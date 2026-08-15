@@ -4586,7 +4586,22 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_vehicle", ["vehicleId"])
     .index("by_salesperson", ["salespersonId"])
-    .index("by_status", ["status"]),
+    .index("by_status", ["status"])
+    // SCRUM-100. `by_org` + a post-read `.filter(status === "PENDING")` reads
+    // every request the org ever created and discards most of them; these rows
+    // are fat (`wizardSnapshot` carries the whole sale wizard). Bound in the
+    // index instead.
+    .index("by_org_status", ["orgId", "status"])
+    // SCRUM-100. `orgId` FIRST is the tenant boundary, not an optimisation:
+    // `by_salesperson` alone keys on a global user id, so a salesperson who
+    // belongs to two dealerships read both. Putting orgId in the access path
+    // means a later edit cannot drop the check by forgetting a filter.
+    //
+    // ⚠️ `status` deliberately absent. The predicate is `!== "REJECTED"` —
+    // PENDING *or* APPROVED — because APPROVED rows are the resume-after-
+    // approval flow. Pinning the range to PENDING would silently drop them,
+    // and encoding the enum here breaks silently if a fourth status is added.
+    .index("by_org_salesperson_createdAt", ["orgId", "salespersonId", "createdAt"]),
 
   feedback: defineTable({
     orgId: v.id("organizations"),

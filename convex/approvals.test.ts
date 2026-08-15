@@ -465,3 +465,275 @@ describe("Approvals Outcomes", () => {
     expect(latest?.requestedProfit).toBe(200);
   });
 });
+
+/**
+ * SCRUM-100. `listMyPendingApprovals` authorises against `args.orgId` but reads
+ * `by_salesperson` on a GLOBAL user id and never filters by org, so a user who
+ * belongs to two dealerships sees the other one's approvals — including
+ * `requestedProfit`, `minimumProfit` and the foreign org's vehicle. Multi-org
+ * membership is first-class here (`organizations.listMine` collects every
+ * membership and the org switcher is built on it), and at least six production
+ * users hold two.
+ *
+ * Every test in this block must FAIL before the fix.
+ */
+describe("SCRUM-100: listMyPendingApprovals tenancy and bounds", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  /** One salesperson, member of two orgs, holding approvals in both. */
+  async function seedMultiOrg(t: ReturnType<typeof convexTestWithComponents>) {
+    return await t.run(async (ctx: any) => {
+      const orgA = await ctx.db.insert("organizations", { name: "Dealer A", createdAt: Date.now() });
+      const orgB = await ctx.db.insert("organizations", { name: "Dealer B", createdAt: Date.now() });
+
+      const userId = await ctx.db.insert("users", {
+        clerkId: "multi_org_sales",
+        email: "multi@test.com",
+        name: "Multi Org Salesperson",
+      });
+
+      for (const orgId of [orgA, orgB]) {
+        const roleId = await ctx.db.insert("roles", {
+          orgId,
+          name: "SALES",
+          permissions: ["view:vehicles"],
+        });
+        await ctx.db.insert("memberships", { orgId, userId, roleId });
+      }
+
+      const addVehicle = (orgId: any, vin: string, make: string) =>
+        ctx.db.insert("vehicles", {
+          orgId,
+          make,
+          model: "Model",
+          status: "AVAILABLE",
+          vin,
+          year: 2022,
+          mileage: 1000,
+          color: "Black",
+          fuelType: "Petrol",
+          transmission: "Automatic",
+          sellingPrice: 20000,
+        });
+
+      const vehA = await addVehicle(orgA, "VINORGA0000000001", "Toyota");
+      const vehB = await addVehicle(orgB, "VINORGB0000000001", "Honda");
+
+      const now = Date.now();
+      const addRequest = (
+        orgId: any,
+        vehicleId: any,
+        status: "PENDING" | "APPROVED" | "REJECTED",
+        requestedProfit: number,
+        createdAt: number
+      ) =>
+        ctx.db.insert("profitApprovalRequests", {
+          orgId,
+          vehicleId,
+          requestedProfit,
+          minimumProfit: 500,
+          salespersonId: userId,
+          status,
+          createdAt,
+        });
+
+      // Org A: one of each status, all inside the 7-day window.
+      await addRequest(orgA, vehA, "PENDING", 1000, now - 1 * DAY);
+      await addRequest(orgA, vehA, "APPROVED", 1100, now - 2 * DAY);
+      await addRequest(orgA, vehA, "REJECTED", 1200, now - 3 * DAY);
+
+      // Org B: the rows that must never surface when Org A is queried.
+      await addRequest(orgB, vehB, "PENDING", 9000, now - 1 * DAY);
+      await addRequest(orgB, vehB, "APPROVED", 9100, now - 2 * DAY);
+
+      return { orgA, orgB, userId };
+    });
+  }
+
+  it("returns only the queried org's rows — never the other org the user also belongs to", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgA, orgB } = await seedMultiOrg(t);
+    const asUser = t.withIdentity({ subject: "multi_org_sales" });
+
+    const rows = await asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA, now: Date.now() });
+
+    // The leak: every returned row must belong to the org that was asked for.
+    expect(rows.every((r: any) => r.orgId === orgA)).toBe(true);
+    expect(rows.some((r: any) => r.orgId === orgB)).toBe(false);
+
+    // Org B's margin figures must not appear at all.
+    const profits = rows.map((r: any) => r.requestedProfit);
+    expect(profits).not.toContain(9000);
+    expect(profits).not.toContain(9100);
+
+    // Nor may Org B's vehicle be read and summarised back to the caller.
+    const summaries = rows.map((r: any) => r.vehicleSummary);
+    expect(summaries.some((s: string) => s.includes("Honda"))).toBe(false);
+  });
+
+  it("keeps APPROVED rows — they are the resume-after-approval flow — and drops REJECTED", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgA } = await seedMultiOrg(t);
+    const asUser = t.withIdentity({ subject: "multi_org_sales" });
+
+    const rows = await asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA, now: Date.now() });
+    const statuses = rows.map((r: any) => r.status).sort();
+
+    // Exactly Org A's PENDING + APPROVED. An index pinned to status === "PENDING"
+    // would drop the APPROVED row and break resuming an already-approved deal.
+    expect(statuses).toEqual(["APPROVED", "PENDING"]);
+  });
+
+  it("excludes another salesperson's rows in the same org", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgA } = await seedMultiOrg(t);
+
+    await t.run(async (ctx: any) => {
+      const otherUser = await ctx.db.insert("users", {
+        clerkId: "other_sales",
+        email: "other@test.com",
+        name: "Other Salesperson",
+      });
+      const role = await ctx.db
+        .query("roles")
+        .filter((q: any) => q.eq(q.field("orgId"), orgA))
+        .first();
+      await ctx.db.insert("memberships", { orgId: orgA, userId: otherUser, roleId: role._id });
+
+      const veh = await ctx.db
+        .query("vehicles")
+        .filter((q: any) => q.eq(q.field("orgId"), orgA))
+        .first();
+      await ctx.db.insert("profitApprovalRequests", {
+        orgId: orgA,
+        vehicleId: veh._id,
+        requestedProfit: 7777,
+        minimumProfit: 500,
+        salespersonId: otherUser,
+        status: "PENDING",
+        createdAt: Date.now() - DAY,
+      });
+    });
+
+    const asUser = t.withIdentity({ subject: "multi_org_sales" });
+    const rows = await asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA, now: Date.now() });
+
+    expect(rows.map((r: any) => r.requestedProfit)).not.toContain(7777);
+  });
+
+  it("applies the 7-day window at both edges", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgA } = await seedMultiOrg(t);
+
+    await t.run(async (ctx: any) => {
+      const veh = await ctx.db
+        .query("vehicles")
+        .filter((q: any) => q.eq(q.field("orgId"), orgA))
+        .first();
+      const user = await ctx.db
+        .query("users")
+        .filter((q: any) => q.eq(q.field("clerkId"), "multi_org_sales"))
+        .first();
+      const now = Date.now();
+      // Just inside the window, and just outside it.
+      await ctx.db.insert("profitApprovalRequests", {
+        orgId: orgA,
+        vehicleId: veh._id,
+        requestedProfit: 6001,
+        minimumProfit: 500,
+        salespersonId: user._id,
+        status: "PENDING",
+        createdAt: now - 7 * DAY + 60_000,
+      });
+      await ctx.db.insert("profitApprovalRequests", {
+        orgId: orgA,
+        vehicleId: veh._id,
+        requestedProfit: 6002,
+        minimumProfit: 500,
+        salespersonId: user._id,
+        status: "PENDING",
+        createdAt: now - 7 * DAY - 60_000,
+      });
+    });
+
+    const asUser = t.withIdentity({ subject: "multi_org_sales" });
+    const rows = await asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA, now: Date.now() });
+    const profits = rows.map((r: any) => r.requestedProfit);
+
+    expect(profits).toContain(6001); // inside the window
+    expect(profits).not.toContain(6002); // outside it
+  });
+
+  it("does not drop or duplicate rows that share an identical createdAt", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgA } = await seedMultiOrg(t);
+
+    const tied = Date.now() - 2 * DAY;
+    await t.run(async (ctx: any) => {
+      const veh = await ctx.db
+        .query("vehicles")
+        .filter((q: any) => q.eq(q.field("orgId"), orgA))
+        .first();
+      const user = await ctx.db
+        .query("users")
+        .filter((q: any) => q.eq(q.field("clerkId"), "multi_org_sales"))
+        .first();
+      for (const profit of [8001, 8002, 8003]) {
+        await ctx.db.insert("profitApprovalRequests", {
+          orgId: orgA,
+          vehicleId: veh._id,
+          requestedProfit: profit,
+          minimumProfit: 500,
+          salespersonId: user._id,
+          status: "PENDING",
+          createdAt: tied,
+        });
+      }
+    });
+
+    const asUser = t.withIdentity({ subject: "multi_org_sales" });
+    const rows = await asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA, now: Date.now() });
+    const profits = rows.map((r: any) => r.requestedProfit);
+
+    for (const profit of [8001, 8002, 8003]) {
+      expect(profits.filter((p: number) => p === profit)).toHaveLength(1);
+    }
+  });
+
+  it("rejects a non-finite `now` instead of failing open", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgA } = await seedMultiOrg(t);
+    const asUser = t.withIdentity({ subject: "multi_org_sales" });
+
+    // Convex accepts NaN for v.number(). An unchecked NaN cutoff makes the
+    // index range comparison meaningless, so it must refuse, not return rows.
+    await expect(
+      asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA, now: NaN })
+    ).rejects.toThrow("Invalid timestamp.");
+  });
+
+  it("countPending counts only the queried org", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgA, orgB } = await seedMultiOrg(t);
+
+    // Grant approve rights by widening the user's EXISTING role in each org.
+    // Adding a second membership instead would make requireTenantAuth reject the
+    // caller, and countPending's fail-closed catch would report 0 — hiding the
+    // very thing this test is checking.
+    await t.run(async (ctx: any) => {
+      for (const orgId of [orgA, orgB]) {
+        const role = await ctx.db
+          .query("roles")
+          .filter((q: any) => q.eq(q.field("orgId"), orgId))
+          .first();
+        await ctx.db.patch(role._id, {
+          permissions: ["view:vehicles", "approve:requests"],
+        });
+      }
+    });
+
+    const asUser = t.withIdentity({ subject: "multi_org_sales" });
+    expect(await asUser.query(api.approvals.countPending, { orgId: orgA })).toBe(1);
+    expect(await asUser.query(api.approvals.countPending, { orgId: orgB })).toBe(1);
+  });
+});

@@ -173,10 +173,12 @@ export const countPending = query({
     } catch {
       return 0;
     }
+    // SCRUM-100: bound on the index. `.filter()` runs *after* the read, so the
+    // previous `by_org` + filter loaded every request the org ever created —
+    // including each one's `wizardSnapshot` — to produce a single integer.
     const requests = await ctx.db
       .query("profitApprovalRequests")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.eq(q.field("status"), "PENDING"))
+      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
       .collect();
     return requests.length;
   },
@@ -190,10 +192,10 @@ export const listPendingApprovals = query({
     // Only users with APPROVE_REQUESTS can see all pending approvals
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
 
+    // SCRUM-100: bound on the index rather than a post-read filter.
     const requests = await ctx.db
       .query("profitApprovalRequests")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.eq(q.field("status"), "PENDING"))
+      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
       .collect();
 
     // Map to include salesperson details and vehicle details
@@ -240,17 +242,42 @@ export const cancelMyApproval = mutation({
 });
 
 export const listMyPendingApprovals = query({
-  args: { orgId: v.id("organizations") },
+  // `now` is supplied by the caller, rounded to the minute, rather than read
+  // from `Date.now()` here. A Convex query re-runs when its *read set* changes,
+  // never merely because time passed — so a clock read inside the handler makes
+  // the 7-day window stale by construction, and it churns the query cache.
+  //
+  // It cannot be used to cross a boundary: the tenant and ownership bounds below
+  // come from `args.orgId` (proven by `requireTenantAuth`) and from the
+  // authenticated `user._id`. `now` only slides the time window over rows the
+  // caller already owns in an org they are already a member of.
+  args: { orgId: v.id("organizations"), now: v.number() },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
 
-    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    const requests = await ctx.db
+    // ⚠️ Convex accepts NaN for `v.number()`. An unchecked NaN cutoff makes the
+    // range comparison below meaningless, so reject it rather than fail open.
+    if (!Number.isFinite(args.now)) {
+      throw new ConvexError("Invalid timestamp.");
+    }
+
+    const cutoff = args.now - 7 * 24 * 60 * 60 * 1000;
+
+    // SCRUM-100. `orgId` leads the index because it is the tenant boundary:
+    // `by_salesperson` keys on a global user id, so this previously returned the
+    // approvals of every org the caller belongs to — margins, wizard snapshots
+    // and the other dealership's vehicles included.
+    const recentInOrg = await ctx.db
       .query("profitApprovalRequests")
-      .withIndex("by_salesperson", (q) => q.eq("salespersonId", user._id))
+      .withIndex("by_org_salesperson_createdAt", (q) =>
+        q.eq("orgId", args.orgId).eq("salespersonId", user._id).gt("createdAt", cutoff)
+      )
       .collect();
 
-    const recent = requests.filter(r => r.createdAt > cutoff && r.status !== "REJECTED");
+    // Kept in JS on purpose: the predicate is `!== "REJECTED"`, i.e. PENDING or
+    // APPROVED, because APPROVED rows are what the sales page resumes from. It
+    // runs over an already tenant- and week-bounded set.
+    const recent = recentInOrg.filter(r => r.status !== "REJECTED");
 
     return await Promise.all(recent.map(async (r) => {
       const vehicle = await ctx.db.get(r.vehicleId);

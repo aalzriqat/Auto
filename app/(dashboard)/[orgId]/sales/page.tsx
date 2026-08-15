@@ -88,9 +88,14 @@ export default function SalesHomePage() {
         { initialNumItems: 5 }
     );
 
+    // Rounded to the minute so the value is stable across re-renders: identical
+    // query arguments let Convex reuse the existing subscription and its cached
+    // result instead of re-reading. The server derives the 7-day cutoff from
+    // this — the business rule stays on the backend, only the clock is passed in.
+    const nowRoundedToMinute = Math.floor(Date.now() / 60_000) * 60_000;
     const myPendingApprovals = useQuery(
         api.approvals.listMyPendingApprovals,
-        activeOrgId ? { orgId: activeOrgId } : "skip"
+        activeOrgId ? { orgId: activeOrgId, now: nowRoundedToMinute } : "skip"
     );
 
     const myWizardDraft = useQuery(
