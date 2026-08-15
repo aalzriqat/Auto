@@ -288,6 +288,42 @@ describe("SCRUM-41 — a frozen margin nothing can substantiate", () => {
     expect(report.unknownMarginSaleCount).toBe(1);
   });
 
+  /**
+   * Found by the Codex reviewer AFTER the application requirement was added to
+   * `saleEconomics` but not to the dashboard's own copy of the rule — the THIRD
+   * consecutive drift between the two surfaces, and the one that triggered the
+   * convergence circuit breaker and the redesign that deleted the copy.
+   *
+   * Kept as a permanent CROSS-SURFACE assertion rather than a unit test: a unit
+   * test of `saleEconomics` alone would have stayed green through all three.
+   */
+  test("a receipt with no application behind it is withheld by BOTH surfaces", async () => {
+    const s = await seedDealer("s41dashApp");
+    const { saleId } = await sellConsigned(s, "VIN41DA1");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, {
+        financingType: "FINANCED",
+        supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+        // Receipt PRESENT (indistinguishable from the sale-price fallback), but
+        // no application behind it. `applicationId` is left unset.
+        consignedSupplierGrossReceiptMinor: SALE_PRICE * 1_000,
+      });
+    });
+
+    const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId, ...range(),
+    });
+    const dash = (await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId,
+      timeRange: "ALL_TIME",
+    })) as { salesVolumeThisMonth: number; truncated: { turnover: boolean } };
+
+    expect(report.unknownMarginSaleCount).toBe(1);
+    expect(report.totalProfit).toBe(0);
+    expect(dash.salesVolumeThisMonth).toBe(0);
+    expect(dash.truncated.turnover).toBe(true);
+  });
+
   test("the dashboard reaches the same verdict as the report on the same sale", async () => {
     const s = await seedDealer("s41dash");
     const { saleId } = await sellConsigned(s, "VIN41D1");

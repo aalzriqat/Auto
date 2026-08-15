@@ -6,9 +6,10 @@ import { isSystemOwnerRole, PERMISSIONS, type Permission } from "./utils/permiss
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { fromMinorUnits } from "./utils/money";
 import {
-  consignedSettlementRoute,
-  dealershipCollectsGross,
+  recordedConsignedMargin,
+  recordedSupplierEntitlement,
   recordedSupplierGrossReceipt,
+  saleEconomics,
 } from "./utils/vehicleOwnership";
 import {
   grossTransactionValueForSale,
@@ -438,239 +439,128 @@ export const stats = query({
     }
 
     /**
-     * Accounting turnover for one sale: the margin on a consigned car, the
-     * price on the dealership's own stock.
+     * ⚠️ REDESIGNED for SCRUM-49 Lane 4, after a convergence circuit breaker.
+     *
+     * This file used to carry its OWN implementation of the rules that decide
+     * whether a sale's earning may be published: which frozen margin to believe,
+     * when the evidence is missing, when the live cost is not a basis. It was
+     * kept "in step" with `saleEconomics` by hand, and it drifted every time that
+     * authority moved — three times during this one change, each found by an
+     * adversarial reviewer, each a case where an owner's home screen and their
+     * own sales report stated different profits for one deal:
+     *
+     *   1. a financed-DIRECT frozen margin with no supplier receipt;
+     *   2. an agent sale whose vehicle is present but has no cost basis;
+     *   3. a receipt with no finance application behind it.
+     *
+     * Two consecutive rounds of fix-induced defects in one subsystem is a design
+     * fault, not a bad patch. So the copy is gone: this screen now ASKS
+     * `saleEconomics` — the same function `reports.salesReport`, both deal
+     * cockpits and the P&L already read — and publishes its answer. There is
+     * nothing left here to drift.
+     *
+     * What stays local is the INPUT, never the decision: which vehicles this
+     * window managed to read and at what basis. That genuinely differs per
+     * window, and it is bounded by the read caps above.
      */
     let turnoverTruncated = false;
     /**
-     * Consigned sales left out because what they earned cannot be established.
-     * Separate from `profitTruncated`, which means "past the costing cap" — a
-     * different reason for a short figure, and one an operator can act on
-     * differently.
+     * Sales left out because what they earned cannot be established. Separate
+     * from `profitTruncated`, which means "past the costing cap" — a different
+     * reason for a short figure, and one an operator can act on differently.
      */
     let unknownMarginExcluded = false;
-    const turnoverFromBasis = (
-      basis: UncostedBasis | undefined,
-      salePrice: number
-    ): number | null => {
-      if (!basis) return null;
-      if (!basis.consigned) return salePrice;
-      return Math.max(0, salePrice - basis.supplierCost);
-    };
 
     /**
-     * What a consigned sale RECORDED as its earning, or `undefined` when it
-     * carries none this reader will believe.
+     * What this window learned about a sale's vehicle, and at what basis.
      *
-     * Identical discipline to `reports.recordedConsignedMargin`, and the same
-     * reason: `sales` is editable through the super-admin raw-JSON editor, so a
-     * non-finite or negative value reaches a reader even though no writer can
-     * produce one. A `NaN` here would propagate into every month of the chart.
+     * `known: false` means the row was not read at all — gone, another org's, or
+     * past both caps. It is NOT "cost zero": `saleEconomics` treats an unreadable
+     * vehicle and a zero-cost one differently, and collapsing them here would
+     * reintroduce the divergence this redesign exists to remove.
      */
-    const frozenConsignedMargin = (sale: Doc<"sales">): number | undefined => {
-      const minor = sale.consignedMarginMinor;
-      const currency = sale.consignedMarginCurrency;
-      if (minor === undefined || !currency) return undefined;
-      if (!Number.isFinite(minor) || minor < 0) return undefined;
-      return fromMinorUnits(minor, currency);
-    };
+    type WindowVehicleBasis =
+      | { known: true; consigned: boolean; cost: number }
+      | { known: false };
 
     /**
-     * A financed sale of the supplier's car settled directly with him — the one
-     * shape where `salePrice − cost` is not the dealership's earning and must
-     * never be published as it. The supplier receives what the finance company
-     * approved, not the sale price, and the difference reaches no party.
+     * One sale's economics on this window's basis, from the shared authority.
+     *
+     * The vehicle is reconstructed as `OwnershipFacts` rather than re-fetched:
+     * `sourceType` is the only field `saleEconomics` reads from it, and this
+     * query already knows whether the row was consigned. Re-reading the document
+     * would double the query's cost for a value it is already holding.
      */
-    const needsFrozenMarginEvidence = (sale: Doc<"sales">): boolean =>
-      !dealershipCollectsGross(
-        consignedSettlementRoute({ supplierSettlementRoute: sale.supplierSettlementRoute })
-      ) &&
-      (sale.financingType === "FINANCED" || sale.financingType === "LEASE");
-
-    /**
-     * The frozen margin, but only where something on the row substantiates it.
-     *
-     * ⚠️ SCRUM-41. Both readers below short-circuited on the mere PRESENCE of
-     * `consignedMarginMinor`, which is the one thing that cannot be assumed on
-     * the financed DIRECT route: there the earning is `approved − entitlement`,
-     * and a row completed before `FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT` landed
-     * froze the sale-price spread instead. This screen then published the
-     * overstated figure exactly as `reports.salesReport` did.
-     *
-     * `consignedSupplierGrossReceiptMinor` is what tells the two populations
-     * apart: `utils/saleCompletion.ts` writes it in the same patch as the margin
-     * on every direct sale and DERIVES the margin from it. Read through the
-     * shared helper rather than re-inspected here, so this surface and
-     * `saleEconomics` cannot come to different conclusions about one sale — the
-     * failure this whole file's `earningIsUnknownGiven` comment already warns
-     * about, in a branch it did not cover.
-     */
-    const trustedFrozenMargin = (sale: Doc<"sales">): number | undefined => {
-      const frozen = frozenConsignedMargin(sale);
-      if (frozen === undefined) return undefined;
-      if (needsFrozenMarginEvidence(sale) && recordedSupplierGrossReceipt(sale) === undefined) {
-        return undefined;
-      }
-      return frozen;
-    };
-
-    /**
-     * Whether this sale needs a recorded earning and has none.
-     *
-     * Answered from the sale row alone, which is what makes it the same answer
-     * everywhere. It used to also require the vehicle to be in
-     * `consignedVehicleIds` — a set holding only the first 500 costed vehicles
-     * — so past that line a financed direct deal stopped being recognized as
-     * one needing evidence, and the turnover fallback published
-     * `salePrice − sourceCost` for it: the supplier's own money reported as the
-     * dealership's. The vehicle was never needed. `supplierSettlementRoute` is
-     * refused outright on dealer-owned stock (see applications.ts's
-     * `setSupplierSettlementRoute`, which rejects rather than storing-and-
-     * ignoring it precisely so readers may trust it), so DIRECT_TO_SUPPLIER on
-     * a sale means a consigned car by construction.
-     *
-     * The residual risk runs the safe way. If such a row somehow existed on
-     * owned stock it would be excluded and flagged rather than estimated —
-     * short and saying so, which is the failure this whole change prefers.
-     */
-    /**
-     * What this query managed to learn about a sale's vehicle, per window.
-     *
-     * `known` means the document was actually read and belongs to this org —
-     * `costedVehicleIdSet` is a different question, holding the ids this query
-     * INTENDED to cost including ones whose row turned out to be gone.
-     *
-     * Taken as a parameter because the two windows read their vehicles into
-     * different maps. Reading the current window's map for a comparison-window
-     * sale answers "not known" for every one of them, which quietly reverts
-     * that window to the vehicle-independent rule this change exists to
-     * replace — the rule would then be the same everywhere only in the half of
-     * the query anybody looked at.
-     */
-    type WindowVehicleFacts = {
-      known: boolean;
-      consigned: boolean;
-      /**
-       * Whether this window's cost for the vehicle is actually a BASIS.
-       *
-       * ⚠️ SCRUM-33 / SCRUM-40 O-2. On a consigned car a zero capitalized cost
-       * is not the fact that the supplier is owed nothing for his own vehicle —
-       * `saleCompletion` refuses to complete a sourced sale without a positive
-       * cost, so zero cannot be what the sale posted on. It is missing evidence,
-       * and `salePrice − 0` publishes the whole ticket.
-       *
-       * Carried on the facts rather than read from a map below, because the two
-       * windows keep their costs in different places and the comparison window
-       * reading the current window's map is a mistake this type already exists
-       * to prevent.
-       */
-      costIsBasis: boolean;
-    };
-    const currentVehicleFacts = (sale: Doc<"sales">): WindowVehicleFacts => ({
-      known: capitalizedCostByVehicle.has(sale.vehicleId),
-      consigned: consignedVehicleIds.has(sale.vehicleId),
-      costIsBasis: (capitalizedCostByVehicle.get(sale.vehicleId) ?? 0) > 0,
-    });
-
-    const earningIsUnknownGiven = (
-      facts: (sale: Doc<"sales">) => WindowVehicleFacts
-    ) => (sale: Doc<"sales">): boolean => {
-      if (trustedFrozenMargin(sale) !== undefined) return false;
-      /**
-       * ⚠️ SCRUM-33 / SCRUM-40 O-2 parity with `saleEconomics`'s `basisUnknown`.
-       *
-       * Found by the adversarial reviewer and REPRODUCED before fixing: a
-       * consigned sale with no trusted frozen margin whose vehicle is PRESENT
-       * but carries no positive cost fell straight past this predicate — because
-       * the only question asked below is whether the row is financed-DIRECT.
-       * `recognizedRevenueOfSale` then reached `Math.max(0, salePrice − 0)` at
-       * `:630` and published the entire ticket as this window's turnover AND as
-       * its profit trend, while `reports.getSalesAndProfitReport` withheld the
-       * same sale and counted it unknown.
-       *
-       * That is the divergence this file's own comments say must not exist, and
-       * the SCRUM-41 fix above made it WIDER rather than narrower by moving the
-       * report without moving this. It also feeds the top-performer tile, so a
-       * salesperson could be ranked first on a car whose margin the sales report
-       * says is unknown.
-       *
-       * The vehicle must be KNOWN for this to fire. An unknown vehicle is
-       * already excluded further down — it has no basis in either map — and
-       * treating "not read" as "zero cost" would fail the wrong rows closed.
-       */
-      const basisFacts = facts(sale);
-      if (basisFacts.known && basisFacts.consigned && !basisFacts.costIsBasis) return true;
-      if (!needsFrozenMarginEvidence(sale)) return false;
-      // The vehicle answers whenever it is present, exactly as it does in
-      // `saleEconomics`. Making this rule vehicle-independent was never the
-      // goal — being the SAME rule as the sales report, the supplier claim and
-      // the P&L is. Without this the two disagreed about a dealer-owned car
-      // carrying a settlement route left over from when it was thought to be
-      // the supplier's: the report and the ledger counted it in full while the
-      // dashboard excluded it and called the remainder complete.
-      return !(basisFacts.known && !basisFacts.consigned);
-    };
-
-    const recognizedEarningIsUnknown = earningIsUnknownGiven(currentVehicleFacts);
-
-    /**
-     * The one authority for what a sale contributed, shared by the turnover
-     * headline and the profit trend so the two halves of this screen cannot
-     * disagree with each other — or with the sales report and the P&L, which
-     * both read the same frozen figure.
-     *
-     * `null` means "cannot be established": excluded and flagged, never zeroed
-     * and never grossed up.
-     */
-    const earningReader =
-      (onUnknown: () => void, isUnknown: (sale: Doc<"sales">) => boolean) =>
+    const economicsGiven =
+      (basisOf: (sale: Doc<"sales">) => WindowVehicleBasis) =>
       (sale: Doc<"sales">) => {
-        const frozen = trustedFrozenMargin(sale);
-        if (frozen !== undefined) return frozen;
-        // The same predicate the ranking asks, so the two cannot come to
-        // different conclusions about one sale — the tile would then omit a row
-        // the totals kept, or rank on a row the totals withheld.
-        if (isUnknown(sale)) {
-          onUnknown();
-          return null;
-        }
-        return undefined;
+        const basis = basisOf(sale);
+        return saleEconomics({
+          salePrice: sale.salePrice,
+          vehicle: basis.known
+            ? { sourceType: basis.consigned ? "SOURCED" : "STOCK" }
+            : null,
+          capitalizedCost: basis.known ? basis.cost : 0,
+          supplierSettlementRoute: sale.supplierSettlementRoute,
+          recordedMargin: recordedConsignedMargin(sale),
+          recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
+          recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
+          hasFinancingApplication: sale.applicationId !== undefined,
+          externallyFinanced:
+            sale.financingType === "FINANCED" || sale.financingType === "LEASE",
+        });
       };
 
     /**
-     * One rule, two windows. The comparison period gets its own instance rather
-     * than its own logic, because the only thing that legitimately differs
-     * between them is WHICH total is short — and a delta computed from a
-     * fail-closed current period and a fail-open historical one reports the
-     * difference between two accounting bases as a change in the business.
+     * The current window's basis: the fully costed map first, then the cheaper
+     * supplier-cost tail read past the costing cap.
+     *
+     * A DEALER-OWNED row in that tail has a known classification and an unknown
+     * cost, which this type deliberately cannot express — so it reports as
+     * unknown here and is handled where turnover is decided, because for owned
+     * stock the price is the turnover and that never depended on the cost.
      */
-    const recognizedEarningOfSale = earningReader(() => {
-      unknownMarginExcluded = true;
-    }, recognizedEarningIsUnknown);
+    const currentBasis = (sale: Doc<"sales">): WindowVehicleBasis => {
+      const cost = capitalizedCostByVehicle.get(sale.vehicleId);
+      if (cost !== undefined) {
+        return { known: true, consigned: consignedVehicleIds.has(sale.vehicleId), cost };
+      }
+      const tail = uncostedBasisByVehicle.get(sale.vehicleId);
+      if (tail?.consigned) return { known: true, consigned: true, cost: tail.supplierCost };
+      return { known: false };
+    };
+
+    const currentEconomics = economicsGiven(currentBasis);
+
+    /**
+     * Turnover for one sale, and the ONE place this window excludes.
+     *
+     * `recognizedRevenue` is `null` exactly when the margin is — the documented
+     * contract of `SaleEconomics` — so an earning that was withheld cannot slip
+     * back in as revenue, which is precisely how this screen came to contradict
+     * the sales report.
+     */
+    const revenueOrNull = (sale: Doc<"sales">): number | null => {
+      const economics = currentEconomics(sale);
+      if (economics.recognizedRevenue !== null) return economics.recognizedRevenue;
+      // The one shape where a withheld EARNING still has a known TURNOVER: a
+      // dealer-owned row past both caps. Its classification is known and only
+      // its cost is not, and for owned stock the price is the turnover — which
+      // never depended on the cost. Booking it at price is what this window has
+      // always done, and dropping it here would shorten the headline for a
+      // reason that does not apply to it.
+      const tail = uncostedBasisByVehicle.get(sale.vehicleId);
+      if (!currentBasis(sale).known && tail && !tail.consigned) return sale.salePrice;
+      return null;
+    };
 
     const recognizedRevenueOfSale = (sale: Doc<"sales">): number => {
       if (!canViewProfitMetrics) return sale.salePrice;
-      // Answered from what the sale itself recorded wherever it can be. This
-      // needs no vehicle at all, so it is also right for a row past the costing
-      // cap, where the fallback below has only a supplier cost to work from.
-      const recognized = recognizedEarningOfSale(sale);
-      if (recognized !== undefined) return recognized ?? 0;
-      const cost = capitalizedCostByVehicle.get(sale.vehicleId);
-      if (!costedVehicleIdSet.has(sale.vehicleId) || cost === undefined) {
-        // Answered from the vehicle row where it could be. What remains is a
-        // row that is gone, belongs to another org, sits past the basis cap,
-        // or is consigned with no recorded supplier cost — none of which is
-        // "the dealership owned it", so none may be booked at gross.
-        const fromBasis = turnoverFromBasis(
-          uncostedBasisByVehicle.get(sale.vehicleId),
-          sale.salePrice
-        );
-        if (fromBasis !== null) return fromBasis;
-        turnoverTruncated = true;
-        return 0;
-      }
-      if (!consignedVehicleIds.has(sale.vehicleId)) return sale.salePrice;
-      return Math.max(0, sale.salePrice - cost);
+      const revenue = revenueOrNull(sale);
+      if (revenue !== null) return revenue;
+      if (currentBasis(sale).known) unknownMarginExcluded = true;
+      else turnoverTruncated = true;
+      return 0;
     };
 
     /**
@@ -713,19 +603,24 @@ export const stats = query({
           // the margin the sale froze — so the home screen and the P&L stated
           // two different profits for one deal, which is the exact condition
           // this whole change exists to remove.
-          const recognized = recognizedEarningOfSale(sale);
-          if (recognized === null) {
-            // Unknown earning: excluded, and reported as such. Publishing
-            // `salePrice − cost` here would be a confident figure built on a
-            // number no party transacted.
-          } else if (recognized !== undefined) {
-            monthlyProfits[key] = (monthlyProfits[key] || 0) + recognized;
-          } else {
-            const cost = capitalizedCostByVehicle.get(sale.vehicleId);
-            if (cost !== undefined) {
-              monthlyProfits[key] = (monthlyProfits[key] || 0) + (sale.salePrice - cost);
-            }
+          const margin = currentEconomics(sale).dealershipMargin;
+          if (margin === null) {
+            // Unknown earning: excluded. Publishing `salePrice − cost` here
+            // would be a confident figure built on a number no party
+            // transacted.
+            //
+            // Deliberately NOT flagged as `unknownMarginExcluded` from here.
+            // That flag feeds `truncated.turnover`, and a null margin does not
+            // imply a short TURNOVER — a dealer-owned row past the costing cap
+            // has an unknown profit and a perfectly known turnover. Where the
+            // turnover really is withheld, `recognizedRevenueOfSale` above sets
+            // the flag itself; the profit's own shortfall is `profitTruncated`.
+          } else if (capitalizedCostByVehicle.has(sale.vehicleId)) {
+            monthlyProfits[key] = (monthlyProfits[key] || 0) + margin;
           }
+          // Past the costing cap: the supplier-cost tail is enough to state a
+          // TURNOVER but this trend is left short rather than mixing bases, and
+          // `profitTruncated` already says so.
         }
       }
     } else {
@@ -867,7 +762,12 @@ export const stats = query({
         // contradiction with the headline beside it: the shipped SALES template
         // counted a 20,000 deal in full and simultaneously crowned a smaller
         // seller.
-        if (canViewProfitMetrics && recognizedEarningIsUnknown(sale)) entry.complete = false;
+        // Keyed to the SAME answer the headline uses, not to the profit. This
+        // tile ranks on revenue, so a row whose turnover is known but whose
+        // profit is not — a dealer-owned sale past the costing cap — is not a
+        // reason to drop a rep from the ranking. Sharing `revenueOrNull` is what
+        // stops the tile and the headline beside it contradicting each other.
+        if (canViewProfitMetrics && revenueOrNull(sale) === null) entry.complete = false;
         revenueBySalesperson[sale.salespersonId] = entry;
       }
 
@@ -1014,49 +914,34 @@ export const stats = query({
     }
 
     let previousUnknownMarginExcluded = false;
-    // The comparison window's own vehicle facts. `previousRevenueBasisByVehicle`
-    // already holds exactly what the predicate needs — whether the row was read
-    // and whether it is consigned — so this costs no extra reads. Asking the
-    // CURRENT window's map instead answered "vehicle unknown" for every
-    // comparison-window sale, which reverted that window to the rule this
-    // change replaced and suppressed the period delta for a correct row.
-    const previousRecognizedEarningOfSale = earningReader(
-      () => {
-        previousUnknownMarginExcluded = true;
-      },
-      earningIsUnknownGiven((sale) => {
-        const basis = previousRevenueBasisByVehicle.get(sale.vehicleId);
-        return basis
-          ? { known: true, consigned: basis.consigned, costIsBasis: basis.cost > 0 }
-          : { known: false, consigned: false, costIsBasis: false };
-      })
-    );
+    /**
+     * The comparison window, on the SAME authority and its own basis.
+     *
+     * One rule, two windows. The window's own maps supply the basis — asking the
+     * current window's maps answered "vehicle unknown" for every
+     * comparison-window sale, which put the two periods on different bases and
+     * reported the difference as growth.
+     */
+    const previousBasis = (sale: Doc<"sales">): WindowVehicleBasis => {
+      const basis = previousRevenueBasisByVehicle.get(sale.vehicleId);
+      if (basis) return { known: true, consigned: basis.consigned, cost: basis.cost };
+      const tail = previousUncostedBasisByVehicle.get(sale.vehicleId);
+      if (tail?.consigned) return { known: true, consigned: true, cost: tail.supplierCost };
+      return { known: false };
+    };
+
+    const previousEconomics = economicsGiven(previousBasis);
 
     const previousRecognizedRevenueOfSale = (sale: Doc<"sales">): number => {
       if (!canViewProfitMetrics) return sale.salePrice;
-      // What the sale itself recorded, first and for the same reason the
-      // current window reads it first: it is the figure the ledger, the
-      // supplier claim and the reports all booked, and it needs no vehicle —
-      // so it is also the right answer for a row past the costing cap.
-      const recognized = previousRecognizedEarningOfSale(sale);
-      if (recognized !== undefined) return recognized ?? 0;
-      // Excluded rather than booked at gross, exactly as the current window
-      // treats the same absence. Booking it at gross here put the two windows
-      // on different bases, so a period-over-period change reported the
-      // difference between an agent-basis turnover and a principal-basis one as
-      // if it were growth.
-      const basis = previousRevenueBasisByVehicle.get(sale.vehicleId);
-      if (!basis) {
-        const fromBasis = turnoverFromBasis(
-          previousUncostedBasisByVehicle.get(sale.vehicleId),
-          sale.salePrice
-        );
-        if (fromBasis !== null) return fromBasis;
-        previousTurnoverTruncated = true;
-        return 0;
-      }
-      if (!basis.consigned) return sale.salePrice;
-      return Math.max(0, sale.salePrice - basis.cost);
+      const economics = previousEconomics(sale);
+      if (economics.recognizedRevenue !== null) return economics.recognizedRevenue;
+      const basis = previousBasis(sale);
+      const tail = previousUncostedBasisByVehicle.get(sale.vehicleId);
+      if (!basis.known && tail && !tail.consigned) return sale.salePrice;
+      if (basis.known) previousUnknownMarginExcluded = true;
+      else previousTurnoverTruncated = true;
+      return 0;
     };
 
     // Compared against the current period's turnover, so it has to be turnover
@@ -1109,14 +994,13 @@ export const stats = query({
         // frozen margin there — and where the earning could not be established
         // at all, this arm still produced a number, which is the one outcome
         // the current arm exists to refuse.
-        const recognized = previousRecognizedEarningOfSale(sale);
-        if (recognized === null) continue;
-        if (recognized !== undefined) {
-          previousProfit += recognized;
-          continue;
-        }
-        const cost = previousCostByVehicle.get(sale.vehicleId);
-        if (cost !== undefined) previousProfit += sale.salePrice - cost;
+        const margin = previousEconomics(sale).dealershipMargin;
+        // Not flagged from here, for the same reason as the current window: this
+        // is a PROFIT shortfall, and the flag it would set describes turnover.
+        if (margin === null) continue;
+        // Same gate as the current window: only a fully costed row contributes
+        // to a profit figure, so the two periods stay on one basis.
+        if (previousCostByVehicle.has(sale.vehicleId)) previousProfit += margin;
       }
     }
 
