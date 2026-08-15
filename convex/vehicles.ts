@@ -2309,7 +2309,11 @@ export const importBulk = mutation({
       const missingVin = args.vehicles.filter((row) => isPlaceholderVin(row.vin));
       if (missingVin.length > 0) {
         throw new ConvexError(
-          `A VIN is required for every vehicle in a purchase import — ${missingVin.length} row(s) have none. Add the VINs, or import them as stock you already own.`
+          // The alternative is deliberately qualified rather than offered as an
+          // equal option: OPENING_STOCK posts nothing, so an operator who takes
+          // it for a car they genuinely just bought silently loses the
+          // acquisition entry — the very thing SCRUM-59 exists to stop.
+          `A VIN is required for every vehicle in a purchase import — ${missingVin.length} row(s) have none. Add the VINs. Import them as stock you already own only if you did not just buy them, because that records no purchase.`
         );
       }
 
@@ -2320,7 +2324,7 @@ export const importBulk = mutation({
       const malformedVin = args.vehicles.filter((row) => hasNonCanonicalVinCharacters(row.vin));
       if (malformedVin.length > 0) {
         throw new ConvexError(
-          `A VIN can only contain letters and numbers — ${malformedVin.length} row(s) have dashes, spaces or punctuation. Remove them, or import these as stock you already own.`
+          `A VIN can only contain letters and numbers — ${malformedVin.length} row(s) have dashes, spaces or punctuation. Remove them. Import these as stock you already own only if you did not just buy them, because that records no purchase.`
         );
       }
       if (args.purchasePaymentMethod === "ON_ACCOUNT") {

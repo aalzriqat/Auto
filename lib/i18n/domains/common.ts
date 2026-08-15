@@ -203,9 +203,9 @@ export const commonEn = {
   ImportWillCapitalize: "Will add to Vehicle Inventory",
   ImportWillCapitalizeNote: "{count} vehicle(s) with a cost. Rows with no cost, and sourced vehicles, post nothing.",
   ImportVinRequiredForPurchase:
-    "{count} vehicle(s) have no VIN. Every vehicle in a purchase import needs one — without it a repeated import would add the same car again and record its purchase twice. Add the VINs, or import these as stock you already own.",
+    "{count} vehicle(s) have no VIN. Every vehicle in a purchase import needs one — without it a repeated import would add the same car again and record its purchase twice. Add the VINs. Only import them as stock you already own if you did not just buy them, because that records no purchase.",
   ImportVinCharactersForPurchase:
-    "{count} VIN(s) contain dashes, spaces or punctuation. A VIN can only be letters and numbers — with them, the same car entered without them is recorded as a different vehicle. Remove them, or import these as stock you already own.",
+    "{count} VIN(s) contain dashes, spaces or punctuation. A VIN can only be letters and numbers — with them, the same car entered without them is recorded as a different vehicle. Remove them. Only import these as stock you already own if you did not just buy them, because that records no purchase.",
   ImportStoppedAfter: "Imported {count} vehicle(s), then stopped:",
   ImportRetryAdvicePurchase:
     "Fix the reported rows and import the file again — the vehicles already added will be skipped, as long as their VINs are unchanged.",
@@ -1117,9 +1117,9 @@ export const commonAr = {
   ImportWillCapitalize: "ستُضاف إلى مخزون المركبات",
   ImportWillCapitalizeNote: "{count} مركبة لها تكلفة. الصفوف بلا تكلفة والمركبات الموردة لا تُقيَّد.",
   ImportVinRequiredForPurchase:
-    "{count} مركبة بلا رقم شاصي. كل مركبة في استيراد شراء تحتاج إليه — بدونه ستُضاف السيارة نفسها مجدداً ويُسجَّل شراؤها مرتين عند إعادة الاستيراد. أضف أرقام الشاصي، أو استوردها كمركبات تملكها بالفعل.",
+    "{count} مركبة بلا رقم شاصي. كل مركبة في استيراد شراء تحتاج إليه — بدونه ستُضاف السيارة نفسها مجدداً ويُسجَّل شراؤها مرتين عند إعادة الاستيراد. أضف أرقام الشاصي. ولا تستوردها كمركبات تملكها بالفعل إلا إذا لم تشترها للتو، لأن ذلك لا يسجّل أي عملية شراء.",
   ImportVinCharactersForPurchase:
-    "{count} رقم شاصي يحتوي على شرطات أو مسافات أو علامات. رقم الشاصي حروف وأرقام فقط — بوجودها تُسجَّل السيارة نفسها المُدخَلة بدونها كمركبة مختلفة. احذفها، أو استوردها كمركبات تملكها بالفعل.",
+    "{count} رقم شاصي يحتوي على شرطات أو مسافات أو علامات. رقم الشاصي حروف وأرقام فقط — بوجودها تُسجَّل السيارة نفسها المُدخَلة بدونها كمركبة مختلفة. احذفها. ولا تستوردها كمركبات تملكها بالفعل إلا إذا لم تشترها للتو، لأن ذلك لا يسجّل أي عملية شراء.",
   ImportStoppedAfter: "تم استيراد {count} مركبة ثم توقف:",
   ImportRetryAdvicePurchase:
     "صحّح الصفوف المذكورة وأعد استيراد الملف — سيتم تخطي المركبات المضافة سابقاً، ما دامت أرقام الشاصي كما هي.",
