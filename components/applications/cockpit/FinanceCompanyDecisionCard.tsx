@@ -393,20 +393,22 @@ export function FinanceCompanyDecisionCard({
                   is what put `الجزء المموَّل من شركة التمويل` at one edge and
                   its figure at the other. Side by side they also read as what
                   they are — one split, not three unrelated facts. */}
-              {/* The reading-measure gate anchors HERE, and this is the block
-                  that earned it: these are the pairs that sat at opposite edges
-                  of a 1780px card. The gate used to count every dt/dd on the
-                  page, which meant it could not say which rows it had measured
-                  — and it turned out to be measuring these ones by accident
-                  rather than by intent. Naming the root makes the gate assert
-                  what it was always actually checking. */}
-              <dl
-                data-testid="deal-decision-economics-rows"
-                className="grid gap-x-10 gap-y-1.5 text-sm sm:grid-cols-2 xl:grid-cols-3"
-              >
+              {/* These are the pairs the reading-measure gate exists for: the
+                  ones that sat at opposite edges of a 1780px card, and whose
+                  Arabic labels ended up across the screen from their figures.
+                  The gate counts them by the `data-row-kind` below rather than
+                  by this list, because the list also carries Applied LTV and
+                  every row in it is independently nullable. */}
+              <dl className="grid gap-x-10 gap-y-1.5 text-sm sm:grid-cols-2 xl:grid-cols-3">
                 {derived.map((line) => (
                   <div
                     key={line.key}
+                    // Each row names itself so the gate can count the three
+                    // MONEY rows and ignore the LTV percentage beside them.
+                    // Every entry above is independently nullable, so a guard
+                    // that counted the list would have been satisfied by the
+                    // LTV row alone with all three split figures gone.
+                    data-row-kind={line.key}
                     className="flex max-w-sm items-baseline justify-between gap-4"
                   >
                     <dt className="text-muted-foreground">{line.label}</dt>

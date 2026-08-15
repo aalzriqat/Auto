@@ -62,24 +62,34 @@ async function measureLabelToFigureGaps(
     // sweeps the whole page. `economics` counts the DECISION-CARD split rows —
     // funded by the finance company, not financed, dealership contribution.
     //
-    // Those are the pairs behind the original complaint: at 1780px they sat at
+    // Those are pairs behind the original complaint: at 1780px they sat at
     // opposite edges of the card, and in Arabic the label and its figure ended
-    // up on opposite sides of the screen. They are what this gate exists for.
+    // up on opposite sides of the screen.
+    //
+    // PART of it, not all of it. The same commit capped `DecisionRow` — the
+    // approved-purchase, appraisal and quotation rows — which was equally part
+    // of the zoom-to-50% bug. Those render as <p>, not <dt>/<dd>, so this sweep
+    // cannot see them at all and a regression that dropped their cap would pass
+    // here silently. Recorded rather than quietly widened: SCRUM-89.
     //
     // Counted separately because the anti-vacuity guard used to ask only whether
     // ANY dt/dd had laid out, and several blocks render their own. It could not
     // distinguish "measured the rows that matter" from "measured whatever was
     // on screen" — and it was passing on these rows by accident rather than by
-    // intent. Naming the root makes the gate assert what it is actually
-    // checking, so counting nothing and counting something else both fail.
-    const economicsRoot = document.querySelector(
-      '[data-testid="deal-decision-economics-rows"]',
-    );
+    // intent.
+    //
+    // Counted by ROW KIND, not by the enclosing list. The same list also renders
+    // Applied LTV, and every row in it is independently nullable, so a count of
+    // the list would have been satisfied by that lone percentage with all three
+    // money figures missing — the identical vacuity one level in. Only the three
+    // money rows count, and the caller asserts there are exactly three.
+    const SPLIT_ROWS = ["funded", "unfinanced", "contribution"];
     let widest = 0;
     let measured = 0;
     let economics = 0;
     for (const dt of Array.from(document.querySelectorAll("dt"))) {
-      const dd = dt.parentElement?.querySelector("dd");
+      const row = dt.parentElement;
+      const dd = row?.querySelector("dd");
       if (!dd) continue;
       const a = dt.getBoundingClientRect();
       const b = dd.getBoundingClientRect();
@@ -87,7 +97,10 @@ async function measureLabelToFigureGaps(
       // Same visual row only; a stacked pair is not a reading-distance problem.
       if (Math.abs(a.top - b.top) > 24) continue;
       measured += 1;
-      if (economicsRoot?.contains(dt)) economics += 1;
+      const kind = row?.getAttribute("data-row-kind");
+      if (kind !== null && kind !== undefined && SPLIT_ROWS.includes(kind)) {
+        economics += 1;
+      }
       const gap = Math.max(b.left - a.right, a.left - b.right);
       if (gap > widest) widest = gap;
     }
@@ -197,19 +210,22 @@ test.describe("the deal cockpit's reading measure", () => {
           // page with no rows produces — and "nothing to measure" would
           // otherwise read as "everything measured well".
           //
-          // On the DECISION-CARD split rows specifically. A count that any dt/dd
-          // could satisfy let their neighbours stand in for them, which is how
-          // this gate spent several rounds reporting a measurement it could not
-          // name.
+          // EXACTLY three, not merely more than none. This fixture always
+          // records a funded portion, an unfinanced portion and a dealership
+          // contribution, so all three must be on screen; "at least one" would
+          // let two of them disappear and still pass, which is the same vacuity
+          // this assertion exists to remove.
           expect(
             economics,
-            "the decision card's split rows were not laid out — nothing was measured for the reading cap",
-          ).toBeGreaterThan(0);
-          // Logged, not asserted: the run itself then shows how many of the
-          // measured pairs were the rows under test, so a future reader can see
-          // at a glance that the two counts are not the same thing.
+            "the decision card's three funding-split rows were not all laid out — the reading cap measured something else",
+          ).toBe(3);
+          // Logged, not asserted: the run then shows how many of the measured
+          // pairs were the rows under test, so a future reader can see at a
+          // glance that the two counts are not the same thing. They are not
+          // equal — the same list also carries Applied LTV, which is a
+          // percentage rather than one of the money figures under test.
           console.log(
-            `[measure] ${locale} @ ${viewport.name}: ${economics} decision-card split rows of ${measured} pairs measured`,
+            `[measure] ${locale} @ ${viewport.name}: ${economics} funding-split rows of ${measured} pairs measured`,
           );
           expect(
             widest,
