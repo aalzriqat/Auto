@@ -772,12 +772,36 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
   // the memo so the entry is identifiable without reconstructing why.
   const legacySourced = p.isSourced === true && p.consignmentEvaluated !== true;
 
-  const revenueMinor = p.taxMinor ? p.saleAmountMinor - p.taxMinor : p.saleAmountMinor;
+  // `saleAmountMinor` is tax-EXCLUSIVE, so the whole of it is revenue and the
+  // tax is billed on top of it (SCRUM-22).
+  //
+  // This rule used to read the same number as tax-INCLUSIVE: revenue was
+  // `saleAmountMinor - taxMinor` and the AR debit carried no tax at all. For a
+  // 20,000 sale at 16% that posted Dr AR 20,000 / Cr Revenue 16,800 / Cr Tax
+  // 3,200 while the customer was invoiced 23,200 — the dealership funded the
+  // customer's tax out of its own revenue and never billed anyone for it.
+  //
+  // Revenue and AR were understated by exactly the same amount, so the entry
+  // BALANCED. `validateBalance` cannot see this class of defect, which is why
+  // `ownedSaleTaxPosting.test.ts` asserts per-account amounts.
+  //
+  // The convention is not chosen here — it is read off the producers, which
+  // never disagreed with each other. `applySaleCompletionSideEffects` passes
+  // `args.salePrice` with `args.taxAmount` alongside it, `completeMultiVehicleSale`
+  // computes `unitPrice * taxRate/100` additively, and `SaleDialog` bills
+  // `salePrice + taxAmount + fees + …`. Only this rule read it the other way.
+  const taxMinor = p.taxMinor && p.taxMinor > 0 ? p.taxMinor : 0;
+  const revenueMinor = p.saleAmountMinor;
   const dims = { customerId: p.customerId, vehicleId: p.vehicleId, salespersonId: p.salespersonId };
   const dealerFeesMinor = p.dealerFeesMinor && p.dealerFeesMinor > 0 ? p.dealerFeesMinor : 0;
   const warrantySoldMinor = p.warrantySoldMinor && p.warrantySoldMinor > 0 ? p.warrantySoldMinor : 0;
   const gapSoldMinor = p.gapSoldMinor && p.gapSoldMinor > 0 ? p.gapSoldMinor : 0;
-  const arDebitMinor = p.saleAmountMinor + dealerFeesMinor + warrantySoldMinor + gapSoldMinor;
+  // Must stay equal to `customerBillableMinor` in utils/saleCompletion.ts, which
+  // sizes the canonical receivable document for the same sale. The GL and the
+  // AR subledger disagreeing about one customer's bill is the failure this
+  // arithmetic is shared to prevent.
+  const arDebitMinor =
+    p.saleAmountMinor + taxMinor + dealerFeesMinor + warrantySoldMinor + gapSoldMinor;
   const lines: LineSpec[] = [
     line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, arDebitMinor, 0, "Sale receivable", dims),
     line(SYSTEM_KEYS.SALES_REVENUE, 0, revenueMinor, "Vehicle sale revenue", dims),
@@ -791,8 +815,8 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
   if (gapSoldMinor > 0) {
     addResoldProductLines(lines, gapSoldMinor, p.gapCostMinor ?? 0, "GAP", dims);
   }
-  if (p.taxMinor && p.taxMinor > 0) {
-    lines.push(line(SYSTEM_KEYS.SALES_TAX_PAYABLE, 0, p.taxMinor, "Sales tax payable", { vehicleId: p.vehicleId }));
+  if (taxMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.SALES_TAX_PAYABLE, 0, taxMinor, "Sales tax payable", { vehicleId: p.vehicleId }));
   }
   if (p.costMinor && p.costMinor > 0) {
     lines.push(line(SYSTEM_KEYS.COST_OF_VEHICLES_SOLD, p.costMinor, 0, "Cost of vehicle sold", { vehicleId: p.vehicleId }));

@@ -939,8 +939,25 @@ async function applySaleCompletionSideEffects(
     isSourced && !dealershipCollectsGross(settlementRoute)
       ? 0
       : toMinorUnits(args.salePrice, prepared.currency);
+  // Sales tax is billed ON TOP of the price, so it is part of what the customer
+  // owes (SCRUM-22). It has to be here as well as in `ruleSaleCompleted`'s AR
+  // debit, or the canonical receivable document and the GL diverge by exactly
+  // the tax for the same sale.
+  //
+  // Safe on the consigned branch above without a further condition: an agency
+  // sale carrying tax is refused outright further down and by
+  // `consignedAgentSaleLines`, so `taxMinor` is always 0 by the time a sourced
+  // sale reaches here.
+  const saleTaxMinor =
+    args.taxAmount != null && args.taxAmount > 0
+      ? toMinorUnits(args.taxAmount, prepared.currency)
+      : 0;
   const customerBillableMinor =
-    vehicleReceivableMinor + (dealerFeesMinor ?? 0) + (warrantySoldMinor ?? 0) + (gapSoldMinor ?? 0);
+    vehicleReceivableMinor +
+    saleTaxMinor +
+    (dealerFeesMinor ?? 0) +
+    (warrantySoldMinor ?? 0) +
+    (gapSoldMinor ?? 0);
 
   // Hoisted above the deposit resolution because the settlement treatment is
   // capped at the margin, and the margin cannot be known without the cost.
