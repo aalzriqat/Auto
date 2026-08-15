@@ -1721,6 +1721,21 @@ describe("turnover past the dashboard's costing cap", () => {
     );
     // And nothing is short, so the flag must not claim otherwise.
     expect(dash.truncated.turnover).toBe(false);
+
+    /**
+     * The PROFIT half of the same claim, asked for by the Codex reviewer after
+     * the dashboard consolidation gated profit on the live cost map and dropped
+     * every margin the map did not hold.
+     *
+     * A consigned sale past the cap has a supplier cost this query already read
+     * cheaply, so its margin needs nothing further — and it belongs in the trend
+     * for the same reason it belongs in the turnover above. Asserting only the
+     * turnover let a chart reporting 0 sit under a headline reporting the
+     * margin.
+     */
+    expect(dash.salesTrend.reduce((total, point) => total + point.Profit, 0)).toBe(
+      CAP * (OWNED_PRICE - OWNED_COST) + MARGIN
+    );
   }, HEAVY_TEST_TIMEOUT_MS);
 
   test("a consigned sale with no recorded supplier cost is excluded, and says so", async () => {

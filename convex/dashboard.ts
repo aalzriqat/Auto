@@ -603,24 +603,38 @@ export const stats = query({
           // the margin the sale froze — so the home screen and the P&L stated
           // two different profits for one deal, which is the exact condition
           // this whole change exists to remove.
+          /**
+           * Credited whenever the authority ESTABLISHED it — never gated on
+           * this window's live cost map.
+           *
+           * ⚠️ Found by the Codex reviewer against the first cut of this
+           * redesign, and reproduced: gating on `capitalizedCostByVehicle`
+           * silently dropped a margin `saleEconomics` had established from the
+           * sale's own FROZEN evidence. A consigned sale whose vehicle row was
+           * deleted reported turnover 3,000 and profit 0 in the same response,
+           * with every truncation flag false — the chart contradicting the
+           * headline directly above it, and saying nothing was missing.
+           *
+           * The branch existed in the implementation this replaced (a frozen
+           * margin was added without consulting the cost map; only the
+           * live-cost FALLBACK required it) and was lost in the port. It is the
+           * cost map's job to supply a BASIS, not to decide whether an answer
+           * that needed no basis may be published.
+           *
+           * `null` is the only exclusion, and it means the basis could not be
+           * established at all. Where that leaves the trend genuinely short —
+           * a dealer-owned row past the costing cap — `profitTruncated` already
+           * says so, set from the cap itself rather than from here.
+           *
+           * NOT flagged as `unknownMarginExcluded`: that flag feeds
+           * `truncated.turnover`, and a null margin does not imply a short
+           * TURNOVER. Where the turnover really is withheld,
+           * `recognizedRevenueOfSale` above sets it.
+           */
           const margin = currentEconomics(sale).dealershipMargin;
-          if (margin === null) {
-            // Unknown earning: excluded. Publishing `salePrice − cost` here
-            // would be a confident figure built on a number no party
-            // transacted.
-            //
-            // Deliberately NOT flagged as `unknownMarginExcluded` from here.
-            // That flag feeds `truncated.turnover`, and a null margin does not
-            // imply a short TURNOVER — a dealer-owned row past the costing cap
-            // has an unknown profit and a perfectly known turnover. Where the
-            // turnover really is withheld, `recognizedRevenueOfSale` above sets
-            // the flag itself; the profit's own shortfall is `profitTruncated`.
-          } else if (capitalizedCostByVehicle.has(sale.vehicleId)) {
+          if (margin !== null) {
             monthlyProfits[key] = (monthlyProfits[key] || 0) + margin;
           }
-          // Past the costing cap: the supplier-cost tail is enough to state a
-          // TURNOVER but this trend is left short rather than mixing bases, and
-          // `profitTruncated` already says so.
         }
       }
     } else {
@@ -994,13 +1008,20 @@ export const stats = query({
         // frozen margin there — and where the earning could not be established
         // at all, this arm still produced a number, which is the one outcome
         // the current arm exists to refuse.
+        /**
+         * ONE predicate, both windows — see the current window's note.
+         *
+         * The `.has()` gate this replaces was worse here than there:
+         * `previousCostByVehicle` stores unreadable vehicles as KEYS WITH
+         * UNDEFINED VALUES, so `.has()` answered true for exactly the rows the
+         * current window's map answered false for. The same sale could regain
+         * its profit merely by ageing into the comparison window, and the
+         * period-over-period delta would report that as a change in the
+         * business. Asking the authority instead removes the asymmetry rather
+         * than correcting one side of it.
+         */
         const margin = previousEconomics(sale).dealershipMargin;
-        // Not flagged from here, for the same reason as the current window: this
-        // is a PROFIT shortfall, and the flag it would set describes turnover.
-        if (margin === null) continue;
-        // Same gate as the current window: only a fully costed row contributes
-        // to a profit figure, so the two periods stay on one basis.
-        if (previousCostByVehicle.has(sale.vehicleId)) previousProfit += margin;
+        if (margin !== null) previousProfit += margin;
       }
     }
 

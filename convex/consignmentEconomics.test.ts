@@ -422,6 +422,51 @@ describe("SCRUM-33 — a sale with no basis on the row and no vehicle to ask", (
    * `Math.max(0, salePrice − 0)` and published the whole ticket as this window's
    * turnover AND its profit trend, feeding the top-performer tile with it.
    */
+  /**
+   * The OTHER direction, and the one a consolidation is most likely to get
+   * wrong: a figure the authority CAN establish must not be dropped.
+   *
+   * Found by the Codex reviewer against the first cut of the dashboard
+   * consolidation and reproduced before fixing. The profit trend was gated on
+   * this window's live cost map, so a sale whose vehicle row is gone — but whose
+   * margin the SALE itself froze — reported turnover 3,000 and profit 0 in one
+   * response, with every truncation flag false. The chart contradicted the
+   * headline directly above it and said nothing was missing.
+   *
+   * The three assertions are deliberately taken together. Turnover alone passed
+   * throughout; only comparing it against the trend and the flags catches this.
+   */
+  test("a frozen margin survives a deleted vehicle in the PROFIT trend, not just in turnover", async () => {
+    const s = await seedDealer("s33frozenprofit");
+    const { vehicleId } = await sellConsigned(s, "VIN33FP1");
+    await s.t.run(async (ctx) => {
+      // Only the vehicle goes. Every frozen field on the sale survives.
+      await ctx.db.delete(vehicleId);
+    });
+
+    const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId, ...range(),
+    });
+    const dash = (await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId,
+      timeRange: "ALL_TIME",
+    })) as {
+      salesVolumeThisMonth: number;
+      truncated: { turnover: boolean; profit: boolean };
+      salesTrend: Array<{ Revenue: number; Profit: number }>;
+    };
+
+    // The report recognizes what the sale froze.
+    expect(report.totalProfit).toBe(MARGIN);
+    // So does the dashboard's headline...
+    expect(dash.salesVolumeThisMonth).toBe(MARGIN);
+    // ...and so must the chart beneath it. This was 0.
+    expect(dash.salesTrend.reduce((total, p) => total + p.Profit, 0)).toBe(MARGIN);
+    // And nothing is short, so no flag may claim otherwise.
+    expect(dash.truncated.turnover).toBe(false);
+    expect(dash.truncated.profit).toBe(false);
+  });
+
   test("a present vehicle with no cost basis is withheld by BOTH surfaces, not just the report", async () => {
     const s = await seedDealer("s33zerocost");
     const { saleId, vehicleId } = await sellConsigned(s, "VIN33Z1");
