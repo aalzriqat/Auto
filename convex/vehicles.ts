@@ -14,6 +14,7 @@ import { internal } from "./_generated/api";
 import { getOrgCurrency, hookVehicleAcquired, hookVehicleLandedCostCapitalized, hookVehicleAcquisitionCostCorrected } from "./accounting/workflowHooks";
 import { toMinorUnits, assertFiniteNumber } from "./utils/money";
 import { paymentMethodValidator, acquisitionPaymentMethodValidator, normalizePaymentMethod, type AcquisitionPaymentMethod, type PaymentMethod } from "./utils/paymentMethods";
+import { hasNonCanonicalVinCharacters } from "./utils/vin";
 import { syncVehicleHoldStatus, getDefaultReservationExpiry, getActiveDepositHolds } from "./utils/depositHelpers";
 import {
   amountToMinorOrThrow,
@@ -2301,11 +2302,25 @@ export const importBulk = mutation({
       //   - a cost-less owned row is the same story once a price is set.
       //
       // It also makes the retry guidance the importer shows honest: in this mode
-      // every row has a VIN, so every already-imported car really is skipped.
+      // every row has a VIN, so an already-imported car is skipped whenever its
+      // VIN string comes back unchanged. That caveat is real — a CSV re-saved
+      // through a spreadsheet can alter a cell — and the message states it
+      // rather than promising outright.
       const missingVin = args.vehicles.filter((row) => isPlaceholderVin(row.vin));
       if (missingVin.length > 0) {
         throw new ConvexError(
           `A VIN is required for every vehicle in a purchase import — ${missingVin.length} row(s) have none. Add the VINs, or import them as stock you already own.`
+        );
+      }
+
+      // ...and it must be plain letters and numbers, so that the dedup this
+      // mode's retry safety rests on is a CANONICAL match and not merely an
+      // exact one. See hasNonCanonicalVinCharacters for why the fix belongs
+      // there rather than in a canonicalization applied only here.
+      const malformedVin = args.vehicles.filter((row) => hasNonCanonicalVinCharacters(row.vin));
+      if (malformedVin.length > 0) {
+        throw new ConvexError(
+          `A VIN can only contain letters and numbers — ${malformedVin.length} row(s) have dashes, spaces or punctuation. Remove them, or import these as stock you already own.`
         );
       }
       if (args.purchasePaymentMethod === "ON_ACCOUNT") {

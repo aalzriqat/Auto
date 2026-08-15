@@ -2281,6 +2281,49 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     expect(vehicles).toHaveLength(0);
   });
 
+  test("PURCHASE refuses a VIN that is not plain alphanumeric, so exact dedup IS canonical dedup", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59n");
+
+    // A real VIN is 17 alphanumeric characters; a dash or space in one is a
+    // formatting artifact, and the product treats `1HGCM826-33A000001` and
+    // `1HGCM82633A000001` as two different cars everywhere (SCRUM-94). That is
+    // pre-existing and codebase-wide, but it must not be reachable through the
+    // path that posts: refusing anything outside [A-Z0-9] here means every VIN
+    // this mode accepts already equals its own canonical form, so the exact
+    // by_org_vin match below is a canonical match among them.
+    for (const vin of ["1HGCM826-33A000001", "1HGCM8263 3A000001", "1HGCM8263.3A00001"]) {
+      await expect(
+        asOwner.mutation(api.vehicles.importBulk, {
+          orgId,
+          acquisitionPosting: "PURCHASE",
+          purchasePaymentMethod: "CASH",
+          vehicles: [{ ...baseImportRow, vin, purchasePrice: 10000 }],
+        })
+      ).rejects.toThrow(/letters and numbers|VIN/i);
+    }
+
+    const entries = await t.run((ctx) =>
+      ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(entries).toHaveLength(0);
+    const vehicles = await t.run((ctx) =>
+      ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(vehicles).toHaveLength(0);
+  });
+
+  test("OPENING_STOCK accepts a punctuated VIN — it posts nothing, and refusing it would block a migration", async () => {
+    const { orgId, asOwner } = await seedDealer("s59o");
+
+    const result = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId,
+      acquisitionPosting: "OPENING_STOCK",
+      vehicles: [{ ...baseImportRow, vin: "1HGCM826-33A000001", purchasePrice: 10000 }],
+    });
+
+    expect(result.inserted).toBe(1);
+  });
+
   test("OPENING_STOCK still accepts VIN-less rows — nothing posts, so nothing can double-post", async () => {
     const { t, orgId, asOwner } = await seedDealer("s59i");
 

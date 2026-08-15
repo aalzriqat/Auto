@@ -10,6 +10,7 @@ import { useCurrency } from "@/hooks/useCurrency";
 import { ImportWizard, ImportFieldConfig, ImportRow, normalizeKey } from "@/components/import/ImportWizard";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import { assertDirectVehicleCreateStatus } from "@/convex/utils/vehicleStatusGuards";
+import { hasNonCanonicalVinCharacters } from "@/convex/utils/vin";
 import { cn } from "@/lib/utils";
 import { SpreadsheetRows } from "@/lib/spreadsheet";
 import { downloadVehicleTemplate } from "@/components/vehicles/vehicleSheet";
@@ -335,11 +336,16 @@ function capitalizingRows(rows: Record<string, any>[]) {
  * discovered after the earlier chunks have already posted real journal entries,
  * leaving the operator with a half-capitalized import and a generic error.
  */
-function purchaseBlockers(rows: Record<string, any>[]): { missingVin: number } {
+function purchaseBlockers(rows: Record<string, any>[]): { missingVin: number; malformedVin: number } {
   // Every row, not just the ones that post today — see the server's own
   // `missingVin` check for why a sourced or cost-less row is not harmless.
+  //
+  // `malformedVin` calls the SAME predicate the server does rather than
+  // restating it. A preflight that quietly disagrees with the guard it mirrors
+  // is how a button ends up offering what the server refuses.
   return {
     missingVin: rows.filter((r) => !String(r.vin ?? "").trim()).length,
+    malformedVin: rows.filter((r) => hasNonCanonicalVinCharacters(String(r.vin ?? ""))).length,
   };
 }
 
@@ -423,6 +429,12 @@ function ImportAccountingChoice({
         </p>
       )}
 
+      {posting === "PURCHASE" && blockers.malformedVin > 0 && (
+        <p className="text-xs font-medium leading-snug text-destructive">
+          {t("ImportVinCharactersForPurchase" as any).replace("{count}", String(blockers.malformedVin))}
+        </p>
+      )}
+
       {posting === "PURCHASE" && (
         <div className="space-y-3 ps-1">
           <div className="flex flex-wrap items-center gap-3">
@@ -501,7 +513,9 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
   const isBlocked = ({ validRows }: { validRows: Record<string, any>[] }) => {
     if (posting === null) return true;
     if (posting !== "PURCHASE") return false;
-    return paymentMethod === null || purchaseBlockers(validRows).missingVin > 0;
+    if (paymentMethod === null) return true;
+    const blockers = purchaseBlockers(validRows);
+    return blockers.missingVin > 0 || blockers.malformedVin > 0;
   };
 
   const handleOpenChange = (next: boolean) => {
@@ -613,10 +627,14 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
               // operator who knows to fix the bad row and re-import, and one
               // who has no idea anything landed.
               //
-              // Re-importing the same file afterwards is safe: a PURCHASE row
-              // must carry a real VIN, so the already-imported cars are skipped
-              // as duplicates rather than capitalized a second time (covered by
-              // "re-importing the same VIN does not capitalize it twice").
+              // Re-importing the same file afterwards skips the cars already
+              // added, PROVIDED their VIN strings survive the edit unchanged — a
+              // PURCHASE row must carry a plain-alphanumeric VIN, so dedup is a
+              // canonical match among them (covered by "re-importing the same
+              // VIN does not capitalize it twice"). A spreadsheet re-saved
+              // through Excel can still alter a cell, which is why the message
+              // says "as long as their VINs are unchanged" rather than
+              // promising outright.
               const detail = err instanceof Error ? err.message : String(err);
               // What a re-import actually does depends on the mode. A PURCHASE
               // file has a real VIN on every row, so every car already added is
