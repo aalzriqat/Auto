@@ -2198,7 +2198,12 @@ export const dealCockpit = query({
       recordedMargin: recordedConsignedMargin(sale),
       recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
       recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
-      settlesDirect: !collectsGross,
+      // The FACTS, not a pre-derived boolean: `saleIsAgentSale` asks the one
+      // admissibility derivation itself, so this screen cannot reach a
+      // different verdict than `saleEconomics` does about the same sale.
+      supplierSettlementRoute: sale.supplierSettlementRoute,
+      externallyFinanced:
+        sale.financingType === "FINANCED" || sale.financingType === "LEASE",
     });
 
     let supplierObligation: ObligationState = "NONE";

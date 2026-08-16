@@ -558,7 +558,10 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
         recordedMargin: recordedConsignedMargin(sale),
         recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
         recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
-        settlesDirect: !dealershipCollectsGross(consignedSettlementRoute(sale)),
+        // The FACTS, not a pre-derived boolean — see `supplierReceiptIsAdmissible`.
+        supplierSettlementRoute: sale.supplierSettlementRoute,
+        externallyFinanced:
+          sale.financingType === "FINANCED" || sale.financingType === "LEASE",
       })
     : vehicle != null && isConsignedAgentSale(vehicle);
 

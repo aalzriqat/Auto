@@ -434,28 +434,67 @@ export function recordedSupplierGrossReceipt(sale: Doc<"sales">): number | undef
  * THROUGH_DEALERSHIP row, where the receipt is deliberately not written and the
  * gross the dealership collected is the sale price.
  *
- * ⚠️ CX-B. The paragraph above states the invariant — the receipt is "deliberately
- * not written" on THROUGH_DEALERSHIP — and the code did not ENFORCE it. A design
- * that assumes a field is absent must refuse it when it is present, because the
- * `/admin` raw editor and a route changed after completion both produce exactly
- * that row. Unenforced, a stale 50,000 receipt on a car that sold for 20,000 made
- * a 40,000 entitlement eligible and published a supplier share exceeding the
- * ENTIRE gross the dealership collected.
+ * ⚠️ CX-B / CX-B2. The paragraph above states the invariant — the receipt is
+ * "deliberately not written" — and the code did not ENFORCE it. It then took two
+ * rounds to get the enforcement right, which is why the rule now lives in ONE
+ * derivation instead of being re-decided here: round 3 checked the ROUTE and
+ * still admitted a cash-direct receipt, because the route alone was never the
+ * discriminator. See `supplierReceiptIsAdmissible`.
  *
- * So the route decides which evidence is ADMISSIBLE, not merely how the answer is
- * labelled. On THROUGH_DEALERSHIP the gross the dealership collected is the sale
- * price and nothing on the row can raise it. The receipt remains the right
- * ceiling on DIRECT, where it is the money that actually reached him — that is
- * O-1 and it is unchanged.
+ * Unenforced, a stale 50,000 receipt on a car that sold for 20,000 made a 40,000
+ * entitlement eligible and published a supplier share exceeding the ENTIRE gross
+ * the dealership collected.
+ *
+ * Takes the settlement FACTS rather than a pre-computed boolean, deliberately: a
+ * caller that can pass the answer can pass the wrong answer, and this function
+ * has now been given the wrong answer once already.
  */
-function entitlementCeiling(args: {
-  salePrice: number;
-  recordedSupplierGrossReceipt?: number;
-  /** DIRECT_TO_SUPPLIER — the only route on which a receipt is admissible. */
-  settlesDirect: boolean;
-}): number {
-  if (!args.settlesDirect) return args.salePrice;
+function entitlementCeiling(
+  args: {
+    salePrice: number;
+    recordedSupplierGrossReceipt?: number;
+  } & ReceiptAdmissibilityFacts
+): number {
+  if (!supplierReceiptIsAdmissible(args)) return args.salePrice;
   return verifiedSupplierReceiptFor(args.recordedSupplierGrossReceipt) ?? args.salePrice;
+}
+
+/** The facts that decide whether a frozen supplier receipt is evidence at all. */
+export interface ReceiptAdmissibilityFacts extends SettlementRouteFacts {
+  /** FINANCED or LEASE — a third party paid the supplier something. */
+  externallyFinanced?: boolean;
+}
+
+/**
+ * Whether a frozen supplier receipt may raise the entitlement ceiling above the
+ * sale price. THE one derivation; every consumer asks this and none re-decides.
+ *
+ * ⚠️ CX-B2. Derived from the WRITER paths, not from another reader's predicate:
+ *
+ *  • `applications.ts` supplies `supplierGrossReceiptMinor` from
+ *    `approvedDealerPurchaseAmountMinor`, and only on DIRECT — that path is the
+ *    finance-application finalization, so it is externally financed BY
+ *    CONSTRUCTION.
+ *  • `saleCompletion.ts` otherwise stores `salePriceMinor`.
+ *  • NO public mutation accepts `supplierGrossReceiptMinor`.
+ *
+ * So on THROUGH_DEALERSHIP, and on cash DIRECT, the stored receipt is always
+ * EXACTLY the sale price. A larger one on those shapes is not something the
+ * product can produce — it is corruption, and it may not raise a ceiling.
+ *
+ * Only financed DIRECT can legitimately exceed the sale price, because
+ * `approveDealerPurchaseAmount` bounds the approval by `> 0` and
+ * `>= entitlement` and not by the sale price. That is O-1, and it survives.
+ *
+ * `=== true` and not truthiness: `externallyFinanced` absent is a DIFFERENT
+ * input from `false`, it is what a legacy row carries, and it must fail closed
+ * rather than be read as financed by permissiveness.
+ */
+export function supplierReceiptIsAdmissible(facts: ReceiptAdmissibilityFacts): boolean {
+  return (
+    !dealershipCollectsGross(consignedSettlementRoute(facts)) &&
+    facts.externallyFinanced === true
+  );
 }
 
 /**
@@ -530,13 +569,17 @@ export function saleIsAgentSale(args: {
    * economics must not disagree about which entitlements are believable.
    */
   recordedSupplierGrossReceipt?: number;
-  /** DIRECT_TO_SUPPLIER — itself a positive consignment signal. */
-  settlesDirect: boolean;
-}): boolean {
+} & ReceiptAdmissibilityFacts): boolean {
   if (args.vehicle !== null) return isConsignedAgentSale(args.vehicle);
+  // Derived HERE from the route rather than accepted as a boolean. Three call
+  // sites used to re-derive this with an identical but unshared formula, which
+  // was consistent only by review — nothing made it stay that way.
+  const settlesDirect = !dealershipCollectsGross(consignedSettlementRoute(args));
   return (
     args.recordedMargin !== undefined ||
-    args.settlesDirect ||
+    // DIRECT_TO_SUPPLIER is itself a positive consignment signal, whatever paid
+    // for it: `setSupplierSettlementRoute` refuses dealer-owned stock.
+    settlesDirect ||
     validFrozenEntitlementFor(
       args.recordedSupplierEntitlement,
       entitlementCeiling(args)
@@ -665,9 +708,9 @@ export function saleEconomics(args: {
   // an answer that already assumed it would be circular.
   const validFrozenEntitlement = validFrozenEntitlementFor(
     args.recordedSupplierEntitlement,
-    // The route is derived above from this sale's own field, so the ceiling and
-    // the classifier below cannot reach it from two different premises.
-    entitlementCeiling({ ...args, settlesDirect })
+    // The raw facts go in; `entitlementCeiling` asks the one admissibility
+    // derivation itself, so this call site cannot answer the question wrongly.
+    entitlementCeiling(args)
   );
   // Through the shared classifier, which is the same rule this function has
   // always applied — including the case where a supplier entitlement survives a
@@ -682,7 +725,8 @@ export function saleEconomics(args: {
     recordedMargin: args.recordedMargin,
     recordedSupplierEntitlement: args.recordedSupplierEntitlement,
     recordedSupplierGrossReceipt: args.recordedSupplierGrossReceipt,
-    settlesDirect,
+    supplierSettlementRoute: args.supplierSettlementRoute,
+    externallyFinanced: args.externallyFinanced,
   });
   // AGENT ONLY. A supplier basis must never derive a dealer-owned row's profit:
   // that row keeps its own cost, and mixing the two makes `revenue − cost`

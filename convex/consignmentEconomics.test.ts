@@ -927,9 +927,15 @@ describe("CX-B — a receipt from the wrong route raises no ceiling", () => {
     expect(e.supplierSettlement).toBe(13_500);
   });
 
-  test("the route decides which evidence is admissible, not merely the label", () => {
-    // Same row twice, one field different. If the ceiling ignored the route,
-    // both would publish the same entitlement and this would be vacuous.
+  /**
+   * ⚠️ INVERTED at round 4 (CX-B2). The previous version of this test asserted
+   * `direct.supplierSettlement === 30_000` on a CASH direct row — i.e. it PINNED
+   * the defect. A cash-direct receipt above the sale price is not
+   * writer-producible at all (see `supplierReceiptIsAdmissible`), so the old
+   * assertion certified an overstatement as correct behaviour. It is removed,
+   * not relaxed: the row it described must now be refused.
+   */
+  test("the route ALONE does not make a receipt admissible — financing is the other half", () => {
     const args = {
       salePrice: THROUGH_PRICE,
       vehicle: { sourceType: "SOURCED" } as const,
@@ -938,14 +944,19 @@ describe("CX-B — a receipt from the wrong route raises no ceiling", () => {
       recordedSupplierGrossReceipt: 35_000,
     };
     const through = saleEconomics({ ...args, supplierSettlementRoute: "THROUGH_DEALERSHIP" });
-    const direct = saleEconomics({
+    const cashDirect = saleEconomics({
       ...args,
       supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
       externallyFinanced: false,
     });
 
     expect(through.supplierSettlement).not.toBe(30_000);
-    expect(direct.supplierSettlement).toBe(30_000);
+    // The inversion. Cash direct is bounded by the sale price exactly as
+    // THROUGH_DEALERSHIP is, because no third party paid the supplier anything.
+    expect(cashDirect.supplierSettlement).not.toBe(30_000);
+    if (cashDirect.supplierSettlement !== null) {
+      expect(cashDirect.supplierSettlement).toBeLessThanOrEqual(THROUGH_PRICE);
+    }
   });
 });
 
@@ -1054,7 +1065,11 @@ describe("CX-C — an id that references nothing is not provenance", () => {
   async function makeApplication(
     s: Seeded,
     vehicleId: Id<"vehicles">,
-    opts: { orgId?: Id<"organizations">; finalizedSaleId?: Id<"sales"> } = {}
+    opts: {
+      orgId?: Id<"organizations">;
+      finalizedSaleId?: Id<"sales">;
+      status?: "DRAFT" | "APPROVED" | "REJECTED";
+    } = {}
   ) {
     return await s.t.run(async (ctx) => {
       const orgId = opts.orgId ?? s.orgId;
@@ -1065,7 +1080,7 @@ describe("CX-C — an id that references nothing is not provenance", () => {
       });
       return await ctx.db.insert("financeApplications", {
         orgId, quoteId, customerId: s.customerId, vehicleId,
-        salespersonId: s.userId, status: "APPROVED" as const,
+        salespersonId: s.userId, status: opts.status ?? ("APPROVED" as const),
         createdAt: Date.now(), updatedAt: Date.now(),
         ...(opts.finalizedSaleId ? { finalizedSaleId: opts.finalizedSaleId } : {}),
       });
@@ -1132,11 +1147,24 @@ describe("CX-C — an id that references nothing is not provenance", () => {
     expect(report.totalProfit).toBe(MARGIN);
   });
 
-  test("a STALE back-pointer does not make a valid application read as absent", async () => {
-    // The other direction of the finding. `finalizedSaleId` is a convenience
-    // pointer; a same-org application referenced by the sale is real financing
-    // whether or not that pointer was ever filled in. Withholding here would
-    // hide a fully derivable margin.
+  /**
+   * ⚠️ INVERTED at round 4 (CX-C2). The previous version asserted this row's
+   * margin WAS published, on the reasoning that `finalizedSaleId` is a mere
+   * convenience pointer. That reasoning was wrong, and the old assertion is
+   * removed rather than relaxed.
+   *
+   * The reciprocal link is not a convenience: `applications.ts:3172-3176`
+   * patches `status: "CLOSED"` and `finalizedSaleId: saleId` in the SAME
+   * statement that creates the sale, and `sales.create` cannot set
+   * `applicationId` at all. So the writer that creates the forward pointer
+   * always creates the back pointer, and a row missing it was not produced by
+   * that writer. Accepting org membership alone let any same-org DRAFT or
+   * REJECTED application release a frozen margin.
+   *
+   * Withheld is the honest answer, and it fails closed. The historical rows this
+   * withholds from are recorded in SCRUM-114, not papered over here.
+   */
+  test("an application with NO reciprocal link does not prove financing", async () => {
     const s = await seedDealer("cxcStalePtr");
     const { saleId, vehicleId } = await financedDirectWithReceipt(s, "VINCXC5");
     const appId = await makeApplication(s, vehicleId); // no finalizedSaleId
@@ -1144,7 +1172,178 @@ describe("CX-C — an id that references nothing is not provenance", () => {
 
     const report = await profitOf(s);
 
-    expect(report.unknownMarginSaleCount).toBe(0);
-    expect(report.totalProfit).toBe(MARGIN);
+    expect(report.unknownMarginSaleCount).toBe(1);
+    expect(report.totalProfit).toBe(0);
+  });
+
+  test("a same-org DRAFT application with no finalized sale does not prove financing", async () => {
+    const s = await seedDealer("cxcDraft");
+    const { saleId, vehicleId } = await financedDirectWithReceipt(s, "VINCXC6");
+    const appId = await makeApplication(s, vehicleId, { status: "DRAFT" });
+    await s.t.run(async (ctx) => await ctx.db.patch(saleId, { applicationId: appId }));
+
+    const report = await profitOf(s);
+
+    expect(report.unknownMarginSaleCount).toBe(1);
+    expect(report.totalProfit).toBe(0);
+  });
+
+  test("a REJECTED application with no finalized sale does not prove financing", async () => {
+    const s = await seedDealer("cxcRejected");
+    const { saleId, vehicleId } = await financedDirectWithReceipt(s, "VINCXC7");
+    const appId = await makeApplication(s, vehicleId, { status: "REJECTED" });
+    await s.t.run(async (ctx) => await ctx.db.patch(saleId, { applicationId: appId }));
+
+    const report = await profitOf(s);
+
+    expect(report.unknownMarginSaleCount).toBe(1);
+    expect(report.totalProfit).toBe(0);
+  });
+
+  test("an application for a DIFFERENT vehicle and customer does not prove financing", async () => {
+    // Same org, real application, simply not this deal's. Under the reciprocal
+    // rule the vehicle/customer comparison is not needed as a separate check —
+    // this row is refused because the back pointer does not name this sale —
+    // but the case is pinned so a future weakening of the rule is caught here.
+    const s = await seedDealer("cxcOtherCar");
+    const { saleId } = await financedDirectWithReceipt(s, "VINCXC8");
+    const otherVehicleId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId, vin: "VINCXC8B", make: "Kia", model: "Sportage", year: 2023,
+        mileage: 5, color: "Black", fuelType: "Gas", transmission: "Auto",
+        sellingPrice: SALE_PRICE, status: "AVAILABLE", sourceType: "SOURCED",
+        sourcedFromName: "Other Importer", sourceCost: ENTITLEMENT,
+      })
+    );
+    const otherCustomerId = await s.t.run((ctx) =>
+      ctx.db.insert("customers", { orgId: s.orgId, firstName: "Someone", lastName: "Else" })
+    );
+    const appId = await s.t.run(async (ctx) => {
+      const quoteId = await ctx.db.insert("quotes", {
+        orgId: s.orgId, customerId: otherCustomerId, vehicleId: otherVehicleId,
+        vehiclePrice: SALE_PRICE, downPayment: 0, termMonths: 12,
+        status: "ACCEPTED" as const, createdBy: s.userId, createdAt: Date.now(),
+      });
+      return await ctx.db.insert("financeApplications", {
+        orgId: s.orgId, quoteId, customerId: otherCustomerId, vehicleId: otherVehicleId,
+        salespersonId: s.userId, status: "APPROVED" as const,
+        createdAt: Date.now(), updatedAt: Date.now(),
+      });
+    });
+    await s.t.run(async (ctx) => await ctx.db.patch(saleId, { applicationId: appId }));
+
+    const report = await profitOf(s);
+
+    expect(report.unknownMarginSaleCount).toBe(1);
+    expect(report.totalProfit).toBe(0);
+  });
+});
+
+/* ------------------------------------------- Round 4: admissibility, both ways */
+
+/**
+ * AF-30 required these two. The round-3 matrix proved the REFUSALS and
+ * under-proved the ACCEPTANCES — the direction in which a fail-closed change
+ * does its damage. Without them, a "fix" that simply refused every receipt on
+ * the cash route would pass the entire suite.
+ */
+describe("CX-B2 — admissibility must accept what the writer really produces", () => {
+  const PRICE = 20_000;
+
+  test("cash DIRECT with a receipt EXACTLY the sale price is ACCEPTED", () => {
+    // This is the ONLY cash-direct receipt the writer can produce:
+    // `saleCompletion.ts:1026` stores `args.supplierGrossReceiptMinor ?? salePriceMinor`,
+    // and no public mutation supplies that argument — so on a cash sale the
+    // receipt IS the sale price. It must remain admissible evidence, and the
+    // entitlement under it must still publish.
+    const e = saleEconomics({
+      salePrice: PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: 15_000,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      externallyFinanced: false,
+      recordedSupplierEntitlement: 18_000,
+      recordedSupplierGrossReceipt: PRICE,
+    });
+
+    expect(e.supplierSettlement).toBe(18_000);
+    expect(e.dealershipMargin).toBe(PRICE - 18_000);
+  });
+
+  test("financed DIRECT with financingType ABSENT is inadmissible — absent is not false", () => {
+    // `externallyFinanced: undefined` is a DIFFERENT INPUT from `false`, and it
+    // is the shape a legacy row carries. The rule is `=== true`, so absence
+    // fails closed rather than being read as "not financed" by luck or as
+    // "financed" by permissiveness.
+    const e = saleEconomics({
+      salePrice: PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: 15_000,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      // externallyFinanced deliberately omitted
+      recordedSupplierEntitlement: 25_000,
+      recordedSupplierGrossReceipt: 30_000,
+    });
+
+    expect(e.supplierSettlement).not.toBe(25_000);
+    if (e.supplierSettlement !== null) {
+      expect(e.supplierSettlement).toBeLessThanOrEqual(PRICE);
+    }
+  });
+
+  test("cash DIRECT with a receipt ABOVE the sale price refuses the entitlement", () => {
+    // AF-30 matrix row 1. The writer cannot produce this row; it is corruption,
+    // and trusting it publishes a supplier share above the entire gross.
+    const e = saleEconomics({
+      salePrice: PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: 15_000,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      externallyFinanced: false,
+      recordedSupplierEntitlement: 25_000,
+      recordedSupplierGrossReceipt: 30_000,
+    });
+
+    expect(e.supplierSettlement).not.toBe(25_000);
+    if (e.supplierSettlement !== null) {
+      expect(e.supplierSettlement).toBeLessThanOrEqual(PRICE);
+    }
+  });
+
+  test("financed DIRECT keeps O-1: a writer-valid receipt above the sale price still publishes", () => {
+    // The regression O-1 exists to prevent. `approveDealerPurchaseAmount` bounds
+    // the approval only by `> 0` and `>= entitlement`, so an approval above the
+    // sale price is legitimately writer-producible on this route ALONE.
+    const e = saleEconomics({
+      salePrice: 12_500,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: 9_500,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      externallyFinanced: true,
+      recordedSupplierEntitlement: 13_500,
+      recordedSupplierGrossReceipt: 14_000,
+      recordedMargin: 500,
+      hasFinancingApplication: true,
+    });
+
+    expect(e.supplierSettlement).toBe(13_500);
+  });
+
+  test("toggling ONLY the financing classification changes what evidence is admissible", () => {
+    const args = {
+      salePrice: 12_500,
+      vehicle: { sourceType: "SOURCED" } as const,
+      capitalizedCost: 9_500,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER" as const,
+      recordedSupplierEntitlement: 13_500,
+      recordedSupplierGrossReceipt: 14_000,
+      recordedMargin: 500,
+      hasFinancingApplication: true,
+    };
+    const financed = saleEconomics({ ...args, externallyFinanced: true });
+    const cash = saleEconomics({ ...args, externallyFinanced: false });
+
+    expect(financed.supplierSettlement).toBe(13_500);
+    expect(cash.supplierSettlement).not.toBe(13_500);
   });
 });

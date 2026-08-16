@@ -31,22 +31,29 @@ export function applicationProvesFinancing(
   // and reading one at all is the cross-tenant shape this codebase re-checks
   // server-side everywhere else.
   if (application.orgId !== sale.orgId) return false;
-  // Unrelated: an application finalized on a DIFFERENT sale is real, same-org
-  // financing — for another car. It proves nothing about this one.
+  // RECIPROCAL, and nothing weaker.
   //
-  // Absence of `finalizedSaleId` is deliberately NOT disqualifying. It is a
-  // convenience pointer written at finalization, so a legitimately linked
-  // application can lack it (it is optional, and no index exists to search by
-  // it). Requiring it would withhold a fully derivable margin because a
-  // denormalized field was stale — failing in the opposite direction, which is
-  // the second half of the same finding.
-  if (
-    application.finalizedSaleId !== undefined &&
-    application.finalizedSaleId !== sale._id
-  ) {
-    return false;
-  }
-  return true;
+  // ⚠️ CX-C2. The first version of this rule let an ABSENT `finalizedSaleId`
+  // pass on org membership alone, reasoning that it is a mere denormalized
+  // convenience pointer. That reasoning was wrong, and it let any same-org
+  // DRAFT, REJECTED or different-vehicle application release a frozen margin.
+  //
+  // It is not a convenience pointer. `applications.ts` patches
+  // `status: "CLOSED"` AND `finalizedSaleId: saleId` in the SAME statement that
+  // creates the sale, and `sales.create` cannot set `applicationId` at all — so
+  // the one writer that can create the forward pointer always creates the back
+  // pointer. A row missing it was not produced by that writer.
+  //
+  // This single condition SUBSUMES the lifecycle, vehicle and customer checks a
+  // reviewer proposed: because CLOSED and the back pointer are written together,
+  // no DRAFT or REJECTED application can name this sale, and no application for
+  // another car can either. One relation is stronger than four comparisons.
+  //
+  // Historical rows without the link fail CLOSED — withheld and counted, never
+  // published and never zeroed. That population is recorded in SCRUM-114; the
+  // reverse lookup that could recover it needs an index `financeApplications`
+  // does not have, and is deliberately not attempted here.
+  return application.finalizedSaleId === sale._id;
 }
 
 /**
