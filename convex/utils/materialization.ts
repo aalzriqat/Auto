@@ -44,45 +44,82 @@ export type MaterializationStatus =
   | "running"
   | "interrupted"
   | "failed"
-  | "completed";
+  | "completed"
+  /**
+   * More than one state row for the same org, platform and generation. They
+   * cannot both be right, so nothing downstream is permitted to guess which is.
+   */
+  | "ambiguous";
 
 type AnyDb = GenericDatabaseReader<DataModel> | GenericDatabaseWriter<DataModel>;
 
 /**
- * The state row for one org/platform at the current generation, or null.
+ * The state row for one org/platform/generation, or an explicit reason there
+ * isn't exactly one.
  *
- * Uses `.first()` rather than `.unique()` on purpose. `.unique()` throws when
- * it finds duplicates, and this runs inside the Social Inbox read path — a
- * throw there is an outage, whereas reading one of two duplicate rows at worst
- * costs a fallback to the legacy path. The writer takes the same lookup before
- * inserting, so duplicates are not expected; this decides which way to be
- * wrong if they ever occur.
+ * This deliberately does not return `Doc | null`. It used to, resolved with
+ * `.first()`, on the reasoning that duplicates were unreachable through the
+ * writer and that reading one of two "at worst costs a fallback to the legacy
+ * path". The second half was simply false, and it was the half the safety
+ * argument rested on. `.first()` returns the OLDEST row at equal index keys, so
+ * a stale `completed` sitting beside a live `running` is exactly the pair it
+ * resolves the wrong way: the gate sees `completed`, unlocks a table that is
+ * still being built, and reports a short or empty inbox with total confidence.
+ * That is the incident this mechanism exists to prevent, reached through the
+ * one code path written to prevent it.
+ *
+ * `.unique()` is still not the answer — it throws, and a throw on the Social
+ * Inbox read path is an outage. So: read one more row than may legitimately
+ * exist, and report the contradiction as its own state for callers to fail
+ * closed on.
+ *
+ * Duplicates should remain unreachable in normal operation, since Convex's
+ * serializable transactions make the read-then-insert in
+ * `beginConversationBackfill` safe against a concurrent one. This is about what
+ * happens when that assumption is broken from outside it — a raw-JSON admin
+ * edit, a data repair, a future writer — which is exactly when a safety gate is
+ * being relied upon and exactly when it must not fail open.
  */
-export async function readMaterializationState(
+export async function lookupMaterializationState(
   ctx: { db: AnyDb },
   orgId: Id<"organizations">,
   platform: SocialPlatform,
   generation: number = SOCIAL_CONVERSATION_GENERATION
-): Promise<Doc<"socialMaterializationState"> | null> {
-  return await ctx.db
+): Promise<
+  | { kind: "missing"; row: null }
+  | { kind: "unique"; row: Doc<"socialMaterializationState"> }
+  | { kind: "ambiguous"; row: null }
+> {
+  // Two, not all: the only question is "exactly one or not", and an unbounded
+  // read here would scale with whatever went wrong.
+  const rows = await ctx.db
     .query("socialMaterializationState")
     .withIndex("by_org_generation_platform", (q) =>
       q.eq("orgId", orgId).eq("generation", generation).eq("platform", platform)
     )
-    .first();
+    .take(2);
+
+  if (rows.length === 0) return { kind: "missing", row: null };
+  if (rows.length === 1) return { kind: "unique", row: rows[0] };
+  return { kind: "ambiguous", row: null };
 }
 
 /**
- * Describes a state row the way staff need to read it.
+ * Describes a lookup the way staff need to read it.
  *
  * `notStarted` and `completed`-with-zero-rows are the two states that look
  * identical from the table contents alone, and telling them apart is the whole
- * point of the record.
+ * point of the record. `ambiguous` is reported rather than folded into
+ * `notStarted` because the two want opposite operator responses: one is "run
+ * the backfill", the other is "resolve the contradiction first, because a run
+ * cannot".
  */
 export function describeMaterializationStatus(
-  row: Doc<"socialMaterializationState"> | null,
+  lookup: Awaited<ReturnType<typeof lookupMaterializationState>>,
   now: number
 ): MaterializationStatus {
+  if (lookup.kind === "ambiguous") return "ambiguous";
+  const row = lookup.row;
   if (!row) return "notStarted";
   if (row.status === "completed") return "completed";
   if (row.status === "failed") return "failed";
@@ -130,11 +167,42 @@ export function describeMaterializationStatus(
  *    nowhere else.
  *
  * Points 3 and 4 together mean every event is materialised by at least one of
- * the two mechanisms, and never by neither. The union is what makes COMPLETED
- * mean "current", which is what lets it unlock the reader.
+ * the two mechanisms, and never by neither.
  *
- * `socialMaterializationGate.test.ts` exercises exactly this: a message that
- * arrives between two pages of a live run, asserted present after completion.
+ * ## What COMPLETED does NOT prove, and what covers the gap
+ *
+ * The argument above is entirely about source coverage: every event has a row.
+ * That is strictly weaker than what the reader needs, which is that the rows it
+ * serves are exactly the current generation's — and the difference is not
+ * academic. A backfill only ever visits threads reachable from source events,
+ * and `syncSocialConversation` only deletes a row when it recomputes that row's
+ * thread and finds it empty. A row that no source event maps to is therefore
+ * never visited, never rebuilt and never deleted. Completion says nothing about
+ * it, and neither does a force rebuild.
+ *
+ * That becomes deterministic rather than hypothetical on a generation bump: a
+ * bump exists precisely for the case where `conversationKey` changes meaning,
+ * so the old keys do not collide with the new ones. Nothing overwrites them.
+ * They would sit in the table until the new generation reached COMPLETED and
+ * then be served beside the real threads.
+ *
+ * The fence is therefore on the DATA as well as the claim: every row carries
+ * its `generation`, every authoritative index leads with it, and the reader
+ * selects one generation. Superseded rows become inert — wrong, but
+ * unreachable, and sweepable whenever with no correctness deadline.
+ *
+ * ⚠️ One residual, stated plainly because it is the shape that bites. This
+ * fences generation-MISMATCHED rows, not same-generation orphans. A stale row
+ * whose thread still exists under the current key scheme is only ever corrected
+ * by a write to that thread, so the bulk-writer risk in point 2 above — a
+ * handler that patches events without collecting every thread it touched — is
+ * not covered here and cannot be. `deferredThreadSync.test.ts` is what holds
+ * that end, which is why its own fail-open history is treated as seriously as
+ * the gate's.
+ *
+ * `socialMaterializationGate.test.ts` exercises both: a message that arrives
+ * between two pages of a live run, asserted present after completion, and a
+ * superseded-generation row asserted absent from a completed reader.
  */
 
 /**
@@ -147,17 +215,21 @@ export function describeMaterializationStatus(
  * which is the same defect as showing a confidently empty one.
  *
  * Fails closed on every uncertainty — missing row, wrong generation, running,
- * interrupted, failed. The cost of being wrong in this direction is a slower
- * query; the cost of being wrong in the other direction is staff not seeing
- * customer messages.
+ * interrupted, failed, or contradictory duplicates. The cost of being wrong in
+ * this direction is a slower query; the cost of being wrong in the other
+ * direction is staff not seeing customer messages.
  */
 export async function socialConversationsReady(
   ctx: { db: AnyDb },
   orgId: Id<"organizations">
 ): Promise<boolean> {
   for (const platform of SOCIAL_PLATFORMS) {
-    const row = await readMaterializationState(ctx, orgId, platform);
-    if (!row || row.status !== "completed") return false;
+    const lookup = await lookupMaterializationState(ctx, orgId, platform);
+    // `kind` first, and not merely for style: reading `.row` alone would treat
+    // an ambiguous lookup as a missing one, which happens to be safe here and
+    // would stop being safe the moment someone gave `ambiguous` a row to
+    // report. The gate states its requirement instead of inheriting it.
+    if (lookup.kind !== "unique" || lookup.row.status !== "completed") return false;
   }
   return true;
 }

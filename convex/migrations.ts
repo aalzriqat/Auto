@@ -17,7 +17,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import {
   describeMaterializationStatus,
-  readMaterializationState,
+  lookupMaterializationState,
   SOCIAL_CONVERSATION_GENERATION,
   SOCIAL_PLATFORMS,
   type SocialPlatform,
@@ -652,7 +652,18 @@ async function beginConversationBackfill(
     }
   }
 
-  const existing = await readMaterializationState(ctx, orgId, platform);
+  const lookup = await lookupMaterializationState(ctx, orgId, platform);
+  // Two contradictory state rows. Standing down is the only safe move: the
+  // operator-start path below would patch one of them and leave the other, so a
+  // run "completing" would still leave a `completed` row beside whatever the
+  // other one says — and the gate would then be resolving a contradiction it
+  // was never allowed to resolve. Worse, the `missing` branch would INSERT a
+  // third row, compounding the anomaly under the very call meant to repair it.
+  // Only a human deleting the wrong row clears this, and
+  // `adminSystem.getSocialMaterializationStatus` reports it as `ambiguous` with
+  // `duplicateState: true` so they can find it.
+  if (lookup.kind === "ambiguous") return null;
+  const existing = lookup.row;
   const now = Date.now();
 
   if (runId !== undefined) {
@@ -675,7 +686,7 @@ async function beginConversationBackfill(
   // Correctness was never at risk — `syncSocialConversation` is a full
   // recompute, so a duplicate pass converges — but liveness was.
   if (onlyIfIdle && existing) {
-    const status = describeMaterializationStatus(existing, now);
+    const status = describeMaterializationStatus(lookup, now);
     if (status === "running" || status === "completed") return null;
   }
 
@@ -874,7 +885,7 @@ export const startSocialConversationBackfills = internalMutation({
     for (const org of page.page) {
       for (const platform of SOCIAL_PLATFORMS) {
         const status = describeMaterializationStatus(
-          await readMaterializationState(ctx, org._id, platform),
+          await lookupMaterializationState(ctx, org._id, platform),
           now
         );
 
@@ -891,7 +902,12 @@ export const startSocialConversationBackfills = internalMutation({
         // operator re-running the fan-out to *check on* progress restarts it
         // instead, and on a long walk that is a livelock. `interrupted`,
         // `failed` and `notStarted` all do want a new run.
-        const settled = status === "completed" || status === "running";
+        // `ambiguous` joins these two despite wanting a different remedy. The
+        // worker refuses it anyway, so scheduling one would burn a transaction
+        // to accomplish nothing; skipping keeps the fan-out's own numbers
+        // honest about how much work it actually started.
+        const settled =
+          status === "completed" || status === "running" || status === "ambiguous";
         if (args.force !== true && settled) {
           skipped += 1;
           continue;

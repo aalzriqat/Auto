@@ -210,6 +210,88 @@ describe("materialization readiness gate", () => {
     expect(await listConversations(asEditor, orgId)).toHaveLength(1);
   });
 
+  test("a materialized row from a superseded generation is never served", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asEditor } = await seedOrg(t, "gate_stale_generation");
+    const customer = await makeCustomer(t, orgId, "Hana");
+    await seedLegacyEvents(t, orgId, customer, 2);
+
+    // A genuine, complete backfill of the CURRENT generation.
+    vi.useFakeTimers();
+    try {
+      await t.mutation(internal.migrations.backfillInstagramConversations, { orgId });
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      await t.mutation(internal.migrations.backfillFacebookConversations, { orgId });
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // A row left behind by the generation before it, under the key scheme that
+    // generation used. This is the case a generation bump is FOR, and it is
+    // unreachable by repair: no source event produces this key, so neither the
+    // backfill nor a force rebuild ever visits it. `syncSocialConversation`
+    // only deletes a row when it recomputes that row's thread and finds it
+    // empty — and it never recomputes this one.
+    //
+    // So completion cannot mean "the table holds exactly the current
+    // generation" by walking the source; it can only mean it by the reader
+    // refusing to look at anything else.
+    await t.run((ctx) =>
+      ctx.db.insert("socialConversations", {
+        orgId,
+        generation: SOCIAL_CONVERSATION_GENERATION - 1,
+        conversationKey: "v0::dm::ghost",
+        platform: "instagram",
+        conversationKind: "dm",
+        customerId: customer,
+        // Newest activity, so an unfenced reader returns it FIRST rather than
+        // somewhere a smaller assertion might miss.
+        lastEventAt: Date.now() + 60_000,
+        eventCount: 99,
+        unansweredCount: 99,
+        vehicleIds: [],
+        vehicleCount: 0,
+        latestSenderRawId: "ghost_sender",
+      })
+    );
+
+    // The materialized path is unlocked and must answer exactly what the source
+    // says — one thread, not two.
+    // `eventCount` is the discriminator because the list item does not expose
+    // `conversationKey`. The ghost carries 99, so this states the whole
+    // expected list rather than merely asserting the ghost's absence — an
+    // equality that fails as [99, 2] if the fence is removed.
+    const page = await listConversations(asEditor, orgId);
+    expect(page.map((c) => c.eventCount)).toEqual([2]);
+  });
+
+  test("contradictory duplicate state rows do not unlock the reader", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asEditor } = await seedOrg(t, "gate_duplicate_state");
+    const customer = await makeCustomer(t, orgId, "Gale");
+    await seedLegacyEvents(t, orgId, customer, 2);
+
+    // Two rows for the same (org, generation, platform) that disagree. The
+    // lookup is `.first()`, which returns the OLDEST row at equal index keys —
+    // so the stale `completed` wins and the live `running` is never seen. The
+    // gate is the one place in this feature where being wrong in this direction
+    // costs staff their customer messages, so it must not resolve a
+    // contradiction by picking whichever row happens to sort first.
+    await writeState(t, orgId, "instagram", {});
+    await writeState(t, orgId, "instagram", { status: "running", completedAt: undefined });
+    await writeState(t, orgId, "facebook", {});
+
+    // Nothing was ever materialised, so trusting the duplicate `completed`
+    // reports an empty inbox for an org holding events — the incident this
+    // whole mechanism exists to prevent, reached by a different door.
+    expect(await t.run((ctx) => ctx.db.query("socialConversations").collect())).toHaveLength(0);
+
+    const page = await listConversations(asEditor, orgId);
+    expect(page).toHaveLength(1);
+    expect(page[0].eventCount).toBe(2);
+  });
+
   test("proven completion switches the reader to the materialized table", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrg(t, "gate_complete");

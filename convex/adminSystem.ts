@@ -9,7 +9,7 @@ import { internal } from "./_generated/api";
 import { CRON_HEARTBEAT_JOBS } from "./constants";
 import {
   describeMaterializationStatus,
-  readMaterializationState,
+  lookupMaterializationState,
   SOCIAL_CONVERSATION_GENERATION,
   SOCIAL_PLATFORMS,
 } from "./utils/materialization";
@@ -86,10 +86,17 @@ export const getSocialMaterializationStatus = query({
       orgs.map(async (org) => {
         const platforms = await Promise.all(
           SOCIAL_PLATFORMS.map(async (platform) => {
-            const row = await readMaterializationState(ctx, org._id, platform);
+            const lookup = await lookupMaterializationState(ctx, org._id, platform);
+            const row = lookup.row;
             return {
               platform,
-              status: describeMaterializationStatus(row, now),
+              status: describeMaterializationStatus(lookup, now),
+              // Surfaced explicitly rather than left to be inferred from
+              // `status`. An operator seeing `ambiguous` needs to know it means
+              // "there are two contradictory rows here", because no backfill
+              // will clear it — the writer stands down on it too, so the only
+              // way out is a human deleting the wrong row.
+              duplicateState: lookup.kind === "ambiguous",
               generation: row?.generation ?? null,
               expectedGeneration: SOCIAL_CONVERSATION_GENERATION,
               processedCount: row?.processedCount ?? 0,

@@ -4321,6 +4321,29 @@ export default defineSchema({
    */
   socialConversations: defineTable({
     orgId: v.id("organizations"),
+    /**
+     * The materialisation shape this row was written under.
+     *
+     * The readiness record is generation-scoped, but that only fences the
+     * *claim*; without this field it could not fence the *data* the claim
+     * authorises. `SOCIAL_CONVERSATION_GENERATION` must be bumped whenever
+     * `conversationKey` changes meaning — and on that bump the old keys do not
+     * collide with the new ones, so nothing overwrites them and no backfill
+     * ever visits them again. They would simply sit in the table until the new
+     * generation reached `completed` and then be served as real threads.
+     *
+     * Stamping the generation onto the row makes that impossible: the reader
+     * selects one generation, and superseded rows become inert garbage that can
+     * be swept whenever, by anything, with no correctness deadline.
+     *
+     * ⚠️ This fences generation-mismatched rows, NOT same-generation orphans.
+     * A row whose thread still exists under the current scheme is only ever
+     * corrected by a write to that thread, so a bulk writer that patches events
+     * without collecting every thread it touched still leaves a stale row this
+     * cannot see. That risk lives in the writer, and `deferredThreadSync.test.ts`
+     * is what holds it.
+     */
+    generation: v.number(),
     conversationKey: v.string(),
     platform: v.union(v.literal("instagram"), v.literal("facebook")),
     conversationKind: v.union(v.literal("comment"), v.literal("dm")),
@@ -4340,14 +4363,31 @@ export default defineSchema({
     latestSenderRawId: v.string(),
   })
     // Upsert path: resolve a thread from an event in one lookup.
-    .index("by_org_key", ["orgId", "conversationKey"])
+    .index("by_org_generation_key", ["orgId", "generation", "conversationKey"])
     // The list itself — descending gives most-recent-activity order directly.
-    .index("by_org_lastEventAt", ["orgId", "lastEventAt"])
+    .index("by_org_generation_lastEventAt", ["orgId", "generation", "lastEventAt"])
     // The two filters the inbox offers as first-class controls; the rest
     // (hasVehicle, needsReply) are evaluated against the paginated stream,
     // which reads these small rows rather than the events behind them.
-    .index("by_org_platform_lastEventAt", ["orgId", "platform", "lastEventAt"])
-    .index("by_org_kind_lastEventAt", ["orgId", "conversationKind", "lastEventAt"]),
+    .index("by_org_generation_platform_lastEventAt", [
+      "orgId",
+      "generation",
+      "platform",
+      "lastEventAt",
+    ])
+    .index("by_org_generation_kind_lastEventAt", [
+      "orgId",
+      "generation",
+      "conversationKind",
+      "lastEventAt",
+    ])
+    // Deliberately NOT generation-scoped, and the only index that must not be:
+    // teardown has to reach every row an org owns, including rows left behind
+    // by superseded generations. A purge that walked the current generation
+    // alone would report a clean org while leaving its customer messages
+    // behind — which is the failure this index exists to prevent, not an
+    // optimisation.
+    .index("by_org_lastEventAt", ["orgId", "lastEventAt"]),
 
   /**
    * Whether `socialConversations` may be trusted as the authoritative source

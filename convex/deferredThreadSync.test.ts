@@ -146,6 +146,114 @@ function mayHoldDeferredMutation(source: string): boolean {
   return source.includes("socialBulkMutation");
 }
 
+/** The builder's real name, wherever it is bound. */
+const BUILDER = "socialBulkMutation";
+
+/**
+ * Every local name in this module that reaches the deferred builder.
+ *
+ * The scan used to match the builder's *spelling* at the call site
+ * (`= socialBulkMutation(`), which is not the same question as "is this built
+ * on the deferred builder". A named import may be renamed on the way in, and
+ * that is ordinary TypeScript rather than anything exotic:
+ *
+ *     import { socialBulkMutation as deferredMutation } from "./functions";
+ *     export const bad = deferredMutation({ ... });
+ *
+ * That defeated both halves of the guard at once. The mutation appeared in
+ * neither `deferredMutationOffenders` nor `deferredMutationsIn`, so the
+ * "guard is armed" test still saw exactly the two known mutations and stayed
+ * green — a guard reporting clean because it was looking for the wrong string.
+ *
+ * `mayHoldDeferredMutation` is not a backstop against this: the raw source
+ * still contains `socialBulkMutation` on the import line, so the file is parsed
+ * and then nothing matches.
+ *
+ * Resolved from the AST rather than by pattern, so the answer is whatever
+ * TypeScript itself would bind. Both import forms are covered — the named
+ * import under any local name, and a namespace import used as
+ * `fns.socialBulkMutation(...)`.
+ */
+function builderBindings(source: string): string[] {
+  const sourceFile = ts.createSourceFile("scan.ts", source, ts.ScriptTarget.Latest, true);
+  // The builder's own name is always a binding, whether or not an import
+  // declaration was found. Resolution ADDS the aliases a spelling match would
+  // miss; it must never subtract the spelling itself. Dropping it made every
+  // fixture without an import line invisible — the same fail-open shape as the
+  // bug this function exists to fix, introduced by the fix for it.
+  const names: string[] = [BUILDER];
+
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement)) continue;
+    const bindings = statement.importClause?.namedBindings;
+    if (!bindings) continue;
+
+    // `import * as fns from "./functions"` — the builder is reached as a
+    // property, so the binding worth recording is `fns.socialBulkMutation`.
+    if (ts.isNamespaceImport(bindings)) {
+      names.push(`${bindings.name.text}.${BUILDER}`);
+      continue;
+    }
+
+    if (!ts.isNamedImports(bindings)) continue;
+    for (const element of bindings.elements) {
+      // `propertyName` is set only when the import is renamed, in which case it
+      // holds the ORIGINAL name and `name` holds the local one.
+      const imported = element.propertyName?.text ?? element.name.text;
+      if (imported === BUILDER) names.push(element.name.text);
+    }
+  }
+
+  return names;
+}
+
+/** Matches `= <binding>(` for any name that resolves to the deferred builder. */
+function builderCallPattern(source: string): RegExp {
+  const bindings = builderBindings(source);
+  // Longest first so `fns.socialBulkMutation` is preferred over a bare
+  // `socialBulkMutation` binding that happens to also exist.
+  const alternation = bindings
+    .sort((a, b) => b.length - a.length)
+    .map((name) => name.replace(/\./g, "\\."))
+    .join("|");
+  return new RegExp(`=\\s*(?:${alternation})\\(`);
+}
+
+/**
+ * Re-exports of the builder under another name, which this guard refuses.
+ *
+ * Binding resolution closes renamed imports, but it cannot follow the builder
+ * across modules. If some module does `export const deferredMutation =
+ * socialBulkMutation`, then an importer of THAT module never writes
+ * `socialBulkMutation` anywhere — so `mayHoldDeferredMutation` skips it before
+ * any parsing happens, and no amount of care at the call site can help.
+ *
+ * Rather than pretend to follow arbitrary indirection, the module doing the
+ * re-export is reported. That puts the failure at the one place that can still
+ * see what is going on.
+ */
+function builderReExports(source: string, rel: string): string[] {
+  const sourceFile = ts.createSourceFile("scan.ts", source, ts.ScriptTarget.Latest, true);
+  const bindings = new Set(builderBindings(source));
+  const offenders: string[] = [];
+
+  for (const statement of sourceFile.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const decl of statement.declarationList.declarations) {
+      const init = decl.initializer;
+      if (!init || !ts.isIdentifier(decl.name)) continue;
+      // An identifier alone, NOT a call: `= socialBulkMutation` rather than
+      // `= socialBulkMutation({...})`. The latter is an ordinary mutation.
+      if (!ts.isIdentifier(init) || !bindings.has(init.text)) continue;
+      offenders.push(
+        `${rel}:${decl.name.text} re-exports ${BUILDER} under another name, which this guard cannot follow`
+      );
+    }
+  }
+
+  return offenders;
+}
+
 /**
  * One entry per exported Convex function, split on the same boundary
  * `scripts/tenantWriteGuard.ts` uses.
@@ -156,6 +264,7 @@ function mayHoldDeferredMutation(source: string): boolean {
  */
 export function deferredMutationsIn(source: string, rel: string): string[] {
   if (!mayHoldDeferredMutation(source)) return [];
+  const builderCall = builderCallPattern(source);
   const found: string[] = [];
   const code = stripComments(source);
 
@@ -170,7 +279,7 @@ export function deferredMutationsIn(source: string, rel: string): string[] {
     const name = raw.match(/^(\w+)/)?.[1];
     if (!name) continue;
     const chunk = end === -1 ? whole : whole.slice(0, end);
-    if (/=\s*socialBulkMutation\(/.test(chunk)) found.push(`${rel}:${name}`);
+    if (builderCall.test(chunk)) found.push(`${rel}:${name}`);
   }
 
   return found;
@@ -178,7 +287,11 @@ export function deferredMutationsIn(source: string, rel: string): string[] {
 
 export function deferredMutationOffenders(source: string, rel: string): string[] {
   if (!mayHoldDeferredMutation(source)) return [];
-  const offenders: string[] = [];
+  // Indirection this guard cannot follow is reported, not tolerated. Checked
+  // before the binding lookup because a module that only re-exports the builder
+  // has no call sites of its own to scan.
+  const offenders: string[] = builderReExports(source, rel);
+  const builderCall = builderCallPattern(source);
   const code = stripComments(source);
 
   // Leading newline so a definition at offset 0 is chunked like any other.
@@ -201,13 +314,13 @@ export function deferredMutationOffenders(source: string, rel: string): string[]
       // Report it rather than scan it: for a guard whose whole purpose is to
       // catch a silent omission, "I could not parse this" must not read the
       // same as "this is fine".
-      if (/=\s*socialBulkMutation\(/.test(whole)) {
+      if (builderCall.test(whole)) {
         offenders.push(`${rel}:${name} uses socialBulkMutation in a definition this guard cannot bound`);
       }
       continue;
     }
     const chunk = whole.slice(0, end);
-    if (!/=\s*socialBulkMutation\(/.test(chunk)) continue;
+    if (!builderCall.test(chunk)) continue;
 
     // Both halves are required. Collecting without syncing leaves the rows
     // stale; syncing without collecting recomputes an empty set, which looks
@@ -332,6 +445,74 @@ export const bad = socialBulkMutation({
     expect(offenders).toEqual([
       "socialInbox.ts:bad uses socialBulkMutation but never calls syncDeferredSocialThreads",
       "socialInbox.ts:bad uses socialBulkMutation but never calls collectSocialThread",
+    ]);
+  });
+
+  test("an aliased import of the builder cannot hide a non-syncing mutation", () => {
+    // Fifth fail-open in this helper, and the first found by review rather than
+    // by a failure: the scan matched the builder's *spelling* at the call site
+    // (`= socialBulkMutation(`) rather than the binding it resolves to. A named
+    // import renamed on the way in is ordinary TypeScript, and it defeated both
+    // halves at once — the mutation appeared in neither the offender list nor
+    // the armed list, so the "guard is armed" test still saw exactly the two
+    // known mutations and stayed green.
+    //
+    // `mayHoldDeferredMutation` is not the backstop it looks like here: the raw
+    // source still contains `socialBulkMutation` on the import line, so the file
+    // is parsed, and then nothing matches.
+    const source = `
+import { socialBulkMutation as deferredMutation } from "./functions";
+
+export const bad = deferredMutation({
+  args: {},
+  handler: async (ctx) => {
+    await ctx.db.patch(id, { customerId });
+  },
+});
+`;
+    expect(deferredMutationOffenders(source, "x.ts")).toEqual([
+      "x.ts:bad uses socialBulkMutation but never calls syncDeferredSocialThreads",
+      "x.ts:bad uses socialBulkMutation but never calls collectSocialThread",
+    ]);
+    expect(deferredMutationsIn(source, "x.ts")).toEqual(["x.ts:bad"]);
+  });
+
+  test("a namespace import of the builder cannot hide a non-syncing mutation", () => {
+    // The other spelling that reaches the same builder without ever writing
+    // `= socialBulkMutation(`.
+    const source = `
+import * as fns from "./functions";
+
+export const bad = fns.socialBulkMutation({
+  args: {},
+  handler: async (ctx) => {
+    await ctx.db.patch(id, { customerId });
+  },
+});
+`;
+    expect(deferredMutationOffenders(source, "x.ts")).toEqual([
+      "x.ts:bad uses socialBulkMutation but never calls syncDeferredSocialThreads",
+      "x.ts:bad uses socialBulkMutation but never calls collectSocialThread",
+    ]);
+    expect(deferredMutationsIn(source, "x.ts")).toEqual(["x.ts:bad"]);
+  });
+
+  test("re-exporting the builder under another name fails the guard closed", () => {
+    // The escape the two tests above cannot close by binding resolution alone.
+    // If a module re-exports the builder, an importer of *that* module never
+    // names `socialBulkMutation` at all, so `mayHoldDeferredMutation` skips it
+    // before any parsing happens and no amount of care at the call site helps.
+    //
+    // The guard cannot follow arbitrary indirection, so it refuses it: the
+    // module doing the re-export is itself reported. That keeps the failure at
+    // the one place that can see what is happening.
+    const source = `
+import { socialBulkMutation } from "./functions";
+
+export const deferredMutation = socialBulkMutation;
+`;
+    expect(deferredMutationOffenders(source, "x.ts")).toEqual([
+      "x.ts:deferredMutation re-exports socialBulkMutation under another name, which this guard cannot follow",
     ]);
   });
 

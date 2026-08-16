@@ -4,6 +4,7 @@ import type { GenericDatabaseWriter } from "convex/server";
 import { components } from "./_generated/api";
 import { DataModel, Doc, Id } from "./_generated/dataModel";
 import { validateVinChecksum } from "../lib/vinHelpers";
+import { SOCIAL_CONVERSATION_GENERATION } from "./utils/materialization";
 
 /**
  * Maintained counts for vehicles, so the dashboard can answer "how many" and
@@ -699,10 +700,18 @@ export async function syncSocialConversation(
 ): Promise<void> {
   socialConversationSyncCount += 1;
   const conversationKey = socialConversationKey(id);
+  // Generation-scoped, like every authoritative path over this table. A bump
+  // changes what `conversationKey` means, so the previous generation's row for
+  // "the same" thread is deliberately NOT found here: it is superseded, not
+  // updated, and overwriting it would be the one way to lose the old shape
+  // before anything had proven the new one.
   const existing = await ctx.db
     .query("socialConversations")
-    .withIndex("by_org_key", (q) =>
-      q.eq("orgId", id.orgId).eq("conversationKey", conversationKey)
+    .withIndex("by_org_generation_key", (q) =>
+      q
+        .eq("orgId", id.orgId)
+        .eq("generation", SOCIAL_CONVERSATION_GENERATION)
+        .eq("conversationKey", conversationKey)
     )
     .first();
 
@@ -732,6 +741,7 @@ export async function syncSocialConversation(
 
   const row = {
     orgId: id.orgId,
+    generation: SOCIAL_CONVERSATION_GENERATION,
     conversationKey,
     platform: id.platform,
     conversationKind: id.kind,

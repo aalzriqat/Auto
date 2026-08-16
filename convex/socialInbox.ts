@@ -20,8 +20,9 @@ import {
 } from "./aggregates";
 import {
   describeMaterializationStatus,
-  readMaterializationState,
+  lookupMaterializationState,
   socialConversationsReady,
+  SOCIAL_CONVERSATION_GENERATION,
   SOCIAL_PLATFORMS,
 } from "./utils/materialization";
 
@@ -433,17 +434,37 @@ export const listConversations = query({
     const { orgId, platform, kind, hasVehicle, needsReply } = args;
     const conversations = ctx.db.query("socialConversations");
 
+    // Every branch pins the generation, and it is a range constraint rather
+    // than a post-read filter for the usual reason: a filter would still read
+    // the superseded rows before discarding them, which is the cost this whole
+    // change exists to remove.
+    //
+    // Without it the readiness record would fence the claim while leaving the
+    // data unfenced. A generation bump changes what `conversationKey` means, so
+    // the previous generation's rows neither collide with the new keys nor get
+    // revisited by the new backfill — nothing overwrites them and nothing
+    // deletes them. They would sit in the table until the new generation
+    // reached `completed` and then be served beside the real threads, as
+    // confidently as the empty inbox in the incident above.
     let baseQuery;
     if (platform) {
-      baseQuery = conversations.withIndex("by_org_platform_lastEventAt", (q) =>
-        q.eq("orgId", orgId).eq("platform", platform)
+      baseQuery = conversations.withIndex("by_org_generation_platform_lastEventAt", (q) =>
+        q
+          .eq("orgId", orgId)
+          .eq("generation", SOCIAL_CONVERSATION_GENERATION)
+          .eq("platform", platform)
       );
     } else if (kind) {
-      baseQuery = conversations.withIndex("by_org_kind_lastEventAt", (q) =>
-        q.eq("orgId", orgId).eq("conversationKind", kind)
+      baseQuery = conversations.withIndex("by_org_generation_kind_lastEventAt", (q) =>
+        q
+          .eq("orgId", orgId)
+          .eq("generation", SOCIAL_CONVERSATION_GENERATION)
+          .eq("conversationKind", kind)
       );
     } else {
-      baseQuery = conversations.withIndex("by_org_lastEventAt", (q) => q.eq("orgId", orgId));
+      baseQuery = conversations.withIndex("by_org_generation_lastEventAt", (q) =>
+        q.eq("orgId", orgId).eq("generation", SOCIAL_CONVERSATION_GENERATION)
+      );
     }
 
     // Whatever the chosen index did not already constrain. `hasVehicle` reads
@@ -530,10 +551,11 @@ export const materializationStatus = query({
     const now = Date.now();
     const platforms = await Promise.all(
       SOCIAL_PLATFORMS.map(async (platform) => {
-        const row = await readMaterializationState(ctx, args.orgId, platform);
+        const lookup = await lookupMaterializationState(ctx, args.orgId, platform);
+        const row = lookup.row;
         return {
           platform,
-          status: describeMaterializationStatus(row, now),
+          status: describeMaterializationStatus(lookup, now),
           processedCount: row?.processedCount ?? 0,
           materializedCount: row?.materializedCount ?? 0,
           expectedCount: row?.expectedCount ?? 0,
