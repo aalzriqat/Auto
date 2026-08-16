@@ -604,6 +604,27 @@ async function beginConversationBackfill(
   expectedCount: number,
   onlyIfIdle = false
 ): Promise<Doc<"socialMaterializationState"> | null> {
+  // ⚠️ Refuse to write readiness state for an organization that is gone or being
+  // deleted.
+  //
+  // `hardDeleteOrg` purges `socialMaterializationState` at a fixed step but only
+  // deletes the organization row once every step has drained. In between, the
+  // org is still a live row that the fan-out's walk returns. A row inserted in
+  // that window sits behind the purge's step cursor and is never revisited, so
+  // the request reports COMPLETED with a readiness record still pointing at a
+  // deleted org.
+  //
+  // Filtering the walk instead would not close it: the walk paginates across
+  // transactions, so an org can enter deletion after its page was read. The
+  // check has to be here, in the same transaction as the write it guards.
+  //
+  // Checked per call, which is the only place that closes it. `deletionRequestId`
+  // rather than `suspended`: it is set only by an approved deletion and cleared
+  // when one is rejected, whereas an org suspended for billing is not being
+  // purged and its state should survive.
+  const org = await ctx.db.get(orgId);
+  if (!org || org.deletionRequestId !== undefined) return null;
+
   const existing = await readMaterializationState(ctx, orgId, platform);
   const now = Date.now();
 

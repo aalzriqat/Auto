@@ -296,8 +296,11 @@ describe("adminOrgs", () => {
       )
     ).toHaveLength(1);
 
-    // The readiness record must go too: left behind, a later org reusing this
-    // id would inherit a "proven complete" materialisation it never had.
+    // The readiness record must go too. Not because a later org could reuse this
+    // id — Convex never reuses document ids, as the purge step's own comment in
+    // adminOrgs.ts says — but because `hardDeleteOrg` reporting COMPLETED while
+    // leaving org-scoped rows behind is this path's documented recurring defect,
+    // and an org-scoped table with no purge step is how the count reached 38.
     await t.run(async (ctx) =>
       ctx.db.insert("socialMaterializationState", {
         orgId,
@@ -375,6 +378,82 @@ describe("adminOrgs", () => {
     expect(remainingIgEvents).toHaveLength(0);
     const org = await t.run(async (ctx) => ctx.db.get(orgId));
     expect(org).toBeNull();
+  });
+
+  /**
+   * ⚠️ Adversarial review finding. The purge deletes `socialMaterializationState`
+   * at a fixed step, but the organization row itself survives until every step
+   * has drained. In that window the org is still visible to the backfill
+   * fan-out, which walks `organizations` unfiltered — so an operator running a
+   * backfill concurrently with a hard delete re-inserts a readiness row that the
+   * purge has already moved past and will never revisit.
+   *
+   * The result is a `socialMaterializationState` row pointing at an org that no
+   * longer exists, after the request reported COMPLETED. No cross-tenant
+   * exposure — Convex does not reuse document ids — but it recreates exactly the
+   * "COMPLETED while rows survive" defect the two new purge steps were added to
+   * close, and the precondition is two ordinary admin operations overlapping.
+   */
+  test("a backfill racing an org purge cannot resurrect the readiness record", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithOwner(t);
+    await t.run(async (ctx) => ctx.db.insert("users", { clerkId: "dev_race", email: "admin@autoflow.dev" }));
+    const asAdmin = t.withIdentity({ subject: "dev_race" });
+
+    const raceCustomerId = await t.run(async (ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Race", lastName: "Contact" })
+    );
+    await t.run(async (ctx) =>
+      ctx.db.insert("instagramEvents", {
+        orgId,
+        externalId: "race_ig_1",
+        kind: "dm",
+        senderInstagramId: "race_sender_1",
+        customerId: raceCustomerId,
+      })
+    );
+
+    const result = await asAdmin.mutation(api.adminOrgs.hardDeleteOrg, {
+      orgId,
+      confirmName: "Acme Motors",
+    });
+
+    const stateRows = async () =>
+      await t.run(async (ctx) =>
+        ctx.db
+          .query("socialMaterializationState")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect()
+      );
+
+    // Drive the purge to the exact window: readiness rows gone, org row still
+    // present. That is when a concurrent fan-out would find the org and act.
+    let reachedWindow = false;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const current = await t.run(async (ctx) => ctx.db.get(result.requestId));
+      if (current?.status !== "RUNNING") break;
+      await t.mutation(internal.adminOrgs.runDeletionRequestBatch, { requestId: result.requestId });
+
+      const orgStillThere = (await t.run(async (ctx) => ctx.db.get(orgId))) !== null;
+      if (orgStillThere && (await stateRows()).length === 0) {
+        reachedWindow = true;
+        // The concurrent operator action.
+        await t.mutation(internal.migrations.backfillInstagramConversations, {
+          orgId,
+          onlyIfIdle: true,
+        });
+        break;
+      }
+    }
+    expect(reachedWindow).toBe(true);
+
+    const finished = await runDeletionToCompletion(t, result.requestId);
+    expect(finished?.status).toBe("COMPLETED");
+    expect(await t.run(async (ctx) => ctx.db.get(orgId))).toBeNull();
+
+    // The org is gone and the request says COMPLETED, so nothing may still
+    // reference it.
+    expect(await stateRows()).toHaveLength(0);
   });
 
   test("hardDeleteOrg removes a financed deal's appraisals, overrides, rule versions and appraisal blobs", async () => {
