@@ -2312,6 +2312,7 @@ export const resolveAppraisalGap = mutation({
      * smuggled through the initial-resolution command.
      */
 
+
     const alreadyResolved =
       app.gapResolution === "CUSTOMER_ABSORBS" ||
       app.gapResolution === "SPLIT" ||

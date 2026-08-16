@@ -4546,10 +4546,11 @@ describe("handover seals the approved amount, and the amount that was verified",
       ).rejects.toThrow(/destination|cash|installment|financing company/i);
 
       const app = await readApp(seed, applicationId);
-      // Present FIRST. `app?.field` with `toBeUndefined()` is satisfied by a
-      // missing row, so without this the assertion below would hold just as
-      // well if the application had vanished — which proves nothing about the
-      // refusal leaving the row untouched.
+      // NOTE: `readApp` throws "application vanished" when the row is missing,
+      // so it returns a NON-nullable row and a vacuous-on-missing-row reading
+      // was never possible here. The reviewer finding that prompted this guard
+      // had the wrong premise, and I accepted it without checking the helper.
+      // Kept as a cheap explicit invariant rather than silently reversed.
       expect(app).not.toBeNull();
       expect(app?.customerGapCashToDealerMinor).toBeUndefined();
     });
@@ -4927,10 +4928,22 @@ describe("handover seals the approved amount, and the amount that was verified",
         afterFirst?.customerGapToFinanceCompanyMinor
       );
       expect(afterSecond?.gapResolvedAt).toBe(afterFirst?.gapResolvedAt);
-      // And the profit inputs the owner sees are unchanged.
-      expect(afterSecond?.customerDirectToDealerMinor).toBe(
-        afterFirst?.customerDirectToDealerMinor
+      // And the PERSISTED economics the owner's figure is derived from are
+      // unchanged. Asserted on a real stored field: an earlier draft of this
+      // line read `customerDirectToDealerMinor`, which is not on the row at all
+      // — it is composed inside `deriveEconomics` and never written. Vitest
+      // strips types without checking them, so that assertion compared
+      // undefined to undefined and passed while proving nothing, in the very
+      // test that exists to stop the profit moving underneath everyone.
+      // Guards the guard: if these were undefined on both rows the comparison
+      // below would pass while measuring nothing, which is exactly how the
+      // previous version of this assertion failed.
+      expect(afterFirst.expectedDealerRemittanceMinor).toBeTypeOf("number");
+      expect(afterFirst.dealerContributionMinor).toBeTypeOf("number");
+      expect(afterSecond.expectedDealerRemittanceMinor).toBe(
+        afterFirst.expectedDealerRemittanceMinor
       );
+      expect(afterSecond.dealerContributionMinor).toBe(afterFirst.dealerContributionMinor);
     });
 
     test("re-approval reopens the negotiation, and it can then be resolved again", async () => {
