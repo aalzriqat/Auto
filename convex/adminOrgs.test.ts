@@ -41,6 +41,62 @@ async function runDeletionToCompletion(
 }
 
 describe("adminOrgs", () => {
+  test("event tables are purged in smaller batches than ordinary org rows", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithOwner(t);
+    await t.run(async (ctx) => ctx.db.insert("users", { clerkId: "dev_batch", email: "admin@autoflow.dev" }));
+    const asAdmin = t.withIdentity({ subject: "dev_batch" });
+    const customerId = await t.run(async (ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Batch", lastName: "Contact" })
+    );
+
+    // 15 events: more than the trigger-heavy batch of 10, fewer than the
+    // ordinary batch of 50. A revert to the shared size would clear all 15 in
+    // one pass and this pins that it does not.
+    //
+    // The size matters because every event delete fires the conversation
+    // trigger, which re-reads that contact's whole history — so the batch's
+    // read cost is batch x history, and blowing the ceiling aborts the
+    // transaction *and* the FAILED status the catch block would have written,
+    // leaving the org permanently half-deleted.
+    await t.runUnwrapped(async (ctx) => {
+      for (let i = 0; i < 15; i += 1) {
+        await ctx.db.insert("instagramEvents", {
+          orgId,
+          externalId: `batch_${i}`,
+          kind: "dm",
+          senderInstagramId: "ig_batch",
+          customerId,
+          text: `m${i}`,
+        });
+      }
+    });
+
+    const request = await asAdmin.mutation(api.adminOrgs.hardDeleteOrg, {
+      orgId,
+      confirmName: "Acme Motors",
+    });
+
+    let sawPartialEventBatch = false;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const current = await t.run(async (ctx) => ctx.db.get(request.requestId));
+      if (current?.status !== "RUNNING") break;
+      await t.mutation(internal.adminOrgs.runDeletionRequestBatch, { requestId: request.requestId });
+      const remaining = await t.run(async (ctx) =>
+        ctx.db.query("instagramEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+      );
+      // 15 -> 5 -> 0 with a batch of 10; 15 -> 0 with a batch of 50.
+      if (remaining.length === 5) sawPartialEventBatch = true;
+    }
+
+    expect(sawPartialEventBatch).toBe(true);
+    expect(
+      await t.run(async (ctx) =>
+        ctx.db.query("instagramEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+      )
+    ).toHaveLength(0);
+  });
+
   test("rejects a non-allowlisted user even if they own the org", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithOwner(t);
@@ -210,17 +266,59 @@ describe("adminOrgs", () => {
     // aggregate trigger. That table is org-scoped and derived, so the purge has
     // to carry it or the row — and its `socialContactsByOrg` entry — outlives
     // the org it belonged to.
+    // Carries a customerId so the event also materialises a
+    // `socialConversations` thread — without one the thread trigger skips the
+    // event entirely and the purge assertions below would prove nothing about
+    // that table.
+    const purgeContactId = await t.run(async (ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Purge", lastName: "Contact" })
+    );
     await t.run(async (ctx) =>
       ctx.db.insert("instagramEvents", {
         orgId,
         externalId: "purge_ig_1",
         kind: "dm",
         senderInstagramId: "purge_sender_1",
+        customerId: purgeContactId,
       })
     );
     expect(
       await t.run(async (ctx) =>
         ctx.db.query("socialContacts").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+      )
+    ).toHaveLength(1);
+    expect(
+      await t.run(async (ctx) =>
+        ctx.db
+          .query("socialConversations")
+          .withIndex("by_org_lastEventAt", (q) => q.eq("orgId", orgId))
+          .collect()
+      )
+    ).toHaveLength(1);
+
+    // The readiness record must go too: left behind, a later org reusing this
+    // id would inherit a "proven complete" materialisation it never had.
+    await t.run(async (ctx) =>
+      ctx.db.insert("socialMaterializationState", {
+        orgId,
+        platform: "instagram" as const,
+        generation: 1,
+        status: "completed" as const,
+        runId: "purge-test",
+        processedCount: 1,
+        materializedCount: 1,
+        expectedCount: 1,
+        startedAt: Date.now(),
+        lastProgressAt: Date.now(),
+        completedAt: Date.now(),
+      })
+    );
+    expect(
+      await t.run(async (ctx) =>
+        ctx.db
+          .query("socialMaterializationState")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect()
       )
     ).toHaveLength(1);
 
@@ -257,6 +355,20 @@ describe("adminOrgs", () => {
       ctx.db.query("socialContacts").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
     );
     expect(remainingSocialContacts).toHaveLength(0);
+    const remainingConversations = await t.run(async (ctx) =>
+      ctx.db
+        .query("socialConversations")
+        .withIndex("by_org_lastEventAt", (q) => q.eq("orgId", orgId))
+        .collect()
+    );
+    expect(remainingConversations).toHaveLength(0);
+    const remainingMaterializationState = await t.run(async (ctx) =>
+      ctx.db
+        .query("socialMaterializationState")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .collect()
+    );
+    expect(remainingMaterializationState).toHaveLength(0);
     const remainingIgEvents = await t.run(async (ctx) =>
       ctx.db.query("instagramEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
     );
