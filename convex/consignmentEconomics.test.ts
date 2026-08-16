@@ -149,7 +149,8 @@ describe("SCRUM-41 — a frozen margin nothing can substantiate", () => {
       capitalizedCost: ENTITLEMENT,
       supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
       externallyFinanced: true,
-      // Frozen at the sale-price spread by a writer that predates the guard.
+      // A frozen margin that the paired writer did not produce — so nothing on
+      // the row says which externally funded basis it came from.
       recordedMargin: MARGIN,
       recordedSupplierEntitlement: ENTITLEMENT,
       // The proof of what actually reached the supplier. Absent.
@@ -270,8 +271,8 @@ describe("SCRUM-41 — a frozen margin nothing can substantiate", () => {
       await ctx.db.patch(saleId, {
         financingType: "FINANCED",
         supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
-        // The pre-guard shape: a margin frozen at the sale-price spread with
-        // nothing on the row to substantiate it.
+        // The unsubstantiated shape: a frozen margin with nothing on the row to
+        // substantiate the basis it was computed on.
         consignedSupplierGrossReceiptMinor: undefined,
       });
     });
@@ -843,6 +844,10 @@ describe("SCRUM-40 O-3 — the frozen consigned fields belong to consigned sales
 
     const sale = await s.t.run((ctx) => ctx.db.get(saleId as Id<"sales">));
 
+    // Without this, every assertion below passes on a null sale: `null?.x` is
+    // `undefined`, so the three `toBeUndefined()` checks would prove nothing
+    // about the writer they exist to pin.
+    expect(sale).not.toBeNull();
     expect(sale?.consignedMarginMinor).toBeUndefined();
     expect(sale?.consignedSupplierEntitlementMinor).toBeUndefined();
     expect(sale?.consignedSupplierGrossReceiptMinor).toBeUndefined();

@@ -5977,6 +5977,8 @@ describe("SCRUM-42 — a lost vehicle must not turn an unpaid supplier into a se
   }
   const stageOf = (view: Awaited<ReturnType<typeof cockpitOfApp>>, key: string) =>
     view!.stages.find((st) => st.key === key)!.state;
+  const supplierRow = (view: Awaited<ReturnType<typeof cockpitOfApp>>) =>
+    view!.money!.parties.find((p) => p.party === "SUPPLIER")!;
 
   async function throughRouteDeal(tag: string) {
     const s = await seedDealership(tag);
@@ -6023,6 +6025,12 @@ describe("SCRUM-42 — a lost vehicle must not turn an unpaid supplier into a se
     // honest answer and it is not completion; NONE is the claim that nobody is
     // owed anything, and it is what this read before the fix.
     expect(stageOf(view, "SETTLEMENT")).not.toBe("COMPLETE");
+
+    // Name the REASON, not just the outcome. A stage can be incomplete for
+    // reasons that have nothing to do with the supplier, so `not COMPLETE`
+    // alone would keep passing if the obligation silently went back to NONE.
+    // The supplier's projected position is where "we cannot tell" is stated.
+    expect(supplierRow(view).position).toBe("UNKNOWN");
   });
 
   test("a genuinely dealer-owned deal still reports nothing owed to a supplier", async () => {

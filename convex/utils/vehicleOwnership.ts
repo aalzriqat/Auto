@@ -258,9 +258,12 @@ export interface SaleEconomics {
    *  1. A financed sale settled DIRECT with the supplier whose recorded margin
    *     is MISSING — `evidenceRequired`. `salePrice − entitlement` reaches no
    *     party on that route.
-   *  2. The same route with a recorded margin that nothing SUBSTANTIATES — no
-   *     frozen supplier receipt (`financedDirectUnverified`, SCRUM-41). The
-   *     frozen figure exists but was computed on the wrong basis.
+   *  2. The same route with a recorded margin that nothing SUBSTANTIATES —
+   *     no frozen supplier receipt, OR no financing application behind it
+   *     (`financedDirectUnverified`, SCRUM-41). EITHER absence is enough to
+   *     withhold, because both facts are required: the receipt is the amount,
+   *     the application is its provenance. The frozen figure exists, but nothing
+   *     on the row says which externally funded basis produced it.
    *  3. An agent sale whose vehicle row is gone and which froze no entitlement
    *     of its own — `evidenceRequired`'s second arm. There is no cost basis
    *     left anywhere.
@@ -545,9 +548,11 @@ export function saleEconomics(args: {
    * `utils/saleCompletion.ts` is the only writer of the frozen consigned fields
    * and it patches this one in the SAME statement as the margin on every direct
    * sale, having DERIVED the margin from it (`supplierGrossReceipt − cost`). So
-   * a direct row carrying a margin and no receipt cannot have been written by
-   * the writer that computes the margin correctly — it predates the receipt, and
-   * its margin is the sale-price spread.
+   * a direct row carrying a margin and no receipt was not written by the writer
+   * that derives the margin from it. What that establishes is EVIDENTIARY, not
+   * chronological: nothing durable on the row substantiates which externally
+   * funded basis produced that margin. Whether the frozen figure is historically
+   * wrong is not knowable from the row, and the rule never needed it to be.
    *
    * Absent on THROUGH_DEALERSHIP by design. See `entitlementCeiling`, which uses
    * it for the other half of the same question.
@@ -651,16 +656,27 @@ export function saleEconomics(args: {
    * the earning is `approved − entitlement` and the sale-price spread reaches no
    * party at all. `sales.create` accepts `financingType` and
    * `supplierSettlementRoute` together with no application, and the write-path
-   * guard (`FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT`) only landed on 2026-08-11 —
-   * so rows completed before it froze the margin at the wrong basis. On a 20,000
-   * sale with a 15,000 entitlement where the financier paid the 18,000 it
+   * guard (`FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT`) only landed on 2026-08-11, so
+   * a row completed before it COULD carry a margin frozen at the wrong basis. On a
+   * 20,000 sale with a 15,000 entitlement where the financier paid the 18,000 it
    * approved, the real earning is 3,000 and `saleEconomics` published 5,000 into
    * `reports.salesReport`'s `totalProfit`.
    *
-   * The discriminator is the row's own evidence, not a completion date. The one
-   * writer records the receipt in the same patch as the margin on every direct
-   * sale and derives the margin from it, so margin-without-receipt on a DIRECT
-   * row is precisely the pre-guard population.
+   * That history is why the shape is reachable. It is NOT the justification, and
+   * the rule must not be read as one. The discriminator is the row's own evidence,
+   * never a completion date: the one writer records the receipt in the same patch
+   * as the margin on every direct sale and derives the margin from it, so
+   * margin-without-receipt on a DIRECT row was not produced by that writer — and
+   * no other durable fact on the sale says which externally funded basis the
+   * margin came from. Withhold what nothing substantiates; that is the whole rule.
+   *
+   * ⚠️ Raised by the ChatGPT reviewer, and the correction matters. The two fields
+   * did NOT enter the codebase together — the margin arrives in the earlier
+   * `c2582b9` work, the receipt and its readers later in the SCRUM-30 sequence
+   * (`0746817` / `f750ee22`). So "margin present, receipt absent" cannot prove the
+   * row belongs to one pre-guard population, and this block no longer claims it
+   * does. Chronology is a weaker authority than the row's evidence, and the
+   * evidence alone already carries the refusal.
    *
    * The identical rule already governs PAYROLL money: `commissionableEarnings`
    * refuses a financed direct sale whose receipt is unrecorded rather than
