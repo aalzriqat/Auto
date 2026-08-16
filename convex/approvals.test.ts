@@ -490,6 +490,15 @@ describe("Approvals Outcomes", () => {
  *      "checkPendingApproval never returns another org's request" — the same
  *          leak in a sibling function; pre-fix it returns Org B's row, so
  *          `result.orgId` is Org B
+ *      "requestProfitApproval never overwrites another org's request" —
+ *          pre-fix, Org B's row reads 555 instead of 4242
+ *      "listPendingApprovals sanitises a foreign vehicle without hiding the
+ *          row" — reverting the guard to its cosmetic form leaves the VIN and
+ *          the foreign `vehicleId` in the response
+ *      "the pending badge never disagrees with the manager's queue" — dropping
+ *          the row instead of sanitising it gives count 1 against list 0
+ *      "respondToApproval does not put a foreign vehicle into the
+ *          notification" — reverting the guard puts Org B's car in the email
  *  - Pass with and without: the salesperson, 7-day-edge, server-clock window,
  *    tied-createdAt and countPending cases. They pin real properties but prove
  *    nothing about the tenancy defect — `countPending` was already org-scoped
@@ -516,8 +525,29 @@ describe("Approvals Outcomes", () => {
  * `by_salesperson`, and this one reads `by_vehicle`. Scan for the SHAPE — a
  * caller-supplied id resolved on a global index — not for the index name.
  *
- * That is all 10 tests in this block accounted for (9 before, plus the
- * `checkPendingApproval` sibling case).
+ * ⚠️ Re-derived a THIRD time, and the previous accounting was wrong in two
+ * ways at once: it claimed 10 tests when the block held 11, and it left the
+ * cross-tenant-WRITE case out of BOTH buckets. An independent review caught it
+ * by doing the thing this table claims was done — reverting to `origin/main`
+ * and re-running — and got 6 failures against the 5 listed. A table that says
+ * "established by reverting, not assumed" has to survive someone actually
+ * reverting.
+ *
+ * ⚠️ REACHABILITY, corrected. The cross-tenant WRITE and both foreign-vehicle
+ * cases all require a row whose `orgId` and whose vehicle's `orgId` disagree,
+ * and every such row here is seeded with a direct `ctx.db.insert` that bypasses
+ * mutation validation. `requestProfitApproval` is the only writer and it
+ * validates the correspondence; nothing repoints a vehicle's `orgId`; vehicles
+ * are hard-deleted only by superadmin teardown or the raw-JSON admin editor.
+ * So these guards are DEFENCE-IN-DEPTH against an admin edit or a future writer
+ * that skips validation — not protection against a live, user-reachable
+ * exploit. The earlier wording said "reproduced", which reads as end-to-end
+ * reachability and overstated it. The confirmed live defect in this ticket is
+ * the READ leak, which needs only ordinary two-org membership.
+ *
+ * That is all 14 tests in this block accounted for: 9 originally, plus
+ * `checkPendingApproval`, `requestProfitApproval`, the two
+ * `listPendingApprovals` cases and the `respondToApproval` case.
  */
 describe("SCRUM-100: listMyPendingApprovals tenancy and bounds", () => {
   const DAY = 24 * 60 * 60 * 1000;
@@ -889,6 +919,148 @@ describe("SCRUM-100: listMyPendingApprovals tenancy and bounds", () => {
     // The identifier itself, not just its description, must not cross.
     expect(rows.some((r: any) => r.vehicleId === foreignVehicleId)).toBe(false);
     expect(JSON.stringify(rows)).not.toContain("Honda");
+  });
+
+  /**
+   * Seeds an in-org PENDING approval whose vehicle belongs to the OTHER org,
+   * and returns the ids needed to assert on it.
+   *
+   * ⚠️ Written through a direct `ctx.db.insert`, which bypasses mutation
+   * validation — and that is the honest description of this state.
+   * `requestProfitApproval` is the only writer and it validates
+   * `vehicle.orgId === args.orgId`, no path repoints a vehicle's `orgId`, and
+   * vehicles are only hard-deleted by superadmin teardown or the raw-JSON admin
+   * editor. So this row cannot arise from ordinary multi-org usage. The guards
+   * below are defence-in-depth against an admin edit or a future writer that
+   * skips validation, NOT protection against a live user-reachable exploit.
+   */
+  async function seedForeignVehicleApproval(
+    t: ReturnType<typeof convexTestWithComponents>,
+    orgA: any,
+    orgB: any,
+    requestedProfit: number
+  ) {
+    return await t.run(async (ctx: any) => {
+      const user = await ctx.db
+        .query("users")
+        .filter((q: any) => q.eq(q.field("clerkId"), "multi_org_sales"))
+        .first();
+      const foreignVehicle = await ctx.db
+        .query("vehicles")
+        .filter((q: any) => q.eq(q.field("orgId"), orgB))
+        .first();
+      const requestId = await ctx.db.insert("profitApprovalRequests", {
+        orgId: orgA,
+        vehicleId: foreignVehicle._id,
+        requestedProfit,
+        minimumProfit: 500,
+        salespersonId: user._id,
+        status: "PENDING",
+        createdAt: Date.now(),
+      });
+      return { requestId, foreignVehicleId: foreignVehicle._id, userId: user._id };
+    });
+  }
+
+  it("listPendingApprovals sanitises a foreign vehicle without hiding the row", async () => {
+    // The manager-facing queue, which returns the VIN as well — so an unchecked
+    // foreign reference discloses strictly more than the salesperson list does.
+    // This guard existed with NO test: an independent review reverted it to the
+    // pre-fix cosmetic form and all 22 tests still passed. A surviving mutant on
+    // a security guard is itself the finding.
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgA, orgB } = await seedMultiOrg(t);
+    const { requestId, foreignVehicleId } = await seedForeignVehicleApproval(t, orgA, orgB, 3131);
+
+    await t.run(async (ctx: any) => {
+      const user = await ctx.db
+        .query("users")
+        .filter((q: any) => q.eq(q.field("clerkId"), "multi_org_sales"))
+        .first();
+      const role = await ctx.db
+        .query("roles")
+        .filter((q: any) => q.eq(q.field("orgId"), orgA))
+        .first();
+      await ctx.db.patch(role._id, { permissions: ["view:vehicles", "approve:requests"] });
+      return user;
+    });
+
+    const asManager = t.withIdentity({ subject: "multi_org_sales" });
+    const rows = await asManager.query(api.approvals.listPendingApprovals, { orgId: orgA });
+    const malformed = rows.find((r: any) => r.requestedProfit === 3131) as any;
+
+    // The row STAYS, so the manager can still reject it and the badge count
+    // cannot drift away from the list. Dropping it created a phantom queue.
+    expect(malformed).toBeDefined();
+    expect(malformed._id).toBe(requestId);
+
+    // ...but nothing of Org B's crosses: no description, no VIN, and above all
+    // no actionable id.
+    //
+    // ⚠️ `vehicleId` is absent from the sanitised branch's TYPE as well, not
+    // merely from its value — `tsc` rejected an earlier version of this
+    // assertion with "Property 'vehicleId' does not exist", which is a stronger
+    // guarantee than the runtime check below and the reason the cast is scoped
+    // to this variable rather than applied to the query.
+    expect(malformed.vehicleMakeModel).toBe("Unknown Vehicle");
+    expect(malformed.vehicleVin).toBe("N/A");
+    expect(malformed.vehicleId).toBeUndefined();
+    expect(JSON.stringify(malformed)).not.toContain(foreignVehicleId);
+    expect(JSON.stringify(malformed)).not.toContain("Honda");
+  });
+
+  it("the pending badge never disagrees with the manager's queue", async () => {
+    // The phantom queue, stated as the invariant rather than as one symptom:
+    // countPending drives a navigation badge and listPendingApprovals draws the
+    // page. If they can ever disagree, a manager sees work that does not exist
+    // and has no way to clear it.
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgA, orgB } = await seedMultiOrg(t);
+    await seedForeignVehicleApproval(t, orgA, orgB, 3131);
+
+    await t.run(async (ctx: any) => {
+      const role = await ctx.db
+        .query("roles")
+        .filter((q: any) => q.eq(q.field("orgId"), orgA))
+        .first();
+      await ctx.db.patch(role._id, { permissions: ["view:vehicles", "approve:requests"] });
+    });
+
+    const asManager = t.withIdentity({ subject: "multi_org_sales" });
+    const count = await asManager.query(api.approvals.countPending, { orgId: orgA });
+    const rows = await asManager.query(api.approvals.listPendingApprovals, { orgId: orgA });
+
+    expect(count).toBe(rows.length);
+  });
+
+  it("respondToApproval does not put a foreign vehicle into the notification", async () => {
+    // The one path that EMAILS the vehicle description rather than rendering
+    // it. Also had no test: reverting the guard left all 22 passing.
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgA, orgB } = await seedMultiOrg(t);
+    const { requestId } = await seedForeignVehicleApproval(t, orgA, orgB, 3131);
+
+    await t.run(async (ctx: any) => {
+      const role = await ctx.db
+        .query("roles")
+        .filter((q: any) => q.eq(q.field("orgId"), orgA))
+        .first();
+      await ctx.db.patch(role._id, { permissions: ["view:vehicles", "approve:requests"] });
+    });
+
+    const asManager = t.withIdentity({ subject: "multi_org_sales" });
+    await asManager.mutation(api.approvals.respondToApproval, {
+      orgId: orgA,
+      requestId,
+      status: "APPROVED",
+    });
+
+    const notifications = await t.run(async (ctx: any) =>
+      await ctx.db.query("notifications").collect()
+    );
+    const serialised = JSON.stringify(notifications);
+    expect(notifications.length).toBeGreaterThan(0);
+    expect(serialised).not.toContain("Honda");
   });
 
   it("requestProfitApproval never overwrites another org's request — cross-tenant WRITE", async () => {

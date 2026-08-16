@@ -53,9 +53,20 @@ export const requestProfitApproval = mutation({
     // tenants end up wrong, and the org whose data was overwritten has no way
     // to see it happened.
     //
-    // Reproduced before fixing: Org B's row came back reading 555 instead of
+    // Demonstrated before fixing: Org B's row came back reading 555 instead of
     // 4242. Note the verification above proves the VEHICLE is in this org and
     // is no help — the row being written is the request, not the vehicle.
+    //
+    // ⚠️ REACHABILITY, stated honestly because the first version of this
+    // comment did not. Triggering it needs a request whose `orgId` disagrees
+    // with its vehicle's, and no user-facing path can produce one: this
+    // mutation is the only writer and validates the correspondence above,
+    // nothing repoints a vehicle's `orgId`, and vehicles are hard-deleted only
+    // by superadmin teardown or the raw-JSON admin editor. The demonstration
+    // seeds that state directly. So this is DEFENCE-IN-DEPTH against an admin
+    // edit or a future writer that skips validation — not a live exploit. The
+    // confirmed user-reachable defect on this ticket is the READ leak in
+    // `listMyPendingApprovals`, which needs only ordinary two-org membership.
     const existing = await ctx.db
       .query("profitApprovalRequests")
       .withIndex("by_org_vehicle_salesperson", (q) =>
@@ -232,22 +243,44 @@ export const listPendingApprovals = query({
         const vehicle = await ctx.db.get(req.vehicleId);
         // Same fail-closed rule as `listMyPendingApprovals`, and this one has
         // more to lose: it returns the VIN as well, so an unchecked foreign
-        // reference discloses strictly more. A malformed row is dropped rather
-        // than relabelled, because relabelling still spread the foreign
-        // `vehicleId` through `...req`.
+        // reference discloses strictly more.
+        //
+        // ⚠️ SANITISED, not dropped — and the asymmetry with
+        // `listMyPendingApprovals` is deliberate. This is the MANAGER's queue,
+        // and `countPending` counts the same PENDING rows for the navigation
+        // badge. Dropping here produced a phantom queue: a permanent nonzero
+        // badge over a page with nothing on it, and no way for anyone to clear
+        // the row, because rejecting it needs the `_id` that was dropped with
+        // it. That is a workflow dead-end, and it was strictly worse than the
+        // cosmetic relabelling it replaced — the manager could at least reject
+        // the row before.
+        //
+        // So the row survives with its `_id` intact and every foreign
+        // reference removed: no `vehicleId` to act on, no VIN, no description.
+        // The manager can reject it; nothing crosses the tenant boundary.
+        //
+        // `listMyPendingApprovals` still drops, because its consumer feeds
+        // `vehicleId` straight into the resume wizard and there is nothing
+        // useful a salesperson can do with a car this dealership does not have.
         //
         // ⚠️ `salespersonId` is still NOT proven in-org. Doing so needs a
         // membership lookup per row, and unlike a VIN or a margin the exposure
-        // is a display name. It is tracked on SCRUM-102 rather than left
-        // unsaid — and note the independent review raised a sharper version of
-        // it than "latent": a salesperson offboarded from this org but still
-        // employed elsewhere keeps a live global user row, so the name shown
-        // here can drift to their CURRENT employer's profile.
+        // is a display name. Tracked on SCRUM-102 — and note both independent
+        // reviews raised a sharper version than "latent": a salesperson
+        // offboarded from this org but still employed elsewhere keeps a live
+        // global user row, so the name shown here can drift to their CURRENT
+        // employer's profile.
         if (!vehicle || vehicle.orgId !== args.orgId) {
           console.error(
-            `[approvals] dropping approval ${req._id}: vehicle ${req.vehicleId} is not in org ${args.orgId}`
+            `[approvals] sanitising approval ${req._id}: vehicle ${req.vehicleId} is not in org ${args.orgId}`
           );
-          return null;
+          const { vehicleId: _foreign, ...safe } = req;
+          return {
+            ...safe,
+            salespersonName: salesperson?.name || salesperson?.email || "Unknown",
+            vehicleMakeModel: "Unknown Vehicle",
+            vehicleVin: "N/A",
+          };
         }
         return {
           ...req,
@@ -258,7 +291,7 @@ export const listPendingApprovals = query({
       })
     );
 
-    return enriched.filter((r): r is NonNullable<typeof r> => r !== null);
+    return enriched;
   },
 });
 
