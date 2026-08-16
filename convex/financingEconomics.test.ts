@@ -3,7 +3,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS, DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 import { deriveManagementProfit } from "./utils/financingEconomics";
 
@@ -4437,6 +4437,37 @@ describe("handover seals the approved amount, and the amount that was verified",
       };
     }
 
+    /** The audit history this application has accumulated, oldest first. */
+    async function overrideRows(seed: Seed, applicationId: Id<"financeApplications">) {
+      return await seed.t.run((ctx) =>
+        ctx.db
+          .query("financeApplicationOverrides")
+          .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+          .collect()
+      );
+    }
+
+    /**
+     * The COMPLETE agreement as stored — every field `resolveAppraisalGap`
+     * patches. Comparing a couple of destinations is not enough: the mutation
+     * writes the resolution, both shares, all three destinations, the resolver,
+     * the timestamp and the notes in one patch, so a refusal that leaked any
+     * one of them through would be a rewrite of the agreement.
+     */
+    function savedAllocation(app: Doc<"financeApplications">) {
+      return {
+        gapResolution: app.gapResolution,
+        customerGapShareMinor: app.customerGapShareMinor,
+        dealerGapShareMinor: app.dealerGapShareMinor,
+        customerGapCashToDealerMinor: app.customerGapCashToDealerMinor,
+        customerGapInstallmentToDealerMinor: app.customerGapInstallmentToDealerMinor,
+        customerGapToFinanceCompanyMinor: app.customerGapToFinanceCompanyMinor,
+        gapResolvedAt: app.gapResolvedAt,
+        gapResolvedBy: app.gapResolvedBy,
+        gapResolutionNotes: app.gapResolutionNotes,
+      };
+    }
+
     async function gapStampFrom(
       seed: Seed,
       applicationId: Id<"financeApplications">,
@@ -4902,6 +4933,8 @@ describe("handover seals the approved amount, and the amount that was verified",
       expect(afterFirst).not.toBeNull();
       expect(afterFirst?.gapResolution).toBe("CUSTOMER_ABSORBS");
 
+      const overridesBefore = await overrideRows(seed, applicationId);
+
       // A DIFFERENT but internally valid allocation, carrying a stamp read
       // fresh AFTER the first resolution — so staleness cannot be what refuses
       // it. Only the once-only rule can.
@@ -4917,17 +4950,31 @@ describe("handover seals the approved amount, and the amount that was verified",
         })
       ).rejects.toThrow(/already been agreed|reopen/i);
 
-      // The recorded allocation is untouched, including the destinations that
-      // decide whether this money is dealer proceeds at all.
+      // The recorded allocation is untouched IN FULL — every field the patch
+      // writes, not a sample of two. A refusal that let any one of the shares,
+      // destinations, the resolver or the timestamp through would still be a
+      // rewrite of an agreement about money.
       const afterSecond = await readApp(seed, applicationId);
       expect(afterSecond).not.toBeNull();
-      expect(afterSecond?.customerGapCashToDealerMinor).toBe(
-        afterFirst?.customerGapCashToDealerMinor
-      );
-      expect(afterSecond?.customerGapToFinanceCompanyMinor).toBe(
-        afterFirst?.customerGapToFinanceCompanyMinor
-      );
-      expect(afterSecond?.gapResolvedAt).toBe(afterFirst?.gapResolvedAt);
+      expect(savedAllocation(afterSecond)).toStrictEqual(savedAllocation(afterFirst));
+      // Non-vacuity: comparing two all-undefined objects would pass while
+      // measuring nothing, which is exactly how the earlier version of the
+      // profit assertion below failed.
+      expect(afterFirst.gapResolvedAt).toBeTypeOf("number");
+      expect(afterFirst.customerGapCashToDealerMinor).toBe(RAW_GAP);
+
+      // And no history row was written for the attempt. A refused allocation
+      // that still recorded an override would leave the audit trail claiming a
+      // second agreement was made — the trail is what gets read months later
+      // when the profit figure is questioned, so a phantom entry there is a
+      // defect in its own right. The mutation throws before any write and
+      // Convex rolls the whole mutation back, but only this proves it.
+      const overridesAfter = await overrideRows(seed, applicationId);
+      expect(overridesAfter).toStrictEqual(overridesBefore);
+      // Non-vacuity again: two empty arrays are equal. The successful first
+      // resolution must have recorded exactly one gapResolution row, or the
+      // comparison above proves nothing about a refusal not adding one.
+      expect(overridesBefore.filter((row) => row.field === "gapResolution")).toHaveLength(1);
       // And the PERSISTED economics the owner's figure is derived from are
       // unchanged. Asserted on a real stored field: an earlier draft of this
       // line read `customerDirectToDealerMinor`, which is not on the row at all
@@ -4946,11 +4993,14 @@ describe("handover seals the approved amount, and the amount that was verified",
       expect(afterSecond.dealerContributionMinor).toBe(afterFirst.dealerContributionMinor);
     });
 
-    test("re-approval reopens the negotiation, and it can then be resolved again", async () => {
-      // The control. Refusing a second allocation must not seal the deal
-      // forever: reopening is a RECORDED act by someone with authority over the
-      // approved amount, and it clears the resolution back to negotiation. A
-      // refusal widened into a permanent dead end would be the worse defect.
+    test("REAL re-approval reopens the negotiation and clears the old agreement, which can then be resolved again", async () => {
+      // The control, and it must run the real path. An earlier version of this
+      // test patched `gapResolution: "PENDING_NEGOTIATION"` directly, which
+      // proved only that the harness can manufacture the enum — it never
+      // touched `approveDealerPurchaseAmount`, so it could not have noticed if
+      // the refusal above had turned reopening into a dead end, nor if a reopen
+      // left the previous allocation attached to a deal that is negotiating
+      // again. Both of those are worse than the defect the refusal fixes.
       const { seed, applicationId } = await approvedDeal();
 
       await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
@@ -4959,25 +5009,68 @@ describe("handover seals the approved amount, and the amount that was verified",
         economicsStamp: await gapStampFrom(seed, applicationId),
         ...customerAbsorbs({}),
       });
+      expect((await readApp(seed, applicationId)).gapResolution).toBe("CUSTOMER_ABSORBS");
 
-      // Back to negotiation, the state re-approval leaves behind.
-      await seed.t.run((ctx) =>
-        ctx.db.patch(applicationId, { gapResolution: "PENDING_NEGOTIATION" })
-      );
+      // The approved purchase amount is renegotiated down. This is the recorded
+      // act, by someone with authority over that amount, that legitimately
+      // reopens the negotiation.
+      //
+      // MANUAL, and deliberately WITHOUT a new appraisal. An earlier draft
+      // reached the same end state by recording a second appraisal first — but
+      // `recordAppraisal` invalidates the whole approval and clears these fields
+      // itself, so that version passed with the clear inside
+      // `approveDealerPurchaseAmount` disabled. It was measuring the wrong
+      // writer. Re-approval alone is the path where that clear is the only thing
+      // standing between a moved gap and a stale agreement.
+      await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: seed.orgId,
+        applicationId,
+        approvedAmountMinor: jod(11_000),
+        basis: "MANUAL",
+        notes: "Renegotiated down with the company.",
+      });
 
+      const reopened = await readApp(seed, applicationId);
+      // The gap really moved — so what the parties agreed was agreed about a
+      // different amount, and carrying it forward would be the stale-split bug.
+      const WIDER_GAP = jod(1_500);
+      expect(reopened.rawAppraisalGapMinor).toBe(WIDER_GAP);
+      expect(reopened.gapResolution).toBe("PENDING_NEGOTIATION");
+      // Cleared, not merely relabelled. A row sitting in PENDING_NEGOTIATION
+      // while still carrying `customerGapCashToDealerMinor` would keep folding
+      // the old customer contribution into the owner's profit for an agreement
+      // that is no longer in force — verified by disabling that clear, which
+      // leaves a 1,000 JOD customer contribution attached to a deal whose gap
+      // is now 1,500.
+      expect(savedAllocation(reopened)).toStrictEqual({
+        gapResolution: "PENDING_NEGOTIATION",
+        customerGapShareMinor: undefined,
+        dealerGapShareMinor: undefined,
+        customerGapCashToDealerMinor: undefined,
+        customerGapInstallmentToDealerMinor: undefined,
+        customerGapToFinanceCompanyMinor: undefined,
+        gapResolvedAt: undefined,
+        gapResolvedBy: undefined,
+        gapResolutionNotes: undefined,
+      });
+
+      // And the deal is genuinely settleable again, against the NEW gap.
       await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
         orgId: seed.orgId,
         applicationId,
         economicsStamp: await gapStampFrom(seed, applicationId),
-        ...customerAbsorbs({
-          customerGapCashToDealerMinor: 0,
-          customerGapToFinanceCompanyMinor: RAW_GAP,
-        }),
+        customerGapShareMinor: WIDER_GAP,
+        dealerGapShareMinor: 0,
+        customerGapCashToDealerMinor: 0,
+        customerGapInstallmentToDealerMinor: 0,
+        customerGapToFinanceCompanyMinor: WIDER_GAP,
       });
 
       const reresolved = await readApp(seed, applicationId);
-      expect(reresolved).not.toBeNull();
-      expect(reresolved?.customerGapToFinanceCompanyMinor).toBe(RAW_GAP);
+      expect(reresolved.gapResolution).toBe("CUSTOMER_ABSORBS");
+      expect(reresolved.customerGapToFinanceCompanyMinor).toBe(WIDER_GAP);
+      // Routed to the financier, so none of it is dealer proceeds.
+      expect(reresolved.customerGapCashToDealerMinor).toBe(0);
     });
 
     test("a deal with no gap cannot be given one", async () => {
