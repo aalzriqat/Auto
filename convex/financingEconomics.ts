@@ -2203,12 +2203,29 @@ export const resolveAppraisalGap = mutation({
      * this mutation directly and settle a shortfall the product deliberately
      * does not show them.
      *
-     * Worse than acting on it — LEARNING it. Every refusal below names the
-     * figure that failed to reconcile, so a deliberately wrong allocation turns
-     * the validator into an oracle disclosing the exact appraisal gap to
-     * someone barred from seeing it. That is why this sits at the very top,
-     * ahead of the row read and ahead of anything that can raise an
-     * amount-bearing error, rather than beside the arithmetic.
+     * The check still sits at the very top, ahead of the row read and ahead of
+     * anything that can raise an amount-bearing error, because every refusal
+     * below names the figure that failed to reconcile and there is no reason
+     * for a refused caller to receive it.
+     *
+     * ⚠️ But that ordering is HYGIENE, NOT A CONFIDENTIALITY BOUNDARY, and an
+     * earlier version of this comment claimed otherwise — that the validator
+     * would otherwise be "an oracle disclosing the exact appraisal gap to
+     * someone barred from seeing it". That is FALSE for the role it named. A
+     * default MANAGER holds `view:finance_applications`, and
+     * `getEconomics` authorizes on exactly that permission and returns the row
+     * through `redactSettlementEvidence`, which blanks only the three tier-1
+     * supplier-disbursement fields — not `rawAppraisalGapMinor`, not the five
+     * allocation fields, and not the override rows this mutation writes with
+     * every amount stringified into them. So a default MANAGER is not barred
+     * from the figure at all; they can read it directly.
+     * `convex/utils/tenancy.ts` says the same thing about tier-2 amounts in its
+     * own words: a display gate, not a boundary.
+     *
+     * The permission requirement stands on AUTHORITY, which is sound on its
+     * own: settling a shortfall moves the owner-facing profit, so it takes the
+     * money permission. It does not stand on secrecy, and nothing should be
+     * built on the assumption that it creates any.
      *
      * `requireTenantAuth` applies the system-owner bypass itself, so this is
      * the SAME authority the cockpit computes rather than a second rule free to

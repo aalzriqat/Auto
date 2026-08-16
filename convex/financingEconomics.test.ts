@@ -4877,7 +4877,7 @@ describe("handover seals the approved amount, and the amount that was verified",
       ).toBe(0);
     });
 
-    test("a manager who cannot see the money cannot settle it, and cannot learn it either", async () => {
+    test("a caller who cannot see the money cannot settle it, and the refusal does not carry the figure", async () => {
       // Found by CodeRabbit and independently reproduced by the owner-proxy.
       //
       // The cockpit withholds this action from a caller who cannot see the
@@ -4887,11 +4887,24 @@ describe("handover seals the approved amount, and the amount that was verified",
       // public mutation was reachable directly — a permission enforced by
       // rendering is not enforced.
       //
-      // The disclosure is the sharper half, and it is what the second
-      // assertion exists for: every refusal in this mutation names the figure
-      // that failed to reconcile, so a deliberately wrong allocation would turn
-      // the validator into an oracle for the exact shortfall. Asserting only
-      // "it throws" would pass even if the throw carried the amount.
+      // The second assertion is hygiene, not a confidentiality proof, and the
+      // earlier version of this test overclaimed by calling it one.
+      //
+      // Every refusal here names the figure that failed to reconcile, and a
+      // refused caller has no reason to receive it — that much is worth
+      // pinning. What it does NOT establish is that this caller "cannot learn"
+      // the gap, which is what the test used to be called. The fixture below
+      // deliberately omits `view:finance_applications`, and a real default
+      // MANAGER HAS it: `getEconomics` authorizes on that permission and
+      // returns `rawAppraisalGapMinor`, the five allocation fields and the
+      // amount-bearing override rows unredacted. So the real role can read the
+      // figure directly, and no assertion in this file changes that.
+      //
+      // The permission requirement is justified by AUTHORITY — settling a
+      // shortfall moves the owner's profit — not by secrecy. Building a
+      // confidentiality claim on it is what produced the false comment this
+      // replaces. Tracked separately; see the follow-up issue on `getEconomics`
+      // redaction.
       const { seed, applicationId } = await approvedDeal();
       const blind = await callerWith(seed, "approve-no-money", [
         "view:sales",
