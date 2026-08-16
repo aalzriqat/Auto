@@ -325,30 +325,75 @@ async function ensureCanonicalReceivableForLegacy(
 }
 
 /**
- * Which canonical receivable a payment against a legacy row must settle.
- *
- * When the row was hand-keyed against a completed sale, that sale's own invoice
- * is the debt — so the payment has to land there. Raising a separate
- * `legacy_receivable` twin for it instead would settle a document that
- * represents nothing the dealership is chasing, leaving the real invoice
- * outstanding in full after the customer had paid.
- *
- * Rows with no sale behind them (genuine manual receivables) keep the existing
- * lift-to-canonical behaviour unchanged.
+ * The sale invoice a hand-keyed row stands for, or null when the row is money in
+ * its own right. Read-only and creates nothing, so it is safe to ask on any path.
  */
-async function canonicalTargetForLegacyPayment(
+async function saleInvoiceForLegacyRow(
+  ctx: MutationCtx,
+  receivable: Doc<"receivables">
+): Promise<Id<"receivableDocuments"> | null> {
+  if (!receivable.saleId) return null;
+  const sale = await ctx.db.get(receivable.saleId);
+  if (sale && sale.orgId === receivable.orgId && sale.canonicalReceivableDocumentId) {
+    return sale.canonicalReceivableDocumentId;
+  }
+  return null;
+}
+
+/**
+ * The ONE canonical document that answers for a legacy row's money — used by
+ * every monetary path, so they cannot disagree: the payment allocation, the
+ * refund that unwinds it, and the caps that bound both.
+ *
+ * When the row was hand-keyed against a completed sale, that sale's invoice is
+ * the debt. Settling a separate `legacy_receivable` twin instead would pay down
+ * a document nobody is chasing and leave the real invoice outstanding in full.
+ *
+ * Deliberately NOT used for rescheduling or cancelling. Those move a due date
+ * and retire a document — one hand-keyed sub-representation has no business
+ * rescheduling the whole sale debt, and certainly none cancelling it. A single
+ * *monetary* authority is the invariant; it does not make the row and the
+ * invoice the same object for every purpose.
+ */
+async function canonicalMonetaryTargetForLegacyRow(
   ctx: MutationCtx,
   receivable: Doc<"receivables">,
   actorId: Id<"users">,
   currency: string
 ): Promise<Id<"receivableDocuments">> {
-  if (receivable.saleId) {
-    const sale = await ctx.db.get(receivable.saleId);
-    if (sale && sale.orgId === receivable.orgId && sale.canonicalReceivableDocumentId) {
-      return sale.canonicalReceivableDocumentId;
-    }
+  return (
+    (await saleInvoiceForLegacyRow(ctx, receivable)) ??
+    (await ensureCanonicalReceivableForLegacy(ctx, receivable, actorId, currency))
+  );
+}
+
+/**
+ * Bounds a payment on a legacy row by what its sale invoice actually still owes.
+ * Shared by `recordPayment` and `clearCheque` because both settle through
+ * `canonicalMonetaryTargetForLegacyRow`, and a guard that lives on only one of
+ * two entry points is the shape of the defect this whole change exists to undo.
+ *
+ * `allocatePaymentToReceivable` already refuses over-allocation, so this adds no
+ * safety — it replaces a message about minor units with one that means something
+ * to whoever is taking the money.
+ */
+async function assertWithinSaleInvoiceBalance(
+  ctx: MutationCtx,
+  receivable: Doc<"receivables">,
+  amount: number,
+  currency: string
+) {
+  const saleInvoiceId = await saleInvoiceForLegacyRow(ctx, receivable);
+  if (!saleInvoiceId) return;
+  const outstanding = fromMinorUnits(
+    await getReceivableOutstandingMinor(ctx, saleInvoiceId),
+    currency
+  );
+  if (amount > outstanding) {
+    throw new ConvexError(
+      "This payment is larger than the sale still owes. The hand-keyed balance is out of date — collect against the sale invoice instead."
+    );
   }
-  return await ensureCanonicalReceivableForLegacy(ctx, receivable, actorId, currency);
 }
 
 async function mirrorCollectionPaymentToCanonical(
@@ -391,7 +436,7 @@ async function mirrorCollectionPaymentToCanonical(
 
   if ((args.receivable || args.receivableDocumentId) && args.payment.direction === "IN") {
     const canonicalReceivableDocumentId = args.receivable
-      ? await canonicalTargetForLegacyPayment(ctx, args.receivable, args.actorId, args.currency)
+      ? await canonicalMonetaryTargetForLegacyRow(ctx, args.receivable, args.actorId, args.currency)
       : args.receivableDocumentId!;
     patch.paymentAllocationId = await allocatePaymentToReceivable(ctx, {
       orgId: args.payment.orgId,
@@ -1107,22 +1152,9 @@ export const recordPayment = mutation({
         const currency = await getOrgCurrency(ctx, args.orgId);
 
         // A hand-keyed row standing for a sale settles that sale's invoice, so
-        // the invoice's remaining balance caps the payment too. Without this the
-        // allocation still refuses — correctly — but with an internal message
-        // about minor units that means nothing to whoever is taking the money.
-        if (receivable?.saleId) {
-          const sale = await ctx.db.get(receivable.saleId);
-          if (sale?.orgId === args.orgId && sale?.canonicalReceivableDocumentId) {
-            const saleOutstanding = fromMinorUnits(
-              await getReceivableOutstandingMinor(ctx, sale.canonicalReceivableDocumentId),
-              currency
-            );
-            if (args.amount > saleOutstanding) {
-              throw new ConvexError(
-                "This payment is larger than the sale still owes. The hand-keyed balance is out of date — collect against the sale invoice instead."
-              );
-            }
-          }
+        // the invoice's remaining balance caps the payment too.
+        if (receivable) {
+          await assertWithinSaleInvoiceBalance(ctx, receivable, args.amount, currency);
         }
 
         // SCRUM-56 — collecting against a completed sale's canonical invoice.
@@ -1427,6 +1459,12 @@ export const clearCheque = mutation({
           receivable = await ctx.db.get(cheque.receivableId);
           if (receivable && cheque.amount > receivable.outstandingAmount) {
             throw new ConvexError("Cheque amount cannot exceed the outstanding receivable amount.");
+          }
+          // Clearing settles through the same monetary target as recordPayment,
+          // so it needs the same bound — a stale hand-keyed balance can admit a
+          // cheque the sale no longer owes.
+          if (receivable) {
+            await assertWithinSaleInvoiceBalance(ctx, receivable, cheque.amount, currency);
           }
         }
 
@@ -1927,14 +1965,19 @@ export const respondToApproval = mutation({
               updatedAt: now,
             });
             // Keep the canonical receivable document in step with the legacy
-            // row — aging and dunning read the canonical dueDate.
-            const rescheduledDocId = await ensureCanonicalReceivableForLegacy(
-              ctx,
-              receivable,
-              user._id,
-              currency
-            );
-            await ctx.db.patch(rescheduledDocId, { dueDate: request.requestedDueDate });
+            // row — aging and dunning read the canonical dueDate. Skipped for a
+            // row that stands for a sale: giving one hand-keyed installment the
+            // power to move the whole sale invoice's due date would reschedule
+            // debt it does not own, and that invoice ages on its own terms.
+            if (!(await saleInvoiceForLegacyRow(ctx, receivable))) {
+              const rescheduledDocId = await ensureCanonicalReceivableForLegacy(
+                ctx,
+                receivable,
+                user._id,
+                currency
+              );
+              await ctx.db.patch(rescheduledDocId, { dueDate: request.requestedDueDate });
+            }
           } else if (request.requestType === "CANCEL_RECEIVABLE") {
             // Block if any payments have already been collected: cancelling a
             // financially-recognised receivable without a reversal GL event
@@ -1973,13 +2016,18 @@ export const respondToApproval = mutation({
               status: "CANCELLED",
               updatedAt: now,
             });
-            const cancelledDocId = await ensureCanonicalReceivableForLegacy(
-              ctx,
-              receivable,
-              user._id,
-              currency
-            );
-            await ctx.db.patch(cancelledDocId, { status: "CANCELLED" });
+            // Cancelling a hand-keyed row deletes a redundant copy, never the
+            // customer's debt — so a row standing for a sale must not carry its
+            // CANCELLED status onto that sale's invoice.
+            if (!(await saleInvoiceForLegacyRow(ctx, receivable))) {
+              const cancelledDocId = await ensureCanonicalReceivableForLegacy(
+                ctx,
+                receivable,
+                user._id,
+                currency
+              );
+              await ctx.db.patch(cancelledDocId, { status: "CANCELLED" });
+            }
             // Reverse the RECEIVABLE_CREATED entry (or cancel its pending post)
             // so AR and the credit account it hit (income/deposit liability/
             // expense reimbursement) don't stay overstated once the receivable
@@ -2032,7 +2080,11 @@ export const respondToApproval = mutation({
             });
 
             const refundPayment = await ctx.db.get(refundPaymentId);
-            const canonicalReceivableDocumentId = await ensureCanonicalReceivableForLegacy(
+            // The refund must unwind the document the payment actually settled.
+            // Resolving the row's own twin here while `recordPayment` allocated
+            // to the sale invoice left nothing to reverse, and `CANCEL` is
+            // blocked behind a refund, so the operator had no way out at all.
+            const canonicalReceivableDocumentId = await canonicalMonetaryTargetForLegacyRow(
               ctx,
               receivable,
               user._id,

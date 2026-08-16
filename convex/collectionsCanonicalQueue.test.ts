@@ -729,6 +729,136 @@ describe("SCRUM-56 correction — legacy balances never compute canonical debt",
     expect(legacy!.duplicateRepresentation).toBe(true);
   });
 
+  /**
+   * The monetary target is single; the non-monetary side effects are not.
+   *
+   * Redirecting the payment allocation to the sale's invoice without redirecting
+   * the REFUND left the refund unwinding a document that had never received
+   * anything — a workflow dead end, with `CANCEL_RECEIVABLE` blocked behind it
+   * (`paidAmount > 0` demands a refund first), so an operator had no way out.
+   *
+   * The opposite error is just as easy and worse: rescheduling or cancelling a
+   * hand-keyed row must NOT reach the sale invoice. One sub-representation may
+   * not move the due date of the whole sale debt, and may certainly not cancel
+   * it. Those two tests pass before this change as well as after — they exist to
+   * stop the resolver being applied where money is not what is moving.
+   */
+  async function saleInvoiceState(t: any, saleId: any) {
+    return await t.run(async (ctx: any) => {
+      const sale = await ctx.db.get(saleId);
+      const doc = await ctx.db.get(sale!.canonicalReceivableDocumentId!);
+      return { status: doc!.status, dueDate: doc!.dueDate };
+    });
+  }
+
+  async function payThenRequest(
+    t: any,
+    asUser: any,
+    orgId: any,
+    customerId: any,
+    userId: any,
+    saleId: any,
+    opts: { pay: number; requestType: "REFUND" | "CANCEL_RECEIVABLE" | "RESCHEDULE"; amount?: number; dueDate?: number }
+  ) {
+    const receivableId = await addSaleLinkedLegacyRow(t, orgId, customerId, userId, saleId, 8000);
+    if (opts.pay > 0) {
+      await asUser.mutation(api.collections.recordPayment, {
+        orgId, receivableId, amount: opts.pay, method: "CASH", paymentDate: Date.now(),
+      });
+    }
+    const requestId = await asUser.mutation(api.collections.requestApproval, {
+      orgId,
+      receivableId,
+      requestType: opts.requestType,
+      requestedAmount: opts.amount,
+      requestedDueDate: opts.dueDate,
+      reason: "test",
+      ...(opts.requestType === "REFUND" ? { disbursementMethod: "CASH" as const } : {}),
+    });
+    return { receivableId, requestId };
+  }
+
+  test("refunding a payment taken on the hand-keyed row unwinds it on the sale's invoice", async () => {
+    const { t, orgId, customerId, vehicleId, userId, asUser, asApprover } = await setup();
+    const saleId = await completeSale(asUser, orgId, customerId, vehicleId);
+    const { requestId } = await payThenRequest(t, asUser, orgId, customerId, userId, saleId, {
+      pay: 8000, requestType: "REFUND", amount: 3000,
+    });
+
+    // Before the fix this threw "Canonical allocations cover only 0 of the
+    // requested refund" — the money was on the sale invoice, the reversal was
+    // looking at the row's own twin.
+    await asApprover.mutation(api.collections.respondToApproval, {
+      orgId, requestId, status: "APPROVED",
+    });
+
+    // The sale's debt reopens by exactly the refunded amount.
+    const item = await canonicalSaleItem(asUser, orgId, saleId);
+    expect(item!.outstandingAmount).toBe(SALE_PRICE - 8000 + 3000);
+  });
+
+  test("cancelling a hand-keyed row does not cancel the sale it was keyed against", async () => {
+    const { t, orgId, customerId, vehicleId, userId, asUser, asApprover } = await setup();
+    const saleId = await completeSale(asUser, orgId, customerId, vehicleId);
+    const { requestId } = await payThenRequest(t, asUser, orgId, customerId, userId, saleId, {
+      pay: 0, requestType: "CANCEL_RECEIVABLE",
+    });
+
+    await asApprover.mutation(api.collections.respondToApproval, {
+      orgId, requestId, status: "APPROVED",
+    });
+
+    // The operator deleted a redundant copy, not the customer's debt.
+    const invoice = await saleInvoiceState(t, saleId);
+    expect(invoice.status).not.toBe("CANCELLED");
+    const item = await canonicalSaleItem(asUser, orgId, saleId);
+    expect(item!.outstandingAmount).toBe(SALE_PRICE);
+  });
+
+  test("rescheduling a hand-keyed row does not move the sale invoice's due date", async () => {
+    const { t, orgId, customerId, vehicleId, userId, asUser, asApprover } = await setup();
+    const saleId = await completeSale(asUser, orgId, customerId, vehicleId);
+    const before = await saleInvoiceState(t, saleId);
+
+    const { requestId } = await payThenRequest(t, asUser, orgId, customerId, userId, saleId, {
+      pay: 0, requestType: "RESCHEDULE", dueDate: Date.now() + 90 * 86_400_000,
+    });
+    await asApprover.mutation(api.collections.respondToApproval, {
+      orgId, requestId, status: "APPROVED",
+    });
+
+    const after = await saleInvoiceState(t, saleId);
+    expect(after.dueDate).toBe(before.dueDate);
+  });
+
+  test("a cheque worth more than the sale still owes is refused in the operator's language", async () => {
+    const { t, orgId, customerId, vehicleId, userId, asUser } = await setup();
+    const saleId = await completeSale(asUser, orgId, customerId, vehicleId);
+    const receivableId = await addSaleLinkedLegacyRow(t, orgId, customerId, userId, saleId, 8000);
+
+    // Settle the sale down to 3,000 directly, leaving the hand-keyed row's own
+    // stored balance stale at 8,000.
+    const canonicalId = await t.run(async (ctx: any) => {
+      const sale = await ctx.db.get(saleId);
+      return sale!.canonicalReceivableDocumentId!;
+    });
+    await asUser.mutation(api.collections.recordPayment, {
+      orgId, receivableDocumentId: canonicalId, amount: SALE_PRICE - 3000,
+      method: "CASH", paymentDate: Date.now(),
+    });
+
+    const chequeId = await asUser.mutation(api.collections.registerCheque, {
+      orgId, receivableId, customerId, bank: "ABC", chequeNumber: "1001",
+      chequeDate: Date.now(), amount: 8000,
+    });
+
+    // The stale row would accept 8,000; the sale only owes 3,000. It must refuse
+    // the way the recordPayment path does, not in minor units.
+    await expect(
+      asUser.mutation(api.collections.clearCheque, { orgId, chequeId })
+    ).rejects.toThrow(/larger than the sale still owes/);
+  });
+
   test("paying the hand-keyed representation pays down the sale's own invoice", async () => {
     const { t, orgId, customerId, vehicleId, userId, asUser } = await setup();
     const saleId = await completeSale(asUser, orgId, customerId, vehicleId);
