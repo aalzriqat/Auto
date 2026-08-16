@@ -461,13 +461,29 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // id for the guard to own-check, and it is an `internalMutation` reachable
   // only from the cron, with no public entry point.
   //
-  // ⚠️ `analysed` stays at 315 across all four. That is the number that must
-  // never drop silently — a new mutation landing in a skip bucket is only
+  // `analysed` stayed at 315 across all four of those. That is the number that
+  // must never drop silently — a new mutation landing in a skip bucket is only
   // acceptable when the reason is one of the two above, stated per mutation.
+  //
+  // ⚠️ SCRUM-53 is the first change to move it DOWN, and it is a deletion, not a
+  // skip: 477→474 / 315→312 by deleting `transactions.add`, `update` and
+  // `remove`. All three took an `orgId`, so all three were `analysed`; neither
+  // skip bucket moves, which is what removing exactly three org-scoped mutations
+  // should look like. A shrinking pin is the direction to distrust — a coverage
+  // loss looks identical from here — so the arithmetic is spelled out rather
+  // than just re-pinned.
+  //
+  // These figures were RECOMPUTED, not taken from either side of the merge.
+  // Both sides moved the same counters independently: main by the four
+  // mutations above (473→477, skip buckets 13→15 and 145→147), this branch by
+  // the three deletions (−3 total, −3 analysed). The merged figures are the sum
+  // of both movements, so they match neither side's pin verbatim — this branch
+  // alone carried 470/312/13/145 against its old base. Taking either side as
+  // written would have silently un-pinned the other side's mutations.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 477,
-      analysed: 315,
+      totalMutations: 474,
+      analysed: 312,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 147,
     });

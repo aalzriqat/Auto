@@ -24,9 +24,9 @@ import { useStyles } from "./moduleStyles";
  * from here and nowhere else in the product. New financial activity has to come
  * from the real domain workflow (a sale, an expense, a collection, a deposit),
  * each of which already inserts its own cashbook row, or from an explicit
- * manual journal. Editing a row the GL has already represented is refused by
- * the server as well (`assertNotRepresentedInGl`), so removing the buttons is
- * the second line of defence and not the only one.
+ * manual journal. The server no longer offers the write at all — `add`,
+ * `update` and `remove` are deleted, and `convex/transactions.ts` exposes
+ * `list` alone — so this screen is not guarding a door that is still there.
  */
 export function AccountingModule({ orgId }: { orgId: string }) {
   const styles = useStyles();

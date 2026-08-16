@@ -1921,18 +1921,6 @@ type QuoteSaveArgs = OrgScopedArgs & {
   manualIncludesCommissionInDebt?: boolean;
 };
 
-type TransactionMutationArgs = OrgScopedArgs & {
-  type: MobileLedgerType;
-  amount: number;
-  date: number;
-  category: MobileLedgerCategory;
-  description: string;
-  vehicleId?: string;
-  userId?: string;
-  expenseId?: string;
-  idempotencyKey?: string;
-};
-
 type ApprovalRespondArgs = OrgScopedArgs & {
   requestId: string;
   status: MobileApprovalStatus;
@@ -2478,16 +2466,9 @@ export const api = {
       TransactionListArgs,
       MobilePageResult<MobileLedgerTransaction>
     >("transactions:list"),
-    add: makeFunctionReference<"mutation", TransactionMutationArgs, string>("transactions:add"),
-    update: makeFunctionReference<
-      "mutation",
-      Partial<Omit<TransactionMutationArgs, "orgId" | "idempotencyKey">> &
-        OrgScopedArgs & { transactionId: string },
-      null
-    >("transactions:update"),
-    remove: makeFunctionReference<"mutation", OrgScopedArgs & { transactionId: string }, null>(
-      "transactions:remove",
-    ),
+    // SCRUM-53: `add`, `update` and `remove` are deliberately absent. The
+    // backend no longer exports them — the legacy cashbook is a read-only
+    // projection, and a declaration here would resolve to nothing on a phone.
   },
   sourcingPayables: {
     list: makeFunctionReference<
@@ -3153,15 +3134,6 @@ export const api = {
   };
   transactions: {
     list: FunctionReference<"query", "public", TransactionListArgs, MobilePageResult<MobileLedgerTransaction>>;
-    add: FunctionReference<"mutation", "public", TransactionMutationArgs, string>;
-    update: FunctionReference<
-      "mutation",
-      "public",
-      Partial<Omit<TransactionMutationArgs, "orgId" | "idempotencyKey">> &
-        OrgScopedArgs & { transactionId: string },
-      null
-    >;
-    remove: FunctionReference<"mutation", "public", OrgScopedArgs & { transactionId: string }, null>;
   };
   sourcingPayables: {
     list: FunctionReference<
