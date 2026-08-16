@@ -47,84 +47,29 @@ function convexModules(dir: string, acc: string[] = []): string[] {
 }
 
 /**
- * Blanks out comments so they cannot satisfy the obligation, using TypeScript's
- * parser rather than pattern matching.
+ * ⚠️ `stripComments` USED TO LIVE HERE, and its removal is the point.
  *
- * Two earlier versions of this were fail-open, and the failure is the same
- * shape each time: something that merely *looks* like a comment gets deleted,
- * that deletion can remove the closing `});` bounding a mutation's chunk, the
- * chunk then runs on into its neighbour, and the offender inherits a
- * `syncDeferredSocialThreads(` call it never makes. A guard that reports clean
- * because it destroyed the evidence is worse than no guard.
+ * The obligation check ran over comment-stripped text, so a stripper was
+ * needed — and it was the single most defect-prone thing in this file. It went
+ * through a regex version (a comment opener inside a string swallowed real
+ * code, including a closing `});` boundary, merging two definitions so an
+ * offender inherited its neighbour's calls), then a `ts.createScanner` version
+ * (no syntactic context, so a regex character class holding both comment
+ * delimiters came back blanked), then a parser-with-`getChildren` version. Each
+ * fix was correct and each still fed a text scan.
  *
- *   - Regular expressions matched comment shapes inside string, template and
- *     regex literals. A block-comment opener in a string pairs with the next
- *     real closer and eats everything between.
- *   - A bare `ts.createScanner` fixed that but has no syntactic context, so it
- *     cannot distinguish division from the start of a regular expression. A
- *     regex character class holding both comment delimiters came back with its
- *     contents blanked. See the fixture named for it below.
+ * The AST never sees a comment: trivia does not become a node. So the whole
+ * class — comments, strings, template literals, regex literals mimicking
+ * comment syntax — stopped being expressible rather than being handled. The
+ * tests that pinned those behaviours through `deferredMutationOffenders` are
+ * kept and still pass; the two that tested the stripper directly, and the one
+ * pinning balanced block-comment delimiters across the tree, were removed with
+ * it, because they assert properties of a mechanism this file no longer has.
  *
- * The parser resolves regex context correctly, so trivia ranges taken from its
- * tokens are the real comments and nothing else. Ranges are replaced with
- * spaces of equal length and newlines are preserved, leaving every downstream
- * offset, chunk boundary and line number byte-for-byte unchanged.
+ * ⚠️ Writing this very docblock broke the file once, because the prose quoted
+ * the closing delimiter and ended the comment early. The hazard is real enough
+ * to bite the note explaining it.
  */
-export function stripComments(source: string): string {
-  // Parser, not scanner. A bare `ts.createScanner` has no syntactic context, so
-  // it cannot tell a division from the start of a regular expression: given
-  // `/[/*][*/]/` it reports the inner `/* ... */` as a block comment and blanks
-  // a valid character class. Verified — that exact input came back as
-  // `/[      ]/`. The parser decides regex context correctly, so comment ranges
-  // taken from token trivia are the real comments and nothing else.
-  const sourceFile = ts.createSourceFile(
-    "scan.ts",
-    source,
-    ts.ScriptTarget.Latest,
-    /* setParentNodes */ true
-  );
-  const out = source.split("");
-  const seen = new Set<string>();
-
-  const blank = (pos: number, end: number) => {
-    const key = `${pos}:${end}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    for (let i = pos; i < end; i++) {
-      // Newlines survive so offsets, chunk boundaries and line numbers are
-      // byte-for-byte what they were in the source.
-      if (out[i] !== "\n" && out[i] !== "\r") out[i] = " ";
-    }
-  };
-
-  // `getChildren`, not `forEachChild`. `forEachChild` visits only syntactic
-  // children and skips punctuation tokens, so the leading trivia of a closing
-  // `}` or `)` is never reached — and `getTrailingCommentRanges` stops at the
-  // first line break, so a comment on the following line is not trailing trivia
-  // of the preceding node either. The gap that leaves is the single most likely
-  // place for the comment this guard must not be fooled by:
-  //
-  //     handler: async (ctx) => {
-  //       await ctx.db.patch(id, {});
-  //       // TODO: syncDeferredSocialThreads(ctx, threads)
-  //     },
-  //
-  // Verified: that comment survived `forEachChild` and satisfied the
-  // obligation. `getChildren` materialises token nodes, so their trivia is
-  // visited too.
-  const visit = (node: ts.Node) => {
-    for (const range of ts.getLeadingCommentRanges(source, node.getFullStart()) ?? []) {
-      blank(range.pos, range.end);
-    }
-    for (const range of ts.getTrailingCommentRanges(source, node.getEnd()) ?? []) {
-      blank(range.pos, range.end);
-    }
-    for (const child of node.getChildren(sourceFile)) visit(child);
-  };
-  visit(sourceFile);
-
-  return out.join("");
-}
 
 /**
  * True when a module could possibly hold a deferred mutation.
@@ -208,22 +153,109 @@ function resolveBuilderImports(sourceFile: ts.SourceFile): {
   return { named, namespaces };
 }
 
-function builderBindings(source: string): string[] {
-  const sourceFile = ts.createSourceFile("scan.ts", source, ts.ScriptTarget.Latest, true);
-  const { named, namespaces } = resolveBuilderImports(sourceFile);
-  return [...named, ...[...namespaces].map((ns) => `${ns}.${BUILDER}`)];
+
+/** Whether an expression node resolves to the deferred builder. */
+function isBuilderReference(
+  node: ts.Expression,
+  named: Set<string>,
+  namespaces: Set<string>
+): boolean {
+  if (ts.isIdentifier(node)) return named.has(node.text);
+  if (ts.isPropertyAccessExpression(node)) {
+    return (
+      node.name.text === BUILDER &&
+      ts.isIdentifier(node.expression) &&
+      namespaces.has(node.expression.text)
+    );
+  }
+  return false;
 }
 
-/** Matches `= <binding>(` for any name that resolves to the deferred builder. */
-function builderCallPattern(source: string): RegExp {
-  const bindings = builderBindings(source);
-  // Longest first so `fns.socialBulkMutation` is preferred over a bare
-  // `socialBulkMutation` binding that happens to also exist.
-  const alternation = bindings
-    .sort((a, b) => b.length - a.length)
-    .map((name) => name.replace(/\./g, "\\."))
-    .join("|");
-  return new RegExp(`=\\s*(?:${alternation})\\(`);
+/**
+ * THE representation of a deferred mutation. One AST fact, derived once.
+ *
+ * ## Why this replaced the text scan, rather than patching it again
+ *
+ * The guard used to be two mechanisms that had to agree: `builderEscapes`
+ * resolved the builder through the AST, while discovery and the obligation
+ * check ran a regex shaped like `= <binding>(` over comment-stripped, `export
+ * const`-split chunks. Two representations of one invariant is how they drift,
+ * and they did — repeatedly, always failing OPEN:
+ *
+ *   - a comment opener inside a string swallowed a chunk boundary
+ *   - a definition at offset 0 produced no chunk at all
+ *   - a chunk ran on into the next definition and borrowed its calls
+ *   - an aliased import defeated the spelling
+ *   - and finally: `socialBulkMutation<void, void>({...})`. The AST reads that
+ *     as a direct builder call and approves it; the regex needs the paren to
+ *     follow the name immediately, so it matched nothing and the mutation was
+ *     invisible to BOTH the offender list and the armed list. The builder is
+ *     exposed through a generic callable type by the convex-helpers version
+ *     this repo uses, so explicit type arguments are ordinary and legal.
+ *
+ * Five fail-opens of the same shape is a design fault, not five bad patches. So
+ * discovery and obligation now read the SAME nodes: a deferred mutation is an
+ * exported const whose initializer is a CallExpression whose callee resolves to
+ * the builder binding, and its obligation is checked by walking that call's own
+ * subtree. Type arguments, comments, formatting, neighbouring definitions and
+ * declaration order stop being able to matter, because none of them is a
+ * CallExpression.
+ */
+type DeferredMutation = { name: string; call: ts.CallExpression };
+
+function findDeferredMutations(source: string): DeferredMutation[] {
+  const sourceFile = ts.createSourceFile("scan.ts", source, ts.ScriptTarget.Latest, true);
+  const { named, namespaces } = resolveBuilderImports(sourceFile);
+  const found: DeferredMutation[] = [];
+
+  for (const statement of sourceFile.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const decl of statement.declarationList.declarations) {
+      const init = decl.initializer;
+      if (!init || !ts.isCallExpression(init)) continue;
+      if (!isBuilderReference(init.expression, named, namespaces)) continue;
+      if (!ts.isIdentifier(decl.name)) continue;
+      // Only exported consts are Convex functions. A non-exported one is not a
+      // mutation at all, and `builderEscapes` reports it as unsupported
+      // indirection rather than letting it pass unexamined.
+      if ((ts.getCombinedModifierFlags(decl) & ts.ModifierFlags.Export) === 0) continue;
+      found.push({ name: decl.name.text, call: init });
+    }
+  }
+
+  return found;
+}
+
+/**
+ * Whether `name` is CALLED anywhere inside this subtree.
+ *
+ * A call, not a mention: an identifier in a comment is trivia and never becomes
+ * a node, and a string containing the name is a StringLiteral. Both classes of
+ * false satisfaction that the text scan kept re-admitting are structurally
+ * impossible here, which is why the tests pinning them survive the rewrite
+ * unchanged — they still assert the behaviour, it is simply no longer possible
+ * to get wrong.
+ */
+function callsFunction(root: ts.Node, name: string): boolean {
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (found) return;
+    if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      const calleeName = ts.isIdentifier(callee)
+        ? callee.text
+        : ts.isPropertyAccessExpression(callee)
+          ? callee.name.text
+          : null;
+      if (calleeName === name) {
+        found = true;
+        return;
+      }
+    }
+    node.forEachChild(visit);
+  };
+  visit(root);
+  return found;
 }
 
 /**
@@ -352,81 +384,42 @@ function builderEscapes(source: string, rel: string): string[] {
 }
 
 /**
- * One entry per exported Convex function, split on the same boundary
- * `scripts/tenantWriteGuard.ts` uses.
- */
-/**
- * One `rel:name` per exported mutation built on `socialBulkMutation`, using the
- * same chunking as the obligation scan so the two cannot diverge.
+ * One `rel:name` per exported mutation built on `socialBulkMutation`.
+ *
+ * Reads the SAME representation the obligation check reads, so the two cannot
+ * disagree about what a deferred mutation is. They used to be a shared regex,
+ * which is not the same thing: a shared expression evaluated over two
+ * separately-derived strings still drifts, and the "guard is armed" test then
+ * confirms the drift instead of catching it.
  */
 export function deferredMutationsIn(source: string, rel: string): string[] {
   if (!mayHoldDeferredMutation(source)) return [];
-  const builderCall = builderCallPattern(source);
-  const found: string[] = [];
-  const code = stripComments(source);
-
-  // Leading newline so a definition at offset 0 is chunked like any other.
-  // Splitting on a newline-prefixed `export const` alone made the FIRST
-  // definition in a module invisible — no chunk, no offender, silently clean.
-  // Fourth fail-open in this helper, same shape as the rest: it reported
-  // nothing because it looked at nothing.
-  for (const raw of ("\n" + code).split(/\nexport const /).slice(1)) {
-    const whole = "export const " + raw;
-    const end = whole.search(/\n\}\);/);
-    const name = raw.match(/^(\w+)/)?.[1];
-    if (!name) continue;
-    const chunk = end === -1 ? whole : whole.slice(0, end);
-    if (builderCall.test(chunk)) found.push(`${rel}:${name}`);
-  }
-
-  return found;
+  return findDeferredMutations(source).map((m) => `${rel}:${m.name}`);
 }
 
 export function deferredMutationOffenders(source: string, rel: string): string[] {
   if (!mayHoldDeferredMutation(source)) return [];
-  // Indirection this guard cannot follow is reported, not tolerated. Checked
-  // before the binding lookup because a module that only re-exports the builder
-  // has no call sites of its own to scan.
+  // Indirection this guard cannot follow is reported, not tolerated — and it is
+  // checked first because a module that only re-exports the builder has no call
+  // sites of its own to find.
   const offenders: string[] = builderEscapes(source, rel);
-  const builderCall = builderCallPattern(source);
-  const code = stripComments(source);
 
-  // Leading newline so a definition at offset 0 is chunked like any other.
-  // Splitting on a newline-prefixed `export const` alone made the FIRST
-  // definition in a module invisible — no chunk, no offender, silently clean.
-  // Fourth fail-open in this helper, same shape as the rest: it reported
-  // nothing because it looked at nothing.
-  for (const raw of ("\n" + code).split(/\nexport const /).slice(1)) {
-    const whole = "export const " + raw;
-    // Bounded at this definition's own closing `});`. Splitting alone runs a
-    // chunk to the next `export const` — or to EOF for the last one — so a
-    // non-exported helper defined *after* an offending mutation leaked its
-    // calls into the offender's chunk and the offender went unreported.
-    const end = whole.search(/\n\}\);/);
-    const name = raw.match(/^(\w+)/)?.[1];
-    if (!name) continue;
-    if (end === -1) {
-      // No recognisable closing `});`, so the chunk cannot be bounded and would
-      // run on into the next definition, borrowing calls that are not its own.
-      // Report it rather than scan it: for a guard whose whole purpose is to
-      // catch a silent omission, "I could not parse this" must not read the
-      // same as "this is fine".
-      if (builderCall.test(whole)) {
-        offenders.push(`${rel}:${name} uses socialBulkMutation in a definition this guard cannot bound`);
-      }
-      continue;
-    }
-    const chunk = whole.slice(0, end);
-    if (!builderCall.test(chunk)) continue;
-
+  for (const mutation of findDeferredMutations(source)) {
+    // The subtree of THIS call, so a neighbouring definition or a helper
+    // declared afterwards cannot lend it calls it never makes. Scope comes from
+    // the tree rather than from guessing where a definition ends, which is what
+    // the old `\n});` boundary search was doing.
+    //
     // Both halves are required. Collecting without syncing leaves the rows
     // stale; syncing without collecting recomputes an empty set, which looks
     // exactly like success.
-    if (!chunk.includes("syncDeferredSocialThreads(")) {
-      offenders.push(`${rel}:${name} uses socialBulkMutation but never calls syncDeferredSocialThreads`);
+    if (!callsFunction(mutation.call, "syncDeferredSocialThreads")) {
+      offenders.push(
+        `${rel}:${mutation.name} uses ${BUILDER} but never calls syncDeferredSocialThreads`
+      );
     }
-    if (!chunk.includes("collectSocialThread(")) {
-      offenders.push(`${rel}:${name} uses socialBulkMutation but never calls collectSocialThread`);
+    if (!callsFunction(mutation.call, "collectSocialThread")) {
+      offenders.push(`${rel}:${mutation.name} uses ${BUILDER} but never calls collectSocialThread`);
     }
   }
 
@@ -434,37 +427,6 @@ export function deferredMutationOffenders(source: string, rel: string): string[]
 }
 
 describe("deferred conversation sync", () => {
-  test("comment-like text inside literals is left alone", () => {
-    // Each of these would have been mangled by the regex stripper. The URL and
-    // the template both contain `//`; the regex literal contains a block-comment
-    // opener; and the closing delimiter inside a string is what could have
-    // swallowed real code up to the next one.
-    const url = 'const endpoint = "https://graph.example.com/v1";';
-    expect(stripComments(url)).toBe(url);
-
-    const template = "const t = `see https://example.com/docs for details`;";
-    expect(stripComments(template)).toBe(template);
-
-    const regex = "const re = /\\/\\*/;";
-    expect(stripComments(regex)).toBe(regex);
-
-    // A regex character class holding both delimiters unescaped. This is what a
-    // context-free scanner gets wrong: it reads the inner `/*` ... `*/` as a
-    // block comment and blanks a valid character class.
-    const charClass = "const re = /[/*][*/]/;";
-    expect(stripComments(charClass)).toBe(charClass);
-
-    const closer = 'const s = "ends with a block comment closer: */";';
-    expect(stripComments(closer)).toBe(closer);
-
-    // Real comments still go, and the code around them survives intact.
-    const mixed = 'const a = 1; // note\nconst b = "//not a comment";';
-    const strippedMixed = stripComments(mixed);
-    expect(strippedMixed).toContain('const b = "//not a comment";');
-    expect(strippedMixed).not.toContain("note");
-    // Offsets are preserved so chunk boundaries and line numbers do not shift.
-    expect(strippedMixed).toHaveLength(mixed.length);
-  });
 
   test("a comment opener inside a string cannot hide an offender", () => {
     // This is the fail-open the regex stripper actually produced, not a
@@ -584,6 +546,36 @@ export const bad = fns.socialBulkMutation({
   args: {},
   handler: async (ctx) => {
     await ctx.db.patch(id, { customerId });
+  },
+});
+`;
+    expect(deferredMutationOffenders(source, "x.ts")).toEqual([
+      "x.ts:bad uses socialBulkMutation but never calls syncDeferredSocialThreads",
+      "x.ts:bad uses socialBulkMutation but never calls collectSocialThread",
+    ]);
+    expect(deferredMutationsIn(source, "x.ts")).toEqual(["x.ts:bad"]);
+  });
+
+  test("explicit type arguments cannot hide a non-syncing mutation", () => {
+    // The bypass that forced this guard to stop being two mechanisms.
+    //
+    // `builderEscapes` resolves the binding through the AST and correctly reads
+    // this as a direct builder call, so it raises nothing. Discovery and the
+    // obligation check were a SEPARATE regex — `= <binding>(` — which requires
+    // the paren to follow the name immediately, so `socialBulkMutation<void,
+    // void>(` matched nothing. The mutation appeared in neither the offender
+    // list nor the armed list.
+    //
+    // Not hypothetical syntax: the custom builder is exposed through a generic
+    // callable type by the convex-helpers version this repo uses, so writing
+    // the type arguments explicitly is ordinary and legal.
+    const source = `
+import { socialBulkMutation } from "./functions";
+
+export const bad = socialBulkMutation<void, void>({
+  args: {},
+  handler: async (ctx) => {
+    await ctx.db.patch(id, {});
   },
 });
 `;
@@ -782,24 +774,6 @@ async function unrelatedHelper(ctx) {
     ]);
   });
 
-  test("every Convex module has balanced block-comment delimiters", () => {
-    // `stripComments` deletes everything between `/*` and the next `*/`. An
-    // unbalanced `/*` inside a string or regex literal would therefore swallow
-    // real code — including, in the worst case, a non-syncing mutation, which
-    // would vanish from the scan entirely. That is the one shape in the
-    // stripper that fails OPEN rather than merely producing a noisy build, so
-    // it is pinned rather than reasoned about.
-    const unbalanced: string[] = [];
-    for (const file of convexModules(CONVEX_DIR)) {
-      const source = fs.readFileSync(file, "utf8");
-      const opens = (source.match(/\/\*/g) ?? []).length;
-      const closes = (source.match(/\*\//g) ?? []).length;
-      if (opens !== closes) {
-        unbalanced.push(`${path.relative(CONVEX_DIR, file)}: ${opens} open vs ${closes} close`);
-      }
-    }
-    expect(unbalanced).toEqual([]);
-  });
 
   test("the guard is armed — it sees the real mutations", () => {
     // A guard nobody has watched fail is not a guard. If the builder is renamed
