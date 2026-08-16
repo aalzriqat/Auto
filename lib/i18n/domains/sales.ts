@@ -904,6 +904,11 @@ export const salesEn = {
   // Sending them to find an approver would name the wrong problem.
   GapResolutionNeedsDealFigures:
     "This deal's figures are not available to you, so the difference cannot be settled here.",
+  // The deal has moved past the point where this can be agreed. Handover seals
+  // the figures and closing writes the sale against them, so the server refuses
+  // outright — the screen must not offer a step guaranteed to fail.
+  GapResolutionSealed:
+    "This deal has already moved on, so who covers the difference can no longer be recorded here.",
   ResolveGapTitle: "Who covers the difference",
   ResolveGapDescription:
     "The finance company approved less than the quotation. Record what the customer and the dealership each agreed to cover, and where the customer's part is actually paid.",
@@ -1845,6 +1850,7 @@ export const salesAr = {
     "يُسجّل الاتفاق على من يتحمّل الفرق من يملك صلاحية اعتماد مبلغ الشراء لهذه الصفقة.",
   GapResolutionNeedsDealFigures:
     "أرقام هذه الصفقة غير متاحة لك، لذلك لا يمكن تسوية الفرق من هنا.",
+  GapResolutionSealed: "تجاوزت هذه الصفقة هذه المرحلة، ولم يعد بالإمكان تسجيل من يتحمّل الفرق هنا.",
   ResolveGapTitle: "من يتحمّل الفرق",
   ResolveGapDescription:
     "اعتمدت شركة التمويل مبلغاً أقل من عرض السعر. سجّل ما اتفق العميل والمعرض على تحمّله، وأين يُدفع نصيب العميل فعلياً.",

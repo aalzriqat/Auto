@@ -2336,13 +2336,14 @@ export const resolveAppraisalGap = mutation({
     // customer's dealership-bound share into the owner's profit figure.
     const updated = await ctx.db.get(args.applicationId);
     if (!updated) {
-      // Fails CLOSED. The settlement patch has already landed by this point, so
-      // skipping the recompute would leave the row carrying an agreed
-      // allocation whose derived economics were never updated — the owner's
-      // profit figure silently disagreeing with the split it is derived from.
-      // Unreachable in practice, since the row was just patched in this same
-      // transaction; a throw rolls the whole mutation back, which is the only
-      // safe reading of "the row I just wrote is gone".
+      // Defensive invariant hardening, and deliberately NOT a claim that the
+      // old `if (updated)` branch could commit a half-resolved row. The patch
+      // and this re-read happen inside the SAME Convex mutation, so a
+      // concurrent delete cannot interleave and no partial state was ever
+      // commit-able. What the old branch did wrong was treat an impossible
+      // reading as a no-op: silently skipping the recompute is the wrong
+      // response to "the row I just wrote is gone", whatever made it so. A
+      // throw rolls the whole mutation back, which is the only safe answer.
       throw new ConvexError(
         "This deal could not be re-read after recording the split, so its figures were not updated. Nothing was saved — try again."
       );

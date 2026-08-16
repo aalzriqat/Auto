@@ -507,6 +507,11 @@ export function DealCockpit({
       // nine rounds removing — asking for agreement about a number the operator
       // is not being shown.
       const gapVisible = typeof deal.money?.appraisalGapMinor === "number";
+      // The two states the server treats as sealed. `handoverStage` is the
+      // rail's own view of whether the vehicle has gone out, and a status other
+      // than APPROVED covers CLOSED and CANCELLED.
+      const lifecycleSealed =
+        deal.status !== "APPROVED" || handoverStage?.state === "COMPLETE";
       return {
         stageKey: liveStage.key,
         actionKey: "ResolveGapAction",
@@ -519,11 +524,26 @@ export function DealCockpit({
         // that authority and still cannot see the deal's money is blocked by
         // visibility, not by permission — and telling them to find someone with
         // approval rights sends them after a problem they do not have.
-        unavailableReasonKey: !hasPermission(PERMISSIONS.APPROVE_FINANCE_APPLICATION)
-          ? "GapResolutionNeedsPermission"
-          : gapVisible
-            ? undefined
-            : "GapResolutionNeedsDealFigures",
+        //
+        // Lifecycle FIRST, because it outranks both. `resolveAppraisalGap`
+        // refuses anything not APPROVED, anything already handed over, and
+        // anything closed — handover seals these figures and finalization
+        // writes the sale against them. The rail can still say GapUnresolved on
+        // such a deal, since nothing ever wrote a resolution to it, so offering
+        // the action here promised a step the server is GUARANTEED to reject.
+        // That is a false affordance, not a permission problem, and it is the
+        // same class of defect as the stage rail that named steps it could not
+        // take.
+        //
+        // Deliberately mirrors the server guard rather than approximating it:
+        // status must be APPROVED and handover must not have happened.
+        unavailableReasonKey: lifecycleSealed
+          ? "GapResolutionSealed"
+          : !hasPermission(PERMISSIONS.APPROVE_FINANCE_APPLICATION)
+            ? "GapResolutionNeedsPermission"
+            : gapVisible
+              ? undefined
+              : "GapResolutionNeedsDealFigures",
       };
     }
 
