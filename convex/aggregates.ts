@@ -3,6 +3,7 @@ import { Triggers } from "convex-helpers/server/triggers";
 import type { GenericDatabaseWriter } from "convex/server";
 import { components } from "./_generated/api";
 import { DataModel, Doc, Id } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
 import { validateVinChecksum } from "../lib/vinHelpers";
 import { SOCIAL_CONVERSATION_GENERATION } from "./utils/materialization";
 
@@ -405,7 +406,9 @@ export const aggregateTriggers = new Triggers<DataModel>();
  * not the other — the failure that would produce is a tree that drifts only
  * during bulk operations, which is precisely the kind nothing surfaces.
  */
-function registerCountingTriggers(triggers: Triggers<DataModel>): void {
+function registerCountingTriggers<Ctx extends MutationCtx>(
+  triggers: Triggers<DataModel, Ctx>
+): void {
   triggers.register("vehicles", vehiclesByOrg.idempotentTrigger());
   triggers.register("vehicles", vehicleQualityByOrg.idempotentTrigger());
   triggers.register("customers", customersByOrg.idempotentTrigger());
@@ -872,7 +875,15 @@ aggregateTriggers.register("facebookEvents", async (ctx, change) => {
  * alone; that is a separate, resumable-pagination design and deliberately not
  * solved here.
  */
-export const deferredThreadTriggers = new Triggers<DataModel>();
+/**
+ * The context these triggers REQUIRE. Making the tracker part of the type is
+ * what stops `wrapDB(ctx)` compiling without one — the earlier version was a
+ * plain `Triggers<DataModel>` whose callbacks needed `ctx as never`, and a cast
+ * is exactly where a mandatory thing quietly becomes optional.
+ */
+export type DeferredThreadCtx = MutationCtx & { deferredThreads: DeferredSocialThreads };
+
+export const deferredThreadTriggers = new Triggers<DataModel, DeferredThreadCtx>();
 registerCountingTriggers(deferredThreadTriggers);
 
 /**
@@ -889,14 +900,17 @@ registerCountingTriggers(deferredThreadTriggers);
  * tracker" would have been the obvious alternative and is exactly the shape
  * that breaks when two mutations interleave.
  *
- * Absence of a tracker is deliberately a no-op rather than a throw: the
- * counting triggers registered above are shared, and a future writer that wraps
- * this DB without the customization should lose the recompute, not the write.
- * `socialBulkMutation` is the only builder that uses these triggers, and it
- * always supplies one.
+ * ⚠️ A MISSING TRACKER THROWS. It used to return quietly, on the reasoning that
+ * a future writer without the customization should "lose the recompute, not the
+ * write" — which is precisely backwards. Losing the recompute IS the defect
+ * this whole mechanism exists to prevent: the event commits and
+ * `socialConversations` silently describes a state that no longer exists, with
+ * nothing failing at write time and no build-time guard left to notice.
+ * Refusing the write is the only fail-closed answer, and because triggers run
+ * inside the mutation's transaction the refusal rolls the write back with it.
  */
 function recordDeferredThreads(
-  ctx: { deferredThreads?: DeferredSocialThreads },
+  ctx: Partial<DeferredThreadCtx>,
   platform: "instagram" | "facebook",
   change: {
     oldDoc: Doc<"instagramEvents"> | Doc<"facebookEvents"> | null;
@@ -904,18 +918,52 @@ function recordDeferredThreads(
   }
 ): void {
   const threads = ctx.deferredThreads;
-  if (!threads) return;
+  if (!threads) {
+    throw new Error(
+      "deferredThreadTriggers was used without a thread tracker. Build the mutation " +
+        "with `socialBulkMutation` (see prepareDeferredThreadMutation) rather than " +
+        "wrapping this writer directly — otherwise the event write would commit while " +
+        "its conversation summary silently went stale."
+    );
+  }
   collectSocialThread(threads, platform, change.oldDoc);
   collectSocialThread(threads, platform, change.newDoc);
 }
 
 deferredThreadTriggers.register("instagramEvents", async (ctx, change) => {
-  recordDeferredThreads(ctx as never, "instagram", change);
+  recordDeferredThreads(ctx, "instagram", change);
 });
 
 deferredThreadTriggers.register("facebookEvents", async (ctx, change) => {
-  recordDeferredThreads(ctx as never, "facebook", change);
+  recordDeferredThreads(ctx, "facebook", change);
 });
+
+/**
+ * The only supported way to obtain the deferred writer.
+ *
+ * Returns the wrapped `db` and nothing else, keeping the tracker and the full
+ * wrapped context captured in this closure. `socialBulkMutation` used to return
+ * the whole wrapped ctx, and `customFnBuilder` merges everything under `ctx`
+ * into the handler's context — so `deferredThreads` was reachable from inside a
+ * handler, which could `.clear()` it and leave `finalize` synchronising an
+ * empty map. An implementation detail the caller can reach is an implementation
+ * detail the caller can defeat.
+ */
+export function prepareDeferredThreadMutation(ctx: MutationCtx): {
+  db: GenericDatabaseWriter<DataModel>;
+  finalize: () => Promise<void>;
+} {
+  const threads = newDeferredSocialThreads();
+  // Tracker first, THEN wrap: `wrapDB` closes over the ctx it is given and
+  // hands it to every trigger, so anything added afterwards is invisible there.
+  const wrapped = deferredThreadTriggers.wrapDB({ ...ctx, deferredThreads: threads });
+  return {
+    db: wrapped.db,
+    finalize: async () => {
+      await syncDeferredSocialThreads(wrapped, threads);
+    },
+  };
+}
 
 /**
  * Threads touched by a bulk operation, keyed canonically so 500 events from one
@@ -944,8 +992,15 @@ export function collectSocialThread(
 }
 
 /**
- * Recomputes each collected thread exactly once. Call before returning from any
- * mutation built on `deferredThreadTriggers`.
+ * Recomputes each collected thread exactly once.
+ *
+ * ⚠️ NOT called by handlers. `prepareDeferredThreadMutation` captures the
+ * tracker and hands this to `socialBulkMutation` as its `onSuccess`, so the
+ * recompute runs automatically after a handler returns. The docblock here used
+ * to read "call before returning from any mutation built on
+ * `deferredThreadTriggers`", which described the manual contract this design
+ * replaced — left in place it would let a future session reconstruct the
+ * deleted obligation from the documentation alone.
  */
 export async function syncDeferredSocialThreads(
   ctx: { db: GenericDatabaseWriter<DataModel> },

@@ -4340,8 +4340,10 @@ export default defineSchema({
      * A row whose thread still exists under the current scheme is only ever
      * corrected by a write to that thread, so a bulk writer that patches events
      * without collecting every thread it touched still leaves a stale row this
-     * cannot see. That risk lives in the writer, and `deferredThreadSync.test.ts`
-     * is what holds it.
+     * cannot see. That risk lived in the writer, and is now structural: the deferred
+     * writer records every thread a write touches and `socialBulkMutation`
+     * recomputes them automatically, so a bulk handler has no settlement step to
+     * omit.
      */
     generation: v.number(),
     conversationKey: v.string(),

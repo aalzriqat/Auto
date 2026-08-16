@@ -160,18 +160,20 @@ export function describeMaterializationStatus(
  *    assumed: `aggregateWiring.test.ts` fails the build on a Convex module
  *    that imports a raw `mutation`/`internalMutation` instead.
  *
- *    One honest caveat. `socialBulkMutation` is deliberately wrapped with
+ *    `socialBulkMutation` is deliberately wrapped with
  *    `deferredThreadTriggers`, which does NOT recompute conversations per
- *    write — bulk loops opt into it precisely to avoid O(N²) recomputes, and
- *    settle up by calling `syncDeferredSocialThreads` at the end.
- *    `deferredThreadSync.test.ts` fails the build if such a mutation never
- *    calls it, but it cannot prove the handler collected *every* thread it
- *    touched. Both current call sites do (`customers.mergeCustomers` collects
- *    loser and survivor; `setConversationVehicle` collects the pre-patch rows,
- *    and `vehicleId` is not part of the key). A future one that collects only
- *    some of what it patches would leave stale rows that COMPLETED would then
- *    vouch for. That is the residual risk in this argument, and it lives in the
- *    writer, not the gate.
+ *    write — bulk loops opt into it precisely to avoid O(N²) recomputes.
+ *
+ *    ⚠️ This used to carry a caveat, and the caveat is now gone rather than
+ *    merely restated. Settlement was the handler's job, so a handler that
+ *    collected only *some* of what it patched would leave stale rows that
+ *    COMPLETED then vouched for — a residual risk living in the writer. The
+ *    builder owns settlement now: the deferred triggers record every thread a
+ *    write touches, from the write itself, and `onSuccess` recomputes them
+ *    after the handler returns. A handler cannot under-collect because it does
+ *    not collect at all, and a writer taken without that customization refuses
+ *    the write instead of losing the recompute. The union below is therefore
+ *    unconditional.
  * 3. So an event arriving mid-run is materialised by its own write, whether or
  *    not the walk has reached it yet.
  * 4. And the walk cannot skip it either. Pagination is by index sort key, new
@@ -210,11 +212,14 @@ export function describeMaterializationStatus(
  * ⚠️ One residual, stated plainly because it is the shape that bites. This
  * fences generation-MISMATCHED rows, not same-generation orphans. A stale row
  * whose thread still exists under the current key scheme is only ever corrected
- * by a write to that thread, so the bulk-writer risk in point 2 above — a
- * handler that patches events without collecting every thread it touched — is
- * not covered here and cannot be. `deferredThreadSync.test.ts` is what holds
- * that end, which is why its own fail-open history is treated as seriously as
- * the gate's.
+ * by a write to that thread.
+ *
+ * That used to leave a real gap: a bulk handler could patch events without
+ * settling every thread it touched, and a build-time guard was all that stood
+ * between that and a stale row COMPLETED would vouch for. It no longer can —
+ * settlement is the builder's, driven by the writes themselves (point 2 above)
+ * — so what remains here is narrower than it was: a row orphaned by something
+ * outside the trigger-wrapped writers entirely, such as a raw-JSON admin edit.
  *
  * `socialMaterializationGate.test.ts` exercises both: a message that arrives
  * between two pages of a live run, asserted present after completion, and a

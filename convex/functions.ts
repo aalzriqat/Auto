@@ -3,12 +3,7 @@ import {
   mutation as rawMutation,
   internalMutation as rawInternalMutation,
 } from "./_generated/server";
-import {
-  aggregateTriggers,
-  deferredThreadTriggers,
-  newDeferredSocialThreads,
-  syncDeferredSocialThreads,
-} from "./aggregates";
+import { aggregateTriggers, prepareDeferredThreadMutation } from "./aggregates";
 
 /**
  * Mutation builders whose `ctx.db` keeps the aggregate component in step with
@@ -64,30 +59,30 @@ export const internalMutation = customMutation(
  * for a guard to police. That is why `deferredThreadSync.test.ts` is gone
  * rather than hardened again.
  *
- * ⚠️ The tracker lives in this closure, NOT at module scope. `onSuccess`
- * receives the original ctx rather than the wrapped one, so it closes over
- * `wrapped` and `threads` directly. A module-level "current tracker" would be
- * the obvious shortcut and is exactly what breaks when two mutations interleave.
+ * ⚠️ The tracker lives in `prepareDeferredThreadMutation`'s closure, NOT at
+ * module scope and NOT on the handler's context. A module-level "current
+ * tracker" is the obvious shortcut and breaks when two mutations interleave;
+ * exposing it to the handler is worse, because `customFnBuilder` merges
+ * everything returned under `ctx` into the handler's context, so a handler
+ * could `.clear()` the map and leave finalisation synchronising nothing. Only
+ * the wrapped `db` crosses that boundary.
  *
- * ⚠️ FAIL-CLOSED. `customFnBuilder` awaits `onSuccess` inside the mutation's own
- * transaction, so a throw during finalisation rolls back every event write with
- * it. The alternative — committing the writes and losing the recompute — is the
- * silent staleness this whole mechanism exists to prevent.
+ * ⚠️ FAIL-CLOSED, in both directions. `customFnBuilder` awaits `onSuccess`
+ * inside the mutation's own transaction, so a throw during finalisation rolls
+ * back every event write with it. And the deferred triggers now THROW when no
+ * tracker is present rather than skipping the recompute — committing a write
+ * while its conversation summary goes stale is the exact failure this mechanism
+ * exists to prevent, so a missing tracker refuses the write instead.
  */
 export const socialBulkMutation = customMutation(rawMutation, {
   args: {},
   input: async (ctx) => {
-    const threads = newDeferredSocialThreads();
-    // Tracker first, THEN wrap: `Triggers.wrapDB` closes over the ctx it is
-    // given and hands it to every trigger, so anything added afterwards would
-    // be invisible to them.
-    const wrapped = deferredThreadTriggers.wrapDB({ ...ctx, deferredThreads: threads });
+    const { db, finalize } = prepareDeferredThreadMutation(ctx);
     return {
-      ctx: wrapped,
+      // Only the wrapped db. The tracker stays private to the factory.
+      ctx: { db },
       args: {},
-      onSuccess: async () => {
-        await syncDeferredSocialThreads(wrapped, threads);
-      },
+      onSuccess: finalize,
     };
   },
 });
