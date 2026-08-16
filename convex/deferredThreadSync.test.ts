@@ -95,6 +95,14 @@ function mayHoldDeferredMutation(source: string): boolean {
 const BUILDER = "socialBulkMutation";
 
 /**
+ * Both halves of the settlement obligation. Collecting without syncing leaves
+ * the rows stale; syncing without collecting recomputes an empty set, which
+ * looks exactly like success.
+ */
+const REQUIRED_HELPERS = ["syncDeferredSocialThreads", "collectSocialThread"] as const;
+type RequiredHelper = (typeof REQUIRED_HELPERS)[number];
+
+/**
  * Every local name in this module that reaches the deferred builder.
  *
  * The scan used to match the builder's *spelling* at the call site
@@ -226,28 +234,96 @@ function findDeferredMutations(source: string): DeferredMutation[] {
   return found;
 }
 
+/** The module that may hand out the settlement helpers. */
+const HELPER_MODULE = "./aggregates";
+
 /**
- * Whether `name` is CALLED anywhere inside this subtree.
+ * Which settlement helpers this module has legitimately bound.
+ *
+ * The builder was made binding-aware and these two were left matched by callee
+ * NAME — the same asymmetry, one layer down, and it made the obligation
+ * satisfiable by anything spelled correctly:
+ *
+ *     function syncDeferredSocialThreads() {}   // a local stub that does nothing
+ *     fake.syncDeferredSocialThreads(ctx, t);   // only the last segment matched
+ *
+ * Either one reported a mutation as compliant while it settled nothing, which
+ * is precisely the silent staleness this file exists to prevent.
+ *
+ * The contract is deliberately narrow, because these are safety helpers and
+ * there is no legitimate reason to reach them any other way: a DIRECT named
+ * import from `./aggregates`, unaliased. Aliases, wrappers and namespace
+ * indirection are rejected for the same reason they are rejected for the
+ * builder — not because they are wrong, but because this guard cannot follow
+ * them and must not pretend otherwise.
+ *
+ * ⚠️ A local declaration of the same name DISQUALIFIES the import, rather than
+ * being ignored. If a module both imports `collectSocialThread` and declares
+ * something by that name, which one a given call site resolves to depends on
+ * scope, and a build guard that guesses is a build guard that fails open.
+ *
+ * Full `ts.Program` symbol resolution would settle it exactly, and is
+ * deliberately not used: this scan already blew CI's 5s timeout once under
+ * coverage instrumentation, and constructing a Program over the Convex tree is
+ * far heavier than parsing three files. The narrow contract gets the same
+ * answer for every shape that can legitimately occur here.
+ */
+function resolveHelperImports(sourceFile: ts.SourceFile): Set<string> {
+  const bound = new Set<string>();
+
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement)) continue;
+    const specifier = statement.moduleSpecifier;
+    if (!ts.isStringLiteral(specifier) || specifier.text !== HELPER_MODULE) continue;
+    const bindings = statement.importClause?.namedBindings;
+    if (!bindings || !ts.isNamedImports(bindings)) continue;
+    for (const element of bindings.elements) {
+      // `propertyName` set means the import was renamed — rejected.
+      if (element.propertyName) continue;
+      if (REQUIRED_HELPERS.includes(element.name.text as RequiredHelper)) {
+        bound.add(element.name.text);
+      }
+    }
+  }
+
+  // Anything the module also declares locally under one of these names makes
+  // the binding ambiguous, so it stops counting as bound.
+  const shadowed = new Set<string>();
+  const findShadows = (node: ts.Node): void => {
+    if (ts.isFunctionDeclaration(node) && node.name && bound.has(node.name.text)) {
+      shadowed.add(node.name.text);
+    }
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && bound.has(node.name.text)) {
+      shadowed.add(node.name.text);
+    }
+    node.forEachChild(findShadows);
+  };
+  findShadows(sourceFile);
+  for (const name of shadowed) bound.delete(name);
+
+  return bound;
+}
+
+/**
+ * Whether the imported helper `name` is CALLED anywhere inside this subtree.
  *
  * A call, not a mention: an identifier in a comment is trivia and never becomes
  * a node, and a string containing the name is a StringLiteral. Both classes of
  * false satisfaction that the text scan kept re-admitting are structurally
- * impossible here, which is why the tests pinning them survive the rewrite
- * unchanged — they still assert the behaviour, it is simply no longer possible
- * to get wrong.
+ * impossible here, which is why the tests pinning them survive unchanged.
+ *
+ * The callee must be a bare Identifier that the module bound properly. A
+ * property access is rejected outright: `fake.syncDeferredSocialThreads()` is
+ * not the imported helper no matter how it is spelled.
  */
-function callsFunction(root: ts.Node, name: string): boolean {
+function callsHelper(root: ts.Node, name: string, bound: Set<string>): boolean {
+  if (!bound.has(name)) return false;
   let found = false;
   const visit = (node: ts.Node): void => {
     if (found) return;
     if (ts.isCallExpression(node)) {
       const callee = node.expression;
-      const calleeName = ts.isIdentifier(callee)
-        ? callee.text
-        : ts.isPropertyAccessExpression(callee)
-          ? callee.name.text
-          : null;
-      if (calleeName === name) {
+      if (ts.isIdentifier(callee) && callee.text === name) {
         found = true;
         return;
       }
@@ -404,22 +480,19 @@ export function deferredMutationOffenders(source: string, rel: string): string[]
   // sites of its own to find.
   const offenders: string[] = builderEscapes(source, rel);
 
+  const helperBindings = resolveHelperImports(
+    ts.createSourceFile("scan.ts", source, ts.ScriptTarget.Latest, true)
+  );
+
   for (const mutation of findDeferredMutations(source)) {
     // The subtree of THIS call, so a neighbouring definition or a helper
     // declared afterwards cannot lend it calls it never makes. Scope comes from
     // the tree rather than from guessing where a definition ends, which is what
     // the old `\n});` boundary search was doing.
-    //
-    // Both halves are required. Collecting without syncing leaves the rows
-    // stale; syncing without collecting recomputes an empty set, which looks
-    // exactly like success.
-    if (!callsFunction(mutation.call, "syncDeferredSocialThreads")) {
-      offenders.push(
-        `${rel}:${mutation.name} uses ${BUILDER} but never calls syncDeferredSocialThreads`
-      );
-    }
-    if (!callsFunction(mutation.call, "collectSocialThread")) {
-      offenders.push(`${rel}:${mutation.name} uses ${BUILDER} but never calls collectSocialThread`);
+    for (const helper of REQUIRED_HELPERS) {
+      if (!callsHelper(mutation.call, helper, helperBindings)) {
+        offenders.push(`${rel}:${mutation.name} uses ${BUILDER} but never calls ${helper}`);
+      }
     }
   }
 
@@ -438,6 +511,9 @@ describe("deferred conversation sync", () => {
     // reported as clean.
     const source = [
       'import { socialBulkMutation } from "./functions";',
+      // Real modules import the settlement helpers; the guard now requires it,
+      // so a fixture that omits the import is not a compliant module.
+      'import { collectSocialThread, syncDeferredSocialThreads } from "./aggregates";',
       "",
       "export const offender = socialBulkMutation({",
       "  args: {},",
@@ -483,6 +559,7 @@ describe("deferred conversation sync", () => {
     // so the module passed no matter what was added beside it.
     const source = `
 import { socialBulkMutation } from "./functions";
+import { collectSocialThread, syncDeferredSocialThreads } from "./aggregates";
 
 export const good = socialBulkMutation({
   args: {},
@@ -554,6 +631,147 @@ export const bad = fns.socialBulkMutation({
       "x.ts:bad uses socialBulkMutation but never calls collectSocialThread",
     ]);
     expect(deferredMutationsIn(source, "x.ts")).toEqual(["x.ts:bad"]);
+  });
+
+  test("a locally defined fake helper does not satisfy the obligation", () => {
+    // The builder was made binding-aware; the two SETTLEMENT helpers were not.
+    // They were matched by callee name, so anything spelled right satisfied
+    // them — including a local stub that does nothing at all. That is the
+    // guard's own failure mode pointed at its other half: a mutation that
+    // settles nothing reports as compliant.
+    const source = `
+import { socialBulkMutation } from "./functions";
+
+function collectSocialThread() {}
+function syncDeferredSocialThreads() {}
+
+export const bad = socialBulkMutation({
+  args: {},
+  handler: async (ctx) => {
+    await ctx.db.patch(id, { customerId });
+    collectSocialThread();
+    await syncDeferredSocialThreads();
+  },
+});
+`;
+    expect(deferredMutationOffenders(source, "x.ts")).toEqual([
+      "x.ts:bad uses socialBulkMutation but never calls syncDeferredSocialThreads",
+      "x.ts:bad uses socialBulkMutation but never calls collectSocialThread",
+    ]);
+  });
+
+  test("a helper shadowed inside the handler does not satisfy the obligation", () => {
+    // The REAL shadowing case, and the one my first attempt missed.
+    //
+    // `import { collectSocialThread } ...` plus a top-level
+    // `function collectSocialThread() {}` is a duplicate-identifier error, so
+    // that shape cannot occur. What CAN occur is an inner binding shadowing the
+    // import inside the handler — ordinary, legal TypeScript. The call then
+    // resolves to the local stub while the module still imports the real helper
+    // perfectly.
+    //
+    // ⚠️ Found by mutation testing, not by writing the test: deleting the
+    // shadow-detection left all 20 tests green, because the "local fake helper"
+    // fixture above has no import at all and was already failing for a
+    // different reason. A surviving mutant is itself the finding.
+    const source = `
+import { socialBulkMutation } from "./functions";
+import { collectSocialThread, syncDeferredSocialThreads } from "./aggregates";
+
+export const bad = socialBulkMutation({
+  args: {},
+  handler: async (ctx) => {
+    const collectSocialThread = () => {};
+    const syncDeferredSocialThreads = async () => {};
+    await ctx.db.patch(id, { customerId });
+    collectSocialThread();
+    await syncDeferredSocialThreads();
+  },
+});
+`;
+    expect(deferredMutationOffenders(source, "x.ts")).toEqual([
+      "x.ts:bad uses socialBulkMutation but never calls syncDeferredSocialThreads",
+      "x.ts:bad uses socialBulkMutation but never calls collectSocialThread",
+    ]);
+  });
+
+  test("a property call with the right final name does not satisfy the obligation", () => {
+    // `callsFunction` read only the LAST segment of a property access, so any
+    // object exposing a same-named method counted — `fake.syncDeferred...()`
+    // is not the imported helper and settles nothing.
+    const source = `
+import { socialBulkMutation } from "./functions";
+import { collectSocialThread, syncDeferredSocialThreads } from "./aggregates";
+
+export const bad = socialBulkMutation({
+  args: {},
+  handler: async (ctx) => {
+    await ctx.db.patch(id, { customerId });
+    fake.collectSocialThread(threads, "instagram", doc);
+    await fake.syncDeferredSocialThreads(ctx, threads);
+  },
+});
+`;
+    expect(deferredMutationOffenders(source, "x.ts")).toEqual([
+      "x.ts:bad uses socialBulkMutation but never calls syncDeferredSocialThreads",
+      "x.ts:bad uses socialBulkMutation but never calls collectSocialThread",
+    ]);
+  });
+
+  test("the settlement helpers must be direct named imports from ./aggregates", () => {
+    // Aliasing or re-homing the safety helpers is the same indirection the
+    // builder already rejects. Accepting it here would leave the obligation
+    // satisfiable by something that merely resolves to the right spelling.
+    const aliased = `
+import { socialBulkMutation } from "./functions";
+import { collectSocialThread as collect, syncDeferredSocialThreads as sync } from "./aggregates";
+
+export const bad = socialBulkMutation({
+  args: {},
+  handler: async (ctx) => {
+    collect(threads, "instagram", doc);
+    await sync(ctx, threads);
+  },
+});
+`;
+    expect(deferredMutationOffenders(aliased, "x.ts")).toHaveLength(2);
+
+    // ⚠️ The shape the `propertyName` guard actually defends, and the one the
+    // alias fixture above does NOT reach. Aliasing the helper to a new name is
+    // already excluded because the local name is not one of the required
+    // helpers — so that case never exercises the guard. The dangerous form is
+    // the REVERSE: importing some OTHER export under the helper's name, which
+    // binds the right spelling to the wrong function.
+    //
+    // Found by mutation testing: deleting the `propertyName` check left all 21
+    // green until this case existed.
+    const renamedOntoHelper = `
+import { socialBulkMutation } from "./functions";
+import { somethingElse as collectSocialThread, other as syncDeferredSocialThreads } from "./aggregates";
+
+export const bad = socialBulkMutation({
+  args: {},
+  handler: async (ctx) => {
+    collectSocialThread(threads, "instagram", doc);
+    await syncDeferredSocialThreads(ctx, threads);
+  },
+});
+`;
+    expect(deferredMutationOffenders(renamedOntoHelper, "x.ts")).toHaveLength(2);
+
+    const wrongModule = `
+import { socialBulkMutation } from "./functions";
+import { collectSocialThread, syncDeferredSocialThreads } from "./elsewhere";
+
+export const bad = socialBulkMutation({
+  args: {},
+  handler: async (ctx) => {
+    collectSocialThread(threads, "instagram", doc);
+    await syncDeferredSocialThreads(ctx, threads);
+  },
+});
+`;
+    expect(deferredMutationOffenders(wrongModule, "x.ts")).toHaveLength(2);
   });
 
   test("explicit type arguments cannot hide a non-syncing mutation", () => {
