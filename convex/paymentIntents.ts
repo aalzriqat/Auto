@@ -8,6 +8,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { runWithIdempotency } from "./utils/idempotency";
 import { hookPaymentLinkReceived } from "./accounting/workflowHooks";
 import { allocatePaymentToReceivable, createCanonicalPayment, getReceivableOutstandingMinor } from "./subledger";
+import { saleInvoiceForLegacyRow } from "./collections";
 import { fromMinorUnits, toMinorUnits, scaleForCurrency, assertValidMinorAmount } from "./utils/money";
 
 const statusValidator = v.union(
@@ -103,7 +104,23 @@ async function createCanonicalIntentSettlement(
     canonicalPaymentId,
   };
 
-  if (intent.receivableDocumentId && !intent.paymentAllocationId) {
+  // SCRUM-56 — a payment link settles the same debt cash and cheques settle.
+  // When the intent names a legacy row that stands for a completed sale, that
+  // sale's invoice is the monetary target; the row's own `legacy_receivable`
+  // twin is an obsolete representation. Without this, a payment link quietly
+  // paid down the twin while `recordPayment` and `clearCheque` paid down the
+  // invoice — three paths disagreeing about the target, which is the shape of
+  // the original defect. Rows with no sale behind them are untouched.
+  let allocationTargetId = intent.receivableDocumentId;
+  if (intent.receivableId) {
+    const legacyRow = await ctx.db.get(intent.receivableId);
+    if (legacyRow && legacyRow.orgId === intent.orgId) {
+      const saleInvoiceId = await saleInvoiceForLegacyRow(ctx, legacyRow);
+      if (saleInvoiceId) allocationTargetId = saleInvoiceId;
+    }
+  }
+
+  if (allocationTargetId && !intent.paymentAllocationId) {
     // Clamp to what is still owed, exactly as the legacy mirror below already
     // does. allocatePaymentToReceivable THROWS when the amount exceeds the
     // outstanding balance, and a Convex mutation is atomic — so if the
@@ -112,13 +129,13 @@ async function createCanonicalIntentSettlement(
     // canonical payment row. The provider has already confirmed the money, and
     // its retries would hit the same throw, so the payment was lost outright.
     // Any excess correctly stays on the payment as an unapplied balance.
-    const outstandingMinor = await getReceivableOutstandingMinor(ctx, intent.receivableDocumentId);
+    const outstandingMinor = await getReceivableOutstandingMinor(ctx, allocationTargetId);
     const allocatableMinor = Math.min(intent.amountMinor, outstandingMinor);
     if (allocatableMinor > 0) {
       links.paymentAllocationId = await allocatePaymentToReceivable(ctx, {
         orgId: intent.orgId,
         paymentId: canonicalPaymentId,
-        receivableDocumentId: intent.receivableDocumentId,
+        receivableDocumentId: allocationTargetId,
         amountMinor: allocatableMinor,
         actorId,
       });

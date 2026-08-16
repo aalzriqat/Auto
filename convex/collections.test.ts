@@ -1885,11 +1885,14 @@ describe("Collections", () => {
       disbursementMethod: "CASH",
       reason: "Legacy data repair case",
     });
+    // SCRUM-56: same refusal, said in the operator's terms rather than in minor
+    // units. The refusal itself is the assertion that matters — a row with no
+    // traceable collections must never have a refund guessed for it.
     await expect(asApprover.mutation(api.collections.respondToApproval, {
       orgId,
       requestId: legacyRefundRequestId,
       status: "APPROVED",
-    })).rejects.toThrow(/Canonical allocations cover only 0/);
+    })).rejects.toThrow(/can be traced to payments collected against this receivable/);
   });
 
   test("return_cleared_cheque_defers_reversal_when_no_open_period_exists", async () => {

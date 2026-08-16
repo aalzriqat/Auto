@@ -328,7 +328,7 @@ async function ensureCanonicalReceivableForLegacy(
  * The sale invoice a hand-keyed row stands for, or null when the row is money in
  * its own right. Read-only and creates nothing, so it is safe to ask on any path.
  */
-async function saleInvoiceForLegacyRow(
+export async function saleInvoiceForLegacyRow(
   ctx: MutationCtx,
   receivable: Doc<"receivables">
 ): Promise<Id<"receivableDocuments"> | null> {
@@ -452,32 +452,74 @@ async function mirrorCollectionPaymentToCanonical(
 }
 
 /**
- * Unwinds ACTIVE allocations on a canonical receivable to cover a refund,
- * newest first. If the refund splits an allocation, the un-refunded remainder
- * is re-allocated from the same payment so the net reversed amount equals the
- * refund exactly. This is what reopens the canonical receivable's outstanding
- * balance to match the legacy receivable after a refund.
+ * Unwinds a refund's worth of allocations — restricted to money THIS row
+ * actually brought in.
+ *
+ * The old version queried every ACTIVE allocation on the canonical document and
+ * consumed newest-first. Once two hand-keyed rows feed one sale invoice that is
+ * a coin toss: refunding installment A reversed installment B's payment, left
+ * A's fully applied, and B's own row still read PAID. Aggregate totals stayed
+ * right, which is exactly why it survived a full suite.
+ *
+ * Lineage, not arithmetic, decides. Both halves of the conjunction below are
+ * load-bearing: the canonical payment must have originated from this row, AND
+ * the allocation must sit on the document this row's money is supposed to
+ * settle. Neither alone is identity — two rows on one sale share the document,
+ * and a payment can be allocated across more than one.
+ *
+ * `canonicalPaymentId` is the durable anchor; `paymentAllocationId` is only a
+ * pointer to the current state. A partial refund reverses an allocation and
+ * re-allocates the remainder under a NEW id, so the pointer moves while the
+ * anchor does not. Anything treating the allocation id as identity silently
+ * follows a reversed row — the same defect one step later — so the pointer is
+ * rewritten here as it moves.
  */
-async function reverseAllocationsForRefund(
+async function reverseAllocationsForRow(
   ctx: MutationCtx,
   args: {
     orgId: Id<"organizations">;
+    receivable: Doc<"receivables">;
     receivableDocumentId: Id<"receivableDocuments">;
     amountMinor: number;
     actorId: Id<"users">;
+    currency: string;
   }
 ) {
-  const activeAllocations = (
+  // Only money actually collected against this row. A DRAFT or outbound row is
+  // not collected money, and a payment with no canonical anchor cannot be
+  // traced at all — both are excluded rather than guessed at.
+  const rowPayments = (
     await ctx.db
-      .query("paymentAllocations")
-      .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", args.receivableDocumentId))
-      .filter((q) => q.eq(q.field("status"), "ACTIVE"))
+      .query("collectionPayments")
+      .withIndex("by_receivable", (q) => q.eq("receivableId", args.receivable._id))
       .collect()
-  ).sort((a, b) => b.createdAt - a.createdAt);
+  ).filter(
+    (payment) =>
+      payment.orgId === args.orgId &&
+      payment.direction === "IN" &&
+      payment.status === "POSTED" &&
+      payment.canonicalPaymentId
+  );
+
+  const candidates: { allocation: Doc<"paymentAllocations">; payment: Doc<"collectionPayments"> }[] = [];
+  for (const payment of rowPayments) {
+    const allocations = await ctx.db
+      .query("paymentAllocations")
+      .withIndex("by_payment", (q) => q.eq("paymentId", payment.canonicalPaymentId!))
+      .collect();
+    for (const allocation of allocations) {
+      if (allocation.status !== "ACTIVE") continue;
+      if (allocation.receivableDocumentId !== args.receivableDocumentId) continue;
+      candidates.push({ allocation, payment });
+    }
+  }
+  // Newest-first WITHIN this row's own money is a fair ordering; newest-first
+  // across the pooled document was the defect.
+  candidates.sort((a, b) => b.allocation.createdAt - a.allocation.createdAt);
 
   let remainingMinor = args.amountMinor;
   let coveredMinor = 0;
-  for (const allocation of activeAllocations) {
+  for (const { allocation, payment } of candidates) {
     if (remainingMinor <= 0) break;
     const reversedMinor = Math.min(allocation.amountMinor, remainingMinor);
     await reverseAllocation(ctx, {
@@ -486,25 +528,59 @@ async function reverseAllocationsForRefund(
       actorId: args.actorId,
     });
     if (allocation.amountMinor > remainingMinor) {
-      await allocatePaymentToReceivable(ctx, {
+      const remainderAllocationId = await allocatePaymentToReceivable(ctx, {
         orgId: args.orgId,
         paymentId: allocation.paymentId,
         receivableDocumentId: args.receivableDocumentId,
         amountMinor: allocation.amountMinor - remainingMinor,
         actorId: args.actorId,
       });
+      // Keep the pointer live. Left alone it would name a REVERSED allocation
+      // while the remainder it stands for sits under a different id.
+      if (payment.paymentAllocationId === allocation._id) {
+        await ctx.db.patch(payment._id, { paymentAllocationId: remainderAllocationId });
+      }
       remainingMinor = 0;
     } else {
+      if (payment.paymentAllocationId === allocation._id) {
+        await ctx.db.patch(payment._id, { paymentAllocationId: undefined });
+      }
       remainingMinor -= allocation.amountMinor;
     }
     coveredMinor += reversedMinor;
   }
 
+  // Fail closed. A refund that cannot be traced to this row's own collections
+  // is a reconciliation problem, and a refusal an operator can act on beats
+  // reversing money that belonged to a different balance.
   if (remainingMinor > 0) {
+    const covered = fromMinorUnits(coveredMinor, args.currency);
+    const requested = fromMinorUnits(args.amountMinor, args.currency);
     throw new ConvexError(
-      `Canonical allocations cover only ${coveredMinor} of the requested refund ${args.amountMinor}.`
+      `Only ${covered} of the ${requested} refund can be traced to payments collected against this receivable. ` +
+        "Reconcile the payment history for this balance before refunding."
     );
   }
+}
+
+/**
+ * The row's OWN canonical twin, and only if the document really is that row's.
+ *
+ * Guards a cancellation from ever reaching the sale invoice: a `sourceType`
+ * check alone would still admit another row's twin, and following the stored
+ * pointer alone would admit whatever it happens to name.
+ */
+async function verifiedOwnLegacyTwin(
+  ctx: MutationCtx,
+  receivable: Doc<"receivables">
+): Promise<Id<"receivableDocuments"> | null> {
+  if (!receivable.canonicalReceivableDocumentId) return null;
+  const doc = await ctx.db.get(receivable.canonicalReceivableDocumentId);
+  if (!doc) return null;
+  if (doc.orgId !== receivable.orgId) return null;
+  if (doc.sourceType !== "legacy_receivable") return null;
+  if (doc.sourceId !== String(receivable._id)) return null;
+  return doc._id;
 }
 
 async function insertLedgerTransaction(
@@ -2017,16 +2093,14 @@ export const respondToApproval = mutation({
               updatedAt: now,
             });
             // Cancelling a hand-keyed row deletes a redundant copy, never the
-            // customer's debt — so a row standing for a sale must not carry its
-            // CANCELLED status onto that sale's invoice.
-            if (!(await saleInvoiceForLegacyRow(ctx, receivable))) {
-              const cancelledDocId = await ensureCanonicalReceivableForLegacy(
-                ctx,
-                receivable,
-                user._id,
-                currency
-              );
-              await ctx.db.patch(cancelledDocId, { status: "CANCELLED" });
+            // customer's debt. Retire only the row's OWN verified twin: the
+            // previous revision skipped the cleanup entirely for sale-linked
+            // rows, which kept the sale invoice safe but stranded those twins
+            // OPEN at full value forever. Verifying the document belongs to
+            // this row gets the cleanup back without ever reaching the invoice.
+            const ownTwinId = await verifiedOwnLegacyTwin(ctx, receivable);
+            if (ownTwinId) {
+              await ctx.db.patch(ownTwinId, { status: "CANCELLED" });
             }
             // Reverse the RECEIVABLE_CREATED entry (or cancel its pending post)
             // so AR and the credit account it hit (income/deposit liability/
@@ -2104,11 +2178,13 @@ export const respondToApproval = mutation({
             // reopens by exactly the refunded amount — without this the
             // canonical doc stays PAID while the legacy row shows a balance.
             const refundAmountMinor = toMinorUnits(refundAmount, currency);
-            await reverseAllocationsForRefund(ctx, {
+            await reverseAllocationsForRow(ctx, {
               orgId: args.orgId,
+              receivable,
               receivableDocumentId: canonicalReceivableDocumentId,
               amountMinor: refundAmountMinor,
               actorId: user._id,
+              currency,
             });
 
             const newOutstanding = roundMoney(receivable.outstandingAmount + refundAmount, currency);
