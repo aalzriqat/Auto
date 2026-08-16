@@ -127,6 +127,50 @@ describe("the gap dialog never invents a destination the operator left blank", (
     expect(screen.getByText("GapStillToAllocate")).toBeTruthy();
   });
 
+  test("a SPLIT holding the whole gap explains itself instead of showing a calm zero", async () => {
+    // Both SPLIT endpoints reconcile perfectly, which is exactly why they were
+    // invisible: 1,000 of a 1,000 gap allocated 1,000/0/0 leaves nothing over,
+    // so the screen showed "still to account for 0" while Confirm stayed dead
+    // and silent. The remedy here is the OTHER radio, not a different number,
+    // so the message has to say that.
+    const onSubmit = vi.fn(async (_values: Submitted) => {});
+    renderDialog(onSubmit);
+
+    fireEvent.click(screen.getByText("GapSplit"));
+    const share = screen.getAllByRole("textbox")[0] as HTMLInputElement;
+    fireEvent.change(share, { target: { value: String(GAP_MAJOR) } });
+    const [cash, installments, toFinanceCompany] = destinationInputs();
+    fireEvent.change(cash, { target: { value: String(GAP_MAJOR) } });
+    fireEvent.change(installments, { target: { value: "0" } });
+    fireEvent.change(toFinanceCompany, { target: { value: "0" } });
+
+    expect(confirmButton().disabled).toBe(true);
+    expect(screen.queryByText("GapStillToAllocate")).toBeNull();
+    expect(screen.getByText("GapSplitIsWholeGap")).toBeTruthy();
+  });
+
+  test("a SPLIT leaving the customer nothing names the forbidden outcome", async () => {
+    // The inverse endpoint, and the one the server refuses outright: a split
+    // giving the customer zero IS the dealer-only outcome under another name.
+    // 0/0/0 also reconciles, so it too showed a calm zero.
+    const onSubmit = vi.fn(async (_values: Submitted) => {});
+    renderDialog(onSubmit);
+
+    fireEvent.click(screen.getByText("GapSplit"));
+    const share = screen.getAllByRole("textbox")[0] as HTMLInputElement;
+    fireEvent.change(share, { target: { value: "0" } });
+    const [cash, installments, toFinanceCompany] = destinationInputs();
+    fireEvent.change(cash, { target: { value: "0" } });
+    fireEvent.change(installments, { target: { value: "0" } });
+    fireEvent.change(toFinanceCompany, { target: { value: "0" } });
+
+    expect(confirmButton().disabled).toBe(true);
+    expect(screen.queryByText("GapStillToAllocate")).toBeNull();
+    expect(screen.getByText("GapSplitLeavesCustomerNothing")).toBeTruthy();
+    fireEvent.click(confirmButton());
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   test("a partially filled allocation is still refused", async () => {
     // Two of three decided. The remaining blank is not "zero by implication".
     const onSubmit = vi.fn(async (_values: Submitted) => {});

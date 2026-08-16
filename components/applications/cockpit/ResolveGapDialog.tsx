@@ -188,13 +188,6 @@ export function ResolveGapDialog({
   const installmentsMinor = toMinor(draft.installments, factor);
   const toFinanceCompanyMinor = toMinor(draft.toFinanceCompany, factor);
 
-  const parsed =
-    customerShareMinor !== null &&
-    dealerShareMinor !== null &&
-    cashMinor !== null &&
-    installmentsMinor !== null &&
-    toFinanceCompanyMinor !== null;
-
   /**
    * The running total, or null while any destination is still undecided.
    *
@@ -214,36 +207,81 @@ export function ResolveGapDialog({
    */
   const destinationsDecided =
     cashMinor !== null && installmentsMinor !== null && toFinanceCompanyMinor !== null;
+
+  /**
+   * ONE readiness verdict, consumed by both the message and the button.
+   *
+   * The three previous display-versus-submit disagreements in this dialog all
+   * had the same cause: readiness was spread across independent booleans
+   * (`parsed`, `splitIsRealSplit`, `violations`) while the screen derived its
+   * own answer separately. Each fix closed one gap and left the others free to
+   * disagree again — the running total said "0 left" while the button was dead,
+   * because nothing forced the two to be computed from the same thing.
+   *
+   * They now are. `canSubmit` is exactly `verdict === "READY"`, and every
+   * not-ready verdict carries the message that names its own remedy. A new
+   * blocking condition cannot be added to one and forgotten in the other,
+   * because there is only one place to add it.
+   */
+  type Readiness =
+    | "READY"
+    /** Some destination box is still blank; blank is not a decision. */
+    | "DESTINATIONS_INCOMPLETE"
+    /** The customer share is not a usable number yet. */
+    | "SHARE_MISSING"
+    /** A "split" giving the customer the whole gap IS customer-absorbs. */
+    | "SPLIT_IS_WHOLE_GAP"
+    /** A "split" leaving the customer nothing is the dealer-only outcome. */
+    | "SPLIT_LEAVES_CUSTOMER_NOTHING"
+    /** The destinations do not sum to the customer's share. */
+    | "ALLOCATION_MISMATCH";
+
+  const verdict: Readiness = (() => {
+    if (customerShareMinor === null || dealerShareMinor === null) return "SHARE_MISSING";
+    if (draft.mode === "SPLIT") {
+      // Checked BEFORE the arithmetic, because both endpoints reconcile
+      // perfectly and would otherwise read as ready. The remedy is a different
+      // mode, not a different number, so the message has to say so.
+      if (customerShareMinor >= gapMinor) return "SPLIT_IS_WHOLE_GAP";
+      if (customerShareMinor <= 0) return "SPLIT_LEAVES_CUSTOMER_NOTHING";
+    }
+    if (!destinationsDecided) return "DESTINATIONS_INCOMPLETE";
+    // The SHARED arithmetic, so the screen and the mutation cannot disagree
+    // about what reconciles. A dialog with its own rules would either block a
+    // submission the server accepts or invite one it refuses.
+    const violations = validateGapShares(gapMinor, {
+      customerGapShareMinor: customerShareMinor,
+      dealerGapShareMinor: dealerShareMinor,
+      customerGapCashToDealerMinor: cashMinor,
+      customerGapInstallmentToDealerMinor: installmentsMinor,
+      customerGapToFinanceCompanyMinor: toFinanceCompanyMinor,
+    });
+    return violations.length > 0 ? "ALLOCATION_MISMATCH" : "READY";
+  })();
+
+  /**
+   * The remainder, and only where a remainder is a meaningful thing to state.
+   *
+   * Withheld for every not-ready verdict rather than only for incomplete
+   * destinations: a split holding the whole gap reconciles to zero, and showing
+   * that zero is precisely how the screen used to tell the operator they were
+   * finished while the button stayed dead.
+   */
   const unallocatedMinor =
-    destinationsDecided && customerShareMinor !== null
+    verdict === "READY" && customerShareMinor !== null && destinationsDecided
       ? customerShareMinor - (cashMinor + installmentsMinor + toFinanceCompanyMinor)
       : null;
 
-  // The shared arithmetic, so the screen and the mutation agree about what is
-  // acceptable. A dialog with its own rules would either block a submission the
-  // server accepts or invite one it refuses.
-  const violations =
-    parsed && dealerShareMinor >= 0
-      ? validateGapShares(gapMinor, {
-          customerGapShareMinor: customerShareMinor,
-          dealerGapShareMinor: dealerShareMinor,
-          customerGapCashToDealerMinor: cashMinor,
-          customerGapInstallmentToDealerMinor: installmentsMinor,
-          customerGapToFinanceCompanyMinor: toFinanceCompanyMinor,
-        })
-      : [{ code: "NEGATIVE_AMOUNT" as const, message: "" }];
+  /** What to say instead, so a disabled button is never unexplained. */
+  const BLOCKED_REASON: Record<Exclude<Readiness, "READY">, string> = {
+    DESTINATIONS_INCOMPLETE: "GapDestinationsIncomplete",
+    SHARE_MISSING: "GapShareMissing",
+    SPLIT_IS_WHOLE_GAP: "GapSplitIsWholeGap",
+    SPLIT_LEAVES_CUSTOMER_NOTHING: "GapSplitLeavesCustomerNothing",
+    ALLOCATION_MISMATCH: "GapAllocationMismatch",
+  };
 
-  /**
-   * A "split" that leaves the customer with nothing is dealer-absorbs wearing
-   * the wrong label. The server refuses that outright; the button should not
-   * offer it either. Bounded at both ends, because the whole gap on the
-   * customer is the OTHER radio and this one should mean what it says.
-   */
-  const splitIsRealSplit =
-    draft.mode !== "SPLIT" ||
-    (customerShareMinor !== null && customerShareMinor > 0 && customerShareMinor < gapMinor);
-
-  const canSubmit = !submitting && parsed && splitIsRealSplit && violations.length === 0;
+  const canSubmit = !submitting && verdict === "READY";
 
   const submit = async () => {
     // Every figure narrowed explicitly, and NOT with `?? 0` on the
@@ -397,18 +435,21 @@ export function ResolveGapDialog({
             {/* What is left to place. Stated as a running figure rather than as
                 a validation error, because an operator part-way through an
                 allocation has not made a mistake yet. */}
-            {unallocatedMinor === null ? (
-              // Named as an unfinished entry rather than shown as a total,
-              // because there is no honest total to show yet.
+            {verdict !== "READY" ? (
+              // The reason the button is dead, in the place the running total
+              // would otherwise sit. Driven by the SAME verdict as `canSubmit`,
+              // so a disabled button and a reassuring total can no longer
+              // appear together.
               <p className="text-xs text-amber-700 dark:text-amber-400">
-                {t("GapDestinationsIncomplete")}
+                {t(BLOCKED_REASON[verdict])}
               </p>
             ) : (
-              <p
-                className={`text-xs ${unallocatedMinor === 0 ? "text-muted-foreground" : "text-amber-700 dark:text-amber-400"}`}
-              >
+              // READY, so a remainder exists and is zero by construction —
+              // `validateGapShares` has already agreed the destinations sum to
+              // the customer's share.
+              <p className="text-xs text-muted-foreground">
                 {t("GapStillToAllocate")}{" "}
-                <span className="font-medium tabular-nums">{money(unallocatedMinor)}</span>
+                <span className="font-medium tabular-nums">{money(unallocatedMinor ?? 0)}</span>
               </p>
             )}
           </fieldset>

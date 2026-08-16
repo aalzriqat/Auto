@@ -927,6 +927,15 @@ export const salesEn = {
   // and nothing else on the screen explains what is missing.
   GapDestinationsIncomplete:
     "Enter an amount in every box — put 0 where nothing was paid that way.",
+  GapShareMissing: "Enter the customer's part of the difference.",
+  // The remedy is the OTHER radio, not a different number — this allocation is
+  // arithmetically fine and simply is not a split.
+  GapSplitIsWholeGap:
+    "That gives the customer the whole difference. Choose “The customer covers it” instead.",
+  GapSplitLeavesCustomerNothing:
+    "That leaves the customer nothing, which the dealership cannot absorb alone. Enter the customer's part.",
+  GapAllocationMismatch:
+    "Where the customer pays does not add up to the customer's part yet.",
   GapNotes: "Notes",
   ConfirmFinalizeTitle: "Close the deal",
   ConfirmFinalizeDesc:
@@ -1855,6 +1864,11 @@ export const salesAr = {
   GapToFinanceCompany: "لشركة التمويل",
   GapStillToAllocate: "المتبقي دون تحديد",
   GapDestinationsIncomplete: "أدخل مبلغاً في كل حقل — واكتب 0 حيث لم يُدفع شيء بهذه الطريقة.",
+  GapShareMissing: "أدخل نصيب العميل من الفرق.",
+  GapSplitIsWholeGap: "هذا يحمّل العميل الفرق كاملاً. اختر “العميل يتحمّله” بدلاً من ذلك.",
+  GapSplitLeavesCustomerNothing:
+    "هذا لا يترك على العميل شيئاً، ولا يمكن للمعرض تحمّله وحده. أدخل نصيب العميل.",
+  GapAllocationMismatch: "أين يدفع العميل لا يساوي نصيب العميل بعد.",
   GapNotes: "ملاحظات",
   ConfirmFinalizeTitle: "إغلاق الصفقة",
   ConfirmFinalizeDesc: "التسليم والدفعة المتوقعة مسجَّلان، ويمكن إغلاق الصفقة.",
