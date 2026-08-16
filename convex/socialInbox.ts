@@ -121,6 +121,43 @@ function normalizeFacebookEvent(ev: Doc<"facebookEvents">): NormalizedEvent {
  * identifier, meaningless to the person reading the inbox, and it was landing
  * in the contact list whenever a profile lookup had not resolved yet.
  */
+/**
+ * A referenced document, but only when it belongs to the org being listed.
+ *
+ * Conversation rows are selected by org; the enrichment that turns one into a
+ * list item is what dereferences customer, lead and vehicle ids. Convex ids
+ * carry no tenant, so a row holding a foreign id would hand another
+ * dealership's customer name, lead stage or vehicle description to an
+ * authenticated user of this one — the caller's auth proves they may act inside
+ * the org they named, and says nothing about which org the RETURNED rows belong
+ * to. That exact distinction shipped as a cross-tenant leak in `approvals.ts`
+ * (SCRUM-100).
+ *
+ * Nothing writes such a row today: the ids are copied from events that are
+ * themselves org-scoped. This is a guard against the class, not a fix for a
+ * known bad row, and it is applied to BOTH reader paths so the materialised
+ * source and the legacy scan cannot disagree about what they will disclose.
+ *
+ * Fails to `null`, which every consumer already renders — an unresolvable
+ * reference degrades to a generic contact label, no vehicle summary and no lead
+ * stage, rather than to another tenant's data.
+ */
+async function getInOrg<T extends "customers" | "leads" | "vehicles">(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  table: T,
+  id: Id<T> | null | undefined
+): Promise<Doc<T> | null> {
+  if (!id) return null;
+  const doc = await ctx.db.get(id);
+  if (!doc || doc.orgId !== orgId) return null;
+  // `table` is not used to fetch — Convex ids are self-describing — but naming
+  // it at the call site keeps the intended table visible and lets the compiler
+  // reject an id of the wrong one.
+  void table;
+  return doc;
+}
+
 function resolveSenderDisplayName(
   event: Pick<NormalizedEvent, "platform" | "senderRawId" | "senderHandle">,
   customer: Doc<"customers"> | null
@@ -336,10 +373,10 @@ async function listConversationsFromEvents(
 
   const page = await Promise.all(
     pageSlice.map(async (c) => {
-      const customer = await ctx.db.get(c.customerId);
-      const lead = c.leadId ? await ctx.db.get(c.leadId) : null;
+      const customer = await getInOrg(ctx, args.orgId, "customers", c.customerId);
+      const lead = await getInOrg(ctx, args.orgId, "leads", c.leadId);
       const vehicleId = [...c.vehicleIds][0];
-      const vehicle = vehicleId ? await ctx.db.get(vehicleId) : null;
+      const vehicle = await getInOrg(ctx, args.orgId, "vehicles", vehicleId);
       return {
         customerId: c.customerId,
         leadId: c.leadId ?? null,
@@ -490,10 +527,10 @@ export const listConversations = query({
 
     const page = await Promise.all(
       pageResult.page.map(async (c) => {
-        const customer = await ctx.db.get(c.customerId);
-        const lead = c.leadId ? await ctx.db.get(c.leadId) : null;
+        const customer = await getInOrg(ctx, orgId, "customers", c.customerId);
+        const lead = await getInOrg(ctx, orgId, "leads", c.leadId);
         const vehicleId = c.vehicleIds[0];
-        const vehicle = vehicleId ? await ctx.db.get(vehicleId) : null;
+        const vehicle = await getInOrg(ctx, orgId, "vehicles", vehicleId);
         return {
           customerId: c.customerId,
           leadId: c.leadId ?? null,

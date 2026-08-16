@@ -864,7 +864,12 @@ export const startSocialConversationBackfills = internalMutation({
   handler: async (
     ctx,
     args
-  ): Promise<{ started: number; skipped: number; isDone: boolean }> => {
+  ): Promise<{
+    started: number;
+    skipped: number;
+    isDone: boolean;
+    continueCursor: string | null;
+  }> => {
     // THE one paginated query. Organizations are walked in pages so a tenant
     // count that grows past a single transaction cannot wedge the fan-out.
     const page = await ctx.db.query("organizations").paginate({
@@ -949,7 +954,18 @@ export const startSocialConversationBackfills = internalMutation({
       });
     }
 
-    return { started, skipped, isDone: page.isDone };
+    // The cursor is returned, not just consumed. `continueAutomatically: false`
+    // is the staged-rollout mode where the operator drives each page by hand —
+    // and without this they had no way to learn where page two begins, so a
+    // second call repeated page one and every org past the first 25 stayed on
+    // the expensive fallback permanently. The self-chaining path above never
+    // noticed, because it passes `page.continueCursor` along internally.
+    return {
+      started,
+      skipped,
+      isDone: page.isDone,
+      continueCursor: page.isDone ? null : page.continueCursor,
+    };
   },
 });
 

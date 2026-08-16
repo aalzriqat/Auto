@@ -884,6 +884,31 @@ describe("operator surface", () => {
     expect(after?.processedCount).toBe(midRun?.processedCount);
   });
 
+  test("a manual fan-out returns the cursor needed to reach page two", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    // One more org than a single fan-out page holds.
+    for (let i = 0; i < 26; i++) await seedOrg(t, `fanout_cursor_${i}`);
+
+    // `continueAutomatically: false` is the staged-rollout mode: the operator
+    // drives each page. That only works if the result says where the next page
+    // starts — otherwise a second call repeats page one forever and every org
+    // past the first 25 stays on the expensive fallback permanently.
+    const first = await t.mutation(internal.migrations.startSocialConversationBackfills, {
+      continueAutomatically: false,
+    });
+    expect(first.isDone).toBe(false);
+    expect(first.continueCursor).toEqual(expect.any(String));
+
+    const second = await t.mutation(internal.migrations.startSocialConversationBackfills, {
+      continueAutomatically: false,
+      cursor: first.continueCursor,
+    });
+    // The remaining org, not the first 25 again.
+    expect(second.started).toBe(2);
+    expect(second.isDone).toBe(true);
+    expect(second.continueCursor).toBeNull();
+  });
+
   test("force does not schedule a worker for contradictory state", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrg(t, "fanout_force_ambiguous");

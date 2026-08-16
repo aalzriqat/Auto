@@ -15,6 +15,22 @@ import type { GenericDatabaseReader, GenericDatabaseWriter } from "convex/server
  * Do NOT bump it for changes that leave existing rows correct (a new index, a
  * new filter over fields that are already stored) — an unnecessary bump sends
  * every tenant back to a full-table scan until someone notices.
+ *
+ * ⚠️ **A bump is not safely reversible, and this is the trap to plan for.**
+ * The fence runs forward only: newer code ignores older generations, but older
+ * code has no idea a newer one ever existed. Deploy generation 2, let it
+ * materialise events for a while, then roll the backend back to generation 1 —
+ * and generation 1's readiness record is still `completed`, because nothing
+ * invalidates it. The rolled-back reader unlocks immediately and serves
+ * generation-1 rows that are missing everything received while 2 was live. No
+ * error, no log: the same confidently-wrong answer this mechanism exists to
+ * prevent, arriving by the one door it does not watch.
+ *
+ * Today this is unreachable — the generation is 1 and there is no 2 — so it is
+ * documented rather than coded around. Before the FIRST bump, either invalidate
+ * the prior generation's readiness records as part of the deploy, or treat the
+ * rollback as requiring a re-backfill and delete them by hand. Whoever bumps
+ * this constant owns that decision; tracked on SCRUM-110.
  */
 export const SOCIAL_CONVERSATION_GENERATION = 1;
 

@@ -429,6 +429,69 @@ describe.each(["legacy", "materialized"] as const)(
     expect(page.page[0].vehicleSummary).toBe("2021 Toyota Corolla");
   });
 
+  test("a mislinked foreign id never discloses another tenant's records", async () => {
+    // Conversation rows are selected by org, but the enrichment that turns one
+    // into a list item dereferences customer, lead and vehicle ids directly.
+    // Convex ids carry no tenant, so a row holding a foreign id would hand
+    // another dealership's customer name, lead stage and vehicle description to
+    // an authenticated user of this one.
+    //
+    // Nothing writes such a row today — the ids are copied from events that are
+    // themselves org-scoped — which is exactly why this is a guard rather than a
+    // bug report. The whole class is one bad write away, and the same class
+    // already shipped once in `approvals.ts` (SCRUM-100): the auth check proves
+    // the CALLER may act inside the org they named, and says nothing about which
+    // org the returned ROWS belong to.
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asEditor } = await seedOrg(t);
+    const { orgId: otherOrgId } = await seedOrgWithMember(t, {
+      clerkId: "conv_other_tenant",
+      permissions: VIEWER_PERMISSIONS,
+    });
+
+    // Every one of these belongs to the OTHER dealership.
+    const foreignCustomer = await makeCustomer(t, otherOrgId, "Leaked", "Tenant");
+    const foreignVehicle = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: otherOrgId, vin: "VINLEAK1", make: "Bentley", model: "Continental",
+        year: 2024, mileage: 10, color: "Black", fuelType: "Gas",
+        transmission: "Automatic", sellingPrice: 500000, status: "AVAILABLE",
+        createdAt: Date.now(),
+      })
+    );
+    const foreignLead = await t.run((ctx) =>
+      ctx.db.insert("leads", {
+        orgId: otherOrgId, customerId: foreignCustomer, source: "SOCIAL",
+        stage: "NEGOTIATION",
+      })
+    );
+
+    await t.run((ctx) =>
+      ctx.db.insert("instagramEvents", {
+        orgId,
+        externalId: "leak_1",
+        kind: "dm",
+        senderInstagramId: "ig_leak",
+        customerId: foreignCustomer,
+        vehicleId: foreignVehicle,
+        leadId: foreignLead,
+        text: "hello",
+      })
+    );
+
+    const page = await asEditor.query(api.socialInbox.listConversations, {
+      orgId,
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+
+    // The thread itself is this org's — the event is. What must not cross is
+    // anything read THROUGH those foreign ids.
+    expect(page.page).toHaveLength(1);
+    expect(page.page[0].senderDisplayName).not.toBe("Leaked Tenant");
+    expect(page.page[0].vehicleSummary).toBeNull();
+    expect(page.page[0].leadStage).toBeNull();
+  });
+
   test("every filter combination agrees with the original predicates", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrg(t);
