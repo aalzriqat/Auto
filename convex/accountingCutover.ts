@@ -28,9 +28,25 @@ import { isSystemOwnerRole, PERMISSIONS } from "./utils/permissions";
 import { getOpenPeriodForDate } from "./accountingPeriods";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { validateManualJournalLines, auditLog, type ManualJournalLine } from "./financialAudit";
-import { toMinorUnits, scaleForCurrency } from "./utils/money";
+import { toMinorUnits, denominationOf } from "./utils/money";
 import { Doc, Id } from "./_generated/dataModel";
 import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
+
+/**
+ * One refusal, worded for the two things that are actually different to the
+ * person reading it: nothing was ever recorded, versus something was recorded
+ * that AutoFlow will not price.
+ *
+ * Both are dead ends only if rejection is unavailable, and it is not —
+ * `rejectOpeningBalanceDraft` stays open on every path, so the org re-submits
+ * in a supported currency rather than being stuck.
+ */
+function unvouchableDenominationMessage(recorded: string | undefined): string {
+  if (recorded === undefined) {
+    return "This opening balance was drafted before its currency was recorded, so the amounts cannot be safely posted. Reject it and submit it again.";
+  }
+  return `This opening balance is denominated "${recorded}", which is not a currency AutoFlow can price — the minor-unit scale would have to be guessed, and a wrong guess misstates the organization's entire starting position by a factor of ten. Reject it and submit it again in a supported currency.`;
+}
 
 /**
  * A deliberately minimal, sign-off-scoped total — not a substitute for
@@ -202,15 +218,20 @@ export const approveOpeningBalance = mutation({
       throw new ConvexError("Opening balance approver cannot be the same as the preparer.");
     }
 
-    // A draft written before the currency snapshot existed cannot have its
-    // denomination proven, and posting the org's entire starting position on a
-    // guess is not a recoverable mistake. Refuse rather than assume: rejecting
-    // and re-submitting takes a minute, and `rejectOpeningBalanceDraft` stays
-    // available so this is never a dead end.
-    if (!draft.currency) {
-      throw new ConvexError(
-        "This opening balance was drafted before its currency was recorded, so the amounts cannot be safely posted. Reject it and submit it again."
-      );
+    // A denomination the product cannot vouch for cannot be posted, and posting
+    // the org's entire starting position on a guessed scale is not a recoverable
+    // mistake. Refuse rather than assume: rejecting and re-submitting takes a
+    // minute, and `rejectOpeningBalanceDraft` stays available so this is never a
+    // dead end.
+    //
+    // `denominationOf`, not `!draft.currency`. Truthiness answers a different
+    // question — "is there a string here" — and lets "JD", "XYZ" and "jod"
+    // through to `scaleForCurrency`, which prices anything it does not
+    // recognise at scale 2. This is the same authority `applications.ts` uses
+    // at handover and finalization, so one rule governs every path that seals
+    // money irreversibly.
+    if (denominationOf(draft.currency) === null) {
+      throw new ConvexError(unvouchableDenominationMessage(draft.currency));
     }
 
     const journalId = await postOpeningBalanceDraft(ctx, {
@@ -271,10 +292,24 @@ async function postOpeningBalanceDraft(
   // posting at the current currency would silently turn 1,000.000 JOD into
   // 10,000.00 USD across the org's entire starting position.
   //
-  // Falls back to the org currency only for drafts written before the snapshot
-  // existed. That is the pre-existing behaviour, not an improvement on it —
-  // approveOpeningBalance refuses such a draft outright rather than guessing.
-  const currency = draft.currency ?? (await getOrgCurrency(ctx, orgId));
+  // And it is resolved through `denominationOf`, the shared fail-closed
+  // authority, rather than by taking the string at its word. `scaleForCurrency`
+  // answers 2 for ANYTHING it does not recognise (`utils/money.ts:110`) — a
+  // deliberate choice for display code that must not crash, and the wrong one
+  // here, where the guess would post the org's entire starting position an
+  // order of magnitude out. `denominationOf` refuses absent, unsupported and
+  // non-canonical spellings alike, and hands back the scale it vouched for.
+  //
+  // This is the CHOKEPOINT both routes share, so neither can post on a guess
+  // even if a future caller forgets the boundary check. There is no fallback to
+  // the org currency: a draft with no recorded denomination cannot have one
+  // re-derived — the org's current setting is a known-wrong answer, not a
+  // conservative one, which is the whole subject of SCRUM-62.
+  const denomination = denominationOf(draft.currency);
+  if (denomination === null) {
+    throw new ConvexError(unvouchableDenominationMessage(draft.currency));
+  }
+  const currency = denomination.code;
   const now = Date.now();
 
   const journalId = await ctx.db.insert("journalEntries", {
@@ -295,7 +330,9 @@ async function postOpeningBalanceDraft(
   const journalNumber = `OB-${journalId.toString().replace(/[^a-z0-9]/gi, "").slice(-10).toUpperCase()}`;
   await ctx.db.patch(journalId, { journalNumber });
 
-  const scale = scaleForCurrency(currency);
+  // The scale the authority vouched for, not a second lookup that could answer
+  // differently from the code above.
+  const scale = denomination.scale;
   for (let i = 0; i < draft.lines.length; i++) {
     const line = draft.lines[i];
     await ctx.db.insert("journalLines", {
@@ -400,6 +437,17 @@ export const postOpeningBalanceDirect = mutation({
 
     validateManualJournalLines(args.lines as ManualJournalLine[]);
 
+    // Checked BEFORE the draft row is written, not only inside the shared
+    // poster. This path inserts the draft first and posts second; a refusal
+    // that arrived only from the poster would still be correct about the money
+    // — the whole mutation rolls back — but the boundary is where the caller
+    // can see it, and it keeps the owner route holding exactly the same rule as
+    // the two-person one instead of inheriting it by accident.
+    const orgDenomination = await getOrgCurrency(ctx, args.orgId);
+    if (denominationOf(orgDenomination) === null) {
+      throw new ConvexError(unvouchableDenominationMessage(orgDenomination));
+    }
+
     const now = Date.now();
     const draftId = await ctx.db.insert("openingBalanceDrafts", {
       orgId: args.orgId,
@@ -414,8 +462,9 @@ export const postOpeningBalanceDirect = mutation({
       // currency once a row exists in one of six financial tables and a draft
       // is not one of them, and the preparer's user row is hard-deleted on
       // offboarding. Written on the direct-post path too so both routes leave
-      // an identically-shaped record.
-      currency: await getOrgCurrency(ctx, args.orgId),
+      // an identically-shaped record. Vouched for immediately above, so the row
+      // cannot be created carrying a denomination the poster would refuse.
+      currency: orgDenomination,
       preparedByName: user.name || user.email || undefined,
     });
 
@@ -522,14 +571,15 @@ export const listPendingOpeningBalanceDrafts = query({
           preparedByName:
             draft.preparedByName || preparer?.name || preparer?.email || null,
           currency: draft.currency ?? orgCurrency,
-          // Deliberately `Boolean(...)`, not `!== undefined`: this must be the
-          // SAME predicate `approveOpeningBalance` refuses on (`!draft.currency`).
-          // The schema types the field as an optional arbitrary string, so ""
-          // is representable; under `!== undefined` such a row would enable
-          // Approve in the UI and then be refused by the server — recreating
-          // the raw-error-toast behaviour this flag exists to remove. One rule,
-          // both sides.
-          denominationKnown: Boolean(draft.currency),
+          // The SAME authority the server refuses on, not a lookalike. This was
+          // `Boolean(draft.currency)` to match the old `!draft.currency` guard,
+          // and both were truthiness: a draft denominated "JD" reported
+          // denomination-known, the panel enabled Approve, and the refusal
+          // arrived as a raw error toast — exactly the dead-end behaviour this
+          // flag exists to remove. `denominationOf` is the one rule for both
+          // sides, so the screen can never offer an approval the poster will
+          // refuse.
+          denominationKnown: denominationOf(draft.currency) !== null,
         };
       })
     );

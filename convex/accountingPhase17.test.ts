@@ -674,6 +674,220 @@ describe("SCRUM-62 — a pending opening balance cannot be re-denominated", () =
   });
 });
 
+describe("SCRUM-62 — an opening balance posts only in a denomination AutoFlow can vouch for", () => {
+  // `!draft.currency` is a TRUTHINESS check, and truthiness is not a
+  // denomination authority. It catches `undefined` and `""` and waves through
+  // every other string — after which `scaleForCurrency` answers **2 for
+  // anything it does not recognise** (`utils/money.ts:110`). A draft carrying
+  // "JD" therefore posts 1,000,000 minor units as 10,000.00 instead of
+  // 1,000.000: the exact SCRUM-62 harm, through a different door, on the org's
+  // entire starting position.
+  //
+  // The authority already exists and is already used by the other path that
+  // seals money irreversibly — `denominationOf` / `assertSupportedDenomination`
+  // in `utils/money.ts`, which `applications.ts` calls at handover and at
+  // finalization. It fails closed on absent, unsupported AND non-canonical
+  // spelling. Use it here rather than inventing a second, weaker rule.
+  //
+  // Reachability, stated honestly: `orgSettings.upsert` has validated against
+  // SUPPORTED_CURRENCIES since before this branch, so today's product cannot
+  // SET a junk code. These values arrive from data that predates that
+  // validation, from a restore, or from a raw edit — and both
+  // `openingBalanceDrafts.currency` and `orgSettings.currency` are free strings
+  // in the schema, so the type system does not exclude them either.
+  const UNVOUCHABLE: Array<[string, string]> = [
+    ["JD", "a colloquial abbreviation, not an ISO code — and the one a Jordanian dealership would actually type"],
+    ["XYZ", "well-formed and completely unsupported"],
+    ["jod", "the right currency in the wrong case; supportedCurrencyScale() uppercases for its lookup, so a laxer guard resolves it to a real scale"],
+    ["", "present but meaningless — `??` does not replace it, so every writer preserves it"],
+  ];
+
+  for (const [code, why] of UNVOUCHABLE) {
+    test(`the two-person approval refuses a draft denominated "${code}" (${why})`, async () => {
+      const ctx = await seedCutoverDealer();
+      const cash = account(ctx, "CASH_ON_HAND");
+      const capital = account(ctx, "PARTNER_CAPITAL");
+
+      const { draftId } = await ctx.asReviewer.mutation(
+        api.accountingCutover.draftOpeningBalance,
+        {
+          orgId: ctx.orgId,
+          asOfDate: Date.now(),
+          memo: "Cutover",
+          lines: [
+            { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
+            { accountId: capital._id, debitMinor: 0, creditMinor: 1_000_000 },
+          ],
+        }
+      );
+
+      // A row whose recorded denomination is not one the product can vouch for.
+      await ctx.t.run(async (c) => {
+        await c.db.patch(draftId as Id<"openingBalanceDrafts">, { currency: code });
+      });
+
+      await expect(
+        ctx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, {
+          orgId: ctx.orgId,
+          draftId: draftId as Id<"openingBalanceDrafts">,
+        })
+      ).rejects.toThrow(/denomination|currency/i);
+
+      // Refused means NOTHING was posted — a guard that throws after writing
+      // the journal would satisfy a rejects-only assertion while the books
+      // already carried the wrong scale.
+      const entries = await ctx.t.run((c) =>
+        c.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", ctx.orgId)).collect()
+      );
+      expect(entries).toHaveLength(0);
+
+      // And it is never a dead end: rejection stays available, so the org can
+      // re-submit in a denomination that can be vouched for.
+      await ctx.asOwner.mutation(api.accountingCutover.rejectOpeningBalanceDraft, {
+        orgId: ctx.orgId,
+        draftId: draftId as Id<"openingBalanceDrafts">,
+        rejectionReason: "Re-submitting in a supported currency",
+      });
+    });
+
+    test(`the owner direct-post refuses an org denominated "${code}" (${why})`, async () => {
+      const ctx = await seedCutoverDealer();
+      const cash = account(ctx, "CASH_ON_HAND");
+      const capital = account(ctx, "PARTNER_CAPITAL");
+
+      // The owner path snapshots `getOrgCurrency` into the draft it creates, so
+      // the unvouchable value has to come from the settings row — which is
+      // exactly where a pre-validation legacy value lives.
+      await ctx.t.run(async (c) => {
+        const settings = await c.db
+          .query("orgSettings")
+          .withIndex("by_org", (q) => q.eq("orgId", ctx.orgId))
+          .unique();
+        if (settings) await c.db.patch(settings._id, { currency: code });
+      });
+
+      await expect(
+        ctx.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+          orgId: ctx.orgId,
+          asOfDate: Date.now(),
+          memo: "Cutover",
+          lines: [
+            { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
+            { accountId: capital._id, debitMinor: 0, creditMinor: 1_000_000 },
+          ],
+        })
+      ).rejects.toThrow(/denomination|currency/i);
+
+      // Neither the journal NOR the draft row may survive the refusal. The
+      // direct path inserts the draft first and posts second, so a guard placed
+      // only inside the poster would leave a PENDING_APPROVAL row behind —
+      // which `hasOpeningBalanceCommitment` then treats as a commitment, and
+      // the org could never open its books at all.
+      const entries = await ctx.t.run((c) =>
+        c.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", ctx.orgId)).collect()
+      );
+      expect(entries).toHaveLength(0);
+      const drafts = await ctx.t.run((c) =>
+        c.db
+          .query("openingBalanceDrafts")
+          .withIndex("by_org_status", (q) => q.eq("orgId", ctx.orgId).eq("status", "PENDING_APPROVAL"))
+          .collect()
+      );
+      expect(drafts).toHaveLength(0);
+    });
+  }
+
+  // The control group. Without it, every assertion above is satisfied by a
+  // guard that refuses everything — including the currency the product runs on.
+  test("a canonical JOD draft still posts, at scale 3, on both paths", async () => {
+    const twoPerson = await seedCutoverDealer();
+    const cashA = account(twoPerson, "CASH_ON_HAND");
+    const capitalA = account(twoPerson, "PARTNER_CAPITAL");
+
+    const { draftId } = await twoPerson.asReviewer.mutation(
+      api.accountingCutover.draftOpeningBalance,
+      {
+        orgId: twoPerson.orgId,
+        asOfDate: Date.now(),
+        memo: "Cutover",
+        lines: [
+          { accountId: cashA._id, debitMinor: 1_000_000, creditMinor: 0 },
+          { accountId: capitalA._id, debitMinor: 0, creditMinor: 1_000_000 },
+        ],
+      }
+    );
+    await twoPerson.asOwner.mutation(api.accountingCutover.approveOpeningBalance, {
+      orgId: twoPerson.orgId,
+      draftId: draftId as Id<"openingBalanceDrafts">,
+    });
+
+    const approvedLines = await twoPerson.t.run((c) =>
+      c.db.query("journalLines").withIndex("by_org", (q) => q.eq("orgId", twoPerson.orgId)).collect()
+    );
+    expect(approvedLines.length).toBeGreaterThan(0);
+    expect(approvedLines.every((l) => l.currency === "JOD" && l.scale === 3)).toBe(true);
+
+    const direct = await seedCutoverDealer();
+    const cashB = account(direct, "CASH_ON_HAND");
+    const capitalB = account(direct, "PARTNER_CAPITAL");
+
+    await direct.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+      orgId: direct.orgId,
+      asOfDate: Date.now(),
+      memo: "Cutover",
+      lines: [
+        { accountId: cashB._id, debitMinor: 1_000_000, creditMinor: 0 },
+        { accountId: capitalB._id, debitMinor: 0, creditMinor: 1_000_000 },
+      ],
+    });
+
+    const directLines = await direct.t.run((c) =>
+      c.db.query("journalLines").withIndex("by_org", (q) => q.eq("orgId", direct.orgId)).collect()
+    );
+    expect(directLines.length).toBeGreaterThan(0);
+    expect(directLines.every((l) => l.currency === "JOD" && l.scale === 3)).toBe(true);
+  });
+
+  // The reviewer's screen has to refuse on the SAME predicate the server does.
+  // If the query still answers `denominationKnown: true` for "JD", the panel
+  // enables Approve and the refusal arrives as a raw error toast — which is the
+  // dead-end behaviour SCRUM-52 exists to remove.
+  test("the approval queue reports an unvouchable draft as denomination-unknown", async () => {
+    const ctx = await seedCutoverDealer();
+    const cash = account(ctx, "CASH_ON_HAND");
+    const capital = account(ctx, "PARTNER_CAPITAL");
+
+    const { draftId } = await ctx.asReviewer.mutation(
+      api.accountingCutover.draftOpeningBalance,
+      {
+        orgId: ctx.orgId,
+        asOfDate: Date.now(),
+        memo: "Cutover",
+        lines: [
+          { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
+          { accountId: capital._id, debitMinor: 0, creditMinor: 1_000_000 },
+        ],
+      }
+    );
+
+    const [known] = await ctx.asOwner.query(
+      api.accountingCutover.listPendingOpeningBalanceDrafts,
+      { orgId: ctx.orgId }
+    );
+    expect(known.denominationKnown).toBe(true);
+
+    await ctx.t.run(async (c) => {
+      await c.db.patch(draftId as Id<"openingBalanceDrafts">, { currency: "JD" });
+    });
+
+    const [unknown] = await ctx.asOwner.query(
+      api.accountingCutover.listPendingOpeningBalanceDrafts,
+      { orgId: ctx.orgId }
+    );
+    expect(unknown.denominationKnown).toBe(false);
+  });
+});
+
 describe("SCRUM-52 — the approval UI can actually be built on this query", () => {
   // listPendingOpeningBalanceDrafts had no caller anywhere in the product, so
   // nothing ever needed it to be renderable. The approval panel does. Both
@@ -719,10 +933,17 @@ describe("SCRUM-52 — the approval UI can actually be built on this query", () 
 
   test("denominationKnown uses the SAME predicate the server refuses on, including the empty string", async () => {
     // The comment on listPendingOpeningBalanceDrafts states this must stay
-    // identical to approveOpeningBalance's `!draft.currency`, and names "" as
-    // the representable value that diverges under `!== undefined`. Nothing
+    // identical to the predicate approveOpeningBalance refuses on, and names ""
+    // as the representable value that diverges under `!== undefined`. Nothing
     // asserted it, so a revert to `!== undefined` would have kept every test
     // green and re-introduced the enabled-then-refused Approve button.
+    //
+    // Both sides are now `denominationOf(...) !== null` rather than truthiness,
+    // which does not change this case's verdict — "" is still refused — but does
+    // change the WORDING: "" is present-but-meaningless, not never-recorded, and
+    // the refusal now says so. Asserted below at that specific message rather
+    // than at any rejection, so the test still distinguishes a real refusal from
+    // an argument-validator error.
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
     const capital = account(ctx, "PARTNER_CAPITAL");
@@ -756,7 +977,7 @@ describe("SCRUM-52 — the approval UI can actually be built on this query", () 
         orgId: ctx.orgId,
         draftId: draftId as Id<"openingBalanceDrafts">,
       })
-    ).rejects.toThrow(/drafted before its currency was recorded/i);
+    ).rejects.toThrow(/not a currency AutoFlow can price/i);
   });
 
   test("an unresolvable preparer is reported as null, never an English display literal", async () => {
