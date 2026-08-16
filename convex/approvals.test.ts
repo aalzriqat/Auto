@@ -842,21 +842,42 @@ describe("SCRUM-100: listMyPendingApprovals tenancy and bounds", () => {
   });
 
   /**
-   * The acceptance criteria asked for old/new ordering equivalence. The
-   * tied-`createdAt` case proves nothing is dropped or duplicated; it does not
-   * pin the order. The old implementation collected `by_salesperson` and
-   * filtered in JS, so rows arrived in index order — ascending `createdAt`
-   * within a salesperson. The new range walk must preserve that.
+   * ⚠️ Ordering equivalence, and the earlier version of this test asserted the
+   * WRONG contract — it pinned ascending `createdAt` and described that as "what
+   * the previous implementation did". It was not.
+   *
+   * Convex appends `_creationTime` to every index as the final ordering field.
+   * The old read used `by_salesperson` = ["salespersonId"], so with the
+   * salesperson fixed by equality the rows came back in **`_creationTime`**
+   * order — insertion order. The new read uses
+   * ["orgId","salespersonId","createdAt"], so with org and salesperson fixed it
+   * comes back in **`createdAt`** order.
+   *
+   * Those are different contracts, and `createdAt` is an application field that
+   * need not agree with insertion order. `sales/page.tsx` renders this list with
+   * a bare `.map()`, so the difference is visible on screen.
+   *
+   * The seed is deliberately a counterexample: 1000 is inserted FIRST but
+   * carries the NEWER `createdAt` (−1 day), 1100 second with −2 days. So
+   * insertion order is [1000, 1100] while `createdAt` order is [1100, 1000] —
+   * exactly reversed. Asserting insertion order therefore fails against a
+   * `createdAt`-ordered implementation, which is what makes this a real
+   * equivalence test rather than a restatement of whatever the new code emits.
    */
-  it("returns rows in ascending createdAt order, as the previous implementation did", async () => {
+  it("preserves the previous implementation's ordering when createdAt disagrees with insertion order", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgA } = await seedMultiOrg(t);
 
     const asUser = t.withIdentity({ subject: "multi_org_sales" });
     const rows = await asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA });
-    const times = rows.map((r: any) => r.createdAt);
+    const profits = rows.map((r: any) => r.requestedProfit);
 
-    expect(times).toEqual([...times].sort((a: number, b: number) => a - b));
-    expect(times.length).toBeGreaterThan(1); // an ordering assertion over 0 or 1 row is vacuous
+    // Insertion order, NOT createdAt order.
+    expect(profits).toEqual([1000, 1100]);
+
+    // And state the invariant directly, so the intent survives a fixture change.
+    const creationTimes = rows.map((r: any) => r._creationTime);
+    expect(creationTimes).toEqual([...creationTimes].sort((a: number, b: number) => a - b));
+    expect(creationTimes.length).toBeGreaterThan(1); // ordering over <2 rows is vacuous
   });
 });

@@ -282,7 +282,20 @@ export const listMyPendingApprovals = query({
     // Kept in JS on purpose: the predicate is `!== "REJECTED"`, i.e. PENDING or
     // APPROVED, because APPROVED rows are what the sales page resumes from. It
     // runs over an already tenant- and week-bounded set.
-    const recent = recentInOrg.filter(r => r.status !== "REJECTED");
+    //
+    // ⚠️ The sort restores the ORDER the previous implementation produced, and
+    // it is not cosmetic. Convex appends `_creationTime` to every index as the
+    // final ordering field, so the old `by_salesperson` read — salesperson fixed
+    // by equality — returned rows in insertion order. This index fixes org and
+    // salesperson and then ranges on `createdAt`, so it would otherwise return
+    // them in `createdAt` order instead. `createdAt` is an application field and
+    // need not agree with insertion order, and `sales/page.tsx` renders this
+    // list with a bare `.map()`, so the difference is visible on screen.
+    // Sorting a set already bounded to one salesperson's last seven days is
+    // cheap; changing what the salesperson sees is not.
+    const recent = recentInOrg
+      .filter(r => r.status !== "REJECTED")
+      .sort((a, b) => a._creationTime - b._creationTime);
 
     return await Promise.all(recent.map(async (r) => {
       const vehicle = await ctx.db.get(r.vehicleId);
