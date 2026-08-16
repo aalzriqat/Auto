@@ -157,6 +157,12 @@ export function OpeningBalanceCard() {
           debitMinor: toMinorUnits(Number(line.debit) || 0, currency),
           creditMinor: toMinorUnits(Number(line.credit) || 0, currency),
         })),
+        // The denomination these integers were converted UNDER, sent so the
+        // server can refuse if the org's currency moved while this form was
+        // open. `currency` above is what `toMinorUnits` used on the same lines,
+        // so the two can never drift apart here — the whole point is that they
+        // can drift from what the server sees by the time the mutation runs.
+        expectedCurrency: currency,
       };
 
       if (status?.canPostDirectly) {

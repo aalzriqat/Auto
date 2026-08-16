@@ -11,7 +11,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -107,6 +107,7 @@ describe("Phase 17 — opening balance journal", () => {
 
     const draft = await ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
       orgId: ctx.orgId,
+      expectedCurrency: "JOD",
       asOfDate: Date.now(),
       lines: [
         { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
@@ -147,6 +148,7 @@ describe("Phase 17 — opening balance journal", () => {
     await expect(
       ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
         orgId: ctx.orgId,
+        expectedCurrency: "JOD",
         asOfDate: Date.now(),
         lines: [
           { accountId: cash._id, debitMinor: 500, creditMinor: 0 },
@@ -163,6 +165,7 @@ describe("Phase 17 — opening balance journal", () => {
 
     const draft = await ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
       orgId: ctx.orgId,
+      expectedCurrency: "JOD",
       asOfDate: Date.now(),
       lines: [
         { accountId: cash._id, debitMinor: 1_000, creditMinor: 0 },
@@ -186,6 +189,7 @@ describe("Phase 17 — opening balance journal", () => {
 
     const redrafted = await ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
       orgId: ctx.orgId,
+      expectedCurrency: "JOD",
       asOfDate: Date.now(),
       lines: [
         { accountId: cash._id, debitMinor: 2_000, creditMinor: 0 },
@@ -203,6 +207,7 @@ describe("Phase 17 — opening balance journal", () => {
     await expect(
       ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
         orgId: ctx.orgId,
+        expectedCurrency: "JOD",
         asOfDate: Date.now(),
         lines: [
           { accountId: cash._id, debitMinor: 1_000, creditMinor: 0 },
@@ -220,6 +225,7 @@ describe("Phase 17 — opening balance journal", () => {
     await expect(
       ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
         orgId: ctx.orgId,
+        expectedCurrency: "JOD",
         asOfDate: Date.UTC(2010, 0, 1),
         lines: [
           { accountId: cash._id, debitMinor: 1_000, creditMinor: 0 },
@@ -391,6 +397,7 @@ describe("Phase 17 — parallel reporting and sign-off", () => {
 
     const draft = await ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
       orgId: ctx.orgId,
+      expectedCurrency: "JOD",
       asOfDate: Date.now(),
       lines: [
         { accountId: cash._id, debitMinor: 1_000, creditMinor: 0 },
@@ -466,6 +473,7 @@ describe("SCRUM-62 — a pending opening balance cannot be re-denominated", () =
 
     await ctx.asReviewer.mutation(api.accountingCutover.draftOpeningBalance, {
       orgId: ctx.orgId,
+      expectedCurrency: "JOD",
       asOfDate: Date.now(),
       memo: "Cutover",
       lines: [
@@ -495,6 +503,7 @@ describe("SCRUM-62 — a pending opening balance cannot be re-denominated", () =
       api.accountingCutover.draftOpeningBalance,
       {
         orgId: ctx.orgId,
+        expectedCurrency: "JOD",
         asOfDate: Date.now(),
         memo: "Cutover",
         lines: [
@@ -541,6 +550,7 @@ describe("SCRUM-62 — a pending opening balance cannot be re-denominated", () =
       api.accountingCutover.draftOpeningBalance,
       {
         orgId: ctx.orgId,
+        expectedCurrency: "JOD",
         asOfDate: Date.now(),
         memo: "Drafted in JOD",
         lines: [
@@ -597,6 +607,7 @@ describe("SCRUM-62 — a pending opening balance cannot be re-denominated", () =
       api.accountingCutover.draftOpeningBalance,
       {
         orgId: ctx.orgId,
+        expectedCurrency: "JOD",
         asOfDate: Date.now(),
         memo: "Cutover",
         lines: [
@@ -639,6 +650,7 @@ describe("SCRUM-62 — a pending opening balance cannot be re-denominated", () =
       api.accountingCutover.draftOpeningBalance,
       {
         orgId: ctx.orgId,
+        expectedCurrency: "JOD",
         asOfDate: Date.now(),
         lines: [
           { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
@@ -712,6 +724,7 @@ describe("SCRUM-62 — an opening balance posts only in a denomination AutoFlow 
         api.accountingCutover.draftOpeningBalance,
         {
           orgId: ctx.orgId,
+          expectedCurrency: "JOD",
           asOfDate: Date.now(),
           memo: "Cutover",
           lines: [
@@ -769,6 +782,7 @@ describe("SCRUM-62 — an opening balance posts only in a denomination AutoFlow 
       await expect(
         ctx.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
           orgId: ctx.orgId,
+          expectedCurrency: "JOD",
           asOfDate: Date.now(),
           memo: "Cutover",
           lines: [
@@ -808,6 +822,7 @@ describe("SCRUM-62 — an opening balance posts only in a denomination AutoFlow 
       api.accountingCutover.draftOpeningBalance,
       {
         orgId: twoPerson.orgId,
+        expectedCurrency: "JOD",
         asOfDate: Date.now(),
         memo: "Cutover",
         lines: [
@@ -833,6 +848,7 @@ describe("SCRUM-62 — an opening balance posts only in a denomination AutoFlow 
 
     await direct.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
       orgId: direct.orgId,
+      expectedCurrency: "JOD",
       asOfDate: Date.now(),
       memo: "Cutover",
       lines: [
@@ -861,6 +877,7 @@ describe("SCRUM-62 — an opening balance posts only in a denomination AutoFlow 
       api.accountingCutover.draftOpeningBalance,
       {
         orgId: ctx.orgId,
+        expectedCurrency: "JOD",
         asOfDate: Date.now(),
         memo: "Cutover",
         lines: [
@@ -888,6 +905,176 @@ describe("SCRUM-62 — an opening balance posts only in a denomination AutoFlow 
   });
 });
 
+describe("SCRUM-62 — minor units stay bound to the denomination they were converted under", () => {
+  // The TOCTOU. `OpeningBalanceCard` turns typed decimals into integers with
+  // `toMinorUnits(amount, currency)` using the currency it can see when the
+  // form is open; the server stamps those integers with whatever the org
+  // denomination is when the mutation runs. Nothing in between notices, because
+  // BOTH codes are individually valid — `denominationOf("USD")` passes happily.
+  // The integers are simply computed under one scale and labelled with another.
+  //
+  // 1,000.000 JOD at scale 3 is 1,000,000 minor units. Stamped USD at scale 2
+  // that is 10,000.00. The org's entire starting position, ten times over,
+  // through a currency change nobody had to be malicious to make.
+  //
+  // Both directions are tested because they fail differently: 3→2 inflates by
+  // ten, 2→3 deflates by ten, and a guard that only compares scales rather than
+  // codes could pass one while failing the other.
+  const LINES = (cash: Doc<"chartOfAccounts">, capital: Doc<"chartOfAccounts">) => [
+    { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
+    { accountId: capital._id, debitMinor: 0, creditMinor: 1_000_000 },
+  ];
+
+  async function setOrgCurrency(ctx: Awaited<ReturnType<typeof seedCutoverDealer>>, code: string) {
+    // Patched directly rather than through orgSettings.upsert: the point is to
+    // reproduce the org denomination having MOVED, not to exercise the lock
+    // that governs when moving is allowed.
+    await ctx.t.run(async (c) => {
+      const settings = await c.db
+        .query("orgSettings")
+        .withIndex("by_org", (q) => q.eq("orgId", ctx.orgId))
+        .unique();
+      if (settings) await c.db.patch(settings._id, { currency: code });
+    });
+  }
+
+  async function assertNothingWritten(ctx: Awaited<ReturnType<typeof seedCutoverDealer>>) {
+    // "It threw" is not the assertion. A mutation that inserts the draft and
+    // then throws satisfies a rejects-only test while leaving a real
+    // PENDING_APPROVAL row behind — which hasOpeningBalanceCommitment reads as
+    // a commitment, locking the org out of opening its books at all.
+    const drafts = await ctx.t.run((c) =>
+      c.db
+        .query("openingBalanceDrafts")
+        .withIndex("by_org_status", (q) => q.eq("orgId", ctx.orgId).eq("status", "PENDING_APPROVAL"))
+        .collect()
+    );
+    expect(drafts).toHaveLength(0);
+    const entries = await ctx.t.run((c) =>
+      c.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", ctx.orgId)).collect()
+    );
+    expect(entries).toHaveLength(0);
+    const lines = await ctx.t.run((c) =>
+      c.db.query("journalLines").withIndex("by_org", (q) => q.eq("orgId", ctx.orgId)).collect()
+    );
+    expect(lines).toHaveLength(0);
+  }
+
+  // (converted under, org switched to) — both directions, per the directive.
+  const DRIFTS: Array<[string, string]> = [
+    ["JOD", "USD"],
+    ["USD", "JOD"],
+  ];
+
+  for (const [convertedUnder, switchedTo] of DRIFTS) {
+    test(`the two-person route refuses ${convertedUnder}-derived amounts once the org is ${switchedTo}`, async () => {
+      const ctx = await seedCutoverDealer();
+      const cash = account(ctx, "CASH_ON_HAND");
+      const capital = account(ctx, "PARTNER_CAPITAL");
+
+      await setOrgCurrency(ctx, switchedTo);
+
+      await expect(
+        ctx.asReviewer.mutation(api.accountingCutover.draftOpeningBalance, {
+          orgId: ctx.orgId,
+          asOfDate: Date.now(),
+          memo: "Cutover",
+          lines: LINES(cash, capital),
+          expectedCurrency: convertedUnder,
+        })
+      ).rejects.toThrow(new RegExp(`entered in ${convertedUnder}.*now ${switchedTo}`, "i"));
+
+      await assertNothingWritten(ctx);
+    });
+
+    test(`the owner direct-post refuses ${convertedUnder}-derived amounts once the org is ${switchedTo}`, async () => {
+      const ctx = await seedCutoverDealer();
+      const cash = account(ctx, "CASH_ON_HAND");
+      const capital = account(ctx, "PARTNER_CAPITAL");
+
+      await setOrgCurrency(ctx, switchedTo);
+
+      await expect(
+        ctx.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+          orgId: ctx.orgId,
+          asOfDate: Date.now(),
+          memo: "Cutover",
+          lines: LINES(cash, capital),
+          expectedCurrency: convertedUnder,
+        })
+      ).rejects.toThrow(new RegExp(`entered in ${convertedUnder}.*now ${switchedTo}`, "i"));
+
+      // This route inserts the draft and posts in one mutation, so the
+      // no-orphan-draft half of this assertion is the one that matters most.
+      await assertNothingWritten(ctx);
+    });
+  }
+
+  // The non-regression rows. A fail-closed change is likeliest to break exactly
+  // these, and without them every refusal above is satisfied by a guard that
+  // refuses everything.
+  test("an unchanged canonical currency still drafts on the two-person route", async () => {
+    const ctx = await seedCutoverDealer();
+    const cash = account(ctx, "CASH_ON_HAND");
+    const capital = account(ctx, "PARTNER_CAPITAL");
+
+    const { draftId } = await ctx.asReviewer.mutation(api.accountingCutover.draftOpeningBalance, {
+      orgId: ctx.orgId,
+      asOfDate: Date.now(),
+      memo: "Cutover",
+      lines: LINES(cash, capital),
+      expectedCurrency: "JOD",
+    });
+    expect(draftId).toBeTruthy();
+
+    const draft = await ctx.t.run((c) => c.db.get(draftId as Id<"openingBalanceDrafts">));
+    expect(draft?.currency).toBe("JOD");
+  });
+
+  test("an unchanged canonical currency still posts on the owner direct route, at scale 3", async () => {
+    const ctx = await seedCutoverDealer();
+    const cash = account(ctx, "CASH_ON_HAND");
+    const capital = account(ctx, "PARTNER_CAPITAL");
+
+    await ctx.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+      orgId: ctx.orgId,
+      asOfDate: Date.now(),
+      memo: "Cutover",
+      lines: LINES(cash, capital),
+      expectedCurrency: "JOD",
+    });
+
+    const lines = await ctx.t.run((c) =>
+      c.db.query("journalLines").withIndex("by_org", (q) => q.eq("orgId", ctx.orgId)).collect()
+    );
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.every((l) => l.currency === "JOD" && l.scale === 3)).toBe(true);
+  });
+
+  // Point 5 of the directive: no aliasing, no uppercasing-to-rescue. These are
+  // the same strings the previous round proved dangerous, arriving through the
+  // new argument instead of through a stored row.
+  for (const alias of ["jod", "JD", "XYZ", ""]) {
+    test(`"${alias}" is refused rather than rescued into JOD`, async () => {
+      const ctx = await seedCutoverDealer();
+      const cash = account(ctx, "CASH_ON_HAND");
+      const capital = account(ctx, "PARTNER_CAPITAL");
+
+      await expect(
+        ctx.asReviewer.mutation(api.accountingCutover.draftOpeningBalance, {
+          orgId: ctx.orgId,
+          asOfDate: Date.now(),
+          memo: "Cutover",
+          lines: LINES(cash, capital),
+          expectedCurrency: alias,
+        })
+      ).rejects.toThrow(/currency is now JOD|not a currency AutoFlow can price/i);
+
+      await assertNothingWritten(ctx);
+    });
+  }
+});
+
 describe("SCRUM-52 — the approval UI can actually be built on this query", () => {
   // listPendingOpeningBalanceDrafts had no caller anywhere in the product, so
   // nothing ever needed it to be renderable. The approval panel does. Both
@@ -909,6 +1096,7 @@ describe("SCRUM-52 — the approval UI can actually be built on this query", () 
     // fixture matches the role that actually hits this path in production.
     await ctx.asAccountant.mutation(api.accountingCutover.draftOpeningBalance, {
       orgId: ctx.orgId,
+      expectedCurrency: "JOD",
       asOfDate: Date.now(),
       memo: "Cutover",
       lines: [
@@ -952,6 +1140,7 @@ describe("SCRUM-52 — the approval UI can actually be built on this query", () 
       api.accountingCutover.draftOpeningBalance,
       {
         orgId: ctx.orgId,
+        expectedCurrency: "JOD",
         asOfDate: Date.now(),
         lines: [
           { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
@@ -989,6 +1178,7 @@ describe("SCRUM-52 — the approval UI can actually be built on this query", () 
       api.accountingCutover.draftOpeningBalance,
       {
         orgId: ctx.orgId,
+        expectedCurrency: "JOD",
         asOfDate: Date.now(),
         lines: [
           { accountId: cash._id, debitMinor: 1_000, creditMinor: 0 },
@@ -1025,6 +1215,7 @@ describe("SCRUM-52 — the approval UI can actually be built on this query", () 
       api.accountingCutover.draftOpeningBalance,
       {
         orgId: ctx.orgId,
+        expectedCurrency: "JOD",
         asOfDate: Date.now(),
         memo: "Prepared by the accountant",
         lines: [
@@ -1074,6 +1265,7 @@ describe("Phase 17 — owner-only direct opening balance", () => {
 
     const result = await ctx.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
       orgId: ctx.orgId,
+      expectedCurrency: "JOD",
       asOfDate: Date.now(),
       memo: "Opening cash",
       lines: [
@@ -1125,6 +1317,7 @@ describe("Phase 17 — owner-only direct opening balance", () => {
     await expect(
       asAccountant.mutation(api.accountingCutover.postOpeningBalanceDirect, {
         orgId: ctx.orgId,
+        expectedCurrency: "JOD",
         asOfDate: Date.now(),
         lines: [
           { accountId: cash._id, debitMinor: 1_000, creditMinor: 0 },
@@ -1148,6 +1341,7 @@ describe("Phase 17 — owner-only direct opening balance", () => {
 
     await ctx.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
       orgId: ctx.orgId,
+      expectedCurrency: "JOD",
       asOfDate: Date.now(),
       lines,
     });
@@ -1155,6 +1349,7 @@ describe("Phase 17 — owner-only direct opening balance", () => {
     await expect(
       ctx.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
         orgId: ctx.orgId,
+        expectedCurrency: "JOD",
         asOfDate: Date.now(),
         lines,
       })
@@ -1170,6 +1365,7 @@ describe("Phase 17 — owner-only direct opening balance", () => {
     await expect(
       ctx.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
         orgId: ctx.orgId,
+        expectedCurrency: "JOD",
         asOfDate: Date.now(),
         lines: [
           { accountId: cash._id, debitMinor: 900_000, creditMinor: 0 },

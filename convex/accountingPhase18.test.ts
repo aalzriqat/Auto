@@ -280,6 +280,7 @@ describe("Phase 18 — every direct journalLines inserter keeps snapshots in syn
 
     const draft = await ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
       orgId: ctx.orgId,
+      expectedCurrency: "JOD",
       asOfDate: Date.UTC(2025, 0, 15),
       lines: [
         { accountId: cash!._id, debitMinor: 500_000, creditMinor: 0 },
@@ -325,6 +326,7 @@ describe("Phase 18 — every direct journalLines inserter keeps snapshots in syn
     await expect(
       ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
         orgId: ctx.orgId,
+        expectedCurrency: "JOD",
         asOfDate: Date.UTC(2025, 0, 15),
         lines: [
           { accountId: otherCash!._id, debitMinor: 100_000, creditMinor: 0 },

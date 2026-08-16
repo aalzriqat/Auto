@@ -41,6 +41,51 @@ import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
  * `rejectOpeningBalanceDraft` stays open on every path, so the org re-submits
  * in a supported currency rather than being stuck.
  */
+/**
+ * Binds already-converted minor units to the denomination they were converted
+ * under, and refuses if the organization has moved on since.
+ *
+ * The client turns typed decimals into integers using the currency it can see
+ * at that moment (`OpeningBalanceCard` calls `toMinorUnits(amount, currency)`).
+ * The server then labels those integers with whatever the org denomination is
+ * when the mutation runs. Between those two moments the currency can change —
+ * and neither `denominationOf` nor any other validity check can notice, because
+ * both codes are perfectly valid on their own. The integers are simply computed
+ * under one scale and stamped with another: 1,000.000 JOD converted at scale 3
+ * is 1,000,000 minor units, and posted as USD at scale 2 that reads 10,000.00.
+ *
+ * So the check is an EQUALITY against what the caller actually converted under,
+ * not a validity test. Callers pass the exact canonical code they used.
+ *
+ * No normalization, deliberately: `"jod"` and `"JD"` fail the equality against
+ * the canonical `"JOD"` rather than being uppercased or aliased into it. A
+ * guard that rescues a value the rest of the system would reject is how the
+ * previous round's defect worked.
+ *
+ * Every caller must invoke this BEFORE its first write. A refusal that lands
+ * after the draft insert is still correct about the money — the mutation rolls
+ * back — but `postOpeningBalanceDirect` would have created a PENDING_APPROVAL
+ * row on the refusal path in any world where the two stopped sharing a
+ * transaction, and `hasOpeningBalanceCommitment` reads such a row as a
+ * commitment that blocks the org from opening its books at all.
+ */
+async function assertDenominationUnchanged(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  expectedCurrency: string
+): Promise<void> {
+  const current = await getOrgCurrency(ctx, orgId);
+  const vouched = denominationOf(current);
+  if (vouched === null) {
+    throw new ConvexError(unvouchableDenominationMessage(current));
+  }
+  if (expectedCurrency !== vouched.code) {
+    throw new ConvexError(
+      `These amounts were entered in ${expectedCurrency}, but this organization's currency is now ${vouched.code}. The figures were converted using ${expectedCurrency}'s decimal places, so posting them as ${vouched.code} would misstate every one of them. Nothing has been saved — reopen the form and enter the opening balance again.`
+    );
+  }
+}
+
 function unvouchableDenominationMessage(recorded: string | undefined): string {
   if (recorded === undefined) {
     return "This opening balance was drafted before its currency was recorded, so the amounts cannot be safely posted. Reject it and submit it again.";
@@ -122,9 +167,17 @@ export const draftOpeningBalance = mutation({
     })),
     asOfDate: v.number(),
     memo: v.optional(v.string()),
+    // The exact canonical code the caller converted the entered decimals under.
+    // See assertDenominationUnchanged — this binds the integers to a scale.
+    expectedCurrency: v.string(),
   },
   handler: async (ctx, args): Promise<{ draftId: string }> => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+
+    // Before anything is read for validation and long before anything is
+    // written: if the denomination moved under the caller, none of the numbers
+    // below mean what they say.
+    await assertDenominationUnchanged(ctx, args.orgId, args.expectedCurrency);
 
     if (await hasOpeningBalanceCommitment(ctx, args.orgId)) {
       throw new ConvexError("An opening balance has already been posted or is awaiting approval for this organization.");
@@ -422,6 +475,9 @@ export const postOpeningBalanceDirect = mutation({
     })),
     asOfDate: v.number(),
     memo: v.optional(v.string()),
+    // The exact canonical code the caller converted the entered decimals under.
+    // See assertDenominationUnchanged — this binds the integers to a scale.
+    expectedCurrency: v.string(),
   },
   handler: async (ctx, args): Promise<{ journalId: string; draftId: string }> => {
     const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -431,22 +487,22 @@ export const postOpeningBalanceDirect = mutation({
       );
     }
 
+    // Before the draft insert AND before the post — this route does both in one
+    // mutation, so it is the one where a late refusal would be worst.
+    await assertDenominationUnchanged(ctx, args.orgId, args.expectedCurrency);
+
     if (await hasOpeningBalanceCommitment(ctx, args.orgId)) {
       throw new ConvexError("An opening balance has already been posted or is awaiting approval for this organization.");
     }
 
     validateManualJournalLines(args.lines as ManualJournalLine[]);
 
-    // Checked BEFORE the draft row is written, not only inside the shared
-    // poster. This path inserts the draft first and posts second; a refusal
-    // that arrived only from the poster would still be correct about the money
-    // — the whole mutation rolls back — but the boundary is where the caller
-    // can see it, and it keeps the owner route holding exactly the same rule as
-    // the two-person one instead of inheriting it by accident.
+    // The denomination to stamp on the row. Already proved vouchable AND equal
+    // to what the caller converted under by the assertion above, which is why
+    // this is a plain read rather than a second guard — one rule, checked once,
+    // at the boundary. (The shared poster re-checks vouchability independently
+    // as the chokepoint for callers that never came through here.)
     const orgDenomination = await getOrgCurrency(ctx, args.orgId);
-    if (denominationOf(orgDenomination) === null) {
-      throw new ConvexError(unvouchableDenominationMessage(orgDenomination));
-    }
 
     const now = Date.now();
     const draftId = await ctx.db.insert("openingBalanceDrafts", {
