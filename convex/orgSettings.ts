@@ -155,7 +155,18 @@ export const upsert = mutation({
       // per-currency, so that re-denominates 1,000.000 JOD into 10,000.00 USD
       // across the org's entire starting position, silently and without
       // conversion.
-      const [ledger, pending, txns, comp, advances, expenseRow, obDraft] = await Promise.all([
+      // `journalEntries` is the other half of that same hole, and it is the one
+      // that matters AFTER approval. `postOpeningBalanceDraft` writes
+      // journalEntries + journalLines directly and inserts NO accountingEvents
+      // row, while the draft leaves PENDING_APPROVAL — so on a fresh org the
+      // moment the starting position became real was also the moment every
+      // other table here went back to empty and the currency unlocked again.
+      // Watched at ANY status and ANY category on purpose: a DRAFT or VALIDATED
+      // entry that has not posted yet still stores minor units denominated in
+      // the currency it was written in, and a REVERSED one still has lines the
+      // reports read. Presence of the row is the invariant, not its status —
+      // narrowing this to POSTED would re-open the hole one state earlier.
+      const [ledger, pending, txns, comp, advances, expenseRow, obDraft, journal] = await Promise.all([
         ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
         ctx.db.query("pendingAccountingEvents").withIndex("by_org_status", (q) => q.eq("orgId", args.orgId)).first(),
         ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
@@ -166,8 +177,9 @@ export const upsert = mutation({
           .query("openingBalanceDrafts")
           .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING_APPROVAL"))
           .first(),
+        ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
       ]);
-      if (ledger || pending || txns || comp || advances || expenseRow || obDraft) {
+      if (ledger || pending || txns || comp || advances || expenseRow || obDraft || journal) {
         throw new ConvexError(
           "The organization currency cannot be changed after financial records exist — stored amounts are not converted and would be misread. Contact support for a currency migration."
         );

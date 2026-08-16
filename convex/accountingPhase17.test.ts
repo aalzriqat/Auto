@@ -578,6 +578,58 @@ describe("SCRUM-62 — a pending opening balance cannot be re-denominated", () =
     expect(lines.every((l) => l.currency === "JOD")).toBe(true);
   });
 
+  test("the lock survives approval — a posted opening balance still holds the currency", async () => {
+    // The lock watched `openingBalanceDrafts` only at PENDING_APPROVAL, and
+    // `postOpeningBalanceDraft` writes `journalEntries` + `journalLines`
+    // directly, with NO `accountingEvents` row. On a fresh org that made
+    // approval — the moment the starting position becomes real — the moment
+    // every watched table went back to empty and the currency became editable
+    // again. Same 1,000,000 minor units, same silent re-denomination into
+    // 10,000.00 USD, one step later than the pending case above.
+    //
+    // Reachable only because SCRUM-52 gives `approveOpeningBalance` a caller:
+    // before this PR nothing in the product could post a draft at all.
+    const ctx = await seedCutoverDealer();
+    const cash = account(ctx, "CASH_ON_HAND");
+    const capital = account(ctx, "PARTNER_CAPITAL");
+
+    const { draftId } = await ctx.asReviewer.mutation(
+      api.accountingCutover.draftOpeningBalance,
+      {
+        orgId: ctx.orgId,
+        asOfDate: Date.now(),
+        memo: "Cutover",
+        lines: [
+          { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
+          { accountId: capital._id, debitMinor: 0, creditMinor: 1_000_000 },
+        ],
+      }
+    );
+
+    await ctx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, {
+      orgId: ctx.orgId,
+      draftId: draftId as Id<"openingBalanceDrafts">,
+    });
+
+    // The premise, asserted rather than assumed: the books now hold JOD amounts
+    // at scale 3, and the draft is no longer PENDING_APPROVAL — so nothing the
+    // old lock watched is left to hold it.
+    const posted = await ctx.t.run((c) =>
+      c.db
+        .query("journalEntries")
+        .withIndex("by_org", (q) => q.eq("orgId", ctx.orgId))
+        .first()
+    );
+    expect(posted?.status).toBe("POSTED");
+    expect(posted?.currency).toBe("JOD");
+    const draftAfter = await ctx.t.run((c) => c.db.get(draftId as Id<"openingBalanceDrafts">));
+    expect(draftAfter?.status).not.toBe("PENDING_APPROVAL");
+
+    await expect(
+      ctx.asOwner.mutation(api.orgSettings.upsert, { orgId: ctx.orgId, currency: "USD" })
+    ).rejects.toThrow(/currency cannot be changed/i);
+  });
+
   test("a draft with no recorded currency is refused rather than posted on a guess", async () => {
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
