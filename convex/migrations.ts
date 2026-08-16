@@ -902,13 +902,19 @@ export const startSocialConversationBackfills = internalMutation({
         // operator re-running the fan-out to *check on* progress restarts it
         // instead, and on a long walk that is a livelock. `interrupted`,
         // `failed` and `notStarted` all do want a new run.
-        // `ambiguous` joins these two despite wanting a different remedy. The
-        // worker refuses it anyway, so scheduling one would burn a transaction
-        // to accomplish nothing; skipping keeps the fan-out's own numbers
-        // honest about how much work it actually started.
-        const settled =
-          status === "completed" || status === "running" || status === "ambiguous";
-        if (args.force !== true && settled) {
+        // `ambiguous` is skipped UNCONDITIONALLY, which is the one place
+        // `force` must not reach. Force exists to override `completed` and
+        // `running` — states where a run would be redundant or disruptive but
+        // is still a coherent thing to ask for. Duplicate state rows are not
+        // that: `beginConversationBackfill` refuses them outright, because no
+        // run can repair a contradiction it is not allowed to resolve. Letting
+        // force through therefore schedules a worker that immediately stands
+        // down, and counts that refusal as work started — the fan-out's own
+        // numbers become the thing that hides the anomaly.
+        if (
+          status === "ambiguous" ||
+          (args.force !== true && (status === "completed" || status === "running"))
+        ) {
           skipped += 1;
           continue;
         }

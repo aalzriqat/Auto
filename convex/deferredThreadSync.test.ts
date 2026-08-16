@@ -174,24 +174,25 @@ const BUILDER = "socialBulkMutation";
  * import under any local name, and a namespace import used as
  * `fns.socialBulkMutation(...)`.
  */
-function builderBindings(source: string): string[] {
-  const sourceFile = ts.createSourceFile("scan.ts", source, ts.ScriptTarget.Latest, true);
+function resolveBuilderImports(sourceFile: ts.SourceFile): {
+  named: Set<string>;
+  namespaces: Set<string>;
+} {
   // The builder's own name is always a binding, whether or not an import
   // declaration was found. Resolution ADDS the aliases a spelling match would
   // miss; it must never subtract the spelling itself. Dropping it made every
   // fixture without an import line invisible — the same fail-open shape as the
   // bug this function exists to fix, introduced by the fix for it.
-  const names: string[] = [BUILDER];
+  const named = new Set<string>([BUILDER]);
+  const namespaces = new Set<string>();
 
   for (const statement of sourceFile.statements) {
     if (!ts.isImportDeclaration(statement)) continue;
     const bindings = statement.importClause?.namedBindings;
     if (!bindings) continue;
 
-    // `import * as fns from "./functions"` — the builder is reached as a
-    // property, so the binding worth recording is `fns.socialBulkMutation`.
     if (ts.isNamespaceImport(bindings)) {
-      names.push(`${bindings.name.text}.${BUILDER}`);
+      namespaces.add(bindings.name.text);
       continue;
     }
 
@@ -200,11 +201,17 @@ function builderBindings(source: string): string[] {
       // `propertyName` is set only when the import is renamed, in which case it
       // holds the ORIGINAL name and `name` holds the local one.
       const imported = element.propertyName?.text ?? element.name.text;
-      if (imported === BUILDER) names.push(element.name.text);
+      if (imported === BUILDER) named.add(element.name.text);
     }
   }
 
-  return names;
+  return { named, namespaces };
+}
+
+function builderBindings(source: string): string[] {
+  const sourceFile = ts.createSourceFile("scan.ts", source, ts.ScriptTarget.Latest, true);
+  const { named, namespaces } = resolveBuilderImports(sourceFile);
+  return [...named, ...[...namespaces].map((ns) => `${ns}.${BUILDER}`)];
 }
 
 /** Matches `= <binding>(` for any name that resolves to the deferred builder. */
@@ -220,37 +227,127 @@ function builderCallPattern(source: string): RegExp {
 }
 
 /**
- * Re-exports of the builder under another name, which this guard refuses.
+ * Every use of the builder that is not a direct call defining an exported
+ * mutation.
  *
- * Binding resolution closes renamed imports, but it cannot follow the builder
- * across modules. If some module does `export const deferredMutation =
- * socialBulkMutation`, then an importer of THAT module never writes
- * `socialBulkMutation` anywhere — so `mayHoldDeferredMutation` skips it before
- * any parsing happens, and no amount of care at the call site can help.
+ * ## Why this is an invariant and not a list of forbidden spellings
  *
- * Rather than pretend to follow arbitrary indirection, the module doing the
- * re-export is reported. That puts the failure at the one place that can still
- * see what is going on.
+ * The first attempt at this enumerated alias syntaxes: it inspected variable
+ * declarations whose initializer was an identifier. That caught
+ * `export const x = socialBulkMutation` and nothing else, while claiming to
+ * close indirection generally. Two ordinary forms walked straight past it —
+ * `export const x = fns.socialBulkMutation` (a PropertyAccessExpression, not an
+ * identifier) and `export { socialBulkMutation as x } from "./functions"` (an
+ * ExportDeclaration, which has no initializer to inspect at all). A wrapper
+ * function was never even in scope of the idea.
+ *
+ * Enumerating syntaxes cannot work here, because the set is open and the guard
+ * fails OPEN on anything it has not thought of. So the question asked is
+ * inverted: every reference to the resolved binding must be one of exactly two
+ * approved things —
+ *
+ *   1. its own import (its legitimate entry point), or
+ *   2. the direct callee of a call that initializes an EXPORTED const.
+ *
+ * Anything else — alias, re-export, wrapper, property assignment, a reference
+ * passed as an argument — is indirection this guard cannot follow, so it fails
+ * closed and says so.
+ *
+ * ## Why the re-exporting module is the one that must fail
+ *
+ * Binding resolution cannot cross module boundaries here. Once a module does
+ * `export { socialBulkMutation as deferredMutation }`, an importer of THAT
+ * module contains no literal `socialBulkMutation` anywhere — so
+ * `mayHoldDeferredMutation` skips it before the parser ever runs, and no care
+ * at the call site can help. The bridge module is the last point at which the
+ * escape is still visible, which is why the bridge is what gets reported.
  */
-function builderReExports(source: string, rel: string): string[] {
+function builderEscapes(source: string, rel: string): string[] {
   const sourceFile = ts.createSourceFile("scan.ts", source, ts.ScriptTarget.Latest, true);
-  const bindings = new Set(builderBindings(source));
+  const { named, namespaces } = resolveBuilderImports(sourceFile);
   const offenders: string[] = [];
 
-  for (const statement of sourceFile.statements) {
-    if (!ts.isVariableStatement(statement)) continue;
-    for (const decl of statement.declarationList.declarations) {
-      const init = decl.initializer;
-      if (!init || !ts.isIdentifier(decl.name)) continue;
-      // An identifier alone, NOT a call: `= socialBulkMutation` rather than
-      // `= socialBulkMutation({...})`. The latter is an ordinary mutation.
-      if (!ts.isIdentifier(init) || !bindings.has(init.text)) continue;
-      offenders.push(
-        `${rel}:${decl.name.text} re-exports ${BUILDER} under another name, which this guard cannot follow`
-      );
-    }
-  }
+  /** `export const name = <builder>({ ... })` — the one approved shape. */
+  const isApprovedMutationCall = (ref: ts.Node): boolean => {
+    const call = ref.parent;
+    if (!call || !ts.isCallExpression(call) || call.expression !== ref) return false;
+    const decl = call.parent;
+    if (!decl || !ts.isVariableDeclaration(decl) || decl.initializer !== call) return false;
+    // `getCombinedModifierFlags` walks a declaration up to the statement that
+    // actually carries the modifiers, which is where `export` lives.
+    return (ts.getCombinedModifierFlags(decl) & ts.ModifierFlags.Export) !== 0;
+  };
 
+  /** The nearest named declaration, so the message points somewhere findable. */
+  const describe = (node: ts.Node): string => {
+    let current: ts.Node | undefined = node;
+    while (current) {
+      if (
+        (ts.isVariableDeclaration(current) || ts.isFunctionDeclaration(current)) &&
+        current.name &&
+        ts.isIdentifier(current.name)
+      ) {
+        return current.name.text;
+      }
+      current = current.parent;
+    }
+    const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+    return `line ${line + 1}`;
+  };
+
+  const escape = (node: ts.Node) => {
+    offenders.push(
+      `${rel}:${describe(node)} references ${BUILDER} outside a direct exported-mutation call, which this guard cannot follow`
+    );
+  };
+
+  const visit = (node: ts.Node): void => {
+    // The import IS the legitimate entry point. Nothing inside it is a use.
+    if (ts.isImportDeclaration(node)) return;
+
+    // `export { socialBulkMutation as x }`, with or without a `from` clause.
+    // Checked by name rather than by binding because the `from` form does not
+    // import anything into local scope at all.
+    if (ts.isExportDeclaration(node)) {
+      const clause = node.exportClause;
+      if (clause && ts.isNamedExports(clause)) {
+        for (const element of clause.elements) {
+          const exported = element.propertyName?.text ?? element.name.text;
+          if (exported === BUILDER || named.has(exported)) {
+            offenders.push(
+              `${rel}:${element.name.text} re-exports ${BUILDER}, which this guard cannot follow`
+            );
+          }
+        }
+      }
+      return;
+    }
+
+    // `fns.socialBulkMutation` reached through a namespace import.
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      node.name.text === BUILDER &&
+      ts.isIdentifier(node.expression) &&
+      namespaces.has(node.expression.text)
+    ) {
+      if (!isApprovedMutationCall(node)) escape(node);
+      return;
+    }
+
+    if (ts.isIdentifier(node) && named.has(node.text)) {
+      // The `name` half of some other object's property access is a different
+      // symbol that merely shares the spelling, not a reference to the binding.
+      if (node.parent && ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) {
+        return;
+      }
+      if (!isApprovedMutationCall(node)) escape(node);
+      return;
+    }
+
+    node.forEachChild(visit);
+  };
+
+  visit(sourceFile);
   return offenders;
 }
 
@@ -290,7 +387,7 @@ export function deferredMutationOffenders(source: string, rel: string): string[]
   // Indirection this guard cannot follow is reported, not tolerated. Checked
   // before the binding lookup because a module that only re-exports the builder
   // has no call sites of its own to scan.
-  const offenders: string[] = builderReExports(source, rel);
+  const offenders: string[] = builderEscapes(source, rel);
   const builderCall = builderCallPattern(source);
   const code = stripComments(source);
 
@@ -497,6 +594,59 @@ export const bad = fns.socialBulkMutation({
     expect(deferredMutationsIn(source, "x.ts")).toEqual(["x.ts:bad"]);
   });
 
+  test("a namespace-property alias of the builder fails the guard closed", () => {
+    // `fns.socialBulkMutation` is a PropertyAccessExpression, not an
+    // Identifier, so an alias check that only inspected identifier
+    // initializers never saw it. Same escape as the plain alias below, one
+    // syntax node different.
+    const source = `
+import * as fns from "./functions";
+
+export const deferredMutation = fns.socialBulkMutation;
+`;
+    expect(deferredMutationOffenders(source, "x.ts")).toEqual([
+      "x.ts:deferredMutation references socialBulkMutation outside a direct exported-mutation call, which this guard cannot follow",
+    ]);
+  });
+
+  test("an export-declaration re-export of the builder fails the guard closed", () => {
+    // An `export ... from` is an ExportDeclaration — it has no variable
+    // statement and no initializer at all, so nothing that inspects
+    // declarations can see it.
+    //
+    // This is the form that matters most, because it is the one that hides the
+    // consumer completely: a module importing `deferredMutation` from here
+    // contains no literal `socialBulkMutation`, so `mayHoldDeferredMutation`
+    // skips it before the parser ever runs. The bridge module is the last place
+    // the escape is still visible, so the bridge is what must fail.
+    const source = `export { socialBulkMutation as deferredMutation } from "./functions";\n`;
+    expect(deferredMutationOffenders(source, "x.ts")).toEqual([
+      "x.ts:deferredMutation re-exports socialBulkMutation, which this guard cannot follow",
+    ]);
+  });
+
+  test("wrapping the builder in a function fails the guard closed", () => {
+    // Not a spelling of an alias — a wrapper. Enumerating alias syntaxes would
+    // never have reached this one, which is why the invariant is now "every
+    // reference is a direct exported-mutation call" rather than a list of
+    // forbidden shapes.
+    const source = `
+import { socialBulkMutation } from "./functions";
+
+const wrap = (...args) => socialBulkMutation(...args);
+
+export const bad = wrap({
+  args: {},
+  handler: async (ctx) => {
+    await ctx.db.patch(id, {});
+  },
+});
+`;
+    expect(deferredMutationOffenders(source, "x.ts")).toEqual([
+      "x.ts:wrap references socialBulkMutation outside a direct exported-mutation call, which this guard cannot follow",
+    ]);
+  });
+
   test("re-exporting the builder under another name fails the guard closed", () => {
     // The escape the two tests above cannot close by binding resolution alone.
     // If a module re-exports the builder, an importer of *that* module never
@@ -512,7 +662,7 @@ import { socialBulkMutation } from "./functions";
 export const deferredMutation = socialBulkMutation;
 `;
     expect(deferredMutationOffenders(source, "x.ts")).toEqual([
-      "x.ts:deferredMutation re-exports socialBulkMutation under another name, which this guard cannot follow",
+      "x.ts:deferredMutation references socialBulkMutation outside a direct exported-mutation call, which this guard cannot follow",
     ]);
   });
 

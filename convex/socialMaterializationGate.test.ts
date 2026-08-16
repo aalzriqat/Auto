@@ -884,6 +884,29 @@ describe("operator surface", () => {
     expect(after?.processedCount).toBe(midRun?.processedCount);
   });
 
+  test("force does not schedule a worker for contradictory state", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrg(t, "fanout_force_ambiguous");
+    const customer = await makeCustomer(t, orgId, "Ida");
+    await seedLegacyEvents(t, orgId, customer, 1);
+
+    // Instagram is contradictory; Facebook has never started.
+    await writeState(t, orgId, "instagram", {});
+    await writeState(t, orgId, "instagram", { status: "running", completedAt: undefined });
+
+    // `force` exists to override `completed` and `running` — states where a run
+    // WOULD be redundant or disruptive. It cannot repair duplicate rows, so
+    // letting it through only schedules a worker that refuses, and reports the
+    // refusal as work started.
+    const result = await t.mutation(internal.migrations.startSocialConversationBackfills, {
+      force: true,
+      continueAutomatically: false,
+    });
+
+    // Facebook is the only platform there is anything to do for.
+    expect(result).toMatchObject({ started: 1, skipped: 1 });
+  });
+
   test("re-running the fan-out does not drop migrated orgs back to the full scan", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrg(t, "redrive_fanout");
