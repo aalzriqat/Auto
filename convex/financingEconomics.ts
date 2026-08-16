@@ -28,7 +28,6 @@ import {
   evaluateQuotationException,
   resolveAppliedLtv,
   assertGapResolutionValid,
-  validateGapShares,
   type FinanceCompanyRuleSnapshot,
 } from "./utils/financingEconomics";
 
@@ -2282,6 +2281,44 @@ export const resolveAppraisalGap = mutation({
     if (rawAppraisalGapMinor <= 0) {
       throw new ConvexError(
         "This deal has no appraisal gap, so there is nothing to settle between the customer and the dealership."
+      );
+    }
+
+    /**
+     * INITIAL resolution only. The raw gap is allocated exactly once.
+     *
+     * Every other guard here answered "may this caller act, on this deal, on
+     * these figures" — and none of them asked whether the shortfall had ALREADY
+     * been settled. So an authorised non-salesperson could resolve once, read
+     * the fresh stamp the resolution itself produced, and call this mutation
+     * again pre-handover with a different but internally valid allocation. The
+     * patch below overwrites the resolution, both shares, all three
+     * destinations, the resolver, the timestamp and the notes, then recomputes
+     * the owner-facing profit — so the second allocation silently replaces the
+     * first and the figure changes underneath everyone.
+     *
+     * The screen hides the action once resolved. That is not a boundary: this
+     * is a public mutation, and hiding a control has never been enforcement.
+     * It is the third time this workflow has leaned on the UI for a rule the
+     * server had to own.
+     *
+     * Reopening stays possible and stays deliberate — re-approval already
+     * clears the resolution back to PENDING_NEGOTIATION, which is a recorded
+     * act by someone with the authority to move the approved amount. What is
+     * refused is a silent second allocation wearing the first one's clothes.
+     *
+     * A genuine CORRECTION workflow, with a mandatory reason and a complete
+     * immutable before/after snapshot, is a separate thing and must not be
+     * smuggled through the initial-resolution command.
+     */
+
+    const alreadyResolved =
+      app.gapResolution === "CUSTOMER_ABSORBS" ||
+      app.gapResolution === "SPLIT" ||
+      app.gapResolution === "DEALER_ABSORBS";
+    if (alreadyResolved) {
+      throw new ConvexError(
+        "Who covers this difference has already been agreed and recorded on this deal. To change it, reopen the approved purchase amount — that clears the agreement and puts the deal back into negotiation."
       );
     }
 
