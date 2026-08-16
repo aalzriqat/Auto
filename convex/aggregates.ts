@@ -1,4 +1,5 @@
 import { TableAggregate } from "@convex-dev/aggregate";
+import { customMutation } from "convex-helpers/server/customFunctions";
 import { Triggers } from "convex-helpers/server/triggers";
 import type { GenericDatabaseWriter } from "convex/server";
 import { components } from "./_generated/api";
@@ -881,9 +882,9 @@ aggregateTriggers.register("facebookEvents", async (ctx, change) => {
  * plain `Triggers<DataModel>` whose callbacks needed `ctx as never`, and a cast
  * is exactly where a mandatory thing quietly becomes optional.
  */
-export type DeferredThreadCtx = MutationCtx & { deferredThreads: DeferredSocialThreads };
+type DeferredThreadCtx = MutationCtx & { deferredThreads: DeferredSocialThreads };
 
-export const deferredThreadTriggers = new Triggers<DataModel, DeferredThreadCtx>();
+const deferredThreadTriggers = new Triggers<DataModel, DeferredThreadCtx>();
 registerCountingTriggers(deferredThreadTriggers);
 
 /**
@@ -939,17 +940,23 @@ deferredThreadTriggers.register("facebookEvents", async (ctx, change) => {
 });
 
 /**
- * The only supported way to obtain the deferred writer.
+ * Obtains the deferred writer and its finalizer. **Module-private on purpose.**
  *
- * Returns the wrapped `db` and nothing else, keeping the tracker and the full
- * wrapped context captured in this closure. `socialBulkMutation` used to return
- * the whole wrapped ctx, and `customFnBuilder` merges everything under `ctx`
- * into the handler's context — so `deferredThreads` was reachable from inside a
- * handler, which could `.clear()` it and leave `finalize` synchronising an
- * empty map. An implementation detail the caller can reach is an implementation
- * detail the caller can defeat.
+ * Returns the wrapped `db` and a `finalize`, keeping the tracker and the full
+ * wrapped context captured in this closure.
+ *
+ * ⚠️ This was briefly exported, and that was the last hole. Handing a caller a
+ * deferred `db` *and* a separate `finalize` is a settlement obligation by
+ * another name: a mutation could take the `db`, write events, and simply not
+ * call `finalize` — with a tracker present, so the missing-tracker throw never
+ * fires. The claim "there is no settlement API left to forget" was therefore
+ * not yet structurally true; the API had just moved.
+ *
+ * `createSocialBulkMutation` below is the only export, and the builder it
+ * returns always owns finalisation. There is deliberately no public path that
+ * yields a deferred `db` without one.
  */
-export function prepareDeferredThreadMutation(ctx: MutationCtx): {
+function prepareDeferredThreadMutation(ctx: MutationCtx): {
   db: GenericDatabaseWriter<DataModel>;
   finalize: () => Promise<void>;
 } {
@@ -963,6 +970,54 @@ export function prepareDeferredThreadMutation(ctx: MutationCtx): {
       await syncDeferredSocialThreads(wrapped, threads);
     },
   };
+}
+
+/**
+ * The exact builder `functions.ts` passes in. A `typeof import` type rather than
+ * a braced value import, so this module never takes `mutation` from
+ * `_generated/server` — which is what `aggregateWiring.test.ts` forbids — while
+ * still preserving the builder's precise type. Widening it to
+ * `MutationBuilder<DataModel, "public">` compiled but degraded inference inside
+ * every handler built on it, turning `q` into an implicit `any` in
+ * `customers.mergeCustomers`.
+ */
+type RawMutationBuilder = typeof import("./_generated/server").mutation;
+
+/**
+ * The ONE public way to build a mutation on the deferred conversation writer.
+ *
+ * Takes the raw mutation builder rather than importing it, so this module never
+ * trips the `_generated/server` guard in `aggregateWiring.test.ts` — and so the
+ * triggers, the tracker type and the finalize factory can all stay private
+ * here.
+ *
+ * The invariant this exists to make structural: **every use of the deferred
+ * writer finalises.** Not "should finalise", not "is checked to finalise" — the
+ * builder wires `onSuccess` itself, and there is no exported path that hands a
+ * caller a deferred `db` without one. That is why the source-scanning guard
+ * this feature carried for seven rounds could be deleted rather than fixed
+ * again: there is nothing left for a caller to forget, so nothing to police.
+ *
+ * ⚠️ Do not export `deferredThreadTriggers`, `prepareDeferredThreadMutation` or
+ * `DeferredThreadCtx` to make something testable. Reaching them from outside is
+ * exactly the escape this seals, and a test-only export is still an export.
+ */
+export function createSocialBulkMutation(rawMutationBuilder: RawMutationBuilder) {
+  return customMutation(rawMutationBuilder, {
+    args: {},
+    input: async (ctx: MutationCtx) => {
+      const { db, finalize } = prepareDeferredThreadMutation(ctx);
+      return {
+        // Only the wrapped db crosses into the handler. `customFnBuilder`
+        // merges everything returned under `ctx`, so returning the wrapped
+        // context would put the tracker within a handler's reach — and a
+        // handler that can reach it can clear it.
+        ctx: { db },
+        args: {},
+        onSuccess: finalize,
+      };
+    },
+  });
 }
 
 /**

@@ -1,126 +1,85 @@
-import { convexTestWithComponents } from "../test-utils/convexTest";
-import { seedOrgWithMember, VIEWER_PERMISSIONS } from "../test-utils/seedOrg";
 import { describe, expect, test } from "vitest";
-import schema from "./schema";
-import { deferredThreadTriggers, prepareDeferredThreadMutation } from "./aggregates";
-import type { Id } from "./_generated/dataModel";
+import * as aggregates from "./aggregates";
+import * as functions from "./functions";
 
 /**
- * The boundary around the deferred conversation writer.
+ * The API boundary around the deferred conversation writer.
  *
- * ## Why this file exists instead of a build-time guard
+ * ## What this file is for, and what it replaced
  *
  * `socialBulkMutation` suppresses the per-write conversation recompute so bulk
- * loops are not O(N²), and something has to guarantee the recompute still
- * happens. That used to be the handler's job, policed by a source-scanning test
- * that failed OPEN seven times — the last time unfixably, because a static
- * check can prove the settlement calls EXIST beneath a mutation and can never
- * prove they EXECUTE.
+ * loops are not O(N²), and something must guarantee the recompute still
+ * happens. That was the handler's job for seven rounds, policed by a
+ * source-scanning test that failed OPEN every time — finally unfixably, because
+ * a static check can prove the settlement calls EXIST beneath a mutation and
+ * can never prove they EXECUTE.
  *
- * So the builder owns it now: the triggers record which threads a write
- * touched, and the customization's `onSuccess` recomputes them. That moved the
- * question from "did the author remember?" to "is the mechanism reachable and
- * mandatory?" — which is what this file answers, at runtime, on real writes.
+ * The builder owns it now. But ownership only means something if the builder is
+ * the only way in: an earlier version exported `prepareDeferredThreadMutation`,
+ * which handed out a deferred `db` *and* a separate `finalize`. That is a
+ * settlement obligation under a new name — take the `db`, write events, never
+ * call `finalize`, and the missing-tracker throw stays silent because a tracker
+ * was supplied. The claim "there is no settlement API left to forget" was not
+ * yet true; the API had just moved.
  *
- * The behavioural proof that finalisation actually runs lives in
- * `socialInboxConversations.test.ts` (emptying `onSuccess` turns eight of its
- * cases red). These are the two boundary properties that suite cannot see.
+ * So the low-level pieces are module-private and this pins that. It is a
+ * runtime check of the module's actual export surface — not a source scan, and
+ * deliberately so, because the lesson of the deleted guard is that reading text
+ * to infer behaviour is what kept failing.
+ *
+ * ## Where the rest of the proof lives
+ *
+ * - `socialInboxConversations.test.ts` proves finalisation actually runs, on
+ *   real writes: `mergeCustomers` and `setConversationVehicle` contain zero
+ *   settlement code, their conversations still come out correct and bounded,
+ *   and emptying the builder's `onSuccess` turns eight of those cases red.
+ * - `aggregateWiring.test.ts` pins that the deferred triggers record rather
+ *   than recompute.
+ *
+ * ⚠️ Two earlier tests here — that wrapping the writer without a tracker throws
+ * and rolls the write back, and that a handler cannot reach the tracker — were
+ * removed with this seal, and that is worth stating rather than quietly
+ * dropping. They required importing the very things that must not be
+ * importable. The behaviours they covered are now unreachable by construction,
+ * which is a stronger guarantee than a test that the misuse fails: the misuse
+ * cannot be written. The runtime throw remains in `recordDeferredThreads` as
+ * defence-in-depth against future edits *inside* `aggregates.ts`, where it is
+ * still reachable.
  */
-describe("deferred thread writer boundary", () => {
-  async function seed(t: ReturnType<typeof convexTestWithComponents>) {
-    const { orgId } = await seedOrgWithMember(t, {
-      clerkId: "deferred_boundary",
-      permissions: VIEWER_PERMISSIONS,
-    });
-    const customerId = await t.run((ctx) =>
-      ctx.db.insert("customers", { orgId, firstName: "Bound", lastName: "Ary" })
+describe("deferred thread writer API boundary", () => {
+  test("the low-level deferred writer is not exported", () => {
+    // Each of these hands a caller either the raw trigger set or a deferred db
+    // paired with a manual finalize. Exporting any one of them reopens the
+    // "forgot to settle" class this design exists to eliminate.
+    const sealed = ["deferredThreadTriggers", "prepareDeferredThreadMutation"];
+    const exported = Object.keys(aggregates);
+
+    for (const name of sealed) {
+      expect(exported, `${name} must stay module-private`).not.toContain(name);
+    }
+  });
+
+  test("the only exported path always owns finalization", () => {
+    // `createSocialBulkMutation` is the sanctioned entry point, and the builder
+    // it returns wires `onSuccess` itself. There is deliberately no exported
+    // function that returns a deferred `db` for a caller to drive by hand.
+    expect(Object.keys(aggregates)).toContain("createSocialBulkMutation");
+    expect(typeof aggregates.createSocialBulkMutation).toBe("function");
+
+    expect(Object.keys(functions)).toContain("socialBulkMutation");
+    expect(typeof functions.socialBulkMutation).toBe("function");
+  });
+
+  test("no export hands out a deferred db alongside a separate finalize", () => {
+    // The shape-level statement of the same rule, so a differently-named future
+    // helper with the same shape is caught too. Every exported function is
+    // called only if it is safe to do so — these are all zero-argument or
+    // builder-taking factories — so the check is on the export NAMES rather
+    // than on invoking them, which would run trigger registration.
+    const suspicious = Object.keys(aggregates).filter(
+      (name) => /^(prepare|create|make|get).*Deferred/i.test(name) && name !== "createSocialBulkMutation"
     );
-    return { orgId, customerId };
-  }
 
-  test("wrapping the deferred writer without a tracker refuses the write", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId } = await seed(t);
-
-    // The misuse: taking the deferred writer directly instead of through
-    // `prepareDeferredThreadMutation`. TypeScript rejects this — the triggers
-    // are typed `Triggers<DataModel, DeferredThreadCtx>`, so `wrapDB` demands
-    // the tracker — and the cast is here precisely to get past that and prove
-    // the RUNTIME also refuses. A compile error alone would be a guarantee only
-    // for code that is compiled with these types.
-    await expect(
-      t.runUnwrapped(async (ctx) => {
-        const wrapped = (deferredThreadTriggers.wrapDB as unknown as (c: unknown) => {
-          db: { insert: (table: string, doc: unknown) => Promise<unknown> };
-        })(ctx);
-        await wrapped.db.insert("instagramEvents", {
-          orgId,
-          externalId: "boundary_no_tracker",
-          kind: "dm",
-          senderInstagramId: "ig_boundary",
-          customerId,
-          text: "should not commit",
-        });
-      })
-    ).rejects.toThrow(/without a thread tracker/);
-
-    // ⚠️ The refusal is only worth having if it takes the write with it. The
-    // old behaviour returned quietly on a missing tracker, which committed the
-    // event and left `socialConversations` describing a state that no longer
-    // existed — silent staleness being the exact defect the whole mechanism
-    // exists to prevent. Triggers run inside the mutation's transaction, so the
-    // throw rolls the insert back.
-    const events = await t.run((ctx) => ctx.db.query("instagramEvents").collect());
-    expect(events).toHaveLength(0);
-  });
-
-  test("the tracker is not reachable from a handler's context", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-
-    // `customFnBuilder` merges everything returned under `ctx` into the
-    // handler's context. Returning the whole wrapped ctx therefore handed
-    // `deferredThreads` to the handler, which could `.clear()` it and leave
-    // finalisation synchronising an empty map — the obligation defeated from
-    // inside the very builder that owns it.
-    //
-    // The factory now returns the wrapped `db` and nothing else, keeping the
-    // tracker captured in its closure. Asserted on the factory's own surface
-    // because that is what determines the handler's context.
-    const surface = await t.run(async (ctx) => {
-      const prepared = prepareDeferredThreadMutation(ctx as never);
-      return Object.keys(prepared).sort();
-    });
-
-    expect(surface).toEqual(["db", "finalize"]);
-    expect(surface).not.toContain("deferredThreads");
-  });
-
-  test("the factory's writer records threads and finalize recomputes them", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId } = await seed(t);
-
-    // The positive case, so the two refusals above cannot pass by the mechanism
-    // being broken outright. One event in, one materialised conversation out —
-    // and only after `finalize`, which is the deferral this builder exists for.
-    const beforeFinalize = await t.runUnwrapped(async (ctx) => {
-      const { db, finalize } = prepareDeferredThreadMutation(ctx as never);
-      await db.insert("instagramEvents", {
-        orgId,
-        externalId: "boundary_ok",
-        kind: "dm",
-        senderInstagramId: "ig_boundary",
-        customerId: customerId as Id<"customers">,
-        text: "hello",
-      });
-      const midRun = await ctx.db.query("socialConversations").collect();
-      await finalize();
-      return midRun.length;
-    });
-
-    expect(beforeFinalize).toBe(0);
-
-    const conversations = await t.run((ctx) => ctx.db.query("socialConversations").collect());
-    expect(conversations).toHaveLength(1);
-    expect(conversations[0].eventCount).toBe(1);
+    expect(suspicious).toEqual([]);
   });
 });

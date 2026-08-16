@@ -3,7 +3,7 @@ import {
   mutation as rawMutation,
   internalMutation as rawInternalMutation,
 } from "./_generated/server";
-import { aggregateTriggers, prepareDeferredThreadMutation } from "./aggregates";
+import { aggregateTriggers, createSocialBulkMutation } from "./aggregates";
 
 /**
  * Mutation builders whose `ctx.db` keeps the aggregate component in step with
@@ -74,15 +74,4 @@ export const internalMutation = customMutation(
  * while its conversation summary goes stale is the exact failure this mechanism
  * exists to prevent, so a missing tracker refuses the write instead.
  */
-export const socialBulkMutation = customMutation(rawMutation, {
-  args: {},
-  input: async (ctx) => {
-    const { db, finalize } = prepareDeferredThreadMutation(ctx);
-    return {
-      // Only the wrapped db. The tracker stays private to the factory.
-      ctx: { db },
-      args: {},
-      onSuccess: finalize,
-    };
-  },
-});
+export const socialBulkMutation = createSocialBulkMutation(rawMutation);
