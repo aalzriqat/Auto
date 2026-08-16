@@ -11,11 +11,6 @@ import { validateInput } from "./utils/validation";
 import { CreateCustomerSchema, UpdateCustomerSchema } from "./validations/customers";
 import { normalizePhone, namesSimilar } from "./utils/dedup";
 import { CUSTOMER_REFERENCING_TABLES } from "./utils/mergeHelpers";
-import {
-  collectSocialThread,
-  newDeferredSocialThreads,
-  syncDeferredSocialThreads,
-} from "./aggregates";
 
 const CUSTOMER_SELECTOR_LIMIT = 50;
 const RECENT_CUSTOMER_SEARCH_WINDOW = 200;
@@ -906,32 +901,25 @@ export const mergeCustomers = socialBulkMutation({
     // reaches Convex's read ceiling and rolls the entire merge back. See
     // `deferredThreadTriggers`.
     //
-    // Both sides are collected: the loser's thread (which loses every event and
-    // is deleted) and the survivor's (which gains them), because `customerId`
-    // is part of the conversation key.
-    const touchedThreads = newDeferredSocialThreads();
-
+    // Both sides are recorded by the builder: the loser's thread (which loses
+    // every event and is deleted) and the survivor's (which gains them),
+    // because `customerId` is part of the conversation key and the triggers see
+    // the document before and after each patch.
+    //
+    // ⚠️ There is deliberately no collect/sync bookkeeping here any more.
+    // `socialBulkMutation` records touched threads from the writes themselves
+    // and recomputes them once the handler returns, so this loop cannot forget
+    // to settle and cannot settle the wrong set. A throw during that
+    // finalisation rolls back the patches below with it, keeping the merge
+    // all-or-nothing.
     const reassignedCounts: Record<string, number> = {};
     for (const ref of CUSTOMER_REFERENCING_TABLES) {
       const rows = await ref.find(ctx, args.orgId, args.loserId);
       for (const row of rows) {
-        if (ref.table === "instagramEvents" || ref.table === "facebookEvents") {
-          const platform = ref.table === "instagramEvents" ? "instagram" : "facebook";
-          const event = row as Doc<"instagramEvents"> | Doc<"facebookEvents">;
-          collectSocialThread(touchedThreads, platform, event);
-          collectSocialThread(touchedThreads, platform, {
-            ...event,
-            customerId: args.survivorId,
-          } as Doc<"instagramEvents"> | Doc<"facebookEvents">);
-        }
         await ctx.db.patch(row._id, { customerId: args.survivorId });
       }
       reassignedCounts[ref.table] = rows.length;
     }
-
-    // Owed by every mutation built on `socialBulkMutation`. A throw here rolls
-    // back the patches above with it, so the merge stays all-or-nothing.
-    await syncDeferredSocialThreads(ctx, touchedThreads);
 
     await ctx.db.patch(loser._id, {
       isDeleted: true,

@@ -10,13 +10,10 @@ import { suggestVehiclesFromText } from "./utils/vehicleTextMatch";
 import { recordLeadActivity, describeLeadFieldValue } from "./utils/leadActivity";
 import { requireFeature } from "./subscriptions";
 import {
-  collectSocialThread,
   facebookEventsByOrg,
   instagramEventsByOrg,
-  newDeferredSocialThreads,
   socialContactsByOrg,
   socialConversationKey,
-  syncDeferredSocialThreads,
 } from "./aggregates";
 import {
   describeMaterializationStatus,
@@ -803,18 +800,15 @@ export const setConversationVehicle = socialBulkMutation({
     // for the customer across both platforms — and `vehicleId` is a
     // materialised field, so a per-write recompute would re-read each thread
     // once per event. See `deferredThreadTriggers`.
-    const touchedThreads = newDeferredSocialThreads();
-    for (const e of igToUpdate) collectSocialThread(touchedThreads, "instagram", e);
-    for (const e of fbToUpdate) collectSocialThread(touchedThreads, "facebook", e);
-
+    //
+    // ⚠️ No collect/sync bookkeeping here any more. `socialBulkMutation`
+    // records the touched threads from the writes themselves and recomputes
+    // them once, after the handler returns. `vehicleId` is not part of the
+    // conversation key, so before and after are the same thread either way.
     await Promise.all([
       ...igToUpdate.map((e) => ctx.db.patch(e._id, { vehicleId: args.vehicleId })),
       ...fbToUpdate.map((e) => ctx.db.patch(e._id, { vehicleId: args.vehicleId })),
     ]);
-
-    // `vehicleId` does not appear in the conversation key, so the threads are
-    // the same before and after — collected from the pre-patch rows above.
-    await syncDeferredSocialThreads(ctx, touchedThreads);
 
     const allLeadIds = new Set(
       [...igToUpdate, ...fbToUpdate].filter((e) => e.leadId).map((e) => e.leadId as Id<"leads">)

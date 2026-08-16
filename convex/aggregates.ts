@@ -843,13 +843,29 @@ aggregateTriggers.register("facebookEvents", async (ctx, change) => {
  * merge either happened completely or it did not happen at all. A throw in the
  * final sync rolls back every patch with it.
  *
- * ## The invariant
+ * ## The invariant, and why it is no longer the caller's to keep
  *
- * A mutation built on this writer MUST call `syncDeferredSocialThreads` with
- * every thread it touched before it returns, or it commits event rows whose
- * conversation summary is stale — silently, with nothing failing at write time.
- * `convex/deferredThreadSync.test.ts` fails the build on any module that takes
- * this builder without also calling the sync.
+ * A mutation built on this writer must recompute every thread it touched before
+ * it returns, or it commits event rows whose conversation summary is stale —
+ * silently, with nothing failing at write time.
+ *
+ * That obligation used to sit with the handler: collect each touched thread,
+ * then call `syncDeferredSocialThreads` before returning. A build-time guard
+ * tried to enforce it by reading the source, and failed open **six times** in
+ * the same shape — a comment opener inside a string, a definition at offset 0,
+ * a chunk running into its neighbour, an aliased import, explicit type
+ * arguments, a destructured local shadow. Each fix was correct and the next
+ * hole was a different spelling.
+ *
+ * The seventh finding is the one that ended the approach: a static check can
+ * prove the two calls EXIST somewhere beneath the mutation, and cannot prove
+ * they EXECUTE. A handler that puts them inside a closure it never invokes
+ * satisfies every syntactic rule while settling nothing.
+ *
+ * So the obligation moved into the builder. The triggers below record which
+ * threads a write touched, and `socialBulkMutation` flushes them from the
+ * customization's `onSuccess` after the handler returns. There is no settlement
+ * call for a caller to forget, and therefore nothing for a guard to police.
  *
  * The remaining cost is linear in the number of events repointed. A large
  * enough customer could still approach the transaction write limit on volume
@@ -858,6 +874,48 @@ aggregateTriggers.register("facebookEvents", async (ctx, change) => {
  */
 export const deferredThreadTriggers = new Triggers<DataModel>();
 registerCountingTriggers(deferredThreadTriggers);
+
+/**
+ * Records the threads an event write touched, instead of recomputing them.
+ *
+ * Both sides of the write are recorded for the same reason the eager trigger
+ * syncs both: an update can MOVE an event between threads, and recording only
+ * the new one would leave the old thread counting an event it no longer holds.
+ *
+ * ⚠️ The tracker is read off `ctx`, which is what makes this per-invocation
+ * rather than global. `Triggers.wrapDB` closes over the ctx it is handed and
+ * passes it to every trigger as `{ ...ctx, db, innerDb }`, so a tracker placed
+ * on the ctx *before* wrapping arrives here untouched. A module-level "current
+ * tracker" would have been the obvious alternative and is exactly the shape
+ * that breaks when two mutations interleave.
+ *
+ * Absence of a tracker is deliberately a no-op rather than a throw: the
+ * counting triggers registered above are shared, and a future writer that wraps
+ * this DB without the customization should lose the recompute, not the write.
+ * `socialBulkMutation` is the only builder that uses these triggers, and it
+ * always supplies one.
+ */
+function recordDeferredThreads(
+  ctx: { deferredThreads?: DeferredSocialThreads },
+  platform: "instagram" | "facebook",
+  change: {
+    oldDoc: Doc<"instagramEvents"> | Doc<"facebookEvents"> | null;
+    newDoc: Doc<"instagramEvents"> | Doc<"facebookEvents"> | null;
+  }
+): void {
+  const threads = ctx.deferredThreads;
+  if (!threads) return;
+  collectSocialThread(threads, platform, change.oldDoc);
+  collectSocialThread(threads, platform, change.newDoc);
+}
+
+deferredThreadTriggers.register("instagramEvents", async (ctx, change) => {
+  recordDeferredThreads(ctx as never, "instagram", change);
+});
+
+deferredThreadTriggers.register("facebookEvents", async (ctx, change) => {
+  recordDeferredThreads(ctx as never, "facebook", change);
+});
 
 /**
  * Threads touched by a bulk operation, keyed canonically so 500 events from one

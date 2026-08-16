@@ -77,10 +77,37 @@ test("a trigger is registered for every table an aggregate counts", () => {
     expect(aggregates).toContain(`registerCountingTriggers(${writer})`);
   }
 
-  // The conversation recompute is the one trigger deliberately absent from the
-  // deferred writer. Pinned so that "suppressed on purpose" cannot quietly
+  // The conversation RECOMPUTE is the one behaviour deliberately absent from
+  // the deferred writer. Pinned so that "suppressed on purpose" cannot quietly
   // become "suppressed everywhere" — the normal webhook path must keep it.
   expect(aggregates).toContain('aggregateTriggers.register("instagramEvents"');
   expect(aggregates).toContain('aggregateTriggers.register("facebookEvents"');
-  expect(aggregates).not.toContain("deferredThreadTriggers.register(");
+
+  // ⚠️ This used to pin `not.toContain("deferredThreadTriggers.register(")`,
+  // which encoded the OLD design: the deferred writer registered nothing at all
+  // for these tables and the handler owed the settlement by hand. That
+  // obligation is now the builder's, so the deferred writer DOES register — to
+  // RECORD the touched threads, never to recompute them.
+  //
+  // The distinction is the whole point of the builder, so it is pinned as such:
+  // both event tables are recorded, and the deferred path must not call the
+  // recompute helper directly.
+  //
+  // ⚠️ Bounded to each registration's OWN callback. A first version sliced from
+  // the first registration to end-of-file and swallowed
+  // `syncDeferredSocialThreads`, whose body legitimately calls the recompute —
+  // the assertion failed on the helper it was never about. Same lesson as the
+  // guard this replaced: scope the text you are asserting over, or you assert
+  // over something else.
+  const deferredCallbacks = Array.from(
+    aggregates.matchAll(
+      /deferredThreadTriggers\.register\("(instagramEvents|facebookEvents)",[\s\S]*?\n\}\);/g,
+    ),
+  ).map((m) => m[0]);
+
+  expect(deferredCallbacks).toHaveLength(2);
+  for (const callback of deferredCallbacks) {
+    expect(callback).toContain("recordDeferredThreads(");
+    expect(callback).not.toContain("syncSocialConversation(");
+  }
 });

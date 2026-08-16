@@ -3,7 +3,12 @@ import {
   mutation as rawMutation,
   internalMutation as rawInternalMutation,
 } from "./_generated/server";
-import { aggregateTriggers, deferredThreadTriggers } from "./aggregates";
+import {
+  aggregateTriggers,
+  deferredThreadTriggers,
+  newDeferredSocialThreads,
+  syncDeferredSocialThreads,
+} from "./aggregates";
 
 /**
  * Mutation builders whose `ctx.db` keeps the aggregate component in step with
@@ -32,18 +37,57 @@ export const internalMutation = customMutation(
  *
  * Everything `mutation` maintains is still maintained here *except* the
  * per-write conversation recompute, which is what makes those loops O(N²) — see
- * `deferredThreadTriggers`. The trade is that the handler owes the recompute
- * itself: collect each touched thread with `collectSocialThread` and call
- * `syncDeferredSocialThreads` before returning.
+ * `deferredThreadTriggers`. Measured on the merge path: 400 recomputes for 200
+ * repointed events before, 2 after.
  *
- * Deliberately narrow rather than a `{ skipSync: true }` argument on the normal
- * builder. A flag is one keystroke for a future caller to add to a mutation
- * that then silently commits stale conversation rows; a separate builder makes
- * the obligation visible at the definition, and
- * `convex/deferredThreadSync.test.ts` fails the build if a module takes this
- * builder without calling the sync.
+ * ## The builder owns the settlement. Callers cannot forget it.
+ *
+ * This used to hand the obligation to the handler — collect each touched
+ * thread, call `syncDeferredSocialThreads` before returning — and enforce it
+ * with a build-time guard that read the source. That guard failed OPEN six
+ * times in the same shape, each time on a different spelling, and the seventh
+ * finding ended the approach on principle rather than on detail: a static check
+ * can prove the calls EXIST beneath a mutation and cannot prove they EXECUTE.
+ * A handler that hides them in a closure it never invokes satisfies every
+ * syntactic rule while settling nothing.
+ *
+ * So the obligation is now discharged here:
+ *
+ *   1. `input` creates a per-invocation tracker and puts it on the ctx BEFORE
+ *      wrapping the DB, so the deferred triggers can record into it.
+ *   2. Those triggers record the threads each write touched, old side and new,
+ *      and skip the recompute — which is the whole point of this builder.
+ *   3. `onSuccess` runs after the handler returns and recomputes each distinct
+ *      thread exactly once.
+ *
+ * There is no settlement API left for a caller to forget, so there is nothing
+ * for a guard to police. That is why `deferredThreadSync.test.ts` is gone
+ * rather than hardened again.
+ *
+ * ⚠️ The tracker lives in this closure, NOT at module scope. `onSuccess`
+ * receives the original ctx rather than the wrapped one, so it closes over
+ * `wrapped` and `threads` directly. A module-level "current tracker" would be
+ * the obvious shortcut and is exactly what breaks when two mutations interleave.
+ *
+ * ⚠️ FAIL-CLOSED. `customFnBuilder` awaits `onSuccess` inside the mutation's own
+ * transaction, so a throw during finalisation rolls back every event write with
+ * it. The alternative — committing the writes and losing the recompute — is the
+ * silent staleness this whole mechanism exists to prevent.
  */
-export const socialBulkMutation = customMutation(
-  rawMutation,
-  customCtx(deferredThreadTriggers.wrapDB)
-);
+export const socialBulkMutation = customMutation(rawMutation, {
+  args: {},
+  input: async (ctx) => {
+    const threads = newDeferredSocialThreads();
+    // Tracker first, THEN wrap: `Triggers.wrapDB` closes over the ctx it is
+    // given and hands it to every trigger, so anything added afterwards would
+    // be invisible to them.
+    const wrapped = deferredThreadTriggers.wrapDB({ ...ctx, deferredThreads: threads });
+    return {
+      ctx: wrapped,
+      args: {},
+      onSuccess: async () => {
+        await syncDeferredSocialThreads(wrapped, threads);
+      },
+    };
+  },
+});

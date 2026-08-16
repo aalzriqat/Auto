@@ -775,6 +775,30 @@ describe.each(["legacy", "materialized"] as const)(
    * elapsed time would be flaky and would still pass on a small fixture, so
    * these count recomputes structurally.
    */
+  /**
+   * ⚠️ THESE TESTS ARE THE SETTLEMENT GUARANTEE. `deferredThreadSync.test.ts`
+   * used to be, and it was deleted rather than hardened a seventh time.
+   *
+   * That guard read the source and asserted a mutation built on
+   * `socialBulkMutation` also called `collectSocialThread` and
+   * `syncDeferredSocialThreads`. It failed OPEN six times on six different
+   * spellings, and the finding that ended it was not a spelling at all: a
+   * static check can prove the calls EXIST beneath a mutation and cannot prove
+   * they EXECUTE. A handler hiding them in a closure it never invokes satisfied
+   * every rule while settling nothing.
+   *
+   * So the obligation moved into the builder — the deferred triggers record the
+   * threads each write touched, and `onSuccess` recomputes them after the
+   * handler returns. There is no settlement call left to forget, which is why
+   * there is no longer anything for a build-time guard to police.
+   *
+   * What replaces it is below, and it is stronger because it is behavioural:
+   * `customers.mergeCustomers` and `socialInbox.setConversationVehicle` now
+   * contain ZERO settlement code, and these tests still assert that the
+   * conversations they touch end up correct and recomputed a bounded number of
+   * times. Verified by mutation: emptying the builder's `onSuccess` turns eight
+   * of them red across both reader sources.
+   */
   describe("bulk operations defer the thread recompute", () => {
     test("merging 200 events in one thread recomputes it a bounded number of times", async () => {
       const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
