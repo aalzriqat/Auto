@@ -478,18 +478,27 @@ describe("Approvals Outcomes", () => {
  * ⚠️ Which of these are regression tests, and which are not — established by
  * reverting each fix and re-running, not assumed:
  *
- *  - FAIL without their fix (genuine regression tests):
+ *  - FAIL without their fix (genuine regression tests). Verified by rebuilding
+ *    the pre-fix handler — unscoped `by_salesperson` plus a JS cutoff — and
+ *    re-running: exactly these three fail.
  *      "returns only the queried org's rows"        — the leak itself
  *      "keeps APPROVED rows"                        — the index-shape trap
+ *      "preserves the previous implementation's ordering" — it expects
+ *          [1000, 1100]; unscoped, Org B's rows join it as [1000, 1100, 9000,
+ *          9100], so it fails on content as well as on order
  *      "does not disclose a vehicle ... enrichment" — reverting the org check
  *          on enrichment yields '2022 Honda Model' instead of 'Unknown Vehicle'
  *  - Pass with and without: the salesperson, 7-day-edge, server-clock window,
- *    tied-createdAt, countPending and ordering cases. They pin real properties
- *    but prove nothing about the tenancy defect — `countPending` was already
- *    org-scoped through `by_org`, and the ordering case is an equivalence pin
- *    against the previous implementation rather than a defect guard.
- *    tied-createdAt really asserts a Convex engine guarantee, and is kept only
- *    because a future pagination-based rewrite could break it.
+ *    tied-createdAt and countPending cases. They pin real properties but prove
+ *    nothing about the tenancy defect — `countPending` was already org-scoped
+ *    through `by_org`, and tied-createdAt really asserts a Convex engine
+ *    guarantee, kept only because a pagination-based rewrite could break it.
+ *
+ * ⚠️ The ordering case sat in the wrong bucket until an independent review
+ * caught it. It was classified when it asserted ascending `createdAt`; the
+ * rewrite to insertion order changed what it detects, and the classification
+ * was not re-derived. Re-derive this table when a test body changes, not only
+ * when a test is added.
  *
  * That is all 9 tests in this block accounted for.
  */
