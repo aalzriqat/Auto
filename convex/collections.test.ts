@@ -354,10 +354,23 @@ describe("Collections", () => {
         ? await ctx.db.get(payment.canonicalPaymentId)
         : null;
       expect(canonicalPayment?.status).toBe("VOIDED");
-      const allocation = payment?.paymentAllocationId
-        ? await ctx.db.get(payment.paymentAllocationId)
-        : null;
-      expect(allocation?.status).toBe("REVERSED");
+
+      // SCRUM-56 R4 — the allocation is reached through the immutable anchor,
+      // not through `payment.paymentAllocationId`. That pointer is now cleared
+      // on return precisely because it would otherwise name a REVERSED
+      // allocation as if it were live; asserting through it encoded
+      // pointer-as-identity, which the applied-movement contract rejects. This
+      // is the stronger assertion: every allocation this payment ever made is
+      // reversed, not merely whichever one the pointer happened to name.
+      expect(payment?.paymentAllocationId).toBeUndefined();
+      const allocations = payment?.canonicalPaymentId
+        ? await ctx.db
+            .query("paymentAllocations")
+            .withIndex("by_payment", (q) => q.eq("paymentId", payment.canonicalPaymentId!))
+            .collect()
+        : [];
+      expect(allocations.length).toBeGreaterThan(0);
+      expect(allocations.every((allocation) => allocation.status === "REVERSED")).toBe(true);
     });
   });
 

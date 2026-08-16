@@ -142,6 +142,7 @@ import type * as test_drives from "../test_drives.js";
 import type * as transactions from "../transactions.js";
 import type * as users from "../users.js";
 import type * as utils_auditLog from "../utils/auditLog.js";
+import type * as utils_collectionMovement from "../utils/collectionMovement.js";
 import type * as utils_commission from "../utils/commission.js";
 import type * as utils_commissionSourceLedger from "../utils/commissionSourceLedger.js";
 import type * as utils_dedup from "../utils/dedup.js";
@@ -351,6 +352,7 @@ declare const fullApi: ApiFromModules<{
   transactions: typeof transactions;
   users: typeof users;
   "utils/auditLog": typeof utils_auditLog;
+  "utils/collectionMovement": typeof utils_collectionMovement;
   "utils/commission": typeof utils_commission;
   "utils/commissionSourceLedger": typeof utils_commissionSourceLedger;
   "utils/dedup": typeof utils_dedup;

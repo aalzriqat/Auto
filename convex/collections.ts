@@ -16,6 +16,10 @@ import { getOpenPeriodForDate } from "./accountingPeriods";
 import { enqueuePendingReversal, cancelPendingPostByKey } from "./accountingOutbox";
 import { toMinorUnits, fromMinorUnits, scaleForCurrency } from "./utils/money";
 import {
+  activeAllocationsForPayment,
+  saleInvoiceForLegacyRow,
+} from "./utils/collectionMovement";
+import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
   ensureReceivableDocument,
@@ -322,22 +326,6 @@ async function ensureCanonicalReceivableForLegacy(
 
   await ctx.db.patch(receivable._id, { canonicalReceivableDocumentId });
   return canonicalReceivableDocumentId;
-}
-
-/**
- * The sale invoice a hand-keyed row stands for, or null when the row is money in
- * its own right. Read-only and creates nothing, so it is safe to ask on any path.
- */
-export async function saleInvoiceForLegacyRow(
-  ctx: MutationCtx,
-  receivable: Doc<"receivables">
-): Promise<Id<"receivableDocuments"> | null> {
-  if (!receivable.saleId) return null;
-  const sale = await ctx.db.get(receivable.saleId);
-  if (sale && sale.orgId === receivable.orgId && sale.canonicalReceivableDocumentId) {
-    return sale.canonicalReceivableDocumentId;
-  }
-  return null;
 }
 
 /**
@@ -1761,6 +1749,10 @@ export const returnClearedCheque = mutation({
           .filter((q) => q.eq(q.field("status"), "POSTED"))
           .first();
 
+        const currency = await getOrgCurrency(ctx, args.orgId);
+        const chequeReceivable = cheque.receivableId ? await ctx.db.get(cheque.receivableId) : null;
+        let stillAppliedMinor = 0;
+
         // Reverse the GL impact of the original clearing.
         if (clearedPayment) {
           const clearingEvent = await ctx.db
@@ -1805,31 +1797,56 @@ export const returnClearedCheque = mutation({
             await cancelPendingPostByKey(ctx, args.orgId, `collection_payment_${clearedPayment._id}`);
           }
 
-          if (clearedPayment.paymentAllocationId) {
-            await reverseAllocation(ctx, {
-              orgId: args.orgId,
-              allocationId: clearedPayment.paymentAllocationId,
-              actorId: user._id,
+          // R3 + R4. This path was wrong twice, and fixing either alone still
+          // leaves it wrong: it selected by `clearedPayment.paymentAllocationId`
+          // — the moving pointer — and reopened `cheque.amount`, the frozen face
+          // value. Selection now goes through the immutable anchor, and the
+          // amount reopened is whatever of this cheque is STILL applied, which a
+          // prior partial refund may already have reduced.
+          if (clearedPayment.canonicalPaymentId && chequeReceivable) {
+            const chequeTargetDocumentId = await canonicalMonetaryTargetForLegacyRow(
+              ctx,
+              chequeReceivable,
+              user._id,
+              currency
+            );
+            const stillActive = await activeAllocationsForPayment(ctx, {
+              canonicalPaymentId: clearedPayment.canonicalPaymentId,
+              targetDocumentId: chequeTargetDocumentId,
             });
-          }
-          if (clearedPayment.canonicalPaymentId) {
+            for (const allocation of stillActive) {
+              stillAppliedMinor += allocation.amountMinor;
+              await reverseAllocation(ctx, {
+                orgId: args.orgId,
+                allocationId: allocation._id,
+                actorId: user._id,
+              });
+            }
             await ctx.db.patch(clearedPayment.canonicalPaymentId, { status: "VOIDED" });
           }
 
-          // Mark the payment as voided
-          await ctx.db.patch(clearedPayment._id, { status: "VOIDED" });
+          // The pointer named an allocation that is now reversed; leaving it set
+          // would hand the next reader a REVERSED row as if it were live.
+          await ctx.db.patch(clearedPayment._id, { status: "VOIDED", paymentAllocationId: undefined });
         }
 
-        // Reopen the linked legacy receivable
-        if (cheque.receivableId) {
-          const receivable = await ctx.db.get(cheque.receivableId);
-          if (receivable) {
-            await ctx.db.patch(receivable._id, {
-              outstandingAmount: (receivable.outstandingAmount ?? 0) + cheque.amount,
-              status: "OVERDUE",
-              updatedAt: now,
-            });
-          }
+        // R3 + R8 — the bank/cash reversal above concerns the whole returned
+        // cheque; the DEBT reopening is bounded by what was still applied. When
+        // no cleared payment or allocation is found, `stillAppliedMinor` is 0
+        // and nothing reopens: there is no evidence this cheque ever paid the
+        // debt down, so re-adding its face value would invent a balance. That
+        // is deliberate, and it is the case the old `+ cheque.amount` got wrong
+        // in the other direction.
+        if (chequeReceivable) {
+          const reopened = roundMoney(
+            (chequeReceivable.outstandingAmount ?? 0) + fromMinorUnits(stillAppliedMinor, currency),
+            currency
+          );
+          await ctx.db.patch(chequeReceivable._id, {
+            outstandingAmount: reopened,
+            status: reopened > 0 ? "OVERDUE" : chequeReceivable.status,
+            updatedAt: now,
+          });
         }
 
         // Post bank fee as expense if provided. Convert minor→major units with

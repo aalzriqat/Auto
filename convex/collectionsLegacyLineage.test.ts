@@ -40,9 +40,11 @@ import { Id } from "./_generated/dataModel";
  *   stale after the first partial refund. `paymentAllocations` itself carries
  *   no back-link to the row. That is the underspecification.
  *
- * PRODUCTION EXPOSURE: ZERO. `npx convex data receivables --prod` returns "no
- * documents in this table", so no legacy rows exist in production and none of
- * these scenarios has a live instance. No backfill is authorised or needed.
+ * PRODUCTION PREVALENCE, MEASURED BY LANE 3 ON 2026-08-17: zero legacy
+ * receivable rows -- `npx convex data receivables --prod` reported "There are no
+ * documents in this table". That is a MEASUREMENT WITH A SHELF LIFE, not a
+ * standing fact. It justifies "no backfill" for this round only, and must be
+ * re-run before it is ever cited again -- especially to justify a deploy.
  */
 
 vi.mock("./rateLimit", () => ({
@@ -177,6 +179,17 @@ describe("SCRUM-56 lineage contract — fixtures for the redesign", () => {
     expect(await appliedMinorForRow(t, rowB)).toBe(11000 * 1000);
   });
 
+  /**
+   * ⚠️ F2 IS A NON-REGRESSION PIN, NOT A FAILING-FIRST PROOF.
+   *
+   * It passes against the unfixed code as well as the fixed code, and it cannot
+   * do otherwise: under a newest-first defect, refunding the row that paid LAST
+   * accidentally selects that row's own allocation, so the wrong implementation
+   * produces the right answer here by luck.
+   *
+   * F1 and F7 are the failing-first pair. Do not count this test as evidence
+   * that lineage works — count it as evidence that it has not broken.
+   */
   test("F2 payment order must not decide whose money gets reversed", async () => {
     const { t, orgId, customerId, vehicleId, userId, asUser, asApprover } = await setup();
     const saleId = await completeSale(asUser, orgId, customerId, vehicleId);
@@ -295,6 +308,18 @@ describe("SCRUM-56 lineage contract — fixtures for the redesign", () => {
 
   // ---- cases the evidence branch did not cover ---------------------------
 
+  /**
+   * ⚠️ F7 IS A NON-REGRESSION PIN, NOT A FAILING-FIRST PROOF — same reason as F2.
+   *
+   * F1 refunds the row that paid FIRST; F7 refunds the row that paid LAST. Under
+   * newest-first, F1 fails and F7 passes; under oldest-first the reverse. Neither
+   * ordering heuristic can satisfy both, which is what makes the PAIR meaningful
+   * and either one alone misleading.
+   *
+   * Counting the nine F-fixtures as nine failing-first proofs over-trusts this
+   * suite: six failed first (F1, F3, F5, F6, F8, F9), and F2 and F4 and F7 are
+   * pins. F4 pins `returnClearedCheque`'s already-correct lineage selection.
+   */
   test("F7 the symmetric case: refunding B reverses B's money, not A's", async () => {
     const { t, orgId, customerId, vehicleId, userId, asUser, asApprover } = await setup();
     const saleId = await completeSale(asUser, orgId, customerId, vehicleId);
