@@ -49,6 +49,7 @@ import {
 import { allocatedDepositForVehicle } from "./utils/depositAllocation";
 import { planDepositSettlementApplication } from "./utils/depositSettlementPlan";
 import { checkPostingAllowed } from "./accountingPeriods";
+import { hasVerifiedFinancingApplication } from "./utils/financingProvenance";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -2489,7 +2490,7 @@ export const dealCockpit = query({
       // application-keyed one. Passed rather than hardcoded so the two can never
       // drift, and so `financedDirectWithoutApproval` below and `saleEconomics`
       // reach their verdict from the same fact rather than two copies of it.
-      hasFinancingApplication: sale.applicationId !== undefined,
+      hasFinancingApplication: await hasVerifiedFinancingApplication(ctx, sale),
       externallyFinanced:
         sale.financingType === "FINANCED" || sale.financingType === "LEASE",
     });

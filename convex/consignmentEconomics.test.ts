@@ -21,7 +21,12 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
-import { saleEconomics } from "./utils/vehicleOwnership";
+import {
+  saleEconomics,
+  recordedConsignedMargin,
+  recordedSupplierEntitlement,
+  recordedSupplierGrossReceipt,
+} from "./utils/vehicleOwnership";
 import type { Id } from "./_generated/dataModel";
 
 vi.mock("./rateLimit", () => ({
@@ -863,5 +868,283 @@ describe("SCRUM-40 O-3 — the frozen consigned fields belong to consigned sales
     // dealer-owned assertion above discriminating rather than trivially true.
     expect(sale?.consignedMarginMinor).toBe(MARGIN * 1_000);
     expect(sale?.consignedSupplierEntitlementMinor).toBe(ENTITLEMENT * 1_000);
+  });
+});
+
+/* ----------------------------------------------------- Codex round 3: CX-B/C/D */
+
+/**
+ * Three HIGH defects the closing Codex seat found at `ecd0ac141`, all INTRODUCED
+ * by this PR. Each test below failed at `ecd0ac141` before the fix.
+ *
+ * The shape they share: this PR taught `saleEconomics` to demand evidence, and
+ * then accepted three kinds of evidence that prove nothing — a receipt from the
+ * wrong route, an id that references nothing, and money in a denomination the
+ * repository cannot scale.
+ */
+describe("CX-B — a receipt from the wrong route raises no ceiling", () => {
+  const THROUGH_PRICE = 20_000;
+
+  test("a stale receipt on a THROUGH_DEALERSHIP row cannot publish a supplier share above the gross", () => {
+    // The row the finding describes: gross the dealership actually collected is
+    // 20,000, and a stale 50,000 receipt sits on a route whose writer never
+    // records one. Without the route check, `entitlementCeiling` returns 50,000
+    // and a 40,000 entitlement becomes "valid" — publishing a supplier share
+    // twice the size of the whole sale.
+    const e = saleEconomics({
+      salePrice: THROUGH_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: 15_000,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      recordedSupplierEntitlement: 40_000,
+      recordedSupplierGrossReceipt: 50_000,
+    });
+
+    // The supplier cannot be owed more than the entire gross on this route.
+    expect(e.supplierSettlement).not.toBe(40_000);
+    expect(e.recognizedRevenue).not.toBe(THROUGH_PRICE - 40_000);
+    if (e.supplierSettlement !== null) {
+      expect(e.supplierSettlement).toBeLessThanOrEqual(THROUGH_PRICE);
+    }
+  });
+
+  test("the DIRECT route still admits the receipt as evidence, so the fix is not just 'ignore receipts'", () => {
+    // The positive control. O-1 exists because the sale price is the WRONG
+    // ceiling here: the financier's approved purchase amount legitimately
+    // exceeds it, and withholding that entitlement was the original defect.
+    const e = saleEconomics({
+      salePrice: 12_500,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: 9_500,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      externallyFinanced: true,
+      recordedSupplierEntitlement: 13_500,
+      recordedSupplierGrossReceipt: 14_000,
+      recordedMargin: 500,
+      hasFinancingApplication: true,
+    });
+
+    expect(e.supplierSettlement).toBe(13_500);
+  });
+
+  test("the route decides which evidence is admissible, not merely the label", () => {
+    // Same row twice, one field different. If the ceiling ignored the route,
+    // both would publish the same entitlement and this would be vacuous.
+    const args = {
+      salePrice: THROUGH_PRICE,
+      vehicle: { sourceType: "SOURCED" } as const,
+      capitalizedCost: 15_000,
+      recordedSupplierEntitlement: 30_000,
+      recordedSupplierGrossReceipt: 35_000,
+    };
+    const through = saleEconomics({ ...args, supplierSettlementRoute: "THROUGH_DEALERSHIP" });
+    const direct = saleEconomics({
+      ...args,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      externallyFinanced: false,
+    });
+
+    expect(through.supplierSettlement).not.toBe(30_000);
+    expect(direct.supplierSettlement).toBe(30_000);
+  });
+});
+
+describe("CX-D — money in a denomination the repository cannot scale is not money", () => {
+  /**
+   * `fromMinorUnits` delegates to `scaleForCurrency`, which returns **2 for
+   * anything unrecognised**. A JOD row stores minor units at scale 3, so a
+   * receipt of 3,000,000 fils reads as 30,000 instead of 3,000 — a tenfold
+   * overstatement that then raises the entitlement ceiling as well.
+   *
+   * This is the same defect class as the #227 CRITICAL, and `denominationOf` is
+   * the fail-closed authority the repository already established for it.
+   *
+   * Table-driven over every value the owner named. Only canonical JOD is money.
+   */
+  const CASES: Array<{ currency: string; why: string; valid: boolean }> = [
+    { currency: "JOD", why: "canonical and supported", valid: true },
+    { currency: "JD", why: "the SYMBOL, not the ISO code — scale-2 guess", valid: false },
+    { currency: "XYZ", why: "well-formed but not a currency this app knows", valid: false },
+    { currency: "jod", why: "lower case — refused by the writers, so refused here", valid: false },
+    { currency: "", why: "PRESENT and meaningless, which ?? never replaces", valid: false },
+  ];
+
+  test.each(CASES)("$currency ($why) -> valid=$valid", ({ currency, valid }) => {
+    const sale = {
+      consignedMarginMinor: 3_000_000,
+      consignedSupplierEntitlementMinor: 15_000_000,
+      consignedSupplierGrossReceiptMinor: 18_000_000,
+      consignedMarginCurrency: currency,
+    } as unknown as Parameters<typeof recordedSupplierGrossReceipt>[0];
+
+    const receipt = recordedSupplierGrossReceipt(sale);
+    const margin = recordedConsignedMargin(sale);
+    const entitlement = recordedSupplierEntitlement(sale);
+
+    if (valid) {
+      // Scale 3: 18,000,000 fils IS 18,000 JOD.
+      expect(receipt).toBe(18_000);
+      expect(margin).toBe(3_000);
+      expect(entitlement).toBe(15_000);
+      return;
+    }
+
+    // Withheld, and specifically NOT the scale-2 guess. Asserting `undefined`
+    // alone would pass if the reader returned the inflated figure by accident
+    // of some other guard, so the guessed value is named explicitly.
+    expect(receipt).toBeUndefined();
+    expect(receipt).not.toBe(180_000);
+    // All three readers share one denomination, so one bad code cannot leave
+    // some fields converted and others withheld — a mixed basis is worse than
+    // either answer alone.
+    expect(margin).toBeUndefined();
+    expect(margin).not.toBe(30_000);
+    expect(entitlement).toBeUndefined();
+    expect(entitlement).not.toBe(150_000);
+  });
+
+  test("an unscalable receipt cannot raise the entitlement ceiling either", () => {
+    // The compounding half of the finding: the inflated receipt does not just
+    // misreport itself, it makes an over-large entitlement look eligible.
+    const sale = {
+      consignedSupplierEntitlementMinor: 40_000_000,
+      consignedSupplierGrossReceiptMinor: 50_000_000,
+      consignedMarginCurrency: "JD",
+    } as unknown as Parameters<typeof recordedSupplierGrossReceipt>[0];
+
+    const e = saleEconomics({
+      salePrice: 20_000,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: 15_000,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      externallyFinanced: false,
+      recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
+      recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
+    });
+
+    expect(e.supplierSettlement).not.toBe(400_000);
+    expect(e.supplierSettlement).not.toBe(40_000);
+  });
+});
+
+describe("CX-C — an id that references nothing is not provenance", () => {
+  /**
+   * `hasFinancingApplication` was `sale.applicationId !== undefined`. Convex ids
+   * carry no referential integrity, so a deleted, cross-tenant or unrelated id
+   * read as "verified financing" and released the frozen margin — the exact
+   * hardening SCRUM-41 exists to provide.
+   *
+   * Every row below is financed DIRECT and carries a valid frozen receipt, so
+   * the receipt half of the rule is satisfied in all of them and the ONLY
+   * variable is the application. That is what makes these tests about
+   * provenance rather than about the receipt.
+   */
+  async function financedDirectWithReceipt(s: Seeded, vin: string) {
+    const { saleId, vehicleId } = await sellConsigned(s, vin);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, {
+        financingType: "FINANCED",
+        supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+        consignedSupplierGrossReceiptMinor: SALE_PRICE * 1_000,
+      });
+    });
+    return { saleId, vehicleId };
+  }
+
+  async function makeApplication(
+    s: Seeded,
+    vehicleId: Id<"vehicles">,
+    opts: { orgId?: Id<"organizations">; finalizedSaleId?: Id<"sales"> } = {}
+  ) {
+    return await s.t.run(async (ctx) => {
+      const orgId = opts.orgId ?? s.orgId;
+      const quoteId = await ctx.db.insert("quotes", {
+        orgId, customerId: s.customerId, vehicleId, vehiclePrice: SALE_PRICE,
+        downPayment: 0, termMonths: 12, status: "ACCEPTED" as const,
+        createdBy: s.userId, createdAt: Date.now(),
+      });
+      return await ctx.db.insert("financeApplications", {
+        orgId, quoteId, customerId: s.customerId, vehicleId,
+        salespersonId: s.userId, status: "APPROVED" as const,
+        createdAt: Date.now(), updatedAt: Date.now(),
+        ...(opts.finalizedSaleId ? { finalizedSaleId: opts.finalizedSaleId } : {}),
+      });
+    });
+  }
+
+  const profitOf = async (s: Seeded) =>
+    await s.asUser.query(api.reports.getSalesAndProfitReport, { orgId: s.orgId, ...range() });
+
+  test("a DANGLING applicationId does not release the frozen margin", async () => {
+    const s = await seedDealer("cxcDangling");
+    const { saleId, vehicleId } = await financedDirectWithReceipt(s, "VINCXC1");
+    const appId = await makeApplication(s, vehicleId, { finalizedSaleId: saleId });
+    // The application is deleted, exactly as `/admin` or a partial org delete
+    // leaves it. The id on the sale survives and still "looks" present.
+    await s.t.run(async (ctx) => await ctx.db.delete(appId));
+    await s.t.run(async (ctx) => await ctx.db.patch(saleId, { applicationId: appId }));
+
+    const report = await profitOf(s);
+
+    expect(report.totalProfit).toBe(0);
+    expect(report.unknownMarginSaleCount).toBe(1);
+  });
+
+  test("a CROSS-TENANT applicationId does not release the frozen margin", async () => {
+    const s = await seedDealer("cxcForeign");
+    const { saleId, vehicleId } = await financedDirectWithReceipt(s, "VINCXC2");
+    const otherOrgId = await s.t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Another dealership", createdAt: Date.now() })
+    );
+    const foreignApp = await makeApplication(s, vehicleId, {
+      orgId: otherOrgId as Id<"organizations">,
+      finalizedSaleId: saleId,
+    });
+    await s.t.run(async (ctx) => await ctx.db.patch(saleId, { applicationId: foreignApp }));
+
+    const report = await profitOf(s);
+
+    expect(report.totalProfit).toBe(0);
+    expect(report.unknownMarginSaleCount).toBe(1);
+  });
+
+  test("an UNRELATED application — one finalized on a different sale — does not release it", async () => {
+    const s = await seedDealer("cxcUnrelated");
+    const { saleId, vehicleId } = await financedDirectWithReceipt(s, "VINCXC3");
+    const other = await sellConsigned(s, "VINCXC3B");
+    const unrelated = await makeApplication(s, vehicleId, { finalizedSaleId: other.saleId });
+    await s.t.run(async (ctx) => await ctx.db.patch(saleId, { applicationId: unrelated }));
+
+    const report = await profitOf(s);
+
+    expect(report.unknownMarginSaleCount).toBe(1);
+  });
+
+  test("a real, same-org, linked application DOES release it — the fix is not 'withhold everything'", async () => {
+    const s = await seedDealer("cxcValid");
+    const { saleId, vehicleId } = await financedDirectWithReceipt(s, "VINCXC4");
+    const appId = await makeApplication(s, vehicleId, { finalizedSaleId: saleId });
+    await s.t.run(async (ctx) => await ctx.db.patch(saleId, { applicationId: appId }));
+
+    const report = await profitOf(s);
+
+    expect(report.unknownMarginSaleCount).toBe(0);
+    expect(report.totalProfit).toBe(MARGIN);
+  });
+
+  test("a STALE back-pointer does not make a valid application read as absent", async () => {
+    // The other direction of the finding. `finalizedSaleId` is a convenience
+    // pointer; a same-org application referenced by the sale is real financing
+    // whether or not that pointer was ever filled in. Withholding here would
+    // hide a fully derivable margin.
+    const s = await seedDealer("cxcStalePtr");
+    const { saleId, vehicleId } = await financedDirectWithReceipt(s, "VINCXC5");
+    const appId = await makeApplication(s, vehicleId); // no finalizedSaleId
+    await s.t.run(async (ctx) => await ctx.db.patch(saleId, { applicationId: appId }));
+
+    const report = await profitOf(s);
+
+    expect(report.unknownMarginSaleCount).toBe(0);
+    expect(report.totalProfit).toBe(MARGIN);
   });
 });

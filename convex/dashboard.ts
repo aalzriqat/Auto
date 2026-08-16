@@ -5,6 +5,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { isSystemOwnerRole, PERMISSIONS, type Permission } from "./utils/permissions";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { fromMinorUnits } from "./utils/money";
+import { verifiedFinancingApplicationSaleIds } from "./utils/financingProvenance";
 import {
   recordedConsignedMargin,
   recordedSupplierEntitlement,
@@ -519,7 +520,13 @@ export const stats = query({
      * would double the query's cost for a value it is already holding.
      */
     const economicsGiven =
-      (basisOf: (sale: Doc<"sales">) => WindowVehicleBasis) =>
+      (
+        basisOf: (sale: Doc<"sales">) => WindowVehicleBasis,
+        // Resolved once per window rather than per sale: this closure runs
+        // inside the window loops, and a `ctx.db.get` there would be an N+1
+        // read on a live-subscribed dashboard query.
+        verifiedFinancing: Set<Id<"sales">>
+      ) =>
       (sale: Doc<"sales">) => {
         const basis = basisOf(sale);
         return saleEconomics({
@@ -535,7 +542,7 @@ export const stats = query({
           recordedMargin: recordedConsignedMargin(sale),
           recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
           recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
-          hasFinancingApplication: sale.applicationId !== undefined,
+          hasFinancingApplication: verifiedFinancing.has(sale._id),
           externallyFinanced:
             sale.financingType === "FINANCED" || sale.financingType === "LEASE",
         });
@@ -563,7 +570,8 @@ export const stats = query({
       return { known: false };
     };
 
-    const currentEconomics = economicsGiven(currentBasis);
+    const currentVerifiedFinancing = await verifiedFinancingApplicationSaleIds(ctx, activeSales);
+    const currentEconomics = economicsGiven(currentBasis, currentVerifiedFinancing);
 
     /**
      * Turnover for one sale, and the ONE place this window excludes.
@@ -995,7 +1003,8 @@ export const stats = query({
       return { known: false };
     };
 
-    const previousEconomics = economicsGiven(previousBasis);
+    const previousVerifiedFinancing = await verifiedFinancingApplicationSaleIds(ctx, previousSales);
+    const previousEconomics = economicsGiven(previousBasis, previousVerifiedFinancing);
 
     const previousRecognizedRevenueOfSale = (sale: Doc<"sales">): number => {
       if (!canViewProfitMetrics) return sale.salePrice;

@@ -1,7 +1,10 @@
 import { v } from "convex/values";
 import { Doc } from "../_generated/dataModel";
 import { grossTransactionValueForSale } from "./grossTransactionValue";
-import { fromMinorUnits } from "./money";
+// `denominationOf`, NOT `fromMinorUnits`/`scaleForCurrency`: the latter guess a
+// scale of 2 for any unrecognised code, and this module reads MONEY. See
+// `recordedConsignedAmount`.
+import { denominationOf } from "./money";
 
 /**
  * Who owns a vehicle, and what the dealership is when it sells one.
@@ -333,11 +336,46 @@ export interface SaleEconomics {
  * where "what does an absent margin mean on THIS route" already lives.
  */
 export function recordedConsignedMargin(sale: Doc<"sales">): number | undefined {
-  const minor = sale.consignedMarginMinor;
-  const currency = sale.consignedMarginCurrency;
-  if (minor === undefined || !currency) return undefined;
+  return recordedConsignedAmount(sale.consignedMarginMinor, sale.consignedMarginCurrency);
+}
+
+/**
+ * One reader for all three frozen consigned amounts, because they are one basis.
+ *
+ * ⚠️ CX-D. Each of the three used to call `fromMinorUnits(minor, currency)`, and
+ * `fromMinorUnits` delegates to `scaleForCurrency`, which returns **2 for
+ * anything it does not recognise**. A JOD row stores minor units at scale 3, so
+ * a stored `"JD"` — the SYMBOL this app puts in `orgSettings.currencySymbol`,
+ * one keystroke from the ISO code — read 18,000,000 fils as 180,000 instead of
+ * 18,000. Tenfold, silent, and on the receipt it also raised the entitlement
+ * ceiling, so the inflated figure was published rather than withheld.
+ *
+ * `denominationOf` is the repository's fail-closed answer to exactly this, and
+ * it is the same authority the WRITERS assert with `assertSupportedDenomination`
+ * — so a reader can no longer publish money in a denomination a mutation would
+ * have refused. It rejects the unsupported (`"XYZ"`), the non-canonical
+ * (`"jod"`, which the writers refuse) and the present-but-meaningless (`""`,
+ * which `??` never replaces and a truthiness check waves through).
+ *
+ * SHARED deliberately, not applied to the new reader alone. The three amounts
+ * are compared against each other — margin, entitlement and receipt come off one
+ * `consignedMarginCurrency` — so vouching one while the others still guess would
+ * produce a MIXED basis inside a single computation, which is worse than either
+ * answer on its own.
+ *
+ * This is the same defect class as the #227 opening-balance CRITICAL, reached
+ * independently in the same week. Two lanes reaching for the guessing helper is
+ * a missing constraint, not two mistakes.
+ */
+function recordedConsignedAmount(
+  minor: number | undefined,
+  currency: string | undefined
+): number | undefined {
+  if (minor === undefined) return undefined;
+  const denomination = denominationOf(currency);
+  if (denomination === null) return undefined;
   if (!Number.isFinite(minor) || minor < 0) return undefined;
-  return fromMinorUnits(minor, currency);
+  return minor / Math.pow(10, denomination.scale);
 }
 
 /**
@@ -351,11 +389,10 @@ export function recordedConsignedMargin(sale: Doc<"sales">): number | undefined 
  * halves of one deal on two different bases.
  */
 export function recordedSupplierEntitlement(sale: Doc<"sales">): number | undefined {
-  const minor = sale.consignedSupplierEntitlementMinor;
-  const currency = sale.consignedMarginCurrency;
-  if (minor === undefined || !currency) return undefined;
-  if (!Number.isFinite(minor) || minor < 0) return undefined;
-  return fromMinorUnits(minor, currency);
+  return recordedConsignedAmount(
+    sale.consignedSupplierEntitlementMinor,
+    sale.consignedMarginCurrency
+  );
 }
 
 /**
@@ -372,11 +409,10 @@ export function recordedSupplierEntitlement(sale: Doc<"sales">): number | undefi
  * route, where the writer always records it.
  */
 export function recordedSupplierGrossReceipt(sale: Doc<"sales">): number | undefined {
-  const minor = sale.consignedSupplierGrossReceiptMinor;
-  const currency = sale.consignedMarginCurrency;
-  if (minor === undefined || !currency) return undefined;
-  if (!Number.isFinite(minor) || minor < 0) return undefined;
-  return fromMinorUnits(minor, currency);
+  return recordedConsignedAmount(
+    sale.consignedSupplierGrossReceiptMinor,
+    sale.consignedMarginCurrency
+  );
 }
 
 /**
@@ -397,11 +433,28 @@ export function recordedSupplierGrossReceipt(sale: Doc<"sales">): number | undef
  * price remains the ceiling wherever no receipt was recorded — every
  * THROUGH_DEALERSHIP row, where the receipt is deliberately not written and the
  * gross the dealership collected is the sale price.
+ *
+ * ⚠️ CX-B. The paragraph above states the invariant — the receipt is "deliberately
+ * not written" on THROUGH_DEALERSHIP — and the code did not ENFORCE it. A design
+ * that assumes a field is absent must refuse it when it is present, because the
+ * `/admin` raw editor and a route changed after completion both produce exactly
+ * that row. Unenforced, a stale 50,000 receipt on a car that sold for 20,000 made
+ * a 40,000 entitlement eligible and published a supplier share exceeding the
+ * ENTIRE gross the dealership collected.
+ *
+ * So the route decides which evidence is ADMISSIBLE, not merely how the answer is
+ * labelled. On THROUGH_DEALERSHIP the gross the dealership collected is the sale
+ * price and nothing on the row can raise it. The receipt remains the right
+ * ceiling on DIRECT, where it is the money that actually reached him — that is
+ * O-1 and it is unchanged.
  */
 function entitlementCeiling(args: {
   salePrice: number;
   recordedSupplierGrossReceipt?: number;
+  /** DIRECT_TO_SUPPLIER — the only route on which a receipt is admissible. */
+  settlesDirect: boolean;
 }): number {
+  if (!args.settlesDirect) return args.salePrice;
   return verifiedSupplierReceiptFor(args.recordedSupplierGrossReceipt) ?? args.salePrice;
 }
 
@@ -612,7 +665,9 @@ export function saleEconomics(args: {
   // an answer that already assumed it would be circular.
   const validFrozenEntitlement = validFrozenEntitlementFor(
     args.recordedSupplierEntitlement,
-    entitlementCeiling(args)
+    // The route is derived above from this sale's own field, so the ceiling and
+    // the classifier below cannot reach it from two different premises.
+    entitlementCeiling({ ...args, settlesDirect })
   );
   // Through the shared classifier, which is the same rule this function has
   // always applied — including the case where a supplier entitlement survives a
