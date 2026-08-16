@@ -573,6 +573,14 @@ describe("SCRUM-100: listMyPendingApprovals tenancy and bounds", () => {
 
     const rows = await asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA });
 
+    // ⚠️ Positive assertion FIRST. `every`, `some` and `not.toContain` below are
+    // all satisfied by an empty array, so a query that returned nothing at all
+    // would pass every isolation check without proving Org A's own approvals
+    // are still reachable. Pin what must be present before pinning what must
+    // not be.
+    const profitsPresent = rows.map((r: any) => r.requestedProfit).sort((a: number, b: number) => a - b);
+    expect(profitsPresent).toEqual([1000, 1100]); // Org A's PENDING + APPROVED
+
     // The leak: every returned row must belong to the org that was asked for.
     expect(rows.every((r: any) => r.orgId === orgA)).toBe(true);
     expect(rows.some((r: any) => r.orgId === orgB)).toBe(false);
