@@ -27,6 +27,7 @@ import {
   economicsStamp,
   evaluateQuotationException,
   resolveAppliedLtv,
+  assertGapResolutionValid,
   validateGapShares,
   type FinanceCompanyRuleSnapshot,
 } from "./utils/financingEconomics";
@@ -2294,10 +2295,12 @@ export const resolveAppraisalGap = mutation({
     // Every violation, not the first: an operator correcting one arithmetic
     // error at a time across a five-field allocation is how the second one gets
     // saved. The mutation still refuses outright.
-    const violations = validateGapShares(rawAppraisalGapMinor, settlement);
-    if (violations.length > 0) {
-      throw new ConvexError(violations.map((violation) => violation.message).join(" "));
-    }
+    // The SHARED assertion, not a local re-implementation of it. This inlined
+    // `validateGapShares` + join-and-throw, which is byte-for-byte what
+    // `assertGapResolutionValid` already does — a second source of truth for
+    // the identity that decides whether an allocation reconciles, and this
+    // dialog has already produced three defects from exactly that shape.
+    assertGapResolutionValid(rawAppraisalGapMinor, settlement);
 
     const resolution = classifyGapResolution(
       rawAppraisalGapMinor,
@@ -2332,7 +2335,19 @@ export const resolveAppraisalGap = mutation({
     // The canonical recomputation, not a local sum. It is what folds the
     // customer's dealership-bound share into the owner's profit figure.
     const updated = await ctx.db.get(args.applicationId);
-    if (updated) await recomputeAndPatchEconomics(ctx, updated);
+    if (!updated) {
+      // Fails CLOSED. The settlement patch has already landed by this point, so
+      // skipping the recompute would leave the row carrying an agreed
+      // allocation whose derived economics were never updated — the owner's
+      // profit figure silently disagreeing with the split it is derived from.
+      // Unreachable in practice, since the row was just patched in this same
+      // transaction; a throw rolls the whole mutation back, which is the only
+      // safe reading of "the row I just wrote is gone".
+      throw new ConvexError(
+        "This deal could not be re-read after recording the split, so its figures were not updated. Nothing was saved — try again."
+      );
+    }
+    await recomputeAndPatchEconomics(ctx, updated);
 
     // History, because the row only ever holds the CURRENT agreement. Who moved
     // a shortfall onto the customer, and when, is exactly what gets asked months

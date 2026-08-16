@@ -4522,6 +4522,12 @@ describe("handover seals the approved amount, and the amount that was verified",
       // Atomicity. A half-resolved row is the failure mode the owner ruled out:
       // a share recorded against a gap it does not reconcile to.
       const app = await readApp(seed, applicationId);
+      // Asserted PRESENT first. `readApp` is nullable, and `app?.field` with
+      // `toBeUndefined()` is satisfied by a MISSING ROW — so without this line
+      // the three assertions below would pass just as happily if the
+      // application had vanished entirely, which is the opposite of the
+      // atomicity they exist to prove.
+      expect(app).not.toBeNull();
       expect(app?.gapResolution).toBe("PENDING_NEGOTIATION");
       expect(app?.customerGapShareMinor).toBeUndefined();
       expect(app?.gapResolvedAt).toBeUndefined();
@@ -4641,6 +4647,12 @@ describe("handover seals the approved amount, and the amount that was verified",
       });
 
       const app = await readApp(seed, applicationId);
+      // Asserted PRESENT first. `readApp` is nullable, and `app?.field` with
+      // `toBeUndefined()` is satisfied by a MISSING ROW — so without this line
+      // the three assertions below would pass just as happily if the
+      // application had vanished entirely, which is the opposite of the
+      // atomicity they exist to prove.
+      expect(app).not.toBeNull();
       expect(app?.gapResolution).toBe("PENDING_NEGOTIATION");
       expect(app?.customerGapShareMinor).toBeUndefined();
       expect(app?.gapResolvedAt).toBeUndefined();
