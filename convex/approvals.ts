@@ -42,16 +42,26 @@ export const requestProfitApproval = mutation({
       throw new ConvexError("Vehicle not found in this organization.");
     }
 
-    // Check if there is an existing pending request for this vehicle and user
+    // Check if there is an existing pending request for this vehicle and user.
+    //
+    // ⚠️ This is a dedup lookup whose result is PATCHED, so an unscoped read
+    // here is a cross-tenant WRITE rather than a leak. `by_vehicle` keys on the
+    // global vehicle id; narrowing by salesperson and status left the request's
+    // org unconstrained, so another dealership's PENDING row for this same
+    // vehicle id satisfied it and received this org's requested profit and
+    // wizard snapshot — while this org got no approval record at all. Both
+    // tenants end up wrong, and the org whose data was overwritten has no way
+    // to see it happened.
+    //
+    // Reproduced before fixing: Org B's row came back reading 555 instead of
+    // 4242. Note the verification above proves the VEHICLE is in this org and
+    // is no help — the row being written is the request, not the vehicle.
     const existing = await ctx.db
       .query("profitApprovalRequests")
-      .withIndex("by_vehicle", (q) => q.eq("vehicleId", args.vehicleId))
-      .filter((q) =>
-        q.and(
-          q.eq(q.field("salespersonId"), user._id),
-          q.eq(q.field("status"), "PENDING")
-        )
+      .withIndex("by_org_vehicle_salesperson", (q) =>
+        q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId).eq("salespersonId", user._id)
       )
+      .filter((q) => q.eq(q.field("status"), "PENDING"))
       .first();
 
     const actorName = await getActorName(ctx);
@@ -111,10 +121,19 @@ export const checkPendingApproval = query({
     }
 
     // We only care about PENDING or APPROVED requests for this salesperson and vehicle.
+    //
+    // `orgId` leads the index for the same reason it does in the queries below,
+    // and the check above is not a substitute: proving the VEHICLE belongs to
+    // this org says nothing about the org of a REQUEST that references it. The
+    // old read used `by_vehicle` — a global vehicle key — and narrowed only by
+    // salesperson, so a request another dealership had written against this
+    // vehicle id came back with its margins and wizard snapshot attached, and
+    // won outright whenever it was the more recent one.
     const requests = await ctx.db
       .query("profitApprovalRequests")
-      .withIndex("by_vehicle", (q) => q.eq("vehicleId", args.vehicleId))
-      .filter((q) => q.eq(q.field("salespersonId"), user._id))
+      .withIndex("by_org_vehicle_salesperson", (q) =>
+        q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId).eq("salespersonId", user._id)
+      )
       .collect();
 
     if (requests.length === 0) return null;
@@ -151,8 +170,16 @@ export const respondToApproval = mutation({
       notes: args.notes,
     });
 
+    // The request is proven in-org above; the vehicle it references is not.
+    // Without this an approval carrying a foreign vehicle id would put that
+    // car's year/make/model into a notification — the same unchecked
+    // dereference the list queries now refuse, on the one path that emails the
+    // result rather than merely rendering it.
     const vehicle = await ctx.db.get(request.vehicleId);
-    const saleLabel = vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "the requested sale";
+    const vehicleInOrg = vehicle && vehicle.orgId === args.orgId ? vehicle : null;
+    const saleLabel = vehicleInOrg
+      ? `${vehicleInOrg.year} ${vehicleInOrg.make} ${vehicleInOrg.model}`
+      : "the requested sale";
     await notifyUser(
       ctx,
       args.orgId,
@@ -199,26 +226,39 @@ export const listPendingApprovals = query({
       .collect();
 
     // Map to include salesperson details and vehicle details
-    return await Promise.all(
+    const enriched = await Promise.all(
       requests.map(async (req) => {
         const salesperson = await ctx.db.get(req.salespersonId);
         const vehicle = await ctx.db.get(req.vehicleId);
-        // Same fail-closed enrichment rule as `listMyPendingApprovals`. This
-        // one additionally returns the VIN, so an unchecked foreign reference
-        // discloses more, not less. `salespersonId` is deliberately not given
-        // the same treatment: proving it in-org needs a membership lookup per
-        // row, and a name is not comparable to a VIN and margin figures.
-        const vehicleInOrg = vehicle && vehicle.orgId === args.orgId ? vehicle : null;
+        // Same fail-closed rule as `listMyPendingApprovals`, and this one has
+        // more to lose: it returns the VIN as well, so an unchecked foreign
+        // reference discloses strictly more. A malformed row is dropped rather
+        // than relabelled, because relabelling still spread the foreign
+        // `vehicleId` through `...req`.
+        //
+        // ⚠️ `salespersonId` is still NOT proven in-org. Doing so needs a
+        // membership lookup per row, and unlike a VIN or a margin the exposure
+        // is a display name. It is tracked on SCRUM-102 rather than left
+        // unsaid — and note the independent review raised a sharper version of
+        // it than "latent": a salesperson offboarded from this org but still
+        // employed elsewhere keeps a live global user row, so the name shown
+        // here can drift to their CURRENT employer's profile.
+        if (!vehicle || vehicle.orgId !== args.orgId) {
+          console.error(
+            `[approvals] dropping approval ${req._id}: vehicle ${req.vehicleId} is not in org ${args.orgId}`
+          );
+          return null;
+        }
         return {
           ...req,
           salespersonName: salesperson?.name || salesperson?.email || "Unknown",
-          vehicleMakeModel: vehicleInOrg
-            ? `${vehicleInOrg.make} ${vehicleInOrg.model} ${vehicleInOrg.year}`
-            : "Unknown Vehicle",
-          vehicleVin: vehicleInOrg?.vin || "N/A",
+          vehicleMakeModel: `${vehicle.make} ${vehicle.model} ${vehicle.year}`,
+          vehicleVin: vehicle.vin,
         };
       })
     );
+
+    return enriched.filter((r): r is NonNullable<typeof r> => r !== null);
   },
 });
 
@@ -297,20 +337,38 @@ export const listMyPendingApprovals = query({
       .filter(r => r.status !== "REJECTED")
       .sort((a, b) => a._creationTime - b._creationTime);
 
-    return await Promise.all(recent.map(async (r) => {
+    const enriched = await Promise.all(recent.map(async (r) => {
       const vehicle = await ctx.db.get(r.vehicleId);
       // ⚠️ The approval row is proven in-org by the index range above; the
       // vehicle it points at is not. `requestProfitApproval` refuses a foreign
       // vehicle, so a malformed reference should not exist — but "should not
       // exist" is an argument about reachability, and this is a confidentiality
-      // read. It fails closed instead, exactly as a missing vehicle does.
-      const vehicleInOrg = vehicle && vehicle.orgId === args.orgId ? vehicle : null;
+      // read.
+      //
+      // The row is DROPPED rather than described as "Unknown Vehicle", and the
+      // difference is not cosmetic. An earlier version masked only the summary
+      // while `...r` still spread the foreign `vehicleId` to the client, and
+      // `sales/page.tsx` hands exactly that id to
+      // `buildInitialDraftFromApproval` when a salesperson resumes. Masking the
+      // label while leaving the identifier live hid the evidence instead of
+      // closing the hole.
+      //
+      // Dropping loses nothing usable: there is no legitimate way to resume a
+      // deal on a car this dealership does not have, so the row is unactionable
+      // by definition. It is logged server-side because silently discarding a
+      // row is only acceptable if someone can find out it happened.
+      if (!vehicle || vehicle.orgId !== args.orgId) {
+        console.error(
+          `[approvals] dropping approval ${r._id}: vehicle ${r.vehicleId} is not in org ${args.orgId}`
+        );
+        return null;
+      }
       return {
         ...r,
-        vehicleSummary: vehicleInOrg
-          ? `${vehicleInOrg.year} ${vehicleInOrg.make} ${vehicleInOrg.model}`
-          : "Unknown Vehicle",
+        vehicleSummary: `${vehicle.year} ${vehicle.make} ${vehicle.model}`,
       };
     }));
+
+    return enriched.filter((r): r is NonNullable<typeof r> => r !== null);
   },
 });

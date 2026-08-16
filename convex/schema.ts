@@ -4601,7 +4601,14 @@ export default defineSchema({
     // PENDING *or* APPROVED — because APPROVED rows are the resume-after-
     // approval flow. Pinning the range to PENDING would silently drop them,
     // and encoding the enum here breaks silently if a fourth status is added.
-    .index("by_org_salesperson_createdAt", ["orgId", "salespersonId", "createdAt"]),
+    .index("by_org_salesperson_createdAt", ["orgId", "salespersonId", "createdAt"])
+    // `checkPendingApproval` asks "does this salesperson already have a request
+    // for this car". It read `by_vehicle` — keyed on the GLOBAL vehicle id —
+    // and narrowed by salesperson with a post-read filter, so nothing in the
+    // read constrained the REQUEST's org. Verifying that the VEHICLE is in-org
+    // proves nothing about a REQUEST that references it, which is the same
+    // distinction that produced this ticket one function away.
+    .index("by_org_vehicle_salesperson", ["orgId", "vehicleId", "salespersonId"]),
 
   feedback: defineTable({
     orgId: v.id("organizations"),

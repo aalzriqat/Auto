@@ -486,8 +486,10 @@ describe("Approvals Outcomes", () => {
  *      "preserves the previous implementation's ordering" — it expects
  *          [1000, 1100]; unscoped, Org B's rows join it as [1000, 1100, 9000,
  *          9100], so it fails on content as well as on order
- *      "does not disclose a vehicle ... enrichment" — reverting the org check
- *          on enrichment yields '2022 Honda Model' instead of 'Unknown Vehicle'
+ *      "does not disclose a vehicle ... enrichment" — REWRITTEN, see below
+ *      "checkPendingApproval never returns another org's request" — the same
+ *          leak in a sibling function; pre-fix it returns Org B's row, so
+ *          `result.orgId` is Org B
  *  - Pass with and without: the salesperson, 7-day-edge, server-clock window,
  *    tied-createdAt and countPending cases. They pin real properties but prove
  *    nothing about the tenancy defect — `countPending` was already org-scoped
@@ -500,7 +502,22 @@ describe("Approvals Outcomes", () => {
  * was not re-derived. Re-derive this table when a test body changes, not only
  * when a test is added.
  *
- * That is all 9 tests in this block accounted for.
+ * ⚠️ Re-derived again, for exactly that reason. An independent cross-family
+ * review found that the enrichment guard was cosmetic: it masked
+ * `vehicleSummary` while `...r` still spread the foreign `vehicleId`, and the
+ * sales page feeds that id straight into `buildInitialDraftFromApproval` on
+ * resume. The test asserted the masked LABEL and therefore certified a hole it
+ * was written to close. Its body now asserts the row is dropped entirely and
+ * that no returned row carries the foreign id — a different detection, so it
+ * gets a fresh classification rather than an inherited one.
+ *
+ * A second sibling, `checkPendingApproval`, carried the identical defect and
+ * was missed by the original sibling scan: that scan searched for uses of
+ * `by_salesperson`, and this one reads `by_vehicle`. Scan for the SHAPE — a
+ * caller-supplied id resolved on a global index — not for the index name.
+ *
+ * That is all 10 tests in this block accounted for (9 before, plus the
+ * `checkPendingApproval` sibling case).
  */
 describe("SCRUM-100: listMyPendingApprovals tenancy and bounds", () => {
   const DAY = 24 * 60 * 60 * 1000;
@@ -840,14 +857,169 @@ describe("SCRUM-100: listMyPendingApprovals tenancy and bounds", () => {
     });
 
     const asUser = t.withIdentity({ subject: "multi_org_sales" });
+    const foreignVehicleId = await t.run(async (ctx: any) => {
+      const v = await ctx.db
+        .query("vehicles")
+        .filter((q: any) => q.eq(q.field("orgId"), orgB))
+        .first();
+      return v._id;
+    });
     const rows = await asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA });
-    const malformed = rows.find((r: any) => r.requestedProfit === 3131);
 
-    // The row itself is legitimately in Org A, so it is still returned...
-    expect(malformed).toBeDefined();
-    // ...but Org B's vehicle must not be described.
-    expect(malformed!.vehicleSummary).toBe("Unknown Vehicle");
-    expect(malformed!.vehicleSummary).not.toContain("Honda");
+    // ⚠️ CONTRACT CHANGED, and the previous version of this test is why it
+    // needed to. It asserted the malformed row was still RETURNED with
+    // `vehicleSummary: "Unknown Vehicle"`, and called that failing closed. It
+    // was not: the handler spread the whole row, so the foreign `vehicleId`
+    // went to the client untouched and only its LABEL was hidden. The sales
+    // page feeds exactly that id to `buildInitialDraftFromApproval` when a
+    // salesperson resumes, so the guard masked the description while leaving
+    // the actionable part live — hiding the evidence rather than closing the
+    // hole.
+    //
+    // A row pointing at another org's vehicle is unusable by definition: there
+    // is no legitimate way to resume a deal on a car this dealership does not
+    // have. So it is dropped, not decorated.
+    expect(rows.find((r: any) => r.requestedProfit === 3131)).toBeUndefined();
+
+    // Org A's own approvals must still be there — the drop has to be surgical,
+    // not a bulk failure that would pass an absence-only assertion.
+    expect(rows.map((r: any) => r.requestedProfit).sort((a: number, b: number) => a - b))
+      .toEqual([1000, 1100]);
+
+    // The identifier itself, not just its description, must not cross.
+    expect(rows.some((r: any) => r.vehicleId === foreignVehicleId)).toBe(false);
+    expect(JSON.stringify(rows)).not.toContain("Honda");
+  });
+
+  it("requestProfitApproval never overwrites another org's request — cross-tenant WRITE", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgA, orgB } = await seedMultiOrg(t);
+
+    const { vehAId, foreignRequestId } = await t.run(async (ctx: any) => {
+      const user = await ctx.db
+        .query("users")
+        .filter((q: any) => q.eq(q.field("clerkId"), "multi_org_sales"))
+        .first();
+
+      // ⚠️ A FRESH Org A vehicle with no requests of its own. The first version
+      // of this test reused the seeded vehicle, which already carries an Org A
+      // PENDING row inserted before the foreign one — so `.first()` returned
+      // Org A's row, the handler patched the correct record, and the test
+      // passed against the UNFIXED code. It proved nothing. The foreign row has
+      // to be the only candidate for the dedup lookup to be the thing under
+      // test.
+      const vehA2 = await ctx.db.insert("vehicles", {
+        orgId: orgA,
+        make: "Mazda",
+        model: "Model",
+        status: "AVAILABLE",
+        vin: "VINORGA0000000002",
+        year: 2023,
+        mileage: 500,
+        color: "Blue",
+        fuelType: "Petrol",
+        transmission: "Automatic",
+        sellingPrice: 21000,
+      });
+
+      // Org B's PENDING request against ORG A's vehicle, same salesperson, and
+      // the only PENDING row for that vehicle anywhere.
+      const foreign = await ctx.db.insert("profitApprovalRequests", {
+        orgId: orgB,
+        vehicleId: vehA2,
+        requestedProfit: 4242,
+        minimumProfit: 500,
+        salespersonId: user._id,
+        status: "PENDING",
+        createdAt: Date.now(),
+      });
+      return { vehAId: vehA2, foreignRequestId: foreign };
+    });
+
+    const asUser = t.withIdentity({ subject: "multi_org_sales" });
+    await asUser.mutation(api.approvals.requestProfitApproval, {
+      orgId: orgA,
+      vehicleId: vehAId,
+      requestedProfit: 555,
+      minimumProfit: 500,
+      wizardSnapshot: {
+        paymentType: "CASH",
+        vehiclePrice: 20000,
+        desiredProfit: 555,
+        downPayment: 0,
+        termMonths: 0,
+      },
+    });
+
+    // The dedup lookup reads `by_vehicle` — a GLOBAL vehicle key — narrowed
+    // only by salesperson and status. Nothing constrains the request's org, so
+    // Org B's row satisfies it and the handler PATCHES that row instead of
+    // creating one for Org A.
+    //
+    // This is the same shape as the read defect, but it writes: Org A's
+    // requested profit and wizard snapshot land in Org B's record, and Org A
+    // gets no approval at all. Worse in both directions than the leak this
+    // ticket was opened for.
+    const foreign = await t.run(async (ctx: any) => await ctx.db.get(foreignRequestId)) as any;
+    expect(foreign.orgId).toBe(orgB);
+    expect(foreign.requestedProfit).toBe(4242);
+
+    const orgARequests = await t.run(async (ctx: any) =>
+      (await ctx.db.query("profitApprovalRequests").collect()).filter(
+        (r: any) => r.orgId === orgA && r.requestedProfit === 555
+      )
+    );
+    expect(orgARequests).toHaveLength(1);
+  });
+
+  it("checkPendingApproval never returns another org's request for an in-org vehicle", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgA, orgB } = await seedMultiOrg(t);
+
+    await t.run(async (ctx: any) => {
+      const user = await ctx.db
+        .query("users")
+        .filter((q: any) => q.eq(q.field("clerkId"), "multi_org_sales"))
+        .first();
+      const vehA = await ctx.db
+        .query("vehicles")
+        .filter((q: any) => q.eq(q.field("orgId"), orgA))
+        .first();
+
+      // Org B's approval, pointing at ORG A's vehicle, and NEWER than Org A's
+      // own — so the handler's "most recent wins" sort selects it. The read is
+      // `by_vehicle`, which is keyed on the global vehicle id and filtered only
+      // by salesperson, so nothing in the query constrains the request's org.
+      await ctx.db.insert("profitApprovalRequests", {
+        orgId: orgB,
+        vehicleId: vehA._id,
+        requestedProfit: 7777,
+        minimumProfit: 500,
+        salespersonId: user._id,
+        status: "PENDING",
+        createdAt: Date.now(),
+      });
+    });
+
+    const asUser = t.withIdentity({ subject: "multi_org_sales" });
+    const result = await asUser.query(api.approvals.checkPendingApproval, {
+      orgId: orgA,
+      vehicleId: await t.run(async (ctx: any) => {
+        const v = await ctx.db
+          .query("vehicles")
+          .filter((q: any) => q.eq(q.field("orgId"), orgA))
+          .first();
+        return v._id;
+      }),
+    });
+
+    // Verifying the VEHICLE is in-org proves nothing about the REQUEST that
+    // references it — the same distinction that produced this ticket one
+    // function away. My own sibling scan for this defect missed it, because it
+    // searched for uses of `by_salesperson` rather than for the shape.
+    expect(result).not.toBeNull();
+    expect(result!.orgId).toBe(orgA);
+    expect(result!.requestedProfit).not.toBe(7777);
   });
 
   /**
