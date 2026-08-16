@@ -1014,6 +1014,16 @@ describe("SCRUM-100: listMyPendingApprovals tenancy and bounds", () => {
     // countPending drives a navigation badge and listPendingApprovals draws the
     // page. If they can ever disagree, a manager sees work that does not exist
     // and has no way to clear it.
+    //
+    // ⚠️ SCOPE OF THIS CLAIM, narrowed after review rather than left implied.
+    // This proves the two agree on row CONTENT. It cannot prove they agree when
+    // one query exceeds Convex's read budget and the other does not: both
+    // `.collect()` an unbounded pending set, and the list additionally reads a
+    // salesperson and a vehicle per row — roughly 2-3N reads against the
+    // badge's N. There is therefore a queue size where the badge completes and
+    // the page errors. That divergence is real, pre-existing (both queries were
+    // unbounded before this branch, which only moved them onto a narrower
+    // index), and tracked on SCRUM-113 — it is not what this test asserts.
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgA, orgB } = await seedMultiOrg(t);
     await seedForeignVehicleApproval(t, orgA, orgB, 3131);
