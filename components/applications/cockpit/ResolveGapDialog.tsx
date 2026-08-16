@@ -195,9 +195,29 @@ export function ResolveGapDialog({
     installmentsMinor !== null &&
     toFinanceCompanyMinor !== null;
 
-  const allocatedMinor =
-    (cashMinor ?? 0) + (installmentsMinor ?? 0) + (toFinanceCompanyMinor ?? 0);
-  const unallocatedMinor = (customerShareMinor ?? 0) - allocatedMinor;
+  /**
+   * The running total, or null while any destination is still undecided.
+   *
+   * NOT `?? 0`. Those fallbacks were dead code while a blank box parsed as
+   * zero, and making blanks null brought them to life meaning something the
+   * submit path does not accept: a blank counted as nothing allocated, so
+   * typing the whole shortfall into cash-to-dealer and leaving the other two
+   * empty displayed "still to allocate: 0" — the calm, everything-agrees state
+   * — beside a Confirm button that was disabled and said nothing about why.
+   *
+   * The operator was being told they were finished by the one figure on the
+   * screen whose job is to tell them whether they are. This is the third
+   * display-versus-submit disagreement this dialog has produced, so the fix is
+   * the shape rather than the symptom: where the submission cannot be computed,
+   * neither can the total, and the screen says which boxes are still open
+   * instead of inventing a reassuring number.
+   */
+  const destinationsDecided =
+    cashMinor !== null && installmentsMinor !== null && toFinanceCompanyMinor !== null;
+  const unallocatedMinor =
+    destinationsDecided && customerShareMinor !== null
+      ? customerShareMinor - (cashMinor + installmentsMinor + toFinanceCompanyMinor)
+      : null;
 
   // The shared arithmetic, so the screen and the mutation agree about what is
   // acceptable. A dialog with its own rules would either block a submission the
@@ -377,12 +397,20 @@ export function ResolveGapDialog({
             {/* What is left to place. Stated as a running figure rather than as
                 a validation error, because an operator part-way through an
                 allocation has not made a mistake yet. */}
-            <p
-              className={`text-xs ${unallocatedMinor === 0 ? "text-muted-foreground" : "text-amber-700 dark:text-amber-400"}`}
-            >
-              {t("GapStillToAllocate")}{" "}
-              <span className="font-medium tabular-nums">{money(unallocatedMinor)}</span>
-            </p>
+            {unallocatedMinor === null ? (
+              // Named as an unfinished entry rather than shown as a total,
+              // because there is no honest total to show yet.
+              <p className="text-xs text-amber-700 dark:text-amber-400">
+                {t("GapDestinationsIncomplete")}
+              </p>
+            ) : (
+              <p
+                className={`text-xs ${unallocatedMinor === 0 ? "text-muted-foreground" : "text-amber-700 dark:text-amber-400"}`}
+              >
+                {t("GapStillToAllocate")}{" "}
+                <span className="font-medium tabular-nums">{money(unallocatedMinor)}</span>
+              </p>
+            )}
           </fieldset>
 
           <div className="space-y-2">

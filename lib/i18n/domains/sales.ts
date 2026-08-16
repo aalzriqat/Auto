@@ -922,6 +922,11 @@ export const salesEn = {
   GapInstallmentsToDealer: "Instalments to us",
   GapToFinanceCompany: "To the finance company",
   GapStillToAllocate: "Still to account for",
+  // Shown INSTEAD of the running total while any destination is blank. It has
+  // to name the remedy, because the Confirm button is disabled at this point
+  // and nothing else on the screen explains what is missing.
+  GapDestinationsIncomplete:
+    "Enter an amount in every box — put 0 where nothing was paid that way.",
   GapNotes: "Notes",
   ConfirmFinalizeTitle: "Close the deal",
   ConfirmFinalizeDesc:
@@ -1849,6 +1854,7 @@ export const salesAr = {
   GapInstallmentsToDealer: "أقساطاً لنا",
   GapToFinanceCompany: "لشركة التمويل",
   GapStillToAllocate: "المتبقي دون تحديد",
+  GapDestinationsIncomplete: "أدخل مبلغاً في كل حقل — واكتب 0 حيث لم يُدفع شيء بهذه الطريقة.",
   GapNotes: "ملاحظات",
   ConfirmFinalizeTitle: "إغلاق الصفقة",
   ConfirmFinalizeDesc: "التسليم والدفعة المتوقعة مسجَّلان، ويمكن إغلاق الصفقة.",

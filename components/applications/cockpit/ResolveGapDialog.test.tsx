@@ -90,6 +90,43 @@ describe("the gap dialog never invents a destination the operator left blank", (
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  test("the running total does not claim the allocation is complete while a box is blank", async () => {
+    // The defect the FIRST fix introduced, and the reason the previous suite
+    // could not see it: those tests asserted only that Confirm was disabled.
+    //
+    // Making a blank box null brought a previously dead `?? 0` in the DISPLAY
+    // sum to life, where it meant something the submit path does not accept —
+    // a blank counted as nothing allocated. So the natural entry (whole gap in
+    // one box) rendered "still to allocate: 0", the calm everything-agrees
+    // state, next to a dead Confirm button with nothing explaining why. The
+    // one figure whose job is to say whether the operator is finished told
+    // them they were.
+    const onSubmit = vi.fn(async (_values: Submitted) => {});
+    renderDialog(onSubmit);
+
+    const [cash] = destinationInputs();
+    fireEvent.change(cash, { target: { value: String(GAP_MAJOR) } });
+
+    expect(confirmButton().disabled).toBe(true);
+    // No total is claimed, and the remedy is named.
+    expect(screen.queryByText("GapStillToAllocate")).toBeNull();
+    expect(screen.getByText("GapDestinationsIncomplete")).toBeTruthy();
+  });
+
+  test("the running total reappears once every destination is decided", async () => {
+    // The control: the incomplete message must not become permanent furniture.
+    const onSubmit = vi.fn(async (_values: Submitted) => {});
+    renderDialog(onSubmit);
+
+    const [cash, installments, toFinanceCompany] = destinationInputs();
+    fireEvent.change(cash, { target: { value: String(GAP_MAJOR) } });
+    fireEvent.change(installments, { target: { value: "0" } });
+    fireEvent.change(toFinanceCompany, { target: { value: "0" } });
+
+    expect(screen.queryByText("GapDestinationsIncomplete")).toBeNull();
+    expect(screen.getByText("GapStillToAllocate")).toBeTruthy();
+  });
+
   test("a partially filled allocation is still refused", async () => {
     // Two of three decided. The remaining blank is not "zero by implication".
     const onSubmit = vi.fn(async (_values: Submitted) => {});
