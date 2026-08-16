@@ -2191,8 +2191,32 @@ export const resolveAppraisalGap = mutation({
     // absorbs a shortfall is the same negotiation, and splitting it across two
     // permissions would let a role move the money without being able to see the
     // figure it is moving against.
+    /**
+     * BOTH permissions, and the money one is not decoration.
+     *
+     * The cockpit already withholds this action from a caller who cannot see
+     * the deal's figures, and `dealCockpit` withholds the figures themselves on
+     * the same rule — `isSystemOwnerRole(role) || VIEW_FINANCE`. But that lived
+     * only in the projection and the screen, and a permission enforced by
+     * rendering is not enforced: a default MANAGER holds
+     * `approve:finance_application` WITHOUT `view:finance`, so they could call
+     * this mutation directly and settle a shortfall the product deliberately
+     * does not show them.
+     *
+     * Worse than acting on it — LEARNING it. Every refusal below names the
+     * figure that failed to reconcile, so a deliberately wrong allocation turns
+     * the validator into an oracle disclosing the exact appraisal gap to
+     * someone barred from seeing it. That is why this sits at the very top,
+     * ahead of the row read and ahead of anything that can raise an
+     * amount-bearing error, rather than beside the arithmetic.
+     *
+     * `requireTenantAuth` applies the system-owner bypass itself, so this is
+     * the SAME authority the cockpit computes rather than a second rule free to
+     * drift from it.
+     */
     const { user } = await requireTenantAuth(ctx, args.orgId, [
       PERMISSIONS.APPROVE_FINANCE_APPLICATION,
+      PERMISSIONS.VIEW_FINANCE,
     ]);
     const app = await requireOwnedRow(
       ctx,

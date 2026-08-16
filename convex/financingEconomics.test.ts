@@ -4828,6 +4828,40 @@ describe("handover seals the approved amount, and the amount that was verified",
       ).toBe(0);
     });
 
+    test("a manager who cannot see the money cannot settle it, and cannot learn it either", async () => {
+      // Found by CodeRabbit and independently reproduced by the owner-proxy.
+      //
+      // The cockpit withholds this action from a caller who cannot see the
+      // deal's figures, and `dealCockpit` withholds the figures on the same
+      // rule. Both lived in the projection and the screen. A default MANAGER
+      // holds `approve:finance_application` WITHOUT `view:finance`, so the
+      // public mutation was reachable directly — a permission enforced by
+      // rendering is not enforced.
+      //
+      // The disclosure is the sharper half, and it is what the second
+      // assertion exists for: every refusal in this mutation names the figure
+      // that failed to reconcile, so a deliberately wrong allocation would turn
+      // the validator into an oracle for the exact shortfall. Asserting only
+      // "it throws" would pass even if the throw carried the amount.
+      const { seed, applicationId } = await approvedDeal();
+      const blind = await callerWith(seed, "approve-no-money", [
+        "view:sales",
+        "approve:finance_application",
+      ]);
+
+      const attempt = blind.mutation(api.financingEconomics.resolveAppraisalGap, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await gapStampFrom(seed, applicationId),
+        // Deliberately wrong, to provoke an amount-bearing validation refusal.
+        ...customerAbsorbs({ customerGapCashToDealerMinor: jod(7), customerGapShareMinor: jod(7) }),
+      });
+
+      await expect(attempt).rejects.toThrow(/permission/i);
+      // And the refusal must not carry the shortfall it is guarding.
+      await expect(attempt).rejects.not.toThrow(new RegExp(String(RAW_GAP)));
+    });
+
     test("a deal with no gap cannot be given one", async () => {
       const seed = await seedDealer();
       const applicationId = await createApplication(seed);
