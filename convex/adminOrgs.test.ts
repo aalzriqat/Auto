@@ -456,6 +456,67 @@ describe("adminOrgs", () => {
     expect(await stateRows()).toHaveLength(0);
   });
 
+  /**
+   * ⚠️ Regression introduced by the race fix above, found on re-review.
+   *
+   * `deletionRequestId` was read nowhere in the codebase until that fix turned it
+   * into a gate. It is not self-clearing: `runDeletionRequestBatch`'s catch marks
+   * the *request* FAILED and never touches the organization row, `unsuspendOrg`
+   * permits unsuspending a FAILED request (only PENDING_REVIEW / APPROVED /
+   * RUNNING block it), and `rejectDeletionRequest` clears the org fields only
+   * from PENDING_REVIEW.
+   *
+   * So a purge that failed, followed by an admin putting the dealership back into
+   * service, leaves a live unsuspended org carrying the marker forever — and a
+   * presence-only guard would deny it the materialised reader permanently, with
+   * no operator signal separating "never backfilled" from "silently blocked".
+   * The gate has to read the request's STATUS, not merely the id's presence.
+   */
+  test("an org recovered from a failed deletion is not permanently denied materialization", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithOwner(t);
+    await t.run(async (ctx) => ctx.db.insert("users", { clerkId: "dev_failed", email: "admin@autoflow.dev" }));
+    const asAdmin = t.withIdentity({ subject: "dev_failed" });
+
+    const result = await asAdmin.mutation(api.adminOrgs.hardDeleteOrg, {
+      orgId,
+      confirmName: "Acme Motors",
+    });
+
+    // The purge dies partway, exactly as runDeletionRequestBatch's catch records it.
+    await t.run(async (ctx) =>
+      ctx.db.patch(result.requestId, {
+        status: "FAILED" as const,
+        failedAt: Date.now(),
+        error: "An unexpected error occurred while deleting the organization.",
+      })
+    );
+
+    // The admin puts the dealership back into service. This is permitted today.
+    await asAdmin.mutation(api.adminOrgs.unsuspendOrg, { orgId });
+
+    const org = await t.run(async (ctx) => ctx.db.get(orgId));
+    expect(org).not.toBeNull();
+    expect(org?.suspended).toBe(false);
+    // The marker survives — nothing in the product clears it from a FAILED request.
+    expect(org?.deletionRequestId).toBeDefined();
+
+    // A live org must still be able to materialise.
+    await t.mutation(internal.migrations.backfillInstagramConversations, {
+      orgId,
+      onlyIfIdle: true,
+    });
+
+    const stateRows = await t.run(async (ctx) =>
+      ctx.db
+        .query("socialMaterializationState")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .collect()
+    );
+    expect(stateRows).toHaveLength(1);
+    expect(stateRows[0].status).toBe("completed");
+  });
+
   test("hardDeleteOrg removes a financed deal's appraisals, overrides, rule versions and appraisal blobs", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, ownerId } = await seedOrgWithOwner(t);

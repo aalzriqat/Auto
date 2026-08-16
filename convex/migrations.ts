@@ -618,12 +618,39 @@ async function beginConversationBackfill(
   // transactions, so an org can enter deletion after its page was read. The
   // check has to be here, in the same transaction as the write it guards.
   //
-  // Checked per call, which is the only place that closes it. `deletionRequestId`
-  // rather than `suspended`: it is set only by an approved deletion and cleared
-  // when one is rejected, whereas an org suspended for billing is not being
-  // purged and its state should survive.
+  // Checked per call, which is the only place that closes it.
+  //
+  // ⚠️ On the request's STATUS, never merely on the presence of
+  // `deletionRequestId`. That field does not clear itself: a purge that throws
+  // marks the *request* FAILED and never touches the organization row,
+  // `unsuspendOrg` then permits putting the dealership back into service, and
+  // `rejectDeletionRequest` only clears the org fields from PENDING_REVIEW. A
+  // presence-only check therefore denied a live, recovered org the materialised
+  // reader permanently, with nothing to distinguish it from "never backfilled".
+  //
+  // A missing request row does NOT block: the purge never deletes
+  // `organizationDeletionRequests`, so a deletion genuinely in flight always
+  // presents one. A dangling id is a data anomaly, and the cost of guessing
+  // wrong there is bounded anyway — the legacy reader stays correct, it is only
+  // slower.
+  //
+  // ⚠️ These three statuses are `ACTIVE_DELETION_STATUSES`, already duplicated
+  // unexported in `adminOrgs.ts` and `organizations.ts`. This is a third copy
+  // rather than a refactor of two modules inside a security change; hoisting all
+  // three into one shared helper is recorded as follow-up.
   const org = await ctx.db.get(orgId);
-  if (!org || org.deletionRequestId !== undefined) return null;
+  if (!org) return null;
+  if (org.deletionRequestId !== undefined) {
+    const deletionRequest = await ctx.db.get(org.deletionRequestId);
+    if (
+      deletionRequest &&
+      (deletionRequest.status === "PENDING_REVIEW" ||
+        deletionRequest.status === "APPROVED" ||
+        deletionRequest.status === "RUNNING")
+    ) {
+      return null;
+    }
+  }
 
   const existing = await readMaterializationState(ctx, orgId, platform);
   const now = Date.now();
