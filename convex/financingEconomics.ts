@@ -22,9 +22,12 @@ import { toMinorUnits, assertSupportedDenomination, denominationOf } from "./uti
 import {
   assertMinorAmount,
   buildRuleSnapshot,
+  classifyGapResolution,
   deriveEconomics,
+  economicsStamp,
   evaluateQuotationException,
   resolveAppliedLtv,
+  assertGapResolutionValid,
   type FinanceCompanyRuleSnapshot,
 } from "./utils/financingEconomics";
 
@@ -2128,6 +2131,295 @@ export const resolveFinancingReconciliation = mutation({
       needsFinancingReconciliation: false,
       financingReconciliationReason: undefined,
       updatedAt: Date.now(),
+    });
+
+    return args.applicationId;
+  },
+});
+
+/**
+ * Records how the parties agreed to settle the appraisal gap.
+ *
+ * Until this existed, a finance company approving below the quotation — the
+ * ordinary case, and the whole reason a gap exists — left the deal at
+ * `PENDING_NEGOTIATION` with nothing in the codebase able to move it. The stage
+ * rail named a step no writer could take, and every stage behind it was hidden.
+ *
+ * WHAT THIS IS NOT ALLOWED TO GET WRONG, in order of what it costs:
+ *
+ * 1. The destinations are recorded, never inferred. `recomputeAndPatchEconomics`
+ *    composes the owner's profit from `customerGapCashToDealerMinor +
+ *    customerGapInstallmentToDealerMinor` and deliberately excludes
+ *    `customerGapToFinanceCompanyMinor` — money the customer pays the financier
+ *    is not dealership money and must never become a dealer receivable or
+ *    profit. A writer that recorded the share and omitted the split would
+ *    understate the profit by the entire gap and nothing downstream would
+ *    notice. That is why every destination is a required argument: absence is
+ *    not zero here.
+ * 2. It is atomic. Either the resolution, both shares, all three destinations
+ *    and the audit stamp land together, or nothing does. A half-resolved row is
+ *    a deal whose agreed split does not reconcile to its own gap.
+ * 3. It reconciles against the gap on the deal NOW. The operator's dialog was
+ *    rendered against a figure a re-approval can move underneath them, and an
+ *    allocation that adds up to yesterday's shortfall is not a smaller error
+ *    than one that adds up to nothing.
+ *
+ * The arithmetic is `validateGapShares` and the classification is
+ * `classifyGapResolution`, both from the shared engine, not restated here. The
+ * resolution is DERIVED from the shares rather than accepted from the caller,
+ * so a client cannot label a split "customer absorbs" and leave the record
+ * disagreeing with its own numbers.
+ */
+export const resolveAppraisalGap = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    /**
+     * The economics the operator's screen was showing. Demanded of every caller
+     * with no permission predicate, for the reason the helper documents.
+     */
+    economicsStamp: v.string(),
+    customerGapShareMinor: v.number(),
+    dealerGapShareMinor: v.number(),
+    customerGapCashToDealerMinor: v.number(),
+    customerGapInstallmentToDealerMinor: v.number(),
+    customerGapToFinanceCompanyMinor: v.number(),
+    notes: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    // The same authority that sets the approved purchase amount. Agreeing who
+    // absorbs a shortfall is the same negotiation, and splitting it across two
+    // permissions would let a role move the money without being able to see the
+    // figure it is moving against.
+    /**
+     * BOTH permissions, and the money one is not decoration.
+     *
+     * The cockpit already withholds this action from a caller who cannot see
+     * the deal's figures, and `dealCockpit` withholds the figures themselves on
+     * the same rule — `isSystemOwnerRole(role) || VIEW_FINANCE`. But that lived
+     * only in the projection and the screen, and a permission enforced by
+     * rendering is not enforced: a default MANAGER holds
+     * `approve:finance_application` WITHOUT `view:finance`, so they could call
+     * this mutation directly and settle a shortfall the product deliberately
+     * does not show them.
+     *
+     * The check still sits at the very top, ahead of the row read and ahead of
+     * anything that can raise an amount-bearing error, because every refusal
+     * below names the figure that failed to reconcile and there is no reason
+     * for a refused caller to receive it.
+     *
+     * ⚠️ But that ordering is HYGIENE, NOT A CONFIDENTIALITY BOUNDARY, and an
+     * earlier version of this comment claimed otherwise — that the validator
+     * would otherwise be "an oracle disclosing the exact appraisal gap to
+     * someone barred from seeing it". That is FALSE for the role it named. A
+     * default MANAGER holds `view:finance_applications`, and
+     * `getEconomics` authorizes on exactly that permission and returns the row
+     * through `redactSettlementEvidence`, which blanks only the three tier-1
+     * supplier-disbursement fields — not `rawAppraisalGapMinor`, not the five
+     * allocation fields, and not the override rows this mutation writes with
+     * every amount stringified into them. So a default MANAGER is not barred
+     * from the figure at all; they can read it directly.
+     * `convex/utils/tenancy.ts` says the same thing about tier-2 amounts in its
+     * own words: a display gate, not a boundary.
+     *
+     * The permission requirement stands on AUTHORITY, which is sound on its
+     * own: settling a shortfall moves the owner-facing profit, so it takes the
+     * money permission. It does not stand on secrecy, and nothing should be
+     * built on the assumption that it creates any.
+     *
+     * `requireTenantAuth` applies the system-owner bypass itself, so this is
+     * the SAME authority the cockpit computes rather than a second rule free to
+     * drift from it.
+     */
+    const { user } = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.APPROVE_FINANCE_APPLICATION,
+      PERMISSIONS.VIEW_FINANCE,
+    ]);
+    const app = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeApplications",
+      args.applicationId
+    );
+
+    // Separation of duties, the same one `approveDealerPurchaseAmount` and
+    // `reopenApproval` enforce. Deciding where the customer's share of a
+    // shortfall lands moves the owner-facing profit — routing all of it to the
+    // dealership raises the figure by the whole gap — so the person who sold
+    // the vehicle does not get to decide it on their own deal, however senior.
+    // Enforced here and not only in the card, because this mutation is
+    // reachable directly.
+    if (user._id === app.salespersonId) {
+      throw new ConvexError(
+        "You cannot settle the appraisal gap on your own application. A manager or the dealership owner records it."
+      );
+    }
+
+    // The lifecycle, before anything else about the money.
+    //
+    // These economics are SEALED by the steps that follow. `registerVehicleHandover`
+    // freezes the approved figures and `finalizeDeal` creates the sale and writes
+    // the remittance — a resolution recorded afterwards would recompute the
+    // owner's profit behind a deal whose journal already exists, and on a
+    // direct-to-supplier deal would overwrite the zero remittance finalization
+    // deliberately wrote. The negotiation belongs before the vehicle leaves.
+    if (app.status !== "APPROVED") {
+      throw new ConvexError(
+        "Only an approved application can have its appraisal gap settled."
+      );
+    }
+    if (app.vehicleHandoverAt !== undefined) {
+      throw new ConvexError(
+        "The vehicle has already been handed over on this deal, so its figures are sealed and the appraisal gap can no longer be settled here."
+      );
+    }
+    if (app.finalizedSaleId !== undefined) {
+      throw new ConvexError(
+        "This deal has already been closed, so its figures are sealed and the appraisal gap can no longer be settled here."
+      );
+    }
+
+    assertSupportedDenomination(app.economicsCurrency, "recording this gap resolution");
+
+    // Stale first, before any arithmetic: an allocation reconciling to a gap
+    // this deal no longer has is not worth validating.
+    if (args.economicsStamp !== economicsStamp(app)) {
+      throw new ConvexError(
+        "This deal's figures changed while you were agreeing the split. Re-check the appraisal gap before recording how it is settled."
+      );
+    }
+
+    const rawAppraisalGapMinor = app.rawAppraisalGapMinor;
+    if (rawAppraisalGapMinor === undefined) {
+      throw new ConvexError(
+        "This deal's appraisal gap has not been worked out yet, so there is nothing to settle. Record the missing economics first."
+      );
+    }
+    if (rawAppraisalGapMinor <= 0) {
+      throw new ConvexError(
+        "This deal has no appraisal gap, so there is nothing to settle between the customer and the dealership."
+      );
+    }
+
+    /**
+     * INITIAL resolution only. The raw gap is allocated exactly once.
+     *
+     * Every other guard here answered "may this caller act, on this deal, on
+     * these figures" — and none of them asked whether the shortfall had ALREADY
+     * been settled. So an authorised non-salesperson could resolve once, read
+     * the fresh stamp the resolution itself produced, and call this mutation
+     * again pre-handover with a different but internally valid allocation. The
+     * patch below overwrites the resolution, both shares, all three
+     * destinations, the resolver, the timestamp and the notes, then recomputes
+     * the owner-facing profit — so the second allocation silently replaces the
+     * first and the figure changes underneath everyone.
+     *
+     * The screen hides the action once resolved. That is not a boundary: this
+     * is a public mutation, and hiding a control has never been enforcement.
+     * It is the third time this workflow has leaned on the UI for a rule the
+     * server had to own.
+     *
+     * Reopening stays possible and stays deliberate — re-approval already
+     * clears the resolution back to PENDING_NEGOTIATION, which is a recorded
+     * act by someone with the authority to move the approved amount. What is
+     * refused is a silent second allocation wearing the first one's clothes.
+     *
+     * A genuine CORRECTION workflow, with a mandatory reason and a complete
+     * immutable before/after snapshot, is a separate thing and must not be
+     * smuggled through the initial-resolution command.
+     */
+
+
+    const alreadyResolved =
+      app.gapResolution === "CUSTOMER_ABSORBS" ||
+      app.gapResolution === "SPLIT" ||
+      app.gapResolution === "DEALER_ABSORBS";
+    if (alreadyResolved) {
+      throw new ConvexError(
+        "Who covers this difference has already been agreed and recorded on this deal. To change it, reopen the approved purchase amount — that clears the agreement and puts the deal back into negotiation."
+      );
+    }
+
+    const settlement = {
+      customerGapShareMinor: args.customerGapShareMinor,
+      dealerGapShareMinor: args.dealerGapShareMinor,
+      customerGapCashToDealerMinor: args.customerGapCashToDealerMinor,
+      customerGapInstallmentToDealerMinor: args.customerGapInstallmentToDealerMinor,
+      customerGapToFinanceCompanyMinor: args.customerGapToFinanceCompanyMinor,
+    };
+    // Every violation, not the first: an operator correcting one arithmetic
+    // error at a time across a five-field allocation is how the second one gets
+    // saved. The mutation still refuses outright.
+    // The SHARED assertion, not a local re-implementation of it. This inlined
+    // `validateGapShares` + join-and-throw, which is byte-for-byte what
+    // `assertGapResolutionValid` already does — a second source of truth for
+    // the identity that decides whether an allocation reconciles, and this
+    // dialog has already produced three defects from exactly that shape.
+    assertGapResolutionValid(rawAppraisalGapMinor, settlement);
+
+    const resolution = classifyGapResolution(
+      rawAppraisalGapMinor,
+      args.customerGapShareMinor,
+      args.dealerGapShareMinor
+    );
+    // The owner authorised customer-absorbs and split, and deliberately NOT
+    // dealer-absorbs: an enum member is not evidence that the dealership eating
+    // a shortfall alone is a normal outcome, and no production row has ever
+    // used it. Refused at the SERVER, because a payload with a zero customer
+    // share classifies as DEALER_ABSORBS whatever the screen called it — a
+    // client-side rule would have let "Split" record a full dealership loss.
+    // Historical rows keep the value and stay readable; this is about what may
+    // be newly created.
+    if (resolution === "DEALER_ABSORBS") {
+      throw new ConvexError(
+        "The customer's share cannot be nothing. Recording the dealership as absorbing the whole difference is not something this step does — record what the customer covers, or reopen the approved amount if the dealership is taking the loss."
+      );
+    }
+
+    const notes = args.notes?.trim();
+    await ctx.db.patch(args.applicationId, {
+      gapResolution: resolution,
+      ...settlement,
+      gapResolvedAt: Date.now(),
+      gapResolvedBy: user._id,
+      // Distinct from omitting it: an emptied note clears the previous one
+      // rather than leaving a stale explanation attached to a new agreement.
+      gapResolutionNotes: notes ? notes : undefined,
+    });
+
+    // The canonical recomputation, not a local sum. It is what folds the
+    // customer's dealership-bound share into the owner's profit figure.
+    const updated = await ctx.db.get(args.applicationId);
+    if (!updated) {
+      // Defensive invariant hardening, and deliberately NOT a claim that the
+      // old `if (updated)` branch could commit a half-resolved row. The patch
+      // and this re-read happen inside the SAME Convex mutation, so a
+      // concurrent delete cannot interleave and no partial state was ever
+      // commit-able. What the old branch did wrong was treat an impossible
+      // reading as a no-op: silently skipping the recompute is the wrong
+      // response to "the row I just wrote is gone", whatever made it so. A
+      // throw rolls the whole mutation back, which is the only safe answer.
+      throw new ConvexError(
+        "This deal could not be re-read after recording the split, so its figures were not updated. Nothing was saved — try again."
+      );
+    }
+    await recomputeAndPatchEconomics(ctx, updated);
+
+    // History, because the row only ever holds the CURRENT agreement. Who moved
+    // a shortfall onto the customer, and when, is exactly what gets asked months
+    // later when the profit figure is questioned.
+    await recordOverride(ctx, {
+      orgId: args.orgId,
+      applicationId: args.applicationId,
+      field: "gapResolution",
+      previousValue: app.gapResolution,
+      newValue: `${resolution} (customer ${args.customerGapShareMinor}, dealer ${args.dealerGapShareMinor}; customer share as cash ${args.customerGapCashToDealerMinor}, installments ${args.customerGapInstallmentToDealerMinor}, to the finance company ${args.customerGapToFinanceCompanyMinor}; against a raw gap of ${rawAppraisalGapMinor})`,
+      // `notes ? notes : …`, NOT `??`. A whitespace-only note trims to "", which
+      // is defined, so nullish coalescing would keep it and write an EMPTY
+      // reason onto the one audit row that explains why money moved. The UI
+      // cannot send that today; this mutation is public and a script could.
+      reason: notes ? notes : `Appraisal gap settled as ${resolution}.`,
+      changedBy: user._id,
     });
 
     return args.applicationId;
