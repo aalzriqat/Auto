@@ -171,6 +171,59 @@ describe("the gap dialog never invents a destination the operator left blank", (
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  test("the stamp submitted is the one the dialog OPENED against, not a later rerender's", async () => {
+    // The guarantee the whole snapshot exists for, asserted end to end rather
+    // than inferred from the docstring.
+    //
+    // A re-approval while the dialog is open moves the shortfall and issues a
+    // new stamp. The parent rerenders with both. If the submission carried the
+    // NEW stamp, the server would be told the operator had seen a revision they
+    // never saw, and would accept an allocation agreed against different
+    // figures — the concurrency guard defeated by the screen it protects.
+    const onSubmit = vi.fn(async (_values: Submitted) => {});
+    const { rerender } = render(
+      <ResolveGapDialog
+        open
+        submitting={false}
+        rawAppraisalGapMinor={GAP_MINOR}
+        economicsStamp="v2|3"
+        factor={FACTOR}
+        money={(minor: number) => `${minor / FACTOR} JOD`}
+        t={(key: string) => key}
+        onOpenChange={() => {}}
+        onSubmit={onSubmit}
+      />
+    );
+
+    // The deal moves underneath the open dialog.
+    rerender(
+      <ResolveGapDialog
+        open
+        submitting={false}
+        rawAppraisalGapMinor={GAP_MINOR * 2}
+        economicsStamp="v2|4"
+        factor={FACTOR}
+        money={(minor: number) => `${minor / FACTOR} JOD`}
+        t={(key: string) => key}
+        onOpenChange={() => {}}
+        onSubmit={onSubmit}
+      />
+    );
+
+    const [cash, installments, toFinanceCompany] = destinationInputs();
+    fireEvent.change(cash, { target: { value: String(GAP_MAJOR) } });
+    fireEvent.change(installments, { target: { value: "0" } });
+    fireEvent.change(toFinanceCompany, { target: { value: "0" } });
+    fireEvent.click(confirmButton());
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    const values = onSubmit.mock.calls[0][0];
+    expect(values.economicsStamp).toBe("v2|3");
+    // And the shortfall allocated is the one that was on screen when the
+    // operator started, not the one that arrived mid-edit.
+    expect(values.customerGapShareMinor).toBe(GAP_MINOR);
+  });
+
   test("a partially filled allocation is still refused", async () => {
     // Two of three decided. The remaining blank is not "zero by implication".
     const onSubmit = vi.fn(async (_values: Submitted) => {});

@@ -1874,7 +1874,10 @@ export const salesAr = {
   GapSplitIsWholeGap: "هذا يحمّل العميل الفرق كاملاً. اختر “العميل يتحمّله” بدلاً من ذلك.",
   GapSplitLeavesCustomerNothing:
     "هذا لا يترك على العميل شيئاً، ولا يمكن للمعرض تحمّله وحده. أدخل نصيب العميل.",
-  GapAllocationMismatch: "أين يدفع العميل لا يساوي نصيب العميل بعد.",
+  // NOT a literal rendering of the English clause. "Where the customer pays"
+  // reads in Arabic as a PLACE being compared with an AMOUNT, which is not a
+  // comparison that means anything. The Arabic names the total instead.
+  GapAllocationMismatch: "مجموع ما يدفعه العميل لا يساوي نصيبه من الفرق بعد.",
   GapNotes: "ملاحظات",
   ConfirmFinalizeTitle: "إغلاق الصفقة",
   ConfirmFinalizeDesc: "التسليم والدفعة المتوقعة مسجَّلان، ويمكن إغلاق الصفقة.",

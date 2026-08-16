@@ -418,6 +418,28 @@ describe("the stage that nothing can clear", () => {
     { key: "SETTLEMENT", state: "PENDING" },
   ];
 
+  test("a caller without the approval permission is told THAT, not something else", () => {
+    // The arm no test exercised. Both reviewers flagged the gap independently:
+    // every existing case granted APPROVE_FINANCE_APPLICATION, so the branch
+    // that actually renders GapResolutionNeedsPermission was never rendered,
+    // and the ternary could have been wired to any key at all without a
+    // failure. Asserting the OTHER two keys are absent is the half that makes
+    // it meaningful — three reasons that can each be shown for the wrong state
+    // is precisely the defect this workflow already produced once.
+    grantTheWholeTail();
+    // Deliberately NOT granting APPROVE_FINANCE_APPLICATION, and the money IS
+    // visible, so visibility cannot be what blocks it.
+    queryResults.set(COCKPIT_QUERY, cockpit({ stages: GAP_STAGES, money: GAP_MONEY }));
+
+    renderCockpit();
+
+    const block = nextStepBlock();
+    expect(within(block).queryByRole("button", { name: "ResolveGapAction" })).toBeNull();
+    expect(within(block).getByText("GapResolutionNeedsPermission")).toBeTruthy();
+    expect(within(block).queryByText("GapResolutionNeedsDealFigures")).toBeNull();
+    expect(within(block).queryByText("GapResolutionSealed")).toBeNull();
+  });
+
   test("a CLOSED deal is not offered a gap resolution the server would refuse", () => {
     // The false affordance. `resolveAppraisalGap` refuses anything not
     // APPROVED, but the rail can still say GapUnresolved on a closed deal
