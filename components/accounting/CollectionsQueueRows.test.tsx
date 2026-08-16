@@ -155,10 +155,20 @@ describe("SCRUM-56 — the Collections queue on screen", () => {
     expect(call.receivableDocumentId).toBeUndefined();
   });
 
-  test("a sale whose hand-keyed rows exceed what it owes is flagged on the row", () => {
-    renderWithQueue([legacyRow({ overRepresented: true })]);
+  test("a duplicate representation is marked, and its amount reads as not counted", () => {
+    renderWithQueue([legacyRow({ duplicateRepresentation: true })]);
 
-    expect(screen.getByLabelText("CollectionOverRepresented")).toBeTruthy();
+    expect(screen.getByLabelText("CollectionDuplicateRepresentation")).toBeTruthy();
+    // The caption is what stops a collector adding this figure into the total
+    // the summary reports, so it is the assertion that matters.
+    expect(screen.getByText("CollectionCountedOnSaleInvoice")).toBeTruthy();
+  });
+
+  test("an ordinary balance is not captioned, and keeps its full weight", () => {
+    renderWithQueue([legacyRow()]);
+
+    expect(screen.queryByText("CollectionCountedOnSaleInvoice")).toBeNull();
+    expect(screen.queryByLabelText("CollectionDuplicateRepresentation")).toBeNull();
   });
 
   test("a queue that hit its bound says so instead of looking complete", () => {

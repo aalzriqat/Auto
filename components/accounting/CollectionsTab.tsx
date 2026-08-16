@@ -9,6 +9,7 @@ import {
   Banknote,
   CalendarClock,
   CalendarDays,
+  Copy,
   FileCheck2,
   HandCoins,
   Landmark,
@@ -315,22 +316,40 @@ export function CollectionsTab() {
                             <span title={t("CollectionSaleInvoiceHint" as any)}>{t("CollectionSaleInvoice" as any)}</span>
                           </span>
                         ) : (
-                          collectionLabel(t, row.sourceType ?? "OTHER")
+                          <span className="inline-flex items-center gap-1.5">
+                            {collectionLabel(t, row.sourceType ?? "OTHER")}
+                            {row.duplicateRepresentation && (
+                              <Copy
+                                className="h-3.5 w-3.5 shrink-0 text-slate-400"
+                                aria-label={t("CollectionDuplicateRepresentation" as any)}
+                              />
+                            )}
+                          </span>
                         )}
                       </TableCell>
                       <TableCell>
-                        <div className="flex items-center gap-1.5">
-                          <StatusBadge status={row.status} />
-                          {row.overRepresented && (
-                            <AlertTriangle
-                              className="h-3.5 w-3.5 text-amber-600"
-                              aria-label={t("CollectionOverRepresented" as any)}
-                            />
-                          )}
-                        </div>
+                        <StatusBadge status={row.status} />
                       </TableCell>
                       <TableCell className="text-right">{formatCurrency(row.originalAmount)}</TableCell>
-                      <TableCell className="text-right font-semibold">{formatCurrency(row.outstandingAmount)}</TableCell>
+                      {/* A duplicate representation is the same debt the sale
+                          invoice already carries, so the totals exclude it. It
+                          has to *look* excluded too — left in the same weight as
+                          real money, it is a number a collector adds up and then
+                          disagrees with the summary about. The caption sits on
+                          its own line rather than inline, so Arabic text and a
+                          Latin-formatted amount never share a bidi run. */}
+                      <TableCell className="text-right">
+                        {row.duplicateRepresentation ? (
+                          <>
+                            <div className="font-normal text-slate-400">{formatCurrency(row.outstandingAmount)}</div>
+                            <div className="text-[11px] leading-tight text-slate-500">
+                              {t("CollectionCountedOnSaleInvoice" as any)}
+                            </div>
+                          </>
+                        ) : (
+                          <span className="font-semibold">{formatCurrency(row.outstandingAmount)}</span>
+                        )}
+                      </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
                           <Button size="sm" variant="outline" onClick={() => setPaymentTarget(row)} disabled={row.outstandingAmount <= 0}>

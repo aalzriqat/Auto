@@ -324,6 +324,33 @@ async function ensureCanonicalReceivableForLegacy(
   return canonicalReceivableDocumentId;
 }
 
+/**
+ * Which canonical receivable a payment against a legacy row must settle.
+ *
+ * When the row was hand-keyed against a completed sale, that sale's own invoice
+ * is the debt — so the payment has to land there. Raising a separate
+ * `legacy_receivable` twin for it instead would settle a document that
+ * represents nothing the dealership is chasing, leaving the real invoice
+ * outstanding in full after the customer had paid.
+ *
+ * Rows with no sale behind them (genuine manual receivables) keep the existing
+ * lift-to-canonical behaviour unchanged.
+ */
+async function canonicalTargetForLegacyPayment(
+  ctx: MutationCtx,
+  receivable: Doc<"receivables">,
+  actorId: Id<"users">,
+  currency: string
+): Promise<Id<"receivableDocuments">> {
+  if (receivable.saleId) {
+    const sale = await ctx.db.get(receivable.saleId);
+    if (sale && sale.orgId === receivable.orgId && sale.canonicalReceivableDocumentId) {
+      return sale.canonicalReceivableDocumentId;
+    }
+  }
+  return await ensureCanonicalReceivableForLegacy(ctx, receivable, actorId, currency);
+}
+
 async function mirrorCollectionPaymentToCanonical(
   ctx: MutationCtx,
   args: {
@@ -364,7 +391,7 @@ async function mirrorCollectionPaymentToCanonical(
 
   if ((args.receivable || args.receivableDocumentId) && args.payment.direction === "IN") {
     const canonicalReceivableDocumentId = args.receivable
-      ? await ensureCanonicalReceivableForLegacy(ctx, args.receivable, args.actorId, args.currency)
+      ? await canonicalTargetForLegacyPayment(ctx, args.receivable, args.actorId, args.currency)
       : args.receivableDocumentId!;
     patch.paymentAllocationId = await allocatePaymentToReceivable(ctx, {
       orgId: args.payment.orgId,
@@ -517,12 +544,12 @@ type CollectionQueueItem = {
   installmentNumber?: number;
   totalInstallments?: number;
   /**
-   * Set on the hand-keyed rows of a sale whose legacy balances add up to MORE
-   * than its invoice still owes. Only those rows can be corrected, and the
-   * invoice is not in the list to carry the warning — it contributes nothing
-   * once it is over-represented.
+   * Set on a hand-keyed legacy row that stands for a sale which already has its
+   * own canonical invoice. The row is shown so its workflow state stays
+   * reachable, but it carries no monetary authority: the summary and the aging
+   * report exclude it, and its stored balance never adjusts the invoice.
    */
-  overRepresented?: boolean;
+  duplicateRepresentation?: boolean;
 };
 
 function canonicalQueueStatus(
@@ -567,22 +594,7 @@ async function buildCollectionQueue(
     legacyRows.push(...rows.slice(0, QUEUE_SOURCE_SCAN_LIMIT).filter((row) => !row.isDeleted));
   }
 
-  // How much of each sale's debt is already represented operationally by
-  // hand-keyed legacy rows.
-  const legacyOpenBySale = new Map<string, number>();
-  for (const row of legacyRows) {
-    if (!row.saleId) continue;
-    const saleKey = String(row.saleId);
-    legacyOpenBySale.set(saleKey, (legacyOpenBySale.get(saleKey) ?? 0) + row.outstandingAmount);
-  }
-
   const items: CollectionQueueItem[] = [];
-
-  // Sales whose hand-keyed rows claim MORE than the invoice still owes. The
-  // warning has to land on those rows, because they are the ones an operator
-  // can correct — the invoice itself contributes nothing and is not listed.
-  const overRepresentedSales = new Set<string>();
-
   const canonicalItems: CollectionQueueItem[] = [];
   for (const status of OPEN_CANONICAL_STATUSES) {
     const docs = await ctx.db
@@ -599,19 +611,13 @@ async function buildCollectionQueue(
       if (!doc.customerId) continue;
 
       const originalAmount = fromMinorUnits(doc.originalAmountMinor, currency);
-      let outstanding = fromMinorUnits(await getReceivableOutstandingMinor(ctx, doc._id), currency);
+      const outstanding = fromMinorUnits(await getReceivableOutstandingMinor(ctx, doc._id), currency);
 
       const saleId = doc.sourceType === "sales" ? ctx.db.normalizeId("sales", doc.sourceId) : null;
-      if (saleId) {
-        const alreadyRepresented = legacyOpenBySale.get(String(saleId)) ?? 0;
-        if (alreadyRepresented > 0) {
-          outstanding = roundMoney(outstanding - alreadyRepresented, currency);
-          if (outstanding < 0) overRepresentedSales.add(String(saleId));
-        }
-      }
 
-      // Nothing left to chase: either the customer has paid, or hand-keyed rows
-      // already represent the whole balance and are in this list themselves.
+      // Nothing left to chase: the customer has paid. Hand-keyed rows never
+      // reduce this figure — a copy of a number is not a payment, and letting
+      // one subtract here is what made a real debt disappear from the queue.
       if (outstanding <= 0) continue;
 
       const sale = saleId ? await ctx.db.get(saleId) : null;
@@ -639,10 +645,20 @@ async function buildCollectionQueue(
   }
 
   for (const row of legacyRows) {
-    const [customer, vehicle] = await Promise.all([
+    const [customer, vehicle, sale] = await Promise.all([
       ctx.db.get(row.customerId),
       getOptionalVehicle(ctx, row.vehicleId),
+      row.saleId ? ctx.db.get(row.saleId) : Promise.resolve(null),
     ]);
+    // Identity, never arithmetic. If the sale this row was hand-keyed against
+    // raised a canonical invoice, the row is a second representation of that
+    // one debt: it keeps its assignment, reminders and installment label and
+    // stays workable, but it stops being money. Deriving this from the sale's
+    // own `canonicalReceivableDocumentId` — rather than from whichever invoices
+    // happen to be open — keeps the classification independent of any balance,
+    // so a settled invoice cannot turn a stale copy back into money.
+    const duplicateRepresentation =
+      sale?.orgId === orgId && Boolean(sale?.canonicalReceivableDocumentId);
     items.push({
       key: `legacy:${row._id}`,
       origin: "LEGACY",
@@ -666,7 +682,7 @@ async function buildCollectionQueue(
       paymentPlanLabel: row.paymentPlanLabel,
       installmentNumber: row.installmentNumber,
       totalInstallments: row.totalInstallments,
-      overRepresented: row.saleId ? overRepresentedSales.has(String(row.saleId)) : undefined,
+      duplicateRepresentation: duplicateRepresentation || undefined,
     });
   }
   items.push(...canonicalItems);
@@ -709,6 +725,9 @@ export const summary = query({
     let dueToday = 0;
 
     for (const item of items) {
+      // A duplicate representation is the same debt already counted by its
+      // canonical invoice. Adding it here would report the sale twice.
+      if (item.duplicateRepresentation) continue;
       totalOutstanding += item.outstandingAmount;
       if (item.dueDate < now || item.status === "OVERDUE") overdueOutstanding += item.outstandingAmount;
       if (item.dueDate >= today.start && item.dueDate <= today.end) dueToday += item.outstandingAmount;
@@ -1086,6 +1105,25 @@ export const recordPayment = mutation({
         }
 
         const currency = await getOrgCurrency(ctx, args.orgId);
+
+        // A hand-keyed row standing for a sale settles that sale's invoice, so
+        // the invoice's remaining balance caps the payment too. Without this the
+        // allocation still refuses — correctly — but with an internal message
+        // about minor units that means nothing to whoever is taking the money.
+        if (receivable?.saleId) {
+          const sale = await ctx.db.get(receivable.saleId);
+          if (sale?.orgId === args.orgId && sale?.canonicalReceivableDocumentId) {
+            const saleOutstanding = fromMinorUnits(
+              await getReceivableOutstandingMinor(ctx, sale.canonicalReceivableDocumentId),
+              currency
+            );
+            if (args.amount > saleOutstanding) {
+              throw new ConvexError(
+                "This payment is larger than the sale still owes. The hand-keyed balance is out of date — collect against the sale invoice instead."
+              );
+            }
+          }
+        }
 
         // SCRUM-56 — collecting against a completed sale's canonical invoice.
         // The outstanding balance is derived from the document's allocations,
@@ -2288,6 +2326,10 @@ export const agingReport = query({
     // alongside the hand-keyed rows instead of being absent from the report.
     const { items } = await buildCollectionQueue(ctx, args.orgId, currency);
     for (const item of items) {
+      // Excluded for the same reason as the summary: the canonical invoice is
+      // already ageing this debt, and a bucket that counted both would overstate
+      // both the amount and the number of debts outstanding.
+      if (item.duplicateRepresentation) continue;
       const ageDays = Math.floor((now - item.dueDate) / DAY_MS);
       const bucket = ageDays <= 0
         ? buckets.current

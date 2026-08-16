@@ -217,15 +217,19 @@ describe("SCRUM-56 — completed sales enter the Collections queue", () => {
       })
     );
 
+    // Counted once, by the invoice that owns the debt. The hand-keyed row is
+    // still listed for its workflow state but adds nothing to the total.
     const summary = await asUser.query(api.collections.summary, { orgId });
     expect(summary.totalOutstanding).toBe(SALE_PRICE);
 
     const queue = await asUser.query(api.collections.listCollectionQueue, { orgId });
-    const queued = queue.items.reduce((sum: number, row: any) => sum + row.outstandingAmount, 0);
-    expect(queued).toBe(SALE_PRICE);
+    const counted = queue.items
+      .filter((row: any) => !row.duplicateRepresentation)
+      .reduce((sum: number, row: any) => sum + row.outstandingAmount, 0);
+    expect(counted).toBe(SALE_PRICE);
   });
 
-  test("hand-keyed rows worth more than the sale still owes are flagged, never netted below zero", async () => {
+  test("hand-keyed rows worth more than the sale still owes never displace the invoice", async () => {
     const { t, orgId, customerId, vehicleId, userId, asUser } = await setup();
     const saleId = await completeSale(asUser, orgId, customerId, vehicleId);
 
@@ -248,31 +252,37 @@ describe("SCRUM-56 — completed sales enter the Collections queue", () => {
     );
 
     const queue = await asUser.query(api.collections.listCollectionQueue, { orgId });
-    // The invoice contributes nothing rather than a negative balance, and the
-    // legacy row is still there to be worked — carrying the warning, because it
-    // is the row an operator can actually correct.
-    expect(queue.items.filter((row: any) => row.origin === "CANONICAL")).toHaveLength(0);
-    expect(queue.items).toHaveLength(1);
-    expect(queue.items[0].outstandingAmount).toBe(SALE_PRICE + 5000);
-    expect(queue.items[0].overRepresented).toBe(true);
+    // The invoice keeps its full balance and its place in the queue. An
+    // over-keyed row used to delete it from all three views; now the row is
+    // simply marked as the duplicate it is, and stays there to be corrected.
+    const canonical = queue.items.filter((row: any) => row.origin === "CANONICAL");
+    expect(canonical).toHaveLength(1);
+    expect(canonical[0].outstandingAmount).toBe(SALE_PRICE);
 
-    // And the total never goes negative, which a naive netting would produce.
+    const legacy = queue.items.filter((row: any) => row.origin === "LEGACY");
+    expect(legacy).toHaveLength(1);
+    expect(legacy[0].duplicateRepresentation).toBe(true);
+
+    // The stale figure never reaches the total, high or low.
     const summary = await asUser.query(api.collections.summary, { orgId });
-    expect(summary.totalOutstanding).toBe(SALE_PRICE + 5000);
+    expect(summary.totalOutstanding).toBe(SALE_PRICE);
   });
 
-  test("a correctly-sized hand-keyed row is not flagged as over-representing its sale", async () => {
+  test("a hand-keyed row with no sale behind it is real money, never a duplicate", async () => {
     const { t, orgId, customerId, vehicleId, userId, asUser } = await setup();
-    const saleId = await completeSale(asUser, orgId, customerId, vehicleId);
+    await completeSale(asUser, orgId, customerId, vehicleId);
 
+    // No `saleId`: nothing else in the system represents this debt, so it is
+    // money in its own right and must keep counting. The duplicate rule has to
+    // be narrow enough not to swallow the manual receivables the ticket
+    // explicitly requires to survive.
     const now = Date.now();
     await t.run((ctx) =>
       ctx.db.insert("receivables", {
         orgId,
         customerId,
-        saleId,
         sourceType: "INTERNAL_INSTALLMENT",
-        title: "Right-sized installment",
+        title: "Standalone installment",
         originalAmount: 8000,
         outstandingAmount: 8000,
         dueDate: now + 86_400_000,
@@ -284,7 +294,10 @@ describe("SCRUM-56 — completed sales enter the Collections queue", () => {
     );
 
     const queue = await asUser.query(api.collections.listCollectionQueue, { orgId });
-    expect(queue.items.every((row: any) => !row.overRepresented)).toBe(true);
+    expect(queue.items.every((row: any) => !row.duplicateRepresentation)).toBe(true);
+
+    const summary = await asUser.query(api.collections.summary, { orgId });
+    expect(summary.totalOutstanding).toBe(SALE_PRICE + 8000);
   });
 
   test("a part payment against the sale invoice leaves exactly the remainder in the queue", async () => {
@@ -600,6 +613,160 @@ describe("SCRUM-56 — completed sales enter the Collections queue", () => {
     await t.run(async (ctx) => {
       const sale = await ctx.db.get(saleId);
       expect(sale?.status).toBe("CANCELLED");
+    });
+  });
+});
+
+/**
+ * SCRUM-56 correction — a legacy balance is not a monetary authority.
+ *
+ * The first implementation deduped a sale's debt by arithmetic: it summed the
+ * `outstandingAmount` of every open legacy row carrying the same `saleId` and
+ * subtracted that from the sale invoice's derived outstanding. That let a
+ * hand-keyed number change what the dealership believes it is owed, which is
+ * precisely the authority the canonical document exists to hold.
+ *
+ * Two consequences, both reproduced below:
+ *
+ *  1. A stale legacy figure — lower, equal or higher than reality — moves the
+ *     queue, the summary and the aging report, and a large enough one deletes
+ *     the real debt from all three.
+ *
+ *  2. Worse, the arithmetic is not even self-consistent with the payment path.
+ *     Paying a sale-linked legacy row allocates through
+ *     `ensureCanonicalReceivableForLegacy`, which settles a SEPARATE
+ *     `legacy_receivable` document keyed on the row — never the sale's invoice.
+ *     So the payment lowers the legacy row, which shrinks the subtraction,
+ *     which makes the sale invoice reappear at its ORIGINAL amount. The customer
+ *     pays and the debt grows back.
+ *
+ * The rule these tests pin: `saleId` identifies a duplicate representation and
+ * nothing more. It never computes money.
+ */
+describe("SCRUM-56 correction — legacy balances never compute canonical debt", () => {
+  const LEGACY_DUE_OFFSET = 86_400_000;
+
+  async function addSaleLinkedLegacyRow(
+    t: any,
+    orgId: any,
+    customerId: any,
+    userId: any,
+    saleId: any,
+    outstandingAmount: number
+  ) {
+    const now = Date.now();
+    return await t.run((ctx: any) =>
+      ctx.db.insert("receivables", {
+        orgId,
+        customerId,
+        saleId,
+        sourceType: "INTERNAL_INSTALLMENT",
+        title: "Hand-keyed representation",
+        originalAmount: outstandingAmount,
+        outstandingAmount,
+        dueDate: now + LEGACY_DUE_OFFSET,
+        status: "OPEN",
+        createdBy: userId,
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
+  }
+
+  async function canonicalSaleItem(asUser: any, orgId: any, saleId: any) {
+    const queue = await asUser.query(api.collections.listCollectionQueue, { orgId });
+    return queue.items.find(
+      (row: any) => row.origin === "CANONICAL" && String(row.saleId) === String(saleId)
+    );
+  }
+
+  // A stale hand-keyed figure is the normal case, not an edge case: it is a
+  // human's copy of a number that keeps moving. Lower, equal and higher all have
+  // to leave the authoritative debt untouched.
+  for (const [label, legacyOutstanding] of [
+    ["lower than", 8000],
+    ["equal to", SALE_PRICE],
+    ["higher than", SALE_PRICE + 5000],
+  ] as const) {
+    test(`a legacy row ${label} the sale invoice cannot change the canonical debt`, async () => {
+      const { t, orgId, customerId, vehicleId, userId, asUser } = await setup();
+      const saleId = await completeSale(asUser, orgId, customerId, vehicleId);
+      await addSaleLinkedLegacyRow(t, orgId, customerId, userId, saleId, legacyOutstanding);
+
+      // The invoice still owes what the subledger says it owes, whatever the
+      // hand-keyed row claims — and it is still listed, so it can still be paid.
+      const item = await canonicalSaleItem(asUser, orgId, saleId);
+      expect(item).toBeDefined();
+      expect(item!.outstandingAmount).toBe(SALE_PRICE);
+
+      // And the duplicate representation does not inflate the totals either:
+      // one debt is counted once, by its canonical authority.
+      const summary = await asUser.query(api.collections.summary, { orgId });
+      expect(summary.totalOutstanding).toBe(SALE_PRICE);
+
+      const aging = await asUser.query(api.collections.agingReport, { orgId });
+      const agedTotal =
+        aging.current.amount +
+        aging.days1To30.amount +
+        aging.days31To60.amount +
+        aging.days61To90.amount +
+        aging.over90.amount;
+      expect(agedTotal).toBe(SALE_PRICE);
+    });
+  }
+
+  test("the hand-keyed row stays visible and workable, marked as a duplicate representation", async () => {
+    const { t, orgId, customerId, vehicleId, userId, asUser } = await setup();
+    const saleId = await completeSale(asUser, orgId, customerId, vehicleId);
+    const receivableId = await addSaleLinkedLegacyRow(t, orgId, customerId, userId, saleId, 8000);
+
+    const queue = await asUser.query(api.collections.listCollectionQueue, { orgId });
+    const legacy = queue.items.find((row: any) => String(row.receivableId) === String(receivableId));
+
+    // Withdrawing it from the list would take its assignment, reminders and
+    // installment label with it. It stays — it just stops being money.
+    expect(legacy).toBeDefined();
+    expect(legacy!.duplicateRepresentation).toBe(true);
+  });
+
+  test("paying the hand-keyed representation pays down the sale's own invoice", async () => {
+    const { t, orgId, customerId, vehicleId, userId, asUser } = await setup();
+    const saleId = await completeSale(asUser, orgId, customerId, vehicleId);
+    const receivableId = await addSaleLinkedLegacyRow(t, orgId, customerId, userId, saleId, 8000);
+
+    const before = await canonicalSaleItem(asUser, orgId, saleId);
+    expect(before!.outstandingAmount).toBe(SALE_PRICE);
+
+    await asUser.mutation(api.collections.recordPayment, {
+      orgId,
+      receivableId,
+      amount: 8000,
+      method: "CASH",
+      paymentDate: Date.now(),
+    });
+
+    // The money reached the sale's canonical invoice, not a twin document
+    // raised from the legacy row. Under the netting model this came back as
+    // the full SALE_PRICE — the customer paid and the debt grew back.
+    const after = await canonicalSaleItem(asUser, orgId, saleId);
+    expect(after).toBeDefined();
+    expect(after!.outstandingAmount).toBe(SALE_PRICE - 8000);
+
+    const summary = await asUser.query(api.collections.summary, { orgId });
+    expect(summary.totalOutstanding).toBe(SALE_PRICE - 8000);
+
+    // And it settled the sale invoice itself, not a `legacy_receivable`
+    // document standing in for it.
+    await t.run(async (ctx: any) => {
+      const sale = await ctx.db.get(saleId);
+      const allocations = await ctx.db
+        .query("paymentAllocations")
+        .filter((q: any) => q.eq(q.field("receivableDocumentId"), sale!.canonicalReceivableDocumentId))
+        .collect();
+      const allocated = allocations
+        .filter((a: any) => a.status === "ACTIVE")
+        .reduce((sum: number, a: any) => sum + a.amountMinor, 0);
+      expect(allocated).toBe(8000 * 1000);
     });
   });
 });
