@@ -68,8 +68,22 @@ const EMPTY: Draft = {
 
 /**
  * Major units to minor, or null when the box is not a number the server could
- * use. An empty box is 0 rather than null ONLY for the destination lines, and
- * the caller decides that — see `parseAllocation`.
+ * use — and an EMPTY box is null, including on the destination lines.
+ *
+ * An earlier revision mapped a blank destination to 0. That let the screen
+ * manufacture a decision nobody made: on a 1,000 shortfall an operator could
+ * type 1,000 into cash-to-dealer, leave the other two blank, and the dialog
+ * would submit three figures of which one was chosen and two were invented —
+ * arithmetic that reconciles because the invented values happen to be zero.
+ *
+ * The distinction is not cosmetic. Money to the dealership becomes dealer
+ * proceeds and money to the finance company must not, so "nothing was paid to
+ * the financier" and "nobody said what was paid to the financier" are different
+ * facts with different accounting consequences. The owner's rule for this
+ * workflow is explicit that there are no defaults from absence, and a blank box
+ * silently reading as zero is exactly such a default.
+ *
+ * A typed `0` is a decision and is accepted. Blank is not a decision.
  */
 function toMinor(value: string, factor: number): number | null {
   const trimmed = value.trim();
@@ -168,11 +182,11 @@ export function ResolveGapDialog({
   const dealerShareMinor =
     customerShareMinor === null ? null : gapMinor - customerShareMinor;
 
-  const cashMinor = toMinor(draft.cash, factor) ?? (draft.cash.trim() === "" ? 0 : null);
-  const installmentsMinor =
-    toMinor(draft.installments, factor) ?? (draft.installments.trim() === "" ? 0 : null);
-  const toFinanceCompanyMinor =
-    toMinor(draft.toFinanceCompany, factor) ?? (draft.toFinanceCompany.trim() === "" ? 0 : null);
+  // Each destination is its own decision. Blank stays null and blocks the
+  // submission rather than becoming a zero the operator never entered.
+  const cashMinor = toMinor(draft.cash, factor);
+  const installmentsMinor = toMinor(draft.installments, factor);
+  const toFinanceCompanyMinor = toMinor(draft.toFinanceCompany, factor);
 
   const parsed =
     customerShareMinor !== null &&
@@ -212,15 +226,28 @@ export function ResolveGapDialog({
   const canSubmit = !submitting && parsed && splitIsRealSplit && violations.length === 0;
 
   const submit = async () => {
-    if (!canSubmit || customerShareMinor === null || dealerShareMinor === null) return;
+    // Every figure narrowed explicitly, and NOT with `?? 0` on the
+    // destinations. A fallback here would restore the defect one refactor
+    // later: `canSubmit` already proves they are non-null, so a zero written
+    // beside them can only ever be a value nobody typed.
+    if (
+      !canSubmit ||
+      customerShareMinor === null ||
+      dealerShareMinor === null ||
+      cashMinor === null ||
+      installmentsMinor === null ||
+      toFinanceCompanyMinor === null
+    ) {
+      return;
+    }
     setError(null);
     try {
       await onSubmit({
         customerGapShareMinor: customerShareMinor,
         dealerGapShareMinor: dealerShareMinor,
-        customerGapCashToDealerMinor: cashMinor ?? 0,
-        customerGapInstallmentToDealerMinor: installmentsMinor ?? 0,
-        customerGapToFinanceCompanyMinor: toFinanceCompanyMinor ?? 0,
+        customerGapCashToDealerMinor: cashMinor,
+        customerGapInstallmentToDealerMinor: installmentsMinor,
+        customerGapToFinanceCompanyMinor: toFinanceCompanyMinor,
         notes: draft.notes.trim(),
         // The stamp the dialog was OPENED against, not whatever the deal says
         // now. Sending the live one would tell the server the operator had seen

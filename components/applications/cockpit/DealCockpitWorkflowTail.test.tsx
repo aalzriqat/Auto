@@ -385,7 +385,12 @@ describe("the stage that nothing can clear", () => {
     const block = nextStepBlock();
     expect(within(block).getByText("BlockerGapUnresolved")).toBeTruthy();
     expect(within(block).queryByRole("button", { name: "ResolveGapAction" })).toBeNull();
-    expect(within(block).getByText("GapResolutionNeedsPermission")).toBeTruthy();
+    // And it names the RIGHT obstacle. This caller holds the approval
+    // permission, so telling them the agreement is recorded by whoever approves
+    // the purchase amount would describe an authority problem they do not have
+    // and send them looking for the wrong person.
+    expect(within(block).getByText("GapResolutionNeedsDealFigures")).toBeTruthy();
+    expect(within(block).queryByText("GapResolutionNeedsPermission")).toBeNull();
   });
 
   test("does not offer handover from behind the blocked gap", () => {

@@ -899,6 +899,11 @@ export const salesEn = {
   GapResolved: "Recorded who covers the difference.",
   GapResolutionNeedsPermission:
     "Agreeing who covers the difference is recorded by whoever approves the purchase amount for this deal.",
+  // A DIFFERENT obstacle: this person may record the agreement, but the deal's
+  // figures are not shown to them, and the shortfall is one of those figures.
+  // Sending them to find an approver would name the wrong problem.
+  GapResolutionNeedsDealFigures:
+    "This deal's figures are not available to you, so the difference cannot be settled here.",
   ResolveGapTitle: "Who covers the difference",
   ResolveGapDescription:
     "The finance company approved less than the quotation. Record what the customer and the dealership each agreed to cover, and where the customer's part is actually paid.",
@@ -1824,6 +1829,8 @@ export const salesAr = {
   GapResolved: "تم تسجيل من يتحمّل الفرق.",
   GapResolutionNeedsPermission:
     "يُسجّل الاتفاق على من يتحمّل الفرق من يملك صلاحية اعتماد مبلغ الشراء لهذه الصفقة.",
+  GapResolutionNeedsDealFigures:
+    "أرقام هذه الصفقة غير متاحة لك، لذلك لا يمكن تسوية الفرق من هنا.",
   ResolveGapTitle: "من يتحمّل الفرق",
   ResolveGapDescription:
     "اعتمدت شركة التمويل مبلغاً أقل من عرض السعر. سجّل ما اتفق العميل والمعرض على تحمّله، وأين يُدفع نصيب العميل فعلياً.",

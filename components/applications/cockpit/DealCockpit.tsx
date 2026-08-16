@@ -513,13 +513,17 @@ export function DealCockpit({
         onStart: () => {
           setResolvingGap(true);
         },
-        // The same authority that set the approved amount, because agreeing who
-        // absorbs the shortfall is the same negotiation — and the mutation
-        // refuses anything less.
-        unavailableReasonKey:
-          hasPermission(PERMISSIONS.APPROVE_FINANCE_APPLICATION) && gapVisible
+        // Two different reasons, told apart rather than merged. The authority
+        // is the same one that set the approved amount, because agreeing who
+        // absorbs the shortfall is the same negotiation. But a caller who HOLDS
+        // that authority and still cannot see the deal's money is blocked by
+        // visibility, not by permission — and telling them to find someone with
+        // approval rights sends them after a problem they do not have.
+        unavailableReasonKey: !hasPermission(PERMISSIONS.APPROVE_FINANCE_APPLICATION)
+          ? "GapResolutionNeedsPermission"
+          : gapVisible
             ? undefined
-            : "GapResolutionNeedsPermission",
+            : "GapResolutionNeedsDealFigures",
       };
     }
 
