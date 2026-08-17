@@ -302,6 +302,33 @@ function financierApprovesPurchase(args: {
   return args.companyId !== undefined;
 }
 
+/**
+ * Whether an approved purchase amount applies to this deal AT ALL.
+ *
+ * NOT the same question as `financierApprovesPurchase`, and conflating them was
+ * a defect this PR introduced. That helper answers "does a financier approve the
+ * purchase", which is false for every recorded non-configured mode — so the
+ * cockpit told a MANUAL deal the figure does not exist for its financing mode.
+ *
+ * But a NAMED manual provider is an identified external payer (`settlementPayer`),
+ * so it may take DIRECT_TO_SUPPLIER — and on that route `finalizeDeal` REQUIRES
+ * the approved amount, because it is what the supplier actually receives and the
+ * dealership's claim on him is measured from it. The same deal was therefore told
+ * the figure was inapplicable and then refused closure until it was recorded.
+ *
+ * `origin/main` said `NoApprovedPurchaseAmount` here, which was true. The route
+ * is the stronger evidence: whatever the mode says, if the financier pays the
+ * supplier directly then an approved amount applies.
+ */
+function approvedPurchaseAmountApplies(args: {
+  quoteMode: QuoteMode | undefined;
+  companyId: Id<"financeCompanies"> | undefined;
+  supplierSettlementRoute: Doc<"financeApplications">["supplierSettlementRoute"];
+}): boolean {
+  if (args.supplierSettlementRoute === "DIRECT_TO_SUPPLIER") return true;
+  return financierApprovesPurchase(args);
+}
+
 async function settlementPayerForApplication(
   ctx: QueryCtx | MutationCtx,
   app: Doc<"financeApplications">
@@ -1172,9 +1199,13 @@ async function buildCockpitMoney(
       // the operator to record something nothing will accept. Same resolution
       // the guard uses, so the two cannot disagree about what kind of deal
       // this is.
-      financierEconomicsApplicable: financierApprovesPurchase({
+      financierEconomicsApplicable: approvedPurchaseAmountApplies({
         quoteMode: await resolveQuoteMode(ctx, app),
         companyId: app.companyId,
+        // The route, not only the mode. Without it a MANUAL direct-to-supplier
+        // deal was told the amount did not apply and then refused closure for
+        // its absence.
+        supplierSettlementRoute: app.supplierSettlementRoute,
       }),
     });
 

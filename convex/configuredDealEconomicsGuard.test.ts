@@ -328,6 +328,66 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
     expect(after?.finalizedSaleId).toBeDefined();
   });
 
+  test("a MANUAL direct-to-supplier deal is told to record the amount, not that it does not apply", async () => {
+    // Found by the Codex seat at b04f06ba and INTRODUCED BY THIS PR.
+    //
+    // `financierApprovesPurchase` answers "does a financier approve the
+    // purchase" and returns false for every recorded non-configured mode. The
+    // cockpit used it to decide whether an approved purchase amount APPLIES AT
+    // ALL — a different question — so a MANUAL deal reported
+    // `NotApplicableForFinancingMode`.
+    //
+    // But a NAMED manual provider is an identified external payer
+    // (`settlementPayer`), so it may take DIRECT_TO_SUPPLIER — and on that route
+    // `finalizeDeal` REQUIRES the approved amount, because it is what the
+    // supplier actually receives and the dealership's claim is measured from it.
+    //
+    // So the same deal was told the figure does not exist for its financing
+    // mode, and then refused closure until that figure was recorded. `main` said
+    // `NoApprovedPurchaseAmount`, which was true. This is the regression that
+    // pins the cockpit and finalization to ONE answer.
+    const { t, orgId, applicationId, asUser, registerExpectedPayment } =
+      await seedApprovedApplication("MANUAL_FINANCE_COMPANY");
+
+    await t.run((ctx) =>
+      ctx.db.patch(applicationId, {
+        manualFinanceSnapshot: { providerName: "Amman Finance House" },
+        supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+        approvedDealerPurchaseAmountMinor: undefined,
+      })
+    );
+
+    const cockpit = await asUser.query(api.applications.dealCockpit, {
+      orgId,
+      applicationId,
+    });
+
+    // Non-vacuity first: the figure really is unavailable, so a reason exists to
+    // be wrong about. `ManagementProfit` is a discriminated union and `reason`
+    // lives only on the unavailable arm, so this narrows rather than reaching
+    // through an optional chain — an unnarrowed `?.reason` compiles to
+    // undefined-vs-undefined at runtime and proves nothing, which is how an
+    // earlier assertion in this codebase passed while measuring nothing.
+    const profit = cockpit?.money?.managementProfit;
+    expect(profit?.available).toBe(false);
+    if (profit?.available !== false) {
+      throw new Error("expected the management profit to be unavailable");
+    }
+    // The actionable reason, agreeing with what finalization will demand.
+    expect(profit.reason).toBe("NoApprovedPurchaseAmount");
+
+    // And the other half of the contradiction, in the same test so the two
+    // cannot drift apart again.
+    await registerHandover(asUser, api, orgId, applicationId);
+    await registerExpectedPayment();
+    // Reaching the REAL refusal matters: without the expected payment above,
+    // finalization stops earlier for an unrelated reason and a looser regex
+    // would have let this test pass while never exercising the contradiction.
+    await expect(
+      asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId })
+    ).rejects.toThrow(/approved purchase amount is not recorded|Record it before finalizing/i);
+  });
+
   test("a LEASE deal is not blocked by the configured-mode requirement", async () => {
     const { t, orgId, applicationId, asUser, registerExpectedPayment } =
       await seedApprovedApplication("LEASE");
