@@ -1,13 +1,18 @@
 import { describe, test, expect } from "vitest";
 import {
   PRODUCTION_CONFIRMATION,
+  classifyDeployKey,
   classifyMaterializationReport,
   decideCommitAuthority,
   decidePollOutcome,
+  forLog,
+  isFullSha,
   mergeVerdicts,
   parseConvexRunJson,
   parseReleaseInputs,
+  pollIntervalMs,
   renderReleaseSummary,
+  requireProductionDeployKey,
   type OrgReport,
   type PlatformReport,
 } from "./releaseGuard";
@@ -156,50 +161,77 @@ describe("the rollout verdict fails closed", () => {
     expect(verdict).toMatchObject({ ok: true, settled: true, orgCount: 1, completedOrgCount: 1 });
   });
 
-  test("THE 2026-08-07 INCIDENT: completed over real events, zero conversations materialised", () => {
-    // On that day the Social Inbox reported zero conversations for an org
-    // holding 347 Instagram and 689 Facebook events — no throw, no log —
-    // because the reader had been pointed at a table whose backfill never ran.
-    // "COMPLETED" alone cannot distinguish that from a genuinely empty org,
-    // which is exactly why the source count is compared against the result.
+  test("an org whose events are all UNLINKED still passes — it is not the incident", () => {
+    // ⚠️ REGRESSION. This shape used to fail the rollout, permanently and
+    // unrecoverably. `syncThreadsInBackfillPage` skips every event without a
+    // `customerId` (`if (!event.customerId) continue;`) and
+    // `socialInboxConversations.test.ts` pins that as correct — so an org whose
+    // events are all unlinked legitimately completes with `expectedCount > 0`
+    // and `materializedCount === 0`.
+    //
+    // Failing on it was not merely wrong, it was a dead end: the fan-out SKIPS
+    // orgs that are already `completed`, so no re-run could clear it, and the
+    // only escape (`force`) restarts the backfill and drops the org back to the
+    // legacy scan.
     const verdict = classifyMaterializationReport([
       org({
         readerSource: "materialized",
         platforms: [platform({ expectedCount: 347, processedCount: 347, materializedCount: 0 })],
       }),
     ]);
-    expect(verdict.ok).toBe(false);
-    expect(verdict.settled).toBe(true);
-    expect(verdict.problems.map((p) => p.kind)).toContain("emptyMaterialization");
+    expect(verdict.ok).toBe(true);
+    expect(verdict.problems).toEqual([]);
+    // Reported, though — it is still the shape of the 2026-08-07 incident when
+    // the events ARE linked, and this gate cannot tell the two apart.
+    expect(verdict.anomalies.map((p) => p.kind)).toEqual(["emptyMaterialization"]);
   });
 
-  test("an org with genuinely no events is NOT the incident", () => {
+  test("an org with genuinely no events raises no anomaly at all", () => {
     const verdict = classifyMaterializationReport([
       org({ platforms: [platform({ expectedCount: 0, processedCount: 0, materializedCount: 0 })] }),
     ]);
     expect(verdict.ok).toBe(true);
+    expect(verdict.anomalies).toEqual([]);
   });
 
-  test("failed, interrupted and ambiguous are terminal problems, not waits", () => {
+  test("REGRESSION: failed and interrupted are REDRIVABLE, so they wait rather than abort", () => {
+    // ⚠️ These used to be terminal, which broke the case they exist for.
+    // `startSocialConversationBackfills` redrives both, but it only SCHEDULES
+    // the worker that resets the row — so the first poll still saw the old
+    // `failed` and aborted the rollout while its own recovery was queued. Any
+    // org carrying a stale failed row made every future rollout fail instantly.
     for (const status of ["failed", "interrupted"]) {
-      const verdict = classifyMaterializationReport([org({ platforms: [platform({ status })] })]);
+      const verdict = classifyMaterializationReport([
+        org({ readerSource: "legacyEvents", platforms: [platform({ status })] }),
+      ]);
       expect(verdict.ok, status).toBe(false);
-      expect(verdict.settled, status).toBe(true);
-      expect(verdict.problems[0].kind, status).toBe(status);
+      expect(verdict.problems, status).toEqual([]);
+      expect(verdict.settled, status).toBe(false);
+      expect(verdict.inFlight[0].kind, status).toBe(status);
     }
+  });
 
-    const ambiguous = classifyMaterializationReport([
+  test("ambiguous stays terminal, because no redrive is allowed to touch it", () => {
+    // The fan-out skips `ambiguous` UNCONDITIONALLY — no run can repair a
+    // contradiction it is not allowed to resolve — so waiting would burn the
+    // whole deadline on something only a human can fix.
+    const verdict = classifyMaterializationReport([
       org({ platforms: [platform({ status: "ambiguous", duplicateState: true })] }),
     ]);
-    expect(ambiguous.problems[0].kind).toBe("ambiguous");
-    expect(ambiguous.settled).toBe(true);
+    expect(verdict.problems[0].kind).toBe("ambiguous");
+    expect(verdict.settled).toBe(true);
+    expect(verdict.inFlight).toEqual([]);
   });
 
   test("a failure message is carried through instead of being swallowed", () => {
     const verdict = classifyMaterializationReport([
-      org({ platforms: [platform({ status: "failed", failureMessage: "hit a document limit" })] }),
+      org({
+        readerSource: "legacyEvents",
+        platforms: [platform({ status: "failed", failureMessage: "hit a document limit" })],
+      }),
     ]);
-    expect(verdict.problems[0].detail).toBe("hit a document limit");
+    expect(verdict.inFlight[0].detail).toMatch(/hit a document limit/);
+    expect(verdict.inFlight[0].detail).toMatch(/awaiting redrive/);
   });
 
   test("running and notStarted mean ASK AGAIN, not healthy and not broken", () => {
@@ -256,7 +288,7 @@ describe("the rollout verdict fails closed", () => {
   test("one bad page poisons the merged verdict, so pagination cannot hide it", () => {
     const good = classifyMaterializationReport([org()]);
     const bad = classifyMaterializationReport([
-      org({ orgId: "org_2", platforms: [platform({ status: "failed" })] }),
+      org({ orgId: "org_2", platforms: [platform({ status: "ambiguous", duplicateState: true })] }),
     ]);
     const merged = mergeVerdicts([good, bad]);
     expect(merged.ok).toBe(false);
@@ -265,8 +297,90 @@ describe("the rollout verdict fails closed", () => {
     expect(merged.problems).toHaveLength(1);
   });
 
+  test("merging carries anomalies through without failing the merge", () => {
+    const clean = classifyMaterializationReport([org()]);
+    const odd = classifyMaterializationReport([
+      org({ orgId: "org_2", platforms: [platform({ expectedCount: 9, materializedCount: 0 })] }),
+    ]);
+    const merged = mergeVerdicts([clean, odd]);
+    expect(merged.ok).toBe(true);
+    expect(merged.anomalies).toHaveLength(1);
+  });
+
   test("merging nothing is not a pass either", () => {
     expect(mergeVerdicts([]).ok).toBe(false);
+  });
+});
+
+describe("a production credential is proven to be one before anything is deployed", () => {
+  test("a PREVIEW key is refused — it would verify a preview and report success", () => {
+    // ⚠️ Not hypothetical. A repository-level secret named CONVEX_DEPLOY_KEY
+    // already exists and playwright.yml consumes it on every pull request with
+    // Convex's preview-deploy flags. Repository secrets are visible to every
+    // job, so a same-named reference here would have picked it up whenever the
+    // environment secret was absent — deploying a PREVIEW, verifying that
+    // preview, and reporting "Production rollout verified".
+    const result = requireProductionDeployKey("preview:my-team:my-project|abc123");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/PREVIEW/);
+    // The key must never appear in the refusal.
+    expect(result.reason).not.toMatch(/abc123/);
+  });
+
+  test("dev, project, legacy and missing keys are all refused", () => {
+    expect(classifyDeployKey("dev:happy-otter-42|secret")).toBe("dev");
+    expect(classifyDeployKey("project:my-team:my-project|secret")).toBe("project");
+    // No `|` at all is the pre-scoping format. Convex's own
+    // `deploymentTypeFromAdminKey` reports those as "prod" — precisely the
+    // assumption not to inherit, since an unrecognised shape must not be
+    // granted the most dangerous meaning.
+    expect(classifyDeployKey("legacyadminkeywithnopipe")).toBe("legacy");
+    expect(classifyDeployKey(undefined)).toBe("missing");
+    expect(classifyDeployKey("   ")).toBe("missing");
+
+    for (const key of ["dev:x|y", "project:a:b|y", "nopipe", undefined, ""]) {
+      expect(requireProductionDeployKey(key).ok, String(key)).toBe(false);
+    }
+  });
+
+  test("a production deployment key is accepted", () => {
+    expect(classifyDeployKey("prod:kindly-hound-172|secretpart")).toBe("prod");
+    expect(requireProductionDeployKey("prod:kindly-hound-172|secretpart").ok).toBe(true);
+  });
+});
+
+describe("polling backs off instead of re-walking every 15 seconds forever", () => {
+  test("responsive early, cheap later", () => {
+    expect(pollIntervalMs(0)).toBe(15_000);
+    expect(pollIntervalMs(60_000)).toBe(15_000);
+    expect(pollIntervalMs(3 * 60_000)).toBe(30_000);
+    expect(pollIntervalMs(30 * 60_000)).toBe(60_000);
+  });
+
+  test("the interval never decreases as the rollout runs on", () => {
+    let previous = 0;
+    for (const minutes of [0, 1, 2, 5, 10, 20, 45]) {
+      const interval = pollIntervalMs(minutes * 60_000);
+      expect(interval, `${minutes}m`).toBeGreaterThanOrEqual(previous);
+      previous = interval;
+    }
+  });
+});
+
+describe("values headed for a URL or a log are bounded first", () => {
+  test("isFullSha accepts only a 40-character hex string", () => {
+    expect(isFullSha("a".repeat(40))).toBe(true);
+    expect(isFullSha("a".repeat(39))).toBe(false);
+    expect(isFullSha("../../etc/passwd")).toBe(false);
+    expect(isFullSha(undefined)).toBe(false);
+  });
+
+  test("forLog flattens newlines and truncates, so a log line stays one line", () => {
+    expect(forLog("a\nb\tc")).toBe('"a b c"');
+    const long = forLog("x".repeat(500));
+    expect(long.length).toBeLessThan(140);
+    expect(long.endsWith("…")).toBe(true);
   });
 });
 
@@ -281,10 +395,19 @@ describe("polling stops for the right reasons", () => {
   });
 
   test("a settled FAILURE ends the poll immediately instead of burning the deadline", () => {
-    // Waiting does not repair a `failed`, an `interrupted`, or a contradictory
-    // pair of state rows.
-    const verdict = classifyMaterializationReport([org({ platforms: [platform({ status: "failed" })] })]);
+    // Waiting does not repair a contradictory pair of state rows — nothing is
+    // even allowed to try.
+    const verdict = classifyMaterializationReport([
+      org({ platforms: [platform({ status: "ambiguous", duplicateState: true })] }),
+    ]);
     expect(decidePollOutcome({ verdict, elapsedMs: 0, timeoutMs: 60_000 })).toBe("failed");
+  });
+
+  test("an anomaly alone does NOT end the poll in failure", () => {
+    const verdict = classifyMaterializationReport([
+      org({ platforms: [platform({ expectedCount: 9, materializedCount: 0 })] }),
+    ]);
+    expect(decidePollOutcome({ verdict, elapsedMs: 0, timeoutMs: 60_000 })).toBe("verified");
   });
 
   test("work still in flight keeps polling until the deadline, then times out", () => {
@@ -319,7 +442,9 @@ describe("convex run output is parsed strictly", () => {
 
 describe("the summary says what is true", () => {
   test("an incomplete rollout says production IS deployed and must not be signed off", () => {
-    const verdict = classifyMaterializationReport([org({ platforms: [platform({ status: "failed" })] })]);
+    const verdict = classifyMaterializationReport([
+      org({ platforms: [platform({ status: "ambiguous", duplicateState: true })] }),
+    ]);
     const summary = renderReleaseSummary({
       mode: "deploy",
       sha: TIP,
@@ -345,5 +470,23 @@ describe("the summary says what is true", () => {
     });
     expect(summary).toMatch(/Production rollout verified/);
     expect(summary).not.toMatch(/rollout is not complete/);
+  });
+
+  test("an anomaly is surfaced in the summary even on a verified run", () => {
+    // The demotion must not become a disappearance — the whole justification
+    // for not failing on it is that a human still gets told.
+    const summary = renderReleaseSummary({
+      mode: "deploy",
+      sha: TIP,
+      mainTipSha: TIP,
+      deployment: "kindly-hound-172",
+      verdict: classifyMaterializationReport([
+        org({ platforms: [platform({ expectedCount: 347, materializedCount: 0 })] }),
+      ]),
+      outcome: "verified",
+    });
+    expect(summary).toMatch(/Production rollout verified/);
+    expect(summary).toMatch(/Worth a look \(did not fail the rollout\)/);
+    expect(summary).toMatch(/emptyMaterialization/);
   });
 });

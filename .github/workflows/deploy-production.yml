@@ -13,13 +13,26 @@
 # a human other than the requester approves each run, and the whole thing is
 # ordered so that verification happens while there is still nothing to steal.
 #
-# ⚠️ Requires configuration that is NOT in this file, and the workflow is not a
+# ⚠️ Requires configuration that is NOT in this file, and the workflow is NOT a
 # boundary until it exists — see AGENTS.md:
-#   · a `production` environment with a required reviewer
-#   · `CONVEX_DEPLOY_KEY`     — production, `deployment:deploy` only
-#   · `CONVEX_OPERATOR_KEY`   — production, `runInternalMutations` +
-#                               `runInternalQueries` only
+#   · the `production` environment given a REQUIRED REVIEWER and its deployment
+#     branches restricted to `main`. An environment with no protection rules
+#     gates nothing: `environment:` on a rule-less environment is a no-op and
+#     the job starts immediately, like any other. The repository's existing
+#     `Production` environment is in exactly that state today.
+#   · `CONVEX_PROD_DEPLOY_KEY`   — production deployment, `deployment:deploy` only
+#   · `CONVEX_PROD_OPERATOR_KEY` — `runInternalMutations` + `runInternalQueries` only
 #   · the workstation production deploy key REVOKED once this is proven
+#
+# ⚠️ The names above are deliberately NOT `CONVEX_DEPLOY_KEY`. A repository
+# secret of that name already exists and is consumed by `playwright.yml` on
+# every pull request. Repository secrets are visible to every job, so reusing
+# the name would mean this workflow silently falling back to that key whenever
+# the environment secret is absent — and if it is a preview key, `convex deploy`
+# would build a PREVIEW deployment, the verifier would then verify that preview,
+# and the run would report "Production rollout verified" while production was
+# never touched. Distinct names make a missing secret resolve to empty, so the
+# deploy fails closed instead.
 
 name: Deploy production
 
@@ -121,25 +134,46 @@ jobs:
           fi
           echo "HEAD is $actual"
 
-      # Approval is asynchronous — a run can wait hours. Without this, a deploy
-      # authorised against yesterday's tip would ship today, silently reverting
-      # everything merged in between while the summary claimed it was shipping
-      # "main's current tip".
-      - name: Re-verify main has not moved since authorisation
-        if: needs.authorize.outputs.mode == 'deploy'
+      # ⚠️ Re-derived HERE, in the workflow definition, rather than trusted from
+      # the `authorize` job. `workflow_dispatch` runs whatever definition exists
+      # on the ref the operator picked, so `authorize` is only as trustworthy as
+      # that ref — its own "must be main" check is the thing a modified branch
+      # would remove first. This step is not affected by the checkout above
+      # either, so it cannot be swapped by choosing an older target commit.
+      #
+      # It runs for BOTH modes. Rollback used to skip the only independent check
+      # in this job, which left "is this commit even in main" resting entirely on
+      # a script the dispatcher could have supplied.
+      - name: Independently re-verify the commit against main
         env:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_SHA: ${{ needs.authorize.outputs.sha }}
+          MODE: ${{ needs.authorize.outputs.mode }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           tip="$(gh api "repos/${REPO}/commits/main" --jq .sha)"
-          if [ "$tip" != "$EXPECTED_SHA" ]; then
-            echo "::error::main advanced to $tip while this run awaited approval. \
-          Dispatch a new run against the current tip, or use the rollback mode deliberately."
+
+          # Contained in main, in both modes. `behind` means main holds this
+          # commit and more; `identical` means it is the tip.
+          status="$(gh api "repos/${REPO}/compare/${tip}...${EXPECTED_SHA}" --jq .status)"
+          case "$status" in
+            behind|identical) ;;
+            *)
+              echo "::error::$EXPECTED_SHA is not contained in main (compare status: $status). Refusing."
+              exit 1
+              ;;
+          esac
+
+          # Approval is asynchronous — a run can wait hours. Without this, a
+          # deploy authorised against yesterday's tip would ship today, silently
+          # reverting everything merged in between while the summary claimed it
+          # was shipping "main's current tip".
+          if [ "$MODE" = "deploy" ] && [ "$tip" != "$EXPECTED_SHA" ]; then
+            echo "::error::main advanced to $tip while this run awaited approval. Dispatch a new run against the current tip, or choose the rollback mode deliberately."
             exit 1
           fi
-          echo "main is still at $tip"
+          echo "main is at $tip; target $EXPECTED_SHA is $status relative to it"
 
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
@@ -165,9 +199,49 @@ jobs:
       # deployment-scoped key makes the credential itself the selector. There is
       # no environment variable here that could point it somewhere else — which
       # is precisely the assumption that failed on 2026-08-07.
+      # ⚠️ Inline rather than a repo script, on purpose: a rollback checks out an
+      # older commit that may not contain any of this PR's files, and a guard
+      # that vanishes exactly when an incident is being handled is not a guard.
+      # The key itself is never printed — only its classification, and only from
+      # a fixed set of words.
+      - name: Refuse a credential that is not scoped to production
+        env:
+          DEPLOY_KEY: ${{ secrets.CONVEX_PROD_DEPLOY_KEY }}
+          OPERATOR_KEY: ${{ secrets.CONVEX_PROD_OPERATOR_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DEPLOY_KEY}" ] || [ -z "${OPERATOR_KEY}" ]; then
+            echo "::error::The production environment's secrets are not configured. Expected CONVEX_PROD_DEPLOY_KEY and CONVEX_PROD_OPERATOR_KEY as environment secrets on 'production'. See AGENTS.md."
+            exit 1
+          fi
+          prefix="${DEPLOY_KEY%%|*}"
+          if [ "$prefix" = "$DEPLOY_KEY" ]; then
+            echo "::error::The deploy key's format is not recognised as deployment-scoped. Refusing rather than assuming it means production."
+            exit 1
+          fi
+          case "${prefix%%:*}" in
+            prod) echo "Deploy key is scoped to a production deployment." ;;
+            preview)
+              echo "::error::This is a PREVIEW deploy key. It would create a preview deployment, and every check afterwards would pass against that preview while production went untouched."
+              exit 1
+              ;;
+            dev)
+              echo "::error::This is a DEV deployment key."
+              exit 1
+              ;;
+            project)
+              echo "::error::This is a project-scoped key; it does not name a deployment and can resolve to dev."
+              exit 1
+              ;;
+            *)
+              echo "::error::Unrecognised deploy key shape. Refusing."
+              exit 1
+              ;;
+          esac
+
       - name: Deploy Convex backend
         env:
-          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PROD_DEPLOY_KEY }}
         run: |
           set -euo pipefail
           pnpm exec convex deploy 2>&1 | tee deploy.log
@@ -187,15 +261,50 @@ jobs:
       # Same job, immediately after the deploy, because the window between them
       # is the expensive one: the conversation trigger is live and adding writes
       # while every inbox is still served by the legacy full scan.
+      #
+      # ⚠️ `deploy` mode only, and that is a correctness bound rather than a
+      # preference. A rollback checks out a commit that predates this tooling —
+      # today, EVERY rollback target does — so `scripts/rolloutRelease.mjs` and
+      # the `materializationReportForRelease` function it calls are both absent
+      # from the tree and from the backend it just deployed. Running it anyway
+      # would have died on a module-not-found error, after a successful deploy,
+      # during an incident. Running the CURRENT backfill against ROLLED-BACK
+      # code would be worse: SCRUM-110 documents that generation fences run
+      # forward only.
       - name: Roll out Social Inbox conversations and verify
+        if: needs.authorize.outputs.mode == 'deploy'
         env:
-          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_OPERATOR_KEY }}
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PROD_OPERATOR_KEY }}
           RELEASE_MODE: ${{ needs.authorize.outputs.mode }}
           RELEASE_SHA: ${{ needs.authorize.outputs.sha }}
           RELEASE_MAIN_TIP: ${{ needs.authorize.outputs.main_tip }}
           RELEASE_DEPLOYMENT: ${{ steps.target.outputs.deployment }}
           ROLLOUT_TIMEOUT_MINUTES: '45'
         run: node scripts/rolloutRelease.mjs
+
+      # Says plainly what a rollback did and did not do, so nobody reads a green
+      # run as a verified one.
+      - name: Report the rollback
+        if: needs.authorize.outputs.mode == 'rollback'
+        env:
+          SHA: ${{ needs.authorize.outputs.sha }}
+          DEPLOYMENT: ${{ steps.target.outputs.deployment }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## ⏪ Rolled back"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Deployed commit | \`${SHA}\` |"
+            echo "| Convex deployment | ${DEPLOYMENT:-_not reported_} |"
+            echo
+            echo "**The Social Inbox rollout was NOT run, and this run does not verify it.**"
+            echo "A rollback target predates this verification tooling, and running the current"
+            echo "backfill against rolled-back code is the forward-only-fence hazard recorded in"
+            echo "SCRUM-110. Check the Social Inbox by hand, and follow SCRUM-110 before touching"
+            echo "any materialisation generation."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # Runs even when verification failed, because "deployed but not rolled
       # out" is a state someone has to be able to act on, and the identifiers

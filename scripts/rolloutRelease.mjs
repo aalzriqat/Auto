@@ -15,14 +15,17 @@
  * This file is deliberately only the I/O around it.
  */
 import { spawnSync } from "node:child_process";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync } from "node:fs";
+import path from "node:path";
 import process from "node:process";
 import {
   classifyMaterializationReport,
   decidePollOutcome,
   mergeVerdicts,
   parseConvexRunJson,
+  pollIntervalMs,
   renderReleaseSummary,
+  requireProductionDeployKey,
 } from "./releaseGuard.ts";
 
 const REPORT_FN = "adminSystem:materializationReportForRelease";
@@ -35,7 +38,14 @@ const PAGE_SIZE = 50;
  */
 const MAX_PAGES = 500;
 
-const POLL_INTERVAL_MS = 15_000;
+/**
+ * A single CLI call that never returns would strand the whole run: `spawnSync`
+ * blocks, so control never reaches the deadline check again and the informative
+ * summary below never gets written. The only backstop would be the job-level
+ * kill, which produces nothing anyone can act on.
+ */
+const CLI_TIMEOUT_MS = 5 * 60_000;
+
 const TIMEOUT_MS = Number(process.env.ROLLOUT_TIMEOUT_MINUTES ?? 45) * 60_000;
 
 const MODE = process.env.RELEASE_MODE ?? "deploy";
@@ -44,7 +54,53 @@ const MAIN_TIP = process.env.RELEASE_MAIN_TIP ?? "";
 const DEPLOYMENT = process.env.RELEASE_DEPLOYMENT || null;
 
 /**
- * Invokes the repository-local Convex CLI.
+ * The repository-local Convex CLI, addressed directly.
+ *
+ * Not `pnpm exec convex`, and not because `pnpm exec` would resolve the wrong
+ * package — it resolves the right one. It is that reaching it through a bare
+ * command name means resolving `pnpm` itself through `PATH`, and this script's
+ * whole job is to report truthfully on what a credential just did to
+ * production. `process.execPath` is the running interpreter's absolute path and
+ * the entry below is inside this commit's own `node_modules`, so neither is
+ * looked up anywhere.
+ */
+const CONVEX_CLI = path.join(process.cwd(), "node_modules", "convex", "bin", "main.js");
+
+let lastVerdict = null;
+let lastOutcome = "continue";
+
+function writeSummary(extra) {
+  const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+  if (!summaryPath) return;
+  const verdict = lastVerdict ?? {
+    ok: false,
+    settled: false,
+    orgCount: 0,
+    completedOrgCount: 0,
+    inFlight: [],
+    problems: [],
+    anomalies: [],
+  };
+  let body = renderReleaseSummary({
+    mode: MODE,
+    sha: SHA,
+    mainTipSha: MAIN_TIP,
+    deployment: DEPLOYMENT,
+    verdict,
+    outcome: lastOutcome === "continue" ? "failed" : lastOutcome,
+  });
+  if (extra) body += `\n### What stopped it\n\n\`\`\`\n${extra}\n\`\`\`\n`;
+  appendFileSync(summaryPath, `${body}\n`);
+}
+
+function fail(message) {
+  console.error(`\n✖ ${message}\n`);
+  writeSummary(message);
+  process.exit(1);
+}
+
+/**
+ * Invokes the Convex CLI.
  *
  * `--prod` is passed deliberately, and NOT because it is what selects the
  * target. Verified against the installed CLI (convex 1.42.1): with a
@@ -57,14 +113,22 @@ const DEPLOYMENT = process.env.RELEASE_DEPLOYMENT || null;
  * that can be the dev one — which would have this script cheerfully verify a
  * successful rollout on a deployment that is not production. That is the exact
  * shape of the 2026-08-07 incident, so the flag is a fail-safe, not a selector.
+ *
+ * Codegen and typechecking are disabled: this step must observe the deployment,
+ * never rewrite the tree it is observing from.
  */
 function convex(args) {
-  const result = spawnSync("pnpm", ["exec", "convex", ...args, "--prod"], {
-    encoding: "utf8",
-    shell: false,
-    env: process.env,
-    maxBuffer: 64 * 1024 * 1024,
-  });
+  const result = spawnSync(
+    process.execPath,
+    [CONVEX_CLI, ...args, "--prod", "--typecheck", "disable", "--codegen", "disable"],
+    {
+      encoding: "utf8",
+      shell: false,
+      env: process.env,
+      maxBuffer: 64 * 1024 * 1024,
+      timeout: CLI_TIMEOUT_MS,
+    }
+  );
 
   if (result.error) {
     return { ok: false, reason: `Could not run the Convex CLI: ${result.error.message}` };
@@ -79,41 +143,17 @@ function convex(args) {
   return parseConvexRunJson(result.stdout ?? "");
 }
 
-function fail(message) {
-  console.error(`\n✖ ${message}\n`);
-  writeSummary(message);
-  process.exit(1);
-}
-
-let lastVerdict = null;
-let lastOutcome = "failed";
-
-function writeSummary(extra) {
-  const path = process.env.GITHUB_STEP_SUMMARY;
-  if (!path) return;
-  const verdict =
-    lastVerdict ??
-    ({ ok: false, settled: false, orgCount: 0, completedOrgCount: 0, inFlight: [], problems: [] });
-  let body = renderReleaseSummary({
-    mode: MODE,
-    sha: SHA,
-    mainTipSha: MAIN_TIP,
-    deployment: DEPLOYMENT,
-    verdict,
-    outcome: lastOutcome,
-  });
-  if (extra) body += `\n### What stopped it\n\n\`\`\`\n${extra}\n\`\`\`\n`;
-  appendFileSync(path, `${body}\n`);
-}
-
 /** Walks every page of the report and merges the per-page verdicts. */
 function collectVerdict() {
   const verdicts = [];
   let cursor = null;
 
   for (let pageNumber = 0; pageNumber < MAX_PAGES; pageNumber += 1) {
-    const args = ["run", REPORT_FN, JSON.stringify({ paginationOpts: { cursor, numItems: PAGE_SIZE } })];
-    const result = convex(args);
+    const result = convex([
+      "run",
+      REPORT_FN,
+      JSON.stringify({ paginationOpts: { cursor, numItems: PAGE_SIZE } }),
+    ]);
     if (!result.ok) return result;
 
     const value = result.value;
@@ -137,6 +177,18 @@ function collectVerdict() {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// ─── 0. Refuse before doing anything if the environment is not configured ────
+
+// Checked here rather than left to the CLI so the failure names the cause. An
+// unconfigured production environment otherwise surfaces as an opaque Convex
+// error several steps later, at the exact moment nobody wants a puzzle.
+const keyCheck = requireProductionDeployKey(process.env.CONVEX_DEPLOY_KEY);
+if (!keyCheck.ok) fail(keyCheck.reason);
+
+if (!existsSync(CONVEX_CLI)) {
+  fail(`The repository-local Convex CLI is missing at ${CONVEX_CLI}. Did the install step run?`);
+}
+
 // ─── 1. Start the backfills ─────────────────────────────────────────────────
 
 console.log(`Starting Social Inbox conversation backfills…`);
@@ -146,44 +198,50 @@ console.log(`  fan-out: ${JSON.stringify(started.value)}`);
 
 // ─── 2. Refuse to finish until every org is verifiably on the fast path ──────
 
-const deadline = Date.now() + TIMEOUT_MS;
+const startedAt = Date.now();
 console.log(`Verifying the rollout (deadline ${Math.round(TIMEOUT_MS / 60_000)} minutes)…`);
 
-for (;;) {
+// The loop variable IS the end condition: every branch below either leaves it
+// at "continue" or sets a terminal value.
+while (lastOutcome === "continue") {
   const collected = collectVerdict();
   if (!collected.ok) fail(collected.reason);
 
   lastVerdict = collected.verdict;
-  const elapsedMs = TIMEOUT_MS - (deadline - Date.now());
+  const elapsedMs = Date.now() - startedAt;
   lastOutcome = decidePollOutcome({ verdict: lastVerdict, elapsedMs, timeoutMs: TIMEOUT_MS });
 
   console.log(
     `  ${lastVerdict.completedOrgCount}/${lastVerdict.orgCount} organizations materialised · ` +
-      `${lastVerdict.inFlight.length} in flight · ${lastVerdict.problems.length} problems · ${lastOutcome}`
+      `${lastVerdict.inFlight.length} in flight · ${lastVerdict.problems.length} problems · ` +
+      `${lastVerdict.anomalies.length} anomalies · ${lastOutcome}`
   );
 
-  if (lastOutcome === "verified") {
-    writeSummary(null);
-    console.log(`\n✔ Every organization is reading the materialised path.\n`);
-    process.exit(0);
-  }
-
-  if (lastOutcome === "failed" || lastOutcome === "timedOut") {
-    for (const p of [...lastVerdict.problems, ...lastVerdict.inFlight]) {
-      console.error(`  ${p.orgName} (${p.orgId}) ${p.platform ?? "—"} ${p.kind}: ${p.detail}`);
-    }
-    // ⚠️ Production IS deployed at this point. Saying so plainly is the whole
-    // job of this branch: the failure is a rollout that did not finish, not a
-    // deploy that did not happen, and the two want completely different next
-    // actions from whoever reads this.
-    fail(
-      lastOutcome === "timedOut"
-        ? `Production is DEPLOYED, but the rollout did not finish within the deadline. ` +
-            `The organizations still in flight are listed above — a follow-up run resumes safely, ` +
-            `since the backfills skip organizations already proven complete.`
-        : `Production is DEPLOYED, but the rollout is INCOMPLETE. Do not record SCRUM-21 as closed.`
-    );
-  }
-
-  await sleep(POLL_INTERVAL_MS);
+  if (lastOutcome === "continue") await sleep(pollIntervalMs(elapsedMs));
 }
+
+for (const p of lastVerdict.anomalies) {
+  console.warn(`  ⚠ ${p.orgName} (${p.orgId}) ${p.platform ?? "—"} ${p.kind}: ${p.detail}`);
+}
+
+if (lastOutcome === "verified") {
+  writeSummary(null);
+  console.log(`\n✔ Every organization is reading the materialised path.\n`);
+  process.exit(0);
+}
+
+for (const p of [...lastVerdict.problems, ...lastVerdict.inFlight]) {
+  console.error(`  ${p.orgName} (${p.orgId}) ${p.platform ?? "—"} ${p.kind}: ${p.detail}`);
+}
+
+// ⚠️ Production IS deployed at this point. Saying so plainly is the whole job
+// of this branch: the failure is a rollout that did not finish, not a deploy
+// that did not happen, and the two want completely different next actions from
+// whoever reads this.
+fail(
+  lastOutcome === "timedOut"
+    ? `Production is DEPLOYED, but the rollout did not finish within the deadline. ` +
+        `The organizations still in flight are listed above — a follow-up run resumes safely, ` +
+        `since the backfills skip organizations already proven complete.`
+    : `Production is DEPLOYED, but the rollout is INCOMPLETE. Do not record SCRUM-21 as closed.`
+);

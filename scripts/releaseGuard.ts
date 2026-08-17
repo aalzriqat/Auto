@@ -41,6 +41,29 @@ export type ParsedInputs = {
 const FULL_SHA = /^[0-9a-f]{40}$/i;
 
 /**
+ * Whether a value is a full commit SHA and nothing else.
+ *
+ * Exported so callers can prove it BEFORE interpolating a value into a URL
+ * path, not merely before deciding with it. Both are needed and they are not
+ * the same check at the same moment.
+ */
+export function isFullSha(value: string | undefined): boolean {
+  return typeof value === "string" && FULL_SHA.test(value);
+}
+
+/**
+ * Bounds a value that is about to be written to a log or a run summary.
+ *
+ * Dispatching this workflow already requires write access, so this is hygiene
+ * rather than a security boundary — but an unbounded echo of an arbitrary input
+ * into a shared CI log is worth not doing, and truncation costs nothing.
+ */
+export function forLog(value: string, max = 120): string {
+  const flat = value.replace(/\s+/g, " ").trim();
+  return flat.length <= max ? JSON.stringify(flat) : `${JSON.stringify(flat.slice(0, max))}…`;
+}
+
+/**
  * Validates the three `workflow_dispatch` inputs before anything else happens.
  *
  * ⚠️ Abbreviated SHAs are refused on purpose, and they are the input most
@@ -65,7 +88,7 @@ export function parseReleaseInputs(raw: {
     return {
       ok: false,
       reason:
-        `commit_sha must be a full 40-character commit SHA; got ${JSON.stringify(sha)} ` +
+        `commit_sha must be a full 40-character commit SHA; got ${forLog(sha)} ` +
         `(${sha.length} characters). Abbreviated SHAs, branch names and tags are refused ` +
         `because they name whatever they resolve to at the time, not one fixed commit.`,
     };
@@ -79,7 +102,7 @@ export function parseReleaseInputs(raw: {
   }
 
   if (mode !== "deploy" && mode !== "rollback") {
-    return { ok: false, reason: `mode must be "deploy" or "rollback"; got ${JSON.stringify(mode)}.` };
+    return { ok: false, reason: `mode must be "deploy" or "rollback"; got ${forLog(mode)}.` };
   }
 
   return { ok: true, sha: sha.toLowerCase(), mode };
@@ -109,10 +132,10 @@ export function decideCommitAuthority(input: {
     return { ok: false, reason: `Commit ${sha} does not exist in this repository.` };
   }
 
-  if (!FULL_SHA.test(mainTipSha)) {
+  if (!isFullSha(mainTipSha)) {
     // Fail closed rather than compare against a half-read value: every decision
     // below is relative to the tip, so not knowing it is not a small problem.
-    return { ok: false, reason: `Could not read main's tip commit (got ${JSON.stringify(mainTipSha)}).` };
+    return { ok: false, reason: `Could not read main's tip commit (got ${forLog(mainTipSha)}).` };
   }
 
   if (!isAncestorOfMain) {
@@ -180,6 +203,77 @@ export type Problem = {
   detail: string;
 };
 
+// ─── Deploy-key shape ───────────────────────────────────────────────────────
+
+export type DeployKeyKind = "prod" | "dev" | "preview" | "project" | "legacy" | "missing";
+
+/**
+ * Classifies a Convex deploy key WITHOUT ever revealing it.
+ *
+ * ⚠️ This exists because of a real, live hazard rather than a hypothetical one.
+ * `playwright.yml` already consumes a repository-level secret named
+ * `CONVEX_DEPLOY_KEY` on every pull request, using `--cmd-url-env-var-name` —
+ * Convex's PREVIEW deploy pattern. A repository secret is visible to every job,
+ * so a workflow referencing that name gets it whenever an environment-scoped
+ * secret of the same name is absent.
+ *
+ * The consequence is the 2026-08-07 incident inverted: `convex deploy` with a
+ * preview key creates a PREVIEW deployment, the rollout verifier then happily
+ * verifies that deployment, every check passes, and the summary reports
+ * "Production rollout verified" while production was never touched. It fails
+ * OPEN, silently, with a success report — the worst available shape.
+ *
+ * Renaming the secrets is the primary fix; this is the second lock. The
+ * predicates are taken from the installed CLI (convex 1.42.1), not guessed:
+ * `isPreviewDeployKey` requires a `preview:<team>:<project>|` prefix,
+ * `isProjectKey` is `/^project:.*\|/`, and `isDeploymentKey` is
+ * `/^(dev|prod):.*\|/`.
+ */
+export function classifyDeployKey(rawKey: string | undefined): DeployKeyKind {
+  const key = (rawKey ?? "").trim();
+  if (key === "") return "missing";
+
+  const [prefix, ...rest] = key.split("|");
+  // No `|` at all is Convex's pre-scoping key format. `deploymentTypeFromAdminKey`
+  // reports those as "prod", which is exactly the assumption not to inherit here:
+  // an unrecognised shape must not be granted the most dangerous meaning.
+  if (rest.length === 0) return "legacy";
+
+  const parts = prefix.split(":");
+  if (parts[0] === "preview" && parts.length === 3) return "preview";
+  if (parts[0] === "project") return "project";
+  if (parts[0] === "prod") return "prod";
+  if (parts[0] === "dev") return "dev";
+  return "legacy";
+}
+
+/** Refuses any credential that is not provably scoped to a production deployment. */
+export function requireProductionDeployKey(rawKey: string | undefined): { ok: true } | Refusal {
+  const kind = classifyDeployKey(rawKey);
+  if (kind === "prod") return { ok: true };
+
+  const why: Record<Exclude<DeployKeyKind, "prod">, string> = {
+    missing:
+      "no deploy key was provided. The production environment's secrets are almost certainly " +
+      "not configured — see AGENTS.md. Refusing rather than falling back to anything ambient.",
+    preview:
+      "this is a PREVIEW deploy key. It would create a preview deployment, and every check " +
+      "afterwards would pass against that preview while production went untouched.",
+    project:
+      "this is a project-scoped key, which does not name a deployment. It can resolve to the " +
+      "dev deployment.",
+    dev: "this is a DEV deployment key.",
+    legacy:
+      "this key's format is not recognised as deployment-scoped. Refusing rather than assuming " +
+      "it means production.",
+  };
+
+  return {
+    ok: false,
+    reason: `Refusing to deploy: ${why[kind]} (classified as ${JSON.stringify(kind)}; the key itself is never logged).`,
+  };
+}
+
 export type Verdict = {
   /** Every org is on the materialised path and nothing looks wrong. */
   ok: boolean;
@@ -193,21 +287,131 @@ export type Verdict = {
   completedOrgCount: number;
   inFlight: Problem[];
   problems: Problem[];
+  /**
+   * Worth a human's eyes, but NOT grounds to fail the rollout — because this
+   * gate cannot tell the anomaly apart from a legitimate state with the data it
+   * has. Reported loudly, never enforced. See `emptyMaterialization`.
+   */
+  anomalies: Problem[];
 };
 
 /**
- * States a backfill can legitimately be passing through, as opposed to states
- * it has landed in.
+ * States that are not a verdict yet, because something is still going to change
+ * them without anyone intervening.
  *
- * `notStarted` is here rather than in the failure set, and the reason is a real
- * race: `startSocialConversationBackfills` only *schedules* the per-org workers,
- * and the state row is created by the worker itself. Between the fan-out
- * returning and the worker running, an org genuinely reports `notStarted`.
- * Treating that as a failure would fail almost every rollout in its first
- * seconds. The overall poll deadline is what catches a backfill that never
- * actually starts.
+ * The rule is REDRIVABILITY, not optimism: a status belongs here exactly when
+ * `startSocialConversationBackfills` will act on it.
+ *
+ * - `notStarted` — the fan-out only *schedules* the per-org workers; the state
+ *   row is created by the worker itself, so an org genuinely reports this for a
+ *   moment after a rollout begins.
+ * - `running` — obviously.
+ * - `failed` / `interrupted` — ⚠️ these look terminal and are not. The fan-out
+ *   redrives both, and its scheduled worker resets the row only when it runs.
+ *   Treating them as terminal meant the FIRST poll saw the pre-existing failure
+ *   and aborted the rollout while its own recovery was already queued — so any
+ *   org with a stale failed row made every future rollout fail instantly, which
+ *   is precisely the state a redrive exists for.
+ *
+ * `ambiguous` is deliberately NOT here. `startSocialConversationBackfills`
+ * skips it unconditionally — no run can repair a contradiction it is not
+ * allowed to resolve — so waiting for it to clear would burn the whole deadline
+ * on something only a human can fix.
  */
-const IN_FLIGHT_STATUSES = new Set(["running", "notStarted"]);
+const REDRIVABLE_STATUSES = new Set(["running", "notStarted", "failed", "interrupted"]);
+
+/**
+ * Classifies one page of the materialisation report.
+ *
+ * Fails closed everywhere. An unrecognised status is a problem, not a shrug:
+ * the alternative is that adding a status to the backend silently widens what
+ * this gate accepts, and a gate that accepts unknown states is not a gate.
+ */
+type PlatformVerdict =
+  | { bucket: "healthy" }
+  | { bucket: "inFlight" | "problem" | "anomaly"; kind: string; detail: string };
+
+/** One platform's verdict. Extracted so the org loop stays readable. */
+function classifyPlatform(p: PlatformReport): PlatformVerdict {
+  if (p.duplicateState || p.status === "ambiguous") {
+    return {
+      bucket: "problem",
+      kind: "ambiguous",
+      detail:
+        "Two contradictory materialisation state rows exist. No backfill can clear this — the " +
+        "writer stands down on it too. A human must delete the wrong row.",
+    };
+  }
+
+  if (REDRIVABLE_STATUSES.has(p.status)) {
+    const progress =
+      `${p.processedCount}/${p.expectedCount} events processed, ` +
+      `${p.materializedCount} conversations materialised.`;
+    return {
+      bucket: "inFlight",
+      kind: p.status,
+      detail: p.failureMessage ? `${p.failureMessage} — awaiting redrive. ${progress}` : progress,
+    };
+  }
+
+  if (p.status !== "completed") {
+    return {
+      bucket: "problem",
+      kind: "unknownStatus",
+      detail: `Unrecognised materialisation status ${JSON.stringify(p.status)}.`,
+    };
+  }
+
+  // ⚠️ Unreachable through the live data path today, and kept deliberately.
+  // `lookupMaterializationState` queries BY the current generation, so a row it
+  // returns always carries that generation and a superseded one surfaces as
+  // `notStarted` instead. This is defence for a future report that carries more
+  // than one generation — it is NOT what protects against a stale generation
+  // today, and describing it as such would be an overclaim.
+  if (p.generation !== p.expectedGeneration) {
+    return {
+      bucket: "problem",
+      kind: "staleGeneration",
+      detail: `Completed at generation ${p.generation}, but the reader expects ${p.expectedGeneration}.`,
+    };
+  }
+
+  // ⚠️ REPORTED, NOT ENFORCED — and the demotion is the whole point.
+  //
+  // This started as a hard failure, because it is the shape of the 2026-08-07
+  // incident: a reader pointed at a table whose backfill never ran, answering
+  // "no conversations" for an org holding 347 Instagram and 689 Facebook
+  // events, with no throw and no log.
+  //
+  // But it cannot tell that apart from a perfectly healthy org.
+  // `syncThreadsInBackfillPage` skips every event without a `customerId`
+  // (`if (!event.customerId) continue;`), and
+  // `socialInboxConversations.test.ts` pins that as correct — "materialising
+  // one would put a row in the inbox the list never showed". `expectedCount`
+  // meanwhile counts ALL events. So an org whose events are all unlinked ends
+  // legitimately `completed` with `expectedCount > 0` and `materializedCount 0`.
+  //
+  // Failing on that would have been unrecoverable, not merely wrong: the
+  // fan-out SKIPS orgs that are already `completed`, so no re-run could ever
+  // clear it, and the only escape — `force` — restarts the backfill and drops
+  // that org back to the legacy scan. A gate no operator can clear is worse
+  // than one that asks a human to look.
+  //
+  // Making this enforceable needs the backfill to record how many events were
+  // materialisABLE, not how many existed. Tracked as follow-up work.
+  if (p.expectedCount > 0 && p.materializedCount === 0) {
+    return {
+      bucket: "anomaly",
+      kind: "emptyMaterialization",
+      detail:
+        `Completed over ${p.expectedCount} source events but materialised 0 conversations. ` +
+        `Expected when none of those events are linked to a customer; the shape of the ` +
+        `2026-08-07 incident when they are. Worth one look at this org's inbox.`,
+    };
+  }
+
+  return { bucket: "healthy" };
+}
 
 /**
  * Classifies one page of the materialisation report.
@@ -219,6 +423,7 @@ const IN_FLIGHT_STATUSES = new Set(["running", "notStarted"]);
 export function classifyMaterializationReport(orgs: OrgReport[]): Verdict {
   const problems: Problem[] = [];
   const inFlight: Problem[] = [];
+  const anomalies: Problem[] = [];
   let completedOrgCount = 0;
 
   for (const org of orgs) {
@@ -235,89 +440,22 @@ export function classifyMaterializationReport(orgs: OrgReport[]): Verdict {
       continue;
     }
 
-    let orgSettledHealthy = true;
+    let settledHealthy = true;
 
     for (const p of org.platforms) {
-      if (p.duplicateState || p.status === "ambiguous") {
-        orgSettledHealthy = false;
-        problems.push(
-          at(
-            p.platform,
-            "ambiguous",
-            "Two contradictory materialisation state rows exist. No backfill can clear this — " +
-              "the writer stands down on it too. A human must delete the wrong row."
-          )
-        );
+      const verdict = classifyPlatform(p);
+      if (verdict.bucket === "healthy") continue;
+
+      const entry = at(p.platform, verdict.kind, verdict.detail);
+      if (verdict.bucket === "anomaly") {
+        // Deliberately does not clear `settledHealthy` — an anomaly is a note,
+        // not a verdict.
+        anomalies.push(entry);
         continue;
       }
 
-      if (IN_FLIGHT_STATUSES.has(p.status)) {
-        orgSettledHealthy = false;
-        inFlight.push(
-          at(
-            p.platform,
-            p.status,
-            `${p.processedCount}/${p.expectedCount} events processed, ` +
-              `${p.materializedCount} conversations materialised.`
-          )
-        );
-        continue;
-      }
-
-      if (p.status === "failed" || p.status === "interrupted") {
-        orgSettledHealthy = false;
-        problems.push(
-          at(
-            p.platform,
-            p.status,
-            p.failureMessage ??
-              (p.status === "interrupted"
-                ? "The backfill chain stopped advancing and is no longer running."
-                : "The backfill reported a failure with no message.")
-          )
-        );
-        continue;
-      }
-
-      if (p.status !== "completed") {
-        orgSettledHealthy = false;
-        problems.push(
-          at(p.platform, "unknownStatus", `Unrecognised materialisation status ${JSON.stringify(p.status)}.`)
-        );
-        continue;
-      }
-
-      if (p.generation !== p.expectedGeneration) {
-        orgSettledHealthy = false;
-        problems.push(
-          at(
-            p.platform,
-            "staleGeneration",
-            `Completed at generation ${p.generation}, but the reader expects ${p.expectedGeneration}.`
-          )
-        );
-        continue;
-      }
-
-      // ⚠️ THE 2026-08-07 INCIDENT SIGNATURE. On that day the Social Inbox
-      // reported zero conversations for an org holding 347 Instagram and 689
-      // Facebook events, with no throw and no log, because the reader was
-      // pointed at a table whose backfill had never run. A completed backfill
-      // over a non-empty event set that produced no conversations at all is
-      // that same picture, and it is the one thing "COMPLETED" cannot tell
-      // you on its own.
-      if (p.expectedCount > 0 && p.materializedCount === 0) {
-        orgSettledHealthy = false;
-        problems.push(
-          at(
-            p.platform,
-            "emptyMaterialization",
-            `Completed over ${p.expectedCount} source events but materialised 0 conversations. ` +
-              `This is the shape of the 2026-08-07 incident: a reader switched to a table that ` +
-              `has nothing in it.`
-          )
-        );
-      }
+      settledHealthy = false;
+      (verdict.bucket === "inFlight" ? inFlight : problems).push(entry);
     }
 
     // Checked as well as, not instead of, the per-platform states. It is
@@ -325,7 +463,7 @@ export function classifyMaterializationReport(orgs: OrgReport[]): Verdict {
     // off, so if it ever stops agreeing with the platform rows, the gate should
     // notice rather than infer.
     if (org.readerSource !== "materialized") {
-      if (orgSettledHealthy) {
+      if (settledHealthy) {
         problems.push(
           at(
             null,
@@ -335,10 +473,10 @@ export function classifyMaterializationReport(orgs: OrgReport[]): Verdict {
           )
         );
       }
-      orgSettledHealthy = false;
+      settledHealthy = false;
     }
 
-    if (orgSettledHealthy) completedOrgCount += 1;
+    if (settledHealthy) completedOrgCount += 1;
   }
 
   return {
@@ -348,6 +486,7 @@ export function classifyMaterializationReport(orgs: OrgReport[]): Verdict {
     completedOrgCount,
     inFlight,
     problems,
+    anomalies,
   };
 }
 
@@ -363,6 +502,7 @@ export function mergeVerdicts(verdicts: Verdict[]): Verdict {
     completedOrgCount: verdicts.reduce((n, v) => n + v.completedOrgCount, 0),
     inFlight,
     problems,
+    anomalies: verdicts.flatMap((v) => v.anomalies),
   };
 }
 
@@ -385,6 +525,22 @@ export function decidePollOutcome(input: {
   if (verdict.problems.length > 0) return "failed";
   if (elapsedMs >= timeoutMs) return "timedOut";
   return "continue";
+}
+
+/**
+ * How long to wait before asking again.
+ *
+ * Each poll re-walks the whole organization catalog, which is cheap at this
+ * tenant count and would stop being cheap at a much larger one — and re-running
+ * a full scan every 15 seconds is a poor look for a change whose entire
+ * programme is about cutting Convex read volume. So it starts responsive, for
+ * the common case where a rollout finishes in the first minutes, then backs off
+ * to a rate that costs almost nothing across a long walk.
+ */
+export function pollIntervalMs(elapsedMs: number): number {
+  if (elapsedMs < 2 * 60_000) return 15_000;
+  if (elapsedMs < 10 * 60_000) return 30_000;
+  return 60_000;
 }
 
 /**
@@ -429,22 +585,24 @@ export function renderReleaseSummary(input: {
   outcome: PollOutcome;
 }): string {
   const { mode, sha, mainTipSha, deployment, verdict, outcome } = input;
-  const heading =
-    outcome === "verified"
-      ? "✅ Production rollout verified"
-      : outcome === "timedOut"
-        ? "⏳ Deployed, but the rollout did not finish in time"
-        : "❌ Deployed, but the rollout is incomplete";
+
+  const HEADINGS: Record<PollOutcome, string> = {
+    verified: "✅ Production rollout verified",
+    timedOut: "⏳ Deployed, but the rollout did not finish in time",
+    failed: "❌ Deployed, but the rollout is incomplete",
+    continue: "❌ Deployed, but the rollout is incomplete",
+  };
+  const deploymentCell = deployment ? `\`${deployment}\`` : "_not reported_";
 
   const lines = [
-    `## ${heading}`,
+    `## ${HEADINGS[outcome]}`,
     "",
     `| | |`,
     `| --- | --- |`,
     `| Mode | \`${mode}\` |`,
     `| Deployed commit | \`${sha}\` |`,
     `| main tip at verification | \`${mainTipSha}\` |`,
-    `| Convex deployment | ${deployment ? `\`${deployment}\`` : "_not reported_"} |`,
+    `| Convex deployment | ${deploymentCell} |`,
     `| Organizations on the materialised path | ${verdict.completedOrgCount}/${verdict.orgCount} |`,
     "",
   ];
@@ -466,8 +624,29 @@ export function renderReleaseSummary(input: {
   }
 
   if (verdict.inFlight.length > 0) {
-    lines.push("### Still in flight at the deadline", "", "| Organization | Platform | Status | Progress |", "| --- | --- | --- | --- |");
+    lines.push(
+      "### Still in flight at the deadline",
+      "",
+      "| Organization | Platform | Status | Progress |",
+      "| --- | --- | --- | --- |"
+    );
     for (const p of verdict.inFlight) {
+      lines.push(`| ${p.orgName} (\`${p.orgId}\`) | ${p.platform ?? "—"} | \`${p.kind}\` | ${p.detail} |`);
+    }
+    lines.push("");
+  }
+
+  if (verdict.anomalies.length > 0) {
+    lines.push(
+      "### Worth a look (did not fail the rollout)",
+      "",
+      "These cannot be told apart from a legitimate state with the data this gate has, so they",
+      "are reported rather than enforced.",
+      "",
+      "| Organization | Platform | Kind | Detail |",
+      "| --- | --- | --- | --- |"
+    );
+    for (const p of verdict.anomalies) {
       lines.push(`| ${p.orgName} (\`${p.orgId}\`) | ${p.platform ?? "—"} | \`${p.kind}\` | ${p.detail} |`);
     }
     lines.push("");

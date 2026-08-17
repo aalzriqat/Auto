@@ -18,7 +18,7 @@
  */
 import { appendFileSync } from "node:fs";
 import process from "node:process";
-import { decideCommitAuthority, parseReleaseInputs } from "./releaseGuard.ts";
+import { decideCommitAuthority, forLog, isFullSha, parseReleaseInputs } from "./releaseGuard.ts";
 
 const REPO = process.env.GITHUB_REPOSITORY ?? "";
 const TOKEN = process.env.GITHUB_TOKEN ?? "";
@@ -82,6 +82,15 @@ const tip = await api(`/commits/main`);
 if (tip.status !== 200) refuse(`Could not read main's tip commit (HTTP ${tip.status}).`);
 const mainTipSha = String(tip.body.sha ?? "").toLowerCase();
 
+// Proven to be 40 hex characters HERE, before it is interpolated into a URL
+// path below — not merely before it is compared. `parsed.sha` already carries
+// that proof from `parseReleaseInputs`. With both established, every path
+// segment this script builds is a fixed-shape identifier and there is nothing
+// left for a traversal or a query string to hide in.
+if (!isFullSha(mainTipSha)) {
+  refuse(`GitHub returned an unusable tip commit for main: ${forLog(mainTipSha)}.`);
+}
+
 const commit = await api(`/commits/${parsed.sha}`);
 const commitExists = commit.status === 200;
 
@@ -117,11 +126,13 @@ if (!authority.ok) refuse(authority.reason);
 // which PR this commit came from, so the deploy is traceable without anyone
 // having to reconstruct it later.
 const pulls = await api(`/commits/${parsed.sha}/pulls`);
+const describePull = (pr) => {
+  const state = pr.merged_at ? `merged ${pr.merged_at}` : pr.state;
+  return `#${pr.number} ${forLog(String(pr.title ?? ""), 80)} (${state})`;
+};
 const provenance =
   pulls.status === 200 && Array.isArray(pulls.body) && pulls.body.length > 0
-    ? pulls.body
-        .map((pr) => `#${pr.number} “${pr.title}” (${pr.merged_at ? `merged ${pr.merged_at}` : pr.state})`)
-        .join(", ")
+    ? pulls.body.map(describePull).join(", ")
     : "_no associated pull request_";
 
 emit("sha", authority.sha);
