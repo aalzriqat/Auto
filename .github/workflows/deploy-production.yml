@@ -210,10 +210,32 @@ jobs:
       # nothing, because `tee` had already streamed the same bytes somewhere
       # equally public. The file is gone; the honest statement is that anything
       # `convex deploy` prints is published.
+      #
+      # ⚠️ The tip is checked ONE LAST TIME inside this step, on the line before
+      # the deploy. The earlier check has to happen where it does — the CI
+      # re-verification below it runs the candidate's own copy of that logic and
+      # is only sound once the candidate is known to be main's tip — but that
+      # left credential assertion and this step between the check and the deploy,
+      # and a merge landing in that gap ships a commit that is no longer the tip.
+      #
+      # This does not close the window; nothing can. A merge can land in the
+      # microsecond after any check. It reduces it from "several steps" to "one
+      # command", which is the honest limit, and AGENTS.md states the guarantee
+      # as observed-immediately-before rather than as absolute.
       - name: Deploy Convex backend
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PROD_DEPLOY_KEY }}
-        run: pnpm exec convex deploy
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ needs.authorize.outputs.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tip="$(gh api "repos/${REPO}/commits/main" --jq .sha)"
+          if [ "$tip" != "$EXPECTED_SHA" ]; then
+            echo "::error::main advanced to $tip while this run waited. Nothing has been deployed."
+            exit 1
+          fi
+          pnpm exec convex deploy
 
       # Same job, immediately after the deploy, because the window between them
       # is the expensive one: the conversation trigger is live and adding writes

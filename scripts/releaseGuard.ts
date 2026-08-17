@@ -428,47 +428,41 @@ export function evaluateRequiredChecks(input: {
 
   for (const check of required) {
     const label = describeCheck(check);
-    const matches = results.filter(
-      (r) => r.producer === check.producer && r.name === check.name
-    );
 
     // ── Identity first, ALWAYS before any waiver ──────────────────────────
-    if (matches.length === 0) {
-      verdict.failures.push(
-        `${label}: no result at this commit from that producer. Either it did not run, or it ` +
-          `was renamed — both are things a release should stop for.`
-      );
+    const observation = resolveObservation(
+      results.filter((r) => r.producer === check.producer && r.name === check.name),
+      label
+    );
+    if (!observation.ok) {
+      verdict.failures.push(observation.reason);
       continue;
     }
-    if (matches.length > 1) {
-      verdict.failures.push(
-        `${label}: ${matches.length} results share that producer and name, so which one gates ` +
-          `the release is undefined. Refusing rather than picking.`
-      );
-      continue;
-    }
+    const { result } = observation;
 
-    const [result] = matches;
-    const observed = result.status === "completed" ? String(result.conclusion) : `still ${result.status}`;
+    // ⚠️ Then completeness, and ALSO before the waiver. A queued or running
+    // check has not produced a result, and a waiver excuses a result — so
+    // consulting the waiver here would sign off a check that has not run yet
+    // on the strength of the note explaining why its outcome does not matter.
+    // Same defect as excusing an absent check, one state later.
+    if (result.status !== "completed") {
+      verdict.failures.push(
+        `${label}: has not finished (${forLog(result.status)}). A waiver excuses a result; it ` +
+          `cannot excuse a run that has not produced one.`
+      );
+      continue;
+    }
+    const observed = String(result.conclusion);
 
     const waiver = waivers.find((w) => w.producer === check.producer && w.name === check.name);
     if (waiver) {
-      const expires = new Date(waiver.expires);
-      if (Number.isNaN(expires.getTime())) {
-        verdict.failures.push(`${label}: its waiver has an unreadable expiry (${forLog(waiver.expires)}).`);
-        continue;
-      }
-      if (expires.getTime() <= now.getTime()) {
-        verdict.failures.push(
-          `${label}: its waiver expired on ${waiver.expires} (${waiver.issue}). Fix it or renew it deliberately.`
-        );
-        continue;
-      }
-      verdict.waived.push({ ...waiver, observed });
+      const allowed = evaluateWaiver(waiver, label, now);
+      if (allowed.ok) verdict.waived.push({ ...waiver, observed });
+      else verdict.failures.push(allowed.reason);
       continue;
     }
 
-    if (result.status === "completed" && result.conclusion === "success") {
+    if (result.conclusion === "success") {
       verdict.passed.push(label);
       continue;
     }
@@ -477,6 +471,51 @@ export function evaluateRequiredChecks(input: {
 
   verdict.ok = verdict.failures.length === 0;
   return verdict;
+}
+
+/**
+ * Resolves a required check to the ONE result allowed to speak for it.
+ *
+ * The count is the verdict: none means it did not run or was renamed, and more
+ * than one means the name is shared — which is not hypothetical here, two
+ * check-runs in this repository are called `osv-scanner`.
+ */
+function resolveObservation(
+  matches: CheckResult[],
+  label: string
+): { ok: true; result: CheckResult } | Refusal {
+  if (matches.length === 0) {
+    return {
+      ok: false,
+      reason:
+        `${label}: no result at this commit from that producer. Either it did not run, or it ` +
+        `was renamed — both are things a release should stop for.`,
+    };
+  }
+  if (matches.length > 1) {
+    return {
+      ok: false,
+      reason:
+        `${label}: ${matches.length} results share that producer and name, so which one gates ` +
+        `the release is undefined. Refusing rather than picking.`,
+    };
+  }
+  return { ok: true, result: matches[0] };
+}
+
+/** Whether a waiver may still stand in for this check's result. */
+function evaluateWaiver(waiver: Waiver, label: string, now: Date): { ok: true } | Refusal {
+  const expires = new Date(waiver.expires);
+  if (Number.isNaN(expires.getTime())) {
+    return { ok: false, reason: `${label}: its waiver has an unreadable expiry (${forLog(waiver.expires)}).` };
+  }
+  if (expires.getTime() <= now.getTime()) {
+    return {
+      ok: false,
+      reason: `${label}: its waiver expired on ${waiver.expires} (${waiver.issue}). Fix it or renew it deliberately.`,
+    };
+  }
+  return { ok: true };
 }
 
 // ─── Rollout verification ───────────────────────────────────────────────────
@@ -559,6 +598,14 @@ export function captureRunBaseline(orgs: OrgReport[], into: RunBaseline = new Ma
  * and waiting on it burns the entire deadline.
  *
  * `completed` and `ambiguous` are skipped too, the second unconditionally.
+ *
+ * ⚠️ KNOWN LIMIT — SCRUM-137. This infers that a redrive was scheduled; it does
+ * not observe one. `interrupted` is DERIVED from a 5-minute stall rather than
+ * stored, so a chain that merely went quiet can read `interrupted` here, resume
+ * before the fan-out, be skipped as `running`, and later fail under its original
+ * runId — at which point this waits for a redrive that was never queued, until
+ * the deadline. The outcome is still correct ("deployed, rollout incomplete"),
+ * only slow, which is why it is recorded rather than patched around.
  */
 const REDRIVEN_BY_FAN_OUT = new Set(["failed", "interrupted", "notStarted"]);
 

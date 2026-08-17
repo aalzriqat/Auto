@@ -47,7 +47,6 @@ const PER_PAGE = 100;
 export async function readCheckResults(api, sha) {
   const results = [];
 
-  let collected = 0;
   for (let page = 1; page <= MAX_PAGES; page += 1) {
     const response = await api(`/commits/${sha}/check-runs`, { per_page: PER_PAGE, page });
     if (response.status !== 200) {
@@ -62,9 +61,15 @@ export async function readCheckResults(api, sha) {
         conclusion: run.conclusion ?? null,
       });
     }
-    collected += runs.length;
-    const total = Number(response.body.total_count ?? collected);
-    if (runs.length === 0 || collected >= total) break;
+
+    // ⚠️ Termination is decided by the PAGE SIZE, never by `total_count`.
+    // Trusting a server-reported total means a total that is wrong — or that
+    // shrinks mid-walk as a re-run replaces a check — silently ends the walk
+    // early, and a required check on the page never fetched reads as "no result
+    // at this commit". That refuses rather than passes, so it is safe; but it
+    // refuses EVERY release, for a reason nobody would think to look for.
+    if (runs.length < PER_PAGE) break;
+
     if (page === MAX_PAGES) {
       return {
         ok: false,

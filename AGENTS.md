@@ -43,10 +43,13 @@ matters.) It refuses an abbreviated SHA, a commit that is not contained in
 `main`, anything that is not `main`'s current tip, a wrong confirmation phrase,
 and dispatch from a branch.
 
-That job runs `main`'s copy of its own logic rather than the candidate commit's,
-so **the commit being deployed cannot ship its own approval**. Dispatching from
-a branch is refused by that same logic — which the branch could have edited, so
-treat it as a guard on mistakes, not as the boundary.
+⚠️ **That job does NOT protect you from the commit it is judging, and an earlier
+version of this file claimed it did.** It checks out `github.ref` — `main` — and
+the workflow only ever deploys `main`'s tip, so main's copy of the verification
+logic *is* the candidate's copy. There is no separation between them to rely on.
+Dispatching from a branch is refused by that same logic, which the branch could
+have edited. Every check in this repository is a guard on an operator's
+mistakes; **the boundary is the environment approval**, and nothing here.
 
 **CI must be green at that exact commit.** Ancestry proves a commit was merged,
 not that the merge was healthy. Both the check-runs API and the commit-status API
@@ -67,13 +70,21 @@ are reported as **WAIVED**, never as passing; an expired waiver fails the
 release; and a waiver excuses a **result**, never the absence of one — a renamed
 or deleted check still refuses.
 
-The deploy job then checks out the exact SHA, asserts `HEAD` matches, and —
-**after approval, immediately before deploying** — re-derives both `main`'s tip
-*and* the CI verdict. Approval is asynchronous: a run can wait hours, and in that
-window a check can be re-run red or a waiver can expire without `main` moving at
-all. It then refuses any credential that does not address the expected
-deployment, installs from the frozen lockfile, and invokes the Convex CLI out of
-that commit's own `node_modules`.
+The deploy job then checks out the exact SHA, asserts `HEAD` matches, and
+installs from the frozen lockfile. **After approval** it re-derives `main`'s tip,
+then the CI verdict, then refuses any credential that does not address the
+expected deployment, then invokes the Convex CLI out of that commit's own
+`node_modules` — in that order, which is load-bearing and pinned by a test.
+Approval is asynchronous: a run can wait hours, and in that window a check can be
+re-run red or a waiver can expire without `main` moving at all.
+
+The tip is checked once more **inside the deploy step, on the line before the
+CLI call**. ⚠️ Read that guarantee precisely: it is *main's tip as observed
+immediately before the deploy*, not *main's tip at the instant of deploy*. A
+merge landing in the moment between the check and the call is undetectable, by
+this or any other arrangement. What the second check buys is shrinking that gap
+from several steps — CI re-verification and credential assertion both sit in it —
+down to a single command.
 
 **Both credentials must name one exact deployment.** "Is it a production key" is
 not the question: a valid production key for the *wrong* project deploys,
@@ -87,10 +98,22 @@ today.) After deploying, the backend states its own identity
 is an observation rather than a log line.
 
 It then starts the Social Inbox conversation backfills and refuses to finish
-until every organization is provably reading the materialised path — checked
-**per platform**, because an org-wide probe lets Facebook's rows answer for
-Instagram's missing ones, and a confidently empty Instagram inbox is the original
-incident surviving the guard written for it.
+until every organization reports every platform `completed` at the current
+generation, resolves to the materialised reader, and — where a platform claims
+it materialised rows — actually has one. That last check is **per platform**,
+because an org-wide probe lets Facebook's rows answer for Instagram's missing
+ones, and a confidently empty Instagram inbox is the original incident surviving
+the guard written for it.
+
+⚠️ **A platform that materialised *nothing* is reported, not refused**, so
+"every organization is verified" does not mean "every organization has
+conversations". `syncThreadsInBackfillPage` legitimately skips events with no
+`customerId`, so an org whose events are all unlinked completes having
+materialised zero — indistinguishable, with the counts available today, from the
+2026-08-07 failure. Refusing it would also be unrecoverable, because the fan-out
+skips orgs already `completed`. SCRUM-126 adds the materializable-event count
+that would make this enforceable; until then it is an anomaly in the summary and
+a human decides.
 
 Backfills run in the same job on purpose. Between the code landing and the
 backfills completing, database I/O goes **up**: the conversation trigger adds a
@@ -119,25 +142,57 @@ dashboard. Resolve a hash on the authenticated `/admin` materialisation screen.
 
 ### What it does not guarantee
 
-**It is not a boundary until the environment is configured, and it is not
-configured yet.** A GitHub environment with no protection rules gates nothing —
-`environment: production` on a rule-less environment is a no-op and the job
-starts immediately, like any other. This repository's `Production` environment
-currently has `protection_rules: []`, no deployment-branch policy, and no
-variables or secrets. Until that changes, **nothing above requires a second
-person**, and the workflow refuses at the credential gate rather than deploying.
-Verify with the query rather than from memory:
+#### ⚠️ There is no second person, and there cannot be one today
+
+The `Production` environment was configured on **2026-08-18** with a required
+reviewer, deployments restricted to `main`, and admin bypass disabled. It is no
+longer the rule-less no-op it was — an environment with `protection_rules: []`
+gates nothing at all, and this one now gates.
+
+But **`prevent_self_review` is `false`, deliberately**, and that changes what the
+workflow means. `aalzriqat` is the repository's only collaborator, so the sole
+possible reviewer is the same person who dispatches the run. With self-review
+prevented, nobody could ever approve and the workflow would be permanently
+unrunnable. The owner accepted self-approval on 2026-08-18.
+
+So do not read the approval gate as independent review. What it actually
+provides:
+
+- production credentials are unreachable until an explicit, separately recorded
+  approval action — a run cannot deploy by simply starting;
+- deployments are refused from any ref other than `main`;
+- administrators cannot bypass it;
+- there is an audit trail naming who approved which run against which commit.
+
+What it does **not** provide is a second pair of eyes. Getting that requires
+adding a second collaborator and then setting `prevent_self_review: true`; there
+is no configuration of a single-maintainer repository that produces it.
+
+Verify the current state with the query rather than from memory — including
+after any change to collaborators:
 
 ```bash
 gh api repos/aalzriqat/Auto/environments/Production \
-  --jq '{rules: [.protection_rules[].type], branches: .deployment_branch_policy}'
+  --jq '{rules: [.protection_rules[].type],
+         reviewers: [.protection_rules[] | select(.type=="required_reviewers") | .reviewers[].reviewer.login],
+         self_review_prevented: [.protection_rules[] | select(.type=="required_reviewers") | .prevent_self_review][0],
+         admins_bypass: .can_admins_bypass}'
+gh api repos/aalzriqat/Auto/environments/Production/deployment-branch-policies --jq '.branch_policies[].name'
 ```
+
+The environment approval is the binding control — not the ref check, not the
+input validation, not the verification job. Those are guards on an operator's
+mistakes.
+
+⚠️ The workflow names the environment in lower case (`environment: production`)
+while GitHub stores it as `Production`. That resolves to the same environment —
+verified by `gh api repos/aalzriqat/Auto/environments/production`, which returns
+the configured `Production` and creates nothing new — so the rules above do
+apply. Had it not resolved, the job would have silently created a rule-less
+environment and gated on nothing.
 
 It is also only a boundary once the production credential exists **nowhere
 else** — see the workstation key above.
-
-The environment's required reviewer is the binding control — not the ref check,
-not the input validation. Those are guards on an operator's mistakes.
 
 **Commit statuses cannot be identified by producer.** The statuses API carries no
 app slug, so nothing status-sourced is required; statuses are read only so that a
@@ -147,14 +202,26 @@ skipped: manual review required for this OSS repository"*.
 
 ### Required configuration (not in this repository)
 
-The workflow is inert, and misleadingly so, until all of this exists:
+The workflow still refuses at the credential gate until the outstanding rows
+below exist. It cannot deploy anything in the meantime.
 
-| What | Where | Detail |
-| --- | --- | --- |
-| `production` environment | Settings → Environments | **Required reviewer**; self-review prevented; **admin bypass disabled**; **deployment branches restricted to `main`** |
-| `CONVEX_PROD_DEPLOYMENT` | that environment's **variables** | The exact production deployment name, e.g. `kindly-hound-172`. Not a secret — it is an identifier, and naming it is the point |
-| `CONVEX_PROD_DEPLOY_KEY` | that environment's secrets | Scoped to that deployment, permission `deployment:deploy` **only** |
-| `CONVEX_PROD_OPERATOR_KEY` | that environment's secrets | `deployment:functions:runInternalMutations` + `runInternalQueries` **only** |
+| What | Where | State | Detail |
+| --- | --- | --- | --- |
+| `Production` environment | Settings → Environments | ✅ **done** 2026-08-18 | Required reviewer `aalzriqat`; branches restricted to `main`; admin bypass disabled. **Self-review NOT prevented** — see above |
+| `CONVEX_PROD_DEPLOYMENT` | that environment's **variables** | ✅ **done** 2026-08-18 | `kindly-hound-172`. Not a secret — it is an identifier, and naming it is the point |
+| `CONVEX_PROD_DEPLOY_KEY` | that environment's secrets | ⛔ **outstanding** | Scoped to that deployment, permission `deployment:deploy` **only** |
+| `CONVEX_PROD_OPERATOR_KEY` | that environment's secrets | ⛔ **outstanding** | `deployment:functions:runInternalMutations` + `runInternalQueries` **only** |
+| `CONVEX_PREVIEW_DEPLOY_KEY` | **repository** secrets | ⛔ **outstanding** | Not used by this workflow. `playwright.yml` was repointed at it, so E2E stays red until it exists — see below |
+
+⚠️ All three keys have to be minted in the Convex dashboard. The CLI has no
+command that creates one (checked: no `key`, `token` or `auth` subcommand), so
+this is not automatable from a script or an agent.
+
+⚠️ **`playwright.yml` now reads `CONVEX_PREVIEW_DEPLOY_KEY`, which does not
+exist yet.** That was the deliberate half of splitting the ambiguous repository
+secret, but it means the E2E suite fails with `No CONVEX_DEPLOYMENT set` rather
+than for its long-standing SCRUM-95 reason. Two causes now stack; do not read a
+red `playwright` as evidence about either one until this secret is provisioned.
 
 ⚠️ **The names are deliberately not `CONVEX_DEPLOY_KEY`.** A repository-level
 secret of that name still exists (SCRUM-125 removes it; `playwright.yml` now uses

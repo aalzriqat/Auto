@@ -212,7 +212,24 @@ describe("CI must be green at the exact commit, and waivers expire", () => {
       now: NOW,
     });
     expect(verdict.ok).toBe(false);
-    expect(verdict.failures[0]).toMatch(/still in_progress/);
+    expect(verdict.failures[0]).toMatch(/has not finished/);
+    expect(verdict.failures[0]).toMatch(/in_progress/);
+  });
+
+  test("a WAIVED check that has not finished is still a refusal", () => {
+    // ⚠️ REGRESSION. A waiver excuses a RESULT. A queued or running check has
+    // not produced one, so consulting its waiver here signs the check off on
+    // the strength of the note explaining why its outcome does not matter —
+    // the same defect as excusing an absent check, one state later.
+    const verdict = evaluateRequiredChecks({
+      required: [PLAYWRIGHT],
+      results: [result({ name: "playwright", status: "in_progress", conclusion: null })],
+      waivers: [waiver],
+      now: NOW,
+    });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.waived).toEqual([]);
+    expect(verdict.failures[0]).toMatch(/has not finished/);
   });
 
   test("a check with no result at this commit is a failure, not an absence", () => {

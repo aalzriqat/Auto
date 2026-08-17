@@ -217,6 +217,28 @@ describe("guarantees that live outside the reach of a normal unit test", () => {
     expect(ciRecheck).toBeLessThan(credentials);
     expect(credentials).toBeLessThan(deploy);
 
+    // ⚠️ And the tip is checked ONCE MORE inside the deploy step itself, with
+    // nothing but the comparison between it and the CLI call.
+    //
+    // The ordering above is necessary but not sufficient: approval is
+    // asynchronous, so between the first tip check and the deploy sit the CI
+    // re-verification and the credential gate. A merge landing in that gap
+    // ships a commit that is no longer main's tip while the summary says it is.
+    // This cannot close the window — a merge can land after any check — but it
+    // shrinks it from several steps to one command.
+    const deployStep = workflow.slice(workflow.indexOf("Deploy Convex backend"));
+    const finalTipCheck = deployStep.indexOf('tip="$(gh api');
+    const cliCall = deployStep.indexOf("pnpm exec convex deploy");
+
+    expect(finalTipCheck, "the deploy step must re-check main's tip itself").toBeGreaterThan(-1);
+    expect(finalTipCheck).toBeLessThan(cliCall);
+
+    const between = deployStep.slice(finalTipCheck, cliCall);
+    expect(between).toMatch(/EXPECTED_SHA/);
+    // Nothing that could take time, fetch code, or run a function may sit in
+    // the gap this step exists to keep small.
+    expect(between).not.toMatch(/\bnode |pnpm install|convex run|actions\//);
+
     // The DEPLOY job needs these to read either check surface; without them the
     // re-check fails closed on an HTTP 403 and nobody would know why.
     //
@@ -249,7 +271,7 @@ describe("guarantees that live outside the reach of a normal unit test", () => {
       .join("\n");
 
     expect(commands.slice(commands.indexOf("Deploy Convex backend"))).toMatch(
-      /run: pnpm exec convex deploy\s*$/m
+      /^\s*pnpm exec convex deploy\s*$/m
     );
     expect(commands).not.toMatch(/tee deploy\.log/);
     expect(commands).not.toMatch(/npx convex/);
