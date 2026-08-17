@@ -7,8 +7,12 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { runWithIdempotency } from "./utils/idempotency";
 import { hookPaymentLinkReceived } from "./accounting/workflowHooks";
-import { allocatePaymentToReceivable, createCanonicalPayment, getReceivableOutstandingMinor } from "./subledger";
-import { fromMinorUnits, toMinorUnits, scaleForCurrency, assertValidMinorAmount } from "./utils/money";
+import { allocatePaymentToReceivable, createCanonicalPayment } from "./subledger";
+import { fromMinorUnits, scaleForCurrency, assertValidMinorAmount } from "./utils/money";
+import {
+  reproveTargetAtSettlement,
+  resolveTargetAtCreation,
+} from "./utils/collectionMovement";
 
 const statusValidator = v.union(
   v.literal("PENDING"),
@@ -103,40 +107,42 @@ async function createCanonicalIntentSettlement(
     canonicalPaymentId,
   };
 
-  if (intent.receivableDocumentId && !intent.paymentAllocationId) {
-    // Clamp to what is still owed, exactly as the legacy mirror below already
-    // does. allocatePaymentToReceivable THROWS when the amount exceeds the
-    // outstanding balance, and a Convex mutation is atomic — so if the
-    // receivable was partly settled through another channel after this intent
-    // was created, the throw rolled back the entire settlement including the
-    // canonical payment row. The provider has already confirmed the money, and
-    // its retries would hit the same throw, so the payment was lost outright.
-    // Any excess correctly stays on the payment as an unapplied balance.
-    const outstandingMinor = await getReceivableOutstandingMinor(ctx, intent.receivableDocumentId);
-    const allocatableMinor = Math.min(intent.amountMinor, outstandingMinor);
-    if (allocatableMinor > 0) {
-      links.paymentAllocationId = await allocatePaymentToReceivable(ctx, {
-        orgId: intent.orgId,
-        paymentId: canonicalPaymentId,
-        receivableDocumentId: intent.receivableDocumentId,
-        amountMinor: allocatableMinor,
-        actorId,
-      });
-    }
-  } else if (intent.paymentAllocationId) {
+  // SCRUM-121 R3 (post-confirmation) — the provider has confirmed the money, so
+  // the target is RE-PROVEN rather than assumed, and an unprovable target NEVER
+  // throws. A throw would roll back this settlement including the canonical
+  // payment, and the provider's retries would hit the same throw forever.
+  //
+  // ONE clamp, computed once, inside the authority (R5). The legacy mirror below
+  // consumes the same `appliedMinor` rather than clamping a second time against
+  // a different number.
+  const proof = await reproveTargetAtSettlement(ctx, {
+    orgId: intent.orgId,
+    targetDocumentId: intent.receivableDocumentId ?? null,
+    customerId: intent.customerId,
+    requestedMinor: intent.amountMinor,
+  });
+  const appliedMinor = intent.paymentAllocationId ? 0 : proof.allocatableMinor;
+
+  if (intent.paymentAllocationId) {
     links.paymentAllocationId = intent.paymentAllocationId;
+  } else if (intent.receivableDocumentId && appliedMinor > 0) {
+    links.paymentAllocationId = await allocatePaymentToReceivable(ctx, {
+      orgId: intent.orgId,
+      paymentId: canonicalPaymentId,
+      receivableDocumentId: intent.receivableDocumentId,
+      amountMinor: appliedMinor,
+      actorId,
+    });
   }
 
   if (intent.receivableId && !intent.collectionPaymentId) {
     const receivable = await ctx.db.get(intent.receivableId);
     if (receivable && receivable.orgId === intent.orgId) {
-      const amount = roundMoney(fromMinorUnits(intent.amountMinor, intent.currency), intent.currency);
-      // The receivable may have been partially paid through another channel
-      // since this intent was created, so the full intent amount can now
-      // exceed what's actually still owed. Clamp what's recorded as applied
-      // to this receivable to its current outstanding balance rather than
-      // posting more than it was ever owed.
-      const appliedAmount = Math.min(amount, receivable.outstandingAmount);
+      // R12.2 — the movement row carries the FULL confirmed receipt. R12.1 — the
+      // AR application is a separate quantity and is the allocation above; the
+      // two are never derived from one another.
+      const receivedAmount = roundMoney(fromMinorUnits(intent.amountMinor, intent.currency), intent.currency);
+      const appliedAmount = roundMoney(fromMinorUnits(appliedMinor, intent.currency), intent.currency);
       const collectionPaymentId = await ctx.db.insert("collectionPayments", {
         orgId: intent.orgId,
         receivableId: receivable._id,
@@ -145,7 +151,7 @@ async function createCanonicalIntentSettlement(
         saleId: receivable.saleId,
         direction: "IN",
         method: "PAYMENT_LINK",
-        amount: appliedAmount,
+        amount: receivedAmount,
         paymentDate: occurredAt,
         status: "POSTED",
         idempotencyKey: `payment_intent_${intent._id}`,
@@ -155,13 +161,17 @@ async function createCanonicalIntentSettlement(
         paymentAllocationId: links.paymentAllocationId,
         createdAt: occurredAt,
       });
-      const outstandingAmount = roundMoney(Math.max(0, receivable.outstandingAmount - appliedAmount), intent.currency);
-      await ctx.db.patch(receivable._id, {
-        outstandingAmount,
-        status: nextLegacyReceivableStatus(outstandingAmount, receivable.dueDate, occurredAt),
-        lastPaymentAt: occurredAt,
-        updatedAt: occurredAt,
-      });
+      // R6/R12.3 — with nothing allocated, no receivable balance, status or
+      // aging may move. The receipt is recorded; the debt is untouched.
+      if (appliedAmount > 0) {
+        const outstandingAmount = roundMoney(Math.max(0, receivable.outstandingAmount - appliedAmount), intent.currency);
+        await ctx.db.patch(receivable._id, {
+          outstandingAmount,
+          status: nextLegacyReceivableStatus(outstandingAmount, receivable.dueDate, occurredAt),
+          lastPaymentAt: occurredAt,
+          updatedAt: occurredAt,
+        });
+      }
       links.collectionPaymentId = collectionPaymentId;
     }
   }
@@ -287,21 +297,35 @@ export const create = mutation({
         const customer = await ctx.db.get(args.customerId);
         if (!customer || customer.orgId !== args.orgId) throw new ConvexError("Customer not found.");
 
-        let receivableDocumentId = args.receivableDocumentId;
-        if (args.receivableId) {
-          const receivable = await ctx.db.get(args.receivableId);
-          if (!receivable || receivable.orgId !== args.orgId) throw new ConvexError("Receivable not found.");
-          if (receivable.customerId !== args.customerId) throw new ConvexError("Receivable customer does not match.");
-          if (!receivable.canonicalReceivableDocumentId) {
+        // SCRUM-121 R3 — creating a payment link is a PRE-FUNDS boundary, so
+        // every supplied reference is proven here or the call hard-fails.
+        //
+        // The previous check compared a caller-supplied `receivableDocumentId`
+        // against the ROW'S OWN twin, which refused the one correct request (a
+        // sale-linked row paid on its sale invoice) while letting a cross-tenant
+        // or dangling document through entirely unread — it was only caught at
+        // the subledger, after a provider had confirmed the funds.
+        const target = await resolveTargetAtCreation(ctx, {
+          orgId: args.orgId,
+          customerId: args.customerId,
+          receivableId: args.receivableId,
+          receivableDocumentId: args.receivableDocumentId,
+          saleId: args.saleId,
+          ensureLegacyDocument: async (row) => {
+            if (row.canonicalReceivableDocumentId) return row.canonicalReceivableDocumentId;
             throw new ConvexError("Receivable is missing its canonical accounting document.");
-          }
-          if (receivableDocumentId && receivableDocumentId !== receivable.canonicalReceivableDocumentId) {
-            throw new ConvexError("Payment intent receivable document does not match the selected receivable.");
-          }
-          receivableDocumentId = receivable.canonicalReceivableDocumentId;
-          const outstandingMinor = toMinorUnits(receivable.outstandingAmount, currency);
-          if (args.amountMinor > outstandingMinor) {
-            throw new ConvexError("Payment link amount cannot exceed the receivable outstanding amount.");
+          },
+        });
+        const receivableDocumentId = target.targetDocumentId ?? undefined;
+        if (receivableDocumentId) {
+          const proof = await reproveTargetAtSettlement(ctx, {
+            orgId: args.orgId,
+            targetDocumentId: receivableDocumentId,
+            customerId: args.customerId,
+            requestedMinor: args.amountMinor,
+          });
+          if (proof.proven && args.amountMinor > proof.allocatableMinor) {
+            throw new ConvexError("Payment link amount cannot exceed the outstanding amount.");
           }
         }
 
