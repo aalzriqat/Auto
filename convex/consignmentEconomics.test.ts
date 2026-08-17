@@ -891,11 +891,20 @@ describe("CX-B — a receipt from the wrong route raises no ceiling", () => {
     // records one. Without the route check, `entitlementCeiling` returns 50,000
     // and a 40,000 entitlement becomes "valid" — publishing a supplier share
     // twice the size of the whole sale.
+    //
+    // ⚠️ `externallyFinanced: true` is LOAD-BEARING, not incidental.
+    // `supplierReceiptIsAdmissible` is `route AND externallyFinanced === true`.
+    // This fixture originally omitted the flag, so the FINANCING conjunct already
+    // refused and the route was never the deciding term — deleting the route
+    // conjunct left every assertion below passing, mutation-proven. Satisfying
+    // financing makes the ROUTE the only thing that can refuse, which is what
+    // this test is named for.
     const e = saleEconomics({
       salePrice: THROUGH_PRICE,
       vehicle: { sourceType: "SOURCED" },
       capitalizedCost: 15_000,
       supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      externallyFinanced: true,
       recordedSupplierEntitlement: 40_000,
       recordedSupplierGrossReceipt: 50_000,
     });
@@ -906,6 +915,11 @@ describe("CX-B — a receipt from the wrong route raises no ceiling", () => {
     // `null` — the previous `not.toBe` plus a bound guarded on non-`null`
     // accepted either refusal outcome, so swapping one for the other would have
     // passed unnoticed.
+    //
+    // With financing satisfied above, deleting the route conjunct raises the
+    // ceiling to the 50,000 receipt, admits the 40,000 entitlement, and publishes
+    // 40,000 against a 20,000 sale — so these three assertions now DIE on that
+    // mutant instead of surviving it.
     expect(e.supplierSettlement).toBe(15_000);
     expect(e.dealershipMargin).toBe(5_000);
     expect(e.recognizedRevenue).toBe(5_000);
@@ -946,20 +960,32 @@ describe("CX-B — a receipt from the wrong route raises no ceiling", () => {
       recordedSupplierEntitlement: 30_000,
       recordedSupplierGrossReceipt: 35_000,
     };
-    const through = saleEconomics({ ...args, supplierSettlementRoute: "THROUGH_DEALERSHIP" });
+    // ⚠️ Each row satisfies the OTHER conjunct, which is the only way this test
+    // can support its own title. `externallyFinanced: true` on the THROUGH row
+    // leaves the ROUTE as the sole refusing condition; `false` on the DIRECT row
+    // leaves FINANCING as the sole refusing condition. The THROUGH row previously
+    // omitted the flag, so financing refused it and the title's "route ALONE"
+    // claim was false as written — mutation-proven: deleting the route conjunct
+    // left this test green.
+    const through = saleEconomics({
+      ...args,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      externallyFinanced: true,
+    });
     const cashDirect = saleEconomics({
       ...args,
       supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
       externallyFinanced: false,
     });
 
-    expect(through.supplierSettlement).not.toBe(30_000);
+    // EXACT on both, so each row pins one conjunct: the inadmissible 30,000
+    // entitlement is dropped and the live basis stands in. Deleting the route
+    // conjunct breaks the first line; deleting the financing conjunct breaks the
+    // second. One test, both halves.
+    expect(through.supplierSettlement).toBe(15_000);
     // The inversion. Cash direct is bounded by the sale price exactly as
     // THROUGH_DEALERSHIP is, because no third party paid the supplier anything.
-    expect(cashDirect.supplierSettlement).not.toBe(30_000);
-    if (cashDirect.supplierSettlement !== null) {
-      expect(cashDirect.supplierSettlement).toBeLessThanOrEqual(THROUGH_PRICE);
-    }
+    expect(cashDirect.supplierSettlement).toBe(15_000);
   });
 });
 
