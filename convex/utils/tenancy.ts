@@ -506,16 +506,21 @@ export function redactSettlementEvidence<T extends Doc<"financeApplications">>(
     // publishing the sentence written next to it is the shape of leak this file
     // already documents at tier 2.
     //
-    // Either permission suffices, because either one independently entitles its
-    // holder to the supplier's cost — VIEW_FINANCE through the settlement
-    // evidence above, VIEW_COST_PRICE through the vehicle itself. Neither is
-    // held by the default SALES template.
-    supplierEntitlementAtApprovalMinor:
+    // TWO GATES, not one. The first version put both behind
+    // `finance || cost_price`, which over-granted the second half: a
+    // VIEW_COST_PRICE holder is entitled to the supplier's COST, and that is all
+    // — `directSupplierReceipt` additionally carries the document the figure was
+    // read off and free-text notes typed beside it, which are settlement
+    // evidence rather than cost data, and in practice record amounts (the tier-2
+    // note below documents `approvedPurchaseNotes` doing exactly that).
+    //
+    // So: the number follows cost visibility, the paperwork follows finance
+    // visibility. Neither is held by the default SALES template.
+    supplierEntitlementWitness:
       canSeeFinance || has(PERMISSIONS.VIEW_COST_PRICE)
-        ? app.supplierEntitlementAtApprovalMinor
+        ? app.supplierEntitlementWitness
         : undefined,
-    directSupplierReceipt:
-      canSeeFinance || has(PERMISSIONS.VIEW_COST_PRICE) ? app.directSupplierReceipt : undefined,
+    directSupplierReceipt: canSeeFinance ? app.directSupplierReceipt : undefined,
 
     // Tier 2 — the one figure the confirmation SCREEN needs to prefill. Without
     // it the amount field opens blank and gets typed from memory, and a typo

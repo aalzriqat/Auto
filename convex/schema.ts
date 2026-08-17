@@ -2271,8 +2271,30 @@ export default defineSchema({
      * Absent on a row approved before this release: unprovable, not unchanged.
      * See `supplierEntitlementVerdictFor` in `applications.ts` — the difference
      * is the whole point of the field.
+     *
+     * ⚠️ NAMED FOR WHAT IT IS, NOT FOR WHEN IT HAPPENED. The first version was
+     * `supplierEntitlementAtApprovalMinor`, and three of the four ways it gets
+     * written are not the approval: choosing the direct route on an
+     * already-approved deal validates it later, and repairing a pre-release row
+     * validates it later still. A bare number under that name asserted a
+     * historical observation the dealership never made — and on the configured
+     * path it would have been filed beside a finance-company approval timestamp
+     * belonging to a different act. So the witness carries its OWN provenance:
+     * when it was validated, by whom, and through which action. The approval's
+     * own actor and timestamp are never borrowed or rewritten to stand in for it.
      */
-    supplierEntitlementAtApprovalMinor: v.optional(v.number()),
+    supplierEntitlementWitness: v.optional(
+      v.object({
+        amountMinor: v.number(),
+        validatedAt: v.number(),
+        validatedBy: v.id("users"),
+        via: v.union(
+          v.literal("CONFIGURED_APPROVAL"),
+          v.literal("MANUAL_RECEIPT"),
+          v.literal("ROUTE_SELECTION")
+        ),
+      })
+    ),
     /**
      * The MANUAL direct supplier-receipt provenance: which document the figure
      * was read off, and any note the operator added.

@@ -532,7 +532,10 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
 
     // Bound to the evidence it was agreed against.
     const recorded = await t.run((ctx) => ctx.db.get(applicationId));
-    expect(recorded?.supplierEntitlementAtApprovalMinor).toBe(17_000_000);
+    expect(recorded?.supplierEntitlementWitness?.amountMinor).toBe(17_000_000);
+    // Its own provenance, not the approval's.
+    expect(recorded?.supplierEntitlementWitness?.via).toBe("MANUAL_RECEIPT");
+    expect(recorded?.supplierEntitlementWitness?.validatedAt).toBeTypeOf("number");
 
     // The supplier's entitlement moves AFTER the agreement — through the REAL
     // public writer, not a raw patch.
@@ -606,7 +609,8 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
     // The configured writer stamps the witness it validated against — the fact
     // this whole test depends on, asserted rather than assumed.
     const approved = await t.run((ctx) => ctx.db.get(applicationId));
-    expect(approved?.supplierEntitlementAtApprovalMinor).toBe(17_000_000);
+    expect(approved?.supplierEntitlementWitness?.amountMinor).toBe(17_000_000);
+    expect(approved?.supplierEntitlementWitness?.via).toBe("CONFIGURED_APPROVAL");
 
     await asUser.mutation(api.vehicles.update, {
       orgId,
@@ -664,7 +668,7 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
     // path now stamps the witness, so the only way to test the legacy row is to
     // recreate it.
     await t.run((ctx) =>
-      ctx.db.patch(applicationId, { supplierEntitlementAtApprovalMinor: undefined })
+      ctx.db.patch(applicationId, { supplierEntitlementWitness: undefined })
     );
 
     await expect(registerHandover(asUser, api, orgId, applicationId)).rejects.toThrow(
@@ -718,7 +722,7 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
     // worse than the fail-open it replaced.
     const after = await t.run((ctx) => ctx.db.get(applicationId));
     expect(after?.approvedDealerPurchaseAmountMinor).toBeUndefined();
-    expect(after?.supplierEntitlementAtApprovalMinor).toBeUndefined();
+    expect(after?.supplierEntitlementWitness).toBeUndefined();
 
     // Recoverable in one step, through the vehicle's own screen.
     await asUser.mutation(api.vehicles.update, { orgId, vehicleId, sourceCost: 17_000 });
@@ -729,7 +733,7 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
       source: "Signed purchase agreement",
     });
     expect(
-      (await t.run((ctx) => ctx.db.get(applicationId)))?.supplierEntitlementAtApprovalMinor
+      (await t.run((ctx) => ctx.db.get(applicationId)))?.supplierEntitlementWitness?.amountMinor
     ).toBe(17_000_000);
   });
 
@@ -761,13 +765,20 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
         ...(notes ? { notes } : {}),
       });
 
+    // Scoped to the fields THIS writer owns. Counting every row on the deal
+    // made these assertions hostage to any sibling mutation that also records
+    // history — `setSupplierSettlementRoute` now does, and a count of "all rows"
+    // would have failed here while the behaviour under test was untouched.
+    const RECEIPT_FIELDS = ["approvedDealerPurchaseAmountMinor", "directSupplierReceipt"];
     const auditRows = async () =>
-      t.run((ctx) =>
-        ctx.db
-          .query("financeApplicationOverrides")
-          .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
-          .collect()
-      );
+      t
+        .run((ctx) =>
+          ctx.db
+            .query("financeApplicationOverrides")
+            .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+            .collect()
+        )
+        .then((rows) => rows.filter((r) => RECEIPT_FIELDS.includes(r.field)));
     const latest = async () => {
       const rows = await auditRows();
       const row = rows.sort((a, b) => a.changedAt - b.changedAt).at(-1)!;
@@ -828,6 +839,417 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
     expect((await auditRows()).length).toBe(4);
   });
 
+  test("the supplier's evidence does not reach a sales-only caller through ANY door, values included", async () => {
+    // A SENTINEL-VALUE scan, and it exists because the key-walking sweep in
+    // financedConsignedSettlement.test.ts structurally cannot see this leak.
+    //
+    // `getEconomics` returns the correction history, whose payloads are STRINGS
+    // — the serialized receipt lives inside `newValue`. A guard that recurses
+    // over object keys sees the key `newValue` and nothing inside it, so the
+    // supplier's cost, the document it was read off and the operator's note all
+    // travelled to a default-SALES caller under a field name that looks
+    // innocuous. Two kinds of assertion are needed because two kinds of leak
+    // exist: a field published whole, and a field serialized into a value.
+    const SENTINEL_SOURCE = "SENTINEL-PURCHASE-AGREEMENT-8891";
+    const SENTINEL_NOTES = "SENTINEL-NOTE-COLLECTED-BY-HAND-4472";
+    const SENTINEL_ENTITLEMENT = 16_431_000;
+
+    const { t, orgId, applicationId, asUser, asApprover } = await seedApprovedApplication(
+      "MANUAL_FINANCE_COMPANY",
+      { sourcedVehicle: true, manualProviderName: "Amman Finance House" }
+    );
+    const vehicleId = (await t.run((ctx) => ctx.db.get(applicationId)))!.vehicleId;
+    // A distinctive entitlement so the witness itself is searchable as a value.
+    await asUser.mutation(api.vehicles.update, {
+      orgId,
+      vehicleId,
+      sourceCost: SENTINEL_ENTITLEMENT / 1000,
+    });
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    await asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_000_000,
+      source: SENTINEL_SOURCE,
+      notes: SENTINEL_NOTES,
+    });
+    // A CORRECTION, so the override history carries the evidence twice — once as
+    // the before and once as the after. The first write alone would leave
+    // `previousValue` empty and under-test the very field that leaked.
+    await asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_500_000,
+      source: SENTINEL_SOURCE,
+      notes: SENTINEL_NOTES,
+    });
+
+    // Anti-vacuity: the sentinels must really be stored, or every assertion
+    // below passes against a deal that never carried them.
+    const stored = await t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      const rows = await ctx.db
+        .query("financeApplicationOverrides")
+        .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+        .collect();
+      return {
+        witness: app?.supplierEntitlementWitness?.amountMinor,
+        receiptSource: app?.directSupplierReceipt?.source,
+        historyMentionsSource: rows.some((r) =>
+          `${r.previousValue ?? ""}${r.newValue}${r.reason}`.includes(SENTINEL_SOURCE)
+        ),
+      };
+    });
+    expect(stored.witness).toBe(SENTINEL_ENTITLEMENT);
+    expect(stored.receiptSource).toBe(SENTINEL_SOURCE);
+    expect(stored.historyMentionsSource).toBe(true);
+
+    // Now demote the role to the DEFAULT SALES template — the real thing, read
+    // from the shipped templates rather than a hand-written list that could
+    // drift into granting less than production does.
+    const salesTemplate = DEFAULT_ROLE_TEMPLATES.find((r) => r.name === "SALES")!;
+    expect(salesTemplate.permissions).toContain("view:finance_applications");
+    expect(salesTemplate.permissions).not.toContain("view:finance");
+    expect(salesTemplate.permissions).not.toContain("view:cost_price");
+    await t.run(async (ctx) => {
+      const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === orgId)!;
+      await ctx.db.patch(role._id, {
+        permissions: [...salesTemplate.permissions],
+        isSystemOwnerRole: false,
+      });
+    });
+
+    const doors: Array<[string, unknown]> = [
+      [
+        "applications.list",
+        await asUser.query(api.applications.list, {
+          orgId,
+          paginationOpts: { numItems: 20, cursor: null },
+        }),
+      ],
+      ["applications.get", await asUser.query(api.applications.get, { orgId, applicationId })],
+      [
+        "applications.dealCockpit",
+        await asUser.query(api.applications.dealCockpit, { orgId, applicationId }),
+      ],
+      [
+        "financingEconomics.getEconomics",
+        await asUser.query(api.financingEconomics.getEconomics, { orgId, applicationId }),
+      ],
+    ];
+
+    for (const [name, payload] of doors) {
+      const serialized = `${name} → ${JSON.stringify(payload ?? null)}`;
+      // Anti-vacuity per door: an empty or null payload contains no evidence for
+      // the trivial reason and would pass while proving nothing.
+      expect(`${name} returned something: ${serialized.length > 40}`).toBe(
+        `${name} returned something: true`
+      );
+      expect(serialized).not.toContain(SENTINEL_SOURCE);
+      expect(serialized).not.toContain(SENTINEL_NOTES);
+      expect(serialized).not.toContain(String(SENTINEL_ENTITLEMENT));
+    }
+
+    // The WORKFLOW half survives: a sales caller still learns that corrections
+    // happened, and when. Withholding the row entirely would hide a fact they
+    // legitimately work with, which is the over-correction this file keeps
+    // documenting in the other direction.
+    const economics = (await asUser.query(api.financingEconomics.getEconomics, {
+      orgId,
+      applicationId,
+    })) as unknown as { overrides: Array<{ changedAt: number; newValue?: string }> };
+    expect(economics.overrides.length).toBeGreaterThan(0);
+    expect(economics.overrides[0].changedAt).toBeTypeOf("number");
+    expect(economics.overrides[0].newValue).toBeUndefined();
+  });
+
+  test("cost visibility earns the number, not the paperwork", async () => {
+    // The over-grant. Both fields sat behind `finance || cost_price`, but
+    // VIEW_COST_PRICE entitles its holder to the supplier's COST and nothing
+    // more — the receipt names the document and carries free-text notes, which
+    // are settlement evidence rather than cost data.
+    const { t, orgId, applicationId, asUser, asApprover } = await seedApprovedApplication(
+      "MANUAL_FINANCE_COMPANY",
+      { sourcedVehicle: true, manualProviderName: "Amman Finance House" }
+    );
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    await asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_000_000,
+      source: "Signed purchase agreement",
+      notes: "Handed over at the branch.",
+    });
+
+    await t.run(async (ctx) => {
+      const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === orgId)!;
+      await ctx.db.patch(role._id, {
+        permissions: ["view:sales", "view:finance_applications", "view:cost_price"],
+        isSystemOwnerRole: false,
+      });
+    });
+
+    const detail = (await asUser.query(api.applications.get, {
+      orgId,
+      applicationId,
+    })) as unknown as Record<string, unknown>;
+    expect(detail).toBeTruthy();
+    // Entitled to the supplier's cost — this caller can read it off the vehicle.
+    expect((detail.supplierEntitlementWitness as { amountMinor: number }).amountMinor).toBe(
+      17_000_000
+    );
+    // Not entitled to the paperwork. Checked as a KEY, because Convex drops
+    // undefined-valued keys on the wire.
+    expect(`present: ${Object.hasOwn(detail, "directSupplierReceipt")}`).toBe("present: false");
+  });
+
+  test("the route cannot be changed after the vehicle has gone out", async () => {
+    // THE DEAD END, REOPENED THROUGH A DIFFERENT MUTATION.
+    //
+    // A MANUAL THROUGH deal may legitimately be handed over with no supplier
+    // receipt amount. Switching it to DIRECT afterwards made finalization demand
+    // that amount — a requirement this PR introduced — while
+    // `recordDirectSupplierReceiptAmount` correctly refuses a handed-over deal.
+    // The cockpit is back to naming a step nothing can perform, which is the
+    // defect SCRUM-61 exists to remove.
+    const { t, orgId, applicationId, asUser } = await seedApprovedApplication(
+      "MANUAL_FINANCE_COMPANY",
+      { sourcedVehicle: true, manualProviderName: "Amman Finance House" }
+    );
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "THROUGH_DEALERSHIP",
+    });
+    await registerHandover(asUser, api, orgId, applicationId);
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.vehicleHandoverAt).toBeTypeOf(
+      "number"
+    );
+
+    await expect(
+      asUser.mutation(api.applications.setSupplierSettlementRoute, {
+        orgId,
+        applicationId,
+        route: "DIRECT_TO_SUPPLIER",
+      })
+    ).rejects.toThrow(/vehicle has gone out/i);
+
+    // The deal is still finalizable on the route it actually went out under — a
+    // refusal that stranded it would be the same dead end from the other side.
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.supplierSettlementRoute).toBe(
+      "THROUGH_DEALERSHIP"
+    );
+
+    // And an idempotent re-submission of the SAME route is still accepted: it
+    // changes nothing, and refusing a retry would break the caller that lost its
+    // response.
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "THROUGH_DEALERSHIP",
+    });
+  });
+
+  test("changing the route invalidates a handover confirmation opened before it", async () => {
+    // The stale-stamp race. `handoverStamp` is derived from `economicsRevision`,
+    // and the handover mutation refuses a confirmation carrying an old one —
+    // that is the entire mechanism stopping an operator from sealing figures
+    // they never saw. This writer moved the route AND the entitlement witness
+    // without touching the revision, so a confirmation opened while the deal
+    // settled THROUGH the dealership still succeeded after somebody switched it
+    // to DIRECT.
+    const { t, orgId, applicationId, asUser, asApprover } = await seedApprovedApplication(
+      "MANUAL_FINANCE_COMPANY",
+      { sourcedVehicle: true, manualProviderName: "Amman Finance House" }
+    );
+    /**
+     * ⚠️ THE ROUTE CHANGE IS THE ONLY WRITER BETWEEN THE STAMP AND THE SUBMIT.
+     *
+     * The first version of this test set the route and then recorded the
+     * supplier amount before submitting the stale stamp — and a mutant that
+     * deleted the route writer's revision bump SURVIVED it, because the AMOUNT
+     * writer bumps the revision too. The test named the route as the cause and
+     * measured a different one. So the deal's economics are completed FIRST, and
+     * the only thing that moves afterwards is the route.
+     */
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    await asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_000_000,
+      source: "Signed purchase agreement",
+    });
+
+    // Operator A opens the confirmation and reads the stamp.
+    const staleStamp = await asUser.query(api.applications.handoverStamp, {
+      orgId,
+      applicationId,
+    });
+    // A null stamp would make the refusal below prove nothing about staleness.
+    expect(staleStamp).toBeTypeOf("string");
+
+    // Operator B changes how the supplier gets paid — and NOTHING else happens.
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "THROUGH_DEALERSHIP",
+    });
+
+    // Operator A submits what they were looking at. It must not seal a deal
+    // whose settlement route changed underneath them — and the refusal must be
+    // the STAMP, not a downstream economics complaint that would pass whether or
+    // not the revision moved.
+    await expect(
+      asUser.mutation(api.applications.registerVehicleHandover, {
+        orgId,
+        applicationId,
+        economicsStamp: staleStamp as string,
+      })
+    ).rejects.toThrow(/changed while you were confirming/i);
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.vehicleHandoverAt).toBeUndefined();
+
+    // Re-reading the deal and confirming again succeeds — the refusal is a
+    // re-read, not a wall.
+    await registerHandover(asUser, api, orgId, applicationId);
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.vehicleHandoverAt).toBeTypeOf(
+      "number"
+    );
+  });
+
+  test("route selection leaves structured evidence, and an identical re-submission leaves none", async () => {
+    const { t, orgId, applicationId, asUser } = await seedApprovedApplication(
+      "MANUAL_FINANCE_COMPANY",
+      { sourcedVehicle: true, manualProviderName: "Amman Finance House" }
+    );
+    const rows = async () =>
+      t.run((ctx) =>
+        ctx.db
+          .query("financeApplicationOverrides")
+          .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+          .collect()
+      );
+
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    const afterFirst = await rows();
+    const routeRow = afterFirst.find((r) => r.field === "supplierSettlementRoute")!;
+    expect(routeRow).toBeDefined();
+    // Machine-readable on both sides, like every other money fact on this deal.
+    expect(JSON.parse(routeRow.newValue)).toStrictEqual({
+      route: "DIRECT_TO_SUPPLIER",
+      // No approved amount yet, so there was nothing to validate an entitlement
+      // against — recorded as null rather than guessed at.
+      supplierEntitlementMinor: null,
+    });
+    const revisionAfterFirst = (await t.run((ctx) => ctx.db.get(applicationId)))?.economicsRevision;
+
+    // The identical act again: no row, no revision bump, no invalidated
+    // confirmations.
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    expect((await rows()).length).toBe(afterFirst.length);
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.economicsRevision).toBe(
+      revisionAfterFirst
+    );
+  });
+
+  test("repairing a legacy witness records itself, and does not rewrite the approval it sits beside", async () => {
+    // PROVENANCE. The witness used to be a bare number under a name that claimed
+    // it was observed at the approval. On a legacy repair — re-approving the
+    // identical amount to establish the evidence — `approvalMateriallyChanged`
+    // is false, so no override row was written at all, and the current supplier
+    // cost was presented as though the dealership had observed it back when the
+    // finance company approved.
+    const { t, orgId, applicationId, asUser, asApprover } = await seedApprovedApplication(
+      "CONFIGURED_FINANCE_COMPANY",
+      { sourcedVehicle: true }
+    );
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    await asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId,
+      applicationId,
+      submittedQuotationMinor: 17_000_000,
+      source: "MANUAL_ENTRY",
+    });
+    await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_000_000,
+      basis: "MANUAL",
+      notes: "Approved by the finance company over the phone.",
+    });
+
+    // The pre-release shape: an approval with no witness beside it.
+    await t.run((ctx) => ctx.db.patch(applicationId, { supplierEntitlementWitness: undefined }));
+    const beforeRepair = await t.run((ctx) => ctx.db.get(applicationId));
+    const approvalStampBefore = beforeRepair?.approvedPurchaseApprovedAt;
+    const approverBefore = beforeRepair?.approvedPurchaseApprovedBy;
+    expect(approvalStampBefore).toBeTypeOf("number");
+    const rowsBefore = await t.run((ctx) =>
+      ctx.db
+        .query("financeApplicationOverrides")
+        .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+        .collect()
+    );
+
+    // The repair: the SAME approval, re-entered to establish the evidence.
+    await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_000_000,
+      basis: "MANUAL",
+      notes: "Approved by the finance company over the phone.",
+    });
+
+    const afterRepair = await t.run((ctx) => ctx.db.get(applicationId));
+    // The witness exists, carries its OWN provenance, and says how it was
+    // established.
+    expect(afterRepair?.supplierEntitlementWitness?.amountMinor).toBe(17_000_000);
+    expect(afterRepair?.supplierEntitlementWitness?.via).toBe("CONFIGURED_APPROVAL");
+    expect(afterRepair?.supplierEntitlementWitness?.validatedBy).toBeDefined();
+
+    // The finance company's approval is a real historical act. It did not
+    // happen again, so nothing about it moved.
+    expect(afterRepair?.approvedPurchaseApprovedAt).toBe(approvalStampBefore);
+    expect(afterRepair?.approvedPurchaseApprovedBy).toBe(approverBefore);
+
+    // And the repair is not silent: it left its own row, distinct from the
+    // approval's history.
+    const rowsAfter = await t.run((ctx) =>
+      ctx.db
+        .query("financeApplicationOverrides")
+        .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+        .collect()
+    );
+    expect(rowsAfter.length).toBe(rowsBefore.length + 1);
+    const witnessRow = rowsAfter.find((r) => r.field === "supplierEntitlementWitness")!;
+    expect(witnessRow).toBeDefined();
+    expect(JSON.parse(witnessRow.newValue).supplierEntitlementMinor).toBe(17_000_000);
+    expect(JSON.parse(witnessRow.newValue).via).toBe("CONFIGURED_APPROVAL");
+  });
+
   test("an exact retry is the same act — no revision bump, no second audit row", async () => {
     // A lost response or a double submit repeated the whole write: it bumped the
     // concurrency revision, invalidating every open confirmation for nothing, and
@@ -860,7 +1282,14 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
           .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
           .collect()
       );
-      return { revision: app?.economicsRevision, auditRows: audit.length };
+      return {
+        revision: app?.economicsRevision,
+        // This writer's own rows only — see the note in the machine-readable
+        // test above.
+        auditRows: audit.filter((r) =>
+          ["approvedDealerPurchaseAmountMinor", "directSupplierReceipt"].includes(r.field)
+        ).length,
+      };
     };
 
     await call(17_000_000, "Signed purchase agreement");
@@ -1029,6 +1458,8 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
         amount: app?.approvedDealerPurchaseAmountMinor,
         currency: app?.economicsCurrency,
         revision: app?.economicsRevision,
+        // Every row, deliberately: this test asserts the refused call wrote
+        // NOTHING anywhere, so narrowing the field would weaken it.
         auditRows: audit.length,
       };
     };
@@ -1050,7 +1481,11 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
     // Non-vacuity: a snapshot of all-undefined would compare equal to itself, so
     // prove the fields the comparison depends on are real ones.
     expect(before.amount).toBeUndefined();
-    expect(before.auditRows).toBe(0);
+    // Not zero: choosing the settlement route legitimately recorded one row
+    // before this test's own call. What matters is that the REFUSAL adds none,
+    // which the comparison below measures — an absolute count here would pin an
+    // unrelated writer's behaviour by accident.
+    expect(before.auditRows).toBe(1);
   });
 
   test("recording the amount MOVES the stamp, so an open handover confirmation cannot seal a figure it never saw", async () => {

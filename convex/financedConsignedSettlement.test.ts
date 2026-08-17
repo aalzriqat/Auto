@@ -1104,7 +1104,26 @@ describe("the screen's answer and the server's answer are the same answer", () =
   for (const [index, c] of cases.entries()) {
     test(`${c.name}: get() and setSupplierSettlementRoute agree`, async () => {
       const s = await seedDealership(`agree${index}`);
-      const { applicationId } = await runDeal(s, { ...c.opts, finalize: false });
+      // STOPPED AT APPROVED, so what these cases measure is what they claim to
+      // measure: whether the PAYER on this deal permits the direct route.
+      //
+      // They used to run through handover, which quietly added a second
+      // condition. Once the route mutation learned to refuse a switch to DIRECT
+      // on a handed-over deal that can no longer record the supplier's receipt
+      // amount, "a named manual provider" started failing here — not because a
+      // named manual provider cannot settle direct, but because THIS FIXTURE had
+      // already handed the vehicle over. Encoding that as `direct: false` would
+      // have written a false statement about manual providers into the table and
+      // hidden any real regression in the payer rules behind it.
+      //
+      // The lifecycle interaction has its own test, in
+      // configuredDealEconomicsGuard.test.ts, where it is the subject rather
+      // than a side effect of the fixture.
+      const { applicationId } = await runDeal(s, {
+        ...c.opts,
+        finalize: false,
+        stopAtApproved: true,
+      });
 
       const view = await s.asUser.query(api.applications.get, { orgId: s.orgId, applicationId });
       expect(view?.canSettleDirectToSupplier).toBe(c.direct);
@@ -5055,11 +5074,11 @@ describe("a settlement advice that contradicts the approval", () => {
     // to mean redaction.
     const storedEvidence = await s.t.run(async (ctx) => {
       const app = (await ctx.db.get(applicationId as never)) as unknown as {
-        supplierEntitlementAtApprovalMinor?: number;
+        supplierEntitlementWitness?: { amountMinor: number };
         directSupplierReceipt?: { source: string };
       };
       return {
-        entitlement: app.supplierEntitlementAtApprovalMinor,
+        entitlement: app.supplierEntitlementWitness?.amountMinor,
         receiptSource: app.directSupplierReceipt?.source,
       };
     });
@@ -5186,7 +5205,7 @@ describe("a settlement advice that contradicts the approval", () => {
         // `redactSettlementEvidence` starts from the whole document and blanks a
         // NAMED list, so a new sensitive field is exposed by default. Every new
         // gated field belongs in this sweep for exactly that reason.
-        "supplierEntitlementAtApprovalMinor",
+        "supplierEntitlementWitness",
         "directSupplierReceipt",
       ]) {
         expect(`${name} exposes ${field}: ${keysOf(response).has(field)}`).toBe(

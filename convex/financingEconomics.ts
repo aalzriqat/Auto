@@ -743,6 +743,8 @@ export const getEconomics = query({
     const canSeeCost =
       isSystemOwnerRole(auth.role) ||
       auth.role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
+    const canSeeFinance =
+      isSystemOwnerRole(auth.role) || auth.role.permissions.includes(PERMISSIONS.VIEW_FINANCE);
 
     // The redaction's OWN decision about the approved amount, reused rather
     // than restated. Whether this caller may see the figure is a rule that
@@ -762,7 +764,36 @@ export const getEconomics = query({
         vehiclePurchaseCostMinor: canSeeCost ? app.vehiclePurchaseCostMinor : undefined,
       },
       appraisals: appraisals.sort((a, b) => b.appraisedAt - a.appraisedAt),
-      overrides: overrides.sort((a, b) => b.changedAt - a.changedAt),
+      /**
+       * THE CORRECTION HISTORY IS SETTLEMENT EVIDENCE, and it was served raw.
+       *
+       * These rows carry `previousValue`/`newValue`/`reason`, and every writer
+       * of this deal's money puts the figures INTO those strings — the approval
+       * as `"17000000 (MANUAL @ 85% LTV, approved by …)"`, the direct receipt as
+       * a serialized object containing the amount, the document it was read off,
+       * the operator's note and the supplier's entitlement. This query authorizes
+       * on VIEW_FINANCE_APPLICATIONS, which the default SALES template holds, so
+       * redacting the application document while publishing its own change log
+       * handed back everything the redaction had just withheld, one layer down.
+       *
+       * ⚠️ A KEY-WALKING GUARD CANNOT SEE THIS. The structural sweep recurses
+       * over object keys, and these payloads are STRINGS — the leak is inside a
+       * value, so the field name it hides behind is `newValue`. That is why the
+       * regressions for this are sentinel-VALUE scans over the fully serialized
+       * response, and why the two kinds of assertion both have to exist.
+       *
+       * The row's shape survives — a caller still learns THAT a figure was
+       * corrected, when, and by whom, which is the workflow fact — while the
+       * amounts and the paperwork behind them follow the same gate as the
+       * document they describe.
+       */
+      overrides: overrides
+        .sort((a, b) => b.changedAt - a.changedAt)
+        .map((row) =>
+          canSeeFinance
+            ? row
+            : { ...row, previousValue: undefined, newValue: undefined, reason: "" }
+        ),
       /**
        * Whether the recorded approved amount is unlike every figure on file.
        *
@@ -1593,7 +1624,7 @@ export const approveDealerPurchaseAmount = mutation({
      * this witness for BOTH writers; without it being written here, that check
      * had nothing to read on the configured shape.
      */
-    let supplierEntitlementAtApprovalMinor: number | undefined;
+    let validatedEntitlementMinor: number | undefined;
     if (!dealershipCollectsGross(consignedSettlementRoute(app))) {
       const vehicle = await ctx.db.get(app.vehicleId);
       if (vehicle && vehicle.orgId === args.orgId && isConsignedAgentSale(vehicle)) {
@@ -1608,10 +1639,10 @@ export const approveDealerPurchaseAmount = mutation({
         // vehicle is still on the lot and re-approving can fix it.
         if (costAmount > 0) {
           const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
-          supplierEntitlementAtApprovalMinor = toMinorUnits(costAmount, currency);
+          validatedEntitlementMinor = toMinorUnits(costAmount, currency);
           const refusal = directSettlementBelowEntitlementRefusal({
             approvedAmountMinor: args.approvedAmountMinor,
-            supplierEntitlementMinor: supplierEntitlementAtApprovalMinor,
+            supplierEntitlementMinor: validatedEntitlementMinor,
             supplierName: vehicle.sourcedFromName,
           });
           if (refusal) throw new ConvexError(refusal);
@@ -1796,6 +1827,46 @@ export const approveDealerPurchaseAmount = mutation({
       });
     }
 
+    /**
+     * The WITNESS has its own material-change test, and therefore its own row.
+     *
+     * `approvalMateriallyChanged` asks whether the finance company's decision
+     * moved. Creating or replacing the entitlement witness is a different event:
+     * on a legacy repair the approval is byte-identical — same amount, basis,
+     * appraisal, LTV, approver, notes — so that flag stays false, no override
+     * row was written, and the deal silently acquired a witness that nothing
+     * recorded. "The evidence this deal stands on was established today, by this
+     * person" is exactly the kind of fact this table exists for.
+     */
+    const witnessChanged =
+      validatedEntitlementMinor !== undefined &&
+      app.supplierEntitlementWitness?.amountMinor !== validatedEntitlementMinor;
+    if (witnessChanged) {
+      await recordOverride(ctx, {
+        orgId: args.orgId,
+        applicationId: args.applicationId,
+        field: "supplierEntitlementWitness",
+        previousValue:
+          app.supplierEntitlementWitness === undefined
+            ? undefined
+            : JSON.stringify({
+                supplierEntitlementMinor: app.supplierEntitlementWitness.amountMinor,
+                via: app.supplierEntitlementWitness.via,
+                validatedAt: app.supplierEntitlementWitness.validatedAt,
+              }),
+        newValue: JSON.stringify({
+          supplierEntitlementMinor: validatedEntitlementMinor,
+          via: "CONFIGURED_APPROVAL",
+          validatedAt: now,
+        }),
+        reason:
+          app.supplierEntitlementWitness === undefined
+            ? "The supplier's entitlement was validated against this approval for the first time; the approval itself is unchanged."
+            : "The supplier's entitlement was re-validated against this approval.",
+        changedBy: user._id,
+      });
+    }
+
     // APPROVED on the appraisal row means the company approved AGAINST it. A
     // MANUAL approval is the one basis that says it did not, even where the
     // appraisal is still in play as the company's LTV base — so the row keeps
@@ -1818,7 +1889,23 @@ export const approveDealerPurchaseAmount = mutation({
       // else: re-approving the identical amount is exactly how a deal whose
       // witness is missing or superseded is repaired, so this must not be
       // conditional on something else having moved.
-      supplierEntitlementAtApprovalMinor,
+      //
+      // Its own actor and timestamp, NOT the approval's. On a legacy repair the
+      // finance company's approval is a real historical act that did not move,
+      // while the entitlement was observed just now — filing the second under
+      // the first's provenance would claim an observation the dealership never
+      // made. `approvedPurchaseApprovedAt/By` above are guarded by
+      // `approvalMateriallyChanged` precisely so they stay put.
+      ...(validatedEntitlementMinor === undefined
+        ? {}
+        : {
+            supplierEntitlementWitness: {
+              amountMinor: validatedEntitlementMinor,
+              validatedAt: now,
+              validatedBy: user._id,
+              via: "CONFIGURED_APPROVAL" as const,
+            },
+          }),
       approvedPurchaseBasis: args.basis,
       approvedPurchaseAppraisalId: appraisal?._id,
       approvedPurchaseExceptionRuleVersion:
