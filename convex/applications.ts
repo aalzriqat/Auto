@@ -155,12 +155,32 @@ function assertDealerEconomicsRecorded(
   // and INTERNAL_INSTALLMENT may not produce this artefact at all, and demanding
   // it there would invent a business rule and dead-end those deals instead —
   // the same defect wearing different clothes.
-  const financierEconomicsAreKnowable = financierApprovesPurchase({
-    quoteMode,
-    companyId: app.companyId,
-  });
+  // Applicability FIRST, before any configured-only artefact is inspected.
+  //
+  // This exemption used to live INSIDE the `submittedQuotationMinor === undefined`
+  // branch, so it only ever fired for a non-CONFIGURED deal that had no
+  // quotation. A row that carried one fell straight through into the two
+  // requirements below — approved purchase amount, then funded portion — which
+  // the comment above says are deliberately not extended to these modes. The
+  // guard described its intent correctly and reached further than it said.
+  //
+  // Reachability, checked rather than assumed: no current writer can put a
+  // quotation on these modes. `recordSubmittedQuotation` resolves a company rule
+  // snapshot and refuses without a company, `quotes.saveQuote` forbids a
+  // `companyId` on any present non-CONFIGURED mode, and `quoteModeAtSubmission`
+  // is frozen at submission so a later quote edit cannot re-label a configured
+  // deal. So this was a latent trap rather than a live dead-end — but it is one
+  // a migration, an import, or a future writer would spring silently, and the
+  // correct shape costs nothing.
+  if (
+    !financierApprovesPurchase({
+      quoteMode,
+      companyId: app.companyId,
+    })
+  ) {
+    return;
+  }
   if (app.submittedQuotationMinor === undefined) {
-    if (!financierEconomicsAreKnowable) return;
     throw new ConvexError(
       `The finance company's submitted quotation is not recorded on this deal. Record it before ${action}.`
     );

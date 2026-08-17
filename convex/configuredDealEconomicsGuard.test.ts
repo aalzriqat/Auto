@@ -62,7 +62,15 @@ type Mode =
   | "OMIT_MODE";
 
 /** An APPROVED application with NO economics recorded, in the given quote mode. */
-async function seedApprovedApplication(mode: Mode) {
+async function seedApprovedApplication(
+  mode: Mode,
+  opts: {
+    /** SOURCED stock, so the vehicle is legally the supplier's and a settlement route exists. */
+    sourcedVehicle?: boolean;
+    /** Names the manual provider, which is what makes it an IDENTIFIED external payer. */
+    manualProviderName?: string;
+  } = {}
+) {
   const t = convexTestWithComponents(schema, MODULES);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Guard Dealer", createdAt: Date.now() })
@@ -94,6 +102,19 @@ async function seedApprovedApplication(mode: Mode) {
       mileage: 1000,
       sellingPrice: 20000,
       status: "AVAILABLE",
+      // `legalOwnerTypeOf` reads ONLY `sourceType`, and `setSupplierSettlementRoute`
+      // refuses dealership stock outright — so without this there is no supplier
+      // to settle with and no route to choose.
+      ...(opts.sourcedVehicle
+        ? {
+            sourceType: "SOURCED" as const,
+            sourcedFromName: "Amman Motors",
+            // The supplier's entitlement. Completing an agency sale without it
+            // refuses outright — there is no margin to recognize — so this is
+            // load-bearing fixture, not decoration.
+            sourceCost: 17000,
+          }
+        : {}),
     })
   );
   const customerId = await t.run((ctx) =>
@@ -133,6 +154,9 @@ async function seedApprovedApplication(mode: Mode) {
     // OMIT_MODE sends no mode at all, which is the whole point of that case.
     ...(mode === "OMIT_MODE" ? {} : { mode }),
     ...(companyId ? { companyId } : {}),
+    // `createFromQuote` builds `manualFinanceSnapshot` from the QUOTE, so the
+    // provider has to arrive through `saveQuote` rather than be patched on after.
+    ...(opts.manualProviderName ? { manualProviderName: opts.manualProviderName } : {}),
     totalFinancedAmount: 17000,
   });
 
@@ -332,61 +356,147 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
     // Found by the Codex seat at b04f06ba and INTRODUCED BY THIS PR.
     //
     // `financierApprovesPurchase` answers "does a financier approve the
-    // purchase" and returns false for every recorded non-configured mode. The
-    // cockpit used it to decide whether an approved purchase amount APPLIES AT
-    // ALL — a different question — so a MANUAL deal reported
-    // `NotApplicableForFinancingMode`.
+    // purchase" and is false for every recorded non-configured mode. The cockpit
+    // used it to decide whether an approved purchase amount APPLIES AT ALL — a
+    // different question — so a MANUAL deal reported NotApplicableForFinancingMode
+    // while `finalizeDeal` refused closure until that same figure was recorded.
     //
-    // But a NAMED manual provider is an identified external payer
-    // (`settlementPayer`), so it may take DIRECT_TO_SUPPLIER — and on that route
-    // `finalizeDeal` REQUIRES the approved amount, because it is what the
-    // supplier actually receives and the dealership's claim is measured from it.
-    //
-    // So the same deal was told the figure does not exist for its financing
-    // mode, and then refused closure until that figure was recorded. `main` said
-    // `NoApprovedPurchaseAmount`, which was true. This is the regression that
-    // pins the cockpit and finalization to ONE answer.
+    // ⚠️ The first version of this test MANUFACTURED its own premise: it patched
+    // `manualFinanceSnapshot` and `supplierSettlementRoute` onto ordinary dealer
+    // stock. `setSupplierSettlementRoute` refuses dealership stock outright, so
+    // that state was unreachable and the test proved the contradiction only in a
+    // shape production cannot produce. It now travels the real road: SOURCED
+    // stock, the provider named on the QUOTE, and the route set by its own
+    // mutation.
     const { t, orgId, applicationId, asUser, registerExpectedPayment } =
-      await seedApprovedApplication("MANUAL_FINANCE_COMPANY");
+      await seedApprovedApplication("MANUAL_FINANCE_COMPANY", {
+        sourcedVehicle: true,
+        manualProviderName: "Amman Finance House",
+      });
 
-    await t.run((ctx) =>
-      ctx.db.patch(applicationId, {
-        manualFinanceSnapshot: { providerName: "Amman Finance House" },
-        supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
-        approvedDealerPurchaseAmountMinor: undefined,
-      })
-    );
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+
+    // Non-vacuity: the route really was accepted by the production writer, and
+    // the approval really is absent — so there is a live question to answer.
+    const seeded = await t.run((ctx) => ctx.db.get(applicationId));
+    expect(seeded?.supplierSettlementRoute).toBe("DIRECT_TO_SUPPLIER");
+    expect(seeded?.manualFinanceSnapshot?.providerName).toBe("Amman Finance House");
+    expect(seeded?.approvedDealerPurchaseAmountMinor).toBeUndefined();
 
     const cockpit = await asUser.query(api.applications.dealCockpit, {
       orgId,
       applicationId,
     });
 
-    // Non-vacuity first: the figure really is unavailable, so a reason exists to
-    // be wrong about. `ManagementProfit` is a discriminated union and `reason`
-    // lives only on the unavailable arm, so this narrows rather than reaching
-    // through an optional chain — an unnarrowed `?.reason` compiles to
-    // undefined-vs-undefined at runtime and proves nothing, which is how an
-    // earlier assertion in this codebase passed while measuring nothing.
+    // `ManagementProfit` is a discriminated union and `reason` lives only on the
+    // unavailable arm, so this narrows rather than reaching through an optional
+    // chain — an unnarrowed `?.reason` compares undefined to undefined and proves
+    // nothing, which is how an earlier assertion in this codebase passed while
+    // measuring nothing.
     const profit = cockpit?.money?.managementProfit;
     expect(profit?.available).toBe(false);
     if (profit?.available !== false) {
       throw new Error("expected the management profit to be unavailable");
     }
-    // The actionable reason, agreeing with what finalization will demand.
     expect(profit.reason).toBe("NoApprovedPurchaseAmount");
 
-    // And the other half of the contradiction, in the same test so the two
-    // cannot drift apart again.
+    // The other half of the contradiction, in the same test so the two cannot
+    // drift apart again. The expected payment is registered first so finalization
+    // reaches the REAL refusal instead of stopping earlier on an unrelated one —
+    // a looser regex without it would have passed while proving nothing.
     await registerHandover(asUser, api, orgId, applicationId);
     await registerExpectedPayment();
-    // Reaching the REAL refusal matters: without the expected payment above,
-    // finalization stops earlier for an unrelated reason and a looser regex
-    // would have let this test pass while never exercising the contradiction.
     await expect(
       asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId })
     ).rejects.toThrow(/approved purchase amount is not recorded|Record it before finalizing/i);
   });
+
+  test("a MANUAL deal settling THROUGH the dealership is not asked for an approved amount", async () => {
+    // The contrast that stops the fix being widened into a new defect. Same
+    // vehicle, same named provider, same mode — only the ROUTE differs. Nothing
+    // outside the dealership pays the supplier here, so no approved purchase
+    // amount applies and the deal must close without one.
+    const { t, orgId, applicationId, asUser, registerExpectedPayment } =
+      await seedApprovedApplication("MANUAL_FINANCE_COMPANY", {
+        sourcedVehicle: true,
+        manualProviderName: "Amman Finance House",
+      });
+
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "THROUGH_DEALERSHIP",
+    });
+
+    const seeded = await t.run((ctx) => ctx.db.get(applicationId));
+    expect(seeded?.supplierSettlementRoute).toBe("THROUGH_DEALERSHIP");
+
+    await registerHandover(asUser, api, orgId, applicationId);
+    await registerExpectedPayment();
+    await asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId });
+
+    const after = await t.run((ctx) => ctx.db.get(applicationId));
+    expect(after?.status).toBe("CLOSED");
+    expect(after?.finalizedSaleId).toBeDefined();
+  });
+
+  // The blocker the owner-proxy found. Structurally real; NOT reachable today.
+  //
+  // `assertDealerEconomicsRecorded` puts its non-applicable exemption INSIDE the
+  // `submittedQuotationMinor === undefined` branch. So the exemption only ever
+  // fires for a non-CONFIGURED deal that has NO quotation. Give one a quotation
+  // and it falls straight through into the CONFIGURED-only requirements —
+  // approved purchase amount, then funded portion — neither of which these modes
+  // need produce. The comment above that guard says it is "deliberately NOT
+  // extended to the other modes"; the code extends it the moment a quotation
+  // exists. Intent, not reach.
+  //
+  // Reachability, checked rather than assumed: `recordSubmittedQuotation` has no
+  // MODE guard, but it needs a company rule snapshot and these modes cannot
+  // carry a company, so it always refuses them. See the note in each case below.
+  for (const mode of ["MANUAL_FINANCE_COMPANY", "LEASE", "INTERNAL_INSTALLMENT"] as const) {
+    test(`a ${mode} deal carrying a quotation is still not blocked by the configured-mode requirement`, async () => {
+      const { t, orgId, applicationId, asUser, registerExpectedPayment } =
+        await seedApprovedApplication(mode);
+
+      // Written directly, and the reason matters. No production writer can put
+      // a quotation on these modes TODAY: `recordSubmittedQuotation` resolves a
+      // company rule snapshot and throws "This application has no finance
+      // company" without one, while `quotes.saveQuote` (line 124) forbids a
+      // `companyId` on any mode that is present and not CONFIGURED. The
+      // application also FREEZES `quoteModeAtSubmission`, so a later edit to the
+      // quote cannot turn a configured deal into a manual one carrying its old
+      // quotation.
+      //
+      // So this is defensive/legacy coverage, NOT a reachable live path — stated
+      // plainly rather than dressed up as a reproduction. The guard is still
+      // wrong in shape: it puts the non-applicable exemption INSIDE the
+      // "no quotation" branch, so any row that ever acquires one — by a future
+      // writer, a migration, or an import — silently inherits CONFIGURED-only
+      // requirements the comment above it says are deliberately not extended.
+      await t.run((ctx) =>
+        ctx.db.patch(applicationId, { submittedQuotationMinor: 17_000_000 })
+      );
+
+      // Non-vacuity: the quotation really is on the row, so the branch under
+      // test is the one being exercised.
+      const seeded = await t.run((ctx) => ctx.db.get(applicationId));
+      expect(seeded?.submittedQuotationMinor).toBe(17_000_000);
+      expect(seeded?.approvedDealerPurchaseAmountMinor).toBeUndefined();
+
+      await registerHandover(asUser, api, orgId, applicationId);
+      await registerExpectedPayment();
+      await asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId });
+
+      const after = await t.run((ctx) => ctx.db.get(applicationId));
+      expect(after?.status).toBe("CLOSED");
+      expect(after?.finalizedSaleId).toBeDefined();
+    });
+  }
 
   test("a LEASE deal is not blocked by the configured-mode requirement", async () => {
     const { t, orgId, applicationId, asUser, registerExpectedPayment } =
