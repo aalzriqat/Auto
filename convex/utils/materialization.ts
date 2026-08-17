@@ -226,6 +226,128 @@ export function describeMaterializationStatus(
  * superseded-generation row asserted absent from a completed reader.
  */
 
+/** One platform's row of {@link describeOrgMaterialization}'s report. */
+export type PlatformMaterializationReport = {
+  platform: SocialPlatform;
+  status: MaterializationStatus;
+  duplicateState: boolean;
+  generation: number | null;
+  expectedGeneration: number;
+  processedCount: number;
+  materializedCount: number;
+  expectedCount: number;
+  startedAt: number | null;
+  lastProgressAt: number | null;
+  completedAt: number | null;
+  failureMessage: string | null;
+  /**
+   * The run identity the row currently carries.
+   *
+   * Surfaced so a caller can tell a PRE-EXISTING failure awaiting redrive from
+   * a failure this run's own backfill produced. The two want opposite
+   * responses: wait for the first, stop for the second.
+   */
+  runId: string | null;
+  /**
+   * Whether ANY `socialConversations` row exists for this org AND THIS PLATFORM
+   * at the current generation.
+   *
+   * A bounded existence probe rather than a count — one indexed read, and the
+   * question is only ever "is the table empty here". It exists because a
+   * completion counter is a *claim* about the table, and the 2026-08-07
+   * incident was a reader confidently serving a table that had nothing in it.
+   * Comparing the claim against the table turns that from an inference into an
+   * observation.
+   *
+   * ⚠️ Per platform, and that is the whole point. An org-wide probe lets one
+   * channel answer for the other: Instagram could report 340 conversations
+   * materialised and have none, while Facebook's rows satisfy the check on its
+   * behalf — and the Instagram inbox would be confidently empty, which is the
+   * original incident surviving the guard written for it.
+   */
+  hasCurrentGenerationConversations: boolean;
+};
+
+/** One organization's row of {@link describeOrgMaterialization}'s report. */
+export type OrgMaterializationReport = {
+  orgId: Id<"organizations">;
+  orgName: string;
+  readerSource: "materialized" | "legacyEvents";
+  platforms: PlatformMaterializationReport[];
+};
+
+/**
+ * The per-org, per-platform materialisation report, in one place.
+ *
+ * Two callers need this and they authenticate differently: the `/admin` query
+ * proves a super-admin identity, and the release workflow's verification step
+ * has no identity at all — a Convex deploy key carries no Clerk subject, so
+ * `requireAuth` rejects it before any handler runs. The authorisation therefore
+ * has to differ, and the reported facts must not.
+ *
+ * Keeping this a single function is the point. A second, "CI-shaped" copy of
+ * the same derivation is exactly how a deploy gate ends up certifying something
+ * subtly different from what the operator screen shows — and the gate is only
+ * worth having if agreeing with it means something.
+ */
+export async function describeOrgMaterialization(
+  ctx: { db: AnyDb },
+  org: Doc<"organizations">,
+  now: number
+): Promise<OrgMaterializationReport> {
+  const platforms = await Promise.all(
+    SOCIAL_PLATFORMS.map(async (platform): Promise<PlatformMaterializationReport> => {
+      const lookup = await lookupMaterializationState(ctx, org._id, platform);
+      const row = lookup.row;
+
+      // One indexed read, bounded to a single row: the question is existence,
+      // not volume, and an unbounded count here would scale with the very
+      // table this exists to reason about.
+      const anyConversation = await ctx.db
+        .query("socialConversations")
+        .withIndex("by_org_generation_platform_lastEventAt", (q) =>
+          q
+            .eq("orgId", org._id)
+            .eq("generation", SOCIAL_CONVERSATION_GENERATION)
+            .eq("platform", platform)
+        )
+        .first();
+
+      return {
+        platform,
+        status: describeMaterializationStatus(lookup, now),
+        // Surfaced explicitly rather than left to be inferred from `status`. An
+        // operator seeing `ambiguous` needs to know it means "there are two
+        // contradictory rows here", because no backfill will clear it — the
+        // writer stands down on it too, so the only way out is a human deleting
+        // the wrong row.
+        duplicateState: lookup.kind === "ambiguous",
+        generation: row?.generation ?? null,
+        expectedGeneration: SOCIAL_CONVERSATION_GENERATION,
+        processedCount: row?.processedCount ?? 0,
+        materializedCount: row?.materializedCount ?? 0,
+        expectedCount: row?.expectedCount ?? 0,
+        startedAt: row?.startedAt ?? null,
+        lastProgressAt: row?.lastProgressAt ?? null,
+        completedAt: row?.completedAt ?? null,
+        failureMessage: row?.failureMessage ?? null,
+        runId: row?.runId ?? null,
+        hasCurrentGenerationConversations: anyConversation !== null,
+      };
+    })
+  );
+
+  return {
+    orgId: org._id,
+    orgName: org.name,
+    // What the reader actually does, which is the question being asked.
+    readerSource: platforms.every((p) => p.status === "completed")
+      ? ("materialized" as const)
+      : ("legacyEvents" as const),
+    platforms,
+  };
+}
+
 /**
  * Whether the materialised `socialConversations` rows may be treated as the
  * authoritative source for this org.
