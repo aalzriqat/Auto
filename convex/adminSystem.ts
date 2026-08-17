@@ -7,12 +7,7 @@ import { requireSuperAdmin } from "./utils/tenancy";
 import { logAdminAction } from "./adminAudit";
 import { internal } from "./_generated/api";
 import { CRON_HEARTBEAT_JOBS } from "./constants";
-import {
-  describeMaterializationStatus,
-  lookupMaterializationState,
-  SOCIAL_CONVERSATION_GENERATION,
-  SOCIAL_PLATFORMS,
-} from "./utils/materialization";
+import { describeOrgMaterialization } from "./utils/materialization";
 
 const OVERVIEW_TABLES = [
   "organizations",
@@ -73,57 +68,57 @@ export const getSocialMaterializationStatus = query({
   args: { paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
     await requireSuperAdmin(ctx);
-    const now = Date.now();
-    // Paginated rather than `take(OVERVIEW_COUNT_CAP)`. Each org costs its own
-    // document plus one indexed read per platform, so a 10,000-org cap is
-    // ~30,000 reads in one query — past Convex's per-transaction ceiling, which
-    // would turn this status screen into an error exactly when a large tenant
-    // list is the reason someone opened it.
-    const orgPage = await ctx.db.query("organizations").paginate(args.paginationOpts);
-    const orgs = orgPage.page;
-
-    const page = await Promise.all(
-      orgs.map(async (org) => {
-        const platforms = await Promise.all(
-          SOCIAL_PLATFORMS.map(async (platform) => {
-            const lookup = await lookupMaterializationState(ctx, org._id, platform);
-            const row = lookup.row;
-            return {
-              platform,
-              status: describeMaterializationStatus(lookup, now),
-              // Surfaced explicitly rather than left to be inferred from
-              // `status`. An operator seeing `ambiguous` needs to know it means
-              // "there are two contradictory rows here", because no backfill
-              // will clear it — the writer stands down on it too, so the only
-              // way out is a human deleting the wrong row.
-              duplicateState: lookup.kind === "ambiguous",
-              generation: row?.generation ?? null,
-              expectedGeneration: SOCIAL_CONVERSATION_GENERATION,
-              processedCount: row?.processedCount ?? 0,
-              materializedCount: row?.materializedCount ?? 0,
-              expectedCount: row?.expectedCount ?? 0,
-              startedAt: row?.startedAt ?? null,
-              lastProgressAt: row?.lastProgressAt ?? null,
-              completedAt: row?.completedAt ?? null,
-              failureMessage: row?.failureMessage ?? null,
-            };
-          })
-        );
-        return {
-          orgId: org._id,
-          orgName: org.name,
-          // What the reader actually does, which is the question being asked.
-          readerSource: platforms.every((p) => p.status === "completed")
-            ? ("materialized" as const)
-            : ("legacyEvents" as const),
-          platforms,
-        };
-      })
-    );
-
-    return { ...orgPage, page };
+    return await materializationReportPage(ctx, args.paginationOpts);
   },
 });
+
+/**
+ * The same report as {@link getSocialMaterializationStatus}, reachable by the
+ * production release workflow.
+ *
+ * It exists because the public query cannot be called from CI, and that is a
+ * property of the auth model rather than an oversight: `requireSuperAdmin`
+ * resolves a `users` row from `ctx.auth.getUserIdentity().subject`, and a
+ * Convex deploy key carries no Clerk identity at all, so the call fails at
+ * `requireAuth` before reaching the handler.
+ *
+ * The alternatives were worse. `convex run --identity` would have the workflow
+ * impersonate a named human's Clerk subject, binding production verification to
+ * one employee's account and putting a forged-identity switch in a credentialed
+ * pipeline. Widening `requireSuperAdmin` would weaken the `/admin` boundary for
+ * every caller to serve one. An internal function takes its authorisation from
+ * the key's scope instead — the workflow's operator key grants exactly
+ * `runInternalQueries`/`runInternalMutations` and nothing else.
+ *
+ * ⚠️ Deliberately read-only, and it must stay that way. This is what a deploy
+ * gate consults to decide whether a rollout succeeded; a verifier that can
+ * mutate is a verifier that can make itself pass.
+ */
+export const materializationReportForRelease = internalQuery({
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    return await materializationReportPage(ctx, args.paginationOpts);
+  },
+});
+
+/**
+ * Paginated rather than `take(OVERVIEW_COUNT_CAP)`. Each org costs its own
+ * document plus one indexed read per platform, so a 10,000-org cap is ~30,000
+ * reads in one query — past Convex's per-transaction ceiling, which would turn
+ * this status screen into an error exactly when a large tenant list is the
+ * reason someone opened it.
+ */
+async function materializationReportPage(
+  ctx: QueryCtx,
+  paginationOpts: { cursor: string | null; numItems: number }
+) {
+  const now = Date.now();
+  const orgPage = await ctx.db.query("organizations").paginate(paginationOpts);
+  const page = await Promise.all(
+    orgPage.page.map((org) => describeOrgMaterialization(ctx, org, now))
+  );
+  return { ...orgPage, page };
+}
 
 /** Newest heartbeat for one job — a single indexed read, ordered by `ranAt`. */
 async function newestHeartbeatForJob(ctx: QueryCtx, jobName: string) {

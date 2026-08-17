@@ -1,0 +1,209 @@
+
+# Production Convex deploys, and the rollout that has to follow one.
+#
+# This exists because a wrapper on a developer's machine could not be made
+# binding. `npx convex deploy` still worked next to it, the production
+# credential sat on the workstation, and two rounds of review kept finding ways
+# out of the sandbox it claimed to be — `NODE_OPTIONS=--require` is honoured by
+# the guard's own parent process before a line of its code runs, and a personal
+# `core.attributesFile` can rewrite files on their way out of git. The boundary
+# has to be somewhere the operator is not.
+#
+# So: the credential lives only in this repository's `production` environment,
+# a human other than the requester approves each run, and the whole thing is
+# ordered so that verification happens while there is still nothing to steal.
+#
+# ⚠️ Requires configuration that is NOT in this file, and the workflow is not a
+# boundary until it exists — see AGENTS.md:
+#   · a `production` environment with a required reviewer
+#   · `CONVEX_DEPLOY_KEY`     — production, `deployment:deploy` only
+#   · `CONVEX_OPERATOR_KEY`   — production, `runInternalMutations` +
+#                               `runInternalQueries` only
+#   · the workstation production deploy key REVOKED once this is proven
+
+name: Deploy production
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: "Exact full 40-character commit SHA (abbreviations are refused)"
+        required: true
+        type: string
+      confirm:
+        description: "Type DEPLOY TO PRODUCTION exactly"
+        required: true
+        type: string
+      mode:
+        description: "deploy = main's current tip · rollback = an older commit already merged into main"
+        required: true
+        default: deploy
+        type: choice
+        options:
+          - deploy
+          - rollback
+
+# Least privilege by default; the one job that needs more asks for it.
+permissions:
+  contents: read
+
+# Never two production deploys at once, and never cancel one midway — an
+# interrupted `convex deploy` is a worse state than a queued one.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  # ── 1. Decide, while there is still nothing to steal ──────────────────────
+  #
+  # No `environment:`, so this job cannot reach the production credential at
+  # all — the refusals below happen before the secret exists in the run.
+  #
+  # It also checks out `github.ref` (pinned to main by the script) rather than
+  # the commit under judgement, so a commit cannot ship its own approval logic.
+  authorize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      sha: ${{ steps.check.outputs.sha }}
+      mode: ${{ steps.check.outputs.mode }}
+      main_tip: ${{ steps.check.outputs.main_tip }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.21.1'
+
+      # No `pnpm install` on purpose: this step imports one dependency-free
+      # module and talks to the GitHub API over `fetch`. Nothing from the
+      # candidate commit is fetched, installed, built or executed here.
+      - name: Verify the commit may reach production
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_INPUT_SHA: ${{ inputs.commit_sha }}
+          RELEASE_INPUT_CONFIRM: ${{ inputs.confirm }}
+          RELEASE_INPUT_MODE: ${{ inputs.mode }}
+        run: node scripts/checkReleaseAuthority.mjs
+
+  # ── 2. Deploy, then finish the rollout in the same job ────────────────────
+  deploy:
+    needs: authorize
+    runs-on: ubuntu-latest
+    # The binding control. Secrets below are unreachable until a human approves
+    # this specific run against this specific commit.
+    environment: production
+    timeout-minutes: 90
+    steps:
+      - name: Check out the authorised commit exactly
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # A SHA, never a branch name — a mutable ref would reintroduce
+          # everything the `authorize` job just ruled out.
+          ref: ${{ needs.authorize.outputs.sha }}
+          persist-credentials: false
+
+      - name: Assert the checkout is that commit
+        env:
+          EXPECTED_SHA: ${{ needs.authorize.outputs.sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$EXPECTED_SHA" ]; then
+            echo "::error::Checked out $actual but $EXPECTED_SHA was authorised."
+            exit 1
+          fi
+          echo "HEAD is $actual"
+
+      # Approval is asynchronous — a run can wait hours. Without this, a deploy
+      # authorised against yesterday's tip would ship today, silently reverting
+      # everything merged in between while the summary claimed it was shipping
+      # "main's current tip".
+      - name: Re-verify main has not moved since authorisation
+        if: needs.authorize.outputs.mode == 'deploy'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ needs.authorize.outputs.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tip="$(gh api "repos/${REPO}/commits/main" --jq .sha)"
+          if [ "$tip" != "$EXPECTED_SHA" ]; then
+            echo "::error::main advanced to $tip while this run awaited approval. \
+          Dispatch a new run against the current tip, or use the rollback mode deliberately."
+            exit 1
+          fi
+          echo "main is still at $tip"
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.21.1'
+          cache: 'pnpm'
+
+      # Frozen, and matching what CI installs everywhere else in this repo, so
+      # the tree that deploys is the tree the tests ran against.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      # `pnpm exec` resolves the Convex CLI from this commit's own
+      # `node_modules`. Never `npx`, which would be free to download a different
+      # version; never `--cmd`, which would run an arbitrary command inside the
+      # deploy; never `-y`, which is what suppressed the confirmation on
+      # 2026-08-07 and is undocumented in `--help`.
+      #
+      # No `--prod` flag: `convex deploy` targets production implicitly, and the
+      # deployment-scoped key makes the credential itself the selector. There is
+      # no environment variable here that could point it somewhere else — which
+      # is precisely the assumption that failed on 2026-08-07.
+      - name: Deploy Convex backend
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          pnpm exec convex deploy 2>&1 | tee deploy.log
+
+      # Best-effort provenance for the run summary. Deliberately NOT a gate:
+      # the deployment-scoped credential is what constrains the target, and a
+      # log-scraping check that could disagree with it would only ever be the
+      # weaker of the two.
+      - name: Record the deployment that was reached
+        id: target
+        run: |
+          set -euo pipefail
+          name="$(grep -oE 'https://[a-z0-9-]+\.convex\.cloud' deploy.log | head -n 1 || true)"
+          echo "deployment=${name}" >> "$GITHUB_OUTPUT"
+          echo "Deployment: ${name:-not reported}"
+
+      # Same job, immediately after the deploy, because the window between them
+      # is the expensive one: the conversation trigger is live and adding writes
+      # while every inbox is still served by the legacy full scan.
+      - name: Roll out Social Inbox conversations and verify
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_OPERATOR_KEY }}
+          RELEASE_MODE: ${{ needs.authorize.outputs.mode }}
+          RELEASE_SHA: ${{ needs.authorize.outputs.sha }}
+          RELEASE_MAIN_TIP: ${{ needs.authorize.outputs.main_tip }}
+          RELEASE_DEPLOYMENT: ${{ steps.target.outputs.deployment }}
+          ROLLOUT_TIMEOUT_MINUTES: '45'
+        run: node scripts/rolloutRelease.mjs
+
+      # Runs even when verification failed, because "deployed but not rolled
+      # out" is a state someone has to be able to act on, and the identifiers
+      # needed to resume are in the log.
+      - name: Upload deploy log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: production-deploy-log
+          path: deploy.log
+          retention-days: 30
