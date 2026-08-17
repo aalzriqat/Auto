@@ -100,6 +100,16 @@ type FinanceCompanyDecisionCardProps = {
   onRecordApproved: () => void;
   /** Reopens a recorded amount for correction — see `correctionAvailable`. */
   onCorrectApproved: () => void;
+  /**
+   * WHICH writer owns the approved purchase amount, decided by the SERVER.
+   *
+   * Not inferred here. The screen cannot see the frozen quote mode, the
+   * application's company or the settlement route, and a client that guessed
+   * would be a second opinion about which mutation applies.
+   */
+  approvedPurchaseWriter: "CONFIGURED_APPROVAL" | "MANUAL_DIRECT_SUPPLIER_AMOUNT" | "NONE";
+  /** Opens the manual provider's supplier-amount dialog. */
+  onRecordDirectSupplierAmount: () => void;
 };
 
 /** One recorded-or-not row, with whatever action belongs to it. */
@@ -149,6 +159,8 @@ export function FinanceCompanyDecisionCard({
   onRecordAppraisal,
   onRecordApproved,
   onCorrectApproved,
+  approvedPurchaseWriter,
+  onRecordDirectSupplierAmount,
 }: Readonly<FinanceCompanyDecisionCardProps>) {
   const quotationRecorded = facts.submittedQuotationMinor !== null;
 
@@ -181,6 +193,30 @@ export function FinanceCompanyDecisionCard({
   // already handles the consequence: a replacement appraisal supersedes its
   // predecessor and clears the approval that was based on it, on the record.
   const appraisalActionAvailable = canRecordAppraisal && !facts.closed && !facts.handedOver;
+
+  /**
+   * The manual provider's supplier amount — offered, or EXPLAINED.
+   *
+   * Every one of these mirrors a refusal `recordDirectSupplierReceiptAmount`
+   * enforces, so the screen and the server cannot disagree about whether the
+   * action is possible. Silently hiding it is what produced the dead end this
+   * row exists to remove: the operator was told a figure was missing and left to
+   * guess why nothing would take it.
+   */
+  const directSupplierActionAvailable =
+    approvedPurchaseWriter === "MANUAL_DIRECT_SUPPLIER_AMOUNT" &&
+    canRecordApproval &&
+    !isOwnDeal &&
+    !facts.closed &&
+    !facts.handedOver;
+
+  let directSupplierNote: string | undefined;
+  if (approvedPurchaseWriter === "MANUAL_DIRECT_SUPPLIER_AMOUNT" && !directSupplierActionAvailable) {
+    if (facts.closed) directSupplierNote = t("DirectSupplierAmountClosed");
+    else if (facts.handedOver) directSupplierNote = t("DirectSupplierAmountSealed");
+    else if (isOwnDeal) directSupplierNote = t("DirectSupplierAmountOwnDeal");
+    else if (!canRecordApproval) directSupplierNote = t("DirectSupplierAmountNeedsPermission");
+  }
 
   const derived: Array<{ key: string; label: string; value: string }> = [];
   if (facts.financeCompanyFundedPortionMinor !== null) {
@@ -300,6 +336,46 @@ export function FinanceCompanyDecisionCard({
             ) : undefined
           }
         />
+
+        {/*
+          The manual provider's own step.
+
+          This deal has no configured finance company, so there is no quotation
+          to send and no approval to mirror — the two rows above never apply to
+          it. What it does have is a provider paying the supplier directly, and
+          `finalizeDeal` requires that figure. Before this row the cockpit said
+          the amount was missing and offered nothing that could record it: the
+          approval action is gated on a quotation a MANUAL deal structurally
+          never has.
+
+          Rendered only for the shape the SERVER classified, so it can never
+          appear beside the configured rows or on a deal where the figure has no
+          meaning.
+        */}
+        {approvedPurchaseWriter === "MANUAL_DIRECT_SUPPLIER_AMOUNT" && (
+          <DecisionRow
+            label={t("DirectSupplierAmountRowLabel")}
+            value={
+              facts.approvedPurchaseAmountMinor !== null ? (
+                <bdi className="tabular-nums">{money(facts.approvedPurchaseAmountMinor)}</bdi>
+              ) : (
+                <span className="text-muted-foreground">{t("NotRecordedYet")}</span>
+              )
+            }
+            note={directSupplierNote}
+            action={
+              directSupplierActionAvailable ? (
+                <Button
+                  size="sm"
+                  variant={facts.approvedPurchaseAmountMinor !== null ? "outline" : "default"}
+                  onClick={onRecordDirectSupplierAmount}
+                >
+                  {t("DirectSupplierAmountAction")}
+                </Button>
+              ) : undefined
+            }
+          />
+        )}
 
         {/* Between the two, because that is the order the deal moves in: we
             send a quotation, they value the car, they answer with an amount.

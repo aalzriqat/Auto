@@ -324,6 +324,54 @@ function financierApprovesPurchase(args: {
 }
 
 /**
+ * WHICH writer can record this deal's approved purchase amount.
+ *
+ * Derived on the SERVER and handed to the screen, because the screen cannot see
+ * what it depends on: the frozen quote mode, the application's company, and the
+ * settlement route. A client that re-derived it would be a second opinion about
+ * which mutation applies, and the two would drift.
+ *
+ * This exists because the cockpit named a step nothing could perform. The
+ * decision card offered its approval action only once a submitted quotation was
+ * recorded, and a MANUAL deal structurally never has one — so a legitimate
+ * MANUAL direct-to-supplier deal was told its supplier receipt amount was
+ * missing and given no way to record it. A backend mutation alone does not close
+ * that: the operator needs the button, pointed at the right writer.
+ *
+ *  - CONFIGURED_APPROVAL — a configured financier approves the purchase.
+ *    `financingEconomics.approveDealerPurchaseAmount`, which applies that
+ *    company's lending rules and needs the quotation first.
+ *  - MANUAL_DIRECT_SUPPLIER_AMOUNT — no configured financier, but the provider
+ *    pays the supplier directly, so the figure is required and there is no
+ *    quotation to base it on. `applications.recordDirectSupplierReceiptAmount`.
+ *  - NONE — the figure does not apply to this deal.
+ */
+export type ApprovedPurchaseWriter =
+  | "CONFIGURED_APPROVAL"
+  | "MANUAL_DIRECT_SUPPLIER_AMOUNT"
+  | "NONE";
+
+async function approvedPurchaseWriterFor(
+  ctx: QueryCtx | MutationCtx,
+  app: Doc<"financeApplications">
+): Promise<ApprovedPurchaseWriter> {
+  const quoteMode = await resolveQuoteMode(ctx, app);
+  if (financierApprovesPurchase({ quoteMode, companyId: app.companyId })) {
+    return "CONFIGURED_APPROVAL";
+  }
+  // The SAME predicate the cockpit's money block uses to decide whether the
+  // figure applies, so the screen cannot be told the amount is required and
+  // simultaneously that no writer owns it.
+  return approvedPurchaseAmountApplies({
+    quoteMode,
+    companyId: app.companyId,
+    supplierSettlementRoute: app.supplierSettlementRoute,
+  })
+    ? "MANUAL_DIRECT_SUPPLIER_AMOUNT"
+    : "NONE";
+}
+
+/**
  * Whether an approved purchase amount applies to this deal AT ALL.
  *
  * NOT the same question as `financierApprovesPurchase`, and conflating them was
@@ -1881,6 +1929,12 @@ export const dealCockpit = query({
        * fields happen to be populated.
        */
       dealKind: "FINANCED" as const,
+      /**
+       * Which writer owns the approved purchase amount on this deal. Server
+       * derived; the screen chooses its action from this rather than guessing
+       * from which fields happen to be populated.
+       */
+      approvedPurchaseWriter: await approvedPurchaseWriterFor(ctx, app),
       /** The id whose tail the header shows — the application on this side. */
       dealRef: app._id as string,
       applicationId: app._id,

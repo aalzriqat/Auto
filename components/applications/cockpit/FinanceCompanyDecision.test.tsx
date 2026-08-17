@@ -1643,3 +1643,123 @@ describe("a flagged amount does not look ordinary at the one-way door", () => {
     expect(within(dialog).getByText("HandoverSealsApprovedAmount")).toBeTruthy();
   });
 });
+
+/**
+ * SCRUM-61 — the operator can take the step the cockpit names.
+ *
+ * A backend mutation alone does not close a cockpit dead end. Before these, a
+ * legitimate MANUAL direct-to-supplier deal was told its supplier receipt amount
+ * was missing and offered nothing that could record it: the approval action is
+ * gated on a submitted quotation, and a MANUAL deal structurally never has one.
+ *
+ * These pin the VISIBLE control and WHICH WRITER it reaches, because "the
+ * mutation exists" and "the operator can call it" are different facts and only
+ * the second one closes the workflow.
+ */
+describe("SCRUM-61: the manual provider's supplier amount is reachable from the cockpit", () => {
+  // Reuses the file's own `wiring()` builder rather than hand-rolling a fixture:
+  // it merges `facts` instead of replacing them, and supplies the `calculation`
+  // the quotation dialog needs. My first version rebuilt the object by hand and
+  // rendered a card the case did not mean to assert about.
+  function manualWiring(overrides: WiringOverrides = {}) {
+    return wiring({ onRecordDirectSupplierAmount: noopAsync, ...overrides });
+  }
+
+  const manualDeal = () =>
+    dealFixture({ approvedPurchaseWriter: "MANUAL_DIRECT_SUPPLIER_AMOUNT" });
+
+  test("the action is offered, and it calls the MANUAL writer — not the configured approval", async () => {
+    const calls: Array<{ approvedAmountMinor: number; source: string }> = [];
+    const configuredApproval = vi.fn();
+
+    renderCockpit(
+      manualWiring({
+        onRecordApproved: configuredApproval,
+        onRecordDirectSupplierAmount: async (values: {
+          approvedAmountMinor: number;
+          source: string;
+        }) => {
+          calls.push(values);
+        },
+      }),
+      manualDeal()
+    );
+
+    const action = cardButton("DirectSupplierAmountAction");
+    expect(action).toBeDefined();
+    fireEvent.click(action!);
+
+    // 17,000 in a scale-3 currency. Typed, never prefilled.
+    fireEvent.change(screen.getByLabelText("DirectSupplierAmountLabel"), {
+      target: { value: "17000" },
+    });
+    fireEvent.change(screen.getByLabelText("DirectSupplierAmountSourceLabel"), {
+      target: { value: "Signed purchase agreement" },
+    });
+
+    const submit = screen
+      .queryAllByRole("button", { name: "DirectSupplierAmountAction" })
+      .find((button) => button.closest('[role="dialog"]') !== null);
+    expect(submit).toBeDefined();
+    fireEvent.click(submit!);
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0].approvedAmountMinor).toBe(17_000_000);
+    expect(calls[0].source).toBe("Signed purchase agreement");
+    // The whole point: it must NOT reach the configured approval mutation, which
+    // needs the quotation and company-rule workflow this deal cannot satisfy.
+    expect(configuredApproval).not.toHaveBeenCalled();
+  });
+
+  test("without the amount typed, the dialog cannot be submitted", () => {
+    renderCockpit(
+      manualWiring({ onRecordDirectSupplierAmount: async () => {} }),
+      manualDeal()
+    );
+    fireEvent.click(cardButton("DirectSupplierAmountAction")!);
+
+    const submit = screen
+      .queryAllByRole("button", { name: "DirectSupplierAmountAction" })
+      .find((button) => button.closest('[role="dialog"]') !== null);
+    expect(submit).toBeDefined();
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+
+    // A source alone is not enough either — both halves are required, and the
+    // server refuses each independently.
+    fireEvent.change(screen.getByLabelText("DirectSupplierAmountSourceLabel"), {
+      target: { value: "Signed purchase agreement" },
+    });
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  test("a CONFIGURED deal is not offered the manual action at all", () => {
+    renderCockpit(
+      manualWiring({ onRecordDirectSupplierAmount: async () => {} }),
+      dealFixture({ approvedPurchaseWriter: "CONFIGURED_APPROVAL" })
+    );
+    expect(cardButton("DirectSupplierAmountAction")).toBeUndefined();
+  });
+
+  // Withheld, EXPLAINED — never silently absent. Each mirrors a refusal the
+  // server enforces, so the operator learns why rather than concluding the
+  // screen is broken.
+  for (const [label, overrides, reasonKey] of [
+    ["without the permission", { canRecordApproval: false }, "DirectSupplierAmountNeedsPermission"],
+    ["on their own deal", { isOwnDeal: true }, "DirectSupplierAmountOwnDeal"],
+    [
+      "after handover",
+      { facts: { handedOver: true } },
+      "DirectSupplierAmountSealed",
+    ],
+    ["once closed", { facts: { closed: true } }, "DirectSupplierAmountClosed"],
+  ] as const) {
+    test(`${label}, the action is withheld and the reason is shown`, () => {
+      renderCockpit(
+        manualWiring({ ...overrides, onRecordDirectSupplierAmount: async () => {} }),
+        manualDeal()
+      );
+      expect(cardButton("DirectSupplierAmountAction")).toBeUndefined();
+      expect(screen.getByText(reasonKey)).toBeTruthy();
+    });
+  }
+});

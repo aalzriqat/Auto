@@ -40,6 +40,7 @@ import {
 import {
   ReopenApprovedPurchaseDialog,
 } from "./ReopenApprovedPurchaseDialog";
+import { RecordDirectSupplierAmountDialog } from "./RecordDirectSupplierAmountDialog";
 import { ConfirmHandoverDialog } from "./ConfirmHandoverDialog";
 import { ConfirmFinalizeDialog } from "./ConfirmFinalizeDialog";
 import {
@@ -295,6 +296,12 @@ export function DealCockpit({
   const finalizeDeal = useMutation(api.applications.finalizeDeal);
   const approveDealerPurchaseAmount = useMutation(
     api.financingEconomics.approveDealerPurchaseAmount
+  );
+  // The manual provider's writer. A SEPARATE mutation, not a mode of the one
+  // above: that one applies a configured company's lending rules and refuses an
+  // application with no company, which is exactly the deal this serves.
+  const recordDirectSupplierReceiptAmount = useMutation(
+    api.applications.recordDirectSupplierReceiptAmount
   );
   const recordAppraisal = useMutation(api.financingEconomics.recordAppraisal);
   const { hasPermission, isLoading: permissionsLoading, membership } = usePermissions();
@@ -706,6 +713,13 @@ export function DealCockpit({
           onReopenApproved: async (values: { reason: string }) => {
             await reopenApproval({ orgId, applicationId, reason: values.reason });
           },
+          onRecordDirectSupplierAmount: async (values: {
+            approvedAmountMinor: number;
+            source: string;
+            notes?: string;
+          }) => {
+            await recordDirectSupplierReceiptAmount({ orgId, applicationId, ...values });
+          },
         }
       : undefined;
 
@@ -1064,6 +1078,12 @@ function MoneyPanel({
  * are exactly what the tests have to vary.
  */
 export type FinanceDecisionWiring = {
+  /** The manual provider's supplier-amount writer — see the mutation's docblock. */
+  onRecordDirectSupplierAmount?: (values: {
+    approvedAmountMinor: number;
+    source: string;
+    notes?: string;
+  }) => Promise<void>;
   facts: FinanceDecisionFacts;
   /** The application's OWN pinned currency, which need not be the org's. */
   currency: string | null;
@@ -1226,6 +1246,8 @@ export function DealCockpitView({
   const [showCompleted, setShowCompleted] = useState(false);
   const [recordingQuotation, setRecordingQuotation] = useState(false);
   const [recordingApproval, setRecordingApproval] = useState(false);
+  const [recordingDirectSupplier, setRecordingDirectSupplier] = useState(false);
+  const [directSupplierSubmitting, setDirectSupplierSubmitting] = useState(false);
   const [reopeningApproval, setReopeningApproval] = useState(false);
   const [recordingAppraisal, setRecordingAppraisal] = useState(false);
   const [appraisalSubmitting, setAppraisalSubmitting] = useState(false);
@@ -1828,6 +1850,17 @@ export function DealCockpitView({
             setReopenError(null);
             setReopeningApproval(true);
           }}
+          // Straight from the server payload. The screen does not decide which
+          // writer owns this figure — it cannot see the frozen quote mode, the
+          // company or the settlement route that decide it.
+          // Straight from the server payload. The screen does not decide which
+          // writer owns this figure — it cannot see the frozen quote mode, the
+          // company or the settlement route that decide it. A cash deal's payload
+          // has no such field, hence the `in` narrowing rather than a cast.
+          approvedPurchaseWriter={
+            deal && "approvedPurchaseWriter" in deal ? deal.approvedPurchaseWriter : "NONE"
+          }
+          onRecordDirectSupplierAmount={() => setRecordingDirectSupplier(true)}
         />
       )}
 
@@ -2146,6 +2179,38 @@ export function DealCockpitView({
             onOpenChange={setRecordingApproval}
             onSubmit={handleRecordApproved}
           />
+          {financeDecision.onRecordDirectSupplierAmount && (
+            <RecordDirectSupplierAmountDialog
+              open={recordingDirectSupplier}
+              submitting={directSupplierSubmitting}
+              // The same two parties the rest of this screen names, read from
+              // the payload rather than restated, so the dialog cannot show a
+              // different supplier from the row above it.
+              supplierName={supplierRow?.name ?? null}
+              providerName={deal.financeCompanyName ?? null}
+              money={decisionMoney}
+              referenceMinor={financeDecision.facts.submittedQuotationMinor}
+              toMinor={(input) => {
+                const parsed = Number(input.replace(/,/g, "").trim());
+                if (!Number.isFinite(parsed)) return null;
+                return Math.round(parsed * decisionFactor);
+              }}
+              t={t}
+              onOpenChange={setRecordingDirectSupplier}
+              onSubmit={async (values) => {
+                setDirectSupplierSubmitting(true);
+                try {
+                  await financeDecision.onRecordDirectSupplierAmount!(values);
+                  setRecordingDirectSupplier(false);
+                } finally {
+                  // Deliberately NOT caught: a swallowed refusal would close the
+                  // dialog on a write that never happened and leave the operator
+                  // believing the figure was recorded.
+                  setDirectSupplierSubmitting(false);
+                }
+              }}
+            />
+          )}
           <ReopenApprovedPurchaseDialog
             open={reopeningApproval}
             submitting={reopenSubmitting}

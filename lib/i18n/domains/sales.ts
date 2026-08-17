@@ -651,6 +651,27 @@ export const salesEn = {
   ProfitNotCalculable: "Cannot be calculated yet",
   // Deliberately NOT "yet". This deal's financing mode has no finance company
   // approving a purchase amount, so there is no step to go and complete.
+  DirectSupplierAmountTitle: "Record what the supplier receives",
+  DirectSupplierAmountDescription:
+    "The finance provider pays the supplier directly on this deal, so what he receives is the figure the dealership's claim on him is measured from. Record it before the vehicle goes out.",
+  DirectSupplierAmountPayer: "Paid by",
+  DirectSupplierAmountPayee: "Paid to",
+  DirectSupplierAmountReference: "Agreed vehicle price",
+  DirectSupplierAmountLabel: "Amount the supplier receives",
+  DirectSupplierAmountInvalid: "Enter an amount greater than zero.",
+  DirectSupplierAmountSourceLabel: "Where this figure comes from",
+  DirectSupplierAmountSourceHelp:
+    "A document or agreement someone can check later — a purchase agreement, a signed offer, a settlement advice.",
+  DirectSupplierAmountNotesLabel: "Notes (optional)",
+  DirectSupplierAmountAction: "Record amount",
+  DirectSupplierAmountRowLabel: "Amount the supplier receives",
+  DirectSupplierAmountNeedsPermission:
+    "Recording what the supplier receives is a manager's decision.",
+  DirectSupplierAmountOwnDeal:
+    "You cannot record this on your own deal. A manager or the dealership owner records it.",
+  DirectSupplierAmountSealed:
+    "The vehicle has gone out, so this deal's figures are sealed and this can no longer be recorded here.",
+  DirectSupplierAmountClosed: "This deal is closed, so its figures are sealed.",
   ProfitNotApplicable: "Not available for this financing mode",
   ProfitNotApplicableForMode:
     "The dealership's profit here is not measured from a finance company's approved purchase, because this deal has none.",
@@ -1646,6 +1667,26 @@ export const salesAr = {
   ProfitEstimatedAwaitingSettlement: "تقديري — بانتظار التسوية",
   ProfitActualUnpostable: "فعلي — غير مُرحَّل للقيود",
   ProfitNotCalculable: "لا يمكن احتسابه بعد",
+  DirectSupplierAmountTitle: "سجّل المبلغ الذي يستلمه المورّد",
+  DirectSupplierAmountDescription:
+    "جهة التمويل تدفع للمورّد مباشرة في هذه الصفقة، والمبلغ الذي يستلمه هو الأساس الذي يُحتسب منه حق المعرض عليه. سجّله قبل خروج المركبة.",
+  DirectSupplierAmountPayer: "الدافع",
+  DirectSupplierAmountPayee: "المستفيد",
+  DirectSupplierAmountReference: "سعر المركبة المتفق عليه",
+  DirectSupplierAmountLabel: "المبلغ الذي يستلمه المورّد",
+  DirectSupplierAmountInvalid: "أدخل مبلغًا أكبر من صفر.",
+  DirectSupplierAmountSourceLabel: "مصدر هذا المبلغ",
+  DirectSupplierAmountSourceHelp:
+    "مستند أو اتفاق يمكن الرجوع إليه لاحقًا — اتفاقية شراء أو عرض موقّع أو إشعار تسوية.",
+  DirectSupplierAmountNotesLabel: "ملاحظات (اختياري)",
+  DirectSupplierAmountAction: "تسجيل المبلغ",
+  DirectSupplierAmountRowLabel: "المبلغ الذي يستلمه المورّد",
+  DirectSupplierAmountNeedsPermission: "تسجيل ما يستلمه المورّد قرار يخص المدير.",
+  DirectSupplierAmountOwnDeal:
+    "لا يمكنك تسجيل هذا على صفقتك. يسجّله المدير أو مالك المعرض.",
+  DirectSupplierAmountSealed:
+    "خرجت المركبة، لذلك أصبحت أرقام هذه الصفقة مثبّتة ولم يعد بالإمكان تسجيل هذا هنا.",
+  DirectSupplierAmountClosed: "هذه الصفقة مغلقة، لذلك أصبحت أرقامها مثبّتة.",
   ProfitNotApplicable: "غير متاح لهذا النوع من التمويل",
   ProfitNotApplicableForMode:
     "ربح المعرض في هذه الصفقة لا يُقاس من قيمة شراء معتمدة من شركة تمويل، لأن هذه الصفقة لا تتضمن واحدة.",
