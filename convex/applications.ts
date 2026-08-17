@@ -383,21 +383,23 @@ const VALID_STATUS_TRANSITIONS: Record<FinanceApplicationStatus, readonly Financ
  * the finance application keeps its own status, so reading the sale only for
  * its route left a cancelled deal rendering as live work.
  */
-async function resolveDealRoute(
-  ctx: QueryCtx,
+function resolveDealRoute(
   app: Doc<"financeApplications">,
-  opts: { vehicle: Doc<"vehicles"> | null; consigned: boolean }
-): Promise<{ routeKnown: boolean; settlesDirect: boolean; saleCancelled: boolean }> {
+  opts: { vehicle: Doc<"vehicles"> | null; consigned: boolean; sale: Doc<"sales"> | null }
+): { routeKnown: boolean; settlesDirect: boolean; saleCancelled: boolean } {
   let routeKnown = true;
   let settlesDirect = false;
   let saleCancelled = false;
 
   if (app.finalizedSaleId) {
-    const sale = await ctx.db.get(app.finalizedSaleId);
-    if (!sale || sale.orgId !== app.orgId) routeKnown = false;
-    else saleCancelled = sale.status === "CANCELLED";
-    if (sale && sale.orgId === app.orgId) {
-      settlesDirect = !dealershipCollectsGross(consignedSettlementRoute(sale));
+    // The caller has already loaded this document and org-checked it, so it is
+    // passed in rather than read a second time. `opts.sale` is null on exactly
+    // the two conditions this branch used to re-derive — no such document, or a
+    // document belonging to another org — which is why one guard replaces two.
+    if (!opts.sale) routeKnown = false;
+    else {
+      saleCancelled = opts.sale.status === "CANCELLED";
+      settlesDirect = !dealershipCollectsGross(consignedSettlementRoute(opts.sale));
     }
   } else if (opts.vehicle === null) {
     routeKnown = false;
@@ -565,9 +567,10 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
       })
     : vehicle != null && isConsignedAgentSale(vehicle);
 
-  const { routeKnown, settlesDirect, saleCancelled } = await resolveDealRoute(ctx, app, {
+  const { routeKnown, settlesDirect, saleCancelled } = resolveDealRoute(app, {
     vehicle,
     consigned,
+    sale,
   });
 
   const supplierClaim = app.finalizedSaleId

@@ -430,12 +430,36 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // mistyped settlement advice. Same shape as the two above — `orgId` plus a
   // caller-supplied `applicationId` — so it lands in `analysed` too, and it
   // satisfies the rule the same inline way.
+  // Then 473→475 / skippedNoArgsBlock 13→15, `analysed` unchanged at 315, by
+  // the two Social Inbox conversation backfills:
+  //
+  // `backfillInstagramConversations` and `backfillFacebookConversations`
+  // materialise `socialConversations` for events that predate the trigger. Both
+  // take the shared `CONVERSATION_BACKFILL_ARGS` constant rather than a literal
+  // args block, so they land in `skippedNoArgsBlock` — that, and only that, is
+  // why they are not analysed.
+  //
+  // They DO take an `orgId`, and every row they touch is reached through that
+  // org's `by_org` index, so the writes are org-derived rather than
+  // caller-directed. There is no caller-supplied document id to own-check.
+  // Then 475→476 / skippedNoOrgId 145→146, `analysed` unchanged at 315, by
+  // `startSocialConversationBackfills`:
+  //
+  // It is the operator fan-out that starts the two backfills above for every
+  // organization, so it deliberately takes no `orgId` — it *enumerates* orgs by
+  // paginating the `organizations` table and passes each id to the per-org
+  // backfills. There is no caller-supplied org or document id for the guard to
+  // own-check, and it is an `internalMutation` with no public entry point.
+  //
+  // ⚠️ `analysed` stays at 315 across all three. That is the number that must
+  // never drop silently — a new mutation landing in a skip bucket is only
+  // acceptable when the reason is one of the two above, stated per mutation.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 473,
+      totalMutations: 476,
       analysed: 315,
-      skippedNoArgsBlock: 13,
-      skippedNoOrgId: 145,
+      skippedNoArgsBlock: 15,
+      skippedNoOrgId: 146,
     });
   });
 });

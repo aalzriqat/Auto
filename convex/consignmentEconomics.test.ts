@@ -900,12 +900,15 @@ describe("CX-B — a receipt from the wrong route raises no ceiling", () => {
       recordedSupplierGrossReceipt: 50_000,
     });
 
-    // The supplier cannot be owed more than the entire gross on this route.
-    expect(e.supplierSettlement).not.toBe(40_000);
-    expect(e.recognizedRevenue).not.toBe(THROUGH_PRICE - 40_000);
-    if (e.supplierSettlement !== null) {
-      expect(e.supplierSettlement).toBeLessThanOrEqual(THROUGH_PRICE);
-    }
+    // EXACT, not "not 40,000 and somewhere under the gross". The refusal permits
+    // exactly ONE outcome: the inadmissible frozen entitlement is dropped and the
+    // live basis stands in its place. Equality is what distinguishes that from
+    // `null` — the previous `not.toBe` plus a bound guarded on non-`null`
+    // accepted either refusal outcome, so swapping one for the other would have
+    // passed unnoticed.
+    expect(e.supplierSettlement).toBe(15_000);
+    expect(e.dealershipMargin).toBe(5_000);
+    expect(e.recognizedRevenue).toBe(5_000);
   });
 
   test("the DIRECT route still admits the receipt as evidence, so the fix is not just 'ignore receipts'", () => {
@@ -1033,8 +1036,12 @@ describe("CX-D — money in a denomination the repository cannot scale is not mo
       recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
     });
 
-    expect(e.supplierSettlement).not.toBe(400_000);
-    expect(e.supplierSettlement).not.toBe(40_000);
+    // EXACT: an unscalable entitlement is not money, so it is dropped and the
+    // live basis stands in. Equality pins that the answer is neither the
+    // mis-scaled 400,000, nor the raw 40,000, nor `null` — the previous pair of
+    // negatives left all three of those open.
+    expect(e.supplierSettlement).toBe(15_000);
+    expect(e.dealershipMargin).toBe(5_000);
   });
 });
 
@@ -1250,12 +1257,21 @@ describe("CX-C — an id that references nothing is not provenance", () => {
 describe("CX-B2 — admissibility must accept what the writer really produces", () => {
   const PRICE = 20_000;
 
-  test("cash DIRECT with a receipt EXACTLY the sale price is ACCEPTED", () => {
+  test("cash DIRECT with a receipt EXACTLY the sale price still publishes the entitlement under it", () => {
     // This is the ONLY cash-direct receipt the writer can produce:
     // `saleCompletion.ts:1026` stores `args.supplierGrossReceiptMinor ?? salePriceMinor`,
     // and no public mutation supplies that argument — so on a cash sale the
-    // receipt IS the sale price. It must remain admissible evidence, and the
-    // entitlement under it must still publish.
+    // receipt IS the sale price, and an entitlement under it must still publish.
+    //
+    // ⚠️ The previous title said this row "is ACCEPTED", which claimed more than
+    // the fixture can discriminate. When the receipt EQUALS the sale price the
+    // ceiling is the sale price either way, so this test passes even with
+    // `supplierReceiptIsAdmissible` hard-coded to `false` — mutation-proven, and
+    // no implementation would change it. What it genuinely pins is that the
+    // refusal is not OVER-broad: the routine cash row must keep publishing.
+    // The row that kills a refuse-everything implementation is the O-1 case
+    // below, where a writer-valid receipt ABOVE the sale price must still raise
+    // the ceiling — that one cannot pass without real admissibility.
     const e = saleEconomics({
       salePrice: PRICE,
       vehicle: { sourceType: "SOURCED" },
@@ -1270,11 +1286,19 @@ describe("CX-B2 — admissibility must accept what the writer really produces", 
     expect(e.dealershipMargin).toBe(PRICE - 18_000);
   });
 
-  test("financed DIRECT with financingType ABSENT is inadmissible — absent is not false", () => {
+  test("DIRECT with financingType ABSENT is inadmissible — absent fails closed, like false", () => {
     // `externallyFinanced: undefined` is a DIFFERENT INPUT from `false`, and it
     // is the shape a legacy row carries. The rule is `=== true`, so absence
     // fails closed rather than being read as "not financed" by luck or as
     // "financed" by permissiveness.
+    //
+    // ⚠️ Stated so this row and the `false` row below are not over-read as a
+    // pair: they are near-identical fixtures differing ONLY in omitted vs
+    // `false`, both are inadmissible, and the pair therefore does NOT pin
+    // absence as its own discriminated case. That is deliberate — the two
+    // inadmissible inputs on this route must refuse IDENTICALLY, which is what
+    // the exact-equality assertions in both now pin. What separates admissible
+    // from inadmissible is the O-1 row further down, not this pair.
     const e = saleEconomics({
       salePrice: PRICE,
       vehicle: { sourceType: "SOURCED" },
@@ -1285,15 +1309,19 @@ describe("CX-B2 — admissibility must accept what the writer really produces", 
       recordedSupplierGrossReceipt: 30_000,
     });
 
-    expect(e.supplierSettlement).not.toBe(25_000);
-    if (e.supplierSettlement !== null) {
-      expect(e.supplierSettlement).toBeLessThanOrEqual(PRICE);
-    }
+    // EXACT: the 30,000 receipt raises no ceiling, so the 25,000 entitlement
+    // exceeds the sale price and is dropped, and the live basis stands in.
+    expect(e.supplierSettlement).toBe(15_000);
+    expect(e.dealershipMargin).toBe(PRICE - 15_000);
   });
 
   test("cash DIRECT with a receipt ABOVE the sale price refuses the entitlement", () => {
     // AF-30 matrix row 1. The writer cannot produce this row; it is corruption,
     // and trusting it publishes a supplier share above the entire gross.
+    //
+    // Deliberately the SAME fixture as the ABSENT row above but with
+    // `externallyFinanced: false` — see the note there. Both refuse, and they
+    // must refuse to the same value; that identity is the assertion.
     const e = saleEconomics({
       salePrice: PRICE,
       vehicle: { sourceType: "SOURCED" },
@@ -1304,10 +1332,11 @@ describe("CX-B2 — admissibility must accept what the writer really produces", 
       recordedSupplierGrossReceipt: 30_000,
     });
 
-    expect(e.supplierSettlement).not.toBe(25_000);
-    if (e.supplierSettlement !== null) {
-      expect(e.supplierSettlement).toBeLessThanOrEqual(PRICE);
-    }
+    // EXACT: the 30,000 receipt raises no ceiling on a cash row, so the 25,000
+    // entitlement exceeds the sale price and is dropped, and the live basis
+    // stands in — the identical outcome to the ABSENT row above.
+    expect(e.supplierSettlement).toBe(15_000);
+    expect(e.dealershipMargin).toBe(PRICE - 15_000);
   });
 
   test("financed DIRECT keeps O-1: a writer-valid receipt above the sale price still publishes", () => {

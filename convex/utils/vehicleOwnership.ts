@@ -467,7 +467,18 @@ export interface ReceiptAdmissibilityFacts extends SettlementRouteFacts {
 
 /**
  * Whether a frozen supplier receipt may raise the entitlement ceiling above the
- * sale price. THE one derivation; every consumer asks this and none re-decides.
+ * sale price. THE one derivation *within this module* — `entitlementCeiling`,
+ * `saleEconomics` and the deal-route classifier all ask it and none re-decides.
+ *
+ * ⚠️ It is NOT the only admissibility decision in the codebase, and this comment
+ * previously claimed it was. `commissionableEarnings`
+ * (`utils/saleCompletion.ts:451`) re-decides for PAYROLL, and more permissively:
+ * it takes `supplierGrossReceipt ?? salePrice` as the basis on any consigned
+ * DIRECT sale without asking this predicate and without any ceiling, refusing
+ * only when the sale is financed AND the receipt is absent. So a cash-direct row
+ * carrying a receipt above the sale price — the exact corruption refused below —
+ * still reaches commission. **Pre-existing, out of this PR's scope, tracked as
+ * SCRUM-108.** Do not read the rule below as governing payroll until that lands.
  *
  * ⚠️ CX-B2. Derived from the WRITER paths, not from another reader's predicate:
  *
