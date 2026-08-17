@@ -1,0 +1,49 @@
+{
+  "$comment": [
+    "What must be green at the exact commit a production release deploys, and",
+    "which of those are explicitly excused.",
+    "",
+    "Ancestry proves a commit was merged. It does not prove the merge was",
+    "healthy: a push to main whose checks are still running, or red, is",
+    "otherwise perfectly deployable — and 'it is on main' is precisely the",
+    "reassurance that would stop anyone looking.",
+    "",
+    "A waiver is data, not a judgement made under pressure at the moment of a",
+    "deploy. Each names the issue that will remove it and the date it stops",
+    "being accepted, and an EXPIRED waiver FAILS the release rather than",
+    "degrading quietly into a permanently lowered standard.",
+    "",
+    "Waived checks are reported as WAIVED. They are never reported as passing."
+  ],
+  "required": [
+    "unit-and-integration",
+    "type-check",
+    "convex-backend",
+    "lint",
+    "secret-scan",
+    "dealer-worker",
+    "production-build",
+    "mobile-and-shared",
+    "Analyze (javascript-typescript)",
+    "Analyze (actions)",
+    "CodeQL",
+    "Semgrep OSS",
+    "osv-scanner",
+    "dependency-audit",
+    "playwright"
+  ],
+  "waivers": [
+    {
+      "context": "dependency-audit",
+      "issue": "SCRUM-127",
+      "expires": "2026-11-17",
+      "reason": "Fails identically on main; a transitive nanoid advisory reached through next's dependency graph, with no fix available at the pinned major. Not introduced by any release this gates."
+    },
+    {
+      "context": "playwright",
+      "issue": "SCRUM-95",
+      "expires": "2026-11-17",
+      "reason": "The shared Convex dev deployment is disabled on free-plan limits, so the browser suite has no backend to run against. Red on every branch, including main."
+    }
+  ]
+}

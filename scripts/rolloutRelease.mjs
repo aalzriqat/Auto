@@ -11,58 +11,50 @@
  * deploy and backfill into two manually resumed sessions leaves production in
  * that state for however long the gap lasts.
  *
- * The verdict logic lives in `releaseGuard.ts` so it can be tested directly.
- * This file is deliberately only the I/O around it.
+ * ⚠️ Everything this prints is PUBLIC — the repository is public, so its
+ * Actions logs and job summaries are too. Organizations appear as opaque
+ * hashes and backend error text never leaves the Convex logs.
  */
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import {
+  assertDeploymentIdentity,
+  captureRunBaseline,
   classifyMaterializationReport,
   decidePollOutcome,
   mergeVerdicts,
   parseConvexRunJson,
   pollIntervalMs,
   renderReleaseSummary,
-  requireProductionDeployKey,
+  requireBoundProductionKey,
 } from "./releaseGuard.ts";
 
 const REPORT_FN = "adminSystem:materializationReportForRelease";
 const START_FN = "migrations:startSocialConversationBackfills";
 
 const PAGE_SIZE = 50;
-/**
- * A cursor that stops advancing would otherwise page forever. The cap is far
- * above any real tenant count; it exists to turn a hang into a report.
- */
+/** A cursor that stops advancing would otherwise page forever. */
 const MAX_PAGES = 500;
-
 /**
  * A single CLI call that never returns would strand the whole run: `spawnSync`
- * blocks, so control never reaches the deadline check again and the informative
- * summary below never gets written. The only backstop would be the job-level
- * kill, which produces nothing anyone can act on.
+ * blocks, so control never reaches the deadline check again and the
+ * informative summary below never gets written.
  */
 const CLI_TIMEOUT_MS = 5 * 60_000;
 
 const TIMEOUT_MS = Number(process.env.ROLLOUT_TIMEOUT_MINUTES ?? 45) * 60_000;
-
-const MODE = process.env.RELEASE_MODE ?? "deploy";
 const SHA = process.env.RELEASE_SHA ?? "";
-const MAIN_TIP = process.env.RELEASE_MAIN_TIP ?? "";
-const DEPLOYMENT = process.env.RELEASE_DEPLOYMENT || null;
+const EXPECTED_DEPLOYMENT = (process.env.CONVEX_PROD_DEPLOYMENT ?? "").trim();
 
 /**
  * The repository-local Convex CLI, addressed directly.
  *
- * Not `pnpm exec convex`, and not because `pnpm exec` would resolve the wrong
- * package — it resolves the right one. It is that reaching it through a bare
- * command name means resolving `pnpm` itself through `PATH`, and this script's
- * whole job is to report truthfully on what a credential just did to
- * production. `process.execPath` is the running interpreter's absolute path and
- * the entry below is inside this commit's own `node_modules`, so neither is
- * looked up anywhere.
+ * Not `pnpm exec convex`, and not because that would resolve the wrong package
+ * — it resolves the right one. It is that reaching it through a bare command
+ * name means resolving `pnpm` itself through `PATH`, and this script's whole
+ * job is to report truthfully on what a credential just did to production.
  */
 const CONVEX_CLI = path.join(process.cwd(), "node_modules", "convex", "bin", "main.js");
 
@@ -82,10 +74,8 @@ function writeSummary(extra) {
     anomalies: [],
   };
   let body = renderReleaseSummary({
-    mode: MODE,
     sha: SHA,
-    mainTipSha: MAIN_TIP,
-    deployment: DEPLOYMENT,
+    deployment: EXPECTED_DEPLOYMENT || "unknown",
     verdict,
     outcome: lastOutcome === "continue" ? "failed" : lastOutcome,
   });
@@ -104,18 +94,14 @@ function fail(message) {
  *
  * `--prod` is passed deliberately, and NOT because it is what selects the
  * target. Verified against the installed CLI (convex 1.42.1): with a
- * deployment-scoped `CONVEX_DEPLOY_KEY` the deployment comes from the key and
- * the flag is ignored with a warning — the credential is the selector, which is
- * the property that makes a protected environment worth having.
- *
- * The flag is here for the misconfiguration case. A PROJECT-scoped key with no
- * selection resolves to a deployment within the project, and without `--prod`
- * that can be the dev one — which would have this script cheerfully verify a
- * successful rollout on a deployment that is not production. That is the exact
- * shape of the 2026-08-07 incident, so the flag is a fail-safe, not a selector.
+ * deployment-scoped key the deployment comes from the key and the flag is
+ * ignored with a warning. It is here for the misconfiguration case — a
+ * PROJECT-scoped key with no selection can resolve to the dev deployment, which
+ * would have this script verify a rollout on a deployment that is not
+ * production.
  *
  * Codegen and typechecking are disabled: this step must observe the deployment,
- * never rewrite the tree it is observing from.
+ * never rewrite the tree it observes from.
  */
 function convex(args) {
   const result = spawnSync(
@@ -134,7 +120,6 @@ function convex(args) {
     return { ok: false, reason: `Could not run the Convex CLI: ${result.error.message}` };
   }
   if (result.status !== 0) {
-    // stderr, because that is where the CLI puts every diagnostic it emits.
     return {
       ok: false,
       reason: `convex ${args[0]} exited ${result.status}.\n${(result.stderr ?? "").trim()}`,
@@ -143,10 +128,17 @@ function convex(args) {
   return parseConvexRunJson(result.stdout ?? "");
 }
 
-/** Walks every page of the report and merges the per-page verdicts. */
-function collectVerdict() {
+/**
+ * Walks every page of the report.
+ *
+ * Returns the raw org pages as well as the verdict, because the caller needs
+ * the pre-fan-out run identities and cannot recover them from a verdict.
+ */
+function collectReport(baseline) {
   const verdicts = [];
+  const orgs = [];
   let cursor = null;
+  let identityChecked = false;
 
   for (let pageNumber = 0; pageNumber < MAX_PAGES; pageNumber += 1) {
     const result = convex([
@@ -161,9 +153,19 @@ function collectVerdict() {
       return { ok: false, reason: `The materialisation report was not the expected shape.` };
     }
 
-    verdicts.push(classifyMaterializationReport(value.page));
+    // ⚠️ Checked on every walk, not once at startup. The deployment that
+    // answers is the only thing that can prove which deployment is being
+    // verified, and a credential can be the wrong credential.
+    if (!identityChecked) {
+      const identity = assertDeploymentIdentity(value.deploymentUrl, EXPECTED_DEPLOYMENT);
+      if (!identity.ok) return identity;
+      identityChecked = true;
+    }
 
-    if (value.isDone === true) return { ok: true, verdict: mergeVerdicts(verdicts) };
+    orgs.push(...value.page);
+    verdicts.push(classifyMaterializationReport(value.page, baseline));
+
+    if (value.isDone === true) return { ok: true, verdict: mergeVerdicts(verdicts), orgs };
 
     const next = value.continueCursor;
     if (typeof next !== "string" || next === cursor) {
@@ -179,24 +181,38 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ─── 0. Refuse before doing anything if the environment is not configured ────
 
-// Checked here rather than left to the CLI so the failure names the cause. An
-// unconfigured production environment otherwise surfaces as an opaque Convex
-// error several steps later, at the exact moment nobody wants a puzzle.
-const keyCheck = requireProductionDeployKey(process.env.CONVEX_DEPLOY_KEY);
+// Only the OPERATOR key is present in this step — the deploy key is deliberately
+// not in scope here, so this cannot deploy anything even if it wanted to. Both
+// keys are checked against each other earlier, in the step that holds both.
+const keyCheck = requireBoundProductionKey(
+  process.env.CONVEX_DEPLOY_KEY,
+  EXPECTED_DEPLOYMENT,
+  "operator key"
+);
 if (!keyCheck.ok) fail(keyCheck.reason);
 
 if (!existsSync(CONVEX_CLI)) {
   fail(`The repository-local Convex CLI is missing at ${CONVEX_CLI}. Did the install step run?`);
 }
 
-// ─── 1. Start the backfills ─────────────────────────────────────────────────
+// ─── 1. Learn what was already broken BEFORE asking for a redrive ───────────
+
+// Without this, a pre-existing failure and a failure caused by this rollout are
+// indistinguishable — and they want opposite responses.
+console.log(`Reading the current materialisation state…`);
+const before = collectReport(undefined);
+if (!before.ok) fail(before.reason);
+const baseline = captureRunBaseline(before.orgs);
+console.log(`  baseline captured for ${before.orgs.length} organizations`);
+
+// ─── 2. Start the backfills ─────────────────────────────────────────────────
 
 console.log(`Starting Social Inbox conversation backfills…`);
 const started = convex(["run", START_FN, "{}"]);
 if (!started.ok) fail(started.reason);
 console.log(`  fan-out: ${JSON.stringify(started.value)}`);
 
-// ─── 2. Refuse to finish until every org is verifiably on the fast path ──────
+// ─── 3. Refuse to finish until every org is verifiably on the fast path ──────
 
 const startedAt = Date.now();
 console.log(`Verifying the rollout (deadline ${Math.round(TIMEOUT_MS / 60_000)} minutes)…`);
@@ -204,7 +220,7 @@ console.log(`Verifying the rollout (deadline ${Math.round(TIMEOUT_MS / 60_000)} 
 // The loop variable IS the end condition: every branch below either leaves it
 // at "continue" or sets a terminal value.
 while (lastOutcome === "continue") {
-  const collected = collectVerdict();
+  const collected = collectReport(baseline);
   if (!collected.ok) fail(collected.reason);
 
   lastVerdict = collected.verdict;
@@ -221,27 +237,25 @@ while (lastOutcome === "continue") {
 }
 
 for (const p of lastVerdict.anomalies) {
-  console.warn(`  ⚠ ${p.orgName} (${p.orgId}) ${p.platform ?? "—"} ${p.kind}: ${p.detail}`);
+  console.warn(`  ⚠ ${p.org} ${p.platform ?? "—"} ${p.kind}: ${p.detail}`);
 }
 
 if (lastOutcome === "verified") {
   writeSummary(null);
-  console.log(`\n✔ Every organization is reading the materialised path.\n`);
+  console.log(`\n✔ Every organization is reading the materialised path on ${EXPECTED_DEPLOYMENT}.\n`);
   process.exit(0);
 }
 
 for (const p of [...lastVerdict.problems, ...lastVerdict.inFlight]) {
-  console.error(`  ${p.orgName} (${p.orgId}) ${p.platform ?? "—"} ${p.kind}: ${p.detail}`);
+  console.error(`  ${p.org} ${p.platform ?? "—"} ${p.kind}: ${p.detail}`);
 }
 
 // ⚠️ Production IS deployed at this point. Saying so plainly is the whole job
 // of this branch: the failure is a rollout that did not finish, not a deploy
-// that did not happen, and the two want completely different next actions from
-// whoever reads this.
+// that did not happen, and the two want completely different next actions.
 fail(
   lastOutcome === "timedOut"
-    ? `Production is DEPLOYED, but the rollout did not finish within the deadline. ` +
-        `The organizations still in flight are listed above — a follow-up run resumes safely, ` +
-        `since the backfills skip organizations already proven complete.`
+    ? `Production is DEPLOYED, but the rollout did not finish within the deadline. A follow-up ` +
+        `run resumes safely, since the backfills skip organizations already proven complete.`
     : `Production is DEPLOYED, but the rollout is INCOMPLETE. Do not record SCRUM-21 as closed.`
 );

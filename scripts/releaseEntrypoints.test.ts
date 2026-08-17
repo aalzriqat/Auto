@@ -50,7 +50,9 @@ function runScript(script: string, overrides: Record<string, string> = {}) {
     "CONVEX_DEPLOYMENT",
     "RELEASE_INPUT_SHA",
     "RELEASE_INPUT_CONFIRM",
-    "RELEASE_INPUT_MODE",
+    "CONVEX_PROD_DEPLOYMENT",
+    "CONVEX_PROD_DEPLOY_KEY",
+    "CONVEX_PROD_OPERATOR_KEY",
   ]) {
     delete env[key];
   }
@@ -87,7 +89,6 @@ describe("the release scripts run under the interpreter that will run them", () 
       GITHUB_REPOSITORY: "aalzriqat/Auto",
       RELEASE_INPUT_SHA: "a1b2c3d",
       RELEASE_INPUT_CONFIRM: "DEPLOY TO PRODUCTION",
-      RELEASE_INPUT_MODE: "deploy",
     });
 
     expect(result.status, `stderr:\n${result.stderr}`).toBe(1);
@@ -101,12 +102,42 @@ describe("the release scripts run under the interpreter that will run them", () 
 
     expect(result.error, `spawn error: ${result.error?.message}`).toBeUndefined();
     expect(result.status, `stderr:\n${result.stderr}`).toBe(1);
-    expect(result.stderr).toMatch(/no deploy key was provided/i);
+    expect(result.stderr).toMatch(/CONVEX_PROD_DEPLOYMENT is not set/i);
     expect(result.stderr).not.toMatch(/ERR_MODULE_NOT_FOUND|Unknown file extension/);
+  });
+
+  test("assertReleaseCredentials.mjs refuses a prod key for the WRONG deployment", () => {
+    // The pre-deploy gate, exercised through its real entrypoint. A valid
+    // production key for another project would otherwise deploy, verify and
+    // report success there.
+    const result = runScript("assertReleaseCredentials.mjs", {
+      CONVEX_PROD_DEPLOYMENT: "kindly-hound-172",
+      CONVEX_PROD_DEPLOY_KEY: "prod:someone-elses-999|deploysecret",
+      CONVEX_PROD_OPERATOR_KEY: "prod:kindly-hound-172|opsecret",
+    });
+
+    expect(result.error, `spawn error: ${result.error?.message}`).toBeUndefined();
+    expect(result.status, `stderr:\n${result.stderr}`).toBe(1);
+    expect(result.stderr).toMatch(/expects/i);
+    const output = `${result.stdout}${result.stderr}`;
+    expect(output).not.toMatch(/deploysecret|opsecret/);
+  });
+
+  test("assertReleaseCredentials.mjs accepts two keys bound to the expected deployment", () => {
+    const result = runScript("assertReleaseCredentials.mjs", {
+      CONVEX_PROD_DEPLOYMENT: "kindly-hound-172",
+      CONVEX_PROD_DEPLOY_KEY: "prod:kindly-hound-172|deploysecret",
+      CONVEX_PROD_OPERATOR_KEY: "prod:kindly-hound-172|opsecret",
+    });
+
+    expect(result.status, `stderr:\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toMatch(/kindly-hound-172/);
+    expect(`${result.stdout}${result.stderr}`).not.toMatch(/deploysecret|opsecret/);
   });
 
   test("rolloutRelease.mjs refuses a preview key without ever printing it", () => {
     const result = runScript("rolloutRelease.mjs", {
+      CONVEX_PROD_DEPLOYMENT: "kindly-hound-172",
       CONVEX_DEPLOY_KEY: "preview:some-team:some-project|thesecretpart",
     });
 

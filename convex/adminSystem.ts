@@ -97,7 +97,26 @@ export const getSocialMaterializationStatus = query({
 export const materializationReportForRelease = internalQuery({
   args: { paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
-    return await materializationReportPage(ctx, args.paginationOpts);
+    const page = await materializationReportPage(ctx, args.paginationOpts);
+    return {
+      ...page,
+      /**
+       * ⚠️ The deployment naming ITSELF, so a verifier can prove it is looking
+       * at the deployment it was told to look at.
+       *
+       * A deploy key names its target, but a credential can be the wrong
+       * credential — a valid production key for another project deploys,
+       * verifies and reports success there just as confidently. Scraping the
+       * CLI's output would answer that with a log line, which can be stale,
+       * reformatted or absent. This answers it over the same connection the
+       * verification uses, from the backend that is actually serving it.
+       *
+       * Read straight from `process.env` rather than through `getValidatedEnv`:
+       * this is a Convex system variable, not application configuration, and a
+       * verifier must not fail because an unrelated app setting is missing.
+       */
+      deploymentUrl: process.env.CONVEX_CLOUD_URL ?? null,
+    };
   },
 });
 

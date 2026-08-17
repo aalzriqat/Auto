@@ -240,6 +240,14 @@ export type PlatformMaterializationReport = {
   lastProgressAt: number | null;
   completedAt: number | null;
   failureMessage: string | null;
+  /**
+   * The run identity the row currently carries.
+   *
+   * Surfaced so a caller can tell a PRE-EXISTING failure awaiting redrive from
+   * a failure this run's own backfill produced. The two want opposite
+   * responses: wait for the first, stop for the second.
+   */
+  runId: string | null;
 };
 
 /** One organization's row of {@link describeOrgMaterialization}'s report. */
@@ -247,6 +255,18 @@ export type OrgMaterializationReport = {
   orgId: Id<"organizations">;
   orgName: string;
   readerSource: "materialized" | "legacyEvents";
+  /**
+   * Whether ANY `socialConversations` row exists for this org at the current
+   * generation.
+   *
+   * A bounded existence probe rather than a count — one indexed read, and the
+   * question is only ever "is the table empty for this org". It exists because
+   * a completion counter is a *claim* about the table, and the 2026-08-07
+   * incident was a reader confidently serving a table that had nothing in it.
+   * Comparing the claim against the table turns that from an inference into an
+   * observation.
+   */
+  hasCurrentGenerationConversations: boolean;
   platforms: PlatformMaterializationReport[];
 };
 
@@ -291,9 +311,20 @@ export async function describeOrgMaterialization(
         lastProgressAt: row?.lastProgressAt ?? null,
         completedAt: row?.completedAt ?? null,
         failureMessage: row?.failureMessage ?? null,
+        runId: row?.runId ?? null,
       };
     })
   );
+
+  // One indexed read, bounded to a single row: the question is existence, not
+  // volume, and an unbounded count here would scale with the table this exists
+  // to reason about.
+  const anyConversation = await ctx.db
+    .query("socialConversations")
+    .withIndex("by_org_generation_lastEventAt", (q) =>
+      q.eq("orgId", org._id).eq("generation", SOCIAL_CONVERSATION_GENERATION)
+    )
+    .first();
 
   return {
     orgId: org._id,
@@ -302,6 +333,7 @@ export async function describeOrgMaterialization(
     readerSource: platforms.every((p) => p.status === "completed")
       ? ("materialized" as const)
       : ("legacyEvents" as const),
+    hasCurrentGenerationConversations: anyConversation !== null,
     platforms,
   };
 }

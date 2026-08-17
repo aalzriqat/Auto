@@ -177,6 +177,100 @@ describe("the report says what the reader will actually do", () => {
     ]);
   });
 
+  test("the table is PROBED, not inferred — the claim and the rows are separate facts", async () => {
+    // ⚠️ This is what makes the 2026-08-07 check enforceable. A completion
+    // counter is a *claim* about the table; on that day the reader served a
+    // table that had nothing in it. Reporting whether a row actually exists
+    // turns the check from an inference into an observation — and it cannot be
+    // confused with a healthy all-unlinked org, because those claim zero.
+    const t = convexTestWithComponents(schema, MODULES);
+    const orgId = await seedOrg(t, "Bloom Cars");
+    await writeState(t, orgId, "instagram", { materializedCount: 4 });
+    await writeState(t, orgId, "facebook", { materializedCount: 4 });
+
+    const claimedButEmpty = await t.query(internal.adminSystem.materializationReportForRelease, PAGE);
+    expect(claimedButEmpty.page[0].hasCurrentGenerationConversations).toBe(false);
+
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Alice", lastName: "Buyer", createdAt: Date.now() })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("socialConversations", {
+        orgId,
+        generation: SOCIAL_CONVERSATION_GENERATION,
+        conversationKey: "ig:dm:alice",
+        platform: "instagram",
+        conversationKind: "dm",
+        customerId,
+        lastEventAt: Date.now(),
+        eventCount: 1,
+        unansweredCount: 0,
+        vehicleIds: [],
+        vehicleCount: 0,
+        latestSenderRawId: "ig_alice",
+      })
+    );
+
+    const withRows = await t.query(internal.adminSystem.materializationReportForRelease, PAGE);
+    expect(withRows.page[0].hasCurrentGenerationConversations).toBe(true);
+  });
+
+  test("a row from a SUPERSEDED generation does not count as present", async () => {
+    // The probe has to be generation-scoped for the same reason the reader is:
+    // superseded rows are inert, and treating them as coverage would vouch for
+    // a table the reader will not serve.
+    const t = convexTestWithComponents(schema, MODULES);
+    const orgId = await seedOrg(t, "Bloom Cars");
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Alice", lastName: "Buyer", createdAt: Date.now() })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("socialConversations", {
+        orgId,
+        generation: SOCIAL_CONVERSATION_GENERATION + 1,
+        conversationKey: "ig:dm:alice",
+        platform: "instagram",
+        conversationKind: "dm",
+        customerId,
+        lastEventAt: Date.now(),
+        eventCount: 1,
+        unansweredCount: 0,
+        vehicleIds: [],
+        vehicleCount: 0,
+        latestSenderRawId: "ig_alice",
+      })
+    );
+
+    const report = await t.query(internal.adminSystem.materializationReportForRelease, PAGE);
+    expect(report.page[0].hasCurrentGenerationConversations).toBe(false);
+  });
+
+  test("the run identity is reported, so a stale failure can be told from a new one", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const orgId = await seedOrg(t, "Bloom Cars");
+    await writeState(t, orgId, "instagram", { runId: "run-abc", status: "failed", completedAt: undefined });
+
+    const report = await t.query(internal.adminSystem.materializationReportForRelease, PAGE);
+    const instagram = report.page[0].platforms.find((p) => p.platform === "instagram");
+    expect(instagram?.runId).toBe("run-abc");
+  });
+
+  test("the deployment reports its own URL so a verifier can prove which one answered", async () => {
+    // A deploy key names its target, but a credential can be the WRONG
+    // credential — a valid production key for another project deploys, verifies
+    // and reports success there. This lets the verifier confirm identity over
+    // the same connection it verifies on, rather than trusting a log line.
+    const t = convexTestWithComponents(schema, MODULES);
+    await seedOrg(t, "Bloom Cars");
+
+    const report = await t.query(internal.adminSystem.materializationReportForRelease, PAGE);
+    // Convex sets CONVEX_CLOUD_URL in the real function runtime; convex-test
+    // does not, so the field must be PRESENT and null rather than absent —
+    // absent would read as "not reported" for a different reason.
+    expect(Object.hasOwn(report, "deploymentUrl")).toBe(true);
+    expect(report.deploymentUrl ?? null).toBe(process.env.CONVEX_CLOUD_URL ?? null);
+  });
+
   test("contradictory duplicate state rows are reported as ambiguous, not resolved", async () => {
     const t = convexTestWithComponents(schema, MODULES);
     const orgId = await seedOrg(t, "Bloom Cars");

@@ -5,20 +5,27 @@
  *
  * Two properties of WHERE this executes matter more than anything it does:
  *
- * 1. **It runs in a job with no `environment:`**, so the protected environment's
- *    secrets are not merely unused here, they are unavailable. A verification
- *    step that could reach the credential it is gating would be theatre.
+ * 1. **It runs in a job with no `environment:`**, so the protected
+ *    environment's secrets are not merely unused here, they are unavailable. A
+ *    verification step that could reach the credential it is gating would be
+ *    theatre.
  *
- * 2. **It runs `main`'s copy of this file, never the candidate commit's.** The
- *    workflow checks out `github.ref` (pinned to `main`) rather than the SHA
- *    being deployed, so a commit cannot ship its own approval. That is also why
- *    every fact below is read from the GitHub API rather than a local clone:
- *    the verification job never checks out, builds, installs or executes
- *    anything from the commit it is judging.
+ * 2. **It runs `main`'s copy of this file.** The workflow checks out
+ *    `github.ref` (pinned to `main`) rather than the SHA being deployed, so a
+ *    commit cannot ship its own approval. That is also why every fact below is
+ *    read from the GitHub API rather than a local clone: this job never checks
+ *    out, builds, installs or executes anything from the commit it is judging.
  */
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import process from "node:process";
-import { decideCommitAuthority, forLog, isFullSha, isSafeApiPath, parseReleaseInputs } from "./releaseGuard.ts";
+import {
+  decideCommitAuthority,
+  evaluateRequiredChecks,
+  forLog,
+  isFullSha,
+  isSafeApiPath,
+  parseReleaseInputs,
+} from "./releaseGuard.ts";
 
 const REPO = process.env.GITHUB_REPOSITORY ?? "";
 const TOKEN = process.env.GITHUB_TOKEN ?? "";
@@ -40,16 +47,7 @@ function emit(name, value) {
   if (path) appendFileSync(path, `${name}=${value}\n`);
 }
 
-/**
- * Builds one path segment.
- *
- * The values reaching this are already proven to be 40 hex characters, so the
- * encoding is a no-op on every input that gets here — it is applied anyway
- * because "a validator somewhere else already guaranteed the shape" is an
- * argument that stops being true the first time someone adds a call site, and
- * because escaping at the point of construction is simply how a URL should be
- * built from a variable.
- */
+/** Builds one path segment; a no-op on the 40-hex values that reach it. */
 const seg = (value) => encodeURIComponent(String(value));
 
 async function api(path) {
@@ -72,12 +70,10 @@ async function api(path) {
 // `workflow_dispatch` runs whatever definition exists on the ref the operator
 // picked, so without this a branch could carry a workflow that skips every
 // check below. ⚠️ Stated honestly: this is a guard, not the boundary. The
-// binding control is the `production` environment's required reviewer, because
-// a modified workflow still cannot obtain the credential without a human
-// approving that specific run.
+// binding control is the `production` environment's required reviewer.
 if (REF !== "refs/heads/main") {
   refuse(
-    `This workflow must be run from main; it was dispatched from ${JSON.stringify(REF)}. ` +
+    `This workflow must be run from main; it was dispatched from ${forLog(REF)}. ` +
       `Running it from a branch would let that branch supply its own verification logic.`
   );
 }
@@ -87,7 +83,6 @@ if (REF !== "refs/heads/main") {
 const parsed = parseReleaseInputs({
   sha: process.env.RELEASE_INPUT_SHA,
   confirm: process.env.RELEASE_INPUT_CONFIRM,
-  mode: process.env.RELEASE_INPUT_MODE,
 });
 if (!parsed.ok) refuse(parsed.reason);
 
@@ -98,10 +93,7 @@ if (tip.status !== 200) refuse(`Could not read main's tip commit (HTTP ${tip.sta
 const mainTipSha = String(tip.body.sha ?? "").toLowerCase();
 
 // Proven to be 40 hex characters HERE, before it is interpolated into a URL
-// path below — not merely before it is compared. `parsed.sha` already carries
-// that proof from `parseReleaseInputs`. With both established, every path
-// segment this script builds is a fixed-shape identifier and there is nothing
-// left for a traversal or a query string to hide in.
+// path below — not merely before it is compared.
 if (!isFullSha(mainTipSha)) {
   refuse(`GitHub returned an unusable tip commit for main: ${forLog(mainTipSha)}.`);
 }
@@ -110,22 +102,21 @@ const commit = await api(`/commits/${seg(parsed.sha)}`);
 const commitExists = commit.status === 200;
 
 // `compare/base...head` reports `behind` when head is contained in base and
-// `identical` when they are the same commit — which is precisely "is this an
-// ancestor of main". Asked of GitHub rather than of a local checkout because
-// a clone's idea of `main` is only as good as its remote configuration.
+// `identical` when they are the same commit. Asked of GitHub rather than of a
+// local checkout, because a clone's idea of `main` is only as good as its
+// remote configuration.
 let isAncestorOfMain = false;
 if (commitExists) {
   if (parsed.sha === mainTipSha) {
     isAncestorOfMain = true;
   } else {
     const compare = await api(`/compare/${seg(mainTipSha)}...${seg(parsed.sha)}`);
-    if (compare.status !== 200) refuse(`Could not compare ${parsed.sha} against main (HTTP ${compare.status}).`);
+    if (compare.status !== 200) refuse(`Could not compare against main (HTTP ${compare.status}).`);
     isAncestorOfMain = compare.body.status === "behind" || compare.body.status === "identical";
   }
 }
 
 const authority = decideCommitAuthority({
-  mode: parsed.mode,
   sha: parsed.sha,
   mainTipSha,
   commitExists,
@@ -133,46 +124,87 @@ const authority = decideCommitAuthority({
 });
 if (!authority.ok) refuse(authority.reason);
 
+// ─── CI must be green AT THIS EXACT COMMIT ──────────────────────────────────
+
+// ⚠️ Both surfaces, because they are different APIs and a check living in one
+// is invisible to the other. Actions jobs are check-runs; app integrations like
+// SonarCloud and Vercel report commit statuses. Reading only one is
+// indistinguishable from "everything passed".
+const [checkRuns, statuses] = await Promise.all([
+  api(`/commits/${seg(authority.sha)}/check-runs`),
+  api(`/commits/${seg(authority.sha)}/status`),
+]);
+if (checkRuns.status !== 200) refuse(`Could not read check runs for this commit (HTTP ${checkRuns.status}).`);
+if (statuses.status !== 200) refuse(`Could not read commit statuses (HTTP ${statuses.status}).`);
+
+const results = [
+  ...(checkRuns.body.check_runs ?? []).map((run) => ({
+    name: run.name,
+    conclusion: run.status === "completed" ? run.conclusion : `still ${run.status}`,
+  })),
+  ...(statuses.body.statuses ?? []).map((s) => ({
+    name: s.context,
+    conclusion: s.state === "success" ? "success" : s.state,
+  })),
+];
+
+const policy = JSON.parse(readFileSync(new URL("../.github/release-waivers.json", import.meta.url), "utf8"));
+const checks = evaluateRequiredChecks({
+  required: policy.required,
+  results,
+  waivers: policy.waivers,
+  now: new Date(),
+});
+
+if (!checks.ok) {
+  refuse(
+    `CI is not green at ${authority.sha}:\n` +
+      checks.failures.map((f) => `  · ${f}`).join("\n") +
+      `\n\nAncestry proves a commit was merged, not that the merge was healthy.`
+  );
+}
+
 // ─── Record the review state this commit arrived with ───────────────────────
 
 // Recorded, not enforced. Branch protection is what requires review, and it
 // enforces it at merge time; re-deriving that here would be inferring
-// enforcement from observation. What this adds is provenance in the run log —
-// which PR this commit came from, so the deploy is traceable without anyone
-// having to reconstruct it later.
-const pulls = await api(`/commits/${seg(parsed.sha)}/pulls`);
-const describePull = (pr) => {
-  const state = pr.merged_at ? `merged ${pr.merged_at}` : pr.state;
-  return `#${pr.number} ${forLog(String(pr.title ?? ""), 80)} (${state})`;
-};
+// enforcement from observation.
+const pulls = await api(`/commits/${seg(authority.sha)}/pulls`);
+const describePull = (pr) => `#${pr.number} (${pr.merged_at ? "merged" : pr.state})`;
 const provenance =
   pulls.status === 200 && Array.isArray(pulls.body) && pulls.body.length > 0
     ? pulls.body.map(describePull).join(", ")
     : "_no associated pull request_";
 
 emit("sha", authority.sha);
-emit("mode", authority.mode);
 emit("main_tip", mainTipSha);
 
-const heading = authority.mode === "rollback" ? "Rollback authorised" : "Deploy authorised";
 summary(
   [
-    `## ✅ ${heading}`,
+    `## ✅ Deploy authorised`,
     "",
     `| | |`,
     `| --- | --- |`,
-    `| Mode | \`${authority.mode}\` |`,
     `| Commit | \`${authority.sha}\` |`,
     `| main tip | \`${mainTipSha}\` |`,
-    `| Contained in main | yes |`,
+    `| Required checks passed | ${checks.passed.length} |`,
     `| Provenance | ${provenance} |`,
     "",
-    authority.mode === "rollback"
-      ? `> Rolling **back** to a commit that is contained in main. It was reviewed; it is simply older.`
-      : `> Deploying main's current tip.`,
-    "",
+    ...(checks.waived.length > 0
+      ? [
+          `### ⚠️ WAIVED — not passing`,
+          "",
+          "| Check | Issue | Expires | Why |",
+          "| --- | --- | --- | --- |",
+          ...checks.waived.map((w) => `| \`${w.context}\` | ${w.issue} | ${w.expires} | ${w.reason} |`),
+          "",
+          "_These are recorded as WAIVED. They must never be reported as passing._",
+          "",
+        ]
+      : []),
     `_Nothing has been deployed yet. The production credential is only reachable after a human approves the \`production\` environment for this run._`,
   ].join("\n")
 );
 
-console.log(`✔ ${heading}: ${forLog(authority.sha)} (main tip ${forLog(mainTipSha)})`);
+console.log(`✔ Deploy authorised: ${forLog(authority.sha)}`);
+console.log(`  required passed: ${checks.passed.length}, waived: ${checks.waived.length}`);
