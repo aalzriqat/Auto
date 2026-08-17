@@ -416,53 +416,107 @@ async function settleAndDescribe(t: any, asUser: any, orgId: any, intentId: any)
  * Asserting only presence passes for an implementation that ALSO allocated;
  * asserting only absence passes for one that threw the money away.
  */
+type Driver = { kind: "intent"; id: any } | { kind: "cheque"; id: any };
+
+/**
+ * ⚠️ THE RECEIPT IS RESOLVED BY OWNERSHIP, NEVER BY POSITION.
+ *
+ * The first version of this helper selected the receipt as
+ * `payments[payments.length - 1]` — newest-first inference. Contract v3 R5
+ * forbids exactly that: "No inference by newest-first, amount matching,
+ * cheque-number text, or a guessed idempotency key — anywhere, INCLUDING IN
+ * TEST HELPERS." Being in a test file is not an exemption. A helper that guesses
+ * which payment it is looking at cannot evidence a contract whose entire subject
+ * is that identity must be proven; it would also keep passing under an
+ * implementation that wrote the right row for the wrong movement.
+ *
+ * So the receipt is reached through the DRIVER'S OWN LINK:
+ *   intent  ->  paymentIntents.canonicalPaymentId
+ *   cheque  ->  collectionPayments.by_cheque -> canonicalPaymentId
+ * and the traversal FAILING is itself reportable, not silently substituted.
+ */
+async function receiptOwnedBy(t: any, driver: Driver) {
+  return await t.run(async (ctx: any) => {
+    let paymentId: any = null;
+    let lineage = "";
+    if (driver.kind === "intent") {
+      const intent = await ctx.db.get(driver.id);
+      paymentId = intent?.canonicalPaymentId ?? null;
+      lineage = "paymentIntents.canonicalPaymentId";
+    } else {
+      const mirror = await ctx.db
+        .query("collectionPayments")
+        .withIndex("by_cheque", (q: any) => q.eq("chequeId", driver.id))
+        .first();
+      paymentId = mirror?.canonicalPaymentId ?? null;
+      lineage = "collectionPayments.by_cheque -> canonicalPaymentId";
+    }
+    if (!paymentId) return { unreachable: `no receipt reachable via ${lineage}` };
+    const payment = await ctx.db.get(paymentId);
+    if (!payment) return { unreachable: `${lineage} points at a missing payment` };
+    const active = (await ctx.db.query("paymentAllocations").collect())
+      .filter((a: any) => a.status === "ACTIVE" && String(a.paymentId) === String(paymentId));
+    const applied = active.reduce((s: number, a: any) => s + a.amountMinor, 0);
+    return {
+      amountMinor: payment.amountMinor,
+      status: payment.status,
+      unappliedMinor: payment.amountMinor - applied,
+    };
+  });
+}
+
 async function safeHarbour(
   t: any,
+  driver: Driver,
   before: any,
   after: any,
   driverStatus: string | null,
   threw: string | null
 ) {
-  const receipt = await t.run(async (ctx: any) => {
-    const payments = await ctx.db.query("canonicalPayments").collect();
-    const newest = payments[payments.length - 1];
-    if (!newest) return null;
-    const active = (await ctx.db.query("paymentAllocations").collect())
-      .filter((a: any) => a.status === "ACTIVE" && String(a.paymentId) === String(newest._id));
-    const applied = active.reduce((s: number, a: any) => s + a.amountMinor, 0);
-    return {
-      amountMinor: newest.amountMinor,
-      status: newest.status,
-      unappliedMinor: newest.amountMinor - applied,
-    };
-  });
+  const receipt: any = await receiptOwnedBy(t, driver);
   const d = (table: string) => after.counts[table] - before.counts[table];
   return {
     threw,
     driverStatus,
-    // presence
-    receiptRecorded: d("canonicalPayments") === 1,
-    receiptAmountMinor: receipt?.amountMinor ?? null,
-    receiptUnappliedMinor: receipt?.unappliedMinor ?? null,
-    receiptSettled: receipt?.status === "SETTLED",
-    // absence
+    // presence — reached through the driver's own link, not guessed
+    receiptReachable: receipt.unreachable ?? true,
+    receiptAmountMinor: receipt.amountMinor ?? null,
+    receiptUnappliedMinor: receipt.unappliedMinor ?? null,
+    receiptSettled: receipt.status === "SETTLED",
+    // absence — no AR movement of any kind
     newAllocations: d("paymentAllocations"),
-    newLegacyMirrors: d("collectionPayments"),
     legacyRowMutated: JSON.stringify(before.row) !== JSON.stringify(after.row),
   };
 }
 
-/** The safe harbour, spelled out once so every cell asserts the same thing. */
+/**
+ * The safe harbour, spelled out once so every cell asserts the same thing.
+ *
+ * ⚠️ CORRECTED for CONTRACT v3 R7 — "AN AR MIRROR IS NOT A LINEAGE RECORD."
+ * The earlier expectation asserted `newLegacyMirrors: 0`, i.e. that the safe
+ * harbour writes NO `collectionPayments` row at all. On the cheque path that
+ * would sever the only typed reversal lineage:
+ *
+ *   postDatedCheques.chequeId -> collectionPayments.chequeId
+ *                             -> canonicalPaymentId / paymentAllocationId
+ *
+ * and `returnClearedCheque:1332` guards its ENTIRE reversal block on
+ * `if (clearedPayment)`. The L-series below measures what that costs.
+ *
+ * So the count of mirror rows is NOT asserted here. What is asserted is what
+ * the mirror must not do: no allocation, and no receivable balance / status /
+ * aging movement. A retained row is permitted only as a zero-applied,
+ * explicitly non-AR movement record.
+ */
 function safeHarbourExpectation(driverStatus: string) {
   return {
     threw: null,
     driverStatus,
-    receiptRecorded: true,
+    receiptReachable: true,
     receiptAmountMinor: PAY * MINOR,
     receiptUnappliedMinor: PAY * MINOR,
     receiptSettled: true,
     newAllocations: 0,
-    newLegacyMirrors: 0,
     legacyRowMutated: false,
   };
 }
@@ -495,7 +549,7 @@ async function receiptShape(t: any) {
   });
 }
 
-describe("SCRUM-121 Priority-1 round 3 — path × input shape, measured on clean main", () => {
+describe("SCRUM-121 Priority-1 round 4 — path × input shape, measured on clean main", () => {
   // ══════════════════════════════════════════════════════════════════════════
   // GROUP 1 — R3 fail-closed cells. ATOMIC REFUSAL is the assertion.
   // ══════════════════════════════════════════════════════════════════════════
@@ -604,7 +658,7 @@ describe("SCRUM-121 Priority-1 round 3 — path × input shape, measured on clea
     const after = await worldSnapshot(t, rowId);
     const chequeStatus = await t.run(async (ctx: any) => (await ctx.db.get(chequeId)).status);
 
-    expect(await safeHarbour(t, before, after, chequeStatus, threw)).toEqual(
+    expect(await safeHarbour(t, { kind: "cheque", id: chequeId }, before, after, chequeStatus, threw)).toEqual(
       safeHarbourExpectation("CLEARED")
     );
   });
@@ -672,7 +726,7 @@ describe("SCRUM-121 Priority-1 round 3 — path × input shape, measured on clea
     const after = await worldSnapshot(t, rowId);
     const intentStatus = await t.run(async (ctx: any) => (await ctx.db.get(intentId)).status);
 
-    expect(await safeHarbour(t, before, after, intentStatus, threw)).toEqual(
+    expect(await safeHarbour(t, { kind: "intent", id: intentId }, before, after, intentStatus, threw)).toEqual(
       safeHarbourExpectation("SETTLED")
     );
   });
@@ -688,14 +742,33 @@ describe("SCRUM-121 Priority-1 round 3 — path × input shape, measured on clea
    * NOT show `main` allocating to a dead document, and reporting it that way
    * would overstate it. It re-measures the R2 routing defect under drift.
    *
-   * A1d isolates revalidation instead. The caller supplies ONLY
+   * A1d isolates one narrow question instead. The caller supplies ONLY
    * `receivableDocumentId` (the S7 shape A11 proves works), so `main`'s own
    * stored target IS the sale invoice. Cancelling the sale then kills the exact
-   * document `main` will settle against — no routing disagreement left, only
-   * the question of whether the second boundary re-proves it.
+   * document `main` will settle against.
    *
    * DRIFT INJECTED (target, post-creation): the sale is cancelled, taking the
    * intent's own stored target to CANCELLED.
+   *
+   * ⚠️⚠️ WHAT THIS CELL PROVES, AND THE OVERCLAIM I MADE FROM IT.
+   *
+   * A1d is GREEN. In SCRUM-121 c12585 I wrote from that one green cell:
+   * "revalidation is NOT missing on main; the stored target is the wrong one."
+   * **That was wrong, and CONTRACT v3 R3 now says so explicitly: revalidation
+   * IS missing on `main` — do not scope it away.**
+   *
+   * A1d is green for one mechanical reason and no other:
+   * `subledger.getReceivableOutstandingMinor:25` carries a specific
+   * `status === "CANCELLED" -> return 0` branch. That is a single hard-coded
+   * terminal status, not a revalidation step. **A1d therefore proves exactly
+   * "CANCELLED-target safe harbour already present", and nothing broader.**
+   * Per SCRUM-98 that branch covers ONLY CANCELLED — A1e and A1f below measure
+   * WRITTEN_OFF and REVERSED rather than repeating the claim.
+   *
+   * ⚠️ AND THE COUNTEREXAMPLE WAS ALREADY IN THIS FILE. A1c is red: a
+   * soft-deleted payer is not re-proven and the money is allocated anyway. I
+   * generalised past a red cell I had measured in the same round. Hedging the
+   * conclusion afterwards is not the same as not drawing it.
    *
    * BASE: no legacy row is involved at all, so this cell is independent of
    * SCRUM-109 — the only cell in the drift group that is.
@@ -721,7 +794,101 @@ describe("SCRUM-121 Priority-1 round 3 — path × input shape, measured on clea
     const after = await worldSnapshot(t);
     const intentStatus = await t.run(async (ctx: any) => (await ctx.db.get(intentId)).status);
 
-    expect(await safeHarbour(t, before, after, intentStatus, threw)).toEqual(
+    expect(await safeHarbour(t, { kind: "intent", id: intentId }, before, after, intentStatus, threw)).toEqual(
+      safeHarbourExpectation("SETTLED")
+    );
+  });
+
+  /**
+   * A1e / A1f — the OTHER terminal statuses, measured rather than cited.
+   *
+   * CONTRACT v3 R3 states, per SCRUM-98, that
+   * `getReceivableOutstandingMinor`'s terminal-status branch covers ONLY
+   * CANCELLED, so WRITTEN_OFF and REVERSED still allocate. That is a claim, and
+   * a claim I would otherwise be repeating from a description. These two cells
+   * turn it into a measurement, which is the whole reason A1d's scope had to be
+   * narrowed in the first place.
+   *
+   * Under R3 all three statuses are the same situation — a target that is no
+   * longer proven, after funds are confirmed — so all three must reach the same
+   * safe harbour. If A1d is green and these are red, the difference is not a
+   * rule, it is a hard-coded status list.
+   *
+   * DRIFT INJECTED (target, post-creation): the stored document is moved to a
+   * terminal status directly, matching the state a write-off or a reversal
+   * leaves behind.
+   *
+   * BASE: independent of SCRUM-109 — no legacy row is involved.
+   */
+  for (const terminalStatus of ["WRITTEN_OFF", "REVERSED"] as const) {
+    const label = terminalStatus === "WRITTEN_OFF" ? "A1e" : "A1f";
+    test(`${label} · P3b · settle after the stored target becomes ${terminalStatus}: safe harbour`, async () => {
+      const { t, orgId, customerId, asUser } = await setup();
+      const vin = terminalStatus === "WRITTEN_OFF" ? "1HGCM82633A000031" : "1HGCM82633A000032";
+      const { invoiceId } = await completedSale(t, asUser, orgId, customerId, vin);
+
+      const intentId = await asUser.mutation(api.paymentIntents.create, {
+        orgId, customerId, receivableDocumentId: invoiceId,
+        amountMinor: PAY * MINOR, currency: "JOD", provider: "stripe",
+        externalId: `pi_${label.toLowerCase()}`,
+      });
+
+      await t.run(async (ctx: any) => await ctx.db.patch(invoiceId, { status: terminalStatus }));
+      const driftedTo = await t.run(async (ctx: any) => (await ctx.db.get(invoiceId)).status);
+      expect(driftedTo).toBe(terminalStatus);
+
+      const before = await worldSnapshot(t);
+      const threw = await capture(() =>
+        asUser.mutation(api.paymentIntents.markSettled, { orgId, intentId })
+      );
+      const after = await worldSnapshot(t);
+      const intentStatus = await t.run(async (ctx: any) => (await ctx.db.get(intentId)).status);
+
+      expect(await safeHarbour(t, { kind: "intent", id: intentId }, before, after, intentStatus, threw)).toEqual(
+        safeHarbourExpectation("SETTLED")
+      );
+    });
+  }
+
+  /**
+   * A1g · POST-CREATE DANGLING target — required by AF30-D014.
+   *
+   * A17 already measures a dangling reference supplied AT create, where the
+   * binding table says hard-fail. This is the other side of the same table: the
+   * reference was VALID when the caller supplied it, the funds are now
+   * confirmed, and only then does the target disappear.
+   *
+   * **The required behaviour is the safe harbour, NOT a throw** — R3 is explicit
+   * that a throw rolls back the confirmed receipt and the provider retries into
+   * the same throw. This cell exists precisely because "not found" is the most
+   * natural thing to write and the most expensive thing to ship.
+   *
+   * DRIFT INJECTED (target, post-creation): the stored document is deleted.
+   *
+   * BASE: independent of SCRUM-109. Deletion is the only way to hold a
+   * syntactically valid id for a document that no longer exists.
+   */
+  test("A1g · P3b · settle after the stored target is DELETED: safe harbour, never a throw", async () => {
+    const { t, orgId, customerId, asUser } = await setup();
+    const { invoiceId } = await completedSale(t, asUser, orgId, customerId, "1HGCM82633A000033");
+
+    const intentId = await asUser.mutation(api.paymentIntents.create, {
+      orgId, customerId, receivableDocumentId: invoiceId,
+      amountMinor: PAY * MINOR, currency: "JOD", provider: "stripe", externalId: "pi_a1g",
+    });
+
+    await t.run(async (ctx: any) => await ctx.db.delete(invoiceId));
+    const gone = await t.run(async (ctx: any) => (await ctx.db.get(invoiceId)) === null);
+    expect(gone).toBe(true);
+
+    const before = await worldSnapshot(t);
+    const threw = await capture(() =>
+      asUser.mutation(api.paymentIntents.markSettled, { orgId, intentId })
+    );
+    const after = await worldSnapshot(t);
+    const intentStatus = await t.run(async (ctx: any) => (await ctx.db.get(intentId)).status);
+
+    expect(await safeHarbour(t, { kind: "intent", id: intentId }, before, after, intentStatus, threw)).toEqual(
       safeHarbourExpectation("SETTLED")
     );
   });
@@ -779,7 +946,7 @@ describe("SCRUM-121 Priority-1 round 3 — path × input shape, measured on clea
     const after = await worldSnapshot(t, rowId);
     const intentStatus = await t.run(async (ctx: any) => (await ctx.db.get(intentId)).status);
 
-    expect(await safeHarbour(t, before, after, intentStatus, threw)).toEqual(
+    expect(await safeHarbour(t, { kind: "intent", id: intentId }, before, after, intentStatus, threw)).toEqual(
       safeHarbourExpectation("SETTLED")
     );
   });
@@ -1409,6 +1576,172 @@ describe("SCRUM-121 Priority-1 round 3 — path × input shape, measured on clea
       allocationCount: state.allocationCount,
     }).toEqual({
       refusalMessage: null, onRowTwin: PAY * MINOR, onSaleInvoice: 0, allocationCount: 1,
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // GROUP 4c — R7 LINEAGE. An AR mirror is not a lineage record.
+  //
+  // CONTRACT v3 R7 corrected an earlier "no legacy mirror" rule because the
+  // cheque path's ONLY typed reversal lineage runs through that row:
+  //
+  //   postDatedCheques.chequeId -> collectionPayments.chequeId
+  //                             -> canonicalPaymentId / paymentAllocationId
+  //                             -> accountingEvents
+  //
+  // L1 pins the lineage working today. L2 is the FAILING-FIRST half: it removes
+  // the row and measures what a "no legacy mirror" safe harbour would actually
+  // cost, so R7 rests on a measurement rather than on a prediction.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * L1 — clear → return, lineage intact. The reversal must FIND ITS MONEY.
+   *
+   * BASE: measured on clean `main` with the mirror row present, which is what
+   * `main` writes today. Depends on SCRUM-109 for the row's twin.
+   */
+  test("L1 · clear then return: the reversal reaches the money through chequeId", async () => {
+    const { t, orgId, customerId, asUser } = await setup();
+    const rowId = await standaloneRow(asUser, orgId, customerId);
+
+    const chequeId = await asUser.mutation(api.collections.registerCheque, {
+      orgId, receivableId: rowId, customerId,
+      bank: "ABC", chequeNumber: "CQ-L1", chequeDate: Date.now(), amount: PAY,
+    });
+    await asUser.mutation(api.collections.clearCheque, { orgId, chequeId });
+
+    const cleared = await targets(t, { rowId });
+    expect(cleared.onRowTwinMinor).toBe(PAY * MINOR);
+
+    const threw = await capture(() =>
+      asUser.mutation(api.collections.returnClearedCheque, {
+        orgId, chequeId, returnReason: "NSF",
+      })
+    );
+
+    const after = await t.run(async (ctx: any) => {
+      const mirror = await ctx.db
+        .query("collectionPayments")
+        .withIndex("by_cheque", (q: any) => q.eq("chequeId", chequeId))
+        .first();
+      const canonical = mirror?.canonicalPaymentId ? await ctx.db.get(mirror.canonicalPaymentId) : null;
+      const activeAllocations = (await ctx.db.query("paymentAllocations").collect())
+        .filter((a: any) => a.status === "ACTIVE");
+      const row = await ctx.db.get(rowId);
+      const twinAllocatedMinor = activeAllocations
+        .filter((a: any) => String(a.receivableDocumentId) === String(row.canonicalReceivableDocumentId))
+        .reduce((s: number, a: any) => s + a.amountMinor, 0);
+      return {
+        mirrorStatus: mirror?.status ?? null,
+        canonicalStatus: canonical?.status ?? null,
+        activeAllocations: activeAllocations.length,
+        rowOutstandingMinor: row.outstandingAmount * MINOR,
+        twinAllocatedMinor,
+      };
+    });
+
+    // The money is reversed, and the debt is owed once — not twice. The last
+    // two keys are the same debt read from the two stores: the legacy row says
+    // it is owed again, and the canonical twin agrees nothing is paid against it.
+    expect({ threw, ...after }).toEqual({
+      threw: null,
+      mirrorStatus: "VOIDED",
+      canonicalStatus: "VOIDED",
+      activeAllocations: 0,
+      rowOutstandingMinor: PAY * MINOR,
+      twinAllocatedMinor: 0,
+    });
+  });
+
+  /**
+   * L2 — FAILING-FIRST: what a "no legacy mirror" safe harbour would cost.
+   *
+   * The mirror row is deleted after clearing, standing in for an implementation
+   * that took the earlier "no legacy mirror" rule literally. Everything else is
+   * identical to L1, and the SAME contract is asserted: the reversal finds its
+   * money and no second AR balance appears.
+   *
+   * `returnClearedCheque:1332` guards its ENTIRE reversal block on
+   * `if (clearedPayment)` — GL reversal, allocation reversal and canonical-payment
+   * voiding all sit inside it — while the legacy receivable is reopened
+   * UNCONDITIONALLY at `:1391`. So the predicted failure is not merely "the
+   * reversal is skipped": the debt is ALSO re-inflated on top of an allocation
+   * that was never reversed. **The cheque is marked RETURNED either way, so this
+   * fails silently.**
+   *
+   * ⚠️ This cell asserts the CONTRACT, so it is expected RED on this construction.
+   * That is the point: it is the failing-first evidence R7 requires, and it must
+   * go GREEN under the approved zero-applied non-AR row.
+   *
+   * BASE: as L1, plus the deliberate deletion — the drift is verified below
+   * before the return runs.
+   */
+  test("L2 · clear then return with the mirror row severed: the reversal must still find its money", async () => {
+    const { t, orgId, customerId, asUser } = await setup();
+    const rowId = await standaloneRow(asUser, orgId, customerId);
+
+    const chequeId = await asUser.mutation(api.collections.registerCheque, {
+      orgId, receivableId: rowId, customerId,
+      bank: "ABC", chequeNumber: "CQ-L2", chequeDate: Date.now(), amount: PAY,
+    });
+    await asUser.mutation(api.collections.clearCheque, { orgId, chequeId });
+
+    // Sever the lineage, and prove it is severed before the return runs.
+    const severed = await t.run(async (ctx: any) => {
+      const mirror = await ctx.db
+        .query("collectionPayments")
+        .withIndex("by_cheque", (q: any) => q.eq("chequeId", chequeId))
+        .first();
+      await ctx.db.delete(mirror._id);
+      const gone = await ctx.db
+        .query("collectionPayments")
+        .withIndex("by_cheque", (q: any) => q.eq("chequeId", chequeId))
+        .first();
+      return gone === null;
+    });
+    expect(severed).toBe(true);
+
+    const threw = await capture(() =>
+      asUser.mutation(api.collections.returnClearedCheque, {
+        orgId, chequeId, returnReason: "NSF",
+      })
+    );
+
+    const after = await t.run(async (ctx: any) => {
+      const cheque = await ctx.db.get(chequeId);
+      const activeAllocations = (await ctx.db.query("paymentAllocations").collect())
+        .filter((a: any) => a.status === "ACTIVE");
+      const settledPayments = (await ctx.db.query("canonicalPayments").collect())
+        .filter((p: any) => p.status === "SETTLED");
+      const row = await ctx.db.get(rowId);
+      const twinAllocatedMinor = activeAllocations
+        .filter((a: any) => String(a.receivableDocumentId) === String(row.canonicalReceivableDocumentId))
+        .reduce((s: number, a: any) => s + a.amountMinor, 0);
+      return {
+        chequeStatus: cheque.status,
+        activeAllocations: activeAllocations.length,
+        stillSettledPayments: settledPayments.length,
+        rowOutstandingMinor: row.outstandingAmount * MINOR,
+        twinAllocatedMinor,
+      };
+    });
+
+    // Same contract as L1: money reversed, debt owed exactly once.
+    //
+    // ⚠️ READ THE LAST TWO KEYS TOGETHER — they are the same debt, read from the
+    // two stores. If `rowOutstandingMinor` and `twinAllocatedMinor` are BOTH
+    // 8,000,000 the money is simultaneously OWED (legacy row reopened at
+    // `:1391`, unconditionally) and COLLECTED (canonical allocation never
+    // reversed, because `:1332`'s `if (clearedPayment)` skipped the whole
+    // block). That is the second AR balance R7 exists to prevent, and the
+    // cheque is marked RETURNED either way — so it fails SILENTLY.
+    expect({ threw, ...after }).toEqual({
+      threw: null,
+      chequeStatus: "RETURNED",
+      activeAllocations: 0,
+      stillSettledPayments: 0,
+      rowOutstandingMinor: PAY * MINOR,
+      twinAllocatedMinor: 0,
     });
   });
 
