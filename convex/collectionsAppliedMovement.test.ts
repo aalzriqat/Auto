@@ -499,6 +499,167 @@ describe("SCRUM-56 applied-movement authority — design fixtures", () => {
     expect(state.activeMinor).toBe(11000 * MINOR);
   });
 
+  /**
+   * Y-series — the three escape paths Codex found at d512b9cde, on the
+   * CORRECTED axis: "every path that MOVES Collections money", not "every path
+   * that writes both an allocation and a mirror". All three were pre-existing;
+   * all three bypassed the authority this PR introduces, and an authority
+   * cannot ship with known escapes.
+   */
+
+  test("Y1 an intent that names only the sale still settles that sale's invoice", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const saleId = await completeSale(asUser, orgId, customerId, vehicleId);
+
+    // A row that owns a twin, but an intent that does NOT reference the row --
+    // it names the sale only. The redirect used to be gated on the owned-row
+    // shape, so this combination allocated to whatever the intent named.
+    const rowId = await asUser.mutation(api.collections.createReceivable, {
+      orgId, customerId, saleId, sourceType: "INTERNAL_INSTALLMENT",
+      title: "Row", amount: 8000, dueDate: Date.now() + 86_400_000,
+    });
+    const twinId = await t.run(async (ctx: any) => (await ctx.db.get(rowId)).canonicalReceivableDocumentId);
+
+    const intentId = await asUser.mutation(api.paymentIntents.create, {
+      orgId, customerId, saleId, receivableDocumentId: twinId,
+      amountMinor: 8000 * MINOR, currency: "JOD", provider: "stripe", externalId: "pi_y1",
+    });
+    await asUser.mutation(api.paymentIntents.markSettled, { orgId, intentId });
+
+    const state = await t.run(async (ctx: any) => {
+      const sale = await ctx.db.get(saleId);
+      const active = (await ctx.db.query("paymentAllocations").collect())
+        .filter((a: any) => a.status === "ACTIVE");
+      return {
+        onInvoice: active.filter((a: any) => a.receivableDocumentId === sale.canonicalReceivableDocumentId)
+          .reduce((s: number, a: any) => s + a.amountMinor, 0),
+        onTwin: active.filter((a: any) => String(a.receivableDocumentId) === String(twinId))
+          .reduce((s: number, a: any) => s + a.amountMinor, 0),
+      };
+    });
+
+    expect(state.onInvoice).toBe(8000 * MINOR);
+    expect(state.onTwin).toBe(0);
+  });
+
+  test("Y2 a sub-minor payment moves the row and the canonical debt by the same amount", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const saleId = await completeSale(asUser, orgId, customerId, vehicleId);
+    const rowId = await asUser.mutation(api.collections.createReceivable, {
+      orgId, customerId, saleId, sourceType: "INTERNAL_INSTALLMENT",
+      title: "Row", amount: 10, dueDate: Date.now() + 86_400_000,
+    });
+
+    // 1.0005 in a scale-3 currency normalizes UP to 1.001. Unfixed, the payment
+    // row stored 1.001 while the legacy balance was reduced by the raw 1.0005 and
+    // then rounded, landing on 9.000 -- so the row and the canonical debt moved
+    // by DIFFERENT amounts for one payment. 1.0004 would not expose this: it
+    // rounds to the same place from both directions, which is exactly the kind
+    // of fixture that passes without proving anything.
+    await asUser.mutation(api.collections.recordPayment, {
+      orgId, receivableId: rowId, amount: 1.0005, method: "CASH", paymentDate: Date.now(),
+    });
+
+    const state = await t.run(async (ctx: any) => {
+      const row = await ctx.db.get(rowId);
+      const payment = (await ctx.db.query("collectionPayments").collect())
+        .find((p: any) => String(p.receivableId) === String(rowId));
+      const applied = (await ctx.db.query("paymentAllocations").collect())
+        .filter((a: any) => a.paymentId === payment.canonicalPaymentId && a.status === "ACTIVE")
+        .reduce((s: number, a: any) => s + a.amountMinor, 0);
+      return { rowOutstanding: row.outstandingAmount, mirrorAmount: payment.amount, appliedMinor: applied };
+    });
+
+    // One normalized value everywhere: 1.000 recorded, 1.000 applied, 1.000 off
+    // the row -- never 8.9996 against 1.000.
+    expect(state.mirrorAmount).toBe(1.001);
+    expect(state.appliedMinor).toBe(1001);
+    expect(state.rowOutstanding).toBe(8.999);
+  });
+
+  test("Y3 returning a cheque whose cleared payment cannot be traced refuses outright", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const saleId = await completeSale(asUser, orgId, customerId, vehicleId);
+    const rowId = await asUser.mutation(api.collections.createReceivable, {
+      orgId, customerId, saleId, sourceType: "INTERNAL_INSTALLMENT",
+      title: "Row", amount: 8000, dueDate: Date.now() + 86_400_000,
+    });
+
+    // The shape the finance-application disbursement leaves behind: a CLEARED
+    // cheque with no `collectionPayments` row. This used to mark the cheque
+    // RETURNED and reverse nothing, leaving its canonical receipt live.
+    const chequeId = await t.run(async (ctx: any) =>
+      ctx.db.insert("postDatedCheques", {
+        orgId, customerId, receivableId: rowId, bank: "ABC", chequeNumber: "CQ-Y3",
+        chequeDate: Date.now(), amount: 8000, status: "CLEARED",
+        createdBy: (await ctx.db.query("users").collect())[0]._id,
+        createdAt: Date.now(), updatedAt: Date.now(),
+      })
+    );
+
+    await expect(
+      asUser.mutation(api.collections.returnClearedCheque, {
+        orgId, chequeId, returnReason: "Insufficient funds",
+      })
+    ).rejects.toThrow(/cannot be traced/);
+
+    // And the refusal changed nothing: no silent success.
+    const state = await t.run(async (ctx: any) => {
+      const cheque = await ctx.db.get(chequeId);
+      const row = await ctx.db.get(rowId);
+      return { chequeStatus: cheque.status, rowOutstanding: row.outstandingAmount };
+    });
+    expect(state.chequeStatus).toBe("CLEARED");
+    expect(state.rowOutstanding).toBe(8000);
+  });
+
+  test("Y4 equivalent facts produce the same normalized breakdown on every channel", async () => {
+    // The row that would have caught all three escapes at once, and whose
+    // absence is why the round-1 path map read as complete.
+    const breakdowns: Record<string, { mirror: number; appliedMinor: number; rowOutstanding: number }> = {};
+
+    for (const channel of ["cash", "cheque", "link"] as const) {
+      const { t, orgId, customerId, vehicleId, asUser } = await setup();
+      const saleId = await completeSale(asUser, orgId, customerId, vehicleId);
+      const rowId = await asUser.mutation(api.collections.createReceivable, {
+        orgId, customerId, saleId, sourceType: "INTERNAL_INSTALLMENT",
+        title: "Row", amount: 10, dueDate: Date.now() + 86_400_000,
+      });
+
+      if (channel === "cash") {
+        await asUser.mutation(api.collections.recordPayment, {
+          orgId, receivableId: rowId, amount: 1.0005, method: "CASH", paymentDate: Date.now(),
+        });
+      } else if (channel === "cheque") {
+        const chequeId = await asUser.mutation(api.collections.registerCheque, {
+          orgId, receivableId: rowId, customerId, bank: "ABC", chequeNumber: "CQ-Y4",
+          chequeDate: Date.now(), amount: 1.0005,
+        });
+        await asUser.mutation(api.collections.clearCheque, { orgId, chequeId });
+      } else {
+        const intentId = await asUser.mutation(api.paymentIntents.create, {
+          orgId, customerId, receivableId: rowId, saleId,
+          amountMinor: 1001, currency: "JOD", provider: "stripe", externalId: "pi_y4",
+        });
+        await asUser.mutation(api.paymentIntents.markSettled, { orgId, intentId });
+      }
+
+      breakdowns[channel] = await t.run(async (ctx: any) => {
+        const row = await ctx.db.get(rowId);
+        const payment = (await ctx.db.query("collectionPayments").collect())
+          .find((p: any) => String(p.receivableId) === String(rowId));
+        const applied = (await ctx.db.query("paymentAllocations").collect())
+          .filter((a: any) => a.paymentId === payment.canonicalPaymentId && a.status === "ACTIVE")
+          .reduce((s: number, a: any) => s + a.amountMinor, 0);
+        return { mirror: payment.amount, appliedMinor: applied, rowOutstanding: row.outstandingAmount };
+      });
+    }
+
+    expect(breakdowns.cheque).toEqual(breakdowns.cash);
+    expect(breakdowns.link).toEqual(breakdowns.cash);
+    expect(breakdowns.cash).toEqual({ mirror: 1.001, appliedMinor: 1001, rowOutstanding: 8.999 });
+  });
+
   test("M7 cash, cheque and payment link record exactly what they applied", async () => {
     // Same facts on each channel: the canonical debt can absorb 7,000 while the
     // row still claims 11,000. A channel may refuse -- money not yet received

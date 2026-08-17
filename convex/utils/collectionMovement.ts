@@ -4,10 +4,21 @@ import { Doc, Id } from "../_generated/dataModel";
 /**
  * SCRUM-56 — the applied-movement authority for Collections.
  *
- * Contract approved by Lane 5 (AF-30) on SCRUM-56 c12405/c12410. Every path that
- * moves collection money writes BOTH a canonical allocation and a legacy
- * operational mirror, and the defects in this subsystem have all been one
- * movement described by two numbers that nothing forced to agree:
+ * Contract approved by Lane 5 (AF-30) on SCRUM-56 c12405/c12410, axis corrected
+ * in c12440.
+ *
+ * ⚠️ THE AXIS IS "every path that MOVES Collections money" — NOT "every path
+ * that writes both a canonical allocation and a legacy mirror." An earlier
+ * revision of this docblock said the latter, and that sentence was false in a
+ * way that cost a round: it silently excused every path writing only ONE side.
+ * A payment intent that allocates and skips the mirror, and an application
+ * cheque that creates a canonical receipt with no mirror at all, were both
+ * outside the enumeration and both diverged. Writing one side is not an
+ * exemption from this contract — it is the divergence the contract exists to
+ * prevent. See the route inventory below.
+ *
+ * The defects in this subsystem have all been one movement described by two
+ * numbers that nothing forced to agree:
  *
  *   - the payment-link path clamped the allocation against the sale invoice and
  *     then clamped the legacy mirror against the row's own stored balance, so a
@@ -32,6 +43,42 @@ import { Doc, Id } from "../_generated/dataModel";
  * Deliberately reads only records that already exist. `subledger.ts` and the
  * schema are out of scope and were proven unnecessary: `paymentAllocations`
  * already indexes `by_payment`, which is the whole of R4's requirement.
+ *
+ * ROUTE INVENTORY — every Collections money-moving path, and whether it
+ * consumes this authority. Inventoried on the corrected axis; keep it current,
+ * because the last enumeration's omissions were the entire failure.
+ *
+ *   MONEY IN
+ *   collections.recordPayment          YES — normalizes once here, one value
+ *                                      drives cap, row, mirror and ledger
+ *   collections.clearCheque            YES — same bound, same target resolution
+ *   paymentIntents settlement          YES — one plan drives allocation and
+ *                                      mirror; resolves the sale invoice via
+ *                                      the legacy row OR intent.saleId
+ *
+ *   MONEY OUT / REVERSAL
+ *   respondToApproval REFUND           YES — reverses only allocations reached
+ *                                      through this row's canonical payments
+ *   returnClearedCheque                YES — selects via the anchor, reopens the
+ *                                      still-active amount, FAILS CLOSED when
+ *                                      the cleared payment cannot be traced
+ *   CANCEL_RECEIVABLE                  N/A monetary — retires only the row's own
+ *                                      verified twin; blocked once paid
+ *   utils/saleCancellation             N/A by refusal — refuses while customer
+ *                                      money is applied, so it never unwinds
+ *                                      allocations behind this authority's back
+ *
+ *   ADJACENT, DELIBERATELY NOT ROUTED THROUGH HERE
+ *   applications confirmDisbursement   finance-company disbursement; payerType
+ *                                      FINANCE_COMPANY, creates a canonical
+ *                                      receipt and NO Collections mirror. It is
+ *                                      not customer collection money. It is
+ *                                      listed because its cheque is returnable
+ *                                      through returnClearedCheque, which now
+ *                                      refuses rather than half-unwinding it.
+ *   utils/saleCompletion               raises the invoice; moves no collection
+ *                                      money
+ *   deposits                           applied at completion, not collected here
  */
 
 /** What one movement actually did, computed once and consumed by every writer. */

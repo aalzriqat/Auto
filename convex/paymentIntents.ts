@@ -114,10 +114,22 @@ async function createCanonicalIntentSettlement(
   const legacyRow = intent.receivableId ? await ctx.db.get(intent.receivableId) : null;
   const ownedLegacyRow = legacyRow && legacyRow.orgId === intent.orgId ? legacyRow : null;
 
+  // The target is the sale's canonical invoice whenever the intent can identify
+  // that sale AT ALL — through its legacy row, or through `intent.saleId`
+  // directly. Gating this on the owned-legacy-row shape alone left the
+  // saleId-present / receivableId-absent combination allocating to whatever
+  // document the intent named, which for a completed sale is the obsolete
+  // `legacy_receivable` twin. A path that can name the sale must settle the
+  // sale.
   let allocationTargetId = intent.receivableDocumentId;
-  if (ownedLegacyRow) {
-    const saleInvoiceId = await saleInvoiceForLegacyRow(ctx, ownedLegacyRow);
-    if (saleInvoiceId) allocationTargetId = saleInvoiceId;
+  const saleInvoiceViaRow = ownedLegacyRow ? await saleInvoiceForLegacyRow(ctx, ownedLegacyRow) : null;
+  if (saleInvoiceViaRow) {
+    allocationTargetId = saleInvoiceViaRow;
+  } else if (intent.saleId) {
+    const sale = await ctx.db.get(intent.saleId);
+    if (sale && sale.orgId === intent.orgId && sale.canonicalReceivableDocumentId) {
+      allocationTargetId = sale.canonicalReceivableDocumentId;
+    }
   }
 
   // R1 + R2 — ONE plan, clamped once against the canonical debt, consumed by

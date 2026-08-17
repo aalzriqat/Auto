@@ -1201,6 +1201,20 @@ export const recordPayment = mutation({
           );
         }
 
+        const currency = await getOrgCurrency(ctx, args.orgId);
+
+        // Normalize ONCE, at the monetary boundary, BEFORE any cap is tested.
+        // Everything downstream — every cap, the payment row, the canonical
+        // allocation, the legacy balance and the ledger — derives from this one
+        // integer minor-unit value. Previously the payment row stored
+        // `roundMoney(args.amount)` while `applyPostedPayment` received the RAW
+        // `args.amount`, so a sub-minor input paid the canonical document down
+        // while the legacy row kept a sliver: a thousand of them left the
+        // invoice PAID and the row still PARTIALLY_PAID. Two numbers for one
+        // movement, one layer below the one this PR started on.
+        const amountMinor = toMinorUnits(args.amount, currency);
+        const amount = fromMinorUnits(amountMinor, currency);
+
         let receivable: Doc<"receivables"> | null = null;
         if (args.receivableId) {
           receivable = await ctx.db.get(args.receivableId);
@@ -1208,17 +1222,15 @@ export const recordPayment = mutation({
           if (["PAID", "CANCELLED", "REFUNDED"].includes(receivable.status)) {
             throw new ConvexError("This receivable can no longer accept payments.");
           }
-          if (args.amount > receivable.outstandingAmount) {
+          if (amount > receivable.outstandingAmount) {
             throw new ConvexError("Payment amount cannot exceed the outstanding receivable amount.");
           }
         }
 
-        const currency = await getOrgCurrency(ctx, args.orgId);
-
         // A hand-keyed row standing for a sale settles that sale's invoice, so
         // the invoice's remaining balance caps the payment too.
         if (receivable) {
-          await assertWithinSaleInvoiceBalance(ctx, receivable, args.amount, currency);
+          await assertWithinSaleInvoiceBalance(ctx, receivable, amount, currency);
         }
 
         // SCRUM-56 — collecting against a completed sale's canonical invoice.
@@ -1241,7 +1253,7 @@ export const recordPayment = mutation({
             await getReceivableOutstandingMinor(ctx, canonicalDocument._id),
             currency
           );
-          if (args.amount > outstanding) {
+          if (amount > outstanding) {
             throw new ConvexError("Payment amount cannot exceed the outstanding receivable amount.");
           }
         }
@@ -1269,7 +1281,7 @@ export const recordPayment = mutation({
           saleId,
           direction: "IN",
           method: args.method,
-          amount: roundMoney(args.amount, currency),
+          amount,
           paymentDate: args.paymentDate,
           status: "POSTED",
           idempotencyKey: args.idempotencyKey,
@@ -1280,13 +1292,13 @@ export const recordPayment = mutation({
         });
 
         if (receivable) {
-          await applyPostedPayment(ctx, receivable, args.amount, args.paymentDate, currency);
+          await applyPostedPayment(ctx, receivable, amount, args.paymentDate, currency);
         }
 
         await insertLedgerTransaction(ctx, {
           orgId: args.orgId,
           direction: "IN",
-          amount: roundMoney(args.amount, currency),
+          amount,
           date: args.paymentDate,
           description: `Collection payment${
             receivable
@@ -1317,7 +1329,7 @@ export const recordPayment = mutation({
           orgId: args.orgId,
           paymentId,
           customerId,
-          amountMinor: toMinorUnits(roundMoney(args.amount, currency), currency),
+          amountMinor,
           currency,
           paymentMethod: args.method,
           actorId: user._id,
@@ -1327,7 +1339,7 @@ export const recordPayment = mutation({
         const actorName = await getActorName(ctx);
         await notifyManagers(ctx, args.orgId, "collection.payment_recorded", {
           actorName,
-          amount: String(roundMoney(args.amount, currency)),
+          amount: String(amount),
         }, { link: `/${args.orgId}/accounting` });
 
         return paymentId;
@@ -1748,6 +1760,20 @@ export const returnClearedCheque = mutation({
           .withIndex("by_cheque", (q) => q.eq("chequeId", args.chequeId))
           .filter((q) => q.eq(q.field("status"), "POSTED"))
           .first();
+
+        // FAIL CLOSED. A cheque cleared through the finance-application flow
+        // never creates a `collectionPayments` row, so this path used to find
+        // nothing, treat the applied amount as zero, and still mark the cheque
+        // RETURNED — leaving its canonical receipt and GL entry ACTIVE with no
+        // record that the cheque bounced. Refusing is the only honest answer:
+        // there is money applied somewhere this mutation cannot see, and
+        // reconstructing it from face value is the guess this contract forbids.
+        if (!clearedPayment || !clearedPayment.canonicalPaymentId) {
+          throw new ConvexError(
+            "This cheque's cleared payment cannot be traced, so returning it here would leave its accounting entries active. " +
+              "Reverse the disbursement where it was confirmed."
+          );
+        }
 
         const currency = await getOrgCurrency(ctx, args.orgId);
         const chequeReceivable = cheque.receivableId ? await ctx.db.get(cheque.receivableId) : null;
