@@ -6,10 +6,11 @@ import {
   bundleOffenders,
   describeTargetSelection,
   evaluateProdDeploy,
-  extractDeploymentName,
+  convexCliPath,
+  parseCanonicalTarget,
+  PRODUCTION_LABEL,
   freezeDeployEnv,
   FROZEN_DEPLOY_ENV_KEYS,
-  looksLikeProduction,
   resolveSelectors,
   runGuardedDeploy,
   type RepoSnapshot,
@@ -30,12 +31,23 @@ const CLEAN: RepoSnapshot = {
   branch: "main",
   headSha: "284e3e35e171313620c94f29a377c2ff6e1f4f78",
   originMainSha: "284e3e35e171313620c94f29a377c2ff6e1f4f78",
+  approvedSha: "284e3e35e171313620c94f29a377c2ff6e1f4f78",
   headIsAncestorOfOriginMain: true,
+  approvedIsAncestorOfOriginMain: true,
   trackedChanges: [],
   bundleFilesOnDisk: ["convex/schema.ts", "convex/socialInbox.ts"],
   trackedBundleFiles: ["convex/schema.ts", "convex/socialInbox.ts"],
   forwardedArgs: [],
   env: {},
+};
+
+
+/** The isolation members every standalone `io` fixture needs, kept in one place. */
+const ISOLATION_STUB = {
+  prepareIsolatedCheckout: (_sha: string) => ({ dir: "/tmp/iso-stub" }),
+  installDependencies: (_dir: string) => ({ status: 0, output: "" }),
+  cliExists: () => true,
+  cleanupCheckout: (_dir: string) => {},
 };
 
 const failureIds = (snapshot: RepoSnapshot, options = {}) =>
@@ -164,7 +176,9 @@ describe("production deploy preconditions", () => {
         ...CLEAN,
         branch: "agent/convex-io-conversations",
         headSha: "ba939af6".padEnd(40, "0"),
+        approvedSha: "ba939af6".padEnd(40, "0"),
         headIsAncestorOfOriginMain: false,
+        approvedIsAncestorOfOriginMain: false,
       })
     ).toContain("merged-into-main");
   });
@@ -174,7 +188,9 @@ describe("production deploy preconditions", () => {
       ...CLEAN,
       branch: "agent/deploy-target-guard",
       headSha: "0c57293e".padEnd(40, "0"),
+      approvedSha: "0c57293e".padEnd(40, "0"),
       headIsAncestorOfOriginMain: false,
+      approvedIsAncestorOfOriginMain: false,
     };
     const tip = evaluateProdDeploy(diverged).checks.find((c) => c.id === "at-origin-main-tip");
     expect(tip?.detail).toMatch(/diverged/);
@@ -187,7 +203,8 @@ describe("production deploy preconditions", () => {
     const behind: RepoSnapshot = {
       ...CLEAN,
       headSha: "52be7b4f".padEnd(40, "0"),
-      headIsAncestorOfOriginMain: true,
+      approvedSha: "52be7b4f".padEnd(40, "0"),
+      approvedIsAncestorOfOriginMain: true,
     };
     expect(failureIds(behind)).toContain("at-origin-main-tip");
     expect(evaluateProdDeploy(behind, { allowBehind: true }).ok).toBe(true);
@@ -221,7 +238,9 @@ describe("production deploy preconditions", () => {
       branch: "agent/convex-io-conversations",
       headSha: "ba939af6".padEnd(40, "0"),
       originMainSha: "284e3e35".padEnd(40, "0"),
+      approvedSha: "ba939af6".padEnd(40, "0"),
       headIsAncestorOfOriginMain: false,
+      approvedIsAncestorOfOriginMain: false,
       trackedChanges: ["convex/schema.ts"],
       bundleFilesOnDisk: ["convex/probe211.ts"],
       trackedBundleFiles: [],
@@ -287,26 +306,77 @@ describe("reading the target back out of the dry run", () => {
     "- Deploying to https://kindly-hound-172.convex.cloud... [dry run]",
   ].join("\n");
 
-  test("the deployment name comes from the CLI's own announcement", () => {
+  test("the deployment name comes from the CLI's own canonical announcement", () => {
     // Read back rather than inferred from CONVEX_DEPLOYMENT, because inferring
     // the target from that variable is the mistake that caused the incident.
-    expect(extractDeploymentName(REAL_DRY_RUN)).toBe("kindly-hound-172");
+    const parsed = parseCanonicalTarget(REAL_DRY_RUN);
+    expect(parsed.kind).toBe("ok");
+    if (parsed.kind !== "ok") return;
+    expect(parsed.name).toBe("kindly-hound-172");
+    expect(parsed.label).toBe(PRODUCTION_LABEL);
   });
 
-  test("production is recognised from the announcement", () => {
-    expect(looksLikeProduction(REAL_DRY_RUN)).toBe(true);
-    expect(looksLikeProduction("▌ [Preview] some-preview-123")).toBe(false);
+  test("a decoy target before the real announcement is never taken", () => {
+    // ⚠️ REGRESSION, reproduced against the previous implementation.
+    // `extractDeploymentName` and `looksLikeProduction` each scanned the whole
+    // output independently, so the first `*.convex.cloud` anywhere won and any
+    // `(prod)` anywhere satisfied the production gate. This exact input returned
+    // `decoy-name` / `true`: the operator would be asked to confirm a name that
+    // was not the deployment being pushed to, and the double dry run could not
+    // catch it because both runs get identical args and so extract the same
+    // wrong name twice. `--message` is forwardable and unvalidated, so operator
+    // text does reach this stream.
+    const decoyed = [
+      "Deploy message: routine hotfix, see (prod) notes at https://decoy-name.convex.cloud/docs",
+      "▌ Deploying code to deployment:",
+      "▌ [Production] aalzriqat:auto:production (prod) (dashboard: .../kindly-hound-172)",
+      "▌ └─ https://kindly-hound-172.convex.cloud",
+    ].join("\n");
+    const parsed = parseCanonicalTarget(decoyed);
+    expect(parsed.kind).toBe("ok");
+    if (parsed.kind !== "ok") return;
+    expect(parsed.name).toBe("kindly-hound-172");
   });
 
-  test("output with no target line yields null so the caller can refuse", () => {
+  test("two announcements refuse rather than pick a winner", () => {
+    // One deploy announces once. Two records mean the output is not the shape
+    // this parser reads, and choosing between them is exactly how a guard
+    // confirms one deployment while pushing to another.
+    const twice = [
+      "▌ [Production] a (prod)",
+      "▌ └─ https://kindly-hound-172.convex.cloud",
+      "▌ [Production] b (prod)",
+      "▌ └─ https://some-other-deployment.convex.cloud",
+    ].join("\n");
+    const parsed = parseCanonicalTarget(twice);
+    expect(parsed.kind).toBe("ambiguous");
+    if (parsed.kind !== "ambiguous") return;
+    expect(parsed.found.map((f) => f.name)).toEqual([
+      "kindly-hound-172",
+      "some-other-deployment",
+    ]);
+  });
+
+  test("output with no announcement is missing, so the caller can refuse", () => {
     // A confirmation that cannot name the target is not a confirmation.
-    expect(extractDeploymentName("some unrelated error")).toBeNull();
+    expect(parseCanonicalTarget("some unrelated error").kind).toBe("missing");
   });
 
-  test("the dashboard URL is a fallback when the cloud URL is absent", () => {
-    expect(
-      extractDeploymentName("(dashboard: https://dashboard.convex.dev/t/a/auto/vibrant-cat-418)")
-    ).toBe("vibrant-cat-418");
+  test("a URL line without its tag line is not a record", () => {
+    // Prose cannot form a record: it takes the bar-and-elbow frame on two
+    // consecutive lines, which is what the CLI actually emits.
+    expect(parseCanonicalTarget("▌ └─ https://kindly-hound-172.convex.cloud").kind).toBe(
+      "missing"
+    );
+  });
+
+  test("a non-production label is read as itself, not coerced", () => {
+    const preview = ["▌ [Preview] x", "▌ └─ https://some-preview-123.convex.cloud"].join("\n");
+    const parsed = parseCanonicalTarget(preview);
+    expect(parsed.kind).toBe("ok");
+    if (parsed.kind !== "ok") return;
+    expect(parsed.label).toBe("Preview");
+    expect(parsed.label).not.toBe(PRODUCTION_LABEL);
   });
 });
 
@@ -510,15 +580,32 @@ describe("the enforcement flow", () => {
     const deployCalls: string[][] = [];
     const dryCalls: string[][] = [];
     const envs: unknown[] = [];
+    const cleanups: string[] = [];
+    const installs: string[] = [];
+    const clis: string[] = [];
+    const cwds: string[] = [];
     const io = {
       collectSnapshot: () => CLEAN,
-      runDryRun: (args: string[], env: unknown) => {
+      prepareIsolatedCheckout: (_sha: string) => ({ dir: "/tmp/iso-abc123" }),
+      installDependencies: (dir: string) => {
+        installs.push(dir);
+        return { status: 0, output: "" };
+      },
+      cliExists: () => true,
+      cleanupCheckout: (dir: string) => {
+        cleanups.push(dir);
+      },
+      runDryRun: (cliPath: string, cwd: string, args: string[], env: unknown) => {
         dryCalls.push(args);
+        clis.push(cliPath);
+        cwds.push(cwd);
         envs.push(env);
         return { status: 0, output: DRY_OUTPUT };
       },
-      runDeploy: (args: string[], env: unknown) => {
+      runDeploy: (cliPath: string, cwd: string, args: string[], env: unknown) => {
         deployCalls.push(args);
+        clis.push(cliPath);
+        cwds.push(cwd);
         envs.push(env);
         return 0;
       },
@@ -528,7 +615,7 @@ describe("the enforcement flow", () => {
       error: () => {},
       ...overrides,
     };
-    return { io, deployCalls, dryCalls, envs };
+    return { io, deployCalls, dryCalls, envs, cleanups, installs, clis, cwds };
   }
 
   test("the happy path deploys, and the real argv carries no confirmation bypass", async () => {
@@ -640,20 +727,112 @@ describe("the enforcement flow", () => {
     expect(deployCalls).toEqual([]);
   });
 
-  test("a tree that changes during confirmation refuses after the human said yes", async () => {
-    // The bundle is read from disk at push time, not at check time, so a file
-    // created during the pause would otherwise ship unexamined.
+  test("the worktree changing mid-run cannot affect what is deployed", async () => {
+    // ⚠️ This REPLACES a test that asserted the opposite mechanism, and the
+    // swap is the whole point of the redesign — so it is stated rather than
+    // quietly dropped.
+    //
+    // The old design re-read the worktree after the operator confirmed and
+    // refused if it had changed. An independent review showed that window was
+    // never actually closed: a second dry run ran AFTER the re-check, and a
+    // file introduced during it still reached `runDeploy`.
+    //
+    // Now the deploy reads an isolated extract of one commit, so a worktree
+    // change is not something to detect — it is something that cannot matter.
+    // The assertion is therefore the stronger one: the snapshot goes on
+    // changing underneath, and the deploy proceeds from the isolated directory
+    // regardless, because nothing downstream ever consults the worktree again.
     let call = 0;
-    const { io, deployCalls } = harness({
+    const { io, deployCalls, cwds } = harness({
       collectSnapshot: () => {
         call += 1;
         return call === 1
           ? CLEAN
-          : { ...CLEAN, bundleFilesOnDisk: [...CLEAN.bundleFilesOnDisk, "convex/late.ts"] };
+          : {
+              ...CLEAN,
+              bundleFilesOnDisk: [...CLEAN.bundleFilesOnDisk, "convex/probe211.ts"],
+              trackedChanges: ["convex/schema.ts"],
+            };
       },
     });
+    expect(await runGuardedDeploy(io)).toBe(0);
+    expect(deployCalls).toHaveLength(1);
+    // Every child process ran in the isolated checkout, never the repo root.
+    expect(new Set(cwds)).toEqual(new Set(["/tmp/iso-abc123"]));
+    // And the guard only ever looked at the worktree once, up front.
+    expect(call).toBe(1);
+  });
+
+  test("the isolated checkout is removed even when the deploy fails", async () => {
+    const { io, cleanups } = harness({ runDeploy: () => 17 });
+    expect(await runGuardedDeploy(io)).toBe(17);
+    expect(cleanups).toEqual(["/tmp/iso-abc123"]);
+  });
+
+  test("the isolated checkout is removed even when a precondition refuses late", async () => {
+    // A refusal after preparation must not leave a copy of the repository on
+    // disk. `finally`, not a happy-path cleanup.
+    const { io, cleanups, deployCalls } = harness({ prompt: async () => "wrong-name" });
     expect(await runGuardedDeploy(io)).toBe(1);
     expect(deployCalls).toEqual([]);
+    expect(cleanups).toEqual(["/tmp/iso-abc123"]);
+  });
+
+  test("a failed isolated checkout refuses, and never reaches the CLI", async () => {
+    const { io, deployCalls, dryCalls, cleanups } = harness({
+      prepareIsolatedCheckout: () => ({ error: "git archive exploded" }),
+    });
+    expect(await runGuardedDeploy(io)).toBe(1);
+    expect(dryCalls).toEqual([]);
+    expect(deployCalls).toEqual([]);
+    // Nothing was created, so there is nothing to clean up.
+    expect(cleanups).toEqual([]);
+  });
+
+  test("a failed frozen install refuses before any deploy", async () => {
+    const { io, deployCalls, dryCalls, cleanups } = harness({
+      installDependencies: () => ({ status: 1, output: "ERR_PNPM_OUTDATED_LOCKFILE" }),
+    });
+    expect(await runGuardedDeploy(io)).toBe(1);
+    expect(dryCalls).toEqual([]);
+    expect(deployCalls).toEqual([]);
+    expect(cleanups).toEqual(["/tmp/iso-abc123"]);
+  });
+
+  test("the CLI that runs is the one inside the isolated checkout", async () => {
+    // Not `npx`, not PATH, not the caller's node_modules: the binary that
+    // pushes must come from the approved commit's own locked dependency set.
+    const { io, clis } = harness();
+    expect(await runGuardedDeploy(io)).toBe(0);
+    expect(clis.length).toBeGreaterThan(0);
+    for (const cli of clis) {
+      expect(cli).toBe("/tmp/iso-abc123/node_modules/convex/bin/main.js");
+    }
+  });
+
+  test("a missing CLI in the checkout refuses rather than falling back", async () => {
+    const { io, dryCalls, deployCalls, cleanups } = harness({ cliExists: () => false });
+    expect(await runGuardedDeploy(io)).toBe(1);
+    expect(dryCalls).toEqual([]);
+    expect(deployCalls).toEqual([]);
+    expect(cleanups).toEqual(["/tmp/iso-abc123"]);
+  });
+
+  test("the checkout is prepared from the approved commit, not from HEAD", async () => {
+    const requested: string[] = [];
+    const { io } = harness({
+      collectSnapshot: () => ({
+        ...CLEAN,
+        headSha: "ffffffff".padEnd(40, "0"),
+        headIsAncestorOfOriginMain: false,
+      }),
+      prepareIsolatedCheckout: (sha: string) => {
+        requested.push(sha);
+        return { dir: "/tmp/iso-abc123" };
+      },
+    });
+    expect(await runGuardedDeploy(io)).toBe(0);
+    expect(requested).toEqual([CLEAN.approvedSha]);
   });
 
   test("the deploy's exit code is propagated, not swallowed", async () => {
@@ -724,13 +903,13 @@ describe("the target is frozen between confirmation and push", () => {
     let resolution = 0;
     const io = {
       collectSnapshot: () => CLEAN,
-      runDryRun: () => {
+      runDryRun: (_cli: string, _cwd: string) => {
         resolution += 1;
         // First resolution: the name the operator is shown and confirms.
         // Second: something changed underneath.
         return { status: 0, output: prod(resolution === 1 ? "kindly-hound-172" : "vibrant-cat-418") };
       },
-      runDeploy: (args: string[]) => {
+      runDeploy: (_cli: string, _cwd: string, args: string[]) => {
         deployCalls.push(args);
         return 0;
       },
@@ -738,6 +917,7 @@ describe("the target is frozen between confirmation and push", () => {
       isTTY: true,
       log: () => {},
       error: () => {},
+      ...ISOLATION_STUB,
     };
     return runGuardedDeploy(io).then((code) => {
       expect(code).toBe(1);
@@ -749,8 +929,8 @@ describe("the target is frozen between confirmation and push", () => {
     const deployCalls: string[][] = [];
     const io = {
       collectSnapshot: () => CLEAN,
-      runDryRun: () => ({ status: 0, output: prod("kindly-hound-172") }),
-      runDeploy: (args: string[]) => {
+      runDryRun: (_cli: string, _cwd: string) => ({ status: 0, output: prod("kindly-hound-172") }),
+      runDeploy: (_cli: string, _cwd: string, args: string[]) => {
         deployCalls.push(args);
         return 0;
       },
@@ -758,6 +938,7 @@ describe("the target is frozen between confirmation and push", () => {
       isTTY: true,
       log: () => {},
       error: () => {},
+      ...ISOLATION_STUB,
     };
     return runGuardedDeploy(io).then((code) => {
       expect(code).toBe(0);
@@ -778,7 +959,7 @@ describe("the target is frozen between confirmation and push", () => {
           "▌ └─ https://some-preview-123.convex.cloud",
         ].join("\n"),
       }),
-      runDeploy: (args: string[]) => {
+      runDeploy: (_cli: string, _cwd: string, args: string[]) => {
         deployCalls.push(args);
         return 0;
       },
@@ -786,6 +967,7 @@ describe("the target is frozen between confirmation and push", () => {
       isTTY: true,
       log: () => {},
       error: () => {},
+      ...ISOLATION_STUB,
     };
     return runGuardedDeploy(io).then((code) => {
       expect(code).toBe(1);

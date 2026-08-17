@@ -31,6 +31,46 @@
  * while Convex would still have bundled it off disk. Both are reproduced in
  * `deployGuard.test.ts`.
  *
+ * ## What the SECOND version got wrong, and why the trust model changed
+ *
+ * It validated the developer's working tree — clean tree, every deployable file
+ * under `convex/` tracked by git — and then let the CLI bundle from that same
+ * mutable directory. That is a **proxy** for what ships, and two independent
+ * reviews (Codex and a Claude-family seat, separately) each proved the proxy
+ * incomplete:
+ *
+ *   - Convex's bundler follows relative imports OUT of `convex/`. Real modules
+ *     do this today (`convex/aggregates.ts` imports `../lib/vinHelpers`,
+ *     `convex/financingEconomics.ts` imports `../lib/financingEconomics`), and
+ *     `createExternalPlugin` in the CLI bundle returns `null` for any specifier
+ *     starting with `.`, so relative imports are never externalised. An
+ *     untracked file under `lib/` therefore shipped while the guard reported a
+ *     clean tree and a fully tracked bundle.
+ *   - Worse, no new import was even needed. esbuild resolves `.tsx` BEFORE
+ *     `.ts` (measured against the installed 0.27.0), so an untracked
+ *     `lib/vinHelpers.tsx` SHADOWS the reviewed `lib/vinHelpers.ts` and
+ *     replaces production logic with nothing tracked having changed at all.
+ *   - And the re-validation that was supposed to close the timing window ran
+ *     BEFORE a second dry run, leaving a fresh gap between the last check and
+ *     the push in which a file could appear.
+ *
+ * All three are the same defect wearing different clothes: **the guard checked
+ * git state instead of checking the artifact.**
+ *
+ * So the artifact is now the thing that is controlled. The approved commit is
+ * extracted into a brand-new directory, its own locked dependencies are
+ * installed there, and the CLI that pushes is the one inside it. Nothing in the
+ * caller's worktree — untracked, ignored, shadowing, or written a millisecond
+ * after the checks pass — is read at any point. The timing window closes not by
+ * being re-checked but by ceasing to exist.
+ *
+ * ⚠️ What this still does NOT buy, stated plainly because the previous version
+ * of this file was punished for overclaiming: `npx convex deploy` still exists
+ * and this wrapper cannot stop anyone reaching for it. The production
+ * credential is on developer machines. Making production unreachable from a
+ * workstation is a CI-mediated deploy against a protected environment, and that
+ * is a separate change this file does not attempt.
+ *
  * Rules are pure functions over an injected snapshot so each one is testable
  * without shelling out or touching a deployment. `scripts/deployProd.mjs`
  * gathers the snapshot and owns the side effects.
@@ -49,8 +89,20 @@ export type RepoSnapshot = {
   branch: string;
   headSha: string;
   originMainSha: string;
+  /**
+   * The exact full commit that will be deployed, decided once by the shell
+   * before anything is prepared and never re-derived from a mutable ref.
+   *
+   * For a normal release this is `origin/main`'s tip. A rollback names an older
+   * merged commit explicitly. Everything downstream — the isolated checkout,
+   * the confirmation text, the push — is bound to this string, so "which source
+   * went to production" has one answer that cannot drift mid-run.
+   */
+  approvedSha: string;
   /** `git merge-base --is-ancestor HEAD origin/main` succeeded. */
   headIsAncestorOfOriginMain: boolean;
+  /** The same question asked of `approvedSha`, which is what actually ships. */
+  approvedIsAncestorOfOriginMain: boolean;
   /** Tracked paths with staged or unstaged modifications. */
   trackedChanges: string[];
   /** Deployable files present on disk under `convex/` (see `bundleOffenders`). */
@@ -257,43 +309,55 @@ function checkBundleIsTracked(snapshot: RepoSnapshot): DeployCheck {
   return {
     id: "bundle-is-tracked",
     ok: offenders.length === 0,
+    // ⚠️ The REASON for this check inverted when the isolated checkout landed,
+    // and the message has to say the true one. Untracked files can no longer
+    // ship — the deploy reads a clean extract of the approved commit, not this
+    // directory. What they can now do is the opposite: silently NOT ship, while
+    // the operator believes work in front of them is going out. Both are
+    // surprises worth refusing on; only one of them used to be possible.
     detail:
       offenders.length === 0
         ? "every deployable file under convex/ is tracked by git"
-        : `deployable file(s) under convex/ are not in git and would ship unreviewed: ${offenders.join(", ")} — commit or delete them (note: .gitignore does NOT stop Convex bundling them)`,
+        : `deployable file(s) under convex/ are not committed, so they will NOT be deployed even though they are in front of you: ${offenders.join(", ")} — commit or delete them (note: .gitignore hides them from git status, not from this check)`,
   };
 }
 
 function checkMerged(snapshot: RepoSnapshot): DeployCheck {
+  // ⚠️ Judges `approvedSha`, not HEAD. What ships is the approved commit
+  // extracted into an isolated checkout; the caller may be sitting on any
+  // branch at the time and it has no bearing on the artifact.
+  const short = snapshot.approvedSha.slice(0, 8);
   return {
     id: "merged-into-main",
-    ok: snapshot.headIsAncestorOfOriginMain,
-    detail: snapshot.headIsAncestorOfOriginMain
-      ? `HEAD ${snapshot.headSha.slice(0, 8)} is contained in origin/main`
-      : `HEAD ${snapshot.headSha.slice(0, 8)} on '${snapshot.branch}' is not an ancestor of origin/main — this is unmerged code, which is what reached production on 2026-08-07`,
+    ok: snapshot.approvedIsAncestorOfOriginMain,
+    detail: snapshot.approvedIsAncestorOfOriginMain
+      ? `${short} is contained in origin/main`
+      : `${short} is not an ancestor of origin/main — this is unmerged code, which is what reached production on 2026-08-07`,
   };
 }
 
 function checkAtTip(snapshot: RepoSnapshot, options: DeployOptions): DeployCheck {
-  if (snapshot.headSha === snapshot.originMainSha) {
-    return { id: "at-origin-main-tip", ok: true, detail: "HEAD is origin/main" };
+  const short = snapshot.approvedSha.slice(0, 8);
+  const tip = snapshot.originMainSha.slice(0, 8);
+  if (snapshot.approvedSha === snapshot.originMainSha) {
+    return { id: "at-origin-main-tip", ok: true, detail: `${short} is origin/main` };
   }
   // "Behind" only means something for a commit that is on main. Telling a
-  // diverged branch's author to pass --allow-behind is advice that cannot work,
+  // diverged branch author to pass --allow-behind is advice that cannot work,
   // because merged-into-main refuses regardless.
-  if (!snapshot.headIsAncestorOfOriginMain) {
+  if (!snapshot.approvedIsAncestorOfOriginMain) {
     return {
       id: "at-origin-main-tip",
       ok: false,
-      detail: `HEAD ${snapshot.headSha.slice(0, 8)} has diverged from origin/main ${snapshot.originMainSha.slice(0, 8)} — merge it first; --allow-behind does not apply to unmerged work`,
+      detail: `${short} has diverged from origin/main ${tip} — merge it first; --allow-behind does not apply to unmerged work`,
     };
   }
   return {
     id: "at-origin-main-tip",
     ok: options.allowBehind === true,
     detail: options.allowBehind
-      ? `deploying ${snapshot.headSha.slice(0, 8)}, behind origin/main ${snapshot.originMainSha.slice(0, 8)} (--allow-behind)`
-      : `HEAD ${snapshot.headSha.slice(0, 8)} is behind origin/main ${snapshot.originMainSha.slice(0, 8)} — pass --allow-behind if this is a deliberate rollback`,
+      ? `deploying ${short}, behind origin/main ${tip} (--allow-behind, deliberate rollback)`
+      : `${short} is behind origin/main ${tip} — pass --allow-behind if this is a deliberate rollback`,
   };
 }
 
@@ -357,24 +421,91 @@ export function deployArgs(forwarded: string[]): string[] {
  * caller must treat that as a refusal — a confirmation prompt that cannot name
  * the target is not a confirmation.
  */
-export function extractDeploymentName(dryRunOutput: string): string | null {
-  // e.g. "▌ └─ https://kindly-hound-172.convex.cloud"
-  const url = /https:\/\/([a-z0-9-]+)\.convex\.cloud/i.exec(dryRunOutput);
-  if (url) return url[1];
-  const dash = /dashboard\.convex\.dev\/t\/[^/]+\/[^/]+\/([a-z0-9-]+)/i.exec(dryRunOutput);
-  return dash ? dash[1] : null;
-}
+export type CanonicalTarget =
+  | { kind: "ok"; name: string; label: string; url: string }
+  | { kind: "missing" }
+  | { kind: "ambiguous"; found: { label: string; name: string }[] };
 
 /**
- * Whether the dry run says this is a production deployment.
- *
- * Belt and braces beside the typed confirmation: the operator can mistype
- * their way into agreeing with a name, but they cannot make a preview
- * deployment announce itself as production.
+ * The bar the CLI prefixes every announcement line with (U+258C), and the
+ * `└─` elbow (U+2514 U+2500) that introduces the URL line.
  */
-export function looksLikeProduction(dryRunOutput: string): boolean {
-  return /\[Production\]|\(prod\)/i.test(dryRunOutput);
+const ANNOUNCE_TAG = /^\s*▌\s*\[([A-Za-z]+)\]\s/;
+const ANNOUNCE_URL = /^\s*▌\s*└─\s*(https:\/\/([a-z0-9-]+)\.convex\.cloud)\/?\s*$/i;
+
+/**
+ * The one deployment this dry run announced, or a refusal.
+ *
+ * ## Why this replaced two whole-string scans
+ *
+ * The previous pair — `extractDeploymentName` and `looksLikeProduction` — each
+ * scanned the ENTIRE captured output independently and unanchored, taking the
+ * first `https://<name>.convex.cloud` anywhere and testing for `[Production]`
+ * or `(prod)` anywhere. Nothing required the two to come from the same
+ * announcement, or from an announcement at all.
+ *
+ * Reproduced against the shipped code, no mutation:
+ *
+ *     "Deploy message: routine hotfix, see (prod) notes at
+ *      https://decoy-name.convex.cloud/docs"
+ *     "▌ Deploying code to deployment:"
+ *     "▌ [Production] … (dashboard: …/kindly-hound-172)"
+ *     "▌ └─ https://kindly-hound-172.convex.cloud"
+ *
+ * gave `decoy-name` / `true`. The operator would be asked to type `decoy-name`
+ * while the push went to `kindly-hound-172` — defeating the single safety
+ * property this wrapper exists to provide. `--message` is on the forwardable
+ * allowlist and is unvalidated free text, so operator-supplied text does reach
+ * the captured stream.
+ *
+ * ⚠️ The double dry run could never have caught it: both runs receive identical
+ * arguments, so both extract the same wrong name and the equality check that is
+ * supposed to bind the confirmation compares a wrong value with itself.
+ *
+ * ## What "canonical" means here
+ *
+ * `formatTargetedDeployment` in the CLI bundle emits, at colour level 0 (which
+ * the dry run forces with `NO_COLOR`), a tag line and its URL line adjacently:
+ *
+ *     ▌ [Production] aalzriqat:auto:production (prod) (dashboard: …)
+ *     ▌ └─ https://kindly-hound-172.convex.cloud
+ *
+ * So a record is a `▌ [Label]` line whose IMMEDIATE successor is a `▌ └─ URL`
+ * line, and both the label and the name come from that one matched pair. Prose
+ * cannot form a record, because prose does not carry the bar-and-elbow frame on
+ * two consecutive lines.
+ *
+ * ## Exactly one, or refuse
+ *
+ * `announceDeploymentTarget` is reached once per deploy — the headered call
+ * sites are the mutually exclusive preview and existing-deployment branches,
+ * and the header-less ones are local-deployment paths. So more than one record
+ * means the output is not what this parser was built to read, and the guard
+ * must not pick a winner. Failing closed on ambiguity is the same rule the
+ * materialisation readiness gate uses, and for the same reason: choosing
+ * between two candidates is exactly where a guard silently chooses wrong.
+ */
+export function parseCanonicalTarget(dryRunOutput: string): CanonicalTarget {
+  const lines = dryRunOutput.split(/\r?\n/);
+  const found: { label: string; name: string; url: string }[] = [];
+
+  for (let i = 0; i < lines.length - 1; i++) {
+    const tag = ANNOUNCE_TAG.exec(lines[i]);
+    if (!tag) continue;
+    const url = ANNOUNCE_URL.exec(lines[i + 1]);
+    if (!url) continue;
+    found.push({ label: tag[1], name: url[2], url: url[1] });
+  }
+
+  if (found.length === 0) return { kind: "missing" };
+  if (found.length > 1) {
+    return { kind: "ambiguous", found: found.map(({ label, name }) => ({ label, name })) };
+  }
+  return { kind: "ok", ...found[0] };
 }
+
+/** The label the CLI prints for a production deployment, at colour level 0. */
+export const PRODUCTION_LABEL = "Production";
 
 /** Variables whose value must never be printed. */
 const SECRET_SELECTORS = new Set<SelectorKey>([
@@ -567,16 +698,48 @@ export function freezeDeployEnv(env: RepoSnapshot["env"]): FrozenDeployEnv {
 
 export type DeployIO = {
   collectSnapshot: () => RepoSnapshot;
+  /**
+   * Materialise the approved commit into a brand-new directory containing only
+   * that commit's tracked content, and return where it landed.
+   *
+   * The contract this must satisfy is the whole point of the redesign: nothing
+   * in the caller's worktree — untracked, ignored, shadowing, or written a
+   * moment later — may appear in the returned directory.
+   */
+  prepareIsolatedCheckout: (sha: string) => { dir: string } | { error: string };
+  /** Install the approved commit's own locked dependency set, inside `dir`. */
+  installDependencies: (dir: string) => { status: number; output: string };
   runDryRun: (
+    cliPath: string,
+    cwd: string,
     args: string[],
     env: FrozenDeployEnv
   ) => { status: number | null; output: string; errorMessage?: string };
-  runDeploy: (args: string[], env: FrozenDeployEnv) => number;
+  runDeploy: (cliPath: string, cwd: string, args: string[], env: FrozenDeployEnv) => number;
+  /** Remove the isolated checkout. Called from a `finally`, so it must not throw. */
+  cleanupCheckout: (dir: string) => void;
+  /** Whether `dir` contains an installed Convex CLI at the expected path. */
+  cliExists: (cliPath: string) => boolean;
   prompt: (question: string) => Promise<string>;
   isTTY: boolean;
   log: (message: string) => void;
   error: (message: string) => void;
 };
+
+/**
+ * Where the Convex CLI lives inside a prepared checkout.
+ *
+ * Always resolved against the isolated directory, never against the caller's
+ * repo and never through `PATH`: the binary that pushes must come from the
+ * approved commit's own locked dependency set. `npx` is not used, so nothing
+ * can substitute a downloaded CLI mid-deploy.
+ *
+ * Forward slashes only — this string is compared in tests and printed to the
+ * operator, and a separator that changes by platform makes both worse.
+ */
+export function convexCliPath(dir: string): string {
+  return `${dir.replaceAll("\\", "/").replace(/\/+$/, "")}/node_modules/convex/bin/main.js`;
+}
 
 /**
  * Runs the dry run and reads the target back, or returns the exit code to stop on.
@@ -586,10 +749,12 @@ export type DeployIO = {
 function resolveTarget(
   io: DeployIO,
   snapshot: RepoSnapshot,
-  env: FrozenDeployEnv
+  env: FrozenDeployEnv,
+  cliPath: string,
+  cwd: string
 ): { target: string; output: string } | number {
   io.log("Resolving the target deployment (dry run, nothing is applied)\u2026\n");
-  const dry = io.runDryRun(dryRunArgs(snapshot.forwardedArgs), env);
+  const dry = io.runDryRun(cliPath, cwd, dryRunArgs(snapshot.forwardedArgs), env);
   io.log(dry.output);
   if (dry.errorMessage) io.error(`\nCould not run the dry run: ${dry.errorMessage}`);
   if (dry.status !== 0) {
@@ -597,25 +762,38 @@ function resolveTarget(
     return dry.status ?? 1;
   }
 
-  const target = extractDeploymentName(dry.output);
-  if (!target) {
+  const parsed = parseCanonicalTarget(dry.output);
+  if (parsed.kind === "missing") {
     io.error(
-      "\nCould not read the target deployment out of the dry run. Refusing:\n" +
+      "\nCould not read a deployment announcement out of the dry run. Refusing:\n" +
         "a confirmation that cannot name the target is not a confirmation.\n"
+    );
+    return 1;
+  }
+  if (parsed.kind === "ambiguous") {
+    // Never pick a winner. Two announcements mean the output is not the shape
+    // this parser was built to read, and guessing is how a guard confirms one
+    // deployment while pushing to another.
+    io.error(
+      `\nRefusing: the dry run announced ${parsed.found.length} deployments, not one:\n` +
+        parsed.found.map((f) => `  [${f.label}] ${f.name}`).join("\n") +
+        "\nNothing was pushed.\n"
     );
     return 1;
   }
   // `deploy:prod` means production. Previously this only decorated a log line,
   // so the command would happily push to whatever the dry run resolved. A label
-  // is not a gate.
-  if (!looksLikeProduction(dry.output)) {
+  // is not a gate. The label now comes from the same matched record as the
+  // name, so it cannot be satisfied by unrelated text elsewhere in the output.
+  if (parsed.label !== PRODUCTION_LABEL) {
     io.error(
-      `\nRefusing: the resolved target ${target} does not announce itself as production,\n` +
+      `\nRefusing: the resolved target ${parsed.name} announced itself as ` +
+        `[${parsed.label}], not [${PRODUCTION_LABEL}],\n` +
         "and this command deploys to production only. Nothing was pushed.\n"
     );
     return 1;
   }
-  return { target, output: dry.output };
+  return { target: parsed.name, output: dry.output };
 }
 
 /**
@@ -657,65 +835,101 @@ export async function runGuardedDeploy(
   // operator confirms is the target that is resolved again at push time.
   const frozenEnv = freezeDeployEnv(snapshot.env);
 
-  const resolved = resolveTarget(io, snapshot, frozenEnv);
-  if (typeof resolved === "number") return resolved;
-  const { target, output: dryOutput } = resolved;
-
-  io.log(
-    `\nTarget: ${target}${looksLikeProduction(dryOutput) ? "  [PRODUCTION]" : ""}\n` +
-      "Convex does not reliably prompt for this — it stays silent when CONVEX_DEPLOYMENT\n" +
-      "already names the target, and when a deploy key is set. So confirm here.\n"
-  );
-
-  // Fail closed with no terminal: an unattended run must never self-confirm.
-  if (!io.isTTY) {
-    io.error("Refusing: no interactive terminal to confirm the target. Nothing was pushed.\n");
+  // ── Everything past here runs against an isolated checkout, never the
+  //    caller's worktree. See the module header for why.
+  const prepared = io.prepareIsolatedCheckout(snapshot.approvedSha);
+  if ("error" in prepared) {
+    io.error(`\nCould not prepare an isolated checkout. Refusing:\n  ${prepared.error}\n`);
     return 1;
   }
+  const dir = prepared.dir;
 
-  const typed = (await io.prompt("Type the deployment name to deploy to it: ")).trim();
-  if (typed !== target) {
-    io.error(`\nGot "${typed}", expected "${target}". Nothing was pushed.\n`);
-    return 1;
-  }
-
-  // Re-validate immediately before pushing. The dry run and the human pause can
-  // take minutes, and the bundle is read from disk at push time, not at check
-  // time — a file created in that window would otherwise ship unexamined.
-  const recheckSnapshot = io.collectSnapshot();
-  const recheck = evaluateProdDeploy(recheckSnapshot, options);
-  if (!recheck.ok) {
-    io.error("\nThe working tree changed while confirming. Refusing:\n");
-    for (const check of recheck.checks) {
-      io.error(`  ${check.ok ? "ok  " : "FAIL"}  ${check.id}: ${check.detail}`);
-    }
-    return 1;
-  }
-
-  // Resolve the target a second time and require it to be the one that was
-  // confirmed.
-  //
-  // Confirming a name and then letting a fresh CLI process resolve its own
-  // target independently is a promise the guard was not keeping: the real
-  // deploy re-reads the deployment selection, so a change between the
-  // confirmation and the push could send it somewhere else. The preconditions
-  // do not catch this either — none of them reads the environment.
-  //
-  // This is the check that actually makes the confirmed target binding: it is a
-  // fresh CLI process reading the same disk the real push will read a moment
-  // later. Reuses the recheck's snapshot rather than collecting a third — the
-  // only field read is `forwardedArgs`, which cannot change mid-run, and
-  // collecting again would run another `git fetch` after the operator has
-  // already confirmed, adding a failure surface for no information.
-  const reresolved = resolveTarget(io, recheckSnapshot, frozenEnv);
-  if (typeof reresolved === "number") return reresolved;
-  if (reresolved.target !== target) {
-    io.error(
-      `\nThe target changed after you confirmed it: you approved ${target}, but the\n` +
-        `deploy now resolves to ${reresolved.target}. Nothing was pushed.\n`
+  try {
+    io.log(
+      `\nPrepared an isolated checkout of ${snapshot.approvedSha.slice(0, 12)}\n` +
+        `  ${dir}\n` +
+        "Only this commit's tracked content is present. Nothing in your working\n" +
+        "tree — untracked, ignored, or written from here on — can reach production.\n"
     );
-    return 1;
-  }
 
-  return io.runDeploy(deployArgs(snapshot.forwardedArgs), frozenEnv);
+    const install = io.installDependencies(dir);
+    if (install.status !== 0) {
+      io.error(
+        `\nThe frozen dependency install failed in the isolated checkout. Refusing:\n${install.output}\n`
+      );
+      return 1;
+    }
+
+    // The CLI that pushes is the approved commit's own, installed from its own
+    // lockfile, addressed absolutely. Not `npx`, not `PATH`, not the caller's
+    // node_modules.
+    const cliPath = convexCliPath(dir);
+    if (!io.cliExists(cliPath)) {
+      io.error(
+        `\nNo Convex CLI at ${cliPath} after the install. Refusing:\n` +
+          "the deploy must run the approved commit's own CLI, not one resolved elsewhere.\n"
+      );
+      return 1;
+    }
+
+    const resolved = resolveTarget(io, snapshot, frozenEnv, cliPath, dir);
+    if (typeof resolved === "number") return resolved;
+    const { target } = resolved;
+
+    // Both halves of what is about to happen, together, immediately above the
+    // prompt: which deployment, and which commit. Naming only the deployment
+    // let an operator confirm "yes, production" without ever being shown which
+    // source was going there — and shipping the wrong source to the right
+    // deployment is exactly the 2026-08-07 incident.
+    io.log(
+      `\nAbout to deploy\n` +
+        `  commit      ${snapshot.approvedSha}\n` +
+        `  deployment  ${target}  [${PRODUCTION_LABEL}]\n\n` +
+        "Convex does not reliably prompt for this — it stays silent when CONVEX_DEPLOYMENT\n" +
+        "already names the target, and when a deploy key is set. So confirm here.\n"
+    );
+
+    // Fail closed with no terminal: an unattended run must never self-confirm.
+    if (!io.isTTY) {
+      io.error("Refusing: no interactive terminal to confirm the target. Nothing was pushed.\n");
+      return 1;
+    }
+
+    const typed = (await io.prompt("Type the deployment name to deploy to it: ")).trim();
+    if (typed !== target) {
+      io.error(`\nGot "${typed}", expected "${target}". Nothing was pushed.\n`);
+      return 1;
+    }
+
+    // Resolve the target a second time, from the same isolated checkout, and
+    // require it to be the one that was confirmed.
+    //
+    // ⚠️ What this check is and is not. It is NOT a re-validation of the
+    // filesystem — that question is now answered by construction, because the
+    // directory being deployed cannot change: it holds one commit's content and
+    // no process writes to it. The previous design re-checked the worktree here
+    // and then ran another dry run before pushing, which reopened the very
+    // window the re-check existed to close; an independent review reproduced a
+    // file appearing in that gap and still reaching `runDeploy`.
+    //
+    // What remains worth re-checking is the TARGET, because deployment
+    // selection is read from the environment by each CLI process. The frozen
+    // env makes that stable, and this proves it rather than asserting it.
+    const reresolved = resolveTarget(io, snapshot, frozenEnv, cliPath, dir);
+    if (typeof reresolved === "number") return reresolved;
+    if (reresolved.target !== target) {
+      io.error(
+        `\nThe target changed after you confirmed it: you approved ${target}, but the\n` +
+          `deploy now resolves to ${reresolved.target}. Nothing was pushed.\n`
+      );
+      return 1;
+    }
+
+    return io.runDeploy(cliPath, dir, deployArgs(snapshot.forwardedArgs), frozenEnv);
+  } finally {
+    // Unconditional. A refusal, a throw, or a successful push all leave the
+    // machine without a stray copy of the repository lying around, and a
+    // cleanup failure must never mask the deploy's own outcome.
+    io.cleanupCheckout(dir);
+  }
 }

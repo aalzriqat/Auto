@@ -15,32 +15,50 @@ Convex agent skills for common tasks can be installed by running
 ## Deploying to production
 
 ```bash
-pnpm deploy:prod      # guarded production deploy
-pnpm dev:push         # one-shot push to the dev deployment
+pnpm deploy:prod                       # guarded production deploy
+pnpm deploy:prod --rollback-to <sha>   # deliberate rollback to an older merged commit
+pnpm dev:push                          # one-shot push to the dev deployment
 ```
 
-Use `pnpm deploy:prod`, not `npx convex deploy`. The wrapper refuses a dirty
-tree, a commit that is not contained in `origin/main`, and any deployable file
-under `convex/` that git does not track — that directory is bundled from disk,
-so an untracked or `.gitignore`d module there ships exactly like committed code
-while appearing in no diff, review or CI check. It also resolves the target with
-a dry run and makes you type the deployment's name before pushing.
+Use `pnpm deploy:prod`, not `npx convex deploy`.
 
-To deploy a commit that is merged but behind the tip — a deliberate rollback —
-run `pnpm deploy:prod --allow-behind`. That flag excuses only the tip check. A
-dirty tree, an untracked module under `convex/`, and unmerged code are still
-refused, and a branch that has diverged from `origin/main` is not "behind" and
-is not covered by it.
+**What it deploys is not your working directory.** The wrapper resolves one
+exact commit — `origin/main`'s tip, or the commit you name for a rollback —
+exports it into a brand-new temporary directory, installs that commit's own
+locked dependencies there, and runs the Convex CLI from inside it. Your
+worktree is never read as a bundle input, so nothing on your disk can reach
+production: not an untracked file, not a `.gitignore`d one, not a file you
+create while the deploy is running.
 
-That last part is not redundant with Convex's own prompt. Convex asks only when
-`CONVEX_DEPLOYMENT` names a *different* deployment than the target; it stays
-silent when the variable already names production, and when `CONVEX_DEPLOY_KEY`
-is set.
+That matters more than it sounds. Convex bundles from disk and follows relative
+imports **out** of `convex/` — real modules do this today — and esbuild resolves
+`.tsx` before `.ts`, so an untracked `lib/helper.tsx` would silently replace a
+reviewed `lib/helper.ts`. Checking git status cannot see either problem. Not
+reading the directory at all can.
 
-On 2026-08-07 `npx convex deploy -y` put unmerged code and an untracked scratch
-module on production, and the Social Inbox reported zero conversations for an
-org holding over a thousand live events. `-y` — undocumented in `--help` —
-suppresses the confirmation that names the production deployment.
+Before anything is prepared it refuses a dirty tree, a commit that is not
+contained in `origin/main`, and any deployable file under `convex/` that git
+does not track. That last check now means the opposite of what it used to: an
+uncommitted file there will **not** ship, and shipping less than you are looking
+at is its own kind of surprise.
 
-The wrapper is advisory. The raw CLI still works, so this depends on reaching
-for the right command.
+Then it shows you both the deployment name and the commit SHA, read out of the
+CLI's own announcement, and makes you type the deployment name before pushing.
+If the dry run announces no deployment, or more than one, it refuses rather than
+guessing which is real.
+
+For a rollback, `--rollback-to <sha>` deploys an older commit that is still
+contained in `origin/main`. It goes back to something that was reviewed, never
+sideways to something that was not.
+
+**Why any of this exists.** On 2026-08-07 `npx convex deploy -y` put unmerged
+code and an untracked scratch module on production, and the Social Inbox
+reported zero conversations for an org holding over a thousand live events.
+`-y` — undocumented in `--help` — suppresses the confirmation that names the
+production deployment.
+
+⚠️ **The wrapper is advisory, not binding.** The raw CLI still works and the
+production credential is on developer machines, so this depends on reaching for
+the right command. Making production unreachable from a workstation means a
+CI-mediated deploy against a protected environment, which is a separate change
+this does not attempt.
