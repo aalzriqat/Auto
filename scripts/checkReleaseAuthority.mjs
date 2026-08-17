@@ -40,6 +40,18 @@ function emit(name, value) {
   if (path) appendFileSync(path, `${name}=${value}\n`);
 }
 
+/**
+ * Builds one path segment.
+ *
+ * The values reaching this are already proven to be 40 hex characters, so the
+ * encoding is a no-op on every input that gets here — it is applied anyway
+ * because "a validator somewhere else already guaranteed the shape" is an
+ * argument that stops being true the first time someone adds a call site, and
+ * because escaping at the point of construction is simply how a URL should be
+ * built from a variable.
+ */
+const seg = (value) => encodeURIComponent(String(value));
+
 async function api(path) {
   const response = await fetch(`https://api.github.com/repos/${REPO}${path}`, {
     headers: {
@@ -91,7 +103,7 @@ if (!isFullSha(mainTipSha)) {
   refuse(`GitHub returned an unusable tip commit for main: ${forLog(mainTipSha)}.`);
 }
 
-const commit = await api(`/commits/${parsed.sha}`);
+const commit = await api(`/commits/${seg(parsed.sha)}`);
 const commitExists = commit.status === 200;
 
 // `compare/base...head` reports `behind` when head is contained in base and
@@ -103,7 +115,7 @@ if (commitExists) {
   if (parsed.sha === mainTipSha) {
     isAncestorOfMain = true;
   } else {
-    const compare = await api(`/compare/${mainTipSha}...${parsed.sha}`);
+    const compare = await api(`/compare/${seg(mainTipSha)}...${seg(parsed.sha)}`);
     if (compare.status !== 200) refuse(`Could not compare ${parsed.sha} against main (HTTP ${compare.status}).`);
     isAncestorOfMain = compare.body.status === "behind" || compare.body.status === "identical";
   }
@@ -125,7 +137,7 @@ if (!authority.ok) refuse(authority.reason);
 // enforcement from observation. What this adds is provenance in the run log —
 // which PR this commit came from, so the deploy is traceable without anyone
 // having to reconstruct it later.
-const pulls = await api(`/commits/${parsed.sha}/pulls`);
+const pulls = await api(`/commits/${seg(parsed.sha)}/pulls`);
 const describePull = (pr) => {
   const state = pr.merged_at ? `merged ${pr.merged_at}` : pr.state;
   return `#${pr.number} ${forLog(String(pr.title ?? ""), 80)} (${state})`;
@@ -160,4 +172,4 @@ summary(
   ].join("\n")
 );
 
-console.log(`✔ ${heading}: ${authority.sha} (main tip ${mainTipSha})`);
+console.log(`✔ ${heading}: ${forLog(authority.sha)} (main tip ${forLog(mainTipSha)})`);

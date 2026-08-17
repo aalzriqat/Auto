@@ -420,6 +420,67 @@ function classifyPlatform(p: PlatformReport): PlatformVerdict {
  * the alternative is that adding a status to the backend silently widens what
  * this gate accepts, and a gate that accepts unknown states is not a gate.
  */
+type OrgVerdict = {
+  settledHealthy: boolean;
+  problems: Problem[];
+  inFlight: Problem[];
+  anomalies: Problem[];
+};
+
+/** One organization's verdict, so the page loop is only bookkeeping. */
+function classifyOrg(org: OrgReport): OrgVerdict {
+  const out: OrgVerdict = { settledHealthy: true, problems: [], inFlight: [], anomalies: [] };
+  const at = (platform: string | null, kind: string, detail: string): Problem => ({
+    orgId: org.orgId,
+    orgName: org.orgName,
+    platform,
+    kind,
+    detail,
+  });
+
+  if (!Array.isArray(org.platforms) || org.platforms.length === 0) {
+    out.settledHealthy = false;
+    out.problems.push(at(null, "noPlatforms", "The report carried no platform rows for this org."));
+    return out;
+  }
+
+  for (const p of org.platforms) {
+    const verdict = classifyPlatform(p);
+    if (verdict.bucket === "healthy") continue;
+
+    const entry = at(p.platform, verdict.kind, verdict.detail);
+    if (verdict.bucket === "anomaly") {
+      // Deliberately does not clear `settledHealthy` — an anomaly is a note,
+      // not a verdict.
+      out.anomalies.push(entry);
+      continue;
+    }
+
+    out.settledHealthy = false;
+    (verdict.bucket === "inFlight" ? out.inFlight : out.problems).push(entry);
+  }
+
+  // Checked as well as, not instead of, the per-platform states. It is
+  // deliberately redundant: `readerSource` is what the inbox actually keys off,
+  // so if it ever stops agreeing with the platform rows, the gate should notice
+  // rather than infer.
+  if (org.readerSource !== "materialized") {
+    if (out.settledHealthy) {
+      out.problems.push(
+        at(
+          null,
+          "readerSourceContradiction",
+          `Every platform reports completed, but the reader still resolves to ` +
+            `${JSON.stringify(org.readerSource)}.`
+        )
+      );
+    }
+    out.settledHealthy = false;
+  }
+
+  return out;
+}
+
 export function classifyMaterializationReport(orgs: OrgReport[]): Verdict {
   const problems: Problem[] = [];
   const inFlight: Problem[] = [];
@@ -427,56 +488,11 @@ export function classifyMaterializationReport(orgs: OrgReport[]): Verdict {
   let completedOrgCount = 0;
 
   for (const org of orgs) {
-    const at = (platform: string | null, kind: string, detail: string): Problem => ({
-      orgId: org.orgId,
-      orgName: org.orgName,
-      platform,
-      kind,
-      detail,
-    });
-
-    if (!Array.isArray(org.platforms) || org.platforms.length === 0) {
-      problems.push(at(null, "noPlatforms", "The report carried no platform rows for this org."));
-      continue;
-    }
-
-    let settledHealthy = true;
-
-    for (const p of org.platforms) {
-      const verdict = classifyPlatform(p);
-      if (verdict.bucket === "healthy") continue;
-
-      const entry = at(p.platform, verdict.kind, verdict.detail);
-      if (verdict.bucket === "anomaly") {
-        // Deliberately does not clear `settledHealthy` — an anomaly is a note,
-        // not a verdict.
-        anomalies.push(entry);
-        continue;
-      }
-
-      settledHealthy = false;
-      (verdict.bucket === "inFlight" ? inFlight : problems).push(entry);
-    }
-
-    // Checked as well as, not instead of, the per-platform states. It is
-    // deliberately redundant: `readerSource` is what the inbox actually keys
-    // off, so if it ever stops agreeing with the platform rows, the gate should
-    // notice rather than infer.
-    if (org.readerSource !== "materialized") {
-      if (settledHealthy) {
-        problems.push(
-          at(
-            null,
-            "readerSourceContradiction",
-            `Every platform reports completed, but the reader still resolves to ` +
-              `${JSON.stringify(org.readerSource)}.`
-          )
-        );
-      }
-      settledHealthy = false;
-    }
-
-    if (settledHealthy) completedOrgCount += 1;
+    const verdict = classifyOrg(org);
+    problems.push(...verdict.problems);
+    inFlight.push(...verdict.inFlight);
+    anomalies.push(...verdict.anomalies);
+    if (verdict.settledHealthy) completedOrgCount += 1;
   }
 
   return {
