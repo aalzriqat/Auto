@@ -549,7 +549,7 @@ async function receiptShape(t: any) {
   });
 }
 
-describe("SCRUM-121 Priority-1 round 4 — path × input shape, measured on clean main", () => {
+describe("SCRUM-121 Priority-1 round 5 — path × input shape, measured on clean main", () => {
   // ══════════════════════════════════════════════════════════════════════════
   // GROUP 1 — R3 fail-closed cells. ATOMIC REFUSAL is the assertion.
   // ══════════════════════════════════════════════════════════════════════════
@@ -1631,18 +1631,32 @@ describe("SCRUM-121 Priority-1 round 4 — path × input shape, measured on clea
       const twinAllocatedMinor = activeAllocations
         .filter((a: any) => String(a.receivableDocumentId) === String(row.canonicalReceivableDocumentId))
         .reduce((s: number, a: any) => s + a.amountMinor, 0);
+      // Measured, not assumed: after the reversal, does the mirror row still
+      // carry its allocation pointer? This decides whether presence-of-pointer
+      // is a usable "this movement paid AR" discriminator for a reader — see
+      // R10c and the R9 verdict.
+      const pointer = mirror?.paymentAllocationId
+        ? await ctx.db.get(mirror.paymentAllocationId)
+        : null;
       return {
         mirrorStatus: mirror?.status ?? null,
         canonicalStatus: canonical?.status ?? null,
         activeAllocations: activeAllocations.length,
         rowOutstandingMinor: row.outstandingAmount * MINOR,
         twinAllocatedMinor,
+        allocationPointerSurvivesVoid: Boolean(mirror?.paymentAllocationId),
+        pointedAllocationStatus: pointer?.status ?? null,
       };
     });
 
-    // The money is reversed, and the debt is owed once — not twice. The last
+    // The money is reversed, and the debt is owed once — not twice. The middle
     // two keys are the same debt read from the two stores: the legacy row says
     // it is owed again, and the canonical twin agrees nothing is paid against it.
+    //
+    // The last two keys are the R9 evidence: the pointer OUTLIVES the reversal
+    // and points at a REVERSED allocation. So `paymentAllocationId != null` does
+    // NOT mean "this movement currently pays AR" — a reader would have to
+    // traverse to the allocation and read its status.
     expect({ threw, ...after }).toEqual({
       threw: null,
       mirrorStatus: "VOIDED",
@@ -1650,33 +1664,50 @@ describe("SCRUM-121 Priority-1 round 4 — path × input shape, measured on clea
       activeAllocations: 0,
       rowOutstandingMinor: PAY * MINOR,
       twinAllocatedMinor: 0,
+      allocationPointerSurvivesVoid: true,
+      pointedAllocationStatus: "REVERSED",
     });
   });
 
   /**
-   * L2 — FAILING-FIRST: what a "no legacy mirror" safe harbour would cost.
+   * L2 — MISSING LINEAGE FAILS CLOSED. Rewritten for sol F9 (ACCEPTED).
    *
-   * The mirror row is deleted after clearing, standing in for an implementation
-   * that took the earlier "no legacy mirror" rule literally. Everything else is
-   * identical to L1, and the SAME contract is asserted: the reversal finds its
-   * money and no second AR balance appears.
+   * ⚠️ WHAT THE PREVIOUS L2 GOT WRONG, AND IT WAS MY ERROR, NOT THE REVIEWER'S.
    *
-   * `returnClearedCheque:1332` guards its ENTIRE reversal block on
-   * `if (clearedPayment)` — GL reversal, allocation reversal and canonical-payment
-   * voiding all sit inside it — while the legacy receivable is reopened
-   * UNCONDITIONALLY at `:1391`. So the predicted failure is not merely "the
-   * reversal is skipped": the debt is ALSO re-inflated on top of an allocation
-   * that was never reversed. **The cheque is marked RETURNED either way, so this
-   * fails silently.**
+   * The round-4 L2 deleted the only typed `collectionPayments.by_cheque` link and
+   * then asserted that `returnClearedCheque` must "still find its money". But
+   * once that row is gone there is NO approved alternative link, and schema
+   * expansion is prohibited — so recovering the money would require inferring
+   * identity from recency, amount, cheque-number text or a guessed idempotency
+   * key, every one of which R5 forbids. **My fixture was demanding the exact
+   * inference the contract exists to prevent.** R8 is unambiguous: missing or
+   * contradictory lineage FAILS CLOSED before marking a cheque returned or
+   * changing balances.
    *
-   * ⚠️ This cell asserts the CONTRACT, so it is expected RED on this construction.
-   * That is the point: it is the failing-first evidence R7 requires, and it must
-   * go GREEN under the approved zero-applied non-AR row.
+   * This is the third round in which I asserted a clause the contract does not
+   * contain — outcomes where the clause was a refusal (round 1), acceptance for
+   * two mutually exclusive shapes (round 3), and recovery where the clause is
+   * fail-closed (round 4). The pattern is writing the behaviour I would want
+   * rather than the clause that binds.
    *
-   * BASE: as L1, plus the deliberate deletion — the drift is verified below
-   * before the return runs.
+   * THE CONTRACT ASSERTION IS ATOMIC REFUSAL: the mutation throws, and the whole
+   * pre-return state survives intact — cheque still CLEARED, canonical payment
+   * still SETTLED, allocation still ACTIVE, legacy row untouched, and no GL
+   * reversal, outbox reversal, payment void, debt reopening or RETURNED status
+   * anywhere.
+   *
+   * THE MEASURED `main` BEHAVIOUR IS STILL REAL AND IS FILED SEPARATELY AS
+   * SCRUM-130: `returnClearedCheque:1332` guards its ENTIRE reversal block on
+   * `if (clearedPayment)` while `:1391` reopens the legacy receivable
+   * UNCONDITIONALLY — so the debt is re-inflated on top of an allocation that
+   * was never reversed, and the cheque is marked RETURNED either way. That is a
+   * pre-existing defect this branch does not fix; it is not the SCRUM-121
+   * contract assertion, and conflating the two is what F9 caught.
+   *
+   * BASE: as L1, plus the deliberate deletion — verified below before the return
+   * runs. Depends on SCRUM-109 for the row's twin.
    */
-  test("L2 · clear then return with the mirror row severed: the reversal must still find its money", async () => {
+  test("L2 · clear then return with lineage missing: atomic refusal, nothing survives", async () => {
     const { t, orgId, customerId, asUser } = await setup();
     const rowId = await standaloneRow(asUser, orgId, customerId);
 
@@ -1714,34 +1745,209 @@ describe("SCRUM-121 Priority-1 round 4 — path × input shape, measured on clea
       const settledPayments = (await ctx.db.query("canonicalPayments").collect())
         .filter((p: any) => p.status === "SETTLED");
       const row = await ctx.db.get(rowId);
-      const twinAllocatedMinor = activeAllocations
-        .filter((a: any) => String(a.receivableDocumentId) === String(row.canonicalReceivableDocumentId))
-        .reduce((s: number, a: any) => s + a.amountMinor, 0);
+      const reversalEvents = (await ctx.db.query("accountingEvents").collect())
+        .filter((e: any) => e.status === "REVERSED" || e.eventType?.includes("REVERS"));
+      const queuedReversals = (await ctx.db.query("pendingAccountingEvents").collect())
+        .filter((e: any) => e.kind === "REVERSE");
       return {
         chequeStatus: cheque.status,
         activeAllocations: activeAllocations.length,
-        stillSettledPayments: settledPayments.length,
+        settledPayments: settledPayments.length,
         rowOutstandingMinor: row.outstandingAmount * MINOR,
-        twinAllocatedMinor,
+        rowStatus: row.status,
+        reversalEvents: reversalEvents.length,
+        queuedReversals: queuedReversals.length,
       };
     });
 
-    // Same contract as L1: money reversed, debt owed exactly once.
-    //
-    // ⚠️ READ THE LAST TWO KEYS TOGETHER — they are the same debt, read from the
-    // two stores. If `rowOutstandingMinor` and `twinAllocatedMinor` are BOTH
-    // 8,000,000 the money is simultaneously OWED (legacy row reopened at
-    // `:1391`, unconditionally) and COLLECTED (canonical allocation never
-    // reversed, because `:1332`'s `if (clearedPayment)` skipped the whole
-    // block). That is the second AR balance R7 exists to prevent, and the
-    // cheque is marked RETURNED either way — so it fails SILENTLY.
-    expect({ threw, ...after }).toEqual({
-      threw: null,
-      chequeStatus: "RETURNED",
-      activeAllocations: 0,
-      stillSettledPayments: 0,
-      rowOutstandingMinor: PAY * MINOR,
-      twinAllocatedMinor: 0,
+    // R8 — the pre-return world survives untouched. `rowOutstandingMinor: 0`
+    // and `rowStatus: "PAID"` are the CLEARED state: the debt must NOT be
+    // reopened, because reopening it without reversing the money is exactly the
+    // second AR balance R7 exists to prevent.
+    expect({ refused: threw !== null, ...after }).toEqual({
+      refused: true,
+      chequeStatus: "CLEARED",
+      activeAllocations: 1,
+      settledPayments: 1,
+      rowOutstandingMinor: 0,
+      rowStatus: "PAID",
+      reversalEvents: 0,
+      queuedReversals: 0,
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // GROUP 4d — F10: the safe harbour proved END TO END, not just in storage.
+  //
+  // A canonical payment with no allocation is NECESSARY and NOT SUFFICIENT. The
+  // confirmed money must also be captured exactly once by cash/bank
+  // reconciliation and by the GL (posted with a journal, or durably queued), and
+  // the retained movement row must be DISTINGUISHABLE BY READERS as an
+  // unapplied/non-AR movement rather than a debt payment.
+  //
+  // R1 below is the one that decides R9: it asks the actual Collections readers
+  // what they make of the retained row, rather than asserting the row exists.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * R10a — the retained lineage row is the EXACT driver-owned row.
+   *
+   * Reached only through `collectionPayments.by_cheque`, never by recency or by
+   * amount. Asserts the row's own identity fields, that it points at the same
+   * canonical payment the driver does, and that it carries NO allocation link.
+   *
+   * Measured on a CLEARED cheque, which is the closest thing `main` has to the
+   * retained movement row R7 approves — the difference being that `main`'s row
+   * DOES carry an allocation. That difference is the finding, not a fixture gap.
+   *
+   * BASE: depends on SCRUM-109 for the row's twin.
+   */
+  test("R10a · the retained cheque movement row is the exact driver-owned row, with no AR allocation", async () => {
+    const { t, orgId, customerId, asUser } = await setup();
+    const rowId = await standaloneRow(asUser, orgId, customerId);
+
+    const chequeId = await asUser.mutation(api.collections.registerCheque, {
+      orgId, receivableId: rowId, customerId,
+      bank: "ABC", chequeNumber: "CQ-R10A", chequeDate: Date.now(), amount: PAY,
+    });
+    await asUser.mutation(api.collections.clearCheque, { orgId, chequeId });
+
+    const lineage = await t.run(async (ctx: any) => {
+      const rows = await ctx.db
+        .query("collectionPayments")
+        .withIndex("by_cheque", (q: any) => q.eq("chequeId", chequeId))
+        .collect();
+      const row = rows[0];
+      const canonical = row?.canonicalPaymentId ? await ctx.db.get(row.canonicalPaymentId) : null;
+      return {
+        rowsForThisCheque: rows.length,
+        carriesChequeId: String(row?.chequeId) === String(chequeId),
+        carriesCanonicalPaymentId: Boolean(row?.canonicalPaymentId),
+        canonicalIsSettled: canonical?.status === "SETTLED",
+        canonicalAmountMinor: canonical?.amountMinor ?? null,
+        hasAllocationLink: Boolean(row?.paymentAllocationId),
+      };
+    });
+
+    expect(lineage).toEqual({
+      rowsForThisCheque: 1,
+      carriesChequeId: true,
+      carriesCanonicalPaymentId: true,
+      canonicalIsSettled: true,
+      canonicalAmountMinor: PAY * MINOR,
+      // The safe harbour requires NO allocation link on the retained row.
+      hasAllocationLink: false,
+    });
+  });
+
+  /**
+   * R10b — the confirmed money is captured EXACTLY ONCE by reconciliation and by
+   * the GL.
+   *
+   * "Exactly once" is asserted as a count, not a boolean, because the failure
+   * this guards against is double-capture as much as no capture. The GL half
+   * accepts EITHER a POSTED accounting event with a journal OR a durably
+   * queued `pendingAccountingEvents` row — R7/F10 name both as acceptable, and
+   * which one occurs depends on whether a period and chart exist.
+   *
+   * The event is located by the driver's SOURCE IDENTITY
+   * (`sourceType: "collectionPayments"`, `sourceId` = the driver-owned row) —
+   * the same traversal `returnClearedCheque:1333-1341` uses. No idempotency-key
+   * guessing.
+   *
+   * BASE: this fixture's org has no chart of accounts or open period, so the
+   * durable-outbox branch is the one expected to carry it. Recorded because a
+   * green here means "captured somewhere durable", not "posted to a journal".
+   */
+  test("R10b · the confirmed money is captured exactly once by reconciliation and the GL", async () => {
+    const { t, orgId, customerId, asUser } = await setup();
+    const rowId = await standaloneRow(asUser, orgId, customerId);
+
+    const chequeId = await asUser.mutation(api.collections.registerCheque, {
+      orgId, receivableId: rowId, customerId,
+      bank: "ABC", chequeNumber: "CQ-R10B", chequeDate: Date.now(), amount: PAY,
+    });
+    await asUser.mutation(api.collections.clearCheque, { orgId, chequeId });
+
+    const capture = await t.run(async (ctx: any) => {
+      const row = await ctx.db
+        .query("collectionPayments")
+        .withIndex("by_cheque", (q: any) => q.eq("chequeId", chequeId))
+        .first();
+      const sourceId = row._id.toString();
+      const events = (await ctx.db.query("accountingEvents").collect())
+        .filter((e: any) => e.sourceType === "collectionPayments" && e.sourceId === sourceId);
+      const queued = (await ctx.db.query("pendingAccountingEvents").collect())
+        .filter((e: any) => e.sourceType === "collectionPayments" && e.sourceId === sourceId);
+      const postedWithJournal = [];
+      for (const e of events.filter((e: any) => e.status === "POSTED")) {
+        const entries = (await ctx.db.query("journalEntries").collect())
+          .filter((j: any) => String(j.accountingEventId) === String(e._id));
+        if (entries.length > 0) postedWithJournal.push(e);
+      }
+      // The cashbook side: how many movement rows represent this one receipt.
+      const cashbookRows = (await ctx.db.query("transactions").collect())
+        .filter((tx: any) => tx.category === "COLLECTION_PAYMENT" && tx.type === "IN");
+      return {
+        glCapturedOnce: postedWithJournal.length + queued.filter((q: any) => q.status === "PENDING").length,
+        cashbookRowsForThisReceipt: cashbookRows.length,
+      };
+    });
+
+    expect(capture).toEqual({ glCapturedOnce: 1, cashbookRowsForThisReceipt: 1 });
+  });
+
+  /**
+   * R10c — THE R9 QUESTION. Is the retained row DISTINGUISHABLE BY READERS as an
+   * unapplied/non-AR movement, or is it presented as money collected against AR?
+   *
+   * This is deliberately not a storage assertion. It asks the two real
+   * Collections readers what they make of a movement row that carries confirmed
+   * money and NO allocation:
+   *
+   *   `collections.summary`            -> `collectedToday`
+   *   `collections.getReconciliationDraft` -> `expectedCash`
+   *
+   * CONSTRUCTION: a CASH payment recorded with no receivable (the S1 shape,
+   * green at A7a) is the only way `main` produces a `collectionPayments` row
+   * that carries the full confirmed amount and no allocation — which is exactly
+   * the shape of the retained safe-harbour row R7 approves. So it stands in for
+   * that row, and what the readers do with it is what they would do with it.
+   *
+   * THE CONTRACT: R6 says the receipt is "visible to cash/bank reconciliation"
+   * and "NEVER presented as paying AR". Those two together require the readers
+   * to separate it — visible in the cash figure, absent from the collected-
+   * against-debt figure. This cell asserts exactly that separation.
+   *
+   * BASE: measured on clean `main` with no chart/period, and independent of
+   * SCRUM-109 — no legacy row is involved.
+   */
+  test("R10c · a confirmed unapplied receipt must be visible to reconciliation and absent from AR collections", async () => {
+    const { t, orgId, customerId, asUser } = await setup();
+
+    await asUser.mutation(api.collections.recordPayment, {
+      orgId, customerId, amount: PAY, method: "CASH", paymentDate: Date.now(),
+    });
+
+    const allocated = await t.run(async (ctx: any) =>
+      (await ctx.db.query("paymentAllocations").collect()).filter((a: any) => a.status === "ACTIVE").length
+    );
+    expect(allocated).toBe(0); // it really is an unapplied receipt
+
+    const summary = await asUser.query(api.collections.summary, { orgId });
+    const draft = await asUser.query(api.collections.getReconciliationDraft, {
+      orgId, businessDate: Date.now(),
+    });
+
+    expect({
+      // R6: visible to cash/bank reconciliation.
+      visibleToReconciliation: draft.expectedCash,
+      // R6: never presented as paying AR. `collectedToday` is the Collections
+      // "money collected against debt" figure.
+      presentedAsCollectedAgainstDebt: summary.collectedToday,
+    }).toEqual({
+      visibleToReconciliation: PAY,
+      presentedAsCollectedAgainstDebt: 0,
     });
   });
 
