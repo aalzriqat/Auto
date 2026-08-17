@@ -7,6 +7,7 @@ import {
   decidePollOutcome,
   forLog,
   isFullSha,
+  isSafeApiPath,
   mergeVerdicts,
   parseConvexRunJson,
   parseReleaseInputs,
@@ -374,6 +375,31 @@ describe("values headed for a URL or a log are bounded first", () => {
     expect(isFullSha("a".repeat(39))).toBe(false);
     expect(isFullSha("../../etc/passwd")).toBe(false);
     expect(isFullSha(undefined)).toBe(false);
+  });
+
+  test("the compare path is allowed, because its own syntax contains dots", () => {
+    // ⚠️ REGRESSION, caught before it shipped. The first version of this
+    // validator refused any path containing "..", which reads as a sensible
+    // traversal guard and refuses `/compare/<sha>...<sha>` — the exact request
+    // the ancestry check depends on. A guard that breaks the thing it guards.
+    const sha = "a".repeat(40);
+    const tip = "b".repeat(40);
+    expect(isSafeApiPath(`/compare/${tip}...${sha}`)).toBe(true);
+    expect(isSafeApiPath(`/commits/${sha}`)).toBe(true);
+    expect(isSafeApiPath(`/commits/${sha}/pulls`)).toBe(true);
+    expect(isSafeApiPath("/commits/main")).toBe(true);
+  });
+
+  test("a traversal SEGMENT is still refused", () => {
+    expect(isSafeApiPath("/commits/../../../etc/passwd")).toBe(false);
+    expect(isSafeApiPath("/..")).toBe(false);
+    expect(isSafeApiPath("/commits/./main")).toBe(false);
+    // Anything that could add a query, a fragment, or a second host.
+    expect(isSafeApiPath("/commits/main?per_page=1")).toBe(false);
+    expect(isSafeApiPath("/commits/main#x")).toBe(false);
+    expect(isSafeApiPath("//evil.example/x")).toBe(false);
+    expect(isSafeApiPath("commits/main")).toBe(false);
+    expect(isSafeApiPath("")).toBe(false);
   });
 
   test("forLog flattens newlines and truncates, so a log line stays one line", () => {

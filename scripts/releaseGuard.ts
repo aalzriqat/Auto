@@ -52,6 +52,25 @@ export function isFullSha(value: string | undefined): boolean {
 }
 
 /**
+ * Whether a GitHub API path is a plain resource path this script may request.
+ *
+ * Validated at the sink rather than only at each call site, because that is the
+ * one place a future caller cannot forget.
+ *
+ * ⚠️ `..` is refused as a SEGMENT, not as a substring, and the distinction is
+ * load-bearing: the compare endpoint's own syntax is
+ * `/compare/<sha>...<sha>`, so a naive `path.includes("..")` refuses the very
+ * request this script depends on — a guard that breaks the thing it guards.
+ * (Caught here by writing the test, which is the point of it being a function.)
+ */
+export function isSafeApiPath(path: string): boolean {
+  if (!/^\/[A-Za-z0-9][A-Za-z0-9/._-]*$/.test(path)) return false;
+  // A `..` or `.` of its own would walk out of the repository scope that every
+  // other guarantee in this file assumes.
+  return !path.split("/").some((segment) => segment === ".." || segment === ".");
+}
+
+/**
  * Bounds a value that is about to be written to a log or a run summary.
  *
  * Dispatching this workflow already requires write access, so this is hygiene

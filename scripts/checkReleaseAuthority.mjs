@@ -18,7 +18,7 @@
  */
 import { appendFileSync } from "node:fs";
 import process from "node:process";
-import { decideCommitAuthority, forLog, isFullSha, parseReleaseInputs } from "./releaseGuard.ts";
+import { decideCommitAuthority, forLog, isFullSha, isSafeApiPath, parseReleaseInputs } from "./releaseGuard.ts";
 
 const REPO = process.env.GITHUB_REPOSITORY ?? "";
 const TOKEN = process.env.GITHUB_TOKEN ?? "";
@@ -53,6 +53,9 @@ function emit(name, value) {
 const seg = (value) => encodeURIComponent(String(value));
 
 async function api(path) {
+  if (!isSafeApiPath(path)) {
+    refuse(`Refusing to request a GitHub path that is not a plain resource path: ${forLog(path)}.`);
+  }
   const response = await fetch(`https://api.github.com/repos/${REPO}${path}`, {
     headers: {
       Accept: "application/vnd.github+json",
