@@ -142,18 +142,17 @@ dashboard. Resolve a hash on the authenticated `/admin` materialisation screen.
 
 ### What it does not guarantee
 
-#### ⚠️ There is no second person, and there cannot be one today
+#### ⚠️ There is no second person, and by design there will not be one
 
-The `Production` environment was configured on **2026-08-18** with a required
-reviewer, deployments restricted to `main`, and admin bypass disabled. It is no
-longer the rule-less no-op it was — an environment with `protection_rules: []`
-gates nothing at all, and this one now gates.
+**`prevent_self_review` is `false`, permanently and deliberately.** `aalzriqat`
+is the repository's only collaborator and the owner does not intend to add
+another, so the sole possible reviewer is the same person who dispatches the run.
+With self-review prevented, nobody could ever approve and the workflow would be
+permanently unrunnable. Owner decision, 2026-08-18.
 
-But **`prevent_self_review` is `false`, deliberately**, and that changes what the
-workflow means. `aalzriqat` is the repository's only collaborator, so the sole
-possible reviewer is the same person who dispatches the run. With self-review
-prevented, nobody could ever approve and the workflow would be permanently
-unrunnable. The owner accepted self-approval on 2026-08-18.
+Do not treat this as a gap awaiting closure, and do not "fix" it by enabling the
+setting — that turns the deploy path off. It is a standing constraint of a
+single-maintainer repository.
 
 So do not read the approval gate as independent review. What it actually
 provides:
@@ -164,9 +163,10 @@ provides:
 - administrators cannot bypass it;
 - there is an audit trail naming who approved which run against which commit.
 
-What it does **not** provide is a second pair of eyes. Getting that requires
+What it does **not** provide is a second pair of eyes. Getting that would require
 adding a second collaborator and then setting `prevent_self_review: true`; there
-is no configuration of a single-maintainer repository that produces it.
+is no configuration of a single-maintainer repository that produces it, and that
+is an accepted trade rather than an outstanding task.
 
 Verify the current state with the query rather than from memory — including
 after any change to collaborators:
@@ -200,28 +200,54 @@ required check which moves surfaces is still seen. A live illustration of why th
 identity matters: CodeRabbit posts `state=success` with the description *"Review
 skipped: manual review required for this OSS repository"*.
 
-### Required configuration (not in this repository)
+### Configuration — complete as of 2026-08-18
 
-The workflow still refuses at the credential gate until the outstanding rows
-below exist. It cannot deploy anything in the meantime.
+⚠️ **This workflow is now ARMED.** Every credential it needs exists. A
+`workflow_dispatch` that passes the checks and receives approval will deploy the
+Convex backend to production and then mutate production data via the backfills.
+Until 2026-08-18 it refused at the credential gate no matter what; that is no
+longer true, and reviews of it should be read with that in mind.
 
 | What | Where | State | Detail |
 | --- | --- | --- | --- |
-| `Production` environment | Settings → Environments | ✅ **done** 2026-08-18 | Required reviewer `aalzriqat`; branches restricted to `main`; admin bypass disabled. **Self-review NOT prevented** — see above |
-| `CONVEX_PROD_DEPLOYMENT` | that environment's **variables** | ✅ **done** 2026-08-18 | `kindly-hound-172`. Not a secret — it is an identifier, and naming it is the point |
-| `CONVEX_PROD_DEPLOY_KEY` | that environment's secrets | ⛔ **outstanding** | Scoped to that deployment, permission `deployment:deploy` **only** |
-| `CONVEX_PROD_OPERATOR_KEY` | that environment's secrets | ⛔ **outstanding** | `deployment:functions:runInternalMutations` + `runInternalQueries` **only** |
-| `CONVEX_PREVIEW_DEPLOY_KEY` | **repository** secrets | ⛔ **outstanding** | Not used by this workflow. `playwright.yml` was repointed at it, so E2E stays red until it exists — see below |
+| `Production` environment | Settings → Environments | ✅ | Required reviewer `aalzriqat`; branches restricted to `main`; admin bypass disabled. **Self-review NOT prevented** — see above |
+| `CONVEX_PROD_DEPLOYMENT` | that environment's **variables** | ✅ | `kindly-hound-172`. Not a secret — it is an identifier, and naming it is the point |
+| `CONVEX_PROD_DEPLOY_KEY` | that environment's secrets | ✅ | Intended scope: that deployment, permission `deployment:deploy` **only** |
+| `CONVEX_PROD_OPERATOR_KEY` | that environment's secrets | ✅ | Intended scope: `deployment:functions:runInternalMutations` + `runInternalQueries` **only** |
+| `CONVEX_PREVIEW_DEPLOY_KEY` | **repository** secrets | ✅ | Not used by this workflow; `playwright.yml` reads it |
 
-⚠️ All three keys have to be minted in the Convex dashboard. The CLI has no
-command that creates one (checked: no `key`, `token` or `auth` subcommand), so
-this is not automatable from a script or an agent.
+Verify presence — never values — with:
 
-⚠️ **`playwright.yml` now reads `CONVEX_PREVIEW_DEPLOY_KEY`, which does not
-exist yet.** That was the deliberate half of splitting the ambiguous repository
-secret, but it means the E2E suite fails with `No CONVEX_DEPLOYMENT set` rather
-than for its long-standing SCRUM-95 reason. Two causes now stack; do not read a
-red `playwright` as evidence about either one until this secret is provisioned.
+```bash
+gh api repos/aalzriqat/Auto/environments/Production/secrets --jq '.secrets[].name'
+gh api repos/aalzriqat/Auto/environments/Production/variables --jq '.variables[] | "\(.name) = \(.value)"'
+```
+
+⚠️ These keys are minted in the Convex dashboard. The CLI has no command that
+creates one (checked: no `key`, `token` or `auth` subcommand), so provisioning
+and rotation are manual by necessity, not by choice.
+
+⚠️ **The operator key's SCOPE is unverified and unverifiable from here.** The
+table says *intended* scope for a reason: Convex enforces key permissions
+server-side, nothing in this repository can read a secret's scope, and the first
+protected run is the first moment anything could demonstrate it. If that key was
+minted broader than `runInternalMutations`/`runInternalQueries`, then the
+separation between the deploy step and the rollout step is organisational rather
+than structural — the rollout step would be *able* to deploy, it simply does not.
+Treat the structural claim as unproven until a real run establishes it.
+
+### Still outstanding
+
+`CONVEX_DEPLOY_KEY` remains a **repository-level** secret. This branch repointed
+`playwright.yml` at `CONVEX_PREVIEW_DEPLOY_KEY`, but `main`'s copy still reads the
+old name, so it cannot be removed until this PR merges. Order: merge → delete the
+repository secret → revoke the underlying Convex credential (SCRUM-125). Deleting
+it first breaks E2E on `main` and destroys a credential that cannot be recreated
+from a shell.
+
+The workstation production deploy key also still exists — see the top of this
+section. Until it is revoked, `npx convex deploy` from a laptop reaches
+production and none of this applies to it.
 
 ⚠️ **The names are deliberately not `CONVEX_DEPLOY_KEY`.** A repository-level
 secret of that name still exists (SCRUM-125 removes it; `playwright.yml` now uses
@@ -232,18 +258,11 @@ a **preview** deployment, which the verifier would then verify, reporting
 "Production rollout verified" while production went untouched. Distinct names make
 a missing secret resolve to empty and fail closed.
 
-⚠️ **Verify the operator key's scope when you mint it.** That
-`runInternalMutations`/`runInternalQueries`-only granularity is what makes the
-verification step structurally unable to deploy. Convex enforces it server-side,
-so nothing in this repository can confirm the dashboard offers exactly that
-scope. If it cannot be minted that narrowly, say so — the property does not hold
-and the claim has to be corrected rather than assumed.
-
 Once a real run has succeeded, revoke the workstation production deploy key,
 remove production deploy credentials from local env files, and use a
 dev-deployment-scoped key for ordinary local work.
 
-### The one thing only the first real run can settle
+### The two things only the first real run can settle
 
 `assertDeploymentIdentity` requires the backend to report `CONVEX_CLOUD_URL`.
 That variable is a Convex system variable available in the function runtime, and
@@ -257,6 +276,28 @@ rather than certifying a deployment that will not say which one it is. So the
 first protected run either verifies the identity or fails closed — it cannot
 quietly pass. Expect that outcome and read the refusal, rather than assuming a
 green run proved the variable exists.
+
+The second is the **operator key's scope**, for the same reason from the other
+direction. "This step holds only the operator key, so it structurally cannot
+deploy" is a claim about how that key was minted, enforced by Convex's servers
+and invisible to everything here. Nothing in the suite tests it and nothing can.
+If the dashboard could not mint it as narrowly as the table above intends, the
+separation is organisational rather than structural and that sentence has to be
+corrected — not assumed because the run went green.
+
+### ⚠️ A green CI is not guaranteed to stay green
+
+`unit-and-integration` intermittently fails with **zero failing tests** — a vitest
+worker-teardown race (`Closing rpc while "onUserConsoleLog" was pending`) that
+names a different Convex suite each time and passes on re-run. `sonarcloud` runs
+the same vitest invocation for coverage, so one race can take out two required
+checks at once. See **SCRUM-140**.
+
+The gate is evaluated twice — in `authorize`, and again after approval — so a
+flake in either window refuses the release. That is fail-closed and correct. It
+does mean a release can need a CI re-run for reasons that have nothing to do with
+the release, and the right response is to re-run the job and read the result, not
+to loosen the required list.
 
 ### When it fails
 

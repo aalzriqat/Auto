@@ -61,7 +61,7 @@
       "name": "playwright",
       "issue": "SCRUM-95",
       "expires": "2026-11-17",
-      "reason": "TWO stacked causes. (1) SCRUM-95: the shared Convex dev deployment is disabled on free-plan limits, so the browser suite has no backend to run against — red on every branch including main. (2) SCRUM-125: this PR repointed playwright.yml at CONVEX_PREVIEW_DEPLOY_KEY, which is not provisioned yet, so the job now fails earlier with 'No CONVEX_DEPLOYMENT set'. Fixing SCRUM-95 alone will NOT turn this green."
+      "reason": "Red on every branch including main, and the cause has MOVED TWICE — measure it before assuming which one you are looking at. (1) SCRUM-95: the shared Convex dev deployment is disabled on free-plan limits. (2) This PR repointed playwright.yml at CONVEX_PREVIEW_DEPLOY_KEY; while that secret was unprovisioned the job failed at 'No CONVEX_DEPLOYMENT set' — RESOLVED 2026-08-18, the secret exists. (3) CURRENT, measured at 56f9dcb9c attempt 2: with the key present the job now fails at 'convex env set' with 'Not authorized', so the credential is read and REJECTED rather than missing. Whether that is the same free-plan limitation or a key-scope mismatch cannot be determined from this repository. Do not assume fixing SCRUM-95 turns this green."
     },
     {
       "producer": "sonarqubecloud",
