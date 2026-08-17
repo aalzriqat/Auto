@@ -179,6 +179,30 @@ function assertDealerEconomicsRecorded(
       companyId: app.companyId,
     })
   ) {
+    /**
+     * Not a configured financier — but the DIRECT route still requires the
+     * figure, and this is the ONE authority both irreversible transitions use.
+     *
+     * `finalizeDeal` already refused a direct deal with no approved amount.
+     * Handover did not, because this guard returned early for every
+     * non-configured mode. So a MANUAL direct deal could put the vehicle in the
+     * customer's hands with nothing recorded, and only then discover that
+     * `recordDirectSupplierReceiptAmount` refuses a handed-over deal and
+     * finalization refuses a missing amount. The vehicle is gone and neither
+     * door opens.
+     *
+     * The screen withdrawing its button after handover does not make that server
+     * transition safe. Refusing BEFORE the vehicle leaves is what makes the
+     * refusal recoverable, which is the whole point of failing closed early.
+     */
+    if (
+      app.supplierSettlementRoute === "DIRECT_TO_SUPPLIER" &&
+      app.approvedDealerPurchaseAmountMinor === undefined
+    ) {
+      throw new ConvexError(
+        `On this deal the finance provider pays the supplier directly, so what he receives is the figure the dealership's claim on him is measured from. It is not recorded. Record it before ${action}.`
+      );
+    }
     return;
   }
   if (app.submittedQuotationMinor === undefined) {
@@ -1759,7 +1783,7 @@ export const dealCockpit = query({
     applicationId: v.id("financeApplications"),
   },
   handler: async (ctx, args) => {
-    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    const { role, user: viewer } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
 
     const app = await ctx.db.get(args.applicationId);
     if (!app || app.orgId !== args.orgId) return null;
@@ -1935,6 +1959,37 @@ export const dealCockpit = query({
        * from which fields happen to be populated.
        */
       approvedPurchaseWriter: await approvedPurchaseWriterFor(ctx, app),
+      /**
+       * Whether the MANUAL supplier-amount action can actually be taken, and why
+       * not — decided HERE, where every input lives.
+       *
+       * The screen previously gated on the approval permission alone, which is
+       * the permission a default MANAGER has. The mutation requires the money
+       * permission too, so that manager was shown a button the server would
+       * refuse. Composing the rule client-side is what let the two disagree, so
+       * the rule is computed once, on the side that owns it.
+       */
+      directSupplierAmount: await (async () => {
+        const writer = await approvedPurchaseWriterFor(ctx, app);
+        if (writer !== "MANUAL_DIRECT_SUPPLIER_AMOUNT") {
+          return { applicable: false, available: false, reasonKey: null as string | null };
+        }
+        const closed = app.status === "CLOSED" || app.status === "CANCELLED";
+        const reasonKey = closed
+          ? "DirectSupplierAmountClosed"
+          : app.vehicleHandoverAt !== undefined
+            ? "DirectSupplierAmountSealed"
+            : viewer._id === app.salespersonId
+              ? "DirectSupplierAmountOwnDeal"
+              : !(
+                    isSystemOwnerRole(role) ||
+                    (role.permissions.includes(PERMISSIONS.APPROVE_FINANCE_APPLICATION) &&
+                      role.permissions.includes(PERMISSIONS.VIEW_FINANCE))
+                  )
+                ? "DirectSupplierAmountNeedsPermission"
+                : null;
+        return { applicable: true, available: reasonKey === null, reasonKey };
+      })(),
       /** The id whose tail the header shows — the application on this side. */
       dealRef: app._id as string,
       applicationId: app._id,
@@ -3047,9 +3102,69 @@ export const recordDirectSupplierReceiptAmount = mutation({
       );
     }
 
+    /**
+     * The premises the ROUTE was accepted on, re-established HERE.
+     *
+     * `setSupplierSettlementRoute` checked them when the route was chosen, and
+     * this is a different moment: the route may have been set first and the
+     * amount typed later, so nothing has re-verified that the vehicle is still
+     * the supplier's or that the payer is still identified. This is the third
+     * ordering of the same three facts, and the only one that had no check.
+     */
+    const vehicle = await ctx.db.get(app.vehicleId);
+    if (!vehicle || vehicle.orgId !== args.orgId) {
+      throw new ConvexError("The vehicle on this deal could not be found in this organization.");
+    }
+    if (!isConsignedAgentSale(vehicle)) {
+      throw new ConvexError(
+        "This vehicle is dealership stock, so there is no supplier receiving money on this deal and nothing to record."
+      );
+    }
+    const payer = settlementPayer({
+      quoteMode,
+      financeCompanyId: app.companyId,
+      manualProviderName: app.manualFinanceSnapshot?.providerName,
+    });
+    if (!payer.external || payer.counterparty === null) {
+      throw new ConvexError(
+        "The finance provider on this deal is not named, so a payment to the supplier could not be attributed to anyone. Record the provider on the quote first."
+      );
+    }
+
+    /**
+     * At LEAST what the supplier is owed.
+     *
+     * `sourceCost` is his entitlement — the figure the dealership agreed he
+     * gets — and an agency sale recognizes only the spread above it. Recording
+     * less than it would post a margin the dealership never earned, and because
+     * the route can be chosen before the amount is typed, nothing else on this
+     * path would have caught it until finalization, potentially after the vehicle
+     * had already gone out.
+     */
+    const entitlementMinor =
+      vehicle.sourceCost !== undefined && vehicle.sourceCost > 0
+        ? toMinorUnits(vehicle.sourceCost, economicsCurrency)
+        : undefined;
+    if (entitlementMinor !== undefined && args.approvedAmountMinor < entitlementMinor) {
+      throw new ConvexError(
+        `The supplier is owed more than this. ${vehicle.sourcedFromName ?? "The supplier"}'s recorded amount on this vehicle is higher than what you entered, and the dealership only earns what is left above it.`
+      );
+    }
+
     await ctx.db.patch(args.applicationId, {
       approvedDealerPurchaseAmountMinor: args.approvedAmountMinor,
       economicsCurrency,
+      /**
+       * The concurrency token MUST move.
+       *
+       * `handoverStamp` is derived from `economicsRevision`, and an open handover
+       * confirmation carries the stamp it was opened against. Without this bump,
+       * operator A could open the confirmation against amount A, operator B
+       * record amount B, and A's stale confirmation still succeed — sealing B
+       * while having reviewed A. Every other writer of these figures moves the
+       * revision; this one did not.
+       */
+      economicsRevision: (app.economicsRevision ?? 0) + 1,
     });
 
     // Actor, time and source. This is the row somebody reads months later when

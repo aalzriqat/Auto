@@ -108,6 +108,20 @@ type FinanceCompanyDecisionCardProps = {
    * would be a second opinion about which mutation applies.
    */
   approvedPurchaseWriter: "CONFIGURED_APPROVAL" | "MANUAL_DIRECT_SUPPLIER_AMOUNT" | "NONE";
+  /**
+   * Whether the manual supplier-amount action can be taken, and why not —
+   * decided by the SERVER, not composed here.
+   *
+   * This card used to gate on `canRecordApproval` alone. The mutation requires
+   * the money permission as well, and a default MANAGER holds the first without
+   * the second — so the manager was shown a button the server would refuse.
+   * Lifecycle, own-deal and BOTH permissions now arrive already resolved.
+   */
+  directSupplierAmount: {
+    applicable: boolean;
+    available: boolean;
+    reasonKey: string | null;
+  };
   /** Opens the manual provider's supplier-amount dialog. */
   onRecordDirectSupplierAmount: () => void;
 };
@@ -160,6 +174,7 @@ export function FinanceCompanyDecisionCard({
   onRecordApproved,
   onCorrectApproved,
   approvedPurchaseWriter,
+  directSupplierAmount,
   onRecordDirectSupplierAmount,
 }: Readonly<FinanceCompanyDecisionCardProps>) {
   const quotationRecorded = facts.submittedQuotationMinor !== null;
@@ -197,26 +212,17 @@ export function FinanceCompanyDecisionCard({
   /**
    * The manual provider's supplier amount — offered, or EXPLAINED.
    *
-   * Every one of these mirrors a refusal `recordDirectSupplierReceiptAmount`
-   * enforces, so the screen and the server cannot disagree about whether the
-   * action is possible. Silently hiding it is what produced the dead end this
-   * row exists to remove: the operator was told a figure was missing and left to
-   * guess why nothing would take it.
+   * Both come straight from the server verdict. An earlier version recomposed
+   * lifecycle and permission here, and got the permission half wrong: it checked
+   * the approval permission only, while the mutation also requires the money
+   * one. Recomposing a server rule on the client is how a screen ends up
+   * offering an action the server refuses.
    */
-  const directSupplierActionAvailable =
-    approvedPurchaseWriter === "MANUAL_DIRECT_SUPPLIER_AMOUNT" &&
-    canRecordApproval &&
-    !isOwnDeal &&
-    !facts.closed &&
-    !facts.handedOver;
-
-  let directSupplierNote: string | undefined;
-  if (approvedPurchaseWriter === "MANUAL_DIRECT_SUPPLIER_AMOUNT" && !directSupplierActionAvailable) {
-    if (facts.closed) directSupplierNote = t("DirectSupplierAmountClosed");
-    else if (facts.handedOver) directSupplierNote = t("DirectSupplierAmountSealed");
-    else if (isOwnDeal) directSupplierNote = t("DirectSupplierAmountOwnDeal");
-    else if (!canRecordApproval) directSupplierNote = t("DirectSupplierAmountNeedsPermission");
-  }
+  const directSupplierActionAvailable = directSupplierAmount.available;
+  const directSupplierNote =
+    directSupplierAmount.applicable && directSupplierAmount.reasonKey
+      ? t(directSupplierAmount.reasonKey)
+      : undefined;
 
   const derived: Array<{ key: string; label: string; value: string }> = [];
   if (facts.financeCompanyFundedPortionMinor !== null) {

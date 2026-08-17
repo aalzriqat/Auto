@@ -34,6 +34,16 @@ export interface RecordDirectSupplierAmountDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   submitting: boolean;
+  /**
+   * The server's refusal, verbatim.
+   *
+   * Every guard in `recordDirectSupplierReceiptAmount` names what to change —
+   * the supplier is owed more, the vehicle is dealership stock, the provider is
+   * unnamed, the vehicle has gone out. Swallowing those left the operator with a
+   * dialog that simply did not work, which is a worse dead end than the one this
+   * whole workflow removes.
+   */
+  error: string | null;
   /** The supplier this money reaches, named so the operator can check it. */
   supplierName: string | null;
   /** The provider paying him, for the same reason. */
@@ -51,6 +61,7 @@ export function RecordDirectSupplierAmountDialog({
   open,
   onOpenChange,
   submitting,
+  error,
   supplierName,
   providerName,
   money,
@@ -162,6 +173,12 @@ export function RecordDirectSupplierAmountDialog({
             />
           </div>
         </div>
+
+        {error && (
+          <p role="alert" className="text-sm font-medium text-destructive">
+            {error}
+          </p>
+        )}
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>

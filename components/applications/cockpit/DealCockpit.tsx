@@ -1248,6 +1248,7 @@ export function DealCockpitView({
   const [recordingApproval, setRecordingApproval] = useState(false);
   const [recordingDirectSupplier, setRecordingDirectSupplier] = useState(false);
   const [directSupplierSubmitting, setDirectSupplierSubmitting] = useState(false);
+  const [directSupplierError, setDirectSupplierError] = useState<string | null>(null);
   const [reopeningApproval, setReopeningApproval] = useState(false);
   const [recordingAppraisal, setRecordingAppraisal] = useState(false);
   const [appraisalSubmitting, setAppraisalSubmitting] = useState(false);
@@ -1860,7 +1861,17 @@ export function DealCockpitView({
           approvedPurchaseWriter={
             deal && "approvedPurchaseWriter" in deal ? deal.approvedPurchaseWriter : "NONE"
           }
-          onRecordDirectSupplierAmount={() => setRecordingDirectSupplier(true)}
+          // The server's verdict, forwarded unchanged. A cash deal's payload has
+          // no such field, hence the `in` narrowing rather than a cast.
+          directSupplierAmount={
+            deal && "directSupplierAmount" in deal
+              ? deal.directSupplierAmount
+              : { applicable: false, available: false, reasonKey: null }
+          }
+          onRecordDirectSupplierAmount={() => {
+            setDirectSupplierError(null);
+            setRecordingDirectSupplier(true);
+          }}
         />
       )}
 
@@ -2197,15 +2208,21 @@ export function DealCockpitView({
               }}
               t={t}
               onOpenChange={setRecordingDirectSupplier}
+              error={directSupplierError}
               onSubmit={async (values) => {
                 setDirectSupplierSubmitting(true);
+                setDirectSupplierError(null);
                 try {
                   await financeDecision.onRecordDirectSupplierAmount!(values);
+                  // Closed ONLY on success. Every refusal in the mutation names
+                  // what to change — the supplier is owed more, the vehicle is
+                  // dealership stock, the provider is unnamed, the vehicle has
+                  // gone out — so the dialog stays open carrying that sentence
+                  // rather than shutting on a write that never happened.
                   setRecordingDirectSupplier(false);
+                } catch (caught) {
+                  setDirectSupplierError(getErrorMessage(caught));
                 } finally {
-                  // Deliberately NOT caught: a swallowed refusal would close the
-                  // dialog on a write that never happened and leave the operator
-                  // believing the figure was recorded.
                   setDirectSupplierSubmitting(false);
                 }
               }}

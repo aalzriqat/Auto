@@ -3146,7 +3146,7 @@ describe("the supplier is never made debtor for money that did not reach him", (
     ).rejects.toThrow(/he is owed/i);
   });
 
-  test("a MANUAL direct deal with no approved amount is still refused at finalization", async () => {
+  test("a MANUAL direct deal with no approved amount is refused before the vehicle leaves", async () => {
     /**
      * Pins the FINALIZE-time direct-route check on its own.
      *
@@ -3164,16 +3164,30 @@ describe("the supplier is never made debtor for money that did not reach him", (
      * that never reached him.
      */
     const s = await seedDealership("s30ManualDirectNoApproval");
-    const { applicationId } = await runDeal(s, {
-      mode: "MANUAL_FINANCE_COMPANY",
-      manualProviderName: "شركة تمويل يدوية",
-      route: "DIRECT_TO_SUPPLIER",
-      finalize: false,
-    });
 
+    // The refusal MOVED EARLIER, and the expectation moved with it — the same
+    // correction the neighbouring configured case documents below.
+    //
+    // SCRUM-61's route-aware authority now refuses a MANUAL direct deal with no
+    // recorded amount at HANDOVER, so `runDeal` itself is rejected and the state
+    // "handed over, no approved amount" is unreachable. That is the point of the
+    // fix: the vehicle must not leave against a figure nothing can record
+    // afterwards. Asserting at finalization would now require manufacturing a
+    // state production refuses to create.
+    //
+    // ⚠️ NOT a claim that `finalizeDeal`'s own direct-route check is dead. It
+    // remains as defence in depth for any path that could clear the amount after
+    // handover; what changed is that this test can no longer be the thing that
+    // exercises it, and pretending otherwise is how the earlier version went
+    // green while covering a different branch.
     await expect(
-      s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId })
-    ).rejects.toThrow(/approved purchase amount is not recorded/i);
+      runDeal(s, {
+        mode: "MANUAL_FINANCE_COMPANY",
+        manualProviderName: "شركة تمويل يدوية",
+        route: "DIRECT_TO_SUPPLIER",
+        finalize: false,
+      })
+    ).rejects.toThrow(/pays the supplier directly|is not recorded/i);
   });
 
   test("a direct deal with no approved amount is refused rather than settled at the sale price", async () => {

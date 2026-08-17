@@ -1665,8 +1665,26 @@ describe("SCRUM-61: the manual provider's supplier amount is reachable from the 
     return wiring({ onRecordDirectSupplierAmount: noopAsync, ...overrides });
   }
 
-  const manualDeal = () =>
-    dealFixture({ approvedPurchaseWriter: "MANUAL_DIRECT_SUPPLIER_AMOUNT" });
+  /**
+   * The deal as the SERVER describes it.
+   *
+   * Eligibility and its reason are the server's verdict now, not something this
+   * card recomposes from permissions and facts — that recomposition is what let
+   * the screen offer a default MANAGER an action the mutation refuses. So these
+   * cases vary the VERDICT, and `configuredDealEconomicsGuard.test.ts` proves the
+   * verdict itself is right for real role templates and real lifecycle states.
+   */
+  const manualDeal = (
+    verdict: { applicable: boolean; available: boolean; reasonKey: string | null } = {
+      applicable: true,
+      available: true,
+      reasonKey: null,
+    }
+  ) =>
+    dealFixture({
+      approvedPurchaseWriter: "MANUAL_DIRECT_SUPPLIER_AMOUNT",
+      directSupplierAmount: verdict,
+    });
 
   test("the action is offered, and it calls the MANUAL writer — not the configured approval", async () => {
     const calls: Array<{ approvedAmountMinor: number; source: string }> = [];
@@ -1740,23 +1758,19 @@ describe("SCRUM-61: the manual provider's supplier amount is reachable from the 
     expect(cardButton("DirectSupplierAmountAction")).toBeUndefined();
   });
 
-  // Withheld, EXPLAINED — never silently absent. Each mirrors a refusal the
-  // server enforces, so the operator learns why rather than concluding the
-  // screen is broken.
-  for (const [label, overrides, reasonKey] of [
-    ["without the permission", { canRecordApproval: false }, "DirectSupplierAmountNeedsPermission"],
-    ["on their own deal", { isOwnDeal: true }, "DirectSupplierAmountOwnDeal"],
-    [
-      "after handover",
-      { facts: { handedOver: true } },
-      "DirectSupplierAmountSealed",
-    ],
-    ["once closed", { facts: { closed: true } }, "DirectSupplierAmountClosed"],
+  // Withheld, EXPLAINED — never silently absent. Each reason is one the SERVER
+  // returned; this proves the card renders it beside the row instead of leaving
+  // the operator to conclude the screen is broken.
+  for (const reasonKey of [
+    "DirectSupplierAmountNeedsPermission",
+    "DirectSupplierAmountOwnDeal",
+    "DirectSupplierAmountSealed",
+    "DirectSupplierAmountClosed",
   ] as const) {
-    test(`${label}, the action is withheld and the reason is shown`, () => {
+    test(`when the server withholds it as ${reasonKey}, the action is gone and the reason is shown`, () => {
       renderCockpit(
-        manualWiring({ ...overrides, onRecordDirectSupplierAmount: async () => {} }),
-        manualDeal()
+        manualWiring(),
+        manualDeal({ applicable: true, available: false, reasonKey })
       );
       expect(cardButton("DirectSupplierAmountAction")).toBeUndefined();
       expect(screen.getByText(reasonKey)).toBeTruthy();

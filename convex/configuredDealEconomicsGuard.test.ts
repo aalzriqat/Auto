@@ -2,6 +2,7 @@ import { convexTestWithComponents, registerHandover } from "../test-utils/convex
 import { expect, test, describe } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 
 const MODULES = import.meta.glob("./**/*.ts");
 
@@ -405,14 +406,14 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
     expect(profit.reason).toBe("NoApprovedPurchaseAmount");
 
     // The other half of the contradiction, in the same test so the two cannot
-    // drift apart again. The expected payment is registered first so finalization
-    // reaches the REAL refusal instead of stopping earlier on an unrelated one —
-    // a looser regex without it would have passed while proving nothing.
-    await registerHandover(asUser, api, orgId, applicationId);
-    await registerExpectedPayment();
+    // drift apart again — and it is now asserted at HANDOVER, which is the
+    // earlier and safer gate. This originally handed the vehicle over and caught
+    // the refusal at finalization; the route-aware authority added for the
+    // owner-proxy's first blocker refuses before the vehicle leaves, so the
+    // deal stays recoverable instead of becoming stuck with the car gone.
     await expect(
-      asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId })
-    ).rejects.toThrow(/approved purchase amount is not recorded|Record it before finalizing/i);
+      registerHandover(asUser, api, orgId, applicationId)
+    ).rejects.toThrow(/pays the supplier directly|is not recorded/i);
   });
 
   test("a MANUAL direct deal can RECORD the amount it is asked for, and then close", async () => {
@@ -489,6 +490,242 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
     const after = await t.run((ctx) => ctx.db.get(applicationId));
     expect(after?.status).toBe("CLOSED");
     expect(after?.finalizedSaleId).toBeDefined();
+  });
+
+  test("a DEFAULT MANAGER is told they cannot record it, not shown an action the server refuses", async () => {
+    // The owner-proxy's fourth blocker, and the fixture is the point.
+    //
+    // The card gated on the approval permission alone; the mutation requires the
+    // money permission as well. A default MANAGER holds the first WITHOUT the
+    // second, so that manager was shown a button the server would refuse. The
+    // earlier negative test passed `canRecordApproval: false`, which is a
+    // caller the split never applies to — it could not have caught this.
+    //
+    // Built from DEFAULT_ROLE_TEMPLATES rather than a hand-written permission
+    // list, because a hand-written list is exactly what hid the defect: it can
+    // omit the permission that makes the combination dangerous.
+    const managerTemplate = DEFAULT_ROLE_TEMPLATES.find((role) => role.name === "MANAGER");
+    expect(managerTemplate).toBeDefined();
+    // The premise, asserted rather than assumed: if MANAGER ever gains
+    // `view:finance` this test must be reconsidered, not silently keep passing.
+    expect(managerTemplate!.permissions).toContain("approve:finance_application");
+    expect(managerTemplate!.permissions).not.toContain("view:finance");
+
+    const { t, orgId, applicationId, asUser } = await seedApprovedApplication(
+      "MANUAL_FINANCE_COMPANY",
+      { sourcedVehicle: true, manualProviderName: "Amman Finance House" }
+    );
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+
+    // A real default MANAGER, and NOT the salesperson on this deal — otherwise
+    // the own-deal rule would answer first and the permission half would go
+    // untested.
+    const managerId = await t.run((ctx) =>
+      ctx.db.insert("users", {
+        clerkId: "guard_manager",
+        email: "manager@test.com",
+        name: "Default Manager",
+      })
+    );
+    const managerRoleId = await t.run((ctx) =>
+      ctx.db.insert("roles", {
+        orgId,
+        name: "MANAGER",
+        permissions: managerTemplate!.permissions,
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("memberships", { orgId, userId: managerId, roleId: managerRoleId })
+    );
+    const asManager = t.withIdentity({ subject: "guard_manager", clerkId: "guard_manager" });
+
+    // The SERVER decides eligibility, so the screen cannot disagree with it.
+    const cockpit = await asManager.query(api.applications.dealCockpit, { orgId, applicationId });
+    expect(cockpit?.directSupplierAmount.applicable).toBe(true);
+    expect(cockpit?.directSupplierAmount.available).toBe(false);
+    expect(cockpit?.directSupplierAmount.reasonKey).toBe("DirectSupplierAmountNeedsPermission");
+
+    // And the mutation refuses that same caller, which is the fact the verdict
+    // above exists to predict.
+    await expect(
+      asManager.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+        orgId,
+        applicationId,
+        approvedAmountMinor: 17_000_000,
+        source: "Signed purchase agreement",
+      })
+    ).rejects.toThrow(/permission/i);
+  });
+
+  test("a MANUAL direct deal cannot be HANDED OVER without the supplier amount", async () => {
+    // The owner-proxy's first blocker, and the sharpest of the five.
+    //
+    // `finalizeDeal` already refused a direct deal with no approved amount.
+    // Handover did not, because the economics guard returned early for every
+    // non-configured mode. So the vehicle could go to the customer with nothing
+    // recorded — and THEN both doors are shut: the writer refuses a handed-over
+    // deal, and finalization refuses a missing amount. The vehicle is gone and
+    // the deal cannot be completed or corrected.
+    //
+    // The screen withdrawing its button after handover does not make that server
+    // transition safe. Refusing before the vehicle leaves is what keeps the
+    // refusal recoverable.
+    const { t, orgId, applicationId, asUser } = await seedApprovedApplication(
+      "MANUAL_FINANCE_COMPANY",
+      { sourcedVehicle: true, manualProviderName: "Amman Finance House" }
+    );
+
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+
+    // Non-vacuity: the amount really is absent, so the refusal is about that.
+    const before = await t.run((ctx) => ctx.db.get(applicationId));
+    expect(before?.supplierSettlementRoute).toBe("DIRECT_TO_SUPPLIER");
+    expect(before?.approvedDealerPurchaseAmountMinor).toBeUndefined();
+
+    await expect(
+      registerHandover(asUser, api, orgId, applicationId)
+    ).rejects.toThrow(/pays the supplier directly|is not recorded/i);
+
+    // And the vehicle has NOT gone out, so the deal is still recoverable.
+    const after = await t.run((ctx) => ctx.db.get(applicationId));
+    expect(after?.vehicleHandoverAt).toBeUndefined();
+  });
+
+  test("recording less than the supplier is owed is refused, and changes nothing at all", async () => {
+    // The entitlement guard. `setSupplierSettlementRoute` checks an amount that
+    // is already there; the configured approver checks one entered after the
+    // route. This writer is the third ordering — route first, amount later — and
+    // it was the one with no entitlement check, so an operator could record less
+    // than the supplier is owed and only meet the refusal at finalization,
+    // potentially after the vehicle had gone.
+    //
+    // ATOMIC: the rejected attempt must move nothing — not the amount, not the
+    // denomination, not the concurrency revision, not the audit trail.
+    const { t, orgId, applicationId, asUser, asApprover } = await seedApprovedApplication(
+      "MANUAL_FINANCE_COMPANY",
+      { sourcedVehicle: true, manualProviderName: "Amman Finance House" }
+    );
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+
+    const snapshot = async () => {
+      const app = await t.run((ctx) => ctx.db.get(applicationId));
+      const audit = await t.run((ctx) =>
+        ctx.db
+          .query("financeApplicationOverrides")
+          .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+          .collect()
+      );
+      return {
+        amount: app?.approvedDealerPurchaseAmountMinor,
+        currency: app?.economicsCurrency,
+        revision: app?.economicsRevision,
+        auditRows: audit.length,
+      };
+    };
+
+    const before = await snapshot();
+
+    // The fixture records `sourceCost: 17000` as the supplier's entitlement, so
+    // 16,000 is genuinely below it rather than merely small.
+    await expect(
+      asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+        orgId,
+        applicationId,
+        approvedAmountMinor: 16_000_000,
+        source: "Signed purchase agreement",
+      })
+    ).rejects.toThrow(/owed more than this/i);
+
+    expect(await snapshot()).toStrictEqual(before);
+    // Non-vacuity: a snapshot of all-undefined would compare equal to itself, so
+    // prove the fields the comparison depends on are real ones.
+    expect(before.amount).toBeUndefined();
+    expect(before.auditRows).toBe(0);
+  });
+
+  test("recording the amount MOVES the stamp, so an open handover confirmation cannot seal a figure it never saw", async () => {
+    // The concurrency race. `handoverStamp` derives from `economicsRevision`, and
+    // an open handover confirmation carries the stamp it was opened against.
+    // Without a bump, operator A could open against amount A, operator B record
+    // amount B, and A's stale confirmation still succeed — sealing B while having
+    // reviewed A. Every other writer of these figures moves the revision; this
+    // one did not.
+    const { t, orgId, applicationId, asUser, asApprover } = await seedApprovedApplication(
+      "MANUAL_FINANCE_COMPANY",
+      { sourcedVehicle: true, manualProviderName: "Amman Finance House" }
+    );
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+
+    const record = (amountMinor: number) =>
+      asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+        orgId,
+        applicationId,
+        approvedAmountMinor: amountMinor,
+        source: "Signed purchase agreement",
+      });
+
+    // FIRST write.
+    await record(17_000_000);
+    const first = await t.run((ctx) => ctx.db.get(applicationId));
+    expect(first?.approvedDealerPurchaseAmountMinor).toBe(17_000_000);
+    const revisionAfterFirst = first?.economicsRevision;
+    expect(revisionAfterFirst).toBeTypeOf("number");
+
+    // The stamp operator A is holding, read BEFORE the correction below.
+    const staleStamp = await asUser.query(api.applications.handoverStamp, {
+      orgId,
+      applicationId,
+    });
+    expect(staleStamp).toBeTruthy();
+
+    // CORRECTION by operator B.
+    await record(18_000_000);
+    const second = await t.run((ctx) => ctx.db.get(applicationId));
+    expect(second?.approvedDealerPurchaseAmountMinor).toBe(18_000_000);
+    expect(second?.economicsRevision).toBeGreaterThan(revisionAfterFirst as number);
+
+    // Operator A's confirmation must now be refused rather than sealing 18,000
+    // against a review of 17,000.
+    await expect(
+      asUser.mutation(api.applications.registerVehicleHandover, {
+        orgId,
+        applicationId,
+        economicsStamp: staleStamp!,
+      })
+    ).rejects.toThrow();
+
+    // A FRESH stamp succeeds, so the guard refuses staleness rather than
+    // handover itself — otherwise this would be a dead end of its own.
+    const freshStamp = await asUser.query(api.applications.handoverStamp, {
+      orgId,
+      applicationId,
+    });
+    expect(freshStamp).toBeTruthy();
+    expect(freshStamp).not.toBe(staleStamp);
+    await asUser.mutation(api.applications.registerVehicleHandover, {
+      orgId,
+      applicationId,
+      economicsStamp: freshStamp!,
+    });
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.vehicleHandoverAt).toBeTypeOf(
+      "number"
+    );
   });
 
   test("the manual writer refuses the deals that belong to the approval step, and the states that are sealed", async () => {
