@@ -8,42 +8,96 @@
     "otherwise perfectly deployable — and 'it is on main' is precisely the",
     "reassurance that would stop anyone looking.",
     "",
+    "A NAME IS NOT AN IDENTITY. Every entry names the PRODUCER as well, because",
+    "this repository has two check-runs called 'osv-scanner' — one real, one a",
+    "report-only job that reports success whatever it finds. Matching on name",
+    "alone gated the release on whichever arrived second. Zero matches is a",
+    "refusal and so is more than one; there is no 'last result wins'.",
+    "",
+    "Only checks that GENUINELY FAIL when their protected condition fails are",
+    "listed here. See 'informational' below for the ones deliberately left out",
+    "and why — that list exists so they are not re-added by someone who sees a",
+    "green tick with a scanner's name on it.",
+    "",
+    "Every entry was verified live to be PRESENT at a main commit (4e3575878,",
+    "2026-08-17). A required check that only ever appears on pull-request",
+    "commits would refuse every release forever, since this gate runs at main's",
+    "tip — which is exactly what an earlier revision of this file did.",
+    "",
     "A waiver is data, not a judgement made under pressure at the moment of a",
     "deploy. Each names the issue that will remove it and the date it stops",
     "being accepted, and an EXPIRED waiver FAILS the release rather than",
-    "degrading quietly into a permanently lowered standard.",
+    "degrading quietly into a permanently lowered standard. A waiver excuses a",
+    "RESULT; it never excuses the ABSENCE of one, so a renamed or deleted check",
+    "is still a refusal.",
     "",
     "Waived checks are reported as WAIVED. They are never reported as passing."
   ],
   "required": [
-    "unit-and-integration",
-    "type-check",
-    "convex-backend",
-    "lint",
-    "secret-scan",
-    "dealer-worker",
-    "production-build",
-    "mobile-and-shared",
-    "Analyze (javascript-typescript)",
-    "Analyze (actions)",
-    "CodeQL",
-    "Semgrep OSS",
-    "osv-scanner",
-    "dependency-audit",
-    "playwright"
+    { "producer": "github-actions", "name": "unit-and-integration" },
+    { "producer": "github-actions", "name": "type-check" },
+    { "producer": "github-actions", "name": "convex-backend" },
+    { "producer": "github-actions", "name": "lint" },
+    { "producer": "github-actions", "name": "secret-scan" },
+    { "producer": "github-actions", "name": "dealer-worker" },
+    { "producer": "github-actions", "name": "production-build" },
+    { "producer": "github-actions", "name": "mobile-and-shared" },
+    { "producer": "github-actions", "name": "Analyze (javascript-typescript)" },
+    { "producer": "github-actions", "name": "Analyze (actions)" },
+    { "producer": "sonarqubecloud", "name": "SonarCloud Code Analysis" },
+    { "producer": "github-actions", "name": "dependency-audit" },
+    { "producer": "github-actions", "name": "playwright" }
   ],
   "waivers": [
     {
-      "context": "dependency-audit",
+      "producer": "github-actions",
+      "name": "dependency-audit",
       "issue": "SCRUM-127",
       "expires": "2026-11-17",
       "reason": "Fails identically on main; a transitive nanoid advisory reached through next's dependency graph, with no fix available at the pinned major. Not introduced by any release this gates."
     },
     {
-      "context": "playwright",
+      "producer": "github-actions",
+      "name": "playwright",
       "issue": "SCRUM-95",
       "expires": "2026-11-17",
       "reason": "The shared Convex dev deployment is disabled on free-plan limits, so the browser suite has no backend to run against. Red on every branch, including main."
+    },
+    {
+      "producer": "sonarqubecloud",
+      "name": "SonarCloud Code Analysis",
+      "issue": "SCRUM-128",
+      "expires": "2027-02-17",
+      "reason": "Quality gate red on main: Security Rating on New Code below A. Pre-existing and repository-wide, so blocking every release on it is not a decision this workflow should make silently. Required rather than dropped, because it is the check that actually fails on a gate breach."
     }
-  ]
+  ],
+  "informational": {
+    "$comment": [
+      "Deliberately NOT required, with the reason recorded so they are not",
+      "re-added. Each of these is a real tool doing real work; none of them can",
+      "currently REFUSE anything, and a gate is only worth having if failing it",
+      "stops something."
+    ],
+    "reportOnly": {
+      "issue": "SCRUM-129",
+      "producer": "github-actions",
+      "names": ["semgrep", "osv-scanner", "checkov", "zap-baseline", "nuclei"],
+      "reason": "Every job in security.yml carries continue-on-error: true, by that file's own stated design. These check-runs report success whatever the scanner finds, so requiring one gates on nothing."
+    },
+    "pullRequestOnly": {
+      "producer": "github-advanced-security",
+      "names": ["CodeQL", "Semgrep OSS", "osv-scanner"],
+      "reason": "Verified absent from main commits (4e3575878) and present on pull-request commits. This gate only ever evaluates main's tip, so requiring these would refuse every release. The CodeQL ANALYSIS is required instead, via the github-actions 'Analyze (...)' jobs — which prove the analysis ran, not that it was clean."
+    },
+    "uploadOnly": {
+      "producer": "github-actions",
+      "names": ["sonarcloud"],
+      "reason": "This job runs sonarqube-scan-action and exits without waiting on the quality gate, so its success means 'the scan was uploaded'. The gate result arrives separately as sonarqubecloud/SonarCloud Code Analysis, which is required above. If this job breaks, that check goes missing and the release refuses on zero matches."
+    },
+    "noProducerIdentity": {
+      "producer": "commit-status",
+      "names": ["CodeRabbit", "Vercel"],
+      "reason": "The commit-status API carries no app slug (creator is null), so a status cannot be identified by producer and nothing status-sourced is required. Statuses are still READ, because a check present on one surface is invisible to the other and a required check could move. Live example of why the identity matters: CodeRabbit posts state=success with the description 'Review skipped: manual review required for this OSS repository'."
+    }
+  }
 }

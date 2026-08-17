@@ -101,6 +101,27 @@ export const materializationReportForRelease = internalQuery({
     return {
       ...page,
       /**
+       * ⚠️ An ALLOWLIST, so tenant data does not leave Convex at all rather
+       * than leaving it and being carefully not printed.
+       *
+       * `orgName` is the field this exists to withhold: the release workflow
+       * runs on a public repository, and "the caller happens not to log it" is
+       * a property of today's caller, not a boundary. An allowlist also means a
+       * field added to the shared report later cannot join the payload by
+       * default — it has to be named here, deliberately.
+       *
+       * `orgId` stays because the verifier needs a stable input to hash into
+       * the opaque reference it prints, and that hash is what makes a run
+       * correlatable with the authenticated `/admin` screen. It is never
+       * rendered directly — `opaqueOrgRef` is the only path to output, which
+       * mutation testing covers.
+       */
+      page: page.page.map((org) => ({
+        orgId: org.orgId,
+        readerSource: org.readerSource,
+        platforms: org.platforms,
+      })),
+      /**
        * ⚠️ The deployment naming ITSELF, so a verifier can prove it is looking
        * at the deployment it was told to look at.
        *

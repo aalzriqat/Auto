@@ -352,17 +352,38 @@ export function assertDeploymentIdentity(
 
 // ─── Exact-SHA CI gating ────────────────────────────────────────────────────
 
-export type CheckResult = { name: string; conclusion: string | null };
+/**
+ * One observed check result, carrying WHO produced it.
+ *
+ * `producer` is a GitHub App slug for a check-run (`github-actions`,
+ * `sonarqubecloud`, `github-advanced-security`), or `commit-status` for the
+ * separate statuses API.
+ */
+export type CheckResult = {
+  producer: string;
+  name: string;
+  /** `queued` | `in_progress` | `completed`. Only the last can be a verdict. */
+  status: string;
+  conclusion: string | null;
+};
 
-export type Waiver = { context: string; issue: string; expires: string; reason: string };
+/** A check identified the only way that is stable: producer *and* name. */
+export type RequiredCheck = { producer: string; name: string };
+
+export type Waiver = RequiredCheck & { issue: string; expires: string; reason: string };
+
+export type WaivedCheck = Waiver & { observed: string };
 
 export type CheckVerdict = {
   ok: boolean;
   passed: string[];
   /** Explicitly waived. ⚠️ Never to be reported as passing. */
-  waived: Waiver[];
+  waived: WaivedCheck[];
   failures: string[];
 };
+
+/** How a required check is named in output. */
+export const describeCheck = (check: RequiredCheck) => `${check.producer}/${check.name}`;
 
 /**
  * Requires the commit being deployed to have green CI *at that exact SHA*.
@@ -372,49 +393,86 @@ export type CheckVerdict = {
  * perfectly deployable by this workflow — and "it is on main" is precisely the
  * reassurance that would stop anyone looking.
  *
+ * ⚠️ A NAME IS NOT AN IDENTITY, and this repository proves it: two check-runs
+ * are called `osv-scanner`. One is `github-advanced-security`'s SARIF result;
+ * the other is a `security.yml` job whose every scanning step carries
+ * `continue-on-error: true` — a check that reports `success` no matter what it
+ * finds. An earlier revision of this function built `new Map(results.map(…))`,
+ * so the collision resolved by last-write-wins and the release gated on
+ * whichever arrived second. A genuine CVE would have reported `osv-scanner:
+ * passed`.
+ *
+ * So every required check is matched on producer AND name, and the count of
+ * matches is itself a verdict:
+ *
+ *   · exactly one → judge it
+ *   · none        → refuse. A renamed, deleted or never-run check is the state
+ *                   this exists to notice, so it is never quietly excused —
+ *                   not even by a waiver.
+ *   · more than one → refuse as ambiguous, rather than pick.
+ *
  * Waivers are data, not judgement calls made at 2am. Each names an issue and an
  * expiry, and an expired one is a failure — the known-red checks in this
  * repository are known-red for reasons that are supposed to get fixed, and a
- * waiver with no end date is just a lowered standard.
+ * waiver with no end date is just a lowered standard. A waiver excuses a
+ * RESULT; it never excuses the absence of one.
  */
 export function evaluateRequiredChecks(input: {
-  required: string[];
+  required: RequiredCheck[];
   results: CheckResult[];
   waivers: Waiver[];
   now: Date;
 }): CheckVerdict {
   const { required, results, waivers, now } = input;
-  const byName = new Map(results.map((r) => [r.name, r.conclusion]));
   const verdict: CheckVerdict = { ok: true, passed: [], waived: [], failures: [] };
 
-  for (const context of required) {
-    const waiver = waivers.find((w) => w.context === context);
+  for (const check of required) {
+    const label = describeCheck(check);
+    const matches = results.filter(
+      (r) => r.producer === check.producer && r.name === check.name
+    );
+
+    // ── Identity first, ALWAYS before any waiver ──────────────────────────
+    if (matches.length === 0) {
+      verdict.failures.push(
+        `${label}: no result at this commit from that producer. Either it did not run, or it ` +
+          `was renamed — both are things a release should stop for.`
+      );
+      continue;
+    }
+    if (matches.length > 1) {
+      verdict.failures.push(
+        `${label}: ${matches.length} results share that producer and name, so which one gates ` +
+          `the release is undefined. Refusing rather than picking.`
+      );
+      continue;
+    }
+
+    const [result] = matches;
+    const observed = result.status === "completed" ? String(result.conclusion) : `still ${result.status}`;
+
+    const waiver = waivers.find((w) => w.producer === check.producer && w.name === check.name);
     if (waiver) {
       const expires = new Date(waiver.expires);
       if (Number.isNaN(expires.getTime())) {
-        verdict.failures.push(`${context}: its waiver has an unreadable expiry (${forLog(waiver.expires)}).`);
+        verdict.failures.push(`${label}: its waiver has an unreadable expiry (${forLog(waiver.expires)}).`);
         continue;
       }
       if (expires.getTime() <= now.getTime()) {
         verdict.failures.push(
-          `${context}: its waiver expired on ${waiver.expires} (${waiver.issue}). Fix it or renew it deliberately.`
+          `${label}: its waiver expired on ${waiver.expires} (${waiver.issue}). Fix it or renew it deliberately.`
         );
         continue;
       }
-      verdict.waived.push(waiver);
+      verdict.waived.push({ ...waiver, observed });
       continue;
     }
 
-    const conclusion = byName.get(context);
-    if (conclusion === "success") {
-      verdict.passed.push(context);
+    if (result.status === "completed" && result.conclusion === "success") {
+      verdict.passed.push(label);
       continue;
     }
-    verdict.failures.push(
-      conclusion === undefined
-        ? `${context}: no result at this commit. It may still be running.`
-        : `${context}: ${forLog(String(conclusion))}.`
-    );
+    verdict.failures.push(`${label}: ${forLog(observed)}.`);
   }
 
   verdict.ok = verdict.failures.length === 0;
@@ -435,16 +493,22 @@ export type PlatformReport = {
   failureMessage: string | null;
   /** Fences concurrent chains, and here: tells a stale failure from a new one. */
   runId: string | null;
+  /**
+   * Whether ANY `socialConversations` row exists for this org AND THIS PLATFORM
+   * at the current generation. A bounded existence probe, not a count.
+   *
+   * ⚠️ Per platform, not per org, and the difference is a whole channel. An
+   * org-wide probe is satisfied by either platform: Instagram could claim 340
+   * materialised conversations and have none, while Facebook's rows answer the
+   * question on its behalf — and the Instagram inbox would be confidently
+   * empty, which is the 2026-08-07 failure surviving the check built for it.
+   */
+  hasCurrentGenerationConversations: boolean;
 };
 
 export type OrgReport = {
   orgId: string;
   readerSource: string;
-  /**
-   * Whether ANY `socialConversations` row exists for this org at the current
-   * generation. A bounded existence probe, not a count.
-   */
-  hasCurrentGenerationConversations: boolean;
   platforms: PlatformReport[];
 };
 
@@ -466,18 +530,37 @@ export type Verdict = {
   anomalies: Problem[];
 };
 
-/** `org|platform` → the runId observed BEFORE the fan-out started. */
-export type RunBaseline = Map<string, string | null>;
+/** What one org/platform looked like BEFORE the fan-out was asked for. */
+export type BaselineEntry = { runId: string | null; status: string };
+
+/** `org|platform` → its pre-fan-out state. */
+export type RunBaseline = Map<string, BaselineEntry>;
 
 export const baselineKey = (orgId: string, platform: string) => `${orgId}|${platform}`;
 
 /** Records what every org/platform looked like before any redrive was asked for. */
 export function captureRunBaseline(orgs: OrgReport[], into: RunBaseline = new Map()): RunBaseline {
   for (const org of orgs) {
-    for (const p of org.platforms) into.set(baselineKey(org.orgId, p.platform), p.runId);
+    for (const p of org.platforms) {
+      into.set(baselineKey(org.orgId, p.platform), { runId: p.runId, status: p.status });
+    }
   }
   return into;
 }
+
+/**
+ * The pre-fan-out states for which `startSocialConversationBackfills` actually
+ * schedules a new run — read from that mutation, not assumed.
+ *
+ * ⚠️ `running` is deliberately absent, and it is the trap. The fan-out SKIPS a
+ * running platform on purpose (re-enqueuing resets its cursor and fences the
+ * chain already doing the work), so nothing is queued to repair it. A failure
+ * that appears there is therefore not "awaiting redrive" — nothing is coming —
+ * and waiting on it burns the entire deadline.
+ *
+ * `completed` and `ambiguous` are skipped too, the second unconditionally.
+ */
+const REDRIVEN_BY_FAN_OUT = new Set(["failed", "interrupted", "notStarted"]);
 
 /**
  * States that are not a verdict yet, because something is still going to change
@@ -499,7 +582,7 @@ type PlatformVerdict =
   | { bucket: "inFlight" | "problem" | "anomaly"; kind: string; detail: string };
 
 /** One platform's verdict. Extracted so the org loop stays readable. */
-function classifyPlatform(p: PlatformReport, baselineRunId: string | null | undefined): PlatformVerdict {
+function classifyPlatform(p: PlatformReport, baseline: BaselineEntry | undefined): PlatformVerdict {
   if (p.duplicateState || p.status === "ambiguous") {
     return {
       bucket: "problem",
@@ -531,23 +614,37 @@ function classifyPlatform(p: PlatformReport, baselineRunId: string | null | unde
     // redrive that runs and fails again would then be waited on until the
     // deadline, turning a definite answer into a 45-minute one.
     //
-    // The runId settles it. A failure still carrying the run identity observed
-    // before the fan-out is the stale one being recovered; a failure under a
-    // NEW runId is this rollout's own attempt, and it has already answered.
-    const isNewRun = baselineRunId !== undefined && p.runId !== baselineRunId;
-    if (isNewRun) {
+    // Waiting is therefore correct in exactly ONE case, and it has to be
+    // established positively rather than by elimination — an earlier revision
+    // asked only "is the runId different?", and was wrong in both directions:
+    //
+    //   · a platform that was `running` at baseline is SKIPPED by the fan-out,
+    //     so its old runId persists and a failure there waited on a redrive
+    //     that was never scheduled; and
+    //   · an org created after the baseline walk has no entry at all, so its
+    //     own fresh failure was read as "pre-existing" and waited on too.
+    //
+    // Both are now terminal. Waiting requires all three: the platform existed
+    // at baseline, it was in a state the fan-out actually redrives, and its run
+    // identity has not changed yet — i.e. the reset is genuinely still queued.
+    const awaitingRedrive =
+      baseline !== undefined &&
+      REDRIVEN_BY_FAN_OUT.has(baseline.status) &&
+      p.runId === baseline.runId;
+
+    if (awaitingRedrive) {
       return {
-        bucket: "problem",
-        kind: p.status,
-        // ⚠️ Deliberately NOT `p.failureMessage`. This output is public, and the
-        // stored message is raw backend error text (SCRUM-119).
-        detail: "This rollout's own backfill run reported a failure. See the Convex logs.",
+        bucket: "inFlight",
+        kind: `${p.status}-awaitingRedrive`,
+        detail: `A pre-existing failure is being redriven. ${p.processedCount}/${p.expectedCount} processed.`,
       };
     }
     return {
-      bucket: "inFlight",
-      kind: `${p.status}-awaitingRedrive`,
-      detail: `A pre-existing failure is being redriven. ${p.processedCount}/${p.expectedCount} processed.`,
+      bucket: "problem",
+      kind: p.status,
+      // ⚠️ Deliberately NOT `p.failureMessage`. This output is public, and the
+      // stored message is raw backend error text (SCRUM-119).
+      detail: "A backfill run reported a failure that no redrive is going to clear. See the Convex logs.",
     };
   }
 
@@ -569,6 +666,31 @@ function classifyPlatform(p: PlatformReport, baselineRunId: string | null | unde
       bucket: "problem",
       kind: "staleGeneration",
       detail: `Completed at generation ${p.generation}, but the reader expects ${p.expectedGeneration}.`,
+    };
+  }
+
+  // ⚠️ THE 2026-08-07 INCIDENT, checked against the table instead of inferred
+  // from a counter — and checked PER PLATFORM.
+  //
+  // On that day the Social Inbox reported zero conversations for an org holding
+  // 347 Instagram and 689 Facebook events — no throw, no log — because the
+  // reader was pointed at a table with nothing in it. A backfill that CLAIMS to
+  // have materialised rows while the table holds none at the current generation
+  // is that picture exactly, and unlike the counter-only check below it cannot
+  // be confused with a healthy all-unlinked platform: those claim zero and are
+  // asked nothing further.
+  //
+  // Per platform because an org-wide probe lets one channel answer for the
+  // other: Instagram claiming 340 rows and having none passes as long as
+  // Facebook has any, and the Instagram inbox is confidently empty.
+  if (p.materializedCount > 0 && !p.hasCurrentGenerationConversations) {
+    return {
+      bucket: "problem",
+      kind: "emptyAfterMaterialising",
+      detail:
+        `The backfill reports ${p.materializedCount} conversations materialised, but no ` +
+        `socialConversations row exists for this platform at the current generation. The reader ` +
+        `would serve an empty inbox with total confidence.`,
     };
   }
 
@@ -615,9 +737,7 @@ function classifyOrg(org: OrgReport, baseline: RunBaseline | undefined): OrgVerd
     return out;
   }
 
-  let claimedMaterialised = 0;
   for (const p of org.platforms) {
-    if (p.status === "completed") claimedMaterialised += p.materializedCount;
     const verdict = classifyPlatform(p, baseline?.get(baselineKey(org.orgId, p.platform)));
     if (verdict.bucket === "healthy") continue;
 
@@ -630,29 +750,6 @@ function classifyOrg(org: OrgReport, baseline: RunBaseline | undefined): OrgVerd
     }
     out.settledHealthy = false;
     (verdict.bucket === "inFlight" ? out.inFlight : out.problems).push(entry);
-  }
-
-  // ⚠️ THE 2026-08-07 INCIDENT, checked against the table instead of inferred
-  // from a counter.
-  //
-  // On that day the Social Inbox reported zero conversations for an org holding
-  // 347 Instagram and 689 Facebook events — no throw, no log — because the
-  // reader was pointed at a table with nothing in it. A backfill that CLAIMS to
-  // have materialised rows while the table holds none at the current generation
-  // is that picture exactly, and unlike the counter-only version it cannot be
-  // confused with a healthy all-unlinked org: those claim zero and are asked
-  // nothing further.
-  if (claimedMaterialised > 0 && !org.hasCurrentGenerationConversations) {
-    out.settledHealthy = false;
-    out.problems.push(
-      at(
-        null,
-        "emptyAfterMaterialising",
-        `The backfill reports ${claimedMaterialised} conversations materialised, but no ` +
-          `socialConversations row exists at the current generation. The reader would serve an ` +
-          `empty inbox with total confidence.`
-      )
-    );
   }
 
   // Checked as well as, not instead of, the per-platform states. It is
@@ -767,21 +864,49 @@ export function pollIntervalMs(elapsedMs: number): number {
  *
  * Parsed strictly anyway. If a future CLI writes a banner to stdout, the honest
  * outcome is refusing to certify a rollout it can no longer read.
+ *
+ * ⚠️ NOTHING from stdout reaches the reason, not even a preview and not even
+ * V8's parse error. That stdout is the materialisation report — organization
+ * rows — and modern V8 quotes the offending input back inside the exception
+ * message, so `error.message` is itself a disclosure channel. An earlier
+ * revision printed "first 200 characters" here, which published tenant data
+ * from two functions away from the redaction that was supposed to prevent it.
+ * The length is enough to tell "empty" from "a banner got in the way".
  */
 export function parseConvexRunJson(stdout: string): { ok: true; value: unknown } | Refusal {
   const trimmed = stdout.trim();
   if (trimmed === "") return { ok: false, reason: "convex run produced no output on stdout." };
   try {
     return { ok: true, value: JSON.parse(trimmed) };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+  } catch {
     return {
       ok: false,
       reason:
-        `convex run's stdout was not JSON (${message}). Refusing to guess at a rollout verdict. ` +
-        `First 200 characters: ${forLog(trimmed.slice(0, 200), 200)}`,
+        `convex run's stdout was not JSON (${trimmed.length} characters). Refusing to guess at a ` +
+        `rollout verdict. The output is not reproduced here: it carries organization rows and ` +
+        `this log is public. Inspect it in the Convex dashboard.`,
     };
   }
+}
+
+/**
+ * What a failed `convex` invocation is allowed to say in public.
+ *
+ * ⚠️ It takes no output, and that is the whole design. The caller writes this
+ * to the job log and the run summary, both public on this repository, and a
+ * Convex error carries whatever the failing function was handling —
+ * organization names, document ids, raw backend text. An earlier revision
+ * interpolated the CLI's entire stderr here, which reopened SCRUM-119 two
+ * functions away from the `opaqueOrgRef` redaction built to close it.
+ *
+ * Making it a function with no channel for output is stronger than remembering
+ * not to use one.
+ */
+export function describeConvexFailure(command: string, exitStatus: number | null): string {
+  return (
+    `convex ${command} exited ${exitStatus}. Its output is not reproduced here — this log is ` +
+    `public and the CLI's errors carry tenant data. Read it in the Convex dashboard's logs.`
+  );
 }
 
 /** Renders the verdict for `$GITHUB_STEP_SUMMARY`. */

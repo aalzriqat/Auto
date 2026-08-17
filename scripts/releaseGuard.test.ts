@@ -19,6 +19,7 @@ import {
   pollIntervalMs,
   renderReleaseSummary,
   requireBoundProductionKeys,
+  type CheckResult,
   type OrgReport,
   type PlatformReport,
 } from "./releaseGuard";
@@ -190,41 +191,107 @@ describe("the deployment states its own identity", () => {
 
 describe("CI must be green at the exact commit, and waivers expire", () => {
   const NOW = new Date("2026-08-17T00:00:00Z");
-  const waiver = { context: "playwright", issue: "SCRUM-95", expires: "2026-11-17", reason: "no backend" };
+  const PLAYWRIGHT = { producer: "github-actions", name: "playwright" };
+  const waiver = { ...PLAYWRIGHT, issue: "SCRUM-95", expires: "2026-11-17", reason: "no backend" };
+
+  const result = (over: Partial<CheckResult> = {}): CheckResult => ({
+    producer: "github-actions",
+    name: "lint",
+    status: "completed",
+    conclusion: "success",
+    ...over,
+  });
+  const LINT = [{ producer: "github-actions", name: "lint" }];
 
   test("a still-running check is not a passing one", () => {
     // Ancestry proves a commit was merged, not that the merge was healthy.
     const verdict = evaluateRequiredChecks({
-      required: ["lint"],
-      results: [{ name: "lint", conclusion: "still in_progress" }],
+      required: LINT,
+      results: [result({ status: "in_progress", conclusion: null })],
       waivers: [],
       now: NOW,
     });
     expect(verdict.ok).toBe(false);
+    expect(verdict.failures[0]).toMatch(/still in_progress/);
   });
 
   test("a check with no result at this commit is a failure, not an absence", () => {
-    const verdict = evaluateRequiredChecks({ required: ["lint"], results: [], waivers: [], now: NOW });
+    const verdict = evaluateRequiredChecks({ required: LINT, results: [], waivers: [], now: NOW });
     expect(verdict.ok).toBe(false);
     expect(verdict.failures[0]).toMatch(/no result at this commit/);
   });
 
-  test("a live waiver is recorded as WAIVED and never as passing", () => {
+  test("THE OSV-SCANNER CASE: a duplicated name refuses rather than picking one", () => {
+    // ⚠️ REGRESSION, and the one that ended round 3. This repository really does
+    // publish two check-runs called `osv-scanner`: Advanced Security's SARIF
+    // result, and a `security.yml` job whose scan step carries
+    // `continue-on-error: true` and therefore reports success whatever it finds.
+    //
+    // The previous implementation built `new Map(results.map(...))`, so the
+    // collision resolved by last-write-wins and the release gated on whichever
+    // arrived second. A real CVE would have reported `osv-scanner: passed`.
+    //
+    // Both here are green, so "did it pass" cannot catch this — only counting
+    // the matches can.
     const verdict = evaluateRequiredChecks({
-      required: ["playwright"],
-      results: [{ name: "playwright", conclusion: "failure" }],
+      required: [{ producer: "github-actions", name: "osv-scanner" }],
+      results: [
+        result({ name: "osv-scanner" }),
+        result({ name: "osv-scanner" }),
+      ],
+      waivers: [],
+      now: NOW,
+    });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.failures[0]).toMatch(/2 results share that producer and name/);
+    expect(verdict.passed).toEqual([]);
+  });
+
+  test("the same name from a DIFFERENT producer does not satisfy the requirement", () => {
+    // The other half of the same lesson: a name is not an identity in either
+    // direction. A green `github-advanced-security/osv-scanner` says nothing
+    // about whether the required Actions job ran.
+    const verdict = evaluateRequiredChecks({
+      required: [{ producer: "github-actions", name: "osv-scanner" }],
+      results: [result({ producer: "github-advanced-security", name: "osv-scanner" })],
+      waivers: [],
+      now: NOW,
+    });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.failures[0]).toMatch(/no result at this commit from that producer/);
+  });
+
+  test("a waiver excuses a RESULT, never the absence of one", () => {
+    // ⚠️ REGRESSION. A waived check that is renamed or deleted used to pass
+    // silently — the waiver was consulted before anything was observed, so the
+    // gate reported WAIVED for a check that had not run at all.
+    const verdict = evaluateRequiredChecks({
+      required: [PLAYWRIGHT],
+      results: [],
+      waivers: [waiver],
+      now: NOW,
+    });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.failures[0]).toMatch(/no result at this commit/);
+    expect(verdict.waived).toEqual([]);
+  });
+
+  test("a live waiver is recorded as WAIVED, with what was actually observed", () => {
+    const verdict = evaluateRequiredChecks({
+      required: [PLAYWRIGHT],
+      results: [result({ name: "playwright", conclusion: "failure" })],
       waivers: [waiver],
       now: NOW,
     });
     expect(verdict.ok).toBe(true);
-    expect(verdict.waived).toEqual([waiver]);
+    expect(verdict.waived).toEqual([{ ...waiver, observed: "failure" }]);
     expect(verdict.passed).toEqual([]);
   });
 
   test("an EXPIRED waiver fails the release rather than degrading quietly", () => {
     const verdict = evaluateRequiredChecks({
-      required: ["playwright"],
-      results: [{ name: "playwright", conclusion: "failure" }],
+      required: [PLAYWRIGHT],
+      results: [result({ name: "playwright", conclusion: "failure" })],
       waivers: [waiver],
       now: new Date("2026-12-01T00:00:00Z"),
     });
@@ -234,26 +301,48 @@ describe("CI must be green at the exact commit, and waivers expire", () => {
 
   test("an unreadable expiry fails closed", () => {
     const verdict = evaluateRequiredChecks({
-      required: ["playwright"],
-      results: [],
+      required: [PLAYWRIGHT],
+      results: [result({ name: "playwright", conclusion: "failure" })],
       waivers: [{ ...waiver, expires: "whenever" }],
       now: NOW,
     });
     expect(verdict.ok).toBe(false);
   });
 
-  test("the checked-in policy file is internally coherent", async () => {
-    const policy = (await import("../.github/release-waivers.json")).default as {
-      required: string[];
-      waivers: { context: string; issue: string; expires: string }[];
-    };
+  test("the checked-in policy is coherent, and requires nothing that cannot fail", async () => {
+    // Not cast: the inferred JSON type is the point. If the file's shape drifts
+    // from what the guard reads, this stops compiling rather than stops meaning
+    // anything.
+    const policy = (await import("../.github/release-waivers.json")).default;
+    const key = (c: { producer: string; name: string }) => `${c.producer}/${c.name}`;
+    const required = new Set(policy.required.map(key));
+
     expect(policy.required.length).toBeGreaterThan(5);
+    // Duplicated entries would make the same check both required and ambiguous
+    // with itself; the matcher would still refuse, but for a confusing reason.
+    expect(required.size).toBe(policy.required.length);
+
     for (const w of policy.waivers) {
       // A waiver for something that is not required protects nothing and hides
       // the fact that the check was never gated.
-      expect(policy.required, w.context).toContain(w.context);
+      expect([...required], key(w)).toContain(key(w));
       expect(w.issue).toMatch(/^SCRUM-\d+$/);
       expect(Number.isNaN(new Date(w.expires).getTime())).toBe(false);
+    }
+
+    // ⚠️ The informational list is not decoration. Every name in it was
+    // verified live to be incapable of refusing a release — report-only jobs
+    // (`continue-on-error` on every step), Advanced Security checks that never
+    // appear on a main commit, and a Sonar job that uploads without waiting for
+    // the quality gate. Requiring any of them gates on nothing, or gates on
+    // something that is never there.
+    for (const group of Object.values(policy.informational)) {
+      if (Array.isArray(group)) continue; // the block's own $comment
+      for (const name of group.names) {
+        expect(required, `${group.producer}/${name} must stay informational`).not.toContain(
+          key({ producer: group.producer, name })
+        );
+      }
     }
   });
 });
@@ -271,13 +360,13 @@ const platform = (over: Partial<PlatformReport> = {}): PlatformReport => ({
   expectedCount: 1029,
   failureMessage: null,
   runId: "run-1",
+  hasCurrentGenerationConversations: true,
   ...over,
 });
 
 const org = (over: Partial<OrgReport> = {}): OrgReport => ({
   orgId: "org_1",
   readerSource: "materialized",
-  hasCurrentGenerationConversations: true,
   platforms: [platform(), platform({ platform: "facebook" })],
   ...over,
 });
@@ -298,11 +387,35 @@ describe("the rollout verdict fails closed", () => {
     // Instagram and 689 Facebook events, with no throw and no log, because the
     // reader was pointed at a table with nothing in it.
     const verdict = classifyMaterializationReport([
-      org({ hasCurrentGenerationConversations: false }),
+      org({
+        platforms: [
+          platform({ hasCurrentGenerationConversations: false }),
+          platform({ platform: "facebook", hasCurrentGenerationConversations: false }),
+        ],
+      }),
     ]);
     expect(verdict.ok).toBe(false);
     expect(verdict.settled).toBe(true);
     expect(verdict.problems.map((p) => p.kind)).toContain("emptyAfterMaterialising");
+  });
+
+  test("ONE CHANNEL MISSING is caught: the other platform cannot answer for it", () => {
+    // ⚠️ REGRESSION. The probe used to be org-wide, so Instagram claiming 12
+    // materialised conversations while holding none passed as long as Facebook
+    // had rows — and the Instagram inbox would be confidently empty, which is
+    // the original incident surviving the guard written for it.
+    const verdict = classifyMaterializationReport([
+      org({
+        platforms: [
+          platform({ hasCurrentGenerationConversations: false }),
+          platform({ platform: "facebook", hasCurrentGenerationConversations: true }),
+        ],
+      }),
+    ]);
+    expect(verdict.ok).toBe(false);
+    expect(verdict.problems.map((p) => [p.platform, p.kind])).toEqual([
+      ["instagram", "emptyAfterMaterialising"],
+    ]);
   });
 
   test("an org whose events are all UNLINKED still passes", () => {
@@ -315,8 +428,14 @@ describe("the rollout verdict fails closed", () => {
     // why that probe can be a hard gate while this stays a note.
     const verdict = classifyMaterializationReport([
       org({
-        hasCurrentGenerationConversations: false,
-        platforms: [platform({ expectedCount: 347, processedCount: 347, materializedCount: 0 })],
+        platforms: [
+          platform({
+            expectedCount: 347,
+            processedCount: 347,
+            materializedCount: 0,
+            hasCurrentGenerationConversations: false,
+          }),
+        ],
       }),
     ]);
     expect(verdict.ok).toBe(true);
@@ -327,8 +446,14 @@ describe("the rollout verdict fails closed", () => {
   test("an org with genuinely no events raises nothing at all", () => {
     const verdict = classifyMaterializationReport([
       org({
-        hasCurrentGenerationConversations: false,
-        platforms: [platform({ expectedCount: 0, processedCount: 0, materializedCount: 0 })],
+        platforms: [
+          platform({
+            expectedCount: 0,
+            processedCount: 0,
+            materializedCount: 0,
+            hasCurrentGenerationConversations: false,
+          }),
+        ],
       }),
     ]);
     expect(verdict.ok).toBe(true);
@@ -340,8 +465,7 @@ describe("the rollout verdict fails closed", () => {
     // only SCHEDULES the worker that resets the row — so immediately after the
     // fan-out the row still shows the OLD failure. Treating that as terminal
     // aborted the rollout mid-recovery. Treating it as in-flight forever would
-    // wait out the deadline on a run that already answered. The runId settles
-    // which one this is.
+    // wait out the deadline on a run that already answered.
     const failing = [org({ readerSource: "legacyEvents", platforms: [platform({ status: "failed" })] })];
     const baseline = captureRunBaseline(failing);
 
@@ -356,6 +480,50 @@ describe("the rollout verdict fails closed", () => {
     );
     expect(newRun.problems[0].kind).toBe("failed");
     expect(newRun.settled).toBe(true);
+  });
+
+  test("a failure on a platform that was RUNNING at baseline is terminal", () => {
+    // ⚠️ REGRESSION, and the subtle half. `startSocialConversationBackfills`
+    // SKIPS a running platform on purpose — re-enqueuing resets its cursor and
+    // fences the chain already doing the work. So nothing was scheduled to
+    // repair it, and a failure that appears there is waiting for a redrive that
+    // is never coming.
+    //
+    // The old rule asked only "is the runId different?", which is false here,
+    // so this waited out the entire 45-minute deadline before reporting.
+    const baseline = captureRunBaseline([
+      org({ readerSource: "legacyEvents", platforms: [platform({ status: "running" })] }),
+    ]);
+
+    const verdict = classifyMaterializationReport(
+      [org({ readerSource: "legacyEvents", platforms: [platform({ status: "failed" })] })],
+      baseline
+    );
+    expect(verdict.inFlight).toEqual([]);
+    expect(verdict.problems[0].kind).toBe("failed");
+    expect(verdict.settled).toBe(true);
+  });
+
+  test("a NEW organization's own failure is terminal, not mistaken for pre-existing", () => {
+    // ⚠️ REGRESSION, the other direction. An org created after the baseline walk
+    // has no entry at all. The old guard read the missing entry as "no evidence
+    // of a new run" and waited — so a tenant onboarded mid-rollout could hold
+    // the release open until the deadline on its own fresh failure.
+    const baseline = captureRunBaseline([org({ orgId: "org_existing" })]);
+
+    const verdict = classifyMaterializationReport(
+      [
+        org({
+          orgId: "org_created_during_rollout",
+          readerSource: "legacyEvents",
+          platforms: [platform({ status: "failed", runId: "run-9" })],
+        }),
+      ],
+      baseline
+    );
+    expect(verdict.inFlight).toEqual([]);
+    expect(verdict.problems[0].kind).toBe("failed");
+    expect(verdict.settled).toBe(true);
   });
 
   test("ambiguous stays terminal, because no redrive is allowed to touch it", () => {
@@ -478,8 +646,13 @@ describe("polling stops for the right reasons", () => {
   test("an anomaly alone does not end the poll in failure", () => {
     const verdict = classifyMaterializationReport([
       org({
-        hasCurrentGenerationConversations: false,
-        platforms: [platform({ expectedCount: 9, materializedCount: 0 })],
+        platforms: [
+          platform({
+            expectedCount: 9,
+            materializedCount: 0,
+            hasCurrentGenerationConversations: false,
+          }),
+        ],
       }),
     ]);
     expect(decidePollOutcome({ verdict, elapsedMs: 0, timeoutMs: 60_000 })).toBe("verified");
@@ -514,6 +687,25 @@ describe("convex run output is parsed strictly", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toMatch(/Refusing to guess/i);
+  });
+
+  test("NOTHING from stdout reaches the refusal — not a preview, not V8's message", () => {
+    // ⚠️ REGRESSION. This stdout is the materialisation report: organization
+    // rows. An earlier revision quoted its "first 200 characters" into a reason
+    // that `fail()` writes to a public log and summary — reopening the exact
+    // disclosure that `opaqueOrgRef` exists to close, from two functions away.
+    //
+    // V8's own parse error is a second door: it quotes the offending input back
+    // inside the exception message, so `error.message` cannot be repeated
+    // either.
+    const leakyStdout = 'Ran function\n{"page":[{"orgName":"Al Zriqat Motors","orgId":"kd7abc"}]}';
+    const result = parseConvexRunJson(leakyStdout);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).not.toMatch(/Al Zriqat Motors/);
+    expect(result.reason).not.toMatch(/kd7abc/);
+    expect(result.reason).not.toMatch(/orgName/);
+    expect(result.reason).toMatch(/this log is public/i);
   });
 });
 

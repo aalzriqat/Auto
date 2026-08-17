@@ -63,6 +63,43 @@ async function writeState(
   );
 }
 
+async function seedConversation(
+  t: ReturnType<typeof convexTestWithComponents>,
+  orgId: Id<"organizations">,
+  platform: "instagram" | "facebook",
+  overrides: Record<string, unknown> = {}
+) {
+  const customerId = await t.run((ctx) =>
+    ctx.db.insert("customers", { orgId, firstName: "Alice", lastName: "Buyer", createdAt: Date.now() })
+  );
+  await t.run((ctx) =>
+    ctx.db.insert("socialConversations", {
+      orgId,
+      generation: SOCIAL_CONVERSATION_GENERATION,
+      conversationKey: `${platform}:dm:alice`,
+      platform,
+      conversationKind: "dm" as const,
+      customerId,
+      lastEventAt: Date.now(),
+      eventCount: 1,
+      unansweredCount: 0,
+      vehicleIds: [],
+      vehicleCount: 0,
+      latestSenderRawId: "raw_alice",
+      ...overrides,
+    })
+  );
+}
+
+/** The per-platform table probe, keyed by platform so assertions read plainly. */
+function probe(org: {
+  platforms: { platform: string; hasCurrentGenerationConversations: boolean }[];
+}): Record<string, boolean> {
+  return Object.fromEntries(
+    org.platforms.map((p) => [p.platform, p.hasCurrentGenerationConversations])
+  );
+}
+
 describe("the release workflow can read the rollout report", () => {
   test("the internal query answers with NO identity at all", async () => {
     // This is the whole reason it exists. A Convex deploy key carries no Clerk
@@ -75,7 +112,26 @@ describe("the release workflow can read the rollout report", () => {
     const report = await t.query(internal.adminSystem.materializationReportForRelease, PAGE);
 
     expect(report.page).toHaveLength(1);
-    expect(report.page[0]).toMatchObject({ orgId, orgName: "Bloom Cars", readerSource: "legacyEvents" });
+    expect(report.page[0]).toMatchObject({ orgId, readerSource: "legacyEvents" });
+  });
+
+  test("the ORG NAME never leaves Convex on the release route", async () => {
+    // ⚠️ REGRESSION. The release workflow runs on a PUBLIC repository. The
+    // verifier hashes the org id before printing anything, but "the caller
+    // happens not to log this" is a property of today's caller, not a boundary
+    // — so the name is withheld at the source instead.
+    //
+    // The query returns an explicit ALLOWLIST, which is the part worth pinning:
+    // a field added to the shared report later cannot join the payload by
+    // default, it has to be named deliberately.
+    const t = convexTestWithComponents(schema, MODULES);
+    await seedOrg(t, "Al Zriqat Motors");
+
+    const report = await t.query(internal.adminSystem.materializationReportForRelease, PAGE);
+
+    expect(JSON.stringify(report)).not.toMatch(/Al Zriqat Motors/);
+    expect(Object.hasOwn(report.page[0], "orgName")).toBe(false);
+    expect(Object.keys(report.page[0]).sort()).toEqual(["orgId", "platforms", "readerSource"]);
   });
 
   test("the PUBLIC query still refuses everyone who is not a super admin", async () => {
@@ -121,9 +177,23 @@ describe("the release workflow can read the rollout report", () => {
     const fromRelease = await t.query(internal.adminSystem.materializationReportForRelease, PAGE);
 
     expect(fromRelease.page).toHaveLength(4);
+
+    // The release route withholds `orgName` deliberately, so the comparison is
+    // "identical apart from exactly that field" — which is stronger than
+    // comparing contents, because it also pins that nothing ELSE differs.
+    expect(fromAdmin.page.every((org) => typeof org.orgName === "string")).toBe(true);
+    const withoutName = fromAdmin.page.map((org) => ({
+      orgId: org.orgId,
+      readerSource: org.readerSource,
+      platforms: org.platforms,
+    }));
+
     // `_creationTime`-ordered pagination gives both the same order, so the
-    // whole payload is comparable rather than just its contents.
-    expect(JSON.stringify(fromRelease.page)).toEqual(JSON.stringify(fromAdmin.page));
+    // whole payload is comparable rather than just its contents. Compared as
+    // values rather than as JSON text: Convex sorts object keys on the way out,
+    // so a reconstructed object differs in key ORDER while being identical in
+    // content — and key order is not the drift this is watching for.
+    expect(fromRelease.page).toEqual(withoutName);
     expect(fromRelease.isDone).toEqual(fromAdmin.isDone);
   });
 });
@@ -189,30 +259,16 @@ describe("the report says what the reader will actually do", () => {
     await writeState(t, orgId, "facebook", { materializedCount: 4 });
 
     const claimedButEmpty = await t.query(internal.adminSystem.materializationReportForRelease, PAGE);
-    expect(claimedButEmpty.page[0].hasCurrentGenerationConversations).toBe(false);
+    expect(probe(claimedButEmpty.page[0])).toEqual({ instagram: false, facebook: false });
 
-    const customerId = await t.run((ctx) =>
-      ctx.db.insert("customers", { orgId, firstName: "Alice", lastName: "Buyer", createdAt: Date.now() })
-    );
-    await t.run((ctx) =>
-      ctx.db.insert("socialConversations", {
-        orgId,
-        generation: SOCIAL_CONVERSATION_GENERATION,
-        conversationKey: "ig:dm:alice",
-        platform: "instagram",
-        conversationKind: "dm",
-        customerId,
-        lastEventAt: Date.now(),
-        eventCount: 1,
-        unansweredCount: 0,
-        vehicleIds: [],
-        vehicleCount: 0,
-        latestSenderRawId: "ig_alice",
-      })
-    );
+    await seedConversation(t, orgId, "instagram");
 
+    // ⚠️ REGRESSION, and the reason this probe is per-platform. The org-wide
+    // version answered `true` here — one Instagram row vouching for Facebook's
+    // 8 claimed-and-absent conversations, and a confidently empty Facebook
+    // inbox is the 2026-08-07 incident surviving the guard written for it.
     const withRows = await t.query(internal.adminSystem.materializationReportForRelease, PAGE);
-    expect(withRows.page[0].hasCurrentGenerationConversations).toBe(true);
+    expect(probe(withRows.page[0])).toEqual({ instagram: true, facebook: false });
   });
 
   test("a row from a SUPERSEDED generation does not count as present", async () => {
@@ -221,28 +277,12 @@ describe("the report says what the reader will actually do", () => {
     // a table the reader will not serve.
     const t = convexTestWithComponents(schema, MODULES);
     const orgId = await seedOrg(t, "Bloom Cars");
-    const customerId = await t.run((ctx) =>
-      ctx.db.insert("customers", { orgId, firstName: "Alice", lastName: "Buyer", createdAt: Date.now() })
-    );
-    await t.run((ctx) =>
-      ctx.db.insert("socialConversations", {
-        orgId,
-        generation: SOCIAL_CONVERSATION_GENERATION + 1,
-        conversationKey: "ig:dm:alice",
-        platform: "instagram",
-        conversationKind: "dm",
-        customerId,
-        lastEventAt: Date.now(),
-        eventCount: 1,
-        unansweredCount: 0,
-        vehicleIds: [],
-        vehicleCount: 0,
-        latestSenderRawId: "ig_alice",
-      })
-    );
+    await seedConversation(t, orgId, "instagram", {
+      generation: SOCIAL_CONVERSATION_GENERATION + 1,
+    });
 
     const report = await t.query(internal.adminSystem.materializationReportForRelease, PAGE);
-    expect(report.page[0].hasCurrentGenerationConversations).toBe(false);
+    expect(probe(report.page[0])).toEqual({ instagram: false, facebook: false });
   });
 
   test("the run identity is reported, so a stale failure can be told from a new one", async () => {

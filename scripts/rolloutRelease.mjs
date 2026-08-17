@@ -24,6 +24,8 @@ import {
   captureRunBaseline,
   classifyMaterializationReport,
   decidePollOutcome,
+  describeConvexFailure,
+  forLog,
   mergeVerdicts,
   parseConvexRunJson,
   pollIntervalMs,
@@ -117,13 +119,14 @@ function convex(args) {
   );
 
   if (result.error) {
-    return { ok: false, reason: `Could not run the Convex CLI: ${result.error.message}` };
+    return { ok: false, reason: `Could not run the Convex CLI: ${forLog(result.error.message)}` };
   }
   if (result.status !== 0) {
-    return {
-      ok: false,
-      reason: `convex ${args[0]} exited ${result.status}.\n${(result.stderr ?? "").trim()}`,
-    };
+    // ⚠️ Built by a helper that CANNOT be handed the CLI's output. `fail()`
+    // writes this reason to the job log and the run summary, both public, and a
+    // Convex error carries whatever the failing function was handling. An
+    // earlier revision pasted the whole of stderr in here.
+    return { ok: false, reason: describeConvexFailure(args[0], result.status) };
   }
   return parseConvexRunJson(result.stdout ?? "");
 }

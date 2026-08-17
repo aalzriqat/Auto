@@ -16,16 +16,18 @@
  *    read from the GitHub API rather than a local clone: this job never checks
  *    out, builds, installs or executes anything from the commit it is judging.
  */
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync } from "node:fs";
 import process from "node:process";
 import {
   decideCommitAuthority,
+  describeCheck,
   evaluateRequiredChecks,
   forLog,
   isFullSha,
   isSafeApiPath,
   parseReleaseInputs,
 } from "./releaseGuard.ts";
+import { loadReleasePolicy, readCheckResults } from "./releaseChecks.mjs";
 
 const REPO = process.env.GITHUB_REPOSITORY ?? "";
 const TOKEN = process.env.GITHUB_TOKEN ?? "";
@@ -50,11 +52,23 @@ function emit(name, value) {
 /** Builds one path segment; a no-op on the 40-hex values that reach it. */
 const seg = (value) => encodeURIComponent(String(value));
 
-async function api(path) {
+/**
+ * Query parameters are passed separately, never spliced into `path`.
+ *
+ * `isSafeApiPath` validates a plain resource path, so a `?per_page=…` in it
+ * would be refused — and "just loosen the validator" is how a validator stops
+ * meaning anything. `URLSearchParams` also encodes, so a query value cannot
+ * smuggle a path segment.
+ */
+async function api(path, query) {
   if (!isSafeApiPath(path)) {
     refuse(`Refusing to request a GitHub path that is not a plain resource path: ${forLog(path)}.`);
   }
-  const response = await fetch(`https://api.github.com/repos/${REPO}${path}`, {
+  const url = new URL(`https://api.github.com/repos/${REPO}${path}`);
+  for (const [key, value] of Object.entries(query ?? {})) {
+    url.searchParams.set(key, String(value));
+  }
+  const response = await fetch(url, {
     headers: {
       Accept: "application/vnd.github+json",
       Authorization: `Bearer ${TOKEN}`,
@@ -126,32 +140,13 @@ if (!authority.ok) refuse(authority.reason);
 
 // ─── CI must be green AT THIS EXACT COMMIT ──────────────────────────────────
 
-// ⚠️ Both surfaces, because they are different APIs and a check living in one
-// is invisible to the other. Actions jobs are check-runs; app integrations like
-// SonarCloud and Vercel report commit statuses. Reading only one is
-// indistinguishable from "everything passed".
-const [checkRuns, statuses] = await Promise.all([
-  api(`/commits/${seg(authority.sha)}/check-runs`),
-  api(`/commits/${seg(authority.sha)}/status`),
-]);
-if (checkRuns.status !== 200) refuse(`Could not read check runs for this commit (HTTP ${checkRuns.status}).`);
-if (statuses.status !== 200) refuse(`Could not read commit statuses (HTTP ${statuses.status}).`);
+const observed = await readCheckResults(api, seg(authority.sha));
+if (!observed.ok) refuse(observed.reason);
 
-const results = [
-  ...(checkRuns.body.check_runs ?? []).map((run) => ({
-    name: run.name,
-    conclusion: run.status === "completed" ? run.conclusion : `still ${run.status}`,
-  })),
-  ...(statuses.body.statuses ?? []).map((s) => ({
-    name: s.context,
-    conclusion: s.state === "success" ? "success" : s.state,
-  })),
-];
-
-const policy = JSON.parse(readFileSync(new URL("../.github/release-waivers.json", import.meta.url), "utf8"));
+const policy = loadReleasePolicy();
 const checks = evaluateRequiredChecks({
   required: policy.required,
-  results,
+  results: observed.results,
   waivers: policy.waivers,
   now: new Date(),
 });
@@ -194,15 +189,19 @@ summary(
       ? [
           `### ⚠️ WAIVED — not passing`,
           "",
-          "| Check | Issue | Expires | Why |",
-          "| --- | --- | --- | --- |",
-          ...checks.waived.map((w) => `| \`${w.context}\` | ${w.issue} | ${w.expires} | ${w.reason} |`),
+          "| Check | Observed | Issue | Expires | Why |",
+          "| --- | --- | --- | --- | --- |",
+          ...checks.waived.map(
+            (w) => `| \`${describeCheck(w)}\` | \`${w.observed}\` | ${w.issue} | ${w.expires} | ${w.reason} |`
+          ),
           "",
           "_These are recorded as WAIVED. They must never be reported as passing._",
           "",
         ]
       : []),
     `_Nothing has been deployed yet. The production credential is only reachable after a human approves the \`production\` environment for this run._`,
+    "",
+    `_This verdict is re-derived immediately before the deploy, after approval. Approval is asynchronous, and a check can be re-run red while a run waits._`,
   ].join("\n")
 );
 

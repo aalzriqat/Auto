@@ -107,6 +107,11 @@ jobs:
     # this specific run against this specific commit.
     environment: production
     timeout-minutes: 90
+    # Read-only, and enough to re-derive the CI verdict after approval.
+    permissions:
+      checks: read
+      contents: read
+      statuses: read
     steps:
       - name: Check out the authorised commit exactly
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -165,6 +170,22 @@ jobs:
           fi
           echo "main is still at $tip"
 
+      # ⚠️ CI is re-derived here too, and for a reason the tip check above does
+      # NOT cover: a check can be re-run red, a workflow removed, or a waiver
+      # expire at midnight, without `main` moving at all. Without this, "CI is
+      # green at that exact commit" was proven before the approval wait and
+      # reported after it.
+      #
+      # Runs from the candidate commit's checkout, which is only sound because
+      # the step above has just proven the candidate IS main's tip. Do not
+      # reorder these two.
+      - name: Re-verify CI at that commit, now that it has been approved
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_SHA: ${{ needs.authorize.outputs.sha }}
+        run: node scripts/assertReleaseChecks.mjs
+
       # ⚠️ "Is it a production key" is not the question. A valid production key
       # for the WRONG project deploys, verifies and reports success there just
       # as confidently — and 2026-08-07 was a targeting error, not an
@@ -182,18 +203,27 @@ jobs:
       # version; never `--cmd`, which would run an arbitrary command inside the
       # deploy; never `-y`, which is what suppressed the confirmation on
       # 2026-08-07 and is undocumented in `--help`.
+      #
+      # ⚠️ Its output goes to the job log, which on a public repository is
+      # public. An earlier revision `tee`'d it to a file and then added a step
+      # announcing the file was not uploaded as an artifact — which reduced
+      # nothing, because `tee` had already streamed the same bytes somewhere
+      # equally public. The file is gone; the honest statement is that anything
+      # `convex deploy` prints is published.
       - name: Deploy Convex backend
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PROD_DEPLOY_KEY }}
-        run: |
-          set -euo pipefail
-          pnpm exec convex deploy 2>&1 | tee deploy.log
+        run: pnpm exec convex deploy
 
       # Same job, immediately after the deploy, because the window between them
       # is the expensive one: the conversation trigger is live and adding writes
       # while every inbox is still served by the legacy full scan.
       #
-      # This step holds ONLY the operator key, so it structurally cannot deploy.
+      # This step is given ONLY the operator key. Whether that key can deploy is
+      # decided by how narrowly it was minted — Convex enforces key scope
+      # server-side and nothing here can verify it. See AGENTS.md: if the
+      # dashboard cannot mint a `runInternalMutations`/`runInternalQueries`-only
+      # key, this separation is organisational, not structural.
       - name: Roll out Social Inbox conversations and verify
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PROD_OPERATOR_KEY }}
@@ -201,11 +231,3 @@ jobs:
           RELEASE_SHA: ${{ needs.authorize.outputs.sha }}
           ROLLOUT_TIMEOUT_MINUTES: '45'
         run: node scripts/rolloutRelease.mjs
-
-      # ⚠️ NOT uploaded as an artifact. This repository is public, so artifacts
-      # are public with it, and a deploy log can carry deployment identifiers
-      # and backend detail. It stays in the job log, which is already scoped the
-      # same way and does not outlive the run's retention.
-      - name: Note that the deploy log is not published
-        if: always()
-        run: echo "deploy.log stays in this job; it is not uploaded, because this repository is public."
