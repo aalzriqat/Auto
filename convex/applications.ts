@@ -142,12 +142,47 @@ function assertDealerEconomicsRecorded(
   action: "handing over the vehicle" | "finalizing",
   quoteMode: QuoteMode | undefined,
   /**
-   * Non-null when the supplier's entitlement no longer matches the one the
-   * recorded amount was agreed against. Resolved by the caller, which is the
-   * side that can read the vehicle.
+   * Whether the supplier's entitlement still stands where the recorded amount
+   * was agreed against it. Resolved by the caller, which is the side that can
+   * read the vehicle.
    */
-  supplierEntitlementDrift: { agreedMinor: number; currentMinor: number } | null = null
+  supplierEntitlement: SupplierEntitlementVerdict = { kind: "NOT_APPLICABLE" }
 ): void {
+  /**
+   * The entitlement witness, checked for EVERY direct-to-supplier writer.
+   *
+   * This lived inside the non-configured branch below, which meant a CONFIGURED
+   * direct deal — the shape a real financier approves — had the identical hole
+   * with none of the protection: approve against supplier cost A, edit the
+   * vehicle to B through its own public path, hand over (quotation, approval and
+   * funded split all present), then fail at finalization with the approval
+   * sealed and the vehicle gone. The fix for one writer had been written as
+   * though it were the fix for the deal shape.
+   *
+   * Hoisted above the applicability branch so it cannot be reintroduced by a
+   * future early return, and refused HERE, before the vehicle leaves, because
+   * that is what makes it recoverable: re-recording (MANUAL) or re-approving
+   * (CONFIGURED) writes a fresh witness and clears this.
+   */
+  if (supplierEntitlement.kind === "DRIFTED") {
+    throw new ConvexError(
+      `The supplier's recorded amount on this vehicle has changed since what he receives was agreed, so the figure on this deal no longer matches it. Record what the supplier receives again before ${action}.`
+    );
+  }
+  if (supplierEntitlement.kind === "UNPROVABLE") {
+    // Named by cause, because the three have different answers: record the
+    // vehicle's supplier cost, fix the vehicle link, or re-record the amount so
+    // the deal carries the evidence it was agreed against.
+    const because =
+      supplierEntitlement.reason === "NO_SUPPLIER_COST"
+        ? "this vehicle carries no supplier cost to compare it against"
+        : supplierEntitlement.reason === "VEHICLE_UNREADABLE"
+          ? "this deal's vehicle could not be read"
+          : "this deal does not record what the supplier was owed when the amount was agreed";
+    throw new ConvexError(
+      `What the supplier receives cannot be checked against what he is owed: ${because}. Record what the supplier receives again before ${action}.`
+    );
+  }
   // A CONFIGURED deal is the one shape where the financier's economics are
   // always knowable: a configured company approves a purchase amount, and that
   // amount is what the dealership's profit is measured from. Letting one through
@@ -209,29 +244,11 @@ function assertDealerEconomicsRecorded(
         `On this deal the finance provider pays the supplier directly, so what he receives is the figure the dealership's claim on him is measured from. It is not recorded. Record it before ${action}.`
       );
     }
-    /**
-     * The entitlement may have MOVED since the amount was agreed.
-     *
-     * The vehicle's `sourceCost` is editable through its own public path, and
-     * nothing about that edit touches this application — so the recorded amount
-     * can silently stop clearing what the supplier is owed. Checking only that
-     * the amount EXISTS let that deal hand over and then be refused at
-     * finalization, with the vehicle gone and the writer sealed against
-     * correction: the same trap, entered through a different door.
-     *
-     * Refused HERE, before the vehicle leaves, so re-recording is still possible.
-     * Re-recording bumps `economicsRevision`, which is what invalidates any
-     * confirmation opened against the superseded figure — the stamp itself
-     * deliberately carries no money and must not learn to.
-     */
-    if (
-      app.supplierSettlementRoute === "DIRECT_TO_SUPPLIER" &&
-      supplierEntitlementDrift !== null
-    ) {
-      throw new ConvexError(
-        `The supplier's recorded amount on this vehicle has changed since what he receives was agreed, so the figure on this deal no longer matches it. Record what the supplier receives again before ${action}.`
-      );
-    }
+    // The entitlement witness is checked at the TOP of this function now, for
+    // every direct-route writer rather than only this branch's. Re-recording
+    // bumps `economicsRevision`, which is what invalidates any confirmation
+    // opened against the superseded figure — the stamp itself deliberately
+    // carries no money and must not learn to.
     return;
   }
   if (app.submittedQuotationMinor === undefined) {
@@ -377,30 +394,66 @@ function financierApprovesPurchase(args: {
 }
 
 /**
- * Whether the supplier's entitlement has moved since the recorded amount was
+ * Whether the supplier's entitlement still stands where the recorded amount was
  * agreed against it.
  *
  * ONE resolver, used by both irreversible transitions, so handover and
- * finalization cannot form different opinions about whether the evidence still
- * holds. Returns null when nothing was recorded against an entitlement, when the
- * vehicle has none, or when it still matches.
+ * finalization cannot form different opinions about whether the evidence holds.
+ *
+ * ⚠️ THREE OUTCOMES, NOT TWO. The first version returned `null` for both "it
+ * still matches" and "I cannot tell", which made every unprovable case read as
+ * proof of safety — a money guard that fails OPEN on exactly the rows whose
+ * evidence is weakest. `vehicles.create` accepts `sourceCost: 0` for a SOURCED
+ * vehicle (only `createSourcedVehicle` refuses it, at `vehicles.ts:1804`), and a
+ * row approved before this release carries no witness at all. Both used to hand
+ * over silently and then be refused at finalization, with the vehicle gone.
+ *
+ * UNPROVABLE is refused like DRIFTED, and for the same reason: the refusal is
+ * recoverable while the vehicle is still on the lot, and unrecoverable after.
  */
-async function supplierEntitlementDriftFor(
+type SupplierEntitlementVerdict =
+  | { kind: "NOT_APPLICABLE" }
+  | { kind: "UNCHANGED" }
+  | { kind: "DRIFTED"; agreedMinor: number; currentMinor: number }
+  | { kind: "UNPROVABLE"; reason: "NO_WITNESS" | "VEHICLE_UNREADABLE" | "NO_SUPPLIER_COST" };
+
+async function supplierEntitlementVerdictFor(
   ctx: QueryCtx | MutationCtx,
   app: Doc<"financeApplications">
-): Promise<{ agreedMinor: number; currentMinor: number } | null> {
-  const agreedMinor = app.directSupplierReceipt?.supplierEntitlementMinor;
-  if (agreedMinor === undefined) return null;
+): Promise<SupplierEntitlementVerdict> {
+  // Only the direct route makes the supplier's entitlement the basis of what he
+  // is paid. On the through route the dealership collects the gross and the
+  // entitlement is an ordinary cost, so there is nothing here to have an opinion
+  // about.
+  if (app.supplierSettlementRoute !== "DIRECT_TO_SUPPLIER") return { kind: "NOT_APPLICABLE" };
+  // An unrecorded amount is refused by its own check, with a message that names
+  // the missing figure. Reporting it here as well would answer a clear question
+  // with a vaguer one.
+  if (app.approvedDealerPurchaseAmountMinor === undefined) return { kind: "NOT_APPLICABLE" };
+
+  const agreedMinor = app.supplierEntitlementAtApprovalMinor;
+  if (agreedMinor === undefined) return { kind: "UNPROVABLE", reason: "NO_WITNESS" };
+
   const vehicle = await ctx.db.get(app.vehicleId);
-  if (!vehicle || vehicle.orgId !== app.orgId) return null;
-  if (vehicle.sourceCost === undefined || vehicle.sourceCost <= 0) return null;
-  // Resolved, never skipped. Returning null on a missing currency would fail
-  // OPEN — the drift check silently disabled on exactly the deals whose scale is
-  // least certain. The writer stamps this field whenever it records, so in
-  // practice it is present; the fallback keeps that from being an assumption.
+  if (!vehicle || vehicle.orgId !== app.orgId) {
+    return { kind: "UNPROVABLE", reason: "VEHICLE_UNREADABLE" };
+  }
+  // The SAME definition `approveDealerPurchaseAmount` validates against, through
+  // the same function. For a SOURCED vehicle it reduces to `sourceCost`; sharing
+  // the helper is what keeps the witness and the validation from being two
+  // opinions that merely happen to agree today.
+  const costAmount = await computeVehicleCapitalizedCost(ctx, vehicle);
+  if (costAmount <= 0) return { kind: "UNPROVABLE", reason: "NO_SUPPLIER_COST" };
+
+  // Resolved, never skipped. Returning early on a missing currency would fail
+  // OPEN — the check silently disabled on exactly the deals whose scale is least
+  // certain. Both writers stamp `economicsCurrency`, so in practice it is
+  // present; the fallback keeps that from being an assumption.
   const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, app.orgId));
-  const currentMinor = toMinorUnits(vehicle.sourceCost, currency);
-  return currentMinor === agreedMinor ? null : { agreedMinor, currentMinor };
+  const currentMinor = toMinorUnits(costAmount, currency);
+  return currentMinor === agreedMinor
+    ? { kind: "UNCHANGED" }
+    : { kind: "DRIFTED", agreedMinor, currentMinor };
 }
 
 /**
@@ -2882,7 +2935,7 @@ export const registerVehicleHandover = mutation({
       app,
       "handing over the vehicle",
       await resolveQuoteMode(ctx, app),
-      await supplierEntitlementDriftFor(ctx, app)
+      await supplierEntitlementVerdictFor(ctx, app)
     );
     /**
      * The denomination, enforced HERE and not only in what the screens render.
@@ -3126,7 +3179,12 @@ export const recordDirectSupplierReceiptAmount = mutation({
     // whoever sold the vehicle does not also record what the supplier receives.
     if (user._id === app.salespersonId) {
       throw new ConvexError(
-        "You cannot record the supplier's amount on your own application. A manager or the dealership owner records it."
+        // Not "a manager": this mutation requires BOTH the approval permission
+        // and finance visibility, and no default role but OWNER holds both —
+        // MANAGER has the approval without the visibility, ACCOUNTANT the
+        // visibility without the approval. Naming a role the server refuses
+        // sends the operator to a second refusal.
+        "You cannot record the supplier's amount on your own application. The dealership owner records it, or another approver who can also see the deal's finances."
       );
     }
 
@@ -3202,11 +3260,30 @@ export const recordDirectSupplierReceiptAmount = mutation({
      * path would have caught it until finalization, potentially after the vehicle
      * had already gone out.
      */
-    const entitlementMinor =
-      vehicle.sourceCost !== undefined && vehicle.sourceCost > 0
-        ? toMinorUnits(vehicle.sourceCost, economicsCurrency)
-        : undefined;
-    if (entitlementMinor !== undefined && args.approvedAmountMinor < entitlementMinor) {
+    // Through the SAME helper the configured writer validates against, not
+    // `vehicle.sourceCost` directly. The two coincide for a SOURCED vehicle,
+    // which is the only shape that reaches here — but "they happen to agree" is
+    // not a property, and this figure is stored as the witness both transitions
+    // later re-check.
+    const costAmount = await computeVehicleCapitalizedCost(ctx, vehicle);
+    /**
+     * A PROVABLE entitlement is required, not merely used when present.
+     *
+     * The first version skipped the comparison when the vehicle carried no
+     * usable cost and stored no witness — so it recorded money against an
+     * entitlement nobody could name, handover then read that absence as "no
+     * drift", and `completeSale` refused the missing supplier cost afterwards,
+     * with the vehicle already gone. Refusing here is recoverable in one step:
+     * record the supplier's cost on the vehicle and come back.
+     */
+    if (costAmount <= 0) {
+      throw new ConvexError(
+        `${vehicle.sourcedFromName ?? "The supplier"}'s cost is not recorded on this vehicle, so what he receives cannot be checked against what he is owed. Record the supplier cost on the vehicle first.`
+      );
+    }
+    const entitlementMinor = toMinorUnits(costAmount, economicsCurrency);
+    assertValidMinorAmount(entitlementMinor, "supplier cost");
+    if (args.approvedAmountMinor < entitlementMinor) {
       throw new ConvexError(
         `The supplier is owed more than this. ${vehicle.sourcedFromName ?? "The supplier"}'s recorded amount on this vehicle is higher than what you entered, and the dealership only earns what is left above it.`
       );
@@ -3227,25 +3304,56 @@ export const recordDirectSupplierReceiptAmount = mutation({
      */
     const previous = app.directSupplierReceipt;
     const notes = args.notes?.trim() ? args.notes.trim() : undefined;
-    const unchanged =
-      app.approvedDealerPurchaseAmountMinor === args.approvedAmountMinor &&
-      previous !== undefined &&
-      previous.source === source &&
-      previous.notes === notes &&
-      previous.supplierEntitlementMinor === entitlementMinor;
-    if (unchanged) return args.applicationId;
+    /**
+     * The whole receipt, serialized identically on both sides.
+     *
+     * The audit row's identity must not depend on prose. An amount-only, a
+     * source-only and a notes-only correction all produced the same
+     * `previousValue`/`newValue` amount strings, so the only machine-readable
+     * record of a source or note being replaced was a sentence somebody would
+     * have to parse — and the test that checked it was regex-matching that
+     * sentence, which is the same defect wearing a test's clothes.
+     */
+    const describeReceipt = (state: {
+      amountMinor: number | undefined;
+      source: string | undefined;
+      notes: string | undefined;
+      entitlementMinor: number | undefined;
+    }) =>
+      JSON.stringify({
+        amountMinor: state.amountMinor ?? null,
+        source: state.source ?? null,
+        notes: state.notes ?? null,
+        supplierEntitlementMinor: state.entitlementMinor ?? null,
+      });
+    const previousReceipt = describeReceipt({
+      amountMinor: app.approvedDealerPurchaseAmountMinor,
+      source: previous?.source,
+      notes: previous?.notes,
+      entitlementMinor: app.supplierEntitlementAtApprovalMinor,
+    });
+    const nextReceipt = describeReceipt({
+      amountMinor: args.approvedAmountMinor,
+      source,
+      notes,
+      entitlementMinor,
+    });
+    // One comparison, over the same serialization the audit row stores, so the
+    // definition of "the same act" and the definition of "what changed" cannot
+    // drift apart.
+    if (previous !== undefined && previousReceipt === nextReceipt) return args.applicationId;
 
     await ctx.db.patch(args.applicationId, {
       approvedDealerPurchaseAmountMinor: args.approvedAmountMinor,
       economicsCurrency,
       // The evidence this figure was agreed against, so a later edit to the
       // vehicle's cost is detectable rather than silently invalidating the deal.
+      // Always written — a witness that is optional in practice is a check that
+      // is optional in practice.
+      supplierEntitlementAtApprovalMinor: entitlementMinor,
       directSupplierReceipt: {
         source,
         ...(notes ? { notes } : {}),
-        ...(entitlementMinor !== undefined
-          ? { supplierEntitlementMinor: entitlementMinor }
-          : {}),
       },
       /**
        * The concurrency token MUST move.
@@ -3265,18 +3373,25 @@ export const recordDirectSupplierReceiptAmount = mutation({
     await ctx.db.insert("financeApplicationOverrides", {
       orgId: args.orgId,
       applicationId: args.applicationId,
-      field: "approvedDealerPurchaseAmountMinor",
-      previousValue:
-        app.approvedDealerPurchaseAmountMinor === undefined
-          ? undefined
-          : String(app.approvedDealerPurchaseAmountMinor),
-      newValue: String(args.approvedAmountMinor),
-      // A correction says what it replaced. A first write says so explicitly
-      // rather than leaving the reader to infer it from an absent previousValue.
+      // Named after what actually moved. An evidence-only correction filed under
+      // the amount's field name would put two identical amounts either side of a
+      // "change" in the history of the figure itself; the source and the note are
+      // real facts about the receipt, and they get their own name.
+      field:
+        app.approvedDealerPurchaseAmountMinor === args.approvedAmountMinor
+          ? "directSupplierReceipt"
+          : "approvedDealerPurchaseAmountMinor",
+      // The STRUCTURED before/after — the machine-readable identity of the
+      // correction. `previousValue` is absent on a first write, which is what
+      // distinguishes it from a correction without reading any prose.
+      previousValue: previous === undefined ? undefined : previousReceipt,
+      newValue: nextReceipt,
+      // The human sentence stays, and stays a sentence: it is what somebody reads
+      // months later. Nothing machine-readable depends on it.
       reason:
         previous === undefined
           ? `Direct supplier receipt amount first recorded for the manual finance provider (source: ${source})${notes ? ` — ${notes}` : ""}.`
-          : `Direct supplier receipt amount corrected for the manual finance provider. Was ${app.approvedDealerPurchaseAmountMinor ?? "unrecorded"} (source: ${previous.source}${previous.notes ? `; ${previous.notes}` : ""}); now ${args.approvedAmountMinor} (source: ${source}${notes ? `; ${notes}` : ""}).`,
+          : `Direct supplier receipt corrected for the manual finance provider. Was ${app.approvedDealerPurchaseAmountMinor ?? "unrecorded"} (source: ${previous.source}${previous.notes ? `; ${previous.notes}` : ""}); now ${args.approvedAmountMinor} (source: ${source}${notes ? `; ${notes}` : ""}).`,
       changedBy: user._id,
       changedAt: Date.now(),
     });
@@ -3338,6 +3453,15 @@ export const setSupplierSettlementRoute = mutation({
     //
     // Asked of the quote MODE rather than of `companyId`, which is only ever
     // set on CONFIGURED_FINANCE_COMPANY deals — see `settlementPayer`.
+    /**
+     * The entitlement the route change itself agreed against, if any.
+     *
+     * Written UNCONDITIONALLY below — the freshly validated figure on the direct
+     * route, and cleared on the through route. A witness that survives a route
+     * change it was not re-validated by is worse than none: it would be read as
+     * proof by the very check that exists because this fact moves.
+     */
+    let entitlementAtRouteChoiceMinor: number | undefined;
     if (args.route === "DIRECT_TO_SUPPLIER") {
       const payer = await settlementPayerForApplication(ctx, app);
       if (!payer.external) {
@@ -3361,9 +3485,17 @@ export const setSupplierSettlementRoute = mutation({
         const costAmount = await computeVehicleCapitalizedCost(ctx, vehicle);
         if (costAmount > 0) {
           const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
+          // THE THIRD WRITER of this agreement, and it needs the witness for the
+          // same reason the other two do. Choosing the direct route on an
+          // already-approved deal is the moment that amount becomes what the
+          // supplier receives — validated right here against his entitlement. If
+          // only the two amount writers stamped the witness, every deal approved
+          // BEFORE its route was chosen would reach handover with nothing to
+          // check and be refused as unprovable, on the ordinary ordering.
+          entitlementAtRouteChoiceMinor = toMinorUnits(costAmount, currency);
           const refusal = directSettlementBelowEntitlementRefusal({
             approvedAmountMinor: app.approvedDealerPurchaseAmountMinor,
-            supplierEntitlementMinor: toMinorUnits(costAmount, currency),
+            supplierEntitlementMinor: entitlementAtRouteChoiceMinor,
             supplierName: vehicle.sourcedFromName,
           });
           if (refusal) throw new ConvexError(refusal);
@@ -3397,6 +3529,7 @@ export const setSupplierSettlementRoute = mutation({
     const previous = consignedSettlementRoute(app);
     await ctx.db.patch(args.applicationId, {
       supplierSettlementRoute: args.route,
+      supplierEntitlementAtApprovalMinor: entitlementAtRouteChoiceMinor,
       updatedAt: Date.now(),
     });
 
@@ -3469,7 +3602,7 @@ export const finalizeDeal = mutation({
           app,
           "finalizing",
           await resolveQuoteMode(ctx, app),
-          await supplierEntitlementDriftFor(ctx, app)
+          await supplierEntitlementVerdictFor(ctx, app)
         );
         // The last step in the ordering Codex traced, and the one that creates
         // a SALE. A deal whose denomination cannot be established must not be

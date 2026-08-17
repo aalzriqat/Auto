@@ -665,14 +665,20 @@ export const salesEn = {
   DirectSupplierAmountNotesLabel: "Notes (optional)",
   DirectSupplierAmountAction: "Record amount",
   DirectSupplierAmountRowLabel: "Amount the supplier receives",
-  // NOT "a manager's decision": the default MANAGER is precisely the role this
-  // refuses, because it holds the approval permission without finance
-  // visibility. Naming the wrong role sends the operator to somebody who will be
-  // refused too.
+  // NO DEFAULT ROLE BUT OWNER IS NAMED, because none of them qualifies.
+  //
+  // Checked against DEFAULT_ROLE_TEMPLATES rather than assumed: MANAGER holds
+  // `approve:finance_application` but NOT `view:finance`; ACCOUNTANT holds
+  // `view:finance` but NOT the approval. This mutation requires both, so naming
+  // either one sends the operator to somebody the server will refuse — the first
+  // draft said "a manager", the correction said "an accountant", and both were
+  // wrong for opposite reasons. An org that grants both to a custom role has
+  // somebody who qualifies; the copy points at the permissions, which is the
+  // thing that is actually true.
   DirectSupplierAmountNeedsPermission:
-    "Recording what the supplier receives needs permission to see the deal's finances as well as to approve it. Ask the dealership owner or an accountant.",
+    "Recording what the supplier receives needs permission to see the deal's finances as well as to approve it. Ask the dealership owner, or someone whose role has both.",
   DirectSupplierAmountOwnDeal:
-    "You cannot record this on your own deal. A manager or the dealership owner records it.",
+    "You cannot record this on your own deal. The dealership owner records it, or another approver who can also see the deal's finances.",
   DirectSupplierAmountSealed:
     "The vehicle has gone out, so this deal's figures are sealed and this can no longer be recorded here.",
   DirectSupplierAmountClosed: "This deal is closed, so its figures are sealed.",
@@ -1685,10 +1691,13 @@ export const salesAr = {
   DirectSupplierAmountNotesLabel: "ملاحظات (اختياري)",
   DirectSupplierAmountAction: "تسجيل المبلغ",
   DirectSupplierAmountRowLabel: "المبلغ الذي يستلمه المورّد",
+  // لا يُذكر أي دور افتراضي غير المالك: المدير يملك صلاحية الاعتماد دون الاطلاع
+  // على المالية، والمحاسب يملك الاطلاع دون الاعتماد — وهذه العملية تتطلب
+  // الصلاحيتين معًا.
   DirectSupplierAmountNeedsPermission:
-    "تسجيل ما يستلمه المورّد يتطلب صلاحية الاطلاع على مالية الصفقة إضافةً إلى صلاحية الاعتماد. راجع مالك المعرض أو المحاسب.",
+    "تسجيل ما يستلمه المورّد يتطلب صلاحية الاطلاع على مالية الصفقة إضافةً إلى صلاحية الاعتماد. راجع مالك المعرض أو مستخدمًا يملك الصلاحيتين معًا.",
   DirectSupplierAmountOwnDeal:
-    "لا يمكنك تسجيل هذا على صفقتك. يسجّله المدير أو مالك المعرض.",
+    "لا يمكنك تسجيل هذا على صفقتك. يسجّله مالك المعرض أو معتمِد آخر يملك أيضًا صلاحية الاطلاع على مالية الصفقة.",
   DirectSupplierAmountSealed:
     "خرجت المركبة، لذلك أصبحت أرقام هذه الصفقة مثبّتة ولم يعد بالإمكان تسجيل هذا هنا.",
   DirectSupplierAmountClosed: "هذه الصفقة مغلقة، لذلك أصبحت أرقامها مثبّتة.",

@@ -1,4 +1,8 @@
-import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
+import {
+  convexTestWithComponents,
+  registerHandover,
+  registerRateLimiter,
+} from "../test-utils/convexTest";
 import { expect, test, describe } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -73,6 +77,10 @@ async function seedApprovedApplication(
   } = {}
 ) {
   const t = convexTestWithComponents(schema, MODULES);
+  // `vehicles.update` is the real public door these tests move the supplier's
+  // cost through, and it rate-limits tenant writes. Without the component
+  // registered it aborts before reaching any of the behaviour under test.
+  registerRateLimiter(t);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Guard Dealer", createdAt: Date.now() })
   );
@@ -466,7 +474,14 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
     );
     const entry = audit.find((row) => row.field === "approvedDealerPurchaseAmountMinor");
     expect(entry).toBeDefined();
-    expect(entry?.newValue).toBe("17000000");
+    // The structured receipt, not a bare amount string: what changed has to be
+    // readable without parsing the sentence beside it.
+    expect(JSON.parse(entry!.newValue)).toStrictEqual({
+      amountMinor: 17_000_000,
+      source: "Signed purchase agreement",
+      notes: null,
+      supplierEntitlementMinor: 17_000_000,
+    });
     expect(entry?.reason).toMatch(/Signed purchase agreement/);
     expect(entry?.changedAt).toBeTypeOf("number");
     expect(entry?.changedBy).toBeDefined();
@@ -517,11 +532,22 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
 
     // Bound to the evidence it was agreed against.
     const recorded = await t.run((ctx) => ctx.db.get(applicationId));
-    expect(recorded?.directSupplierReceipt?.supplierEntitlementMinor).toBe(17_000_000);
+    expect(recorded?.supplierEntitlementAtApprovalMinor).toBe(17_000_000);
 
-    // The supplier's entitlement moves AFTER the agreement.
+    // The supplier's entitlement moves AFTER the agreement — through the REAL
+    // public writer, not a raw patch.
+    //
+    // The distinction is the whole claim: this defect exists because
+    // `vehicles.update` is a door an operator can walk through, on a screen that
+    // knows nothing about finance applications. A `ctx.db.patch` would have
+    // proved only that the guard fires when the field changes by magic, and
+    // would still pass if every public path to that field were closed.
     const vehicleId = recorded!.vehicleId;
-    await t.run((ctx) => ctx.db.patch(vehicleId, { sourceCost: 18_000 }));
+    await asUser.mutation(api.vehicles.update, {
+      orgId,
+      vehicleId,
+      sourceCost: 18_000,
+    });
 
     await expect(
       registerHandover(asUser, api, orgId, applicationId)
@@ -542,6 +568,264 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
     expect((await t.run((ctx) => ctx.db.get(applicationId)))?.vehicleHandoverAt).toBeTypeOf(
       "number"
     );
+  });
+
+  test("a CONFIGURED direct deal is refused too when the entitlement moves under its approval", async () => {
+    // The SAME hole, in the writer that was left out.
+    //
+    // The first fix stored the witness inside the manual writer's own object and
+    // checked it inside the non-configured branch of the guard — so the shape a
+    // real financier approves kept the defect entirely: approve against cost A,
+    // edit the vehicle to B, and every artefact handover inspects (quotation,
+    // approval, funded split) is still present. The vehicle goes out and
+    // finalization refuses afterwards. A fix for one writer had been written as
+    // though it were a fix for the deal.
+    const { t, orgId, applicationId, asUser, asApprover } = await seedApprovedApplication(
+      "CONFIGURED_FINANCE_COMPANY",
+      { sourcedVehicle: true }
+    );
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    await asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId,
+      applicationId,
+      submittedQuotationMinor: 17_000_000,
+      source: "MANUAL_ENTRY",
+    });
+    await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_000_000,
+      basis: "MANUAL",
+      notes: "Approved by the finance company over the phone.",
+    });
+
+    // The configured writer stamps the witness it validated against — the fact
+    // this whole test depends on, asserted rather than assumed.
+    const approved = await t.run((ctx) => ctx.db.get(applicationId));
+    expect(approved?.supplierEntitlementAtApprovalMinor).toBe(17_000_000);
+
+    await asUser.mutation(api.vehicles.update, {
+      orgId,
+      vehicleId: approved!.vehicleId,
+      sourceCost: 18_000,
+    });
+
+    await expect(registerHandover(asUser, api, orgId, applicationId)).rejects.toThrow(
+      /has changed since what he receives was agreed/i
+    );
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.vehicleHandoverAt).toBeUndefined();
+
+    // RECOVERABLE through the configured writer's own door: re-approving against
+    // the entitlement that now stands writes a fresh witness and clears it.
+    await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 18_000_000,
+      basis: "MANUAL",
+      notes: "Re-approved after the supplier's cost was corrected.",
+      outlierAcknowledged: true,
+    });
+    await registerHandover(asUser, api, orgId, applicationId);
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.vehicleHandoverAt).toBeTypeOf(
+      "number"
+    );
+  });
+
+  test("an amount recorded with no witness is refused at handover, not waved through", async () => {
+    // UNPROVABLE IS NOT UNCHANGED.
+    //
+    // The first resolver returned `null` for both "it still matches" and "I
+    // cannot tell", so every unprovable row read as proof of safety — a money
+    // guard failing OPEN on exactly the deals whose evidence is weakest. A row
+    // approved before this release carries no witness, and that is the shape
+    // this pins.
+    const { t, orgId, applicationId, asUser, asApprover } = await seedApprovedApplication(
+      "MANUAL_FINANCE_COMPANY",
+      { sourcedVehicle: true, manualProviderName: "Amman Finance House" }
+    );
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    await asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_000_000,
+      source: "Signed purchase agreement",
+    });
+
+    // ⚠️ A RAW PATCH, deliberately and narrowly: this is the PRE-RELEASE shape,
+    // and no writer can produce it any more — which is the point. Every public
+    // path now stamps the witness, so the only way to test the legacy row is to
+    // recreate it.
+    await t.run((ctx) =>
+      ctx.db.patch(applicationId, { supplierEntitlementAtApprovalMinor: undefined })
+    );
+
+    await expect(registerHandover(asUser, api, orgId, applicationId)).rejects.toThrow(
+      /cannot be checked against what he is owed/i
+    );
+
+    // Repaired by re-recording the SAME figures. The retry-identity comparison
+    // covers the witness, so this is correctly NOT treated as a no-op — the
+    // stored receipt genuinely differs from the one being written.
+    await asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_000_000,
+      source: "Signed purchase agreement",
+    });
+    await registerHandover(asUser, api, orgId, applicationId);
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.vehicleHandoverAt).toBeTypeOf(
+      "number"
+    );
+  });
+
+  test("the writer refuses an amount it cannot check against the supplier's cost", async () => {
+    // `vehicles.update` accepts `sourceCost: 0` on a SOURCED vehicle — it only
+    // refuses absence (`vehicles.ts:1009`), while `createSourcedVehicle` refuses
+    // zero. So a deal's entitlement can legitimately become uncheckable through
+    // an ordinary public edit, and the writer used to record money against it
+    // anyway with no witness. `completeSale` would then refuse the sale after the
+    // vehicle had gone.
+    const { t, orgId, applicationId, asUser, asApprover } = await seedApprovedApplication(
+      "MANUAL_FINANCE_COMPANY",
+      { sourcedVehicle: true, manualProviderName: "Amman Finance House" }
+    );
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    const vehicleId = (await t.run((ctx) => ctx.db.get(applicationId)))!.vehicleId;
+    await asUser.mutation(api.vehicles.update, { orgId, vehicleId, sourceCost: 0 });
+
+    await expect(
+      asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+        orgId,
+        applicationId,
+        approvedAmountMinor: 17_000_000,
+        source: "Signed purchase agreement",
+      })
+    ).rejects.toThrow(/cost is not recorded on this vehicle/i);
+
+    // Nothing was written on the way out — a refusal that half-recorded would be
+    // worse than the fail-open it replaced.
+    const after = await t.run((ctx) => ctx.db.get(applicationId));
+    expect(after?.approvedDealerPurchaseAmountMinor).toBeUndefined();
+    expect(after?.supplierEntitlementAtApprovalMinor).toBeUndefined();
+
+    // Recoverable in one step, through the vehicle's own screen.
+    await asUser.mutation(api.vehicles.update, { orgId, vehicleId, sourceCost: 17_000 });
+    await asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_000_000,
+      source: "Signed purchase agreement",
+    });
+    expect(
+      (await t.run((ctx) => ctx.db.get(applicationId)))?.supplierEntitlementAtApprovalMinor
+    ).toBe(17_000_000);
+  });
+
+  test("what changed in a correction is machine-readable — amount, source and notes each on their own", async () => {
+    // The audit row's identity must not live in prose.
+    //
+    // A source-only or notes-only correction produced the same amount strings on
+    // both sides of the row, so the only record of what actually moved was a
+    // sentence — and the test that checked it was regex-parsing that sentence,
+    // which is the same defect wearing a test's clothes. Somebody reading this
+    // history months later is answering "was this figure changed, and what by",
+    // and a human explanation is not an answer a machine can check.
+    const { t, orgId, applicationId, asUser, asApprover } = await seedApprovedApplication(
+      "MANUAL_FINANCE_COMPANY",
+      { sourcedVehicle: true, manualProviderName: "Amman Finance House" }
+    );
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+
+    const record = (amountMinor: number, source: string, notes?: string) =>
+      asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+        orgId,
+        applicationId,
+        approvedAmountMinor: amountMinor,
+        source,
+        ...(notes ? { notes } : {}),
+      });
+
+    const auditRows = async () =>
+      t.run((ctx) =>
+        ctx.db
+          .query("financeApplicationOverrides")
+          .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+          .collect()
+      );
+    const latest = async () => {
+      const rows = await auditRows();
+      const row = rows.sort((a, b) => a.changedAt - b.changedAt).at(-1)!;
+      return {
+        field: row.field,
+        before: row.previousValue === undefined ? undefined : JSON.parse(row.previousValue),
+        after: JSON.parse(row.newValue),
+        count: rows.length,
+      };
+    };
+
+    await record(17_000_000, "Signed purchase agreement", "Collected in person.");
+    const first = await latest();
+    // A first write is distinguishable from a correction WITHOUT reading prose:
+    // there is no before.
+    expect(first.before).toBeUndefined();
+    expect(first.after).toStrictEqual({
+      amountMinor: 17_000_000,
+      source: "Signed purchase agreement",
+      notes: "Collected in person.",
+      supplierEntitlementMinor: 17_000_000,
+    });
+
+    // AMOUNT ONLY.
+    await record(18_000_000, "Signed purchase agreement", "Collected in person.");
+    const amountOnly = await latest();
+    expect(amountOnly.count).toBe(2);
+    expect(amountOnly.field).toBe("approvedDealerPurchaseAmountMinor");
+    expect(amountOnly.before.amountMinor).toBe(17_000_000);
+    expect(amountOnly.after.amountMinor).toBe(18_000_000);
+    expect(amountOnly.after.source).toBe(amountOnly.before.source);
+    expect(amountOnly.after.notes).toBe(amountOnly.before.notes);
+
+    // SOURCE ONLY — the amount did not move, so this is not filed against the
+    // amount's own history.
+    await record(18_000_000, "Revised purchase agreement", "Collected in person.");
+    const sourceOnly = await latest();
+    expect(sourceOnly.count).toBe(3);
+    expect(sourceOnly.field).toBe("directSupplierReceipt");
+    expect(sourceOnly.before.source).toBe("Signed purchase agreement");
+    expect(sourceOnly.after.source).toBe("Revised purchase agreement");
+    expect(sourceOnly.after.amountMinor).toBe(sourceOnly.before.amountMinor);
+    expect(sourceOnly.after.notes).toBe(sourceOnly.before.notes);
+
+    // NOTES ONLY.
+    await record(18_000_000, "Revised purchase agreement", "Collected by bank transfer.");
+    const notesOnly = await latest();
+    expect(notesOnly.count).toBe(4);
+    expect(notesOnly.field).toBe("directSupplierReceipt");
+    expect(notesOnly.before.notes).toBe("Collected in person.");
+    expect(notesOnly.after.notes).toBe("Collected by bank transfer.");
+    expect(notesOnly.after.amountMinor).toBe(notesOnly.before.amountMinor);
+    expect(notesOnly.after.source).toBe(notesOnly.before.source);
+
+    // And a genuine no-op is still a no-op: nothing above turned the identity
+    // check into "any call writes a row".
+    await record(18_000_000, "Revised purchase agreement", "Collected by bank transfer.");
+    expect((await auditRows()).length).toBe(4);
   });
 
   test("an exact retry is the same act — no revision bump, no second audit row", async () => {

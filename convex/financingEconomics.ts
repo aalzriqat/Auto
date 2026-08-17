@@ -1581,17 +1581,37 @@ export const approveDealerPurchaseAmount = mutation({
     // approval, and `completeSale` refuses at the commit point regardless, so
     // neither ordering can slip through. This one exists so the operator learns
     // it here rather than at the finalize button.
+    /**
+     * The entitlement this approval was measured against, KEPT.
+     *
+     * Validating it here and storing nothing left a CONFIGURED direct deal with
+     * the same mutable-entitlement hole SCRUM-61 closed for the manual writer:
+     * approve against supplier cost A, edit the vehicle to B through its own
+     * public path, and every artefact handover checks — quotation, approval,
+     * funded split — is still present, so the vehicle goes out and finalization
+     * refuses afterwards. `applications.supplierEntitlementVerdictFor` re-checks
+     * this witness for BOTH writers; without it being written here, that check
+     * had nothing to read on the configured shape.
+     */
+    let supplierEntitlementAtApprovalMinor: number | undefined;
     if (!dealershipCollectsGross(consignedSettlementRoute(app))) {
       const vehicle = await ctx.db.get(app.vehicleId);
       if (vehicle && vehicle.orgId === args.orgId && isConsignedAgentSale(vehicle)) {
         const costAmount = await computeVehicleCapitalizedCost(ctx, vehicle);
         // A vehicle with no recorded cost is not evidence that nothing is owed;
         // `completeSale` refuses that sale outright. Nothing is asserted here.
+        //
+        // Deliberately still not a refusal AT APPROVAL: the approval is not the
+        // irreversible step, and widening this path's refusals is not what the
+        // hole required. The witness is simply absent, and the handover guard
+        // treats an absent witness as UNPROVABLE and refuses there — while the
+        // vehicle is still on the lot and re-approving can fix it.
         if (costAmount > 0) {
           const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
+          supplierEntitlementAtApprovalMinor = toMinorUnits(costAmount, currency);
           const refusal = directSettlementBelowEntitlementRefusal({
             approvedAmountMinor: args.approvedAmountMinor,
-            supplierEntitlementMinor: toMinorUnits(costAmount, currency),
+            supplierEntitlementMinor: supplierEntitlementAtApprovalMinor,
             supplierName: vehicle.sourcedFromName,
           });
           if (refusal) throw new ConvexError(refusal);
@@ -1794,6 +1814,11 @@ export const approveDealerPurchaseAmount = mutation({
       // have moved. See `economicsRevision` in the schema.
       economicsRevision: (app.economicsRevision ?? 0) + 1,
       approvedDealerPurchaseAmountMinor: args.approvedAmountMinor,
+      // Written on every approval, including a re-approval that changes nothing
+      // else: re-approving the identical amount is exactly how a deal whose
+      // witness is missing or superseded is repaired, so this must not be
+      // conditional on something else having moved.
+      supplierEntitlementAtApprovalMinor,
       approvedPurchaseBasis: args.basis,
       approvedPurchaseAppraisalId: appraisal?._id,
       approvedPurchaseExceptionRuleVersion:

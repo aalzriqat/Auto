@@ -490,6 +490,33 @@ export function redactSettlementEvidence<T extends Doc<"financeApplications">>(
       ? app.supplierDisbursementApprovedAtRecordingMinor
       : undefined,
 
+    // Tier 1 as well — the supplier's COST, and the paperwork it was read off.
+    //
+    // `supplierEntitlementAtApprovalMinor` is the vehicle's capitalized cost at
+    // the moment the purchase amount was agreed. `vehicles.list` already blanks
+    // `sourceCost` for a caller without VIEW_COST_PRICE, so publishing the same
+    // figure here — through a query that authorizes on VIEW_SALES alone — would
+    // have handed the default SALES template the supplier's cost by a second
+    // door, on a field that appears nowhere in `origin/main`. This release added
+    // the exposure, so this release closes it.
+    //
+    // `directSupplierReceipt` goes with it as a WHOLE OBJECT rather than
+    // field-by-field: `notes` is free text an operator types beside the figure,
+    // and `source` names the purchase agreement. Gating the number and
+    // publishing the sentence written next to it is the shape of leak this file
+    // already documents at tier 2.
+    //
+    // Either permission suffices, because either one independently entitles its
+    // holder to the supplier's cost — VIEW_FINANCE through the settlement
+    // evidence above, VIEW_COST_PRICE through the vehicle itself. Neither is
+    // held by the default SALES template.
+    supplierEntitlementAtApprovalMinor:
+      canSeeFinance || has(PERMISSIONS.VIEW_COST_PRICE)
+        ? app.supplierEntitlementAtApprovalMinor
+        : undefined,
+    directSupplierReceipt:
+      canSeeFinance || has(PERMISSIONS.VIEW_COST_PRICE) ? app.directSupplierReceipt : undefined,
+
     // Tier 2 — the one figure the confirmation SCREEN needs to prefill. Without
     // it the amount field opens blank and gets typed from memory, and a typo
     // locks the deal in a state only MANAGE_FINANCE can repair.

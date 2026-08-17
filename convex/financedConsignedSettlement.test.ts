@@ -4987,6 +4987,19 @@ describe("a settlement advice that contradicts the approval", () => {
       await ctx.db.patch(applicationId as never, {
         needsFinancingReconciliation: true,
         financingReconciliationReason: "Flagged so the queue actually returns this deal.",
+        // The MANUAL writer's provenance object, placed directly.
+        //
+        // ⚠️ A RAW PATCH, and the reason is narrow: this fixture is a CONFIGURED
+        // deal, and `directSupplierReceipt` is written only by the manual
+        // writer, so no public path puts one here. What is under test is the
+        // REDACTION, which is keyed on the field and knows nothing about which
+        // writer produced it — the door behaves identically either way. The
+        // writer's own coverage lives in configuredDealEconomicsGuard.test.ts,
+        // against real mutations.
+        directSupplierReceipt: {
+          source: "Signed purchase agreement",
+          notes: "Supplier confirmed by phone.",
+        },
       } as never);
       const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === s.orgId)!;
       await ctx.db.patch(role._id, {
@@ -5034,6 +5047,27 @@ describe("a settlement advice that contradicts the approval", () => {
     expect(economics.application).toBeTruthy();
     expect(economics.overrides.length).toBeGreaterThan(0);
     expect(queue.page.length).toBeGreaterThan(0);
+
+    // ANTI-VACUITY FOR THE TWO NEW FIELDS SPECIFICALLY. Asserting a key is
+    // absent from a payload proves nothing if the row never carried it — the
+    // assertion would pass just as happily against a field that does not exist.
+    // Both must be present on the STORED document for their absence downstream
+    // to mean redaction.
+    const storedEvidence = await s.t.run(async (ctx) => {
+      const app = (await ctx.db.get(applicationId as never)) as unknown as {
+        supplierEntitlementAtApprovalMinor?: number;
+        directSupplierReceipt?: { source: string };
+      };
+      return {
+        entitlement: app.supplierEntitlementAtApprovalMinor,
+        receiptSource: app.directSupplierReceipt?.source,
+      };
+    });
+    // Written by `approveDealerPurchaseAmount` itself on this direct-route deal
+    // — not patched in. If the configured writer ever stops stamping the
+    // witness, this fails here rather than leaving the sweep quietly vacuous.
+    expect(storedEvidence.entitlement).toBeTypeOf("number");
+    expect(storedEvidence.receiptSource).toBe("Signed purchase agreement");
 
     const suggestion = await s.asUser.query(api.financingEconomics.suggestQuotation, {
       orgId: s.orgId,
@@ -5146,6 +5180,14 @@ describe("a settlement advice that contradicts the approval", () => {
         // left this test green.
         "supplierDisbursementConfirmedAt",
         "supplierDisbursementConfirmedBy",
+        // The supplier's COST and the paperwork it was read off, added when
+        // SCRUM-61 introduced them. They went out through `applications.list`
+        // and `applications.get` — both VIEW_SALES — because
+        // `redactSettlementEvidence` starts from the whole document and blanks a
+        // NAMED list, so a new sensitive field is exposed by default. Every new
+        // gated field belongs in this sweep for exactly that reason.
+        "supplierEntitlementAtApprovalMinor",
+        "directSupplierReceipt",
       ]) {
         expect(`${name} exposes ${field}: ${keysOf(response).has(field)}`).toBe(
           `${name} exposes ${field}: false`
