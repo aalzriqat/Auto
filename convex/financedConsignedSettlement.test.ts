@@ -351,6 +351,73 @@ async function runDeal(
   // deal payload the way a real screen gets it. Read rather than assumed: the
   // branch above may have recorded an approval, and the non-configured cases
   // have not, so the stamp differs between them.
+  const intendedApprovedMinor = (opts.approvedAmount ?? VEHICLE_PRICE) * SCALE;
+  // BEFORE handover, because that is when this figure is required and when the
+  // writers still accept it — `recordDirectSupplierReceiptAmount` refuses a deal
+  // whose vehicle has gone out, and it is right to: afterwards the figures are
+  // sealed and a journal exists that was posted against them. The old raw patch
+  // ran AFTER handover, which is a state no operator could reach.
+  //
+  // Still skipped for `finalize: false` callers, who drive the economics
+  // themselves through the real writers — seeding an approval here would make
+  // `recordSubmittedQuotation` unreachable for them, since it refuses to run
+  // once an approval exists.
+  if (opts.finalize !== false && opts.route === "DIRECT_TO_SUPPLIER") {
+    // CodeRabbit + owner-proxy, ACCEPTED IN FULL. The raw patch is GONE.
+    //
+    // It wrote `approvedDealerPurchaseAmountMinor` for every direct-route deal.
+    // Scoping it to "only when absent" fixed the configured case but left the
+    // worse half standing: for a NON-configured deal it manufactured an
+    // authority that did not exist, because `approveDealerPurchaseAmount`
+    // refuses an application with no configured company. These fixtures were
+    // therefore green against a state production could not create — the exact
+    // fault this PR was correcting elsewhere, living in its own settlement
+    // suite.
+    //
+    // Both routes now go through a real public writer, so if either were shut
+    // these fixtures would fail instead of quietly proving nothing.
+    const needsAmount = await s.t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      return app?.approvedDealerPurchaseAmountMinor !== intendedApprovedMinor;
+    });
+    if (needsAmount) {
+      if (configured) {
+        // The configured financier's own approval step, which applies its
+        // lending rules. `recordSubmittedQuotation` first, because the approval
+        // is measured against it.
+        const hasQuotation = await s.t.run(async (ctx) => {
+          const app = await ctx.db.get(applicationId);
+          return app?.submittedQuotationMinor !== undefined;
+        });
+        if (!hasQuotation) {
+          await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+            orgId: s.orgId,
+            applicationId,
+            submittedQuotationMinor: intendedApprovedMinor,
+            source: "MANUAL_ENTRY",
+          });
+        }
+        await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+          orgId: s.orgId,
+          applicationId,
+          approvedAmountMinor: intendedApprovedMinor,
+          basis: "MANUAL",
+          notes: "Fixture: agreed directly.",
+        });
+      } else {
+        // The manual provider's path — the writer this PR adds, and the reason
+        // it had to exist: nothing else can record this figure for a deal with
+        // no configured company.
+        await s.asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+          orgId: s.orgId,
+          applicationId,
+          approvedAmountMinor: intendedApprovedMinor,
+          source: "Fixture: signed purchase agreement",
+        });
+      }
+    }
+  }
+
   await registerHandover(s.asUser, api, s.orgId, applicationId);
   await s.asUser.mutation(api.applications.registerExpectedPayment, {
     orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
@@ -378,35 +445,6 @@ async function runDeal(
   // real writers, and `recordSubmittedQuotation` refuses to run once an approval
   // exists — so seeding one here would make that path unreachable.
   if (opts.finalize === false) return { quoteId, applicationId, saleId: null };
-
-  if (opts.route === "DIRECT_TO_SUPPLIER") {
-    // CodeRabbit, ACCEPTED, and it is the same fault the owner-proxy flagged in
-    // the guard fixtures: writing state a production writer already wrote.
-    //
-    // The `configured` block above records this through
-    // `approveDealerPurchaseAmount`. Unscoped, this patch then rewrote that same
-    // figure for every configured direct-route deal — past the point the writer
-    // SEALS it. The values matched, so nothing failed, and a fixture that
-    // silently overwrites a sealed figure is exactly the habit that makes a
-    // later real divergence invisible.
-    //
-    // So: only write what no writer has. An explicit `approvedAmount` override
-    // still patches, because the writer cannot be asked for a different figure
-    // once it has sealed one — that is deliberate, and now it is the only case
-    // where a raw write happens on top of a recorded approval.
-    const existing = await s.t.run(async (ctx) => {
-      const app = await ctx.db.get(applicationId);
-      return app?.approvedDealerPurchaseAmountMinor;
-    });
-    const intended = (opts.approvedAmount ?? VEHICLE_PRICE) * SCALE;
-    if (existing !== intended) {
-      await s.t.run(async (ctx) => {
-        await ctx.db.patch(applicationId, {
-          approvedDealerPurchaseAmountMinor: intended,
-        });
-      });
-    }
-  }
 
   const saleId = await s.asUser.mutation(api.applications.finalizeDeal, {
     orgId: s.orgId,

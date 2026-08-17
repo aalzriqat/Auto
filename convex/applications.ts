@@ -5,6 +5,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import {
   requireTenantAuth,
+  requireOwnedRow,
   redactSettlementEvidence,
 } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
@@ -2864,6 +2865,161 @@ export const registerExpectedPayment = mutation({
  * describing the opposite deal from the journal. Correcting a posted deal is a
  * correction, not an edit.
  */
+/**
+ * Records what the manual finance provider will pay the supplier directly.
+ *
+ * THE STEP THE SCREEN NAMED AND NOTHING COULD PERFORM.
+ *
+ * A deal may legitimately be MANUAL_FINANCE_COMPANY with a named provider, on a
+ * SOURCED vehicle, settling DIRECT_TO_SUPPLIER — each of those is set through an
+ * ordinary public mutation, and `setSupplierSettlementRoute` accepts exactly
+ * that combination. On that route `finalizeDeal` REQUIRES the approved purchase
+ * amount, because it is what the supplier actually receives and the dealership's
+ * claim on him is measured from it.
+ *
+ * But `approveDealerPurchaseAmount` cannot serve those deals: it resolves a
+ * finance-company rule snapshot, and that resolver refuses an application with
+ * no configured company — which a MANUAL deal structurally never has, because
+ * `quotes.saveQuote` forbids a `companyId` on any mode that is present and not
+ * the configured one. So the cockpit correctly reported the figure missing,
+ * finalization correctly refused without it, and no supported path could record
+ * it. The operator could enter the state, be told what was wrong, and be
+ * refused — the impossible-next-step dead end this issue exists to remove,
+ * reached through a different door.
+ *
+ * DELIBERATELY NARROW. This is not a second `approveDealerPurchaseAmount`:
+ *
+ *  - it records ONE figure and manufactures no configured-company semantics —
+ *    no submitted quotation, no applied LTV, no funded portion. Those describe a
+ *    configured financier's arithmetic, and inventing them for a manual provider
+ *    would be a fabricated number wearing an audited one's clothes;
+ *  - it refuses any deal `approveDealerPurchaseAmount` CAN serve, so the two
+ *    never overlap and no field has two writers;
+ *  - it refuses any deal not on the direct route, where the figure has no
+ *    meaning; and
+ *  - it is refused once the vehicle has gone out or the deal has closed, so it
+ *    cannot rewrite an amount a journal was already posted against.
+ */
+export const recordDirectSupplierReceiptAmount = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    /** What the provider will pay the supplier, in minor units. */
+    approvedAmountMinor: v.number(),
+    /** Where the figure came from — the evidence a later reader will ask for. */
+    source: v.string(),
+    notes: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    // The approval authority, plus the money permission: this figure moves the
+    // owner-facing profit, and a permission enforced only by a screen is not
+    // enforced.
+    const { user } = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.APPROVE_FINANCE_APPLICATION,
+      PERMISSIONS.VIEW_FINANCE,
+    ]);
+    const app = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeApplications",
+      args.applicationId
+    );
+
+    // Rejects NaN and Infinity, which `v.number()` admits.
+    assertValidMinorAmount(args.approvedAmountMinor, "Approved supplier receipt amount");
+    if (args.approvedAmountMinor <= 0) {
+      throw new ConvexError("The amount the supplier receives must be greater than zero.");
+    }
+    const source = args.source.trim();
+    if (!source) {
+      throw new ConvexError(
+        "Record where this amount came from — a later reader has no other way to tell whether it was agreed or assumed."
+      );
+    }
+
+    // The denomination is RESOLVED and STAMPED, not merely validated.
+    //
+    // `assertSupportedDenomination` returns early on `undefined` — it checks a
+    // currency that is present, it does not require one. So validating alone
+    // would have recorded a money amount on a deal with no recorded scale, and
+    // handover then refused it with "AutoFlow cannot confirm which currency this
+    // deal's approved amount is recorded in": the figure would be written and
+    // the deal stuck, which is the same dead end this mutation exists to remove.
+    //
+    // Resolved the way `recomputeAndPatchEconomics` resolves it, so the two
+    // cannot disagree about what currency a deal is in. A denomination is not
+    // configured-company arithmetic — it is what makes the number mean anything.
+    const economicsCurrency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
+    assertSupportedDenomination(economicsCurrency, "recording this supplier receipt amount");
+
+    // Separation of duties, the rule the other money writers on this deal apply:
+    // whoever sold the vehicle does not also record what the supplier receives.
+    if (user._id === app.salespersonId) {
+      throw new ConvexError(
+        "You cannot record the supplier's amount on your own application. A manager or the dealership owner records it."
+      );
+    }
+
+    if (app.status !== "APPROVED") {
+      throw new ConvexError(
+        "Only an approved application can record what the supplier receives."
+      );
+    }
+    // BEFORE the vehicle goes out and before the deal closes: afterwards the
+    // figures are sealed and a journal exists that was posted against them.
+    if (app.vehicleHandoverAt !== undefined) {
+      throw new ConvexError(
+        "The vehicle has already been handed over on this deal, so its figures are sealed. Record the supplier's amount before handover."
+      );
+    }
+    if (app.finalizedSaleId !== undefined) {
+      throw new ConvexError("This deal has already been closed, so its figures are sealed.");
+    }
+
+    if (app.supplierSettlementRoute !== "DIRECT_TO_SUPPLIER") {
+      throw new ConvexError(
+        "On this deal the finance provider does not pay the supplier directly, so there is no supplier receipt amount to record."
+      );
+    }
+
+    // The boundary between the two writers, derived through the SAME helper the
+    // guard and the cockpit use rather than a third opinion. A deal a configured
+    // financier approves belongs to `approveDealerPurchaseAmount`, which runs
+    // that company's lending rules and the funding split this path does not have.
+    const quoteMode = await resolveQuoteMode(ctx, app);
+    if (financierApprovesPurchase({ quoteMode, companyId: app.companyId })) {
+      throw new ConvexError(
+        "A finance company approves the purchase amount on this deal. Record it through the approval step, which applies that company's lending rules."
+      );
+    }
+
+    await ctx.db.patch(args.applicationId, {
+      approvedDealerPurchaseAmountMinor: args.approvedAmountMinor,
+      economicsCurrency,
+    });
+
+    // Actor, time and source. This is the row somebody reads months later when
+    // the supplier's payment is questioned.
+    await ctx.db.insert("financeApplicationOverrides", {
+      orgId: args.orgId,
+      applicationId: args.applicationId,
+      field: "approvedDealerPurchaseAmountMinor",
+      previousValue:
+        app.approvedDealerPurchaseAmountMinor === undefined
+          ? undefined
+          : String(app.approvedDealerPurchaseAmountMinor),
+      newValue: String(args.approvedAmountMinor),
+      reason: `Direct supplier receipt amount recorded for the manual finance provider (source: ${source})${
+        args.notes?.trim() ? ` — ${args.notes.trim()}` : ""
+      }.`,
+      changedBy: user._id,
+      changedAt: Date.now(),
+    });
+
+    return args.applicationId;
+  },
+});
+
 export const setSupplierSettlementRoute = mutation({
   args: {
     orgId: v.id("organizations"),

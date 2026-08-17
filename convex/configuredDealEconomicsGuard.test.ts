@@ -195,7 +195,7 @@ async function seedApprovedApplication(
   const forceHandover = () =>
     t.run((ctx) => ctx.db.patch(applicationId, { vehicleHandoverAt: Date.now(), vehicleHandoverBy: userId }));
 
-  return { t, orgId, applicationId, asUser, registerExpectedPayment, forceHandover };
+  return { t, orgId, applicationId, asUser, asApprover, registerExpectedPayment, forceHandover };
 }
 
 describe("SCRUM-61: a CONFIGURED deal may not close without its economics", () => {
@@ -413,6 +413,163 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
     await expect(
       asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId })
     ).rejects.toThrow(/approved purchase amount is not recorded|Record it before finalizing/i);
+  });
+
+  test("a MANUAL direct deal can RECORD the amount it is asked for, and then close", async () => {
+    // The exit, not just the wall.
+    //
+    // The test above proves the operator is correctly TOLD what is missing. On
+    // its own that is only half a workflow, and the owner-proxy was right to
+    // call it out: `approveDealerPurchaseAmount` cannot serve this deal, because
+    // it resolves a finance-company rule snapshot and a MANUAL application has
+    // no configured company. So the screen named a step nothing could perform —
+    // the impossible-next-step dead end this issue exists to remove.
+    //
+    // Everything below goes through PUBLIC mutations. No raw patch anywhere: if
+    // any door on this road were shut, this test could not reach the end.
+    const { t, orgId, applicationId, asApprover, asUser, registerExpectedPayment } =
+      await seedApprovedApplication("MANUAL_FINANCE_COMPANY", {
+        sourcedVehicle: true,
+        manualProviderName: "Amman Finance House",
+      });
+
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+
+    // The step that did not exist.
+    await asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_000_000,
+      source: "Signed purchase agreement",
+    });
+
+    const recorded = await t.run((ctx) => ctx.db.get(applicationId));
+    expect(recorded?.approvedDealerPurchaseAmountMinor).toBe(17_000_000);
+    // And it manufactured NO configured-company arithmetic. A manual provider
+    // has no LTV rule and no funding split; inventing them would be a fabricated
+    // figure carrying an audited figure's authority.
+    expect(recorded?.submittedQuotationMinor).toBeUndefined();
+    expect(recorded?.appliedLtvPercent).toBeUndefined();
+    expect(recorded?.financeCompanyFundedPortionMinor).toBeUndefined();
+
+    // Actor, time and source, on the row a later reader asks for.
+    const audit = await t.run((ctx) =>
+      ctx.db
+        .query("financeApplicationOverrides")
+        .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+        .collect()
+    );
+    const entry = audit.find((row) => row.field === "approvedDealerPurchaseAmountMinor");
+    expect(entry).toBeDefined();
+    expect(entry?.newValue).toBe("17000000");
+    expect(entry?.reason).toMatch(/Signed purchase agreement/);
+    expect(entry?.changedAt).toBeTypeOf("number");
+    expect(entry?.changedBy).toBeDefined();
+
+    // The cockpit stops asking for THIS figure. It may still name a later one —
+    // the supplier settlement is not recorded until finalization — so asserting
+    // "available" would be asserting a different step had also been done. What
+    // matters is that the complaint MOVED OFF the amount just recorded.
+    const cockpit = await asUser.query(api.applications.dealCockpit, { orgId, applicationId });
+    const profit = cockpit?.money?.managementProfit;
+    if (profit?.available === false) {
+      expect(profit.reason).not.toBe("NoApprovedPurchaseAmount");
+      expect(profit.reason).not.toBe("NotApplicableForFinancingMode");
+    }
+
+    // And the deal completes through the ordinary road.
+    await registerHandover(asUser, api, orgId, applicationId);
+    await registerExpectedPayment();
+    await asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId });
+
+    const after = await t.run((ctx) => ctx.db.get(applicationId));
+    expect(after?.status).toBe("CLOSED");
+    expect(after?.finalizedSaleId).toBeDefined();
+  });
+
+  test("the manual writer refuses the deals that belong to the approval step, and the states that are sealed", async () => {
+    // The boundary. Without these the new writer is a second way to set a field
+    // that already has an owner, which is how two derivations of one number
+    // start disagreeing.
+    const configured = await seedApprovedApplication("CONFIGURED_FINANCE_COMPANY", {
+      sourcedVehicle: true,
+    });
+    await configured.asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId: configured.orgId,
+      applicationId: configured.applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    await expect(
+      configured.asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+        orgId: configured.orgId,
+        applicationId: configured.applicationId,
+        approvedAmountMinor: 17_000_000,
+        source: "Signed purchase agreement",
+      })
+    ).rejects.toThrow(/finance company approves the purchase amount/i);
+
+    // Not on the direct route, where the figure has no meaning.
+    const through = await seedApprovedApplication("MANUAL_FINANCE_COMPANY", {
+      sourcedVehicle: true,
+      manualProviderName: "Amman Finance House",
+    });
+    await expect(
+      through.asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+        orgId: through.orgId,
+        applicationId: through.applicationId,
+        approvedAmountMinor: 17_000_000,
+        source: "Signed purchase agreement",
+      })
+    ).rejects.toThrow(/does not pay the supplier directly/i);
+
+    // NaN passes `v.number()`, so the guard is asserted rather than assumed.
+    const manual = await seedApprovedApplication("MANUAL_FINANCE_COMPANY", {
+      sourcedVehicle: true,
+      manualProviderName: "Amman Finance House",
+    });
+    await manual.asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId: manual.orgId,
+      applicationId: manual.applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    await expect(
+      manual.asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+        orgId: manual.orgId,
+        applicationId: manual.applicationId,
+        approvedAmountMinor: Number.NaN,
+        source: "Signed purchase agreement",
+      })
+    ).rejects.toThrow();
+    // An unrecorded source is refused: an amount nobody can trace is not evidence.
+    await expect(
+      manual.asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+        orgId: manual.orgId,
+        applicationId: manual.applicationId,
+        approvedAmountMinor: 17_000_000,
+        source: "   ",
+      })
+    ).rejects.toThrow(/where this amount came from/i);
+
+    // Sealed once the vehicle has gone out.
+    await manual.asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+      orgId: manual.orgId,
+      applicationId: manual.applicationId,
+      approvedAmountMinor: 17_000_000,
+      source: "Signed purchase agreement",
+    });
+    await registerHandover(manual.asUser, api, manual.orgId, manual.applicationId);
+    await expect(
+      manual.asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+        orgId: manual.orgId,
+        applicationId: manual.applicationId,
+        approvedAmountMinor: 18_000_000,
+        source: "Revised agreement",
+      })
+    ).rejects.toThrow(/handed over/i);
   });
 
   test("a MANUAL deal settling THROUGH the dealership is not asked for an approved amount", async () => {
