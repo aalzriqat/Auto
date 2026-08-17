@@ -380,11 +380,32 @@ async function runDeal(
   if (opts.finalize === false) return { quoteId, applicationId, saleId: null };
 
   if (opts.route === "DIRECT_TO_SUPPLIER") {
-    await s.t.run(async (ctx) => {
-      await ctx.db.patch(applicationId, {
-        approvedDealerPurchaseAmountMinor: (opts.approvedAmount ?? VEHICLE_PRICE) * SCALE,
-      });
+    // CodeRabbit, ACCEPTED, and it is the same fault the owner-proxy flagged in
+    // the guard fixtures: writing state a production writer already wrote.
+    //
+    // The `configured` block above records this through
+    // `approveDealerPurchaseAmount`. Unscoped, this patch then rewrote that same
+    // figure for every configured direct-route deal — past the point the writer
+    // SEALS it. The values matched, so nothing failed, and a fixture that
+    // silently overwrites a sealed figure is exactly the habit that makes a
+    // later real divergence invisible.
+    //
+    // So: only write what no writer has. An explicit `approvedAmount` override
+    // still patches, because the writer cannot be asked for a different figure
+    // once it has sealed one — that is deliberate, and now it is the only case
+    // where a raw write happens on top of a recorded approval.
+    const existing = await s.t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      return app?.approvedDealerPurchaseAmountMinor;
     });
+    const intended = (opts.approvedAmount ?? VEHICLE_PRICE) * SCALE;
+    if (existing !== intended) {
+      await s.t.run(async (ctx) => {
+        await ctx.db.patch(applicationId, {
+          approvedDealerPurchaseAmountMinor: intended,
+        });
+      });
+    }
   }
 
   const saleId = await s.asUser.mutation(api.applications.finalizeDeal, {

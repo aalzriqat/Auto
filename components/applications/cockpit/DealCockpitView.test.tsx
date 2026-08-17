@@ -42,6 +42,7 @@ vi.mock("@/components/accounting/AccountingTabShared", () => ({
 }));
 
 import { DealCockpitView } from "./DealCockpit";
+import { salesEn, salesAr } from "@/lib/i18n/domains/sales";
 
 const SCALE = 1_000;
 
@@ -220,6 +221,23 @@ describe("the headline figure", () => {
     // accompanied by the new line.
     expect(screen.queryByText("ProfitNotCalculable")).toBeNull();
     expect(screen.queryByText("ProfitNeedsApprovedPurchase")).toBeNull();
+
+    // CodeRabbit, ACCEPTED. The harness translator is `t: (key) => key`, so every
+    // assertion above proves only that the component ASKED for a translation —
+    // never that the string exists. A key added to the component and forgotten in
+    // the dictionary keeps this test green and shows a raw key to the operator.
+    // These assert the real dictionaries, in both languages, which is the fact
+    // the rendered assertions structurally cannot reach.
+    for (const key of ["ProfitNotApplicable", "ProfitNotApplicableForMode"] as const) {
+      expect(salesEn[key]).toBeTruthy();
+      expect(salesAr[key]).toBeTruthy();
+      // Not the key echoed back: a dictionary mapping a key to itself would pass
+      // `toBeTruthy` while leaving the operator reading "ProfitNotApplicable".
+      expect(salesEn[key]).not.toBe(key);
+      expect(salesAr[key]).not.toBe(key);
+      // And genuinely translated, not the English copied across.
+      expect(salesAr[key]).not.toBe(salesEn[key]);
+    }
   });
 });
 

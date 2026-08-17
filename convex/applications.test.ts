@@ -29,6 +29,19 @@ async function setup() {
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Test Dealer", createdAt: Date.now() })
   );
+  // CodeRabbit, ACCEPTED. The economics literals below multiply major units by
+  // 1_000, which is correct ONLY because `getOrgCurrency` falls back to "JOD"
+  // (`accounting/workflowHooks.ts`) when no `orgSettings` row exists. That made
+  // the fixture's scale depend on an unstated default: seed a 100-scale currency,
+  // or change the fallback, and every amount here silently becomes wrong by 10x
+  // while the tests stay green. Seeded explicitly so the scale is asserted rather
+  // than inherited.
+  await t.run((ctx) =>
+    ctx.db.insert("orgSettings", {
+      orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH", "BANK_TRANSFER"],
+    })
+  );
+
   const userId = await t.run((ctx) =>
     ctx.db.insert("users", { clerkId: "user_app_1", email: "app@test.com", name: "App User" })
   );

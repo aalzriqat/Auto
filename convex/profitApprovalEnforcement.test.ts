@@ -28,6 +28,18 @@ async function seedOrg(t: any, seed: string, minimumProfit: number | undefined) 
       name: `Profit ${seed}`,
       createdAt: Date.now(),
     });
+    // CodeRabbit, ACCEPTED. The economics literals in this file multiply major
+    // units by 1_000, which is correct ONLY because `getOrgCurrency` falls back
+    // to "JOD" (`accounting/workflowHooks.ts`) when no `orgSettings` row exists.
+    // That made the scale depend on an unstated default: change the fallback, or
+    // seed a 100-scale currency, and every amount here is silently wrong by 10x
+    // while the tests stay green. Seeded so the scale is asserted, not inherited.
+    await ctx.db.insert("orgSettings", {
+      orgId,
+      currency: "JOD",
+      currencySymbol: "JD",
+      enabledPaymentTypes: ["CASH", "BANK_TRANSFER"],
+    });
     const userId = await ctx.db.insert("users", {
       clerkId: `profit_${seed}`,
       email: `${seed}@profit.example.com`,
