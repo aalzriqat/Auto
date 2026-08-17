@@ -7,6 +7,12 @@ import { requireSuperAdmin } from "./utils/tenancy";
 import { logAdminAction } from "./adminAudit";
 import { internal } from "./_generated/api";
 import { CRON_HEARTBEAT_JOBS } from "./constants";
+import {
+  describeMaterializationStatus,
+  lookupMaterializationState,
+  SOCIAL_CONVERSATION_GENERATION,
+  SOCIAL_PLATFORMS,
+} from "./utils/materialization";
 
 const OVERVIEW_TABLES = [
   "organizations",
@@ -43,6 +49,79 @@ export const getOverview = query({
       };
     }
     return counts;
+  },
+});
+
+/**
+ * Per-org, per-platform state of the `socialConversations` materialisation.
+ *
+ * Exists so an operator can answer "is this org's Social Inbox reading the
+ * fast path, and if not, why not" without inferring it from row counts — the
+ * inference that is impossible in the one case that matters, where a completed
+ * backfill and a backfill that never ran both leave zero rows behind.
+ *
+ * ⚠️ No `/admin` screen renders this yet, so today it is a `convex run` /
+ * dashboard query. It is also the only way to notice an `interrupted` chain:
+ * nothing alerts on one. Verifying a deployment means calling this and
+ * confirming `readerSource === "materialized"` for every org.
+ *
+ * `processed` and `materialized` are reported separately on purpose. A run over
+ * 1,029 events that produced 12 threads is healthy; reporting only "12" next to
+ * "1,029" reads like a stall.
+ */
+export const getSocialMaterializationStatus = query({
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    await requireSuperAdmin(ctx);
+    const now = Date.now();
+    // Paginated rather than `take(OVERVIEW_COUNT_CAP)`. Each org costs its own
+    // document plus one indexed read per platform, so a 10,000-org cap is
+    // ~30,000 reads in one query — past Convex's per-transaction ceiling, which
+    // would turn this status screen into an error exactly when a large tenant
+    // list is the reason someone opened it.
+    const orgPage = await ctx.db.query("organizations").paginate(args.paginationOpts);
+    const orgs = orgPage.page;
+
+    const page = await Promise.all(
+      orgs.map(async (org) => {
+        const platforms = await Promise.all(
+          SOCIAL_PLATFORMS.map(async (platform) => {
+            const lookup = await lookupMaterializationState(ctx, org._id, platform);
+            const row = lookup.row;
+            return {
+              platform,
+              status: describeMaterializationStatus(lookup, now),
+              // Surfaced explicitly rather than left to be inferred from
+              // `status`. An operator seeing `ambiguous` needs to know it means
+              // "there are two contradictory rows here", because no backfill
+              // will clear it — the writer stands down on it too, so the only
+              // way out is a human deleting the wrong row.
+              duplicateState: lookup.kind === "ambiguous",
+              generation: row?.generation ?? null,
+              expectedGeneration: SOCIAL_CONVERSATION_GENERATION,
+              processedCount: row?.processedCount ?? 0,
+              materializedCount: row?.materializedCount ?? 0,
+              expectedCount: row?.expectedCount ?? 0,
+              startedAt: row?.startedAt ?? null,
+              lastProgressAt: row?.lastProgressAt ?? null,
+              completedAt: row?.completedAt ?? null,
+              failureMessage: row?.failureMessage ?? null,
+            };
+          })
+        );
+        return {
+          orgId: org._id,
+          orgName: org.name,
+          // What the reader actually does, which is the question being asked.
+          readerSource: platforms.every((p) => p.status === "completed")
+            ? ("materialized" as const)
+            : ("legacyEvents" as const),
+          platforms,
+        };
+      })
+    );
+
+    return { ...orgPage, page };
   },
 });
 

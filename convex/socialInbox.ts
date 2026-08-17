@@ -1,7 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { query } from "./_generated/server";
-import { mutation } from "./functions";
+import { socialBulkMutation } from "./functions";
 import { QueryCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -9,7 +9,19 @@ import { PERMISSIONS } from "./utils/permissions";
 import { suggestVehiclesFromText } from "./utils/vehicleTextMatch";
 import { recordLeadActivity, describeLeadFieldValue } from "./utils/leadActivity";
 import { requireFeature } from "./subscriptions";
-import { facebookEventsByOrg, instagramEventsByOrg, socialContactsByOrg } from "./aggregates";
+import {
+  facebookEventsByOrg,
+  instagramEventsByOrg,
+  socialContactsByOrg,
+  socialConversationKey,
+} from "./aggregates";
+import {
+  describeMaterializationStatus,
+  lookupMaterializationState,
+  socialConversationsReady,
+  SOCIAL_CONVERSATION_GENERATION,
+  SOCIAL_PLATFORMS,
+} from "./utils/materialization";
 
 /**
  * Unifies `instagramEvents` and `facebookEvents` for the Social Inbox UI.
@@ -106,7 +118,47 @@ function normalizeFacebookEvent(ev: Doc<"facebookEvents">): NormalizedEvent {
  * identifier, meaningless to the person reading the inbox, and it was landing
  * in the contact list whenever a profile lookup had not resolved yet.
  */
-function resolveSenderDisplayName(event: NormalizedEvent, customer: Doc<"customers"> | null): string {
+/**
+ * A referenced document, but only when it belongs to the org being listed.
+ *
+ * Conversation rows are selected by org; the enrichment that turns one into a
+ * list item is what dereferences customer, lead and vehicle ids. Convex ids
+ * carry no tenant, so a row holding a foreign id would hand another
+ * dealership's customer name, lead stage or vehicle description to an
+ * authenticated user of this one — the caller's auth proves they may act inside
+ * the org they named, and says nothing about which org the RETURNED rows belong
+ * to. That exact distinction shipped as a cross-tenant leak in `approvals.ts`
+ * (SCRUM-100).
+ *
+ * Nothing writes such a row today: the ids are copied from events that are
+ * themselves org-scoped. This is a guard against the class, not a fix for a
+ * known bad row, and it is applied to BOTH reader paths so the materialised
+ * source and the legacy scan cannot disagree about what they will disclose.
+ *
+ * Fails to `null`, which every consumer already renders — an unresolvable
+ * reference degrades to a generic contact label, no vehicle summary and no lead
+ * stage, rather than to another tenant's data.
+ */
+async function getInOrg<T extends "customers" | "leads" | "vehicles">(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  table: T,
+  id: Id<T> | null | undefined
+): Promise<Doc<T> | null> {
+  if (!id) return null;
+  const doc = await ctx.db.get(id);
+  if (!doc || doc.orgId !== orgId) return null;
+  // `table` is not used to fetch — Convex ids are self-describing — but naming
+  // it at the call site keeps the intended table visible and lets the compiler
+  // reject an id of the wrong one.
+  void table;
+  return doc;
+}
+
+function resolveSenderDisplayName(
+  event: Pick<NormalizedEvent, "platform" | "senderRawId" | "senderHandle">,
+  customer: Doc<"customers"> | null
+): string {
   if (customer) {
     // Trimmed per field, matching the engagement helpers: a trailing space on
     // firstName otherwise leaves a double space in the joined name, which then
@@ -156,15 +208,196 @@ async function loadVehiclesForSuggestions(ctx: QueryCtx, orgId: Id<"organization
     .take(200);
 }
 
+// The thread grouping now lives in `convex/aggregates.ts` as
+// `socialConversationKey`, next to the trigger that materialises the rows, so
+// the reader and the writer cannot drift on what a thread is.
+
 /**
- * Stable key that groups events into a single conversation thread.
- * - Comments: one thread per (platform, customer, postId). Events with no postId
- *   are grouped into a "__none__" bucket until a resync can fill in the postId.
- * - DMs: one thread per (platform, customer) — all DMs in one inbox thread.
+ * The two sources page through different cursor spaces, and a client can hold a
+ * cursor across the moment readiness flips.
+ *
+ * The legacy path's cursor is an offset into a re-sorted array; the materialised
+ * path's is a Convex index sort key. Neither is meaningful to the other, and the
+ * failure is silent in the dangerous direction: `Number('["1700000000000",…]')`
+ * is `NaN`, `slice(NaN, NaN)` is empty, and the legacy path would answer with an
+ * empty page, `isDone: false`, and a `"NaN"` cursor — a Social Inbox that shows
+ * one page and then loads forever without ever finishing. That is the same
+ * confidently-wrong-and-quiet shape as the incident this gate was written for.
+ *
+ * So each path rejects the other's cursor explicitly. `InvalidCursor` is the one
+ * error `usePaginatedQuery` recovers from by itself: it resets pagination state
+ * and re-fetches from the start. Coercing a foreign cursor to `null` instead
+ * would look tidier and would duplicate rows across the seam.
  */
-function getConversationKey(ev: NormalizedEvent): string {
-  if (ev.kind === "dm") return `${ev.platform}:${ev.customerId}:dm`;
-  return `${ev.platform}:${ev.customerId}:comment:${ev.postId ?? "__none__"}`;
+const LEGACY_CURSOR_PREFIX = "legacyOffset:";
+
+function invalidCursor(): never {
+  throw new ConvexError({
+    isConvexSystemError: true,
+    paginationError: "InvalidCursor",
+  });
+}
+
+/** Offset for the legacy path, rejecting a materialised cursor. */
+function parseLegacyCursor(cursor: string | null): number {
+  if (cursor === null) return 0;
+  if (!cursor.startsWith(LEGACY_CURSOR_PREFIX)) invalidCursor();
+  const offset = Number(cursor.slice(LEGACY_CURSOR_PREFIX.length));
+  if (!Number.isInteger(offset) || offset < 0) invalidCursor();
+  return offset;
+}
+
+/** One conversation row as the inbox renders it, from either source. */
+type ConversationListItem = {
+  customerId: Id<"customers">;
+  leadId: Id<"leads"> | null;
+  platform: "instagram" | "facebook";
+  conversationKind: "comment" | "dm";
+  conversationPostId: string | null;
+  senderDisplayName: string;
+  latestText: string | undefined;
+  latestCreationTime: number;
+  latestSenderHandle: string | null;
+  vehicleSummary: string | null;
+  vehicleCount: number;
+  eventCount: number;
+  needsReply: boolean;
+  leadStage: string | null;
+};
+
+/**
+ * The pre-materialisation implementation, kept as the fallback the readiness
+ * gate falls back *to*.
+ *
+ * This is not dead code and must not be deleted as such. It is what the Social
+ * Inbox runs for any org whose `socialConversations` rows have not been proven
+ * complete — which includes the window between deploying this file and
+ * finishing the backfill, the exact window in which a production deployment
+ * once showed staff an empty inbox over a thousand live events.
+ *
+ * It reads both event tables in full, which is the 1.34 GB/week cost the
+ * materialised path exists to remove. That is the intended trade: correct and
+ * expensive beats fast and wrong, and it only runs until the backfill proves
+ * itself.
+ */
+async function listConversationsFromEvents(
+  ctx: QueryCtx,
+  args: {
+    orgId: Id<"organizations">;
+    paginationOpts: { numItems: number; cursor: string | null };
+    platform?: "instagram" | "facebook";
+    kind?: "comment" | "dm";
+    hasVehicle?: boolean;
+    needsReply?: boolean;
+  }
+): Promise<{ page: ConversationListItem[]; isDone: boolean; continueCursor: string }> {
+  const [igEvents, fbEvents] = await Promise.all([
+    ctx.db.query("instagramEvents").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).collect(),
+    ctx.db.query("facebookEvents").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).collect(),
+  ]);
+  const allEvents = [
+    ...igEvents.map(normalizeInstagramEvent),
+    ...fbEvents.map(normalizeFacebookEvent),
+  ];
+
+  const grouped = new Map<
+    string,
+    {
+      events: NormalizedEvent[];
+      platform: "instagram" | "facebook";
+      kind: "comment" | "dm";
+      conversationPostId: string | null;
+    }
+  >();
+  for (const ev of allEvents) {
+    if (!ev.customerId) continue;
+    // The writer's canonical key, so the fallback groups threads exactly as the
+    // materialised path does. Using a second local implementation here is how
+    // the two sources would silently disagree about what a conversation is.
+    const key = socialConversationKey({
+      platform: ev.platform,
+      customerId: ev.customerId,
+      kind: ev.kind,
+      postId: ev.postId,
+    });
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.events.push(ev);
+    } else {
+      grouped.set(key, {
+        events: [ev],
+        platform: ev.platform,
+        kind: ev.kind,
+        conversationPostId: ev.kind === "comment" ? (ev.postId ?? null) : null,
+      });
+    }
+  }
+
+  let conversations = Array.from(grouped.values()).map((g) => {
+    const latest = g.events.reduce((a, b) => (b._creationTime > a._creationTime ? b : a), g.events[0]);
+    const vehicleIds = new Set(g.events.filter((e) => e.vehicleId).map((e) => e.vehicleId as Id<"vehicles">));
+    const leadId = [...g.events].reverse().find((e) => e.leadId)?.leadId;
+    return {
+      customerId: latest.customerId!,
+      platform: g.platform,
+      conversationKind: g.kind,
+      conversationPostId: g.conversationPostId,
+      latest,
+      eventCount: g.events.length,
+      needsReply: g.events.some((e) => !e.autoRepliedAt && !e.manualRepliedAt),
+      vehicleIds,
+      leadId,
+    };
+  });
+  conversations.sort((a, b) => b.latest._creationTime - a.latest._creationTime);
+
+  if (args.platform) {
+    const p = args.platform;
+    conversations = conversations.filter((c) => c.platform === p);
+  }
+  if (args.kind) {
+    const k = args.kind;
+    conversations = conversations.filter((c) => c.conversationKind === k);
+  }
+  if (args.hasVehicle === true) conversations = conversations.filter((c) => c.vehicleIds.size > 0);
+  if (args.hasVehicle === false) conversations = conversations.filter((c) => c.vehicleIds.size === 0);
+  if (args.needsReply === true) conversations = conversations.filter((c) => c.needsReply);
+  if (args.needsReply === false) conversations = conversations.filter((c) => !c.needsReply);
+
+  const start = parseLegacyCursor(args.paginationOpts.cursor);
+  const numItems = args.paginationOpts.numItems;
+  const pageSlice = conversations.slice(start, start + numItems);
+
+  const page = await Promise.all(
+    pageSlice.map(async (c) => {
+      const customer = await getInOrg(ctx, args.orgId, "customers", c.customerId);
+      const lead = await getInOrg(ctx, args.orgId, "leads", c.leadId);
+      const vehicleId = [...c.vehicleIds][0];
+      const vehicle = await getInOrg(ctx, args.orgId, "vehicles", vehicleId);
+      return {
+        customerId: c.customerId,
+        leadId: c.leadId ?? null,
+        platform: c.platform,
+        conversationKind: c.conversationKind,
+        conversationPostId: c.conversationPostId,
+        senderDisplayName: resolveSenderDisplayName(c.latest, customer),
+        latestText: c.latest.text,
+        latestCreationTime: c.latest._creationTime,
+        latestSenderHandle: c.latest.senderHandle ?? null,
+        vehicleSummary: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : null,
+        vehicleCount: c.vehicleIds.size,
+        eventCount: c.eventCount,
+        needsReply: c.needsReply,
+        leadStage: lead?.stage ?? null,
+      };
+    })
+  );
+
+  return {
+    page,
+    isDone: start + numItems >= conversations.length,
+    continueCursor: `${LEGACY_CURSOR_PREFIX}${start + numItems}`,
+  };
 }
 
 /**
@@ -191,106 +424,190 @@ export const listConversations = query({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
     await requireFeature(ctx, args.orgId, "socialInbox");
 
-    const [igEvents, fbEvents] = await Promise.all([
-      ctx.db.query("instagramEvents").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).collect(),
-      ctx.db.query("facebookEvents").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).collect(),
-    ]);
-    const allEvents = [
-      ...igEvents.map(normalizeInstagramEvent),
-      ...fbEvents.map(normalizeFacebookEvent),
-    ];
-
-    // Group events into conversation threads
-    const grouped = new Map<
-      string,
-      {
-        events: NormalizedEvent[];
-        platform: "instagram" | "facebook";
-        kind: "comment" | "dm";
-        conversationPostId: string | null;
-      }
-    >();
-    for (const ev of allEvents) {
-      if (!ev.customerId) continue;
-      const key = getConversationKey(ev);
-      const existing = grouped.get(key);
-      if (existing) {
-        existing.events.push(ev);
-      } else {
-        grouped.set(key, {
-          events: [ev],
-          platform: ev.platform,
-          kind: ev.kind,
-          conversationPostId: ev.kind === "comment" ? (ev.postId ?? null) : null,
-        });
-      }
+    // The materialised table is authoritative only once a backfill for the
+    // current generation has proven, by exhausting the source, that it holds
+    // every thread this org has. Anything else — never started, mid-run,
+    // interrupted, failed, or completed under an older generation — falls back
+    // to reading the events directly.
+    //
+    // This is the fix for a production incident, not a precaution. Deploying
+    // the materialised reader ahead of its backfill made the Social Inbox
+    // report zero conversations for an org holding 1,029 events, with no error
+    // and no way for staff to tell an empty inbox from an unbuilt one. The
+    // gate makes deployment order irrelevant: the code can ship hours or days
+    // before the backfill finishes and the inbox stays correct throughout,
+    // switching over by itself once completion is recorded.
+    //
+    // Exactly one source answers any given request. Blending a page from both
+    // would have to reconcile two different cursor spaces — an integer offset
+    // here, an index sort key there — and could duplicate or drop threads at
+    // the seam.
+    if (!(await socialConversationsReady(ctx, args.orgId))) {
+      return await listConversationsFromEvents(ctx, args);
     }
 
-    let conversations = Array.from(grouped.values()).map((g) => {
-      const latest = g.events.reduce((a, b) => (b._creationTime > a._creationTime ? b : a), g.events[0]);
-      const vehicleIds = new Set(g.events.filter((e) => e.vehicleId).map((e) => e.vehicleId as Id<"vehicles">));
-      const leadId = [...g.events].reverse().find((e) => e.leadId)?.leadId;
-      return {
-        customerId: latest.customerId!,
-        platform: g.platform,
-        conversationKind: g.kind,
-        conversationPostId: g.conversationPostId,
-        latest,
-        eventCount: g.events.length,
-        needsReply: g.events.some((e) => !e.autoRepliedAt && !e.manualRepliedAt),
-        vehicleIds,
-        leadId,
-      };
+    // Readiness flipped underneath a client that is mid-scroll on the legacy
+    // path. Convex would reject this cursor itself, but not before the shape of
+    // the error became the caller's problem; raising `InvalidCursor` is what
+    // makes `usePaginatedQuery` reset and re-page cleanly against the new
+    // source.
+    if (args.paginationOpts.cursor?.startsWith(LEGACY_CURSOR_PREFIX)) invalidCursor();
+
+    // One page of materialised threads, newest activity first, straight off an
+    // index. This used to `.collect()` both event tables in full, group them in
+    // JavaScript, and slice the result — 1.34 GB of production bandwidth in a
+    // week, re-read from scratch on every inbound message and once per mounted
+    // page, because a "conversation" was not a row and the cursor was an offset
+    // into an in-memory array.
+    //
+    // `platform` and `kind` each get their own index so the common filtered
+    // views stay index-bounded. They are mutually exclusive in the index
+    // choice: a query can only use one, so when both are supplied the platform
+    // index runs and `kind` is matched against the stream. That still reads
+    // only small conversation rows, never the events behind them.
+    const { orgId, platform, kind, hasVehicle, needsReply } = args;
+    const conversations = ctx.db.query("socialConversations");
+
+    // Every branch pins the generation, and it is a range constraint rather
+    // than a post-read filter for the usual reason: a filter would still read
+    // the superseded rows before discarding them, which is the cost this whole
+    // change exists to remove.
+    //
+    // Without it the readiness record would fence the claim while leaving the
+    // data unfenced. A generation bump changes what `conversationKey` means, so
+    // the previous generation's rows neither collide with the new keys nor get
+    // revisited by the new backfill — nothing overwrites them and nothing
+    // deletes them. They would sit in the table until the new generation
+    // reached `completed` and then be served beside the real threads, as
+    // confidently as the empty inbox in the incident above.
+    let baseQuery;
+    if (platform) {
+      baseQuery = conversations.withIndex("by_org_generation_platform_lastEventAt", (q) =>
+        q
+          .eq("orgId", orgId)
+          .eq("generation", SOCIAL_CONVERSATION_GENERATION)
+          .eq("platform", platform)
+      );
+    } else if (kind) {
+      baseQuery = conversations.withIndex("by_org_generation_kind_lastEventAt", (q) =>
+        q
+          .eq("orgId", orgId)
+          .eq("generation", SOCIAL_CONVERSATION_GENERATION)
+          .eq("conversationKind", kind)
+      );
+    } else {
+      baseQuery = conversations.withIndex("by_org_generation_lastEventAt", (q) =>
+        q.eq("orgId", orgId).eq("generation", SOCIAL_CONVERSATION_GENERATION)
+      );
+    }
+
+    // Whatever the chosen index did not already constrain. `hasVehicle` reads
+    // the stored distinct-vehicle count and `needsReply` the stored unanswered
+    // count, so both mean exactly what the old in-memory predicates meant.
+    //
+    // `q.and` is variadic and each clause is independent, so they are collected
+    // and applied in one call. `true` when there is nothing to narrow — an
+    // `and()` over an empty list is not a shape worth relying on.
+    const filtered = baseQuery.filter((q) => {
+      const clauses = [];
+      // Only when the platform index was chosen, so `kind` was not applied to
+      // the index range and still has to be matched against the stream.
+      if (platform && kind) clauses.push(q.eq(q.field("conversationKind"), kind));
+      if (hasVehicle === true) clauses.push(q.gt(q.field("vehicleCount"), 0));
+      if (hasVehicle === false) clauses.push(q.eq(q.field("vehicleCount"), 0));
+      if (needsReply === true) clauses.push(q.gt(q.field("unansweredCount"), 0));
+      if (needsReply === false) clauses.push(q.eq(q.field("unansweredCount"), 0));
+      return clauses.length === 0 ? true : q.and(...clauses);
     });
-    conversations.sort((a, b) => b.latest._creationTime - a.latest._creationTime);
 
-    // Apply filters
-    if (args.platform) {
-      const p = args.platform;
-      conversations = conversations.filter((c) => c.platform === p);
-    }
-    if (args.kind) {
-      const k = args.kind;
-      conversations = conversations.filter((c) => c.conversationKind === k);
-    }
-    if (args.hasVehicle === true) conversations = conversations.filter((c) => c.vehicleIds.size > 0);
-    if (args.hasVehicle === false) conversations = conversations.filter((c) => c.vehicleIds.size === 0);
-    if (args.needsReply === true) conversations = conversations.filter((c) => c.needsReply);
-    if (args.needsReply === false) conversations = conversations.filter((c) => !c.needsReply);
-
-    const start = Number(args.paginationOpts.cursor ?? "0");
-    const numItems = args.paginationOpts.numItems;
-    const pageSlice = conversations.slice(start, start + numItems);
+    const pageResult = await filtered.order("desc").paginate(args.paginationOpts);
 
     const page = await Promise.all(
-      pageSlice.map(async (c) => {
-        const customer = await ctx.db.get(c.customerId);
-        const lead = c.leadId ? await ctx.db.get(c.leadId) : null;
-        const vehicleId = [...c.vehicleIds][0];
-        const vehicle = vehicleId ? await ctx.db.get(vehicleId) : null;
+      pageResult.page.map(async (c) => {
+        const customer = await getInOrg(ctx, orgId, "customers", c.customerId);
+        const lead = await getInOrg(ctx, orgId, "leads", c.leadId);
+        const vehicleId = c.vehicleIds[0];
+        const vehicle = await getInOrg(ctx, orgId, "vehicles", vehicleId);
         return {
           customerId: c.customerId,
           leadId: c.leadId ?? null,
           platform: c.platform,
           conversationKind: c.conversationKind,
-          conversationPostId: c.conversationPostId,
-          senderDisplayName: resolveSenderDisplayName(c.latest, customer),
-          latestText: c.latest.text,
-          latestCreationTime: c.latest._creationTime,
-          latestSenderHandle: c.latest.senderHandle ?? null,
+          conversationPostId: c.conversationPostId ?? null,
+          senderDisplayName: resolveSenderDisplayName(
+            {
+              platform: c.platform,
+              senderRawId: c.latestSenderRawId,
+              senderHandle: c.latestSenderHandle,
+            },
+            customer
+          ),
+          latestText: c.latestText,
+          latestCreationTime: c.lastEventAt,
+          latestSenderHandle: c.latestSenderHandle ?? null,
           vehicleSummary: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : null,
-          vehicleCount: c.vehicleIds.size,
+          vehicleCount: c.vehicleIds.length,
           eventCount: c.eventCount,
-          needsReply: c.needsReply,
+          needsReply: c.unansweredCount > 0,
           leadStage: lead?.stage ?? null,
         };
       })
     );
 
+    return { ...pageResult, page };
+  },
+});
+
+/**
+ * Which source this org's inbox is reading, and how far its materialisation
+ * has got.
+ *
+ * Tenant-scoped counterpart to `adminSystem.getSocialMaterializationStatus`.
+ *
+ * ⚠️ Nothing in `app/`, `components/` or `apps/` calls this yet. It exists so
+ * the inbox *can* say "still building, showing live results" rather than
+ * leaving staff to wonder why a list feels slow — but that banner has not been
+ * built, and adding it is UI work that has to go through the design workflow.
+ * Until then this is reachable only from the Convex dashboard or `convex run`.
+ * Said plainly because a doc comment describing intent as though it shipped is
+ * how the next person concludes the observability problem is solved.
+ *
+ * Returns counts that are already distinct: `processedCount` is source events
+ * read, `materializedCount` is threads rebuilt. "0 of 1,029" was the unreadable
+ * signal that prompted this; "1,029 processed, 12 threads, completed" is not.
+ */
+export const materializationStatus = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
+    await requireFeature(ctx, args.orgId, "socialInbox");
+
+    const now = Date.now();
+    const platforms = await Promise.all(
+      SOCIAL_PLATFORMS.map(async (platform) => {
+        const lookup = await lookupMaterializationState(ctx, args.orgId, platform);
+        const row = lookup.row;
+        return {
+          platform,
+          status: describeMaterializationStatus(lookup, now),
+          processedCount: row?.processedCount ?? 0,
+          materializedCount: row?.materializedCount ?? 0,
+          expectedCount: row?.expectedCount ?? 0,
+          startedAt: row?.startedAt ?? null,
+          lastProgressAt: row?.lastProgressAt ?? null,
+          completedAt: row?.completedAt ?? null,
+          failureMessage: row?.failureMessage ?? null,
+        };
+      })
+    );
+
     return {
-      page,
-      isDone: start + numItems >= conversations.length,
-      continueCursor: String(start + numItems),
+      // The honest answer to "is this list coming off the fast path", which is
+      // the only thing the UI should branch on.
+      readerSource: platforms.every((p) => p.status === "completed")
+        ? ("materialized" as const)
+        : ("legacyEvents" as const),
+      platforms,
     };
   },
 });
@@ -425,7 +742,7 @@ export const listEventsForCustomer = query({
  * all unlinked events for the customer are updated (leads-page behavior).
  * Also patches any associated lead that has no vehicle yet.
  */
-export const setConversationVehicle = mutation({
+export const setConversationVehicle = socialBulkMutation({
   args: {
     orgId: v.id("organizations"),
     customerId: v.id("customers"),
@@ -478,6 +795,16 @@ export const setConversationVehicle = mutation({
       (e) => !e.vehicleId && inScope(e, !args.platform || args.platform === "facebook")
     );
 
+    // Deferred conversation sync. From the leads page this runs with no
+    // `platform` or `conversationKind`, so it repoints *every* unlinked event
+    // for the customer across both platforms — and `vehicleId` is a
+    // materialised field, so a per-write recompute would re-read each thread
+    // once per event. See `deferredThreadTriggers`.
+    //
+    // ⚠️ No collect/sync bookkeeping here any more. `socialBulkMutation`
+    // records the touched threads from the writes themselves and recomputes
+    // them once, after the handler returns. `vehicleId` is not part of the
+    // conversation key, so before and after are the same thread either way.
     await Promise.all([
       ...igToUpdate.map((e) => ctx.db.patch(e._id, { vehicleId: args.vehicleId })),
       ...fbToUpdate.map((e) => ctx.db.patch(e._id, { vehicleId: args.vehicleId })),

@@ -134,6 +134,17 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // Derived from the two event tables above; purged alongside them so a deleted
   // org leaves no rows behind in `socialContactsByOrg` either.
   { kind: "orgRows", table: "socialContacts", index: "by_org" },
+  // Backstop only: the event steps above run first and the conversation
+  // trigger deletes each thread as its last event goes, so this normally finds
+  // nothing. Its cost, and the point at which that stops being acceptable, are
+  // documented on `syncSocialConversation` in `aggregates.ts`.
+  { kind: "orgRows", table: "socialConversations", index: "by_org_lastEventAt" },
+  // The readiness record for the two steps above. Convex never reuses document
+  // ids, so this is not about a resurrected org reading someone else's state —
+  // it is that `hardDeleteOrg` reporting COMPLETED while leaving rows behind is
+  // this table's documented recurring defect, and an org-scoped table with no
+  // purge step is how the count got to 38.
+  { kind: "orgRows", table: "socialMaterializationState", index: "by_org" },
   { kind: "orgRows", table: "facebookMessages", index: "by_org" },
   { kind: "socialPostsWithStorage" },
   { kind: "orgRows", table: "orgCustomFields", index: "by_org" },
@@ -186,15 +197,41 @@ function scheduleDeletionBatch(ctx: MutationCtx, requestId: Id<"organizationDele
   return ctx.scheduler.runAfter(0, internal.adminOrgs.runDeletionRequestBatch, { requestId });
 }
 
+/**
+ * Tables whose deletes fan out into a read far larger than the delete itself.
+ *
+ * Every `instagramEvents`/`facebookEvents` delete fires the conversation
+ * trigger, which recomputes that thread by reading the contact's whole history
+ * on that platform. A 50-row batch dominated by one busy contact holding N
+ * events therefore reads on the order of 50N, and crossing Convex's
+ * per-transaction ceiling aborts the transaction — which also rolls back the
+ * `FAILED` status the catch block would have recorded. Every retry then re-reads
+ * the identical first 50 rows and fails identically, leaving the org
+ * permanently half-deleted with no forward path.
+ *
+ * A smaller batch does not bound the product — it is still linear in N — it
+ * moves the threshold roughly 5x, from around 330 events on one
+ * contact/platform to around 1,600. Production is at roughly 700 events per org
+ * across all contacts, so this is comfortable today and is not a guarantee. The
+ * cost is more scheduled passes on a large org, which is the cheap side of the
+ * trade: this path already has a documented history of reporting COMPLETED
+ * while leaving rows behind.
+ */
+const TRIGGER_HEAVY_DELETION_TABLES = new Set<TableNames>(["instagramEvents", "facebookEvents"]);
+const TRIGGER_HEAVY_BATCH_SIZE = 10;
+
 async function deleteRowsByOrgBatch(
   ctx: MutationCtx,
   table: TableNames,
   index: string,
   orgId: Id<"organizations">
 ) {
+  const batchSize = TRIGGER_HEAVY_DELETION_TABLES.has(table)
+    ? TRIGGER_HEAVY_BATCH_SIZE
+    : ORG_DELETION_BATCH_SIZE;
   const rows: Array<{ _id: Id<TableNames> }> = await (ctx.db.query(table) as any)
     .withIndex(index, (q: any) => q.eq("orgId", orgId))
-    .take(ORG_DELETION_BATCH_SIZE);
+    .take(batchSize);
   for (const row of rows) {
     await ctx.db.delete(row._id);
   }

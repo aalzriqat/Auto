@@ -7,12 +7,21 @@ import {
   leadsByOrg,
   membershipsByOrg,
   recordSocialContact,
+  namespacedThreadKey,
+  syncSocialConversation,
   vehicleQualityByOrg,
   vehiclesByOrg,
 } from "./aggregates";
 import { internal } from "./_generated/api";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
+import {
+  describeMaterializationStatus,
+  lookupMaterializationState,
+  SOCIAL_CONVERSATION_GENERATION,
+  SOCIAL_PLATFORMS,
+  type SocialPlatform,
+} from "./utils/materialization";
 import { ALL_PERMISSIONS, isSystemOwnerRole, normalizeRoleName, SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";
 import {
   hasActiveDepositHold,
@@ -525,6 +534,567 @@ export const repairSocialContacts = internalMutation({
       // contract choice for clarity, not a guard against data loss.
       continueCursor: page.isDone || phase === "clear" ? null : page.continueCursor,
     };
+  },
+});
+
+/**
+ * Argument shape for the two conversation backfills.
+ *
+ * Org-scoped, unlike the aggregate backfills above. The aggregates are one
+ * global tree per table and a global walk is the honest shape for them. A
+ * conversation backfill decides whether one *tenant's* inbox may trust the
+ * materialised table, and a global walk cannot answer that for any single org
+ * until it has finished for all of them — one noisy tenant would hold every
+ * other tenant on the slow path, and worse, there would be no truthful moment
+ * at which to record that a given org was done.
+ */
+const CONVERSATION_BACKFILL_ARGS = {
+  orgId: v.id("organizations"),
+  /**
+   * Present only on a scheduled continuation. Absent means "operator starting a
+   * run", which allocates a fresh run and restarts from the beginning.
+   */
+  runId: v.optional(v.string()),
+  /**
+   * Set by the fan-out. Makes a start yield to a chain that is already running,
+   * instead of resetting its cursor. An operator invoking a backfill by hand
+   * leaves it unset and gets the restart they asked for.
+   */
+  onlyIfIdle: v.optional(v.boolean()),
+  batchSize: v.optional(v.number()),
+  /** Set false to run exactly one batch — used by tests to drive it by hand. */
+  continueAutomatically: v.optional(v.boolean()),
+} as const;
+
+type ConversationBackfillResult = {
+  status: "running" | "completed" | "failed" | "staleRun";
+  processed: number;
+  materialized: number;
+  isDone: boolean;
+};
+
+/**
+ * Claims the state row for this page, or returns null when the caller is a
+ * continuation of a run that has been superseded.
+ *
+ * The fencing matters more than it looks. Without it, an operator re-running a
+ * backfill while an earlier chain is still in flight leaves two chains writing
+ * to one state row, each overwriting the other's cursor — and the one that
+ * happens to read the last page marks the whole thing COMPLETED while the
+ * other is still somewhere in the middle. Since COMPLETED is what unlocks the
+ * materialised reader, that is precisely the false-completion the gate exists
+ * to prevent.
+ */
+/**
+ * The next run's sequence number, one past whatever the previous run id
+ * carried. Unparseable or absent ids restart at 0, which is safe because the
+ * timestamp segment still differs across milliseconds.
+ */
+function nextRunSequence(previousRunId: string | undefined): number {
+  if (!previousRunId) return 0;
+  const seq = Number(previousRunId.split(":").at(-1));
+  return Number.isInteger(seq) && seq >= 0 ? seq + 1 : 0;
+}
+
+async function beginConversationBackfill(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  platform: SocialPlatform,
+  runId: string | undefined,
+  expectedCount: number,
+  onlyIfIdle = false
+): Promise<Doc<"socialMaterializationState"> | null> {
+  // ⚠️ Refuse to write readiness state for an organization that is gone or being
+  // deleted.
+  //
+  // `hardDeleteOrg` purges `socialMaterializationState` at a fixed step but only
+  // deletes the organization row once every step has drained. In between, the
+  // org is still a live row that the fan-out's walk returns. A row inserted in
+  // that window sits behind the purge's step cursor and is never revisited, so
+  // the request reports COMPLETED with a readiness record still pointing at a
+  // deleted org.
+  //
+  // Filtering the walk instead would not close it: the walk paginates across
+  // transactions, so an org can enter deletion after its page was read. The
+  // check has to be here, in the same transaction as the write it guards.
+  //
+  // Checked per call, which is the only place that closes it.
+  //
+  // ⚠️ On the request's STATUS, never merely on the presence of
+  // `deletionRequestId`. That field does not clear itself: a purge that throws
+  // marks the *request* FAILED and never touches the organization row,
+  // `unsuspendOrg` then permits putting the dealership back into service, and
+  // `rejectDeletionRequest` only clears the org fields from PENDING_REVIEW. A
+  // presence-only check therefore denied a live, recovered org the materialised
+  // reader permanently, with nothing to distinguish it from "never backfilled".
+  //
+  // A missing request row does NOT block: the purge never deletes
+  // `organizationDeletionRequests`, so a deletion genuinely in flight always
+  // presents one. A dangling id is a data anomaly, and the cost of guessing
+  // wrong there is bounded anyway — the legacy reader stays correct, it is only
+  // slower.
+  //
+  // ⚠️ These three statuses are `ACTIVE_DELETION_STATUSES`, already duplicated
+  // unexported in `adminOrgs.ts` and `organizations.ts`. This is a third copy
+  // rather than a refactor of two modules inside a security change; hoisting all
+  // three into one shared helper is recorded as follow-up.
+  const org = await ctx.db.get(orgId);
+  if (!org) return null;
+  if (org.deletionRequestId !== undefined) {
+    const deletionRequest = await ctx.db.get(org.deletionRequestId);
+    if (
+      deletionRequest &&
+      (deletionRequest.status === "PENDING_REVIEW" ||
+        deletionRequest.status === "APPROVED" ||
+        deletionRequest.status === "RUNNING")
+    ) {
+      return null;
+    }
+  }
+
+  const lookup = await lookupMaterializationState(ctx, orgId, platform);
+  // Two contradictory state rows. Standing down is the only safe move: the
+  // operator-start path below would patch one of them and leave the other, so a
+  // run "completing" would still leave a `completed` row beside whatever the
+  // other one says — and the gate would then be resolving a contradiction it
+  // was never allowed to resolve. Worse, the `missing` branch would INSERT a
+  // third row, compounding the anomaly under the very call meant to repair it.
+  // Only a human deleting the wrong row clears this, and
+  // `adminSystem.getSocialMaterializationStatus` reports it as `ambiguous` with
+  // `duplicateState: true` so they can find it.
+  if (lookup.kind === "ambiguous") return null;
+  const existing = lookup.row;
+  const now = Date.now();
+
+  if (runId !== undefined) {
+    // A continuation. It may only proceed if it still owns the run.
+    if (!existing || existing.runId !== runId) return null;
+    if (existing.status !== "running") return null;
+    return existing;
+  }
+
+  // A fan-out start, which is an operator start that yields to a live chain.
+  //
+  // The fan-out reads state and schedules in one transaction, but the worker it
+  // schedules runs in another — so two fan-out invocations can both observe
+  // `notStarted` and both enqueue the same org and platform. The first worker
+  // inserts a `running` record; without this the second would take the operator
+  // path below, reset the cursor to zero and fence the chain that was already
+  // working. Progress restarts, and if that keeps happening the walk never
+  // lands.
+  //
+  // Correctness was never at risk — `syncSocialConversation` is a full
+  // recompute, so a duplicate pass converges — but liveness was.
+  if (onlyIfIdle && existing) {
+    const status = describeMaterializationStatus(lookup, now);
+    if (status === "running" || status === "completed") return null;
+  }
+
+  // An operator start. Restart from the beginning under a new run id, which
+  // also fences any chain still running under the old one.
+  //
+  // The id carries a sequence number taken from the record it replaces, not
+  // just a timestamp. `Date.now()` alone looks sufficient and is not: two
+  // operator starts inside the same millisecond produce identical ids, the
+  // second fails to fence the first, and two chains then share one cursor —
+  // which is exactly the false-completion this mechanism exists to prevent.
+  // Reading the previous sequence makes it strictly increasing without relying
+  // on `Math.random()` or `crypto.randomUUID()`, neither of which this file
+  // should assume after `events.at(-1)` had to be proven against a live
+  // deployment.
+  const nextRunId = `${platform}:${now}:${nextRunSequence(existing?.runId)}`;
+  const fresh = {
+    orgId,
+    platform,
+    generation: SOCIAL_CONVERSATION_GENERATION,
+    status: "running" as const,
+    runId: nextRunId,
+    cursor: undefined,
+    processedCount: 0,
+    materializedCount: 0,
+    expectedCount,
+    startedAt: now,
+    lastProgressAt: now,
+    completedAt: undefined,
+    failureMessage: undefined,
+  };
+
+  if (existing) {
+    await ctx.db.patch(existing._id, fresh);
+    return { ...existing, ...fresh };
+  }
+  const id = await ctx.db.insert("socialMaterializationState", fresh);
+  const inserted = await ctx.db.get(id);
+  if (!inserted) throw new Error("materialization state vanished immediately after insert");
+  return inserted;
+}
+
+/**
+ * Records one page's progress, and completion only on proven exhaustion.
+ *
+ * `page.isDone` is the *only* thing that may write COMPLETED. Not "the batch
+ * returned without throwing", not "nothing changed this time", and not
+ * "processed reached expected" — `expectedCount` is a live aggregate that
+ * inbound messages move underneath the run, so treating it as a finish line
+ * would mark a backfill complete while rows remained, or never at all.
+ */
+async function recordConversationBackfillProgress(
+  ctx: MutationCtx,
+  state: Doc<"socialMaterializationState">,
+  page: { page: unknown[]; isDone: boolean; continueCursor: string },
+  materialized: number,
+  expectedCount: number
+): Promise<ConversationBackfillResult> {
+  const now = Date.now();
+  const processedCount = state.processedCount + page.page.length;
+  const materializedCount = state.materializedCount + materialized;
+
+  await ctx.db.patch(state._id, {
+    processedCount,
+    materializedCount,
+    expectedCount,
+    lastProgressAt: now,
+    cursor: page.isDone ? undefined : page.continueCursor,
+    status: page.isDone ? "completed" : "running",
+    completedAt: page.isDone ? now : undefined,
+  });
+
+  return {
+    status: page.isDone ? "completed" : "running",
+    processed: processedCount,
+    materialized: materializedCount,
+    isDone: page.isDone,
+  };
+}
+
+/** Batch ceiling, shared by both conversation backfills. See `seedAggregatePage`. */
+function conversationBatchSize(batchSize: number | undefined): number {
+  return Math.min(Math.max(batchSize ?? 100, 1), 250);
+}
+
+/**
+ * Records a run as failed rather than leaving it silently stalled.
+ *
+ * Only reachable for errors the handler can catch. A Convex transaction limit
+ * kills the transaction outright and rolls this write back with everything
+ * else, which is why `interrupted` — derived from a stale `lastProgressAt` —
+ * remains the catch-all signal. Both are non-`completed`, so the reader falls
+ * back either way; the difference is only how legible the state is to whoever
+ * has to fix it.
+ */
+export async function recordConversationBackfillFailure(
+  ctx: MutationCtx,
+  state: Doc<"socialMaterializationState">,
+  error: unknown
+): Promise<ConversationBackfillResult> {
+  console.error("social conversation backfill failed", error);
+  await ctx.db.patch(state._id, {
+    status: "failed",
+    lastProgressAt: Date.now(),
+    // Truncated and generic: this string reaches an admin screen, and raw
+    // Convex errors leak schema and row shapes.
+    failureMessage:
+      error instanceof Error ? error.message.slice(0, 300) : "Unknown backfill error",
+  });
+  return { status: "failed", processed: state.processedCount, materialized: 0, isDone: false };
+}
+
+/**
+ * Rebuilds every distinct thread represented in one page of a backfill, and
+ * returns how many it rebuilt.
+ *
+ * One sync per distinct *thread*, not per event. A thread's events are
+ * contiguous in creation time — they arrive as a burst — so a batch can be
+ * dominated by one thread and would otherwise recompute it once per event,
+ * making the batch cost events x history instead of threads x history. That is
+ * what pushes a batch past the per-transaction read ceiling, and a throw there
+ * rolls back the scheduled continuation too, halting the chain mid-table.
+ *
+ * Shared by both platform backfills because that rule is the load-bearing part
+ * and two copies of it are two places for it to drift. The `.paginate()` calls
+ * deliberately stay in the callers: Convex permits exactly one per function,
+ * `convex-test` does not enforce it, and this repo has already shipped a
+ * backfill that passed the whole suite and then failed on its first production
+ * call. That constraint has to stay visible where it applies.
+ */
+async function syncThreadsInBackfillPage(
+  ctx: MutationCtx,
+  platform: SocialPlatform,
+  events: (Doc<"instagramEvents"> | Doc<"facebookEvents">)[]
+): Promise<number> {
+  const synced = new Set<string>();
+  for (const event of events) {
+    if (!event.customerId) continue;
+    const identity = {
+      orgId: event.orgId,
+      platform,
+      customerId: event.customerId,
+      kind: event.kind,
+      postId: event.postId,
+    };
+    const key = namespacedThreadKey(identity);
+    if (synced.has(key)) continue;
+    synced.add(key);
+    await syncSocialConversation(ctx, identity);
+  }
+  return synced.size;
+}
+
+/**
+ * Starts both conversation backfills for every organization.
+ *
+ * Without this the migration has no operator surface at all: the two backfills
+ * are org-scoped, so running them means invoking 2N internal mutations by hand
+ * with no way to enumerate N — and until they run, every tenant stays on the
+ * legacy full-scan path, which is the entire cost this work exists to remove.
+ * A gate that is never unlocked is just a slower inbox.
+ *
+ * Safe to re-run. Each per-org backfill allocates a fresh run and restarts,
+ * and `syncSocialConversation` is a full recompute, so a redrive converges
+ * rather than duplicating.
+ */
+export const startSocialConversationBackfills = internalMutation({
+  args: {
+    cursor: v.optional(v.union(v.string(), v.null())),
+    batchSize: v.optional(v.number()),
+    continueAutomatically: v.optional(v.boolean()),
+    /** Rebuild orgs that are already proven complete at this generation. */
+    force: v.optional(v.boolean()),
+  },
+  handler: async (
+    ctx,
+    args
+  ): Promise<{
+    started: number;
+    skipped: number;
+    isDone: boolean;
+    continueCursor: string | null;
+  }> => {
+    // THE one paginated query. Organizations are walked in pages so a tenant
+    // count that grows past a single transaction cannot wedge the fan-out.
+    const page = await ctx.db.query("organizations").paginate({
+      cursor: args.cursor ?? null,
+      numItems: 25,
+    });
+
+    // Decided per platform, not per org. An org can have Instagram mid-walk and
+    // Facebook not started, and the two want opposite answers.
+    const BACKFILL_FOR: Record<SocialPlatform, typeof internal.migrations.backfillInstagramConversations> = {
+      instagram: internal.migrations.backfillInstagramConversations,
+      facebook: internal.migrations.backfillFacebookConversations,
+    };
+
+    let started = 0;
+    let skipped = 0;
+    const now = Date.now();
+    for (const org of page.page) {
+      for (const platform of SOCIAL_PLATFORMS) {
+        const status = describeMaterializationStatus(
+          await lookupMaterializationState(ctx, org._id, platform),
+          now
+        );
+
+        // `completed` is skipped because starting a run resets the record to
+        // `running`, which un-readies the org and drops it back to the full
+        // event scan for the length of the walk. Over a migrated deployment
+        // that would put every tenant back on the 1.34 GB/week path at once,
+        // for no gain: the rows are already complete and the trigger keeps them
+        // current.
+        //
+        // `running` is skipped for a sharper reason. Re-enqueuing sends it
+        // through the operator-start path, which resets `cursor` and
+        // `processedCount` and fences the chain already doing the work — so an
+        // operator re-running the fan-out to *check on* progress restarts it
+        // instead, and on a long walk that is a livelock. `interrupted`,
+        // `failed` and `notStarted` all do want a new run.
+        // `ambiguous` is skipped UNCONDITIONALLY, which is the one place
+        // `force` must not reach. Force exists to override `completed` and
+        // `running` — states where a run would be redundant or disruptive but
+        // is still a coherent thing to ask for. Duplicate state rows are not
+        // that: `beginConversationBackfill` refuses them outright, because no
+        // run can repair a contradiction it is not allowed to resolve. Letting
+        // force through therefore schedules a worker that immediately stands
+        // down, and counts that refusal as work started — the fan-out's own
+        // numbers become the thing that hides the anomaly.
+        if (
+          status === "ambiguous" ||
+          (args.force !== true && (status === "completed" || status === "running"))
+        ) {
+          skipped += 1;
+          continue;
+        }
+
+        started += 1;
+        // `continueAutomatically` reaches the per-org chains too. Gating only
+        // the org walk meant an operator asking for a single step still kicked
+        // off full self-chaining runs for up to 25 tenants.
+        await ctx.scheduler.runAfter(0, BACKFILL_FOR[platform], {
+          orgId: org._id,
+          batchSize: args.batchSize,
+          continueAutomatically: args.continueAutomatically,
+          // The fan-out reads and schedules in separate transactions, so this
+          // decision can be stale by the time the worker runs. `onlyIfIdle`
+          // makes the worker re-check and stand down rather than restart a
+          // chain that started in between. `force` deliberately overrides it.
+          onlyIfIdle: args.force !== true,
+        });
+      }
+    }
+
+    if (!page.isDone && args.continueAutomatically !== false) {
+      await ctx.scheduler.runAfter(0, internal.migrations.startSocialConversationBackfills, {
+        cursor: page.continueCursor,
+        batchSize: args.batchSize,
+        force: args.force,
+        // Carried for symmetry with `force`. Only `true`/`undefined` can reach
+        // here today (a `false` short-circuits the branch above), but an
+        // asymmetric propagation is how a third semantic for this flag would
+        // break silently on page 2 and not page 1.
+        continueAutomatically: args.continueAutomatically,
+      });
+    }
+
+    // The cursor is returned, not just consumed. `continueAutomatically: false`
+    // is the staged-rollout mode where the operator drives each page by hand —
+    // and without this they had no way to learn where page two begins, so a
+    // second call repeated page one and every org past the first 25 stayed on
+    // the expensive fallback permanently. The self-chaining path above never
+    // noticed, because it passes `page.continueCursor` along internally.
+    return {
+      started,
+      skipped,
+      isDone: page.isDone,
+      continueCursor: page.isDone ? null : page.continueCursor,
+    };
+  },
+});
+
+/**
+ * Materialises `socialConversations` for one org's Instagram events that
+ * predate the trigger, and records whether that has been proven exhaustive.
+ *
+ * Idempotent because `syncSocialConversation` is a full recompute keyed on the
+ * thread, not an increment: running it twice over the same event, or over two
+ * events in the same thread, converges on the identical row. That is the same
+ * property the aggregate backfills get from `insertIfDoesNotExist`, obtained
+ * here from the rebuild being a pure function of the thread's events. A resumed
+ * or restarted run therefore cannot duplicate or double-count a conversation.
+ *
+ * Separate from the Facebook one because a Convex function may run only one
+ * paginated query, and `convex-test` does not enforce that.
+ */
+export const backfillInstagramConversations = internalMutation({
+  args: CONVERSATION_BACKFILL_ARGS,
+  handler: async (ctx, args): Promise<ConversationBackfillResult> => {
+    const expectedCount = await instagramEventsByOrg.count(ctx, {
+      namespace: args.orgId,
+      bounds: {},
+    });
+    const state = await beginConversationBackfill(
+      ctx,
+      args.orgId,
+      "instagram",
+      args.runId,
+      expectedCount,
+      args.onlyIfIdle
+    );
+    if (!state) return { status: "staleRun", processed: 0, materialized: 0, isDone: false };
+
+    // THE one paginated query this function is allowed. Convex permits exactly
+    // one per function and `convex-test` does not enforce it, so keeping it
+    // visible here — rather than behind a shared helper — is deliberate.
+    const page = await ctx.db
+      .query("instagramEvents")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .paginate({
+        cursor: state.cursor ?? null,
+        numItems: conversationBatchSize(args.batchSize),
+      });
+
+    let materialized: number;
+    try {
+      materialized = await syncThreadsInBackfillPage(ctx, "instagram", page.page);
+    } catch (error) {
+      // Deliberately not rethrown: rethrowing rolls the transaction back, and
+      // with it the very record that says the run failed.
+      return await recordConversationBackfillFailure(ctx, state, error);
+    }
+
+    const result = await recordConversationBackfillProgress(
+      ctx,
+      state,
+      page,
+      materialized,
+      expectedCount
+    );
+
+    if (!result.isDone && args.continueAutomatically !== false) {
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillInstagramConversations, {
+        orgId: args.orgId,
+        runId: state.runId,
+        batchSize: args.batchSize,
+      });
+    }
+
+    return result;
+  },
+});
+
+/** Facebook counterpart to `backfillInstagramConversations`. */
+export const backfillFacebookConversations = internalMutation({
+  args: CONVERSATION_BACKFILL_ARGS,
+  handler: async (ctx, args): Promise<ConversationBackfillResult> => {
+    const expectedCount = await facebookEventsByOrg.count(ctx, {
+      namespace: args.orgId,
+      bounds: {},
+    });
+    const state = await beginConversationBackfill(
+      ctx,
+      args.orgId,
+      "facebook",
+      args.runId,
+      expectedCount,
+      args.onlyIfIdle
+    );
+    if (!state) return { status: "staleRun", processed: 0, materialized: 0, isDone: false };
+
+    // THE one paginated query this function is allowed. Convex permits exactly
+    // one per function and `convex-test` does not enforce it, so keeping it
+    // visible here — rather than behind a shared helper — is deliberate.
+    const page = await ctx.db
+      .query("facebookEvents")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .paginate({
+        cursor: state.cursor ?? null,
+        numItems: conversationBatchSize(args.batchSize),
+      });
+
+    let materialized: number;
+    try {
+      materialized = await syncThreadsInBackfillPage(ctx, "facebook", page.page);
+    } catch (error) {
+      // Deliberately not rethrown: rethrowing rolls the transaction back, and
+      // with it the very record that says the run failed.
+      return await recordConversationBackfillFailure(ctx, state, error);
+    }
+
+    const result = await recordConversationBackfillProgress(
+      ctx,
+      state,
+      page,
+      materialized,
+      expectedCount
+    );
+
+    if (!result.isDone && args.continueAutomatically !== false) {
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillFacebookConversations, {
+        orgId: args.orgId,
+        runId: state.runId,
+        batchSize: args.batchSize,
+      });
+    }
+
+    return result;
   },
 });
 
