@@ -28,6 +28,28 @@ import { Id } from "./_generated/dataModel";
  * the exact permitted target for every shape.
  *
  * ─────────────────────────────────────────────────────────────────────────────
+ * WHY ROUND 3 EXISTS — two more defects, both mine
+ * ─────────────────────────────────────────────────────────────────────────────
+ * F5. Round 2's A1b and A3b were NOT VALID REVALIDATION FIXTURES. Each began
+ * from an already-contradictory request that the corrected creation boundary is
+ * REQUIRED to reject: A1b created a contradictory intent, A3b registered a
+ * contradictory cheque. Once A1a/A3a land, those starting states are
+ * unconstructable. **A fixture whose precondition the design forbids cannot
+ * evidence the design's second boundary.** Replaced, not repaired.
+ *
+ * The sharper half is that I had ALREADY WRITTEN A3b's weakness down — "green on
+ * the amount check, not target revalidation" — and kept the cell anyway.
+ * **Labelling a limitation accurately is not the same as the cell being valid
+ * evidence.** An honest caveat on a cell that cannot exist is still a cell that
+ * cannot exist.
+ *
+ * F6. The round-2 matrix constrained REFUSAL and nothing constrained
+ * ACCEPTANCE. A resolver that over-refuses unless all three references are
+ * present would satisfy every red mismatch cell and still break every
+ * legitimate caller. That is the exact mirror of round 1's defect. The C-series
+ * below are ACCEPTANCE controls, built to fail against that resolver.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
  * CONTRACT v2 (owner rules as amended by AF30-D009 §1–§2)
  * ─────────────────────────────────────────────────────────────────────────────
  * R1  Every DEBT-DIRECTED movement resolves exactly ONE canonical debt target
@@ -44,9 +66,10 @@ import { Id } from "./_generated/dataModel";
  *                                     (the row is SOURCE LINEAGE / mirror
  *                                      context only, never a second target)
  *
- * R3  Contradictory target candidates FAIL CLOSED, ATOMICALLY. Silently
- *     discarding one reference is not a resolution — a contradictory pair is
- *     refused, never reconciled by preference.
+ * R3  Contradictory target candidates FAIL CLOSED, ATOMICALLY — but WHICH
+ *     failure is correct depends on whether the money exists yet. See the
+ *     binding table below. Silently discarding one reference is never a
+ *     resolution: a contradictory pair is refused, not reconciled by preference.
  *
  * R4  Provenance (sale, customer, vehicle) derives from the VERIFIED TARGET.
  *     Independent fallback expressions are the named anti-pattern:
@@ -54,9 +77,37 @@ import { Id } from "./_generated/dataModel";
  *       `receivable?.saleId ?? args.saleId`   collections.ts:986  (cheque)
  *
  * R5  ALL supplied target candidates AND payer identity must resolve to one
- *     org-scoped canonical debt and one payer, or fail closed AT THE BOUNDARY
- *     THAT ACCEPTS THEM. Failing later — after a provider has confirmed funds —
- *     is not fail-closed.
+ *     org-scoped canonical debt and one payer AT THE BOUNDARY THAT ACCEPTS
+ *     THEM, and must be RE-PROVEN at every later boundary that moves money.
+ *     Re-proving means the TARGET and the PAYER, never merely the amount.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * THE BINDING TABLE (owner-proxy ruling, AF30-D013) — R3/R5 resolved by boundary
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ *   contradictory / foreign / dangling / terminal / payer-mismatched candidate
+ *     BEFORE funds exist  (create · register · manual cash)
+ *       -> HARD-FAIL ATOMICALLY. Nothing survives.
+ *
+ *   target no longer proven
+ *     AFTER funds confirmed  (intent settlement · cheque clearing)
+ *       -> DO NOT ALLOCATE, DO NOT LOSE THE RECEIPT. The receipt takes R6's
+ *          form exactly (see R6 — referenced, deliberately not restated here),
+ *          and the driver record reaches a TERMINAL state so the provider or
+ *          cheque event does NOT keep retrying as if no funds had arrived.
+ *
+ *   target still proven, owes less than requested
+ *     AT settlement
+ *       -> allocate the LIVE outstanding; the remainder stays unapplied.
+ *
+ * This is NOT a new unapplied-payment product. It is the S1 compatibility form
+ * the owner already approved, reused as the post-confirmation safe harbour.
+ *
+ * ⚠️ ASSERT BOTH HALVES OF THE SAFE HARBOUR. The receipt EXISTS and is
+ * reconcilable, AND allocation, AR status/aging and debt provenance are
+ * UNTOUCHED. Either half alone proves half of it: "a receipt was recorded" is
+ * satisfied by an implementation that also allocated, and "nothing was
+ * allocated" is satisfied by one that threw the money away.
  *
  * R6  S1 (no debt named) is an UNALLOCATED RECEIPT:
  *       targetDocumentId = null · appliedMinor = 0 ·
@@ -141,6 +192,8 @@ const PERMISSIONS = [
   "create:sales", "edit:sales", "view:sales", "edit:vehicles", "view:vehicles",
   "approve:requests", "manage:finance", "view:finance",
   "register:vehicle_handover", "register:expected_payment",
+  // A1c injects payer drift through `customers.softDelete`.
+  "delete:customers",
   // Deliberate: `notifyManagers` only dispatches to roles holding manage:users.
   // Without it the "no notification survived" assertions below would pass
   // vacuously — a fixture that cannot fail is worse than no fixture.
@@ -352,6 +405,69 @@ async function settleAndDescribe(t: any, asUser: any, orgId: any, intentId: any)
 }
 
 /**
+ * BOTH HALVES of the post-confirmation safe harbour, in one reading.
+ *
+ * PRESENCE — a receipt was recorded for the confirmed funds, carries the whole
+ * amount as unapplied, and the driver record reached a TERMINAL state so the
+ * provider / cheque event stops retrying.
+ * ABSENCE — no allocation, no legacy mirror row, and the legacy row's balance,
+ * status and aging fields are byte-identical to before.
+ *
+ * Asserting only presence passes for an implementation that ALSO allocated;
+ * asserting only absence passes for one that threw the money away.
+ */
+async function safeHarbour(
+  t: any,
+  before: any,
+  after: any,
+  driverStatus: string | null,
+  threw: string | null
+) {
+  const receipt = await t.run(async (ctx: any) => {
+    const payments = await ctx.db.query("canonicalPayments").collect();
+    const newest = payments[payments.length - 1];
+    if (!newest) return null;
+    const active = (await ctx.db.query("paymentAllocations").collect())
+      .filter((a: any) => a.status === "ACTIVE" && String(a.paymentId) === String(newest._id));
+    const applied = active.reduce((s: number, a: any) => s + a.amountMinor, 0);
+    return {
+      amountMinor: newest.amountMinor,
+      status: newest.status,
+      unappliedMinor: newest.amountMinor - applied,
+    };
+  });
+  const d = (table: string) => after.counts[table] - before.counts[table];
+  return {
+    threw,
+    driverStatus,
+    // presence
+    receiptRecorded: d("canonicalPayments") === 1,
+    receiptAmountMinor: receipt?.amountMinor ?? null,
+    receiptUnappliedMinor: receipt?.unappliedMinor ?? null,
+    receiptSettled: receipt?.status === "SETTLED",
+    // absence
+    newAllocations: d("paymentAllocations"),
+    newLegacyMirrors: d("collectionPayments"),
+    legacyRowMutated: JSON.stringify(before.row) !== JSON.stringify(after.row),
+  };
+}
+
+/** The safe harbour, spelled out once so every cell asserts the same thing. */
+function safeHarbourExpectation(driverStatus: string) {
+  return {
+    threw: null,
+    driverStatus,
+    receiptRecorded: true,
+    receiptAmountMinor: PAY * MINOR,
+    receiptUnappliedMinor: PAY * MINOR,
+    receiptSettled: true,
+    newAllocations: 0,
+    newLegacyMirrors: 0,
+    legacyRowMutated: false,
+  };
+}
+
+/**
  * R6 reading for an unallocated receipt: what the canonical layer holds for a
  * movement that named no debt. `unappliedMinor` is derived, exactly as
  * `subledger.getPaymentUnappliedMinor` derives it.
@@ -379,7 +495,7 @@ async function receiptShape(t: any) {
   });
 }
 
-describe("SCRUM-121 Priority-1 round 2 — path × input shape, measured on clean main", () => {
+describe("SCRUM-121 Priority-1 round 3 — path × input shape, measured on clean main", () => {
   // ══════════════════════════════════════════════════════════════════════════
   // GROUP 1 — R3 fail-closed cells. ATOMIC REFUSAL is the assertion.
   // ══════════════════════════════════════════════════════════════════════════
@@ -434,46 +550,63 @@ describe("SCRUM-121 Priority-1 round 2 — path × input shape, measured on clea
   });
 
   /**
-   * Clear-time REVALIDATION after post-registration drift (AF30-D009 §3).
+   * A3b′ — REPLACES round-2 A3b, which sol's F5 correctly invalidated: it
+   * registered an ALREADY-CONTRADICTORY cheque, a state the corrected
+   * registration boundary (A3a) must reject, so it could never evidence the
+   * clear-time boundary. It also refused on the AMOUNT rather than the target,
+   * which I had written down and kept anyway.
    *
-   * BASE: registration is assumed to succeed — which is only true because A3a
-   * is red on `main`. If A3a is ever fixed, THIS cell becomes unconstructable
-   * and that is the correct outcome, not a regression.
+   * VALID AT THE FIRST BOUNDARY: a cheque against a sale-linked row, customer
+   * matching, NO contradictory `saleId` — the A10 shape, which registers
+   * cleanly.
    *
-   * READ THE REASON, NOT THE COLOUR: `clearCheque:1109` refuses because
-   * `cheque.amount > receivable.outstandingAmount` — an AMOUNT check. Nothing
-   * here re-resolves the TARGET. A green cell means the observable the contract
-   * asks for happens to hold; it does not mean clear-time target revalidation
-   * exists. Constructing a drift that moves the target without moving the
-   * amount would very likely go red, and is NOT measured here.
+   * DRIFT INJECTED (target, post-registration): the SALE IS CANCELLED, so
+   * `cancelSaleReceivableIfSafe:107` sets the sale's canonical invoice to
+   * CANCELLED. Under R2 that invoice is the cheque's one permitted target, and
+   * it is no longer provable.
+   *
+   * WHY THIS DRIFT AND NOT AN AMOUNT DRIFT: the legacy row's
+   * `outstandingAmount` is UNCHANGED by the cancellation, so
+   * `clearCheque:1109`'s amount comparison still passes. Only re-proving the
+   * TARGET can catch this. That is the whole point of the replacement.
+   *
+   * BASE: the sale can be cancelled while a cheque is merely HELD because no
+   * allocation exists yet — `cancelSaleReceivableIfSafe:82` only refuses over
+   * already-applied payments. Also depends on SCRUM-109 raising the row's twin.
+   *
+   * CONSTRUCTION FINDING, per-shape: `registerCheque` has NO
+   * `receivableDocumentId` argument at all, so the cheque path CANNOT express a
+   * direct canonical target. Its stored target is therefore always the row's
+   * twin, and the A1d isolation below — drifting the target the code itself
+   * stores — is UNCONSTRUCTABLE on this path. That is a finding about the
+   * cheque surface, not a gap in the fixture.
    */
-  test("A3b · P2b×S6 · cheque clear: revalidated after drift, refused atomically", async () => {
-    const { t, orgId, customerId, asUser } = await setup();
-    const { saleId } = await completedSale(t, asUser, orgId, customerId, "1HGCM82633A000003");
-    const rowId = await standaloneRow(asUser, orgId, customerId);
+  test("A3b′ · P2b · cheque clear after TARGET drift: safe harbour, not allocation", async () => {
+    const { t, orgId, customerId, asUser, asApprover } = await setup();
+    const { saleId, invoiceId } = await completedSale(t, asUser, orgId, customerId, "1HGCM82633A000003");
+    const rowId = await saleLinkedRow(asUser, orgId, customerId, saleId);
 
     const chequeId = await asUser.mutation(api.collections.registerCheque, {
-      orgId, receivableId: rowId, customerId, saleId,
+      orgId, receivableId: rowId, customerId,
       bank: "ABC", chequeNumber: "CQ-A3B", chequeDate: Date.now(), amount: PAY,
     });
 
-    // DRIFT: the row is settled through another channel between register and clear.
-    await asUser.mutation(api.collections.recordPayment, {
-      orgId, receivableId: rowId, amount: PAY, method: "CASH", paymentDate: Date.now(),
-    });
+    await asApprover.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
+
+    // A DRIFT FIXTURE THAT DOES NOT PROVE ITS DRIFT LANDED IS NOT EVIDENCE.
+    const invoiceStatus = await t.run(async (ctx: any) => (await ctx.db.get(invoiceId)).status);
+    expect(invoiceStatus).toBe("CANCELLED");
 
     const before = await worldSnapshot(t, rowId);
-    const refused = await capture(() =>
+    const threw = await capture(() =>
       asUser.mutation(api.collections.clearCheque, { orgId, chequeId })
     );
     const after = await worldSnapshot(t, rowId);
     const chequeStatus = await t.run(async (ctx: any) => (await ctx.db.get(chequeId)).status);
 
-    expect({
-      refused: refused !== null,
-      delta: worldDelta(before, after),
-      chequeStatus,
-    }).toEqual({ refused: true, delta: {}, chequeStatus: "HELD" });
+    expect(await safeHarbour(t, before, after, chequeStatus, threw)).toEqual(
+      safeHarbourExpectation("CLEARED")
+    );
   });
 
   /** BASE: as A2. */
@@ -497,46 +630,158 @@ describe("SCRUM-121 Priority-1 round 2 — path × input shape, measured on clea
   });
 
   /**
-   * Settlement-time REVALIDATION after drift (AF30-D009 §3).
+   * A1b′ — REPLACES round-2 A1b (sol F5). The old cell created an
+   * ALREADY-CONTRADICTORY intent, which the corrected create boundary (A1a)
+   * must reject, so its precondition is unconstructable under the design it was
+   * meant to evidence. It also asserted an atomic throw, which the owner-proxy
+   * ruling has since replaced with the safe harbour — the design tension I
+   * flagged there is now SETTLED, and settled against what I asserted.
    *
-   * BASE: creation is assumed to succeed — only true because A1a is red.
+   * VALID AT THE FIRST BOUNDARY: a correlated pair — a sale-linked row and its
+   * own sale (S5). Creation is clean.
    *
-   * DESIGN TENSION, recorded not resolved: `paymentIntents.ts:107-114` argues
-   * the opposite of an atomic throw here — the provider has already confirmed
-   * the funds, so a throw rolls back the settlement AND the canonical payment,
-   * and the provider's retries hit the same throw, losing the money outright.
-   * D009 §3 directs "both atomic", so atomic refusal is what this cell asserts.
-   * Whether atomic refusal or an explicit unallocated receipt is the right
-   * answer at THIS boundary is a DESIGN question, not mine to settle in a
-   * fixture. Flagged for the DESIGN review.
+   * DRIFT INJECTED (target, post-creation): the SALE IS CANCELLED, taking its
+   * canonical invoice — the one permitted target under R2 — to CANCELLED.
+   *
+   * NOT AN AMOUNT DRIFT: the row and its twin still carry the full outstanding,
+   * so every amount comparison on this path still passes. Only re-proving the
+   * target catches it.
+   *
+   * BASE: cancellation succeeds because the intent is still PENDING and nothing
+   * is allocated yet. Depends on SCRUM-109 raising the row's twin.
    */
-  test("A1b · P3b×S6 · payment link settle: revalidated after drift, refused atomically", async () => {
-    const { t, orgId, customerId, asUser } = await setup();
-    const { saleId } = await completedSale(t, asUser, orgId, customerId, "1HGCM82633A000005");
-    const rowId = await standaloneRow(asUser, orgId, customerId);
+  test("A1b′ · P3b · settle after TARGET drift: safe harbour, not allocation", async () => {
+    const { t, orgId, customerId, asUser, asApprover } = await setup();
+    const { saleId, invoiceId } = await completedSale(t, asUser, orgId, customerId, "1HGCM82633A000005");
+    const rowId = await saleLinkedRow(asUser, orgId, customerId, saleId);
 
     const intentId = await asUser.mutation(api.paymentIntents.create, {
       orgId, customerId, receivableId: rowId, saleId,
       amountMinor: PAY * MINOR, currency: "JOD", provider: "stripe", externalId: "pi_a1b",
     });
 
-    // DRIFT: the row is settled through another channel before the link settles.
-    await asUser.mutation(api.collections.recordPayment, {
-      orgId, receivableId: rowId, amount: PAY, method: "CASH", paymentDate: Date.now(),
-    });
+    await asApprover.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
+
+    const invoiceStatus = await t.run(async (ctx: any) => (await ctx.db.get(invoiceId)).status);
+    expect(invoiceStatus).toBe("CANCELLED");
 
     const before = await worldSnapshot(t, rowId);
-    const refused = await capture(() =>
+    const threw = await capture(() =>
       asUser.mutation(api.paymentIntents.markSettled, { orgId, intentId })
     );
     const after = await worldSnapshot(t, rowId);
     const intentStatus = await t.run(async (ctx: any) => (await ctx.db.get(intentId)).status);
 
-    expect({
-      refused: refused !== null,
-      delta: worldDelta(before, after),
-      intentStatus,
-    }).toEqual({ refused: true, delta: {}, intentStatus: "PENDING" });
+    expect(await safeHarbour(t, before, after, intentStatus, threw)).toEqual(
+      safeHarbourExpectation("SETTLED")
+    );
+  });
+
+  /**
+   * A1d · TARGET drift, ISOLATED — and the reason it exists is a limit of A1b′
+   * I am not going to paper over.
+   *
+   * In A1b′ the caller supplies `receivableId`, so `paymentIntents.ts:301`
+   * overwrites the stored target with the ROW'S TWIN. Cancelling the sale kills
+   * the SALE INVOICE — the target CONTRACT R2 names — but not the twin `main`
+   * actually uses. So A1b′ is red for a real contract violation, yet it does
+   * NOT show `main` allocating to a dead document, and reporting it that way
+   * would overstate it. It re-measures the R2 routing defect under drift.
+   *
+   * A1d isolates revalidation instead. The caller supplies ONLY
+   * `receivableDocumentId` (the S7 shape A11 proves works), so `main`'s own
+   * stored target IS the sale invoice. Cancelling the sale then kills the exact
+   * document `main` will settle against — no routing disagreement left, only
+   * the question of whether the second boundary re-proves it.
+   *
+   * DRIFT INJECTED (target, post-creation): the sale is cancelled, taking the
+   * intent's own stored target to CANCELLED.
+   *
+   * BASE: no legacy row is involved at all, so this cell is independent of
+   * SCRUM-109 — the only cell in the drift group that is.
+   */
+  test("A1d · P3b · settle after the STORED target itself is cancelled: safe harbour", async () => {
+    const { t, orgId, customerId, asUser, asApprover } = await setup();
+    const { saleId, invoiceId } = await completedSale(t, asUser, orgId, customerId, "1HGCM82633A000030");
+
+    const intentId = await asUser.mutation(api.paymentIntents.create, {
+      orgId, customerId, receivableDocumentId: invoiceId,
+      amountMinor: PAY * MINOR, currency: "JOD", provider: "stripe", externalId: "pi_a1d",
+    });
+
+    await asApprover.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
+
+    const invoiceStatus = await t.run(async (ctx: any) => (await ctx.db.get(invoiceId)).status);
+    expect(invoiceStatus).toBe("CANCELLED");
+
+    const before = await worldSnapshot(t);
+    const threw = await capture(() =>
+      asUser.mutation(api.paymentIntents.markSettled, { orgId, intentId })
+    );
+    const after = await worldSnapshot(t);
+    const intentStatus = await t.run(async (ctx: any) => (await ctx.db.get(intentId)).status);
+
+    expect(await safeHarbour(t, before, after, intentStatus, threw)).toEqual(
+      safeHarbourExpectation("SETTLED")
+    );
+  });
+
+  /**
+   * A1c · PAYER drift — the other half of "re-prove target AND payer". Round 2
+   * never exercised payer identity at all.
+   *
+   * VALID AT THE FIRST BOUNDARY: a standalone row for its own customer (S3),
+   * which creates cleanly (A4 is green).
+   *
+   * DRIFT INJECTED (payer, post-creation): the customer is SOFT-DELETED. The
+   * intent still names a payer that no longer exists as a valid party.
+   *
+   * NOT AN AMOUNT DRIFT: nothing about the balance moves. And note that
+   * `allocatePaymentToReceivable:211` compares payment.customerId to
+   * receivable.customerId — both still hold the same now-deleted id, so an
+   * identity COMPARISON still passes where a PROOF of a valid payer would not.
+   *
+   * CONSTRUCTION NOTE (per-shape difficulty, carried forward): payer drift is
+   * only constructible on a STANDALONE row. `customers.softDelete:540/546`
+   * refuses to delete a customer holding leads or sales, so the sale-linked and
+   * correlated shapes cannot express this drift at all through the public API.
+   * A drift that only one shape can express is exactly the kind of asymmetry
+   * that keeps a scenario out of a matrix.
+   *
+   * MEASURED NON-FINDING, recorded so nobody re-derives it: `mergeCustomers` is
+   * NOT a payer-drift vector. `CUSTOMER_REFERENCING_TABLES` repoints
+   * `receivableDocuments`, `receivables`, `canonicalPayments` AND
+   * `paymentIntents` together, so both sides move to the survivor and stay
+   * consistent.
+   *
+   * BASE: depends on SCRUM-109 raising the standalone row's twin.
+   */
+  test("A1c · P3b · settle after PAYER drift: safe harbour, not allocation", async () => {
+    const { t, orgId, asUser } = await setup();
+    // A payer with no leads and no sales, so soft-delete is permitted.
+    const payerId = await secondCustomer(t, orgId);
+    const rowId = await standaloneRow(asUser, orgId, payerId);
+
+    const intentId = await asUser.mutation(api.paymentIntents.create, {
+      orgId, customerId: payerId, receivableId: rowId,
+      amountMinor: PAY * MINOR, currency: "JOD", provider: "stripe", externalId: "pi_a1c",
+    });
+
+    await asUser.mutation(api.customers.softDelete, { orgId, customerId: payerId });
+
+    const payerDeleted = await t.run(async (ctx: any) => (await ctx.db.get(payerId)).isDeleted);
+    expect(payerDeleted).toBe(true);
+
+    const before = await worldSnapshot(t, rowId);
+    const threw = await capture(() =>
+      asUser.mutation(api.paymentIntents.markSettled, { orgId, intentId })
+    );
+    const after = await worldSnapshot(t, rowId);
+    const intentStatus = await t.run(async (ctx: any) => (await ctx.db.get(intentId)).status);
+
+    expect(await safeHarbour(t, before, after, intentStatus, threw)).toEqual(
+      safeHarbourExpectation("SETTLED")
+    );
   });
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -1023,6 +1268,148 @@ describe("SCRUM-121 Priority-1 round 2 — path × input shape, measured on clea
       delta: worldDelta(before, after),
       settlement,
     }).toEqual({ refused: true, delta: {}, settlement: "unreachable" });
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // GROUP 4b — ACCEPTANCE CONTROLS (sol F6). The mirror of the round-1 defect.
+  //
+  // Every cell above constrains REFUSAL and nothing constrains ACCEPTANCE. A
+  // resolver that over-refuses unless all three references are present would
+  // satisfy every red mismatch cell and still break every legitimate caller.
+  // These three pairwise controls are the evidence that must fail against that
+  // hypothetical resolver — so each asserts NO refusal, the EXACT target, the
+  // EXACT amount and exactly ONE allocation. An over-refuser fails all four.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * C1 — direct document + its MATCHING sale, no row.
+   * BASE: the invoice comes from `sales.completeFromQuote`, not from SCRUM-109.
+   */
+  test("C1 · P3 · document + its matching sale is ACCEPTED and settles that document", async () => {
+    const { t, orgId, customerId, asUser } = await setup();
+    const { saleId, invoiceId } = await completedSale(t, asUser, orgId, customerId, "1HGCM82633A000026");
+
+    const refusalMessage = await capture(async () => {
+      const intentId = await asUser.mutation(api.paymentIntents.create, {
+        orgId, customerId, receivableDocumentId: invoiceId, saleId,
+        amountMinor: PAY * MINOR, currency: "JOD", provider: "stripe", externalId: "pi_c1",
+      });
+      await asUser.mutation(api.paymentIntents.markSettled, { orgId, intentId });
+    });
+
+    const state = await targets(t, { invoiceId });
+    expect({
+      refusalMessage,
+      onSaleInvoice: state.onSaleInvoiceMinor,
+      allocationCount: state.allocationCount,
+    }).toEqual({ refusalMessage: null, onSaleInvoice: PAY * MINOR, allocationCount: 1 });
+  });
+
+  /**
+   * C2a — direct document + its MATCHING sale-linked row, no explicit sale,
+   * where "matching" is read under CONTRACT R2: a sale-linked row's one
+   * permitted target is the SALE'S CANONICAL INVOICE.
+   *
+   * ⚠️ THE PHRASE "matching document" IS AMBIGUOUS ON `main`, and I am not
+   * resolving that ambiguity by picking the reading that suits me. `main`'s own
+   * rule (`paymentIntents.ts:298`) treats the row's TWIN as the matching
+   * document. C2b below measures that second reading, so this control does not
+   * rest on my interpretation of the directive.
+   *
+   * BASE: depends on SCRUM-109 raising the row's twin, which is what makes the
+   * invoice and the twin two distinct ids in the first place.
+   */
+  test("C2a · P3 · document(sale invoice) + its sale-linked row is ACCEPTED and settles the invoice", async () => {
+    const { t, orgId, customerId, asUser } = await setup();
+    const { saleId, invoiceId } = await completedSale(t, asUser, orgId, customerId, "1HGCM82633A000027");
+    const rowId = await saleLinkedRow(asUser, orgId, customerId, saleId);
+
+    const refusalMessage = await capture(async () => {
+      const intentId = await asUser.mutation(api.paymentIntents.create, {
+        orgId, customerId, receivableDocumentId: invoiceId, receivableId: rowId,
+        amountMinor: PAY * MINOR, currency: "JOD", provider: "stripe", externalId: "pi_c2a",
+      });
+      await asUser.mutation(api.paymentIntents.markSettled, { orgId, intentId });
+    });
+
+    const state = await targets(t, { invoiceId, rowId });
+    expect({
+      refusalMessage,
+      onSaleInvoice: state.onSaleInvoiceMinor,
+      onRowTwin: state.onRowTwinMinor,
+      allocationCount: state.allocationCount,
+    }).toEqual({
+      refusalMessage: null, onSaleInvoice: PAY * MINOR, onRowTwin: 0, allocationCount: 1,
+    });
+  });
+
+  /**
+   * C2b — the SAME pair under `main`'S reading of "matching": the row's OWN
+   * TWIN as the document. Measured so the C2 verdict does not rest on my
+   * interpretation of the directive's wording.
+   *
+   * ⚠️ THIS IS NOT AN ACCEPTANCE CONTROL — it is its complement, and I had it
+   * wrong on the first pass. Under contract R2 a sale-linked row's ONE
+   * permitted target is the sale's invoice, so naming the row twin names a
+   * document that is not a permitted target for this row. That is a
+   * contradictory candidate arriving BEFORE funds exist, so the binding table
+   * says hard-fail atomically. C2a and C2b therefore cannot both be green under
+   * the finished design, and asserting acceptance for both would have been the
+   * "either location is acceptable" defect wearing a new hat.
+   *
+   * BASE: as C2a — depends on SCRUM-109 making the twin and the invoice two
+   * distinct documents. If SCRUM-109 is fixed and no twin exists, this cell
+   * becomes unconstructable, which is the correct outcome.
+   */
+  test("C2b · P3 · document(row twin) + its sale-linked row is refused atomically", async () => {
+    const { t, orgId, customerId, asUser } = await setup();
+    const { saleId } = await completedSale(t, asUser, orgId, customerId, "1HGCM82633A000028");
+    const rowId = await saleLinkedRow(asUser, orgId, customerId, saleId);
+    const twinId = await rowTwinOf(t, rowId);
+
+    const before = await worldSnapshot(t, rowId);
+    const refused = await capture(() =>
+      asUser.mutation(api.paymentIntents.create, {
+        orgId, customerId, receivableDocumentId: twinId, receivableId: rowId,
+        amountMinor: PAY * MINOR, currency: "JOD", provider: "stripe", externalId: "pi_c2b",
+      })
+    );
+    const after = await worldSnapshot(t, rowId);
+
+    expect({ refused: refused !== null, delta: worldDelta(before, after) }).toEqual({
+      refused: true, delta: {},
+    });
+  });
+
+  /**
+   * C3 — standalone row + its OWN direct canonical document, no sale.
+   * BASE: the row's twin is SCRUM-109's twin, and under R2 it is also the one
+   * permitted target for a standalone row, so this control survives unchanged
+   * only while both remain true.
+   */
+  test("C3 · P3 · standalone row + its own document is ACCEPTED and settles that document", async () => {
+    const { t, orgId, customerId, asUser } = await setup();
+    const { invoiceId } = await completedSale(t, asUser, orgId, customerId, "1HGCM82633A000029");
+    const rowId = await standaloneRow(asUser, orgId, customerId);
+    const twinId = await rowTwinOf(t, rowId);
+
+    const refusalMessage = await capture(async () => {
+      const intentId = await asUser.mutation(api.paymentIntents.create, {
+        orgId, customerId, receivableDocumentId: twinId, receivableId: rowId,
+        amountMinor: PAY * MINOR, currency: "JOD", provider: "stripe", externalId: "pi_c3",
+      });
+      await asUser.mutation(api.paymentIntents.markSettled, { orgId, intentId });
+    });
+
+    const state = await targets(t, { invoiceId, rowId });
+    expect({
+      refusalMessage,
+      onRowTwin: state.onRowTwinMinor,
+      onSaleInvoice: state.onSaleInvoiceMinor,
+      allocationCount: state.allocationCount,
+    }).toEqual({
+      refusalMessage: null, onRowTwin: PAY * MINOR, onSaleInvoice: 0, allocationCount: 1,
+    });
   });
 
   // ══════════════════════════════════════════════════════════════════════════
