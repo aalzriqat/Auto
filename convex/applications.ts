@@ -140,7 +140,13 @@ async function getActiveReceivableAllocations(
 function assertDealerEconomicsRecorded(
   app: Doc<"financeApplications">,
   action: "handing over the vehicle" | "finalizing",
-  quoteMode: QuoteMode | undefined
+  quoteMode: QuoteMode | undefined,
+  /**
+   * Non-null when the supplier's entitlement no longer matches the one the
+   * recorded amount was agreed against. Resolved by the caller, which is the
+   * side that can read the vehicle.
+   */
+  supplierEntitlementDrift: { agreedMinor: number; currentMinor: number } | null = null
 ): void {
   // A CONFIGURED deal is the one shape where the financier's economics are
   // always knowable: a configured company approves a purchase amount, and that
@@ -201,6 +207,29 @@ function assertDealerEconomicsRecorded(
     ) {
       throw new ConvexError(
         `On this deal the finance provider pays the supplier directly, so what he receives is the figure the dealership's claim on him is measured from. It is not recorded. Record it before ${action}.`
+      );
+    }
+    /**
+     * The entitlement may have MOVED since the amount was agreed.
+     *
+     * The vehicle's `sourceCost` is editable through its own public path, and
+     * nothing about that edit touches this application — so the recorded amount
+     * can silently stop clearing what the supplier is owed. Checking only that
+     * the amount EXISTS let that deal hand over and then be refused at
+     * finalization, with the vehicle gone and the writer sealed against
+     * correction: the same trap, entered through a different door.
+     *
+     * Refused HERE, before the vehicle leaves, so re-recording is still possible.
+     * Re-recording bumps `economicsRevision`, which is what invalidates any
+     * confirmation opened against the superseded figure — the stamp itself
+     * deliberately carries no money and must not learn to.
+     */
+    if (
+      app.supplierSettlementRoute === "DIRECT_TO_SUPPLIER" &&
+      supplierEntitlementDrift !== null
+    ) {
+      throw new ConvexError(
+        `The supplier's recorded amount on this vehicle has changed since what he receives was agreed, so the figure on this deal no longer matches it. Record what the supplier receives again before ${action}.`
       );
     }
     return;
@@ -345,6 +374,33 @@ function financierApprovesPurchase(args: {
   // requirement its mode says it does not have.
   if (args.quoteMode !== undefined) return false;
   return args.companyId !== undefined;
+}
+
+/**
+ * Whether the supplier's entitlement has moved since the recorded amount was
+ * agreed against it.
+ *
+ * ONE resolver, used by both irreversible transitions, so handover and
+ * finalization cannot form different opinions about whether the evidence still
+ * holds. Returns null when nothing was recorded against an entitlement, when the
+ * vehicle has none, or when it still matches.
+ */
+async function supplierEntitlementDriftFor(
+  ctx: QueryCtx | MutationCtx,
+  app: Doc<"financeApplications">
+): Promise<{ agreedMinor: number; currentMinor: number } | null> {
+  const agreedMinor = app.directSupplierReceipt?.supplierEntitlementMinor;
+  if (agreedMinor === undefined) return null;
+  const vehicle = await ctx.db.get(app.vehicleId);
+  if (!vehicle || vehicle.orgId !== app.orgId) return null;
+  if (vehicle.sourceCost === undefined || vehicle.sourceCost <= 0) return null;
+  // Resolved, never skipped. Returning null on a missing currency would fail
+  // OPEN — the drift check silently disabled on exactly the deals whose scale is
+  // least certain. The writer stamps this field whenever it records, so in
+  // practice it is present; the fallback keeps that from being an assumption.
+  const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, app.orgId));
+  const currentMinor = toMinorUnits(vehicle.sourceCost, currency);
+  return currentMinor === agreedMinor ? null : { agreedMinor, currentMinor };
 }
 
 /**
@@ -2822,7 +2878,12 @@ export const registerVehicleHandover = mutation({
     // Deal fitness first. A deal that cannot be handed over at all is not
     // improved by being asked to confirm a figure — and the refusal that names
     // the missing funding split is the more useful one to reach the operator.
-    assertDealerEconomicsRecorded(app, "handing over the vehicle", await resolveQuoteMode(ctx, app));
+    assertDealerEconomicsRecorded(
+      app,
+      "handing over the vehicle",
+      await resolveQuoteMode(ctx, app),
+      await supplierEntitlementDriftFor(ctx, app)
+    );
     /**
      * The denomination, enforced HERE and not only in what the screens render.
      *
@@ -3151,9 +3212,41 @@ export const recordDirectSupplierReceiptAmount = mutation({
       );
     }
 
+    /**
+     * An exact retry is the SAME ACT, not a correction.
+     *
+     * A lost response, a double-submit or a retried request repeated the whole
+     * write: it patched the row, bumped the concurrency revision — invalidating
+     * every open confirmation for nothing — and appended a second override event
+     * claiming the figure had been changed. The audit trail is what somebody
+     * reads to find out whether a number moved, so inventing a correction that
+     * never happened corrupts exactly the record it exists to protect.
+     *
+     * Compared on the NORMALIZED values actually stored, so whitespace does not
+     * make two identical acts look different.
+     */
+    const previous = app.directSupplierReceipt;
+    const notes = args.notes?.trim() ? args.notes.trim() : undefined;
+    const unchanged =
+      app.approvedDealerPurchaseAmountMinor === args.approvedAmountMinor &&
+      previous !== undefined &&
+      previous.source === source &&
+      previous.notes === notes &&
+      previous.supplierEntitlementMinor === entitlementMinor;
+    if (unchanged) return args.applicationId;
+
     await ctx.db.patch(args.applicationId, {
       approvedDealerPurchaseAmountMinor: args.approvedAmountMinor,
       economicsCurrency,
+      // The evidence this figure was agreed against, so a later edit to the
+      // vehicle's cost is detectable rather than silently invalidating the deal.
+      directSupplierReceipt: {
+        source,
+        ...(notes ? { notes } : {}),
+        ...(entitlementMinor !== undefined
+          ? { supplierEntitlementMinor: entitlementMinor }
+          : {}),
+      },
       /**
        * The concurrency token MUST move.
        *
@@ -3178,9 +3271,12 @@ export const recordDirectSupplierReceiptAmount = mutation({
           ? undefined
           : String(app.approvedDealerPurchaseAmountMinor),
       newValue: String(args.approvedAmountMinor),
-      reason: `Direct supplier receipt amount recorded for the manual finance provider (source: ${source})${
-        args.notes?.trim() ? ` — ${args.notes.trim()}` : ""
-      }.`,
+      // A correction says what it replaced. A first write says so explicitly
+      // rather than leaving the reader to infer it from an absent previousValue.
+      reason:
+        previous === undefined
+          ? `Direct supplier receipt amount first recorded for the manual finance provider (source: ${source})${notes ? ` — ${notes}` : ""}.`
+          : `Direct supplier receipt amount corrected for the manual finance provider. Was ${app.approvedDealerPurchaseAmountMinor ?? "unrecorded"} (source: ${previous.source}${previous.notes ? `; ${previous.notes}` : ""}); now ${args.approvedAmountMinor} (source: ${source}${notes ? `; ${notes}` : ""}).`,
       changedBy: user._id,
       changedAt: Date.now(),
     });
@@ -3369,7 +3465,12 @@ export const finalizeDeal = mutation({
         // Same guard as registerVehicleHandover: an approval cleared by a
         // reappraisal leaves status APPROVED, so this is the only thing
         // stopping a sale being completed on economics nothing supports.
-        assertDealerEconomicsRecorded(app, "finalizing", await resolveQuoteMode(ctx, app));
+        assertDealerEconomicsRecorded(
+          app,
+          "finalizing",
+          await resolveQuoteMode(ctx, app),
+          await supplierEntitlementDriftFor(ctx, app)
+        );
         // The last step in the ordering Codex traced, and the one that creates
         // a SALE. A deal whose denomination cannot be established must not be
         // turned into money here either — otherwise every guard upstream is

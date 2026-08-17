@@ -665,8 +665,12 @@ export const salesEn = {
   DirectSupplierAmountNotesLabel: "Notes (optional)",
   DirectSupplierAmountAction: "Record amount",
   DirectSupplierAmountRowLabel: "Amount the supplier receives",
+  // NOT "a manager's decision": the default MANAGER is precisely the role this
+  // refuses, because it holds the approval permission without finance
+  // visibility. Naming the wrong role sends the operator to somebody who will be
+  // refused too.
   DirectSupplierAmountNeedsPermission:
-    "Recording what the supplier receives is a manager's decision.",
+    "Recording what the supplier receives needs permission to see the deal's finances as well as to approve it. Ask the dealership owner or an accountant.",
   DirectSupplierAmountOwnDeal:
     "You cannot record this on your own deal. A manager or the dealership owner records it.",
   DirectSupplierAmountSealed:
@@ -1681,7 +1685,8 @@ export const salesAr = {
   DirectSupplierAmountNotesLabel: "ملاحظات (اختياري)",
   DirectSupplierAmountAction: "تسجيل المبلغ",
   DirectSupplierAmountRowLabel: "المبلغ الذي يستلمه المورّد",
-  DirectSupplierAmountNeedsPermission: "تسجيل ما يستلمه المورّد قرار يخص المدير.",
+  DirectSupplierAmountNeedsPermission:
+    "تسجيل ما يستلمه المورّد يتطلب صلاحية الاطلاع على مالية الصفقة إضافةً إلى صلاحية الاعتماد. راجع مالك المعرض أو المحاسب.",
   DirectSupplierAmountOwnDeal:
     "لا يمكنك تسجيل هذا على صفقتك. يسجّله المدير أو مالك المعرض.",
   DirectSupplierAmountSealed:

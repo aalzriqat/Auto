@@ -492,6 +492,120 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
     expect(after?.finalizedSaleId).toBeDefined();
   });
 
+  test("raising the supplier's entitlement after the amount was agreed blocks handover, and re-recording clears it", async () => {
+    // The owner-proxy's HIGH. The vehicle's cost is editable through its own
+    // public path and nothing about that edit touches this application — so a
+    // correctly recorded deal could have the supplier's entitlement raised
+    // underneath it, pass a handover that only checked the amount EXISTS, and be
+    // refused at finalization with the vehicle gone and the writer sealed. The
+    // same trap, entered through a different door.
+    const { t, orgId, applicationId, asUser, asApprover } = await seedApprovedApplication(
+      "MANUAL_FINANCE_COMPANY",
+      { sourcedVehicle: true, manualProviderName: "Amman Finance House" }
+    );
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    await asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_000_000,
+      source: "Signed purchase agreement",
+    });
+
+    // Bound to the evidence it was agreed against.
+    const recorded = await t.run((ctx) => ctx.db.get(applicationId));
+    expect(recorded?.directSupplierReceipt?.supplierEntitlementMinor).toBe(17_000_000);
+
+    // The supplier's entitlement moves AFTER the agreement.
+    const vehicleId = recorded!.vehicleId;
+    await t.run((ctx) => ctx.db.patch(vehicleId, { sourceCost: 18_000 }));
+
+    await expect(
+      registerHandover(asUser, api, orgId, applicationId)
+    ).rejects.toThrow(/has changed since what he receives was agreed/i);
+
+    // RECOVERABLE: the vehicle has not gone out, and re-recording against the
+    // new entitlement clears the refusal. A guard that blocked without an exit
+    // would be the dead end this whole issue exists to remove.
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.vehicleHandoverAt).toBeUndefined();
+
+    await asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 18_000_000,
+      source: "Revised purchase agreement",
+    });
+    await registerHandover(asUser, api, orgId, applicationId);
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.vehicleHandoverAt).toBeTypeOf(
+      "number"
+    );
+  });
+
+  test("an exact retry is the same act — no revision bump, no second audit row", async () => {
+    // A lost response or a double submit repeated the whole write: it bumped the
+    // concurrency revision, invalidating every open confirmation for nothing, and
+    // appended an override event claiming the figure had been corrected. The
+    // audit trail is what somebody reads to find out whether a number moved, so
+    // fabricating a correction corrupts the record it exists to protect.
+    const { t, orgId, applicationId, asUser, asApprover } = await seedApprovedApplication(
+      "MANUAL_FINANCE_COMPANY",
+      { sourcedVehicle: true, manualProviderName: "Amman Finance House" }
+    );
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+
+    const call = (amountMinor: number, source: string) =>
+      asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+        orgId,
+        applicationId,
+        approvedAmountMinor: amountMinor,
+        source,
+      });
+
+    const snapshot = async () => {
+      const app = await t.run((ctx) => ctx.db.get(applicationId));
+      const audit = await t.run((ctx) =>
+        ctx.db
+          .query("financeApplicationOverrides")
+          .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+          .collect()
+      );
+      return { revision: app?.economicsRevision, auditRows: audit.length };
+    };
+
+    await call(17_000_000, "Signed purchase agreement");
+    const afterFirst = await snapshot();
+    // Non-vacuity: the first write really did record something to retry.
+    expect(afterFirst.auditRows).toBe(1);
+    expect(afterFirst.revision).toBeTypeOf("number");
+
+    // The identical act, including whitespace that normalizes to the same value.
+    await call(17_000_000, "  Signed purchase agreement  ");
+    expect(await snapshot()).toStrictEqual(afterFirst);
+
+    // A REAL change is still a correction, and says what it replaced.
+    await call(18_000_000, "Revised purchase agreement");
+    const afterCorrection = await snapshot();
+    expect(afterCorrection.auditRows).toBe(2);
+    expect(afterCorrection.revision).toBeGreaterThan(afterFirst.revision as number);
+
+    const audit = await t.run((ctx) =>
+      ctx.db
+        .query("financeApplicationOverrides")
+        .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+        .collect()
+    );
+    const correction = audit.find((row) => row.reason.includes("corrected"));
+    expect(correction?.reason).toMatch(/Was 17000000/);
+    expect(correction?.reason).toMatch(/now 18000000/);
+  });
+
   test("a DEFAULT MANAGER is told they cannot record it, not shown an action the server refuses", async () => {
     // The owner-proxy's fourth blocker, and the fixture is the point.
     //

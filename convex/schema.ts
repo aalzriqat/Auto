@@ -2247,6 +2247,26 @@ export default defineSchema({
     supplierDisbursementReference: v.optional(v.string()),
     supplierDisbursementConfirmedBy: v.optional(v.id("users")),
     /**
+     * The evidence a MANUAL direct supplier-receipt amount was agreed against.
+     *
+     * `supplierEntitlementMinor` is the vehicle's `sourceCost` AS IT STOOD when
+     * the amount was recorded. The vehicle's cost is editable through its own
+     * public path, so without this the deal could be recorded correctly, have the
+     * supplier's entitlement raised underneath it, pass handover (which only
+     * checked the amount EXISTS), and then be refused at finalization with the
+     * vehicle already gone and the writer sealed.
+     *
+     * `source` and `notes` are kept so an exact retry can be recognised as the
+     * same act rather than fabricated into a second correction.
+     */
+    directSupplierReceipt: v.optional(
+      v.object({
+        source: v.string(),
+        notes: v.optional(v.string()),
+        supplierEntitlementMinor: v.optional(v.number()),
+      })
+    ),
+    /**
      * Whether the recorded advice agrees with what the deal was approved at.
      *
      * The dealership's ruling is one payment, for the approved amount — so a
