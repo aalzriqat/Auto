@@ -71,9 +71,16 @@ export async function readCheckResults(api, sha) {
     if (runs.length < PER_PAGE) break;
 
     if (page === MAX_PAGES) {
+      // ⚠️ A deliberate runaway cap, and the wording matters. Reaching here
+      // means page `MAX_PAGES` came back FULL, so the true count is at least
+      // `MAX_PAGES * PER_PAGE` and may be more — this cannot tell which, and
+      // does not try. An earlier version said "more than 1000", which is a
+      // false statement at exactly 1000. Refusing is right either way (a
+      // commit with a thousand checks is not a state this gate reasons about);
+      // saying something untrue about it is not.
       return {
         ok: false,
-        reason: `This commit has more than ${MAX_PAGES * PER_PAGE} check runs, which is not a state this gate understands.`,
+        reason: `This commit has ${MAX_PAGES * PER_PAGE} or more check runs, which is not a state this gate understands.`,
       };
     }
   }

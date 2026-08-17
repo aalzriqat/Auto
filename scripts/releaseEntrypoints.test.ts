@@ -23,11 +23,87 @@
  */
 import { describe, expect, test } from "vitest";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 const REPO_ROOT = path.resolve(__dirname, "..");
 const readRepoFile = (relative: string) => readFileSync(path.join(REPO_ROOT, relative), "utf8");
+
+/**
+ * Lifts a workflow step's `run: |` block out of the YAML, verbatim.
+ *
+ * Textual, deliberately: the point is to execute exactly the lines GitHub will
+ * execute, not a re-typed approximation of them.
+ */
+function extractRunBlock(workflow: string, stepName: string): string {
+  const lines = workflow.split(/\r?\n/);
+  const stepAt = lines.findIndex((l) => l.includes(`- name: ${stepName}`));
+  expect(stepAt, `step not found: ${stepName}`).toBeGreaterThan(-1);
+
+  const runAt = lines.findIndex((l, i) => i > stepAt && /^\s*run: \|\s*$/.test(l));
+  expect(runAt, `step has no multi-line run block: ${stepName}`).toBeGreaterThan(-1);
+
+  const indent = (lines[runAt].match(/^\s*/) ?? [""])[0].length;
+  const body: string[] = [];
+  for (let i = runAt + 1; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (line.trim() !== "" && (line.match(/^\s*/) ?? [""])[0].length <= indent) break;
+    body.push(line.slice(indent + 2));
+  }
+  return body.join("\n");
+}
+
+/**
+ * Runs the deploy step's real shell with `gh` and `pnpm` stubbed out.
+ *
+ * ⚠️ This exists because asserting on the YAML's TEXT proved nothing. The
+ * earlier version of this test checked that the tip comparison appeared before
+ * the CLI call and that nothing dangerous sat between them — which is still
+ * true if the comparison is inverted from `!=` to `=`, or if `exit 1` is
+ * deleted. Both mutations leave a workflow that deploys a stale commit, and
+ * both passed.
+ *
+ * The stubs are shell FUNCTIONS rather than files on `PATH`, so this needs no
+ * executable-bit or path-translation handling and behaves the same on Windows
+ * and on the Ubuntu runner.
+ */
+function runDeployStep(options: { tip: string; expected: string; ghStatus?: number }) {
+  const body = extractRunBlock(readRepoFile(".github/workflows/deploy-production.yml"), "Deploy Convex backend");
+  const dir = mkdtempSync(path.join(tmpdir(), "autoflow-deploy-step-"));
+  const marker = path.join(dir, "deployed");
+  const scriptPath = path.join(dir, "step.sh");
+
+  writeFileSync(
+    scriptPath,
+    [
+      `gh() { if [ "$FAKE_GH_STATUS" != "0" ]; then return "$FAKE_GH_STATUS"; fi; printf '%s\\n' "$FAKE_TIP"; }`,
+      `pnpm() { echo "$*" > "$MARKER"; }`,
+      body,
+    ].join("\n")
+  );
+
+  const result = spawnSync("bash", [scriptPath], {
+    encoding: "utf8",
+    shell: false,
+    timeout: 30_000,
+    env: {
+      ...process.env,
+      FAKE_TIP: options.tip,
+      FAKE_GH_STATUS: String(options.ghStatus ?? 0),
+      MARKER: marker,
+      EXPECTED_SHA: options.expected,
+      REPO: "aalzriqat/Auto",
+    },
+  });
+
+  return {
+    status: result.status,
+    deployed: existsSync(marker),
+    deployedWith: existsSync(marker) ? readFileSync(marker, "utf8").trim() : null,
+    output: `${result.stdout ?? ""}${result.stderr ?? ""}`,
+  };
+}
 
 /**
  * Deliberately hostile, minimal environment: no GitHub context, no Convex
@@ -249,6 +325,42 @@ describe("guarantees that live outside the reach of a normal unit test", () => {
     const deployJob = workflow.slice(workflow.indexOf("\n  deploy:"));
     expect(deployJob).toMatch(/checks: read/);
     expect(deployJob).toMatch(/statuses: read/);
+  });
+
+  test("the deploy step's own shell REFUSES when main has moved, and deploys when it has not", () => {
+    // ⚠️ REGRESSION, and the third test of mine to assert less than it looked
+    // like it did. Its predecessor checked that the tip comparison appeared
+    // before the CLI call with nothing dangerous in between — which stays true
+    // when `!=` is flipped to `=`, or when `exit 1` is removed. Both leave a
+    // workflow that ships a stale commit; both passed.
+    //
+    // So this executes the step's real shell instead of reading it.
+    const SHA = "a".repeat(40);
+
+    const unchanged = runDeployStep({ tip: SHA, expected: SHA });
+    expect(unchanged.status, unchanged.output).toBe(0);
+    expect(unchanged.deployed).toBe(true);
+    expect(unchanged.deployedWith).toBe("exec convex deploy");
+
+    // main advanced while the run waited for approval
+    const moved = runDeployStep({ tip: "b".repeat(40), expected: SHA });
+    expect(moved.status).not.toBe(0);
+    expect(moved.deployed, "a stale commit must never reach convex deploy").toBe(false);
+    expect(moved.output).toMatch(/main advanced/);
+
+    // `gh` itself failing — rate limit, 5xx — must not authorise anything.
+    //
+    // ⚠️ What actually stops it is the COMPARISON, not `set -euo pipefail`. A
+    // failed `gh api` writes nothing to stdout, so `tip` is empty, and an empty
+    // tip never equals a 40-character SHA. Mutation testing proved this:
+    // deleting `set -euo pipefail` from the step leaves every case here
+    // passing, because the comparison already fails closed on an empty or
+    // garbage tip. The line stays as defence for a future edit that adds a
+    // command to this step, but no test proves it and this comment will not
+    // claim one does.
+    const apiDown = runDeployStep({ tip: SHA, expected: SHA, ghStatus: 1 });
+    expect(apiDown.status).not.toBe(0);
+    expect(apiDown.deployed, "an unreachable GitHub API must not authorise a deploy").toBe(false);
   });
 
   test("the deploy invocation stays on the narrow path, and publishes no log file", () => {

@@ -34,20 +34,30 @@ const run = (name: string, over: Partial<Run> = {}): Run => ({
 function fakeApi(options: {
   runs: Run[];
   statuses?: { context: string; state: string }[];
-  perPage?: number;
   reportedTotal?: number;
   failCheckRuns?: number;
   failStatuses?: number;
 }) {
-  const perPage = options.perPage ?? 100;
-  const calls: { path: string; page?: number }[] = [];
+  const calls: { path: string; page?: number; perPage?: number }[] = [];
 
   const api = async (path: string, query?: Record<string, unknown>) => {
-    calls.push({ path, page: query?.page as number | undefined });
+    calls.push({
+      path,
+      page: query?.page as number | undefined,
+      perPage: query?.per_page as number | undefined,
+    });
 
     if (path.endsWith("/check-runs")) {
       if (options.failCheckRuns) return { status: options.failCheckRuns, body: null };
       const page = Number(query?.page ?? 1);
+      // ⚠️ GitHub's OWN DEFAULT, honoured deliberately. An earlier version of
+      // this mock sliced by its own fixed 100 and ignored `per_page` entirely,
+      // so dropping `per_page: PER_PAGE` from the production request still
+      // passed here — while against the real API the reader would receive 30,
+      // see 30 < 100, stop after one page, and make every check beyond it
+      // invisible. A mock that is more generous than the service it stands in
+      // for tests nothing.
+      const perPage = Number(query?.per_page ?? 30);
       const slice = options.runs.slice((page - 1) * perPage, page * perPage);
       return {
         status: 200,
@@ -79,7 +89,13 @@ describe("every check at a commit is read, across every page", () => {
     const found = result.results ?? [];
     expect(found).toHaveLength(101);
     expect(found.some((r) => r.name === "lint")).toBe(true);
-    expect(calls.filter((c) => c.path.endsWith("/check-runs")).map((c) => c.page)).toEqual([1, 2]);
+
+    const checkRunCalls = calls.filter((c) => c.path.endsWith("/check-runs"));
+    expect(checkRunCalls.map((c) => c.page)).toEqual([1, 2]);
+    // The page size must be REQUESTED, not assumed. Without it GitHub serves
+    // 30, and the reader's `runs.length < PER_PAGE` test would end the walk on
+    // the first page while believing it had reached the end.
+    expect(checkRunCalls.map((c) => c.perPage)).toEqual([100, 100]);
   });
 
   test("a LYING total_count does not end the walk early", async () => {
@@ -116,7 +132,24 @@ describe("every check at a commit is read, across every page", () => {
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.reason).toMatch(/more than 1000 check runs/);
+    expect(result.reason).toMatch(/1000 or more check runs/);
+  });
+
+  test("the cap says what it can actually tell, at the boundary itself", async () => {
+    // Exactly 1000 — ten full pages — is the case where "more than 1000" was a
+    // false statement. The cap is deliberate and refusing here is intended: a
+    // commit with a thousand checks is not a state this gate reasons about.
+    // What it may not do is describe that state incorrectly, because the whole
+    // point of this round is that claims match what is known.
+    const runs = Array.from({ length: 1000 }, (_, i) => run(`filler-${i}`));
+    const { api } = fakeApi({ runs });
+
+    const result = await readCheckResults(api, "a".repeat(40));
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/1000 or more/);
+    expect(result.reason).not.toMatch(/more than 1000/);
   });
 
   test("either surface failing is a refusal, never an empty result set", async () => {
