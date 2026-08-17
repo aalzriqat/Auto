@@ -507,6 +507,48 @@ export function parseCanonicalTarget(dryRunOutput: string): CanonicalTarget {
 /** The label the CLI prints for a production deployment, at colour level 0. */
 export const PRODUCTION_LABEL = "Production";
 
+export type RollbackArg =
+  | { kind: "absent" }
+  | { kind: "present"; value: string; index: number }
+  | { kind: "invalid"; reason: string };
+
+/**
+ * `--rollback-to <commit-ish>`, parsed strictly.
+ *
+ * ⚠️ Lives here, rather than in the shell, because the lax version SHIPPED and
+ * both review seats found it independently. When `--rollback-to` was the final
+ * argument, `argv[i + 1]` was `undefined` — falsy — so the rollback branch never
+ * ran and the deploy fell through to `origin/main`'s TIP: the exact commit the
+ * operator was trying to roll back away from, during an incident, having been
+ * asked to confirm only the deployment name. `--rollback-to ""` from a shell
+ * variable that resolved empty did the same thing.
+ *
+ * It went unnoticed because `deployProd.mjs` cannot be imported by a test — it
+ * runs a deploy on import — so nothing in this repo covered a single line of
+ * its argument handling. Moving the decision into this module is the same move
+ * that made every other rule here testable.
+ *
+ * Three outcomes, and the third must never collapse into the first: absent,
+ * present-and-usable, present-but-broken.
+ */
+export function parseRollbackArg(args: string[]): RollbackArg {
+  const index = args.indexOf("--rollback-to");
+  if (index === -1) return { kind: "absent" };
+  if (args.indexOf("--rollback-to", index + 1) !== -1) {
+    return { kind: "invalid", reason: "--rollback-to was given more than once" };
+  }
+  const value = args[index + 1];
+  // A flag-shaped value is the `--rollback-to --allow-behind` slip, which would
+  // otherwise consume the next flag as a commit-ish and fail far from the cause.
+  if (value === undefined || value.trim() === "" || value.startsWith("-")) {
+    return {
+      kind: "invalid",
+      reason: "--rollback-to requires a commit to roll back to, e.g. --rollback-to 52be7b4f",
+    };
+  }
+  return { kind: "present", value, index };
+}
+
 /** Variables whose value must never be printed. */
 const SECRET_SELECTORS = new Set<SelectorKey>([
   "CONVEX_DEPLOY_KEY",
@@ -738,7 +780,13 @@ export type DeployIO = {
  * operator, and a separator that changes by platform makes both worse.
  */
 export function convexCliPath(dir: string): string {
-  return `${dir.replaceAll("\\", "/").replace(/\/+$/, "")}/node_modules/convex/bin/main.js`;
+  // Trailing separators stripped without a regex. `/\/+$/` is super-linear
+  // (SonarCloud S5852) and the input is a `mkdtemp` path today, so this is
+  // hygiene rather than a live risk — but a backtracking pattern inside the
+  // thing that gates production is a poor place to keep one.
+  let normalised = dir.replaceAll("\\", "/");
+  while (normalised.endsWith("/")) normalised = normalised.slice(0, -1);
+  return `${normalised}/node_modules/convex/bin/main.js`;
 }
 
 /**
@@ -764,9 +812,26 @@ function resolveTarget(
 
   const parsed = parseCanonicalTarget(dry.output);
   if (parsed.kind === "missing") {
+    // ⚠️ Name the most likely cause rather than leaving the operator with a
+    // generic refusal. A self-hosted deployment reaches this branch ALWAYS and
+    // can never get past it: the CLI sets `deploymentFields: null` for the
+    // self-hosted credential path, and `formatTargetedDeployment` emits no
+    // `[Label]` line at all when fields are null — so there is no canonical
+    // record to match. This wrapper resolves, freezes and displays the
+    // self-hosted selectors elsewhere, which makes it look supported; it is
+    // not, and an operator staring at "could not read the target" would
+    // otherwise have no way to know that.
+    const selfHosted =
+      snapshot.env.CONVEX_SELF_HOSTED_URL !== undefined ||
+      snapshot.env.CONVEX_SELF_HOSTED_ADMIN_KEY !== undefined;
     io.error(
       "\nCould not read a deployment announcement out of the dry run. Refusing:\n" +
-        "a confirmation that cannot name the target is not a confirmation.\n"
+        "a confirmation that cannot name the target is not a confirmation.\n" +
+        (selfHosted
+          ? "\n⚠️ A self-hosted deployment is selected. Convex announces those without a\n" +
+            "   deployment label, so this wrapper cannot bind a confirmation to them and\n" +
+            "   will never accept one. Self-hosted targets are not supported here.\n"
+          : "")
     );
     return 1;
   }

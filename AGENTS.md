@@ -25,10 +25,19 @@ Use `pnpm deploy:prod`, not `npx convex deploy`.
 **What it deploys is not your working directory.** The wrapper resolves one
 exact commit — `origin/main`'s tip, or the commit you name for a rollback —
 exports it into a brand-new temporary directory, installs that commit's own
-locked dependencies there, and runs the Convex CLI from inside it. Your
-worktree is never read as a bundle input, so nothing on your disk can reach
-production: not an untracked file, not a `.gitignore`d one, not a file you
-create while the deploy is running.
+locked dependencies there, and runs the Convex CLI from inside it. Your worktree
+is never read as a bundle input, so an untracked file, a `.gitignore`d one, or a
+file you create mid-deploy cannot become part of what ships.
+
+⚠️ **It is not a sandbox, and the earlier version of this paragraph overstated
+it.** It said "nothing on your disk can reach production", and a reviewer
+falsified that in one pass: Node honours `NODE_OPTIONS=--require`, so an
+inherited environment could preload code into the CLI that writes into the
+checkout after every check had passed. The wrapper now builds a minimal child
+environment, but the honest boundary is narrower than the original sentence —
+this reduces what reaches production to the approved commit plus whatever your
+own account can do to a directory it owns. A subverted `git`, `pnpm` or `node`
+is out of scope.
 
 That matters more than it sounds. Convex bundles from disk and follows relative
 imports **out** of `convex/` — real modules do this today — and esbuild resolves

@@ -71,6 +71,73 @@ export function createIsolatedCheckout(options: {
   tmpRoot?: string;
 }): CheckoutResult {
   const { git, repoRoot, sha } = options;
+
+  // ── Resolve BEFORE creating anything. The previous version created the
+  //    directory first and then lost its path down every error return, because
+  //    `CheckoutResult`'s error arm carries no `dir` and the caller's `finally`
+  //    only begins after a successful result. Both reviewers found it, and it
+  //    was not theoretical: twelve empty `autoflow-deploy-*` directories were
+  //    sitting in this machine's temp directory, one per failed test run.
+  const resolved = spawnSync(git, ["rev-parse", "--verify", `${sha}^{commit}`], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  if (resolved.status !== 0) {
+    return { error: `${sha} is not a commit in this repository` };
+  }
+  const commit = resolved.stdout.trim();
+
+  // ── Refuse tree shapes this exporter cannot reproduce faithfully.
+  //
+  // `checkout-index` writes a WORKING TREE, not a byte-for-byte tree export: it
+  // applies `text`/`eol`/`ident`/encoding conversion and any configured smudge
+  // filter, and it materialises symlinks. The conversions are neutralised below,
+  // but two shapes cannot be neutralised and must not be silently mangled:
+  //
+  //   - a symlink (mode 120000) can point outside the checkout, and Convex
+  //     would follow a relative import straight back out to untracked content;
+  //   - a gitlink (mode 160000, a submodule) is not materialised at all, so the
+  //     deployed tree would be missing source the commit says is there.
+  //
+  // Neither exists in this repository today. That is exactly why this refuses
+  // rather than warns: the day one is committed, a guard that quietly deviated
+  // from the commit would be the last thing to notice.
+  const tree = spawnSync(git, ["ls-tree", "-r", "-z", "--full-tree", commit], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024 * 64,
+  });
+  if (tree.status !== 0) {
+    return { error: `ls-tree failed: ${tree.stderr?.trim() || "unknown error"}` };
+  }
+  const unsupported: string[] = [];
+  let hasGitAttributes = false;
+  for (const entry of tree.stdout.split("\0").filter(Boolean)) {
+    // "<mode> <type> <object>\t<path>"
+    const mode = entry.slice(0, 6);
+    const file = entry.slice(entry.indexOf("\t") + 1);
+    if (mode === "120000" || mode === "160000") unsupported.push(`${file} (mode ${mode})`);
+    if (file === ".gitattributes" || file.endsWith("/.gitattributes")) hasGitAttributes = true;
+  }
+  if (unsupported.length > 0) {
+    return {
+      error:
+        `the commit contains symlinks or submodules, which this exporter will not reproduce ` +
+        `faithfully: ${unsupported.slice(0, 5).join(", ")}${unsupported.length > 5 ? ", …" : ""}`,
+    };
+  }
+  if (hasGitAttributes) {
+    // A committed `.gitattributes` can route files through a smudge filter,
+    // whose stdout replaces the blob's content wholesale. Refusing is the only
+    // honest answer while the export goes through the working-tree machinery.
+    return {
+      error:
+        "the commit contains a .gitattributes, which can route files through smudge filters " +
+        "that would substitute content at checkout — this exporter cannot guarantee the " +
+        "deployed bytes match the commit while one is present",
+    };
+  }
+
   let dir: string;
   try {
     dir = mkdtempSync(path.join(options.tmpRoot ?? os.tmpdir(), "autoflow-deploy-"));
@@ -78,23 +145,32 @@ export function createIsolatedCheckout(options: {
     return { error: `could not create a temporary directory: ${(error as Error).message}` };
   }
 
+  // From here on the directory exists, so every exit removes it.
+  let succeeded = false;
   try {
-    // Resolve the commit first, so a bad ref is a clean refusal rather than a
-    // half-populated directory.
-    const resolved = spawnSync(git, ["rev-parse", "--verify", `${sha}^{commit}`], {
-      cwd: repoRoot,
-      encoding: "utf8",
-    });
-    if (resolved.status !== 0) {
-      return { error: `${sha} is not a commit in this repository` };
-    }
-
-    // A scratch index, inside the throwaway directory's parent, so the
-    // operator's own staged changes are untouched.
+    // A scratch index inside the throwaway directory, so the operator's own
+    // staged changes are untouched. ⚠️ This is the load-bearing line: without
+    // it, `read-tree` overwrites the index of the repository they are working
+    // in. A guard that damages the working state it is protecting would not
+    // survive first contact — and until this round no test could tell the
+    // difference, because every fixture committed cleanly first.
     const indexFile = path.join(dir, ".autoflow-deploy-index");
     const env = { ...process.env, GIT_INDEX_FILE: indexFile };
 
-    const readTree = spawnSync(git, ["read-tree", resolved.stdout.trim()], {
+    // Conversions off, explicitly, for these invocations only. `core.autocrlf`
+    // is true on this machine (globally), and `git ls-files --eol` reports
+    // `i/lf w/crlf` for the repository's own sources — so without these the
+    // deployed bytes differ from the commit's blobs. It does not change what
+    // JavaScript means, but "the deployed tree is the commit" is the claim this
+    // whole design rests on, and a claim that is only nearly true is the kind
+    // this PR has already been caught making twice.
+    const noConvert = [
+      "-c", "core.autocrlf=false",
+      "-c", "core.eol=lf",
+      "-c", "core.symlinks=false",
+    ];
+
+    const readTree = spawnSync(git, [...noConvert, "read-tree", commit], {
       cwd: repoRoot,
       env,
       encoding: "utf8",
@@ -105,7 +181,7 @@ export function createIsolatedCheckout(options: {
 
     const checkout = spawnSync(
       git,
-      ["--work-tree", dir, "checkout-index", "--all", "--force"],
+      [...noConvert, "--work-tree", dir, "checkout-index", "--all", "--force"],
       { cwd: repoRoot, env, encoding: "utf8" }
     );
     if (checkout.status !== 0) {
@@ -117,9 +193,12 @@ export function createIsolatedCheckout(options: {
     // this function exists to guarantee.
     rmSync(indexFile, { force: true });
 
+    succeeded = true;
     return { dir };
   } catch (error) {
     return { error: (error as Error).message };
+  } finally {
+    if (!succeeded) removeIsolatedCheckout(dir);
   }
 }
 

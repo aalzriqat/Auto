@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, test } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createIsolatedCheckout, removeIsolatedCheckout } from "./isolatedCheckout";
@@ -10,8 +18,8 @@ import { createIsolatedCheckout, removeIsolatedCheckout } from "./isolatedChecko
  *
  * ## Why these are integration tests and not unit tests
  *
- * The claim is about what a directory contains after `git archive` — that is a
- * fact about git and tar, not about our own arithmetic. A mocked `spawnSync`
+ * The claim is about what a directory contains after a git export — that is a
+ * fact about git, not about our own arithmetic. A mocked `spawnSync`
  * would only prove that we call the functions we think we call, which is
  * exactly the class of test that let the previous design pass while shipping
  * unreviewed code. Each case below builds a repository, commits it, plants the
@@ -43,8 +51,8 @@ function write(root: string, rel: string, body: string) {
   writeFileSync(full, body);
 }
 
-function git(root: string, args: string[]): string {
-  return execFileSync(GIT, args, { cwd: root, encoding: "utf8" }).trim();
+function git(root: string, args: string[], input?: string): string {
+  return execFileSync(GIT, args, { cwd: root, encoding: "utf8", input }).trim();
 }
 
 /**
@@ -167,6 +175,105 @@ describe("the isolated checkout contains one commit and nothing else", () => {
       tmpRoot: os.tmpdir(),
     });
     expect("error" in result).toBe(true);
+  });
+
+  test("the operator's own index and staged changes survive untouched", () => {
+    // ⚠️ SURVIVING MUTANT, found by review and reproduced twice: removing the
+    // `GIT_INDEX_FILE` override left all 10 tests green, because every fixture
+    // committed cleanly first — so `read-tree` overwrote the real index with
+    // itself and nothing could tell. The module's own header calls this line
+    // load-bearing; until now no test could distinguish it from a no-op.
+    //
+    // The fix is a DIVERGENT index: stage something that is not in the commit,
+    // and leave an unstaged edit too, then require both to survive verbatim.
+    const { root, sha } = seedRepo();
+
+    write(root, "lib/stagedOnly.ts", "export const staged = 1;\n");
+    git(root, ["add", "lib/stagedOnly.ts"]);
+    write(root, "lib/helper.ts", 'export const helper = "UNSTAGED EDIT";\n');
+
+    const indexBefore = git(root, ["diff", "--cached", "--name-status"]);
+    const statusBefore = git(root, ["status", "--porcelain"]);
+
+    checkout(root, sha);
+
+    expect(git(root, ["diff", "--cached", "--name-status"])).toBe(indexBefore);
+    expect(git(root, ["status", "--porcelain"])).toBe(statusBefore);
+    // And the staged-but-uncommitted file must not have leaked into the export.
+    expect(indexBefore).toContain("lib/stagedOnly.ts");
+  });
+
+  test("a failed preparation leaves no directory behind", () => {
+    // ⚠️ The directory used to be created before the commit was validated, and
+    // every error return dropped its path — the caller's `finally` only begins
+    // after a successful result, so nothing could clean it. Twelve empty
+    // `autoflow-deploy-*` directories were sitting in this machine's temp dir,
+    // one per failed test run.
+    const { root } = seedRepo();
+    const tmpRoot = tmp("guard-leak-");
+    const before = readdirSync(tmpRoot).length;
+
+    const result = createIsolatedCheckout({
+      git: GIT,
+      repoRoot: root,
+      sha: "0".repeat(40),
+      tmpRoot,
+    });
+
+    expect("error" in result).toBe(true);
+    expect(readdirSync(tmpRoot).length).toBe(before);
+  });
+
+  test("line endings are the commit's, not the machine's", () => {
+    // ⚠️ `checkout-index` writes a WORKING TREE: with core.autocrlf=true (true
+    // on this machine, globally) it converts LF to CRLF, so the deployed bytes
+    // differed from the commit's blobs. Harmless for JavaScript semantics, but
+    // the whole design rests on 'the deployed tree IS the commit', and a claim
+    // that is only nearly true is the kind this PR has been caught making.
+    const { root, sha } = seedRepo();
+    git(root, ["config", "core.autocrlf", "true"]);
+
+    const dir = checkout(root, sha);
+
+    const bytes = readFileSync(path.join(dir, "lib", "helper.ts"));
+    expect(bytes.includes(Buffer.from("\r\n"))).toBe(false);
+  });
+
+  test("a commit containing a symlink is refused, not silently mangled", () => {
+    // A symlink can point outside the checkout, and Convex follows relative
+    // imports — so a mode-120000 entry could reach untracked content. None
+    // exists in this repo today, which is exactly why this refuses now rather
+    // than the day someone commits one.
+    const { root } = seedRepo();
+    // Build the symlink entry through the index, so the test does not depend
+    // on the filesystem supporting symlink creation (Windows without
+    // developer mode does not).
+    const blob = git(root, ["hash-object", "-w", "--stdin"], "../outside/secret.ts");
+    git(root, [
+      "update-index", "--add", "--cacheinfo", `120000,${blob},lib/escape.ts`,
+    ]);
+    git(root, ["commit", "-q", "-m", "symlink"]);
+    const sha = git(root, ["rev-parse", "HEAD"]);
+
+    const result = createIsolatedCheckout({ git: GIT, repoRoot: root, sha, tmpRoot: os.tmpdir() });
+    expect("error" in result).toBe(true);
+    if ("error" in result) expect(result.error).toMatch(/symlink|submodule/i);
+  });
+
+  test("a commit containing .gitattributes is refused while filters could apply", () => {
+    // A committed .gitattributes can route files through a smudge filter whose
+    // stdout replaces the blob wholesale. git-lfs filters ARE configured on
+    // this machine (filter.lfs.required=true); they are inert only because no
+    // .gitattributes exists to engage them.
+    const { root } = seedRepo();
+    write(root, ".gitattributes", "*.ts filter=lfs\n");
+    git(root, ["add", "-A"]);
+    git(root, ["commit", "-q", "-m", "attrs"]);
+    const sha = git(root, ["rev-parse", "HEAD"]);
+
+    const result = createIsolatedCheckout({ git: GIT, repoRoot: root, sha, tmpRoot: os.tmpdir() });
+    expect("error" in result).toBe(true);
+    if ("error" in result) expect(result.error).toMatch(/gitattributes|smudge/i);
   });
 });
 

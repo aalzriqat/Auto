@@ -24,13 +24,26 @@
  * ## What this adds over `npx convex deploy`
  *
  *   1. One exact commit, decided once, never re-derived from a moving ref.
- *   2. An isolated checkout, so nothing on your disk can reach production.
- *   3. A frozen dependency install from the approved commit's own lockfile.
+ *   2. An isolated checkout, so no file in your working directory — tracked,
+ *      untracked, ignored or shadowing — is read as a bundle input.
+ *   3. A frozen dependency install from the approved commit's own lockfile,
+ *      with lifecycle scripts disabled.
  *   4. An allowlist of forwardable arguments. `-y` suppresses the production
  *      confirmation and is undocumented; a denylist missed `-vy`.
  *   5. A confirmation naming BOTH the deployment and the commit, read out of
  *      the CLI's own canonical announcement rather than pattern-matched from
  *      arbitrary output.
+ *   6. A minimal child environment. Node honours `NODE_OPTIONS=--require`, so
+ *      an inherited environment could preload code into the CLI that writes
+ *      into the checkout after every check has passed.
+ *
+ * ⚠️ **What this does NOT claim.** It is not a sandbox. It reduces what can
+ * reach production to the approved commit plus whatever the operator's own
+ * account can do to a directory it owns; a determined local attacker with write
+ * access to the temp directory, or with `git`/`pnpm`/`node` themselves
+ * subverted, is out of scope. An earlier version of this comment said "nothing
+ * on your disk can reach production", and a reviewer falsified that sentence in
+ * one pass via `NODE_OPTIONS` — which is why the wording is now bounded.
  *
  * ⚠️ Advisory, not binding: `npx convex deploy` still exists and this cannot
  * stop anyone reaching for it. Making production unreachable from a workstation
@@ -51,11 +64,17 @@
 // off and the field is advisory. An operator who cannot tell a version problem
 // from a broken tool reaches for the raw CLI, which is the failure this whole
 // wrapper exists to prevent. Hence: dynamic import, after an explicit check.
+// ⚠️ Node 23.0–23.5 is a real hole, not a hypothetical: type stripping landed
+// by default in 22.18 and again in 23.6, so the range between them passes a
+// naive `major < 22` test and then dies on the import. The comment above always
+// said "22.18+, or 23.6+"; the code did not, which is the same
+// documentation-ahead-of-implementation gap this PR keeps being caught by.
 const [major, minor] = process.versions.node.split(".").map(Number);
-if (major < 22 || (major === 22 && minor < 18)) {
+if (major < 22 || (major === 22 && minor < 18) || (major === 23 && minor < 6)) {
   console.error(
     `\nRefusing to deploy: Node ${process.versions.node} cannot run this guard.\n` +
-      `  It needs Node >=22.18 (<23), where TypeScript type stripping is enabled by default.\n` +
+      `  It needs Node >=22.18 (<23) or >=23.6, where TypeScript type stripping is on by default.\n` +
+      `  This repo pins >=22.18 <23 in package.json engines, and CI runs 22.21.1.\n` +
       `  Switch Node versions and try again — do NOT fall back to 'npx convex deploy'.\n`
   );
   process.exit(1);
@@ -68,17 +87,26 @@ const path = (await import("node:path")).default;
 // `convexCliPath` is deliberately NOT imported here: the guard resolves the CLI
 // against the isolated checkout itself, so the shell never gets to name a
 // binary. That is the point — a path chosen out here could be a different one.
-const { BUNDLED_EXTENSIONS, resolveSelectors, runGuardedDeploy } = await import(
+const { BUNDLED_EXTENSIONS, parseRollbackArg, resolveSelectors, runGuardedDeploy } = await import(
   "./deployGuard.ts"
 );
 const { createIsolatedCheckout, removeIsolatedCheckout } = await import("./isolatedCheckout.ts");
 
 const argv = process.argv.slice(2);
 const allowBehind = argv.includes("--allow-behind");
-const rollbackIndex = argv.indexOf("--rollback-to");
-const rollbackTo = rollbackIndex === -1 ? null : argv[rollbackIndex + 1];
+
+// `parseRollbackArg` lives in deployGuard.ts so it can be tested — this file
+// runs a deploy on import and therefore cannot be imported by a test at all,
+// which is precisely why its lax predecessor shipped unnoticed.
+const rollback = parseRollbackArg(argv);
+if (rollback.kind === "invalid") {
+  console.error(`\nRefusing to deploy: ${rollback.reason}. Nothing was pushed.\n`);
+  process.exit(1);
+}
+const rollbackTo = rollback.kind === "present" ? rollback.value : null;
+const rollbackValueIndex = rollback.kind === "present" ? rollback.index + 1 : -1;
 const forwardedArgs = argv.filter(
-  (a, i) => a !== "--allow-behind" && a !== "--rollback-to" && i !== rollbackIndex + 1
+  (a, i) => a !== "--allow-behind" && a !== "--rollback-to" && i !== rollbackValueIndex
 );
 
 /**
@@ -98,7 +126,7 @@ function resolveGit() {
     console.error("\nRefusing to deploy: could not locate a git executable.\n");
     process.exit(1);
   }
-  const first = found.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)[0];
+  const first = found.stdout.split(/\r?\n/).map((l) => l.trim()).find(Boolean);
   if (!first || !existsSync(first)) {
     console.error("\nRefusing to deploy: git was reported at a path that does not exist.\n");
     process.exit(1);
@@ -269,15 +297,76 @@ function collectSnapshot() {
  */
 function installDependencies(dir) {
   const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-  const r = spawnSync(pnpm, ["install", "--frozen-lockfile", "--ignore-scripts"], {
-    cwd: dir,
-    encoding: "utf8",
-    shell: process.platform === "win32",
-  });
+  // ⚠️ `--filter .` scopes the install to the ROOT project. Without it this
+  // resolves all three workspace projects — including the Expo mobile app and
+  // its 79 declared dependencies — for a deploy that needs only the Convex CLI.
+  // Measured on a fully warm store with zero downloads: 1m 35.8s, 1741 packages
+  // linked. The guard's own argument is that an override "is reached for by
+  // habit"; a safe path that is gratuitously slower is how that habit forms.
+  const r = spawnSync(
+    pnpm,
+    ["install", "--filter", ".", "--frozen-lockfile", "--ignore-scripts"],
+    {
+      cwd: dir,
+      encoding: "utf8",
+      shell: process.platform === "win32",
+      env: childEnv({}),
+    }
+  );
   return {
     status: r.status ?? 1,
     output: `${r.stdout ?? ""}${r.stderr ?? ""}${r.error ? r.error.message : ""}`,
   };
+}
+
+/**
+ * Variables stripped from every child process this wrapper spawns.
+ *
+ * ⚠️ THIS CLOSES A REPRODUCED BYPASS OF THE ISOLATION ITSELF. The children used
+ * to inherit `process.env` wholesale, and Node honours `NODE_OPTIONS` at
+ * startup — including `--require` and `--import`. Verified by direct execution:
+ * `NODE_OPTIONS=--require <file> node child.cjs` printed `PRELOAD RAN`, loading
+ * a file from the caller's worktree into the child.
+ *
+ * That is not merely code execution; it defeats the design's central claim. The
+ * isolated directory is writable, and Convex bundles from it at push time — so
+ * a preload can do nothing during `--dry-run` (both target resolutions stay
+ * valid, both agree) and then, on the real `deploy`, write a shadowing module
+ * into the checkout that the bundler picks up. Every check passes and unapproved
+ * bytes ship. AGENTS.md claimed no file created during deployment could reach
+ * production; that sentence was false until this list existed.
+ *
+ * The loader hooks are the sharp ones; the rest are the neighbouring mechanisms
+ * that inject code or redirect resolution by the same trick.
+ */
+const STRIPPED_CHILD_ENV = [
+  "NODE_OPTIONS",
+  "NODE_PATH",
+  "NODE_REPL_EXTERNAL_MODULE",
+  "NODE_V8_COVERAGE",
+  "ESBUILD_BINARY_PATH",
+  "npm_config_node_options",
+  "PNPM_SCRIPT_SRC_DIR",
+  "GIT_INDEX_FILE",
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_CONFIG",
+  "GIT_CONFIG_GLOBAL",
+  "GIT_CONFIG_SYSTEM",
+];
+
+/**
+ * The environment a child gets: the caller's, minus the injection vectors above,
+ * plus the frozen deployment selection.
+ *
+ * The frozen selectors are applied last and deliberately include `""` for unset
+ * — Node drops an `undefined` value, and a dropped variable is not neutral,
+ * because the child's own dotenv would then load it from disk.
+ */
+function childEnv(frozenEnv) {
+  const env = { ...process.env };
+  for (const key of STRIPPED_CHILD_ENV) delete env[key];
+  return { ...env, ...frozenEnv };
 }
 
 const io = {
@@ -301,7 +390,7 @@ const io = {
       // ANSI-wrapped string the canonical parser no longer recognises — which
       // now means a refusal rather than a silent mis-read, but a refusal at the
       // worst moment is still worth not causing.
-      env: { ...process.env, ...frozenEnv, NO_COLOR: "1", FORCE_COLOR: "0" },
+      env: { ...childEnv(frozenEnv), NO_COLOR: "1", FORCE_COLOR: "0" },
     });
     return {
       status: r.status,
@@ -313,7 +402,7 @@ const io = {
     spawnSync(process.execPath, [cliPath, ...args], {
       stdio: "inherit",
       cwd,
-      env: { ...process.env, ...frozenEnv },
+      env: childEnv(frozenEnv),
     }).status ?? 1,
   prompt: async (question) => {
     const rl = createInterface({ input: process.stdin, output: process.stdout });

@@ -8,6 +8,7 @@ import {
   evaluateProdDeploy,
   convexCliPath,
   parseCanonicalTarget,
+  parseRollbackArg,
   PRODUCTION_LABEL,
   freezeDeployEnv,
   FROZEN_DEPLOY_ENV_KEYS,
@@ -973,5 +974,58 @@ describe("the target is frozen between confirmation and push", () => {
       expect(code).toBe(1);
       expect(deployCalls).toEqual([]);
     });
+  });
+});
+
+describe("--rollback-to is parsed strictly, because a rollback is an incident", () => {
+  test("a missing value REFUSES instead of quietly deploying the tip", () => {
+    // ⚠️ REGRESSION, found independently by both review seats. The previous
+    // parser read `argv[i + 1]`, which is `undefined` when the flag is last;
+    // `undefined` is falsy, so the rollback branch never ran and the deploy
+    // fell through to origin/main's TIP — the exact commit the operator was
+    // trying to roll back AWAY from. Reproduced before the fix:
+    //   parse(["--rollback-to"]) -> approvedFrom: "origin/main TIP"
+    // The operator would then be asked to confirm only a deployment NAME,
+    // which is correct for the wrong commit, so nothing on screen contradicts
+    // them.
+    const result = parseRollbackArg(["--rollback-to"]);
+    expect(result.kind).toBe("invalid");
+    if (result.kind !== "invalid") return;
+    expect(result.reason).toMatch(/requires a commit/i);
+  });
+
+  test("an empty value refuses too — a shell variable that resolved to nothing", () => {
+    // `pnpm deploy:prod --rollback-to "$SHA"` with SHA unset lands here, and
+    // "" is falsy exactly like undefined was.
+    expect(parseRollbackArg(["--rollback-to", ""]).kind).toBe("invalid");
+    expect(parseRollbackArg(["--rollback-to", "   "]).kind).toBe("invalid");
+  });
+
+  test("a flag-shaped value refuses rather than eating the next flag", () => {
+    // `--rollback-to --allow-behind` would otherwise take '--allow-behind' as
+    // a commit-ish and fail later, far from the cause.
+    expect(parseRollbackArg(["--rollback-to", "--allow-behind"]).kind).toBe("invalid");
+  });
+
+  test("a repeated flag refuses rather than silently picking one", () => {
+    expect(parseRollbackArg(["--rollback-to", "aaa", "--rollback-to", "bbb"]).kind).toBe(
+      "invalid"
+    );
+  });
+
+  test("absent is absent — a normal deploy is not a broken rollback", () => {
+    expect(parseRollbackArg([]).kind).toBe("absent");
+    expect(parseRollbackArg(["--allow-behind"]).kind).toBe("absent");
+  });
+
+  test("a real value is carried through with its position", () => {
+    const result = parseRollbackArg(["--verbose", "--rollback-to", "52be7b4f"]);
+    expect(result.kind).toBe("present");
+    if (result.kind !== "present") return;
+    expect(result.value).toBe("52be7b4f");
+    // The index matters: the shell uses it to drop the VALUE from the args it
+    // forwards to the CLI, and dropping the wrong element would forward a bare
+    // SHA to `convex deploy`.
+    expect(result.index).toBe(1);
   });
 });
