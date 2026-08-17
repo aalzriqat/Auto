@@ -4,7 +4,12 @@ import { grossTransactionValueForSale } from "./grossTransactionValue";
 // `denominationOf`, NOT `fromMinorUnits`/`scaleForCurrency`: the latter guess a
 // scale of 2 for any unrecognised code, and this module reads MONEY. See
 // `recordedConsignedAmount`.
-import { denominationOf } from "./money";
+//
+// `isValidMinorAmount` is the repository's own minor-unit authority and is the
+// fail-soft half of the pair — `assertMinorAmount`
+// (`utils/financingEconomics.ts:444`) tests the same predicate but THROWS, which
+// a reader must not do. See `recordedConsignedAmount`.
+import { denominationOf, isValidMinorAmount } from "./money";
 
 /**
  * Who owns a vehicle, and what the dealership is when it sells one.
@@ -374,7 +379,23 @@ function recordedConsignedAmount(
   if (minor === undefined) return undefined;
   const denomination = denominationOf(currency);
   if (denomination === null) return undefined;
-  if (!Number.isFinite(minor) || minor < 0) return undefined;
+  // ⚠️ CR-3. The denomination is only half of "is this money" — the AMOUNT has to
+  // be representable too. The previous guard here was
+  // `!Number.isFinite(minor) || minor < 0`, which passes a FRACTIONAL minor unit
+  // and a value beyond `Number.MAX_SAFE_INTEGER`; both were divided by the scale
+  // and published (9500.5 read as 9.5005).
+  //
+  // `isValidMinorAmount` (`utils/money.ts:192`) is the authority the repository
+  // already has for this question, and the same predicate the writers enforce.
+  // This function is the ONE chokepoint all three frozen consigned amounts read
+  // through, so holding a weaker rule than the repository's own left every one of
+  // them exposed at once.
+  //
+  // FAIL-SOFT, and deliberately not `assertMinorAmount`, which tests the same
+  // thing and THROWS: the contract here is to return `undefined` so
+  // `saleEconomics` can withhold the figure. A throw would turn an
+  // unrepresentable frozen value into a crash on an owner-facing report.
+  if (!isValidMinorAmount(minor)) return undefined;
   return minor / Math.pow(10, denomination.scale);
 }
 

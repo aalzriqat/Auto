@@ -160,6 +160,15 @@ describe("SCRUM-41 — a frozen margin nothing can substantiate", () => {
       recordedSupplierEntitlement: ENTITLEMENT,
       // The proof of what actually reached the supplier. Absent.
       recordedSupplierGrossReceipt: undefined,
+      // ⚠️ LOAD-BEARING, and its absence made this test vacuous.
+      // `financedDirectUnverified` withholds when the receipt is unverified OR
+      // the application is missing. With this flag omitted the SECOND reason
+      // already fired, so the receipt half was never the deciding term —
+      // deleting it left this test green. Satisfying the application makes the
+      // MISSING RECEIPT the only remaining reason to withhold, which is what
+      // this test is named for. The sibling test below already sets it and
+      // explains why a realistic financed-DIRECT row carries one.
+      hasFinancingApplication: true,
     });
 
     expect(e.dealershipMargin).toBeNull();
@@ -1041,6 +1050,67 @@ describe("CX-D — money in a denomination the repository cannot scale is not mo
     expect(margin).not.toBe(30_000);
     expect(entitlement).toBeUndefined();
     expect(entitlement).not.toBe(150_000);
+  });
+
+  /**
+   * CR-3. The denomination is only half of "is this money" — the AMOUNT has to be
+   * representable too.
+   *
+   * `recordedConsignedAmount` is the single chokepoint all three frozen consigned
+   * amounts now read through, and it is introduced by this PR. Its guard was
+   * `!Number.isFinite(minor) || minor < 0`, which passes a FRACTIONAL minor unit
+   * and a value beyond `Number.MAX_SAFE_INTEGER` — neither is representable as
+   * money, and both were silently converted and published.
+   *
+   * `isValidMinorAmount` (`convex/utils/money.ts:192`) is the repository's
+   * existing authority for exactly this question, and it is the same predicate
+   * the writers enforce through `assertMinorAmount`. A new shared money
+   * chokepoint holding a weaker rule than the repository's own is an incomplete
+   * contract, not defence in depth.
+   *
+   * ⚠️ FAIL-SOFT deliberately, and never the throwing assert. This is a READER
+   * whose contract is to return `undefined` so `saleEconomics` can withhold. A
+   * throwing assertion here would turn an unrepresentable frozen value into a
+   * crash on an owner-facing report — an outage in place of a withheld figure.
+   */
+  const AMOUNTS: Array<{ label: string; minor: number; accepted: boolean }> = [
+    { label: "a canonical safe integer", minor: 9_500_000, accepted: true },
+    { label: "a FRACTIONAL minor unit", minor: 9500.5, accepted: false },
+    { label: "beyond Number.MAX_SAFE_INTEGER", minor: Number.MAX_SAFE_INTEGER + 1, accepted: false },
+  ];
+
+  test.each(AMOUNTS)("$label -> accepted=$accepted", ({ minor, accepted }) => {
+    const sale = {
+      consignedMarginMinor: minor,
+      consignedSupplierEntitlementMinor: minor,
+      consignedSupplierGrossReceiptMinor: minor,
+      consignedMarginCurrency: "JOD",
+    } as unknown as Parameters<typeof recordedSupplierGrossReceipt>[0];
+
+    const receipt = recordedSupplierGrossReceipt(sale);
+    const margin = recordedConsignedMargin(sale);
+    const entitlement = recordedSupplierEntitlement(sale);
+
+    if (accepted) {
+      // Unchanged by this correction: scale 3, and a valid amount still converts.
+      // Tightening a guard that also withheld the good rows would be a different
+      // wrong answer, not a safer one.
+      expect(receipt).toBe(9_500);
+      expect(margin).toBe(9_500);
+      expect(entitlement).toBe(9_500);
+      return;
+    }
+
+    // Withheld — and specifically NOT the figure the old guard produced by
+    // dividing it anyway. Naming that value is what separates a real refusal
+    // from `undefined` arriving through some unrelated guard.
+    expect(receipt).toBeUndefined();
+    expect(receipt).not.toBe(minor / 1_000);
+    // All three read through the one chokepoint, so none of them may convert a
+    // value the others withhold — a mixed basis inside one computation is worse
+    // than either answer alone.
+    expect(margin).toBeUndefined();
+    expect(entitlement).toBeUndefined();
   });
 
   test("an unscalable receipt cannot raise the entitlement ceiling either", () => {
