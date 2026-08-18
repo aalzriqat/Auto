@@ -191,12 +191,22 @@ export type SubscriptionStatus = "active" | "past_due" | "cancelled" | "expired"
  * The ONE place that decides whether a paid period has lapsed.
  *
  * Takes `now` as an argument and never reads the clock itself. That is the
- * whole point: a reactive query whose result depends on `Date.now()` can never
- * be served from Convex's cache, so every plan-gated query re-read the database
- * in full on every re-subscription — measured at ~326 MB/day of production DB
+ * whole point. A query execution that reads the clock is marked `observed_time`
+ * by Convex, which does not make it uncacheable outright — it BOUNDS how long
+ * the cached result may be reused, after which the entry is rejected on age.
+ * The default works out to roughly 17s and is deployment-overridable; measured
+ * independently here as longer than 2s and shorter than 20s. Clients
+ * re-subscribe about every 52s, so such an entry is always past its limit and
+ * every plan-gated query re-executed, every time — ~326 MB/day of production DB
  * I/O per open tab, larger than the entire defect SCRUM-21 was opened for.
- * Entitlement is now a *stored* fact that a reconciler maintains, and the read
- * path is a pure function of stored fields (SCRUM-145).
+ *
+ * ⚠️ It is the ACT of calling the clock that starts that bound, not what the
+ * value is used for: probes that read `Date.now()` and discarded it behaved
+ * identically to ones that used it. Rounding or quantising the timestamp
+ * therefore fixes NOTHING — the call has to leave the reactive path entirely,
+ * across the whole reachable call graph. Entitlement is now a *stored* fact
+ * that a reconciler maintains, and the read path is a pure function of stored
+ * fields (SCRUM-145).
  *
  * Only the `active` -> `expired` edge is time-derived. `past_due` and
  * `cancelled` are billing decisions and are never re-derived from the clock —
@@ -234,8 +244,9 @@ export function settledSubscriptionStatus(
  * Reads STORED state only. It deliberately does not re-check `currentPeriodEnd`
  * against the clock; `reconcileExpiredSubscriptions` is what moves a lapsed row
  * to `expired`, within a bounded lag (5 minutes; owner-accepted, SCRUM-145).
- * Re-adding a `Date.now()` comparison here would silently make every
- * plan-gated query uncacheable again.
+ * Re-adding a `Date.now()` comparison here would silently re-bound the cache
+ * lifetime of every plan-gated query, and at the client's re-subscription
+ * interval that means none of them are ever served from cache again.
  */
 export async function getOrgPlan(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">): Promise<PlanId> {
   const sub = await ctx.db
