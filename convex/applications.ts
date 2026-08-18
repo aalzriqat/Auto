@@ -553,19 +553,32 @@ async function directRouteTransitionRefusal(
   const projected: Doc<"financeApplications"> = {
     ...app,
     supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
-    // Only `amountMinor` is read from here, by `supplierEntitlementVerdictFor`,
-    // which compares it against the vehicle. The provenance fields carry
-    // placeholders and NOTHING IS PERSISTED: this object exists only to ask the
-    // guard a question.
+    /**
+     * THE WITNESS THE WRITE WOULD ACTUALLY STORE — an EXISTING one first.
+     *
+     * Manufacturing one from the current entitlement made this projection
+     * disagree with the writer it speaks for, and that disagreement WAS the
+     * laundering path: on a handed-over deal that had stepped off the direct
+     * route, the classifier asked "would a freshly measured witness be
+     * consistent?" — which it always is, by construction — instead of "would the
+     * witness this deal actually carries still hold?".
+     *
+     * Route selection establishes a witness only when none exists, so the
+     * projection mirrors exactly that. Only `amountMinor` is read downstream, by
+     * `supplierEntitlementVerdictFor`; the placeholder provenance on a
+     * newly-established one is never persisted, because this object exists only
+     * to ask the guard a question.
+     */
     supplierEntitlementWitness:
-      entitlementMinor === undefined
+      app.supplierEntitlementWitness ??
+      (entitlementMinor === undefined
         ? undefined
         : {
             amountMinor: entitlementMinor,
             validatedAt: 0,
             validatedBy: app.salespersonId,
             via: "ROUTE_SELECTION" as const,
-          },
+          }),
   };
   try {
     assertDealerEconomicsRecorded(
@@ -3692,11 +3705,44 @@ export const setSupplierSettlementRoute = mutation({
      * confirmation on the deal for nothing.
      */
     const previousWitness = app.supplierEntitlementWitness;
-    const { witness: nextWitness, changed: witnessMoved } = witnessToStore(
-      previousWitness,
-      entitlementAtRouteChoiceMinor,
-      { validatedAt: Date.now(), validatedBy: user._id, via: "ROUTE_SELECTION" }
-    );
+    /**
+     * ROUTE SELECTION MAY ESTABLISH A WITNESS. IT MAY NEVER CLEAR OR REPLACE ONE.
+     *
+     * This is a redesign, not a fourth patch, and it exists because the same
+     * subsystem produced a new HIGH under repair twice running. The lifecycle had
+     * conflated two classes of writer: those that RE-AGREE what the supplier is
+     * paid (the configured approval and the manual receipt, both of which take an
+     * approver and a figure) and this one, which records only HOW the money
+     * travels. Only the first class has any standing to say what the supplier was
+     * owed at the moment the amount was agreed — yet this writer could both wipe
+     * that record and mint a new one.
+     *
+     * So each fix closed one route into that authority and left the next open:
+     * first the same-route retry, then — found by Codex and reproduced end to end
+     * to a successful `finalizeDeal` — the round trip. On a handed-over DIRECT
+     * deal whose entitlement had drifted, selecting THROUGH cleared the witness
+     * and selecting DIRECT again minted a fresh one at the CURRENT cost. DRIFTED
+     * became UNCHANGED, and a deal approved at 17,000,000 against an entitlement
+     * of 16,000,000 finalized, with no approver anywhere in the sequence.
+     *
+     * Establish-only makes that unreachable by construction rather than by
+     * enumerating doors. A retained witness is inert while the deal settles
+     * THROUGH (the verdict is NOT_APPLICABLE off the direct route) and reappears
+     * unchanged if it returns to DIRECT — so the round trip now ends where it
+     * started, DRIFTED, and the amount writers remain the only way to re-agree
+     * it.
+     */
+    const nextWitness =
+      previousWitness ??
+      (entitlementAtRouteChoiceMinor === undefined
+        ? undefined
+        : {
+            amountMinor: entitlementAtRouteChoiceMinor,
+            validatedAt: Date.now(),
+            validatedBy: user._id,
+            via: "ROUTE_SELECTION" as const,
+          });
+    const witnessMoved = previousWitness === undefined && nextWitness !== undefined;
     /**
      * Compared against the STORED route, not the derived one.
      *
@@ -3753,8 +3799,8 @@ export const setSupplierSettlementRoute = mutation({
       }),
       reason:
         args.route === "DIRECT_TO_SUPPLIER"
-          ? `Settlement route set to DIRECT_TO_SUPPLIER${entitlementAtRouteChoiceMinor === undefined ? "" : `, validated against the supplier's entitlement of ${entitlementAtRouteChoiceMinor}`}.`
-          : "Settlement route set to THROUGH_DEALERSHIP; the supplier's entitlement is no longer what the finance company pays him, so no witness applies.",
+          ? `Settlement route set to DIRECT_TO_SUPPLIER${witnessMoved && nextWitness !== undefined ? `, validated against the supplier's entitlement of ${nextWitness.amountMinor}` : previousWitness === undefined ? "" : `, against the entitlement of ${previousWitness.amountMinor} already agreed on this deal`}.`
+          : "Settlement route set to THROUGH_DEALERSHIP; the supplier's entitlement is not what the finance company pays him on this route, so the recorded witness does not apply while it stands — it is KEPT, not cleared, so returning to the direct route cannot mint a new one.",
       changedBy: user._id,
       changedAt: Date.now(),
     });

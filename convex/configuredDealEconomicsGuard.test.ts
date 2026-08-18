@@ -1319,7 +1319,98 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
     expect(rowsAfter.length).toBe(rowsBefore.length);
   });
 
-  test("clearing the witness with the route leaves its provenance in the history", async () => {
+  test("the route cannot clear a witness, so a THROUGH round trip cannot mint a new one", async () => {
+    // ⚠️ THIS TEST REPLACES ONE THAT ASSERTED THE OPPOSITE.
+    //
+    // The previous version pinned "choosing THROUGH clears the witness" and
+    // checked that the clearing was legible in the history. The clearing was
+    // itself the defect: Codex found, and I reproduced end to end, that on a
+    // handed-over DIRECT deal whose entitlement had drifted, selecting THROUGH
+    // wiped the witness and selecting DIRECT again minted a fresh one at the
+    // CURRENT cost. DRIFTED became UNCHANGED and a deal approved at 17,000,000
+    // against an entitlement of 16,000,000 finalized, with no approver anywhere
+    // in the sequence.
+    //
+    // A test can pin a defect as confidently as it pins a fix. This one now
+    // states the invariant that makes the laundering unreachable: route
+    // selection may ESTABLISH a witness when none exists, and may never clear or
+    // replace one.
+    const { t, orgId, applicationId, asUser, asApprover, registerExpectedPayment } =
+      await seedApprovedApplication("MANUAL_FINANCE_COMPANY", {
+        sourcedVehicle: true,
+        manualProviderName: "Amman Finance House",
+      });
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    await asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_000_000,
+      source: "Signed purchase agreement",
+    });
+    await registerHandover(asUser, api, orgId, applicationId);
+    const agreed = (await t.run((ctx) => ctx.db.get(applicationId)))!.supplierEntitlementWitness!;
+    expect(agreed.amountMinor).toBe(17_000_000);
+
+    // The supplier's entitlement drops after the vehicle has gone out. DOWN, so
+    // the below-entitlement guard cannot be the thing that refuses.
+    const vehicleId = (await t.run((ctx) => ctx.db.get(applicationId)))!.vehicleId;
+    await asUser.mutation(api.vehicles.update, { orgId, vehicleId, sourceCost: 16_000 });
+
+    // Step 1 of the laundering run: leave the direct route.
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "THROUGH_DEALERSHIP",
+    });
+    // THE WITNESS SURVIVES. It is inert here — the verdict is NOT_APPLICABLE off
+    // the direct route — but it is not evidence the deal is entitled to destroy.
+    expect(
+      (await t.run((ctx) => ctx.db.get(applicationId)))?.supplierEntitlementWitness
+    ).toStrictEqual(agreed);
+
+    // Step 2: come back. The retained witness still disagrees with the vehicle,
+    // so the deal is exactly as refused as it was before the detour.
+    const view = await asUser.query(api.applications.get, { orgId, applicationId });
+    expect(view?.canSettleDirectToSupplier).toBe(false);
+    await expect(
+      asUser.mutation(api.applications.setSupplierSettlementRoute, {
+        orgId,
+        applicationId,
+        route: "DIRECT_TO_SUPPLIER",
+      })
+    ).rejects.toThrow();
+    expect(
+      (await t.run((ctx) => ctx.db.get(applicationId)))?.supplierEntitlementWitness
+    ).toStrictEqual(agreed);
+
+    // The route did not come back, so the deal cannot finalize as a direct
+    // settlement against re-badged evidence — which is what this laundering run
+    // achieved before the redesign, reproduced end to end to a successful
+    // `finalizeDeal` at 17,000,000 against a 16,000,000 entitlement.
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.supplierSettlementRoute).toBe(
+      "THROUGH_DEALERSHIP"
+    );
+
+    // ⚠️ NOT ASSERTED HERE: that finalization is refused. The deal is parked on
+    // the THROUGH route, where the supplier's entitlement is an ordinary payable
+    // rather than what the financier pays him, so the witness is NOT_APPLICABLE
+    // and finalizing is permitted by the stated invariant — "a route transition
+    // after handover may proceed only if the resulting state is already
+    // finalizable without a writer handover has sealed". THROUGH is such a state.
+    //
+    // Whether a handed-over DIRECT deal should be allowed to become THROUGH at
+    // all is a separate question: it moves the accounting basis of a deal whose
+    // vehicle has already left. Raised for a ruling rather than decided here,
+    // because widening the guard on my own reading is how this subsystem earned
+    // its patch halt.
+    await registerExpectedPayment();
+  });
+
+  test("choosing the direct route records the entitlement it was validated against, with its provenance", async () => {
     const { t, orgId, applicationId, asUser, asApprover } = await seedApprovedApplication(
       "MANUAL_FINANCE_COMPANY",
       { sourcedVehicle: true, manualProviderName: "Amman Finance House" }
@@ -1336,48 +1427,45 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
       source: "Signed purchase agreement",
     });
 
-    // Back to the through route: the supplier's entitlement is no longer what the
-    // financier pays him, so the witness no longer applies and is cleared.
+    // The witness the MANUAL writer established, actor included — the history
+    // has to name the person, not just the number and the moment.
+    const approverId = await t.run(async (ctx) =>
+      (await ctx.db.query("users").collect()).find((u) => u.clerkId === "guard_approver")!._id
+    );
+    const stored = (await t.run((ctx) => ctx.db.get(applicationId)))!.supplierEntitlementWitness!;
+    expect(stored).toStrictEqual({
+      amountMinor: 17_000_000,
+      via: "MANUAL_RECEIPT",
+      validatedAt: expect.any(Number),
+      validatedBy: approverId,
+    });
+
+    // Leaving the direct route is recorded, and says the witness was kept.
     await asUser.mutation(api.applications.setSupplierSettlementRoute, {
       orgId,
       applicationId,
       route: "THROUGH_DEALERSHIP",
     });
-    expect(
-      (await t.run((ctx) => ctx.db.get(applicationId)))?.supplierEntitlementWitness
-    ).toBeUndefined();
-
-    // The clearing is legible: a reader can see WHAT was discarded and who had
-    // established it, not merely that a number vanished.
     const rows = await t.run((ctx) =>
       ctx.db
         .query("financeApplicationOverrides")
         .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
         .collect()
     );
-    const clearing = rows
+    const leaving = rows
       .filter((r) => r.field === "supplierSettlementRoute")
       .sort((a, b) => a.changedAt - b.changedAt)
       .at(-1)!;
-    const before = JSON.parse(clearing.previousValue!);
-    const after = JSON.parse(clearing.newValue);
-    expect(before.route).toBe("DIRECT_TO_SUPPLIER");
-    // THE ACTOR IS ASSERTED, not accepted as absent. The previous version of
-    // this expectation matched an object with no `validatedBy` in it while the
-    // comment above claimed the history showed who had established the witness —
-    // so the test agreed with the prose instead of checking it, and
-    // `describeWitness` was quietly dropping the person.
-    const approverId = await t.run(async (ctx) =>
-      (await ctx.db.query("users").collect()).find((u) => u.clerkId === "guard_approver")!._id
-    );
-    expect(before.witness).toStrictEqual({
+    expect(JSON.parse(leaving.previousValue!).witness).toStrictEqual({
       supplierEntitlementMinor: 17_000_000,
       via: "MANUAL_RECEIPT",
       validatedAt: expect.any(Number),
       validatedBy: approverId,
     });
-    expect(after.route).toBe("THROUGH_DEALERSHIP");
-    expect(after.witness).toBeNull();
+    // Unchanged on the other side, because the route did not touch it.
+    expect(JSON.parse(leaving.newValue).witness).toStrictEqual(
+      JSON.parse(leaving.previousValue!).witness
+    );
   });
 
   test("the screen and the server agree about a drifted deal, not just an unrecorded one", async () => {
