@@ -23,6 +23,9 @@ export type LeadStage = typeof LEAD_STAGES[number];
  * appear on the admin panel. `adminSystem.test.ts` fails if a job inserts a
  * heartbeat under a name that is missing from this list.
  */
-export const CRON_HEARTBEAT_JOBS = ["check-upcoming-tasks"] as const;
+export const CRON_HEARTBEAT_JOBS = [
+  "check-upcoming-tasks",
+  "reconcile-expired-subscriptions",
+] as const;
 
 export type CronHeartbeatJob = typeof CRON_HEARTBEAT_JOBS[number];
