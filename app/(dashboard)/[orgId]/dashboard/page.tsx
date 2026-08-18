@@ -57,7 +57,11 @@ export default function DashboardPage() {
 
   const stats = useQuery(
     api.dashboard.stats,
-    activeOrgId ? { orgId: activeOrgId, timeRange } : "skip"
+    // This screen renders no period-over-period delta anywhere, so it declines
+    // the comparison window rather than having the backend measure a second
+    // full accounting period and discard it on every load. Mobile, the only
+    // consumer of `previousPeriod`, is unaffected: the argument defaults to true.
+    activeOrgId ? { orgId: activeOrgId, timeRange, includePreviousPeriod: false } : "skip"
   );
 
   const dataQuality = useQuery(
