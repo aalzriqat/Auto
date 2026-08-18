@@ -360,3 +360,72 @@ export function assertChequeLineagePresent(
     );
   }
 }
+
+/**
+ * R8 + R12.5 — everything a cheque REVERSAL is allowed to act on, resolved once,
+ * before any write.
+ *
+ * ⚠️ THE STORED `paymentAllocationId` IS NOT IDENTITY. It is a snapshot of one
+ * moment, and it goes stale the first time the money moves. Measured in
+ * `reverseAllocationsForRefund` (`collections.ts:404-450`): a partial refund
+ * reverses the ORIGINAL allocation in full and re-allocates the un-refunded
+ * remainder as a NEW allocation. After that the stored pointer names a REVERSED
+ * row while the live money sits on a different one, so following the pointer
+ * does not reverse "a bit too much" — `reverseAllocation` refuses an already
+ * reversed allocation outright, and a legitimate cheque return becomes
+ * impossible for any cheque that was ever partially refunded (cell L3/L4).
+ *
+ * Identity is therefore `canonicalPaymentId` PLUS the currently-ACTIVE
+ * allocations reached through it, exactly as R12.5 states. Never recency, never
+ * amount matching, never cheque-number text, never a guessed idempotency key.
+ *
+ * ⚠️ R12.1 — `activeAppliedMinor` IS NOT THE CHEQUE'S FACE VALUE, and the two
+ * must never be derived from one another. The face value is the confirmed
+ * receipt, which is what the bank and the GL reverse. `activeAppliedMinor` is
+ * what currently sits on debt, which is the only amount that may return to AR.
+ * They differ whenever a cheque over-paid its debt (L5) or was partly refunded
+ * (L3). Computed ONCE here so no caller can recompute it differently.
+ *
+ * R12.6 — a missing or contradictory link refuses BEFORE any status, GL,
+ * payment, allocation or balance change. Partial recovery is forbidden: on
+ * `main` the canonical void sat behind `if (clearedPayment.canonicalPaymentId)`
+ * while the cheque was still marked RETURNED and the debt still reopened (L6).
+ */
+export type ChequeReversalLineage = {
+  movementRow: Doc<"collectionPayments">;
+  canonicalPaymentId: Id<"canonicalPayments">;
+  activeAllocationIds: Id<"paymentAllocations">[];
+  activeAppliedMinor: number;
+};
+
+export async function resolveChequeReversalLineage(
+  ctx: MutationCtx,
+  args: { orgId: Id<"organizations">; chequeId: Id<"postDatedCheques"> }
+): Promise<ChequeReversalLineage> {
+  const movementRow = await movementRowForCheque(ctx, args.chequeId);
+  assertChequeLineagePresent(movementRow);
+
+  const untraceable =
+    "This cheque's payment record cannot be traced to the money it moved, so the amount to reverse cannot be determined. Resolve the broken payment link before returning the cheque.";
+
+  const canonicalPaymentId = movementRow.canonicalPaymentId;
+  if (!canonicalPaymentId) throw new ConvexError(untraceable);
+
+  // The link must resolve to a real payment in THIS org. A dangling or foreign
+  // id is contradictory lineage, not absent lineage, and R8 treats both alike.
+  const payment = await ctx.db.get(canonicalPaymentId);
+  if (!payment || payment.orgId !== args.orgId) throw new ConvexError(untraceable);
+
+  const activeAllocations = await ctx.db
+    .query("paymentAllocations")
+    .withIndex("by_payment", (q) => q.eq("paymentId", canonicalPaymentId))
+    .filter((q) => q.eq(q.field("status"), "ACTIVE"))
+    .collect();
+
+  return {
+    movementRow,
+    canonicalPaymentId,
+    activeAllocationIds: activeAllocations.map((a) => a._id),
+    activeAppliedMinor: activeAllocations.reduce((sum, a) => sum + a.amountMinor, 0),
+  };
+}

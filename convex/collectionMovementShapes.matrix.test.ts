@@ -1786,6 +1786,493 @@ describe("SCRUM-121 Priority-1 round 5 — path × input shape, measured on clea
   });
 
   // ══════════════════════════════════════════════════════════════════════════
+  // GROUP 4c′ — F11 (AF30-D030): R8 + R12.5 applied to the REVERSAL caller.
+  //
+  // L1/L2 proved the reversal FINDS its lineage and REFUSES when it is missing.
+  // Neither one constrains the QUANTITY reversed, or which allocation is
+  // reversed once the money has moved since clearing. F11 is that gap: an
+  // incomplete application of rules already in the contract, not a new rule.
+  //
+  // The mechanism, measured rather than assumed (`reverseAllocationsForRefund`,
+  // collections.ts:404-450): a partial refund reverses the ORIGINAL allocation
+  // in full and re-allocates the un-refunded remainder as a NEW allocation. So
+  // after any partial refund:
+  //
+  //   collectionPayments.paymentAllocationId  ->  allocation A1  (REVERSED)
+  //   the live money                          ->  allocation A2  (ACTIVE)
+  //
+  // The stored pointer is not identity — it is a snapshot of one moment. R8 says
+  // identity is `canonicalPaymentId` PLUS currently-ACTIVE allocations, and
+  // R12.1 says the confirmed receipt and the AR application are separate
+  // quantities that must never be derived from one another. The cheque's face
+  // value is the receipt; only ACTIVE allocations are AR.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * L3 — partial refund, then return. THE AR REOPENED IS THE LIVE APPLIED
+   * AMOUNT, NEVER THE FACE VALUE.
+   *
+   * 11,000 collected by cheque; 4,000 refunded; the cheque then bounces. Only
+   * 7,000 is still applied to the debt, so only 7,000 may return to AR — the
+   * customer already has the other 4,000 back, and reopening it again would bill
+   * them twice for one refund.
+   *
+   * BASE: clean row + cheque, then the approval-driven refund path. Depends on
+   * SCRUM-109 for the row's twin.
+   */
+  test("L3 · partial refund then return: AR reopens by the ACTIVE applied amount, not the face value", async () => {
+    const BIG = 11000;
+    const REFUND = 4000;
+    const { t, orgId, customerId, asUser, asApprover } = await setup();
+    const rowId = await standaloneRow(asUser, orgId, customerId, BIG);
+
+    const chequeId = await asUser.mutation(api.collections.registerCheque, {
+      orgId, receivableId: rowId, customerId,
+      bank: "ABC", chequeNumber: "CQ-L3", chequeDate: Date.now(), amount: BIG,
+    });
+    await asUser.mutation(api.collections.clearCheque, { orgId, chequeId });
+
+    const requestId = await asUser.mutation(api.collections.requestApproval, {
+      orgId, receivableId: rowId, requestType: "REFUND",
+      requestedAmount: REFUND, disbursementMethod: "CASH", reason: "Partial refund",
+    });
+    await asApprover.mutation(api.collections.respondToApproval, {
+      orgId, requestId, status: "APPROVED",
+    });
+
+    // BASE STATE, PROVEN BEFORE THE RETURN RUNS: the refund has moved the money,
+    // the stored pointer is stale, and the live remainder lives elsewhere.
+    const beforeReturn = await t.run(async (ctx: any) => {
+      const mirror = await ctx.db
+        .query("collectionPayments")
+        .withIndex("by_cheque", (q: any) => q.eq("chequeId", chequeId))
+        .first();
+      const pointed = mirror?.paymentAllocationId
+        ? await ctx.db.get(mirror.paymentAllocationId)
+        : null;
+      const activeForPayment = (await ctx.db.query("paymentAllocations").collect())
+        .filter((a: any) =>
+          a.status === "ACTIVE" && String(a.paymentId) === String(mirror.canonicalPaymentId)
+        );
+      const row = await ctx.db.get(rowId);
+      return {
+        pointedAllocationStatus: pointed?.status ?? null,
+        activeAppliedMinor: activeForPayment.reduce((s: number, a: any) => s + a.amountMinor, 0),
+        rowOutstandingMinor: row.outstandingAmount * MINOR,
+      };
+    });
+    expect(beforeReturn).toEqual({
+      pointedAllocationStatus: "REVERSED",
+      activeAppliedMinor: (BIG - REFUND) * MINOR,
+      rowOutstandingMinor: REFUND * MINOR,
+    });
+
+    const threw = await capture(() =>
+      asUser.mutation(api.collections.returnClearedCheque, {
+        orgId, chequeId, returnReason: "NSF",
+      })
+    );
+
+    const after = await t.run(async (ctx: any) => {
+      const mirror = await ctx.db
+        .query("collectionPayments")
+        .withIndex("by_cheque", (q: any) => q.eq("chequeId", chequeId))
+        .first();
+      const canonical = mirror?.canonicalPaymentId ? await ctx.db.get(mirror.canonicalPaymentId) : null;
+      const activeAllocations = (await ctx.db.query("paymentAllocations").collect())
+        .filter((a: any) => a.status === "ACTIVE");
+      const row = await ctx.db.get(rowId);
+      const cheque = await ctx.db.get(chequeId);
+      return {
+        chequeStatus: cheque.status,
+        mirrorStatus: mirror?.status ?? null,
+        canonicalStatus: canonical?.status ?? null,
+        activeAllocations: activeAllocations.length,
+        rowOutstandingMinor: row.outstandingAmount * MINOR,
+      };
+    });
+
+    // The debt returns to its FULL original size — 4,000 of it because the refund
+    // put it back, 7,000 because the cheque bounced. Reopening by the face value
+    // would make it 15,000: the refund counted twice.
+    expect({ threw, ...after }).toEqual({
+      threw: null,
+      chequeStatus: "RETURNED",
+      mirrorStatus: "VOIDED",
+      canonicalStatus: "VOIDED",
+      activeAllocations: 0,
+      rowOutstandingMinor: BIG * MINOR,
+    });
+  });
+
+  /**
+   * L4 — IDENTITY IS THE LIVE ALLOCATION SET, NOT THE STORED POINTER.
+   *
+   * Same construction as L3, but this cell asserts WHICH allocation the reversal
+   * acted on. L3 could in principle go green through some arithmetic that never
+   * touches A2; this one cannot. It names A1 (stale, already REVERSED) and A2
+   * (live) and requires the reversal to have reached A2 and left A1 alone.
+   *
+   * This is the cell that fails against `reverseAllocation(storedPointer)`, whose
+   * measured behaviour is to throw "Allocation is already reversed" — the stale
+   * pointer does not merely reverse the wrong amount, it makes a legitimate
+   * cheque return IMPOSSIBLE after any partial refund.
+   *
+   * BASE: as L3.
+   */
+  test("L4 · the reversal follows canonicalPaymentId to the live allocation, not the stored pointer", async () => {
+    const BIG = 11000;
+    const REFUND = 4000;
+    const { t, orgId, customerId, asUser, asApprover } = await setup();
+    const rowId = await standaloneRow(asUser, orgId, customerId, BIG);
+
+    const chequeId = await asUser.mutation(api.collections.registerCheque, {
+      orgId, receivableId: rowId, customerId,
+      bank: "ABC", chequeNumber: "CQ-L4", chequeDate: Date.now(), amount: BIG,
+    });
+    await asUser.mutation(api.collections.clearCheque, { orgId, chequeId });
+
+    const requestId = await asUser.mutation(api.collections.requestApproval, {
+      orgId, receivableId: rowId, requestType: "REFUND",
+      requestedAmount: REFUND, disbursementMethod: "CASH", reason: "Partial refund",
+    });
+    await asApprover.mutation(api.collections.respondToApproval, {
+      orgId, requestId, status: "APPROVED",
+    });
+
+    // Name the two allocations explicitly, so the assertion below is about
+    // identity rather than about totals that could coincide.
+    const ids = await t.run(async (ctx: any) => {
+      const mirror = await ctx.db
+        .query("collectionPayments")
+        .withIndex("by_cheque", (q: any) => q.eq("chequeId", chequeId))
+        .first();
+      const forPayment = (await ctx.db.query("paymentAllocations").collect())
+        .filter((a: any) => String(a.paymentId) === String(mirror.canonicalPaymentId));
+      const live = forPayment.filter((a: any) => a.status === "ACTIVE");
+      return {
+        stalePointerId: String(mirror.paymentAllocationId),
+        liveIds: live.map((a: any) => String(a._id)),
+      };
+    });
+    expect(ids.liveIds).toHaveLength(1);
+    expect(ids.liveIds).not.toContain(ids.stalePointerId);
+
+    const threw = await capture(() =>
+      asUser.mutation(api.collections.returnClearedCheque, {
+        orgId, chequeId, returnReason: "NSF",
+      })
+    );
+
+    const after = await t.run(async (ctx: any) => {
+      const live = await ctx.db.get(ids.liveIds[0] as any);
+      const reversalOfLive = (await ctx.db.query("paymentAllocations").collect())
+        .filter((a: any) => String(a.reversalOfAllocationId ?? "") === ids.liveIds[0]);
+      return {
+        liveAllocationStatus: live.status,
+        // Exactly one reversal row for the live allocation — not zero (nothing
+        // reversed) and not two (reversed twice). R12.2: assert counts.
+        reversalRowsForLive: reversalOfLive.length,
+        reversedMinor: reversalOfLive.reduce((s: number, a: any) => s + a.amountMinor, 0),
+      };
+    });
+
+    expect({ threw, ...after }).toEqual({
+      threw: null,
+      liveAllocationStatus: "REVERSED",
+      reversalRowsForLive: 1,
+      reversedMinor: (BIG - REFUND) * MINOR,
+    });
+  });
+
+  /**
+   * L5 — OVERSIZED CHEQUE: only the APPLIED portion becomes AR again.
+   *
+   * A cheque larger than the debt clears (R3 forbids throwing once the bank has
+   * confirmed funds), applies the live outstanding and leaves the remainder
+   * unapplied. On return, the unapplied remainder was never AR, so it cannot
+   * become AR — the bank/GL reversal is the full face value while the AR reopened
+   * is only the applied part. R12.1: two quantities, never derived from each other.
+   *
+   * BASE: an 8,000 debt paid by an 11,000 cheque. Requires the corrected clearing
+   * boundary, so this cell is meaningful only on this branch.
+   */
+  test("L5 · oversized cheque returned: only the applied portion becomes AR again", async () => {
+    const BIG = 11000;
+    const { t, orgId, customerId, asUser } = await setup();
+    const rowId = await standaloneRow(asUser, orgId, customerId, PAY);
+
+    const chequeId = await asUser.mutation(api.collections.registerCheque, {
+      orgId, receivableId: rowId, customerId,
+      bank: "ABC", chequeNumber: "CQ-L5", chequeDate: Date.now(), amount: BIG,
+    });
+    await asUser.mutation(api.collections.clearCheque, { orgId, chequeId });
+
+    // BASE STATE: the cheque over-pays, so only PAY is applied and BIG-PAY is
+    // unapplied. Proven before the return, or the cell below proves nothing.
+    const beforeReturn = await t.run(async (ctx: any) => {
+      const mirror = await ctx.db
+        .query("collectionPayments")
+        .withIndex("by_cheque", (q: any) => q.eq("chequeId", chequeId))
+        .first();
+      const activeForPayment = (await ctx.db.query("paymentAllocations").collect())
+        .filter((a: any) =>
+          a.status === "ACTIVE" && String(a.paymentId) === String(mirror.canonicalPaymentId)
+        );
+      const row = await ctx.db.get(rowId);
+      return {
+        activeAppliedMinor: activeForPayment.reduce((s: number, a: any) => s + a.amountMinor, 0),
+        rowOutstandingMinor: row.outstandingAmount * MINOR,
+      };
+    });
+    expect(beforeReturn).toEqual({
+      activeAppliedMinor: PAY * MINOR,
+      rowOutstandingMinor: 0,
+    });
+
+    const threw = await capture(() =>
+      asUser.mutation(api.collections.returnClearedCheque, {
+        orgId, chequeId, returnReason: "NSF",
+      })
+    );
+
+    const after = await t.run(async (ctx: any) => {
+      const row = await ctx.db.get(rowId);
+      const activeAllocations = (await ctx.db.query("paymentAllocations").collect())
+        .filter((a: any) => a.status === "ACTIVE");
+      return {
+        rowOutstandingMinor: row.outstandingAmount * MINOR,
+        activeAllocations: activeAllocations.length,
+      };
+    });
+
+    // PAY, not BIG. The 3,000 that was never applied cannot be un-applied.
+    expect({ threw, ...after }).toEqual({
+      threw: null,
+      rowOutstandingMinor: PAY * MINOR,
+      activeAllocations: 0,
+    });
+  });
+
+  /**
+   * L6 — CONTRADICTORY LINEAGE (row present, canonical link absent) REFUSES
+   * ATOMICALLY.
+   *
+   * L2 covers the row being MISSING. This covers the row being PRESENT but
+   * unable to identify the money: no `canonicalPaymentId`, so there is no way to
+   * reach the ACTIVE allocations that define what may be reversed. R12.5 makes
+   * that link identity, and R12.6 says the refusal precedes every write — not
+   * merely the money ones.
+   *
+   * Measured behaviour without the requirement: the canonical void is skipped
+   * (`if (clearedPayment.canonicalPaymentId)`), yet the cheque is still marked
+   * RETURNED and the debt still reopened. That is partial recovery, which R8
+   * forbids explicitly.
+   *
+   * BASE: as L1, plus the deliberate unlinking — verified below before the
+   * return runs.
+   */
+  test("L6 · lineage present but unlinked from the money: atomic refusal, nothing survives", async () => {
+    const { t, orgId, customerId, asUser } = await setup();
+    const rowId = await standaloneRow(asUser, orgId, customerId);
+
+    const chequeId = await asUser.mutation(api.collections.registerCheque, {
+      orgId, receivableId: rowId, customerId,
+      bank: "ABC", chequeNumber: "CQ-L6", chequeDate: Date.now(), amount: PAY,
+    });
+    await asUser.mutation(api.collections.clearCheque, { orgId, chequeId });
+
+    const unlinked = await t.run(async (ctx: any) => {
+      const mirror = await ctx.db
+        .query("collectionPayments")
+        .withIndex("by_cheque", (q: any) => q.eq("chequeId", chequeId))
+        .first();
+      await ctx.db.patch(mirror._id, { canonicalPaymentId: undefined });
+      const reread = await ctx.db.get(mirror._id);
+      return { rowStillThere: reread !== null, linkGone: reread.canonicalPaymentId === undefined };
+    });
+    expect(unlinked).toEqual({ rowStillThere: true, linkGone: true });
+
+    const before = await worldSnapshot(t, rowId);
+    const threw = await capture(() =>
+      asUser.mutation(api.collections.returnClearedCheque, {
+        orgId, chequeId, returnReason: "NSF",
+      })
+    );
+    const afterWorld = await worldSnapshot(t, rowId);
+
+    const after = await t.run(async (ctx: any) => {
+      const cheque = await ctx.db.get(chequeId);
+      const activeAllocations = (await ctx.db.query("paymentAllocations").collect())
+        .filter((a: any) => a.status === "ACTIVE");
+      return { chequeStatus: cheque.status, activeAllocations: activeAllocations.length };
+    });
+
+    // The refusal is deliberate and named — same reason L2 asserts its message:
+    // a null dereference would also "throw", and a crash is not a contract
+    // behaviour.
+    expect({
+      refused: threw !== null,
+      namedReason: threw?.includes("cannot be traced to the money") ?? false,
+      ...after,
+      delta: worldDelta(before, afterWorld),
+    }).toEqual({
+      refused: true,
+      namedReason: true,
+      chequeStatus: "CLEARED",
+      activeAllocations: 1,
+      delta: {},
+    });
+  });
+
+  /**
+   * L7 — DANGLING canonical link: the row names a payment that is not there.
+   *
+   * L6 covers the link being absent. This covers it being PRESENT and broken,
+   * which is contradictory rather than missing lineage — R8 treats both alike,
+   * and R12.6 puts the refusal ahead of every write either way.
+   *
+   * ⚠️ THIS CELL EXISTS BECAUSE OF A GUARD I WROTE, NOT BECAUSE A REVIEWER ASKED
+   * FOR IT. The resolver checks that the named payment exists and belongs to this
+   * org; without a cell, deleting that check would leave every fixture green and
+   * the guard would be decoration. A surviving mutant is itself a finding.
+   *
+   * BASE: as L1, plus the deliberate deletion — verified below.
+   */
+  test("L7 · lineage names a payment that no longer exists: atomic refusal, nothing survives", async () => {
+    const { t, orgId, customerId, asUser } = await setup();
+    const rowId = await standaloneRow(asUser, orgId, customerId);
+
+    const chequeId = await asUser.mutation(api.collections.registerCheque, {
+      orgId, receivableId: rowId, customerId,
+      bank: "ABC", chequeNumber: "CQ-L7", chequeDate: Date.now(), amount: PAY,
+    });
+    await asUser.mutation(api.collections.clearCheque, { orgId, chequeId });
+
+    const dangled = await t.run(async (ctx: any) => {
+      const mirror = await ctx.db
+        .query("collectionPayments")
+        .withIndex("by_cheque", (q: any) => q.eq("chequeId", chequeId))
+        .first();
+      await ctx.db.delete(mirror.canonicalPaymentId);
+      const reread = await ctx.db.get(mirror._id);
+      return {
+        linkRetained: reread.canonicalPaymentId !== undefined,
+        targetGone: (await ctx.db.get(reread.canonicalPaymentId)) === null,
+      };
+    });
+    expect(dangled).toEqual({ linkRetained: true, targetGone: true });
+
+    const before = await worldSnapshot(t, rowId);
+    const threw = await capture(() =>
+      asUser.mutation(api.collections.returnClearedCheque, {
+        orgId, chequeId, returnReason: "NSF",
+      })
+    );
+    const afterWorld = await worldSnapshot(t, rowId);
+
+    const cheque = await t.run((ctx: any) => ctx.db.get(chequeId));
+
+    expect({
+      refused: threw !== null,
+      namedReason: threw?.includes("cannot be traced to the money") ?? false,
+      chequeStatus: cheque.status,
+      delta: worldDelta(before, afterWorld),
+    }).toEqual({
+      refused: true,
+      namedReason: true,
+      chequeStatus: "CLEARED",
+      delta: {},
+    });
+  });
+
+  /**
+   * L8 — RETURNING A SAFE-HARBOUR CHEQUE REOPENS NOTHING.
+   *
+   * The mirror image of L5, and the clause that L3/L5 alone cannot pin: when
+   * `activeAppliedMinor` is ZERO, the AR side of the reversal must do nothing at
+   * all. A safe-harbour cheque was confirmed money that never reduced AR, so
+   * returning it cannot increase AR — and there is no basis for moving the row's
+   * status either. R12.3: AR and aging see ONLY money represented by ACTIVE
+   * allocations.
+   *
+   * The money side still runs: the receipt was real, so the canonical payment is
+   * voided and the movement row voided with it. Zero AR is not zero reversal.
+   *
+   * ⚠️ ALSO A GUARD OF MY OWN. Without this cell, dropping the `> 0` condition
+   * leaves every other cell green while a returned safe-harbour cheque silently
+   * marks a debt OVERDUE that it never touched.
+   *
+   * BASE: as R10a — sale-linked row whose invoice is cancelled between
+   * registration and clearing. Depends on `sales.update` being able to cancel.
+   */
+  test("L8 · returning a safe-harbour cheque reverses the money and reopens no AR", async () => {
+    const { t, orgId, customerId, asUser, asApprover } = await setup();
+    const { saleId } = await completedSale(t, asUser, orgId, customerId, "1HGCM82633A000041");
+    const rowId = await saleLinkedRow(asUser, orgId, customerId, saleId);
+
+    const chequeId = await asUser.mutation(api.collections.registerCheque, {
+      orgId, receivableId: rowId, customerId,
+      bank: "ABC", chequeNumber: "CQ-L8", chequeDate: Date.now(), amount: PAY,
+    });
+    await asApprover.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
+    await asUser.mutation(api.collections.clearCheque, { orgId, chequeId });
+
+    // BASE STATE: confirmed money, zero AR application.
+    const beforeReturn = await t.run(async (ctx: any) => {
+      const mirror = await ctx.db
+        .query("collectionPayments")
+        .withIndex("by_cheque", (q: any) => q.eq("chequeId", chequeId))
+        .first();
+      const activeForPayment = (await ctx.db.query("paymentAllocations").collect())
+        .filter((a: any) =>
+          a.status === "ACTIVE" && String(a.paymentId) === String(mirror.canonicalPaymentId)
+        );
+      const row = await ctx.db.get(rowId);
+      return {
+        activeAppliedMinor: activeForPayment.reduce((s: number, a: any) => s + a.amountMinor, 0),
+        rowOutstanding: row.outstandingAmount,
+        rowStatus: row.status,
+      };
+    });
+    expect(beforeReturn.activeAppliedMinor).toBe(0);
+
+    const threw = await capture(() =>
+      asUser.mutation(api.collections.returnClearedCheque, {
+        orgId, chequeId, returnReason: "NSF",
+      })
+    );
+
+    const after = await t.run(async (ctx: any) => {
+      const mirror = await ctx.db
+        .query("collectionPayments")
+        .withIndex("by_cheque", (q: any) => q.eq("chequeId", chequeId))
+        .first();
+      const canonical = await ctx.db.get(mirror.canonicalPaymentId);
+      const row = await ctx.db.get(rowId);
+      const cheque = await ctx.db.get(chequeId);
+      return {
+        chequeStatus: cheque.status,
+        mirrorStatus: mirror.status,
+        canonicalStatus: canonical.status,
+        // The AR side, unchanged in BOTH fields — an amount-only assertion would
+        // miss a status flipped to OVERDUE on an untouched balance.
+        rowOutstanding: row.outstandingAmount,
+        rowStatus: row.status,
+      };
+    });
+
+    expect({ threw, ...after }).toEqual({
+      threw: null,
+      chequeStatus: "RETURNED",
+      mirrorStatus: "VOIDED",
+      canonicalStatus: "VOIDED",
+      rowOutstanding: beforeReturn.rowOutstanding,
+      rowStatus: beforeReturn.rowStatus,
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
   // GROUP 4d — F10: the safe harbour proved END TO END, not just in storage.
   //
   // A canonical payment with no allocation is NECESSARY and NOT SUFFICIENT. The
