@@ -103,6 +103,26 @@ export const stats = query({
   args: {
     orgId: v.id("organizations"),
     timeRange: v.optional(v.union(v.literal("DAY"), v.literal("MONTH"), v.literal("YEAR"), v.literal("ALL_TIME"))),
+    /**
+     * Whether the caller wants the comparison window.
+     *
+     * Defaults to true, so every existing caller — mobile, which is the only
+     * consumer of `previousPeriod` in the product — keeps exactly the response
+     * it has today and needs no change.
+     *
+     * ⚠️ NOTHING SENDS THIS ARGUMENT YET, deliberately. This commit is Phase 1
+     * of a two-phase rollout: the backend must be able to accept the field
+     * before any client emits it, because AutoFlow deploys the frontend
+     * separately from the manually-deployed Convex backend, and an older
+     * backend rejects an unexpected field outright. A new web client against an
+     * old backend would take the dashboard down.
+     *
+     * Phase 2 will have the web dashboard pass false — it defaults to MONTH and
+     * renders no delta anywhere, so it pays for a second full accounting window
+     * on every load and discards it. That change may only ship after
+     * `convex function-spec --prod` reports this argument live in production.
+     */
+    includePreviousPeriod: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     // 1. Authenticate and verify membership, then derive domain visibility.
@@ -145,7 +165,12 @@ export const stats = query({
     // A YEAR view shows its figures without deltas, which the client already
     // handles — an absent previous total collapses the delta and leaves the
     // layout alone.
-    const comparesPeriods = args.timeRange === "DAY" || args.timeRange === "MONTH";
+    // One gate for the whole comparison window: every previous-period read and
+    // the assembly of `previousPeriod` itself already hang off this flag, so a
+    // caller that declines it issues none of those ranges at all.
+    const comparesPeriods =
+      (args.includePreviousPeriod ?? true) &&
+      (args.timeRange === "DAY" || args.timeRange === "MONTH");
     const previousStart = filterStart - periodLength;
 
     // 2. Total Vehicles & Available Vehicles
@@ -216,7 +241,15 @@ export const stats = query({
     ) as Record<(typeof activeStages)[number], number>;
 
     // 4. Sales this period
+    //
+    // `periodSalesWasCapped` records what the read actually DID, rather than
+    // re-deriving it from the branch predicate further down. Those are not the
+    // same thing: a later change that caps the dated branch, or that moves the
+    // `filterStart > 0` boundary, would leave a derived flag still claiming the
+    // read was complete and `truncated.sales` reporting a false negative.
+    const SALES_CAP = 5000;
     let periodSales: Doc<"sales">[] = [];
+    let periodSalesWasCapped = false;
     if (canViewSalesMetrics) {
       if (filterStart > 0) {
         periodSales = await ctx.db
@@ -235,13 +268,30 @@ export const stats = query({
             q.eq(q.field("status"), "COMPLETED"),
             q.neq(q.field("isDeleted"), true)
           ))
-          .take(5000);
+          .take(SALES_CAP);
+        periodSalesWasCapped = true;
       }
     }
 
     const activeSales = periodSales;
 
-    const transactionCandidates: Doc<"transactions">[] = canViewSalesMetrics
+    // The `VEHICLE_SALE` ledger is a fallback for a period that recorded no
+    // sale rows at all: every consumer below (`grossTransactionValue`,
+    // `salesCount`, `salesVolume`, the `monthlySales` chart) reads the sales
+    // path whenever `activeSales` is non-empty and ignores this result
+    // entirely. Issuing the range query regardless bought an index range plus
+    // the documents behind it on every dashboard load of every org that has
+    // ever recorded a sale, and then threw the answer away.
+    //
+    // One behavioural consequence, and it is a correction rather than a
+    // regression: `salesTruncated` below ORs the two lengths, so a period that
+    // had sales AND a ledger that happened to hit the 5,000 cap used to report
+    // the sales figures as truncated. Those figures came from `activeSales`,
+    // which was not truncated — the flag was a false positive about a dataset
+    // that contributed nothing. With the query skipped, the OR collapses to
+    // the `activeSales` term, which is the only one that was ever load-bearing
+    // on that path.
+    const transactionCandidates: Doc<"transactions">[] = canViewSalesMetrics && activeSales.length === 0
       ? filterStart > 0
           ? await ctx.db
             .query("transactions")
@@ -264,7 +314,6 @@ export const stats = query({
       : [];
     const saleTransactions = transactionCandidates;
 
-    const SALES_CAP = 5000;
     // Gross transaction value: what the dealership handled, agent deals at full
     // ticket. Turnover is computed further down, once the consigned vehicles are
     // known — the two are different numbers and both are reported.
@@ -278,7 +327,19 @@ export const stats = query({
           0
         );
     const salesCount = activeSales.length > 0 ? activeSales.length : saleTransactions.length;
-    const salesTruncated = activeSales.length === SALES_CAP || saleTransactions.length === SALES_CAP;
+    // Truncation is a property of the READ that produced the figures, not of a
+    // row count. DAY/MONTH/YEAR read `periodSales` with `.collect()`, which
+    // returns the complete range - exactly SALES_CAP rows there means the
+    // period genuinely had that many, not that anything was dropped, and the
+    // old OR declared a truncation that had not happened. Only the ALL_TIME
+    // branch reads `.take(SALES_CAP)` and can stop silently at the cap.
+    //
+    // The fallback ledger always reads `.take(SALES_CAP)`, so it is truncated
+    // at the cap - but only while it is the authoritative source, which is
+    // exactly when `activeSales` is empty.
+    const salesTruncated = activeSales.length > 0
+      ? periodSalesWasCapped && activeSales.length === SALES_CAP
+      : saleTransactions.length === SALES_CAP;
 
     const getChartKey = (dateTs: number) => {
       const d = new Date(dateTs);
