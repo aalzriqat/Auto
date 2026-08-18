@@ -1,5 +1,5 @@
 import { ConvexError, v } from "convex/values";
-import { Doc } from "../_generated/dataModel";
+import { Doc, Id } from "../_generated/dataModel";
 import { toMinorSameCurrencyOrUndefined } from "./money";
 import {
   PERCENT_DECIMAL_PLACES,
@@ -1499,4 +1499,55 @@ export function deriveAccountingProfit(args: {
     lines: reconciles ? lines : [],
     reconcilesToLedger: true,
   };
+}
+
+/**
+ * The supplier-entitlement WITNESS.
+ *
+ * Shared because three writers establish it — the configured approval, the
+ * manual receipt and the route selection — and they live in two modules that
+ * already import in one direction only. Putting the decision here keeps
+ * `financingEconomics.ts` from having to import from `applications.ts`, which
+ * imports from it.
+ */
+/** The witness serialized for an audit row — provenance included, `null` when absent. */
+export function describeWitness(
+  witness: Doc<"financeApplications">["supplierEntitlementWitness"]
+): { supplierEntitlementMinor: number; via: string; validatedAt: number } | null {
+  return witness === undefined
+    ? null
+    : {
+        supplierEntitlementMinor: witness.amountMinor,
+        via: witness.via,
+        validatedAt: witness.validatedAt,
+      };
+}
+
+/**
+ * The witness to STORE, given the entitlement just measured.
+ *
+ * ⚠️ AN UNCHANGED FACT IS NOT A NEW OBSERVATION. Every writer stamped its own
+ * `via`, actor and timestamp unconditionally, so a configured re-approval of an
+ * identical amount silently rewrote a ROUTE_SELECTION witness into a fresh
+ * CONFIGURED_APPROVAL one — new actor, new time — while the audit trail said
+ * nothing had changed, because nothing about the AMOUNT had. The provenance is
+ * evidence in its own right: it moves when the fact it describes moves, not
+ * because some other mutation happened to run.
+ */
+export function witnessToStore(
+  existing: Doc<"financeApplications">["supplierEntitlementWitness"],
+  entitlementMinor: number | undefined,
+  provenance: {
+    validatedAt: number;
+    validatedBy: Id<"users">;
+    via: "CONFIGURED_APPROVAL" | "MANUAL_RECEIPT" | "ROUTE_SELECTION";
+  }
+): { witness: Doc<"financeApplications">["supplierEntitlementWitness"]; changed: boolean } {
+  if (entitlementMinor === undefined) {
+    return { witness: undefined, changed: existing !== undefined };
+  }
+  if (existing?.amountMinor === entitlementMinor) {
+    return { witness: existing, changed: false };
+  }
+  return { witness: { amountMinor: entitlementMinor, ...provenance }, changed: true };
 }

@@ -67,6 +67,7 @@ import {
   type SettlementPayer,
 } from "./utils/vehicleOwnership";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
+import { describeWitness, witnessToStore } from "./utils/financingEconomics";
 import { auditLog } from "./financialAudit";
 
 /** sourceType used for the canonical finance-company receivable opened at finalizeDeal. */
@@ -454,6 +455,106 @@ async function supplierEntitlementVerdictFor(
   return currentMinor === agreedMinor
     ? { kind: "UNCHANGED" }
     : { kind: "DRIFTED", agreedMinor, currentMinor };
+}
+
+/**
+ * The supplier's entitlement as it stands RIGHT NOW, in minor units.
+ *
+ * The measurement the witness writers and the transition classifier both take,
+ * so "what is he owed" has one implementation rather than three that agree by
+ * inspection.
+ */
+async function currentSupplierEntitlementMinor(
+  ctx: QueryCtx | MutationCtx,
+  app: Doc<"financeApplications">
+): Promise<number | undefined> {
+  const vehicle = await ctx.db.get(app.vehicleId);
+  if (!vehicle || vehicle.orgId !== app.orgId || !isConsignedAgentSale(vehicle)) return undefined;
+  const costAmount = await computeVehicleCapitalizedCost(ctx, vehicle);
+  if (costAmount <= 0) return undefined;
+  const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, app.orgId));
+  return toMinorUnits(costAmount, currency);
+}
+
+/**
+ * Whether switching this deal to DIRECT_TO_SUPPLIER would strand it.
+ *
+ * ⚠️ ONE CLASSIFIER, ANSWERING BOTH DOORS. `setSupplierSettlementRoute` and
+ * `applications.get`'s `canSettleDirectToSupplier` decided this separately, and
+ * the screen's copy was the narrower one — it asked only whether an amount was
+ * recorded, while the mutation projected the whole final state. A deal whose
+ * amount was present but whose entitlement had drifted, or could not be proven,
+ * was therefore OFFERED the direct route and then refused by the server. A
+ * screen that offers what the server rejects is the disagreement this pair of
+ * surfaces exists to prevent.
+ *
+ * Before handover this is always false: the ordinary flow chooses the route at
+ * the close, and anything missing can still be recorded.
+ */
+async function directRouteTransitionRefusal(
+  ctx: QueryCtx | MutationCtx,
+  app: Doc<"financeApplications">
+): Promise<{ key: "BelowSupplierEntitlement" | "VehicleHandedOver"; message: string } | null> {
+  const entitlementMinor = await currentSupplierEntitlementMinor(ctx, app);
+
+  /**
+   * The supplier would be paid less than he is owed.
+   *
+   * This check already existed in the mutation and NOT in the projection, which
+   * is the second half of the same disagreement: a deal whose recorded amount
+   * had fallen behind the vehicle's cost was offered the direct route by the
+   * screen and refused by the server. Evaluated here so both read one verdict.
+   */
+  if (app.approvedDealerPurchaseAmountMinor !== undefined && entitlementMinor !== undefined) {
+    const vehicle = await ctx.db.get(app.vehicleId);
+    const belowEntitlement = directSettlementBelowEntitlementRefusal({
+      approvedAmountMinor: app.approvedDealerPurchaseAmountMinor,
+      supplierEntitlementMinor: entitlementMinor,
+      supplierName: vehicle?.sourcedFromName,
+    });
+    if (belowEntitlement) {
+      return { key: "BelowSupplierEntitlement", message: belowEntitlement };
+    }
+  }
+
+  if (app.vehicleHandoverAt === undefined) return null;
+  // Already on the route: a re-submission is not a transition.
+  if (app.supplierSettlementRoute === "DIRECT_TO_SUPPLIER") return null;
+  const projected: Doc<"financeApplications"> = {
+    ...app,
+    supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+    // Only `amountMinor` is read from here, by `supplierEntitlementVerdictFor`,
+    // which compares it against the vehicle. The provenance fields carry
+    // placeholders and NOTHING IS PERSISTED: this object exists only to ask the
+    // guard a question.
+    supplierEntitlementWitness:
+      entitlementMinor === undefined
+        ? undefined
+        : {
+            amountMinor: entitlementMinor,
+            validatedAt: 0,
+            validatedBy: app.salespersonId,
+            via: "ROUTE_SELECTION" as const,
+          },
+  };
+  try {
+    assertDealerEconomicsRecorded(
+      projected,
+      "finalizing",
+      await resolveQuoteMode(ctx, app),
+      await supplierEntitlementVerdictFor(ctx, projected)
+    );
+    return null;
+  } catch {
+    // Reported in terms of what the operator can still do. The underlying
+    // refusal says "record it before finalizing", which on a handed-over deal is
+    // advice nothing can act on.
+    return {
+      key: "VehicleHandedOver",
+      message:
+        "The vehicle has gone out on this deal, and settling direct to the supplier needs figures that can no longer be recorded once it has. Leave it settling through the dealership, or correct the sale.",
+    };
+  }
 }
 
 /**
@@ -1736,10 +1837,7 @@ export const get = query({
      * the reason a case list in financedConsignedSettlement.test.ts asserts the
      * two answers side by side.
      */
-    const directRouteSealed =
-      app.vehicleHandoverAt !== undefined &&
-      app.supplierSettlementRoute !== "DIRECT_TO_SUPPLIER" &&
-      app.approvedDealerPurchaseAmountMinor === undefined;
+    const directRouteTransition = await directRouteTransitionRefusal(ctx, app);
 
     return {
       ...visibleApp,
@@ -1772,16 +1870,15 @@ export const get = query({
       /** Whether an outside party pays for the car at all. */
       hasExternalFinancier: payer.external,
       /** Whether DIRECT_TO_SUPPLIER is available, and why not when it is not. */
-      canSettleDirectToSupplier: payerAllowsDirect && !hasHeldDeposit && !directRouteSealed,
+      canSettleDirectToSupplier:
+        payerAllowsDirect && !hasHeldDeposit && directRouteTransition === null,
       directRouteRefusal: !payer.external
         ? "NoExternalFinancier"
         : payer.counterparty === null
           ? payer.unidentifiedReason
           : hasHeldDeposit
             ? "HeldDeposit"
-            : directRouteSealed
-              ? "VehicleHandedOver"
-              : null,
+            : (directRouteTransition?.key ?? null),
     };
   },
 });
@@ -3506,26 +3603,27 @@ export const setSupplierSettlementRoute = mutation({
       // approved. Either ordering reaches the same illegal state — the supplier
       // paid less than he is owed — and a guard that covers only one of them is
       // a guard with a documented way around it.
+      // THE THIRD WRITER of this agreement, and it needs the witness for the
+      // same reason the other two do. Choosing the direct route on an
+      // already-approved deal is the moment that amount becomes what the
+      // supplier receives. If only the two amount writers stamped the witness,
+      // every deal approved BEFORE its route was chosen would reach handover
+      // with nothing to check and be refused as unprovable, on the ordinary
+      // ordering.
       if (app.approvedDealerPurchaseAmountMinor !== undefined) {
-        const costAmount = await computeVehicleCapitalizedCost(ctx, vehicle);
-        if (costAmount > 0) {
-          const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
-          // THE THIRD WRITER of this agreement, and it needs the witness for the
-          // same reason the other two do. Choosing the direct route on an
-          // already-approved deal is the moment that amount becomes what the
-          // supplier receives — validated right here against his entitlement. If
-          // only the two amount writers stamped the witness, every deal approved
-          // BEFORE its route was chosen would reach handover with nothing to
-          // check and be refused as unprovable, on the ordinary ordering.
-          entitlementAtRouteChoiceMinor = toMinorUnits(costAmount, currency);
-          const refusal = directSettlementBelowEntitlementRefusal({
-            approvedAmountMinor: app.approvedDealerPurchaseAmountMinor,
-            supplierEntitlementMinor: entitlementAtRouteChoiceMinor,
-            supplierName: vehicle.sourcedFromName,
-          });
-          if (refusal) throw new ConvexError(refusal);
-        }
+        entitlementAtRouteChoiceMinor = await currentSupplierEntitlementMinor(ctx, app);
       }
+      /**
+       * Every reason this transition can be refused, from the SHARED classifier
+       * that `applications.get` also consumes.
+       *
+       * The below-entitlement mirror check used to be inline here and nowhere
+       * else, so the screen offered a route the server rejected whenever the
+       * vehicle's cost had moved past the recorded amount. Same verdict, two
+       * presentations: a message here, a key there.
+       */
+      const transitionRefusal = await directRouteTransitionRefusal(ctx, app);
+      if (transitionRefusal) throw new ConvexError(transitionRefusal.message);
     }
     // A held عربون and the direct route together are refused, deliberately and
     // for now.
@@ -3561,7 +3659,11 @@ export const setSupplierSettlementRoute = mutation({
      * confirmation on the deal for nothing.
      */
     const previousWitness = app.supplierEntitlementWitness;
-    const witnessMoved = previousWitness?.amountMinor !== entitlementAtRouteChoiceMinor;
+    const { witness: nextWitness, changed: witnessMoved } = witnessToStore(
+      previousWitness,
+      entitlementAtRouteChoiceMinor,
+      { validatedAt: Date.now(), validatedBy: user._id, via: "ROUTE_SELECTION" }
+    );
     /**
      * Compared against the STORED route, not the derived one.
      *
@@ -3575,62 +3677,6 @@ export const setSupplierSettlementRoute = mutation({
     const materiallyChanged = app.supplierSettlementRoute !== args.route || witnessMoved;
     if (!materiallyChanged) return { route: args.route };
 
-    /**
-     * AFTER HANDOVER, a route change must not create a step nothing can perform.
-     *
-     * The defect: hand a MANUAL deal over settling THROUGH the dealership with no
-     * supplier receipt amount — entirely legitimate on that route — then switch
-     * it to DIRECT. Finalization now demands the amount, and
-     * `recordDirectSupplierReceiptAmount` refuses a handed-over deal. The vehicle
-     * is gone and neither door opens: SCRUM-61's original dead end, reopened
-     * through the side door my own route-aware requirement built.
-     *
-     * ⚠️ NOT "no route change after handover", which is what a blanket reading of
-     * the finding would give. Measured before assuming: `finalizeDeal` REQUIRES a
-     * settlement route, and the cockpit asks for it one step AFTER handover — see
-     * the projection test in financedConsignedSettlement.test.ts, whose comment
-     * records that this ordering is the ordinary shape of a consigned financed
-     * deal. Refusing every post-handover change would therefore strand every one
-     * of them: handed over, no route, finalization demanding a route the route
-     * mutation now refuses to record. That is a worse dead end than the one being
-     * closed, and the same class of defect.
-     *
-     * So the question asked is the exact one that matters — would the deal this
-     * change produces be finalizable? — and it is asked of the SAME authority
-     * finalization uses, rather than a second opinion assembled here.
-     */
-    if (app.vehicleHandoverAt !== undefined) {
-      const projected: Doc<"financeApplications"> = {
-        ...app,
-        supplierSettlementRoute: args.route,
-        supplierEntitlementWitness:
-          entitlementAtRouteChoiceMinor === undefined
-            ? undefined
-            : {
-                amountMinor: entitlementAtRouteChoiceMinor,
-                validatedAt: Date.now(),
-                validatedBy: user._id,
-                via: "ROUTE_SELECTION" as const,
-              },
-      };
-      try {
-        assertDealerEconomicsRecorded(
-          projected,
-          "finalizing",
-          await resolveQuoteMode(ctx, app),
-          await supplierEntitlementVerdictFor(ctx, projected)
-        );
-      } catch {
-        // The projected refusal is reported in terms of what the operator can
-        // still do, not re-thrown: the underlying message says "record it before
-        // finalizing", and on a handed-over deal that is advice nothing can act
-        // on. Naming the real obstacle is the difference between a dead end and
-        // a decision.
-        throw new ConvexError(
-          "The vehicle has gone out on this deal, and settling direct to the supplier needs figures that can no longer be recorded once it has. Leave it settling through the dealership, or correct the sale."
-        );
-      }
-    }
 
     await ctx.db.patch(args.applicationId, {
       supplierSettlementRoute: args.route,
@@ -3647,16 +3693,7 @@ export const setSupplierSettlementRoute = mutation({
        * moved underneath a confirmation that was never re-read.
        */
       economicsRevision: (app.economicsRevision ?? 0) + 1,
-      ...(entitlementAtRouteChoiceMinor === undefined
-        ? { supplierEntitlementWitness: undefined }
-        : {
-            supplierEntitlementWitness: {
-              amountMinor: entitlementAtRouteChoiceMinor,
-              validatedAt: Date.now(),
-              validatedBy: user._id,
-              via: "ROUTE_SELECTION" as const,
-            },
-          }),
+      supplierEntitlementWitness: nextWitness,
       updatedAt: Date.now(),
     });
 
@@ -3667,15 +3704,19 @@ export const setSupplierSettlementRoute = mutation({
       orgId: args.orgId,
       applicationId: args.applicationId,
       field: "supplierSettlementRoute",
+      // The WHOLE witness on both sides, provenance included. Recording only the
+      // amount left a witness being cleared, or its origin changing, with no
+      // structured trace — a reader could see a number disappear but not who had
+      // established it, or through which act.
       previousValue: JSON.stringify({
         // The stored value, `null` when nobody had chosen — distinct from
         // somebody having chosen the route that absence happens to imply.
         route: app.supplierSettlementRoute ?? null,
-        supplierEntitlementMinor: previousWitness?.amountMinor ?? null,
+        witness: describeWitness(previousWitness),
       }),
       newValue: JSON.stringify({
         route: args.route,
-        supplierEntitlementMinor: entitlementAtRouteChoiceMinor ?? null,
+        witness: describeWitness(nextWitness),
       }),
       reason:
         args.route === "DIRECT_TO_SUPPLIER"

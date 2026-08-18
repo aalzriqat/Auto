@@ -681,6 +681,13 @@ export const salesEn = {
     "You cannot record this on your own deal. The dealership owner records it, or another approver who can also see the deal's finances.",
   DirectSupplierAmountSealed:
     "The vehicle has gone out, so this deal's figures are sealed and this can no longer be recorded here.",
+  // Both reachable through `directRouteRefusal`. Without them the dialog fell
+  // through to "no external financier", which is a false explanation — the
+  // financier is right there; the obstacle is the money.
+  RouteDirectUnavailableBelowEntitlement:
+    "The amount recorded for the supplier is less than he is owed for the car, so the finance company cannot pay him directly for it.",
+  RouteDirectUnavailableVehicleHandedOver:
+    "The vehicle has gone out, and settling direct to the supplier needs figures that can no longer be recorded once it has.",
   DirectSupplierAmountClosed: "This deal is closed, so its figures are sealed.",
   ProfitNotApplicable: "Not available for this financing mode",
   ProfitNotApplicableForMode:
@@ -1700,6 +1707,10 @@ export const salesAr = {
     "لا يمكنك تسجيل هذا على صفقتك. يسجّله مالك المعرض أو معتمِد آخر يملك أيضًا صلاحية الاطلاع على مالية الصفقة.",
   DirectSupplierAmountSealed:
     "خرجت المركبة، لذلك أصبحت أرقام هذه الصفقة مثبّتة ولم يعد بالإمكان تسجيل هذا هنا.",
+  RouteDirectUnavailableBelowEntitlement:
+    "المبلغ المسجَّل للمورّد أقل مما هو مستحق له عن المركبة، لذلك لا يمكن أن تدفع له شركة التمويل مباشرةً.",
+  RouteDirectUnavailableVehicleHandedOver:
+    "خرجت المركبة، وتسوية المورّد مباشرةً تتطلب أرقامًا لم يعد بالإمكان تسجيلها بعد خروجها.",
   DirectSupplierAmountClosed: "هذه الصفقة مغلقة، لذلك أصبحت أرقامها مثبّتة.",
   ProfitNotApplicable: "غير متاح لهذا النوع من التمويل",
   ProfitNotApplicableForMode:

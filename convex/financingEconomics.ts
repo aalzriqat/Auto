@@ -18,6 +18,7 @@ import {
   isConsignedAgentSale,
 } from "./utils/vehicleOwnership";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
+import { describeWitness, witnessToStore } from "./utils/financingEconomics";
 import { toMinorUnits, assertSupportedDenomination, denominationOf } from "./utils/money";
 import {
   assertMinorAmount,
@@ -1838,10 +1839,19 @@ export const approveDealerPurchaseAmount = mutation({
      * recorded. "The evidence this deal stands on was established today, by this
      * person" is exactly the kind of fact this table exists for.
      */
-    const witnessChanged =
-      validatedEntitlementMinor !== undefined &&
-      app.supplierEntitlementWitness?.amountMinor !== validatedEntitlementMinor;
-    if (witnessChanged) {
+    //
+    // ⚠️ RE-SUBMITTING AN IDENTICAL APPROVAL MUST NOT RE-BADGE THE WITNESS. The
+    // patch below wrote a fresh CONFIGURED_APPROVAL witness — new actor, new
+    // timestamp — whenever the entitlement was measurable, so a deal whose
+    // witness had been established at ROUTE_SELECTION quietly changed hands while
+    // the audit said nothing, because the AMOUNT had not moved. `witnessToStore`
+    // keeps an unchanged fact exactly as it was recorded.
+    const { witness: nextWitness, changed: witnessChanged } = witnessToStore(
+      app.supplierEntitlementWitness,
+      validatedEntitlementMinor,
+      { validatedAt: now, validatedBy: user._id, via: "CONFIGURED_APPROVAL" }
+    );
+    if (witnessChanged && nextWitness !== undefined) {
       await recordOverride(ctx, {
         orgId: args.orgId,
         applicationId: args.applicationId,
@@ -1849,16 +1859,8 @@ export const approveDealerPurchaseAmount = mutation({
         previousValue:
           app.supplierEntitlementWitness === undefined
             ? undefined
-            : JSON.stringify({
-                supplierEntitlementMinor: app.supplierEntitlementWitness.amountMinor,
-                via: app.supplierEntitlementWitness.via,
-                validatedAt: app.supplierEntitlementWitness.validatedAt,
-              }),
-        newValue: JSON.stringify({
-          supplierEntitlementMinor: validatedEntitlementMinor,
-          via: "CONFIGURED_APPROVAL",
-          validatedAt: now,
-        }),
+            : JSON.stringify(describeWitness(app.supplierEntitlementWitness)),
+        newValue: JSON.stringify(describeWitness(nextWitness)),
         reason:
           app.supplierEntitlementWitness === undefined
             ? "The supplier's entitlement was validated against this approval for the first time; the approval itself is unchanged."
@@ -1896,16 +1898,11 @@ export const approveDealerPurchaseAmount = mutation({
       // the first's provenance would claim an observation the dealership never
       // made. `approvedPurchaseApprovedAt/By` above are guarded by
       // `approvalMateriallyChanged` precisely so they stay put.
-      ...(validatedEntitlementMinor === undefined
-        ? {}
-        : {
-            supplierEntitlementWitness: {
-              amountMinor: validatedEntitlementMinor,
-              validatedAt: now,
-              validatedBy: user._id,
-              via: "CONFIGURED_APPROVAL" as const,
-            },
-          }),
+      //
+      // NOT cleared when the entitlement is unmeasurable here: a THROUGH-route
+      // approval has nothing to validate against, and wiping a witness that the
+      // route writer established would destroy evidence this act never examined.
+      ...(nextWitness === undefined ? {} : { supplierEntitlementWitness: nextWitness }),
       approvedPurchaseBasis: args.basis,
       approvedPurchaseAppraisalId: appraisal?._id,
       approvedPurchaseExceptionRuleVersion:
