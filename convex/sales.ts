@@ -19,6 +19,7 @@ import {
   isConsignedAgentSale,
   recordedConsignedMargin,
   recordedSupplierEntitlement,
+  recordedSupplierGrossReceipt,
   saleIsAgentSale,
 } from "./utils/vehicleOwnership";
 import {
@@ -48,6 +49,7 @@ import {
 import { allocatedDepositForVehicle } from "./utils/depositAllocation";
 import { planDepositSettlementApplication } from "./utils/depositSettlementPlan";
 import { checkPostingAllowed } from "./accountingPeriods";
+import { hasVerifiedFinancingApplication } from "./utils/financingProvenance";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -2195,7 +2197,13 @@ export const dealCockpit = query({
       salePrice: sale.salePrice,
       recordedMargin: recordedConsignedMargin(sale),
       recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
-      settlesDirect: !collectsGross,
+      recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
+      // The FACTS, not a pre-derived boolean: `saleIsAgentSale` asks the one
+      // admissibility derivation itself, so this screen cannot reach a
+      // different verdict than `saleEconomics` does about the same sale.
+      supplierSettlementRoute: sale.supplierSettlementRoute,
+      externallyFinanced:
+        sale.financingType === "FINANCED" || sale.financingType === "LEASE",
     });
 
     let supplierObligation: ObligationState = "NONE";
@@ -2481,6 +2489,13 @@ export const dealCockpit = query({
       supplierSettlementRoute: sale.supplierSettlementRoute,
       recordedMargin: recordedConsignedMargin(sale),
       recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
+      recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
+      // Always false on this screen in practice — `money` is already null for a
+      // sale that HAS an application, because its real screen is the
+      // application-keyed one. Passed rather than hardcoded so the two can never
+      // drift, and so `financedDirectWithoutApproval` below and `saleEconomics`
+      // reach their verdict from the same fact rather than two copies of it.
+      hasFinancingApplication: await hasVerifiedFinancingApplication(ctx, sale),
       externallyFinanced:
         sale.financingType === "FINANCED" || sale.financingType === "LEASE",
     });

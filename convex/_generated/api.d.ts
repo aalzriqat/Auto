@@ -157,6 +157,7 @@ import type * as utils_expenseAmortization from "../utils/expenseAmortization.js
 import type * as utils_facebookApi from "../utils/facebookApi.js";
 import type * as utils_financialGuards from "../utils/financialGuards.js";
 import type * as utils_financingEconomics from "../utils/financingEconomics.js";
+import type * as utils_financingProvenance from "../utils/financingProvenance.js";
 import type * as utils_geoProvider from "../utils/geoProvider.js";
 import type * as utils_grossTransactionValue from "../utils/grossTransactionValue.js";
 import type * as utils_idempotency from "../utils/idempotency.js";
@@ -367,6 +368,7 @@ declare const fullApi: ApiFromModules<{
   "utils/facebookApi": typeof utils_facebookApi;
   "utils/financialGuards": typeof utils_financialGuards;
   "utils/financingEconomics": typeof utils_financingEconomics;
+  "utils/financingProvenance": typeof utils_financingProvenance;
   "utils/geoProvider": typeof utils_geoProvider;
   "utils/grossTransactionValue": typeof utils_grossTransactionValue;
   "utils/idempotency": typeof utils_idempotency;

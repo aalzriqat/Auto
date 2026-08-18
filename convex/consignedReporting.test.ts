@@ -214,6 +214,27 @@ describe("the economics split", () => {
       // this state takes a partial repair or a raw-JSON edit of one field —
       // which is exactly the case a fail-closed rule is for.
       recordedSupplierEntitlement: undefined,
+      /**
+       * SCRUM-41 added this input, and this test needed it to keep testing what
+       * it was written to test.
+       *
+       * Its subject is the SETTLEMENT half — that a missing frozen entitlement
+       * must not fall back to a drifted live cost. Its premise is that the
+       * margin beside it is sound. On the financed DIRECT route that premise is
+       * now something the row has to carry evidence for, and without the receipt
+       * the margin is withheld too — which would make the test pass for the
+       * wrong reason and stop exercising the settlement rule at all.
+       *
+       * The withheld-margin case is not lost: it is `SCRUM-41 — a frozen margin
+       * nothing can substantiate` in `consignmentEconomics.test.ts`.
+       *
+       * The application is supplied for the same reason: on this route a receipt
+       * proves its amount, not its provenance, so both are required before the
+       * frozen margin is believed. A real financed DIRECT sale always has one —
+       * `finalizeDeal` is the only thing that can create the shape.
+       */
+      recordedSupplierGrossReceipt: SALE_PRICE,
+      hasFinancingApplication: true,
     });
 
     // The half that was already right: the frozen margin is still trusted.
@@ -611,15 +632,39 @@ describe("a recorded margin the reader cannot trust", () => {
   test("an erased entitlement makes the supplier total a floor without touching profit", async () => {
     const s = await seedDealer("reportEntitlementGone");
     const saleId = await sellConsigned(s, "VINENT1");
+    /**
+     * ⚠️ The FIXTURE changed for SCRUM-49 Lane 4; the assertions did not.
+     *
+     * This used to be a financed DIRECT row patched by hand. That shape can no
+     * longer demonstrate what this test is for: SCRUM-41 withholds a frozen
+     * margin on that route unless the row carries BOTH a frozen receipt and the
+     * application that approved it, and an application cannot be conjured by a
+     * `db.patch` — it needs a real quote and a real application row. Left as it
+     * was, BOTH counters would fire and the distinction this test exists to pin
+     * would be gone.
+     *
+     * So it now reaches the SAME withholding rule through `evidenceRequired`'s
+     * other arm — an agent sale whose vehicle row is gone, with its frozen
+     * margin surviving and its frozen entitlement not. That is a real production
+     * shape (the `/admin` raw editor, a part-failed `hardDeleteOrg`), and it is
+     * arguably a more honest fixture than a hand-patched financed row that no
+     * writer could have produced.
+     *
+     * The financed-DIRECT settlement arm is still covered at unit level by
+     * `a frozen margin beside a missing frozen entitlement is UNKNOWN, never the
+     * live cost` above, which supplies the application the pure function needs.
+     */
     await s.t.run(async (ctx) => {
+      const sale = await ctx.db.get(saleId);
       await ctx.db.patch(saleId, {
-        // The financed DIRECT shape, where the frozen evidence is required.
-        financingType: "FINANCED",
-        supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+        // What the sale earned, still frozen on the row.
         consignedMarginMinor: MARGIN * 1_000,
         // ...and the half that was erased afterwards.
         consignedSupplierEntitlementMinor: undefined,
       });
+      // The cost basis leaves with the vehicle, so nothing can re-derive what
+      // the supplier was owed.
+      await ctx.db.delete(sale!.vehicleId);
     });
 
     const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
@@ -1676,6 +1721,70 @@ describe("turnover past the dashboard's costing cap", () => {
     );
     // And nothing is short, so the flag must not claim otherwise.
     expect(dash.truncated.turnover).toBe(false);
+
+    /**
+     * The PROFIT half of the same claim, asked for by the Codex reviewer after
+     * the dashboard consolidation gated profit on the live cost map and dropped
+     * every margin the map did not hold.
+     *
+     * A consigned sale past the cap has a supplier cost this query already read
+     * cheaply, so its margin needs nothing further — and it belongs in the trend
+     * for the same reason it belongs in the turnover above. Asserting only the
+     * turnover let a chart reporting 0 sit under a headline reporting the
+     * margin.
+     */
+    expect(dash.salesTrend.reduce((total, point) => total + point.Profit, 0)).toBe(
+      CAP * (OWNED_PRICE - OWNED_COST) + MARGIN
+    );
+  }, HEAVY_TEST_TIMEOUT_MS);
+
+  /**
+   * The vehicle stays authoritative past the cap, so a DEALER-OWNED row cannot
+   * be reclassified by stale consignment fields on its sale.
+   *
+   * Found by the Codex reviewer against the dashboard consolidation. Past the
+   * costing cap a STOCK vehicle is recorded as `{ consigned: false }` — its
+   * classification IS known, only its cost is not. Collapsing that to "vehicle
+   * unknown" handed `saleEconomics` a `vehicle: null`, which invites it to
+   * classify from the SALE's frozen evidence instead: a stale
+   * `consignedMarginMinor` (raw-editor reachable — the writer only ever sets it
+   * on a sourced sale, which `SCRUM-40 O-3` pins) would then be read as an agent
+   * sale, publishing that stale margin as turnover in place of the sale price
+   * and crediting it as profit for a car the dealership owned.
+   *
+   * The report keeps the vehicle authoritative, so the two would disagree at the
+   * cap boundary — the class of defect this whole lane exists to remove.
+   */
+  test("a dealer-owned sale past the cap is not reclassified by a stale consigned margin", async () => {
+    const { s, pastCap } = await dealerPastTheCap("capStaleConsigned");
+
+    await s.t.run(async (ctx) => {
+      const sale = (await ctx.db
+        .query("sales")
+        .filter((q) => q.eq(q.field("vehicleId"), pastCap.owned))
+        .first())!;
+      // Corruption, not a writer output: a dealer-owned sale carrying the
+      // frozen fields that only ever belong to a consigned one.
+      await ctx.db.patch(sale._id, {
+        consignedMarginMinor: 1_000 * 1_000,
+        consignedMarginCurrency: "JOD",
+      });
+    });
+
+    const dash = await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId, timeRange: "YEAR" as const,
+    });
+
+    // Its TURNOVER is still its sale price — the dealership sold its own car —
+    // and emphatically not the stale 1,000 margin.
+    expect(dash.salesVolumeThisMonth).toBe(
+      CAP * OWNED_PRICE + PAST_CAP_OWNED_PRICE + MARGIN
+    );
+    // And its unknowable profit is not invented from that stale figure. The
+    // cap's own flag reports the shortfall.
+    expect(dash.salesTrend.reduce((total, point) => total + point.Profit, 0)).toBe(
+      CAP * (OWNED_PRICE - OWNED_COST) + MARGIN
+    );
   }, HEAVY_TEST_TIMEOUT_MS);
 
   test("a consigned sale with no recorded supplier cost is excluded, and says so", async () => {
@@ -1751,6 +1860,49 @@ describe("turnover past the dashboard's costing cap", () => {
     // Had the previous window kept excluding its tail while the current window
     // counted its own, the delta between them would have reported the
     // difference in treatment as a change in trade.
+    expect(dash.previousPeriod?.sales).toBe(
+      CAP * OWNED_PRICE + PAST_CAP_OWNED_PRICE + MARGIN
+    );
+  }, HEAVY_TEST_TIMEOUT_MS);
+
+  /**
+   * The comparison window's copy of the stale-consignment guard.
+   *
+   * Asked for by the Codex reviewer, and it caught a real one: the third
+   * `WindowVehicleBasis` state was added to `currentBasis` and lost from
+   * `previousBasis` during a revert/restore cycle, so the two windows
+   * classified the same sale differently. That asymmetry is worse here than in
+   * either window alone — a sale ageing from one window into the other would
+   * change its own contribution, and the delta between them reports that as a
+   * change in trade the dealership never had.
+   *
+   * Every previous-window assertion above is on CLEAN data, so none of them
+   * could see it. This one carries the corruption across the boundary.
+   */
+  test("a stale consigned margin does not reclassify a past-cap owned sale in the COMPARISON window either", async () => {
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const { s, pastCap } = await dealerPastTheCap(
+      "capPrevStale",
+      Date.now() - 45 * DAY_MS
+    );
+
+    await s.t.run(async (ctx) => {
+      const sale = (await ctx.db
+        .query("sales")
+        .filter((q) => q.eq(q.field("vehicleId"), pastCap.owned))
+        .first())!;
+      await ctx.db.patch(sale._id, {
+        consignedMarginMinor: 1_000 * 1_000,
+        consignedMarginCurrency: "JOD",
+      });
+    });
+
+    const dash = await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId, timeRange: "MONTH" as const,
+    });
+
+    // The dealership owned that car. Its full price is the turnover, in this
+    // window exactly as in the other one.
     expect(dash.previousPeriod?.sales).toBe(
       CAP * OWNED_PRICE + PAST_CAP_OWNED_PRICE + MARGIN
     );

@@ -5943,6 +5943,119 @@ describe("the deal cockpit's canonical sale destination", () => {
   });
 });
 
+
+/**
+ * SCRUM-49 Lane 4 / SCRUM-42 — the financed cockpit's own classification.
+ *
+ * `resolveSettlement` asked `vehicle != null && isConsignedAgentSale(vehicle)`,
+ * the NARROW test. `saleEconomics` has always applied the broader one: a vehicle
+ * row that is gone does not stop a sale from having BEEN an agent sale when the
+ * sale's own frozen evidence survives. The two disagree exactly when the vehicle
+ * has been hard-deleted — reachable through `/admin`'s raw-JSON editor, and
+ * through a `hardDeleteOrg` that fails part-way.
+ *
+ * The consequence is in `resolveSupplierObligation`'s THROUGH branch: with no
+ * payable row to read it answers `consigned ? "UNKNOWN" : "NONE"`. Wrongly
+ * `false`, a debt that certainly exists reads as PROVEN ABSENT, and
+ * `settlementIsComplete` treats NONE as done. The rail then reports the deal
+ * settled while the supplier is still owed his entire entitlement.
+ *
+ * Both erasures are the SAME failure mode, which is why the pair is realistic
+ * rather than contrived: `hardDeleteOrg` removes the supplier rows and the
+ * vehicles in one run, so a run that dies in the middle leaves precisely this.
+ *
+ * SCRUM-29 fixed the identical classification bug on the CASH cockpit and
+ * deliberately left this production accounting surface alone — which is why it
+ * is its own ticket, with its own regression, on its own review.
+ */
+describe("SCRUM-42 — a lost vehicle must not turn an unpaid supplier into a settled one", () => {
+  async function cockpitOfApp(s: Seeded, applicationId: string) {
+    return await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId: applicationId as never,
+    });
+  }
+  const stageOf = (view: Awaited<ReturnType<typeof cockpitOfApp>>, key: string) =>
+    view!.stages.find((st) => st.key === key)!.state;
+  const supplierRow = (view: Awaited<ReturnType<typeof cockpitOfApp>>) =>
+    view!.money!.parties.find((p) => p.party === "SUPPLIER")!;
+
+  async function throughRouteDeal(tag: string) {
+    const s = await seedDealership(tag);
+    const { applicationId } = await runDeal(s, { route: "THROUGH_DEALERSHIP", finalize: true });
+    // The financier's own leg finished. Without this the rail could never read
+    // COMPLETE whatever the supplier leg said, and the test would prove nothing.
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, { settlementStatus: "FULLY_SETTLED" });
+    });
+    return { s, applicationId };
+  }
+
+  async function payableOf(s: Seeded) {
+    return await s.t.run(async (ctx) =>
+      (await ctx.db.query("vehicleSupplierPayables").collect()).find(
+        (row) => row.orgId === (s.orgId as never) && row.status !== "CANCELLED"
+      )
+    );
+  }
+
+  test("the rail does not report a deal settled when the debt record and the vehicle are both gone", async () => {
+    const { s, applicationId } = await throughRouteDeal("s42Through");
+
+    // Premise 1: the dealership really does owe him, and the record says so.
+    const payable = await payableOf(s);
+    expect(payable).toBeDefined();
+    expect(payable!.amountDue).toBeGreaterThan(0);
+
+    // Premise 2: with the record present the rail is already not complete, so
+    // the assertion below cannot pass merely because completion is unreachable.
+    expect(stageOf(await cockpitOfApp(s, applicationId), "SETTLEMENT")).not.toBe("COMPLETE");
+
+    // What a half-finished `hardDeleteOrg` leaves behind: the supplier rows
+    // removed before the vehicles, and the sale still standing.
+    const sale = await s.t.run(async (ctx) => await ctx.db.get(payable!.saleId!));
+    await s.t.run(async (ctx) => {
+      await ctx.db.delete(payable!._id);
+      await ctx.db.delete(sale!.vehicleId);
+    });
+
+    const view = await cockpitOfApp(s, applicationId);
+
+    // The debt did not stop existing because its record did. UNKNOWN is the
+    // honest answer and it is not completion; NONE is the claim that nobody is
+    // owed anything, and it is what this read before the fix.
+    expect(stageOf(view, "SETTLEMENT")).not.toBe("COMPLETE");
+
+    // Name the REASON, not just the outcome. A stage can be incomplete for
+    // reasons that have nothing to do with the supplier, so `not COMPLETE`
+    // alone would keep passing if the obligation silently went back to NONE.
+    // The supplier's projected position is where "we cannot tell" is stated.
+    expect(supplierRow(view).position).toBe("UNKNOWN");
+  });
+
+  test("a genuinely dealer-owned deal still reports nothing owed to a supplier", async () => {
+    // The other side of the guard. A fix that simply answered "consigned" more
+    // often would strand every ordinary financed sale in UNKNOWN for ever.
+    const s = await seedDealership("s42Owned");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.vehicleId as never, {
+        sourceType: "STOCK",
+        purchasePrice: 15_000,
+      });
+    });
+    const { applicationId } = await runDeal(s, { finalize: true });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, { settlementStatus: "FULLY_SETTLED" });
+    });
+
+    const view = await cockpitOfApp(s, applicationId);
+    const supplier = view!.money!.parties.find((p) => p.party === "SUPPLIER")!;
+    // No supplier, nothing owed, and the deal is free to finish.
+    expect(supplier.amountMinor).toBe(0);
+    expect(stageOf(view, "SETTLEMENT")).toBe("COMPLETE");
+  });
+});
+
 /**
  * A deal walked to APPROVED with the vehicle handed over and NOTHING else.
  *

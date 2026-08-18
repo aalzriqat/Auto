@@ -62,6 +62,10 @@ import {
   dealershipCollectsGross,
   directSettlementBelowEntitlementRefusal,
   isConsignedAgentSale,
+  recordedConsignedMargin,
+  recordedSupplierEntitlement,
+  recordedSupplierGrossReceipt,
+  saleIsAgentSale,
   settlementPayer,
   type SettlementPayer,
 } from "./utils/vehicleOwnership";
@@ -379,21 +383,23 @@ const VALID_STATUS_TRANSITIONS: Record<FinanceApplicationStatus, readonly Financ
  * the finance application keeps its own status, so reading the sale only for
  * its route left a cancelled deal rendering as live work.
  */
-async function resolveDealRoute(
-  ctx: QueryCtx,
+function resolveDealRoute(
   app: Doc<"financeApplications">,
-  opts: { vehicle: Doc<"vehicles"> | null; consigned: boolean }
-): Promise<{ routeKnown: boolean; settlesDirect: boolean; saleCancelled: boolean }> {
+  opts: { vehicle: Doc<"vehicles"> | null; consigned: boolean; sale: Doc<"sales"> | null }
+): { routeKnown: boolean; settlesDirect: boolean; saleCancelled: boolean } {
   let routeKnown = true;
   let settlesDirect = false;
   let saleCancelled = false;
 
   if (app.finalizedSaleId) {
-    const sale = await ctx.db.get(app.finalizedSaleId);
-    if (!sale || sale.orgId !== app.orgId) routeKnown = false;
-    else saleCancelled = sale.status === "CANCELLED";
-    if (sale && sale.orgId === app.orgId) {
-      settlesDirect = !dealershipCollectsGross(consignedSettlementRoute(sale));
+    // The caller has already loaded this document and org-checked it, so it is
+    // passed in rather than read a second time. `opts.sale` is null on exactly
+    // the two conditions this branch used to re-derive — no such document, or a
+    // document belonging to another org — which is why one guard replaces two.
+    if (!opts.sale) routeKnown = false;
+    else {
+      saleCancelled = opts.sale.status === "CANCELLED";
+      settlesDirect = !dealershipCollectsGross(consignedSettlementRoute(opts.sale));
     }
   } else if (opts.vehicle === null) {
     routeKnown = false;
@@ -517,11 +523,54 @@ function resolveFinancierObligation(
 
 async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">) {
   const vehicle = await ctx.db.get(app.vehicleId);
-  const consigned = vehicle != null && isConsignedAgentSale(vehicle);
+  /**
+   * ⚠️ SCRUM-42 — through the SHARED classifier once a sale exists.
+   *
+   * This asked `vehicle != null && isConsignedAgentSale(vehicle)`, the NARROW
+   * rule. `saleEconomics` has always applied a broader one: a vehicle row that
+   * is gone does not stop a sale from having been an agent sale when the sale's
+   * own frozen evidence survives — a recorded consigned margin, a
+   * `DIRECT_TO_SUPPLIER` route, or a valid frozen entitlement. The two disagree
+   * exactly when the vehicle has been hard-deleted, which the `/admin` raw-JSON
+   * editor and a partially-failed `hardDeleteOrg` both reach.
+   *
+   * `consigned` gates the supplier-obligation resolution below. Wrongly `false`,
+   * the obligation reads as ABSENT rather than UNKNOWN — so the stage rail can
+   * report the deal COMPLETE and the supplier row disappears while a real claim
+   * is still open, all while the headline reports a genuine agency margin
+   * because `saleEconomics` classified the same sale correctly. The screen said
+   * the deal was settled and nothing was owed, over money the supplier still
+   * held.
+   *
+   * SCRUM-29 hit the identical bug on the new CASH cockpit and fixed it there by
+   * extracting `saleIsAgentSale`. The financed cockpit was deliberately left
+   * alone then — pre-existing, in production, outside that PR's frozen scope.
+   *
+   * The vehicle still answers whenever it is present, and BEFORE a sale exists
+   * it is the only evidence there is — which is why the fallback is the old test
+   * rather than a guess. (`settlesDirectToSupplier` above keeps the narrow rule
+   * for exactly that pre-sale case.)
+   */
+  const finalizedSale = app.finalizedSaleId ? await ctx.db.get(app.finalizedSaleId) : null;
+  const sale = finalizedSale && finalizedSale.orgId === app.orgId ? finalizedSale : null;
+  const consigned = sale
+    ? saleIsAgentSale({
+        vehicle,
+        salePrice: sale.salePrice,
+        recordedMargin: recordedConsignedMargin(sale),
+        recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
+        recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
+        // The FACTS, not a pre-derived boolean — see `supplierReceiptIsAdmissible`.
+        supplierSettlementRoute: sale.supplierSettlementRoute,
+        externallyFinanced:
+          sale.financingType === "FINANCED" || sale.financingType === "LEASE",
+      })
+    : vehicle != null && isConsignedAgentSale(vehicle);
 
-  const { routeKnown, settlesDirect, saleCancelled } = await resolveDealRoute(ctx, app, {
+  const { routeKnown, settlesDirect, saleCancelled } = resolveDealRoute(app, {
     vehicle,
     consigned,
+    sale,
   });
 
   const supplierClaim = app.finalizedSaleId

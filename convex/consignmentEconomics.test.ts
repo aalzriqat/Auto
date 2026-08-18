@@ -1,0 +1,1474 @@
+/**
+ * SCRUM-49 Lane 4 — one consignment classification, one set of economics.
+ *
+ * Four defects that all live in `saleEconomics` and its consumers, and which are
+ * one problem seen from four sides: a figure is published as known when the
+ * evidence for it is missing, corrupt, or belongs to a different basis.
+ *
+ *   SCRUM-41  a frozen margin is trusted even on the one route where the frozen
+ *             margin is exactly what cannot be trusted.
+ *   SCRUM-33  a sale whose vehicle row is gone and which froze nothing of its
+ *             own is read as dealer-owned stock with a zero cost basis, so the
+ *             whole ticket is published as profit — with no unknown flag.
+ *   O-1       the frozen entitlement is validated against the sale price, which
+ *             is the wrong yardstick on a financed DIRECT deal.
+ *   O-2       an entitlement that fails validation falls back to a live cost
+ *             that is itself not a basis.
+ *
+ * Every test here failed against `origin/main` at 214c843a before the fix.
+ */
+import { convexTestWithComponents } from "../test-utils/convexTest";
+import { describe, expect, test, vi } from "vitest";
+import schema from "./schema";
+import { api } from "./_generated/api";
+import {
+  saleEconomics,
+  recordedConsignedMargin,
+  recordedSupplierEntitlement,
+  recordedSupplierGrossReceipt,
+} from "./utils/vehicleOwnership";
+import type { Id } from "./_generated/dataModel";
+
+vi.mock("./rateLimit", () => ({
+  rateLimiter: {
+    limit: vi.fn().mockResolvedValue({ ok: true }),
+    check: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
+  },
+  checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
+}));
+
+const MODULE_GLOB = import.meta.glob("./**/*.*s");
+
+const PERMS = [
+  "view:sales", "create:sales", "edit:sales",
+  "view:vehicles", "create:vehicles", "edit:vehicles",
+  "view:customers", "create:customers",
+  "manage:finance", "view:finance", "view:reports",
+  "view:commissions", "manage:commissions",
+];
+
+const SALE_PRICE = 12_500;
+const ENTITLEMENT = 9_500;
+const MARGIN = SALE_PRICE - ENTITLEMENT;
+/** What the financier actually approved, and therefore actually paid him. */
+const APPROVED = 11_000;
+/** The earning the ledger recognizes on the direct route: approved − entitlement. */
+const REAL_EARNING = APPROVED - ENTITLEMENT;
+
+async function seedDealer(tag: string) {
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
+  const orgId = await t.run((ctx) =>
+    ctx.db.insert("organizations", { name: `L4 ${tag}`, createdAt: Date.now() })
+  );
+  await t.run((ctx) =>
+    ctx.db.insert("subscriptions", {
+      orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now(),
+    })
+  );
+  const userId = await t.run((ctx) =>
+    ctx.db.insert("users", { clerkId: `${tag}_u`, email: `${tag}@e.com`, name: "Lane4 User" })
+  );
+  const roleId = await t.run((ctx) =>
+    ctx.db.insert("roles", { orgId, name: "Owner", permissions: PERMS, isSystemOwnerRole: true })
+  );
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+  await t.run((ctx) =>
+    ctx.db.insert("orgSettings", {
+      orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH", "BANK_TRANSFER"],
+    })
+  );
+
+  const asUser = t.withIdentity({ subject: `${tag}_u`, clerkId: `${tag}_u` });
+  await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
+  const fiscalYear = new Date().getUTCFullYear();
+  await asUser.mutation(api.accountingPeriods.create, {
+    orgId,
+    startDate: Date.UTC(fiscalYear, 0, 1),
+    endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+    fiscalYear, periodNumber: 1,
+  });
+  const period = (await asUser.query(api.accountingPeriods.list, { orgId }))[0];
+  await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+
+  const customerId = await t.run((ctx) =>
+    ctx.db.insert("customers", { orgId, firstName: "Buyer", lastName: tag })
+  );
+
+  return { t, orgId, userId, asUser, customerId };
+}
+
+type Seeded = Awaited<ReturnType<typeof seedDealer>>;
+
+/** A completed consigned sale through the real writer, so every frozen field is real. */
+async function sellConsigned(s: Seeded, vin: string) {
+  const vehicleId = await s.t.run((ctx) =>
+    ctx.db.insert("vehicles", {
+      orgId: s.orgId, vin, make: "Toyota", model: "Camry", year: 2024, mileage: 10,
+      color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: SALE_PRICE,
+      status: "AVAILABLE", sourceType: "SOURCED",
+      sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
+    })
+  );
+  const saleId = await s.asUser.mutation(api.sales.create, {
+    orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
+    salePrice: SALE_PRICE, saleDate: Date.now(), status: "COMPLETED" as const,
+  });
+  return { saleId: saleId as Id<"sales">, vehicleId };
+}
+
+function range() {
+  const now = Date.now();
+  return { startDate: now - 86_400_000, endDate: now + 86_400_000 };
+}
+
+/* ------------------------------------------------------------------ SCRUM-41 */
+
+/**
+ * The frozen margin is the answer on every route EXCEPT one.
+ *
+ * On a financed DIRECT deal the finance company pays the supplier what it
+ * APPROVED, and the dealership earns `approved − entitlement`. `salePrice −
+ * entitlement` reaches no party. `sales.create` accepts `financingType` and
+ * `supplierSettlementRoute` together with no application behind them, and the
+ * write-path guard that refuses that shape (`FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT`)
+ * only landed with the SCRUM-30 release — so a row completed before it froze
+ * `consignedMarginMinor` at the sale-price spread.
+ *
+ * What tells the two populations apart is not a date: it is
+ * `consignedSupplierGrossReceiptMinor`. The one writer of the frozen fields
+ * (`utils/saleCompletion.ts`) writes it in the SAME patch as the margin on every
+ * direct-route sale, and derives the margin FROM it. A direct row carrying a
+ * margin and no receipt therefore cannot have been written by the writer that
+ * computes the margin correctly.
+ *
+ * The commission engine already fails closed on exactly this evidence
+ * (`commissionableEarnings` refuses a financed direct sale with no recorded
+ * receipt rather than substituting the sale price). Payroll money was protected
+ * and owner-facing report money was not.
+ */
+describe("SCRUM-41 — a frozen margin nothing can substantiate", () => {
+  test("a financed DIRECT row with no frozen receipt does not publish its frozen margin", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: ENTITLEMENT,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      externallyFinanced: true,
+      // A frozen margin that the paired writer did not produce — so nothing on
+      // the row says which externally funded basis it came from.
+      recordedMargin: MARGIN,
+      recordedSupplierEntitlement: ENTITLEMENT,
+      // The proof of what actually reached the supplier. Absent.
+      recordedSupplierGrossReceipt: undefined,
+      // ⚠️ LOAD-BEARING, and its absence made this test vacuous.
+      // `financedDirectUnverified` withholds when the receipt is unverified OR
+      // the application is missing. With this flag omitted the SECOND reason
+      // already fired, so the receipt half was never the deciding term —
+      // deleting it left this test green. Satisfying the application makes the
+      // MISSING RECEIPT the only remaining reason to withhold, which is what
+      // this test is named for. The sibling test below already sets it and
+      // explains why a realistic financed-DIRECT row carries one.
+      hasFinancingApplication: true,
+    });
+
+    expect(e.dealershipMargin).toBeNull();
+    // And specifically not the overstated figure.
+    expect(e.dealershipMargin).not.toBe(MARGIN);
+    expect(e.recognizedRevenue).toBeNull();
+    // The supplier's own share is a separate frozen fact and survives: what he
+    // is owed does not depend on proving what the financier paid.
+    expect(e.supplierSettlement).toBe(ENTITLEMENT);
+  });
+
+  test("the same row WITH its frozen receipt keeps the margin the ledger posted", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: ENTITLEMENT,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      externallyFinanced: true,
+      // What the current writer freezes: approved − entitlement.
+      recordedMargin: REAL_EARNING,
+      recordedSupplierEntitlement: ENTITLEMENT,
+      recordedSupplierGrossReceipt: APPROVED,
+      // A financed DIRECT sale is only constructible through `finalizeDeal`,
+      // which records the application on the sale — so a realistic fixture for
+      // this route carries one. See the no-application case below.
+      hasFinancingApplication: true,
+    });
+
+    // Withholding a figure that IS substantiated is a different wrong answer,
+    // not a safer one. This is the guard's other side.
+    expect(e.dealershipMargin).toBe(REAL_EARNING);
+    expect(e.recognizedRevenue).toBe(REAL_EARNING);
+    expect(e.supplierSettlement).toBe(ENTITLEMENT);
+  });
+
+  /**
+   * Raised by the Codex reviewer as CRITICAL, and its stated reachability was
+   * DISPROVED before this test was written — see the SCRUM-41 Jira comment.
+   * `consignedSupplierGrossReceiptMinor` and the write-path guard that forces a
+   * real approved amount (`FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT`) reached main
+   * in the SAME merge, 51c62fc2 / PR #218, so the "field exists but guard does
+   * not" window never existed in any deployed state: a pre-#218 row carries no
+   * receipt at all and is already withheld by the rule above.
+   *
+   * The hardening is taken anyway, because the reviewer's underlying point is
+   * right for a different reason. `/admin`'s raw-JSON editor can fabricate a row
+   * whose receipt equals its sale price, and — more importantly — the CASH deal
+   * cockpit already refuses EVERY no-application financed-direct row
+   * (`financedDirectWithoutApproval` in convex/sales.ts). `saleEconomics` being
+   * more permissive than a screen that already ships is two authorities
+   * disagreeing about one sale, which is the exact defect this lane exists to
+   * remove.
+   *
+   * It costs nothing legitimate: a financed DIRECT sale is only constructible
+   * through `finalizeDeal`, which records `applicationId` on the sale.
+   */
+  test("a receipt equal to the sale price does not verify a margin with no application behind it", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: ENTITLEMENT,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      externallyFinanced: true,
+      recordedMargin: MARGIN,
+      recordedSupplierEntitlement: ENTITLEMENT,
+      // Present, and indistinguishable from the historical sale-price fallback.
+      recordedSupplierGrossReceipt: SALE_PRICE,
+      // Nothing approved this. There is no application to prove what a
+      // financier paid, so the receipt proves only its own presence.
+      hasFinancingApplication: false,
+    });
+
+    expect(e.dealershipMargin).toBeNull();
+    expect(e.dealershipMargin).not.toBe(MARGIN);
+  });
+
+  test("...and the same row WITH its application keeps the margin", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: ENTITLEMENT,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      externallyFinanced: true,
+      recordedMargin: REAL_EARNING,
+      recordedSupplierEntitlement: ENTITLEMENT,
+      recordedSupplierGrossReceipt: APPROVED,
+      hasFinancingApplication: true,
+    });
+
+    expect(e.dealershipMargin).toBe(REAL_EARNING);
+  });
+
+  test("a CASH direct row is untouched — the buyer really does hand over the sale price", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: ENTITLEMENT,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      // No external financier: nobody approves an amount, so there is nothing
+      // the sale price could disagree with.
+      externallyFinanced: false,
+      recordedMargin: MARGIN,
+      recordedSupplierEntitlement: ENTITLEMENT,
+      recordedSupplierGrossReceipt: undefined,
+    });
+
+    expect(e.dealershipMargin).toBe(MARGIN);
+  });
+
+  test("the sales report excludes it from profit and says the total is a floor", async () => {
+    const s = await seedDealer("s41report");
+    const { saleId } = await sellConsigned(s, "VIN41R1");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, {
+        financingType: "FINANCED",
+        supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+        // The unsubstantiated shape: a frozen margin with nothing on the row to
+        // substantiate the basis it was computed on.
+        consignedSupplierGrossReceiptMinor: undefined,
+      });
+    });
+
+    const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId, ...range(),
+    });
+
+    expect(report.totalProfit).toBe(0);
+    expect(report.totalProfit).not.toBe(MARGIN);
+    expect(report.totalRevenue).toBe(0);
+    // Not merely short — reported as short, which is the whole difference
+    // between an incomplete total and a wrong one.
+    expect(report.unknownMarginSaleCount).toBe(1);
+  });
+
+  /**
+   * Found by the Codex reviewer AFTER the application requirement was added to
+   * `saleEconomics` but not to the dashboard's own copy of the rule — the THIRD
+   * consecutive drift between the two surfaces, and the one that triggered the
+   * convergence circuit breaker and the redesign that deleted the copy.
+   *
+   * Kept as a permanent CROSS-SURFACE assertion rather than a unit test: a unit
+   * test of `saleEconomics` alone would have stayed green through all three.
+   */
+  test("a receipt with no application behind it is withheld by BOTH surfaces", async () => {
+    const s = await seedDealer("s41dashApp");
+    const { saleId } = await sellConsigned(s, "VIN41DA1");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, {
+        financingType: "FINANCED",
+        supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+        // Receipt PRESENT (indistinguishable from the sale-price fallback), but
+        // no application behind it. `applicationId` is left unset.
+        consignedSupplierGrossReceiptMinor: SALE_PRICE * 1_000,
+      });
+    });
+
+    const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId, ...range(),
+    });
+    const dash = (await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId,
+      timeRange: "ALL_TIME",
+    })) as { salesVolumeThisMonth: number; truncated: { turnover: boolean } };
+
+    expect(report.unknownMarginSaleCount).toBe(1);
+    expect(report.totalProfit).toBe(0);
+    expect(dash.salesVolumeThisMonth).toBe(0);
+    expect(dash.truncated.turnover).toBe(true);
+  });
+
+  test("the dashboard reaches the same verdict as the report on the same sale", async () => {
+    const s = await seedDealer("s41dash");
+    const { saleId } = await sellConsigned(s, "VIN41D1");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, {
+        financingType: "FINANCED",
+        supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+        consignedSupplierGrossReceiptMinor: undefined,
+      });
+    });
+
+    const dash = (await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId,
+      timeRange: "ALL_TIME",
+    })) as { salesVolumeThisMonth: number; truncated: { turnover: boolean } };
+    const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId, ...range(),
+    });
+
+    // Two screens, one deal, one answer. They disagreed before: the report
+    // published the overstated margin while the dashboard had its own rule.
+    expect(dash.salesVolumeThisMonth).toBe(0);
+    expect(dash.truncated.turnover).toBe(true);
+    expect(report.totalRevenue).toBe(0);
+    expect(report.unknownMarginSaleCount).toBe(1);
+  });
+});
+
+/* ------------------------------------------------------------------ SCRUM-33 */
+
+/**
+ * A sale that froze nothing, whose vehicle row is gone.
+ *
+ * `consignedMarginMinor` post-dates the legacy consigned population and the
+ * route is absent, which reads as THROUGH_DEALERSHIP — so none of the three
+ * consignment signals fires and the sale classifies as dealer-owned stock.
+ * `capitalizedCost` also arrives as 0, because the cost basis went with the
+ * vehicle. The result was the entire ticket published as revenue AND as profit,
+ * with `unknownMarginSaleCount: 0` — presented as complete.
+ *
+ * The fix is not to guess the classification. It is that a sale with no
+ * readable basis of its own and no readable vehicle has an UNKNOWN earning,
+ * whichever side of the classification it would have fallen on: the same
+ * `salePrice − 0` arithmetic misstates a dealer-owned row just as badly.
+ */
+describe("SCRUM-33 — a sale with no basis on the row and no vehicle to ask", () => {
+  test("the whole ticket is not published as profit", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      // Hard-deleted through the /admin raw-JSON editor, or left behind by a
+      // partially-failed `hardDeleteOrg`.
+      vehicle: null,
+      capitalizedCost: 0,
+      // A legacy consigned THROUGH sale: the route field did not exist yet.
+      supplierSettlementRoute: undefined,
+      recordedMargin: undefined,
+      recordedSupplierEntitlement: undefined,
+    });
+
+    expect(e.dealershipMargin).toBeNull();
+    expect(e.dealershipMargin).not.toBe(SALE_PRICE);
+    // Revenue is null exactly when the margin is — the documented contract of
+    // this object, and what keeps `unknownMarginSaleCount` honest about which
+    // totals a row was excluded from.
+    expect(e.recognizedRevenue).toBeNull();
+    // Nor is the supplier's share asserted to be zero on a sale nobody can
+    // classify.
+    expect(e.supplierSettlement).toBeNull();
+  });
+
+  test("a surviving frozen basis still answers, so the rule costs nothing it should not", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: null,
+      capitalizedCost: 0,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      recordedMargin: undefined,
+      recordedSupplierEntitlement: ENTITLEMENT,
+    });
+
+    expect(e.isAgentSale).toBe(true);
+    expect(e.dealershipMargin).toBe(MARGIN);
+    expect(e.supplierSettlement).toBe(ENTITLEMENT);
+  });
+
+  /**
+   * Found INDEPENDENTLY by both adversarial reviewers, and reproduced before
+   * fixing. It is the case the first cut of this lane missed, and the miss was
+   * caused by the fix itself: moving `saleEconomics` to withhold while leaving
+   * the dashboard's own parallel rule alone made the two surfaces disagree MORE
+   * than before, under a comment asserting they now agreed.
+   *
+   * The vehicle is PRESENT here — that is what makes it different from the test
+   * below, and it is why the dashboard's rule sailed past it: the only question
+   * that rule asked was whether the sale was financed-DIRECT. It then reached
+   * `Math.max(0, salePrice − 0)` and published the whole ticket as this window's
+   * turnover AND its profit trend, feeding the top-performer tile with it.
+   */
+  /**
+   * The OTHER direction, and the one a consolidation is most likely to get
+   * wrong: a figure the authority CAN establish must not be dropped.
+   *
+   * Found by the Codex reviewer against the first cut of the dashboard
+   * consolidation and reproduced before fixing. The profit trend was gated on
+   * this window's live cost map, so a sale whose vehicle row is gone — but whose
+   * margin the SALE itself froze — reported turnover 3,000 and profit 0 in one
+   * response, with every truncation flag false. The chart contradicted the
+   * headline directly above it and said nothing was missing.
+   *
+   * The three assertions are deliberately taken together. Turnover alone passed
+   * throughout; only comparing it against the trend and the flags catches this.
+   */
+  test("a frozen margin survives a deleted vehicle in the PROFIT trend, not just in turnover", async () => {
+    const s = await seedDealer("s33frozenprofit");
+    const { vehicleId } = await sellConsigned(s, "VIN33FP1");
+    await s.t.run(async (ctx) => {
+      // Only the vehicle goes. Every frozen field on the sale survives.
+      await ctx.db.delete(vehicleId);
+    });
+
+    const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId, ...range(),
+    });
+    const dash = (await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId,
+      timeRange: "ALL_TIME",
+    })) as {
+      salesVolumeThisMonth: number;
+      truncated: { turnover: boolean; profit: boolean };
+      salesTrend: Array<{ Revenue: number; Profit: number }>;
+    };
+
+    // The report recognizes what the sale froze.
+    expect(report.totalProfit).toBe(MARGIN);
+    // So does the dashboard's headline...
+    expect(dash.salesVolumeThisMonth).toBe(MARGIN);
+    // ...and so must the chart beneath it. This was 0.
+    expect(dash.salesTrend.reduce((total, p) => total + p.Profit, 0)).toBe(MARGIN);
+    // And nothing is short, so no flag may claim otherwise.
+    expect(dash.truncated.turnover).toBe(false);
+    expect(dash.truncated.profit).toBe(false);
+  });
+
+  test("a present vehicle with no cost basis is withheld by BOTH surfaces, not just the report", async () => {
+    const s = await seedDealer("s33zerocost");
+    const { saleId, vehicleId } = await sellConsigned(s, "VIN33Z1");
+    await s.t.run(async (ctx) => {
+      // The legacy row: completed before the frozen fields existed.
+      await ctx.db.patch(saleId, {
+        consignedMarginMinor: undefined,
+        consignedMarginCurrency: undefined,
+        consignedSupplierEntitlementMinor: undefined,
+        consignedSupplierGrossReceiptMinor: undefined,
+        supplierSettlementRoute: undefined,
+      });
+      // ...whose supplier cost was later cleared. The row itself SURVIVES.
+      await ctx.db.patch(vehicleId, { sourceCost: 0 });
+    });
+
+    const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId, ...range(),
+    });
+    const dash = (await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId,
+      timeRange: "ALL_TIME",
+    })) as {
+      salesVolumeThisMonth: number;
+      truncated: { turnover: boolean };
+      salesTrend: Array<{ Revenue: number; Profit: number }>;
+    };
+
+    expect(report.totalProfit).toBe(0);
+    expect(report.unknownMarginSaleCount).toBe(1);
+
+    // Before the fix: 12,500 as turnover, 12,500 as profit, `truncated.turnover`
+    // false — an owner's home screen contradicting their own sales report.
+    expect(dash.salesVolumeThisMonth).toBe(0);
+    expect(dash.truncated.turnover).toBe(true);
+    for (const point of dash.salesTrend) {
+      expect(point.Revenue).toBe(0);
+      expect(point.Profit).toBe(0);
+    }
+  });
+
+  test("the report withholds it, and the dashboard agrees on the same sale", async () => {
+    const s = await seedDealer("s33report");
+    const { saleId, vehicleId } = await sellConsigned(s, "VIN33R1");
+    await s.t.run(async (ctx) => {
+      // The legacy shape: completed before any of the frozen fields existed.
+      await ctx.db.patch(saleId, {
+        consignedMarginMinor: undefined,
+        consignedMarginCurrency: undefined,
+        consignedSupplierEntitlementMinor: undefined,
+        consignedSupplierGrossReceiptMinor: undefined,
+        supplierSettlementRoute: undefined,
+      });
+      await ctx.db.delete(vehicleId);
+    });
+
+    const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId, ...range(),
+    });
+    const dash = (await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId,
+      timeRange: "ALL_TIME",
+    })) as { salesVolumeThisMonth: number; truncated: { turnover: boolean } };
+
+    // Never the sale price as profit — the defect this ticket names.
+    expect(report.totalProfit).toBe(0);
+    expect(report.totalProfit).not.toBe(SALE_PRICE);
+    expect(report.totalRevenue).not.toBe(SALE_PRICE);
+    // And flagged, so the owner is told the range is incomplete rather than
+    // handed a confident wrong total.
+    expect(report.unknownMarginSaleCount).toBe(1);
+
+    // The two surfaces disagreed on this exact row: the dashboard excluded it
+    // and the report published it in full.
+    expect(dash.salesVolumeThisMonth).toBe(0);
+    expect(dash.truncated.turnover).toBe(true);
+  });
+});
+
+/* -------------------------------------------------------------- SCRUM-40 O-1 */
+
+/**
+ * `<= salePrice` is the wrong yardstick on a financed DIRECT deal.
+ *
+ * `approveDealerPurchaseAmount` bounds the approval only by `> 0` and
+ * `>= entitlement`, and MANUAL basis accepts any figure — so an approval, and
+ * therefore an entitlement, above the sale price is writer-producible.
+ * `completeSale` compares the entitlement against the supplier's GROSS RECEIPT,
+ * not against the sale price, so the reader was applying a stricter bound than
+ * the writer and rejecting values the writer had legitimately stored.
+ *
+ * The error direction was withholding rather than overstating, which is why this
+ * is a hardening rather than a defect — but a figure withheld for no reason is
+ * still a figure the owner cannot see.
+ */
+describe("SCRUM-40 O-1 — the entitlement is bounded by what the supplier received", () => {
+  test("an entitlement above the sale price is legitimate when the approval covered it", () => {
+    const LOW_PRICE = 12_500;
+    const HIGH_ENTITLEMENT = 13_500;
+    const HIGH_APPROVAL = 14_000;
+
+    const e = saleEconomics({
+      salePrice: LOW_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: HIGH_ENTITLEMENT,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      externallyFinanced: true,
+      recordedMargin: HIGH_APPROVAL - HIGH_ENTITLEMENT,
+      recordedSupplierEntitlement: HIGH_ENTITLEMENT,
+      recordedSupplierGrossReceipt: HIGH_APPROVAL,
+      // The approval this test is about came FROM an application.
+      hasFinancingApplication: true,
+    });
+
+    expect(e.supplierSettlement).toBe(HIGH_ENTITLEMENT);
+    expect(e.supplierSettlement).not.toBeNull();
+    expect(e.dealershipMargin).toBe(HIGH_APPROVAL - HIGH_ENTITLEMENT);
+  });
+
+  test("the sale price still bounds it when no receipt was recorded", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: ENTITLEMENT,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      recordedMargin: undefined,
+      // Above the gross, and with no receipt there is nothing that makes it so.
+      recordedSupplierEntitlement: SALE_PRICE + 1_000,
+    });
+
+    // Falls back to the live basis, which is what it did before and remains
+    // right while that basis is a real one.
+    expect(e.supplierSettlement).toBe(ENTITLEMENT);
+    expect(e.dealershipMargin).toBe(MARGIN);
+  });
+});
+
+/* -------------------------------------------------------------- SCRUM-40 O-2 */
+
+/**
+ * When the frozen entitlement is rejected, the settlement dropped to the LIVE
+ * capitalized cost rather than withholding — and on an agent sale a live cost of
+ * zero is not the fact that the supplier is owed nothing for his own car. It is
+ * missing evidence: `saleCompletion` refuses to complete a sourced sale without
+ * a positive cost, so zero cannot have been what the sale posted on.
+ *
+ * Reproduced by Opus: `SOURCED, cost=0, entitlement=13500, margin=undefined` →
+ * `margin=12500, settle=0`. The whole ticket as profit, from two corruptions
+ * that individually are survivable.
+ *
+ * The narrow rule is deliberate. Where the live cost IS a real basis — every
+ * pinned test in `consignedReporting.test.ts` — falling back to it stays right,
+ * and withholding a derivable number would be a different wrong answer.
+ */
+describe("SCRUM-40 O-2 — a live basis that is not a basis", () => {
+  test("an agent sale with no cost basis and an ineligible entitlement withholds both figures", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      // Cleared through the admin raw editor.
+      capitalizedCost: 0,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      recordedMargin: undefined,
+      // Above the ceiling, so ineligible.
+      recordedSupplierEntitlement: SALE_PRICE + 1_000,
+    });
+
+    expect(e.dealershipMargin).toBeNull();
+    expect(e.dealershipMargin).not.toBe(SALE_PRICE);
+    expect(e.supplierSettlement).toBeNull();
+    expect(e.supplierSettlement).not.toBe(0);
+  });
+
+  test("a positive live cost is still a basis and is still used", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: ENTITLEMENT,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      recordedMargin: undefined,
+      recordedSupplierEntitlement: undefined,
+    });
+
+    expect(e.dealershipMargin).toBe(MARGIN);
+    expect(e.supplierSettlement).toBe(ENTITLEMENT);
+  });
+
+  /**
+   * Raised by the Codex reviewer, VALIDATED by reproduction, and a genuine gap
+   * in my first cut: I coupled the supplier's uncertainty to the margin's.
+   *
+   * `basisUnknown` requires the margin to be absent, so a row that HAS a frozen
+   * margin skipped it entirely — and the settlement beside it then fell through
+   * to a live cost of zero and published "the supplier is owed nothing", with no
+   * unknown-settlement count to say otherwise. The two figures answer different
+   * questions from different evidence and their uncertainty is not shared: a
+   * surviving margin says nothing about whether the supplier's basis survived.
+   *
+   * Note this is the OPPOSITE direction from the "ONE predicate governs BOTH
+   * halves" rule established in an earlier round. That rule is about which
+   * ENTITLEMENT is eligible, and it still holds — an entitlement unfit to derive
+   * the margin is still unfit to be published. This is about which figure may be
+   * withheld, and there the two are independent.
+   */
+  test("a surviving frozen margin does not certify the supplier's basis beside it", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      // Cleared after the sale — a consigned car is never capitalized, so the
+      // acquisition lock never engages and `sourceCost` stays editable.
+      capitalizedCost: 0,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      // The sale froze what IT earned...
+      recordedMargin: MARGIN,
+      // ...but what the supplier was owed predates the field, or was erased.
+      recordedSupplierEntitlement: undefined,
+    });
+
+    // The margin is still known: it has its own frozen evidence.
+    expect(e.dealershipMargin).toBe(MARGIN);
+    // The supplier's share is NOT. Zero is the claim that he is owed nothing
+    // for his own car, and nothing on this row supports it.
+    expect(e.supplierSettlement).toBeNull();
+    expect(e.supplierSettlement).not.toBe(0);
+  });
+
+  /**
+   * A supplier cost edited ABOVE the sale price is corruption, not a loss.
+   *
+   * Raised by the Codex reviewer against the dashboard consolidation, which
+   * dropped a `Math.max(0, …)` floor the old dashboard applied to its turnover.
+   * The floor is not the right answer either — it published a confident zero —
+   * but neither is an exact negative, and the deeper point is that
+   * `reports.ts` NEVER had the floor, so both surfaces were already publishing
+   * it. Fixing it in the shared authority fixes both.
+   *
+   * Reachable in production: a consigned car is never capitalized into
+   * inventory, so the acquisition lock never engages and `sourceCost` stays
+   * editable after the sale. `saleCompletion` REFUSES to complete a sourced sale
+   * below the supplier's entitlement, so a negative agent spread cannot be what
+   * the sale was posted on — it is evidence the live basis has drifted, which is
+   * exactly the rule `recordedConsignedMargin` and `validFrozenEntitlementFor`
+   * already apply to their own fields.
+   */
+  test("a live supplier cost above the sale price is UNKNOWN, not a loss", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      // Corrected upward after the sale, past what the car sold for.
+      capitalizedCost: SALE_PRICE + 3_500,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      recordedMargin: undefined,
+      recordedSupplierEntitlement: undefined,
+    });
+
+    expect(e.dealershipMargin).toBeNull();
+    expect(e.dealershipMargin).not.toBe(-3_500);
+    expect(e.recognizedRevenue).toBeNull();
+    /**
+     * The half the first version of this test forgot to assert, and the more
+     * consequential one — it feeds `supplierPayable` on the deal cockpit.
+     *
+     * In this branch the settlement comes from the SAME drifted cost, so
+     * publishing it would state a supplier share larger than the whole car.
+     * Without this line the old `capitalizedCost` fallback could be restored for
+     * the settlement alone and every test would stay green.
+     */
+    expect(e.supplierSettlement).toBeNull();
+    expect(e.supplierSettlement).not.toBe(SALE_PRICE + 3_500);
+  });
+
+  /**
+   * The guard that decides "is there a live basis at all" is written
+   * `!(capitalizedCost > 0)`, twice — `basisUnknown` and `supplierBasisUnknown`.
+   *
+   * SonarCloud flags both on PR #238 as S1940, "use the opposite operator (<=)
+   * instead". That rewrite is not equivalent and would be a defect: every
+   * comparison against `NaN` is false, so `!(NaN > 0)` is TRUE (no basis, and
+   * the figure is withheld) while `NaN <= 0` is FALSE (a basis exists, and
+   * `salePrice − NaN` is published).
+   *
+   * Reachable, not theoretical. Convex stores `NaN` under a `v.number()`
+   * validator without complaint, and `computeVehicleCapitalizedCost` returns
+   * `vehicle.sourceCost ?? 0` for a sourced car — `NaN ?? 0` is `NaN`, so it
+   * arrives here unchanged. One such row then renders EVERY other sale's profit
+   * in the org as `NaN`, the same failure `consignedReporting.test.ts` already
+   * pins for the frozen margin field.
+   *
+   * This test exists to make that suggestion fail loudly rather than be applied
+   * on a quiet cleanup pass. Verified by mutation: inverting either operator to
+   * `<= 0` turns the assertions below red.
+   */
+  test("a NaN live cost is not a basis — the `<= 0` rewrite would publish NaN", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: NaN,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      recordedMargin: undefined,
+      recordedSupplierEntitlement: undefined,
+    });
+
+    expect(e.dealershipMargin).toBeNull();
+    expect(e.recognizedRevenue).toBeNull();
+    // The supplier half asks the same question independently, so it needs its
+    // own assertion — `supplierBasisUnknown` carries the second `!(… > 0)`.
+    expect(e.supplierSettlement).toBeNull();
+
+    // Stated separately from `toBeNull()`: a NaN leaking through reads as
+    // "not null" in a way the failure message above would not name.
+    expect(Number.isNaN(e.dealershipMargin as number)).toBe(false);
+    expect(Number.isNaN(e.supplierSettlement as number)).toBe(false);
+  });
+
+  test("a dealer-owned sale sold at a genuine loss still reports that loss", () => {
+    // The other side, and the reason this rule is agent-only. A dealership can
+    // and does sell its own stock below cost; that is a real trading result and
+    // withholding it would hide a fact the owner needs.
+    const e = saleEconomics({
+      salePrice: 8_000,
+      vehicle: { sourceType: "STOCK" },
+      capitalizedCost: 9_500,
+    });
+
+    expect(e.dealershipMargin).toBe(-1_500);
+    expect(e.recognizedRevenue).toBe(8_000);
+  });
+
+  test("a dealer-owned sale is not caught by the agent-only zero-cost rule", () => {
+    // A dealer-owned car genuinely can carry a zero cost basis on a legacy row,
+    // and `salePrice − 0` is what its own sale posted on. Widening the rule to
+    // cover it would blank a figure that was never in doubt.
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "STOCK" },
+      capitalizedCost: 0,
+    });
+
+    expect(e.isAgentSale).toBe(false);
+    expect(e.dealershipMargin).toBe(SALE_PRICE);
+    expect(e.recognizedRevenue).toBe(SALE_PRICE);
+  });
+});
+
+/* -------------------------------------------------------------- SCRUM-40 O-3 */
+
+/**
+ * The classification premise, enforced rather than merely true.
+ *
+ * `saleIsAgentSale` treats a surviving `consignedSupplierEntitlementMinor` — and
+ * a surviving `consignedMarginMinor` — as positive consignment signals when the
+ * vehicle row is gone. That rests on "these fields exist only on a consigned
+ * sale", which today holds because there is exactly one writer and it sits
+ * inside `if (isSourced && marginMinor !== null)`.
+ *
+ * Nothing enforced it. A future writer or backfill that recorded either field on
+ * a dealer-owned sale would silently reclassify it once its vehicle was deleted:
+ * revenue `salePrice` → `salePrice − entitlement`, cost → 0.
+ */
+describe("SCRUM-40 O-3 — the frozen consigned fields belong to consigned sales only", () => {
+  test("completing a dealer-owned sale writes neither frozen consigned field", async () => {
+    const s = await seedDealer("s40o3");
+    const vehicleId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId, vin: "VIN40O3", make: "Kia", model: "Rio", year: 2023, mileage: 5,
+        color: "Red", fuelType: "Gas", transmission: "Auto", sellingPrice: 8_000,
+        status: "AVAILABLE", sourceType: "STOCK", purchasePrice: 6_000,
+      })
+    );
+    const saleId = await s.asUser.mutation(api.sales.create, {
+      orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
+      salePrice: 8_000, saleDate: Date.now(), status: "COMPLETED" as const,
+    });
+
+    const sale = await s.t.run((ctx) => ctx.db.get(saleId as Id<"sales">));
+
+    // Without this, every assertion below passes on a null sale: `null?.x` is
+    // `undefined`, so the three `toBeUndefined()` checks would prove nothing
+    // about the writer they exist to pin.
+    expect(sale).not.toBeNull();
+    expect(sale?.consignedMarginMinor).toBeUndefined();
+    expect(sale?.consignedSupplierEntitlementMinor).toBeUndefined();
+    expect(sale?.consignedSupplierGrossReceiptMinor).toBeUndefined();
+  });
+
+  test("completing a consigned sale writes all three, so the guard above is not vacuous", async () => {
+    const s = await seedDealer("s40o3b");
+    const { saleId } = await sellConsigned(s, "VIN40O3B");
+    const sale = await s.t.run((ctx) => ctx.db.get(saleId));
+
+    // THROUGH_DEALERSHIP is the default route, and the receipt is written only
+    // on the direct one — so two of the three, which is what makes the
+    // dealer-owned assertion above discriminating rather than trivially true.
+    expect(sale?.consignedMarginMinor).toBe(MARGIN * 1_000);
+    expect(sale?.consignedSupplierEntitlementMinor).toBe(ENTITLEMENT * 1_000);
+  });
+});
+
+/* ----------------------------------------------------- Codex round 3: CX-B/C/D */
+
+/**
+ * Three HIGH defects the closing Codex seat found at `ecd0ac141`, all INTRODUCED
+ * by this PR. Each test below failed at `ecd0ac141` before the fix.
+ *
+ * The shape they share: this PR taught `saleEconomics` to demand evidence, and
+ * then accepted three kinds of evidence that prove nothing — a receipt from the
+ * wrong route, an id that references nothing, and money in a denomination the
+ * repository cannot scale.
+ */
+describe("CX-B — a receipt from the wrong route raises no ceiling", () => {
+  const THROUGH_PRICE = 20_000;
+
+  test("a stale receipt on a THROUGH_DEALERSHIP row cannot publish a supplier share above the gross", () => {
+    // The row the finding describes: gross the dealership actually collected is
+    // 20,000, and a stale 50,000 receipt sits on a route whose writer never
+    // records one. Without the route check, `entitlementCeiling` returns 50,000
+    // and a 40,000 entitlement becomes "valid" — publishing a supplier share
+    // twice the size of the whole sale.
+    //
+    // ⚠️ `externallyFinanced: true` is LOAD-BEARING, not incidental.
+    // `supplierReceiptIsAdmissible` is `route AND externallyFinanced === true`.
+    // This fixture originally omitted the flag, so the FINANCING conjunct already
+    // refused and the route was never the deciding term — deleting the route
+    // conjunct left every assertion below passing, mutation-proven. Satisfying
+    // financing makes the ROUTE the only thing that can refuse, which is what
+    // this test is named for.
+    const e = saleEconomics({
+      salePrice: THROUGH_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: 15_000,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      externallyFinanced: true,
+      recordedSupplierEntitlement: 40_000,
+      recordedSupplierGrossReceipt: 50_000,
+    });
+
+    // EXACT, not "not 40,000 and somewhere under the gross". The refusal permits
+    // exactly ONE outcome: the inadmissible frozen entitlement is dropped and the
+    // live basis stands in its place. Equality is what distinguishes that from
+    // `null` — the previous `not.toBe` plus a bound guarded on non-`null`
+    // accepted either refusal outcome, so swapping one for the other would have
+    // passed unnoticed.
+    //
+    // With financing satisfied above, deleting the route conjunct raises the
+    // ceiling to the 50,000 receipt, admits the 40,000 entitlement, and publishes
+    // 40,000 against a 20,000 sale — so these three assertions now DIE on that
+    // mutant instead of surviving it.
+    expect(e.supplierSettlement).toBe(15_000);
+    expect(e.dealershipMargin).toBe(5_000);
+    expect(e.recognizedRevenue).toBe(5_000);
+  });
+
+  test("the DIRECT route still admits the receipt as evidence, so the fix is not just 'ignore receipts'", () => {
+    // The positive control. O-1 exists because the sale price is the WRONG
+    // ceiling here: the financier's approved purchase amount legitimately
+    // exceeds it, and withholding that entitlement was the original defect.
+    const e = saleEconomics({
+      salePrice: 12_500,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: 9_500,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      externallyFinanced: true,
+      recordedSupplierEntitlement: 13_500,
+      recordedSupplierGrossReceipt: 14_000,
+      recordedMargin: 500,
+      hasFinancingApplication: true,
+    });
+
+    expect(e.supplierSettlement).toBe(13_500);
+  });
+
+  /**
+   * ⚠️ INVERTED at round 4 (CX-B2). The previous version of this test asserted
+   * `direct.supplierSettlement === 30_000` on a CASH direct row — i.e. it PINNED
+   * the defect. A cash-direct receipt above the sale price is not
+   * writer-producible at all (see `supplierReceiptIsAdmissible`), so the old
+   * assertion certified an overstatement as correct behaviour. It is removed,
+   * not relaxed: the row it described must now be refused.
+   */
+  test("the route ALONE does not make a receipt admissible — financing is the other half", () => {
+    const args = {
+      salePrice: THROUGH_PRICE,
+      vehicle: { sourceType: "SOURCED" } as const,
+      capitalizedCost: 15_000,
+      recordedSupplierEntitlement: 30_000,
+      recordedSupplierGrossReceipt: 35_000,
+    };
+    // ⚠️ Each row satisfies the OTHER conjunct, which is the only way this test
+    // can support its own title. `externallyFinanced: true` on the THROUGH row
+    // leaves the ROUTE as the sole refusing condition; `false` on the DIRECT row
+    // leaves FINANCING as the sole refusing condition. The THROUGH row previously
+    // omitted the flag, so financing refused it and the title's "route ALONE"
+    // claim was false as written — mutation-proven: deleting the route conjunct
+    // left this test green.
+    const through = saleEconomics({
+      ...args,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      externallyFinanced: true,
+    });
+    const cashDirect = saleEconomics({
+      ...args,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      externallyFinanced: false,
+    });
+
+    // EXACT on both, so each row pins one conjunct: the inadmissible 30,000
+    // entitlement is dropped and the live basis stands in. Deleting the route
+    // conjunct breaks the first line; deleting the financing conjunct breaks the
+    // second. One test, both halves.
+    expect(through.supplierSettlement).toBe(15_000);
+    // The inversion. Cash direct is bounded by the sale price exactly as
+    // THROUGH_DEALERSHIP is, because no third party paid the supplier anything.
+    expect(cashDirect.supplierSettlement).toBe(15_000);
+  });
+});
+
+describe("CX-D — money in a denomination the repository cannot scale is not money", () => {
+  /**
+   * `fromMinorUnits` delegates to `scaleForCurrency`, which returns **2 for
+   * anything unrecognised**. A JOD row stores minor units at scale 3, so a
+   * receipt of 3,000,000 fils reads as 30,000 instead of 3,000 — a tenfold
+   * overstatement that then raises the entitlement ceiling as well.
+   *
+   * This is the same defect class as the #227 CRITICAL, and `denominationOf` is
+   * the fail-closed authority the repository already established for it.
+   *
+   * Table-driven over every value the owner named. Only canonical JOD is money.
+   */
+  const CASES: Array<{ currency: string; why: string; valid: boolean }> = [
+    { currency: "JOD", why: "canonical and supported", valid: true },
+    { currency: "JD", why: "the SYMBOL, not the ISO code — scale-2 guess", valid: false },
+    { currency: "XYZ", why: "well-formed but not a currency this app knows", valid: false },
+    { currency: "jod", why: "lower case — refused by the writers, so refused here", valid: false },
+    { currency: "", why: "PRESENT and meaningless, which ?? never replaces", valid: false },
+  ];
+
+  test.each(CASES)("$currency ($why) -> valid=$valid", ({ currency, valid }) => {
+    const sale = {
+      consignedMarginMinor: 3_000_000,
+      consignedSupplierEntitlementMinor: 15_000_000,
+      consignedSupplierGrossReceiptMinor: 18_000_000,
+      consignedMarginCurrency: currency,
+    } as unknown as Parameters<typeof recordedSupplierGrossReceipt>[0];
+
+    const receipt = recordedSupplierGrossReceipt(sale);
+    const margin = recordedConsignedMargin(sale);
+    const entitlement = recordedSupplierEntitlement(sale);
+
+    if (valid) {
+      // Scale 3: 18,000,000 fils IS 18,000 JOD.
+      expect(receipt).toBe(18_000);
+      expect(margin).toBe(3_000);
+      expect(entitlement).toBe(15_000);
+      return;
+    }
+
+    // Withheld, and specifically NOT the scale-2 guess. Asserting `undefined`
+    // alone would pass if the reader returned the inflated figure by accident
+    // of some other guard, so the guessed value is named explicitly.
+    expect(receipt).toBeUndefined();
+    expect(receipt).not.toBe(180_000);
+    // All three readers share one denomination, so one bad code cannot leave
+    // some fields converted and others withheld — a mixed basis is worse than
+    // either answer alone.
+    expect(margin).toBeUndefined();
+    expect(margin).not.toBe(30_000);
+    expect(entitlement).toBeUndefined();
+    expect(entitlement).not.toBe(150_000);
+  });
+
+  /**
+   * CR-3. The denomination is only half of "is this money" — the AMOUNT has to be
+   * representable too.
+   *
+   * `recordedConsignedAmount` is the single chokepoint all three frozen consigned
+   * amounts now read through, and it is introduced by this PR. Its guard was
+   * `!Number.isFinite(minor) || minor < 0`, which passes a FRACTIONAL minor unit
+   * and a value beyond `Number.MAX_SAFE_INTEGER` — neither is representable as
+   * money, and both were silently converted and published.
+   *
+   * `isValidMinorAmount` (`convex/utils/money.ts:192`) is the repository's
+   * existing authority for exactly this question, and it is the same predicate
+   * the writers enforce through `assertMinorAmount`. A new shared money
+   * chokepoint holding a weaker rule than the repository's own is an incomplete
+   * contract, not defence in depth.
+   *
+   * ⚠️ FAIL-SOFT deliberately, and never the throwing assert. This is a READER
+   * whose contract is to return `undefined` so `saleEconomics` can withhold. A
+   * throwing assertion here would turn an unrepresentable frozen value into a
+   * crash on an owner-facing report — an outage in place of a withheld figure.
+   */
+  const AMOUNTS: Array<{ label: string; minor: number; accepted: boolean }> = [
+    { label: "a canonical safe integer", minor: 9_500_000, accepted: true },
+    { label: "a FRACTIONAL minor unit", minor: 9500.5, accepted: false },
+    { label: "beyond Number.MAX_SAFE_INTEGER", minor: Number.MAX_SAFE_INTEGER + 1, accepted: false },
+  ];
+
+  test.each(AMOUNTS)("$label -> accepted=$accepted", ({ minor, accepted }) => {
+    const sale = {
+      consignedMarginMinor: minor,
+      consignedSupplierEntitlementMinor: minor,
+      consignedSupplierGrossReceiptMinor: minor,
+      consignedMarginCurrency: "JOD",
+    } as unknown as Parameters<typeof recordedSupplierGrossReceipt>[0];
+
+    const receipt = recordedSupplierGrossReceipt(sale);
+    const margin = recordedConsignedMargin(sale);
+    const entitlement = recordedSupplierEntitlement(sale);
+
+    if (accepted) {
+      // Unchanged by this correction: scale 3, and a valid amount still converts.
+      // Tightening a guard that also withheld the good rows would be a different
+      // wrong answer, not a safer one.
+      expect(receipt).toBe(9_500);
+      expect(margin).toBe(9_500);
+      expect(entitlement).toBe(9_500);
+      return;
+    }
+
+    // Withheld — and specifically NOT the figure the old guard produced by
+    // dividing it anyway. Naming that value is what separates a real refusal
+    // from `undefined` arriving through some unrelated guard.
+    expect(receipt).toBeUndefined();
+    expect(receipt).not.toBe(minor / 1_000);
+    // All three read through the one chokepoint, so none of them may convert a
+    // value the others withhold — a mixed basis inside one computation is worse
+    // than either answer alone.
+    expect(margin).toBeUndefined();
+    expect(entitlement).toBeUndefined();
+  });
+
+  test("an unscalable receipt cannot raise the entitlement ceiling either", () => {
+    // The compounding half of the finding: the inflated receipt does not just
+    // misreport itself, it makes an over-large entitlement look eligible.
+    const sale = {
+      consignedSupplierEntitlementMinor: 40_000_000,
+      consignedSupplierGrossReceiptMinor: 50_000_000,
+      consignedMarginCurrency: "JD",
+    } as unknown as Parameters<typeof recordedSupplierGrossReceipt>[0];
+
+    const e = saleEconomics({
+      salePrice: 20_000,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: 15_000,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      externallyFinanced: false,
+      recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
+      recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
+    });
+
+    // EXACT: an unscalable entitlement is not money, so it is dropped and the
+    // live basis stands in. Equality pins that the answer is neither the
+    // mis-scaled 400,000, nor the raw 40,000, nor `null` — the previous pair of
+    // negatives left all three of those open.
+    expect(e.supplierSettlement).toBe(15_000);
+    expect(e.dealershipMargin).toBe(5_000);
+  });
+});
+
+describe("CX-C — an id that references nothing is not provenance", () => {
+  /**
+   * `hasFinancingApplication` was `sale.applicationId !== undefined`. Convex ids
+   * carry no referential integrity, so a deleted, cross-tenant or unrelated id
+   * read as "verified financing" and released the frozen margin — the exact
+   * hardening SCRUM-41 exists to provide.
+   *
+   * Every row below is financed DIRECT and carries a valid frozen receipt, so
+   * the receipt half of the rule is satisfied in all of them and the ONLY
+   * variable is the application. That is what makes these tests about
+   * provenance rather than about the receipt.
+   */
+  async function financedDirectWithReceipt(s: Seeded, vin: string) {
+    const { saleId, vehicleId } = await sellConsigned(s, vin);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, {
+        financingType: "FINANCED",
+        supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+        consignedSupplierGrossReceiptMinor: SALE_PRICE * 1_000,
+      });
+    });
+    return { saleId, vehicleId };
+  }
+
+  async function makeApplication(
+    s: Seeded,
+    vehicleId: Id<"vehicles">,
+    opts: {
+      orgId?: Id<"organizations">;
+      finalizedSaleId?: Id<"sales">;
+      status?: "DRAFT" | "APPROVED" | "REJECTED";
+    } = {}
+  ) {
+    return await s.t.run(async (ctx) => {
+      const orgId = opts.orgId ?? s.orgId;
+      const quoteId = await ctx.db.insert("quotes", {
+        orgId, customerId: s.customerId, vehicleId, vehiclePrice: SALE_PRICE,
+        downPayment: 0, termMonths: 12, status: "ACCEPTED" as const,
+        createdBy: s.userId, createdAt: Date.now(),
+      });
+      return await ctx.db.insert("financeApplications", {
+        orgId, quoteId, customerId: s.customerId, vehicleId,
+        salespersonId: s.userId, status: opts.status ?? ("APPROVED" as const),
+        createdAt: Date.now(), updatedAt: Date.now(),
+        ...(opts.finalizedSaleId ? { finalizedSaleId: opts.finalizedSaleId } : {}),
+      });
+    });
+  }
+
+  const profitOf = async (s: Seeded) =>
+    await s.asUser.query(api.reports.getSalesAndProfitReport, { orgId: s.orgId, ...range() });
+
+  test("a DANGLING applicationId does not release the frozen margin", async () => {
+    const s = await seedDealer("cxcDangling");
+    const { saleId, vehicleId } = await financedDirectWithReceipt(s, "VINCXC1");
+    const appId = await makeApplication(s, vehicleId, { finalizedSaleId: saleId });
+    // The application is deleted, exactly as `/admin` or a partial org delete
+    // leaves it. The id on the sale survives and still "looks" present.
+    await s.t.run(async (ctx) => await ctx.db.delete(appId));
+    await s.t.run(async (ctx) => await ctx.db.patch(saleId, { applicationId: appId }));
+
+    const report = await profitOf(s);
+
+    expect(report.totalProfit).toBe(0);
+    expect(report.unknownMarginSaleCount).toBe(1);
+  });
+
+  test("a CROSS-TENANT applicationId does not release the frozen margin", async () => {
+    const s = await seedDealer("cxcForeign");
+    const { saleId, vehicleId } = await financedDirectWithReceipt(s, "VINCXC2");
+    const otherOrgId = await s.t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Another dealership", createdAt: Date.now() })
+    );
+    const foreignApp = await makeApplication(s, vehicleId, {
+      orgId: otherOrgId as Id<"organizations">,
+      finalizedSaleId: saleId,
+    });
+    await s.t.run(async (ctx) => await ctx.db.patch(saleId, { applicationId: foreignApp }));
+
+    const report = await profitOf(s);
+
+    expect(report.totalProfit).toBe(0);
+    expect(report.unknownMarginSaleCount).toBe(1);
+  });
+
+  test("an UNRELATED application — one finalized on a different sale — does not release it", async () => {
+    const s = await seedDealer("cxcUnrelated");
+    const { saleId, vehicleId } = await financedDirectWithReceipt(s, "VINCXC3");
+    const other = await sellConsigned(s, "VINCXC3B");
+    const unrelated = await makeApplication(s, vehicleId, { finalizedSaleId: other.saleId });
+    await s.t.run(async (ctx) => await ctx.db.patch(saleId, { applicationId: unrelated }));
+
+    const report = await profitOf(s);
+
+    expect(report.unknownMarginSaleCount).toBe(1);
+  });
+
+  test("a real, same-org, linked application DOES release it — the fix is not 'withhold everything'", async () => {
+    const s = await seedDealer("cxcValid");
+    const { saleId, vehicleId } = await financedDirectWithReceipt(s, "VINCXC4");
+    const appId = await makeApplication(s, vehicleId, { finalizedSaleId: saleId });
+    await s.t.run(async (ctx) => await ctx.db.patch(saleId, { applicationId: appId }));
+
+    const report = await profitOf(s);
+
+    expect(report.unknownMarginSaleCount).toBe(0);
+    expect(report.totalProfit).toBe(MARGIN);
+  });
+
+  /**
+   * ⚠️ INVERTED at round 4 (CX-C2). The previous version asserted this row's
+   * margin WAS published, on the reasoning that `finalizedSaleId` is a mere
+   * convenience pointer. That reasoning was wrong, and the old assertion is
+   * removed rather than relaxed.
+   *
+   * The reciprocal link is not a convenience: `applications.ts:3172-3176`
+   * patches `status: "CLOSED"` and `finalizedSaleId: saleId` in the SAME
+   * statement that creates the sale, and `sales.create` cannot set
+   * `applicationId` at all. So the writer that creates the forward pointer
+   * always creates the back pointer, and a row missing it was not produced by
+   * that writer. Accepting org membership alone let any same-org DRAFT or
+   * REJECTED application release a frozen margin.
+   *
+   * Withheld is the honest answer, and it fails closed. The historical rows this
+   * withholds from are recorded in SCRUM-114, not papered over here.
+   */
+  test("an application with NO reciprocal link does not prove financing", async () => {
+    const s = await seedDealer("cxcStalePtr");
+    const { saleId, vehicleId } = await financedDirectWithReceipt(s, "VINCXC5");
+    const appId = await makeApplication(s, vehicleId); // no finalizedSaleId
+    await s.t.run(async (ctx) => await ctx.db.patch(saleId, { applicationId: appId }));
+
+    const report = await profitOf(s);
+
+    expect(report.unknownMarginSaleCount).toBe(1);
+    expect(report.totalProfit).toBe(0);
+  });
+
+  test("a same-org DRAFT application with no finalized sale does not prove financing", async () => {
+    const s = await seedDealer("cxcDraft");
+    const { saleId, vehicleId } = await financedDirectWithReceipt(s, "VINCXC6");
+    const appId = await makeApplication(s, vehicleId, { status: "DRAFT" });
+    await s.t.run(async (ctx) => await ctx.db.patch(saleId, { applicationId: appId }));
+
+    const report = await profitOf(s);
+
+    expect(report.unknownMarginSaleCount).toBe(1);
+    expect(report.totalProfit).toBe(0);
+  });
+
+  test("a REJECTED application with no finalized sale does not prove financing", async () => {
+    const s = await seedDealer("cxcRejected");
+    const { saleId, vehicleId } = await financedDirectWithReceipt(s, "VINCXC7");
+    const appId = await makeApplication(s, vehicleId, { status: "REJECTED" });
+    await s.t.run(async (ctx) => await ctx.db.patch(saleId, { applicationId: appId }));
+
+    const report = await profitOf(s);
+
+    expect(report.unknownMarginSaleCount).toBe(1);
+    expect(report.totalProfit).toBe(0);
+  });
+
+  test("an application for a DIFFERENT vehicle and customer does not prove financing", async () => {
+    // Same org, real application, simply not this deal's. Under the reciprocal
+    // rule the vehicle/customer comparison is not needed as a separate check —
+    // this row is refused because the back pointer does not name this sale —
+    // but the case is pinned so a future weakening of the rule is caught here.
+    const s = await seedDealer("cxcOtherCar");
+    const { saleId } = await financedDirectWithReceipt(s, "VINCXC8");
+    const otherVehicleId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId, vin: "VINCXC8B", make: "Kia", model: "Sportage", year: 2023,
+        mileage: 5, color: "Black", fuelType: "Gas", transmission: "Auto",
+        sellingPrice: SALE_PRICE, status: "AVAILABLE", sourceType: "SOURCED",
+        sourcedFromName: "Other Importer", sourceCost: ENTITLEMENT,
+      })
+    );
+    const otherCustomerId = await s.t.run((ctx) =>
+      ctx.db.insert("customers", { orgId: s.orgId, firstName: "Someone", lastName: "Else" })
+    );
+    const appId = await s.t.run(async (ctx) => {
+      const quoteId = await ctx.db.insert("quotes", {
+        orgId: s.orgId, customerId: otherCustomerId, vehicleId: otherVehicleId,
+        vehiclePrice: SALE_PRICE, downPayment: 0, termMonths: 12,
+        status: "ACCEPTED" as const, createdBy: s.userId, createdAt: Date.now(),
+      });
+      return await ctx.db.insert("financeApplications", {
+        orgId: s.orgId, quoteId, customerId: otherCustomerId, vehicleId: otherVehicleId,
+        salespersonId: s.userId, status: "APPROVED" as const,
+        createdAt: Date.now(), updatedAt: Date.now(),
+      });
+    });
+    await s.t.run(async (ctx) => await ctx.db.patch(saleId, { applicationId: appId }));
+
+    const report = await profitOf(s);
+
+    expect(report.unknownMarginSaleCount).toBe(1);
+    expect(report.totalProfit).toBe(0);
+  });
+});
+
+/* ------------------------------------------- Round 4: admissibility, both ways */
+
+/**
+ * AF-30 required these two. The round-3 matrix proved the REFUSALS and
+ * under-proved the ACCEPTANCES — the direction in which a fail-closed change
+ * does its damage. Without them, a "fix" that simply refused every receipt on
+ * the cash route would pass the entire suite.
+ */
+describe("CX-B2 — admissibility must accept what the writer really produces", () => {
+  const PRICE = 20_000;
+
+  test("cash DIRECT with a receipt EXACTLY the sale price still publishes the entitlement under it", () => {
+    // This is the ONLY cash-direct receipt the writer can produce:
+    // `saleCompletion.ts:1026` stores `args.supplierGrossReceiptMinor ?? salePriceMinor`,
+    // and no public mutation supplies that argument — so on a cash sale the
+    // receipt IS the sale price, and an entitlement under it must still publish.
+    //
+    // ⚠️ The previous title said this row "is ACCEPTED", which claimed more than
+    // the fixture can discriminate. When the receipt EQUALS the sale price the
+    // ceiling is the sale price either way, so this test passes even with
+    // `supplierReceiptIsAdmissible` hard-coded to `false` — mutation-proven, and
+    // no implementation would change it. What it genuinely pins is that the
+    // refusal is not OVER-broad: the routine cash row must keep publishing.
+    // The row that kills a refuse-everything implementation is the O-1 case
+    // below, where a writer-valid receipt ABOVE the sale price must still raise
+    // the ceiling — that one cannot pass without real admissibility.
+    const e = saleEconomics({
+      salePrice: PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: 15_000,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      externallyFinanced: false,
+      recordedSupplierEntitlement: 18_000,
+      recordedSupplierGrossReceipt: PRICE,
+    });
+
+    expect(e.supplierSettlement).toBe(18_000);
+    expect(e.dealershipMargin).toBe(PRICE - 18_000);
+  });
+
+  test("DIRECT with financingType ABSENT is inadmissible — absent fails closed, like false", () => {
+    // `externallyFinanced: undefined` is a DIFFERENT INPUT from `false`, and it
+    // is the shape a legacy row carries. The rule is `=== true`, so absence
+    // fails closed rather than being read as "not financed" by luck or as
+    // "financed" by permissiveness.
+    //
+    // ⚠️ Stated so this row and the `false` row below are not over-read as a
+    // pair: they are near-identical fixtures differing ONLY in omitted vs
+    // `false`, both are inadmissible, and the pair therefore does NOT pin
+    // absence as its own discriminated case. That is deliberate — the two
+    // inadmissible inputs on this route must refuse IDENTICALLY, which is what
+    // the exact-equality assertions in both now pin. What separates admissible
+    // from inadmissible is the O-1 row further down, not this pair.
+    const e = saleEconomics({
+      salePrice: PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: 15_000,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      // externallyFinanced deliberately omitted
+      recordedSupplierEntitlement: 25_000,
+      recordedSupplierGrossReceipt: 30_000,
+    });
+
+    // EXACT: the 30,000 receipt raises no ceiling, so the 25,000 entitlement
+    // exceeds the sale price and is dropped, and the live basis stands in.
+    expect(e.supplierSettlement).toBe(15_000);
+    expect(e.dealershipMargin).toBe(PRICE - 15_000);
+  });
+
+  test("cash DIRECT with a receipt ABOVE the sale price refuses the entitlement", () => {
+    // AF-30 matrix row 1. The writer cannot produce this row; it is corruption,
+    // and trusting it publishes a supplier share above the entire gross.
+    //
+    // Deliberately the SAME fixture as the ABSENT row above but with
+    // `externallyFinanced: false` — see the note there. Both refuse, and they
+    // must refuse to the same value; that identity is the assertion.
+    const e = saleEconomics({
+      salePrice: PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: 15_000,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      externallyFinanced: false,
+      recordedSupplierEntitlement: 25_000,
+      recordedSupplierGrossReceipt: 30_000,
+    });
+
+    // EXACT: the 30,000 receipt raises no ceiling on a cash row, so the 25,000
+    // entitlement exceeds the sale price and is dropped, and the live basis
+    // stands in — the identical outcome to the ABSENT row above.
+    expect(e.supplierSettlement).toBe(15_000);
+    expect(e.dealershipMargin).toBe(PRICE - 15_000);
+  });
+
+  test("financed DIRECT keeps O-1: a writer-valid receipt above the sale price still publishes", () => {
+    // The regression O-1 exists to prevent. `approveDealerPurchaseAmount` bounds
+    // the approval only by `> 0` and `>= entitlement`, so an approval above the
+    // sale price is legitimately writer-producible on this route ALONE.
+    const e = saleEconomics({
+      salePrice: 12_500,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: 9_500,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      externallyFinanced: true,
+      recordedSupplierEntitlement: 13_500,
+      recordedSupplierGrossReceipt: 14_000,
+      recordedMargin: 500,
+      hasFinancingApplication: true,
+    });
+
+    expect(e.supplierSettlement).toBe(13_500);
+  });
+
+  test("toggling ONLY the financing classification changes what evidence is admissible", () => {
+    const args = {
+      salePrice: 12_500,
+      vehicle: { sourceType: "SOURCED" } as const,
+      capitalizedCost: 9_500,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER" as const,
+      recordedSupplierEntitlement: 13_500,
+      recordedSupplierGrossReceipt: 14_000,
+      recordedMargin: 500,
+      hasFinancingApplication: true,
+    };
+    const financed = saleEconomics({ ...args, externallyFinanced: true });
+    const cash = saleEconomics({ ...args, externallyFinanced: false });
+
+    expect(financed.supplierSettlement).toBe(13_500);
+    expect(cash.supplierSettlement).not.toBe(13_500);
+  });
+});

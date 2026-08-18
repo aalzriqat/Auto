@@ -22,9 +22,11 @@ import {
   saleEconomics,
   recordedConsignedMargin,
   recordedSupplierEntitlement,
+  recordedSupplierGrossReceipt,
 } from "./utils/vehicleOwnership";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { getOrgCurrency } from "./accounting/workflowHooks";
+import { verifiedFinancingApplicationSaleIds } from "./utils/financingProvenance";
 
 /*
  * `recordedConsignedMargin` and `recordedSupplierEntitlement` moved to
@@ -143,6 +145,12 @@ export const getSalesAndProfitReport = query({
       })
     );
 
+    // Provenance for every sale in the window, resolved ONCE. `saleEconomics`
+    // needs to know the financing application is real, not merely referenced;
+    // doing that per sale inside the map would be an N+1 read on a
+    // live-subscribed report.
+    const verifiedFinancing = await verifiedFinancingApplicationSaleIds(ctx, salesInDateRange);
+
     const enrichedSales = salesInDateRange.map((sale) => {
       const vehicle = vehicleMap.get(sale.vehicleId);
       const expenses = expensesByVehicle.get(sale.vehicleId) ?? [];
@@ -160,6 +168,13 @@ export const getSalesAndProfitReport = query({
         // salePrice - approved, which is money that reaches no party.
         recordedMargin: recordedConsignedMargin(sale),
         recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
+        recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
+        // The application that approved what the financier would pay. A frozen
+        // receipt proves its amount, not its provenance — see the field's note.
+        // PROVEN, not merely referenced: a Convex id carries no referential
+        // integrity, so `!== undefined` accepted deleted, cross-tenant and
+        // unrelated applications alike.
+        hasFinancingApplication: verifiedFinancing.has(sale._id),
         externallyFinanced:
           sale.financingType === "FINANCED" || sale.financingType === "LEASE",
       });
@@ -761,6 +776,9 @@ export const getSalespersonPerformance = query({
       users.filter((u): u is NonNullable<typeof u> => u !== null).map(u => [u._id, u])
     );
 
+    // Same one-pass provenance resolution as the profit report above.
+    const verifiedFinancing = await verifiedFinancingApplicationSaleIds(ctx, salesInDateRange);
+
     const result = Object.entries(salesBySalesperson).map(([userId, userSales]) => {
       let totalRevenue = 0;
       let totalProfit = 0;
@@ -784,6 +802,8 @@ export const getSalespersonPerformance = query({
           // includes money no party paid.
           recordedMargin: recordedConsignedMargin(sale),
           recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
+          recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
+          hasFinancingApplication: verifiedFinancing.has(sale._id),
           externallyFinanced:
             sale.financingType === "FINANCED" || sale.financingType === "LEASE",
         });
