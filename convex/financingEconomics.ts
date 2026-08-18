@@ -1794,6 +1794,18 @@ export const approveDealerPurchaseAmount = mutation({
 
     const now = Date.now();
     const previousRawGapMinor = app.rawAppraisalGapMinor ?? 0;
+    /**
+     * THE AMOUNT ALONE — the only input the supplier-entitlement witness
+     * attests to.
+     *
+     * Deliberately separate from `approvalMateriallyChanged` below, which is
+     * broader by design: it also turns true for a basis, LTV, appraisal,
+     * approver or notes change, none of which move the figure the supplier's
+     * entitlement was compared against. `undefined` on the left makes a first
+     * approval a change, which it is.
+     */
+    const approvedAmountChanged =
+      app.approvedDealerPurchaseAmountMinor !== args.approvedAmountMinor;
     // Any material change, not only the amount. Narrowing this to the amount
     // meant re-approving 11,500 on the MANUAL basis instead of APPRAISAL
     // silently replaced the basis, the approver, the timestamp and the notes —
@@ -1877,19 +1889,44 @@ export const approveDealerPurchaseAmount = mutation({
      * carries no amount at all — zero, the current cost and a nullable number
      * are each things a later reader could mistake for proof.
      */
-    const { witness: nextWitness, changed: witnessChanged } = entitlementApplies
-      ? witnessToStore(
-          app.supplierEntitlementWitness,
-          validatedEntitlementMinor === undefined
-            ? { validated: false }
-            : { validated: true, entitlementMinor: validatedEntitlementMinor },
-          { validatedAt: now, validatedBy: user._id, via: "CONFIGURED_APPROVAL" },
-          // A byte-identical re-approval moves nothing, so it must not downgrade
-          // a VALIDATED witness to NOT_VALIDATED, nor restamp anyone's
-          // provenance.
-          approvalMateriallyChanged || app.approvedDealerPurchaseAmountMinor === undefined
-        )
-      : { witness: app.supplierEntitlementWitness, changed: false };
+    /**
+     * ⚠️ THE WITNESS IS ALWAYS RE-EVALUATED. `entitlementApplies` may decide
+     * whether to CREATE a marker on a deal that has none — never whether an
+     * EXISTING witness survives.
+     *
+     * The previous version made this entire call conditional on
+     * `entitlementApplies`, so a deal could be converted SOURCED → STOCK through
+     * the ordinary `vehicles.update` path, re-approved at a different amount,
+     * and converted back, carrying its original VALIDATED witness across
+     * untouched. Reproduced end to end: evidence for 17,000,000 survived a
+     * re-approval at 16,000,000 and the handover then succeeded on it.
+     *
+     * That conditional was added in the same commit, to make five unrelated
+     * tests stop failing — which is precisely the kind of change that earns the
+     * most suspicion rather than the least.
+     */
+    const stored = witnessToStore(
+      app.supplierEntitlementWitness,
+      validatedEntitlementMinor === undefined
+        ? { validated: false }
+        : { validated: true, entitlementMinor: validatedEntitlementMinor },
+      { validatedAt: now, validatedBy: user._id, via: "CONFIGURED_APPROVAL" },
+      approvedAmountChanged
+    );
+    /**
+     * The one thing applicability still decides: whether a deal that has NEVER
+     * held a witness acquires a NOT_VALIDATED marker.
+     *
+     * On the dealership's own stock there is no supplier and no entitlement, so
+     * recording "not validated" would assert a gap that does not exist. That is
+     * safe here and only here, because there is by definition no prior evidence
+     * to preserve — the stale-witness hole above needs an EXISTING witness to
+     * carry across, and this branch requires there to be none.
+     */
+    const suppressAbsentMarker =
+      app.supplierEntitlementWitness === undefined && !entitlementApplies;
+    const nextWitness = suppressAbsentMarker ? undefined : stored.witness;
+    const witnessChanged = suppressAbsentMarker ? false : stored.changed;
     /**
      * A row when evidence APPEARS or IS LOST, not on every approval.
      *

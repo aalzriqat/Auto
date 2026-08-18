@@ -1566,30 +1566,71 @@ export function witnessToStore(
     via: "CONFIGURED_APPROVAL" | "MANUAL_RECEIPT";
   },
   /**
-   * Whether the amount this witness describes actually moved. A byte-identical
-   * re-submission must not downgrade a VALIDATED witness to NOT_VALIDATED, and
-   * must not restamp anybody's provenance.
+   * WHETHER THE APPROVED AMOUNT THIS WITNESS ATTESTS TO ACTUALLY MOVED.
+   *
+   * ⚠️ NOT a general "something changed" flag, and deliberately not the
+   * caller's `approvalMateriallyChanged`: that one is broader by design and also
+   * turns true for a basis, LTV, appraisal, approver or notes edit, none of
+   * which touch the figure the supplier's entitlement was compared against.
+   * Passing it here would let somebody fixing a typo in the notes disturb the
+   * evidence a supplier's payment stands on.
+   *
+   * Required, with no default. A defaulted version of this parameter is exactly
+   * how the hole below stayed open for a round: the permissive answer was the
+   * one a caller got for free.
    */
-  amountChanged = true
+  approvedAmountChanged: boolean
 ): { witness: Doc<"financeApplications">["supplierEntitlementWitness"]; changed: boolean } {
+  /**
+   * THE GOVERNING RULE: a witness may never survive a change to the approved
+   * amount it attests to without that new amount being explicitly re-evaluated.
+   *
+   * ⚠️ This is where a CONFIRMED HIGH lived. The old code consulted the
+   * amount-changed flag ONLY on the not-validated path, so the validated path
+   * returned the existing witness whenever the supplier's entitlement number
+   * matched — regardless of what the approved amount had just done. An approval
+   * moving 18,000,000 → 19,000,000 therefore INHERITED evidence created for the
+   * 18,000,000 decision, purely because the supplier's 17,000,000 had not moved.
+   *
+   * The entitlement is only HALF of what this evidence attests to. A witness
+   * records a COMPARISON between the supplier's entitlement and an approved
+   * amount, so either side moving invalidates it.
+   */
+  if (approvedAmountChanged) {
+    if (measurement.validated) {
+      // Applicable and provable: fresh evidence with fresh provenance, even
+      // where the entitlement number itself is unchanged. Somebody re-agreed
+      // THIS amount against it, and that act has its own actor and moment.
+      return {
+        witness: { status: "VALIDATED", amountMinor: measurement.entitlementMinor, ...provenance },
+        changed: true,
+      };
+    }
+    // Not applicable, or applicable but unprovable. Both fail closed to the same
+    // explicit state, and the old VALIDATED record is REPLACED rather than kept.
+    // Keeping it is what let a deal pass through a window where nothing was
+    // compared and come out the other side still carrying proof.
+    return { witness: { status: "NOT_VALIDATED", ...provenance }, changed: true };
+  }
+
+  // The amount has not moved. Byte-for-byte identity is preserved unless a
+  // genuine revalidation happened: an unchanged fact is not a new observation,
+  // and re-badging it would move the actor and timestamp onto evidence nobody
+  // re-examined.
   if (measurement.validated) {
-    // An unchanged fact is not a new observation: keep the original actor and
-    // moment rather than re-badging evidence nobody re-examined.
     if (existing?.status === "VALIDATED" && existing.amountMinor === measurement.entitlementMinor) {
       return { witness: existing, changed: false };
     }
+    // Either there was nothing, or the entitlement itself moved, or the deal
+    // held an explicit NOT_VALIDATED which this act has now upgraded. All three
+    // are real observations about the same unchanged amount.
     return {
       witness: { status: "VALIDATED", amountMinor: measurement.entitlementMinor, ...provenance },
       changed: true,
     };
   }
-  // Nothing was compared. Downgrade ONLY when the amount this evidence describes
-  // has actually moved — otherwise the existing record still describes the
-  // current amount truthfully, and replacing it would destroy real evidence in
-  // the name of honesty about an act that changed nothing.
-  if (existing !== undefined && !amountChanged) return { witness: existing, changed: false };
-  if (existing?.status === "NOT_VALIDATED" && !amountChanged) {
-    return { witness: existing, changed: false };
-  }
+  // Nothing was compared and nothing moved: the existing record, whatever it
+  // says, still describes the current amount truthfully.
+  if (existing !== undefined) return { witness: existing, changed: false };
   return { witness: { status: "NOT_VALIDATED", ...provenance }, changed: true };
 }

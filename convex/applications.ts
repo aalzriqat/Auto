@@ -3532,7 +3532,13 @@ export const recordDirectSupplierReceiptAmount = mutation({
         // supplier's entitlement is positive and representable, and it compares
         // the amount against it.
         { validated: true, entitlementMinor },
-        { validatedAt: Date.now(), validatedBy: user._id, via: "MANUAL_RECEIPT" }
+        { validatedAt: Date.now(), validatedBy: user._id, via: "MANUAL_RECEIPT" },
+        // The AMOUNT, not the receipt. This writer legitimately reaches here on a
+        // source-only or notes-only correction — the early return above only
+        // catches a byte-identical resubmission — and neither of those moves the
+        // figure the entitlement was compared against, so neither may restamp
+        // whose evidence this is.
+        app.approvedDealerPurchaseAmountMinor !== args.approvedAmountMinor
       ).witness,
       directSupplierReceipt: {
         source,

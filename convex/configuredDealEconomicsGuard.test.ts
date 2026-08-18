@@ -6,7 +6,9 @@ import {
 import { expect, test, describe } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
+import { witnessToStore } from "./utils/financingEconomics";
 
 const MODULES = import.meta.glob("./**/*.ts");
 
@@ -1009,6 +1011,81 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
     // Not entitled to the paperwork. Checked as a KEY, because Convex drops
     // undefined-valued keys on the wire.
     expect(`present: ${Object.hasOwn(detail, "directSupplierReceipt")}`).toBe("present: false");
+
+    /**
+     * ⚠️ AND NOT ENTITLED TO THE PROVENANCE EITHER — the half this test
+     * used to miss.
+     *
+     * The assertion above pins what this caller MAY see, and a test that only
+     * pins what a caller may see cannot notice a caller starting to see more.
+     * The witness was a bare number when the gate was written, so
+     * `finance || cost_price` was exactly right; it then grew into an object
+     * carrying WHO validated the supplier's entitlement, WHEN, THROUGH WHICH
+     * ACT and WHETHER IT WAS VALIDATED AT ALL, and the unchanged gate published
+     * the whole of it. The gate did not change; what it was guarding did.
+     *
+     * Every provenance field is named individually rather than compared as a
+     * whole object, so a field added to this witness in future arrives here as
+     * a decision somebody has to make rather than as a silent grant.
+     */
+    const costOnlyWitness = detail.supplierEntitlementWitness as Record<string, unknown>;
+    for (const field of ["status", "via", "validatedAt", "validatedBy"]) {
+      expect(`cost-only sees ${field}: ${Object.hasOwn(costOnlyWitness, field)}`).toBe(
+        `cost-only sees ${field}: false`
+      );
+    }
+
+    /**
+     * THE OTHER TWO ROLE SHAPES, pinned on the SAME serialized response.
+     *
+     * Three permissions, three different answers, and the middle one is the
+     * only one either of the previous versions of this gate could express.
+     */
+    await t.run(async (ctx) => {
+      const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === orgId)!;
+      await ctx.db.patch(role._id, {
+        permissions: ["view:sales", "view:finance_applications", "view:finance"],
+        isSystemOwnerRole: false,
+      });
+    });
+    const financeDetail = (await asUser.query(api.applications.get, {
+      orgId,
+      applicationId,
+    })) as unknown as Record<string, unknown>;
+    const financeWitness = financeDetail.supplierEntitlementWitness as Record<string, unknown>;
+    // The whole record, provenance included. Withholding it from finance would
+    // be the over-correction in the other direction: this is precisely the
+    // caller the evidence exists for.
+    expect(financeWitness.amountMinor).toBe(17_000_000);
+    expect(financeWitness.status).toBe("VALIDATED");
+    expect(financeWitness.via).toBe("MANUAL_RECEIPT");
+    expect(financeWitness.validatedAt).toBeTypeOf("number");
+    expect(financeWitness.validatedBy).toBeTypeOf("string");
+    expect(`finance sees the paperwork: ${Object.hasOwn(financeDetail, "directSupplierReceipt")}`).toBe(
+      "finance sees the paperwork: true"
+    );
+
+    await t.run(async (ctx) => {
+      const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === orgId)!;
+      await ctx.db.patch(role._id, {
+        permissions: ["view:sales", "view:finance_applications"],
+        isSystemOwnerRole: false,
+      });
+    });
+    const salesDetail = (await asUser.query(api.applications.get, {
+      orgId,
+      applicationId,
+    })) as unknown as Record<string, unknown>;
+    // Neither half. Not the amount, not the provenance, not the key.
+    expect(`sales sees the witness: ${Object.hasOwn(salesDetail, "supplierEntitlementWitness")}`).toBe(
+      "sales sees the witness: false"
+    );
+    expect(`sales sees the paperwork: ${Object.hasOwn(salesDetail, "directSupplierReceipt")}`).toBe(
+      "sales sees the paperwork: false"
+    );
+    // Anti-vacuity: the caller is still being served a real deal, so the three
+    // absences above are redaction rather than an empty response.
+    expect(salesDetail._id).toBe(applicationId);
   });
 
   test("the route cannot be changed after the vehicle has gone out", async () => {
@@ -2445,5 +2522,528 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
     const after = await t.run((ctx) => ctx.db.get(applicationId));
     expect(after?.status).toBe("CLOSED");
     expect(after?.finalizedSaleId).toBeDefined();
+  });
+});
+
+describe("SCRUM-61: a witness never outlives the amount it attests to", () => {
+  /**
+   * THE GOVERNING INVARIANT, exercised as a MATRIX rather than as the one
+   * sequence that happened to be reproduced.
+   *
+   * ⚠️ Written this way on the owner's instruction, after four consecutive
+   * rounds in which a fix of mine opened a new HIGH in this subsystem. Every one
+   * of those four was the same authority mistake wearing different clothes, and
+   * every one was found by attacking a path the previous round's test did not
+   * enumerate. Fixing only the reproduced sequence is what kept producing a
+   * fifth.
+   *
+   * The dimensions are the ones that can actually disagree:
+   *   amount changed / unchanged
+   *     x  entitlement applicable+provable / not applicable / unprovable
+   *     x  evidence already held: none / VALIDATED / NOT_VALIDATED
+   *
+   * This pins the RULE. It does not prove every caller passes the right flag —
+   * that is what the two end-to-end sequences below cover, through the real
+   * public mutations. Both halves are needed: the rule was correct in the first
+   * design and a caller bypassed it, and here the caller was correct and the
+   * rule leaked.
+   */
+  const FRESH = {
+    validatedAt: 1_700_000_000_000,
+    validatedBy: "fresh_actor" as unknown as Id<"users">,
+    via: "CONFIGURED_APPROVAL" as const,
+  };
+  const HELD_VALIDATED = {
+    status: "VALIDATED" as const,
+    amountMinor: 17_000_000,
+    validatedAt: 1_600_000_000_000,
+    validatedBy: "earlier_actor" as unknown as Id<"users">,
+    via: "MANUAL_RECEIPT" as const,
+  };
+  const HELD_NOT_VALIDATED = {
+    status: "NOT_VALIDATED" as const,
+    validatedAt: 1_600_000_000_000,
+    validatedBy: "earlier_actor" as unknown as Id<"users">,
+    via: "MANUAL_RECEIPT" as const,
+  };
+
+  // "Applicable and provable at the SAME entitlement" is the case the defect
+  // hid in: the supplier's number had not moved, so the old code called the
+  // evidence current while the amount it attested to had changed underneath it.
+  const SAME_ENTITLEMENT = { validated: true as const, entitlementMinor: 17_000_000 };
+  const MOVED_ENTITLEMENT = { validated: true as const, entitlementMinor: 18_000_000 };
+  const NOTHING_COMPARED = { validated: false as const };
+
+  const cases: Array<{
+    name: string;
+    held: typeof HELD_VALIDATED | typeof HELD_NOT_VALIDATED | undefined;
+    measured: typeof SAME_ENTITLEMENT | typeof NOTHING_COMPARED;
+    amountChanged: boolean;
+    expected: { status: "VALIDATED" | "NOT_VALIDATED"; amountMinor?: number; fresh: boolean };
+  }> = [
+    // ---- THE AMOUNT MOVED. Nothing held may survive it, in any combination.
+    {
+      name: "amount moved, entitlement unchanged, VALIDATED held — THE HIGH",
+      held: HELD_VALIDATED,
+      measured: SAME_ENTITLEMENT,
+      amountChanged: true,
+      expected: { status: "VALIDATED", amountMinor: 17_000_000, fresh: true },
+    },
+    {
+      name: "amount moved, entitlement moved, VALIDATED held",
+      held: HELD_VALIDATED,
+      measured: MOVED_ENTITLEMENT,
+      amountChanged: true,
+      expected: { status: "VALIDATED", amountMinor: 18_000_000, fresh: true },
+    },
+    {
+      name: "amount moved, nothing comparable, VALIDATED held — fails closed",
+      held: HELD_VALIDATED,
+      measured: NOTHING_COMPARED,
+      amountChanged: true,
+      expected: { status: "NOT_VALIDATED", fresh: true },
+    },
+    {
+      name: "amount moved, nothing comparable, NOT_VALIDATED held",
+      held: HELD_NOT_VALIDATED,
+      measured: NOTHING_COMPARED,
+      amountChanged: true,
+      expected: { status: "NOT_VALIDATED", fresh: true },
+    },
+    {
+      name: "amount moved, entitlement provable, NOT_VALIDATED held — upgrades",
+      held: HELD_NOT_VALIDATED,
+      measured: SAME_ENTITLEMENT,
+      amountChanged: true,
+      expected: { status: "VALIDATED", amountMinor: 17_000_000, fresh: true },
+    },
+    {
+      name: "amount moved, entitlement provable, nothing held — first evidence",
+      held: undefined,
+      measured: SAME_ENTITLEMENT,
+      amountChanged: true,
+      expected: { status: "VALIDATED", amountMinor: 17_000_000, fresh: true },
+    },
+    {
+      name: "amount moved, nothing comparable, nothing held",
+      held: undefined,
+      measured: NOTHING_COMPARED,
+      amountChanged: true,
+      expected: { status: "NOT_VALIDATED", fresh: true },
+    },
+    // ---- THE AMOUNT DID NOT MOVE. Identity is preserved, but only where
+    //      nothing was genuinely re-observed.
+    {
+      name: "amount unchanged, same entitlement re-measured — identity preserved",
+      held: HELD_VALIDATED,
+      measured: SAME_ENTITLEMENT,
+      amountChanged: false,
+      expected: { status: "VALIDATED", amountMinor: 17_000_000, fresh: false },
+    },
+    {
+      name: "amount unchanged, entitlement itself moved — re-observed",
+      held: HELD_VALIDATED,
+      measured: MOVED_ENTITLEMENT,
+      amountChanged: false,
+      expected: { status: "VALIDATED", amountMinor: 18_000_000, fresh: true },
+    },
+    {
+      name: "amount unchanged, nothing comparable, VALIDATED held — still true of it",
+      held: HELD_VALIDATED,
+      measured: NOTHING_COMPARED,
+      amountChanged: false,
+      expected: { status: "VALIDATED", amountMinor: 17_000_000, fresh: false },
+    },
+    {
+      name: "amount unchanged, NOT_VALIDATED held, now provable — genuine upgrade",
+      held: HELD_NOT_VALIDATED,
+      measured: SAME_ENTITLEMENT,
+      amountChanged: false,
+      expected: { status: "VALIDATED", amountMinor: 17_000_000, fresh: true },
+    },
+    {
+      name: "amount unchanged, NOT_VALIDATED held, still nothing compared — no re-badge",
+      held: HELD_NOT_VALIDATED,
+      measured: NOTHING_COMPARED,
+      amountChanged: false,
+      expected: { status: "NOT_VALIDATED", fresh: false },
+    },
+    {
+      name: "amount unchanged, nothing held, now provable",
+      held: undefined,
+      measured: SAME_ENTITLEMENT,
+      amountChanged: false,
+      expected: { status: "VALIDATED", amountMinor: 17_000_000, fresh: true },
+    },
+    {
+      name: "amount unchanged, nothing held, nothing comparable",
+      held: undefined,
+      measured: NOTHING_COMPARED,
+      amountChanged: false,
+      expected: { status: "NOT_VALIDATED", fresh: true },
+    },
+  ];
+
+  for (const c of cases) {
+    test(`witness rule: ${c.name}`, () => {
+      const { witness, changed } = witnessToStore(c.held, c.measured, FRESH, c.amountChanged);
+      expect(witness?.status).toBe(c.expected.status);
+      expect(witness?.amountMinor).toBe(c.expected.amountMinor);
+      /**
+       * PROVENANCE IS THE ASSERTION, not the amount.
+       *
+       * The defect produced a witness whose amount was RIGHT and whose meaning
+       * was wrong: 17,000,000 was still the supplier's entitlement, and the
+       * record still said an earlier actor had agreed it against an amount that
+       * no longer existed. Comparing amounts alone cannot see that, which is why
+       * the old tests did not.
+       */
+      expect(witness?.validatedBy).toBe(
+        c.expected.fresh ? FRESH.validatedBy : c.held?.validatedBy
+      );
+      expect(witness?.validatedAt).toBe(c.expected.fresh ? FRESH.validatedAt : c.held?.validatedAt);
+      expect(witness?.via).toBe(c.expected.fresh ? FRESH.via : c.held?.via);
+      expect(changed).toBe(c.expected.fresh);
+    });
+  }
+
+  test("a witness cannot cross a window in which the vehicle was not consigned", async () => {
+    /**
+     * THE REPRODUCED HIGH, end to end, through the ORDINARY public doors.
+     *
+     * Nothing here is patched in and nothing is exotic: `vehicles.update` is the
+     * screen a manager uses to correct how a car was acquired, and it is
+     * deliberately open while the car is unsold — `retroactiveOwnershipChangeRefusal`
+     * only closes it once the vehicle has been SOLD, because converting a sold
+     * car rewrites posted accounting. So this sequence is a real operator's
+     * afternoon, not an attack.
+     *
+     *   approve 17,000,000 against the supplier's 17,000,000  → VALIDATED
+     *   convert the car to dealership STOCK
+     *   re-approve 16,000,000                                  → nothing compares it
+     *   convert the car back to SOURCED
+     *   hand it over
+     *
+     * The witness was written only while the vehicle was consigned, so the
+     * middle step left the ORIGINAL 17,000,000 evidence in place beside a
+     * 16,000,000 decision. Coming back out the other side, the verdict compared
+     * that stale 17,000,000 against the vehicle's unchanged 17,000,000, read
+     * UNCHANGED, and the handover SUCCEEDED on evidence for an amount that had
+     * been abandoned. The supplier's 1,000,000 vanished with the vehicle.
+     *
+     * ⚠️ The vehicle's cost is deliberately left at 17,000 for the return trip.
+     * Lowering it would make the stale witness DRIFTED, and the drift guard —
+     * which was never broken — would refuse the handover for its own reasons,
+     * leaving this test green against the unfixed code while proving nothing
+     * about the rule it names.
+     */
+    const { t, orgId, applicationId, asUser, asApprover } = await seedApprovedApplication(
+      "CONFIGURED_FINANCE_COMPANY",
+      { sourcedVehicle: true }
+    );
+    const vehicleId = (await t.run((ctx) => ctx.db.get(applicationId)))!.vehicleId;
+
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    await asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId,
+      applicationId,
+      submittedQuotationMinor: 17_000_000,
+      source: "MANUAL_ENTRY",
+    });
+    await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_000_000,
+      basis: "MANUAL",
+      notes: "Approved by the finance company over the phone.",
+    });
+
+    const agreed = await t.run((ctx) => ctx.db.get(applicationId));
+    expect(agreed?.supplierEntitlementWitness?.status).toBe("VALIDATED");
+    expect(agreed?.supplierEntitlementWitness?.amountMinor).toBe(17_000_000);
+    const revisionBefore = agreed?.economicsRevision ?? 0;
+
+    // The window. An ordinary correction on an unsold car.
+    await asUser.mutation(api.vehicles.update, { orgId, vehicleId, sourceType: "STOCK" });
+
+    await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 16_000_000,
+      basis: "MANUAL",
+      notes: "Finance company reduced the purchase amount.",
+      outlierAcknowledged: true,
+    });
+
+    const afterReapproval = await t.run((ctx) => ctx.db.get(applicationId));
+    expect(afterReapproval?.approvedDealerPurchaseAmountMinor).toBe(16_000_000);
+    // THE INVARIANT. Evidence taken for 17,000,000 may not still be standing
+    // beside a 16,000,000 decision, whatever the car happens to be right now.
+    expect(afterReapproval?.supplierEntitlementWitness?.status).toBe("NOT_VALIDATED");
+    expect(afterReapproval?.supplierEntitlementWitness?.amountMinor).toBeUndefined();
+    // And the concurrency token moved, so a handover confirmation opened against
+    // the 17,000,000 view cannot seal the 16,000,000 one.
+    expect(afterReapproval?.economicsRevision ?? 0).toBeGreaterThan(revisionBefore);
+
+    await asUser.mutation(api.vehicles.update, { orgId, vehicleId, sourceType: "SOURCED" });
+    // Anti-vacuity: the car really is consigned again at the SAME cost, so the
+    // refusal below is the witness rule and not a drift the fixture engineered.
+    const vehicle = await t.run((ctx) => ctx.db.get(vehicleId));
+    expect(vehicle?.sourceType).toBe("SOURCED");
+    expect(vehicle?.sourceCost).toBe(17_000);
+
+    await expect(registerHandover(asUser, api, orgId, applicationId)).rejects.toThrow(
+      /does not record what the supplier was owed/i
+    );
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.vehicleHandoverAt).toBeUndefined();
+
+    /**
+     * RECOVERABLE, which is the half that makes this a guard rather than a dead
+     * end. The supplier's cost is corrected to the 16,000 the parties actually
+     * settled on, and re-agreeing the same 16,000,000 against it re-takes the
+     * evidence — an amount that did not move, but a comparison that genuinely
+     * happened.
+     */
+    await asUser.mutation(api.vehicles.update, { orgId, vehicleId, sourceCost: 16_000 });
+    await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 16_000_000,
+      basis: "MANUAL",
+      notes: "Re-agreed against the corrected supplier cost.",
+      outlierAcknowledged: true,
+    });
+    const reagreed = await t.run((ctx) => ctx.db.get(applicationId));
+    expect(reagreed?.supplierEntitlementWitness?.status).toBe("VALIDATED");
+    expect(reagreed?.supplierEntitlementWitness?.amountMinor).toBe(16_000_000);
+
+    await registerHandover(asUser, api, orgId, applicationId);
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.vehicleHandoverAt).toBeTypeOf(
+      "number"
+    );
+  });
+
+  test("re-approving a different amount re-takes the evidence even where the supplier's number never moved", async () => {
+    /**
+     * THE SIBLING CONTROL, and the reason the fix is not merely "stop skipping
+     * the helper".
+     *
+     * No vehicle conversion, no route change, nothing unusual at all: a plain
+     * consigned direct deal whose finance company revises its purchase amount
+     * from 18,000,000 to 19,000,000 while the supplier is owed 17,000,000
+     * throughout. The helper preserved the witness whenever the ENTITLEMENT
+     * number matched, so the 19,000,000 decision inherited evidence created for
+     * the 18,000,000 one — same amount, same actor, same timestamp.
+     *
+     * The entitlement is only HALF of what this evidence attests to. A witness
+     * records a COMPARISON, and the other side of it just moved.
+     *
+     * The second approval is made by a DIFFERENT actor, because a fresh
+     * timestamp alone is not a safe assertion — two approvals inside one test
+     * can land on the same millisecond, and the test would then pass for a
+     * reason that has nothing to do with the rule.
+     *
+     * ⚠️ That actor is a THIRD user, not the fixture's `asUser`. The first
+     * version reused `asUser`, who is the deal's salesperson, so
+     * `approveDealerPurchaseAmount` refused it on separation of duties — and the
+     * test duly "failed first" against the unfixed code for a reason that had
+     * nothing whatever to do with the witness rule. A neighbouring guard firing
+     * first makes an uncovered guard look covered.
+     */
+    const { t, orgId, applicationId, asUser, asApprover } = await seedApprovedApplication(
+      "CONFIGURED_FINANCE_COMPANY",
+      { sourcedVehicle: true }
+    );
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    await asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId,
+      applicationId,
+      submittedQuotationMinor: 18_000_000,
+      source: "MANUAL_ENTRY",
+    });
+    await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 18_000_000,
+      basis: "MANUAL",
+      notes: "First approval.",
+    });
+    const first = (await t.run((ctx) => ctx.db.get(applicationId)))!.supplierEntitlementWitness!;
+    expect(first.status).toBe("VALIDATED");
+    expect(first.amountMinor).toBe(17_000_000);
+
+    // A DIFFERENT actor re-agrees a DIFFERENT amount against the SAME 17,000,000.
+    const secondApprover = await t.run(async (ctx) => {
+      const roleId = (await ctx.db.query("roles").collect()).find((r) => r.orgId === orgId)!._id;
+      const userId = await ctx.db.insert("users", {
+        clerkId: "guard_approver_2",
+        email: "guard.a2@test.com",
+        name: "Second Approver",
+      });
+      await ctx.db.insert("memberships", { orgId, userId, roleId });
+      return userId;
+    });
+    const asSecondApprover = t.withIdentity({
+      subject: "guard_approver_2",
+      clerkId: "guard_approver_2",
+    });
+    await asSecondApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 19_000_000,
+      basis: "MANUAL",
+      notes: "Finance company revised the purchase amount upward.",
+      outlierAcknowledged: true,
+    });
+    const second = (await t.run((ctx) => ctx.db.get(applicationId)))!.supplierEntitlementWitness!;
+
+    // The supplier's number legitimately did not move — asserted, so the case
+    // this test is named for is the case it actually exercised.
+    expect(second.amountMinor).toBe(17_000_000);
+    expect(second.status).toBe("VALIDATED");
+    // But the evidence is NOT the same evidence. Somebody else agreed a
+    // different amount against it, and that act has its own actor — named
+    // exactly, so this cannot pass on any difference that happens to appear.
+    expect(second.validatedBy).toBe(secondApprover);
+    expect(second.validatedBy).not.toBe(first.validatedBy);
+
+    // And it left a trace. Evidence being re-taken on a money decision is
+    // exactly what the override table exists to record.
+    const witnessRows = await t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query("financeApplicationOverrides")
+          .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+          .collect()
+      ).filter((r) => r.field === "supplierEntitlementWitness")
+    );
+    expect(witnessRows.length).toBeGreaterThan(0);
+  });
+
+  test("a cost-only caller cannot read NOT_VALIDATED off the shape of what it is served", async () => {
+    /**
+     * THE SECOND-ORDER LEAK, closed while re-reading the first fix.
+     *
+     * The cost-only projection strips the provenance and keeps the amount. A
+     * NOT_VALIDATED witness has no amount, so the first version returned an
+     * empty object — and an empty object is `status: NOT_VALIDATED` spelled by
+     * SHAPE rather than by name. The caller learns the deal holds evidence
+     * recording that nothing was compared, which is precisely the finance fact
+     * the projection exists to withhold.
+     *
+     * Collapsing "no witness" and "witness with no amount" to the same absence
+     * is the non-disclosing answer, and it withholds nothing this caller is
+     * entitled to: either way there is no entitlement amount to read.
+     */
+    const { t, orgId, applicationId, asUser, asApprover } = await seedApprovedApplication(
+      "CONFIGURED_FINANCE_COMPANY",
+      { sourcedVehicle: true }
+    );
+    // THROUGH the dealership: the approval compares no entitlement, so it
+    // records NOT_VALIDATED rather than staying silent about it.
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "THROUGH_DEALERSHIP",
+    });
+    await asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId,
+      applicationId,
+      submittedQuotationMinor: 17_000_000,
+      source: "MANUAL_ENTRY",
+    });
+    await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_000_000,
+      basis: "MANUAL",
+      notes: "Approved while the deal settles through the dealership.",
+    });
+    // Anti-vacuity: the deal really does hold the shape this test is about.
+    const held = (await t.run((ctx) => ctx.db.get(applicationId)))?.supplierEntitlementWitness;
+    expect(held?.status).toBe("NOT_VALIDATED");
+    expect(held?.amountMinor).toBeUndefined();
+
+    await t.run(async (ctx) => {
+      const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === orgId)!;
+      await ctx.db.patch(role._id, {
+        permissions: ["view:sales", "view:finance_applications", "view:cost_price"],
+        isSystemOwnerRole: false,
+      });
+    });
+    const costOnly = (await asUser.query(api.applications.get, {
+      orgId,
+      applicationId,
+    })) as unknown as Record<string, unknown>;
+    // No key at all — indistinguishable from a deal that holds no witness.
+    expect(`cost-only sees a witness: ${Object.hasOwn(costOnly, "supplierEntitlementWitness")}`).toBe(
+      "cost-only sees a witness: false"
+    );
+    expect(costOnly._id).toBe(applicationId);
+
+    // And finance still sees it, so the absence above is redaction rather than
+    // the field having quietly stopped being served to anybody.
+    await t.run(async (ctx) => {
+      const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === orgId)!;
+      await ctx.db.patch(role._id, {
+        permissions: ["view:sales", "view:finance_applications", "view:finance"],
+        isSystemOwnerRole: false,
+      });
+    });
+    const financeView = (await asUser.query(api.applications.get, {
+      orgId,
+      applicationId,
+    })) as unknown as Record<string, unknown>;
+    expect((financeView.supplierEntitlementWitness as { status: string }).status).toBe(
+      "NOT_VALIDATED"
+    );
+  });
+
+  test("a byte-identical re-approval still re-badges nothing", async () => {
+    /**
+     * THE OTHER DIRECTION, kept honest.
+     *
+     * A rule that re-takes evidence whenever the amount moves is only safe if it
+     * does NOT re-take it when nothing moved. Otherwise every retry, double
+     * click and dropped connection quietly transfers authorship of a money
+     * decision — which is a defect this same file closed two rounds ago, and the
+     * kind a stricter fix is most likely to reopen.
+     */
+    const { t, orgId, applicationId, asUser, asApprover } = await seedApprovedApplication(
+      "CONFIGURED_FINANCE_COMPANY",
+      { sourcedVehicle: true }
+    );
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    await asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId,
+      applicationId,
+      submittedQuotationMinor: 18_000_000,
+      source: "MANUAL_ENTRY",
+    });
+    const approve = () =>
+      asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId,
+        applicationId,
+        approvedAmountMinor: 18_000_000,
+        basis: "MANUAL",
+        notes: "First approval.",
+      });
+    await approve();
+    const before = (await t.run((ctx) => ctx.db.get(applicationId)))!.supplierEntitlementWitness!;
+    await approve();
+    const after = (await t.run((ctx) => ctx.db.get(applicationId)))!.supplierEntitlementWitness!;
+    expect(after).toEqual(before);
   });
 });
