@@ -695,7 +695,9 @@ export interface MobileSubscription {
   plan: MobilePlanId;
   status: string;
   planDetails: MobileSubscriptionPlan;
-  daysUntilRenewal: number | null;
+  // `daysUntilRenewal` was removed in SCRUM-145: computing it server-side read
+  // the wall clock and made getMySubscription permanently uncacheable. Derive it
+  // from `currentPeriodEnd` on the client if a screen ever needs it — none does.
   currentPeriodEnd: number | null;
 }
 

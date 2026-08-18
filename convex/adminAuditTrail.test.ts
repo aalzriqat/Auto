@@ -81,6 +81,157 @@ describe("super-admin writes leave an audit trail", () => {
     expect(rows[1].targetId).toBeDefined();
   });
 
+  test("adminUpdateSubscription cannot store an active plan whose period already ended", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const { asAdmin } = await seedSuperAdmin(t);
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Lapsed Cars", createdAt: Date.now() })
+    );
+
+    // SCRUM-145: the read path now trusts stored state, so a row saying
+    // "active" with a period that ended would hand out paid access until the
+    // next sweep — and the old read-time clock check that used to absorb this
+    // is gone. Both writers settle through the same transition.
+    await asAdmin.mutation(api.subscriptions.adminUpdateSubscription, {
+      orgId,
+      plan: "enterprise",
+      status: "active",
+      currentPeriodEnd: Date.now() - 60_000,
+    });
+
+    const row = await t.run((ctx) =>
+      ctx.db.query("subscriptions").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique()
+    );
+    expect(row?.status).toBe("expired");
+
+    // The audit row must agree with the row that was written. Logging the
+    // requested status would leave the trail claiming "active" for a
+    // subscription stored as "expired".
+    const rows = await auditRows(t, "adminUpdateSubscription");
+    expect(rows[rows.length - 1]).toMatchObject({
+      after: { plan: "enterprise", status: "expired" },
+    });
+    // ...and it must still say what the admin actually asked for. "Chose
+    // expired" and "chose active and was overruled by normalisation" are
+    // different acts; a billing audit that records only the effective state
+    // cannot tell them apart afterwards.
+    expect((rows[rows.length - 1].after as Record<string, unknown>).requestedStatus).toBe("active");
+
+    // A renewal through the same path restores it — `expired` is not a
+    // one-way door.
+    await asAdmin.mutation(api.subscriptions.adminUpdateSubscription, {
+      orgId,
+      plan: "enterprise",
+      status: "active",
+      currentPeriodEnd: Date.now() + 30 * 24 * 60 * 60 * 1000,
+    });
+
+    const renewed = await t.run((ctx) =>
+      ctx.db.query("subscriptions").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique()
+    );
+    expect(renewed?.status).toBe("active");
+
+    // Nothing was overruled this time, so the trail carries no phantom
+    // "requested" value to puzzle over later.
+    // Identity first: `toBeUndefined()` on a renamed or missing field passes
+    // without proving anything, and without this the assertion could silently
+    // re-read the earlier row.
+    const afterRenewal = await auditRows(t, "adminUpdateSubscription");
+    expect(afterRenewal).toHaveLength(2);
+    expect(afterRenewal[1]).toMatchObject({
+      after: { plan: "enterprise", status: "active" },
+    });
+    expect(
+      (afterRenewal[1].after as Record<string, unknown>).requestedStatus
+    ).toBeUndefined();
+  });
+
+  test("a free plan is never stamped expired, however stale its period end", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const { asAdmin } = await seedSuperAdmin(t);
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Downgraded Cars", createdAt: Date.now() })
+    );
+
+    // Downgrading to free does not require clearing the optional period-end
+    // field, so this shape is ordinary admin output. The free plan has no paid
+    // period, so nothing about it can lapse — stamping it `expired` would make
+    // getMySubscription report a lapsed entitlement to an org that never had
+    // one. This is the writer-side half of the same guard the reconciler relies
+    // on; the reconciler's own copy is now unreachable for free rows because
+    // the query filters them out, so this is where it is actually load-bearing.
+    await asAdmin.mutation(api.subscriptions.adminUpdateSubscription, {
+      orgId,
+      plan: "free",
+      status: "active",
+      currentPeriodEnd: Date.now() - 10_000_000,
+    });
+
+    const row = await t.run((ctx) =>
+      ctx.db.query("subscriptions").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique()
+    );
+    expect(row?.status).toBe("active");
+    expect(row?.plan).toBe("free");
+  });
+
+  test("omitting currentPeriodEnd cannot resurrect a lapsed subscription", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const { asAdmin } = await seedSuperAdmin(t);
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Stale Period Cars", createdAt: Date.now() })
+    );
+
+    // A row whose paid period has already ended.
+    await t.run((ctx) =>
+      ctx.db.insert("subscriptions", {
+        orgId,
+        plan: "professional",
+        status: "expired",
+        billingInterval: "annual",
+        currentPeriodStart: Date.now() - 40_000_000,
+        currentPeriodEnd: Date.now() - 10_000_000,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    );
+
+    // The admin edits plan/status WITHOUT touching the period-end field.
+    // Convex strips omitted optional arguments, so `currentPeriodEnd` is absent
+    // from args — but `ctx.db.patch` preserves the STORED value. Settling
+    // against the request alone therefore sees no period at all and returns the
+    // requested status untouched, storing `active` over a period that ended.
+    // That is exactly the state the settle step exists to make impossible.
+    await asAdmin.mutation(api.subscriptions.adminUpdateSubscription, {
+      orgId,
+      plan: "professional",
+      status: "active",
+    });
+
+    const row = await t.run((ctx) =>
+      ctx.db.query("subscriptions").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique()
+    );
+    expect(row?.status).toBe("expired");
+    expect(row?.currentPeriodEnd).toBeLessThan(Date.now());
+
+    // The audit must describe the row that now exists, not the subset the admin
+    // happened to type. `patch` preserves every omitted persisted field, so an
+    // `after` that drops them cannot be reconciled against the subscription
+    // afterwards — which is the whole point of recording effective state.
+    const audits = await auditRows(t, "adminUpdateSubscription");
+    // Every persisted optional `patch` preserves must appear, not just the one
+    // that drives settlement — mutation testing showed `billingInterval` had no
+    // coverage at all and its merge could be deleted unnoticed.
+    expect(audits[audits.length - 1].after).toMatchObject({
+      plan: "professional",
+      status: "expired",
+      requestedStatus: "active",
+      currentPeriodEnd: row?.currentPeriodEnd,
+      billingInterval: "annual",
+      currentPeriodStart: row?.currentPeriodStart,
+    });
+    expect(row?.billingInterval).toBe("annual");
+  });
+
   test("setSiteConfig records the previous and new value", async () => {
     const t = convexTestWithComponents(schema, MODULES);
     const { adminId, asAdmin } = await seedSuperAdmin(t);
