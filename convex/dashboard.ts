@@ -97,6 +97,16 @@ export const stats = query({
   args: {
     orgId: v.id("organizations"),
     timeRange: v.optional(v.union(v.literal("DAY"), v.literal("MONTH"), v.literal("YEAR"), v.literal("ALL_TIME"))),
+    /**
+     * Whether the caller wants the comparison window.
+     *
+     * Defaults to true, so every existing caller — mobile, which is the only
+     * consumer of `previousPeriod` in the product — keeps exactly the response
+     * it has today and needs no change. The web dashboard passes false: it
+     * defaults to MONTH and renders no delta anywhere, so it was paying for a
+     * second full accounting window on every load and discarding it.
+     */
+    includePreviousPeriod: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     // 1. Authenticate and verify membership, then derive domain visibility.
@@ -139,7 +149,12 @@ export const stats = query({
     // A YEAR view shows its figures without deltas, which the client already
     // handles — an absent previous total collapses the delta and leaves the
     // layout alone.
-    const comparesPeriods = args.timeRange === "DAY" || args.timeRange === "MONTH";
+    // One gate for the whole comparison window: every previous-period read and
+    // the assembly of `previousPeriod` itself already hang off this flag, so a
+    // caller that declines it issues none of those ranges at all.
+    const comparesPeriods =
+      (args.includePreviousPeriod ?? true) &&
+      (args.timeRange === "DAY" || args.timeRange === "MONTH");
     const previousStart = filterStart - periodLength;
 
     // 2. Total Vehicles & Available Vehicles
