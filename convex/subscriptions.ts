@@ -766,18 +766,28 @@ export const adminUpdateSubscription = mutation({
     // stored. Logging the requested values instead would make the audit trail
     // disagree with the row whenever settling changed the status.
     //
-    // ⚠️ Settled against the MERGED row, not the arguments. Convex strips
-    // omitted optional arguments, so an admin who edits plan/status without
-    // touching the period-end field leaves `currentPeriodEnd` absent from
-    // `rest` — while `ctx.db.patch` preserves the STORED value. Settling on the
-    // request alone therefore saw no period at all, returned the requested
-    // status untouched, and stored `active` over a period that had already
-    // ended: exactly the state this step exists to make impossible.
-    const effectivePeriodEnd = rest.currentPeriodEnd ?? existing?.currentPeriodEnd;
-    const settled = {
+    // ⚠️ Built from the MERGED row, not the arguments. Convex strips omitted
+    // optional arguments, so an admin who edits plan/status without touching
+    // the other fields leaves them absent from `rest` — while `ctx.db.patch`
+    // PRESERVES whatever is stored. Two things went wrong when this worked off
+    // the request alone:
+    //
+    //   1. Settlement saw no period at all, returned the requested status
+    //      untouched, and stored `active` over a period that had already
+    //      ended — exactly the state this step exists to make impossible.
+    //   2. The audit `after` omitted every field the admin did not retype, so
+    //      it could not be reconciled against the row it claims to describe.
+    //
+    // Spread from `rest` rather than listing fields, so a future argument is
+    // carried automatically; the three persisted optionals are then merged
+    // explicitly because those are the ones `patch` preserves.
+    const effective = {
       ...rest,
-      status: settledSubscriptionStatus({ ...rest, currentPeriodEnd: effectivePeriodEnd }, now),
+      billingInterval: rest.billingInterval ?? existing?.billingInterval,
+      currentPeriodStart: rest.currentPeriodStart ?? existing?.currentPeriodStart,
+      currentPeriodEnd: rest.currentPeriodEnd ?? existing?.currentPeriodEnd,
     };
+    const settled = { ...effective, status: settledSubscriptionStatus(effective, now) };
 
     // A plan/status change is a billing change, and it used to leave no trace
     // of who made it. Written before the return so both branches are covered.

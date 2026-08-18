@@ -187,6 +187,8 @@ describe("super-admin writes leave an audit trail", () => {
         orgId,
         plan: "professional",
         status: "expired",
+        billingInterval: "annual",
+        currentPeriodStart: Date.now() - 40_000_000,
         currentPeriodEnd: Date.now() - 10_000_000,
         createdAt: Date.now(),
         updatedAt: Date.now(),
@@ -210,6 +212,24 @@ describe("super-admin writes leave an audit trail", () => {
     );
     expect(row?.status).toBe("expired");
     expect(row?.currentPeriodEnd).toBeLessThan(Date.now());
+
+    // The audit must describe the row that now exists, not the subset the admin
+    // happened to type. `patch` preserves every omitted persisted field, so an
+    // `after` that drops them cannot be reconciled against the subscription
+    // afterwards — which is the whole point of recording effective state.
+    const audits = await auditRows(t, "adminUpdateSubscription");
+    // Every persisted optional `patch` preserves must appear, not just the one
+    // that drives settlement — mutation testing showed `billingInterval` had no
+    // coverage at all and its merge could be deleted unnoticed.
+    expect(audits[audits.length - 1].after).toMatchObject({
+      plan: "professional",
+      status: "expired",
+      requestedStatus: "active",
+      currentPeriodEnd: row?.currentPeriodEnd,
+      billingInterval: "annual",
+      currentPeriodStart: row?.currentPeriodStart,
+    });
+    expect(row?.billingInterval).toBe("annual");
   });
 
   test("setSiteConfig records the previous and new value", async () => {
