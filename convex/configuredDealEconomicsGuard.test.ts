@@ -1319,6 +1319,82 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
     expect(rowsAfter.length).toBe(rowsBefore.length);
   });
 
+  test("a handed-over DIRECT deal may still move to THROUGH and finalize there, and only CLOSED seals the route", async () => {
+    // THE POSITIVE POLICY, pinned deliberately.
+    //
+    // Owner ruling: handover seals the ECONOMICS; finalization/CLOSED seals the
+    // POSTING ROUTE. So a handed-over deal may still change how the money
+    // travels, and the protection is not a lock on the route — it is that route
+    // selection may never rewrite the evidence the economics were agreed
+    // against.
+    //
+    // Pinned as its own test because the refusal cases alone cannot distinguish
+    // "the guard is correct" from "the guard is a blanket lock". A blanket lock
+    // passes every refusal test in this file and strands every consigned
+    // financed deal in production, which is exactly the defect a previous round
+    // nearly shipped.
+    const { t, orgId, applicationId, asUser, asApprover, registerExpectedPayment } =
+      await seedApprovedApplication("MANUAL_FINANCE_COMPANY", {
+        sourcedVehicle: true,
+        manualProviderName: "Amman Finance House",
+      });
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    await asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_000_000,
+      source: "Signed purchase agreement",
+    });
+    await registerHandover(asUser, api, orgId, applicationId);
+    const agreed = (await t.run((ctx) => ctx.db.get(applicationId)))!.supplierEntitlementWitness!;
+    expect(agreed.amountMinor).toBe(17_000_000);
+
+    // ALLOWED after handover: the deal changes how it settles.
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "THROUGH_DEALERSHIP",
+    });
+    // The evidence is untouched by that move — byte for byte, provenance
+    // included. Route selection records how the money travels; it does not get
+    // to restate what the supplier was owed.
+    expect(
+      (await t.run((ctx) => ctx.db.get(applicationId)))?.supplierEntitlementWitness
+    ).toStrictEqual(agreed);
+
+    // ...and the deal finishes on the route it actually settled by.
+    await registerExpectedPayment();
+    await asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId });
+    const closed = await t.run((ctx) => ctx.db.get(applicationId));
+    expect(closed?.status).toBe("CLOSED");
+    expect(closed?.supplierSettlementRoute).toBe("THROUGH_DEALERSHIP");
+    // The witness survived finalization too: it is the record of what was agreed,
+    // not a scratch value the lifecycle consumes.
+    expect(closed?.supplierEntitlementWitness).toStrictEqual(agreed);
+
+    // NOW the route is sealed — by CLOSED, which is the boundary that decides how
+    // the deal posts. Both directions are refused, including back to the route it
+    // was handed over on.
+    await expect(
+      asUser.mutation(api.applications.setSupplierSettlementRoute, {
+        orgId,
+        applicationId,
+        route: "DIRECT_TO_SUPPLIER",
+      })
+    ).rejects.toThrow(/already finalized/i);
+    await expect(
+      asUser.mutation(api.applications.setSupplierSettlementRoute, {
+        orgId,
+        applicationId,
+        route: "THROUGH_DEALERSHIP",
+      })
+    ).rejects.toThrow(/already finalized/i);
+  });
+
   test("the route cannot clear a witness, so a THROUGH round trip cannot mint a new one", async () => {
     // ⚠️ THIS TEST REPLACES ONE THAT ASSERTED THE OPPOSITE.
     //
