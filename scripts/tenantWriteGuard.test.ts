@@ -451,15 +451,25 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // backfills. There is no caller-supplied org or document id for the guard to
   // own-check, and it is an `internalMutation` with no public entry point.
   //
-  // ⚠️ `analysed` stays at 315 across all three. That is the number that must
+  // Then 476→477 / skippedNoOrgId 146→147, `analysed` unchanged at 315, by
+  // `subscriptions.reconcileExpiredSubscriptions` (SCRUM-145):
+  //
+  // It is a cross-org sweep that moves subscriptions past their paid period to
+  // `expired`, so it deliberately takes no `orgId` — it selects rows by the
+  // `by_status_plan_period_end` index rather than from caller input, and
+  // patches only rows that range returned. There is no caller-supplied org or document
+  // id for the guard to own-check, and it is an `internalMutation` reachable
+  // only from the cron, with no public entry point.
+  //
+  // ⚠️ `analysed` stays at 315 across all four. That is the number that must
   // never drop silently — a new mutation landing in a skip bucket is only
   // acceptable when the reason is one of the two above, stated per mutation.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 476,
+      totalMutations: 477,
       analysed: 315,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 146,
+      skippedNoOrgId: 147,
     });
   });
 });
