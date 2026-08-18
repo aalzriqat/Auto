@@ -387,9 +387,8 @@ export const reconcileExpiredSubscriptions = internalMutation({
     // discarded document, and a Convex transaction aborts past 32,000 scanned
     // documents — so enough free rows ordered ahead of a lapsed paid row would
     // abort the query before `.take()` reached it, and abort again on every
-    // later run. The candidate read also happens before the try/catch below, so
-    // that failure would not even leave a heartbeat. Derived from PLANS rather
-    // than hardcoded, so a new paid tier cannot be silently left out.
+    // later run. Derived from PLANS rather than hardcoded, so a new paid tier
+    // cannot be silently left out.
     // ⚠️ Plans are drained in PLANS order, so an extreme backlog concentrated in
     // an earlier tier is processed before a later tier is reached. The chain
     // self-corrects through near-immediate `runAfter(0)` hops, so the five-minute
@@ -400,11 +399,19 @@ export const reconcileExpiredSubscriptions = internalMutation({
     const candidates: Doc<"subscriptions">[] = [];
     let expired = 0;
     try {
-      // ⚠️ The candidate read lives INSIDE the try, not before it. A read can
-      // fail too — the documented scanned-document cap is the obvious way — and
-      // when it did, the mutation threw before any heartbeat was written. The
-      // admin panel then showed neither a failure nor a recent success, which
-      // is precisely the silent state the heartbeat exists to prevent.
+      // ⚠️ The candidate read lives INSIDE the try, not before it. It used to
+      // sit above, and a read that threw took the whole mutation down before
+      // any heartbeat was written — the admin panel then showed neither a
+      // failure nor a recent success, which is precisely the silent state the
+      // heartbeat exists to prevent.
+      //
+      // Note the motivating example no longer applies to this query: with the
+      // indexed per-plan reads the batch is bounded by `limit` (<=500), so the
+      // 32,000-document scan cap that made the old `.filter()` version fail is
+      // not a path here. A read can still fail for other reasons, and the
+      // failure branch remains untested either way (see the catch below), so
+      // the read belongs inside the reporting boundary on principle rather than
+      // because a specific abort is expected.
       for (const plan of paidPlans) {
         if (candidates.length >= limit) break;
         const rows = await ctx.db
