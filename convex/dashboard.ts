@@ -235,7 +235,23 @@ export const stats = query({
 
     const activeSales = periodSales;
 
-    const transactionCandidates: Doc<"transactions">[] = canViewSalesMetrics
+    // The `VEHICLE_SALE` ledger is a fallback for a period that recorded no
+    // sale rows at all: every consumer below (`grossTransactionValue`,
+    // `salesCount`, `salesVolume`, the `monthlySales` chart) reads the sales
+    // path whenever `activeSales` is non-empty and ignores this result
+    // entirely. Issuing the range query regardless bought an index range plus
+    // the documents behind it on every dashboard load of every org that has
+    // ever recorded a sale, and then threw the answer away.
+    //
+    // One behavioural consequence, and it is a correction rather than a
+    // regression: `salesTruncated` below ORs the two lengths, so a period that
+    // had sales AND a ledger that happened to hit the 5,000 cap used to report
+    // the sales figures as truncated. Those figures came from `activeSales`,
+    // which was not truncated — the flag was a false positive about a dataset
+    // that contributed nothing. With the query skipped, the OR collapses to
+    // the `activeSales` term, which is the only one that was ever load-bearing
+    // on that path.
+    const transactionCandidates: Doc<"transactions">[] = canViewSalesMetrics && activeSales.length === 0
       ? filterStart > 0
           ? await ctx.db
             .query("transactions")
@@ -272,7 +288,20 @@ export const stats = query({
           0
         );
     const salesCount = activeSales.length > 0 ? activeSales.length : saleTransactions.length;
-    const salesTruncated = activeSales.length === SALES_CAP || saleTransactions.length === SALES_CAP;
+    // Truncation is a property of the READ that produced the figures, not of a
+    // row count. DAY/MONTH/YEAR read `periodSales` with `.collect()`, which
+    // returns the complete range - exactly SALES_CAP rows there means the
+    // period genuinely had that many, not that anything was dropped, and the
+    // old OR declared a truncation that had not happened. Only the ALL_TIME
+    // branch reads `.take(SALES_CAP)` and can stop silently at the cap.
+    //
+    // The fallback ledger always reads `.take(SALES_CAP)`, so it is truncated
+    // at the cap - but only while it is the authoritative source, which is
+    // exactly when `activeSales` is empty.
+    const currentPeriodUsedTake = filterStart === 0;
+    const salesTruncated = activeSales.length > 0
+      ? currentPeriodUsedTake && activeSales.length === SALES_CAP
+      : saleTransactions.length === SALES_CAP;
 
     const getChartKey = (dateTs: number) => {
       const d = new Date(dateTs);
