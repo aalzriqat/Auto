@@ -4634,7 +4634,14 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_org", ["orgId"])
-    .index("by_status_period_end", ["status", "currentPeriodEnd"]),
+    .index("by_status_period_end", ["status", "currentPeriodEnd"])
+    // `plan` sits BEFORE `currentPeriodEnd` so the expiry sweep can exclude free
+    // rows through the index instead of `.filter()`. A filter still scans and
+    // charges every discarded document, and a Convex transaction is capped at
+    // 32,000 scanned documents — so enough free rows carrying a stale period end
+    // would abort the query before `.take()` ever reached a lapsed paid row, and
+    // abort it again on every subsequent run (SCRUM-145).
+    .index("by_status_plan_period_end", ["status", "plan", "currentPeriodEnd"]),
 
   // ─── Super-admin dashboard (cross-tenant, /admin) ──────────────────────────
 

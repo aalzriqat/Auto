@@ -111,6 +111,11 @@ describe("super-admin writes leave an audit trail", () => {
     expect(rows[rows.length - 1]).toMatchObject({
       after: { plan: "enterprise", status: "expired" },
     });
+    // ...and it must still say what the admin actually asked for. "Chose
+    // expired" and "chose active and was overruled by normalisation" are
+    // different acts; a billing audit that records only the effective state
+    // cannot tell them apart afterwards.
+    expect((rows[rows.length - 1].after as Record<string, unknown>).requestedStatus).toBe("active");
 
     // A renewal through the same path restores it — `expired` is not a
     // one-way door.
@@ -125,6 +130,13 @@ describe("super-admin writes leave an audit trail", () => {
       ctx.db.query("subscriptions").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique()
     );
     expect(renewed?.status).toBe("active");
+
+    // Nothing was overruled this time, so the trail carries no phantom
+    // "requested" value to puzzle over later.
+    const afterRenewal = await auditRows(t, "adminUpdateSubscription");
+    expect(
+      (afterRenewal[afterRenewal.length - 1].after as Record<string, unknown>).requestedStatus
+    ).toBeUndefined();
   });
 
   test("a free plan is never stamped expired, however stale its period end", async () => {

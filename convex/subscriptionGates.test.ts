@@ -358,9 +358,14 @@ describe("subscription feature gates", () => {
           name: `Perpetual ${i}`,
           createdAt: Date.now(),
         });
+        // ⚠️ Deliberately the SAME plan as the lapsed row below. Candidates are
+        // now read through an indexed equality per paid plan, so seeding these
+        // as a different tier would put them in a different range — the lapsed
+        // row would be reached first and the test would pass without ever
+        // exercising the lower bound. Mutation testing caught exactly that.
         await ctx.db.insert("subscriptions", {
           orgId: org,
-          plan: "enterprise",
+          plan: "professional",
           status: "active",
           createdAt: Date.now(),
           updatedAt: Date.now(),
@@ -390,7 +395,7 @@ describe("subscription feature gates", () => {
     );
     expect(row?.status).toBe("expired");
 
-    // And no perpetual org was touched.
+    // And every perpetual org is untouched — still active, still no period end.
     const perpetual = await t.run((ctx) =>
       ctx.db
         .query("subscriptions")
@@ -398,6 +403,7 @@ describe("subscription feature gates", () => {
         .collect()
     );
     expect(perpetual).toHaveLength(120);
+    expect(perpetual.every((r) => r.currentPeriodEnd === undefined)).toBe(true);
   });
 
   test("a cohort larger than one page still expires inside the 5-minute bound", async () => {
@@ -515,6 +521,81 @@ describe("subscription feature gates", () => {
 
     const rows = await t.run((ctx) => ctx.db.query("subscriptions").collect());
     expect(rows.every((r) => r.status === "active")).toBe(true);
+  });
+
+  test("a subscription lapses AT its period end, not a millisecond later", async () => {
+    vi.useFakeTimers();
+    const frozen = 1_700_000_000_000;
+    vi.setSystemTime(frozen);
+
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+
+    // The candidate range selects with `lte(now)` while the transition tested
+    // `< now`, so a row sitting EXACTLY on the boundary was selected and then
+    // refused. A whole page of them expired nothing and scheduled nothing —
+    // which is also the case that makes the continuation's `expired > 0` guard
+    // load-bearing rather than the unreachable defence it was documented as.
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Boundary Dealer", createdAt: frozen })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("subscriptions", {
+        orgId,
+        plan: "professional",
+        status: "active",
+        currentPeriodEnd: frozen,
+        createdAt: frozen,
+        updatedAt: frozen,
+      })
+    );
+
+    const result = await t.mutation(internal.subscriptions.reconcileExpiredSubscriptions, {});
+    expect(result.scanned).toBe(1);
+    expect(result.expired).toBe(1);
+
+    const row = await t.run((ctx) =>
+      ctx.db.query("subscriptions").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique()
+    );
+    expect(row?.status).toBe("expired");
+  });
+
+  test("a full page sitting on the boundary still drains", async () => {
+    vi.useFakeTimers();
+    const frozen = 1_700_000_000_000;
+    vi.setSystemTime(frozen);
+
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+
+    // 101 rows all exactly at the boundary: the page is full, every row is
+    // eligible, and the sweep must drain the whole cohort rather than stall.
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 101; i++) {
+        const org = await ctx.db.insert("organizations", {
+          name: `Boundary ${i}`,
+          createdAt: frozen,
+        });
+        await ctx.db.insert("subscriptions", {
+          orgId: org,
+          plan: "professional",
+          status: "active",
+          currentPeriodEnd: frozen,
+          createdAt: frozen,
+          updatedAt: frozen,
+        });
+      }
+    });
+
+    const first = await t.mutation(internal.subscriptions.reconcileExpiredSubscriptions, {});
+    expect(first.expired).toBe(100);
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    const remaining = await t.run((ctx) =>
+      ctx.db
+        .query("subscriptions")
+        .withIndex("by_status_period_end", (q) => q.eq("status", "active"))
+        .collect()
+    );
+    expect(remaining).toHaveLength(0);
   });
 
   test("reconciliation is idempotent", async () => {

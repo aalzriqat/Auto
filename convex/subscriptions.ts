@@ -5,7 +5,7 @@ import { MutationCtx, QueryCtx } from "./_generated/server";
 import { requireTenantAuth, requireSuperAdmin } from "./utils/tenancy";
 import { logAdminAction } from "./adminAudit";
 import { internal } from "./_generated/api";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 
 // ─── Plan catalogue ──────────────────────────────────────────────────────────
 
@@ -235,7 +235,12 @@ export function settledSubscriptionStatus(
   // here so the green suite is not mistaken for behavioural coverage.
   if (sub.currentPeriodEnd === undefined) return sub.status;
   if (sub.status !== "active") return sub.status;
-  return sub.currentPeriodEnd < now ? "expired" : "active";
+  // `<=`, matching the candidate range's `lte`. They disagreed: the range
+  // selected a row sitting exactly on its period end and this test then refused
+  // it, so a full page of boundary rows expired nothing and scheduled nothing.
+  // Expiring AT the end is not expiring BEFORE it — the period is over at that
+  // instant — so the "never downgrade early" rule is untouched.
+  return sub.currentPeriodEnd <= now ? "expired" : "active";
 }
 
 /**
@@ -371,20 +376,36 @@ export const reconcileExpiredSubscriptions = internalMutation({
     //   sorts BELOW every number, so a plain `lte(now)` returns every row that
     //   never had a period at all. This bound means "is a number".
     //
-    //   neq(plan, "free") — a FREE row can still carry a real, stale
+    //   plan equality — a FREE row can still carry a real, stale
     //   `currentPeriodEnd`, which the bound above cannot exclude. Downgrading an
     //   org to free through `adminUpdateSubscription` does not require clearing
     //   the optional period-end field, so this is ordinary admin output rather
-    //   than a corrupt row. Filtering here rather than inside the loop is the
-    //   same reasoning `canAddVehicle` records below: filter BEFORE `take`, or
-    //   the skipped rows consume the page and the real work never happens.
-    const candidates = await ctx.db
-      .query("subscriptions")
-      .withIndex("by_status_period_end", (q) =>
-        q.eq("status", "active").gte("currentPeriodEnd", -Infinity).lte("currentPeriodEnd", now)
-      )
-      .filter((q) => q.neq(q.field("plan"), "free"))
-      .take(limit);
+    //   than a corrupt row.
+    //
+    // ⚠️ This is deliberately an INDEXED equality per paid plan, not
+    // `.filter(neq(plan, "free"))`. A filter still scans and is charged for every
+    // discarded document, and a Convex transaction aborts past 32,000 scanned
+    // documents — so enough free rows ordered ahead of a lapsed paid row would
+    // abort the query before `.take()` reached it, and abort again on every
+    // later run. The candidate read also happens before the try/catch below, so
+    // that failure would not even leave a heartbeat. Derived from PLANS rather
+    // than hardcoded, so a new paid tier cannot be silently left out.
+    const paidPlans = (Object.keys(PLANS) as PlanId[]).filter((p) => p !== "free");
+    const candidates: Doc<"subscriptions">[] = [];
+    for (const plan of paidPlans) {
+      if (candidates.length >= limit) break;
+      const rows = await ctx.db
+        .query("subscriptions")
+        .withIndex("by_status_plan_period_end", (q) =>
+          q
+            .eq("status", "active")
+            .eq("plan", plan)
+            .gte("currentPeriodEnd", -Infinity)
+            .lte("currentPeriodEnd", now)
+        )
+        .take(limit - candidates.length);
+      candidates.push(...rows);
+    }
 
     let expired = 0;
     try {
@@ -430,13 +451,14 @@ export const reconcileExpiredSubscriptions = internalMutation({
     // instead of stopping. Requiring `expired > 0` means every continuation has
     // strictly reduced the eligible set, so the chain terminates on data.
     //
-    // ⚠️ Mutation testing: dropping `expired > 0` SURVIVES the suite, and no
-    // test can currently kill it. Every candidate is `active`, non-free, with a
-    // numeric `currentPeriodEnd` at or before now, and `settledSubscriptionStatus`
-    // always transitions exactly that shape — so a full page with zero progress
-    // is unreachable today. The guard is defence against a future skip condition
-    // in the loop, not live logic, and it is recorded here rather than covered
-    // by a test contrived to look like coverage.
+    // ⚠️ This guard was previously documented here as unreachable defence. That
+    // was WRONG, and an independent reviewer disproved it by execution: the
+    // candidate range used `lte(now)` while the transition used `< now`, so a
+    // page of rows sitting exactly on the boundary expired nothing and
+    // scheduled nothing. The mismatch is fixed and pinned by a boundary test,
+    // which is what makes a no-progress full page unreachable again — the guard
+    // stays as defence against exactly that kind of drift recurring, and this
+    // note stays as the reason not to trust a fresh "unreachable" claim here.
     if (expired > 0 && candidates.length === limit) {
       await ctx.scheduler.runAfter(0, internal.subscriptions.reconcileExpiredSubscriptions, {
         limit,
@@ -740,7 +762,14 @@ export const adminUpdateSubscription = mutation({
             currentPeriodEnd: existing.currentPeriodEnd,
           }
         : undefined,
-      after: { ...settled },
+      // Effective state, so the trail matches the row that was written. The
+      // requested status is preserved alongside it whenever normalisation
+      // overruled the admin, because "chose expired" and "chose active and was
+      // corrected" are different acts and a billing audit should not conflate
+      // them.
+      after: settled.status === rest.status
+        ? { ...settled }
+        : { ...settled, requestedStatus: rest.status },
     });
 
     if (existing) {
