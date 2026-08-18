@@ -679,6 +679,11 @@ export const salesEn = {
     "Recording what the supplier receives needs permission to see the deal's finances as well as to approve it. Ask the dealership owner, or someone whose role has both.",
   DirectSupplierAmountOwnDeal:
     "You cannot record this on your own deal. The dealership owner records it, or another approver who can also see the deal's finances.",
+  // Names the step that unblocks it, not the state it is stuck in. The finance
+  // company has to approve the application before anybody can record what the
+  // supplier receives against it.
+  DirectSupplierAmountNeedsApproval:
+    "This deal has not been approved yet, so what the supplier receives cannot be recorded against it. Approve the application first, then record it here.",
   DirectSupplierAmountSealed:
     "The vehicle has gone out, so this deal's figures are sealed and this can no longer be recorded here.",
   // Both reachable through `directRouteRefusal`. Without them the dialog fell
@@ -1705,6 +1710,8 @@ export const salesAr = {
     "تسجيل ما يستلمه المورّد يتطلب صلاحية الاطلاع على مالية الصفقة إضافةً إلى صلاحية الاعتماد. راجع مالك المعرض أو مستخدمًا يملك الصلاحيتين معًا.",
   DirectSupplierAmountOwnDeal:
     "لا يمكنك تسجيل هذا على صفقتك. يسجّله مالك المعرض أو معتمِد آخر يملك أيضًا صلاحية الاطلاع على مالية الصفقة.",
+  DirectSupplierAmountNeedsApproval:
+    "لم تُعتمد هذه الصفقة بعد، لذلك لا يمكن تسجيل ما يستلمه المورّد عليها. اعتمد الطلب أولاً، ثم سجّله هنا.",
   DirectSupplierAmountSealed:
     "خرجت المركبة، لذلك أصبحت أرقام هذه الصفقة مثبّتة ولم يعد بالإمكان تسجيل هذا هنا.",
   RouteDirectUnavailableBelowEntitlement:

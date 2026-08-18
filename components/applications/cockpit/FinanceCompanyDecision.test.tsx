@@ -53,6 +53,7 @@ vi.mock("@/components/ui/sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
+import { salesEn, salesAr } from "@/lib/i18n/domains/sales";
 import { DealCockpitView } from "./DealCockpit";
 import { RecordSubmittedQuotationDialog } from "./RecordSubmittedQuotationDialog";
 
@@ -1766,6 +1767,7 @@ describe("SCRUM-61: the manual provider's supplier amount is reachable from the 
     "DirectSupplierAmountOwnDeal",
     "DirectSupplierAmountSealed",
     "DirectSupplierAmountClosed",
+    "DirectSupplierAmountNeedsApproval",
   ] as const) {
     test(`when the server withholds it as ${reasonKey}, the action is gone and the reason is shown`, () => {
       renderCockpit(
@@ -1774,6 +1776,17 @@ describe("SCRUM-61: the manual provider's supplier amount is reachable from the 
       );
       expect(cardButton("DirectSupplierAmountAction")).toBeUndefined();
       expect(screen.getByText(reasonKey)).toBeTruthy();
+      // CodeRabbit, ACCEPTED. The harness translator is identity, so the
+      // assertion above proves only that the card ASKED for a translation, never
+      // that the string exists. A reason key added to the card and forgotten in
+      // the dictionary keeps this test green and shows a raw key to the operator.
+      expect(salesEn[reasonKey]).toBeTruthy();
+      expect(salesAr[reasonKey]).toBeTruthy();
+      // Not the key echoed back, and genuinely translated rather than the
+      // English copied across.
+      expect(salesEn[reasonKey]).not.toBe(reasonKey);
+      expect(salesAr[reasonKey]).not.toBe(reasonKey);
+      expect(salesAr[reasonKey]).not.toBe(salesEn[reasonKey]);
     });
   }
 });

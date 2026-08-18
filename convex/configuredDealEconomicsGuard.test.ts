@@ -76,6 +76,15 @@ async function seedApprovedApplication(
     sourcedVehicle?: boolean;
     /** Names the manual provider, which is what makes it an IDENTIFIED external payer. */
     manualProviderName?: string;
+    /**
+     * Stop at UNDER_REVIEW instead of approving.
+     *
+     * `VALID_STATUS_TRANSITIONS` makes APPROVED terminal, so a test that needs a
+     * not-yet-approved deal cannot walk backwards from one — it has to stop
+     * short. The caller then approves through the ordinary `updateStatus`
+     * mutation when it wants the other half of the transition.
+     */
+    stopAtUnderReview?: boolean;
   } = {}
 ) {
   const t = convexTestWithComponents(schema, MODULES);
@@ -173,7 +182,9 @@ async function seedApprovedApplication(
 
   const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
   await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
-  await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
+  if (!opts.stopAtUnderReview) {
+    await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
+  }
 
   // Guards the fixture itself: if the seed ever starts recording economics, these
   // tests would keep passing while no longer covering the branch they name.
@@ -426,6 +437,132 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
     ).rejects.toThrow(/pays the supplier directly|is not recorded/i);
   });
 
+  test("an unapproved deal is told to get approval, not shown a button the server refuses", async () => {
+    /**
+     * ⚠️ SCRUM-61'S OWN DEFECT CLASS, REAPPEARING INSIDE SCRUM-61.
+     *
+     * `recordDirectSupplierReceiptAmount` accepts ONLY an APPROVED application.
+     * The cockpit's availability ladder tested CLOSED and CANCELLED and stopped,
+     * so a deal in PENDING_DOCS, UNDER_REVIEW or REJECTED came back
+     * `available: true` with NO reason — and the card deliberately trusts that
+     * server verdict rather than composing its own, so nothing downstream could
+     * correct the false affordance.
+     *
+     * Reachable through the supported UI, which is what makes it a defect rather
+     * than a curiosity: `setSupplierSettlementRoute` refuses only CLOSED and
+     * CANCELLED, so the route can legitimately be chosen while the deal is still
+     * under review.
+     *
+     * Found by CodeRabbit at 03:19Z on an earlier head — its thread had been
+     * RESOLVED while the defect stayed live — and independently reproduced by the
+     * Codex seat against the integrated head. Both halves of the transition are
+     * pinned here so the screen and the mutation cannot drift apart again.
+     */
+    const { t, orgId, applicationId, asUser, asApprover } = await seedApprovedApplication(
+      "MANUAL_FINANCE_COMPANY",
+      { sourcedVehicle: true, manualProviderName: "Amman Finance House", stopAtUnderReview: true }
+    );
+
+    // The route is chosen while the deal is still under review, through its own
+    // production mutation. This is the step that lights the action up.
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+
+    // Anti-vacuity: the deal really is un-approved and really is on the direct
+    // route, so the refusal below is the lifecycle rung and not some other rung
+    // firing first.
+    const seeded = await t.run((ctx) => ctx.db.get(applicationId));
+    expect(seeded?.status).toBe("UNDER_REVIEW");
+    expect(seeded?.supplierSettlementRoute).toBe("DIRECT_TO_SUPPLIER");
+
+    const beforeApproval = await asApprover.query(api.applications.dealCockpit, {
+      orgId,
+      applicationId,
+    });
+    const blocked = beforeApproval!.directSupplierAmount;
+    // APPLICABLE — this deal does need the figure. Just not yet.
+    expect(blocked.applicable).toBe(true);
+    expect(blocked.available).toBe(false);
+    expect(blocked.reasonKey).toBe("DirectSupplierAmountNeedsApproval");
+
+    // And the server agrees with its own screen, which is the whole point.
+    await expect(
+      asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+        orgId,
+        applicationId,
+        approvedAmountMinor: 17_000_000,
+        source: "Signed purchase agreement",
+      })
+    ).rejects.toThrow(/approved application/i);
+
+    /**
+     * THE OTHER HALF. A refusal that never lifts is the dead end this issue
+     * exists to remove, so the recovery is pinned in the same test: approving
+     * the application through the ordinary mutation opens the action.
+     */
+    await asApprover.mutation(api.applications.updateStatus, {
+      orgId,
+      applicationId,
+      status: "APPROVED",
+    });
+    const afterApproval = await asApprover.query(api.applications.dealCockpit, {
+      orgId,
+      applicationId,
+    });
+    const open = afterApproval!.directSupplierAmount;
+    expect(open.applicable).toBe(true);
+    expect(open.available).toBe(true);
+    expect(open.reasonKey).toBeNull();
+
+    // And it can actually be recorded now, so "available" is not a claim the
+    // server would refuse a second time.
+    await asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_000_000,
+      source: "Signed purchase agreement",
+    });
+    expect(
+      (await t.run((ctx) => ctx.db.get(applicationId)))?.approvedDealerPurchaseAmountMinor
+    ).toBe(17_000_000);
+  });
+
+  test("recording the supplier receipt stamps updatedAt like every sibling money writer", async () => {
+    /**
+     * `dealCockpit` serves `updatedAt`, and this writer moved the approved
+     * amount, the currency, the entitlement witness, the receipt provenance and
+     * the economics revision while leaving `updatedAt` at its previous value —
+     * so the screen reported the row as untouched immediately after a write that
+     * moved the supplier's money. Every sibling writer stamps it.
+     */
+    const { t, orgId, applicationId, asUser, asApprover } = await seedApprovedApplication(
+      "MANUAL_FINANCE_COMPANY",
+      { sourcedVehicle: true, manualProviderName: "Amman Finance House" }
+    );
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    const before = (await t.run((ctx) => ctx.db.get(applicationId)))!.updatedAt;
+    await asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_000_000,
+      source: "Signed purchase agreement",
+    });
+    const after = (await t.run((ctx) => ctx.db.get(applicationId)))!.updatedAt;
+    // Anti-vacuity: a row that never carried the field would make any
+    // comparison below meaningless.
+    expect(before).toBeTypeOf("number");
+    expect(after).toBeTypeOf("number");
+    expect(after!).toBeGreaterThanOrEqual(before!);
+    expect(after).not.toBe(before);
+  });
+
   test("a MANUAL direct deal can RECORD the amount it is asked for, and then close", async () => {
     // The exit, not just the wall.
     //
@@ -494,6 +631,18 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
     // matters is that the complaint MOVED OFF the amount just recorded.
     const cockpit = await asUser.query(api.applications.dealCockpit, { orgId, applicationId });
     const profit = cockpit?.money?.managementProfit;
+    /**
+     * ⚠️ THE PROJECTION MUST EXIST BEFORE THE CONDITIONAL, or this block
+     * asserts NOTHING.
+     *
+     * With only the `if` below, a `profit` of `undefined` — a cockpit that
+     * stopped serving the projection at all — ran zero assertions and the test
+     * passed while proving none of what its comment claims. Asserting presence
+     * first keeps the deliberate looseness of the arm (the complaint may
+     * legitimately have moved to a LATER step, so `available` is not asserted)
+     * without letting the whole check evaporate.
+     */
+    expect(profit).toBeDefined();
     if (profit?.available === false) {
       expect(profit.reason).not.toBe("NoApprovedPurchaseAmount");
       expect(profit.reason).not.toBe("NotApplicableForFinancingMode");

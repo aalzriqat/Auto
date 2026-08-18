@@ -191,8 +191,16 @@ async function runDeal(
      *
      * This is where a test that owns its own economics puts them — quotation
      * different from the approved amount, an appraisal shortfall, a specific
-     * LTV. Supplying it replaces the default seeding below rather than adding
-     * to it.
+     * LTV.
+     *
+     * ⚠️ IT DOES NOT REPLACE THE DEFAULT SEEDING — it runs BEFORE it, and the
+     * seeding below then fills in only what is still absent. This docstring said
+     * "replaces", which is the opposite, and a caller trusting it would write a
+     * callback recording only a quotation, believe the deal carried no approval,
+     * and silently receive the default one at `approvedAmount ?? VEHICLE_PRICE`.
+     * That is a fixture passing for a reason its author did not intend, which is
+     * the failure mode this file has already produced more than once. To own a
+     * field completely, set it in the callback; the seeding will leave it alone.
      *
      * It exists because the lifecycle position moved, not to make room for a
      * bypass. `assertDealerEconomicsRecorded` still runs at handover: a callback

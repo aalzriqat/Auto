@@ -146,8 +146,27 @@ function assertDealerEconomicsRecorded(
    * Whether the supplier's entitlement still stands where the recorded amount
    * was agreed against it. Resolved by the caller, which is the side that can
    * read the vehicle.
+   *
+   * ⚠️ REQUIRED, WITH NO DEFAULT, AND THAT IS THE WHOLE POINT.
+   *
+   * This parameter used to default to `{ kind: "NOT_APPLICABLE" }`, which meant
+   * any caller that simply forgot it silently disabled the entire
+   * supplier-entitlement check on a money path — a fail-OPEN default on the one
+   * guard this release exists to make fail closed. The comment below explains
+   * that the check was hoisted so a future early return could not reintroduce
+   * the bypass; a permissive default reopened exactly that bypass through a
+   * different door, and no test would have failed.
+   *
+   * Making it required moves the guarantee to the COMPILER: a new call site
+   * cannot omit it, so the decision must be made deliberately every time. All
+   * three existing callers already pass a real verdict, so this is
+   * behaviour-neutral today and load-bearing tomorrow.
+   *
+   * Do not reintroduce a default, and do not add a runtime fallback that
+   * recreates an implicit NOT_APPLICABLE — that would be the same hole wearing
+   * a third costume.
    */
-  supplierEntitlement: SupplierEntitlementVerdict = { kind: "NOT_APPLICABLE" }
+  supplierEntitlement: SupplierEntitlementVerdict
 ): void {
   /**
    * The entitlement witness, checked for EVERY direct-to-supplier writer.
@@ -591,11 +610,23 @@ async function directRouteTransitionRefusal(
    */
   const projectedVerdict = await supplierEntitlementVerdictFor(ctx, projected);
   if (projectedVerdict.kind === "UNPROVABLE") return null;
+  /**
+   * READS HAPPEN OUTSIDE THE CATCH. Only the guard's own refusal is caught.
+   *
+   * `resolveQuoteMode` is a database read, and it used to sit INSIDE the `try`
+   * below. A read failure — or anything else that threw on the way — was
+   * therefore converted into a settlement-route refusal reason, so the cockpit
+   * would calmly tell an operator the route was unavailable for a business
+   * reason when the truth was that the query had failed. The catch exists to
+   * turn ONE specific `ConvexError` into an operator-facing reason; widening it
+   * over a read turns an outage into a plausible-looking business rule.
+   */
+  const quoteMode = await resolveQuoteMode(ctx, app);
   try {
     assertDealerEconomicsRecorded(
       projected,
       "finalizing",
-      await resolveQuoteMode(ctx, app),
+      quoteMode,
       projectedVerdict
     );
     return null;
@@ -2182,6 +2213,11 @@ export const dealCockpit = query({
       actorNames.set(entry.changedBy, actor?.name ?? "");
     }
 
+    // Resolved ONCE and read twice below. It walks the quote mode, the company
+    // and the settlement route, so asking it the same question a second time
+    // inside the availability closure paid for that twice on every cockpit load
+    // and left two call sites that could drift apart.
+    const approvedPurchaseWriter = await approvedPurchaseWriterFor(ctx, app);
     const adviceRequiresReconciliation =
       app.supplierDisbursementStatus === "REQUIRES_RECONCILIATION";
     const settlementAdviceEvidence: SettlementAdviceEvidence | null =
@@ -2238,7 +2274,7 @@ export const dealCockpit = query({
        * derived; the screen chooses its action from this rather than guessing
        * from which fields happen to be populated.
        */
-      approvedPurchaseWriter: await approvedPurchaseWriterFor(ctx, app),
+      approvedPurchaseWriter,
       /**
        * Whether the MANUAL supplier-amount action can actually be taken, and why
        * not — decided HERE, where every input lives.
@@ -2249,25 +2285,54 @@ export const dealCockpit = query({
        * refuse. Composing the rule client-side is what let the two disagree, so
        * the rule is computed once, on the side that owns it.
        */
-      directSupplierAmount: await (async () => {
-        const writer = await approvedPurchaseWriterFor(ctx, app);
-        if (writer !== "MANUAL_DIRECT_SUPPLIER_AMOUNT") {
+      directSupplierAmount: (() => {
+        if (approvedPurchaseWriter !== "MANUAL_DIRECT_SUPPLIER_AMOUNT") {
           return { applicable: false, available: false, reasonKey: null as string | null };
         }
         const closed = app.status === "CLOSED" || app.status === "CANCELLED";
+        /**
+         * ⚠️ THE LIFECYCLE RUNG. Every prerequisite the MUTATION owns has to
+         * appear here, or the screen offers an action the server refuses.
+         *
+         * `recordDirectSupplierReceiptAmount` accepts ONLY an APPROVED
+         * application. This ladder tested CLOSED and CANCELLED and stopped, so a
+         * deal in PENDING_DOCS, UNDER_REVIEW or REJECTED came back
+         * `available: true` with no reason at all — and the card deliberately
+         * trusts this verdict rather than composing its own, so nothing
+         * downstream could correct the false affordance.
+         *
+         * It is reachable through the supported UI, not just the API:
+         * `setSupplierSettlementRoute` refuses only CLOSED and CANCELLED, so an
+         * operator can choose DIRECT_TO_SUPPLIER while the deal is still
+         * UNDER_REVIEW, see the button light up, and have every submission
+         * rejected as not approved.
+         *
+         * That is the exact defect SCRUM-61 exists to remove — a screen naming a
+         * step nothing can perform — reappearing inside the change that removes
+         * it. Found by CodeRabbit and independently reproduced by the Codex seat
+         * at the integrated head.
+         *
+         * Ordered with the other DEAL-state reasons and above the VIEWER-state
+         * ones: closed and sealed and not-yet-approved are facts about the deal
+         * that hold for everybody, while own-deal and permission depend on who is
+         * looking. The reason names the recovery action rather than the state,
+         * matching `NeedsPermission`.
+         */
         const reasonKey = closed
           ? "DirectSupplierAmountClosed"
           : app.vehicleHandoverAt !== undefined
             ? "DirectSupplierAmountSealed"
-            : viewer._id === app.salespersonId
-              ? "DirectSupplierAmountOwnDeal"
-              : !(
-                    isSystemOwnerRole(role) ||
-                    (role.permissions.includes(PERMISSIONS.APPROVE_FINANCE_APPLICATION) &&
-                      role.permissions.includes(PERMISSIONS.VIEW_FINANCE))
-                  )
-                ? "DirectSupplierAmountNeedsPermission"
-                : null;
+            : app.status !== "APPROVED"
+              ? "DirectSupplierAmountNeedsApproval"
+              : viewer._id === app.salespersonId
+                ? "DirectSupplierAmountOwnDeal"
+                : !(
+                      isSystemOwnerRole(role) ||
+                      (role.permissions.includes(PERMISSIONS.APPROVE_FINANCE_APPLICATION) &&
+                        role.permissions.includes(PERMISSIONS.VIEW_FINANCE))
+                    )
+                  ? "DirectSupplierAmountNeedsPermission"
+                  : null;
         return { applicable: true, available: reasonKey === null, reasonKey };
       })(),
       /** The id whose tail the header shows — the application on this side. */
@@ -3555,6 +3620,17 @@ export const recordDirectSupplierReceiptAmount = mutation({
        * revision; this one did not.
        */
       economicsRevision: (app.economicsRevision ?? 0) + 1,
+      /**
+       * Stamped like every sibling money writer.
+       *
+       * `setSupplierSettlementRoute`, `registerVehicleHandover` and
+       * `approveDealerPurchaseAmount` all stamp this in the same patch. This one
+       * wrote the approved amount, the currency, the entitlement witness, the
+       * receipt provenance and the economics revision — and left `updatedAt` at
+       * its previous value, so `dealCockpit`, which serves that field, reported
+       * the row as untouched after a write that moved the supplier's money.
+       */
+      updatedAt: Date.now(),
     });
 
     // Actor, time and source. This is the row somebody reads months later when
