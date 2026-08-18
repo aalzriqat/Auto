@@ -133,9 +133,16 @@ describe("super-admin writes leave an audit trail", () => {
 
     // Nothing was overruled this time, so the trail carries no phantom
     // "requested" value to puzzle over later.
+    // Identity first: `toBeUndefined()` on a renamed or missing field passes
+    // without proving anything, and without this the assertion could silently
+    // re-read the earlier row.
     const afterRenewal = await auditRows(t, "adminUpdateSubscription");
+    expect(afterRenewal).toHaveLength(2);
+    expect(afterRenewal[1]).toMatchObject({
+      after: { plan: "enterprise", status: "active" },
+    });
     expect(
-      (afterRenewal[afterRenewal.length - 1].after as Record<string, unknown>).requestedStatus
+      (afterRenewal[1].after as Record<string, unknown>).requestedStatus
     ).toBeUndefined();
   });
 
@@ -165,6 +172,44 @@ describe("super-admin writes leave an audit trail", () => {
     );
     expect(row?.status).toBe("active");
     expect(row?.plan).toBe("free");
+  });
+
+  test("omitting currentPeriodEnd cannot resurrect a lapsed subscription", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const { asAdmin } = await seedSuperAdmin(t);
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Stale Period Cars", createdAt: Date.now() })
+    );
+
+    // A row whose paid period has already ended.
+    await t.run((ctx) =>
+      ctx.db.insert("subscriptions", {
+        orgId,
+        plan: "professional",
+        status: "expired",
+        currentPeriodEnd: Date.now() - 10_000_000,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    );
+
+    // The admin edits plan/status WITHOUT touching the period-end field.
+    // Convex strips omitted optional arguments, so `currentPeriodEnd` is absent
+    // from args — but `ctx.db.patch` preserves the STORED value. Settling
+    // against the request alone therefore sees no period at all and returns the
+    // requested status untouched, storing `active` over a period that ended.
+    // That is exactly the state the settle step exists to make impossible.
+    await asAdmin.mutation(api.subscriptions.adminUpdateSubscription, {
+      orgId,
+      plan: "professional",
+      status: "active",
+    });
+
+    const row = await t.run((ctx) =>
+      ctx.db.query("subscriptions").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique()
+    );
+    expect(row?.status).toBe("expired");
+    expect(row?.currentPeriodEnd).toBeLessThan(Date.now());
   });
 
   test("setSiteConfig records the previous and new value", async () => {

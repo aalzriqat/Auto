@@ -122,7 +122,7 @@ describe("subscription feature gates", () => {
     expect(row?.plan).toBe("professional");
   });
 
-  test("a lapsed period grants no access beyond the reconciliation bound", async () => {
+  test("a lapsed period still grants access until the reconciler records it", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwnerOrg(t, {
       plan: "professional",

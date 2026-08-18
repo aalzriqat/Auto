@@ -456,8 +456,8 @@ describe("the analyzer's coverage does not shrink silently", () => {
   //
   // It is a cross-org sweep that moves subscriptions past their paid period to
   // `expired`, so it deliberately takes no `orgId` — it selects rows by the
-  // `by_status_period_end` index rather than from caller input, and patches
-  // only rows that range returned. There is no caller-supplied org or document
+  // `by_status_plan_period_end` index rather than from caller input, and
+  // patches only rows that range returned. There is no caller-supplied org or document
   // id for the guard to own-check, and it is an `internalMutation` reachable
   // only from the cron, with no public entry point.
   //

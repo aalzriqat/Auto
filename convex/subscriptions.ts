@@ -398,23 +398,28 @@ export const reconcileExpiredSubscriptions = internalMutation({
     // later tiers would wait. Scoped rather than claimed absolutely.
     const paidPlans = (Object.keys(PLANS) as PlanId[]).filter((p) => p !== "free");
     const candidates: Doc<"subscriptions">[] = [];
-    for (const plan of paidPlans) {
-      if (candidates.length >= limit) break;
-      const rows = await ctx.db
-        .query("subscriptions")
-        .withIndex("by_status_plan_period_end", (q) =>
-          q
-            .eq("status", "active")
-            .eq("plan", plan)
-            .gte("currentPeriodEnd", -Infinity)
-            .lte("currentPeriodEnd", now)
-        )
-        .take(limit - candidates.length);
-      candidates.push(...rows);
-    }
-
     let expired = 0;
     try {
+      // ⚠️ The candidate read lives INSIDE the try, not before it. A read can
+      // fail too — the documented scanned-document cap is the obvious way — and
+      // when it did, the mutation threw before any heartbeat was written. The
+      // admin panel then showed neither a failure nor a recent success, which
+      // is precisely the silent state the heartbeat exists to prevent.
+      for (const plan of paidPlans) {
+        if (candidates.length >= limit) break;
+        const rows = await ctx.db
+          .query("subscriptions")
+          .withIndex("by_status_plan_period_end", (q) =>
+            q
+              .eq("status", "active")
+              .eq("plan", plan)
+              .gte("currentPeriodEnd", -Infinity)
+              .lte("currentPeriodEnd", now)
+          )
+          .take(limit - candidates.length);
+        candidates.push(...rows);
+      }
+
       for (const sub of candidates) {
         // Still re-checked through the shared transition: the range and filter
         // narrow the page, they do not decide the outcome.
@@ -760,7 +765,19 @@ export const adminUpdateSubscription = mutation({
     // Settled BEFORE the audit call so `after` records what was actually
     // stored. Logging the requested values instead would make the audit trail
     // disagree with the row whenever settling changed the status.
-    const settled = { ...rest, status: settledSubscriptionStatus(rest, now) };
+    //
+    // ⚠️ Settled against the MERGED row, not the arguments. Convex strips
+    // omitted optional arguments, so an admin who edits plan/status without
+    // touching the period-end field leaves `currentPeriodEnd` absent from
+    // `rest` — while `ctx.db.patch` preserves the STORED value. Settling on the
+    // request alone therefore saw no period at all, returned the requested
+    // status untouched, and stored `active` over a period that had already
+    // ended: exactly the state this step exists to make impossible.
+    const effectivePeriodEnd = rest.currentPeriodEnd ?? existing?.currentPeriodEnd;
+    const settled = {
+      ...rest,
+      status: settledSubscriptionStatus({ ...rest, currentPeriodEnd: effectivePeriodEnd }, now),
+    };
 
     // A plan/status change is a billing change, and it used to leave no trace
     // of who made it. Written before the return so both branches are covered.
