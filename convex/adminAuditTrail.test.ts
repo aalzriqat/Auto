@@ -81,6 +81,52 @@ describe("super-admin writes leave an audit trail", () => {
     expect(rows[1].targetId).toBeDefined();
   });
 
+  test("adminUpdateSubscription cannot store an active plan whose period already ended", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const { asAdmin } = await seedSuperAdmin(t);
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Lapsed Cars", createdAt: Date.now() })
+    );
+
+    // SCRUM-145: the read path now trusts stored state, so a row saying
+    // "active" with a period that ended would hand out paid access until the
+    // next sweep — and the old read-time clock check that used to absorb this
+    // is gone. Both writers settle through the same transition.
+    await asAdmin.mutation(api.subscriptions.adminUpdateSubscription, {
+      orgId,
+      plan: "enterprise",
+      status: "active",
+      currentPeriodEnd: Date.now() - 60_000,
+    });
+
+    const row = await t.run((ctx) =>
+      ctx.db.query("subscriptions").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique()
+    );
+    expect(row?.status).toBe("expired");
+
+    // The audit row must agree with the row that was written. Logging the
+    // requested status would leave the trail claiming "active" for a
+    // subscription stored as "expired".
+    const rows = await auditRows(t, "adminUpdateSubscription");
+    expect(rows[rows.length - 1]).toMatchObject({
+      after: { plan: "enterprise", status: "expired" },
+    });
+
+    // A renewal through the same path restores it — `expired` is not a
+    // one-way door.
+    await asAdmin.mutation(api.subscriptions.adminUpdateSubscription, {
+      orgId,
+      plan: "enterprise",
+      status: "active",
+      currentPeriodEnd: Date.now() + 30 * 24 * 60 * 60 * 1000,
+    });
+
+    const renewed = await t.run((ctx) =>
+      ctx.db.query("subscriptions").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique()
+    );
+    expect(renewed?.status).toBe("active");
+  });
+
   test("setSiteConfig records the previous and new value", async () => {
     const t = convexTestWithComponents(schema, MODULES);
     const { adminId, asAdmin } = await seedSuperAdmin(t);

@@ -68,6 +68,21 @@ crons.interval(
   {}
 );
 
+// Move subscriptions whose paid period has ended to `expired`.
+//
+// Entitlement used to be re-derived from `Date.now()` on every read, which made
+// every plan-gated query permanently uncacheable (SCRUM-145). The read path now
+// trusts stored state, so this job is what makes that state true. Five minutes
+// is the owner-accepted maximum stale-paid access; the owner's tolerance is an
+// hour, and the gap between the two is deliberate headroom for a missed run
+// rather than a schedule to relax into.
+crons.interval(
+  "reconcile-expired-subscriptions",
+  { minutes: 5 },
+  internal.subscriptions.reconcileExpiredSubscriptions,
+  {}
+);
+
 // Release expired inventory reservations and their non-financial vehicle holds.
 crons.interval(
   "expire-vehicle-reservations",

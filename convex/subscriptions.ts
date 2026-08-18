@@ -184,7 +184,59 @@ const PLAN_GATE_LABELS: Record<PlanGate, string> = {
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
-/** Returns the org's active plan, defaulting to "free" if no subscription row exists. */
+/** The stored lifecycle states a subscription row can hold. */
+export type SubscriptionStatus = "active" | "past_due" | "cancelled" | "expired";
+
+/**
+ * The ONE place that decides whether a paid period has lapsed.
+ *
+ * Takes `now` as an argument and never reads the clock itself. That is the
+ * whole point: a reactive query whose result depends on `Date.now()` can never
+ * be served from Convex's cache, so every plan-gated query re-read the database
+ * in full on every re-subscription — measured at ~326 MB/day of production DB
+ * I/O per open tab, larger than the entire defect SCRUM-21 was opened for.
+ * Entitlement is now a *stored* fact that a reconciler maintains, and the read
+ * path is a pure function of stored fields (SCRUM-145).
+ *
+ * Only the `active` -> `expired` edge is time-derived. `past_due` and
+ * `cancelled` are billing decisions and are never re-derived from the clock —
+ * inferring them here would let a cron overrule the billing provider.
+ *
+ * Idempotent, and NOT a one-way door: re-running it on a row whose
+ * `currentPeriodEnd` is in the future returns `active` unchanged, so a renewal
+ * applied through `adminUpdateSubscription` sticks and is not undone on the
+ * next sweep.
+ */
+export function settledSubscriptionStatus(
+  sub: { plan: PlanId; status: SubscriptionStatus; currentPeriodEnd?: number },
+  now: number
+): SubscriptionStatus {
+  // The free plan has no paid period, so there is nothing that can lapse.
+  if (sub.plan === "free") return sub.status;
+  // No period end recorded means no expiry was ever agreed. Treating a missing
+  // value as "already over" would strip a paying org of its plan.
+  //
+  // ⚠️ Mutation testing: changing this to `=== null` SURVIVES the whole suite.
+  // It is not load-bearing at runtime, because `undefined < now` is already
+  // false and the comparison below therefore returns "active" on its own. What
+  // actually enforces it is the type system — the mutant fails `tsc` with
+  // TS18048 ("'sub.currentPeriodEnd' is possibly 'undefined'"), verified. Kept
+  // as an explicit guard rather than relying on a JS coercion, and recorded
+  // here so the green suite is not mistaken for behavioural coverage.
+  if (sub.currentPeriodEnd === undefined) return sub.status;
+  if (sub.status !== "active") return sub.status;
+  return sub.currentPeriodEnd < now ? "expired" : "active";
+}
+
+/**
+ * Returns the org's active plan, defaulting to "free" if no subscription row exists.
+ *
+ * Reads STORED state only. It deliberately does not re-check `currentPeriodEnd`
+ * against the clock; `reconcileExpiredSubscriptions` is what moves a lapsed row
+ * to `expired`, within a bounded lag (5 minutes; owner-accepted, SCRUM-145).
+ * Re-adding a `Date.now()` comparison here would silently make every
+ * plan-gated query uncacheable again.
+ */
 export async function getOrgPlan(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">): Promise<PlanId> {
   const sub = await ctx.db
     .query("subscriptions")
@@ -193,7 +245,6 @@ export async function getOrgPlan(ctx: QueryCtx | MutationCtx, orgId: Id<"organiz
 
   if (!sub) return "free";
   if (sub.status !== "active") return "free";
-  if (sub.currentPeriodEnd !== undefined && sub.currentPeriodEnd < Date.now()) return "free";
   return sub.plan;
 }
 
@@ -274,6 +325,61 @@ export const getExpiringRenewals = internalQuery({
         (s.currentPeriodEnd ?? 0) >= now &&
         !s.renewalReminderSentAt
     );
+  },
+});
+
+/**
+ * Moves subscriptions whose paid period has ended to `expired`.
+ *
+ * The backstop half of SCRUM-145. The authoritative, immediate path is
+ * `adminUpdateSubscription` — this only catches lapses that happen purely
+ * because time passed and nobody told us. Runs every 5 minutes, so the maximum
+ * stale-paid access caused by reaching `currentPeriodEnd` is 5 minutes.
+ *
+ * Writes a heartbeat because entitlement expiry now DEPENDS on this job. Before
+ * SCRUM-145 expiry was re-derived on every read and could not silently stop;
+ * now it can, so the stall has to be visible on the admin panel rather than
+ * discovered as orgs quietly keeping paid features.
+ */
+export const reconcileExpiredSubscriptions = internalMutation({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const limit = Math.min(Math.max(args.limit ?? 100, 1), 500);
+
+    // ⚠️ The lower bound is load-bearing, not decoration. `currentPeriodEnd` is
+    // optional and an undefined value sorts BELOW every number, so a plain
+    // `lte(now)` range hands back every free-plan row before it reaches a paid
+    // one. With more free orgs than `limit`, the batch fills entirely with rows
+    // the loop then skips and nothing ever expires — silently, reporting
+    // `expired: 0` and a green heartbeat every run. `gte(-Infinity)` means "is
+    // a number at all", which is precisely the rows that can lapse.
+    const candidates = await ctx.db
+      .query("subscriptions")
+      .withIndex("by_status_period_end", (q) =>
+        q.eq("status", "active").gte("currentPeriodEnd", -Infinity).lte("currentPeriodEnd", now)
+      )
+      .take(limit);
+
+    let expired = 0;
+    for (const sub of candidates) {
+      // A free row can still carry a stale `currentPeriodEnd` from a previous
+      // paid period, so it survives the range above. Re-checking through the
+      // shared transition is what keeps it from being stamped `expired`.
+      const next = settledSubscriptionStatus(sub, now);
+      if (next === sub.status) continue;
+      await ctx.db.patch(sub._id, { status: next, updatedAt: now });
+      expired += 1;
+    }
+
+    await ctx.db.insert("cronHeartbeats", {
+      jobName: "reconcile-expired-subscriptions",
+      ranAt: now,
+      success: true,
+      detail: `${expired} expired of ${candidates.length} scanned`,
+    });
+
+    return { scanned: candidates.length, expired };
   },
 });
 
@@ -377,17 +483,16 @@ export const getMySubscription = query({
 
     const planId = await getOrgPlan(ctx, args.orgId);
     const plan = PLANS[planId];
-    const now = Date.now();
 
-    const daysUntilRenewal =
-      sub?.currentPeriodEnd
-        ? Math.max(0, Math.ceil((sub.currentPeriodEnd - now) / (24 * 60 * 60 * 1000)))
-        : null;
-
+    // `daysUntilRenewal` used to be computed here from `Date.now()`, which made
+    // this query permanently uncacheable on its own — fixing `getOrgPlan` alone
+    // would not have helped it (SCRUM-145). It is a display value derived
+    // entirely from `currentPeriodEnd`, which is returned, so any caller that
+    // wants it can compute it client-side against the viewer's own clock.
+    // Nothing rendered it: it appeared only as a type in the mobile API surface.
     return {
       ...(sub ?? { plan: "free" as const, status: "active" as const }),
       planDetails: plan,
-      daysUntilRenewal,
       currentPeriodEnd: sub?.currentPeriodEnd ?? null,
     };
   },
@@ -537,6 +642,17 @@ export const adminUpdateSubscription = mutation({
     const now = Date.now();
     const { orgId, ...rest } = args;
 
+    // Both writers settle through the same transition, so an admin cannot leave
+    // a row claiming `active` with a period that already ended — which, now that
+    // the read path trusts stored state, would grant paid access indefinitely
+    // until the next sweep noticed. Before SCRUM-145 the read-time clock check
+    // absorbed that inconsistency silently.
+    //
+    // Settled BEFORE the audit call so `after` records what was actually
+    // stored. Logging the requested values instead would make the audit trail
+    // disagree with the row whenever settling changed the status.
+    const settled = { ...rest, status: settledSubscriptionStatus(rest, now) };
+
     // A plan/status change is a billing change, and it used to leave no trace
     // of who made it. Written before the return so both branches are covered.
     await logAdminAction(ctx, admin, {
@@ -553,17 +669,17 @@ export const adminUpdateSubscription = mutation({
             currentPeriodEnd: existing.currentPeriodEnd,
           }
         : undefined,
-      after: { ...rest },
+      after: { ...settled },
     });
 
     if (existing) {
-      await ctx.db.patch(existing._id, { ...rest, renewalReminderSentAt: undefined, updatedAt: now });
+      await ctx.db.patch(existing._id, { ...settled, renewalReminderSentAt: undefined, updatedAt: now });
       return existing._id;
     }
 
     return await ctx.db.insert("subscriptions", {
       orgId,
-      ...rest,
+      ...settled,
       createdAt: now,
       updatedAt: now,
     });
