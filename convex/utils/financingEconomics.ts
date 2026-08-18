@@ -1522,7 +1522,8 @@ export function deriveAccountingProfit(args: {
 export function describeWitness(
   witness: Doc<"financeApplications">["supplierEntitlementWitness"]
 ): {
-  supplierEntitlementMinor: number;
+  status: string;
+  supplierEntitlementMinor: number | null;
   via: string;
   validatedAt: number;
   validatedBy: Id<"users">;
@@ -1530,7 +1531,8 @@ export function describeWitness(
   return witness === undefined
     ? null
     : {
-        supplierEntitlementMinor: witness.amountMinor,
+        status: witness.status,
+        supplierEntitlementMinor: witness.amountMinor ?? null,
         via: witness.via,
         validatedAt: witness.validatedAt,
         validatedBy: witness.validatedBy,
@@ -1550,18 +1552,44 @@ export function describeWitness(
  */
 export function witnessToStore(
   existing: Doc<"financeApplications">["supplierEntitlementWitness"],
-  entitlementMinor: number | undefined,
+  /**
+   * What THIS act actually established. `VALIDATED` means the writer compared
+   * the supplier's entitlement against the amount and an actor stood behind it;
+   * `NOT_VALIDATED` means the writer re-agreed an amount without comparing
+   * anything, which is the honest description of an approval taken while the
+   * deal settles through the dealership.
+   */
+  measurement: { validated: true; entitlementMinor: number } | { validated: false },
   provenance: {
     validatedAt: number;
     validatedBy: Id<"users">;
-    via: "CONFIGURED_APPROVAL" | "MANUAL_RECEIPT" | "ROUTE_SELECTION";
-  }
+    via: "CONFIGURED_APPROVAL" | "MANUAL_RECEIPT";
+  },
+  /**
+   * Whether the amount this witness describes actually moved. A byte-identical
+   * re-submission must not downgrade a VALIDATED witness to NOT_VALIDATED, and
+   * must not restamp anybody's provenance.
+   */
+  amountChanged = true
 ): { witness: Doc<"financeApplications">["supplierEntitlementWitness"]; changed: boolean } {
-  if (entitlementMinor === undefined) {
-    return { witness: undefined, changed: existing !== undefined };
+  if (measurement.validated) {
+    // An unchanged fact is not a new observation: keep the original actor and
+    // moment rather than re-badging evidence nobody re-examined.
+    if (existing?.status === "VALIDATED" && existing.amountMinor === measurement.entitlementMinor) {
+      return { witness: existing, changed: false };
+    }
+    return {
+      witness: { status: "VALIDATED", amountMinor: measurement.entitlementMinor, ...provenance },
+      changed: true,
+    };
   }
-  if (existing?.amountMinor === entitlementMinor) {
+  // Nothing was compared. Downgrade ONLY when the amount this evidence describes
+  // has actually moved — otherwise the existing record still describes the
+  // current amount truthfully, and replacing it would destroy real evidence in
+  // the name of honesty about an act that changed nothing.
+  if (existing !== undefined && !amountChanged) return { witness: existing, changed: false };
+  if (existing?.status === "NOT_VALIDATED" && !amountChanged) {
     return { witness: existing, changed: false };
   }
-  return { witness: { amountMinor: entitlementMinor, ...provenance }, changed: true };
+  return { witness: { status: "NOT_VALIDATED", ...provenance }, changed: true };
 }

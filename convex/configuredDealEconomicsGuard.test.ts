@@ -1262,6 +1262,11 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
       "CONFIGURED_FINANCE_COMPANY",
       { sourcedVehicle: true }
     );
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
     await asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
       orgId,
       applicationId,
@@ -1275,17 +1280,14 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
       basis: "MANUAL",
       notes: "Approved by the finance company over the phone.",
     });
-    // The ROUTE establishes the witness here: the approval above ran while the
-    // deal still settled through the dealership, so it had nothing to validate.
-    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
-      orgId,
-      applicationId,
-      route: "DIRECT_TO_SUPPLIER",
-    });
-
+    // ⚠️ THE PREMISE MOVED. This test used to have the ROUTE establish the
+    // witness; route selection no longer writes one at all, so the evidence is
+    // established the only way it can be — by the approval itself, taken while
+    // the deal is on the direct route so there is an entitlement to compare.
     const established = (await t.run((ctx) => ctx.db.get(applicationId)))!
       .supplierEntitlementWitness!;
-    expect(established.via).toBe("ROUTE_SELECTION");
+    expect(established.via).toBe("CONFIGURED_APPROVAL");
+    expect(established.status).toBe("VALIDATED");
     expect(established.amountMinor).toBe(17_000_000);
 
     const rowsBefore = await t.run((ctx) =>
@@ -1393,6 +1395,222 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
         route: "THROUGH_DEALERSHIP",
       })
     ).rejects.toThrow(/already finalized/i);
+  });
+
+  test("an amount approved with nothing compared cannot be finalized on the direct route", async () => {
+    // THE CRITICAL, pinned. Both reviewer seats found this independently and I
+    // reproduced it end to end: approve while the deal settles THROUGH — where
+    // nothing measures an entitlement — hand the vehicle over, correct the
+    // vehicle's cost, then choose DIRECT for the first time. Route selection had
+    // no previous witness to protect, so it MINTED one at the corrected cost, the
+    // verdict read UNCHANGED, and the deal posted money against evidence nobody
+    // agreed to.
+    //
+    // ABSENCE IS NOT AGREEMENT. The approval now records that it validated
+    // nothing, route selection writes no evidence at all, and finalization fails
+    // closed.
+    const { t, orgId, applicationId, asUser, asApprover, registerExpectedPayment } =
+      await seedApprovedApplication("CONFIGURED_FINANCE_COMPANY", { sourcedVehicle: true });
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "THROUGH_DEALERSHIP",
+    });
+    await asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId,
+      applicationId,
+      submittedQuotationMinor: 17_000_000,
+      source: "MANUAL_ENTRY",
+    });
+    await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_000_000,
+      basis: "MANUAL",
+      notes: "Approved by the finance company over the phone.",
+    });
+
+    // The silence is now explicit, with its own actor and moment, and carries NO
+    // amount — zero, the current cost and a nullable number are each things a
+    // later reader could mistake for proof.
+    const afterApproval = (await t.run((ctx) => ctx.db.get(applicationId)))!
+      .supplierEntitlementWitness!;
+    expect(afterApproval.status).toBe("NOT_VALIDATED");
+    expect(afterApproval.amountMinor).toBeUndefined();
+    expect(afterApproval.via).toBe("CONFIGURED_APPROVAL");
+
+    await registerHandover(asUser, api, orgId, applicationId);
+    const vehicleId = (await t.run((ctx) => ctx.db.get(applicationId)))!.vehicleId;
+    await asUser.mutation(api.vehicles.update, { orgId, vehicleId, sourceCost: 5_000 });
+
+    // The route change is ALLOWED — it has no economic authority, so it is not
+    // the place to refuse — and it establishes nothing.
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    expect(
+      (await t.run((ctx) => ctx.db.get(applicationId)))?.supplierEntitlementWitness
+    ).toStrictEqual(afterApproval);
+
+    // ...and the money does not move.
+    await registerExpectedPayment();
+    await expect(
+      asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId })
+    ).rejects.toThrow(/cannot be checked against what he is owed/i);
+
+    // THE EXIT, so this is a refusal and not a dead end: the deal finishes on the
+    // route the vehicle actually went out under.
+    //
+    // ⚠️ Re-agreement is NOT available here, by an older deliberate rule:
+    // `approveDealerPurchaseAmount` refuses once the vehicle is handed over AND
+    // an amount is already recorded (SCRUM-78 — the handover dialog promises the
+    // figure is final). So post-handover the only honest move is the route the
+    // deal was handed over on. The re-agreement path is pinned separately, at the
+    // lifecycle point where it is actually reachable.
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "THROUGH_DEALERSHIP",
+    });
+    await asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId });
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CLOSED");
+  });
+
+  test("an explicit re-agreement is what opens the direct route, and nothing else", async () => {
+    // The other half of the ruling: fail closed until the re-agreement actually
+    // happens — and then succeed. Pinned BEFORE handover, which is where the
+    // approval writer is still open.
+    const { t, orgId, applicationId, asUser, asApprover, registerExpectedPayment } =
+      await seedApprovedApplication("CONFIGURED_FINANCE_COMPANY", { sourcedVehicle: true });
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "THROUGH_DEALERSHIP",
+    });
+    await asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId,
+      applicationId,
+      submittedQuotationMinor: 17_000_000,
+      source: "MANUAL_ENTRY",
+    });
+    await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_000_000,
+      basis: "MANUAL",
+      notes: "Approved over the phone, before the settlement route was chosen.",
+    });
+    expect(
+      (await t.run((ctx) => ctx.db.get(applicationId)))?.supplierEntitlementWitness?.status
+    ).toBe("NOT_VALIDATED");
+
+    // Moving to the direct route mints nothing...
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    expect(
+      (await t.run((ctx) => ctx.db.get(applicationId)))?.supplierEntitlementWitness?.status
+    ).toBe("NOT_VALIDATED");
+    // ...so the vehicle cannot go out on a figure nothing was compared against.
+    await expect(registerHandover(asUser, api, orgId, applicationId)).rejects.toThrow(
+      /cannot be checked against what he is owed/i
+    );
+
+    // THE RE-AGREEMENT: the same approver, on the direct route, where the writer
+    // compares the amount against what the supplier is owed and refuses a
+    // shortfall. THIS is the act that may establish evidence.
+    await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_000_000,
+      basis: "MANUAL",
+      notes: "Re-agreed against the supplier's entitlement on the direct route.",
+    });
+    const witness = (await t.run((ctx) => ctx.db.get(applicationId)))!
+      .supplierEntitlementWitness!;
+    expect(witness.status).toBe("VALIDATED");
+    expect(witness.amountMinor).toBe(17_000_000);
+    expect(witness.via).toBe("CONFIGURED_APPROVAL");
+
+    await registerHandover(asUser, api, orgId, applicationId);
+    await registerExpectedPayment();
+    await asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId });
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CLOSED");
+  });
+
+  test("route selection mints no witness before handover either", async () => {
+    // The exception used to be scoped to "when none exists", and its danger was
+    // not the handover boundary — it was the authority. A route change is not an
+    // economic approval at any point in the lifecycle.
+    const { t, orgId, applicationId, asUser, asApprover } = await seedApprovedApplication(
+      "MANUAL_FINANCE_COMPANY",
+      { sourcedVehicle: true, manualProviderName: "Amman Finance House" }
+    );
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    expect(
+      (await t.run((ctx) => ctx.db.get(applicationId)))?.supplierEntitlementWitness
+    ).toBeUndefined();
+
+    // Even flipping back and forth.
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "THROUGH_DEALERSHIP",
+    });
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    expect(
+      (await t.run((ctx) => ctx.db.get(applicationId)))?.supplierEntitlementWitness
+    ).toBeUndefined();
+
+    /**
+     * THE CASE THAT ACTUALLY EXERCISES THE NO-WRITE RULE: an approved amount
+     * with NO witness beside it.
+     *
+     * ⚠️ Added because a mutant SURVIVED. Restoring route selection's
+     * establish-when-absent branch left every assertion above green: after this
+     * release an approved deal always carries a witness — NOT_VALIDATED at worst
+     * — so the mint branch was never reached, and the test proved the ENCODING
+     * rather than the authority rule it claimed to prove.
+     *
+     * The state below is the pre-release shape, which no writer can produce any
+     * more, so it is built by patching the row directly. That is precisely the
+     * population a route change could once have minted evidence for.
+     */
+    await asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_000_000,
+      source: "Signed purchase agreement",
+    });
+    await t.run((ctx) => ctx.db.patch(applicationId, { supplierEntitlementWitness: undefined }));
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "THROUGH_DEALERSHIP",
+    });
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    // Still nothing. The amount is there and the entitlement is measurable, and
+    // the route writer declines to draw the obvious conclusion — because drawing
+    // it is not its decision to make.
+    expect(
+      (await t.run((ctx) => ctx.db.get(applicationId)))?.supplierEntitlementWitness
+    ).toBeUndefined();
   });
 
   test("the route cannot clear a witness, so a THROUGH round trip cannot mint a new one", async () => {
@@ -1510,6 +1728,7 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
     );
     const stored = (await t.run((ctx) => ctx.db.get(applicationId)))!.supplierEntitlementWitness!;
     expect(stored).toStrictEqual({
+      status: "VALIDATED",
       amountMinor: 17_000_000,
       via: "MANUAL_RECEIPT",
       validatedAt: expect.any(Number),
@@ -1533,6 +1752,7 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
       .sort((a, b) => a.changedAt - b.changedAt)
       .at(-1)!;
     expect(JSON.parse(leaving.previousValue!).witness).toStrictEqual({
+      status: "VALIDATED",
       supplierEntitlementMinor: 17_000_000,
       via: "MANUAL_RECEIPT",
       validatedAt: expect.any(Number),

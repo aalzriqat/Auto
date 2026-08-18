@@ -1626,8 +1626,23 @@ export const approveDealerPurchaseAmount = mutation({
      * had nothing to read on the configured shape.
      */
     let validatedEntitlementMinor: number | undefined;
+    /**
+     * WHETHER A SUPPLIER ENTITLEMENT EXISTS AT ALL on this deal — asked of the
+     * VEHICLE, not of the route.
+     *
+     * Only a consigned agency sale has a supplier with an entitlement. On the
+     * dealership's own stock there is nobody to compare against, so recording
+     * "not validated" would be noise asserting a gap that does not exist. The
+     * route decides whether the entitlement is CHECKED; the vehicle decides
+     * whether there is one to check.
+     */
+    const entitlementVehicle = await ctx.db.get(app.vehicleId);
+    const entitlementApplies =
+      entitlementVehicle !== null &&
+      entitlementVehicle.orgId === args.orgId &&
+      isConsignedAgentSale(entitlementVehicle);
     if (!dealershipCollectsGross(consignedSettlementRoute(app))) {
-      const vehicle = await ctx.db.get(app.vehicleId);
+      const vehicle = entitlementVehicle;
       if (vehicle && vehicle.orgId === args.orgId && isConsignedAgentSale(vehicle)) {
         const costAmount = await computeVehicleCapitalizedCost(ctx, vehicle);
         // A vehicle with no recorded cost is not evidence that nothing is owed;
@@ -1846,12 +1861,49 @@ export const approveDealerPurchaseAmount = mutation({
     // witness had been established at ROUTE_SELECTION quietly changed hands while
     // the audit said nothing, because the AMOUNT had not moved. `witnessToStore`
     // keeps an unchanged fact exactly as it was recorded.
-    const { witness: nextWitness, changed: witnessChanged } = witnessToStore(
-      app.supplierEntitlementWitness,
-      validatedEntitlementMinor,
-      { validatedAt: now, validatedBy: user._id, via: "CONFIGURED_APPROVAL" }
-    );
-    if (witnessChanged && nextWitness !== undefined) {
+    /**
+     * WHAT THIS APPROVAL ACTUALLY CHECKED, recorded either way.
+     *
+     * On the direct route this writer compares the supplier's entitlement
+     * against the amount and refuses a shortfall, so the witness is VALIDATED.
+     * On the through route it compares nothing — the dealership collects the
+     * gross and the entitlement is an ordinary payable — and the first design
+     * recorded that by writing NOTHING.
+     *
+     * That silence was the hole a whole round was lost to: an amount approved
+     * against nothing looked identical to an amount not yet agreed, and a later
+     * route change treated the gap as an invitation to originate evidence. So
+     * the approval now says so out loud, with its own actor and timestamp, and
+     * carries no amount at all — zero, the current cost and a nullable number
+     * are each things a later reader could mistake for proof.
+     */
+    const { witness: nextWitness, changed: witnessChanged } = entitlementApplies
+      ? witnessToStore(
+          app.supplierEntitlementWitness,
+          validatedEntitlementMinor === undefined
+            ? { validated: false }
+            : { validated: true, entitlementMinor: validatedEntitlementMinor },
+          { validatedAt: now, validatedBy: user._id, via: "CONFIGURED_APPROVAL" },
+          // A byte-identical re-approval moves nothing, so it must not downgrade
+          // a VALIDATED witness to NOT_VALIDATED, nor restamp anyone's
+          // provenance.
+          approvalMateriallyChanged || app.approvedDealerPurchaseAmountMinor === undefined
+        )
+      : { witness: app.supplierEntitlementWitness, changed: false };
+    /**
+     * A row when evidence APPEARS or IS LOST, not on every approval.
+     *
+     * Recording "this approval compared nothing" for the first time on a deal
+     * that never had a witness says nothing the approval's own history does not
+     * already say, and it doubled the override rows on every ordinary consigned
+     * approval. What genuinely deserves its own line is a VALIDATED witness
+     * being established, replaced, or DOWNGRADED — the last being evidence
+     * disappearing, which is the case a reader must never have to infer.
+     */
+    const witnessWorthRecording =
+      witnessChanged &&
+      !(app.supplierEntitlementWitness === undefined && nextWitness?.status === "NOT_VALIDATED");
+    if (witnessWorthRecording) {
       await recordOverride(ctx, {
         orgId: args.orgId,
         applicationId: args.applicationId,
@@ -1862,9 +1914,11 @@ export const approveDealerPurchaseAmount = mutation({
             : JSON.stringify(describeWitness(app.supplierEntitlementWitness)),
         newValue: JSON.stringify(describeWitness(nextWitness)),
         reason:
-          app.supplierEntitlementWitness === undefined
-            ? "The supplier's entitlement was validated against this approval for the first time; the approval itself is unchanged."
-            : "The supplier's entitlement was re-validated against this approval.",
+          nextWitness?.status === "NOT_VALIDATED"
+            ? "This approval was taken while the deal settles through the dealership, so the supplier's entitlement was NOT compared against it. Recorded explicitly: an unchecked amount must not be mistaken later for an agreed one."
+            : app.supplierEntitlementWitness === undefined
+              ? "The supplier's entitlement was validated against this approval for the first time; the approval itself is unchanged."
+              : "The supplier's entitlement was re-validated against this approval.",
         changedBy: user._id,
       });
     }
@@ -1903,6 +1957,7 @@ export const approveDealerPurchaseAmount = mutation({
       // approval has nothing to validate against, and wiping a witness that the
       // route writer established would destroy evidence this act never examined.
       ...(nextWitness === undefined ? {} : { supplierEntitlementWitness: nextWitness }),
+
       approvedPurchaseBasis: args.basis,
       approvedPurchaseAppraisalId: appraisal?._id,
       approvedPurchaseExceptionRuleVersion:

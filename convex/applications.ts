@@ -432,8 +432,15 @@ async function supplierEntitlementVerdictFor(
   // with a vaguer one.
   if (app.approvedDealerPurchaseAmountMinor === undefined) return { kind: "NOT_APPLICABLE" };
 
-  const agreedMinor = app.supplierEntitlementWitness?.amountMinor;
-  if (agreedMinor === undefined) return { kind: "UNPROVABLE", reason: "NO_WITNESS" };
+  const witness = app.supplierEntitlementWitness;
+  // Absent, or present and explicitly saying nothing was compared. The second
+  // case is the one that used to be silence: an approval taken while the deal
+  // settled through the dealership now RECORDS that it validated nothing, so a
+  // later reader cannot mistake the gap for "not agreed yet".
+  if (witness === undefined || witness.status !== "VALIDATED" || witness.amountMinor === undefined) {
+    return { kind: "UNPROVABLE", reason: "NO_WITNESS" };
+  }
+  const agreedMinor = witness.amountMinor;
 
   const vehicle = await ctx.db.get(app.vehicleId);
   if (!vehicle || vehicle.orgId !== app.orgId) {
@@ -541,7 +548,7 @@ async function directRouteTransitionRefusal(
    */
   if (app.supplierSettlementRoute === "DIRECT_TO_SUPPLIER") {
     const verdict = await supplierEntitlementVerdictFor(ctx, app);
-    if (verdict.kind === "DRIFTED" || verdict.kind === "UNPROVABLE") {
+    if (verdict.kind === "DRIFTED") {
       return {
         key: "VehicleHandedOver",
         message:
@@ -554,38 +561,42 @@ async function directRouteTransitionRefusal(
     ...app,
     supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
     /**
-     * THE WITNESS THE WRITE WOULD ACTUALLY STORE — an EXISTING one first.
+     * THE WITNESS THIS DEAL ACTUALLY CARRIES. Nothing is invented here.
      *
-     * Manufacturing one from the current entitlement made this projection
-     * disagree with the writer it speaks for, and that disagreement WAS the
-     * laundering path: on a handed-over deal that had stepped off the direct
-     * route, the classifier asked "would a freshly measured witness be
-     * consistent?" — which it always is, by construction — instead of "would the
-     * witness this deal actually carries still hold?".
+     * Two laundering paths were built on inventing one. The first manufactured a
+     * witness from the current entitlement, so the projection asked "would a
+     * freshly measured witness be consistent?" — which it always is, by
+     * construction. The second let route selection originate a real one when
+     * none existed, which turned "no evidence" into "evidence" at a moment with
+     * strictly less authority than the writers that own that decision.
      *
-     * Route selection establishes a witness only when none exists, so the
-     * projection mirrors exactly that. Only `amountMinor` is read downstream, by
-     * `supplierEntitlementVerdictFor`; the placeholder provenance on a
-     * newly-established one is never persisted, because this object exists only
-     * to ask the guard a question.
+     * Route selection now writes nothing at all, so the projection is simply the
+     * stored witness. A deal with none — or with one that records that nothing
+     * was compared — projects as UNPROVABLE, which is the truth.
      */
-    supplierEntitlementWitness:
-      app.supplierEntitlementWitness ??
-      (entitlementMinor === undefined
-        ? undefined
-        : {
-            amountMinor: entitlementMinor,
-            validatedAt: 0,
-            validatedBy: app.salespersonId,
-            via: "ROUTE_SELECTION" as const,
-          }),
+    supplierEntitlementWitness: app.supplierEntitlementWitness,
   };
+  /**
+   * ⚠️ AN UNPROVABLE TRANSITION IS PERMITTED; AN UNPROVABLE FINALIZATION IS NOT.
+   *
+   * Owner ruling: changing into a route that requires a witness does not create
+   * one, and if no valid witness exists `finalizeDeal` must fail closed until an
+   * explicit re-agreement happens. So the route change itself is not the place to
+   * refuse a missing witness — refusing here would only hide, at a step with no
+   * economic authority, a decision that belongs at the step that posts money.
+   *
+   * A CONTRADICTED witness is different and still refused below: the deal holds
+   * evidence that actively disagrees with the vehicle, and moving further onto a
+   * route that depends on that evidence is not a state to walk into knowingly.
+   */
+  const projectedVerdict = await supplierEntitlementVerdictFor(ctx, projected);
+  if (projectedVerdict.kind === "UNPROVABLE") return null;
   try {
     assertDealerEconomicsRecorded(
       projected,
       "finalizing",
       await resolveQuoteMode(ctx, app),
-      await supplierEntitlementVerdictFor(ctx, projected)
+      projectedVerdict
     );
     return null;
   } catch {
@@ -3517,7 +3528,10 @@ export const recordDirectSupplierReceiptAmount = mutation({
       // configured writer, still alive in the second of the three.
       supplierEntitlementWitness: witnessToStore(
         app.supplierEntitlementWitness,
-        entitlementMinor,
+        // Always VALIDATED here: this writer refuses outright above unless the
+        // supplier's entitlement is positive and representable, and it compares
+        // the amount against it.
+        { validated: true, entitlementMinor },
         { validatedAt: Date.now(), validatedBy: user._id, via: "MANUAL_RECEIPT" }
       ).witness,
       directSupplierReceipt: {
@@ -3706,7 +3720,8 @@ export const setSupplierSettlementRoute = mutation({
      */
     const previousWitness = app.supplierEntitlementWitness;
     /**
-     * ROUTE SELECTION MAY ESTABLISH A WITNESS. IT MAY NEVER CLEAR OR REPLACE ONE.
+     * ROUTE SELECTION WRITES NO WITNESS AT ALL. NOT ESTABLISH, NOT CLEAR, NOT
+     * REPLACE, NOT REFRESH.
      *
      * This is a redesign, not a fourth patch, and it exists because the same
      * subsystem produced a new HIGH under repair twice running. The lifecycle had
@@ -3725,24 +3740,24 @@ export const setSupplierSettlementRoute = mutation({
      * became UNCHANGED, and a deal approved at 17,000,000 against an entitlement
      * of 16,000,000 finalized, with no approver anywhere in the sequence.
      *
-     * Establish-only makes that unreachable by construction rather than by
-     * enumerating doors. A retained witness is inert while the deal settles
-     * THROUGH (the verdict is NOT_APPLICABLE off the direct route) and reappears
-     * unchanged if it returns to DIRECT — so the round trip now ends where it
-     * started, DRIFTED, and the amount writers remain the only way to re-agree
-     * it.
+     * Establish-only was the LAST surviving exception, and it fell to the same
+     * class of attack a round later: approve 17,000,000 while the deal settles
+     * THROUGH — where nothing measures an entitlement, so no witness exists —
+     * hand the vehicle over, correct the vehicle's cost downward, then choose
+     * DIRECT for the first time. With no previous witness to protect, route
+     * selection minted one at the corrected cost, the verdict read UNCHANGED,
+     * and the deal posted. ABSENCE IS NOT AGREEMENT: a missing witness is not
+     * permission to invent one, and after handover nobody can re-agree the
+     * amount, so nothing can contradict what was invented.
+     *
+     * Owner ruling, adopted here without exception: route selection never
+     * writes, clears, replaces, refreshes or establishes this evidence. A
+     * witness may be created or moved only by a writer that explicitly compares
+     * the entitlement and records an actor agreeing to it. If a deal reaches a
+     * route that needs one without having one, the route change still proceeds
+     * — and `finalizeDeal` fails closed until the re-agreement actually happens.
      */
-    const nextWitness =
-      previousWitness ??
-      (entitlementAtRouteChoiceMinor === undefined
-        ? undefined
-        : {
-            amountMinor: entitlementAtRouteChoiceMinor,
-            validatedAt: Date.now(),
-            validatedBy: user._id,
-            via: "ROUTE_SELECTION" as const,
-          });
-    const witnessMoved = previousWitness === undefined && nextWitness !== undefined;
+    const witnessMoved = false;
     /**
      * Compared against the STORED route, not the derived one.
      *
@@ -3772,7 +3787,6 @@ export const setSupplierSettlementRoute = mutation({
        * moved underneath a confirmation that was never re-read.
        */
       economicsRevision: (app.economicsRevision ?? 0) + 1,
-      supplierEntitlementWitness: nextWitness,
       updatedAt: Date.now(),
     });
 
@@ -3793,14 +3807,22 @@ export const setSupplierSettlementRoute = mutation({
         route: app.supplierSettlementRoute ?? null,
         witness: describeWitness(previousWitness),
       }),
+      // The witness is reported IDENTICALLY on both sides, because this writer
+      // does not touch it. Recording it at all is deliberate: a reader of this
+      // row can see what evidence the deal held when the route moved, without
+      // being able to read the row as though the route move produced it.
       newValue: JSON.stringify({
         route: args.route,
-        witness: describeWitness(nextWitness),
+        witness: describeWitness(previousWitness),
       }),
       reason:
         args.route === "DIRECT_TO_SUPPLIER"
-          ? `Settlement route set to DIRECT_TO_SUPPLIER${witnessMoved && nextWitness !== undefined ? `, validated against the supplier's entitlement of ${nextWitness.amountMinor}` : previousWitness === undefined ? "" : `, against the entitlement of ${previousWitness.amountMinor} already agreed on this deal`}.`
-          : "Settlement route set to THROUGH_DEALERSHIP; the supplier's entitlement is not what the finance company pays him on this route, so the recorded witness does not apply while it stands — it is KEPT, not cleared, so returning to the direct route cannot mint a new one.",
+          ? `Settlement route set to DIRECT_TO_SUPPLIER${
+              previousWitness?.status === "VALIDATED"
+                ? `, against the entitlement of ${previousWitness.amountMinor} already agreed on this deal`
+                : "; the supplier's entitlement has not been agreed against this amount, so the deal cannot be finalized on this route until it is"
+            }.`
+          : "Settlement route set to THROUGH_DEALERSHIP; the supplier's entitlement is not what the finance company pays him on this route. Any recorded witness is left exactly as it stands — this step neither creates nor destroys that evidence.",
       changedBy: user._id,
       changedAt: Date.now(),
     });

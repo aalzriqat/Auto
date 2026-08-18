@@ -2285,14 +2285,37 @@ export default defineSchema({
      */
     supplierEntitlementWitness: v.optional(
       v.object({
-        amountMinor: v.number(),
+        /**
+         * WHETHER THE ENTITLEMENT WAS ACTUALLY CHECKED, said out loud.
+         *
+         * An approval taken while the deal settles THROUGH the dealership
+         * compares nothing against the supplier: the dealership collects the
+         * gross and his entitlement is an ordinary payable. The first design
+         * recorded that by writing no witness at all — and that SILENCE was the
+         * hole. A later route change read "no witness" as "nothing agreed yet"
+         * and felt free to originate one from the current vehicle cost, so an
+         * amount approved against nothing acquired evidence it had been checked.
+         *
+         * NOT_VALIDATED is therefore a real state with a real provenance, not an
+         * absence: it says a specific person, at a specific time, approved this
+         * amount WITHOUT the supplier's entitlement being compared. It carries no
+         * `amountMinor`, deliberately — zero, the current cost, and a nullable
+         * number are all things a later reader could mistake for evidence.
+         */
+        status: v.union(v.literal("VALIDATED"), v.literal("NOT_VALIDATED")),
+        /** Present only on VALIDATED — the entitlement that was actually compared. */
+        amountMinor: v.optional(v.number()),
         validatedAt: v.number(),
         validatedBy: v.id("users"),
-        via: v.union(
-          v.literal("CONFIGURED_APPROVAL"),
-          v.literal("MANUAL_RECEIPT"),
-          v.literal("ROUTE_SELECTION")
-        ),
+        /**
+         * ⚠️ NO `ROUTE_SELECTION`. Route selection has no economic approval
+         * authority and may not write this field at all — not to establish it,
+         * not to clear it, not to refresh it. It records HOW the money travels;
+         * only a writer that explicitly compares the entitlement and records an
+         * actor agreeing to it may touch this evidence. Two separate laundering
+         * paths were built on the exception that used to live here.
+         */
+        via: v.union(v.literal("CONFIGURED_APPROVAL"), v.literal("MANUAL_RECEIPT")),
       })
     ),
     /**
