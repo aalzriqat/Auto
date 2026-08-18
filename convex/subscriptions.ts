@@ -347,29 +347,63 @@ export const reconcileExpiredSubscriptions = internalMutation({
     const now = Date.now();
     const limit = Math.min(Math.max(args.limit ?? 100, 1), 500);
 
-    // ⚠️ The lower bound is load-bearing, not decoration. `currentPeriodEnd` is
-    // optional and an undefined value sorts BELOW every number, so a plain
-    // `lte(now)` range hands back every free-plan row before it reaches a paid
-    // one. With more free orgs than `limit`, the batch fills entirely with rows
-    // the loop then skips and nothing ever expires — silently, reporting
-    // `expired: 0` and a green heartbeat every run. `gte(-Infinity)` means "is
-    // a number at all", which is precisely the rows that can lapse.
+    // ⚠️ BOTH restrictions are load-bearing, and each closes half of the same
+    // starvation class. A row that qualifies for this range but is then skipped
+    // by the loop qualifies again on every future run, for ever — and because
+    // the index orders ascending by `currentPeriodEnd`, those stale timestamps
+    // sort AHEAD of a freshly-lapsed paid row's much larger one. Past `limit`
+    // of them, no paid subscription is ever reached again: `expired: 0` and a
+    // green heartbeat, permanently, with nothing to distinguish it from a quiet
+    // day.
+    //
+    //   gte(-Infinity) — `currentPeriodEnd` is optional and an undefined value
+    //   sorts BELOW every number, so a plain `lte(now)` returns every row that
+    //   never had a period at all. This bound means "is a number".
+    //
+    //   neq(plan, "free") — a FREE row can still carry a real, stale
+    //   `currentPeriodEnd`, which the bound above cannot exclude. Downgrading an
+    //   org to free through `adminUpdateSubscription` does not require clearing
+    //   the optional period-end field, so this is ordinary admin output rather
+    //   than a corrupt row. Filtering here rather than inside the loop is the
+    //   same reasoning `canAddVehicle` records below: filter BEFORE `take`, or
+    //   the skipped rows consume the page and the real work never happens.
     const candidates = await ctx.db
       .query("subscriptions")
       .withIndex("by_status_period_end", (q) =>
         q.eq("status", "active").gte("currentPeriodEnd", -Infinity).lte("currentPeriodEnd", now)
       )
+      .filter((q) => q.neq(q.field("plan"), "free"))
       .take(limit);
 
     let expired = 0;
-    for (const sub of candidates) {
-      // A free row can still carry a stale `currentPeriodEnd` from a previous
-      // paid period, so it survives the range above. Re-checking through the
-      // shared transition is what keeps it from being stamped `expired`.
-      const next = settledSubscriptionStatus(sub, now);
-      if (next === sub.status) continue;
-      await ctx.db.patch(sub._id, { status: next, updatedAt: now });
-      expired += 1;
+    try {
+      for (const sub of candidates) {
+        // Still re-checked through the shared transition: the range and filter
+        // narrow the page, they do not decide the outcome.
+        const next = settledSubscriptionStatus(sub, now);
+        if (next === sub.status) continue;
+        await ctx.db.patch(sub._id, { status: next, updatedAt: now });
+        expired += 1;
+      }
+    } catch (err) {
+      // ⚠️ Deliberately NOT rethrown, and this is the opposite of what the
+      // only other heartbeat-writing cron does. `crons.triggerAlarms` inserts a
+      // `success: false` row and then rethrows — but a Convex mutation is
+      // atomic, so the rethrow rolls that failure heartbeat back along with
+      // everything else and the failure is recorded nowhere. Verified by
+      // mutation, and filed as its own defect rather than copied.
+      //
+      // Swallowing is safe HERE specifically because this sweep is idempotent
+      // and runs every 5 minutes: committing partial progress plus an honest
+      // failure row loses nothing, and the next run finishes the batch. Do not
+      // copy this into a job where partial commitment is unsafe.
+      await ctx.db.insert("cronHeartbeats", {
+        jobName: "reconcile-expired-subscriptions",
+        ranAt: now,
+        success: false,
+        detail: err instanceof Error ? err.message : String(err),
+      });
+      return { scanned: candidates.length, expired, failed: true };
     }
 
     await ctx.db.insert("cronHeartbeats", {
@@ -379,7 +413,7 @@ export const reconcileExpiredSubscriptions = internalMutation({
       detail: `${expired} expired of ${candidates.length} scanned`,
     });
 
-    return { scanned: candidates.length, expired };
+    return { scanned: candidates.length, expired, failed: false };
   },
 });
 

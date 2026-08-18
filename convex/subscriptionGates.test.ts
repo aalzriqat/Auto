@@ -286,6 +286,120 @@ describe("subscription feature gates", () => {
     expect(row?.status).toBe("expired");
   });
 
+  test("free rows carrying a stale period end cannot starve the sweep either", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+
+    // The second half of the starvation class. A super-admin downgrading a
+    // churned dealership to `free` through adminUpdateSubscription does NOT
+    // have to clear the optional "Period end" field, and the form resends
+    // whatever is still in it — so `{plan:"free", status:"active",
+    // currentPeriodEnd:<old>}` is ordinary admin output, not a corrupt row.
+    //
+    // Such a row has a REAL number, so the `gte(-Infinity)` bound that fixed
+    // the undefined case does not exclude it. It enters the batch, the free
+    // guard returns its status unchanged, and the loop skips it WITHOUT
+    // patching — so it qualifies again on every future run, for ever. The
+    // index orders ascending by currentPeriodEnd, so these old timestamps sort
+    // AHEAD of a freshly-lapsed paid row's much larger one. Past `limit` of
+    // them, no paid subscription is ever reached again: `expired: 0` and a
+    // green heartbeat, permanently.
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 120; i++) {
+        const org = await ctx.db.insert("organizations", {
+          name: `Downgraded ${i}`,
+          createdAt: Date.now(),
+        });
+        await ctx.db.insert("subscriptions", {
+          orgId: org,
+          plan: "free",
+          status: "active",
+          currentPeriodEnd: Date.now() - 10_000_000 + i,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+      }
+    });
+
+    const lapsedOrg = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Lapsed Paid Dealer", createdAt: Date.now() })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("subscriptions", {
+        orgId: lapsedOrg,
+        plan: "professional",
+        status: "active",
+        currentPeriodEnd: Date.now() - 60_000,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    );
+
+    const result = await t.mutation(internal.subscriptions.reconcileExpiredSubscriptions, {});
+    expect(result.expired).toBe(1);
+
+    const row = await t.run((ctx) =>
+      ctx.db.query("subscriptions").withIndex("by_org", (q) => q.eq("orgId", lapsedOrg)).unique()
+    );
+    expect(row?.status).toBe("expired");
+  });
+
+  test("perpetual paid orgs cannot starve the sweep either", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+
+    // The third variant of the starvation class, and the only one the plan
+    // filter does NOT cover: a PAID subscription with no agreed period end.
+    // It passes `neq(plan, "free")`, and without a numeric lower bound an
+    // undefined value sorts below every number and lands at the very front of
+    // the range — then the loop skips it, for ever. Only `gte(-Infinity)`
+    // ("is a number at all") keeps these out of the page.
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 120; i++) {
+        const org = await ctx.db.insert("organizations", {
+          name: `Perpetual ${i}`,
+          createdAt: Date.now(),
+        });
+        await ctx.db.insert("subscriptions", {
+          orgId: org,
+          plan: "enterprise",
+          status: "active",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+      }
+    });
+
+    const lapsedOrg = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Lapsed Paid Dealer", createdAt: Date.now() })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("subscriptions", {
+        orgId: lapsedOrg,
+        plan: "professional",
+        status: "active",
+        currentPeriodEnd: Date.now() - 60_000,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    );
+
+    const result = await t.mutation(internal.subscriptions.reconcileExpiredSubscriptions, {});
+    expect(result.expired).toBe(1);
+
+    const row = await t.run((ctx) =>
+      ctx.db.query("subscriptions").withIndex("by_org", (q) => q.eq("orgId", lapsedOrg)).unique()
+    );
+    expect(row?.status).toBe("expired");
+
+    // And no perpetual org was touched.
+    const perpetual = await t.run((ctx) =>
+      ctx.db
+        .query("subscriptions")
+        .withIndex("by_status_period_end", (q) => q.eq("status", "active"))
+        .collect()
+    );
+    expect(perpetual).toHaveLength(120);
+  });
+
   test("reconciliation is idempotent", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     await seedOwnerOrg(t, { plan: "professional", currentPeriodEnd: Date.now() - 60_000 });

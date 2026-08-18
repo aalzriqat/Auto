@@ -127,6 +127,34 @@ describe("super-admin writes leave an audit trail", () => {
     expect(renewed?.status).toBe("active");
   });
 
+  test("a free plan is never stamped expired, however stale its period end", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const { asAdmin } = await seedSuperAdmin(t);
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Downgraded Cars", createdAt: Date.now() })
+    );
+
+    // Downgrading to free does not require clearing the optional period-end
+    // field, so this shape is ordinary admin output. The free plan has no paid
+    // period, so nothing about it can lapse — stamping it `expired` would make
+    // getMySubscription report a lapsed entitlement to an org that never had
+    // one. This is the writer-side half of the same guard the reconciler relies
+    // on; the reconciler's own copy is now unreachable for free rows because
+    // the query filters them out, so this is where it is actually load-bearing.
+    await asAdmin.mutation(api.subscriptions.adminUpdateSubscription, {
+      orgId,
+      plan: "free",
+      status: "active",
+      currentPeriodEnd: Date.now() - 10_000_000,
+    });
+
+    const row = await t.run((ctx) =>
+      ctx.db.query("subscriptions").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique()
+    );
+    expect(row?.status).toBe("active");
+    expect(row?.plan).toBe("free");
+  });
+
   test("setSiteConfig records the previous and new value", async () => {
     const t = convexTestWithComponents(schema, MODULES);
     const { adminId, asAdmin } = await seedSuperAdmin(t);
