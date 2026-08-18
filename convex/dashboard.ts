@@ -102,9 +102,19 @@ export const stats = query({
      *
      * Defaults to true, so every existing caller — mobile, which is the only
      * consumer of `previousPeriod` in the product — keeps exactly the response
-     * it has today and needs no change. The web dashboard passes false: it
-     * defaults to MONTH and renders no delta anywhere, so it was paying for a
-     * second full accounting window on every load and discarding it.
+     * it has today and needs no change.
+     *
+     * ⚠️ NOTHING SENDS THIS ARGUMENT YET, deliberately. This commit is Phase 1
+     * of a two-phase rollout: the backend must be able to accept the field
+     * before any client emits it, because AutoFlow deploys the frontend
+     * separately from the manually-deployed Convex backend, and an older
+     * backend rejects an unexpected field outright. A new web client against an
+     * old backend would take the dashboard down.
+     *
+     * Phase 2 will have the web dashboard pass false — it defaults to MONTH and
+     * renders no delta anywhere, so it pays for a second full accounting window
+     * on every load and discards it. That change may only ship after
+     * `convex function-spec --prod` reports this argument live in production.
      */
     includePreviousPeriod: v.optional(v.boolean()),
   },

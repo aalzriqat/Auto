@@ -12,8 +12,12 @@ import { stats } from "./dashboard";
  * it away, on every dashboard load.
  *
  * `includePreviousPeriod` lets a caller decline that work. It defaults to true,
- * so mobile and every existing caller keep their current behaviour untouched;
- * only the web dashboard opts out.
+ * so mobile and every existing caller keep their current behaviour untouched.
+ *
+ * ⚠️ On this branch NO caller sends it — the web opt-out is Phase 2, gated on
+ * the argument being live in production. These tests therefore exercise the
+ * argument directly rather than through any client, which is the only way to
+ * cover behaviour that no caller reaches yet.
  *
  * These tests pin the reads themselves via the same context spy used for the
  * sale-ledger fallback, rather than a byte count.
