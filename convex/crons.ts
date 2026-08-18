@@ -70,12 +70,20 @@ crons.interval(
 
 // Move subscriptions whose paid period has ended to `expired`.
 //
-// Entitlement used to be re-derived from `Date.now()` on every read, which made
-// every plan-gated query permanently uncacheable (SCRUM-145). The read path now
-// trusts stored state, so this job is what makes that state true. Five minutes
-// is the owner-accepted maximum stale-paid access; the owner's tolerance is an
-// hour, and the gap between the two is deliberate headroom for a missed run
-// rather than a schedule to relax into.
+// Entitlement used to be re-derived from `Date.now()` on every read. That did
+// not make the plan-gated queries uncacheable outright; it bounded how long
+// each cached result could be reused, and at the client's re-subscription
+// interval the bound always expired first, so none of them were ever served
+// from cache (SCRUM-145). The read path now trusts stored state, so this job is
+// what makes that state true.
+//
+// ⚠️ FIVE MINUTES IS THE CONTRACT. The owner separately said a one-hour lapse
+// would not harm the business; that is the failure budget if a run is missed,
+// NOT permission to lengthen this interval. Anyone widening it is changing the
+// entitlement guarantee and needs a fresh owner decision, not this comment.
+//
+// The sweep also self-schedules while a full page still makes progress, so a
+// cohort larger than one batch does not push the tail past five minutes.
 crons.interval(
   "reconcile-expired-subscriptions",
   { minutes: 5 },

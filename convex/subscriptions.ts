@@ -417,6 +417,32 @@ export const reconcileExpiredSubscriptions = internalMutation({
       return { scanned: candidates.length, expired, failed: true };
     }
 
+    // ⚠️ The five-minute bound is a promise about EVERY subscription, not about
+    // the first `limit` of them. The cron fires once every five minutes with no
+    // arguments, so left to the cron alone a 101st lapsed subscription waits for
+    // the next tick — up to ten minutes from its lapse — and the tail grows by
+    // another interval per page. Draining the eligible set in one sweep is what
+    // makes the stated contract true rather than true-for-a-hundred.
+    //
+    // Guarded on PROGRESS, not on a full page. A full page that expired nothing
+    // would mean the batch is occupied by rows the loop refuses, which is the
+    // starvation shape — rescheduling on fullness alone would spin for ever
+    // instead of stopping. Requiring `expired > 0` means every continuation has
+    // strictly reduced the eligible set, so the chain terminates on data.
+    //
+    // ⚠️ Mutation testing: dropping `expired > 0` SURVIVES the suite, and no
+    // test can currently kill it. Every candidate is `active`, non-free, with a
+    // numeric `currentPeriodEnd` at or before now, and `settledSubscriptionStatus`
+    // always transitions exactly that shape — so a full page with zero progress
+    // is unreachable today. The guard is defence against a future skip condition
+    // in the loop, not live logic, and it is recorded here rather than covered
+    // by a test contrived to look like coverage.
+    if (expired > 0 && candidates.length === limit) {
+      await ctx.scheduler.runAfter(0, internal.subscriptions.reconcileExpiredSubscriptions, {
+        limit,
+      });
+    }
+
     await ctx.db.insert("cronHeartbeats", {
       jobName: "reconcile-expired-subscriptions",
       ranAt: now,
@@ -529,9 +555,9 @@ export const getMySubscription = query({
     const planId = await getOrgPlan(ctx, args.orgId);
     const plan = PLANS[planId];
 
-    // `daysUntilRenewal` used to be computed here from `Date.now()`, which made
-    // this query permanently uncacheable on its own — fixing `getOrgPlan` alone
-    // would not have helped it (SCRUM-145). It is a display value derived
+    // `daysUntilRenewal` used to be computed here from `Date.now()`, which
+    // bounded this query's cache lifetime on its own — fixing `getOrgPlan`
+    // alone would not have helped it (SCRUM-145). It is a display value derived
     // entirely from `currentPeriodEnd`, which is returned, so any caller that
     // wants it can compute it client-side against the viewer's own clock.
     // Nothing rendered it: it appeared only as a type in the mobile API surface.

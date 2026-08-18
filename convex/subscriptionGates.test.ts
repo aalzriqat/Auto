@@ -400,6 +400,123 @@ describe("subscription feature gates", () => {
     expect(perpetual).toHaveLength(120);
   });
 
+  test("a cohort larger than one page still expires inside the 5-minute bound", async () => {
+    vi.useFakeTimers();
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+
+    // The starvation tests cover INELIGIBLE rows occupying the page. This is the
+    // opposite shape: eligible rows EXCEEDING it. The cron calls the sweep once
+    // every five minutes with no arguments, so the production batch is 100. Left
+    // to the cron alone, subscription 101 waits for the next tick — up to ten
+    // minutes from its lapse, 201 waits fifteen, and the tail grows by another
+    // five-minute interval per hundred rows. That contradicts the owner-approved
+    // contract, which is a five-minute maximum for every subscription, not for
+    // the first hundred.
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 101; i++) {
+        const org = await ctx.db.insert("organizations", {
+          name: `Lapsed ${i}`,
+          createdAt: Date.now(),
+        });
+        await ctx.db.insert("subscriptions", {
+          orgId: org,
+          plan: "professional",
+          status: "active",
+          currentPeriodEnd: Date.now() - 60_000 - i,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+      }
+    });
+
+    const first = await t.mutation(internal.subscriptions.reconcileExpiredSubscriptions, {});
+    expect(first.expired).toBe(100);
+
+    // One sweep must drain the whole eligible set through its own continuation,
+    // without another cron tick.
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    const remaining = await t.run((ctx) =>
+      ctx.db
+        .query("subscriptions")
+        .withIndex("by_status_period_end", (q) => q.eq("status", "active"))
+        .collect()
+    );
+    expect(remaining).toHaveLength(0);
+  });
+
+  test("the continuation keeps going past a second page", async () => {
+    vi.useFakeTimers();
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+
+    // 201 proves the chain CONTINUES rather than merely running one extra page.
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 201; i++) {
+        const org = await ctx.db.insert("organizations", {
+          name: `Lapsed ${i}`,
+          createdAt: Date.now(),
+        });
+        await ctx.db.insert("subscriptions", {
+          orgId: org,
+          plan: "professional",
+          status: "active",
+          currentPeriodEnd: Date.now() - 60_000 - i,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+      }
+    });
+
+    await t.mutation(internal.subscriptions.reconcileExpiredSubscriptions, {});
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    const remaining = await t.run((ctx) =>
+      ctx.db
+        .query("subscriptions")
+        .withIndex("by_status_period_end", (q) => q.eq("status", "active"))
+        .collect()
+    );
+    expect(remaining).toHaveLength(0);
+  });
+
+  test("an all-ineligible sweep expires nothing and schedules nothing", async () => {
+    vi.useFakeTimers();
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+
+    // ⚠️ This test is NOT evidence about the `expired > 0` half of the
+    // continuation guard, despite an earlier version of it claiming to be.
+    // Mutation testing showed why: these free rows are filtered out BEFORE
+    // `take`, so `candidates.length` is 0 rather than `limit`, the full-page
+    // condition never fires, and dropping `expired > 0` changes nothing here.
+    // The mutant survived and the name was the only thing asserting otherwise.
+    //
+    // What it does prove, which is worth keeping: a sweep facing nothing but
+    // ineligible rows expires nothing and starts no continuation chain.
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 150; i++) {
+        const org = await ctx.db.insert("organizations", {
+          name: `Free ${i}`,
+          createdAt: Date.now(),
+        });
+        await ctx.db.insert("subscriptions", {
+          orgId: org,
+          plan: "free",
+          status: "active",
+          currentPeriodEnd: Date.now() - 60_000 - i,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+      }
+    });
+
+    const result = await t.mutation(internal.subscriptions.reconcileExpiredSubscriptions, {});
+    expect(result.expired).toBe(0);
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    const rows = await t.run((ctx) => ctx.db.query("subscriptions").collect());
+    expect(rows.every((r) => r.status === "active")).toBe(true);
+  });
+
   test("reconciliation is idempotent", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     await seedOwnerOrg(t, { plan: "professional", currentPeriodEnd: Date.now() - 60_000 });
