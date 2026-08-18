@@ -7,6 +7,7 @@ import { requireSuperAdmin } from "./utils/tenancy";
 import { logAdminAction } from "./adminAudit";
 import { internal } from "./_generated/api";
 import { CRON_HEARTBEAT_JOBS } from "./constants";
+import { describeOrgMaterialization } from "./utils/materialization";
 
 const OVERVIEW_TABLES = [
   "organizations",
@@ -45,6 +46,119 @@ export const getOverview = query({
     return counts;
   },
 });
+
+/**
+ * Per-org, per-platform state of the `socialConversations` materialisation.
+ *
+ * Exists so an operator can answer "is this org's Social Inbox reading the
+ * fast path, and if not, why not" without inferring it from row counts — the
+ * inference that is impossible in the one case that matters, where a completed
+ * backfill and a backfill that never ran both leave zero rows behind.
+ *
+ * ⚠️ No `/admin` screen renders this yet, so today it is a `convex run` /
+ * dashboard query. It is also the only way to notice an `interrupted` chain:
+ * nothing alerts on one. Verifying a deployment means calling this and
+ * confirming `readerSource === "materialized"` for every org.
+ *
+ * `processed` and `materialized` are reported separately on purpose. A run over
+ * 1,029 events that produced 12 threads is healthy; reporting only "12" next to
+ * "1,029" reads like a stall.
+ */
+export const getSocialMaterializationStatus = query({
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    await requireSuperAdmin(ctx);
+    return await materializationReportPage(ctx, args.paginationOpts);
+  },
+});
+
+/**
+ * The same report as {@link getSocialMaterializationStatus}, reachable by the
+ * production release workflow.
+ *
+ * It exists because the public query cannot be called from CI, and that is a
+ * property of the auth model rather than an oversight: `requireSuperAdmin`
+ * resolves a `users` row from `ctx.auth.getUserIdentity().subject`, and a
+ * Convex deploy key carries no Clerk identity at all, so the call fails at
+ * `requireAuth` before reaching the handler.
+ *
+ * The alternatives were worse. `convex run --identity` would have the workflow
+ * impersonate a named human's Clerk subject, binding production verification to
+ * one employee's account and putting a forged-identity switch in a credentialed
+ * pipeline. Widening `requireSuperAdmin` would weaken the `/admin` boundary for
+ * every caller to serve one. An internal function takes its authorisation from
+ * the key's scope instead — the workflow's operator key grants exactly
+ * `runInternalQueries`/`runInternalMutations` and nothing else.
+ *
+ * ⚠️ Deliberately read-only, and it must stay that way. This is what a deploy
+ * gate consults to decide whether a rollout succeeded; a verifier that can
+ * mutate is a verifier that can make itself pass.
+ */
+export const materializationReportForRelease = internalQuery({
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    const page = await materializationReportPage(ctx, args.paginationOpts);
+    return {
+      ...page,
+      /**
+       * ⚠️ An ALLOWLIST, so tenant data does not leave Convex at all rather
+       * than leaving it and being carefully not printed.
+       *
+       * `orgName` is the field this exists to withhold: the release workflow
+       * runs on a public repository, and "the caller happens not to log it" is
+       * a property of today's caller, not a boundary. An allowlist also means a
+       * field added to the shared report later cannot join the payload by
+       * default — it has to be named here, deliberately.
+       *
+       * `orgId` stays because the verifier needs a stable input to hash into
+       * the opaque reference it prints, and that hash is what makes a run
+       * correlatable with the authenticated `/admin` screen. It is never
+       * rendered directly — `opaqueOrgRef` is the only path to output, which
+       * mutation testing covers.
+       */
+      page: page.page.map((org) => ({
+        orgId: org.orgId,
+        readerSource: org.readerSource,
+        platforms: org.platforms,
+      })),
+      /**
+       * ⚠️ The deployment naming ITSELF, so a verifier can prove it is looking
+       * at the deployment it was told to look at.
+       *
+       * A deploy key names its target, but a credential can be the wrong
+       * credential — a valid production key for another project deploys,
+       * verifies and reports success there just as confidently. Scraping the
+       * CLI's output would answer that with a log line, which can be stale,
+       * reformatted or absent. This answers it over the same connection the
+       * verification uses, from the backend that is actually serving it.
+       *
+       * Read straight from `process.env` rather than through `getValidatedEnv`:
+       * this is a Convex system variable, not application configuration, and a
+       * verifier must not fail because an unrelated app setting is missing.
+       */
+      deploymentUrl: process.env.CONVEX_CLOUD_URL ?? null,
+    };
+  },
+});
+
+/**
+ * Paginated rather than `take(OVERVIEW_COUNT_CAP)`. Each org costs its own
+ * document plus one indexed read per platform, so a 10,000-org cap is ~30,000
+ * reads in one query — past Convex's per-transaction ceiling, which would turn
+ * this status screen into an error exactly when a large tenant list is the
+ * reason someone opened it.
+ */
+async function materializationReportPage(
+  ctx: QueryCtx,
+  paginationOpts: { cursor: string | null; numItems: number }
+) {
+  const now = Date.now();
+  const orgPage = await ctx.db.query("organizations").paginate(paginationOpts);
+  const page = await Promise.all(
+    orgPage.page.map((org) => describeOrgMaterialization(ctx, org, now))
+  );
+  return { ...orgPage, page };
+}
 
 /** Newest heartbeat for one job — a single indexed read, ordered by `ranAt`. */
 async function newestHeartbeatForJob(ctx: QueryCtx, jobName: string) {

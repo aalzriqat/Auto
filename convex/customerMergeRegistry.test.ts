@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
-import { CUSTOMER_REFERENCING_TABLES } from "./utils/mergeHelpers";
+import { CUSTOMER_DERIVED_TABLES, CUSTOMER_REFERENCING_TABLES } from "./utils/mergeHelpers";
 
 function customerReferenceTablesFromSchema(source: string): string[] {
   const tables = new Set<string>();
@@ -22,7 +22,12 @@ describe("customer merge registry", () => {
   test("covers every schema table with a customerId foreign key", () => {
     const schemaSource = readFileSync(new URL("./schema.ts", import.meta.url), "utf8");
     const schemaTables = customerReferenceTablesFromSchema(schemaSource);
-    const mergeTables = CUSTOMER_REFERENCING_TABLES.map((entry) => entry.table).sort();
+    // Every table with a `customerId` must be either rewritten by the merge or
+    // explicitly declared derived — never silently absent from both.
+    const mergeTables = [
+      ...CUSTOMER_REFERENCING_TABLES.map((entry) => entry.table),
+      ...CUSTOMER_DERIVED_TABLES,
+    ].sort();
 
     expect(mergeTables).toEqual(schemaTables);
   });

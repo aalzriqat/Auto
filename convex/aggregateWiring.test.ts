@@ -65,6 +65,49 @@ test("a trigger is registered for every table an aggregate counts", () => {
 
   expect(countedTables.length).toBeGreaterThan(0);
   for (const table of countedTables) {
-    expect(aggregates).toContain(`aggregateTriggers.register("${table}"`);
+    expect(aggregates).toContain(`triggers.register("${table}"`);
+  }
+
+  // The registrations live in `registerCountingTriggers` so that both writers
+  // get them from one list. That only holds while both writers actually call
+  // it: a new `Triggers` instance that skipped the call would maintain no tree
+  // at all, and every count would drift for exactly the mutations built on it —
+  // silently, and only during those operations.
+  for (const writer of ["aggregateTriggers", "deferredThreadTriggers"]) {
+    expect(aggregates).toContain(`registerCountingTriggers(${writer})`);
+  }
+
+  // The conversation RECOMPUTE is the one behaviour deliberately absent from
+  // the deferred writer. Pinned so that "suppressed on purpose" cannot quietly
+  // become "suppressed everywhere" — the normal webhook path must keep it.
+  expect(aggregates).toContain('aggregateTriggers.register("instagramEvents"');
+  expect(aggregates).toContain('aggregateTriggers.register("facebookEvents"');
+
+  // ⚠️ This used to pin `not.toContain("deferredThreadTriggers.register(")`,
+  // which encoded the OLD design: the deferred writer registered nothing at all
+  // for these tables and the handler owed the settlement by hand. That
+  // obligation is now the builder's, so the deferred writer DOES register — to
+  // RECORD the touched threads, never to recompute them.
+  //
+  // The distinction is the whole point of the builder, so it is pinned as such:
+  // both event tables are recorded, and the deferred path must not call the
+  // recompute helper directly.
+  //
+  // ⚠️ Bounded to each registration's OWN callback. A first version sliced from
+  // the first registration to end-of-file and swallowed
+  // `syncDeferredSocialThreads`, whose body legitimately calls the recompute —
+  // the assertion failed on the helper it was never about. Same lesson as the
+  // guard this replaced: scope the text you are asserting over, or you assert
+  // over something else.
+  const deferredCallbacks = Array.from(
+    aggregates.matchAll(
+      /deferredThreadTriggers\.register\("(instagramEvents|facebookEvents)",[\s\S]*?\n\}\);/g,
+    ),
+  ).map((m) => m[0]);
+
+  expect(deferredCallbacks).toHaveLength(2);
+  for (const callback of deferredCallbacks) {
+    expect(callback).toContain("recordDeferredThreads(");
+    expect(callback).not.toContain("syncSocialConversation(");
   }
 });

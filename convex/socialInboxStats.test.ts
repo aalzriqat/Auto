@@ -1,4 +1,5 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
+import { seedOrgWithMember, VIEWER_PERMISSIONS } from "../test-utils/seedOrg";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -27,26 +28,13 @@ async function seedOrgWithEditor(
   t: ReturnType<typeof convexTestWithComponents>,
   clerkId = "stats_editor_001"
 ) {
-  const orgId = await t.run(async (ctx) =>
-    ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() })
-  );
-  await t.run(async (ctx) =>
-    ctx.db.insert("subscriptions", {
-      orgId,
-      plan: "professional",
-      status: "active",
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    })
-  );
-  const userId = await t.run(async (ctx) =>
-    ctx.db.insert("users", { clerkId, email: `${clerkId}@test.com`, name: "Editor" })
-  );
-  const roleId = await t.run(async (ctx) =>
-    ctx.db.insert("roles", { orgId, name: "SALES", permissions: ["view:leads", "edit:leads"] })
-  );
-  await t.run(async (ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
-  return { orgId, userId, asEditor: t.withIdentity({ subject: clerkId }) };
+  const { orgId, userId, identity } = await seedOrgWithMember(t, {
+    clerkId,
+    permissions: VIEWER_PERMISSIONS,
+    roleName: "SALES",
+    memberName: "Editor",
+  });
+  return { orgId, userId, asEditor: identity };
 }
 
 /** The exact algorithm the query used before the aggregates replaced it. */

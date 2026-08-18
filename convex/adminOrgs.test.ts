@@ -41,6 +41,62 @@ async function runDeletionToCompletion(
 }
 
 describe("adminOrgs", () => {
+  test("event tables are purged in smaller batches than ordinary org rows", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithOwner(t);
+    await t.run(async (ctx) => ctx.db.insert("users", { clerkId: "dev_batch", email: "admin@autoflow.dev" }));
+    const asAdmin = t.withIdentity({ subject: "dev_batch" });
+    const customerId = await t.run(async (ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Batch", lastName: "Contact" })
+    );
+
+    // 15 events: more than the trigger-heavy batch of 10, fewer than the
+    // ordinary batch of 50. A revert to the shared size would clear all 15 in
+    // one pass and this pins that it does not.
+    //
+    // The size matters because every event delete fires the conversation
+    // trigger, which re-reads that contact's whole history — so the batch's
+    // read cost is batch x history, and blowing the ceiling aborts the
+    // transaction *and* the FAILED status the catch block would have written,
+    // leaving the org permanently half-deleted.
+    await t.runUnwrapped(async (ctx) => {
+      for (let i = 0; i < 15; i += 1) {
+        await ctx.db.insert("instagramEvents", {
+          orgId,
+          externalId: `batch_${i}`,
+          kind: "dm",
+          senderInstagramId: "ig_batch",
+          customerId,
+          text: `m${i}`,
+        });
+      }
+    });
+
+    const request = await asAdmin.mutation(api.adminOrgs.hardDeleteOrg, {
+      orgId,
+      confirmName: "Acme Motors",
+    });
+
+    let sawPartialEventBatch = false;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const current = await t.run(async (ctx) => ctx.db.get(request.requestId));
+      if (current?.status !== "RUNNING") break;
+      await t.mutation(internal.adminOrgs.runDeletionRequestBatch, { requestId: request.requestId });
+      const remaining = await t.run(async (ctx) =>
+        ctx.db.query("instagramEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+      );
+      // 15 -> 5 -> 0 with a batch of 10; 15 -> 0 with a batch of 50.
+      if (remaining.length === 5) sawPartialEventBatch = true;
+    }
+
+    expect(sawPartialEventBatch).toBe(true);
+    expect(
+      await t.run(async (ctx) =>
+        ctx.db.query("instagramEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+      )
+    ).toHaveLength(0);
+  });
+
   test("rejects a non-allowlisted user even if they own the org", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithOwner(t);
@@ -210,17 +266,62 @@ describe("adminOrgs", () => {
     // aggregate trigger. That table is org-scoped and derived, so the purge has
     // to carry it or the row — and its `socialContactsByOrg` entry — outlives
     // the org it belonged to.
+    // Carries a customerId so the event also materialises a
+    // `socialConversations` thread — without one the thread trigger skips the
+    // event entirely and the purge assertions below would prove nothing about
+    // that table.
+    const purgeContactId = await t.run(async (ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Purge", lastName: "Contact" })
+    );
     await t.run(async (ctx) =>
       ctx.db.insert("instagramEvents", {
         orgId,
         externalId: "purge_ig_1",
         kind: "dm",
         senderInstagramId: "purge_sender_1",
+        customerId: purgeContactId,
       })
     );
     expect(
       await t.run(async (ctx) =>
         ctx.db.query("socialContacts").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+      )
+    ).toHaveLength(1);
+    expect(
+      await t.run(async (ctx) =>
+        ctx.db
+          .query("socialConversations")
+          .withIndex("by_org_lastEventAt", (q) => q.eq("orgId", orgId))
+          .collect()
+      )
+    ).toHaveLength(1);
+
+    // The readiness record must go too. Not because a later org could reuse this
+    // id — Convex never reuses document ids, as the purge step's own comment in
+    // adminOrgs.ts says — but because `hardDeleteOrg` reporting COMPLETED while
+    // leaving org-scoped rows behind is this path's documented recurring defect,
+    // and an org-scoped table with no purge step is how the count reached 38.
+    await t.run(async (ctx) =>
+      ctx.db.insert("socialMaterializationState", {
+        orgId,
+        platform: "instagram" as const,
+        generation: 1,
+        status: "completed" as const,
+        runId: "purge-test",
+        processedCount: 1,
+        materializedCount: 1,
+        expectedCount: 1,
+        startedAt: Date.now(),
+        lastProgressAt: Date.now(),
+        completedAt: Date.now(),
+      })
+    );
+    expect(
+      await t.run(async (ctx) =>
+        ctx.db
+          .query("socialMaterializationState")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect()
       )
     ).toHaveLength(1);
 
@@ -257,12 +358,163 @@ describe("adminOrgs", () => {
       ctx.db.query("socialContacts").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
     );
     expect(remainingSocialContacts).toHaveLength(0);
+    const remainingConversations = await t.run(async (ctx) =>
+      ctx.db
+        .query("socialConversations")
+        .withIndex("by_org_lastEventAt", (q) => q.eq("orgId", orgId))
+        .collect()
+    );
+    expect(remainingConversations).toHaveLength(0);
+    const remainingMaterializationState = await t.run(async (ctx) =>
+      ctx.db
+        .query("socialMaterializationState")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .collect()
+    );
+    expect(remainingMaterializationState).toHaveLength(0);
     const remainingIgEvents = await t.run(async (ctx) =>
       ctx.db.query("instagramEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
     );
     expect(remainingIgEvents).toHaveLength(0);
     const org = await t.run(async (ctx) => ctx.db.get(orgId));
     expect(org).toBeNull();
+  });
+
+  /**
+   * ⚠️ Adversarial review finding. The purge deletes `socialMaterializationState`
+   * at a fixed step, but the organization row itself survives until every step
+   * has drained. In that window the org is still visible to the backfill
+   * fan-out, which walks `organizations` unfiltered — so an operator running a
+   * backfill concurrently with a hard delete re-inserts a readiness row that the
+   * purge has already moved past and will never revisit.
+   *
+   * The result is a `socialMaterializationState` row pointing at an org that no
+   * longer exists, after the request reported COMPLETED. No cross-tenant
+   * exposure — Convex does not reuse document ids — but it recreates exactly the
+   * "COMPLETED while rows survive" defect the two new purge steps were added to
+   * close, and the precondition is two ordinary admin operations overlapping.
+   */
+  test("a backfill racing an org purge cannot resurrect the readiness record", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithOwner(t);
+    await t.run(async (ctx) => ctx.db.insert("users", { clerkId: "dev_race", email: "admin@autoflow.dev" }));
+    const asAdmin = t.withIdentity({ subject: "dev_race" });
+
+    const raceCustomerId = await t.run(async (ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Race", lastName: "Contact" })
+    );
+    await t.run(async (ctx) =>
+      ctx.db.insert("instagramEvents", {
+        orgId,
+        externalId: "race_ig_1",
+        kind: "dm",
+        senderInstagramId: "race_sender_1",
+        customerId: raceCustomerId,
+      })
+    );
+
+    const result = await asAdmin.mutation(api.adminOrgs.hardDeleteOrg, {
+      orgId,
+      confirmName: "Acme Motors",
+    });
+
+    const stateRows = async () =>
+      await t.run(async (ctx) =>
+        ctx.db
+          .query("socialMaterializationState")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect()
+      );
+
+    // Drive the purge to the exact window: readiness rows gone, org row still
+    // present. That is when a concurrent fan-out would find the org and act.
+    let reachedWindow = false;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const current = await t.run(async (ctx) => ctx.db.get(result.requestId));
+      if (current?.status !== "RUNNING") break;
+      await t.mutation(internal.adminOrgs.runDeletionRequestBatch, { requestId: result.requestId });
+
+      const orgStillThere = (await t.run(async (ctx) => ctx.db.get(orgId))) !== null;
+      if (orgStillThere && (await stateRows()).length === 0) {
+        reachedWindow = true;
+        // The concurrent operator action.
+        await t.mutation(internal.migrations.backfillInstagramConversations, {
+          orgId,
+          onlyIfIdle: true,
+        });
+        break;
+      }
+    }
+    expect(reachedWindow).toBe(true);
+
+    const finished = await runDeletionToCompletion(t, result.requestId);
+    expect(finished?.status).toBe("COMPLETED");
+    expect(await t.run(async (ctx) => ctx.db.get(orgId))).toBeNull();
+
+    // The org is gone and the request says COMPLETED, so nothing may still
+    // reference it.
+    expect(await stateRows()).toHaveLength(0);
+  });
+
+  /**
+   * ⚠️ Regression introduced by the race fix above, found on re-review.
+   *
+   * `deletionRequestId` was read nowhere in the codebase until that fix turned it
+   * into a gate. It is not self-clearing: `runDeletionRequestBatch`'s catch marks
+   * the *request* FAILED and never touches the organization row, `unsuspendOrg`
+   * permits unsuspending a FAILED request (only PENDING_REVIEW / APPROVED /
+   * RUNNING block it), and `rejectDeletionRequest` clears the org fields only
+   * from PENDING_REVIEW.
+   *
+   * So a purge that failed, followed by an admin putting the dealership back into
+   * service, leaves a live unsuspended org carrying the marker forever — and a
+   * presence-only guard would deny it the materialised reader permanently, with
+   * no operator signal separating "never backfilled" from "silently blocked".
+   * The gate has to read the request's STATUS, not merely the id's presence.
+   */
+  test("an org recovered from a failed deletion is not permanently denied materialization", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithOwner(t);
+    await t.run(async (ctx) => ctx.db.insert("users", { clerkId: "dev_failed", email: "admin@autoflow.dev" }));
+    const asAdmin = t.withIdentity({ subject: "dev_failed" });
+
+    const result = await asAdmin.mutation(api.adminOrgs.hardDeleteOrg, {
+      orgId,
+      confirmName: "Acme Motors",
+    });
+
+    // The purge dies partway, exactly as runDeletionRequestBatch's catch records it.
+    await t.run(async (ctx) =>
+      ctx.db.patch(result.requestId, {
+        status: "FAILED" as const,
+        failedAt: Date.now(),
+        error: "An unexpected error occurred while deleting the organization.",
+      })
+    );
+
+    // The admin puts the dealership back into service. This is permitted today.
+    await asAdmin.mutation(api.adminOrgs.unsuspendOrg, { orgId });
+
+    const org = await t.run(async (ctx) => ctx.db.get(orgId));
+    expect(org).not.toBeNull();
+    expect(org?.suspended).toBe(false);
+    // The marker survives — nothing in the product clears it from a FAILED request.
+    expect(org?.deletionRequestId).toBeDefined();
+
+    // A live org must still be able to materialise.
+    await t.mutation(internal.migrations.backfillInstagramConversations, {
+      orgId,
+      onlyIfIdle: true,
+    });
+
+    const stateRows = await t.run(async (ctx) =>
+      ctx.db
+        .query("socialMaterializationState")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .collect()
+    );
+    expect(stateRows).toHaveLength(1);
+    expect(stateRows[0].status).toBe("completed");
   });
 
   test("hardDeleteOrg removes a financed deal's appraisals, overrides, rule versions and appraisal blobs", async () => {

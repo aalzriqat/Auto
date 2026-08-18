@@ -1,6 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { query, QueryCtx } from "./_generated/server";
-import { mutation } from "./functions";
+import { mutation, socialBulkMutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -814,7 +814,7 @@ export const previewMerge = query({
  * audit row. Requires PERMISSIONS.MERGE_CUSTOMERS — destructive, so OWNER
  * by default with MANAGER opted in via the default role template.
  */
-export const mergeCustomers = mutation({
+export const mergeCustomers = socialBulkMutation({
   args: {
     orgId: v.id("organizations"),
     survivorId: v.id("customers"),
@@ -893,6 +893,25 @@ export const mergeCustomers = mutation({
       await ctx.db.patch(survivor._id, mergedFields);
     }
 
+    // Social events are repointed like every other reference, but their
+    // conversation threads are recomputed once at the end rather than once per
+    // event. Merging a contact who arrived on both platforms is the single most
+    // common reason to merge at all, and a per-event recompute re-reads the
+    // whole thread each time — O(N squared), which on a long Messenger history
+    // reaches Convex's read ceiling and rolls the entire merge back. See
+    // `deferredThreadTriggers`.
+    //
+    // Both sides are recorded by the builder: the loser's thread (which loses
+    // every event and is deleted) and the survivor's (which gains them),
+    // because `customerId` is part of the conversation key and the triggers see
+    // the document before and after each patch.
+    //
+    // ⚠️ There is deliberately no collect/sync bookkeeping here any more.
+    // `socialBulkMutation` records touched threads from the writes themselves
+    // and recomputes them once the handler returns, so this loop cannot forget
+    // to settle and cannot settle the wrong set. A throw during that
+    // finalisation rolls back the patches below with it, keeping the merge
+    // all-or-nothing.
     const reassignedCounts: Record<string, number> = {};
     for (const ref of CUSTOMER_REFERENCING_TABLES) {
       const rows = await ref.find(ctx, args.orgId, args.loserId);
