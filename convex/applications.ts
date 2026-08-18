@@ -518,8 +518,38 @@ async function directRouteTransitionRefusal(
   }
 
   if (app.vehicleHandoverAt === undefined) return null;
-  // Already on the route: a re-submission is not a transition.
-  if (app.supplierSettlementRoute === "DIRECT_TO_SUPPLIER") return null;
+
+  /**
+   * A SAME-ROUTE RETRY IS NOT A LICENCE TO RE-VALIDATE.
+   *
+   * Returning "not a transition" here made this mutation a backdoor around the
+   * witness seal the rest of this change exists to build: on a handed-over DIRECT
+   * deal, re-submitting the route it already has re-measured the supplier's
+   * entitlement and stored it, so a DRIFTED deal became UNCHANGED and
+   * finalization stopped objecting. No amount was re-agreed and no approver was
+   * involved — the evidence simply caught up with the vehicle behind everyone's
+   * back.
+   *
+   * The below-entitlement check above hides how bad this is, because it only
+   * fires when the entitlement rises ABOVE the approved amount. The dangerous
+   * direction is the other one: a cost corrected DOWNWARD leaves the approved
+   * amount comfortably above it, so nothing refuses, and the refresh quietly
+   * conceals that the supplier is now being paid more than he is owed.
+   *
+   * So the retry stays an idempotent no-op only while the existing witness still
+   * holds. Once it does not, the deal needs a human, not a re-measurement.
+   */
+  if (app.supplierSettlementRoute === "DIRECT_TO_SUPPLIER") {
+    const verdict = await supplierEntitlementVerdictFor(ctx, app);
+    if (verdict.kind === "DRIFTED" || verdict.kind === "UNPROVABLE") {
+      return {
+        key: "VehicleHandedOver",
+        message:
+          "What the supplier is owed no longer matches what this deal recorded, and the vehicle has already gone out — so it cannot be agreed again here. Correct the sale instead.",
+      };
+    }
+    return null;
+  }
   const projected: Doc<"financeApplications"> = {
     ...app,
     supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
@@ -3465,15 +3495,18 @@ export const recordDirectSupplierReceiptAmount = mutation({
       economicsCurrency,
       // The evidence this figure was agreed against, so a later edit to the
       // vehicle's cost is detectable rather than silently invalidating the deal.
-      // Always written — a witness that is optional in practice is a check that
-      // is optional in practice — and carrying its OWN provenance rather than
-      // implying it was observed at some other act's timestamp.
-      supplierEntitlementWitness: {
-        amountMinor: entitlementMinor,
-        validatedAt: Date.now(),
-        validatedBy: user._id,
-        via: "MANUAL_RECEIPT" as const,
-      },
+      //
+      // Through the SHARED helper, like the other two writers. Stamping it
+      // directly here re-badged the witness on a SOURCE-ONLY or NOTES-ONLY
+      // correction: the receipt legitimately changed, the entitlement did not,
+      // and yet the actor and timestamp on the evidence moved to whoever happened
+      // to fix a typo. That is the same defect this round closed in the
+      // configured writer, still alive in the second of the three.
+      supplierEntitlementWitness: witnessToStore(
+        app.supplierEntitlementWitness,
+        entitlementMinor,
+        { validatedAt: Date.now(), validatedBy: user._id, via: "MANUAL_RECEIPT" }
+      ).witness,
       directSupplierReceipt: {
         source,
         ...(notes ? { notes } : {}),

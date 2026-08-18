@@ -1510,16 +1510,30 @@ export function deriveAccountingProfit(args: {
  * `financingEconomics.ts` from having to import from `applications.ts`, which
  * imports from it.
  */
-/** The witness serialized for an audit row — provenance included, `null` when absent. */
+/**
+ * The witness serialized for an audit row — provenance included, `null` when absent.
+ *
+ * ⚠️ `validatedBy` IS PART OF THE PROVENANCE. The first version omitted it while
+ * the surrounding comments claimed the history showed "who had established" a
+ * witness, and the regression asserting that claim accepted an object with no
+ * actor in it. A serialized record that drops the person is not a provenance
+ * record; it is a timestamp with a label.
+ */
 export function describeWitness(
   witness: Doc<"financeApplications">["supplierEntitlementWitness"]
-): { supplierEntitlementMinor: number; via: string; validatedAt: number } | null {
+): {
+  supplierEntitlementMinor: number;
+  via: string;
+  validatedAt: number;
+  validatedBy: Id<"users">;
+} | null {
   return witness === undefined
     ? null
     : {
         supplierEntitlementMinor: witness.amountMinor,
         via: witness.via,
         validatedAt: witness.validatedAt,
+        validatedBy: witness.validatedBy,
       };
 }
 

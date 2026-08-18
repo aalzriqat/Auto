@@ -1362,10 +1362,19 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
     const before = JSON.parse(clearing.previousValue!);
     const after = JSON.parse(clearing.newValue);
     expect(before.route).toBe("DIRECT_TO_SUPPLIER");
+    // THE ACTOR IS ASSERTED, not accepted as absent. The previous version of
+    // this expectation matched an object with no `validatedBy` in it while the
+    // comment above claimed the history showed who had established the witness —
+    // so the test agreed with the prose instead of checking it, and
+    // `describeWitness` was quietly dropping the person.
+    const approverId = await t.run(async (ctx) =>
+      (await ctx.db.query("users").collect()).find((u) => u.clerkId === "guard_approver")!._id
+    );
     expect(before.witness).toStrictEqual({
       supplierEntitlementMinor: 17_000_000,
       via: "MANUAL_RECEIPT",
       validatedAt: expect.any(Number),
+      validatedBy: approverId,
     });
     expect(after.route).toBe("THROUGH_DEALERSHIP");
     expect(after.witness).toBeNull();
@@ -1429,6 +1438,113 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
     // longer be corrected.
     expect(offered).toBe(false);
     expect(view?.directRouteRefusal).toBe("BelowSupplierEntitlement");
+  });
+
+  test("a handed-over deal cannot re-validate its witness by re-submitting the route it already has", async () => {
+    // THE BACKDOOR. `directRouteTransitionRefusal` treated a same-route
+    // re-submission as "not a transition" and returned early, but the mutation
+    // then re-measured the supplier's entitlement and stored it — so a DRIFTED
+    // deal became UNCHANGED, and finalization stopped objecting. No amount was
+    // re-agreed and no approver was involved: the evidence simply caught up with
+    // the vehicle behind everyone's back, through the one writer that was never
+    // supposed to be an economics writer at all.
+    //
+    // ⚠️ THE COST MOVES **DOWN** HERE, DELIBERATELY. Raising it trips the
+    // below-entitlement refusal first, which is what made this look covered: the
+    // guard that fires is not the guard under test. A cost corrected downward
+    // leaves the approved amount comfortably above it, so nothing else refuses
+    // — and the concealed fact is that the supplier is now being paid MORE than
+    // he is owed.
+    const { t, orgId, applicationId, asUser, asApprover, registerExpectedPayment } =
+      await seedApprovedApplication("MANUAL_FINANCE_COMPANY", {
+        sourcedVehicle: true,
+        manualProviderName: "Amman Finance House",
+      });
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    await asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_000_000,
+      source: "Signed purchase agreement",
+    });
+    await registerHandover(asUser, api, orgId, applicationId);
+
+    const sealed = (await t.run((ctx) => ctx.db.get(applicationId)))!;
+    expect(sealed.supplierEntitlementWitness?.amountMinor).toBe(17_000_000);
+    await asUser.mutation(api.vehicles.update, {
+      orgId,
+      vehicleId: sealed.vehicleId,
+      sourceCost: 16_000,
+    });
+
+    // The retry. The route does not change; only the witness would.
+    await expect(
+      asUser.mutation(api.applications.setSupplierSettlementRoute, {
+        orgId,
+        applicationId,
+        route: "DIRECT_TO_SUPPLIER",
+      })
+    ).rejects.toThrow(/no longer matches what this deal recorded/i);
+
+    // The seal held: the witness is the one that was agreed, and the revision
+    // did not move, so no open confirmation was invalidated by a refused call.
+    const after = (await t.run((ctx) => ctx.db.get(applicationId)))!;
+    expect(after.supplierEntitlementWitness).toStrictEqual(sealed.supplierEntitlementWitness);
+    expect(after.economicsRevision).toBe(sealed.economicsRevision);
+
+    // And the drift is still visible to the transition that matters.
+    await registerExpectedPayment();
+    await expect(
+      asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId })
+    ).rejects.toThrow(/has changed since what he receives was agreed/i);
+  });
+
+  test("correcting only the source leaves the witness exactly as whoever validated it left it", async () => {
+    // The third writer had the same re-badging defect as the configured one.
+    // `recordDirectSupplierReceiptAmount` stamped a fresh witness whenever its
+    // receipt-level comparison found ANY difference — and that comparison
+    // includes the source and the notes. So fixing a typo in the document name
+    // moved the actor and timestamp on evidence about the supplier's entitlement,
+    // which that edit never examined.
+    const { t, orgId, applicationId, asUser, asApprover } = await seedApprovedApplication(
+      "MANUAL_FINANCE_COMPANY",
+      { sourcedVehicle: true, manualProviderName: "Amman Finance House" }
+    );
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    await asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_000_000,
+      source: "Signed purchase agreement",
+      notes: "Collected in person.",
+    });
+    const established = (await t.run((ctx) => ctx.db.get(applicationId)))!
+      .supplierEntitlementWitness!;
+    expect(established.amountMinor).toBe(17_000_000);
+
+    // A real correction to the paperwork — the amount and the entitlement are
+    // untouched.
+    await asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_000_000,
+      source: "Revised purchase agreement",
+      notes: "Collected in person.",
+    });
+
+    const after = (await t.run((ctx) => ctx.db.get(applicationId)))!;
+    // The receipt moved, because that is what was corrected...
+    expect(after.directSupplierReceipt?.source).toBe("Revised purchase agreement");
+    // ...and the witness did NOT, because the entitlement did not.
+    expect(after.supplierEntitlementWitness).toStrictEqual(established);
   });
 
   test("an exact retry is the same act — no revision bump, no second audit row", async () => {
