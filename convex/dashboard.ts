@@ -235,7 +235,15 @@ export const stats = query({
     ) as Record<(typeof activeStages)[number], number>;
 
     // 4. Sales this period
+    //
+    // `periodSalesWasCapped` records what the read actually DID, rather than
+    // re-deriving it from the branch predicate further down. Those are not the
+    // same thing: a later change that caps the dated branch, or that moves the
+    // `filterStart > 0` boundary, would leave a derived flag still claiming the
+    // read was complete and `truncated.sales` reporting a false negative.
+    const SALES_CAP = 5000;
     let periodSales: Doc<"sales">[] = [];
+    let periodSalesWasCapped = false;
     if (canViewSalesMetrics) {
       if (filterStart > 0) {
         periodSales = await ctx.db
@@ -254,7 +262,8 @@ export const stats = query({
             q.eq(q.field("status"), "COMPLETED"),
             q.neq(q.field("isDeleted"), true)
           ))
-          .take(5000);
+          .take(SALES_CAP);
+        periodSalesWasCapped = true;
       }
     }
 
@@ -299,7 +308,6 @@ export const stats = query({
       : [];
     const saleTransactions = transactionCandidates;
 
-    const SALES_CAP = 5000;
     // Gross transaction value: what the dealership handled, agent deals at full
     // ticket. Turnover is computed further down, once the consigned vehicles are
     // known — the two are different numbers and both are reported.
@@ -323,9 +331,8 @@ export const stats = query({
     // The fallback ledger always reads `.take(SALES_CAP)`, so it is truncated
     // at the cap - but only while it is the authoritative source, which is
     // exactly when `activeSales` is empty.
-    const currentPeriodUsedTake = filterStart === 0;
     const salesTruncated = activeSales.length > 0
-      ? currentPeriodUsedTake && activeSales.length === SALES_CAP
+      ? periodSalesWasCapped && activeSales.length === SALES_CAP
       : saleTransactions.length === SALES_CAP;
 
     const getChartKey = (dateTs: number) => {

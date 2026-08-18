@@ -357,6 +357,11 @@ describe("dashboard.stats — an unrequested previous window cannot pollute the 
     // from the comparison window, and the delta is withheld rather than
     // published against an unestablished basis.
     expect(result.truncated.profit).toBe(true);
+    // Presence first. With optional chaining alone, a regression that dropped
+    // `previousPeriod` entirely would satisfy the `toBeUndefined()` below while
+    // proving nothing — and this test exists precisely to show the window IS
+    // requested and its delta withheld, not that the window vanished.
+    expect(result.previousPeriod).toBeDefined();
     expect(result.previousPeriod?.netProfit).toBeUndefined();
   });
 
