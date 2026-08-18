@@ -701,6 +701,35 @@ export const suggestQuotationForApplication = query({
 });
 
 /** Everything the dealership needs to answer "what happened on this deal". */
+/**
+ * Change-log rows that ARE settlement evidence, not merely rows about it.
+ *
+ * ⚠️ A REDACTED DOCUMENT WITH AN UNREDACTED CHANGE LOG IS NOT REDACTED.
+ * `redactSettlementEvidence` gates the supplier-entitlement witness and the
+ * direct-receipt paperwork on the document. Both writers ALSO file an override
+ * row, and this query blanks only those rows' values — leaving `field`,
+ * `changedBy` and `changedAt` in place. A default-SALES caller therefore still
+ * learned that a supplier-entitlement validation happened, WHEN, and BY WHOM:
+ * exactly the provenance the document gate had just been split three ways to
+ * withhold. Measured, not reasoned: 2 such rows reached a caller holding
+ * neither `view:finance` nor `view:cost_price`.
+ *
+ * These rows are withheld ENTIRELY from a non-finance caller rather than masked.
+ * Masking the field name would put a row in the log that names nothing, and
+ * inventing a placeholder name would put something false there. Nothing is lost
+ * that this caller acts on: an amount correction files its own
+ * `approvedDealerPurchaseAmountMinor` row, which they still receive with its own
+ * timestamp, so the workflow fact survives while the evidence provenance does
+ * not.
+ *
+ * This is the same mistake as the leak it sits beside — gating a field and
+ * publishing the sentence written next to it — one layer further down.
+ */
+const SETTLEMENT_EVIDENCE_OVERRIDE_FIELDS: ReadonlySet<string> = new Set([
+  "supplierEntitlementWitness",
+  "directSupplierReceipt",
+]);
+
 export const getEconomics = query({
   args: {
     orgId: v.id("organizations"),
@@ -789,6 +818,7 @@ export const getEconomics = query({
        * document they describe.
        */
       overrides: overrides
+        .filter((row) => canSeeFinance || !SETTLEMENT_EVIDENCE_OVERRIDE_FIELDS.has(row.field))
         .sort((a, b) => b.changedAt - a.changedAt)
         .map((row) =>
           canSeeFinance

@@ -889,6 +889,23 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
       source: SENTINEL_SOURCE,
       notes: SENTINEL_NOTES,
     });
+    /**
+     * A third correction that moves the PAPERWORK ONLY, so a row is filed under
+     * `directSupplierReceipt` rather than under the amount's own name.
+     *
+     * ⚠️ Added because the anti-vacuity check below CAUGHT this test being
+     * empty: both corrections above move the amount, and the writer deliberately
+     * files those under `approvedDealerPurchaseAmountMinor`. Without this call
+     * there is no evidence-named row in the table at all, and every assertion
+     * about withholding one passes against a deal that never had one.
+     */
+    await asApprover.mutation(api.applications.recordDirectSupplierReceiptAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_500_000,
+      source: SENTINEL_SOURCE,
+      notes: `${SENTINEL_NOTES} (corrected)`,
+    });
 
     // Anti-vacuity: the sentinels must really be stored, or every assertion
     // below passes against a deal that never carried them.
@@ -963,10 +980,75 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
     const economics = (await asUser.query(api.financingEconomics.getEconomics, {
       orgId,
       applicationId,
-    })) as unknown as { overrides: Array<{ changedAt: number; newValue?: string }> };
+    })) as unknown as {
+      overrides: Array<{ field: string; changedAt: number; changedBy?: string; newValue?: string }>;
+    };
     expect(economics.overrides.length).toBeGreaterThan(0);
     expect(economics.overrides[0].changedAt).toBeTypeOf("number");
     expect(economics.overrides[0].newValue).toBeUndefined();
+
+    /**
+     * ⚠️ A REDACTED DOCUMENT WITH AN UNREDACTED CHANGE LOG IS NOT REDACTED.
+     *
+     * Blanking the VALUES on these rows is not enough. Each row also carries
+     * `field`, `changedBy` and `changedAt`, so a caller holding neither
+     * `view:finance` nor `view:cost_price` still learned that a
+     * supplier-entitlement validation happened, WHEN and BY WHOM — which is
+     * precisely the provenance the document gate beside it was just split three
+     * ways to withhold. Measured before the fix: 2 such rows reached a
+     * default-SALES caller.
+     *
+     * The rows this PR introduced (`supplierEntitlementWitness`,
+     * `directSupplierReceipt`) now follow the same gate as the document fields
+     * they describe.
+     */
+    const evidenceFields = ["supplierEntitlementWitness", "directSupplierReceipt"];
+    for (const row of economics.overrides) {
+      expect(`sales sees an evidence row (${row.field}): ${evidenceFields.includes(row.field)}`).toBe(
+        `sales sees an evidence row (${row.field}): false`
+      );
+    }
+
+    /**
+     * ANTI-VACUITY, and it is load-bearing here: the absence above must be
+     * REDACTION, not a fixture that never produced such a row. Read straight
+     * from the table, bypassing every gate.
+     */
+    const storedEvidenceRows = await t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query("financeApplicationOverrides")
+          .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+          .collect()
+      ).filter((r) => evidenceFields.includes(r.field))
+    );
+    expect(storedEvidenceRows.length).toBeGreaterThan(0);
+    expect(storedEvidenceRows.every((r) => typeof r.changedBy === "string")).toBe(true);
+
+    /**
+     * And the WORKFLOW half still survives: withholding the whole log would hide
+     * a fact a sales caller legitimately works with. An amount correction files
+     * its own row under its own name, and that one still arrives — with its
+     * timestamp — so nothing they act on was taken away with the evidence.
+     */
+    expect(
+      economics.overrides.some((r) => r.field === "approvedDealerPurchaseAmountMinor")
+    ).toBe(true);
+
+    // A finance caller still receives the evidence rows, so the gate is a gate
+    // and not the field having quietly stopped being served to anybody.
+    await t.run(async (ctx) => {
+      const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === orgId)!;
+      await ctx.db.patch(role._id, {
+        permissions: [...salesTemplate.permissions, "view:finance"],
+        isSystemOwnerRole: false,
+      });
+    });
+    const financeEconomics = (await asUser.query(api.financingEconomics.getEconomics, {
+      orgId,
+      applicationId,
+    })) as unknown as { overrides: Array<{ field: string; changedBy?: string }> };
+    expect(financeEconomics.overrides.some((r) => evidenceFields.includes(r.field))).toBe(true);
   });
 
   test("cost visibility earns the number, not the paperwork", async () => {
@@ -3005,6 +3087,112 @@ describe("SCRUM-61: a witness never outlives the amount it attests to", () => {
     expect((financeView.supplierEntitlementWitness as { status: string }).status).toBe(
       "NOT_VALIDATED"
     );
+  });
+
+  test("the witness change log follows the same gate as the witness", async () => {
+    /**
+     * A REDACTED DOCUMENT WITH AN UNREDACTED CHANGE LOG IS NOT REDACTED.
+     *
+     * ⚠️ Found by the Codex reviewer seat and reproduced here before being
+     * believed. Splitting `redactSettlementEvidence` three ways withheld the
+     * witness provenance from the DOCUMENT — and `getEconomics` went on serving
+     * the override rows this release introduced, blanking only their VALUES. The
+     * rows still carried `field: "supplierEntitlementWitness"`, `changedBy` and
+     * `changedAt`, so a default-SALES caller still learned that a
+     * supplier-entitlement validation happened, when, and by whom.
+     *
+     * Measured before the fix: 2 such rows reached a caller holding neither
+     * `view:finance` nor `view:cost_price`. It is the same mistake as the leak
+     * it sits beside — gate the field, publish the sentence written next to it
+     * — one layer further down.
+     */
+    const { t, orgId, applicationId, asUser, asApprover } = await seedApprovedApplication(
+      "CONFIGURED_FINANCE_COMPANY",
+      { sourcedVehicle: true }
+    );
+    await asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId,
+      applicationId,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    await asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId,
+      applicationId,
+      submittedQuotationMinor: 17_000_000,
+      source: "MANUAL_ENTRY",
+    });
+    await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_000_000,
+      basis: "MANUAL",
+      notes: "First approval.",
+    });
+    await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 17_500_000,
+      basis: "MANUAL",
+      notes: "Revised.",
+      outlierAcknowledged: true,
+    });
+
+    // ANTI-VACUITY FIRST, straight from the table and past every gate: the rows
+    // must exist, or withholding them proves nothing.
+    const stored = await t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query("financeApplicationOverrides")
+          .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+          .collect()
+      ).filter((r) => r.field === "supplierEntitlementWitness")
+    );
+    expect(stored.length).toBeGreaterThan(0);
+    expect(stored.every((r) => typeof r.changedBy === "string")).toBe(true);
+
+    const salesTemplate = DEFAULT_ROLE_TEMPLATES.find((r) => r.name === "SALES")!;
+    expect(salesTemplate.permissions).not.toContain("view:finance");
+    expect(salesTemplate.permissions).not.toContain("view:cost_price");
+    const setPermissions = (permissions: string[]) =>
+      t.run(async (ctx) => {
+        const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === orgId)!;
+        await ctx.db.patch(role._id, { permissions, isSystemOwnerRole: false });
+      });
+    const overridesFor = async () =>
+      (
+        (await asUser.query(api.financingEconomics.getEconomics, {
+          orgId,
+          applicationId,
+        })) as unknown as { overrides: Array<{ field: string; changedBy?: string }> }
+      ).overrides;
+
+    await setPermissions([...salesTemplate.permissions]);
+    const salesRows = await overridesFor();
+    expect(
+      `sales sees witness rows: ${salesRows.some((r) => r.field === "supplierEntitlementWitness")}`
+    ).toBe("sales sees witness rows: false");
+    // The WORKFLOW half survives: the amount correction files its own row under
+    // its own name, and that one still arrives. Withholding the whole log would
+    // hide a fact this caller legitimately works with.
+    expect(salesRows.some((r) => r.field === "approvedDealerPurchaseAmountMinor")).toBe(true);
+
+    // COST-ONLY gets the entitlement AMOUNT on the document, and still not the
+    // provenance here — `changedBy` is who validated it, which is finance.
+    await setPermissions([...salesTemplate.permissions, "view:cost_price"]);
+    const costRows = await overridesFor();
+    expect(
+      `cost-only sees witness rows: ${costRows.some((r) => r.field === "supplierEntitlementWitness")}`
+    ).toBe("cost-only sees witness rows: false");
+
+    // FINANCE receives them, so this is a gate rather than the rows having
+    // quietly stopped being served to anybody.
+    await setPermissions([...salesTemplate.permissions, "view:finance"]);
+    const financeRows = await overridesFor();
+    const financeWitnessRows = financeRows.filter(
+      (r) => r.field === "supplierEntitlementWitness"
+    );
+    expect(financeWitnessRows.length).toBe(stored.length);
+    expect(financeWitnessRows.every((r) => typeof r.changedBy === "string")).toBe(true);
   });
 
   test("a byte-identical re-approval still re-badges nothing", async () => {
