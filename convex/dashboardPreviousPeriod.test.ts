@@ -2,6 +2,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
 import { stats } from "./dashboard";
 
 /**
@@ -249,9 +250,9 @@ describe("dashboard.stats — an unrequested previous window cannot pollute the 
    */
   async function seedUnknownEarningConsignedSale(
     t: Awaited<ReturnType<typeof setup>>["t"],
-    orgId: string,
-    customerId: string,
-    userId: string,
+    orgId: Id<"organizations">,
+    customerId: Id<"customers">,
+    userId: Id<"users">,
     saleDate: number
   ) {
     const vehicleId = await t.run((ctx) =>

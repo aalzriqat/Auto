@@ -2,6 +2,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
 import { stats } from "./dashboard";
 
 /**
@@ -250,7 +251,12 @@ describe("dashboard.stats — truncated.sales is source-aware", () => {
 
   async function seedSales(
     t: Awaited<ReturnType<typeof setup>>["t"],
-    seeds: { orgId: string; vehicleId: string; customerId: string; userId: string },
+    seeds: {
+      orgId: Id<"organizations">;
+      vehicleId: Id<"vehicles">;
+      customerId: Id<"customers">;
+      userId: Id<"users">;
+    },
     count: number,
     saleDate: number
   ) {
@@ -271,7 +277,7 @@ describe("dashboard.stats — truncated.sales is source-aware", () => {
 
   async function seedLedger(
     t: Awaited<ReturnType<typeof setup>>["t"],
-    orgId: string,
+    orgId: Id<"organizations">,
     count: number,
     date: number
   ) {
