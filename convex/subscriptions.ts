@@ -390,6 +390,12 @@ export const reconcileExpiredSubscriptions = internalMutation({
     // later run. The candidate read also happens before the try/catch below, so
     // that failure would not even leave a heartbeat. Derived from PLANS rather
     // than hardcoded, so a new paid tier cannot be silently left out.
+    // ⚠️ Plans are drained in PLANS order, so an extreme backlog concentrated in
+    // an earlier tier is processed before a later tier is reached. The chain
+    // self-corrects through near-immediate `runAfter(0)` hops, so the five-minute
+    // bound holds at realistic churn — but it is a fairness property no test
+    // exercises across plans, and at a backlog far beyond organic volume the
+    // later tiers would wait. Scoped rather than claimed absolutely.
     const paidPlans = (Object.keys(PLANS) as PlanId[]).filter((p) => p !== "free");
     const candidates: Doc<"subscriptions">[] = [];
     for (const plan of paidPlans) {
@@ -429,6 +435,16 @@ export const reconcileExpiredSubscriptions = internalMutation({
       // and runs every 5 minutes: committing partial progress plus an honest
       // failure row loses nothing, and the next run finishes the batch. Do not
       // copy this into a job where partial commitment is unsafe.
+      //
+      // ⚠️ DISCLOSED TEST GAP: nothing exercises this branch. No test asserts
+      // `failed: true`, the `success:false` row, that earlier in-loop progress
+      // survives, or that no continuation is scheduled — because there is no
+      // seam to make `ctx.db.patch` throw from outside the mutation, and
+      // `adminSystem.test.ts` only checks that the job NAME is registered, not
+      // that this control flow runs. So a future edit reintroducing the rethrow
+      // — the exact `crons.triggerAlarms` bug this block exists to avoid — would
+      // pass the whole suite. Stated here rather than left implied, to the same
+      // standard as the scan-limit disclosure above. Tracked on SCRUM-149.
       await ctx.db.insert("cronHeartbeats", {
         jobName: "reconcile-expired-subscriptions",
         ranAt: now,
