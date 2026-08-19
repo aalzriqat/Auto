@@ -2822,7 +2822,8 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
   /** Every table a PURCHASE import writes to. Used to assert a true zero delta. */
   async function worldDelta(t: Ctx["t"], orgId: Id<"organizations">) {
     const count = async (
-      table: "vehicles" | "transactions" | "accountingEvents" | "vehicleSupplierPayables" | "journalEntries" | "journalLines"
+      table: "vehicles" | "transactions" | "accountingEvents" | "vehicleSupplierPayables"
+        | "journalEntries" | "journalLines" | "financeCompanies" | "vehicleValuations"
     ) => (await t.run((ctx) => ctx.db.query(table).withIndex("by_org", (q) => q.eq("orgId", orgId)).collect())).length;
     // Command evidence is on its own index and is part of "nothing happened":
     // proof of an import that did not run is exactly what suppresses its retry.
@@ -2836,6 +2837,11 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
       payables: await count("vehicleSupplierPayables"),
       journals: await count("journalEntries"),
       journalLines: await count("journalLines"),
+      // ⚠️ These two were missing while the docstring claimed the helper covered
+      // every table a purchase import writes to. It did not, and a retry that
+      // created a finance company went unnoticed because of it.
+      companies: await count("financeCompanies"),
+      valuations: await count("vehicleValuations"),
       evidence: evidence.length,
       inventoryMinor: await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY"),
     };
@@ -2843,7 +2849,8 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
 
   const NOTHING_HAPPENED = {
     vehicles: 0, transactions: 0, events: 0, payables: 0,
-    journals: 0, journalLines: 0, evidence: 0, inventoryMinor: 0,
+    journals: 0, journalLines: 0, companies: 0, valuations: 0,
+    evidence: 0, inventoryMinor: 0,
   };
 
   /** One CASH-purchased Kia Sportage 2023, imported and capitalized. */
@@ -3893,6 +3900,142 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     });
 
     expect(again).toMatchObject({ inserted: 0, alreadyRecorded: 1, skipped: 0 });
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+  test("a proven retry creates NOTHING — including the finance companies its valuations name", async () => {
+    // The company-resolution loop runs before the row loop, so it used to reach
+    // proven-retry rows too. Harmless while the company still exists under the
+    // name the spreadsheet used; NOT harmless once somebody renames it in
+    // Settings, because the lookup then misses and the retry recreates an inert
+    // duplicate — while reporting alreadyRecorded, i.e. while claiming it did
+    // nothing. Reproduced before the fix:
+    //
+    //   again={alreadyRecorded:1, companiesCreated:1}
+    //   companies = "Orange Finance PLC" | "Orange Finance"
+    //
+    // One reviewer traced this path and concluded it was safe, reasoning that
+    // the company would already exist. It does — under a name nobody has
+    // touched. The rename is what breaks the reasoning, and only execution
+    // showed it.
+    const { t, orgId, asOwner } = await seedDealer("r8c2");
+    const row = {
+      rowId: 1, ...baseImportRow, vin: "1HGCM82633A05555", purchasePrice: 10000,
+      valuations: [{ companyName: "Orange Finance", valuationAmount: 12500 }],
+    };
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "r8-c2", purchasePaymentMethod: "CASH", vehicles: [row],
+    });
+    const companies = await t.run((ctx) =>
+      ctx.db.query("financeCompanies").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(companies).toHaveLength(1);
+    // An ordinary settings edit, between the original call and its retry.
+    await t.run((ctx) => ctx.db.patch(companies[0]._id, { name: "Orange Finance PLC" }));
+    const before = await worldDelta(t, orgId);
+
+    const again = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "r8-c2", purchasePaymentMethod: "CASH", vehicles: [row],
+    });
+
+    expect(again).toMatchObject({ inserted: 0, alreadyRecorded: 1, companiesCreated: 0 });
+    // A no-op that creates a row is not a no-op. worldDelta now counts finance
+    // companies and valuations for exactly this reason.
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+
+  test("the SAME key with a company name differing only in CASE is a conflict", async () => {
+    // Company matching is case-SENSITIVE (`companyIdByName` keys on the trimmed
+    // name), so "orange finance" would create a second company. A fingerprint
+    // that lowercased made the two hash equal and let the change through as a
+    // proven retry — the hash agreeing where the writes would not.
+    const { t, orgId, asOwner } = await seedDealer("r8c3a");
+    const row = {
+      rowId: 1, ...baseImportRow, vin: "1HGCM82633A06666", purchasePrice: 10000,
+      valuations: [{ companyName: "Orange Finance", valuationAmount: 12500 }],
+    };
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "r8-c3a", purchasePaymentMethod: "CASH", vehicles: [row],
+    });
+    const before = await worldDelta(t, orgId);
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", importId: "r8-c3a", purchasePaymentMethod: "CASH",
+        vehicles: [{ ...row, valuations: [{ companyName: "orange finance", valuationAmount: 12500 }] }],
+      })
+    ).rejects.toThrow(/IDEMPOTENCY_CONFLICT/);
+
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+
+  test("the SAME key with duplicate-company valuations REVERSED is a conflict", async () => {
+    // Two valuations naming one company are applied in order and the last wins,
+    // so reversing them persists a different amount. An order-blind sort hashed
+    // them equal. Re-ordering DIFFERENT companies is still not a conflict —
+    // covered by "re-ordering the same valuation columns is NOT a conflict".
+    const { t, orgId, asOwner } = await seedDealer("r8c3b");
+    const row = {
+      rowId: 1, ...baseImportRow, vin: "1HGCM82633A07777", purchasePrice: 10000,
+      valuations: [
+        { companyName: "Orange Finance", valuationAmount: 100 },
+        { companyName: "Orange Finance", valuationAmount: 200 },
+      ],
+    };
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "r8-c3b", purchasePaymentMethod: "CASH", vehicles: [row],
+    });
+    const before = await worldDelta(t, orgId);
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", importId: "r8-c3b", purchasePaymentMethod: "CASH",
+        vehicles: [{ ...row, valuations: [...row.valuations].reverse() }],
+      })
+    ).rejects.toThrow(/IDEMPOTENCY_CONFLICT/);
+
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+  test("changing a SUPERSEDED duplicate valuation is NOT a conflict — it changes nothing stored", async () => {
+    // Surfaced by a surviving mutant: flipping the fingerprint from last-wins to
+    // first-wins passed every test, because a REVERSED pair conflicts under both
+    // rules. Only a change to the valuation that never reaches storage tells
+    // them apart.
+    //
+    // Storage applies duplicates in order and the last one wins, so [100, 200]
+    // and [300, 200] both persist 200. The fingerprint is a statement about what
+    // gets WRITTEN, so these are the same request and must not conflict —
+    // first-wins would refuse a retry whose outcome is identical.
+    const { t, orgId, asOwner } = await seedDealer("r8c3c");
+    const row = {
+      rowId: 1, ...baseImportRow, vin: "1HGCM82633A08888", purchasePrice: 10000,
+      valuations: [
+        { companyName: "Orange Finance", valuationAmount: 100 },
+        { companyName: "Orange Finance", valuationAmount: 200 },
+      ],
+    };
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "r8-c3c", purchasePaymentMethod: "CASH", vehicles: [row],
+    });
+    const before = await worldDelta(t, orgId);
+    // The surviving 200 is what was stored; confirm that before relying on it.
+    const stored = await t.run((ctx) =>
+      ctx.db.query("vehicleValuations").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(stored).toHaveLength(1);
+    expect(stored[0].valuationAmount).toBe(200);
+
+    const again = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "r8-c3c", purchasePaymentMethod: "CASH",
+      vehicles: [{
+        ...row,
+        valuations: [
+          { companyName: "Orange Finance", valuationAmount: 300 },
+          { companyName: "Orange Finance", valuationAmount: 200 },
+        ],
+      }],
+    });
+
+    expect(again).toMatchObject({ inserted: 0, alreadyRecorded: 1 });
     expect(await worldDelta(t, orgId)).toEqual(before);
   });
 });

@@ -2352,17 +2352,29 @@ async function importRowFingerprint(
   paymentMethod: AcquisitionPaymentMethod
 ): Promise<string> {
   const text = (value: string | undefined) => (value ?? "").trim().toLowerCase();
-  const valuations = (row.valuations ?? [])
-    .map((v) => ({
-      companyId: v.companyId ?? null,
-      companyName: text(v.companyName),
-      valuationAmount: v.valuationAmount,
-    }))
-    .sort((a, b) =>
-      `${a.companyId}|${a.companyName}|${a.valuationAmount}`.localeCompare(
-        `${b.companyId}|${b.companyName}|${b.valuationAmount}`
-      )
-    );
+
+  // ⚠️ CANONICALIZE THE WAY STORAGE RESOLVES, or the hash agrees where the
+  // writes would not. Two mismatches were reproduced against an earlier version
+  // of this function, both of which let a materially different row pass as a
+  // proven retry:
+  //
+  //   - a company is matched by its TRIMMED NAME WITH CASE PRESERVED
+  //     (`companyIdByName`), so lowercasing here made "Orange Finance" and
+  //     "orange finance" hash equal while creating two distinct companies;
+  //   - two valuations naming the SAME company are applied in order and the
+  //     last one wins, so an order-blind sort made a reversed pair hash equal
+  //     while persisting a different final amount.
+  //
+  // Collapsing per company key, last-wins, then sorting reproduces both:
+  // re-ordering DIFFERENT companies stays a non-conflict, while changing the
+  // case or the surviving amount becomes one.
+  const lastByCompany = new Map<string, number>();
+  (row.valuations ?? []).forEach((v) => {
+    lastByCompany.set(v.companyId ?? (v.companyName ?? "").trim(), v.valuationAmount);
+  });
+  const valuations = Array.from(lastByCompany.entries())
+    .map(([company, valuationAmount]) => ({ company, valuationAmount }))
+    .sort((a, b) => a.company.localeCompare(b.company));
   return simplePayloadHash({
     vin: row.vin.trim().toUpperCase(),
     make: text(row.make),
@@ -2680,9 +2692,21 @@ export const importBulk = mutation({
       // a SOURCED or cost-less row converted to owned stock with a price later
       // posts its own VEHICLE_ACQUIRED, and by then the identity is long gone.
       //
-      // If AutoFlow ever needs to acquire an owned vehicle before a real VIN
-      // exists, that needs an explicit alternative durable-identity design.
-      // It is deliberately NOT invented here.
+      // ⚠️ WHAT THIS DOES NOT DO, STATED PLAINLY.
+      //
+      // `isPlaceholderVin` is a DENYLIST — blanks, single-character runs, and a
+      // handful of named tokens. It cannot establish that a string IS a durable
+      // identifier, only that it is one of the fillers we have seen. `TEMP123`,
+      // `PENDING` and `NOVIN1` are alphanumeric, pass every check here, and are
+      // recorded as durable VINs. The failure this guard exists to prevent is
+      // therefore still reachable through an unrecognised temporary label.
+      //
+      // Closing that needs a POSITIVE identifier contract — a validated VIN or
+      // chassis format, or an explicit alternative durable identity for stock
+      // that genuinely has neither. That is a design with its own migration and
+      // its own product decisions, it is deliberately NOT invented here, and it
+      // is tracked separately. The denylist narrows the opening; it does not
+      // close it, and no comment here should imply otherwise.
       const missingVin = args.vehicles.filter((row) => isPlaceholderVin(row.vin));
       if (missingVin.length > 0) {
         throw new ConvexError(
@@ -2971,6 +2995,22 @@ export const importBulk = mutation({
 
     let companiesCreated = 0;
     for (const row of args.vehicles) {
+      // ⚠️ A PROVEN RETRY CREATES NOTHING — INCLUDING COMPANIES.
+      //
+      // This loop runs before the row loop, so it used to reach proven-retry
+      // rows too. Harmless while the company still exists under the name the
+      // spreadsheet used; NOT harmless after somebody renames it in Settings,
+      // because the lookup then misses and the retry recreates an inert
+      // duplicate under the old name — while reporting `alreadyRecorded`, i.e.
+      // while claiming it did nothing at all. Reproduced:
+      //
+      //   again={alreadyRecorded:1, companiesCreated:1}
+      //   companies = "Orange Finance PLC" | "Orange Finance"
+      //
+      // A no-op that creates a row is not a no-op. The original call already
+      // created whatever its valuations named, in the same transaction as the
+      // evidence that makes this a retry at all.
+      if (postsAcquisitions && provenRetries.has(row.rowId!)) continue;
       for (const val of row.valuations ?? []) {
         if (val.companyId || !val.companyName) continue;
         const name = val.companyName.trim();
