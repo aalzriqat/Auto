@@ -2388,9 +2388,24 @@ async function importRowFingerprint(
     // storage persists 100 and 300. The hash then agrees where the writes
     // differ — the exact failure this canonicalization exists to prevent, and
     // the third form of it found on this function.
-    .filter((v) => v.valuationAmount > 0)
+    // Storage skips an entry when `!companyId || valuationAmount <= 0`, where
+    // its `companyId` is POST-resolution. A non-blank name always resolves,
+    // because the loop above creates one for it — so storage's `!companyId` is
+    // exactly "no id and no non-blank name", which is what this expresses.
+    .filter((v) => v.valuationAmount > 0 && (v.companyId || (v.companyName ?? "").trim()))
     .forEach((v) => {
-      lastByCompany.set(v.companyId ?? (v.companyName ?? "").trim(), v.valuationAmount);
+      // ⚠️ IDS AND NAMES ARE DISJOINT KEY SPACES. Keying on the raw value put
+      // them in one namespace, so a name that happened to equal another
+      // company's id string collided with it: both entries collapsed to a
+      // single key while storage wrote TWO valuations — company <id>, and a
+      // company lazily created under that literal name. Changing the id-side
+      // amount then left the hash untouched. Improbable through the importer,
+      // which derives names from column headers, and trivial through a direct
+      // call.
+      lastByCompany.set(
+        v.companyId ? `id:${v.companyId}` : `name:${(v.companyName ?? "").trim()}`,
+        v.valuationAmount
+      );
     });
   const valuations = Array.from(lastByCompany.entries())
     .map(([company, valuationAmount]) => ({ company, valuationAmount }))

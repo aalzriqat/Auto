@@ -4111,4 +4111,75 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
 
     expect(await worldDelta(t, orgId)).toEqual(before);
   });
+  test("a company NAME that equals another company's ID does not collide with it", async () => {
+    // Raised by one seat as a TWO-company/ONE-key collision — the mirror of
+    // SCRUM-173's same-company/two-key one. Keying on the raw value put ids and
+    // names in a single namespace, so these two entries collapsed to one key
+    // while storage wrote TWO valuations: company <id>, and a company lazily
+    // created under that literal name. Changing the id-side amount then left
+    // the hash unchanged and the change was discarded as a proven retry.
+    const { t, orgId, asOwner } = await seedDealer("r10ns");
+    const companyId = await t.run((ctx) =>
+      ctx.db.insert("financeCompanies", {
+        orgId, name: "Orange Finance", profitRate: 0, maxTermMonths: 84,
+        gracePeriodMonths: 0, isActive: false,
+      })
+    );
+    const row = (idSideAmount: number) => ({
+      rowId: 1, ...baseImportRow, vin: "1HGCM82633A11111", purchasePrice: 10000,
+      valuations: [
+        { companyId, valuationAmount: idSideAmount },
+        // A name that is literally the other company's id string.
+        { companyName: companyId as unknown as string, valuationAmount: 200 },
+      ],
+    });
+
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "r10-ns", purchasePaymentMethod: "CASH",
+      vehicles: [row(100)],
+    });
+    // Storage really did treat them as two companies — the premise of the
+    // conflict below, asserted rather than assumed.
+    const stored = await t.run((ctx) =>
+      ctx.db.query("vehicleValuations").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(stored).toHaveLength(2);
+    const before = await worldDelta(t, orgId);
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", importId: "r10-ns", purchasePaymentMethod: "CASH",
+        vehicles: [row(300)],
+      })
+    ).rejects.toThrow(/IDEMPOTENCY_CONFLICT/);
+
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+
+  test("a valuation with no usable company at all is skipped by the fingerprint too", async () => {
+    // The companion gap the other seat found: storage drops an entry whose
+    // company cannot be resolved, so the fingerprint must drop it as well.
+    // Only ever over-rejects if it disagrees — a false conflict rather than a
+    // silent discard — but a rule that mirrors storage needs no such caveat.
+    const { t, orgId, asOwner } = await seedDealer("r10noco");
+    const base = { rowId: 1, ...baseImportRow, vin: "1HGCM82633A12121", purchasePrice: 10000 };
+
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "r10-noco", purchasePaymentMethod: "CASH",
+      vehicles: [{ ...base, valuations: [{ companyName: "   ", valuationAmount: 500 }] }],
+    });
+    const before = await worldDelta(t, orgId);
+    expect(before.valuations).toBe(0);
+    expect(before.companies).toBe(0);
+
+    // A different unusable amount for the same unusable company is still the
+    // same request, because storage writes nothing either way.
+    const again = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "r10-noco", purchasePaymentMethod: "CASH",
+      vehicles: [{ ...base, valuations: [{ companyName: "   ", valuationAmount: 900 }] }],
+    });
+
+    expect(again).toMatchObject({ inserted: 0, alreadyRecorded: 1 });
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
 });
