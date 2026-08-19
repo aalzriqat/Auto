@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 
+import { PURCHASE_IMPORT_MAX_ROWS } from "@/convex/utils/importLimits";
 import {
   IMPORT_PURCHASE_MAX_ROWS,
   deriveVehicleRow,
@@ -90,24 +91,49 @@ describe("purchaseBlockers — the preflight must agree with the server", () => 
   });
 });
 
-describe("purchaseBlockers — a PURCHASE import is ONE transaction", () => {
+describe("purchaseBlockers — a PURCHASE import is ONE transaction over the WHOLE file", () => {
   const row = () => deriveVehicleRow(stockRow);
+  const file = (total: number, invalid = 0) => ({ invalidCount: invalid, totalCount: total });
 
   test("accepts a file exactly at the limit", () => {
-    const rows = Array.from({ length: IMPORT_PURCHASE_MAX_ROWS }, row);
-    expect(purchaseBlockers(rows, "CASH").exceedsRowLimit).toBe(false);
+    const rows = Array.from({ length: PURCHASE_IMPORT_MAX_ROWS }, row);
+    const b = purchaseBlockers(rows, "CASH", file(PURCHASE_IMPORT_MAX_ROWS));
+    expect(b.exceedsRowLimit).toBe(false);
+    expect(b.hasInvalidRows).toBe(false);
   });
 
   test("refuses one row over, so the operator is told to split BEFORE anything is sent", () => {
-    const rows = Array.from({ length: IMPORT_PURCHASE_MAX_ROWS + 1 }, row);
-    expect(purchaseBlockers(rows, "CASH").exceedsRowLimit).toBe(true);
+    const rows = Array.from({ length: PURCHASE_IMPORT_MAX_ROWS + 1 }, row);
+    expect(purchaseBlockers(rows, "CASH", file(PURCHASE_IMPORT_MAX_ROWS + 1)).exceedsRowLimit).toBe(
+      true
+    );
   });
 
-  test("the limit matches the server's own cap, which refuses the batch regardless", () => {
-    // A preflight that disagrees with the guard it mirrors is how a button ends
-    // up offering what the server refuses. importBulk's
-    // IMPORT_BULK_MAX_POSTING_ROWS is the binding control; this is the early,
-    // legible half of the same number.
-    expect(IMPORT_PURCHASE_MAX_ROWS).toBe(25);
+  test("ANY invalid row blocks the whole purchase — no subset import", () => {
+    // One atomic transaction over the whole file means the action waits until
+    // every row is valid. Importing the valid subset instead is how two cars
+    // sharing a filler VIN become one vehicle and one acquisition: the first
+    // posts, and the corrected second is later read as a retry of it.
+    const rows = Array.from({ length: 3 }, row);
+    expect(purchaseBlockers(rows, "CASH", file(4, 1)).hasInvalidRows).toBe(true);
+    expect(purchaseBlockers(rows, "CASH", file(3, 0)).hasInvalidRows).toBe(false);
+  });
+
+  test("THE DISCRIMINATION: 26 total with 25 valid is BOTH invalid AND still a 26-row file", () => {
+    // Correcting the broken row must not quietly turn the same file into an
+    // importable one — it is over the limit either way. Measuring the cap
+    // against the valid subset alone would do exactly that.
+    const rows = Array.from({ length: PURCHASE_IMPORT_MAX_ROWS }, row);
+    const b = purchaseBlockers(rows, "CASH", file(PURCHASE_IMPORT_MAX_ROWS + 1, 1));
+    expect(b.hasInvalidRows).toBe(true);
+    expect(b.exceedsRowLimit).toBe(true);
+  });
+
+  test("the client cap IS the shared cap — not a second copy of the number", () => {
+    // The previous version of this test asserted `=== 25` twice and would not
+    // have failed if the two sides drifted, which is the very drift this
+    // codebase warns about. Both sides now read one constant; the convex suite
+    // pins the server end of the same chain.
+    expect(IMPORT_PURCHASE_MAX_ROWS).toBe(PURCHASE_IMPORT_MAX_ROWS);
   });
 });

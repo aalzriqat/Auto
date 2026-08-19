@@ -15,6 +15,8 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { postAccountingEvent } from "./accounting/postingEngine";
+import { IMPORT_BULK_MAX_POSTING_ROWS } from "./vehicles";
+import { PURCHASE_IMPORT_MAX_ROWS } from "./utils/importLimits";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -2545,38 +2547,6 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(0);
   });
 
-  test("a PURCHASE VIN that differs from an existing car only in punctuation is REFUSED", async () => {
-    const { t, orgId, asOwner } = await seedDealer("s59canon");
-
-    // Typed in with dashes. Nothing refuses that today: CreateVehicleSchema
-    // checks length and the I/O/Q rule, not punctuation, and OPENING_STOCK
-    // accepts it deliberately so a migration is not blocked.
-    await asOwner.mutation(api.vehicles.importBulk, {
-      orgId,
-      acquisitionPosting: "OPENING_STOCK",
-      vehicles: [{ ...baseImportRow, vin: "1HGCM826-33A0043" }],
-    });
-
-    // The spreadsheet spells the same car cleanly. `by_org_vin` is an
-    // exact-string lookup, so without the guard this inserts a SECOND vehicle
-    // document, earns a different `vehicle_acquired_<id>` idempotency key, and
-    // capitalizes one physical car twice.
-    await expect(
-      asOwner.mutation(api.vehicles.importBulk, {
-        orgId,
-        acquisitionPosting: "PURCHASE",
-        purchasePaymentMethod: "CASH",
-        vehicles: [{ ...baseImportRow, vin: "1HGCM82633A0043", purchasePrice: 10000 }],
-      })
-    ).rejects.toThrow(/differently-written/i);
-
-    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(0);
-    const vehicles = await t.run((ctx) =>
-      ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
-    );
-    expect(vehicles).toHaveLength(1);
-  });
-
   test("re-importing a file that overlaps cars already bought skips them without reposting", async () => {
     const { t, orgId, asOwner } = await seedDealer("s59retry");
 
@@ -2629,39 +2599,6 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
   // were incomplete in five separate ways, three of them introduced by the
   // round-1 fix itself.
   // ─────────────────────────────────────────────────────────────────────────
-
-  test("a stored VIN differing only in CASE is refused, not inserted as a second car", async () => {
-    const { t, orgId, asOwner, userId } = await seedDealer("s59case");
-
-    // Lowercase reaches the table through the raw admin editor, which patches
-    // vehicles without normalizing. Constructed directly because no ordinary
-    // product path writes it.
-    const vehicleId = await t.run((ctx) =>
-      ctx.db.insert("vehicles", {
-        orgId, vin: "abc123def456ghi78", make: "Kia", model: "Sportage", year: 2023,
-        mileage: 0, color: "Silver", fuelType: "Petrol", transmission: "Automatic",
-        sellingPrice: 15000, status: "AVAILABLE" as const,
-        addedBy: userId, updatedBy: userId, updatedAt: Date.now(),
-      })
-    );
-    expect(vehicleId).toBeTruthy();
-
-    // `by_org_vin` matches the stored string EXACTLY, so this uppercase VIN can
-    // never dedup against `abc123def456ghi78`. Without the raw-value comparison
-    // the collision goes unreported and a SECOND vehicle is capitalized.
-    await expect(
-      asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-        vehicles: [{ ...baseImportRow, vin: "ABC123DEF456GHI78", purchasePrice: 10000 }],
-      })
-    ).rejects.toThrow(/differently-written/i);
-
-    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(0);
-    const vehicles = await t.run((ctx) =>
-      ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
-    );
-    expect(vehicles).toHaveLength(1);
-  });
 
   test("two rows in ONE file sharing a filler VIN are refused, not collapsed into one car", async () => {
     const { t, orgId, asOwner } = await seedDealer("s59batch");
@@ -2736,92 +2673,6 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
       })
     ).rejects.toThrow(/no recorded purchase/i);
   });
-  test("an org with more vehicles than the import can check is refused, never left unchecked", async () => {
-    const { t, orgId, asOwner, userId } = await seedDealer("s59cap");
-
-    // One more than the bound. The refusal matters more than the number: the
-    // alternative to failing closed is running the duplicate check against a
-    // TRUNCATED view of the dealership, which would silently miss exactly the
-    // collision it exists to catch.
-    await t.run(async (ctx) => {
-      for (let i = 0; i < 501; i += 1) {
-        await ctx.db.insert("vehicles", {
-          orgId, vin: `CAP${String(i).padStart(14, "0")}`, make: "Kia", model: "Rio",
-          year: 2020, mileage: 0, color: "White", fuelType: "Petrol",
-          transmission: "Automatic", sellingPrice: 9000, status: "AVAILABLE" as const,
-          addedBy: userId, updatedBy: userId, updatedAt: Date.now(),
-        });
-      }
-    });
-
-    await expect(
-      asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-        vehicles: [{ ...baseImportRow, vin: "IMPORTCAP0000001A", purchasePrice: 10000 }],
-      })
-    ).rejects.toThrow(/more than 500 vehicles/i);
-
-    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(0);
-  });
-  test("MEASURED: a full 500-vehicle scan of worst-case documents leaves ample headroom", async () => {
-    const { t, orgId, userId } = await seedDealer("s59head");
-
-    // A bound is only as good as the numbers behind it. Rather than argue about
-    // Convex's published 16 MiB / 32,000-document caps, ask the runtime what it
-    // actually has left after reading a full-size population of deliberately fat
-    // vehicle documents: the largest free-text field at its practical ceiling
-    // plus a long image-id array. A real vehicle is far smaller, so this is an
-    // upper bound on what the guard has to survive.
-    // ~6 KB of free text stands in for a fat document (long notes plus a long
-    // imageIds array). Real storage ids cannot be fabricated, and their byte
-    // weight is what matters here, so it is carried in the field that has no
-    // length constraint.
-    const fatNotes = "x".repeat(6000);
-    await t.run(async (ctx) => {
-      for (let i = 0; i < 500; i += 1) {
-        await ctx.db.insert("vehicles", {
-          orgId, vin: `HDR${String(i).padStart(14, "0")}`, make: "Kia", model: "Sportage",
-          year: 2023, mileage: 12345, color: "Silver", fuelType: "Petrol",
-          transmission: "Automatic", sellingPrice: 15000, purchasePrice: 10000,
-          status: "AVAILABLE" as const, notes: fatNotes,
-          addedBy: userId, updatedBy: userId, updatedAt: Date.now(),
-        });
-      }
-    });
-
-    const metrics = await t.run(async (ctx: any) => {
-      // Exactly the read the guard performs.
-      const rows = await ctx.db
-        .query("vehicles")
-        .withIndex("by_org", (q: any) => q.eq("orgId", orgId))
-        .take(501);
-      expect(rows.length).toBeGreaterThanOrEqual(500);
-      return ctx.meta.getTransactionMetrics();
-    });
-
-    const mib = (n: number) => (n / (1024 * 1024)).toFixed(2);
-    console.log(
-      `[SCRUM-59 headroom] 500 fat vehicles — bytesRead used=${mib(metrics.bytesRead.used)} MiB ` +
-        `remaining=${mib(metrics.bytesRead.remaining)} MiB · documentsRead used=${metrics.documentsRead.used} ` +
-        `remaining=${metrics.documentsRead.remaining}`
-    );
-
-    // ⚠️ Measured under convex-test, which MODELS the limits rather than
-    // enforcing production's. This is evidence about document size and read
-    // volume — the thing that actually varies with a dealership's data — not a
-    // substitute for a deployed measurement.
-    //
-    // The scan must not be what exhausts the transaction: the 25 posting rows
-    // that follow write roughly eleven documents each and need room after it.
-    expect(metrics.bytesRead.remaining).toBeGreaterThan(metrics.bytesRead.used);
-    expect(metrics.documentsRead.remaining).toBeGreaterThan(5_000);
-  });
-  // ─────────────────────────────────────────────────────────────────────────
-  // Round 3 — PURCHASE is ONE TRANSACTION. Whole-file equals whole-transaction,
-  // which is what removes the cross-chunk duplicate and self-stranding retry
-  // classes rather than guarding against them.
-  // ─────────────────────────────────────────────────────────────────────────
-
   test("exactly 25 PURCHASE rows succeeds — the cap is inclusive", async () => {
     const { t, orgId, asOwner } = await seedDealer("s59max");
 
@@ -2902,30 +2753,12 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     expect(payables[0].sourcedFromName).toBe("Atiwi Motors");
   });
 
-  test("a stored FULLWIDTH VIN is recognized as the same car as its ASCII spelling", async () => {
-    const { t, orgId, asOwner } = await seedDealer("s59fw");
 
-    // OPENING_STOCK does not apply the plain-alphanumeric rule, so a fullwidth
-    // VIN can genuinely be stored this way. Before NFKC it canonicalized to the
-    // EMPTY string, was dropped from the collision map, and the ASCII import
-    // below inserted a second vehicle and posted a second acquisition.
-    await asOwner.mutation(api.vehicles.importBulk, {
-      orgId,
-      acquisitionPosting: "OPENING_STOCK",
-      vehicles: [{ ...baseImportRow, vin: "ＡＢＣ１２３４５" }],
-    });
-
-    await expect(
-      asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-        vehicles: [{ ...baseImportRow, vin: "ABC12345", purchasePrice: 10000 }],
-      })
-    ).rejects.toThrow(/differently-written/i);
-
-    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(0);
-    const vehicles = await t.run((ctx) =>
-      ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
-    );
-    expect(vehicles).toHaveLength(1);
+  test("the server cap IS the shared cap, so client and server cannot drift", () => {
+    // The client reads PURCHASE_IMPORT_MAX_ROWS too (pinned in
+    // components/vehicles/vehicleImportRow.test.ts). One constant, both ends
+    // asserted — rather than the same literal written twice, which would not
+    // fail if one side changed.
+    expect(IMPORT_BULK_MAX_POSTING_ROWS).toBe(PURCHASE_IMPORT_MAX_ROWS);
   });
 });

@@ -52,6 +52,19 @@ export interface ImportRow {
   [key: string]: any;
 }
 
+/**
+ * What the preflight and the block-check are given.
+ *
+ * `validRows` is the rows that will actually be sent. `totalCount` and
+ * `invalidCount` describe the file they came from, so a consumer whose invariant
+ * is about the whole file can refuse rather than silently import a subset.
+ */
+export interface ImportPreflightInfo {
+  validRows: Record<string, any>[];
+  invalidCount: number;
+  totalCount: number;
+}
+
 interface ImportWizardProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -91,8 +104,8 @@ interface ImportWizardProps {
    * rule that must hold across the whole import can be checked before the first
    * chunk is sent rather than discovered after earlier chunks have committed.
    */
-  renderPreflight?: (info: { validRows: Record<string, any>[] }) => React.ReactNode;
-  isBlocked?: (info: { validRows: Record<string, any>[] }) => boolean;
+  renderPreflight?: (info: ImportPreflightInfo) => React.ReactNode;
+  isBlocked?: (info: ImportPreflightInfo) => boolean;
   onImport: (validRows: Record<string, any>[]) => Promise<{ inserted: number; skipped: number; companiesCreated?: number }>;
 }
 
@@ -219,6 +232,16 @@ export function ImportWizard(props: ImportWizardProps) {
   const validRows = rows.filter((r) => r._errors.length === 0);
   const invalidRows = rows.filter((r) => r._errors.length > 0);
 
+  // `validRows` alone is NOT enough to decide whether an import may proceed.
+  // A consumer whose rule is about the WHOLE FILE — a purchase import, which
+  // is one atomic transaction — must be able to see that rows were dropped,
+  // or it silently imports a subset and calls it the file.
+  const preflightInfo = {
+    validRows: validRows.map(({ _errors, ...r }) => r),
+    invalidCount: invalidRows.length,
+    totalCount: rows.length,
+  };
+
   async function handleImport() {
     if (!activeOrgId || validRows.length === 0) return;
     // The wizard enforces the control it documents, rather than relying on the
@@ -228,7 +251,7 @@ export function ImportWizard(props: ImportWizardProps) {
     // bypass. VehicleImportDialog re-checks inside its own onImport too, so
     // there is no live bypass today; this makes the abstraction authoritative
     // so the next consumer does not have to know to duplicate it.
-    if (isBlocked?.({ validRows: validRows.map(({ _errors, ...r }) => r) })) return;
+    if (isBlocked?.(preflightInfo)) return;
     setImporting(true);
     try {
       const result = await onImport(validRows.map(({ _errors, ...r }) => r));
@@ -413,7 +436,7 @@ export function ImportWizard(props: ImportWizardProps) {
                 </Table>
               </div>
 
-              {renderPreflight?.({ validRows })}
+              {renderPreflight?.(preflightInfo)}
             </>
           )}
         </div>
@@ -429,7 +452,7 @@ export function ImportWizard(props: ImportWizardProps) {
           {step === "preview" && (
             <Button
               onClick={handleImport}
-              disabled={validRows.length === 0 || importing || (isBlocked?.({ validRows }) ?? false)}
+              disabled={validRows.length === 0 || importing || (isBlocked?.(preflightInfo) ?? false)}
             >
               {importing ? t("ImportingEllipsis" as any) : `${t("Import" as any) ?? "Import"} (${validRows.length})`}
             </Button>

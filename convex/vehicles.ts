@@ -14,7 +14,8 @@ import { internal } from "./_generated/api";
 import { getOrgCurrency, hookVehicleAcquired, hookVehicleLandedCostCapitalized, hookVehicleAcquisitionCostCorrected } from "./accounting/workflowHooks";
 import { toMinorUnits, assertFiniteNumber } from "./utils/money";
 import { paymentMethodValidator, acquisitionPaymentMethodValidator, normalizePaymentMethod, type AcquisitionPaymentMethod, type PaymentMethod } from "./utils/paymentMethods";
-import { canonicalVin, hasNonCanonicalVinCharacters } from "./utils/vin";
+import { PURCHASE_IMPORT_MAX_ROWS } from "./utils/importLimits";
+import { hasNonCanonicalVinCharacters } from "./utils/vin";
 import { syncVehicleHoldStatus, getDefaultReservationExpiry, getActiveDepositHolds } from "./utils/depositHelpers";
 import {
   amountToMinorOrThrow,
@@ -2208,7 +2209,7 @@ export const IMPORT_BULK_MAX_ROWS = 200;
  * the cost of being too high is an opaque rollback of a dealer's whole import.
  * Measuring the real ceiling against a live deployment is follow-up work.
  */
-export const IMPORT_BULK_MAX_POSTING_ROWS = 25;
+export const IMPORT_BULK_MAX_POSTING_ROWS = PURCHASE_IMPORT_MAX_ROWS;
 
 /**
  * FOR A PURCHASE IMPORT, WHOLE-FILE MUST EQUAL WHOLE-TRANSACTION.
@@ -2409,14 +2410,16 @@ export const importBulk = mutation({
           `A VIN can only contain letters and numbers — ${malformedVin.length} row(s) have dashes, spaces or punctuation. Remove them. Import these as stock you already own only if you did not just buy them, because that records no purchase.`
         );
       }
-      // ── SCRUM-59: the two ways a PURCHASE import can capitalize the WRONG car.
-      // Both are refused here, before a single row is written.
+      // ── SCRUM-59: what a PURCHASE import refuses, before a single row is
+      // written. Each of these is decidable from the file plus an EXACT VIN
+      // lookup — the identity rule every writer already uses.
       //
-      // Neither is fixed by rewriting stored VINs. That is SCRUM-94: it needs a
-      // whole-codebase canonicalization plus a backfill shipping in the same
-      // deploy, and it is deliberately NOT in scope here. What IS in scope is
-      // that a NEW money-posting path must refuse an identity it cannot prove
-      // rather than post against a guess.
+      // ⚠️ Deciding whether a historically stored, differently-WRITTEN VIN is the
+      // same physical car is NOT attempted here and must not be added. Three
+      // attempts each introduced a new identity defect; SCRUM-94 owns that
+      // problem in full, including the residual that an existing punctuated or
+      // otherwise differently-encoded VIN will not be matched by this import.
+      // That residual is knowingly accepted, not overlooked.
 
       // Only rows that would actually reach Vehicle Inventory carry the basis
       // ambiguity below. A SOURCED row and a cost-less row post nothing, so an
@@ -2444,22 +2447,29 @@ export const importBulk = mutation({
       // reads this mutation's own writes, so the second row silently resolves to
       // the vehicle the first row just inserted and is counted as "skipped" —
       // two purchased cars become one vehicle and ONE acquisition, understating
-      // inventory. The stored-vehicle map built below cannot catch this: at
-      // validation time neither row exists yet.
+      // inventory.
       //
       // Reachable with ordinary filler, not just identical VINs: `UNK` and
       // `UNKNOWN` are alphanumeric and are not in `isPlaceholderVin`'s list, so
       // they pass every other guard.
+      //
+      // Identity here is the EXACT rule every writer already uses —
+      // `trim().toUpperCase()` — and deliberately nothing wider. The guards above
+      // have already refused any VIN that is not plain `[A-Z0-9]`, so among
+      // accepted rows this IS the rule the `by_org_vin` dedup applies. Deciding
+      // that two differently-WRITTEN VINs are one car is a different problem and
+      // belongs to SCRUM-94; see the note in convex/utils/vin.ts for the three
+      // attempts that proved it cannot be done correctly here.
       const firstSeenAt = new Map<string, number>();
       const batchDuplicates: string[] = [];
       args.vehicles.forEach((row, index) => {
-        const canonical = canonicalVin(row.vin);
-        if (!canonical) return;
-        if (!firstSeenAt.has(canonical)) {
-          firstSeenAt.set(canonical, index);
+        const identity = row.vin.trim().toUpperCase();
+        if (!identity) return;
+        if (!firstSeenAt.has(identity)) {
+          firstSeenAt.set(identity, index);
           return;
         }
-        batchDuplicates.push(row.vin.trim().toUpperCase());
+        batchDuplicates.push(identity);
       });
       if (batchDuplicates.length > 0) {
         throw new ConvexError(
@@ -2467,78 +2477,7 @@ export const importBulk = mutation({
         );
       }
 
-      // ⚠️ TEMPORARY LAUNCH BOUND — NOT the VIN-identity architecture.
-      //
-      // Proving "is this the same car under a different spelling" needs a stored,
-      // indexed canonical key. There is none, and adding one requires
-      // canonicalizing every writer plus a backfill shipping in the same deploy.
-      // That is SCRUM-94 and it owns the durable design, including collision and
-      // backfill policy. Until it lands, a PURCHASE import proves it in the only
-      // way available without a migration: read this org's vehicles and compare
-      // in memory.
-      //
-      // 500 is a deliberately small ceiling. A Convex query or mutation is capped
-      // at 16 MiB of data read AND 32,000 documents scanned; 500 whole vehicle
-      // documents sit far below both, leaving the 25 posting rows their headroom.
-      //
-      // ⚠️ The bound is on the RAW `by_org` result, deliberately. A `.filter()`
-      // does not reduce what a transaction consumes — Convex still scans and
-      // reads discarded documents — and there is no org+isDeleted index to bound
-      // on instead. Soft-deleted rows are excluded AFTER the read, and only to
-      // stop a deleted car raising a false conflict; that exclusion buys no
-      // transaction headroom and must never be described as if it did.
-      const VIN_SCAN_CAP = 500;
-      const existingVehicles = await ctx.db
-        .query("vehicles")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .take(VIN_SCAN_CAP + 1);
-      if (existingVehicles.length > VIN_SCAN_CAP) {
-        throw new ConvexError(
-          `This dealership has more than ${VIN_SCAN_CAP} vehicles on record, which is more than a purchase import can check for duplicates. Add these vehicles individually instead.`
-        );
-      }
-
-      const byCanonicalVin = new Map<string, { id: Id<"vehicles">; storedVin: string }>();
-      for (const vehicle of existingVehicles) {
-        // Excluded AFTER the bounded read, for correctness only: a deleted car
-        // must not block re-importing its replacement. See the note above on why
-        // this cannot be pushed into the query.
-        if (vehicle.isDeleted) continue;
-        const canonical = canonicalVin(vehicle.vin);
-        if (!canonical) continue;
-        if (!byCanonicalVin.has(canonical)) {
-          // The RAW stored value, NOT a normalized copy. The dedup in the loop
-          // below queries `by_org_vin` for the incoming VIN uppercased, and that
-          // index matches the stored string EXACTLY — so the only stored value
-          // that dedup can ever find is one already identical to it. Comparing a
-          // normalized copy instead makes a stored `abc123` look like an exact
-          // match for an incoming `ABC123`, the collision goes unreported, and
-          // the loop then fails to find `abc123` and inserts a second vehicle
-          // with a second acquisition. That bypass was introduced by a type fix.
-          byCanonicalVin.set(canonical, { id: vehicle._id, storedVin: vehicle.vin ?? "" });
-        }
-      }
-
-      // (2) SAME CAR, DIFFERENT SPELLING. Refuse whenever the canonical forms
-      // agree but the stored string is not exactly what the dedup will look up —
-      // punctuation, case or surrounding whitespace all reach this.
-      const collisions = args.vehicles.filter((row) => {
-        const incoming = canonicalVin(row.vin);
-        if (!incoming) return false;
-        const match = byCanonicalVin.get(incoming);
-        return match !== undefined && match.storedVin !== row.vin.trim().toUpperCase();
-      });
-      if (collisions.length > 0) {
-        const sample = collisions
-          .slice(0, 3)
-          .map((row) => `${row.vin.trim().toUpperCase()} vs ${byCanonicalVin.get(canonicalVin(row.vin))!.storedVin}`)
-          .join("; ");
-        throw new ConvexError(
-          `${collisions.length} row(s) name a vehicle this dealership already has under a differently-written VIN (${sample}). Importing them would record the same car twice. Correct the VIN on the existing vehicle, or remove these rows, then import again.`
-        );
-      }
-
-      // (3) THE EXISTING VEHICLE'S BASIS CANNOT BE PROVEN. An exact VIN match is
+      // (2) THE EXISTING VEHICLE'S BASIS CANNOT BE PROVEN. An exact VIN match is
       // skipped by the loop below, and that is right for a genuine retry: the car
       // is already capitalized and must not post twice.
       //

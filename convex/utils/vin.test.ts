@@ -1,54 +1,20 @@
 import { describe, expect, test } from "vitest";
 
-import { canonicalVin, hasNonCanonicalVinCharacters } from "./vin";
+import { hasNonCanonicalVinCharacters } from "./vin";
 
 /**
- * VIN identity, unit-level.
+ * VIN ADMISSIBILITY on the path that posts money — and nothing wider.
  *
- * `canonicalVin` decides whether two differently-written strings are the same
- * car. A key it returns EMPTY is worse than a wrong key: an empty canonical form
- * is skipped when the collision map is built, so the stored car becomes
- * invisible to the guard and a later import inserts a second vehicle and posts a
- * second acquisition for it.
+ * There is no canonical-VIN function to test any more. Deciding whether a
+ * historically stored, differently-written VIN is the same physical car was
+ * attempted three times inside this import and introduced a new identity defect
+ * every time; SCRUM-94 owns that problem in full. See the note at the bottom of
+ * convex/utils/vin.ts.
+ *
+ * What is left is provable: a PURCHASE row must be plain [A-Z0-9], so among
+ * accepted rows the exact by_org_vin match IS the identity rule — the same one
+ * every other writer already uses.
  */
-describe("canonicalVin", () => {
-  test("strips formatting so a punctuated VIN matches its plain spelling", () => {
-    expect(canonicalVin("1HGCM826-33A0043")).toBe("1HGCM82633A0043");
-    expect(canonicalVin(" 1hgcm826 33a0043 ")).toBe("1HGCM82633A0043");
-    expect(canonicalVin("1HGCM826.33A0043")).toBe("1HGCM82633A0043");
-  });
-
-  test("NFKC folds a fullwidth VIN onto the ASCII spelling it is a presentation form of", () => {
-    // Without NFKC this stored value canonicalized to "" and vanished from the
-    // collision map, so an ASCII import of the same car posted a second
-    // acquisition.
-    expect(canonicalVin("ＡＢＣ１２３４５")).toBe("ABC12345");
-    expect(canonicalVin("ＡＢＣ１２３４５")).toBe(canonicalVin("ABC12345"));
-  });
-
-  test("NON-ASCII DIGITS KEEP A NON-EMPTY KEY — they must never collapse to nothing", () => {
-    // NFKC does NOT map Arabic-Indic digits to ASCII, so an implementation that
-    // stripped "everything that is not [A-Z0-9]" produced "" here. That is the
-    // hole: an empty key is dropped from the map and the stored car stops being
-    // protected. Keeping letters and numbers of any script gives it a key of its
-    // own instead.
-    const arabicIndic = canonicalVin("١٢٣٤٥");
-    expect(arabicIndic).not.toBe("");
-    expect(arabicIndic).toHaveLength(5);
-  });
-
-  test("and are NOT treated as equivalent to their ASCII counterparts", () => {
-    // They are different strings and nothing proves they are the same car.
-    expect(canonicalVin("١٢٣٤٥")).not.toBe(canonicalVin("12345"));
-  });
-
-  test("a VIN with no alphanumeric content at all is still empty, and is meant to be", () => {
-    expect(canonicalVin("---")).toBe("");
-    expect(canonicalVin("")).toBe("");
-    expect(canonicalVin(undefined)).toBe("");
-  });
-});
-
 describe("hasNonCanonicalVinCharacters — admissibility on the path that POSTS", () => {
   test("accepts plain alphanumeric", () => {
     expect(hasNonCanonicalVinCharacters("1HGCM82633A0043")).toBe(false);

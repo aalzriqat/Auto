@@ -42,43 +42,35 @@ export function hasNonCanonicalVinCharacters(vin: string | undefined): boolean {
 }
 
 /**
- * The canonical form of a VIN: uppercase, with every character outside
- * `[A-Z0-9]` removed.
+ * ⚠️ THERE IS DELIBERATELY NO CANONICAL-VIN FUNCTION HERE.
  *
- * This is NOT a replacement for `hasNonCanonicalVinCharacters`, and it is
- * deliberately not applied to what gets STORED. Canonicalizing the write side
- * alone would stop matching the rows already stored and break the dedup that
- * works today — that whole-codebase change plus its backfill is SCRUM-94.
+ * Three separate attempts to decide, inside this import, whether a historically
+ * stored VIN is the SAME PHYSICAL CAR as a differently-written incoming one each
+ * introduced a new identity defect:
  *
- * What this is for is narrower: letting a PURCHASE import ask "is there already
- * a vehicle in this org that is the same car under a differently-spelled VIN?"
- * so it can REFUSE rather than insert a second document and capitalize the same
- * physical car twice. Refusal needs no migration; rewriting stored VINs does.
+ *   1. comparing a NORMALIZED copy of the stored value — a stored `abc123` read
+ *      as an exact match for `ABC123`, so the collision went unreported and the
+ *      exact index lookup then missed it and posted a second acquisition;
+ *   2. stripping everything outside `[A-Z0-9]` — fullwidth and Arabic-Indic
+ *      digits collapsed to an EMPTY key, which is dropped when the map is built,
+ *      silently removing that stored car from the guard's view;
+ *   3. NFKC normalization — fixed fullwidth, but COMPOSED `A`+U+0301 into `Á` so
+ *      a stored decomposed VIN stopped matching its ASCII spelling (a case the
+ *      previous version had protected), and EXPANDED `Ⅳ` into `IV`, colliding
+ *      with a genuinely different car.
+ *
+ * Each fix created the next defect. That is not a run of bad patches — deciding
+ * VIN equivalence needs an explicit domain definition of "the same VIN", a
+ * stored indexed representation, and a migration for existing collisions.
+ * **SCRUM-94 owns it in full.**
+ *
+ * The three approaches above are EVIDENCE INPUTS, not candidate
+ * implementations. Do not resurrect them from the branch history.
+ *
+ * What remains here is narrow and provable: `hasNonCanonicalVinCharacters`
+ * refuses anything that is not plain `[A-Z0-9]` on the path that POSTS, so among
+ * accepted rows the exact `by_org_vin` match IS the identity rule — the same one
+ * every writer already uses. A historically stored VIN written differently will
+ * not be matched, and that residual is explicitly SCRUM-94's, not something to
+ * partially solve here.
  */
-export function canonicalVin(vin: string | undefined): string {
-  return (
-    (vin ?? "")
-      // NFKC first, so a fullwidth `ＡＢＣ１２３` becomes the ASCII `ABC123` it
-      // is a presentation form OF, and therefore lands on the same canonical
-      // key as the car already stored under the plain spelling.
-      .normalize("NFKC")
-      .trim()
-      .toUpperCase()
-      // Strip FORMATTING only — punctuation, separators, whitespace.
-      //
-      // ⚠️ Deliberately NOT `[^A-Z0-9]`. That version deleted every character
-      // outside ASCII, so a VIN written in Arabic-Indic digits (`١٢٣`) — which
-      // NFKC does NOT map to ASCII — collapsed to the EMPTY string. An empty
-      // canonical key is skipped when the collision map is built, so the stored
-      // car became invisible to the guard and a later import inserted a second
-      // vehicle and posted a second acquisition for it.
-      //
-      // Keeping letters and numbers of ANY script means such a VIN gets a
-      // non-empty key of its own. It does not collide with `123`, which is
-      // correct — they are not proven to be the same car — and, critically, it
-      // no longer vanishes. Admissibility is a separate question, answered by
-      // `hasNonCanonicalVinCharacters`, which refuses anything outside plain
-      // `[A-Z0-9]` on the path that posts.
-      .replace(/[^\p{L}\p{N}]/gu, "")
-  );
-}

@@ -7,11 +7,18 @@ import { Doc } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useCurrency } from "@/hooks/useCurrency";
-import { ImportWizard, ImportFieldConfig, ImportRow, normalizeKey } from "@/components/import/ImportWizard";
+import {
+  ImportWizard,
+  ImportFieldConfig,
+  ImportRow,
+  normalizeKey,
+  type ImportPreflightInfo,
+} from "@/components/import/ImportWizard";
 import {
   PaymentMethodSelect,
   type AcquisitionPaymentMethod,
 } from "@/components/payments/PaymentMethodSelect";
+import { PURCHASE_IMPORT_MAX_ROWS } from "@/convex/utils/importLimits";
 import { assertDirectVehicleCreateStatus } from "@/convex/utils/vehicleStatusGuards";
 import { hasNonCanonicalVinCharacters } from "@/convex/utils/vin";
 import { cn } from "@/lib/utils";
@@ -352,22 +359,29 @@ function capitalizingRows(rows: Record<string, any>[]) {
 }
 
 /**
- * The server's PURCHASE rules, re-checked here across the WHOLE file.
+ * The server's PURCHASE rules, re-checked here across the whole file.
  *
- * Not a duplicate of the server control — the server still refuses, per call.
- * This exists because a file larger than a chunk arrives as several separate
- * transactions: without a whole-file check, a bad row in the last chunk is only
- * discovered after the earlier chunks have already posted real journal entries,
- * leaving the operator with a half-capitalized import and a generic error.
+ * Not a duplicate of the server control — the server still refuses, and it is
+ * authoritative. This exists so the operator learns BEFORE submitting, from a
+ * message that names the rows, instead of from a generic server error after
+ * staring at a preview.
+ *
+ * ⚠️ A PURCHASE import is ONE transaction and is never chunked, so there is no
+ * "bad row in a later chunk" to discover late any more: the whole file either
+ * commits or does not. An earlier version of this comment described that
+ * chunk-boundary hazard; it no longer exists, and reasoning about one chunk is
+ * precisely the mental model that produced this PR's defects.
  */
 export function purchaseBlockers(
   rows: Record<string, any>[],
-  paymentMethod: AcquisitionPaymentMethod | null
+  paymentMethod: AcquisitionPaymentMethod | null,
+  file: { invalidCount: number; totalCount: number } = { invalidCount: 0, totalCount: rows.length }
 ): {
   missingVin: number;
   malformedVin: number;
   missingSupplier: number;
   exceedsRowLimit: boolean;
+  hasInvalidRows: boolean;
 } {
   // Every row, not just the ones that post today — see the server's own
   // `missingVin` check for why a sourced or cost-less row is not harmless.
@@ -388,11 +402,18 @@ export function purchaseBlockers(
       paymentMethod === "ON_ACCOUNT"
         ? capitalizingRows(rows).filter((r) => !String(r.sourcedFromName ?? "").trim()).length
         : 0,
-    // A PURCHASE import is one transaction, so an oversized file is refused
-    // outright rather than split. Checked here, before anything is sent, so the
-    // operator is told to split the file instead of discovering it from a
-    // server error after staring at a preview.
-    exceedsRowLimit: rows.length > IMPORT_PURCHASE_MAX_ROWS,
+    // Counted over EVERY parsed row, not just the valid ones. A file of 26 rows
+    // is a 26-row file whether or not one of them currently fails validation;
+    // measuring the limit against the valid subset would let the same file
+    // become importable simply because a row was broken.
+    exceedsRowLimit: file.totalCount > IMPORT_PURCHASE_MAX_ROWS,
+    // ⚠️ A PURCHASE import is one atomic transaction over the WHOLE file, so it
+    // must not run on the valid subset while quietly dropping the rest. Two cars
+    // sharing a filler VIN, where one row is momentarily invalid, would otherwise
+    // import the first, and the corrected second would later be read as a retry
+    // of it and skipped — one car bought, no acquisition, nothing said. The whole
+    // action waits until every row is valid.
+    hasInvalidRows: file.invalidCount > 0,
   };
 }
 
@@ -410,12 +431,16 @@ export function purchaseBlockers(
  */
 function ImportAccountingChoice({
   validRows,
+  invalidCount,
+  totalCount,
   posting,
   setPosting,
   paymentMethod,
   setPaymentMethod,
 }: {
   validRows: Record<string, any>[];
+  invalidCount: number;
+  totalCount: number;
   posting: AcquisitionPosting | null;
   setPosting: (p: AcquisitionPosting) => void;
   paymentMethod: AcquisitionPaymentMethod | null;
@@ -426,7 +451,7 @@ function ImportAccountingChoice({
 
   const capitalizing = capitalizingRows(validRows);
   const totalCost = capitalizing.reduce((sum, r) => sum + Number(r.purchasePrice ?? 0), 0);
-  const blockers = purchaseBlockers(validRows, paymentMethod);
+  const blockers = purchaseBlockers(validRows, paymentMethod, { invalidCount, totalCount });
 
   const option = (value: AcquisitionPosting, label: string, hint: string) => {
     const selected = posting === value;
@@ -493,10 +518,19 @@ function ImportAccountingChoice({
         </p>
       )}
 
+      {posting === "PURCHASE" && blockers.hasInvalidRows && (
+        <p className="text-xs font-medium leading-snug text-destructive">
+          {t("ImportPurchaseAllRowsMustBeValid" as any).replace(
+            "{count}",
+            String(invalidCount)
+          )}
+        </p>
+      )}
+
       {posting === "PURCHASE" && blockers.exceedsRowLimit && (
         <p className="text-xs font-medium leading-snug text-destructive">
           {t("ImportPurchaseTooManyRows" as any)
-            .replace("{count}", String(validRows.length))
+            .replace("{count}", String(totalCount))
             .replace("{max}", String(IMPORT_PURCHASE_MAX_ROWS))}
         </p>
       )}
@@ -574,17 +608,11 @@ interface Props {
 const IMPORT_CHUNK_SIZE = 200;
 
 /**
- * A PURCHASE import is ONE transaction, so this is the limit on the whole FILE
- * — not a chunk size. Must match importBulk's IMPORT_BULK_MAX_POSTING_ROWS,
- * which refuses a larger batch server-side regardless of what this client does.
- *
- * Whole-file must equal whole-transaction on the path that posts money: a
- * duplicate split across two chunks escapes a per-chunk duplicate check, and a
- * bound evaluated per chunk can be crossed mid-file, committing an import into
- * a state where its own retry is refused. Both were measured on this branch.
- * OPENING_STOCK posts nothing and still chunks.
+ * Re-exported from the shared module both sides consume, so the client and the
+ * mutation cannot drift. See convex/utils/importLimits.ts for why this bounds
+ * the FILE rather than a chunk.
  */
-export const IMPORT_PURCHASE_MAX_ROWS = 25;
+export const IMPORT_PURCHASE_MAX_ROWS = PURCHASE_IMPORT_MAX_ROWS;
 
 export function VehicleImportDialog({ open, onOpenChange }: Props) {
   const { t } = useLanguage();
@@ -600,16 +628,17 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
   const [posting, setPosting] = useState<AcquisitionPosting | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<AcquisitionPaymentMethod | null>(null);
 
-  const isBlocked = ({ validRows }: { validRows: Record<string, any>[] }) => {
+  const isBlocked = ({ validRows, invalidCount, totalCount }: ImportPreflightInfo) => {
     if (posting === null) return true;
     if (posting !== "PURCHASE") return false;
     if (paymentMethod === null) return true;
-    const blockers = purchaseBlockers(validRows, paymentMethod);
+    const blockers = purchaseBlockers(validRows, paymentMethod, { invalidCount, totalCount });
     return (
       blockers.missingVin > 0 ||
       blockers.malformedVin > 0 ||
       blockers.missingSupplier > 0 ||
-      blockers.exceedsRowLimit
+      blockers.exceedsRowLimit ||
+      blockers.hasInvalidRows
     );
   };
 
@@ -658,9 +687,11 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
         return { extraFields, extraAutoGuess };
       }}
       isBlocked={isBlocked}
-      renderPreflight={({ validRows }) => (
+      renderPreflight={({ validRows, invalidCount, totalCount }) => (
         <ImportAccountingChoice
           validRows={validRows}
+          invalidCount={invalidCount}
+          totalCount={totalCount}
           posting={posting}
           setPosting={setPosting}
           paymentMethod={paymentMethod}
@@ -672,7 +703,14 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
         // The wizard's Import button is disabled until this is answered; the
         // guard is here as well because a disabled button is a hint, not a
         // control, and importBulk itself refuses an unstated method.
-        if (posting === null || isBlocked({ validRows: vehicles })) {
+        // Same whole-file view the button and the wizard use. `vehicles` is the
+        // valid subset, so the counts have to come with it — re-checking against
+        // `vehicles.length` alone would silently re-admit the subset import this
+        // guard exists to refuse.
+        if (
+          posting === null ||
+          isBlocked({ validRows: vehicles, invalidCount: 0, totalCount: vehicles.length })
+        ) {
           return Promise.resolve({ inserted: 0, skipped: 0 });
         }
         // Send only the fields importBulk's validator declares — Convex rejects
@@ -752,8 +790,18 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
                 "{count}",
                 String(totals.inserted)
               );
+              // PURCHASE is one atomic call, so `totals.inserted` is ALWAYS 0 here
+              // and the "imported N, then stopped" framing never applies — gating
+              // the guidance on it made the guidance unreachable. For PURCHASE the
+              // advice is always true and always relevant, so it is always shown.
+              // OPENING_STOCK keeps the partial-progress form, which is accurate
+              // for it because it still chunks.
               throw new Error(
-                totals.inserted > 0 ? `${stopped} ${detail} ${retryAdvice}` : detail
+                posting === "PURCHASE"
+                  ? `${detail} ${retryAdvice}`
+                  : totals.inserted > 0
+                    ? `${stopped} ${detail} ${retryAdvice}`
+                    : detail
               );
             }
           }
