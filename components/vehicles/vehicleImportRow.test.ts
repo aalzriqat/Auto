@@ -307,3 +307,42 @@ describe("describeImportResult — an unrecorded car is never called a duplicate
     expect(message).not.toContain("{count}");
   });
 });
+describe("an optional VALUATION never costs the operator the whole car", () => {
+  // Regression for a defect this branch introduced and an adversarial reviewer
+  // caught: strict money parsing was applied to finance-company valuation
+  // columns too, so "N/A" — completely ordinary in the spreadsheets dealers
+  // actually send — invalidated the entire vehicle row. In an OPENING_STOCK
+  // cutover import the wizard then excluded that car from the migration
+  // entirely, because of a column that carries no money at all.
+  const withValuation = (value: string) => ({
+    ...stockRow,
+    "valuation:new:Orange Finance": value,
+  });
+
+  test("an unreadable valuation is treated as 'no figure', exactly like blank", () => {
+    expect(validateVehicleRow(deriveVehicleRow(withValuation("N/A")))).toEqual([]);
+    expect(deriveVehicleRow(withValuation("N/A")).valuations).toEqual([]);
+    expect(deriveVehicleRow(withValuation("")).valuations).toEqual([]);
+  });
+
+  test("a readable valuation still comes through", () => {
+    expect(deriveVehicleRow(withValuation("12,500")).valuations).toEqual([
+      { companyName: "Orange Finance", valuationAmount: 12500 },
+    ]);
+  });
+
+  test("but an unreadable COST still blocks — that is where the money is", () => {
+    // The distinction being drawn: strictness belongs on the cells that reach
+    // the ledger, not on every numeric column in the sheet.
+    expect(
+      validateVehicleRow(deriveVehicleRow({ ...stockRow, purchasePrice: "N/A" })).join(" ")
+    ).toMatch(/Unreadable Cost/);
+  });
+
+  test("an explicit + sign is a number, not a typo", () => {
+    expect(parseMoneyCell("+10000")).toEqual({ ok: true, value: 10000 });
+    expect(parseMoneyCell("+10,000.50")).toEqual({ ok: true, value: 10000.5 });
+    // Still refused: a space is as likely to be two numbers as one.
+    expect(parseMoneyCell("10 000")).toEqual({ ok: false });
+  });
+});

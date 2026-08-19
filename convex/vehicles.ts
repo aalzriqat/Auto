@@ -2350,6 +2350,49 @@ function vehicleFactsMismatch(
   return null;
 }
 
+/** SOURCED (drop-ship, the supplier's car) or STOCK (owned). Never undefined. */
+const ownershipOf = (row: { sourceType?: string }) =>
+  (row.sourceType ?? "").trim().toUpperCase() === "SOURCED" ? "SOURCED" : "STOCK";
+
+/**
+ * Does this row contradict how the existing vehicle is OWNED, or on what terms?
+ *
+ * Separate from `vehicleFactsMismatch` because it is not about which car this
+ * is — it is about whose car it is. STOCK and SOURCED are different ownership,
+ * a different counterparty and a different sale-accounting basis downstream
+ * (principal versus agent), so re-presenting one as the other is never a retry.
+ *
+ * This runs for rows that post NOTHING as well, which is the point. Such a row
+ * changes no journal either way, so an earlier version skipped it — but it is
+ * still reported to the operator as "already recorded with matching purchase
+ * evidence", and that sentence must not be said about terms nobody compared.
+ *
+ * Returns a human-readable reason, or null when nothing contradicts.
+ */
+function ownershipTermsMismatch(
+  existing: { sourceType?: string; sourcedFromName?: string; sourceCost?: number },
+  row: { sourceType?: string; sourcedFromName?: string; sourceCost?: number; purchasePrice?: number }
+): string | null {
+  const was = ownershipOf(existing);
+  const now = ownershipOf(row);
+  if (was !== now) {
+    return was === "SOURCED"
+      ? "recorded as sourced from a supplier, this file says owned stock"
+      : "recorded as owned stock, this file says sourced from a supplier";
+  }
+  if (now === "STOCK") return null;
+
+  // Both sourced: the supplier and the agreed cost ARE the terms.
+  if (!sameText(existing.sourcedFromName, row.sourcedFromName)) {
+    return `recorded as sourced from ${existing.sourcedFromName ?? "no one"}, this file says ${row.sourcedFromName?.trim() || "no one"}`;
+  }
+  const incomingCost = row.sourceCost ?? row.purchasePrice;
+  if (existing.sourceCost !== incomingCost) {
+    return `recorded at a supplier cost of ${existing.sourceCost}, this file says ${incomingCost}`;
+  }
+  return null;
+}
+
 /**
  * Does the money in this row contradict the acquisition already posted?
  *
@@ -2432,6 +2475,14 @@ export const importBulk = mutation({
   },
   handler: async (ctx, args) => {
     const postsAcquisitions = args.acquisitionPosting === "PURCHASE";
+    /**
+     * Every VIN the classification pass below PROVED is an existing purchase.
+     *
+     * PURCHASE only. The row loop counts `alreadyRecorded` by membership here
+     * rather than by re-deciding, so a row that took an early exit during
+     * classification can never be certified by accident.
+     */
+    const provenRetries = new Set<string>();
     const maxRows = postsAcquisitions ? IMPORT_BULK_MAX_POSTING_ROWS : IMPORT_BULK_MAX_ROWS;
     if (args.vehicles.length > maxRows) {
       throw new ConvexError(
@@ -2621,16 +2672,25 @@ export const importBulk = mutation({
 
       // ── (3) EVERY ROW IS CLASSIFIED BEFORE ANYTHING IS WRITTEN.
       //
-      // A PURCHASE import may end in exactly two outcomes per row: the car is
+      // A PURCHASE import ends in one of two outcomes per row: the car is
       // recorded, or it was ALREADY recorded by a provably identical purchase.
-      // There is no third, silent one. Everything else throws here, before the
-      // first write, and the whole file rolls back.
+      // Everything this pass cannot place in one of those two throws here,
+      // before the first write, and the whole file rolls back.
       //
-      // ⚠️ THIS IS THE RULE THE REST OF THE MUTATION DEPENDS ON. Because every
-      // uncreatable and every unprovable row has already thrown by the time the
-      // row loop runs, an existing-VIN row that reaches that loop in PURCHASE
-      // mode IS a proven retry — which is why it may be counted as
-      // `alreadyRecorded` there without re-deciding anything.
+      // ⚠️ ONE PRE-EXISTING EXCEPTION, stated rather than glossed: an owned
+      // STOCK row with no purchase price is still INSERTED and posts nothing,
+      // because `postVehicleAcquisitionIfOwned` no-ops without a cost. That is
+      // `vehicles.create`'s long-standing behaviour and is not introduced here
+      // — `vehicleHasCostBasis` (utils/vehicleCost.ts) stops it corrupting
+      // commission and profit downstream. It is a third outcome all the same,
+      // and this comment previously claimed there were only ever two. SCRUM-168.
+      //
+      // ⚠️ The row loop must NOT re-derive this. Every VIN proven here is added
+      // to `provenRetries`, and the loop counts `alreadyRecorded` only for a
+      // member of that set — an existing VIN that is somehow not in it is an
+      // internal error, not a duplicate. An earlier revision asserted that
+      // invariant in a comment instead of enforcing it, and the gap was real:
+      // a row that took an early `continue` here was still certified below.
       //
       // Why a proof at all, rather than "the VIN matches, so skip it": this mode
       // posts money. `skipped` used to mean both "already bought this car,
@@ -2665,17 +2725,19 @@ export const importBulk = mutation({
 
         // ── An exact VIN already here. It is a retry ONLY if it is provably the
         // same command; a mismatch is refused rather than skipped OR applied.
-        const factsMismatch = vehicleFactsMismatch(existing, row);
+        const factsMismatch = vehicleFactsMismatch(existing, row) ?? ownershipTermsMismatch(existing, row);
         if (factsMismatch) {
           contradictions.push(`${normalized}: ${factsMismatch}`);
           continue;
         }
 
         // A row that posts nothing (SOURCED, or no cost) has no financial
-        // fingerprint to agree with. Vehicle facts agreed above and nothing
-        // about the books changes either way, so this stays an ordinary
-        // duplicate exactly as it always was.
-        if (!wouldCapitalize(row)) continue;
+        // fingerprint left to agree with — ownership and terms were just
+        // checked, and no journal moves either way.
+        if (!wouldCapitalize(row)) {
+          provenRetries.add(normalized);
+          continue;
+        }
 
         // Proven POSTED evidence only — a REVERSED or dead-lettered FAILED record
         // does not prove this car is capitalized today.
@@ -2695,6 +2757,7 @@ export const importBulk = mutation({
           contradictions.push(`${normalized}: ${moneyMismatch}`);
           continue;
         }
+        provenRetries.add(normalized);
 
         // ON_ACCOUNT additionally owes a NAMED supplier, and the GL event does
         // not carry the name — the payable is the only record of who. So it is
@@ -2707,6 +2770,7 @@ export const importBulk = mutation({
             .collect();
           const supplier = row.sourcedFromName ?? "";
           if (!payables.some((payable) => sameText(payable.sourcedFromName, supplier))) {
+            provenRetries.delete(normalized);
             contradictions.push(
               payables.length === 0
                 ? `${normalized}: recorded on account, but no supplier payable exists to compare against`
@@ -2785,12 +2849,29 @@ export const importBulk = mutation({
           .withIndex("by_org_vin", (q) => q.eq("orgId", args.orgId).eq("vin", normalizedVin))
           .unique();
         if (existing) {
-          // In PURCHASE mode the classification pass above has already proven
-          // this is the same purchase — same car, same cost, same currency,
-          // same payment method, and for ON_ACCOUNT the same supplier — or it
-          // threw. So this is an idempotent retry and is reported as one.
-          if (postsAcquisitions) alreadyRecorded++;
-          else skipped++;
+          if (postsAcquisitions) {
+            // Membership, not inference. The classification pass proved this
+            // exact VIN is the same car, the same ownership and terms, and —
+            // where it capitalizes — the same cost, currency, payment method
+            // and supplier. Anything it could not prove threw before any write,
+            // so a miss here means the two disagree about what was proven.
+            //
+            // ⚠️ NO INPUT REACHES THIS THROW TODAY, and mutation testing says
+            // so: deleting the check kills nothing, because classification is
+            // exhaustive over the same rows. What IS load-bearing is the set's
+            // population — stop adding non-capitalizing rows to it and this
+            // fires immediately. It is kept as the enforcement of an invariant
+            // that was previously only ASSERTED IN A COMMENT, and the gap that
+            // comment hid was real.
+            if (!provenRetries.has(normalizedVin)) {
+              throw new ConvexError(
+                `Internal check failed: ${normalizedVin} was not proven to be an existing purchase. Nothing was imported.`
+              );
+            }
+            alreadyRecorded++;
+          } else {
+            skipped++;
+          }
           vehicleId = existing._id;
         }
       }

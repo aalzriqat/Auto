@@ -3240,4 +3240,111 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     // (which could double-count opening stock) and does not quietly skip.
     expect(await worldDelta(t, orgId)).toEqual(before);
   });
+  test("a SOURCED row re-presenting an existing owned STOCK vehicle is refused, not certified", async () => {
+    // The row posts nothing either way, which is why an earlier revision let it
+    // take an early exit before any proof ran. But it is still REPORTED as
+    // "already recorded with matching purchase evidence", and that sentence
+    // must not be said about terms nobody compared. STOCK and SOURCED are
+    // different ownership, a different counterparty, and a different
+    // principal-versus-agent basis at sale time.
+    const { t, orgId, asOwner } = await seedPurchased("s59crosssrc", "CROSSSOURCE0001A", 10000);
+    const before = await worldDelta(t, orgId);
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+        vehicles: [{
+          ...baseImportRow, vin: "CROSSSOURCE0001A", sourceType: "SOURCED",
+          sourcedFromName: "Some Other Dealer", sourceCost: 4000,
+        }],
+      })
+    ).rejects.toThrow(/recorded as owned stock, this file says sourced from a supplier/);
+
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+
+  test("the reverse — owned stock re-presenting an existing SOURCED vehicle — is refused too", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59crosssrc2");
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+      vehicles: [{
+        ...baseImportRow, vin: "CROSSSOURCE0002B", sourceType: "SOURCED",
+        sourcedFromName: "Other Dealer", sourceCost: 9000,
+      }],
+    });
+    const before = await worldDelta(t, orgId);
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+        vehicles: [{ ...baseImportRow, vin: "CROSSSOURCE0002B", purchasePrice: 9000 }],
+      })
+    ).rejects.toThrow(/recorded as sourced from a supplier, this file says owned stock/);
+
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+
+  test("two SOURCED rows agreeing on the car but NOT on the supplier are refused", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59srcsupp");
+    const base = {
+      ...baseImportRow, vin: "CROSSSOURCE0003C", sourceType: "SOURCED", sourceCost: 9000,
+    };
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+      vehicles: [{ ...base, sourcedFromName: "Other Dealer" }],
+    });
+    const before = await worldDelta(t, orgId);
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+        vehicles: [{ ...base, sourcedFromName: "A Completely Different Dealer" }],
+      })
+    ).rejects.toThrow(/sourced from Other Dealer, this file says A Completely Different Dealer/);
+
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+
+  test("two SOURCED rows agreeing on the supplier but NOT on the cost are refused", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59srccost2");
+    const base = {
+      ...baseImportRow, vin: "CROSSSOURCE0004D", sourceType: "SOURCED",
+      sourcedFromName: "Other Dealer",
+    };
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+      vehicles: [{ ...base, sourceCost: 9000 }],
+    });
+    const before = await worldDelta(t, orgId);
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+        vehicles: [{ ...base, sourceCost: 7500 }],
+      })
+    ).rejects.toThrow(/supplier cost of 9000, this file says 7500/);
+
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+
+  test("an unchanged SOURCED row is still an ordinary proven retry", async () => {
+    // The other failure direction: the checks above must not refuse a genuine
+    // re-import of a file whose sourced rows never changed.
+    const { t, orgId, asOwner } = await seedDealer("s59srcretry");
+    const row = {
+      ...baseImportRow, vin: "CROSSSOURCE0005E", sourceType: "SOURCED",
+      sourcedFromName: "Other Dealer", sourceCost: 9000,
+    };
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH", vehicles: [row],
+    });
+    const before = await worldDelta(t, orgId);
+
+    const again = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH", vehicles: [row],
+    });
+
+    expect(again).toMatchObject({ inserted: 0, alreadyRecorded: 1, skipped: 0 });
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
 });

@@ -210,8 +210,13 @@ function parseVehicleWorksheet(rawRows: SpreadsheetRows): { headers: string[]; r
  * `\d` here is ASCII-only (no `u` flag), so Arabic-Indic digits do not match and
  * are refused rather than silently mapped. That is the fail-closed direction and
  * it needs no digit table.
+ *
+ * Space-grouped values ("10 000") are deliberately NOT accepted: a space is
+ * equally likely to be a typo splitting two numbers, and guessing which is the
+ * silent repair this function exists to stop. An explicit "+" IS accepted — it
+ * is unambiguous, and refusing it was an oversight rather than a decision.
  */
-const MONEY_CELL = /^-?(\d{1,3}(,\d{3})+|\d+)(\.\d+)?$/;
+const MONEY_CELL = /^[+-]?(\d{1,3}(,\d{3})+|\d+)(\.\d+)?$/;
 
 type MoneyCell = { ok: true; value: number | undefined } | { ok: false };
 
@@ -275,15 +280,20 @@ export function deriveVehicleRow(mapped: Record<string, any>): Record<string, an
   const valuations: Array<{ companyId?: string; companyName?: string; valuationAmount: number }> = [];
   Object.entries(mapped).forEach(([key, value]) => {
     if (!key.startsWith(NEW_COMPANY_PREFIX) && !key.startsWith(EXISTING_COMPANY_PREFIX)) return;
+    // ⚠️ A valuation NEVER blocks the row, deliberately — and an earlier
+    // revision of this made it do so, which was a real regression.
+    //
+    // A finance-company valuation posts nothing and is entirely optional, so a
+    // cell that cannot be read means "this company gave no figure", exactly as
+    // blank and zero already do. "N/A" in a valuation column is completely
+    // ordinary in the spreadsheets dealers actually send. Treating it as a row
+    // error excluded the whole VEHICLE from the import — a car dropped from a
+    // cutover migration because of a column that carries no money at all.
+    //
+    // The strictness belongs on `purchasePrice` and `sellingPrice`, which is
+    // where a misread cell changes what reaches the books.
     const cell = parseMoneyCell(value);
-    if (!cell.ok) {
-      numberErrors.push(`Unreadable valuation in "${key.slice(key.indexOf(":") + 1) || key}"`);
-      return;
-    }
-    const amount = cell.value;
-    // Blank and zero valuation columns are ordinary — most finance companies
-    // have no figure for most cars — so those are still simply absent. Only a
-    // cell that cannot be READ is an error.
+    const amount = cell.ok ? cell.value : undefined;
     if (amount === undefined || amount <= 0) return;
     if (key.startsWith(NEW_COMPANY_PREFIX)) {
       valuations.push({ companyName: key.slice(NEW_COMPANY_PREFIX.length), valuationAmount: amount });
