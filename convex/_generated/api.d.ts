@@ -161,6 +161,7 @@ import type * as utils_financingProvenance from "../utils/financingProvenance.js
 import type * as utils_geoProvider from "../utils/geoProvider.js";
 import type * as utils_grossTransactionValue from "../utils/grossTransactionValue.js";
 import type * as utils_idempotency from "../utils/idempotency.js";
+import type * as utils_importLimits from "../utils/importLimits.js";
 import type * as utils_instagramApi from "../utils/instagramApi.js";
 import type * as utils_leadActivity from "../utils/leadActivity.js";
 import type * as utils_leadAssignment from "../utils/leadAssignment.js";
@@ -373,6 +374,7 @@ declare const fullApi: ApiFromModules<{
   "utils/geoProvider": typeof utils_geoProvider;
   "utils/grossTransactionValue": typeof utils_grossTransactionValue;
   "utils/idempotency": typeof utils_idempotency;
+  "utils/importLimits": typeof utils_importLimits;
   "utils/instagramApi": typeof utils_instagramApi;
   "utils/leadActivity": typeof utils_leadActivity;
   "utils/leadAssignment": typeof utils_leadAssignment;
