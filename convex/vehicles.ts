@@ -2338,8 +2338,16 @@ const IMPORT_ROW_OPERATION = "vehicles.importBulk.row";
  * `sellingPrice`, `status`, `notes` and `valuations` were all persisted and all
  * omitted. If a field is added to the row validator, it belongs here too.
  *
- * Valuations are canonicalized by sort key first, so re-ordering the same
- * columns is not a conflict while changing, adding or removing one is.
+ * ⚠️ ONE KNOWN RESIDUAL, AND THIS FUNCTION DOES NOT CLAIM OTHERWISE — SCRUM-173.
+ * Valuations are keyed by the value the row SUBMITS, so an entry naming a
+ * company by `companyId` and another naming the SAME company by name are one
+ * record to storage but two keys here. Reversing that pair changes which amount
+ * storage keeps while leaving this hash unchanged. Not producible by the import
+ * dialog, which never emits both forms for one company, and `vehicleValuations`
+ * reaches no journal — but it is real through a direct call, and it is a known
+ * gap rather than a covered case. Closing it needs an identity resolution that
+ * survives the company being CREATED by the very call being fingerprinted, and
+ * that is a decision of its own.
  */
 async function importRowFingerprint(
   row: {
@@ -2353,10 +2361,11 @@ async function importRowFingerprint(
 ): Promise<string> {
   const text = (value: string | undefined) => (value ?? "").trim().toLowerCase();
 
-  // ⚠️ CANONICALIZE THE WAY STORAGE RESOLVES, or the hash agrees where the
-  // writes would not. Two mismatches were reproduced against an earlier version
-  // of this function, both of which let a materially different row pass as a
-  // proven retry:
+  // ⚠️ CANONICALIZE THE WAY STORAGE RESOLVES — for the rules below. This is not
+  // a claim of complete agreement with storage: see the alias residual in the
+  // docstring (SCRUM-173). Three mismatches were reproduced against earlier
+  // versions of this function, each of which let a materially different row
+  // pass as a proven retry:
   //
   //   - a company is matched by its TRIMMED NAME WITH CASE PRESERVED
   //     (`companyIdByName`), so lowercasing here made "Orange Finance" and
@@ -2365,9 +2374,10 @@ async function importRowFingerprint(
   //     last one wins, so an order-blind sort made a reversed pair hash equal
   //     while persisting a different final amount.
   //
-  // Collapsing per company key, last-wins, then sorting reproduces both:
-  // re-ordering DIFFERENT companies stays a non-conflict, while changing the
-  // case or the surviving amount becomes one.
+  // Collapsing per company key, last-wins over the entries storage would
+  // actually write, then sorting, reproduces all three: re-ordering DIFFERENT
+  // companies stays a non-conflict, while changing the case, the surviving
+  // amount, or a value storage would skip becomes one.
   const lastByCompany = new Map<string, number>();
   (row.valuations ?? [])
     // ⚠️ MIRROR THE SKIP, NOT JUST THE COLLAPSE. Storage drops a non-positive
