@@ -4038,4 +4038,77 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     expect(again).toMatchObject({ inserted: 0, alreadyRecorded: 1 });
     expect(await worldDelta(t, orgId)).toEqual(before);
   });
+  test("a valuation storage would SKIP cannot hide a changed amount", async () => {
+    // Both seats converged on this independently. Storage drops a non-positive
+    // valuation before reading or writing anything, so it cannot overwrite what
+    // an earlier positive entry for the same company already stored:
+    //
+    //   [100, 0] persists 100        [300, 0] persists 300
+    //
+    // An earlier canonicalization let the trailing entry win regardless, so both
+    // collapsed to 0 and hashed EQUAL — and the retry's changed valuation was
+    // discarded in silence. Not reachable through the import dialog, which
+    // filters non-positive cells during derivation, but importBulk is a public
+    // mutation and its own validator permits them.
+    const { t, orgId, asOwner } = await seedDealer("r9skip");
+    const base = { rowId: 1, ...baseImportRow, vin: "1HGCM82633A09999", purchasePrice: 10000 };
+    const withTrailingZero = (surviving: number) => ({
+      ...base,
+      valuations: [
+        { companyName: "Orange Finance", valuationAmount: surviving },
+        { companyName: "Orange Finance", valuationAmount: 0 },
+      ],
+    });
+
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "r9-skip", purchasePaymentMethod: "CASH",
+      vehicles: [withTrailingZero(100)],
+    });
+    // The zero was skipped, so 100 is what is on record — the premise the
+    // conflict below depends on.
+    const stored = await t.run((ctx) =>
+      ctx.db.query("vehicleValuations").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(stored).toHaveLength(1);
+    expect(stored[0].valuationAmount).toBe(100);
+    const before = await worldDelta(t, orgId);
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", importId: "r9-skip", purchasePaymentMethod: "CASH",
+        vehicles: [withTrailingZero(300)],
+      })
+    ).rejects.toThrow(/IDEMPOTENCY_CONFLICT/);
+
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+
+  test("...and a row whose ONLY valuation is skipped differs from one that stored a figure", async () => {
+    // The other shape of the same collision: an entry storage never writes must
+    // not make a row look like one that wrote something.
+    const { t, orgId, asOwner } = await seedDealer("r9skip2");
+    const base = { rowId: 1, ...baseImportRow, vin: "1HGCM82633A10101", purchasePrice: 10000 };
+
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "r9-skip2", purchasePaymentMethod: "CASH",
+      vehicles: [{
+        ...base,
+        valuations: [
+          { companyName: "Orange Finance", valuationAmount: 100 },
+          { companyName: "Orange Finance", valuationAmount: -1 },
+        ],
+      }],
+    });
+    const before = await worldDelta(t, orgId);
+    expect(before.valuations).toBe(1);
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", importId: "r9-skip2", purchasePaymentMethod: "CASH",
+        vehicles: [{ ...base, valuations: [{ companyName: "Orange Finance", valuationAmount: -1 }] }],
+      })
+    ).rejects.toThrow(/IDEMPOTENCY_CONFLICT/);
+
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
 });

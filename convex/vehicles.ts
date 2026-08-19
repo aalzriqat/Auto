@@ -2369,9 +2369,19 @@ async function importRowFingerprint(
   // re-ordering DIFFERENT companies stays a non-conflict, while changing the
   // case or the surviving amount becomes one.
   const lastByCompany = new Map<string, number>();
-  (row.valuations ?? []).forEach((v) => {
-    lastByCompany.set(v.companyId ?? (v.companyName ?? "").trim(), v.valuationAmount);
-  });
+  (row.valuations ?? [])
+    // ⚠️ MIRROR THE SKIP, NOT JUST THE COLLAPSE. Storage drops a non-positive
+    // valuation BEFORE reading or writing anything (`valuationAmount <= 0`
+    // continue), so such an entry cannot overwrite what an earlier positive
+    // entry for the same company already stored. Letting it win here does the
+    // opposite: [100, 0] and [300, 0] both collapse to 0 and hash EQUAL, while
+    // storage persists 100 and 300. The hash then agrees where the writes
+    // differ — the exact failure this canonicalization exists to prevent, and
+    // the third form of it found on this function.
+    .filter((v) => v.valuationAmount > 0)
+    .forEach((v) => {
+      lastByCompany.set(v.companyId ?? (v.companyName ?? "").trim(), v.valuationAmount);
+    });
   const valuations = Array.from(lastByCompany.entries())
     .map(([company, valuationAmount]) => ({ company, valuationAmount }))
     .sort((a, b) => a.company.localeCompare(b.company));
