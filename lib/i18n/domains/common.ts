@@ -216,9 +216,16 @@ export const commonEn = {
     "{count} VIN(s) contain dashes, spaces or punctuation. A VIN can only be letters and numbers — with them, the same car entered without them is recorded as a different vehicle. Remove them. Only import these as stock you already own if you did not just buy them, because that records no purchase.",
   ImportStoppedAfter: "Imported {count} vehicle(s), then stopped:",
   ImportRetryAdvicePurchase:
-    "Nothing was saved — a purchase import records everything or nothing. Fix the reported rows and import the file again; a vehicle already recorded under the same VIN is skipped rather than bought twice. One already on record under a differently-written VIN may not be recognised as the same car.",
+    "Nothing was saved — a purchase import records everything or nothing. Fix the reported rows and import the file again. A vehicle already recorded under the same VIN is skipped rather than bought twice, but only when the make, model, year, cost and payment method all still match what was recorded; if any of those changed, the import will say so rather than record it twice or quietly ignore the change. One already on record under a differently-written VIN may not be recognised as the same car.",
   ImportRetryAdviceOpeningStock:
     "Fix the reported rows and import the file again. Vehicles that carry a VIN will be skipped as duplicates, but rows without one would be added a second time — remove those that already imported.",
+
+  ImportResultImported: "Imported {count}.",
+  ImportResultAlreadyRecorded:
+    "{count} were already recorded with matching purchase evidence, so nothing was posted again for them.",
+  ImportResultSkippedDuplicates: "Skipped {count} duplicates.",
+  ImportResultCompaniesCreated:
+    "Created {count} new finance company/companies — configure their rates in Settings → Finance.",
 
   ImportCustomersTitle: "Import Customers from Excel / CSV",
   ImportCustomersDesc: "Upload your existing customer list from a spreadsheet. Supported: .xlsx, .csv",
@@ -1139,9 +1146,16 @@ export const commonAr = {
     "{count} رقم شاصي يحتوي على شرطات أو مسافات أو علامات. رقم الشاصي حروف وأرقام فقط — بوجودها تُسجَّل السيارة نفسها المُدخَلة بدونها كمركبة مختلفة. احذفها. ولا تستوردها كمركبات تملكها بالفعل إلا إذا لم تشترها للتو، لأن ذلك لا يسجّل أي عملية شراء.",
   ImportStoppedAfter: "تم استيراد {count} مركبة ثم توقف:",
   ImportRetryAdvicePurchase:
-    "لم يُحفظ أي شيء — استيراد الشراء يسجّل كل شيء أو لا شيء. صحّح الصفوف المذكورة وأعد استيراد الملف؛ المركبة المسجّلة سابقاً بنفس رقم الشاصي يتم تخطيها ولا تُشترى مرتين. أما المسجّلة برقم شاصي مكتوب بصيغة مختلفة فقد لا يتم التعرّف عليها كالمركبة نفسها.",
+    "لم يُحفظ أي شيء — استيراد الشراء يسجّل كل شيء أو لا شيء. صحّح الصفوف المذكورة وأعد استيراد الملف. المركبة المسجّلة سابقاً بنفس رقم الشاصي يتم تخطيها ولا تُشترى مرتين، لكن فقط إذا بقيت الماركة والطراز والسنة والتكلفة وطريقة الدفع مطابقة لما سُجِّل؛ وإن تغيّر أي منها فسيُبلغك الاستيراد بذلك بدل أن يسجّلها مرتين أو يتجاهل التغيير بصمت. أما المسجّلة برقم شاصي مكتوب بصيغة مختلفة فقد لا يتم التعرّف عليها كالمركبة نفسها.",
   ImportRetryAdviceOpeningStock:
     "صحّح الصفوف المذكورة وأعد استيراد الملف. المركبات التي تحمل رقم شاصي سيتم تخطيها كمكررة، أما الصفوف بلا رقم شاصي فستُضاف مرة ثانية — احذف ما تم استيراده منها.",
+
+  ImportResultImported: "تم استيراد {count}.",
+  ImportResultAlreadyRecorded:
+    "{count} مسجّلة مسبقاً بأدلة شراء مطابقة، لذلك لم يُقيَّد لها شيء من جديد.",
+  ImportResultSkippedDuplicates: "تم تخطي {count} مكررة.",
+  ImportResultCompaniesCreated:
+    "تم إنشاء {count} شركة تمويل جديدة — اضبط نسبها من الإعدادات ← التمويل.",
 
   ImportCustomersTitle: "استيراد العملاء من Excel / CSV",
   ImportCustomersDesc: "قم برفع قائمة عملائك من جدول بيانات. المدعوم: .xlsx و .csv",

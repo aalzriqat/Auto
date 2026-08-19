@@ -187,6 +187,49 @@ function parseVehicleWorksheet(rawRows: SpreadsheetRows): { headers: string[]; r
 }
 
 /**
+/**
+ * A money cell either reads EXACTLY, or it is an error the operator has to see.
+ *
+ * `parseFloat` is a PREFIX parser, and on a money column that is a silent
+ * corruption rather than a failure. Measured on the cells dealers actually
+ * produce:
+ *
+ *   "1O000"      (capital O for zero) -> 1          — posts one dinar
+ *   "10000abc"                        -> 10000      — reads as if clean
+ *   "JOD 10,000" (currency in-cell)   -> NaN -> undefined, i.e. "no cost", so
+ *                                        the car imports UNCAPITALIZED and the
+ *                                        import reports success
+ *
+ * Each of those reaches accounting meaning something different from the
+ * spreadsheet cell, and none of them tells anyone. The grammar below is
+ * deliberately narrow — optional sign, digits, optional 3-digit thousands
+ * groups, optional decimal — and anything outside it is an error rather than a
+ * repair. Currency text is NOT stripped and separators are NOT guessed: a cell
+ * this function cannot read is a cell a human has to look at.
+ *
+ * `\d` here is ASCII-only (no `u` flag), so Arabic-Indic digits do not match and
+ * are refused rather than silently mapped. That is the fail-closed direction and
+ * it needs no digit table.
+ */
+const MONEY_CELL = /^-?(\d{1,3}(,\d{3})+|\d+)(\.\d+)?$/;
+
+type MoneyCell = { ok: true; value: number | undefined } | { ok: false };
+
+/** Blank is `undefined` (absent, which is legitimate); unreadable is `ok: false`. */
+export function parseMoneyCell(raw: unknown): MoneyCell {
+  if (raw === null || raw === undefined) return { ok: true, value: undefined };
+  // A spreadsheet parser can hand back a real number; trust it only if finite.
+  if (typeof raw === "number") {
+    return Number.isFinite(raw) ? { ok: true, value: raw } : { ok: false };
+  }
+  const text = String(raw).trim();
+  if (text === "") return { ok: true, value: undefined };
+  if (!MONEY_CELL.test(text)) return { ok: false };
+  const value = Number(text.replace(/,/g, ""));
+  return Number.isFinite(value) ? { ok: true, value } : { ok: false };
+}
+
+/**
  * Smart model/make splitting + year extraction, applied after the dealer's
  * column mapping. "TYPE/Name" often contains the full vehicle name (e.g.
  * "BYD Dolphin 2024"); when there's no explicit model column, we split on
@@ -212,10 +255,19 @@ export function deriveVehicleRow(mapped: Record<string, any>): Record<string, an
   const mileage = rawMileage === "" ? undefined : parseFloat(rawMileage.replace(/,/g, ""));
   const fuelType = String(mapped.fuelType ?? "Petrol").trim() || "Petrol";
   const transmission = String(mapped.transmission ?? "Automatic").trim() || "Automatic";
-  const sellingPrice = parseFloat(String(mapped.sellingPrice ?? "0").replace(/,/g, ""));
-  const purchasePrice = mapped.purchasePrice != null
-    ? parseFloat(String(mapped.purchasePrice).replace(/,/g, ""))
-    : undefined;
+  // Unreadable money is collected rather than coerced, and surfaced by
+  // validateVehicleRow — which makes the row invalid, which (for a PURCHASE)
+  // refuses the whole file before anything is sent. See parseMoneyCell.
+  const numberErrors: string[] = [];
+  const sellingCell = parseMoneyCell(mapped.sellingPrice);
+  if (!sellingCell.ok) numberErrors.push(`Unreadable Selling Price: "${String(mapped.sellingPrice).trim()}"`);
+  // Absent selling price has always meant 0 and still does; only a non-blank
+  // cell that cannot be read is an error.
+  const sellingPrice = sellingCell.ok ? (sellingCell.value ?? 0) : 0;
+
+  const purchaseCell = parseMoneyCell(mapped.purchasePrice);
+  if (!purchaseCell.ok) numberErrors.push(`Unreadable Cost: "${String(mapped.purchasePrice).trim()}"`);
+  const purchasePrice = purchaseCell.ok ? purchaseCell.value : undefined;
 
   const sourceType = normalizeImportSourceType(mapped.sourceType);
   const sourcedFrom = String(mapped.sourcedFrom ?? "").trim();
@@ -223,8 +275,16 @@ export function deriveVehicleRow(mapped: Record<string, any>): Record<string, an
   const valuations: Array<{ companyId?: string; companyName?: string; valuationAmount: number }> = [];
   Object.entries(mapped).forEach(([key, value]) => {
     if (!key.startsWith(NEW_COMPANY_PREFIX) && !key.startsWith(EXISTING_COMPANY_PREFIX)) return;
-    const amount = parseFloat(String(value ?? "").replace(/,/g, ""));
-    if (isNaN(amount) || amount <= 0) return;
+    const cell = parseMoneyCell(value);
+    if (!cell.ok) {
+      numberErrors.push(`Unreadable valuation in "${key.slice(key.indexOf(":") + 1) || key}"`);
+      return;
+    }
+    const amount = cell.value;
+    // Blank and zero valuation columns are ordinary — most finance companies
+    // have no figure for most cars — so those are still simply absent. Only a
+    // cell that cannot be READ is an error.
+    if (amount === undefined || amount <= 0) return;
     if (key.startsWith(NEW_COMPANY_PREFIX)) {
       valuations.push({ companyName: key.slice(NEW_COMPANY_PREFIX.length), valuationAmount: amount });
     } else {
@@ -242,15 +302,19 @@ export function deriveVehicleRow(mapped: Record<string, any>): Record<string, an
     color: color || "Unknown",
     mileage,
     fuelType, transmission,
-    sellingPrice: isNaN(sellingPrice) ? 0 : sellingPrice,
-    purchasePrice: purchasePrice && !isNaN(purchasePrice) ? purchasePrice : undefined,
+    sellingPrice,
+    // A cost of exactly 0 keeps its long-standing meaning of "no cost stated",
+    // so nothing capitalizes off it. This was previously a `&&` truthiness test
+    // that also swallowed NaN; NaN can no longer reach here, and the zero case
+    // is now deliberate rather than incidental.
+    purchasePrice: purchasePrice === 0 ? undefined : purchasePrice,
     // Only fields declared in the importBulk validator may be returned here —
     // the whole derived row (minus _errors) is sent as the mutation payload, and
     // Convex rejects any undeclared field. sourcedFromName holds the supplier.
     sourceType,
     // For a sourced vehicle the supplier cost is the same "Cost" column that
     // owned stock uses for purchase price; importBulk mirrors it into sourceCost.
-    sourceCost: sourceType === "SOURCED" && purchasePrice && !isNaN(purchasePrice) ? purchasePrice : undefined,
+    sourceCost: sourceType === "SOURCED" && purchasePrice ? purchasePrice : undefined,
     // Kept for STOCK rows too, not just SOURCED. importBulk writes
     // `sourcedFromName` onto the vehicle document ONLY for a SOURCED row, so this
     // does not pollute owned stock — but a PURCHASE on ON_ACCOUNT needs the
@@ -262,11 +326,20 @@ export function deriveVehicleRow(mapped: Record<string, any>): Record<string, an
     status: mapped.status ? String(mapped.status).toUpperCase() : undefined,
     notes: mapped.notes ? String(mapped.notes).trim() : undefined,
     valuations,
+    // Preview-only. Deliberately NOT in the payload picked for importBulk —
+    // Convex rejects undeclared fields — and read by validateVehicleRow, which
+    // is the only thing that turns it into a visible error.
+    _numberErrors: numberErrors,
   };
 }
 
-function validateVehicleRow(row: Record<string, any>): string[] {
+export function validateVehicleRow(row: Record<string, any>): string[] {
   const errors: string[] = [];
+  // A money cell that could not be read is a data-entry error in EITHER posting
+  // mode. It blocks a purchase import outright (one transaction over the whole
+  // file); in an opening-stock import it excludes the row from the valid set,
+  // which is what the wizard already does with every other invalid row.
+  errors.push(...((row._numberErrors as string[] | undefined) ?? []));
   if (!row.make) errors.push("Missing Make");
   if (!row.model) errors.push("Missing Model");
   // The server's own guard, called rather than restated — it throws both for an
@@ -282,6 +355,10 @@ function validateVehicleRow(row: Record<string, any>): string[] {
   }
   if (!row.year || isNaN(row.year) || row.year < 1900 || row.year > new Date().getFullYear() + 2) errors.push("Invalid Year");
   if (row.mileage !== undefined && (isNaN(row.mileage) || row.mileage < 0)) errors.push("Invalid Mileage");
+  // A purchase cannot cost less than nothing. importBulk refuses this too and
+  // is the control; catching it here names the row instead of failing the file
+  // with a count after the operator has already pressed Import.
+  if (row.purchasePrice !== undefined && row.purchasePrice < 0) errors.push("Negative Cost");
   if (row.sourceType === "SOURCED") {
     // Sourced vehicles must name their supplier and carry a supplier cost — the
     // same constraint the create-sourced flow enforces (backend re-checks too).
@@ -699,7 +776,7 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
         />
       )}
       onImport={(vehicles) => {
-        if (!activeOrgId) return Promise.resolve({ inserted: 0, skipped: 0 });
+        if (!activeOrgId) return Promise.resolve({ inserted: 0, skipped: 0, alreadyRecorded: 0 });
         // The wizard's Import button is disabled until this is answered; the
         // guard is here as well because a disabled button is a hint, not a
         // control, and importBulk itself refuses an unstated method.
@@ -711,7 +788,7 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
           posting === null ||
           isBlocked({ validRows: vehicles, invalidCount: 0, totalCount: vehicles.length })
         ) {
-          return Promise.resolve({ inserted: 0, skipped: 0 });
+          return Promise.resolve({ inserted: 0, skipped: 0, alreadyRecorded: 0 });
         }
         // Send only the fields importBulk's validator declares — Convex rejects
         // any undeclared field, so we pick explicitly rather than spreading the
@@ -747,7 +824,7 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
         const chunkSize =
           posting === "PURCHASE" ? IMPORT_PURCHASE_MAX_ROWS : IMPORT_CHUNK_SIZE;
         return (async () => {
-          const totals = { inserted: 0, skipped: 0 };
+          const totals = { inserted: 0, skipped: 0, alreadyRecorded: 0 };
           for (let i = 0; i < payload.length; i += chunkSize) {
             const chunk = payload.slice(i, i + chunkSize);
             try {
@@ -759,6 +836,7 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
               });
               totals.inserted += result.inserted;
               totals.skipped += result.skipped;
+              totals.alreadyRecorded += result.alreadyRecorded;
             } catch (err) {
               // Each chunk is its own transaction, so a failure here leaves the
               // earlier ones committed — vehicles AND, in PURCHASE mode, their

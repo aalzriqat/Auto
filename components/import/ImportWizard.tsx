@@ -59,6 +59,52 @@ export interface ImportRow {
  * `invalidCount` describe the file they came from, so a consumer whose invariant
  * is about the whole file can refuse rather than silently import a subset.
  */
+/**
+ * What an import actually did, told apart rather than summed.
+ *
+ * `alreadyRecorded` and `skipped` are NOT the same outcome and must never share
+ * a counter. `alreadyRecorded` means the row was proven to be a repeat of work
+ * already done — nothing needed doing. `skipped` is the older, looser
+ * "an existing record matched" used by imports that post nothing.
+ *
+ * The reason this distinction exists at all: a single `skipped` counter was
+ * rendered to the operator as "skipped N duplicates" no matter WHY the row was
+ * not written. A vehicle that could not be recorded — and whose purchase
+ * therefore never reached the ledger — was announced as a duplicate, which is
+ * the one message guaranteed to stop anyone looking into it.
+ */
+export interface ImportResult {
+  inserted: number;
+  skipped: number;
+  /** Rows proven to repeat work already recorded. Never a row that was dropped. */
+  alreadyRecorded?: number;
+  companiesCreated?: number;
+}
+
+/**
+ * The sentence an operator reads after an import, built from the result alone.
+ *
+ * Pure and exported so the copy is testable against the real dictionaries
+ * without a render harness — the wording is the whole point of this function,
+ * and "skipped N duplicates" being wrong for a row that was never recorded is
+ * precisely the kind of defect a render test would not have been written to
+ * catch.
+ */
+export function describeImportResult(
+  result: ImportResult,
+  translate: (key: string) => string
+): string {
+  const line = (key: string, count: number) => translate(key).replace("{count}", String(count));
+  // Each outcome gets its own sentence. Concatenating them into one
+  // "imported N, skipped M duplicates" is how two different things — work
+  // already done, and work that did not happen — became indistinguishable.
+  const parts = [line("ImportResultImported", result.inserted)];
+  if (result.alreadyRecorded) parts.push(line("ImportResultAlreadyRecorded", result.alreadyRecorded));
+  if (result.skipped > 0) parts.push(line("ImportResultSkippedDuplicates", result.skipped));
+  if (result.companiesCreated) parts.push(line("ImportResultCompaniesCreated", result.companiesCreated));
+  return parts.join(" ");
+}
+
 export interface ImportPreflightInfo {
   validRows: Record<string, any>[];
   invalidCount: number;
@@ -106,7 +152,7 @@ interface ImportWizardProps {
    */
   renderPreflight?: (info: ImportPreflightInfo) => React.ReactNode;
   isBlocked?: (info: ImportPreflightInfo) => boolean;
-  onImport: (validRows: Record<string, any>[]) => Promise<{ inserted: number; skipped: number; companiesCreated?: number }>;
+  onImport: (validRows: Record<string, any>[]) => Promise<ImportResult>;
 }
 
 const IGNORE = "__IGNORE__";
@@ -255,10 +301,7 @@ export function ImportWizard(props: ImportWizardProps) {
     setImporting(true);
     try {
       const result = await onImport(validRows.map(({ _errors, ...r }) => r));
-      const companiesNote = result.companiesCreated
-        ? `, created ${result.companiesCreated} new finance compan${result.companiesCreated === 1 ? "y" : "ies"} (configure rates in Settings → Finance)`
-        : "";
-      toast.success(`Imported ${result.inserted}${result.skipped > 0 ? `, skipped ${result.skipped} duplicates` : ""}${companiesNote}.`);
+      toast.success(describeImportResult(result, (key) => t(key as any)));
       onOpenChange(false);
       resetAll();
     } catch (err: any) {

@@ -12,7 +12,7 @@ import { CreateVehicleSchema, UpdateVehicleSchema } from "./validations/vehicles
 import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socialAutoPost";
 import { internal } from "./_generated/api";
 import { getOrgCurrency, hookVehicleAcquired, hookVehicleLandedCostCapitalized, hookVehicleAcquisitionCostCorrected } from "./accounting/workflowHooks";
-import { toMinorUnits, assertFiniteNumber } from "./utils/money";
+import { toMinorUnits, fromMinorUnits, assertFiniteNumber } from "./utils/money";
 import { paymentMethodValidator, acquisitionPaymentMethodValidator, normalizePaymentMethod, type AcquisitionPaymentMethod, type PaymentMethod } from "./utils/paymentMethods";
 import { PURCHASE_IMPORT_MAX_ROWS } from "./utils/importLimits";
 import { hasNonCanonicalVinCharacters } from "./utils/vin";
@@ -973,13 +973,29 @@ export async function hasVehicleAcquisitionAccountingExposure(
  * `accountingMigration.ts` and `vehicleEdits.ts` whose looser semantics are
  * correct for what they ask, and widening this change to alter their behaviour
  * is the scope creep that produced the defects this round exists to close.
- * SCRUM-94 owns the durable identity work.
+ * SCRUM-94 owns the durable identity work; SCRUM-166 owns the shared helper.
+ *
+ * It returns the EVIDENCE rather than a boolean because "an acquisition was
+ * posted for this vehicleId" is not enough to conclude that a row in a new
+ * import is a retry OF THAT PURCHASE. A vehicle document is editable — make,
+ * model and year can all be corrected after the fact — so vehicle facts alone
+ * are a contradiction check, not proof of economic identity. The posted event
+ * carries the part that cannot be edited from the vehicle screen: what was
+ * capitalized, in which currency, and how it was paid. See
+ * `acquisitionFingerprintMismatch`.
  */
-async function hasProvenPostedAcquisition(
+interface ProvenAcquisitionEvidence {
+  /** From the event payload. `undefined` means the record cannot prove it. */
+  costMinor: number | undefined;
+  currency: string | undefined;
+  paymentMethod: string | undefined;
+}
+
+async function provenAcquisitionEvidence(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
   vehicleId: Id<"vehicles">
-): Promise<boolean> {
+): Promise<ProvenAcquisitionEvidence | null> {
   const events = await ctx.db
     .query("accountingEvents")
     .withIndex("by_org_source", (q) =>
@@ -987,18 +1003,49 @@ async function hasProvenPostedAcquisition(
     )
     .filter((q) => q.eq(q.field("eventType"), "VEHICLE_ACQUIRED"))
     .collect();
-  if (events.some((event) => event.status === "POSTED")) return true;
+  const posted = events.find((event) => event.status === "POSTED");
+  if (posted) return readAcquisitionEvidence(posted.payload, posted.currency);
 
   // An outbox row still queued to POST is durable and will post, so it is real
-  // exposure. A FAILED row has been dead-lettered and is not. A row already
-  // resolved to POSTED is represented by the event checked above.
+  // exposure. A FAILED row has been dead-lettered and is not — accepting one
+  // would skip a car that never capitalized, which is SCRUM-59 itself arriving
+  // by another route (covered: "a DEAD-LETTERED outbox row is not proof").
+  // A row already resolved to POSTED is represented by the event checked above.
+  //
+  // ⚠️ The `kind === "POST"` half has NO test, deliberately. Mutation testing
+  // found it survives deletion, and the reason is that the state it excludes is
+  // unreachable: `enqueuePendingReversal` is the only writer of a REVERSE row,
+  // and every caller supplies a prefixed key (`reversed_*`, `trade_in_reversed_*`,
+  // `sale_cancelled_*`, `prepaid_reversed_*`, `cheque_return_after_clear_*`, ...),
+  // so no REVERSE row can carry `vehicle_acquired_<id>` and this lookup can
+  // never return one. It is kept as a fail-closed assertion of that invariant,
+  // not removed — but a test for it would assert a shape the system does not
+  // produce, which is worse than none.
   const queued = await ctx.db
     .query("pendingAccountingEvents")
     .withIndex("by_org_idempotency", (q) =>
       q.eq("orgId", orgId).eq("idempotencyKey", `vehicle_acquired_${vehicleId}`)
     )
     .collect();
-  return queued.some((row) => row.kind === "POST" && row.status === "PENDING");
+  const pending = queued.find((row) => row.kind === "POST" && row.status === "PENDING");
+  if (pending) return readAcquisitionEvidence(pending.payload, pending.currency);
+  return null;
+}
+
+/**
+ * `payload` is `v.any()`, so every field here is read defensively and a value of
+ * the wrong shape becomes `undefined` rather than being trusted. `undefined` is
+ * never treated as agreement — the caller refuses on it.
+ */
+function readAcquisitionEvidence(
+  payload: unknown,
+  rowCurrency: string | undefined
+): ProvenAcquisitionEvidence {
+  const p = (payload ?? {}) as Record<string, unknown>;
+  const costMinor = typeof p.costMinor === "number" && Number.isFinite(p.costMinor) ? p.costMinor : undefined;
+  const payloadCurrency = typeof p.currency === "string" && p.currency.trim() ? p.currency : undefined;
+  const paymentMethod = typeof p.paymentMethod === "string" && p.paymentMethod.trim() ? p.paymentMethod : undefined;
+  return { costMinor, currency: payloadCurrency ?? rowCurrency, paymentMethod };
 }
 
 /**
@@ -2276,6 +2323,70 @@ export const IMPORT_BULK_MAX_POSTING_ROWS = PURCHASE_IMPORT_MAX_ROWS;
 export const IMPORT_ACQUISITION_POSTING = ["OPENING_STOCK", "PURCHASE"] as const;
 export type ImportAcquisitionPosting = (typeof IMPORT_ACQUISITION_POSTING)[number];
 
+const sameText = (a: string | undefined, b: string | undefined) =>
+  (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();
+
+/**
+ * Does this row contradict the vehicle already stored under the same VIN?
+ *
+ * A CONTRADICTION GUARD, not proof of identity. Make, model and year are all
+ * editable on an existing vehicle, so their agreement cannot establish that two
+ * rows are the same car — but their DISAGREEMENT does establish that something
+ * is wrong, and that is the half worth acting on. A Honda arriving under a VIN
+ * stored against a Toyota is not a retry under any reading.
+ *
+ * Returns a human-readable reason, or null when nothing contradicts.
+ */
+function vehicleFactsMismatch(
+  existing: { make: string; model: string; year: number },
+  row: { make: string; model: string; year: number }
+): string | null {
+  if (!sameText(existing.make, row.make) || !sameText(existing.model, row.model)) {
+    return `recorded as ${existing.make} ${existing.model}, this file says ${row.make.trim()} ${row.model.trim()}`;
+  }
+  if (existing.year !== row.year) {
+    return `recorded as a ${existing.year}, this file says ${row.year}`;
+  }
+  return null;
+}
+
+/**
+ * Does the money in this row contradict the acquisition already posted?
+ *
+ * This is the part of "the same purchase" that a vehicle document cannot answer.
+ * Two rows can agree on make, model and year and still be different economic
+ * commands — a different price, a different currency, cash instead of supplier
+ * credit. Re-presenting any of those under an existing VIN is a CHANGE to
+ * recorded financial terms, and silently skipping it records the old terms
+ * forever while the operator believes the new ones landed.
+ *
+ * FAILS CLOSED on missing evidence. A posted acquisition whose payload cannot
+ * produce a cost, a currency or a payment method proves exposure but not
+ * agreement, and "cannot tell" must never take the permissive branch here.
+ *
+ * Returns a human-readable reason, or null when everything agrees.
+ */
+function acquisitionFingerprintMismatch(
+  evidence: ProvenAcquisitionEvidence,
+  incomingCostMinor: number,
+  incomingCurrency: string,
+  incomingPaymentMethod: AcquisitionPaymentMethod
+): string | null {
+  if (evidence.currency === undefined) return "the recorded purchase does not state a currency";
+  if (evidence.currency !== incomingCurrency) {
+    return `recorded in ${evidence.currency}, this import is in ${incomingCurrency}`;
+  }
+  if (evidence.costMinor === undefined) return "the recorded purchase does not state a cost";
+  if (evidence.costMinor !== incomingCostMinor) {
+    return `recorded at ${fromMinorUnits(evidence.costMinor, evidence.currency)}, this file says ${fromMinorUnits(incomingCostMinor, incomingCurrency)}`;
+  }
+  if (evidence.paymentMethod === undefined) return "the recorded purchase does not state a payment method";
+  if (evidence.paymentMethod !== incomingPaymentMethod) {
+    return `recorded as paid by ${evidence.paymentMethod}, this import says ${incomingPaymentMethod}`;
+  }
+  return null;
+}
+
 export const importBulk = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -2491,26 +2602,6 @@ export const importBulk = mutation({
       // opening-balance position, and posting here would capitalize it a second
       // time. The two cases are indistinguishable from the row alone, so this
       // FAILS CLOSED and asks a human instead of guessing in either direction.
-      const unprovenBasis: string[] = [];
-      for (const row of args.vehicles) {
-        if (!wouldCapitalize(row)) continue;
-        const normalized = row.vin.trim().toUpperCase();
-        const existing = await ctx.db
-          .query("vehicles")
-          .withIndex("by_org_vin", (q) => q.eq("orgId", args.orgId).eq("vin", normalized))
-          .unique();
-        if (!existing) continue;
-        // Proven POSTED evidence only — a REVERSED or dead-lettered FAILED record
-        // does not prove this car is capitalized today.
-        if (await hasProvenPostedAcquisition(ctx, args.orgId, existing._id)) continue;
-        unprovenBasis.push(normalized);
-      }
-      if (unprovenBasis.length > 0) {
-        throw new ConvexError(
-          `${unprovenBasis.length} vehicle(s) already exist here with no recorded purchase (${unprovenBasis.slice(0, 3).join(", ")}). They may already be covered by this dealership's opening balance, so importing them as a purchase could count them twice — and skipping them could leave them with no cost at all. Reconcile those vehicles' basis first, then import the rest.`
-        );
-      }
-
       if (args.purchasePaymentMethod === "ON_ACCOUNT") {
         // sourcedFromName doubles as the generic "who is this owed to" field
         // here exactly as it does on vehicles.create — the AP-Suppliers credit
@@ -2526,6 +2617,119 @@ export const importBulk = mutation({
             `A supplier name is required for every vehicle purchased on account — ${missingSupplier.length} row(s) are missing one.`
           );
         }
+      }
+
+      // ── (3) EVERY ROW IS CLASSIFIED BEFORE ANYTHING IS WRITTEN.
+      //
+      // A PURCHASE import may end in exactly two outcomes per row: the car is
+      // recorded, or it was ALREADY recorded by a provably identical purchase.
+      // There is no third, silent one. Everything else throws here, before the
+      // first write, and the whole file rolls back.
+      //
+      // ⚠️ THIS IS THE RULE THE REST OF THE MUTATION DEPENDS ON. Because every
+      // uncreatable and every unprovable row has already thrown by the time the
+      // row loop runs, an existing-VIN row that reaches that loop in PURCHASE
+      // mode IS a proven retry — which is why it may be counted as
+      // `alreadyRecorded` there without re-deciding anything.
+      //
+      // Why a proof at all, rather than "the VIN matches, so skip it": this mode
+      // posts money. `skipped` used to mean both "already bought this car,
+      // nothing to do" and "could not record your car", and those are opposite
+      // economic outcomes. The second loses a physical vehicle's acquisition
+      // entirely and reports it to the operator as a duplicate.
+      const orgCurrency = await getOrgCurrency(ctx, args.orgId);
+      const unprovenBasis: string[] = [];
+      const contradictions: string[] = [];
+      const uncreatable: string[] = [];
+
+      for (const row of args.vehicles) {
+        const normalized = row.vin.trim().toUpperCase();
+        const existing = await ctx.db
+          .query("vehicles")
+          .withIndex("by_org_vin", (q) => q.eq("orgId", args.orgId).eq("vin", normalized))
+          .unique();
+
+        // ── A row with no existing vehicle will be INSERTED. If it cannot be,
+        // the FILE is refused rather than the row dropped. The row loop below
+        // skips a SOURCED row with no supplier or no cost — correct when an
+        // import posts nothing, and a silent loss of a purchased car when it
+        // does, reported to the operator as a "duplicate".
+        if (!existing) {
+          const isSourcedRow = (row.sourceType ?? "").trim().toUpperCase() === "SOURCED";
+          const rowCost = row.sourceCost ?? row.purchasePrice;
+          if (isSourcedRow && (!row.sourcedFromName?.trim() || rowCost === undefined || rowCost <= 0)) {
+            uncreatable.push(normalized);
+          }
+          continue;
+        }
+
+        // ── An exact VIN already here. It is a retry ONLY if it is provably the
+        // same command; a mismatch is refused rather than skipped OR applied.
+        const factsMismatch = vehicleFactsMismatch(existing, row);
+        if (factsMismatch) {
+          contradictions.push(`${normalized}: ${factsMismatch}`);
+          continue;
+        }
+
+        // A row that posts nothing (SOURCED, or no cost) has no financial
+        // fingerprint to agree with. Vehicle facts agreed above and nothing
+        // about the books changes either way, so this stays an ordinary
+        // duplicate exactly as it always was.
+        if (!wouldCapitalize(row)) continue;
+
+        // Proven POSTED evidence only — a REVERSED or dead-lettered FAILED record
+        // does not prove this car is capitalized today.
+        const evidence = await provenAcquisitionEvidence(ctx, args.orgId, existing._id);
+        if (!evidence) {
+          unprovenBasis.push(normalized);
+          continue;
+        }
+
+        const moneyMismatch = acquisitionFingerprintMismatch(
+          evidence,
+          toMinorUnits(row.purchasePrice!, orgCurrency),
+          orgCurrency,
+          args.purchasePaymentMethod
+        );
+        if (moneyMismatch) {
+          contradictions.push(`${normalized}: ${moneyMismatch}`);
+          continue;
+        }
+
+        // ON_ACCOUNT additionally owes a NAMED supplier, and the GL event does
+        // not carry the name — the payable is the only record of who. So it is
+        // proven from the subledger, or it is not proven, in which case this
+        // refuses. A payable that cannot be found is not evidence of agreement.
+        if (args.purchasePaymentMethod === "ON_ACCOUNT") {
+          const payables = await ctx.db
+            .query("vehicleSupplierPayables")
+            .withIndex("by_vehicle", (q) => q.eq("vehicleId", existing._id))
+            .collect();
+          const supplier = row.sourcedFromName ?? "";
+          if (!payables.some((payable) => sameText(payable.sourcedFromName, supplier))) {
+            contradictions.push(
+              payables.length === 0
+                ? `${normalized}: recorded on account, but no supplier payable exists to compare against`
+                : `${normalized}: owed to ${payables[0].sourcedFromName}, this file says ${supplier.trim()}`
+            );
+          }
+        }
+      }
+
+      if (uncreatable.length > 0) {
+        throw new ConvexError(
+          `${uncreatable.length} sourced row(s) cannot be recorded because they are missing a supplier or a cost (${uncreatable.slice(0, 3).join(", ")}). Nothing was imported. Complete those rows and import again — a purchase import records every row or none of them, so they are never quietly left out.`
+        );
+      }
+      if (contradictions.length > 0) {
+        throw new ConvexError(
+          `${contradictions.length} row(s) use a VIN that is already here but do not match what was recorded (${contradictions.slice(0, 3).join("; ")}). Nothing was imported. If these are different cars, give them their real VINs. If you are changing what was already recorded, use the vehicle's own edit and correction workflow — an import cannot rewrite a purchase that has already posted.`
+        );
+      }
+      if (unprovenBasis.length > 0) {
+        throw new ConvexError(
+          `${unprovenBasis.length} vehicle(s) already exist here with no recorded purchase (${unprovenBasis.slice(0, 3).join(", ")}). They may already be covered by this dealership's opening balance, so importing them as a purchase could count them twice — and skipping them could leave them with no cost at all. Reconcile those vehicles' basis first, then import the rest.`
+        );
       }
     }
 
@@ -2559,7 +2763,13 @@ export const importBulk = mutation({
     }
 
     let inserted = 0;
+    // ⚠️ `skipped` is OPENING_STOCK's counter and means "an exact VIN was already
+    // here". In PURCHASE mode it stays 0 for the whole run: a proven retry is
+    // counted as `alreadyRecorded`, and every other reason a row might not be
+    // written has already thrown above. One counter carrying both meanings is
+    // what let a lost car be announced as a duplicate.
     let skipped = 0;
+    let alreadyRecorded = 0;
 
     for (const row of args.vehicles) {
       // Placeholder VINs (xxxxx, N/A, blank, ...) are treated as "no VIN": they
@@ -2575,7 +2785,12 @@ export const importBulk = mutation({
           .withIndex("by_org_vin", (q) => q.eq("orgId", args.orgId).eq("vin", normalizedVin))
           .unique();
         if (existing) {
-          skipped++;
+          // In PURCHASE mode the classification pass above has already proven
+          // this is the same purchase — same car, same cost, same currency,
+          // same payment method, and for ON_ACCOUNT the same supplier — or it
+          // threw. So this is an idempotent retry and is reported as one.
+          if (postsAcquisitions) alreadyRecorded++;
+          else skipped++;
           vehicleId = existing._id;
         }
       }
@@ -2584,10 +2799,23 @@ export const importBulk = mutation({
         const isSourced = (row.sourceType ?? "").trim().toUpperCase() === "SOURCED";
 
         // A sourced row without its supplier name + cost can't be created (the
-        // same constraint createSourced enforces). Skip it rather than throw —
-        // one bad row must not roll back the whole batch's inserts.
+        // same constraint createSourced enforces). For OPENING_STOCK it is
+        // skipped rather than thrown — one bad row must not roll back the whole
+        // batch's inserts, and nothing of accounting significance is lost.
+        //
+        // PURCHASE never reaches here: the classification pass refuses the whole
+        // file for exactly this row shape, because dropping it means a car that
+        // was genuinely bought is never recorded, its acquisition never posts,
+        // and the operator is told it was a "duplicate". The assertion is not
+        // defensive decoration — it states the invariant that makes the
+        // `alreadyRecorded` accounting above sound.
         const sourceCost = row.sourceCost ?? row.purchasePrice;
         if (isSourced && (!row.sourcedFromName?.trim() || sourceCost === undefined || sourceCost <= 0)) {
+          if (postsAcquisitions) {
+            throw new ConvexError(
+              `Internal check failed: a purchase import reached row ${row.vin} without a supplier or cost. Nothing was imported.`
+            );
+          }
           skipped++;
           continue;
         }
@@ -2642,6 +2870,14 @@ export const importBulk = mutation({
       }
 
       for (const val of row.valuations ?? []) {
+        // Surveyed with the rest of the lenient-skip class and deliberately left
+        // alone. This is a sub-record, not a whole row: dropping it loses a
+        // finance company's valuation, never a vehicle and never an acquisition,
+        // so no money goes unrecorded either way. A blank or zero valuation
+        // column is also completely ordinary — most companies have no figure for
+        // most cars — so refusing on it would reject nearly every real
+        // spreadsheet. An UNREADABLE valuation cell is a different matter and is
+        // caught client-side by parseMoneyCell, which marks the row invalid.
         const companyId = val.companyId ?? (val.companyName ? companyIdByName.get(val.companyName.trim()) : undefined);
         if (!companyId || val.valuationAmount <= 0) continue;
 
@@ -2664,6 +2900,6 @@ export const importBulk = mutation({
       }
     }
 
-    return { inserted, skipped, companiesCreated };
+    return { inserted, skipped, alreadyRecorded, companiesCreated };
   },
 });

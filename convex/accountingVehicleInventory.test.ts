@@ -2463,7 +2463,9 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     });
 
     expect(second.inserted).toBe(0);
-    expect(second.skipped).toBe(1);
+    expect(second.alreadyRecorded).toBe(1);
+    // ...and NOT via the generic counter, which a purchase import never uses.
+    expect(second.skipped).toBe(0);
     expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(10_000_000);
     // The legacy cash transaction is not idempotent the way the GL event is, so
     // a re-import must not reach it at all.
@@ -2543,7 +2545,8 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
       orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH", vehicles: rows,
     });
     expect(second.inserted).toBe(0);
-    expect(second.skipped).toBe(2);
+    expect(second.alreadyRecorded).toBe(2);
+    expect(second.skipped).toBe(0);
     expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(0);
   });
 
@@ -2584,7 +2587,8 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
       ],
     });
     expect(retry.inserted).toBe(2);
-    expect(retry.skipped).toBe(1);
+    expect(retry.alreadyRecorded).toBe(1);
+    expect(retry.skipped).toBe(0);
 
     // 10,000 + 7,000 + 7,000 — each car once. A repost would read 34,000,000.
     expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(24_000_000);
@@ -2760,5 +2764,480 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     // asserted — rather than the same literal written twice, which would not
     // fail if one side changed.
     expect(IMPORT_BULK_MAX_POSTING_ROWS).toBe(PURCHASE_IMPORT_MAX_ROWS);
+  });
+
+  // ── The lenient-skip class ────────────────────────────────────────────────
+  //
+  // `importBulk` counted three completely different outcomes into one `skipped`
+  // number and the UI rendered all of them as "skipped N duplicates":
+  //
+  //   - an exact VIN already on record        (benign: nothing to do)
+  //   - a SOURCED row with no supplier/cost   (the car was NOT recorded)
+  //   - a second car sharing a filler VIN     (the car was NOT recorded)
+  //
+  // That was survivable while an import posted nothing. Once PURCHASE
+  // capitalizes, the last two mean a vehicle the dealership genuinely bought has
+  // no vehicle row, no VEHICLE_ACQUIRED event and no payment — announced to the
+  // operator as a duplicate, which is the one word that stops anyone looking.
+  //
+  // For PURCHASE there are now exactly two outcomes: recorded, or PROVEN to be
+  // already recorded. Everything else throws before the first write.
+
+  /** Every table a PURCHASE import writes to. Used to assert a true zero delta. */
+  async function worldDelta(t: Ctx["t"], orgId: Id<"organizations">) {
+    const count = async (table: "vehicles" | "transactions" | "accountingEvents" | "vehicleSupplierPayables") =>
+      (await t.run((ctx) => ctx.db.query(table).withIndex("by_org", (q) => q.eq("orgId", orgId)).collect())).length;
+    return {
+      vehicles: await count("vehicles"),
+      transactions: await count("transactions"),
+      events: await count("accountingEvents"),
+      payables: await count("vehicleSupplierPayables"),
+      inventoryMinor: await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY"),
+    };
+  }
+
+  /** One CASH-purchased Kia Sportage 2023, imported and capitalized. */
+  async function seedPurchased(suffix: string, vin: string, cost = 10000) {
+    const ctx = await seedDealer(suffix);
+    await ctx.asOwner.mutation(api.vehicles.importBulk, {
+      orgId: ctx.orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+      vehicles: [{ ...baseImportRow, vin, purchasePrice: cost }],
+    });
+    return ctx;
+  }
+
+  test("a DIFFERENT car sharing a filler VIN across two imports is REFUSED, not silently dropped", async () => {
+    // `UNKNOWN` is alphanumeric and is not in isPlaceholderVin's list, so it
+    // passes every VIN guard. Two operators filling the column that way on two
+    // different days is ordinary, not adversarial.
+    const { t, orgId, asOwner } = await seedDealer("s59xcall");
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+      vehicles: [{ ...baseImportRow, make: "Toyota", model: "Corolla", vin: "UNKNOWN", purchasePrice: 8000 }],
+    });
+    const before = await worldDelta(t, orgId);
+
+    // A genuinely different car, in a separate file. Before the fix this
+    // returned inserted=0 skipped=1 and the Honda vanished: no vehicle, no
+    // VEHICLE_ACQUIRED, no cash paid, reported as "skipped 1 duplicates".
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+        vehicles: [{ ...baseImportRow, make: "Honda", model: "Civic", vin: "UNKNOWN", purchasePrice: 12000 }],
+      })
+    ).rejects.toThrow(/recorded as Toyota Corolla, this file says Honda Civic/);
+
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+
+  // ⚠️ The filler-VIN case above changes make AND model at once, so it cannot
+  // tell which half of the predicate refused it. Each field gets a fixture that
+  // ONLY it can refuse — otherwise a neighbouring conjunct makes an uncovered
+  // one look covered, which is exactly how a money guard on this branch reached
+  // four review rounds with one half never exercised.
+
+  test("an existing VIN whose MAKE alone disagrees is refused", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59mk");
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+      vehicles: [{ ...baseImportRow, make: "Kia", model: "Sportage", vin: "IMPORTMAKE00001A", purchasePrice: 10000 }],
+    });
+    const before = await worldDelta(t, orgId);
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+        vehicles: [{ ...baseImportRow, make: "Hyundai", model: "Sportage", vin: "IMPORTMAKE00001A", purchasePrice: 10000 }],
+      })
+    ).rejects.toThrow(/recorded as Kia Sportage, this file says Hyundai Sportage/);
+
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+
+  test("an existing VIN whose MODEL alone disagrees is refused", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59md");
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+      vehicles: [{ ...baseImportRow, make: "Kia", model: "Sportage", vin: "IMPORTMODEL0001A", purchasePrice: 10000 }],
+    });
+    const before = await worldDelta(t, orgId);
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+        vehicles: [{ ...baseImportRow, make: "Kia", model: "Sorento", vin: "IMPORTMODEL0001A", purchasePrice: 10000 }],
+      })
+    ).rejects.toThrow(/recorded as Kia Sportage, this file says Kia Sorento/);
+
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+
+  // The other failure direction matters too: a contradiction check that fires on
+  // "kia " vs "Kia" refuses every legitimate retry from a spreadsheet that was
+  // re-saved, and an operator who cannot retry stops trusting the import.
+  test("a retry differing only in CASE and PADDING is still a retry", async () => {
+    const { t, orgId, asOwner } = await seedPurchased("s59case", "IMPORTCASE00001A", 10000);
+    const before = await worldDelta(t, orgId);
+
+    const again = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+      vehicles: [{ ...baseImportRow, make: "  kia ", model: "SPORTAGE", vin: "IMPORTCASE00001A", purchasePrice: 10000 }],
+    });
+
+    expect(again).toMatchObject({ inserted: 0, alreadyRecorded: 1, skipped: 0 });
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+
+  test("FAIL CLOSED: an acquisition recorded in another CURRENCY is refused", async () => {
+    const { t, orgId, asOwner } = await seedPurchased("s59cur", "IMPORTCUR000001A", 10000);
+    const vehicle = await vehicleByVin(t, orgId, "IMPORTCUR000001A");
+    await t.run(async (ctx) => {
+      const event = await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicle!._id.toString())
+        )
+        .filter((q) => q.eq(q.field("eventType"), "VEHICLE_ACQUIRED"))
+        .unique();
+      await ctx.db.patch(event!._id, {
+        payload: { ...(event!.payload as Record<string, unknown>), currency: "USD" },
+      });
+    });
+    const before = await worldDelta(t, orgId);
+
+    // 10000 USD and 10000 JOD are not the same purchase, and comparing the
+    // MINOR-UNIT amounts alone would call them equal only by coincidence of
+    // scale. The currency is checked in its own right.
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+        vehicles: [{ ...baseImportRow, vin: "IMPORTCUR000001A", purchasePrice: 10000 }],
+      })
+    ).rejects.toThrow(/recorded in USD, this import is in JOD/);
+
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+
+  test("FAIL CLOSED: proven exposure that cannot state a PAYMENT METHOD is refused", async () => {
+    const { t, orgId, asOwner } = await seedPurchased("s59nopm", "IMPORTNOPM00001A", 10000);
+    const vehicle = await vehicleByVin(t, orgId, "IMPORTNOPM00001A");
+    await t.run(async (ctx) => {
+      const event = await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicle!._id.toString())
+        )
+        .filter((q) => q.eq(q.field("eventType"), "VEHICLE_ACQUIRED"))
+        .unique();
+      const { paymentMethod: _dropped, ...rest } = event!.payload as Record<string, unknown>;
+      await ctx.db.patch(event!._id, { payload: rest });
+    });
+    const before = await worldDelta(t, orgId);
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+        vehicles: [{ ...baseImportRow, vin: "IMPORTNOPM00001A", purchasePrice: 10000 }],
+      })
+    ).rejects.toThrow(/does not state a payment method/);
+
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+
+  test("an existing VIN whose YEAR disagrees is refused too — same rule, the other field", async () => {
+    const { t, orgId, asOwner } = await seedPurchased("s59yr", "IMPORTYEAR00001A");
+    const before = await worldDelta(t, orgId);
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+        vehicles: [{ ...baseImportRow, year: 2024, vin: "IMPORTYEAR00001A", purchasePrice: 10000 }],
+      })
+    ).rejects.toThrow(/recorded as a 2023, this file says 2024/);
+
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+
+  test("same car, DIFFERENT COST is refused — a retry cannot change what was posted", async () => {
+    // Vehicle facts agree, so a make/model/year check alone would call this a
+    // retry and skip it: the operator's corrected price would never reach the
+    // books and they would be told it was a duplicate. The posted event is what
+    // proves the economic command, and it disagrees.
+    const { t, orgId, asOwner } = await seedPurchased("s59cost", "IMPORTCOST00001A", 10000);
+    const before = await worldDelta(t, orgId);
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+        vehicles: [{ ...baseImportRow, vin: "IMPORTCOST00001A", purchasePrice: 12000 }],
+      })
+    ).rejects.toThrow(/recorded at 10000, this file says 12000/);
+
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+
+  test("same car and cost, DIFFERENT PAYMENT METHOD is refused", async () => {
+    const { t, orgId, asOwner } = await seedPurchased("s59pm", "IMPORTPM00000001", 10000);
+    const before = await worldDelta(t, orgId);
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "BANK_TRANSFER",
+        vehicles: [{ ...baseImportRow, vin: "IMPORTPM00000001", purchasePrice: 10000 }],
+      })
+    ).rejects.toThrow(/recorded as paid by CASH, this import says BANK_TRANSFER/);
+
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+
+  test("an identical re-import is an idempotent retry, reported as alreadyRecorded and NOT as skipped", async () => {
+    const { t, orgId, asOwner } = await seedPurchased("s59retry", "IMPORTRETRY0001A", 10000);
+    const before = await worldDelta(t, orgId);
+
+    const again = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+      vehicles: [{ ...baseImportRow, vin: "IMPORTRETRY0001A", purchasePrice: 10000 }],
+    });
+
+    expect(again).toMatchObject({ inserted: 0, alreadyRecorded: 1, skipped: 0 });
+    // Nothing posted a second time — same car, same books.
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+
+  test("ON_ACCOUNT: a retry naming a DIFFERENT supplier is refused", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59supp");
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "ON_ACCOUNT",
+      vehicles: [{ ...baseImportRow, vin: "IMPORTSUPP00001A", purchasePrice: 10000, sourcedFromName: "Gulf Motors" }],
+    });
+    const before = await worldDelta(t, orgId);
+
+    // Everything the GL event knows agrees — cost, currency, ON_ACCOUNT. Only
+    // the payable knows WHO is owed, so that is where the disagreement is.
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "ON_ACCOUNT",
+        vehicles: [{ ...baseImportRow, vin: "IMPORTSUPP00001A", purchasePrice: 10000, sourcedFromName: "Delta Auto" }],
+      })
+    ).rejects.toThrow(/owed to Gulf Motors, this file says Delta Auto/);
+
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+
+  test("ON_ACCOUNT: a retry naming the SAME supplier is a retry, and creates no second payable", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59supp2");
+    const row = { ...baseImportRow, vin: "IMPORTSUPP00002B", purchasePrice: 10000, sourcedFromName: "Gulf Motors" };
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "ON_ACCOUNT", vehicles: [row],
+    });
+    const before = await worldDelta(t, orgId);
+    expect(before.payables).toBe(1);
+
+    const again = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "ON_ACCOUNT", vehicles: [row],
+    });
+
+    expect(again).toMatchObject({ inserted: 0, alreadyRecorded: 1, skipped: 0 });
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+
+  test("a SOURCED row with no supplier refuses the whole PURCHASE file instead of being dropped as a 'duplicate'", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59srcskip");
+
+    // The row loop's own guard would skip this row and increment `skipped`,
+    // committing the first car and reporting the second as a duplicate — a car
+    // bought on supplier credit with nothing recorded anywhere.
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+        vehicles: [
+          { ...baseImportRow, vin: "IMPORTSRC00001AA", purchasePrice: 10000 },
+          { ...baseImportRow, vin: "IMPORTSRC00002BB", sourceType: "SOURCED", sourceCost: 9000 },
+        ],
+      })
+    ).rejects.toThrow(/missing a supplier or a cost/);
+
+    expect(await worldDelta(t, orgId)).toEqual({
+      vehicles: 0, transactions: 0, events: 0, payables: 0, inventoryMinor: 0,
+    });
+  });
+
+  test("a SOURCED row with a supplier but NO COST refuses the file as well", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59srccost");
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+        vehicles: [
+          { ...baseImportRow, vin: "IMPORTSRC00003CC", sourceType: "SOURCED", sourcedFromName: "Gulf Motors" },
+        ],
+      })
+    ).rejects.toThrow(/missing a supplier or a cost/);
+
+    expect((await worldDelta(t, orgId)).vehicles).toBe(0);
+  });
+
+  test("OPENING_STOCK keeps its lenient behaviour — it posts nothing, so nothing financial is lost", async () => {
+    // Deliberately NOT changed. The refusals above exist because a dropped row
+    // means a lost acquisition; an opening-stock import records no purchase at
+    // all, so a skipped row costs the books nothing and forcing the whole file
+    // to fail would be a regression for cutover migrations.
+    const { t, orgId, asOwner } = await seedDealer("s59oslenient");
+
+    const result = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "OPENING_STOCK",
+      vehicles: [
+        { ...baseImportRow, vin: "IMPORTOSL00001AA", purchasePrice: 10000 },
+        { ...baseImportRow, vin: "IMPORTOSL00002BB", sourceType: "SOURCED", sourceCost: 9000 },
+      ],
+    });
+
+    expect(result.inserted).toBe(1);
+    expect(result.skipped).toBe(1);
+    // ...and it never claims the generic skip was a proven retry.
+    expect(result.alreadyRecorded).toBe(0);
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(0);
+  });
+
+  test("FAIL CLOSED: proven exposure whose payload cannot state a cost is refused, not treated as agreement", async () => {
+    // A POSTED VEHICLE_ACQUIRED proves the car is capitalized. It does not
+    // prove it was capitalized at THIS price. "Cannot tell" must never take the
+    // permissive branch on a path that decides whether to post money.
+    const { t, orgId, asOwner } = await seedPurchased("s59blind", "IMPORTBLIND0001A", 10000);
+    const vehicle = await vehicleByVin(t, orgId, "IMPORTBLIND0001A");
+    await t.run(async (ctx) => {
+      const event = await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicle!._id.toString())
+        )
+        .filter((q) => q.eq(q.field("eventType"), "VEHICLE_ACQUIRED"))
+        .unique();
+      const { costMinor: _dropped, ...rest } = event!.payload as Record<string, unknown>;
+      await ctx.db.patch(event!._id, { payload: rest });
+    });
+    const before = await worldDelta(t, orgId);
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+        vehicles: [{ ...baseImportRow, vin: "IMPORTBLIND0001A", purchasePrice: 10000 }],
+      })
+    ).rejects.toThrow(/does not state a cost/);
+
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+  test("evidence still QUEUED in the outbox counts, and its missing currency is named rather than printed as 'undefined'", async () => {
+    // Two gaps closed at once, both surfaced by a surviving mutant rather than
+    // by review:
+    //
+    //  1. provenAcquisitionEvidence has a second branch — a durable outbox row
+    //     that WILL post but has not yet — and nothing exercised it. A vehicle
+    //     whose acquisition is queued is exposed just as surely as one already
+    //     posted, and treating it as unproven would send a duplicate.
+    //  2. `pendingAccountingEvents.currency` is OPTIONAL, so evidence with no
+    //     currency at all is reachable. Deleting the explicit guard still
+    //     refused — `undefined !== "JOD"` — but told the operator the purchase
+    //     was "recorded in undefined". The refusal was never at risk; the
+    //     sentence was.
+    const { t, orgId, asOwner, userId } = await seedDealer("s59queued");
+
+    // A vehicle that posts nothing on the way in, so the ONLY evidence is the
+    // outbox row inserted below.
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "OPENING_STOCK",
+      vehicles: [{ ...baseImportRow, vin: "IMPORTQUEUE0001A", purchasePrice: 10000 }],
+    });
+    const vehicle = await vehicleByVin(t, orgId, "IMPORTQUEUE0001A");
+    await t.run((ctx) =>
+      ctx.db.insert("pendingAccountingEvents", {
+        orgId,
+        kind: "POST",
+        status: "PENDING",
+        idempotencyKey: `vehicle_acquired_${vehicle!._id}`,
+        accountingDate: Date.now(),
+        actorId: userId,
+        attempts: 0,
+        createdAt: Date.now(),
+        eventType: "VEHICLE_ACQUIRED",
+        sourceType: "vehicles",
+        sourceId: vehicle!._id.toString(),
+        payload: { vehicleId: vehicle!._id.toString() },
+      })
+    );
+    const before = await worldDelta(t, orgId);
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+        vehicles: [{ ...baseImportRow, vin: "IMPORTQUEUE0001A", purchasePrice: 10000 }],
+      })
+    ).rejects.toThrow(/does not state a currency/);
+
+    // Specifically NOT the unproven-basis message: the queued row IS proof of
+    // exposure. Reaching that branch would mean the outbox was ignored.
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+        vehicles: [{ ...baseImportRow, vin: "IMPORTQUEUE0001A", purchasePrice: 10000 }],
+      })
+    ).rejects.not.toThrow(/no recorded purchase/);
+
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+  test("a DEAD-LETTERED outbox row is not proof of anything, and the car is not skipped on it", async () => {
+    // Surfaced by a surviving mutant: widening the outbox filter from PENDING to
+    // any POST row passed every test. It should not have.
+    //
+    // A PENDING row will post. A FAILED row has been dead-lettered and never
+    // will. Accepting the second as proof of exposure is precisely the SCRUM-59
+    // shape arriving by a new route: the car is skipped as "already recorded",
+    // nothing ever debits Vehicle Inventory, and a later sale credits an asset
+    // that was never capitalized. This is the outbox-branch twin of the
+    // REVERSED-event case already covered on the posted branch.
+    const { t, orgId, asOwner, userId } = await seedDealer("s59deadletter");
+
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "OPENING_STOCK",
+      vehicles: [{ ...baseImportRow, vin: "IMPORTDEAD00001A", purchasePrice: 10000 }],
+    });
+    const vehicle = await vehicleByVin(t, orgId, "IMPORTDEAD00001A");
+    await t.run((ctx) =>
+      ctx.db.insert("pendingAccountingEvents", {
+        orgId,
+        kind: "POST",
+        status: "FAILED",
+        idempotencyKey: `vehicle_acquired_${vehicle!._id}`,
+        accountingDate: Date.now(),
+        actorId: userId,
+        attempts: 5,
+        lastError: "dead-lettered",
+        createdAt: Date.now(),
+        eventType: "VEHICLE_ACQUIRED",
+        sourceType: "vehicles",
+        sourceId: vehicle!._id.toString(),
+        currency: "JOD",
+        // A payload that would AGREE on every field, so the only thing standing
+        // between this car and a silent skip is the status filter itself.
+        payload: {
+          vehicleId: vehicle!._id.toString(),
+          costMinor: 10_000_000,
+          currency: "JOD",
+          paymentMethod: "CASH",
+        },
+      })
+    );
+    const before = await worldDelta(t, orgId);
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+        vehicles: [{ ...baseImportRow, vin: "IMPORTDEAD00001A", purchasePrice: 10000 }],
+      })
+    ).rejects.toThrow(/no recorded purchase/);
+
+    // It fails CLOSED — a human reconciles the basis. It does not quietly post
+    // (which could double-count opening stock) and does not quietly skip.
+    expect(await worldDelta(t, orgId)).toEqual(before);
   });
 });

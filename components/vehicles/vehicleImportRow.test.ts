@@ -1,10 +1,14 @@
 import { describe, expect, test } from "vitest";
 
 import { PURCHASE_IMPORT_MAX_ROWS } from "@/convex/utils/importLimits";
+import { commonAr, commonEn } from "@/lib/i18n/domains/common";
+import { describeImportResult } from "@/components/import/ImportWizard";
 import {
   IMPORT_PURCHASE_MAX_ROWS,
   deriveVehicleRow,
+  parseMoneyCell,
   purchaseBlockers,
+  validateVehicleRow,
 } from "./VehicleImportDialog";
 
 /**
@@ -135,5 +139,171 @@ describe("purchaseBlockers — a PURCHASE import is ONE transaction over the WHO
     // codebase warns about. Both sides now read one constant; the convex suite
     // pins the server end of the same chain.
     expect(IMPORT_PURCHASE_MAX_ROWS).toBe(PURCHASE_IMPORT_MAX_ROWS);
+  });
+});
+// ── Money cells ──────────────────────────────────────────────────────────────
+//
+// `parseFloat` is a PREFIX parser. On a column that decides how much a car cost,
+// that turns a typo into a different amount rather than into an error, and the
+// import reports success either way. These are the shapes measured on the branch
+// before the fix:
+//
+//   "1O000"      -> 1          a capital O for a zero, off by four orders
+//   "10000abc"   -> 10000      trailing junk read as if clean
+//   "JOD 10,000" -> NaN        -> undefined -> "no cost" -> imports UNCAPITALIZED
+//
+// The middle one is the quietest: nothing looks wrong anywhere.
+
+describe("parseMoneyCell — a money cell reads exactly, or it is an error", () => {
+  const reads = (raw: unknown, expected: number | undefined) =>
+    expect(parseMoneyCell(raw)).toEqual({ ok: true, value: expected });
+  const refuses = (raw: unknown) => expect(parseMoneyCell(raw)).toEqual({ ok: false });
+
+  test("reads the shapes a dealer's spreadsheet actually contains", () => {
+    reads("10000", 10000);
+    reads("10,000", 10000);
+    reads("1,234,567", 1234567);
+    reads("10000.50", 10000.5);
+    reads("10,000.50", 10000.5);
+    reads("  10,000  ", 10000);
+    reads(-5000, -5000);
+    reads("-5000", -5000);
+    reads(10000, 10000);
+    reads("0", 0);
+  });
+
+  test("BLANK is absent, not invalid — the distinction the whole fix rests on", () => {
+    // An optional cost that nobody filled in is legitimate; it imports the car
+    // without capitalizing it. Only a NON-BLANK cell that cannot be read is an
+    // error. Collapsing these two is what made "JOD 10,000" mean "free".
+    reads(undefined, undefined);
+    reads(null, undefined);
+    reads("", undefined);
+    reads("   ", undefined);
+  });
+
+  test("refuses every cell parseFloat would have silently mangled", () => {
+    refuses("1O000");      // capital O — became 1
+    refuses("10000abc");   // trailing junk — became 10000
+    refuses("JOD 10,000"); // currency in-cell — became "no cost"
+    refuses("10,000 JOD");
+    refuses("$10,000");
+    refuses("10 000");     // space separator — not guessed at
+    refuses("1,0000");     // mis-grouped thousands
+    refuses("10.");
+    refuses(".5");
+    refuses("abc");
+    refuses(NaN);
+    refuses(Infinity);
+  });
+
+  test("refuses Arabic-Indic digits rather than mapping them", () => {
+    // Fail closed, and no digit table. Refusing "١٠٠٠٠" tells the operator to
+    // retype it; mapping it is a decision about numerals that does not belong in
+    // an import dialog. (The bare `\d` class is ASCII-only without the `u` flag,
+    // which is what makes this true rather than incidental.)
+    refuses("١٠٠٠٠");
+    refuses("١٠,٠٠٠");
+  });
+});
+
+describe("a malformed cost is an ERROR on the row, not a different number", () => {
+  const withCost = (cost: string) => ({ ...stockRow, purchasePrice: cost });
+  const errorsFor = (raw: Record<string, any>) => validateVehicleRow(deriveVehicleRow(raw));
+
+  test("1O000 does not import as 1", () => {
+    expect(deriveVehicleRow(withCost("1O000")).purchasePrice).toBeUndefined();
+    expect(errorsFor(withCost("1O000")).join(" ")).toMatch(/Unreadable Cost/);
+  });
+
+  test("10000abc does not import as 10000", () => {
+    expect(errorsFor(withCost("10000abc")).join(" ")).toMatch(/Unreadable Cost/);
+  });
+
+  test("JOD 10,000 does not import as a car with no cost at all", () => {
+    // The worst of the three: the row was VALID, so it imported, and the car
+    // landed in inventory with nothing capitalized against it — the exact
+    // SCRUM-59 shape, arriving through the client instead of the server.
+    expect(errorsFor(withCost("JOD 10,000")).join(" ")).toMatch(/Unreadable Cost/);
+  });
+
+  test("a blank cost is still perfectly valid — it just capitalizes nothing", () => {
+    const { purchasePrice: _dropped, ...noCost } = stockRow;
+    expect(deriveVehicleRow(noCost).purchasePrice).toBeUndefined();
+    expect(errorsFor(noCost)).toEqual([]);
+  });
+
+  test("a negative cost is refused before the file is sent", () => {
+    expect(errorsFor(withCost("-5000")).join(" ")).toMatch(/Negative Cost/);
+  });
+
+  test("an unreadable SELLING price is an error, not a silent zero", () => {
+    expect(errorsFor({ ...stockRow, sellingPrice: "15,000 JOD" }).join(" "))
+      .toMatch(/Unreadable Selling Price/);
+    // Absent has always meant zero and still does.
+    const { sellingPrice: _omitted, ...noPrice } = stockRow;
+    expect(deriveVehicleRow(noPrice).sellingPrice).toBe(0);
+    expect(errorsFor(noPrice)).toEqual([]);
+  });
+
+  test("and it blocks the WHOLE purchase file, not just its own row", () => {
+    // One atomic transaction over the whole file. A malformed cost anywhere
+    // stops all of it, rather than importing the readable rows and leaving the
+    // operator to notice one car is missing.
+    const good = deriveVehicleRow(stockRow);
+    const bad = deriveVehicleRow(withCost("1O000"));
+    const invalidCount = [good, bad].filter((r) => validateVehicleRow(r).length > 0).length;
+    expect(invalidCount).toBe(1);
+    expect(
+      purchaseBlockers([good], "CASH", { invalidCount, totalCount: 2 }).hasInvalidRows
+    ).toBe(true);
+  });
+});
+
+// ── What the operator is told afterwards ─────────────────────────────────────
+
+describe("describeImportResult — an unrecorded car is never called a duplicate", () => {
+  const en = (key: string) => (commonEn as Record<string, string>)[key];
+  const ar = (key: string) => (commonAr as Record<string, string>)[key];
+
+  test("an idempotent retry is reported as already recorded, with its evidence named", () => {
+    const message = describeImportResult({ inserted: 17, skipped: 0, alreadyRecorded: 2 }, en);
+    expect(message).toContain("Imported 17.");
+    expect(message).toContain("2 were already recorded with matching purchase evidence");
+    // THE DEFECT: this used to read "Imported 17, skipped 2 duplicates." — the
+    // same sentence a lost car produced.
+    expect(message).not.toMatch(/duplicate/i);
+  });
+
+  test("the generic duplicate wording survives only where it is true", () => {
+    // OPENING_STOCK posts nothing, so its skip really is just a duplicate.
+    const message = describeImportResult({ inserted: 5, skipped: 2 }, en);
+    expect(message).toContain("Skipped 2 duplicates.");
+    expect(message).not.toMatch(/already recorded/i);
+  });
+
+  test("a clean import says only that", () => {
+    expect(describeImportResult({ inserted: 3, skipped: 0 }, en)).toBe("Imported 3.");
+  });
+
+  test("both counts appear when both happened, and never merge", () => {
+    const message = describeImportResult(
+      { inserted: 1, skipped: 2, alreadyRecorded: 3, companiesCreated: 1 },
+      en
+    );
+    expect(message).toContain("Imported 1.");
+    expect(message).toContain("3 were already recorded");
+    expect(message).toContain("Skipped 2 duplicates.");
+    expect(message).toContain("Created 1 new finance");
+  });
+
+  test("Arabic says the same things — every key exists and interpolates", () => {
+    const message = describeImportResult({ inserted: 17, skipped: 0, alreadyRecorded: 2 }, ar);
+    expect(message).toContain("17");
+    expect(message).toContain("2");
+    // A missing key would render "undefined"; an un-interpolated one keeps the
+    // placeholder. Both are the failure this asserts against.
+    expect(message).not.toContain("undefined");
+    expect(message).not.toContain("{count}");
   });
 });
