@@ -2415,7 +2415,7 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
   });
 
   test("a PURCHASE batch is capped well below the insert-only ceiling", async () => {
-    const { orgId, asOwner } = await seedDealer("s59j");
+    const { t, orgId, asOwner } = await seedDealer("s59j");
     const rows = Array.from({ length: 26 }, (_, i) => ({
       ...baseImportRow,
       vin: `IMPORTCAP${String(i).padStart(8, "0")}`,
@@ -2427,6 +2427,20 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
         orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH", vehicles: rows,
       })
     ).rejects.toThrow(/Import too large/);
+
+    // Refused BEFORE ANY WRITE, across every table the posting path touches.
+    // A PURCHASE import is one transaction, so "too large" must mean nothing
+    // happened — not that some prefix of the file landed.
+    const countAll = async (table: string): Promise<number> => {
+      const rows = await t.run(async (ctx) => (ctx.db.query(table as any) as any).collect());
+      return (rows as unknown[]).length;
+    };
+    expect(await countAll("vehicles")).toBe(0);
+    expect(await countAll("transactions")).toBe(0);
+    expect(await countAll("accountingEvents")).toBe(0);
+    expect(await countAll("journalEntries")).toBe(0);
+    expect(await countAll("journalLines")).toBe(0);
+    expect(await countAll("vehicleSupplierPayables")).toBe(0);
 
     // The same 26 rows are fine when nothing posts.
     const ok = await asOwner.mutation(api.vehicles.importBulk, {
@@ -2563,19 +2577,20 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     expect(vehicles).toHaveLength(1);
   });
 
-  test("retrying a file after a later chunk failed skips the committed rows without reposting them", async () => {
+  test("re-importing a file that overlaps cars already bought skips them without reposting", async () => {
     const { t, orgId, asOwner } = await seedDealer("s59retry");
 
-    // Chunk 1 commits. A file larger than the posting cap arrives as several
-    // calls, and each is its own transaction, so this really is durable.
+    // A first purchase commits. PURCHASE is one transaction per file, so this is
+    // a separate, completed import — not a chunk of a larger one.
     await asOwner.mutation(api.vehicles.importBulk, {
       orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
       vehicles: [{ ...baseImportRow, vin: "IMPORTRTY000001A", purchasePrice: 10000 }],
     });
     expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(10_000_000);
 
-    // Chunk 2 fails on its second row. That chunk is atomic, so it leaves
-    // nothing — but chunk 1 stays committed, which is the state a retry meets.
+    // A second import fails on its second row. It is atomic, so it leaves
+    // nothing — but the first import stays committed, which is the state the
+    // operator's corrected re-import meets.
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
         orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
@@ -2587,9 +2602,9 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     ).rejects.toThrow(/sale/i);
     expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(10_000_000);
 
-    // The operator fixes the row and imports THE WHOLE FILE again — the
-    // documented recovery. The already-committed car must be skipped without
-    // reposting, and the remainder must still go in.
+    // The operator fixes the row and imports the combined file — the documented
+    // recovery. The already-committed car must be skipped without reposting, and
+    // the remainder must still go in.
     const retry = await asOwner.mutation(api.vehicles.importBulk, {
       orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
       vehicles: [
@@ -2800,5 +2815,117 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     // that follow write roughly eleven documents each and need room after it.
     expect(metrics.bytesRead.remaining).toBeGreaterThan(metrics.bytesRead.used);
     expect(metrics.documentsRead.remaining).toBeGreaterThan(5_000);
+  });
+  // ─────────────────────────────────────────────────────────────────────────
+  // Round 3 — PURCHASE is ONE TRANSACTION. Whole-file equals whole-transaction,
+  // which is what removes the cross-chunk duplicate and self-stranding retry
+  // classes rather than guarding against them.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  test("exactly 25 PURCHASE rows succeeds — the cap is inclusive", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59max");
+
+    const rows = Array.from({ length: 25 }, (_, i) => ({
+      ...baseImportRow,
+      vin: `IMPORTMAX${String(i).padStart(8, "0")}`,
+      purchasePrice: 1000,
+    }));
+
+    const result = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH", vehicles: rows,
+    });
+
+    expect(result.inserted).toBe(25);
+    // Every one of them capitalized, in a single transaction.
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(25_000_000);
+    expect(await glBalanceMinor(t, orgId, "CASH_ON_HAND")).toBe(-25_000_000);
+  });
+
+  test("a duplicate VIN at the FIRST and LAST row of a full file refuses atomically", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59dup25");
+
+    // The pair is deliberately as far apart as the file allows. Under the old
+    // chunked protocol these two rows landed in DIFFERENT transactions, so no
+    // single call ever saw both and the second car was silently skipped. One
+    // transaction is what makes this detectable at all.
+    const rows = Array.from({ length: 25 }, (_, i) => ({
+      ...baseImportRow,
+      vin: `IMPORTDUP${String(i).padStart(8, "0")}`,
+      purchasePrice: 1000,
+    }));
+    rows[24].vin = rows[0].vin;
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH", vehicles: rows,
+      })
+    ).rejects.toThrow(/repeat a VIN already used earlier/i);
+
+    const vehicles = await t.run((ctx) =>
+      ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(vehicles).toHaveLength(0);
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(0);
+  });
+
+  test("an OWNED ON_ACCOUNT row reaches AP-Suppliers and creates the supplier payable", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59e2e");
+
+    // The OWNED half of the ON_ACCOUNT path: a STOCK row carrying a supplier.
+    //
+    // ⚠️ This is the server end of a two-part chain, and the seam between them
+    // is where the defect actually lived — `deriveVehicleRow` discarded
+    // `sourcedFromName` for every non-SOURCED row, so no spreadsheet could ever
+    // produce the row below, while every server test hand-built it and passed.
+    // The client end is pinned in components/vehicles/vehicleImportRow.test.ts
+    // ("keeps the supplier on an OWNED row"), which asserts derivation emits
+    // exactly this shape: sourceType not SOURCED, sourcedFromName present,
+    // sourceCost undefined. Importing the dialog here instead would drag a .tsx
+    // module into convex/tsconfig and break the convex-backend gate.
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "ON_ACCOUNT",
+      vehicles: [{
+        ...baseImportRow, vin: "IMPORTE2E0000001A",
+        purchasePrice: 10000, sourcedFromName: "Atiwi Motors",
+      }],
+    });
+
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(10_000_000);
+    expect(await glBalanceMinor(t, orgId, "ACCOUNTS_PAYABLE_SUPPLIERS")).toBe(-10_000_000);
+    // Owed, not paid — no cash moved.
+    expect(await glBalanceMinor(t, orgId, "CASH_ON_HAND")).toBe(0);
+
+    const payables = await t.run((ctx) =>
+      ctx.db.query("vehicleSupplierPayables").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(payables).toHaveLength(1);
+    expect(payables[0].sourcedFromName).toBe("Atiwi Motors");
+  });
+
+  test("a stored FULLWIDTH VIN is recognized as the same car as its ASCII spelling", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59fw");
+
+    // OPENING_STOCK does not apply the plain-alphanumeric rule, so a fullwidth
+    // VIN can genuinely be stored this way. Before NFKC it canonicalized to the
+    // EMPTY string, was dropped from the collision map, and the ASCII import
+    // below inserted a second vehicle and posted a second acquisition.
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId,
+      acquisitionPosting: "OPENING_STOCK",
+      vehicles: [{ ...baseImportRow, vin: "ＡＢＣ１２３４５" }],
+    });
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+        vehicles: [{ ...baseImportRow, vin: "ABC12345", purchasePrice: 10000 }],
+      })
+    ).rejects.toThrow(/differently-written/i);
+
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(0);
+    const vehicles = await t.run((ctx) =>
+      ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(vehicles).toHaveLength(1);
   });
 });

@@ -56,5 +56,29 @@ export function hasNonCanonicalVinCharacters(vin: string | undefined): boolean {
  * physical car twice. Refusal needs no migration; rewriting stored VINs does.
  */
 export function canonicalVin(vin: string | undefined): string {
-  return (vin ?? "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return (
+    (vin ?? "")
+      // NFKC first, so a fullwidth `ＡＢＣ１２３` becomes the ASCII `ABC123` it
+      // is a presentation form OF, and therefore lands on the same canonical
+      // key as the car already stored under the plain spelling.
+      .normalize("NFKC")
+      .trim()
+      .toUpperCase()
+      // Strip FORMATTING only — punctuation, separators, whitespace.
+      //
+      // ⚠️ Deliberately NOT `[^A-Z0-9]`. That version deleted every character
+      // outside ASCII, so a VIN written in Arabic-Indic digits (`١٢٣`) — which
+      // NFKC does NOT map to ASCII — collapsed to the EMPTY string. An empty
+      // canonical key is skipped when the collision map is built, so the stored
+      // car became invisible to the guard and a later import inserted a second
+      // vehicle and posted a second acquisition for it.
+      //
+      // Keeping letters and numbers of ANY script means such a VIN gets a
+      // non-empty key of its own. It does not collide with `123`, which is
+      // correct — they are not proven to be the same car — and, critically, it
+      // no longer vanishes. Admissibility is a separate question, answered by
+      // `hasNonCanonicalVinCharacters`, which refuses anything outside plain
+      // `[A-Z0-9]` on the path that posts.
+      .replace(/[^\p{L}\p{N}]/gu, "")
+  );
 }

@@ -204,6 +204,8 @@ export const commonEn = {
     "This applies to every vehicle in the file. If they were not all paid the same way, split the file and import each payment method separately.",
   ImportSupplierRequiredOnAccount:
     "{count} vehicle(s) have no supplier name. A purchase on account is money still owed, so the books have to say who it is owed to. Add the supplier column, or choose how you actually paid.",
+  ImportPurchaseTooManyRows:
+    "This file has {count} vehicles, and a purchase import records at most {max} at a time so that it all succeeds or none of it does. Split it into files of {max} vehicles or fewer and import them one after another.",
   ImportWillCapitalize: "Will add to Vehicle Inventory",
   ImportWillCapitalizeNote: "{count} vehicle(s) with a cost. Rows with no cost, and sourced vehicles, post nothing.",
   ImportVinRequiredForPurchase:
@@ -212,7 +214,7 @@ export const commonEn = {
     "{count} VIN(s) contain dashes, spaces or punctuation. A VIN can only be letters and numbers — with them, the same car entered without them is recorded as a different vehicle. Remove them. Only import these as stock you already own if you did not just buy them, because that records no purchase.",
   ImportStoppedAfter: "Imported {count} vehicle(s), then stopped:",
   ImportRetryAdvicePurchase:
-    "Fix the reported rows and import the file again — the vehicles already added will be skipped, as long as their VINs are unchanged.",
+    "Nothing was imported — a purchase import records everything or nothing. Fix the reported rows and import the file again.",
   ImportRetryAdviceOpeningStock:
     "Fix the reported rows and import the file again. Vehicles that carry a VIN will be skipped as duplicates, but rows without one would be added a second time — remove those that already imported.",
 
@@ -1123,6 +1125,8 @@ export const commonAr = {
     "ينطبق هذا على كل مركبة في الملف. إن لم تُدفع جميعها بالطريقة نفسها، قسّم الملف واستورد كل طريقة دفع على حدة.",
   ImportSupplierRequiredOnAccount:
     "{count} مركبة بلا اسم مورّد. الشراء على الحساب مبلغ ما زال مستحقاً، لذا يجب أن تُبيّن الدفاتر الجهة المستحقة له. أضف عمود المورّد، أو اختر طريقة الدفع الفعلية.",
+  ImportPurchaseTooManyRows:
+    "يحتوي هذا الملف على {count} مركبة، واستيراد الشراء يسجّل {max} مركبة كحد أقصى في المرة الواحدة لضمان نجاح العملية كاملة أو عدم تنفيذها إطلاقاً. قسّم الملف إلى ملفات لا تتجاوز {max} مركبة واستوردها تباعاً.",
   ImportWillCapitalize: "ستُضاف إلى مخزون المركبات",
   ImportWillCapitalizeNote: "{count} مركبة لها تكلفة. الصفوف بلا تكلفة والمركبات الموردة لا تُقيَّد.",
   ImportVinRequiredForPurchase:
@@ -1131,7 +1135,7 @@ export const commonAr = {
     "{count} رقم شاصي يحتوي على شرطات أو مسافات أو علامات. رقم الشاصي حروف وأرقام فقط — بوجودها تُسجَّل السيارة نفسها المُدخَلة بدونها كمركبة مختلفة. احذفها. ولا تستوردها كمركبات تملكها بالفعل إلا إذا لم تشترها للتو، لأن ذلك لا يسجّل أي عملية شراء.",
   ImportStoppedAfter: "تم استيراد {count} مركبة ثم توقف:",
   ImportRetryAdvicePurchase:
-    "صحّح الصفوف المذكورة وأعد استيراد الملف — سيتم تخطي المركبات المضافة سابقاً، ما دامت أرقام الشاصي كما هي.",
+    "لم يتم استيراد أي مركبة — استيراد الشراء يسجّل كل شيء أو لا شيء. صحّح الصفوف المذكورة وأعد استيراد الملف.",
   ImportRetryAdviceOpeningStock:
     "صحّح الصفوف المذكورة وأعد استيراد الملف. المركبات التي تحمل رقم شاصي سيتم تخطيها كمكررة، أما الصفوف بلا رقم شاصي فستُضاف مرة ثانية — احذف ما تم استيراده منها.",
 

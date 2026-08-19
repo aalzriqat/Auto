@@ -2211,30 +2211,37 @@ export const IMPORT_BULK_MAX_ROWS = 200;
 export const IMPORT_BULK_MAX_POSTING_ROWS = 25;
 
 /**
- * THE RECOVERY CONTRACT for a file larger than the cap.
+ * FOR A PURCHASE IMPORT, WHOLE-FILE MUST EQUAL WHOLE-TRANSACTION.
  *
- * Such a file arrives as several calls and each is its own transaction, so a
- * transient failure in a later chunk leaves the earlier chunks committed. The
- * operator is told to fix the reported rows and import THE SAME FILE again
- * (`ImportRetryAdvicePurchase`), and that instruction is only honest because:
+ * This cap is therefore the limit on the FILE, not the size of a chunk. A
+ * PURCHASE import is never split: it is one mutation, and a mutation is atomic,
+ * so it either records every car and every journal entry or records nothing.
  *
- *  1. every predictable whole-file rule is checked before the first chunk is
- *     sent — the client re-runs the server's own VIN and supplier predicates
- *     across all rows, so a bad row at the end stops the import before a single
- *     journal entry exists;
- *  2. a chunk is atomic, so a failed chunk contributes nothing; and
- *  3. on the retry, a row whose vehicle already exists AND already carries
- *     acquisition exposure is skipped without reposting, while the remainder
- *     proceeds — identity is the VIN, never the row's position in the file.
+ * That is an architectural rule, not a conservative number. Chunking a
+ * money-posting import puts whole-FILE invariants inside per-CHUNK
+ * transactions, and two entire classes of defect follow from the mismatch —
+ * both measured on this branch before the rule was adopted:
  *
- * Proven by "retrying a file after a later chunk failed skips the committed
- * rows without reposting them" in accountingVehicleInventory.test.ts, which
- * pins the GL at one acquisition per car across the failure and the retry.
+ *  - a duplicate spread ACROSS chunks escapes a per-chunk duplicate check
+ *    entirely; the second chunk reads the first chunk's committed VIN as a
+ *    legitimate retry and silently skips a car that was genuinely bought;
+ *  - a bound evaluated per chunk can be crossed MID-FILE, so an import commits
+ *    part of itself into a state where its own retry is refused.
  *
- * ⚠️ (3) holds only while the VIN spelling is unchanged. A spreadsheet re-saved
- * between attempts can alter a cell; that is why the retry advice says so
- * rather than promising outright, and why a canonically-colliding VIN is
- * refused rather than inserted as a second car.
+ * Neither is fixable by adding another guard around the protocol, because the
+ * guard would still be reasoning about one chunk. Making the file the
+ * transaction removes the category. A read-limit failure likewise becomes a
+ * clean pre-write refusal instead of "chunk 1 posted money and chunk 2 failed".
+ *
+ * OPENING_STOCK is unaffected and still chunks at IMPORT_BULK_MAX_ROWS: it
+ * posts nothing, so it has no money-shaped invariant to preserve across a
+ * boundary.
+ *
+ * The recovery story is correspondingly simpler and is what the operator is
+ * told: if a PURCHASE import fails, nothing was written — fix the rows and
+ * import again. Re-importing a file that SUCCEEDED remains idempotent, because
+ * identity is the VIN and an already-capitalized car is skipped without
+ * reposting.
  */
 
 /**

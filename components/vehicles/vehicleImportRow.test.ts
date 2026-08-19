@@ -1,6 +1,10 @@
 import { describe, expect, test } from "vitest";
 
-import { deriveVehicleRow, purchaseBlockers } from "./VehicleImportDialog";
+import {
+  IMPORT_PURCHASE_MAX_ROWS,
+  deriveVehicleRow,
+  purchaseBlockers,
+} from "./VehicleImportDialog";
 
 /**
  * The import dialog's two pure gating functions.
@@ -83,5 +87,27 @@ describe("purchaseBlockers — the preflight must agree with the server", () => 
   test("malformed VINs are counted by the shared server predicate", () => {
     expect(purchaseBlockers([{ vin: "1HGCM826-33A0043" }], "CASH").malformedVin).toBe(1);
     expect(purchaseBlockers([{ vin: "1HGCM82633A0043" }], "CASH").malformedVin).toBe(0);
+  });
+});
+
+describe("purchaseBlockers — a PURCHASE import is ONE transaction", () => {
+  const row = () => deriveVehicleRow(stockRow);
+
+  test("accepts a file exactly at the limit", () => {
+    const rows = Array.from({ length: IMPORT_PURCHASE_MAX_ROWS }, row);
+    expect(purchaseBlockers(rows, "CASH").exceedsRowLimit).toBe(false);
+  });
+
+  test("refuses one row over, so the operator is told to split BEFORE anything is sent", () => {
+    const rows = Array.from({ length: IMPORT_PURCHASE_MAX_ROWS + 1 }, row);
+    expect(purchaseBlockers(rows, "CASH").exceedsRowLimit).toBe(true);
+  });
+
+  test("the limit matches the server's own cap, which refuses the batch regardless", () => {
+    // A preflight that disagrees with the guard it mirrors is how a button ends
+    // up offering what the server refuses. importBulk's
+    // IMPORT_BULK_MAX_POSTING_ROWS is the binding control; this is the early,
+    // legible half of the same number.
+    expect(IMPORT_PURCHASE_MAX_ROWS).toBe(25);
   });
 });

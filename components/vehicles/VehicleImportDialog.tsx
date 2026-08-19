@@ -363,7 +363,12 @@ function capitalizingRows(rows: Record<string, any>[]) {
 export function purchaseBlockers(
   rows: Record<string, any>[],
   paymentMethod: AcquisitionPaymentMethod | null
-): { missingVin: number; malformedVin: number; missingSupplier: number } {
+): {
+  missingVin: number;
+  malformedVin: number;
+  missingSupplier: number;
+  exceedsRowLimit: boolean;
+} {
   // Every row, not just the ones that post today — see the server's own
   // `missingVin` check for why a sourced or cost-less row is not harmless.
   //
@@ -383,6 +388,11 @@ export function purchaseBlockers(
       paymentMethod === "ON_ACCOUNT"
         ? capitalizingRows(rows).filter((r) => !String(r.sourcedFromName ?? "").trim()).length
         : 0,
+    // A PURCHASE import is one transaction, so an oversized file is refused
+    // outright rather than split. Checked here, before anything is sent, so the
+    // operator is told to split the file instead of discovering it from a
+    // server error after staring at a preview.
+    exceedsRowLimit: rows.length > IMPORT_PURCHASE_MAX_ROWS,
   };
 }
 
@@ -483,6 +493,14 @@ function ImportAccountingChoice({
         </p>
       )}
 
+      {posting === "PURCHASE" && blockers.exceedsRowLimit && (
+        <p className="text-xs font-medium leading-snug text-destructive">
+          {t("ImportPurchaseTooManyRows" as any)
+            .replace("{count}", String(validRows.length))
+            .replace("{max}", String(IMPORT_PURCHASE_MAX_ROWS))}
+        </p>
+      )}
+
       {posting === "PURCHASE" && blockers.missingSupplier > 0 && (
         <p className="text-xs font-medium leading-snug text-destructive">
           {t("ImportSupplierRequiredOnAccount" as any).replace(
@@ -556,11 +574,17 @@ interface Props {
 const IMPORT_CHUNK_SIZE = 200;
 
 /**
- * Must not exceed importBulk's IMPORT_BULK_MAX_POSTING_ROWS. A PURCHASE row
- * writes a journal entry and its lines on top of the vehicle insert, so the
- * transaction it shares fills up an order of magnitude faster.
+ * A PURCHASE import is ONE transaction, so this is the limit on the whole FILE
+ * — not a chunk size. Must match importBulk's IMPORT_BULK_MAX_POSTING_ROWS,
+ * which refuses a larger batch server-side regardless of what this client does.
+ *
+ * Whole-file must equal whole-transaction on the path that posts money: a
+ * duplicate split across two chunks escapes a per-chunk duplicate check, and a
+ * bound evaluated per chunk can be crossed mid-file, committing an import into
+ * a state where its own retry is refused. Both were measured on this branch.
+ * OPENING_STOCK posts nothing and still chunks.
  */
-const IMPORT_POSTING_CHUNK_SIZE = 25;
+export const IMPORT_PURCHASE_MAX_ROWS = 25;
 
 export function VehicleImportDialog({ open, onOpenChange }: Props) {
   const { t } = useLanguage();
@@ -581,7 +605,12 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
     if (posting !== "PURCHASE") return false;
     if (paymentMethod === null) return true;
     const blockers = purchaseBlockers(validRows, paymentMethod);
-    return blockers.missingVin > 0 || blockers.malformedVin > 0 || blockers.missingSupplier > 0;
+    return (
+      blockers.missingVin > 0 ||
+      blockers.malformedVin > 0 ||
+      blockers.missingSupplier > 0 ||
+      blockers.exceedsRowLimit
+    );
   };
 
   const handleOpenChange = (next: boolean) => {
@@ -667,12 +696,18 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
           notes: v.notes,
           valuations: v.valuations,
         }));
-        // Chunked to match importBulk's server-side row cap: one transaction
-        // per chunk, so a large spreadsheet cannot exceed Convex's
+        // OPENING_STOCK is chunked so a large spreadsheet cannot exceed Convex's
         // per-transaction write budget now that each row also maintains the
-        // vehicle aggregate — and a much smaller chunk when each row also posts
-        // a journal entry, which costs an order of magnitude more per row.
-        const chunkSize = posting === "PURCHASE" ? IMPORT_POSTING_CHUNK_SIZE : IMPORT_CHUNK_SIZE;
+        // vehicle aggregate. It posts nothing, so nothing of accounting
+        // significance straddles a chunk boundary.
+        //
+        // PURCHASE is NEVER chunked. Whole-file must equal whole-transaction on
+        // the path that posts money — see IMPORT_PURCHASE_MAX_ROWS. The file is
+        // refused above this point if it is too large, so the single slice below
+        // is the entire file, and its atomicity is what makes "if it failed,
+        // nothing was written" true rather than aspirational.
+        const chunkSize =
+          posting === "PURCHASE" ? IMPORT_PURCHASE_MAX_ROWS : IMPORT_CHUNK_SIZE;
         return (async () => {
           const totals = { inserted: 0, skipped: 0 };
           for (let i = 0; i < payload.length; i += chunkSize) {
