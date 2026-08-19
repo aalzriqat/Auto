@@ -1,6 +1,16 @@
 "use client";
 
 import { useRef, useState } from "react";
+
+/** Opaque, unique per uploaded file. Never derived from the file's contents. */
+function newImportId(): string {
+  const c = globalThis.crypto;
+  if (c && typeof c.randomUUID === "function") return c.randomUUID();
+  // Older/insecure contexts: still unique enough for one operator's session,
+  // and the server treats the value as opaque.
+  return `imp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -49,6 +59,14 @@ export interface ImportPreviewColumn {
 
 export interface ImportRow {
   _errors: string[];
+  /**
+   * This row's position in the uploaded file, 1-based, assigned before any
+   * filtering. A consumer whose retry safety depends on row identity must use
+   * this and not an index into the valid subset: correcting one bad row would
+   * renumber every row after it, and evidence keyed on those numbers would stop
+   * matching the rows it was written for.
+   */
+  _sourceRow: number;
   [key: string]: any;
 }
 
@@ -73,6 +91,31 @@ export interface ImportRow {
  * therefore never reached the ledger — was announced as a duplicate, which is
  * the one message guaranteed to stop anyone looking into it.
  */
+/**
+ * Identifies the import operation itself, so a consumer can prove a re-sent row
+ * is a RETRY rather than a second, genuinely new record.
+ *
+ * This matters wherever an import has effects that must not happen twice. Two
+ * different real-world things are routinely identical in every field a
+ * spreadsheet carries, so comparing the contents of a re-sent row against what
+ * is already stored cannot answer the question — it can only guess, and on a
+ * money path guessing wrong destroys a record silently.
+ */
+export interface ImportSubmission {
+  /** Stable for this uploaded file across every call and retry it produces. */
+  importId: string;
+  /**
+   * Original file row number for each submitted row, index-aligned with them.
+   *
+   * Carried BESIDE the rows rather than inside them, because a consumer is free
+   * to forward a row straight to its backend — `CustomerImportDialog` does
+   * exactly that — and a stray bookkeeping field would be rejected as an
+   * undeclared argument. Anything the wizard adds for its own use is stripped
+   * before a row leaves it.
+   */
+  sourceRows: number[];
+}
+
 export interface ImportResult {
   inserted: number;
   skipped: number;
@@ -103,6 +146,23 @@ export function describeImportResult(
   if (result.skipped > 0) parts.push(line("ImportResultSkippedDuplicates", result.skipped));
   if (result.companiesCreated) parts.push(line("ImportResultCompaniesCreated", result.companiesCreated));
   return parts.join(" ");
+}
+
+/**
+ * A row as a CONSUMER sees it: every field the wizard added for its own
+ * bookkeeping removed, so the row can be forwarded to a backend unchanged.
+ *
+ * This is not tidiness. `CustomerImportDialog` passes its rows straight into a
+ * Convex mutation, and Convex REJECTS an undeclared argument — so any field the
+ * wizard leaves on a row breaks a consumer that never asked for it. The `_`
+ * prefix is the convention; this function is what makes it load-bearing.
+ */
+export function stripInternalFields(row: Record<string, any>): Record<string, any> {
+  const clean: Record<string, any> = {};
+  Object.entries(row).forEach(([key, value]) => {
+    if (!key.startsWith("_")) clean[key] = value;
+  });
+  return clean;
 }
 
 export interface ImportPreflightInfo {
@@ -152,7 +212,7 @@ interface ImportWizardProps {
    */
   renderPreflight?: (info: ImportPreflightInfo) => React.ReactNode;
   isBlocked?: (info: ImportPreflightInfo) => boolean;
-  onImport: (validRows: Record<string, any>[]) => Promise<ImportResult>;
+  onImport: (validRows: Record<string, any>[], meta: ImportSubmission) => Promise<ImportResult>;
 }
 
 const IGNORE = "__IGNORE__";
@@ -192,6 +252,7 @@ export function ImportWizard(props: ImportWizardProps) {
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [importing, setImporting] = useState(false);
   const [rows, setRows] = useState<ImportRow[]>([]);
+  const [importId, setImportId] = useState<string>("");
   const [dynamicFields, setDynamicFields] = useState<ImportFieldConfig[]>([]);
 
   const allFields = [...fields, ...dynamicFields];
@@ -210,6 +271,7 @@ export function ImportWizard(props: ImportWizardProps) {
     setRawRows([]);
     setMapping({});
     setRows([]);
+    setImportId("");
     setDynamicFields([]);
   }
 
@@ -254,17 +316,21 @@ export function ImportWizard(props: ImportWizardProps) {
   }
 
   function confirmMapping() {
-    const mappedRows: ImportRow[] = rawRows.map((rawRow) => {
+    const mappedRows: ImportRow[] = rawRows.map((rawRow, index) => {
       const mapped: Record<string, any> = {};
       headers.forEach((h, i) => {
         const field = mapping[normalizeKey(h)];
         if (field && field !== IGNORE) mapped[field] = rawRow[i];
       });
       const derived = deriveRow ? deriveRow(mapped) : mapped;
-      return { ...derived, _errors: validateRow(derived) };
+      return { ...derived, _errors: validateRow(derived), _sourceRow: index + 1 };
     });
 
     setRows(mappedRows);
+    // One identity per uploaded file, stable for every call this import makes.
+    // Regenerated here rather than per send, so the chunk loop and any retry
+    // within this upload all present the same operation.
+    setImportId(newImportId());
     setStep("preview");
 
     if (activeOrgId) {
@@ -283,7 +349,7 @@ export function ImportWizard(props: ImportWizardProps) {
   // is one atomic transaction — must be able to see that rows were dropped,
   // or it silently imports a subset and calls it the file.
   const preflightInfo = {
-    validRows: validRows.map(({ _errors, ...r }) => r),
+    validRows: validRows.map(stripInternalFields),
     invalidCount: invalidRows.length,
     totalCount: rows.length,
   };
@@ -300,7 +366,10 @@ export function ImportWizard(props: ImportWizardProps) {
     if (isBlocked?.(preflightInfo)) return;
     setImporting(true);
     try {
-      const result = await onImport(validRows.map(({ _errors, ...r }) => r));
+      const result = await onImport(validRows.map(stripInternalFields), {
+        importId,
+        sourceRows: validRows.map((r) => r._sourceRow),
+      });
       toast.success(describeImportResult(result, (key) => t(key as any)));
       onOpenChange(false);
       resetAll();

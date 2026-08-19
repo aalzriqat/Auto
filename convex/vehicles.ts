@@ -15,6 +15,8 @@ import { getOrgCurrency, hookVehicleAcquired, hookVehicleLandedCostCapitalized, 
 import { toMinorUnits, fromMinorUnits, assertFiniteNumber } from "./utils/money";
 import { paymentMethodValidator, acquisitionPaymentMethodValidator, normalizePaymentMethod, type AcquisitionPaymentMethod, type PaymentMethod } from "./utils/paymentMethods";
 import { PURCHASE_IMPORT_MAX_ROWS } from "./utils/importLimits";
+import { findCommandUnit, recordCommandUnit } from "./utils/idempotency";
+import { simplePayloadHash } from "./accounting/postingRules";
 import { hasNonCanonicalVinCharacters } from "./utils/vin";
 import { syncVehicleHoldStatus, getDefaultReservationExpiry, getActiveDepositHolds } from "./utils/depositHelpers";
 import {
@@ -111,7 +113,16 @@ function isPlaceholderVin(raw: string): boolean {
   if (!trimmed) return true;
   if (/^(.)\1+$/.test(trimmed)) return true; // xxxxxxxx, --------, 00000000, ...
   const lower = trimmed.toLowerCase();
-  return lower === "n/a" || lower === "na" || lower === "tbd" || lower === "none" || lower === "-";
+  // "unknown"/"unk" are data cleanup, NOT the retry fix — retry safety is the
+  // (importId, rowId) evidence, and no blocklist could ever provide it. What
+  // this does provide is a far better failure: a purchase import refuses these
+  // by NAME ("a VIN is required") instead of by collision ("this VIN repeats"),
+  // and an opening-stock import stops deduping two different cars into one
+  // because a human typed the same word in both VIN cells.
+  return (
+    lower === "n/a" || lower === "na" || lower === "tbd" || lower === "none" || lower === "-" ||
+    lower === "unknown" || lower === "unk"
+  );
 }
 
 /**
@@ -2323,6 +2334,45 @@ export const IMPORT_BULK_MAX_POSTING_ROWS = PURCHASE_IMPORT_MAX_ROWS;
 export const IMPORT_ACQUISITION_POSTING = ["OPENING_STOCK", "PURCHASE"] as const;
 export type ImportAcquisitionPosting = (typeof IMPORT_ACQUISITION_POSTING)[number];
 
+/**
+ * The unit of idempotency for a bulk purchase import: ONE SPREADSHEET ROW.
+ *
+ * Keyed `<importId>:<rowId>` under this operation name, where `importId`
+ * identifies the logical import (stable across every call it takes) and `rowId`
+ * identifies the row within the operator's original file (stable across
+ * retries, and NOT the position within the valid subset — otherwise correcting
+ * an earlier row would renumber every row after it and void their evidence).
+ */
+const IMPORT_ROW_OPERATION = "vehicles.importBulk.row";
+
+/**
+ * What must be identical for a re-sent row to be the SAME requested operation.
+ *
+ * Deliberately every fact that changes what is written or posted — not a
+ * summary. Re-sending a row under the same key with any of these altered is a
+ * different request wearing a used identifier, and is refused rather than
+ * silently resolved in either direction.
+ */
+async function importRowFingerprint(
+  row: {
+    vin: string; make: string; model: string; year: number;
+    purchasePrice?: number; sourceType?: string; sourcedFromName?: string; sourceCost?: number;
+  },
+  paymentMethod: AcquisitionPaymentMethod
+): Promise<string> {
+  return simplePayloadHash({
+    vin: row.vin.trim().toUpperCase(),
+    make: row.make.trim().toLowerCase(),
+    model: row.model.trim().toLowerCase(),
+    year: row.year,
+    purchasePrice: row.purchasePrice ?? null,
+    sourceType: ownershipOf(row),
+    sourcedFromName: (row.sourcedFromName ?? "").trim().toLowerCase(),
+    sourceCost: row.sourceCost ?? null,
+    paymentMethod,
+  });
+}
+
 const sameText = (a: string | undefined, b: string | undefined) =>
   (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();
 
@@ -2443,7 +2493,23 @@ export const importBulk = mutation({
      * cell is exactly the silent guess this argument exists to prevent.
      */
     purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
+    /**
+     * Identifies the logical import. REQUIRED for PURCHASE, ignored otherwise.
+     *
+     * Together with each row's `rowId` this is the ONLY thing that can prove a
+     * re-sent row is a retry rather than a second car. Matching facts cannot:
+     * two genuinely different vehicles are routinely identical in every recorded
+     * field — same model, same price, same filler text in the VIN column — and
+     * treating that as proof silently drops the second car and its acquisition.
+     */
+    importId: v.optional(v.string()),
     vehicles: v.array(v.object({
+      /**
+       * This row's position in the operator's ORIGINAL file. REQUIRED for
+       * PURCHASE, ignored otherwise. Must survive a retry unchanged, so it is
+       * the source row number rather than an index into the valid subset.
+       */
+      rowId: v.optional(v.number()),
       make: v.string(),
       model: v.string(),
       year: v.number(),
@@ -2475,14 +2541,17 @@ export const importBulk = mutation({
   },
   handler: async (ctx, args) => {
     const postsAcquisitions = args.acquisitionPosting === "PURCHASE";
+    const importId = args.importId?.trim();
     /**
-     * Every VIN the classification pass below PROVED is an existing purchase.
+     * Row ids for which DURABLE EVIDENCE says this exact import operation
+     * already ran, and the row's facts are unchanged since it did.
      *
-     * PURCHASE only. The row loop counts `alreadyRecorded` by membership here
-     * rather than by re-deciding, so a row that took an early exit during
-     * classification can never be certified by accident.
+     * PURCHASE only. Keyed by `rowId`, not by VIN — the whole point of the
+     * redesign is that a VIN, and indeed every other recorded fact, cannot
+     * distinguish "this operation ran before" from "a second identical car was
+     * bought". Only the (importId, rowId) evidence can.
      */
-    const provenRetries = new Set<string>();
+    const provenRetries = new Set<number>();
     const maxRows = postsAcquisitions ? IMPORT_BULK_MAX_POSTING_ROWS : IMPORT_BULK_MAX_ROWS;
     if (args.vehicles.length > maxRows) {
       throw new ConvexError(
@@ -2524,6 +2593,41 @@ export const importBulk = mutation({
       // transfer, cheque or card.
       if (!args.purchasePaymentMethod) {
         throw new ConvexError("Payment method is required when importing purchased vehicles.");
+      }
+
+      // ── The import must be able to identify ITSELF, and each row within it.
+      //
+      // Without this the mutation has no way to tell a re-sent file from a
+      // second purchase of identical cars, and the only alternative — comparing
+      // recorded facts — provably cannot: two different vehicles are routinely
+      // identical in every field a spreadsheet carries. Rather than guess, a
+      // purchase import states which operation it is.
+      if (!importId) {
+        throw new ConvexError(
+          "This purchase import did not identify itself, so it cannot be safely retried. Nothing was imported. Reload the page and import the file again."
+        );
+      }
+      const missingRowIds = args.vehicles.filter(
+        (row) => row.rowId === undefined || !Number.isInteger(row.rowId)
+      );
+      if (missingRowIds.length > 0) {
+        throw new ConvexError(
+          `${missingRowIds.length} row(s) in this purchase import carry no row number, so they cannot be safely retried. Nothing was imported. Reload the page and import the file again.`
+        );
+      }
+      // Two rows claiming the same identity would share one evidence record, so
+      // the second would read as a retry of the first — the same silent loss,
+      // arriving through the key instead of through the VIN.
+      const rowIdsSeen = new Set<number>();
+      const repeatedRowIds = args.vehicles.filter((row) => {
+        if (rowIdsSeen.has(row.rowId!)) return true;
+        rowIdsSeen.add(row.rowId!);
+        return false;
+      });
+      if (repeatedRowIds.length > 0) {
+        throw new ConvexError(
+          `${repeatedRowIds.length} row(s) repeat a row number within this import. Nothing was imported. Reload the page and import the file again.`
+        );
       }
       // EVERY row in a purchase import must be identifiable — not only the ones
       // that post today. vehicles.create already refuses a non-sourced vehicle
@@ -2701,9 +2805,35 @@ export const importBulk = mutation({
       const unprovenBasis: string[] = [];
       const contradictions: string[] = [];
       const uncreatable: string[] = [];
+      const collisions: string[] = [];
 
       for (const row of args.vehicles) {
         const normalized = row.vin.trim().toUpperCase();
+
+        // ── (a) HAS THIS EXACT ROW OF THIS EXACT IMPORT ALREADY RUN?
+        //
+        // This is the only question whose answer is proof. It is asked FIRST,
+        // and nothing about the database's contents is consulted to answer it.
+        // A conflicting fingerprint throws from inside findCommandUnit: the same
+        // key with different details is a new request wearing a used identifier,
+        // and resolving that in either direction loses something.
+        const evidence = await findCommandUnit(ctx, {
+          orgId: args.orgId,
+          operation: IMPORT_ROW_OPERATION,
+          idempotencyKey: `${importId}:${row.rowId}`,
+          fingerprint: await importRowFingerprint(row, args.purchasePaymentMethod),
+          label: `Row ${row.rowId} (${normalized})`,
+        });
+        if (evidence) {
+          provenRetries.add(row.rowId!);
+          continue;
+        }
+
+        // ── (b) NO EVIDENCE, so this is a NEW requested operation.
+        //
+        // From here an existing VIN is a COLLISION, never a retry. It may well
+        // be the same physical car — but "may well be" is what this redesign
+        // exists to stop being treated as proof on a path that posts money.
         const existing = await ctx.db
           .query("vehicles")
           .withIndex("by_org_vin", (q) => q.eq("orgId", args.orgId).eq("vin", normalized))
@@ -2723,61 +2853,58 @@ export const importBulk = mutation({
           continue;
         }
 
-        // ── An exact VIN already here. It is a retry ONLY if it is provably the
-        // same command; a mismatch is refused rather than skipped OR applied.
+        // ── An exact VIN already here, on an operation that has never run.
+        //
+        // Whatever this is, it is NOT a proven retry, so it is refused. The
+        // checks below only decide HOW TO SAY SO: naming the field that
+        // disagrees is far more useful than "this VIN exists", and where
+        // everything agrees the message has to be honest that agreement is
+        // exactly what cannot settle the question.
         const factsMismatch = vehicleFactsMismatch(existing, row) ?? ownershipTermsMismatch(existing, row);
         if (factsMismatch) {
           contradictions.push(`${normalized}: ${factsMismatch}`);
           continue;
         }
 
-        // A row that posts nothing (SOURCED, or no cost) has no financial
-        // fingerprint left to agree with — ownership and terms were just
-        // checked, and no journal moves either way.
-        if (!wouldCapitalize(row)) {
-          provenRetries.add(normalized);
-          continue;
-        }
-
-        // Proven POSTED evidence only — a REVERSED or dead-lettered FAILED record
-        // does not prove this car is capitalized today.
-        const evidence = await provenAcquisitionEvidence(ctx, args.orgId, existing._id);
-        if (!evidence) {
-          unprovenBasis.push(normalized);
-          continue;
-        }
-
-        const moneyMismatch = acquisitionFingerprintMismatch(
-          evidence,
-          toMinorUnits(row.purchasePrice!, orgCurrency),
-          orgCurrency,
-          args.purchasePaymentMethod
-        );
-        if (moneyMismatch) {
-          contradictions.push(`${normalized}: ${moneyMismatch}`);
-          continue;
-        }
-        provenRetries.add(normalized);
-
-        // ON_ACCOUNT additionally owes a NAMED supplier, and the GL event does
-        // not carry the name — the payable is the only record of who. So it is
-        // proven from the subledger, or it is not proven, in which case this
-        // refuses. A payable that cannot be found is not evidence of agreement.
-        if (args.purchasePaymentMethod === "ON_ACCOUNT") {
-          const payables = await ctx.db
-            .query("vehicleSupplierPayables")
-            .withIndex("by_vehicle", (q) => q.eq("vehicleId", existing._id))
-            .collect();
-          const supplier = row.sourcedFromName ?? "";
-          if (!payables.some((payable) => sameText(payable.sourcedFromName, supplier))) {
-            provenRetries.delete(normalized);
-            contradictions.push(
-              payables.length === 0
-                ? `${normalized}: recorded on account, but no supplier payable exists to compare against`
-                : `${normalized}: owed to ${payables[0].sourcedFromName}, this file says ${supplier.trim()}`
-            );
+        if (wouldCapitalize(row)) {
+          // Proven POSTED evidence only — a REVERSED or dead-lettered FAILED
+          // record does not prove this car is capitalized today.
+          const acquisition = await provenAcquisitionEvidence(ctx, args.orgId, existing._id);
+          if (!acquisition) {
+            unprovenBasis.push(normalized);
+            continue;
+          }
+          const moneyMismatch = acquisitionFingerprintMismatch(
+            acquisition,
+            toMinorUnits(row.purchasePrice!, orgCurrency),
+            orgCurrency,
+            args.purchasePaymentMethod
+          );
+          if (moneyMismatch) {
+            contradictions.push(`${normalized}: ${moneyMismatch}`);
+            continue;
+          }
+          if (args.purchasePaymentMethod === "ON_ACCOUNT") {
+            const payables = await ctx.db
+              .query("vehicleSupplierPayables")
+              .withIndex("by_vehicle", (q) => q.eq("vehicleId", existing._id))
+              .collect();
+            const supplier = row.sourcedFromName ?? "";
+            if (!payables.some((payable) => sameText(payable.sourcedFromName, supplier))) {
+              contradictions.push(
+                payables.length === 0
+                  ? `${normalized}: recorded on account, but no supplier payable exists to compare against`
+                  : `${normalized}: owed to ${payables[0].sourcedFromName}, this file says ${supplier.trim()}`
+              );
+              continue;
+            }
           }
         }
+
+        // Everything recorded agrees — and that is precisely why this cannot be
+        // waved through. A second identical car produces the same agreement, so
+        // accepting it would silently drop a vehicle that was genuinely bought.
+        collisions.push(normalized);
       }
 
       if (uncreatable.length > 0) {
@@ -2788,6 +2915,11 @@ export const importBulk = mutation({
       if (contradictions.length > 0) {
         throw new ConvexError(
           `${contradictions.length} row(s) use a VIN that is already here but do not match what was recorded (${contradictions.slice(0, 3).join("; ")}). Nothing was imported. If these are different cars, give them their real VINs. If you are changing what was already recorded, use the vehicle's own edit and correction workflow — an import cannot rewrite a purchase that has already posted.`
+        );
+      }
+      if (collisions.length > 0) {
+        throw new ConvexError(
+          `${collisions.length} vehicle(s) in this file are already recorded under the same VIN (${collisions.slice(0, 3).join(", ")}), and this import has not been sent before. Nothing was imported. If these are cars you already added, remove those rows. If they are different cars that happen to share a VIN in the sheet, give each its own real VIN — matching details cannot tell the two apart, and guessing would drop a car you actually bought.`
         );
       }
       if (unprovenBasis.length > 0) {
@@ -2856,22 +2988,25 @@ export const importBulk = mutation({
             // and supplier. Anything it could not prove threw before any write,
             // so a miss here means the two disagree about what was proven.
             //
-            // ⚠️ NO INPUT REACHES THIS THROW TODAY, and mutation testing says
-            // so: deleting the check kills nothing, because classification is
-            // exhaustive over the same rows. What IS load-bearing is the set's
-            // population — stop adding non-capitalizing rows to it and this
-            // fires immediately. It is kept as the enforcement of an invariant
-            // that was previously only ASSERTED IN A COMMENT, and the gap that
-            // comment hid was real.
-            if (!provenRetries.has(normalizedVin)) {
+            // ⚠️ This throw is unreachable today and mutation testing says so:
+            // the classification pass refuses every existing-VIN row that has no
+            // evidence, so nothing that reaches here can be outside the set.
+            // What IS load-bearing is how the set is POPULATED — it is filled
+            // ONLY from durable (importId, rowId) evidence, never from matching
+            // facts. An earlier revision populated it from fact agreement and
+            // silently lost a second identical car.
+            if (!provenRetries.has(row.rowId!)) {
               throw new ConvexError(
-                `Internal check failed: ${normalizedVin} was not proven to be an existing purchase. Nothing was imported.`
+                `Internal check failed: row ${row.rowId} (${normalizedVin}) was not proven to be an existing purchase. Nothing was imported.`
               );
             }
             alreadyRecorded++;
-          } else {
-            skipped++;
+            // Nothing else runs for this row. The operation already happened;
+            // re-touching its valuations would be re-executing part of a
+            // completed unit of work, which is what the evidence exists to stop.
+            continue;
           }
+          skipped++;
           vehicleId = existing._id;
         }
       }
@@ -2945,6 +3080,24 @@ export const importBulk = mutation({
             supplierName: row.sourcedFromName?.trim(),
             vehicleLabel: `${row.year} ${row.make.trim()} ${row.model.trim()}`,
             vin: insertedVin,
+            actorId: user._id,
+          });
+
+          // ⚠️ THE SAME TRANSACTION AS THE WORK IT ATTESTS TO — deliberately,
+          // and this ordering is the whole safety argument.
+          //
+          // A Convex mutation is atomic: if the acquisition above throws, or any
+          // later row throws, this insert rolls back with it and the retry
+          // correctly sees no evidence. Writing it from a separate mutation, an
+          // action or the scheduler would invert the defect this fixes —
+          // evidence surviving a posting that failed, so every retry is refused
+          // as "already recorded" and the money never reaches the ledger.
+          await recordCommandUnit(ctx, {
+            orgId: args.orgId,
+            operation: IMPORT_ROW_OPERATION,
+            idempotencyKey: `${importId}:${row.rowId}`,
+            fingerprint: await importRowFingerprint(row, args.purchasePaymentMethod!),
+            result: { vehicleId },
             actorId: user._id,
           });
         }

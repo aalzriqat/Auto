@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import { PURCHASE_IMPORT_MAX_ROWS } from "@/convex/utils/importLimits";
 import { commonAr, commonEn } from "@/lib/i18n/domains/common";
-import { describeImportResult } from "@/components/import/ImportWizard";
+import { describeImportResult, stripInternalFields } from "@/components/import/ImportWizard";
 import {
   IMPORT_PURCHASE_MAX_ROWS,
   deriveVehicleRow,
@@ -344,5 +344,31 @@ describe("an optional VALUATION never costs the operator the whole car", () => {
     expect(parseMoneyCell("+10,000.50")).toEqual({ ok: true, value: 10000.5 });
     // Still refused: a space is as likely to be two numbers as one.
     expect(parseMoneyCell("10 000")).toEqual({ ok: false });
+  });
+});
+
+describe("stripInternalFields — a consumer's row carries nothing the wizard added", () => {
+  // Not tidiness. CustomerImportDialog forwards its rows straight into a Convex
+  // mutation, and Convex REJECTS an undeclared argument — so a bookkeeping field
+  // left on a row breaks a consumer that never asked for it. This branch added
+  // two such fields (`_numberErrors`, `_sourceRow`), which is exactly when the
+  // convention needed to stop being a convention.
+  test("removes every underscore-prefixed field and keeps the rest", () => {
+    const row = {
+      firstName: "Jane",
+      phone: "0790000000",
+      _errors: ["Missing Make"],
+      _sourceRow: 7,
+      _numberErrors: ["Unreadable Cost"],
+    };
+    expect(stripInternalFields(row)).toEqual({ firstName: "Jane", phone: "0790000000" });
+  });
+
+  test("a derived vehicle row leaves nothing internal behind", () => {
+    // The real shape, not a hand-written one: whatever deriveVehicleRow starts
+    // adding next is covered by this without anyone remembering to update it.
+    const clean = stripInternalFields(deriveVehicleRow(stockRow));
+    expect(Object.keys(clean).some((k) => k.startsWith("_"))).toBe(false);
+    expect(clean.vin).toBe("IMPORTSUP0000001A");
   });
 });

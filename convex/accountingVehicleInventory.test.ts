@@ -2093,11 +2093,11 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
 
     await asOwner.mutation(api.vehicles.importBulk, {
       orgId,
-      acquisitionPosting: "PURCHASE",
+      acquisitionPosting: "PURCHASE", importId: "imp-1",
       purchasePaymentMethod: "CASH",
       vehicles: [
-        { ...baseImportRow, vin: "IMPORTGL0000001AA", purchasePrice: 10000 },
-        { ...baseImportRow, vin: "IMPORTGL0000002BB", purchasePrice: 10000 },
+        { rowId: 1, ...baseImportRow, vin: "IMPORTGL0000001AA", purchasePrice: 10000 },
+        { rowId: 2, ...baseImportRow, vin: "IMPORTGL0000002BB", purchasePrice: 10000 },
       ],
     });
 
@@ -2153,8 +2153,8 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
         orgId,
-        acquisitionPosting: "PURCHASE",
-        vehicles: [{ ...baseImportRow, vin: "IMPORTNOPM000001A", purchasePrice: 10000 }],
+        acquisitionPosting: "PURCHASE", importId: "imp-2",
+        vehicles: [{ rowId: 1, ...baseImportRow, vin: "IMPORTNOPM000001A", purchasePrice: 10000 }],
       })
     ).rejects.toThrow(/Payment method is required/);
 
@@ -2170,11 +2170,11 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
         orgId,
-        acquisitionPosting: "PURCHASE",
+        acquisitionPosting: "PURCHASE", importId: "imp-3",
         purchasePaymentMethod: "ON_ACCOUNT",
         vehicles: [
-          { ...baseImportRow, vin: "IMPORTOA00000001A", purchasePrice: 10000, sourcedFromName: "Gulf Motors" },
-          { ...baseImportRow, vin: "IMPORTOA00000002B", purchasePrice: 10000 },
+          { rowId: 1, ...baseImportRow, vin: "IMPORTOA00000001A", purchasePrice: 10000, sourcedFromName: "Gulf Motors" },
+          { rowId: 2, ...baseImportRow, vin: "IMPORTOA00000002B", purchasePrice: 10000 },
         ],
       })
     ).rejects.toThrow(/supplier name is required/i);
@@ -2192,10 +2192,10 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
 
     await asOwner.mutation(api.vehicles.importBulk, {
       orgId,
-      acquisitionPosting: "PURCHASE",
+      acquisitionPosting: "PURCHASE", importId: "imp-4",
       purchasePaymentMethod: "ON_ACCOUNT",
       vehicles: [
-        { ...baseImportRow, vin: "IMPORTOA00000003C", purchasePrice: 10000, sourcedFromName: "Gulf Motors" },
+        { rowId: 1, ...baseImportRow, vin: "IMPORTOA00000003C", purchasePrice: 10000, sourcedFromName: "Gulf Motors" },
       ],
     });
 
@@ -2216,10 +2216,10 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
 
     const result = await asOwner.mutation(api.vehicles.importBulk, {
       orgId,
-      acquisitionPosting: "PURCHASE",
+      acquisitionPosting: "PURCHASE", importId: "imp-5",
       purchasePaymentMethod: "CASH",
       vehicles: [
-        {
+        { rowId: 1,
           ...baseImportRow, vin: "IMPORTSRC0000001A", sourceType: "SOURCED",
           sourcedFromName: "Other Dealer", sourceCost: 9000,
         },
@@ -2251,9 +2251,9 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
       await expect(
         asOwner.mutation(api.vehicles.importBulk, {
           orgId,
-          acquisitionPosting: "PURCHASE",
+          acquisitionPosting: "PURCHASE", importId: "imp-6",
           purchasePaymentMethod: "CASH",
-          vehicles: [{ ...baseImportRow, vin, purchasePrice: 10000 }],
+          vehicles: [{ rowId: 1, ...baseImportRow, vin, purchasePrice: 10000 }],
         })
       ).rejects.toThrow(/VIN/i);
     }
@@ -2275,13 +2275,13 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     // physical car twice. `hasVehicleAcquisitionAccountingExposure` guards per
     // vehicleId and cannot know two rows are one car.
     for (const row of [
-      { ...baseImportRow, vin: "", sourceType: "SOURCED", sourcedFromName: "Gulf Motors", sourceCost: 9000 },
-      { ...baseImportRow, vin: "N/A", purchasePrice: 0 },
-      { ...baseImportRow, vin: "xxxxxxxxxxxxxxxxx" },
+      { rowId: 1, ...baseImportRow, vin: "", sourceType: "SOURCED", sourcedFromName: "Gulf Motors", sourceCost: 9000 },
+      { rowId: 1, ...baseImportRow, vin: "N/A", purchasePrice: 0 },
+      { rowId: 1, ...baseImportRow, vin: "xxxxxxxxxxxxxxxxx" },
     ]) {
       await expect(
         asOwner.mutation(api.vehicles.importBulk, {
-          orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH", vehicles: [row],
+          orgId, acquisitionPosting: "PURCHASE", importId: "imp-7", purchasePaymentMethod: "CASH", vehicles: [row],
         })
       ).rejects.toThrow(/VIN/i);
     }
@@ -2306,9 +2306,9 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
       await expect(
         asOwner.mutation(api.vehicles.importBulk, {
           orgId,
-          acquisitionPosting: "PURCHASE",
+          acquisitionPosting: "PURCHASE", importId: "imp-8",
           purchasePaymentMethod: "CASH",
-          vehicles: [{ ...baseImportRow, vin, purchasePrice: 10000 }],
+          vehicles: [{ rowId: 1, ...baseImportRow, vin, purchasePrice: 10000 }],
         })
       ).rejects.toThrow(/letters and numbers|VIN/i);
     }
@@ -2374,11 +2374,11 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
         orgId,
-        acquisitionPosting: "PURCHASE",
+        acquisitionPosting: "PURCHASE", importId: "imp-9",
         purchasePaymentMethod: "CASH",
         vehicles: [
-          { ...baseImportRow, vin: "IMPORTSTATUS00001", purchasePrice: 10000 },
-          { ...baseImportRow, vin: "IMPORTSTATUS00002", purchasePrice: 10000, status: "SOLD" },
+          { rowId: 1, ...baseImportRow, vin: "IMPORTSTATUS00001", purchasePrice: 10000 },
+          { rowId: 2, ...baseImportRow, vin: "IMPORTSTATUS00002", purchasePrice: 10000, status: "SOLD" },
         ],
       })
     ).rejects.toThrow(/sale/i);
@@ -2401,10 +2401,12 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
         asOwner.mutation(api.vehicles.importBulk, {
           orgId,
           acquisitionPosting,
-          ...(acquisitionPosting === "PURCHASE" ? { purchasePaymentMethod: "CASH" as const } : {}),
+          ...(acquisitionPosting === "PURCHASE"
+            ? { purchasePaymentMethod: "CASH" as const, importId: "imp-status" }
+            : {}),
           vehicles: [
-            { ...baseImportRow, vin: "IMPORTSTATUS00003", purchasePrice: 10000 },
-            { ...baseImportRow, vin: "IMPORTSTATUS00004", purchasePrice: 10000, status: "IN STOCK" },
+            { rowId: 1, ...baseImportRow, vin: "IMPORTSTATUS00003", purchasePrice: 10000 },
+            { rowId: 2, ...baseImportRow, vin: "IMPORTSTATUS00004", purchasePrice: 10000, status: "IN STOCK" },
           ],
         })
       ).rejects.toThrow(/status/i);
@@ -2419,6 +2421,7 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
   test("a PURCHASE batch is capped well below the insert-only ceiling", async () => {
     const { t, orgId, asOwner } = await seedDealer("s59j");
     const rows = Array.from({ length: 26 }, (_, i) => ({
+      rowId: i + 1,
       ...baseImportRow,
       vin: `IMPORTCAP${String(i).padStart(8, "0")}`,
       purchasePrice: 1000,
@@ -2426,7 +2429,7 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
 
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH", vehicles: rows,
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-10", purchasePaymentMethod: "CASH", vehicles: rows,
       })
     ).rejects.toThrow(/Import too large/);
 
@@ -2451,15 +2454,17 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     expect(ok.inserted).toBe(26);
   });
 
-  test("re-importing the same VIN does not capitalize it twice", async () => {
+  test("re-sending the same import does not capitalize the same VIN twice", async () => {
     const { t, orgId, asOwner } = await seedDealer("s59g");
-    const rows = [{ ...baseImportRow, vin: "IMPORTDUP00000001", purchasePrice: 10000 }];
+    const rows = [{ rowId: 1, ...baseImportRow, vin: "IMPORTDUP00000001", purchasePrice: 10000 }];
 
+    // The SAME import, sent twice — a network retry, or an operator who did not
+    // see the first response. This, and only this, is a provable retry.
     await asOwner.mutation(api.vehicles.importBulk, {
-      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH", vehicles: rows,
+      orgId, acquisitionPosting: "PURCHASE", importId: "imp-dup-1", purchasePaymentMethod: "CASH", vehicles: rows,
     });
     const second = await asOwner.mutation(api.vehicles.importBulk, {
-      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH", vehicles: rows,
+      orgId, acquisitionPosting: "PURCHASE", importId: "imp-dup-1", purchasePaymentMethod: "CASH", vehicles: rows,
     });
 
     expect(second.inserted).toBe(0);
@@ -2492,7 +2497,7 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     await asOwner.mutation(api.vehicles.importBulk, {
       orgId,
       acquisitionPosting: "OPENING_STOCK",
-      vehicles: [{ ...baseImportRow, vin: "IMPORTAMB0000001A", purchasePrice: 10000 }],
+      vehicles: [{ rowId: 1, ...baseImportRow, vin: "IMPORTAMB0000001A", purchasePrice: 10000 }],
     });
     expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(0);
 
@@ -2503,9 +2508,9 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
         orgId,
-        acquisitionPosting: "PURCHASE",
+        acquisitionPosting: "PURCHASE", importId: "imp-11",
         purchasePaymentMethod: "CASH",
-        vehicles: [{ ...baseImportRow, vin: "IMPORTAMB0000001A", purchasePrice: 10000 }],
+        vehicles: [{ rowId: 1, ...baseImportRow, vin: "IMPORTAMB0000001A", purchasePrice: 10000 }],
       })
     ).rejects.toThrow(/no recorded purchase/i);
 
@@ -2530,19 +2535,19 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     // which depends on re-presenting rows that never posted.
     const rows = [
       {
-        ...baseImportRow, vin: "IMPORTDUP0000001A", sourceType: "SOURCED",
+        rowId: 1, ...baseImportRow, vin: "IMPORTDUP0000001A", sourceType: "SOURCED",
         sourcedFromName: "Other Dealer", sourceCost: 9000,
       },
-      { ...baseImportRow, vin: "IMPORTDUP0000002B" },
+      { rowId: 2, ...baseImportRow, vin: "IMPORTDUP0000002B" },
     ];
 
     const first = await asOwner.mutation(api.vehicles.importBulk, {
-      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH", vehicles: rows,
+      orgId, acquisitionPosting: "PURCHASE", importId: "imp-12", purchasePaymentMethod: "CASH", vehicles: rows,
     });
     expect(first.inserted).toBe(2);
 
     const second = await asOwner.mutation(api.vehicles.importBulk, {
-      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH", vehicles: rows,
+      orgId, acquisitionPosting: "PURCHASE", importId: "imp-12", purchasePaymentMethod: "CASH", vehicles: rows,
     });
     expect(second.inserted).toBe(0);
     expect(second.alreadyRecorded).toBe(2);
@@ -2550,14 +2555,14 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(0);
   });
 
-  test("re-importing a file that overlaps cars already bought skips them without reposting", async () => {
+  test("a NEW import overlapping cars already bought is REFUSED — matching facts are not proof of a retry", async () => {
     const { t, orgId, asOwner } = await seedDealer("s59retry");
 
     // A first purchase commits. PURCHASE is one transaction per file, so this is
     // a separate, completed import — not a chunk of a larger one.
     await asOwner.mutation(api.vehicles.importBulk, {
-      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-      vehicles: [{ ...baseImportRow, vin: "IMPORTRTY000001A", purchasePrice: 10000 }],
+      orgId, acquisitionPosting: "PURCHASE", importId: "imp-rty-1", purchasePaymentMethod: "CASH",
+      vehicles: [{ rowId: 1, ...baseImportRow, vin: "IMPORTRTY000001A", purchasePrice: 10000 }],
     });
     expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(10_000_000);
 
@@ -2566,29 +2571,44 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     // operator's corrected re-import meets.
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-rty-2", purchasePaymentMethod: "CASH",
         vehicles: [
-          { ...baseImportRow, vin: "IMPORTRTY000002B", purchasePrice: 7000 },
-          { ...baseImportRow, vin: "IMPORTRTY000003C", purchasePrice: 7000, status: "SOLD" },
+          { rowId: 1, ...baseImportRow, vin: "IMPORTRTY000002B", purchasePrice: 7000 },
+          { rowId: 2, ...baseImportRow, vin: "IMPORTRTY000003C", purchasePrice: 7000, status: "SOLD" },
         ],
       })
     ).rejects.toThrow(/sale/i);
     expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(10_000_000);
 
-    // The operator fixes the row and imports the combined file — the documented
-    // recovery. The already-committed car must be skipped without reposting, and
-    // the remainder must still go in.
-    const retry = await asOwner.mutation(api.vehicles.importBulk, {
-      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+    // ⚠️ THE RECOVERY STORY, RESTATED. An earlier version of this test asserted
+    // the combined file would skip the car already bought and import the rest.
+    // It cannot, and the reason is the whole point of the redesign: this is a
+    // DIFFERENT import operation, and the only thing linking its first row to
+    // the earlier purchase is that their details match. Two identical cars
+    // produce exactly that, so accepting it as a retry would silently discard a
+    // vehicle the dealer bought. It refuses and says which rows to remove.
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-rty-3", purchasePaymentMethod: "CASH",
+        vehicles: [
+          { rowId: 1, ...baseImportRow, vin: "IMPORTRTY000001A", purchasePrice: 10000 },
+          { rowId: 2, ...baseImportRow, vin: "IMPORTRTY000002B", purchasePrice: 7000 },
+          { rowId: 3, ...baseImportRow, vin: "IMPORTRTY000003C", purchasePrice: 7000 },
+        ],
+      })
+    ).rejects.toThrow(/already recorded under the same VIN/);
+    // Atomic: the two new cars did not land either.
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(10_000_000);
+
+    // Removing the row already bought is what the message asks for, and it works.
+    const fixed = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "imp-rty-4", purchasePaymentMethod: "CASH",
       vehicles: [
-        { ...baseImportRow, vin: "IMPORTRTY000001A", purchasePrice: 10000 },
-        { ...baseImportRow, vin: "IMPORTRTY000002B", purchasePrice: 7000 },
-        { ...baseImportRow, vin: "IMPORTRTY000003C", purchasePrice: 7000 },
+        { rowId: 2, ...baseImportRow, vin: "IMPORTRTY000002B", purchasePrice: 7000 },
+        { rowId: 3, ...baseImportRow, vin: "IMPORTRTY000003C", purchasePrice: 7000 },
       ],
     });
-    expect(retry.inserted).toBe(2);
-    expect(retry.alreadyRecorded).toBe(1);
-    expect(retry.skipped).toBe(0);
+    expect(fixed.inserted).toBe(2);
 
     // 10,000 + 7,000 + 7,000 — each car once. A repost would read 34,000,000.
     expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(24_000_000);
@@ -2604,22 +2624,36 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
   // round-1 fix itself.
   // ─────────────────────────────────────────────────────────────────────────
 
-  test("two rows in ONE file sharing a filler VIN are refused, not collapsed into one car", async () => {
+  test("two rows in ONE file sharing a VIN are refused, not collapsed into one car", async () => {
     const { t, orgId, asOwner } = await seedDealer("s59batch");
 
-    // `UNK` is alphanumeric and is not in isPlaceholderVin's list, so it passes
-    // every other guard. The per-row dedup reads this mutation's own writes, so
-    // without a batch check the second car is silently "skipped" — two cars
-    // bought, one vehicle, ONE acquisition, inventory understated.
+    // A REAL, repeated VIN — deliberately not a filler word. `UNK` and
+    // `UNKNOWN` are now normalized as "no VIN" and refused by name before this
+    // guard is reached, so testing it with one of those would leave the
+    // duplicate check itself uncovered while looking covered. The per-row dedup
+    // reads this mutation's own writes, so without a batch check the second car
+    // is silently "skipped" — two cars bought, one vehicle, ONE acquisition.
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-15", purchasePaymentMethod: "CASH",
         vehicles: [
-          { ...baseImportRow, vin: "UNK", purchasePrice: 10000 },
-          { ...baseImportRow, vin: "UNK", purchasePrice: 7000, model: "Seltos" },
+          { rowId: 1, ...baseImportRow, vin: "IMPORTBATCH0001A", purchasePrice: 10000 },
+          { rowId: 2, ...baseImportRow, vin: "IMPORTBATCH0001A", purchasePrice: 7000, model: "Seltos" },
         ],
       })
     ).rejects.toThrow(/repeat a VIN already used earlier/i);
+
+    // ...and a filler word in both cells is refused too, by NAME rather than as
+    // a collision — the clearer failure, and the one an operator can act on.
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-15b", purchasePaymentMethod: "CASH",
+        vehicles: [
+          { rowId: 1, ...baseImportRow, vin: "UNK", purchasePrice: 10000 },
+          { rowId: 2, ...baseImportRow, vin: "UNK", purchasePrice: 7000, model: "Seltos" },
+        ],
+      })
+    ).rejects.toThrow(/VIN is required for every vehicle/);
 
     const vehicles = await t.run((ctx) =>
       ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
@@ -2637,8 +2671,8 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     // uncapitalized-inventory shape SCRUM-59 exists to prevent.
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-        vehicles: [{ ...baseImportRow, vin: "IMPORTNEG0000001A", purchasePrice: -10000 }],
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-16", purchasePaymentMethod: "CASH",
+        vehicles: [{ rowId: 1, ...baseImportRow, vin: "IMPORTNEG0000001A", purchasePrice: -10000 }],
       })
     ).rejects.toThrow(/cannot cost less than nothing/i);
 
@@ -2652,8 +2686,8 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     const { t, orgId, asOwner } = await seedDealer("s59rev");
 
     await asOwner.mutation(api.vehicles.importBulk, {
-      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-      vehicles: [{ ...baseImportRow, vin: "IMPORTREV0000001A", purchasePrice: 10000 }],
+      orgId, acquisitionPosting: "PURCHASE", importId: "imp-17", purchasePaymentMethod: "CASH",
+      vehicles: [{ rowId: 1, ...baseImportRow, vin: "IMPORTREV0000001A", purchasePrice: 10000 }],
     });
     expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(10_000_000);
 
@@ -2672,8 +2706,8 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     // forever. The guard must use POSTED evidence only, and therefore refuse.
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-        vehicles: [{ ...baseImportRow, vin: "IMPORTREV0000001A", purchasePrice: 10000 }],
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-18", purchasePaymentMethod: "CASH",
+        vehicles: [{ rowId: 1, ...baseImportRow, vin: "IMPORTREV0000001A", purchasePrice: 10000 }],
       })
     ).rejects.toThrow(/no recorded purchase/i);
   });
@@ -2681,13 +2715,14 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     const { t, orgId, asOwner } = await seedDealer("s59max");
 
     const rows = Array.from({ length: 25 }, (_, i) => ({
+      rowId: i + 1,
       ...baseImportRow,
       vin: `IMPORTMAX${String(i).padStart(8, "0")}`,
       purchasePrice: 1000,
     }));
 
     const result = await asOwner.mutation(api.vehicles.importBulk, {
-      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH", vehicles: rows,
+      orgId, acquisitionPosting: "PURCHASE", importId: "imp-19", purchasePaymentMethod: "CASH", vehicles: rows,
     });
 
     expect(result.inserted).toBe(25);
@@ -2704,6 +2739,7 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     // single call ever saw both and the second car was silently skipped. One
     // transaction is what makes this detectable at all.
     const rows = Array.from({ length: 25 }, (_, i) => ({
+      rowId: i + 1,
       ...baseImportRow,
       vin: `IMPORTDUP${String(i).padStart(8, "0")}`,
       purchasePrice: 1000,
@@ -2712,7 +2748,7 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
 
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH", vehicles: rows,
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-fill-1", purchasePaymentMethod: "CASH", vehicles: rows,
       })
     ).rejects.toThrow(/repeat a VIN already used earlier/i);
 
@@ -2738,8 +2774,8 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     // sourceCost undefined. Importing the dialog here instead would drag a .tsx
     // module into convex/tsconfig and break the convex-backend gate.
     await asOwner.mutation(api.vehicles.importBulk, {
-      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "ON_ACCOUNT",
-      vehicles: [{
+      orgId, acquisitionPosting: "PURCHASE", importId: "imp-fill-2", purchasePaymentMethod: "ON_ACCOUNT",
+      vehicles: [{ rowId: 1,
         ...baseImportRow, vin: "IMPORTE2E0000001A",
         purchasePrice: 10000, sourcedFromName: "Atiwi Motors",
       }],
@@ -2797,23 +2833,30 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
   }
 
   /** One CASH-purchased Kia Sportage 2023, imported and capitalized. */
+  /**
+   * One CASH-purchased Kia Sportage 2023, and the identity of the import that
+   * bought it — which is the ONLY thing a later call can use to prove it is
+   * retrying that same purchase rather than recording a second car.
+   */
   async function seedPurchased(suffix: string, vin: string, cost = 10000) {
     const ctx = await seedDealer(suffix);
+    const importId = `seed-${suffix}`;
     await ctx.asOwner.mutation(api.vehicles.importBulk, {
-      orgId: ctx.orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-      vehicles: [{ ...baseImportRow, vin, purchasePrice: cost }],
+      orgId: ctx.orgId, acquisitionPosting: "PURCHASE", importId, purchasePaymentMethod: "CASH",
+      vehicles: [{ rowId: 1, ...baseImportRow, vin, purchasePrice: cost }],
     });
-    return ctx;
+    return { ...ctx, importId };
   }
 
-  test("a DIFFERENT car sharing a filler VIN across two imports is REFUSED, not silently dropped", async () => {
-    // `UNKNOWN` is alphanumeric and is not in isPlaceholderVin's list, so it
-    // passes every VIN guard. Two operators filling the column that way on two
-    // different days is ordinary, not adversarial.
+  test("a DIFFERENT car sharing a VIN across two imports is REFUSED, not silently dropped", async () => {
+    // Two operators copying the same VIN cell down on two different days is
+    // ordinary, not adversarial. A real VIN is used here rather than a filler
+    // word so that this exercises the CONTRADICTION path — filler words are now
+    // refused earlier, by name.
     const { t, orgId, asOwner } = await seedDealer("s59xcall");
     await asOwner.mutation(api.vehicles.importBulk, {
-      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-      vehicles: [{ ...baseImportRow, make: "Toyota", model: "Corolla", vin: "UNKNOWN", purchasePrice: 8000 }],
+      orgId, acquisitionPosting: "PURCHASE", importId: "imp-21", purchasePaymentMethod: "CASH",
+      vehicles: [{ rowId: 1, ...baseImportRow, make: "Toyota", model: "Corolla", vin: "IMPORTXCALL0001A", purchasePrice: 8000 }],
     });
     const before = await worldDelta(t, orgId);
 
@@ -2822,8 +2865,8 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     // VEHICLE_ACQUIRED, no cash paid, reported as "skipped 1 duplicates".
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-        vehicles: [{ ...baseImportRow, make: "Honda", model: "Civic", vin: "UNKNOWN", purchasePrice: 12000 }],
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-22", purchasePaymentMethod: "CASH",
+        vehicles: [{ rowId: 1, ...baseImportRow, make: "Honda", model: "Civic", vin: "IMPORTXCALL0001A", purchasePrice: 12000 }],
       })
     ).rejects.toThrow(/recorded as Toyota Corolla, this file says Honda Civic/);
 
@@ -2839,15 +2882,15 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
   test("an existing VIN whose MAKE alone disagrees is refused", async () => {
     const { t, orgId, asOwner } = await seedDealer("s59mk");
     await asOwner.mutation(api.vehicles.importBulk, {
-      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-      vehicles: [{ ...baseImportRow, make: "Kia", model: "Sportage", vin: "IMPORTMAKE00001A", purchasePrice: 10000 }],
+      orgId, acquisitionPosting: "PURCHASE", importId: "imp-23", purchasePaymentMethod: "CASH",
+      vehicles: [{ rowId: 1, ...baseImportRow, make: "Kia", model: "Sportage", vin: "IMPORTMAKE00001A", purchasePrice: 10000 }],
     });
     const before = await worldDelta(t, orgId);
 
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-        vehicles: [{ ...baseImportRow, make: "Hyundai", model: "Sportage", vin: "IMPORTMAKE00001A", purchasePrice: 10000 }],
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-24", purchasePaymentMethod: "CASH",
+        vehicles: [{ rowId: 1, ...baseImportRow, make: "Hyundai", model: "Sportage", vin: "IMPORTMAKE00001A", purchasePrice: 10000 }],
       })
     ).rejects.toThrow(/recorded as Kia Sportage, this file says Hyundai Sportage/);
 
@@ -2857,15 +2900,15 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
   test("an existing VIN whose MODEL alone disagrees is refused", async () => {
     const { t, orgId, asOwner } = await seedDealer("s59md");
     await asOwner.mutation(api.vehicles.importBulk, {
-      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-      vehicles: [{ ...baseImportRow, make: "Kia", model: "Sportage", vin: "IMPORTMODEL0001A", purchasePrice: 10000 }],
+      orgId, acquisitionPosting: "PURCHASE", importId: "imp-25", purchasePaymentMethod: "CASH",
+      vehicles: [{ rowId: 1, ...baseImportRow, make: "Kia", model: "Sportage", vin: "IMPORTMODEL0001A", purchasePrice: 10000 }],
     });
     const before = await worldDelta(t, orgId);
 
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-        vehicles: [{ ...baseImportRow, make: "Kia", model: "Sorento", vin: "IMPORTMODEL0001A", purchasePrice: 10000 }],
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-26", purchasePaymentMethod: "CASH",
+        vehicles: [{ rowId: 1, ...baseImportRow, make: "Kia", model: "Sorento", vin: "IMPORTMODEL0001A", purchasePrice: 10000 }],
       })
     ).rejects.toThrow(/recorded as Kia Sportage, this file says Kia Sorento/);
 
@@ -2876,12 +2919,15 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
   // "kia " vs "Kia" refuses every legitimate retry from a spreadsheet that was
   // re-saved, and an operator who cannot retry stops trusting the import.
   test("a retry differing only in CASE and PADDING is still a retry", async () => {
-    const { t, orgId, asOwner } = await seedPurchased("s59case", "IMPORTCASE00001A", 10000);
+    const { t, orgId, asOwner, importId } = await seedPurchased("s59case", "IMPORTCASE00001A", 10000);
     const before = await worldDelta(t, orgId);
 
+    // Same import, same row — re-sent with the make and model typed differently.
+    // The fingerprint is case- and padding-insensitive on those, so this is
+    // still the same requested operation and not a conflict.
     const again = await asOwner.mutation(api.vehicles.importBulk, {
-      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-      vehicles: [{ ...baseImportRow, make: "  kia ", model: "SPORTAGE", vin: "IMPORTCASE00001A", purchasePrice: 10000 }],
+      orgId, acquisitionPosting: "PURCHASE", importId, purchasePaymentMethod: "CASH",
+      vehicles: [{ rowId: 1, ...baseImportRow, make: "  kia ", model: "SPORTAGE", vin: "IMPORTCASE00001A", purchasePrice: 10000 }],
     });
 
     expect(again).toMatchObject({ inserted: 0, alreadyRecorded: 1, skipped: 0 });
@@ -2910,8 +2956,8 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     // scale. The currency is checked in its own right.
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-        vehicles: [{ ...baseImportRow, vin: "IMPORTCUR000001A", purchasePrice: 10000 }],
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-28", purchasePaymentMethod: "CASH",
+        vehicles: [{ rowId: 1, ...baseImportRow, vin: "IMPORTCUR000001A", purchasePrice: 10000 }],
       })
     ).rejects.toThrow(/recorded in USD, this import is in JOD/);
 
@@ -2936,8 +2982,8 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
 
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-        vehicles: [{ ...baseImportRow, vin: "IMPORTNOPM00001A", purchasePrice: 10000 }],
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-29", purchasePaymentMethod: "CASH",
+        vehicles: [{ rowId: 1, ...baseImportRow, vin: "IMPORTNOPM00001A", purchasePrice: 10000 }],
       })
     ).rejects.toThrow(/does not state a payment method/);
 
@@ -2950,8 +2996,8 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
 
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-        vehicles: [{ ...baseImportRow, year: 2024, vin: "IMPORTYEAR00001A", purchasePrice: 10000 }],
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-30", purchasePaymentMethod: "CASH",
+        vehicles: [{ rowId: 1, ...baseImportRow, year: 2024, vin: "IMPORTYEAR00001A", purchasePrice: 10000 }],
       })
     ).rejects.toThrow(/recorded as a 2023, this file says 2024/);
 
@@ -2968,8 +3014,8 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
 
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-        vehicles: [{ ...baseImportRow, vin: "IMPORTCOST00001A", purchasePrice: 12000 }],
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-31", purchasePaymentMethod: "CASH",
+        vehicles: [{ rowId: 1, ...baseImportRow, vin: "IMPORTCOST00001A", purchasePrice: 12000 }],
       })
     ).rejects.toThrow(/recorded at 10000, this file says 12000/);
 
@@ -2982,8 +3028,8 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
 
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "BANK_TRANSFER",
-        vehicles: [{ ...baseImportRow, vin: "IMPORTPM00000001", purchasePrice: 10000 }],
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-32", purchasePaymentMethod: "BANK_TRANSFER",
+        vehicles: [{ rowId: 1, ...baseImportRow, vin: "IMPORTPM00000001", purchasePrice: 10000 }],
       })
     ).rejects.toThrow(/recorded as paid by CASH, this import says BANK_TRANSFER/);
 
@@ -2991,12 +3037,12 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
   });
 
   test("an identical re-import is an idempotent retry, reported as alreadyRecorded and NOT as skipped", async () => {
-    const { t, orgId, asOwner } = await seedPurchased("s59retry", "IMPORTRETRY0001A", 10000);
+    const { t, orgId, asOwner, importId } = await seedPurchased("s59retry", "IMPORTRETRY0001A", 10000);
     const before = await worldDelta(t, orgId);
 
     const again = await asOwner.mutation(api.vehicles.importBulk, {
-      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-      vehicles: [{ ...baseImportRow, vin: "IMPORTRETRY0001A", purchasePrice: 10000 }],
+      orgId, acquisitionPosting: "PURCHASE", importId, purchasePaymentMethod: "CASH",
+      vehicles: [{ rowId: 1, ...baseImportRow, vin: "IMPORTRETRY0001A", purchasePrice: 10000 }],
     });
 
     expect(again).toMatchObject({ inserted: 0, alreadyRecorded: 1, skipped: 0 });
@@ -3007,8 +3053,8 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
   test("ON_ACCOUNT: a retry naming a DIFFERENT supplier is refused", async () => {
     const { t, orgId, asOwner } = await seedDealer("s59supp");
     await asOwner.mutation(api.vehicles.importBulk, {
-      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "ON_ACCOUNT",
-      vehicles: [{ ...baseImportRow, vin: "IMPORTSUPP00001A", purchasePrice: 10000, sourcedFromName: "Gulf Motors" }],
+      orgId, acquisitionPosting: "PURCHASE", importId: "imp-34", purchasePaymentMethod: "ON_ACCOUNT",
+      vehicles: [{ rowId: 1, ...baseImportRow, vin: "IMPORTSUPP00001A", purchasePrice: 10000, sourcedFromName: "Gulf Motors" }],
     });
     const before = await worldDelta(t, orgId);
 
@@ -3016,8 +3062,8 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     // the payable knows WHO is owed, so that is where the disagreement is.
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "ON_ACCOUNT",
-        vehicles: [{ ...baseImportRow, vin: "IMPORTSUPP00001A", purchasePrice: 10000, sourcedFromName: "Delta Auto" }],
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-35", purchasePaymentMethod: "ON_ACCOUNT",
+        vehicles: [{ rowId: 1, ...baseImportRow, vin: "IMPORTSUPP00001A", purchasePrice: 10000, sourcedFromName: "Delta Auto" }],
       })
     ).rejects.toThrow(/owed to Gulf Motors, this file says Delta Auto/);
 
@@ -3026,15 +3072,15 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
 
   test("ON_ACCOUNT: a retry naming the SAME supplier is a retry, and creates no second payable", async () => {
     const { t, orgId, asOwner } = await seedDealer("s59supp2");
-    const row = { ...baseImportRow, vin: "IMPORTSUPP00002B", purchasePrice: 10000, sourcedFromName: "Gulf Motors" };
+    const row = { rowId: 1, ...baseImportRow, vin: "IMPORTSUPP00002B", purchasePrice: 10000, sourcedFromName: "Gulf Motors" };
     await asOwner.mutation(api.vehicles.importBulk, {
-      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "ON_ACCOUNT", vehicles: [row],
+      orgId, acquisitionPosting: "PURCHASE", importId: "imp-36", purchasePaymentMethod: "ON_ACCOUNT", vehicles: [row],
     });
     const before = await worldDelta(t, orgId);
     expect(before.payables).toBe(1);
 
     const again = await asOwner.mutation(api.vehicles.importBulk, {
-      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "ON_ACCOUNT", vehicles: [row],
+      orgId, acquisitionPosting: "PURCHASE", importId: "imp-36", purchasePaymentMethod: "ON_ACCOUNT", vehicles: [row],
     });
 
     expect(again).toMatchObject({ inserted: 0, alreadyRecorded: 1, skipped: 0 });
@@ -3049,10 +3095,10 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     // bought on supplier credit with nothing recorded anywhere.
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-38", purchasePaymentMethod: "CASH",
         vehicles: [
-          { ...baseImportRow, vin: "IMPORTSRC00001AA", purchasePrice: 10000 },
-          { ...baseImportRow, vin: "IMPORTSRC00002BB", sourceType: "SOURCED", sourceCost: 9000 },
+          { rowId: 1, ...baseImportRow, vin: "IMPORTSRC00001AA", purchasePrice: 10000 },
+          { rowId: 2, ...baseImportRow, vin: "IMPORTSRC00002BB", sourceType: "SOURCED", sourceCost: 9000 },
         ],
       })
     ).rejects.toThrow(/missing a supplier or a cost/);
@@ -3067,9 +3113,9 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
 
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-39", purchasePaymentMethod: "CASH",
         vehicles: [
-          { ...baseImportRow, vin: "IMPORTSRC00003CC", sourceType: "SOURCED", sourcedFromName: "Gulf Motors" },
+          { rowId: 1, ...baseImportRow, vin: "IMPORTSRC00003CC", sourceType: "SOURCED", sourcedFromName: "Gulf Motors" },
         ],
       })
     ).rejects.toThrow(/missing a supplier or a cost/);
@@ -3120,8 +3166,8 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
 
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-        vehicles: [{ ...baseImportRow, vin: "IMPORTBLIND0001A", purchasePrice: 10000 }],
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-40", purchasePaymentMethod: "CASH",
+        vehicles: [{ rowId: 1, ...baseImportRow, vin: "IMPORTBLIND0001A", purchasePrice: 10000 }],
       })
     ).rejects.toThrow(/does not state a cost/);
 
@@ -3169,8 +3215,8 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
 
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-        vehicles: [{ ...baseImportRow, vin: "IMPORTQUEUE0001A", purchasePrice: 10000 }],
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-41", purchasePaymentMethod: "CASH",
+        vehicles: [{ rowId: 1, ...baseImportRow, vin: "IMPORTQUEUE0001A", purchasePrice: 10000 }],
       })
     ).rejects.toThrow(/does not state a currency/);
 
@@ -3178,8 +3224,8 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     // exposure. Reaching that branch would mean the outbox was ignored.
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-        vehicles: [{ ...baseImportRow, vin: "IMPORTQUEUE0001A", purchasePrice: 10000 }],
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-42", purchasePaymentMethod: "CASH",
+        vehicles: [{ rowId: 1, ...baseImportRow, vin: "IMPORTQUEUE0001A", purchasePrice: 10000 }],
       })
     ).rejects.not.toThrow(/no recorded purchase/);
 
@@ -3231,8 +3277,8 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
 
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-        vehicles: [{ ...baseImportRow, vin: "IMPORTDEAD00001A", purchasePrice: 10000 }],
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-43", purchasePaymentMethod: "CASH",
+        vehicles: [{ rowId: 1, ...baseImportRow, vin: "IMPORTDEAD00001A", purchasePrice: 10000 }],
       })
     ).rejects.toThrow(/no recorded purchase/);
 
@@ -3252,8 +3298,8 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
 
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-        vehicles: [{
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-44", purchasePaymentMethod: "CASH",
+        vehicles: [{ rowId: 1,
           ...baseImportRow, vin: "CROSSSOURCE0001A", sourceType: "SOURCED",
           sourcedFromName: "Some Other Dealer", sourceCost: 4000,
         }],
@@ -3266,8 +3312,8 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
   test("the reverse — owned stock re-presenting an existing SOURCED vehicle — is refused too", async () => {
     const { t, orgId, asOwner } = await seedDealer("s59crosssrc2");
     await asOwner.mutation(api.vehicles.importBulk, {
-      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-      vehicles: [{
+      orgId, acquisitionPosting: "PURCHASE", importId: "imp-45", purchasePaymentMethod: "CASH",
+      vehicles: [{ rowId: 1,
         ...baseImportRow, vin: "CROSSSOURCE0002B", sourceType: "SOURCED",
         sourcedFromName: "Other Dealer", sourceCost: 9000,
       }],
@@ -3276,8 +3322,8 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
 
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-        vehicles: [{ ...baseImportRow, vin: "CROSSSOURCE0002B", purchasePrice: 9000 }],
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-46", purchasePaymentMethod: "CASH",
+        vehicles: [{ rowId: 1, ...baseImportRow, vin: "CROSSSOURCE0002B", purchasePrice: 9000 }],
       })
     ).rejects.toThrow(/recorded as sourced from a supplier, this file says owned stock/);
 
@@ -3290,15 +3336,15 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
       ...baseImportRow, vin: "CROSSSOURCE0003C", sourceType: "SOURCED", sourceCost: 9000,
     };
     await asOwner.mutation(api.vehicles.importBulk, {
-      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-      vehicles: [{ ...base, sourcedFromName: "Other Dealer" }],
+      orgId, acquisitionPosting: "PURCHASE", importId: "imp-47", purchasePaymentMethod: "CASH",
+      vehicles: [{ rowId: 1, ...base, sourcedFromName: "Other Dealer" }],
     });
     const before = await worldDelta(t, orgId);
 
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-        vehicles: [{ ...base, sourcedFromName: "A Completely Different Dealer" }],
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-48", purchasePaymentMethod: "CASH",
+        vehicles: [{ rowId: 1, ...base, sourcedFromName: "A Completely Different Dealer" }],
       })
     ).rejects.toThrow(/sourced from Other Dealer, this file says A Completely Different Dealer/);
 
@@ -3312,15 +3358,15 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
       sourcedFromName: "Other Dealer",
     };
     await asOwner.mutation(api.vehicles.importBulk, {
-      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-      vehicles: [{ ...base, sourceCost: 9000 }],
+      orgId, acquisitionPosting: "PURCHASE", importId: "imp-49", purchasePaymentMethod: "CASH",
+      vehicles: [{ rowId: 1, ...base, sourceCost: 9000 }],
     });
     const before = await worldDelta(t, orgId);
 
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
-        vehicles: [{ ...base, sourceCost: 7500 }],
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-50", purchasePaymentMethod: "CASH",
+        vehicles: [{ rowId: 1, ...base, sourceCost: 7500 }],
       })
     ).rejects.toThrow(/supplier cost of 9000, this file says 7500/);
 
@@ -3332,19 +3378,308 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     // re-import of a file whose sourced rows never changed.
     const { t, orgId, asOwner } = await seedDealer("s59srcretry");
     const row = {
-      ...baseImportRow, vin: "CROSSSOURCE0005E", sourceType: "SOURCED",
+      rowId: 1, ...baseImportRow, vin: "CROSSSOURCE0005E", sourceType: "SOURCED",
       sourcedFromName: "Other Dealer", sourceCost: 9000,
     };
     await asOwner.mutation(api.vehicles.importBulk, {
-      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH", vehicles: [row],
+      orgId, acquisitionPosting: "PURCHASE", importId: "imp-51", purchasePaymentMethod: "CASH", vehicles: [row],
     });
     const before = await worldDelta(t, orgId);
 
     const again = await asOwner.mutation(api.vehicles.importBulk, {
-      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH", vehicles: [row],
+      orgId, acquisitionPosting: "PURCHASE", importId: "imp-51", purchasePaymentMethod: "CASH", vehicles: [row],
     });
 
     expect(again).toMatchObject({ inserted: 0, alreadyRecorded: 1, skipped: 0 });
     expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+  // ── Durable per-row idempotency ───────────────────────────────────────────
+  //
+  // `alreadyRecorded` means ONE thing: durable evidence exists that this exact
+  // import operation already ran. It does NOT mean "something in the database
+  // looks like this row". Those are different claims, and the difference is a
+  // car.
+  //
+  // Two genuinely separate vehicles can agree on every fact a spreadsheet
+  // carries — same model, same price, same day, same filler text in the VIN
+  // column. Fact equality therefore cannot distinguish a retry from a second
+  // purchase, and the earlier design that tried to silently discarded the
+  // second car and its capitalization while reporting success.
+
+  /**
+   * ⚠️ TWO CARS CANNOT SHARE A VIN STRING, so the reported scenario cannot end
+   * with two stored vehicles both reading "UNKNOWN".
+   *
+   * `by_org_vin` is read with `.unique()` in several places, and a second row
+   * under the same VIN would make every later lookup for that org throw — an
+   * org-wide breakage strictly worse than the defect being fixed. So the
+   * property asserted here is the one that actually matters: THE SECOND CAR IS
+   * NEVER SILENTLY SUPPRESSED. It is refused, by name, with a message saying
+   * what to do; and once the VINs are real, both cars import and both
+   * capitalize.
+   */
+  test("two IDENTICAL cars under a filler VIN are REFUSED, never silently collapsed into one", async () => {
+    // THE REPRODUCTION. Same model, same 10,000 price, both rows carrying
+    // "UNKNOWN" because the VINs were not to hand — an ordinary fleet purchase.
+    // Every fact agrees, which is exactly why nothing but row identity could
+    // ever tell them apart. Previously the second was reported as an
+    // already-recorded retry and vanished along with its 10,000.
+    const { t, orgId, asOwner } = await seedDealer("s59fleet");
+    const car = { ...baseImportRow, make: "Kia", model: "Sportage", year: 2023, vin: "UNKNOWN", purchasePrice: 10000 };
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", importId: "fleet-1", purchasePaymentMethod: "CASH",
+        vehicles: [{ ...car, rowId: 1 }, { ...car, rowId: 2 }],
+      })
+    ).rejects.toThrow(/VIN is required for every vehicle/);
+    expect(await worldDelta(t, orgId)).toEqual({
+      vehicles: 0, transactions: 0, events: 0, payables: 0, inventoryMinor: 0,
+    });
+
+    // ...and the SAME two cars, once their real VINs are supplied, both land and
+    // both capitalize. Nothing about them being identical suppresses either one.
+    const fixed = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "fleet-1", purchasePaymentMethod: "CASH",
+      vehicles: [
+        { ...car, rowId: 1, vin: "IMPORTFLEET0001A" },
+        { ...car, rowId: 2, vin: "IMPORTFLEET0002B" },
+      ],
+    });
+    expect(fixed).toMatchObject({ inserted: 2, alreadyRecorded: 0, skipped: 0 });
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(20_000_000);
+    expect(await glBalanceMinor(t, orgId, "CASH_ON_HAND")).toBe(-20_000_000);
+  });
+
+  test("the SECOND of two identical cars in a LATER import is refused, not reported as already recorded", async () => {
+    // The cross-import half of the same defect, and the one the 25-row cap makes
+    // routine: a fleet larger than one file arrives as several imports. The
+    // second car agrees with the first on every recorded fact, so only the
+    // absence of evidence for THIS row can save it — and it does.
+    const { t, orgId, asOwner } = await seedDealer("s59fleet2");
+    const car = { ...baseImportRow, make: "Kia", model: "Sportage", year: 2023, purchasePrice: 10000 };
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "fleet-2", purchasePaymentMethod: "CASH",
+      vehicles: [{ ...car, rowId: 1, vin: "IMPORTFLEET0003C" }],
+    });
+    const before = await worldDelta(t, orgId);
+
+    // A different row of the same import, identical in every fact, re-using the
+    // first car's VIN because the operator copied the cell down.
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", importId: "fleet-2", purchasePaymentMethod: "CASH",
+        vehicles: [{ ...car, rowId: 2, vin: "IMPORTFLEET0003C" }],
+      })
+    ).rejects.toThrow(/already recorded under the same VIN/);
+    expect(await worldDelta(t, orgId)).toEqual(before);
+
+    // Whereas re-sending ROW 1 — the same row of the same import — is a proven
+    // retry and moves nothing.
+    const again = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "fleet-2", purchasePaymentMethod: "CASH",
+      vehicles: [{ ...car, rowId: 1, vin: "IMPORTFLEET0003C" }],
+    });
+    expect(again).toMatchObject({ inserted: 0, alreadyRecorded: 1, skipped: 0 });
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+
+  test("the SAME key with different facts is a hard conflict, never a retry and never an update", async () => {
+    // Four separate materially-different facts, each on its own dealer so the
+    // conflict is the only thing under test. Resolving any of these in either
+    // direction loses something: accepting the old outcome discards the change,
+    // applying the new one rewrites a posted purchase.
+    const car = { ...baseImportRow, vin: "IMPORTIDEM00001A", purchasePrice: 10000, rowId: 1 };
+    const variants: Array<[string, Record<string, unknown>, "CASH" | "BANK_TRANSFER" | "ON_ACCOUNT"]> = [
+      ["cost", { purchasePrice: 12000 }, "CASH"],
+      ["payment method", {}, "BANK_TRANSFER"],
+      ["ownership", { sourceType: "SOURCED", sourcedFromName: "Other Dealer", sourceCost: 9000 }, "CASH"],
+      ["supplier", { sourcedFromName: "Someone Else" }, "CASH"],
+    ];
+
+    for (const [label, change, method] of variants) {
+      const { t, orgId, asOwner } = await seedDealer(`s59idem-${label.replace(/\s/g, "")}`);
+      await asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", importId: "conflict-1", purchasePaymentMethod: "CASH",
+        vehicles: [car],
+      });
+      const before = await worldDelta(t, orgId);
+
+      await expect(
+        asOwner.mutation(api.vehicles.importBulk, {
+          orgId, acquisitionPosting: "PURCHASE", importId: "conflict-1", purchasePaymentMethod: method,
+          vehicles: [{ ...car, ...change }],
+        })
+      ).rejects.toThrow(/IDEMPOTENCY_CONFLICT/);
+
+      expect(await worldDelta(t, orgId)).toEqual(before);
+    }
+  });
+
+  test("an identical VIN and identical facts under a DIFFERENT key is never a proven retry", async () => {
+    // The distinction the whole redesign turns on. Everything about this row
+    // matches what is already recorded — and that is precisely why it cannot be
+    // waved through, because a second identical car matches just as well.
+    const { t, orgId, asOwner } = await seedDealer("s59newkey");
+    const car = { ...baseImportRow, vin: "IMPORTNEWKEY0001", purchasePrice: 10000, rowId: 1 };
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "key-a", purchasePaymentMethod: "CASH", vehicles: [car],
+    });
+    const before = await worldDelta(t, orgId);
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", importId: "key-b", purchasePaymentMethod: "CASH", vehicles: [car],
+      })
+    ).rejects.toThrow(/already recorded under the same VIN/);
+
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+
+  test("re-sending a FULL 25-row import proves every row independently, with no accounting duplicates", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59full25");
+    const rows = Array.from({ length: 25 }, (_, i) => ({
+      rowId: i + 1,
+      ...baseImportRow,
+      vin: `IMPORTFULL${String(i).padStart(7, "0")}`,
+      purchasePrice: 1000,
+    }));
+
+    const first = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "full-25", purchasePaymentMethod: "CASH", vehicles: rows,
+    });
+    expect(first.inserted).toBe(25);
+    const before = await worldDelta(t, orgId);
+
+    const again = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "full-25", purchasePaymentMethod: "CASH", vehicles: rows,
+    });
+
+    expect(again).toMatchObject({ inserted: 0, alreadyRecorded: 25, skipped: 0 });
+    expect(await worldDelta(t, orgId)).toEqual(before);
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(25_000_000);
+  });
+
+  test("a 26-row file is refused and leaves NO evidence, so the 25+1 split still imports both parts", async () => {
+    // The cap is the reason a fleet purchase spans several imports at all, so
+    // the boundary has to be clean in both directions: a refused oversize file
+    // must not leave proof that suppresses the rows when they are re-sent.
+    const { t, orgId, asOwner } = await seedDealer("s59boundary");
+    const rows = Array.from({ length: 26 }, (_, i) => ({
+      rowId: i + 1,
+      ...baseImportRow,
+      vin: `IMPORTEDGE${String(i).padStart(7, "0")}`,
+      purchasePrice: 1000,
+    }));
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", importId: "edge-1", purchasePaymentMethod: "CASH", vehicles: rows,
+      })
+    ).rejects.toThrow(/Import too large/);
+    expect(await worldDelta(t, orgId)).toEqual({
+      vehicles: 0, transactions: 0, events: 0, payables: 0, inventoryMinor: 0,
+    });
+
+    // Split, keeping the ORIGINAL row numbers — which is what makes the halves
+    // two parts of one file rather than two unrelated imports.
+    const head = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "edge-1", purchasePaymentMethod: "CASH",
+      vehicles: rows.slice(0, 25),
+    });
+    const tail = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "edge-1", purchasePaymentMethod: "CASH",
+      vehicles: rows.slice(25),
+    });
+
+    expect(head.inserted).toBe(25);
+    expect(tail.inserted).toBe(1);
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(26_000_000);
+
+    // And re-sending either half is still a proven retry, not a second purchase.
+    const replay = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "edge-1", purchasePaymentMethod: "CASH",
+      vehicles: rows.slice(25),
+    });
+    expect(replay).toMatchObject({ inserted: 0, alreadyRecorded: 1 });
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(26_000_000);
+  });
+
+  test("ATOMICITY: a file that fails partway leaves no evidence able to suppress its own retry", async () => {
+    // The inverse defect, and the reason the evidence is written inline with the
+    // acquisition rather than before it or afterwards. If proof of row 1 could
+    // outlive a failure in row 2, the corrected re-import would skip row 1 as
+    // "already recorded" and its purchase would never reach the ledger at all.
+    const { t, orgId, asOwner } = await seedDealer("s59atomic");
+    const good = { rowId: 1, ...baseImportRow, vin: "IMPORTATOM00001A", purchasePrice: 10000 };
+    const bad = { rowId: 2, ...baseImportRow, vin: "IMPORTATOM00002B", purchasePrice: 7000, status: "SOLD" };
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", importId: "atomic-1", purchasePaymentMethod: "CASH",
+        vehicles: [good, bad],
+      })
+    ).rejects.toThrow(/sale/i);
+
+    // Nothing at all — including no idempotency record for the row that "ran".
+    const evidence = await t.run((ctx) =>
+      ctx.db.query("commandIdempotency").withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(evidence).toHaveLength(0);
+
+    // The corrected re-import records BOTH cars. If row 1's proof had survived
+    // the rollback, it would be skipped here and 10,000 would never post.
+    const fixed = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "atomic-1", purchasePaymentMethod: "CASH",
+      vehicles: [good, { ...bad, status: undefined }],
+    });
+    expect(fixed).toMatchObject({ inserted: 2, alreadyRecorded: 0 });
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(17_000_000);
+  });
+
+  test("a purchase import that cannot identify itself is refused outright", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59noident");
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+        vehicles: [{ rowId: 1, ...baseImportRow, vin: "IMPORTNOID00001A", purchasePrice: 10000 }],
+      })
+    ).rejects.toThrow(/did not identify itself/);
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", importId: "no-rows", purchasePaymentMethod: "CASH",
+        vehicles: [{ ...baseImportRow, vin: "IMPORTNOID00002B", purchasePrice: 10000 }],
+      })
+    ).rejects.toThrow(/carry no row number/);
+
+    // Two rows claiming to be the same row would share one evidence record, so
+    // the second would read as a retry of the first — the same silent loss,
+    // arriving through the key instead of through the VIN.
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", importId: "dup-rows", purchasePaymentMethod: "CASH",
+        vehicles: [
+          { rowId: 1, ...baseImportRow, vin: "IMPORTNOID00003C", purchasePrice: 10000 },
+          { rowId: 1, ...baseImportRow, vin: "IMPORTNOID00004D", purchasePrice: 10000 },
+        ],
+      })
+    ).rejects.toThrow(/repeat a row number/);
+
+    expect((await worldDelta(t, orgId)).vehicles).toBe(0);
+  });
+
+  test("OPENING_STOCK needs no identity at all — it posts nothing to be idempotent about", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59osident");
+    const result = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "OPENING_STOCK",
+      vehicles: [{ ...baseImportRow, vin: "IMPORTOSID00001A", purchasePrice: 10000 }],
+    });
+    expect(result.inserted).toBe(1);
+    const evidence = await t.run((ctx) =>
+      ctx.db.query("commandIdempotency").withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(evidence).toHaveLength(0);
   });
 });

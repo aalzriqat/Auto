@@ -785,7 +785,7 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
           setPaymentMethod={setPaymentMethod}
         />
       )}
-      onImport={(vehicles) => {
+      onImport={(vehicles, { importId, sourceRows }) => {
         if (!activeOrgId) return Promise.resolve({ inserted: 0, skipped: 0, alreadyRecorded: 0 });
         // The wizard's Import button is disabled until this is answered; the
         // guard is here as well because a disabled button is a hint, not a
@@ -800,10 +800,22 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
         ) {
           return Promise.resolve({ inserted: 0, skipped: 0, alreadyRecorded: 0 });
         }
+        // A purchase import refuses without this, and would do so only after the
+        // operator pressed Import. Saying it here keeps the failure legible.
+        if (posting === "PURCHASE" && !importId) {
+          return Promise.reject(
+            new Error(t("ImportCouldNotIdentifyItself" as any))
+          );
+        }
         // Send only the fields importBulk's validator declares — Convex rejects
         // any undeclared field, so we pick explicitly rather than spreading the
         // whole derived row (which also carries preview-only helper values).
-        const payload = vehicles.map((v) => ({
+        const payload = vehicles.map((v, i) => ({
+          // The row's position in the operator's ORIGINAL file, index-aligned
+          // with `vehicles`. This is what makes a re-sent row provably the same
+          // row, so it must survive correcting an earlier row — which an index
+          // into the valid subset would not.
+          rowId: sourceRows[i],
           make: v.make,
           model: v.model,
           year: v.year,
@@ -842,6 +854,9 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
                 orgId: activeOrgId,
                 acquisitionPosting: posting,
                 purchasePaymentMethod: posting === "PURCHASE" ? paymentMethod! : undefined,
+                // Same identity for every chunk and every retry of this upload.
+                // A purchase import refuses outright without it.
+                importId,
                 vehicles: chunk as any,
               });
               totals.inserted += result.inserted;

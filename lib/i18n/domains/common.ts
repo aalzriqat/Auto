@@ -220,6 +220,8 @@ export const commonEn = {
   ImportRetryAdviceOpeningStock:
     "Fix the reported rows and import the file again. Vehicles that carry a VIN will be skipped as duplicates, but rows without one would be added a second time — remove those that already imported.",
 
+  ImportCouldNotIdentifyItself:
+    "This import could not identify itself, so it cannot be safely retried and nothing was saved. Reload the page and import the file again.",
   ImportResultImported: "Imported {count}.",
   ImportResultAlreadyRecorded:
     "{count} were already recorded with matching purchase evidence, so nothing was posted again for them.",
@@ -1150,6 +1152,8 @@ export const commonAr = {
   ImportRetryAdviceOpeningStock:
     "صحّح الصفوف المذكورة وأعد استيراد الملف. المركبات التي تحمل رقم شاصي سيتم تخطيها كمكررة، أما الصفوف بلا رقم شاصي فستُضاف مرة ثانية — احذف ما تم استيراده منها.",
 
+  ImportCouldNotIdentifyItself:
+    "تعذّر على هذا الاستيراد تعريف نفسه، لذا لا يمكن إعادة المحاولة بأمان ولم يُحفظ أي شيء. أعد تحميل الصفحة ثم استورد الملف مجدداً.",
   ImportResultImported: "تم استيراد {count}.",
   ImportResultAlreadyRecorded:
     "{count} مسجّلة مسبقاً بأدلة شراء مطابقة، لذلك لم يُقيَّد لها شيء من جديد.",
