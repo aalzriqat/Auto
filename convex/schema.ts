@@ -528,6 +528,20 @@ export default defineSchema({
     memo: v.optional(v.string()),
     createdBy: v.id("users"),
     createdAt: v.number(),
+    // The currency these minor-unit line amounts were ENTERED in, snapshotted
+    // at draft time. Not derivable from the org later: orgSettings only locks
+    // the org currency once a row exists in one of six financial tables, and
+    // openingBalanceDrafts is not one of them — so a fresh org (exactly the
+    // onboarding case) could draft in JOD, switch to USD, and approve. Scale is
+    // per-currency (3 for JOD/KWD/BHD/OMR, 2 otherwise), so that re-denominates
+    // 1,000.000 JOD into 10,000.00 USD with no conversion. Optional because
+    // rows drafted before this field existed cannot have it.
+    currency: v.optional(v.string()),
+    // Display identity of the preparer, snapshotted for the same reason: user
+    // rows are hard-deleted on offboarding (memberships.ts), which would leave
+    // the approver reviewing a draft prepared by "Unknown" — and the whole
+    // point of the two-person control is knowing who the other person was.
+    preparedByName: v.optional(v.string()),
     reviewedBy: v.optional(v.id("users")),
     decidedAt: v.optional(v.number()),
     rejectionReason: v.optional(v.string()),

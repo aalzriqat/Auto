@@ -2,6 +2,13 @@ import { describe, expect, test } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { dictionaries } from "./dictionaries";
+// Imported statically, not with `await import()` inside the test body. Loading
+// the panel drags in React, Convex and the shadcn tree; under a parallel run
+// that transform cost lands inside the 5s per-test budget and the test times
+// out, while passing in isolation. Paying it at file-import time — which vitest
+// does not time-box per test — makes the guard's result depend on the code
+// rather than on how loaded the machine is.
+import { computeApprovalGate } from "@/components/accounting/setup/OpeningBalanceApprovalPanel";
 
 /**
  * `useLanguage().t` is typed as `keyof typeof dictionaries.en | (string & {})`.
@@ -174,5 +181,53 @@ describe("cockpit label maps resolve through the dictionaries", () => {
       .filter(({ key }) => !(key in dictionaries.en) || !(key in dictionaries.ar))
       .map(({ name, key }) => `${name} -> ${key}`);
     expect(missing).toEqual([]);
+  });
+});
+
+/**
+ * Keys that reach `t()` through a variable, not a literal.
+ *
+ * `computeApprovalGate` returns key STRINGS which the panel passes to `t()`, so
+ * the call sites contain no literal key and static scanning cannot see them. A
+ * rename in one dictionary would ship an untranslated string to exactly the
+ * screen that unblocks an organization's general ledger. CodeRabbit caught this
+ * as a direct consequence of the round-4 gate redesign.
+ */
+describe("dynamically-referenced i18n keys", () => {
+  const gateKeys = [
+    "OpeningBalanceUnbalanced",
+    "OpeningBalanceCurrencyUnknown",
+    "OpeningBalanceRejectAndResubmit",
+    "OpeningBalanceOwnDraftNeedsAnotherReviewer",
+    "OpeningBalanceSegregationOfDutiesNotice",
+    "OpeningBalancePreparerUnknown",
+    "OpeningBalanceRawMinorUnitsNote",
+  ] as const;
+
+  test("every key computeApprovalGate can return exists in both dictionaries", () => {
+    for (const key of gateKeys) {
+      expect(dictionaries.en[key as keyof typeof dictionaries.en], `missing EN: ${key}`).toBeTruthy();
+      expect(dictionaries.ar[key as keyof typeof dictionaries.ar], `missing AR: ${key}`).toBeTruthy();
+    }
+  });
+
+  test("the list above matches what the gate can actually return", () => {
+    // Guards the guard: if a future branch returns a new key and nobody adds it
+    // above, this fails rather than silently narrowing the coverage.
+    const produced = new Set<string>();
+    for (const isOwnDraft of [true, false]) {
+      for (const busy of [true, false]) {
+        for (const balanced of [true, false]) {
+          for (const denominationKnown of [true, false]) {
+            const gate = computeApprovalGate({ isOwnDraft, busy, balanced, denominationKnown });
+            if (gate.recoveryKey) produced.add(gate.recoveryKey);
+            gate.blockingFacts.forEach((f) => produced.add(f.key));
+          }
+        }
+      }
+    }
+    for (const key of produced) {
+      expect(gateKeys as readonly string[], `gate returns unlisted key: ${key}`).toContain(key);
+    }
   });
 });

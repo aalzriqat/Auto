@@ -28,9 +28,70 @@ import { isSystemOwnerRole, PERMISSIONS } from "./utils/permissions";
 import { getOpenPeriodForDate } from "./accountingPeriods";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { validateManualJournalLines, auditLog, type ManualJournalLine } from "./financialAudit";
-import { toMinorUnits, scaleForCurrency } from "./utils/money";
+import { toMinorUnits, denominationOf } from "./utils/money";
 import { Doc, Id } from "./_generated/dataModel";
 import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
+
+/**
+ * One refusal, worded for the two things that are actually different to the
+ * person reading it: nothing was ever recorded, versus something was recorded
+ * that AutoFlow will not price.
+ *
+ * Both are dead ends only if rejection is unavailable, and it is not —
+ * `rejectOpeningBalanceDraft` stays open on every path, so the org re-submits
+ * in a supported currency rather than being stuck.
+ */
+/**
+ * Binds already-converted minor units to the denomination they were converted
+ * under, and refuses if the organization has moved on since.
+ *
+ * The client turns typed decimals into integers using the currency it can see
+ * at that moment (`OpeningBalanceCard` calls `toMinorUnits(amount, currency)`).
+ * The server then labels those integers with whatever the org denomination is
+ * when the mutation runs. Between those two moments the currency can change —
+ * and neither `denominationOf` nor any other validity check can notice, because
+ * both codes are perfectly valid on their own. The integers are simply computed
+ * under one scale and stamped with another: 1,000.000 JOD converted at scale 3
+ * is 1,000,000 minor units, and posted as USD at scale 2 that reads 10,000.00.
+ *
+ * So the check is an EQUALITY against what the caller actually converted under,
+ * not a validity test. Callers pass the exact canonical code they used.
+ *
+ * No normalization, deliberately: `"jod"` and `"JD"` fail the equality against
+ * the canonical `"JOD"` rather than being uppercased or aliased into it. A
+ * guard that rescues a value the rest of the system would reject is how the
+ * previous round's defect worked.
+ *
+ * Every caller must invoke this BEFORE its first write. A refusal that lands
+ * after the draft insert is still correct about the money — the mutation rolls
+ * back — but `postOpeningBalanceDirect` would have created a PENDING_APPROVAL
+ * row on the refusal path in any world where the two stopped sharing a
+ * transaction, and `hasOpeningBalanceCommitment` reads such a row as a
+ * commitment that blocks the org from opening its books at all.
+ */
+async function assertDenominationUnchanged(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  expectedCurrency: string
+): Promise<void> {
+  const current = await getOrgCurrency(ctx, orgId);
+  const vouched = denominationOf(current);
+  if (vouched === null) {
+    throw new ConvexError(unvouchableDenominationMessage(current));
+  }
+  if (expectedCurrency !== vouched.code) {
+    throw new ConvexError(
+      `These amounts were entered in ${expectedCurrency}, but this organization's currency is now ${vouched.code}. The figures were converted using ${expectedCurrency}'s decimal places, so posting them as ${vouched.code} would misstate every one of them. Nothing has been saved — reopen the form and enter the opening balance again.`
+    );
+  }
+}
+
+function unvouchableDenominationMessage(recorded: string | undefined): string {
+  if (recorded === undefined) {
+    return "This opening balance was drafted before its currency was recorded, so the amounts cannot be safely posted. Reject it and submit it again.";
+  }
+  return `This opening balance is denominated "${recorded}", which is not a currency AutoFlow can price — the minor-unit scale would have to be guessed, and a wrong guess misstates the organization's entire starting position by a factor of ten. Reject it and submit it again in a supported currency.`;
+}
 
 /**
  * A deliberately minimal, sign-off-scoped total — not a substitute for
@@ -106,9 +167,17 @@ export const draftOpeningBalance = mutation({
     })),
     asOfDate: v.number(),
     memo: v.optional(v.string()),
+    // The exact canonical code the caller converted the entered decimals under.
+    // See assertDenominationUnchanged — this binds the integers to a scale.
+    expectedCurrency: v.string(),
   },
   handler: async (ctx, args): Promise<{ draftId: string }> => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+
+    // Before anything is read for validation and long before anything is
+    // written: if the denomination moved under the caller, none of the numbers
+    // below mean what they say.
+    await assertDenominationUnchanged(ctx, args.orgId, args.expectedCurrency);
 
     if (await hasOpeningBalanceCommitment(ctx, args.orgId)) {
       throw new ConvexError("An opening balance has already been posted or is awaiting approval for this organization.");
@@ -149,6 +218,14 @@ export const draftOpeningBalance = mutation({
       memo: args.memo,
       createdBy: user._id,
       createdAt: now,
+      // Snapshot the denomination and the preparer's identity at draft time.
+      // Neither can be re-derived at approval: orgSettings only locks the org
+      // currency once a row exists in one of six financial tables and a draft
+      // is not one of them, and the preparer's user row is hard-deleted on
+      // offboarding. Written on the direct-post path too so both routes leave
+      // an identically-shaped record.
+      currency: await getOrgCurrency(ctx, args.orgId),
+      preparedByName: user.name || user.email || undefined,
     });
 
     await auditLog(ctx, {
@@ -192,6 +269,22 @@ export const approveOpeningBalance = mutation({
     // exception is visible in the API surface rather than hidden behind a flag.
     if (draft.createdBy === user._id) {
       throw new ConvexError("Opening balance approver cannot be the same as the preparer.");
+    }
+
+    // A denomination the product cannot vouch for cannot be posted, and posting
+    // the org's entire starting position on a guessed scale is not a recoverable
+    // mistake. Refuse rather than assume: rejecting and re-submitting takes a
+    // minute, and `rejectOpeningBalanceDraft` stays available so this is never a
+    // dead end.
+    //
+    // `denominationOf`, not `!draft.currency`. Truthiness answers a different
+    // question — "is there a string here" — and lets "JD", "XYZ" and "jod"
+    // through to `scaleForCurrency`, which prices anything it does not
+    // recognise at scale 2. This is the same authority `applications.ts` uses
+    // at handover and finalization, so one rule governs every path that seals
+    // money irreversibly.
+    if (denominationOf(draft.currency) === null) {
+      throw new ConvexError(unvouchableDenominationMessage(draft.currency));
     }
 
     const journalId = await postOpeningBalanceDraft(ctx, {
@@ -244,7 +337,32 @@ async function postOpeningBalanceDraft(
     throw new ConvexError("No open accounting period covers the opening-balance date. Create and open a period first.");
   }
 
-  const currency = await getOrgCurrency(ctx, orgId);
+  // The denomination the lines were ENTERED in, never the org's current one.
+  // The two can differ: orgSettings locks the org currency only once a row
+  // exists in one of six financial tables, and openingBalanceDrafts is not among
+  // them — so a fresh org can draft in JOD, switch to USD, then approve. Since
+  // minor-unit scale is per-currency (3 for JOD/KWD/BHD/OMR, 2 otherwise),
+  // posting at the current currency would silently turn 1,000.000 JOD into
+  // 10,000.00 USD across the org's entire starting position.
+  //
+  // And it is resolved through `denominationOf`, the shared fail-closed
+  // authority, rather than by taking the string at its word. `scaleForCurrency`
+  // answers 2 for ANYTHING it does not recognise (`utils/money.ts:110`) — a
+  // deliberate choice for display code that must not crash, and the wrong one
+  // here, where the guess would post the org's entire starting position an
+  // order of magnitude out. `denominationOf` refuses absent, unsupported and
+  // non-canonical spellings alike, and hands back the scale it vouched for.
+  //
+  // This is the CHOKEPOINT both routes share, so neither can post on a guess
+  // even if a future caller forgets the boundary check. There is no fallback to
+  // the org currency: a draft with no recorded denomination cannot have one
+  // re-derived — the org's current setting is a known-wrong answer, not a
+  // conservative one, which is the whole subject of SCRUM-62.
+  const denomination = denominationOf(draft.currency);
+  if (denomination === null) {
+    throw new ConvexError(unvouchableDenominationMessage(draft.currency));
+  }
+  const currency = denomination.code;
   const now = Date.now();
 
   const journalId = await ctx.db.insert("journalEntries", {
@@ -265,7 +383,9 @@ async function postOpeningBalanceDraft(
   const journalNumber = `OB-${journalId.toString().replace(/[^a-z0-9]/gi, "").slice(-10).toUpperCase()}`;
   await ctx.db.patch(journalId, { journalNumber });
 
-  const scale = scaleForCurrency(currency);
+  // The scale the authority vouched for, not a second lookup that could answer
+  // differently from the code above.
+  const scale = denomination.scale;
   for (let i = 0; i < draft.lines.length; i++) {
     const line = draft.lines[i];
     await ctx.db.insert("journalLines", {
@@ -355,6 +475,9 @@ export const postOpeningBalanceDirect = mutation({
     })),
     asOfDate: v.number(),
     memo: v.optional(v.string()),
+    // The exact canonical code the caller converted the entered decimals under.
+    // See assertDenominationUnchanged — this binds the integers to a scale.
+    expectedCurrency: v.string(),
   },
   handler: async (ctx, args): Promise<{ journalId: string; draftId: string }> => {
     const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -364,11 +487,22 @@ export const postOpeningBalanceDirect = mutation({
       );
     }
 
+    // Before the draft insert AND before the post — this route does both in one
+    // mutation, so it is the one where a late refusal would be worst.
+    await assertDenominationUnchanged(ctx, args.orgId, args.expectedCurrency);
+
     if (await hasOpeningBalanceCommitment(ctx, args.orgId)) {
       throw new ConvexError("An opening balance has already been posted or is awaiting approval for this organization.");
     }
 
     validateManualJournalLines(args.lines as ManualJournalLine[]);
+
+    // The denomination to stamp on the row. Already proved vouchable AND equal
+    // to what the caller converted under by the assertion above, which is why
+    // this is a plain read rather than a second guard — one rule, checked once,
+    // at the boundary. (The shared poster re-checks vouchability independently
+    // as the chokepoint for callers that never came through here.)
+    const orgDenomination = await getOrgCurrency(ctx, args.orgId);
 
     const now = Date.now();
     const draftId = await ctx.db.insert("openingBalanceDrafts", {
@@ -379,6 +513,15 @@ export const postOpeningBalanceDirect = mutation({
       memo: args.memo,
       createdBy: user._id,
       createdAt: now,
+      // Snapshot the denomination and the preparer's identity at draft time.
+      // Neither can be re-derived at approval: orgSettings only locks the org
+      // currency once a row exists in one of six financial tables and a draft
+      // is not one of them, and the preparer's user row is hard-deleted on
+      // offboarding. Written on the direct-post path too so both routes leave
+      // an identically-shaped record. Vouched for immediately above, so the row
+      // cannot be created carrying a denomination the poster would refuse.
+      currency: orgDenomination,
+      preparedByName: user.name || user.email || undefined,
     });
 
     const draft = await ctx.db.get(draftId);
@@ -447,10 +590,55 @@ export const listPendingOpeningBalanceDrafts = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    return await ctx.db
+    const drafts = await ctx.db
       .query("openingBalanceDrafts")
       .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING_APPROVAL"))
       .collect();
+
+    // `preparedByName` and `currency` are resolved here rather than in the
+    // client because both are load-bearing for the approval decision and
+    // neither is on the draft row.
+    //
+    // The name is what makes the segregation-of-duties check meaningful to a
+    // human: approveOpeningBalance refuses when approver === preparer, and a
+    // reviewer who cannot see who prepared it is being asked to rubber-stamp.
+    //
+    // The currency drives the minor-unit scale the amounts are rendered at.
+    // Scale is per-currency (3 for JOD/KWD/BHD/OMR, 2 otherwise), so a client
+    // that guessed would display an opening balance off by a factor of ten on
+    // exactly the currencies this product is used in. Mirrors the same
+    // reasoning as openingBalanceStatus.
+    const orgCurrency = await getOrgCurrency(ctx, args.orgId);
+
+    return await Promise.all(
+      drafts.map(async (draft) => {
+        // Snapshot first, live lookup only as a fallback for drafts written
+        // before the snapshot existed. The live row is the unreliable one:
+        // offboarding hard-deletes users (memberships.ts), which would render
+        // the preparer as "Unknown" on the very screen where identifying them
+        // is the control.
+        const preparer = draft.preparedByName ? null : await ctx.db.get(draft.createdBy);
+        return {
+          ...draft,
+          // `null`, never an English literal. The client renders this inside a
+          // <bdi> on a screen this PR hardened for Arabic bidi — shipping
+          // "Unknown" there would put untranslated English in the RTL run.
+          // Translation is the client's job; the server reports absence.
+          preparedByName:
+            draft.preparedByName || preparer?.name || preparer?.email || null,
+          currency: draft.currency ?? orgCurrency,
+          // The SAME authority the server refuses on, not a lookalike. This was
+          // `Boolean(draft.currency)` to match the old `!draft.currency` guard,
+          // and both were truthiness: a draft denominated "JD" reported
+          // denomination-known, the panel enabled Approve, and the refusal
+          // arrived as a raw error toast — exactly the dead-end behaviour this
+          // flag exists to remove. `denominationOf` is the one rule for both
+          // sides, so the screen can never offer an approval the poster will
+          // refuse.
+          denominationKnown: denominationOf(draft.currency) !== null,
+        };
+      })
+    );
   },
 });
 

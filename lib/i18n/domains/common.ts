@@ -332,6 +332,24 @@ export const commonEn = {
   OpeningBalanceSubmitForApproval: "Save for approval",
   OpeningBalanceOwnerNote: "As an owner you can post this directly, with no second approver.",
   OpeningBalanceApprovalNote: "This will be saved for a second finance user to approve.",
+  OpeningBalanceAwaitingApproval: "Opening balance awaiting your approval",
+  OpeningBalancePreparedBy: "Prepared by",
+  OpeningBalanceAsOf: "as of",
+  OpeningBalanceLinesRegion: "Opening balance lines, scrollable",
+  OpeningBalanceSegregationOfDutiesNotice:
+    "You submitted this opening balance, so you cannot approve or reject it yourself. The owner or another finance user must review it.",
+  OpeningBalanceRejectionReasonPlaceholder: "Why is this being rejected?",
+  OpeningBalanceRejectionReasonRequired: "A reason is required to reject.",
+  OpeningBalanceCurrencyUnknown:
+    "This draft was created before its currency was recorded, so its amounts cannot be posted safely.",
+  OpeningBalanceRejectAndResubmit: "Reject it and submit it again.",
+  OpeningBalancePreparerUnknown: "an unknown user",
+  OpeningBalanceRawMinorUnitsNote:
+    "Amounts are shown as raw stored units because this draft's currency is unknown.",
+  OpeningBalanceOwnDraftNeedsAnotherReviewer:
+    "You submitted this, so another finance user or the owner must reject it before it can be submitted again.",
+  OpeningBalanceApprovedToast: "Opening balance approved and posted.",
+  OpeningBalanceRejectedToast: "Opening balance rejected.",
   OpeningBalancePostedToast: "Opening balance posted.",
   OpeningBalanceSubmittedToast: "Opening balance saved for approval.",
   OpeningBalanceSelectAccount: "Select an account",
@@ -1202,6 +1220,24 @@ export const commonAr = {
   OpeningBalanceSubmitForApproval: "حفظ للموافقة",
   OpeningBalanceOwnerNote: "بصفتك المالك يمكنك الترحيل مباشرة دون موافقة شخص ثانٍ.",
   OpeningBalanceApprovalNote: "سيتم الحفظ بانتظار موافقة مستخدم مالية آخر.",
+  OpeningBalanceAwaitingApproval: "رصيد افتتاحي بانتظار موافقتك",
+  OpeningBalancePreparedBy: "أعدّه",
+  OpeningBalanceAsOf: "كما في",
+  OpeningBalanceLinesRegion: "بنود الرصيد الافتتاحي، قابلة للتمرير",
+  OpeningBalanceSegregationOfDutiesNotice:
+    "لقد أرسلت هذا الرصيد الافتتاحي، لذا لا يمكنك الموافقة عليه أو رفضه بنفسك. يجب أن يراجعه المالك أو مستخدم مالية آخر.",
+  OpeningBalanceRejectionReasonPlaceholder: "ما سبب الرفض؟",
+  OpeningBalanceRejectionReasonRequired: "يجب إدخال سبب للرفض.",
+  OpeningBalanceCurrencyUnknown:
+    "أُنشئت هذه المسودة قبل تسجيل عملتها، لذا لا يمكن ترحيل مبالغها بأمان.",
+  OpeningBalanceRejectAndResubmit: "ارفضها وأعد إرسالها.",
+  OpeningBalancePreparerUnknown: "مستخدم غير معروف",
+  OpeningBalanceRawMinorUnitsNote:
+    "تُعرض المبالغ كوحدات مخزّنة خام لأن عملة هذه المسودة غير معروفة.",
+  OpeningBalanceOwnDraftNeedsAnotherReviewer:
+    "أنت من أرسل هذه المسودة، لذا يجب أن يرفضها مستخدم مالية آخر أو المالك قبل إعادة إرسالها.",
+  OpeningBalanceApprovedToast: "تمت الموافقة على الرصيد الافتتاحي وترحيله.",
+  OpeningBalanceRejectedToast: "تم رفض الرصيد الافتتاحي.",
   OpeningBalancePostedToast: "تم ترحيل الرصيد الافتتاحي.",
   OpeningBalanceSubmittedToast: "تم حفظ الرصيد الافتتاحي بانتظار الموافقة.",
   OpeningBalanceSelectAccount: "اختر الحساب",
