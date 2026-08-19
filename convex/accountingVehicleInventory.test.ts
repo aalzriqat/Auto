@@ -2212,7 +2212,7 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
   test("a SOURCED row never capitalizes into inventory, even under PURCHASE", async () => {
     const { t, orgId, asOwner } = await seedDealer("s59f");
 
-    await asOwner.mutation(api.vehicles.importBulk, {
+    const result = await asOwner.mutation(api.vehicles.importBulk, {
       orgId,
       acquisitionPosting: "PURCHASE",
       purchasePaymentMethod: "CASH",
@@ -2223,6 +2223,15 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
         },
       ],
     });
+
+    // Both balances are also 0 when the row was never created at all, and a
+    // SOURCED row missing its supplier name or cost IS skipped a few lines
+    // later in importBulk. Without this the test passes on a regression that
+    // silently drops the row it claims to be about.
+    expect(result.inserted).toBe(1);
+    const sourced = await vehicleByVin(t, orgId, "IMPORTSRC0000001A");
+    expect(sourced).not.toBeNull();
+    expect(sourced!.sourceType).toBe("SOURCED");
 
     expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(0);
     expect(await glBalanceMinor(t, orgId, "CASH_ON_HAND")).toBe(0);
@@ -2447,5 +2456,157 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
         .filter((q) => q.eq(q.field("category"), "VEHICLE_PURCHASE")).collect()
     );
     expect(txns).toHaveLength(1);
+  });
+  // ─────────────────────────────────────────────────────────────────────────
+  // The retry PAIR. These two are deliberately adjacent: they present the
+  // import with the SAME shape — an exact VIN that already exists — and require
+  // OPPOSITE answers. One is a genuine retry and must be idempotent; the other
+  // is an unproven basis and must refuse. A guard that gets either alone right
+  // while collapsing them into one behaviour is the defect.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  test("an OPENING_STOCK vehicle re-presented as a PURCHASE is REFUSED, never silently skipped", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59amb");
+
+    // Cutover. The car is stock the dealer already owns, so nothing posts — its
+    // cost sits in the organization's opening balance, not in a per-vehicle
+    // acquisition event.
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId,
+      acquisitionPosting: "OPENING_STOCK",
+      vehicles: [{ ...baseImportRow, vin: "IMPORTAMB0000001A", purchasePrice: 10000 }],
+    });
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(0);
+
+    // The same VIN now arrives as a purchase. Skipping it silently leaves a car
+    // that can be SOLD, crediting Vehicle Inventory against a debit that was
+    // never posted. Posting it would capitalize stock the opening balance
+    // already covers. Neither is inferable from this row, so it refuses.
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId,
+        acquisitionPosting: "PURCHASE",
+        purchasePaymentMethod: "CASH",
+        vehicles: [{ ...baseImportRow, vin: "IMPORTAMB0000001A", purchasePrice: 10000 }],
+      })
+    ).rejects.toThrow(/no recorded purchase/i);
+
+    // Refused for the stated reason AND atomically: a null-dereference would
+    // also "throw" while proving nothing, so the world delta is pinned too.
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(0);
+    const vehicles = await t.run((ctx) =>
+      ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(vehicles).toHaveLength(1);
+    const lines = await t.run((ctx) =>
+      ctx.db.query("journalLines").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(lines).toHaveLength(0);
+  });
+
+  test("a SOURCED or cost-less row that already exists is still an ordinary duplicate, not a refusal", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59amb2");
+
+    // The ambiguity only exists for a row that would CAPITALIZE. These post
+    // nothing either way, so refusing them would break the retry contract —
+    // which depends on re-presenting rows that never posted.
+    const rows = [
+      {
+        ...baseImportRow, vin: "IMPORTDUP0000001A", sourceType: "SOURCED",
+        sourcedFromName: "Other Dealer", sourceCost: 9000,
+      },
+      { ...baseImportRow, vin: "IMPORTDUP0000002B" },
+    ];
+
+    const first = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH", vehicles: rows,
+    });
+    expect(first.inserted).toBe(2);
+
+    const second = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH", vehicles: rows,
+    });
+    expect(second.inserted).toBe(0);
+    expect(second.skipped).toBe(2);
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(0);
+  });
+
+  test("a PURCHASE VIN that differs from an existing car only in punctuation is REFUSED", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59canon");
+
+    // Typed in with dashes. Nothing refuses that today: CreateVehicleSchema
+    // checks length and the I/O/Q rule, not punctuation, and OPENING_STOCK
+    // accepts it deliberately so a migration is not blocked.
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId,
+      acquisitionPosting: "OPENING_STOCK",
+      vehicles: [{ ...baseImportRow, vin: "1HGCM826-33A0043" }],
+    });
+
+    // The spreadsheet spells the same car cleanly. `by_org_vin` is an
+    // exact-string lookup, so without the guard this inserts a SECOND vehicle
+    // document, earns a different `vehicle_acquired_<id>` idempotency key, and
+    // capitalizes one physical car twice.
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId,
+        acquisitionPosting: "PURCHASE",
+        purchasePaymentMethod: "CASH",
+        vehicles: [{ ...baseImportRow, vin: "1HGCM82633A0043", purchasePrice: 10000 }],
+      })
+    ).rejects.toThrow(/differently-punctuated/i);
+
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(0);
+    const vehicles = await t.run((ctx) =>
+      ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(vehicles).toHaveLength(1);
+  });
+
+  test("retrying a file after a later chunk failed skips the committed rows without reposting them", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59retry");
+
+    // Chunk 1 commits. A file larger than the posting cap arrives as several
+    // calls, and each is its own transaction, so this really is durable.
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+      vehicles: [{ ...baseImportRow, vin: "IMPORTRTY000001A", purchasePrice: 10000 }],
+    });
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(10_000_000);
+
+    // Chunk 2 fails on its second row. That chunk is atomic, so it leaves
+    // nothing — but chunk 1 stays committed, which is the state a retry meets.
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+        vehicles: [
+          { ...baseImportRow, vin: "IMPORTRTY000002B", purchasePrice: 7000 },
+          { ...baseImportRow, vin: "IMPORTRTY000003C", purchasePrice: 7000, status: "SOLD" },
+        ],
+      })
+    ).rejects.toThrow(/sale/i);
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(10_000_000);
+
+    // The operator fixes the row and imports THE WHOLE FILE again — the
+    // documented recovery. The already-committed car must be skipped without
+    // reposting, and the remainder must still go in.
+    const retry = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH",
+      vehicles: [
+        { ...baseImportRow, vin: "IMPORTRTY000001A", purchasePrice: 10000 },
+        { ...baseImportRow, vin: "IMPORTRTY000002B", purchasePrice: 7000 },
+        { ...baseImportRow, vin: "IMPORTRTY000003C", purchasePrice: 7000 },
+      ],
+    });
+    expect(retry.inserted).toBe(2);
+    expect(retry.skipped).toBe(1);
+
+    // 10,000 + 7,000 + 7,000 — each car once. A repost would read 34,000,000.
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(24_000_000);
+    const txns = await t.run((ctx) =>
+      ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .filter((q) => q.eq(q.field("category"), "VEHICLE_PURCHASE")).collect()
+    );
+    expect(txns).toHaveLength(3);
   });
 });

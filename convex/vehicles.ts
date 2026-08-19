@@ -2163,6 +2163,33 @@ export const IMPORT_BULK_MAX_ROWS = 200;
 export const IMPORT_BULK_MAX_POSTING_ROWS = 25;
 
 /**
+ * THE RECOVERY CONTRACT for a file larger than the cap.
+ *
+ * Such a file arrives as several calls and each is its own transaction, so a
+ * transient failure in a later chunk leaves the earlier chunks committed. The
+ * operator is told to fix the reported rows and import THE SAME FILE again
+ * (`ImportRetryAdvicePurchase`), and that instruction is only honest because:
+ *
+ *  1. every predictable whole-file rule is checked before the first chunk is
+ *     sent — the client re-runs the server's own VIN and supplier predicates
+ *     across all rows, so a bad row at the end stops the import before a single
+ *     journal entry exists;
+ *  2. a chunk is atomic, so a failed chunk contributes nothing; and
+ *  3. on the retry, a row whose vehicle already exists AND already carries
+ *     acquisition exposure is skipped without reposting, while the remainder
+ *     proceeds — identity is the VIN, never the row's position in the file.
+ *
+ * Proven by "retrying a file after a later chunk failed skips the committed
+ * rows without reposting them" in accountingVehicleInventory.test.ts, which
+ * pins the GL at one acquisition per car across the failure and the retry.
+ *
+ * ⚠️ (3) holds only while the VIN spelling is unchanged. A spreadsheet re-saved
+ * between attempts can alter a cell; that is why the retry advice says so
+ * rather than promising outright, and why a canonically-colliding VIN is
+ * refused rather than inserted as a second car.
+ */
+
+/**
  * What an import means in accounting terms — the operator states it, the server
  * never guesses.
  *
