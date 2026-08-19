@@ -953,6 +953,54 @@ export async function hasVehicleAcquisitionAccountingExposure(
 }
 
 /**
+ * STRICTER than `hasVehicleAcquisitionAccountingExposure`, and deliberately local.
+ *
+ * The shared helper answers "was an attempt ever made". That is the right
+ * question for `accountingMigration`, which uses it to avoid posting a second
+ * event. It is the wrong question here, because this guard uses the answer to
+ * take its PERMISSIVE branch — to conclude a car is already capitalized and may
+ * be skipped — so it has to prove capitalization is CURRENTLY TRUE, not that
+ * something was once attempted.
+ *
+ * `accountingEvents.status` is PENDING | POSTED | FAILED | REVERSED and the
+ * shared helper inspects none of them. A REVERSED acquisition, whose journal has
+ * been netted back to zero, and a dead-lettered FAILED outbox row would both
+ * read as "capitalized", and the car would be silently skipped forever while a
+ * later sale credits Vehicle Inventory against a debit that no longer exists.
+ *
+ * The shared helper is deliberately NOT changed: it has five other callers in
+ * `accountingMigration.ts` and `vehicleEdits.ts` whose looser semantics are
+ * correct for what they ask, and widening this change to alter their behaviour
+ * is the scope creep that produced the defects this round exists to close.
+ * SCRUM-94 owns the durable identity work.
+ */
+async function hasProvenPostedAcquisition(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">
+): Promise<boolean> {
+  const events = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_source", (q) =>
+      q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId.toString())
+    )
+    .filter((q) => q.eq(q.field("eventType"), "VEHICLE_ACQUIRED"))
+    .collect();
+  if (events.some((event) => event.status === "POSTED")) return true;
+
+  // An outbox row still queued to POST is durable and will post, so it is real
+  // exposure. A FAILED row has been dead-lettered and is not. A row already
+  // resolved to POSTED is represented by the event checked above.
+  const queued = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_idempotency", (q) =>
+      q.eq("orgId", orgId).eq("idempotencyKey", `vehicle_acquired_${vehicleId}`)
+    )
+    .collect();
+  return queued.some((row) => row.kind === "POST" && row.status === "PENDING");
+}
+
+/**
  * Updates an existing vehicle's details.
  */
 export const update = mutation({
@@ -2371,74 +2419,132 @@ export const importBulk = mutation({
       const wouldCapitalize = (row: { sourceType?: string; purchasePrice?: number }) =>
         (row.sourceType ?? "").trim().toUpperCase() !== "SOURCED" && (row.purchasePrice ?? 0) > 0;
 
-      // ONE read of the org's vehicles, not one per row, and bounded so this can
-      // never itself be what blows the transaction: Convex aborts past ~32k
-      // scanned documents, and an opaque rollback of a dealer's whole import is
-      // the exact failure this guard exists to prevent.
-      const VIN_SCAN_CAP = 10_000;
+      // (0) A NEGATIVE COST IS NOT A PURCHASE. `assertFiniteNumber` above rejects
+      // NaN and Infinity but not sign, and `wouldCapitalize` tests `> 0`, so a
+      // negative price slips past BOTH: the row is inserted, nothing posts, and
+      // the import reports success having created exactly the uncapitalized
+      // inventory row SCRUM-59 exists to prevent.
+      const negativeCost = args.vehicles.filter(
+        (row) => (row.purchasePrice ?? 0) < 0 || (row.sourceCost ?? 0) < 0
+      );
+      if (negativeCost.length > 0) {
+        throw new ConvexError(
+          `${negativeCost.length} row(s) have a negative cost. A purchase cannot cost less than nothing — correct the amounts and import again.`
+        );
+      }
+
+      // (1) TWO ROWS IN THIS FILE THAT ARE THE SAME CAR. The per-row dedup below
+      // reads this mutation's own writes, so the second row silently resolves to
+      // the vehicle the first row just inserted and is counted as "skipped" —
+      // two purchased cars become one vehicle and ONE acquisition, understating
+      // inventory. The stored-vehicle map built below cannot catch this: at
+      // validation time neither row exists yet.
+      //
+      // Reachable with ordinary filler, not just identical VINs: `UNK` and
+      // `UNKNOWN` are alphanumeric and are not in `isPlaceholderVin`'s list, so
+      // they pass every other guard.
+      const firstSeenAt = new Map<string, number>();
+      const batchDuplicates: string[] = [];
+      args.vehicles.forEach((row, index) => {
+        const canonical = canonicalVin(row.vin);
+        if (!canonical) return;
+        if (!firstSeenAt.has(canonical)) {
+          firstSeenAt.set(canonical, index);
+          return;
+        }
+        batchDuplicates.push(row.vin.trim().toUpperCase());
+      });
+      if (batchDuplicates.length > 0) {
+        throw new ConvexError(
+          `${batchDuplicates.length} row(s) repeat a VIN already used earlier in this file (${batchDuplicates.slice(0, 3).join(", ")}). Each vehicle needs its own VIN — otherwise only the first is recorded and the rest are bought without ever being added. Give every row its real VIN and import again.`
+        );
+      }
+
+      // ⚠️ TEMPORARY LAUNCH BOUND — NOT the VIN-identity architecture.
+      //
+      // Proving "is this the same car under a different spelling" needs a stored,
+      // indexed canonical key. There is none, and adding one requires
+      // canonicalizing every writer plus a backfill shipping in the same deploy.
+      // That is SCRUM-94 and it owns the durable design, including collision and
+      // backfill policy. Until it lands, a PURCHASE import proves it in the only
+      // way available without a migration: read this org's vehicles and compare
+      // in memory.
+      //
+      // 500 is a deliberately small ceiling. A Convex query or mutation is capped
+      // at 16 MiB of data read AND 32,000 documents scanned; 500 whole vehicle
+      // documents sit far below both, leaving the 25 posting rows their headroom.
+      //
+      // ⚠️ The bound is on the RAW `by_org` result, deliberately. A `.filter()`
+      // does not reduce what a transaction consumes — Convex still scans and
+      // reads discarded documents — and there is no org+isDeleted index to bound
+      // on instead. Soft-deleted rows are excluded AFTER the read, and only to
+      // stop a deleted car raising a false conflict; that exclusion buys no
+      // transaction headroom and must never be described as if it did.
+      const VIN_SCAN_CAP = 500;
       const existingVehicles = await ctx.db
         .query("vehicles")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
         .take(VIN_SCAN_CAP + 1);
       if (existingVehicles.length > VIN_SCAN_CAP) {
         throw new ConvexError(
-          `This dealership has too many vehicles for an import to prove it is not duplicating one (over ${VIN_SCAN_CAP.toLocaleString()}). Add these vehicles individually, or import them as stock you already own, which records no purchase.`
+          `This dealership has more than ${VIN_SCAN_CAP} vehicles on record, which is more than a purchase import can check for duplicates. Add these vehicles individually instead.`
         );
       }
 
-      const byCanonicalVin = new Map<string, { id: Id<"vehicles">; vin: string }>();
+      const byCanonicalVin = new Map<string, { id: Id<"vehicles">; storedVin: string }>();
       for (const vehicle of existingVehicles) {
+        // Excluded AFTER the bounded read, for correctness only: a deleted car
+        // must not block re-importing its replacement. See the note above on why
+        // this cannot be pushed into the query.
+        if (vehicle.isDeleted) continue;
         const canonical = canonicalVin(vehicle.vin);
         if (!canonical) continue;
         if (!byCanonicalVin.has(canonical)) {
-          // Store the NORMALIZED stored VIN so the comparison below is
-          // normalized-vs-normalized. `vehicles.vin` is optional in the schema,
-          // but a row with no VIN has an empty canonical form and was skipped.
-          byCanonicalVin.set(canonical, {
-            id: vehicle._id,
-            vin: (vehicle.vin ?? "").trim().toUpperCase(),
-          });
+          // The RAW stored value, NOT a normalized copy. The dedup in the loop
+          // below queries `by_org_vin` for the incoming VIN uppercased, and that
+          // index matches the stored string EXACTLY — so the only stored value
+          // that dedup can ever find is one already identical to it. Comparing a
+          // normalized copy instead makes a stored `abc123` look like an exact
+          // match for an incoming `ABC123`, the collision goes unreported, and
+          // the loop then fails to find `abc123` and inserts a second vehicle
+          // with a second acquisition. That bypass was introduced by a type fix.
+          byCanonicalVin.set(canonical, { id: vehicle._id, storedVin: vehicle.vin ?? "" });
         }
       }
 
-      // (1) SAME CAR, DIFFERENT SPELLING. `by_org_vin` is an exact-string
-      // lookup, so an existing `1HGCM826-33A004352` is invisible to this
-      // import's `1HGCM82633A004352`. Left alone the row inserts a SECOND
-      // vehicle document, which earns a different `vehicle_acquired_<id>`
-      // idempotency key, and one physical car is capitalized twice.
+      // (2) SAME CAR, DIFFERENT SPELLING. Refuse whenever the canonical forms
+      // agree but the stored string is not exactly what the dedup will look up —
+      // punctuation, case or surrounding whitespace all reach this.
       const collisions = args.vehicles.filter((row) => {
         const incoming = canonicalVin(row.vin);
         if (!incoming) return false;
         const match = byCanonicalVin.get(incoming);
-        // An EXACT match is the ordinary duplicate path, handled by (2) and the
-        // loop below. Only a differently-spelled match is this ambiguity.
-        return match !== undefined && match.vin !== row.vin.trim().toUpperCase();
+        return match !== undefined && match.storedVin !== row.vin.trim().toUpperCase();
       });
       if (collisions.length > 0) {
         const sample = collisions
           .slice(0, 3)
-          .map((row) => `${row.vin.trim().toUpperCase()} vs ${byCanonicalVin.get(canonicalVin(row.vin))!.vin}`)
+          .map((row) => `${row.vin.trim().toUpperCase()} vs ${byCanonicalVin.get(canonicalVin(row.vin))!.storedVin}`)
           .join("; ");
         throw new ConvexError(
-          `${collisions.length} row(s) name a vehicle this dealership already has under a differently-punctuated VIN (${sample}). Importing them would record the same car twice. Correct the VIN on the existing vehicle, or remove these rows, then import again.`
+          `${collisions.length} row(s) name a vehicle this dealership already has under a differently-written VIN (${sample}). Importing them would record the same car twice. Correct the VIN on the existing vehicle, or remove these rows, then import again.`
         );
       }
 
-      // (2) THE EXISTING VEHICLE'S BASIS CANNOT BE PROVEN. An exact VIN match is
-      // skipped by the loop below, and that is right for a genuine retry: the
-      // car is already capitalized and must not post twice.
+      // (3) THE EXISTING VEHICLE'S BASIS CANNOT BE PROVEN. An exact VIN match is
+      // skipped by the loop below, and that is right for a genuine retry: the car
+      // is already capitalized and must not post twice.
       //
       // It is NOT right when the existing row arrived as OPENING_STOCK. That row
-      // carries no per-vehicle acquisition event, so a later PURCHASE of the
-      // same VIN would silently do nothing, and a subsequent sale would credit
-      // Vehicle Inventory with no matching debit.
+      // carries no acquisition event, so a later PURCHASE of the same VIN would
+      // silently do nothing, and a subsequent sale would credit Vehicle Inventory
+      // with no matching debit.
       //
-      // The inverse is equally wrong: absence of a per-vehicle event does NOT
-      // mean "needs posting". Legitimate opening stock is represented by the
-      // org's opening-balance position, and posting here would capitalize it a
-      // second time. The two cases are indistinguishable from this row alone, so
-      // this FAILS CLOSED and asks a human instead of guessing in either
-      // direction.
+      // The inverse is equally wrong: absence of an event does NOT mean "needs
+      // posting". Legitimate opening stock is represented by the org's
+      // opening-balance position, and posting here would capitalize it a second
+      // time. The two cases are indistinguishable from the row alone, so this
+      // FAILS CLOSED and asks a human instead of guessing in either direction.
       const unprovenBasis: string[] = [];
       for (const row of args.vehicles) {
         if (!wouldCapitalize(row)) continue;
@@ -2448,7 +2554,9 @@ export const importBulk = mutation({
           .withIndex("by_org_vin", (q) => q.eq("orgId", args.orgId).eq("vin", normalized))
           .unique();
         if (!existing) continue;
-        if (await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, existing._id)) continue;
+        // Proven POSTED evidence only — a REVERSED or dead-lettered FAILED record
+        // does not prove this car is capitalized today.
+        if (await hasProvenPostedAcquisition(ctx, args.orgId, existing._id)) continue;
         unprovenBasis.push(normalized);
       }
       if (unprovenBasis.length > 0) {

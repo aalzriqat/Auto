@@ -185,7 +185,7 @@ function parseVehicleWorksheet(rawRows: SpreadsheetRows): { headers: string[]; r
  * "BYD Dolphin 2024"); when there's no explicit model column, we split on
  * the first space (make / model) and pull a 19xx/20xx year out of the model.
  */
-function deriveVehicleRow(mapped: Record<string, any>): Record<string, any> {
+export function deriveVehicleRow(mapped: Record<string, any>): Record<string, any> {
   const rawModel = String(mapped.model ?? "").trim();
   const yearFromModel = rawModel.match(/\b(19|20)\d{2}\b/)?.[0];
   let model = yearFromModel ? rawModel.replace(yearFromModel, "").trim() : rawModel;
@@ -244,7 +244,14 @@ function deriveVehicleRow(mapped: Record<string, any>): Record<string, any> {
     // For a sourced vehicle the supplier cost is the same "Cost" column that
     // owned stock uses for purchase price; importBulk mirrors it into sourceCost.
     sourceCost: sourceType === "SOURCED" && purchasePrice && !isNaN(purchasePrice) ? purchasePrice : undefined,
-    sourcedFromName: sourceType === "SOURCED" ? (sourcedFrom || undefined) : undefined,
+    // Kept for STOCK rows too, not just SOURCED. importBulk writes
+    // `sourcedFromName` onto the vehicle document ONLY for a SOURCED row, so this
+    // does not pollute owned stock — but a PURCHASE on ON_ACCOUNT needs the
+    // supplier name to credit AP-Suppliers and to create the payable, and every
+    // capitalizing row is STOCK by definition. Discarding it here made the
+    // supplier column unreachable, so selecting "On account" blocked the import
+    // forever even from a spreadsheet that named the supplier in every row.
+    sourcedFromName: sourcedFrom || undefined,
     status: mapped.status ? String(mapped.status).toUpperCase() : undefined,
     notes: mapped.notes ? String(mapped.notes).trim() : undefined,
     valuations,
@@ -353,7 +360,7 @@ function capitalizingRows(rows: Record<string, any>[]) {
  * discovered after the earlier chunks have already posted real journal entries,
  * leaving the operator with a half-capitalized import and a generic error.
  */
-function purchaseBlockers(
+export function purchaseBlockers(
   rows: Record<string, any>[],
   paymentMethod: AcquisitionPaymentMethod | null
 ): { missingVin: number; malformedVin: number; missingSupplier: number } {
