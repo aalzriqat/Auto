@@ -17,7 +17,20 @@ import { paymentMethodValidator, acquisitionPaymentMethodValidator, normalizePay
 import { PURCHASE_IMPORT_MAX_ROWS } from "./utils/importLimits";
 import { findCommandUnit, recordCommandUnit } from "./utils/idempotency";
 import { simplePayloadHash } from "./accounting/postingRules";
-import { hasNonCanonicalVinCharacters } from "./utils/vin";
+import { hasNonCanonicalVinCharacters, isPlaceholderVin } from "./utils/vin";
+
+/** The stock kinds `getAgingBuckets` sums over, in key order. */
+const STOCK_KINDS = [OWN_STOCK, SOURCED];
+
+function randomHex(bytesLength: number): string {
+  const bytes = new Uint8Array(bytesLength);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function generateImportVinPlaceholder(): string {
+  return `IMPORT-${Date.now()}-${randomHex(3)}`;
+}
 import { syncVehicleHoldStatus, getDefaultReservationExpiry, getActiveDepositHolds } from "./utils/depositHelpers";
 import {
   amountToMinorOrThrow,
@@ -89,41 +102,6 @@ function agingKey(sourcedFlag: number, createdAt: number): [number, number, stri
   return [LIVE, sourcedFlag, "AVAILABLE", createdAt];
 }
 
-/** The stock kinds `getAgingBuckets` sums over, in key order. */
-const STOCK_KINDS = [OWN_STOCK, SOURCED];
-
-function randomHex(bytesLength: number): string {
-  const bytes = new Uint8Array(bytesLength);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function generateImportVinPlaceholder(): string {
-  return `IMPORT-${Date.now()}-${randomHex(3)}`;
-}
-
-// Dealers routinely drop a filler string into the VIN column for stock that has
-// no VIN yet — a run of x's, dashes or zeros, or "N/A". Those are NOT real
-// identifiers, so treating them as such makes every such row after the first
-// collide as a "duplicate VIN" and get silently skipped (this is why owned
-// stock, which most often lacks a VIN, failed to import). Normalizing them to
-// blank lets each row get its own generated placeholder instead of deduping.
-function isPlaceholderVin(raw: string): boolean {
-  const trimmed = raw.trim();
-  if (!trimmed) return true;
-  if (/^(.)\1+$/.test(trimmed)) return true; // xxxxxxxx, --------, 00000000, ...
-  const lower = trimmed.toLowerCase();
-  // "unknown"/"unk" are data cleanup, NOT the retry fix — retry safety is the
-  // (importId, rowId) evidence, and no blocklist could ever provide it. What
-  // this does provide is a far better failure: a purchase import refuses these
-  // by NAME ("a VIN is required") instead of by collision ("this VIN repeats"),
-  // and an opening-stock import stops deduping two different cars into one
-  // because a human typed the same word in both VIN cells.
-  return (
-    lower === "n/a" || lower === "na" || lower === "tbd" || lower === "none" || lower === "-" ||
-    lower === "unknown" || lower === "unk"
-  );
-}
 
 /**
  * Posts the VEHICLE_ACQUIRED GL entry (+ legacy VEHICLE_PURCHASE transaction
@@ -2348,28 +2326,61 @@ const IMPORT_ROW_OPERATION = "vehicles.importBulk.row";
 /**
  * What must be identical for a re-sent row to be the SAME requested operation.
  *
- * Deliberately every fact that changes what is written or posted — not a
- * summary. Re-sending a row under the same key with any of these altered is a
- * different request wearing a used identifier, and is refused rather than
- * silently resolved in either direction.
+ * EVERY input that changes what is written, posted, or created — not a summary,
+ * and not only the financial fields. A re-sent row whose selling price, status,
+ * mileage or valuations differ is a different request wearing a used identifier,
+ * and because a proven retry does no work at all, accepting it would discard
+ * the operator's change in silence: no write, no error, and a response
+ * indistinguishable from an ordinary no-op retry.
+ *
+ * ⚠️ An earlier revision covered only the money fields, and its own comment
+ * claimed it covered everything. `color`, `mileage`, `fuelType`, `transmission`,
+ * `sellingPrice`, `status`, `notes` and `valuations` were all persisted and all
+ * omitted. If a field is added to the row validator, it belongs here too.
+ *
+ * Valuations are canonicalized by sort key first, so re-ordering the same
+ * columns is not a conflict while changing, adding or removing one is.
  */
 async function importRowFingerprint(
   row: {
     vin: string; make: string; model: string; year: number;
+    color: string; mileage?: number; fuelType: string; transmission: string;
+    sellingPrice: number; status?: string; notes?: string;
     purchasePrice?: number; sourceType?: string; sourcedFromName?: string; sourceCost?: number;
+    valuations?: Array<{ companyId?: string; companyName?: string; valuationAmount: number }>;
   },
   paymentMethod: AcquisitionPaymentMethod
 ): Promise<string> {
+  const text = (value: string | undefined) => (value ?? "").trim().toLowerCase();
+  const valuations = (row.valuations ?? [])
+    .map((v) => ({
+      companyId: v.companyId ?? null,
+      companyName: text(v.companyName),
+      valuationAmount: v.valuationAmount,
+    }))
+    .sort((a, b) =>
+      `${a.companyId}|${a.companyName}|${a.valuationAmount}`.localeCompare(
+        `${b.companyId}|${b.companyName}|${b.valuationAmount}`
+      )
+    );
   return simplePayloadHash({
     vin: row.vin.trim().toUpperCase(),
-    make: row.make.trim().toLowerCase(),
-    model: row.model.trim().toLowerCase(),
+    make: text(row.make),
+    model: text(row.model),
     year: row.year,
+    color: text(row.color),
+    mileage: row.mileage ?? null,
+    fuelType: text(row.fuelType),
+    transmission: text(row.transmission),
+    sellingPrice: row.sellingPrice,
+    status: text(row.status),
+    notes: text(row.notes),
     purchasePrice: row.purchasePrice ?? null,
     sourceType: ownershipOf(row),
-    sourcedFromName: (row.sourcedFromName ?? "").trim().toLowerCase(),
+    sourcedFromName: text(row.sourcedFromName),
     sourceCost: row.sourceCost ?? null,
     paymentMethod,
+    valuations,
   });
 }
 
@@ -2968,12 +2979,34 @@ export const importBulk = mutation({
     let alreadyRecorded = 0;
 
     for (const row of args.vehicles) {
+      // ── A PROVEN RETRY IS FINISHED. Nothing below runs for it.
+      //
+      // ⚠️ This MUST come before the VIN lookup, and an earlier revision had it
+      // nested inside that lookup instead — which meant a proven row whose
+      // vehicle had since been renamed was not recognised at all. Reproduced:
+      // import a car, correct its VIN through the ordinary edit screen, then let
+      // the original call retry. The lookup for the OLD vin found nothing, so
+      // the row fell through and inserted a SECOND vehicle, posted a SECOND
+      // acquisition, and wrote a SECOND evidence row under the same key — double
+      // inventory and cash, plus an evidence table that then throws on every
+      // `.unique()` read of that key.
+      //
+      // Proof of execution is a property of the ROW, not of anything currently
+      // in the database. Consulting it through a database lookup made it
+      // conditional on state the proof was supposed to make irrelevant.
+      if (postsAcquisitions && provenRetries.has(row.rowId!)) {
+        alreadyRecorded++;
+        continue;
+      }
+
       // Placeholder VINs (xxxxx, N/A, blank, ...) are treated as "no VIN": they
       // must NOT dedupe against each other, or all-but-one stock row is skipped.
       const normalizedVin = isPlaceholderVin(row.vin) ? "" : row.vin.trim().toUpperCase();
 
-      // Skip duplicate VINs within the org (or blank VINs treated as unique),
-      // but still refresh that vehicle's valuations from this import.
+      // OPENING_STOCK only: an existing VIN is skipped, and that vehicle's
+      // valuations are still refreshed from this import. PURCHASE cannot reach
+      // this — a proven retry already left the loop, and any other existing VIN
+      // was refused during classification.
       let vehicleId: Id<"vehicles"> | null = null;
       if (normalizedVin) {
         const existing = await ctx.db
@@ -2981,30 +3014,13 @@ export const importBulk = mutation({
           .withIndex("by_org_vin", (q) => q.eq("orgId", args.orgId).eq("vin", normalizedVin))
           .unique();
         if (existing) {
+          // PURCHASE never reaches here: a proven retry left the loop at the
+          // top, and every other existing-VIN row was refused before any write.
+          // This is OPENING_STOCK's long-standing duplicate handling.
           if (postsAcquisitions) {
-            // Membership, not inference. The classification pass proved this
-            // exact VIN is the same car, the same ownership and terms, and —
-            // where it capitalizes — the same cost, currency, payment method
-            // and supplier. Anything it could not prove threw before any write,
-            // so a miss here means the two disagree about what was proven.
-            //
-            // ⚠️ This throw is unreachable today and mutation testing says so:
-            // the classification pass refuses every existing-VIN row that has no
-            // evidence, so nothing that reaches here can be outside the set.
-            // What IS load-bearing is how the set is POPULATED — it is filled
-            // ONLY from durable (importId, rowId) evidence, never from matching
-            // facts. An earlier revision populated it from fact agreement and
-            // silently lost a second identical car.
-            if (!provenRetries.has(row.rowId!)) {
-              throw new ConvexError(
-                `Internal check failed: row ${row.rowId} (${normalizedVin}) was not proven to be an existing purchase. Nothing was imported.`
-              );
-            }
-            alreadyRecorded++;
-            // Nothing else runs for this row. The operation already happened;
-            // re-touching its valuations would be re-executing part of a
-            // completed unit of work, which is what the evidence exists to stop.
-            continue;
+            throw new ConvexError(
+              `Internal check failed: row ${row.rowId} (${normalizedVin}) reached the writer without proof. Nothing was imported.`
+            );
           }
           skipped++;
           vehicleId = existing._id;

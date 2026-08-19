@@ -3682,4 +3682,97 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     );
     expect(evidence).toHaveLength(0);
   });
+  test("a proven retry is recognised even after the vehicle's VIN was corrected", async () => {
+    // Proof of execution belongs to the ROW, not to anything currently in the
+    // database. An earlier revision consulted it only inside the VIN lookup, so
+    // an ordinary correction through the edit screen made the proof invisible:
+    // reproduced at inserted=1, vehicles=2, inventory=20,000,000 and TWO
+    // evidence rows under one key — double inventory and cash, plus an evidence
+    // table that then throws on every `.unique()` read of that key.
+    const { t, orgId, asOwner } = await seedDealer("faVinEdit");
+    const row = { rowId: 1, ...baseImportRow, vin: "1HGCM82633A00777", purchasePrice: 10000 };
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "fa-1", purchasePaymentMethod: "CASH", vehicles: [row],
+    });
+    const vehicle = await vehicleByVin(t, orgId, "1HGCM82633A00777");
+    await asOwner.mutation(api.vehicles.update, {
+      orgId, vehicleId: vehicle!._id, vin: "1HGCM82633A00888",
+    });
+    const before = await worldDelta(t, orgId);
+
+    const again = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "fa-1", purchasePaymentMethod: "CASH", vehicles: [row],
+    });
+
+    expect(again).toMatchObject({ inserted: 0, alreadyRecorded: 1, skipped: 0 });
+    expect(await worldDelta(t, orgId)).toEqual(before);
+    // Exactly one evidence row. A second under the same key would make every
+    // later `findCommandUnit` read of it throw.
+    const evidence = await t.run((ctx) =>
+      ctx.db.query("commandIdempotency").withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(evidence).toHaveLength(1);
+  });
+
+  test("the SAME key with a changed NON-FINANCIAL field is a conflict too", async () => {
+    // A proven retry does no work at all, so a field missing from the
+    // fingerprint is a field the operator can change and have silently
+    // discarded — no write, no error, a response identical to a real retry.
+    // Every one of these is persisted on the vehicle.
+    const base = {
+      rowId: 1, ...baseImportRow, vin: "1HGCM82633A00999", purchasePrice: 10000,
+    };
+    const variants: Array<[string, Record<string, unknown>]> = [
+      ["selling price", { sellingPrice: 19999 }],
+      ["status", { status: "SOURCING" }],
+      ["mileage", { mileage: 54321 }],
+      ["colour", { color: "Midnight Blue" }],
+      ["fuel type", { fuelType: "Diesel" }],
+      ["transmission", { transmission: "Manual" }],
+      ["notes", { notes: "roof rack included" }],
+      ["valuations", { valuations: [{ companyName: "Orange Finance", valuationAmount: 12500 }] }],
+    ];
+
+    for (const [label, change] of variants) {
+      const { t, orgId, asOwner } = await seedDealer(`s59fp-${label.replace(/\s/g, "")}`);
+      await asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", importId: "fp-1", purchasePaymentMethod: "CASH",
+        vehicles: [base],
+      });
+      const before = await worldDelta(t, orgId);
+
+      await expect(
+        asOwner.mutation(api.vehicles.importBulk, {
+          orgId, acquisitionPosting: "PURCHASE", importId: "fp-1", purchasePaymentMethod: "CASH",
+          vehicles: [{ ...base, ...change }],
+        })
+      ).rejects.toThrow(/IDEMPOTENCY_CONFLICT/);
+
+      expect(await worldDelta(t, orgId)).toEqual(before);
+    }
+  });
+
+  test("re-ordering the same valuation columns is NOT a conflict", async () => {
+    // The other failure direction. Column order is not a fact about the car, and
+    // a fingerprint that reacted to it would refuse ordinary retries.
+    const { t, orgId, asOwner } = await seedDealer("s59fporder");
+    const valuations = [
+      { companyName: "Orange Finance", valuationAmount: 12500 },
+      { companyName: "Blue Finance", valuationAmount: 11000 },
+    ];
+    const base = { rowId: 1, ...baseImportRow, vin: "1HGCM82633A01111", purchasePrice: 10000 };
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "fp-order", purchasePaymentMethod: "CASH",
+      vehicles: [{ ...base, valuations }],
+    });
+    const before = await worldDelta(t, orgId);
+
+    const again = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "fp-order", purchasePaymentMethod: "CASH",
+      vehicles: [{ ...base, valuations: [...valuations].reverse() }],
+    });
+
+    expect(again).toMatchObject({ inserted: 0, alreadyRecorded: 1 });
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
 });

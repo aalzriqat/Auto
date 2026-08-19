@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import { PURCHASE_IMPORT_MAX_ROWS } from "@/convex/utils/importLimits";
+import { isPlaceholderVin } from "@/convex/utils/vin";
 import { commonAr, commonEn } from "@/lib/i18n/domains/common";
 import { describeImportResult, stripInternalFields } from "@/components/import/ImportWizard";
 import {
@@ -79,14 +80,28 @@ describe("purchaseBlockers — the preflight must agree with the server", () => 
   });
 
   test("missingVin uses the same placeholder rule as the server, not a restatement", () => {
-    // `N/A` is non-empty, so the old `!vin.trim()` restatement counted it as
-    // present while the server refused it. The two only agreed because
-    // deriveVehicleRow happens to normalize placeholders to "" first — an
-    // implicit dependency that would have broken silently.
-    expect(purchaseBlockers([{ vin: "N/A" }], "CASH").missingVin).toBe(1);
-    expect(purchaseBlockers([{ vin: "xxxxxxxxxxxxxxxxx" }], "CASH").missingVin).toBe(1);
-    expect(purchaseBlockers([{ vin: "" }], "CASH").missingVin).toBe(1);
+    // ⚠️ THIS TEST'S TITLE WAS FALSE FOR A WHILE, AND IT PASSED ANYWAY.
+    //
+    // The rule lived in two hand-maintained copies. One of them gained
+    // "unknown"/"unk" and the other did not, so the preflight reported a file
+    // ready to import that the server then refused in full — and this test kept
+    // passing, because it only exercised the values both copies happened to
+    // share. It now asserts against the SHARED predicate, and every value the
+    // server treats as filler is listed.
+    for (const filler of ["N/A", "na", "TBD", "none", "-", "xxxxxxxxxxxxxxxxx", "", "   ", "unknown", "UNK", "Unknown"]) {
+      expect(isPlaceholderVin(filler)).toBe(true);
+      expect(purchaseBlockers([{ vin: filler }], "CASH").missingVin).toBe(1);
+    }
     expect(purchaseBlockers([{ vin: "IMPORTSUP0000001A" }], "CASH").missingVin).toBe(0);
+    expect(isPlaceholderVin("IMPORTSUP0000001A")).toBe(false);
+  });
+
+  test("a filler VIN is blanked during derivation, so each such row can be told apart", () => {
+    // The client and the server must also agree on what derivation does with a
+    // filler, not merely on how to recognise one.
+    expect(deriveVehicleRow({ ...stockRow, vin: "Unknown" }).vin).toBe("");
+    expect(deriveVehicleRow({ ...stockRow, vin: "UNK" }).vin).toBe("");
+    expect(deriveVehicleRow(stockRow).vin).toBe("IMPORTSUP0000001A");
   });
 
   test("malformed VINs are counted by the shared server predicate", () => {

@@ -1,11 +1,15 @@
 /**
  * VIN admissibility, defined once for the server guard and the client preflight.
  *
- * Deliberately a shared module rather than a matching pair of literals. The
- * importer already carries one hand-synchronized copy of `isPlaceholderVin`
- * (convex/vehicles.ts and components/vehicles/VehicleImportDialog.tsx), and a
- * client preflight that silently disagrees with the server guard it mirrors is
- * exactly the drift that produces a button offering what the server refuses.
+ * Deliberately a shared module rather than a matching pair of literals. A client
+ * preflight that silently disagrees with the server guard it mirrors is exactly
+ * the drift that produces a button offering what the server refuses.
+ *
+ * `isPlaceholderVin` lives here for that reason. It previously existed as two
+ * hand-synchronized copies — this file's own header warned about them — and the
+ * warning came true the moment one copy gained two new filler words and the
+ * other did not: the preflight reported a file ready to import that the server
+ * then refused in full.
  * This lives in `convex/utils` because the client already imports from there
  * (`vehicleStatusGuards`), so there is a proven path and no new registration.
  */
@@ -74,3 +78,27 @@ export function hasNonCanonicalVinCharacters(vin: string | undefined): boolean {
  * not be matched, and that residual is explicitly SCRUM-94's, not something to
  * partially solve here.
  */
+
+/**
+ * Is this VIN cell filler rather than a real identifier?
+ *
+ * Dealers routinely drop a placeholder into the VIN column — a run of x's, a
+ * dash, "N/A", or the word "unknown" — and every one of those means "not
+ * supplied", not "this is the VIN". Normalizing them to blank is what lets each
+ * such row receive its own generated placeholder instead of all of them
+ * colliding with each other as one repeated VIN.
+ *
+ * ⚠️ ONE DEFINITION, DELIBERATELY. The server guard and the client preflight
+ * both import this. They were separate copies until a change to one of them
+ * produced exactly the disagreement this module exists to prevent.
+ */
+export function isPlaceholderVin(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) return true;
+  if (/^(.)\1+$/.test(trimmed)) return true; // xxxxxxxx, --------, 00000000, ...
+  const lower = trimmed.toLowerCase();
+  return (
+    lower === "n/a" || lower === "na" || lower === "tbd" || lower === "none" || lower === "-" ||
+    lower === "unknown" || lower === "unk"
+  );
+}

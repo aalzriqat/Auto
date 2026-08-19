@@ -20,7 +20,7 @@ import {
 } from "@/components/payments/PaymentMethodSelect";
 import { PURCHASE_IMPORT_MAX_ROWS } from "@/convex/utils/importLimits";
 import { assertDirectVehicleCreateStatus } from "@/convex/utils/vehicleStatusGuards";
-import { hasNonCanonicalVinCharacters } from "@/convex/utils/vin";
+import { hasNonCanonicalVinCharacters, isPlaceholderVin } from "@/convex/utils/vin";
 import { cn } from "@/lib/utils";
 import { SpreadsheetRows } from "@/lib/spreadsheet";
 import { downloadVehicleTemplate } from "@/components/vehicles/vehicleSheet";
@@ -120,18 +120,6 @@ const PREVIEW_COLUMNS = [
   { key: "sellingPrice", label: "Selling Price", align: "end" as const },
   { key: "valuations", label: "Financing Company Valuations" },
 ];
-
-// Mirror of the backend guard (convex/vehicles.ts): a run of x's/dashes/zeros,
-// "N/A", or blank is a filler VIN, not a real one. Blanking it here keeps the
-// preview honest and lets the backend assign each row a unique placeholder
-// instead of skipping stock rows that share the same filler string.
-function isPlaceholderVin(raw: string): boolean {
-  const trimmed = raw.trim();
-  if (!trimmed) return true;
-  if (/^(.)\1+$/.test(trimmed)) return true;
-  const lower = trimmed.toLowerCase();
-  return lower === "n/a" || lower === "na" || lower === "tbd" || lower === "none" || lower === "-";
-}
 
 function normalizeImportSourceType(raw: unknown): "STOCK" | "SOURCED" {
   const value = String(raw ?? "").trim().toUpperCase();
