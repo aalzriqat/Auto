@@ -32,7 +32,8 @@
  * What this predicate is for is narrower and provable: refuse these on the one
  * path that POSTS, so every VIN that path accepts already equals its own
  * canonical form. Exact `by_org_vin` matching is then canonical matching among
- * the accepted rows, and the import's retry safety — which IS that dedup — holds
+ * the accepted rows, and the durable vehicle identity that a purchase
+ * acquisition needs across independent imports holds
  * without touching what "the same car" means anywhere else.
  *
  * The residual, which this does not close: a clean VIN imported here still will

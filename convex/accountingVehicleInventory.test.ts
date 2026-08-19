@@ -2264,7 +2264,7 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     expect(vehicles).toHaveLength(0);
   });
 
-  test("PURCHASE refuses a VIN-less row of ANY shape, because retry safety is VIN dedup", async () => {
+  test("PURCHASE refuses a VIN-less row of ANY shape, because an acquisition needs durable vehicle identity", async () => {
     const { t, orgId, asOwner } = await seedDealer("s59m");
 
     // A sourced row and a cost-less owned row post nothing TODAY, so an earlier
@@ -2821,16 +2821,30 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
 
   /** Every table a PURCHASE import writes to. Used to assert a true zero delta. */
   async function worldDelta(t: Ctx["t"], orgId: Id<"organizations">) {
-    const count = async (table: "vehicles" | "transactions" | "accountingEvents" | "vehicleSupplierPayables") =>
-      (await t.run((ctx) => ctx.db.query(table).withIndex("by_org", (q) => q.eq("orgId", orgId)).collect())).length;
+    const count = async (
+      table: "vehicles" | "transactions" | "accountingEvents" | "vehicleSupplierPayables" | "journalEntries" | "journalLines"
+    ) => (await t.run((ctx) => ctx.db.query(table).withIndex("by_org", (q) => q.eq("orgId", orgId)).collect())).length;
+    // Command evidence is on its own index and is part of "nothing happened":
+    // proof of an import that did not run is exactly what suppresses its retry.
+    const evidence = await t.run((ctx) =>
+      ctx.db.query("commandIdempotency").withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId)).collect()
+    );
     return {
       vehicles: await count("vehicles"),
       transactions: await count("transactions"),
       events: await count("accountingEvents"),
       payables: await count("vehicleSupplierPayables"),
+      journals: await count("journalEntries"),
+      journalLines: await count("journalLines"),
+      evidence: evidence.length,
       inventoryMinor: await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY"),
     };
   }
+
+  const NOTHING_HAPPENED = {
+    vehicles: 0, transactions: 0, events: 0, payables: 0,
+    journals: 0, journalLines: 0, evidence: 0, inventoryMinor: 0,
+  };
 
   /** One CASH-purchased Kia Sportage 2023, imported and capitalized. */
   /**
@@ -3103,9 +3117,7 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
       })
     ).rejects.toThrow(/missing a supplier or a cost/);
 
-    expect(await worldDelta(t, orgId)).toEqual({
-      vehicles: 0, transactions: 0, events: 0, payables: 0, inventoryMinor: 0,
-    });
+    expect(await worldDelta(t, orgId)).toEqual(NOTHING_HAPPENED);
   });
 
   test("a SOURCED row with a supplier but NO COST refuses the file as well", async () => {
@@ -3433,9 +3445,7 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
         vehicles: [{ ...car, rowId: 1 }, { ...car, rowId: 2 }],
       })
     ).rejects.toThrow(/VIN is required for every vehicle/);
-    expect(await worldDelta(t, orgId)).toEqual({
-      vehicles: 0, transactions: 0, events: 0, payables: 0, inventoryMinor: 0,
-    });
+    expect(await worldDelta(t, orgId)).toEqual(NOTHING_HAPPENED);
 
     // ...and the SAME two cars, once their real VINs are supplied, both land and
     // both capitalize. Nothing about them being identical suppresses either one.
@@ -3577,9 +3587,7 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
         orgId, acquisitionPosting: "PURCHASE", importId: "edge-1", purchasePaymentMethod: "CASH", vehicles: rows,
       })
     ).rejects.toThrow(/Import too large/);
-    expect(await worldDelta(t, orgId)).toEqual({
-      vehicles: 0, transactions: 0, events: 0, payables: 0, inventoryMinor: 0,
-    });
+    expect(await worldDelta(t, orgId)).toEqual(NOTHING_HAPPENED);
 
     // Split, keeping the ORIGINAL row numbers — which is what makes the halves
     // two parts of one file rather than two unrelated imports.
@@ -3773,6 +3781,118 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     });
 
     expect(again).toMatchObject({ inserted: 0, alreadyRecorded: 1 });
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+  // ── Durable physical-vehicle identity ─────────────────────────────────────
+  //
+  // TWO IDENTITIES, deliberately separate:
+  //
+  //   (importId, rowId)  COMMAND identity — proves this exact row of this exact
+  //                      import already ran. Owns replay safety. Needs no VIN.
+  //   a real VIN         VEHICLE identity — the only thing that correlates one
+  //                      physical car ACROSS independent acquisition commands.
+  //
+  // A generated placeholder is unique to the insertion, so it provides the
+  // second not at all. The same car uploaded tomorrow under a new importId
+  // would become a second vehicle and a second acquisition — and row evidence
+  // cannot stop that, because the second import IS a different command.
+
+  test("a placeholder VIN in a PURCHASE import is refused atomically, with no evidence written", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59durable1");
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", importId: "durable-1", purchasePaymentMethod: "CASH",
+        vehicles: [{ rowId: 1, ...baseImportRow, vin: "UNKNOWN", purchasePrice: 10000 }],
+      })
+    ).rejects.toThrow(/VIN is required for every vehicle/);
+
+    // Nothing anywhere — including no command evidence. Proof of an import that
+    // did not run is exactly what would suppress the corrected retry.
+    expect(await worldDelta(t, orgId)).toEqual(NOTHING_HAPPENED);
+  });
+
+  test("TWO placeholder rows refuse atomically too — not one accepted and one dropped", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59durable2");
+    const car = { ...baseImportRow, make: "Kia", model: "Sportage", year: 2023, purchasePrice: 10000 };
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", importId: "durable-2", purchasePaymentMethod: "CASH",
+        vehicles: [
+          { ...car, rowId: 1, vin: "UNKNOWN" },
+          { ...car, rowId: 2, vin: "UNK" },
+        ],
+      })
+    ).rejects.toThrow(/VIN is required for every vehicle/);
+
+    expect(await worldDelta(t, orgId)).toEqual(NOTHING_HAPPENED);
+  });
+
+  test("a placeholder mixed into an otherwise valid file refuses the WHOLE file", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59durable3");
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", importId: "durable-3", purchasePaymentMethod: "CASH",
+        vehicles: [
+          { rowId: 1, ...baseImportRow, vin: "1HGCM82633A02222", purchasePrice: 10000 },
+          { rowId: 2, ...baseImportRow, vin: "N/A", purchasePrice: 7000 },
+        ],
+      })
+    ).rejects.toThrow(/VIN is required for every vehicle/);
+
+    expect(await worldDelta(t, orgId)).toEqual(NOTHING_HAPPENED);
+  });
+
+  test("OPENING_STOCK still accepts placeholders and still gives each row its own vehicle", async () => {
+    // Unchanged on purpose. That path posts no acquisition money, so a
+    // placeholder costs the books nothing — the lack of durable identity only
+    // becomes a financial-integrity problem where an acquisition is recorded.
+    const { t, orgId, asOwner } = await seedDealer("s59durable4");
+    const car = { ...baseImportRow, make: "Kia", model: "Sportage", year: 2023, purchasePrice: 10000 };
+
+    const result = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "OPENING_STOCK",
+      vehicles: [{ ...car, vin: "UNKNOWN" }, { ...car, vin: "UNK" }, { ...car, vin: "N/A" }],
+    });
+
+    expect(result.inserted).toBe(3);
+    const vehicles = await t.run((ctx) =>
+      ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(vehicles).toHaveLength(3);
+    // Each got its own generated identifier rather than colliding on the filler.
+    expect(new Set(vehicles.map((v) => v.vin)).size).toBe(3);
+    // No money, and therefore no identity problem to solve.
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(0);
+  });
+
+  test("same-import replay safety comes from (importId, rowId), NOT from the VIN", async () => {
+    // The two identities pulling in opposite directions, on purpose. The VIN
+    // stored for this car is CHANGED between the original call and its retry —
+    // so if replay safety were VIN-based it would fail here. It is not: the row
+    // is recognised by its command identity alone.
+    //
+    // Read together with the placeholder refusals above, this is the whole
+    // contract: command identity owns replay, VIN owns the physical car across
+    // independent commands, and neither substitutes for the other.
+    const { t, orgId, asOwner } = await seedDealer("s59durable5");
+    const row = { rowId: 1, ...baseImportRow, vin: "1HGCM82633A03333", purchasePrice: 10000 };
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "durable-5", purchasePaymentMethod: "CASH", vehicles: [row],
+    });
+    const vehicle = await vehicleByVin(t, orgId, "1HGCM82633A03333");
+    await asOwner.mutation(api.vehicles.update, {
+      orgId, vehicleId: vehicle!._id, vin: "1HGCM82633A04444",
+    });
+    const before = await worldDelta(t, orgId);
+
+    const again = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "durable-5", purchasePaymentMethod: "CASH", vehicles: [row],
+    });
+
+    expect(again).toMatchObject({ inserted: 0, alreadyRecorded: 1, skipped: 0 });
     expect(await worldDelta(t, orgId)).toEqual(before);
   });
 });

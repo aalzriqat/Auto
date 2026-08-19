@@ -2640,32 +2640,49 @@ export const importBulk = mutation({
           `${repeatedRowIds.length} row(s) repeat a row number within this import. Nothing was imported. Reload the page and import the file again.`
         );
       }
-      // EVERY row in a purchase import must be identifiable — not only the ones
-      // that post today. vehicles.create already refuses a non-sourced vehicle
-      // with no VIN, and this is the same rule applied to the whole file.
+      // ── A PURCHASE ACQUISITION MUST CARRY DURABLE PHYSICAL-VEHICLE IDENTITY.
       //
-      // The reason is that a purchase import's retry safety IS the VIN dedup
-      // below. A blank or filler VIN is replaced with
-      // generateImportVinPlaceholder(), which is random per call, so the dedup
-      // can never match it and re-submitting the same file — a network retry, or
-      // an operator retrying after a later chunk failed — inserts a second
-      // vehicle for the same car.
+      // TWO DIFFERENT IDENTITIES ARE IN PLAY HERE, and conflating them is what
+      // this guard now exists to prevent:
       //
-      // Restricting this to rows that post today would leave the hole open, for
-      // two shapes that look harmless and are not:
+      //   (importId, rowId)  — COMMAND identity. Proves that this exact row of
+      //                        this exact import already executed. It owns
+      //                        replay safety completely, and needs no VIN.
+      //   a real VIN         — VEHICLE identity. The only thing that can
+      //                        correlate one physical car ACROSS independent
+      //                        acquisition commands.
       //
-      //   - a SOURCED row posts nothing now, but converting it to STOCK with a
-      //     purchase price later posts VEHICLE_ACQUIRED. Duplicate it here and
-      //     both copies post, capitalizing one physical car twice.
-      //     hasVehicleAcquisitionAccountingExposure guards per vehicleId and
-      //     cannot know two rows are one car.
-      //   - a cost-less owned row is the same story once a price is set.
+      // ⚠️ An earlier revision justified this guard by saying "a purchase
+      // import's retry safety IS the VIN dedup". That reason is DEAD: row
+      // evidence owns same-import retry safety now. The guard survives on a
+      // different and stronger invariant.
       //
-      // It also makes the retry guidance the importer shows honest: in this mode
-      // every row has a VIN, so an already-imported car is skipped whenever its
-      // VIN string comes back unchanged. That caveat is real — a CSV re-saved
-      // through a spreadsheet can alter a cell — and the message states it
-      // rather than promising outright.
+      // A blank or filler VIN is replaced by generateImportVinPlaceholder(),
+      // which is unique to the INSERTION. So the same physical car uploaded
+      // tomorrow under a new importId has nothing to correlate against — and
+      // that second import is legitimately a different command, so row evidence
+      // cannot and should not stop it. The result would be:
+      //
+      //     first import   → vehicle A + acquisition A
+      //     second import  → vehicle B + acquisition B, same physical car
+      //
+      // one car, capitalized twice, silently. That is precisely the class
+      // SCRUM-59 exists to fail closed on.
+      //
+      // Identity is NOT inferred from make, model, year or price. Those are
+      // contradiction and fingerprint evidence; they are not durable identity,
+      // and two genuinely different cars agree on all of them routinely.
+      //
+      // This also keeps bulk import from becoming a WEAKER accounting entry
+      // point than the single-vehicle path: `vehicles.create` already refuses a
+      // non-sourced vehicle with no VIN, and arriving by CSV should not lower
+      // the bar. Applied to EVERY row, not only the ones that post today —
+      // a SOURCED or cost-less row converted to owned stock with a price later
+      // posts its own VEHICLE_ACQUIRED, and by then the identity is long gone.
+      //
+      // If AutoFlow ever needs to acquire an owned vehicle before a real VIN
+      // exists, that needs an explicit alternative durable-identity design.
+      // It is deliberately NOT invented here.
       const missingVin = args.vehicles.filter((row) => isPlaceholderVin(row.vin));
       if (missingVin.length > 0) {
         throw new ConvexError(
@@ -2677,10 +2694,12 @@ export const importBulk = mutation({
         );
       }
 
-      // ...and it must be plain letters and numbers, so that the dedup this
-      // mode's retry safety rests on is a CANONICAL match and not merely an
-      // exact one. See hasNonCanonicalVinCharacters for why the fix belongs
-      // there rather than in a canonicalization applied only here.
+      // ...and it must be plain letters and numbers, so that the durable
+      // identity above is a CANONICAL match and not merely an exact one — the
+      // same car written with and without punctuation must not read as two
+      // vehicles. See hasNonCanonicalVinCharacters for why the remaining
+      // equivalence problem belongs to SCRUM-94 rather than to a
+      // canonicalization applied only here.
       const malformedVin = args.vehicles.filter((row) => hasNonCanonicalVinCharacters(row.vin));
       if (malformedVin.length > 0) {
         throw new ConvexError(
