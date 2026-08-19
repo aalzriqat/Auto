@@ -40,3 +40,21 @@ export function hasNonCanonicalVinCharacters(vin: string | undefined): boolean {
   if (!normalized) return false;
   return /[^A-Z0-9]/.test(normalized);
 }
+
+/**
+ * The canonical form of a VIN: uppercase, with every character outside
+ * `[A-Z0-9]` removed.
+ *
+ * This is NOT a replacement for `hasNonCanonicalVinCharacters`, and it is
+ * deliberately not applied to what gets STORED. Canonicalizing the write side
+ * alone would stop matching the rows already stored and break the dedup that
+ * works today — that whole-codebase change plus its backfill is SCRUM-94.
+ *
+ * What this is for is narrower: letting a PURCHASE import ask "is there already
+ * a vehicle in this org that is the same car under a differently-spelled VIN?"
+ * so it can REFUSE rather than insert a second document and capitalize the same
+ * physical car twice. Refusal needs no migration; rewriting stored VINs does.
+ */
+export function canonicalVin(vin: string | undefined): string {
+  return (vin ?? "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+}

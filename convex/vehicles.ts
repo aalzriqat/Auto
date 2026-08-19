@@ -14,7 +14,7 @@ import { internal } from "./_generated/api";
 import { getOrgCurrency, hookVehicleAcquired, hookVehicleLandedCostCapitalized, hookVehicleAcquisitionCostCorrected } from "./accounting/workflowHooks";
 import { toMinorUnits, assertFiniteNumber } from "./utils/money";
 import { paymentMethodValidator, acquisitionPaymentMethodValidator, normalizePaymentMethod, type AcquisitionPaymentMethod, type PaymentMethod } from "./utils/paymentMethods";
-import { hasNonCanonicalVinCharacters } from "./utils/vin";
+import { canonicalVin, hasNonCanonicalVinCharacters } from "./utils/vin";
 import { syncVehicleHoldStatus, getDefaultReservationExpiry, getActiveDepositHolds } from "./utils/depositHelpers";
 import {
   amountToMinorOrThrow,
@@ -2327,6 +2327,109 @@ export const importBulk = mutation({
           `A VIN can only contain letters and numbers — ${malformedVin.length} row(s) have dashes, spaces or punctuation. Remove them. Import these as stock you already own only if you did not just buy them, because that records no purchase.`
         );
       }
+      // ── SCRUM-59: the two ways a PURCHASE import can capitalize the WRONG car.
+      // Both are refused here, before a single row is written.
+      //
+      // Neither is fixed by rewriting stored VINs. That is SCRUM-94: it needs a
+      // whole-codebase canonicalization plus a backfill shipping in the same
+      // deploy, and it is deliberately NOT in scope here. What IS in scope is
+      // that a NEW money-posting path must refuse an identity it cannot prove
+      // rather than post against a guess.
+
+      // Only rows that would actually reach Vehicle Inventory carry the basis
+      // ambiguity below. A SOURCED row and a cost-less row post nothing, so an
+      // existing VIN there is an ordinary duplicate and is skipped as it always
+      // was. Refusing those would break the retry contract, because a retried
+      // file legitimately re-presents rows that never posted.
+      const wouldCapitalize = (row: { sourceType?: string; purchasePrice?: number }) =>
+        (row.sourceType ?? "").trim().toUpperCase() !== "SOURCED" && (row.purchasePrice ?? 0) > 0;
+
+      // ONE read of the org's vehicles, not one per row, and bounded so this can
+      // never itself be what blows the transaction: Convex aborts past ~32k
+      // scanned documents, and an opaque rollback of a dealer's whole import is
+      // the exact failure this guard exists to prevent.
+      const VIN_SCAN_CAP = 10_000;
+      const existingVehicles = await ctx.db
+        .query("vehicles")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .take(VIN_SCAN_CAP + 1);
+      if (existingVehicles.length > VIN_SCAN_CAP) {
+        throw new ConvexError(
+          `This dealership has too many vehicles for an import to prove it is not duplicating one (over ${VIN_SCAN_CAP.toLocaleString()}). Add these vehicles individually, or import them as stock you already own, which records no purchase.`
+        );
+      }
+
+      const byCanonicalVin = new Map<string, { id: Id<"vehicles">; vin: string }>();
+      for (const vehicle of existingVehicles) {
+        const canonical = canonicalVin(vehicle.vin);
+        if (!canonical) continue;
+        if (!byCanonicalVin.has(canonical)) {
+          // Store the NORMALIZED stored VIN so the comparison below is
+          // normalized-vs-normalized. `vehicles.vin` is optional in the schema,
+          // but a row with no VIN has an empty canonical form and was skipped.
+          byCanonicalVin.set(canonical, {
+            id: vehicle._id,
+            vin: (vehicle.vin ?? "").trim().toUpperCase(),
+          });
+        }
+      }
+
+      // (1) SAME CAR, DIFFERENT SPELLING. `by_org_vin` is an exact-string
+      // lookup, so an existing `1HGCM826-33A004352` is invisible to this
+      // import's `1HGCM82633A004352`. Left alone the row inserts a SECOND
+      // vehicle document, which earns a different `vehicle_acquired_<id>`
+      // idempotency key, and one physical car is capitalized twice.
+      const collisions = args.vehicles.filter((row) => {
+        const incoming = canonicalVin(row.vin);
+        if (!incoming) return false;
+        const match = byCanonicalVin.get(incoming);
+        // An EXACT match is the ordinary duplicate path, handled by (2) and the
+        // loop below. Only a differently-spelled match is this ambiguity.
+        return match !== undefined && match.vin !== row.vin.trim().toUpperCase();
+      });
+      if (collisions.length > 0) {
+        const sample = collisions
+          .slice(0, 3)
+          .map((row) => `${row.vin.trim().toUpperCase()} vs ${byCanonicalVin.get(canonicalVin(row.vin))!.vin}`)
+          .join("; ");
+        throw new ConvexError(
+          `${collisions.length} row(s) name a vehicle this dealership already has under a differently-punctuated VIN (${sample}). Importing them would record the same car twice. Correct the VIN on the existing vehicle, or remove these rows, then import again.`
+        );
+      }
+
+      // (2) THE EXISTING VEHICLE'S BASIS CANNOT BE PROVEN. An exact VIN match is
+      // skipped by the loop below, and that is right for a genuine retry: the
+      // car is already capitalized and must not post twice.
+      //
+      // It is NOT right when the existing row arrived as OPENING_STOCK. That row
+      // carries no per-vehicle acquisition event, so a later PURCHASE of the
+      // same VIN would silently do nothing, and a subsequent sale would credit
+      // Vehicle Inventory with no matching debit.
+      //
+      // The inverse is equally wrong: absence of a per-vehicle event does NOT
+      // mean "needs posting". Legitimate opening stock is represented by the
+      // org's opening-balance position, and posting here would capitalize it a
+      // second time. The two cases are indistinguishable from this row alone, so
+      // this FAILS CLOSED and asks a human instead of guessing in either
+      // direction.
+      const unprovenBasis: string[] = [];
+      for (const row of args.vehicles) {
+        if (!wouldCapitalize(row)) continue;
+        const normalized = row.vin.trim().toUpperCase();
+        const existing = await ctx.db
+          .query("vehicles")
+          .withIndex("by_org_vin", (q) => q.eq("orgId", args.orgId).eq("vin", normalized))
+          .unique();
+        if (!existing) continue;
+        if (await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, existing._id)) continue;
+        unprovenBasis.push(normalized);
+      }
+      if (unprovenBasis.length > 0) {
+        throw new ConvexError(
+          `${unprovenBasis.length} vehicle(s) already exist here with no recorded purchase (${unprovenBasis.slice(0, 3).join(", ")}). They may already be covered by this dealership's opening balance, so importing them as a purchase could count them twice — and skipping them could leave them with no cost at all. Reconcile those vehicles' basis first, then import the rest.`
+        );
+      }
+
       if (args.purchasePaymentMethod === "ON_ACCOUNT") {
         // sourcedFromName doubles as the generic "who is this owed to" field
         // here exactly as it does on vehicles.create — the AP-Suppliers credit

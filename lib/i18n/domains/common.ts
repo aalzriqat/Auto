@@ -197,9 +197,13 @@ export const commonEn = {
     "Carrying existing inventory over from a spreadsheet. No money moves today — these vehicles enter the ledger through your opening balance.",
   ImportAsPurchase: "Vehicles I just bought",
   ImportAsPurchaseHint:
-    "A real purchase. Each vehicle is added to Vehicle Inventory and paid for from the account you choose below.",
+    "A real purchase. Each vehicle is added to Vehicle Inventory, and either paid for from the account you choose below or recorded as owed to the supplier.",
   ImportPaidFrom: "Paid from",
   ImportPaidFromPlaceholder: "Choose how you paid",
+  ImportPaidFromAppliesToAll:
+    "This applies to every vehicle in the file. If they were not all paid the same way, split the file and import each payment method separately.",
+  ImportSupplierRequiredOnAccount:
+    "{count} vehicle(s) have no supplier name. A purchase on account is money still owed, so the books have to say who it is owed to. Add the supplier column, or choose how you actually paid.",
   ImportWillCapitalize: "Will add to Vehicle Inventory",
   ImportWillCapitalizeNote: "{count} vehicle(s) with a cost. Rows with no cost, and sourced vehicles, post nothing.",
   ImportVinRequiredForPurchase:
@@ -608,6 +612,7 @@ export const commonEn = {
   PaymentMethod_BANK_TRANSFER: "Bank Transfer",
   PaymentMethod_CHEQUE: "Cheque",
   PaymentMethod_CARD: "Card",
+  PaymentMethod_ON_ACCOUNT: "On account (owed to supplier)",
   CollectionCreditAccountRequired: "Select what this receivable represents before saving.",
   CollectionCreditAccountPlaceholder: "What does this represent? (required)",
   CollectionCreditAccount_MISCELLANEOUS_INCOME: "Other income",
@@ -1111,9 +1116,13 @@ export const commonAr = {
     "ترحيل مخزون قائم من جدول بيانات. لا تتحرك أي أموال اليوم — تدخل هذه المركبات إلى الدفاتر عبر الرصيد الافتتاحي.",
   ImportAsPurchase: "مركبات اشتريتها للتو",
   ImportAsPurchaseHint:
-    "عملية شراء فعلية. تُضاف كل مركبة إلى مخزون المركبات وتُدفع من الحساب الذي تختاره أدناه.",
+    "عملية شراء فعلية. تُضاف كل مركبة إلى مخزون المركبات، وتُدفع إما من الحساب الذي تختاره أدناه أو تُسجَّل كمبلغ مستحق للمورّد.",
   ImportPaidFrom: "مدفوعة من",
   ImportPaidFromPlaceholder: "اختر طريقة الدفع",
+  ImportPaidFromAppliesToAll:
+    "ينطبق هذا على كل مركبة في الملف. إن لم تُدفع جميعها بالطريقة نفسها، قسّم الملف واستورد كل طريقة دفع على حدة.",
+  ImportSupplierRequiredOnAccount:
+    "{count} مركبة بلا اسم مورّد. الشراء على الحساب مبلغ ما زال مستحقاً، لذا يجب أن تُبيّن الدفاتر الجهة المستحقة له. أضف عمود المورّد، أو اختر طريقة الدفع الفعلية.",
   ImportWillCapitalize: "ستُضاف إلى مخزون المركبات",
   ImportWillCapitalizeNote: "{count} مركبة لها تكلفة. الصفوف بلا تكلفة والمركبات الموردة لا تُقيَّد.",
   ImportVinRequiredForPurchase:
@@ -1520,6 +1529,7 @@ export const commonAr = {
   PaymentMethod_BANK_TRANSFER: "حوالة بنكية",
   PaymentMethod_CHEQUE: "شيك",
   PaymentMethod_CARD: "بطاقة",
+  PaymentMethod_ON_ACCOUNT: "على الحساب (مستحق للمورّد)",
   CollectionCreditAccountRequired: "اختر ماذا تمثل هذه الذمة المدينة قبل الحفظ.",
   CollectionCreditAccountPlaceholder: "ماذا يمثل هذا؟ (مطلوب)",
   CollectionCreditAccount_MISCELLANEOUS_INCOME: "إيراد آخر",

@@ -221,6 +221,14 @@ export function ImportWizard(props: ImportWizardProps) {
 
   async function handleImport() {
     if (!activeOrgId || validRows.length === 0) return;
+    // The wizard enforces the control it documents, rather than relying on the
+    // Button being disabled. A disabled button is a hint; any consumer that
+    // supplies `isBlocked` and calls handleImport from another path — a form
+    // submit, an Enter key, a future shortcut — would otherwise get a silent
+    // bypass. VehicleImportDialog re-checks inside its own onImport too, so
+    // there is no live bypass today; this makes the abstraction authoritative
+    // so the next consumer does not have to know to duplicate it.
+    if (isBlocked?.({ validRows: validRows.map(({ _errors, ...r }) => r) })) return;
     setImporting(true);
     try {
       const result = await onImport(validRows.map(({ _errors, ...r }) => r));

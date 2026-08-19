@@ -8,7 +8,10 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import { ImportWizard, ImportFieldConfig, ImportRow, normalizeKey } from "@/components/import/ImportWizard";
-import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
+import {
+  PaymentMethodSelect,
+  type AcquisitionPaymentMethod,
+} from "@/components/payments/PaymentMethodSelect";
 import { assertDirectVehicleCreateStatus } from "@/convex/utils/vehicleStatusGuards";
 import { hasNonCanonicalVinCharacters } from "@/convex/utils/vin";
 import { cn } from "@/lib/utils";
@@ -312,15 +315,29 @@ function renderVehiclePreviewCell(row: ImportRow, key: string) {
 type AcquisitionPosting = "OPENING_STOCK" | "PURCHASE";
 
 /**
- * The four settled methods only — deliberately NOT importBulk's fifth,
- * ON_ACCOUNT. The single-vehicle create form (VehicleDialog) offers exactly
- * these, and making the CSV importer the one place in the product where a
- * dealer can buy on account would be a strange asymmetry to introduce here.
- * The backend accepts and guards ON_ACCOUNT because postVehicleAcquisitionIfOwned
- * does; exposing it is a product decision for the vehicle-acquisition surface as
- * a whole, not something to slip in through an import dialog.
+ * The four settled methods AND ON_ACCOUNT.
+ *
+ * An earlier revision offered only the four settled methods, reasoning that
+ * exposing supplier credit here would be an asymmetry with the single-vehicle
+ * form. That was the wrong trade once this dialog started POSTING. With
+ * ON_ACCOUNT withheld, a dealer who bought on supplier credit had no truthful
+ * selection: every remaining option credits cash, bank, cheque or card for money
+ * that never moved, and writes no `vehicleSupplierPayables` row. An importer
+ * that can only record a purchase by misstating how it was paid defeats the
+ * point of SCRUM-59, which exists to stop the importer writing the wrong books.
+ *
+ * The server already implements, guards and tests this branch — it demands a
+ * supplier name per capitalizing row and credits AP-Suppliers instead of cash.
+ * Only this list withheld it. Owner decision, 2026-08-19, scoped to the bulk
+ * importer and deliberately not to the single-vehicle form.
  */
-const IMPORT_PAYMENT_METHODS: readonly PaymentMethod[] = ["CASH", "BANK_TRANSFER", "CHEQUE", "CARD"];
+const IMPORT_PAYMENT_METHODS: readonly AcquisitionPaymentMethod[] = [
+  "CASH",
+  "BANK_TRANSFER",
+  "CHEQUE",
+  "CARD",
+  "ON_ACCOUNT",
+];
 
 /** Rows that will actually reach Vehicle Inventory: owned, with a cost. */
 function capitalizingRows(rows: Record<string, any>[]) {
@@ -336,16 +353,29 @@ function capitalizingRows(rows: Record<string, any>[]) {
  * discovered after the earlier chunks have already posted real journal entries,
  * leaving the operator with a half-capitalized import and a generic error.
  */
-function purchaseBlockers(rows: Record<string, any>[]): { missingVin: number; malformedVin: number } {
+function purchaseBlockers(
+  rows: Record<string, any>[],
+  paymentMethod: AcquisitionPaymentMethod | null
+): { missingVin: number; malformedVin: number; missingSupplier: number } {
   // Every row, not just the ones that post today — see the server's own
   // `missingVin` check for why a sourced or cost-less row is not harmless.
   //
-  // `malformedVin` calls the SAME predicate the server does rather than
-  // restating it. A preflight that quietly disagrees with the guard it mirrors
-  // is how a button ends up offering what the server refuses.
+  // BOTH VIN predicates call the SAME functions the server does rather than
+  // restating them. A preflight that quietly disagrees with the guard it mirrors
+  // is how a button ends up offering what the server refuses. `missingVin` used
+  // to restate the rule as `!vin.trim()`, which agreed with the server only
+  // because `deriveVehicleRow` happens to normalize placeholders to "" before
+  // the preview sees them — an implicit dependency that would break silently.
   return {
-    missingVin: rows.filter((r) => !String(r.vin ?? "").trim()).length,
+    missingVin: rows.filter((r) => isPlaceholderVin(String(r.vin ?? ""))).length,
     malformedVin: rows.filter((r) => hasNonCanonicalVinCharacters(String(r.vin ?? ""))).length,
+    // Mirrors the server's ON_ACCOUNT rule exactly: a capitalizing row bought on
+    // supplier credit must name who the payable is owed to, because the
+    // AP-Suppliers credit and the `vehicleSupplierPayables` row both need it.
+    missingSupplier:
+      paymentMethod === "ON_ACCOUNT"
+        ? capitalizingRows(rows).filter((r) => !String(r.sourcedFromName ?? "").trim()).length
+        : 0,
   };
 }
 
@@ -371,15 +401,15 @@ function ImportAccountingChoice({
   validRows: Record<string, any>[];
   posting: AcquisitionPosting | null;
   setPosting: (p: AcquisitionPosting) => void;
-  paymentMethod: PaymentMethod | null;
-  setPaymentMethod: (m: PaymentMethod) => void;
+  paymentMethod: AcquisitionPaymentMethod | null;
+  setPaymentMethod: (m: AcquisitionPaymentMethod) => void;
 }) {
   const { t } = useLanguage();
   const currency = useCurrency();
 
   const capitalizing = capitalizingRows(validRows);
   const totalCost = capitalizing.reduce((sum, r) => sum + Number(r.purchasePrice ?? 0), 0);
-  const blockers = purchaseBlockers(validRows);
+  const blockers = purchaseBlockers(validRows, paymentMethod);
 
   const option = (value: AcquisitionPosting, label: string, hint: string) => {
     const selected = posting === value;
@@ -408,9 +438,20 @@ function ImportAccountingChoice({
 
   return (
     <div className="space-y-3 border-t pt-4">
-      <p className="text-sm font-semibold">{t("ImportAccountingHeading" as any)}</p>
+      <p className="text-sm font-semibold" id="import-accounting-heading">
+        {t("ImportAccountingHeading" as any)}
+      </p>
 
-      <div className="grid gap-2 sm:grid-cols-2">
+      {/* The two options are a native radio group, but the question itself was
+          only a heading with no programmatic relationship to them — a screen
+          reader announced "Stock I already own, 1 of 2" without ever saying what
+          was being asked. This choice decides whether the import posts to the
+          ledger, so the question carries the meaning. */}
+      <div
+        className="grid gap-2 sm:grid-cols-2"
+        role="radiogroup"
+        aria-labelledby="import-accounting-heading"
+      >
         {option(
           "OPENING_STOCK",
           t("ImportAsOpeningStock" as any),
@@ -435,6 +476,15 @@ function ImportAccountingChoice({
         </p>
       )}
 
+      {posting === "PURCHASE" && blockers.missingSupplier > 0 && (
+        <p className="text-xs font-medium leading-snug text-destructive">
+          {t("ImportSupplierRequiredOnAccount" as any).replace(
+            "{count}",
+            String(blockers.missingSupplier)
+          )}
+        </p>
+      )}
+
       {posting === "PURCHASE" && (
         <div className="space-y-3 ps-1">
           <div className="flex flex-wrap items-center gap-3">
@@ -452,6 +502,15 @@ function ImportAccountingChoice({
               />
             </div>
           </div>
+
+          {/* One method covers the whole file. Stated plainly here rather than
+              inferred per row from a column the dealers spreadsheets do not
+              have: guessing a payment method per row is exactly the silent
+              invention this dialog exists to prevent. A mixed file is split,
+              never guessed. */}
+          <p className="text-xs leading-snug text-muted-foreground">
+            {t("ImportPaidFromAppliesToAll" as any)}
+          </p>
 
           {/* The ledger consequence, stated before it happens. The amount leads
               on narrow screens instead of being squeezed to the far edge of a
@@ -508,14 +567,14 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
   // No initial value on purpose — see IMPORT_ACQUISITION_POSTING in
   // convex/vehicles.ts. Both possible defaults corrupt somebody's books.
   const [posting, setPosting] = useState<AcquisitionPosting | null>(null);
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<AcquisitionPaymentMethod | null>(null);
 
   const isBlocked = ({ validRows }: { validRows: Record<string, any>[] }) => {
     if (posting === null) return true;
     if (posting !== "PURCHASE") return false;
     if (paymentMethod === null) return true;
-    const blockers = purchaseBlockers(validRows);
-    return blockers.missingVin > 0 || blockers.malformedVin > 0;
+    const blockers = purchaseBlockers(validRows, paymentMethod);
+    return blockers.missingVin > 0 || blockers.malformedVin > 0 || blockers.missingSupplier > 0;
   };
 
   const handleOpenChange = (next: boolean) => {
