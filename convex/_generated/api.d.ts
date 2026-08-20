@@ -161,6 +161,7 @@ import type * as utils_financingProvenance from "../utils/financingProvenance.js
 import type * as utils_geoProvider from "../utils/geoProvider.js";
 import type * as utils_grossTransactionValue from "../utils/grossTransactionValue.js";
 import type * as utils_idempotency from "../utils/idempotency.js";
+import type * as utils_importLimits from "../utils/importLimits.js";
 import type * as utils_instagramApi from "../utils/instagramApi.js";
 import type * as utils_leadActivity from "../utils/leadActivity.js";
 import type * as utils_leadAssignment from "../utils/leadAssignment.js";
@@ -196,6 +197,7 @@ import type * as utils_vehicleCost from "../utils/vehicleCost.js";
 import type * as utils_vehicleOwnership from "../utils/vehicleOwnership.js";
 import type * as utils_vehicleStatusGuards from "../utils/vehicleStatusGuards.js";
 import type * as utils_vehicleTextMatch from "../utils/vehicleTextMatch.js";
+import type * as utils_vin from "../utils/vin.js";
 import type * as validations_customers from "../validations/customers.js";
 import type * as validations_expenses from "../validations/expenses.js";
 import type * as validations_sales from "../validations/sales.js";
@@ -372,6 +374,7 @@ declare const fullApi: ApiFromModules<{
   "utils/geoProvider": typeof utils_geoProvider;
   "utils/grossTransactionValue": typeof utils_grossTransactionValue;
   "utils/idempotency": typeof utils_idempotency;
+  "utils/importLimits": typeof utils_importLimits;
   "utils/instagramApi": typeof utils_instagramApi;
   "utils/leadActivity": typeof utils_leadActivity;
   "utils/leadAssignment": typeof utils_leadAssignment;
@@ -407,6 +410,7 @@ declare const fullApi: ApiFromModules<{
   "utils/vehicleOwnership": typeof utils_vehicleOwnership;
   "utils/vehicleStatusGuards": typeof utils_vehicleStatusGuards;
   "utils/vehicleTextMatch": typeof utils_vehicleTextMatch;
+  "utils/vin": typeof utils_vin;
   "validations/customers": typeof validations_customers;
   "validations/expenses": typeof validations_expenses;
   "validations/sales": typeof validations_sales;
