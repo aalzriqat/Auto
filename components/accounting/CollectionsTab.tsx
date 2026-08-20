@@ -2,12 +2,14 @@
 
 import { useMemo, useRef, useState } from "react";
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { format } from "date-fns";
 import {
   AlertTriangle,
   Banknote,
   CalendarClock,
   CalendarDays,
+  Copy,
   FileCheck2,
   HandCoins,
   Landmark,
@@ -54,6 +56,14 @@ type ReceivableRow = Doc<"receivables"> & {
   customerName: string;
   vehicleLabel?: string;
 };
+
+/**
+ * SCRUM-56 — a row in the collection queue. It is whatever the server says it
+ * is, so the two cannot drift: a hand-created balance from the legacy
+ * `receivables` table, or a completed sale's canonical invoice, which has no
+ * legacy row to point at.
+ */
+type QueueRow = FunctionReturnType<typeof api.collections.listCollectionQueue>["items"][number];
 
 type ChequeRow = Doc<"postDatedCheques"> & {
   customerName: string;
@@ -108,25 +118,29 @@ export function CollectionsTab() {
   const [chequeStart, setChequeStart] = useState(todayInput);
   const [chequeEnd, setChequeEnd] = useState(weekFromNowInput);
   const [receivableDialog, setReceivableDialog] = useState(false);
-  const [paymentTarget, setPaymentTarget] = useState<ReceivableRow | null>(null);
-  const [chequeTarget, setChequeTarget] = useState<ReceivableRow | null>(null);
-  const [approvalTarget, setApprovalTarget] = useState<{ receivable: ReceivableRow; type: "REFUND" | "RESCHEDULE" | "CANCEL_RECEIVABLE" } | null>(null);
+  const [paymentTarget, setPaymentTarget] = useState<QueueRow | null>(null);
+  const [chequeTarget, setChequeTarget] = useState<QueueRow | null>(null);
+  const [approvalTarget, setApprovalTarget] = useState<{ receivable: QueueRow; type: "REFUND" | "RESCHEDULE" | "CANCEL_RECEIVABLE" } | null>(null);
   const [replaceTarget, setReplaceTarget] = useState<ChequeRow | null>(null);
   const [returnTarget, setReturnTarget] = useState<ChequeRow | null>(null);
   const [reconcileOpen, setReconcileOpen] = useState(false);
   const [receivablesView, setReceivablesView] = useState<"list" | "calendar">("list");
 
   const summary = useQuery(api.collections.summary, activeOrgId ? { orgId: activeOrgId } : "skip");
-  const { results: receivables, status: receivableLoadStatus, loadMore: loadMoreReceivables } = usePaginatedQuery(
-    api.collections.listReceivables,
+  // One queue over both sources — see convex/collections.ts buildCollectionQueue.
+  // Bounded rather than cursor-paginated, because a sale invoice and a
+  // hand-created balance live in different tables and one cursor cannot walk
+  // both in due-date order without risking a dropped or duplicated debt.
+  const collectionQueue = useQuery(
+    api.collections.listCollectionQueue,
     activeOrgId
       ? {
           orgId: activeOrgId,
-          status: receivableStatus === "ALL" ? undefined : receivableStatus as ReceivableRow["status"],
+          status: receivableStatus === "ALL" ? undefined : receivableStatus as QueueRow["status"],
         }
-      : "skip",
-    { initialNumItems: 75 }
+      : "skip"
   );
+  const receivables = collectionQueue?.items;
   const { results: cheques, status: chequeLoadStatus, loadMore: loadMoreCheques } = usePaginatedQuery(
     api.collections.listCheques,
     activeOrgId
@@ -289,30 +303,75 @@ export function CollectionsTab() {
                   <EmptyRow colSpan={7} label={t("NoReceivablesFound" as any)} />
                 ) : (
                   receivables.map((row) => (
-                    <TableRow key={row._id}>
+                    <TableRow key={row.key}>
                       <TableCell className="font-medium">{formatDate(row.dueDate)}</TableCell>
                       <TableCell>
                         <div className="font-medium">{row.customerName}</div>
                         <div className="text-xs text-slate-500">{row.vehicleLabel || row.title}</div>
                       </TableCell>
-                      <TableCell>{collectionLabel(t, row.sourceType)}</TableCell>
-                      <TableCell><StatusBadge status={row.status} /></TableCell>
+                      <TableCell>
+                        {row.origin === "CANONICAL" ? (
+                          <span className="inline-flex items-center gap-1.5">
+                            <Landmark className="h-3.5 w-3.5 text-slate-400" aria-hidden />
+                            <span title={t("CollectionSaleInvoiceHint" as any)}>{t("CollectionSaleInvoice" as any)}</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5">
+                            {collectionLabel(t, row.sourceType ?? "OTHER")}
+                            {row.duplicateRepresentation && (
+                              <Copy
+                                className="h-3.5 w-3.5 shrink-0 text-slate-400"
+                                aria-label={t("CollectionDuplicateRepresentation" as any)}
+                              />
+                            )}
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <StatusBadge status={row.status} />
+                      </TableCell>
                       <TableCell className="text-right">{formatCurrency(row.originalAmount)}</TableCell>
-                      <TableCell className="text-right font-semibold">{formatCurrency(row.outstandingAmount)}</TableCell>
+                      {/* A duplicate representation is the same debt the sale
+                          invoice already carries, so the totals exclude it. It
+                          has to *look* excluded too — left in the same weight as
+                          real money, it is a number a collector adds up and then
+                          disagrees with the summary about. The caption sits on
+                          its own line rather than inline, so Arabic text and a
+                          Latin-formatted amount never share a bidi run. */}
+                      <TableCell className="text-right">
+                        {row.duplicateRepresentation ? (
+                          <>
+                            <div className="font-normal text-slate-400">{formatCurrency(row.outstandingAmount)}</div>
+                            <div className="text-[11px] leading-tight text-slate-500">
+                              {t("CollectionCountedOnSaleInvoice" as any)}
+                            </div>
+                          </>
+                        ) : (
+                          <span className="font-semibold">{formatCurrency(row.outstandingAmount)}</span>
+                        )}
+                      </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
                           <Button size="sm" variant="outline" onClick={() => setPaymentTarget(row)} disabled={row.outstandingAmount <= 0}>
                             <Banknote className="h-3.5 w-3.5" />
                           </Button>
-                          <Button size="sm" variant="outline" onClick={() => setChequeTarget(row)} disabled={row.outstandingAmount <= 0}>
-                            <FileCheck2 className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button size="sm" variant="outline" onClick={() => setApprovalTarget({ receivable: row, type: "RESCHEDULE" })}>
-                            <CalendarClock className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button size="sm" variant="outline" onClick={() => setApprovalTarget({ receivable: row, type: "REFUND" })}>
-                            <RotateCcw className="h-3.5 w-3.5" />
-                          </Button>
+                          {/* Cheques, reschedules and refunds are workflows the
+                              legacy receivable owns. A sale invoice has no such
+                              row, so those actions are absent rather than
+                              offered and then refused. */}
+                          {row.origin === "LEGACY" && (
+                            <>
+                              <Button size="sm" variant="outline" onClick={() => setChequeTarget(row)} disabled={row.outstandingAmount <= 0}>
+                                <FileCheck2 className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button size="sm" variant="outline" onClick={() => setApprovalTarget({ receivable: row, type: "RESCHEDULE" })}>
+                                <CalendarClock className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button size="sm" variant="outline" onClick={() => setApprovalTarget({ receivable: row, type: "REFUND" })}>
+                                <RotateCcw className="h-3.5 w-3.5" />
+                              </Button>
+                            </>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -322,8 +381,11 @@ export function CollectionsTab() {
             </Table>
           </div>
           )}
-          {receivablesView === "list" && receivableLoadStatus === "CanLoadMore" && (
-            <Button variant="outline" onClick={() => loadMoreReceivables(75)}>{t("LoadMore" as any)}</Button>
+          {receivablesView === "list" && collectionQueue?.truncated && (
+            <p className="flex items-center gap-2 text-xs text-amber-700">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+              {t("CollectionQueueTruncated" as any).replace("{count}", String(receivables?.length ?? 0))}
+            </p>
           )}
         </TabsContent>
 
@@ -776,7 +838,7 @@ function ReceivableDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
   );
 }
 
-function PaymentDialog({ receivable, onOpenChange }: { receivable: ReceivableRow | null; onOpenChange: (open: boolean) => void }) {
+function PaymentDialog({ receivable, onOpenChange }: { receivable: QueueRow | null; onOpenChange: (open: boolean) => void }) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const recordPayment = useMutation(api.collections.recordPayment);
@@ -795,7 +857,10 @@ function PaymentDialog({ receivable, onOpenChange }: { receivable: ReceivableRow
       idempotencyKeyRef.current ??= `collection-payment:${crypto.randomUUID()}`;
       await recordPayment({
         orgId: activeOrgId,
-        receivableId: receivable._id,
+        // Exactly one of these is set. A sale invoice is collected against the
+        // canonical document; a hand-created balance against its own row.
+        receivableId: receivable.receivableId,
+        receivableDocumentId: receivable.receivableId ? undefined : receivable.receivableDocumentId,
         amount: Number(amount),
         method: method as Doc<"collectionPayments">["method"],
         paymentDate: dateInputToMs(paymentDate),
@@ -821,7 +886,16 @@ function PaymentDialog({ receivable, onOpenChange }: { receivable: ReceivableRow
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{t("RecordPayment" as any)}</DialogTitle>
-          <DialogDescription>{receivable?.customerName} · {receivable ? collectionLabel(t, receivable.sourceType) : ""}</DialogDescription>
+          <DialogDescription>
+            {receivable?.customerName}
+            {receivable
+              ? ` · ${
+                  receivable.origin === "CANONICAL"
+                    ? t("CollectionSaleInvoice" as any)
+                    : collectionLabel(t, receivable.sourceType ?? "OTHER")
+                }`
+              : ""}
+          </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
           <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={`${t("AmountDue" as any)} ${receivable?.outstandingAmount ?? ""}`} />
@@ -846,7 +920,7 @@ function PaymentDialog({ receivable, onOpenChange }: { receivable: ReceivableRow
   );
 }
 
-function ChequeDialog({ receivable, onOpenChange }: { receivable: ReceivableRow | null; onOpenChange: (open: boolean) => void }) {
+function ChequeDialog({ receivable, onOpenChange }: { receivable: QueueRow | null; onOpenChange: (open: boolean) => void }) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const registerCheque = useMutation(api.collections.registerCheque);
@@ -858,12 +932,14 @@ function ChequeDialog({ receivable, onOpenChange }: { receivable: ReceivableRow 
   const [submitting, setSubmitting] = useState(false);
 
   async function submit() {
-    if (!activeOrgId || !receivable) return;
+    // Only a legacy row can carry a cheque; the queue offers this action on
+    // legacy rows alone, and this guard keeps that true if it ever changes.
+    if (!activeOrgId || !receivable?.receivableId) return;
     setSubmitting(true);
     try {
       await registerCheque({
         orgId: activeOrgId,
-        receivableId: receivable._id,
+        receivableId: receivable.receivableId,
         customerId: receivable.customerId,
         vehicleId: receivable.vehicleId,
         saleId: receivable.saleId,
@@ -911,7 +987,7 @@ function ChequeDialog({ receivable, onOpenChange }: { receivable: ReceivableRow 
 
 type DisbursementMethod = "CASH" | "BANK_TRANSFER" | "CHEQUE" | "CARD";
 
-function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable: ReceivableRow; type: "REFUND" | "RESCHEDULE" | "CANCEL_RECEIVABLE" } | null; onOpenChange: (open: boolean) => void }) {
+function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable: QueueRow; type: "REFUND" | "RESCHEDULE" | "CANCEL_RECEIVABLE" } | null; onOpenChange: (open: boolean) => void }) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const requestApproval = useMutation(api.collections.requestApproval);
@@ -922,12 +998,13 @@ function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable:
   const [submitting, setSubmitting] = useState(false);
 
   async function submit() {
-    if (!activeOrgId || !target) return;
+    // Reschedule/refund/cancel are approvals against a legacy receivable row.
+    if (!activeOrgId || !target?.receivable.receivableId) return;
     setSubmitting(true);
     try {
       await requestApproval({
         orgId: activeOrgId,
-        receivableId: target.receivable._id,
+        receivableId: target.receivable.receivableId,
         requestType: target.type,
         requestedAmount: target.type === "REFUND" ? Number(amount) : undefined,
         requestedDueDate: target.type === "RESCHEDULE" ? dateInputToMs(dueDate) : undefined,

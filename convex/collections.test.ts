@@ -354,10 +354,23 @@ describe("Collections", () => {
         ? await ctx.db.get(payment.canonicalPaymentId)
         : null;
       expect(canonicalPayment?.status).toBe("VOIDED");
-      const allocation = payment?.paymentAllocationId
-        ? await ctx.db.get(payment.paymentAllocationId)
-        : null;
-      expect(allocation?.status).toBe("REVERSED");
+
+      // SCRUM-56 R4 — the allocation is reached through the immutable anchor,
+      // not through `payment.paymentAllocationId`. That pointer is now cleared
+      // on return precisely because it would otherwise name a REVERSED
+      // allocation as if it were live; asserting through it encoded
+      // pointer-as-identity, which the applied-movement contract rejects. This
+      // is the stronger assertion: every allocation this payment ever made is
+      // reversed, not merely whichever one the pointer happened to name.
+      expect(payment?.paymentAllocationId).toBeUndefined();
+      const allocations = payment?.canonicalPaymentId
+        ? await ctx.db
+            .query("paymentAllocations")
+            .withIndex("by_payment", (q) => q.eq("paymentId", payment.canonicalPaymentId!))
+            .collect()
+        : [];
+      expect(allocations.length).toBeGreaterThan(0);
+      expect(allocations.every((allocation) => allocation.status === "REVERSED")).toBe(true);
     });
   });
 
@@ -1107,11 +1120,15 @@ describe("Collections", () => {
       });
     });
 
+    // SCRUM-56: the summary and the aging report now read the same model as the
+    // collection queue, which excludes soft-deleted rows — as listReceivablesDueBetween
+    // already did below. The "Deleted balance" row's 30 used to be counted here as
+    // money owed, overstating both the total and today's due figure.
     const summary = await asFinance.query(api.collections.summary, { orgId });
     expect(summary).toMatchObject({
-      totalOutstanding: 225,
+      totalOutstanding: 195,
       overdueOutstanding: 120,
-      dueToday: 105,
+      dueToday: 75,
       collectedToday: 20,
       upcomingChequeTotal: 500,
       upcomingChequeCount: 2,
@@ -1166,7 +1183,8 @@ describe("Collections", () => {
     expect(upcoming.rows.map((row) => row.chequeNumber)).toEqual(expect.arrayContaining(["RPT-1", "RPT-2"]));
 
     const aging = await asFinance.query(api.collections.agingReport, { orgId });
-    expect(aging.current).toMatchObject({ count: 2, amount: 105 });
+    // One current row, not two — the soft-deleted balance is no longer aged.
+    expect(aging.current).toMatchObject({ count: 1, amount: 75 });
     expect(aging.days31To60).toMatchObject({ count: 1, amount: 120 });
   });
 
@@ -1880,11 +1898,14 @@ describe("Collections", () => {
       disbursementMethod: "CASH",
       reason: "Legacy data repair case",
     });
+    // SCRUM-56: same refusal, said in the operator's terms rather than in minor
+    // units. The refusal itself is the assertion that matters — a row with no
+    // traceable collections must never have a refund guessed for it.
     await expect(asApprover.mutation(api.collections.respondToApproval, {
       orgId,
       requestId: legacyRefundRequestId,
       status: "APPROVED",
-    })).rejects.toThrow(/Canonical allocations cover only 0/);
+    })).rejects.toThrow(/can be traced to payments collected against this receivable/);
   });
 
   test("return_cleared_cheque_defers_reversal_when_no_open_period_exists", async () => {

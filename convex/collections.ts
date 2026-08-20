@@ -16,9 +16,14 @@ import { getOpenPeriodForDate } from "./accountingPeriods";
 import { enqueuePendingReversal, cancelPendingPostByKey } from "./accountingOutbox";
 import { toMinorUnits, fromMinorUnits, scaleForCurrency } from "./utils/money";
 import {
+  activeAllocationsForPayment,
+  saleInvoiceForLegacyRow,
+} from "./utils/collectionMovement";
+import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
   ensureReceivableDocument,
+  getReceivableOutstandingMinor,
   reverseAllocation,
 } from "./subledger";
 
@@ -323,12 +328,75 @@ async function ensureCanonicalReceivableForLegacy(
   return canonicalReceivableDocumentId;
 }
 
+/**
+ * The ONE canonical document that answers for a legacy row's money — used by
+ * every monetary path, so they cannot disagree: the payment allocation, the
+ * refund that unwinds it, and the caps that bound both.
+ *
+ * When the row was hand-keyed against a completed sale, that sale's invoice is
+ * the debt. Settling a separate `legacy_receivable` twin instead would pay down
+ * a document nobody is chasing and leave the real invoice outstanding in full.
+ *
+ * Deliberately NOT used for rescheduling or cancelling. Those move a due date
+ * and retire a document — one hand-keyed sub-representation has no business
+ * rescheduling the whole sale debt, and certainly none cancelling it. A single
+ * *monetary* authority is the invariant; it does not make the row and the
+ * invoice the same object for every purpose.
+ */
+async function canonicalMonetaryTargetForLegacyRow(
+  ctx: MutationCtx,
+  receivable: Doc<"receivables">,
+  actorId: Id<"users">,
+  currency: string
+): Promise<Id<"receivableDocuments">> {
+  return (
+    (await saleInvoiceForLegacyRow(ctx, receivable)) ??
+    (await ensureCanonicalReceivableForLegacy(ctx, receivable, actorId, currency))
+  );
+}
+
+/**
+ * Bounds a payment on a legacy row by what its sale invoice actually still owes.
+ * Shared by `recordPayment` and `clearCheque` because both settle through
+ * `canonicalMonetaryTargetForLegacyRow`, and a guard that lives on only one of
+ * two entry points is the shape of the defect this whole change exists to undo.
+ *
+ * `allocatePaymentToReceivable` already refuses over-allocation, so this adds no
+ * safety — it replaces a message about minor units with one that means something
+ * to whoever is taking the money.
+ */
+async function assertWithinSaleInvoiceBalance(
+  ctx: MutationCtx,
+  receivable: Doc<"receivables">,
+  amount: number,
+  currency: string
+) {
+  const saleInvoiceId = await saleInvoiceForLegacyRow(ctx, receivable);
+  if (!saleInvoiceId) return;
+  const outstanding = fromMinorUnits(
+    await getReceivableOutstandingMinor(ctx, saleInvoiceId),
+    currency
+  );
+  if (amount > outstanding) {
+    throw new ConvexError(
+      "This payment is larger than the sale still owes. The hand-keyed balance is out of date — collect against the sale invoice instead."
+    );
+  }
+}
+
 async function mirrorCollectionPaymentToCanonical(
   ctx: MutationCtx,
   args: {
     paymentId: Id<"collectionPayments">;
     payment: Doc<"collectionPayments">;
     receivable?: Doc<"receivables"> | null;
+    /**
+     * Set when the payment is collected directly against a canonical receivable
+     * document (a completed sale's invoice) rather than a legacy row. Without
+     * it the canonical payment would be created and never allocated, leaving
+     * the invoice outstanding in full after the customer had paid.
+     */
+    receivableDocumentId?: Id<"receivableDocuments">;
     actorId: Id<"users">;
     currency: string;
   }
@@ -354,13 +422,10 @@ async function mirrorCollectionPaymentToCanonical(
     canonicalPaymentId,
   };
 
-  if (args.receivable && args.payment.direction === "IN") {
-    const canonicalReceivableDocumentId = await ensureCanonicalReceivableForLegacy(
-      ctx,
-      args.receivable,
-      args.actorId,
-      args.currency
-    );
+  if ((args.receivable || args.receivableDocumentId) && args.payment.direction === "IN") {
+    const canonicalReceivableDocumentId = args.receivable
+      ? await canonicalMonetaryTargetForLegacyRow(ctx, args.receivable, args.actorId, args.currency)
+      : args.receivableDocumentId!;
     patch.paymentAllocationId = await allocatePaymentToReceivable(ctx, {
       orgId: args.payment.orgId,
       paymentId: canonicalPaymentId,
@@ -375,32 +440,74 @@ async function mirrorCollectionPaymentToCanonical(
 }
 
 /**
- * Unwinds ACTIVE allocations on a canonical receivable to cover a refund,
- * newest first. If the refund splits an allocation, the un-refunded remainder
- * is re-allocated from the same payment so the net reversed amount equals the
- * refund exactly. This is what reopens the canonical receivable's outstanding
- * balance to match the legacy receivable after a refund.
+ * Unwinds a refund's worth of allocations — restricted to money THIS row
+ * actually brought in.
+ *
+ * The old version queried every ACTIVE allocation on the canonical document and
+ * consumed newest-first. Once two hand-keyed rows feed one sale invoice that is
+ * a coin toss: refunding installment A reversed installment B's payment, left
+ * A's fully applied, and B's own row still read PAID. Aggregate totals stayed
+ * right, which is exactly why it survived a full suite.
+ *
+ * Lineage, not arithmetic, decides. Both halves of the conjunction below are
+ * load-bearing: the canonical payment must have originated from this row, AND
+ * the allocation must sit on the document this row's money is supposed to
+ * settle. Neither alone is identity — two rows on one sale share the document,
+ * and a payment can be allocated across more than one.
+ *
+ * `canonicalPaymentId` is the durable anchor; `paymentAllocationId` is only a
+ * pointer to the current state. A partial refund reverses an allocation and
+ * re-allocates the remainder under a NEW id, so the pointer moves while the
+ * anchor does not. Anything treating the allocation id as identity silently
+ * follows a reversed row — the same defect one step later — so the pointer is
+ * rewritten here as it moves.
  */
-async function reverseAllocationsForRefund(
+async function reverseAllocationsForRow(
   ctx: MutationCtx,
   args: {
     orgId: Id<"organizations">;
+    receivable: Doc<"receivables">;
     receivableDocumentId: Id<"receivableDocuments">;
     amountMinor: number;
     actorId: Id<"users">;
+    currency: string;
   }
 ) {
-  const activeAllocations = (
+  // Only money actually collected against this row. A DRAFT or outbound row is
+  // not collected money, and a payment with no canonical anchor cannot be
+  // traced at all — both are excluded rather than guessed at.
+  const rowPayments = (
     await ctx.db
-      .query("paymentAllocations")
-      .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", args.receivableDocumentId))
-      .filter((q) => q.eq(q.field("status"), "ACTIVE"))
+      .query("collectionPayments")
+      .withIndex("by_receivable", (q) => q.eq("receivableId", args.receivable._id))
       .collect()
-  ).sort((a, b) => b.createdAt - a.createdAt);
+  ).filter(
+    (payment) =>
+      payment.orgId === args.orgId &&
+      payment.direction === "IN" &&
+      payment.status === "POSTED" &&
+      payment.canonicalPaymentId
+  );
+
+  const candidates: { allocation: Doc<"paymentAllocations">; payment: Doc<"collectionPayments"> }[] = [];
+  for (const payment of rowPayments) {
+    const allocations = await ctx.db
+      .query("paymentAllocations")
+      .withIndex("by_payment", (q) => q.eq("paymentId", payment.canonicalPaymentId!))
+      .collect();
+    for (const allocation of allocations) {
+      if (allocation.status !== "ACTIVE") continue;
+      if (allocation.receivableDocumentId !== args.receivableDocumentId) continue;
+      candidates.push({ allocation, payment });
+    }
+  }
+  // Newest-first WITHIN this row's own money is a fair ordering; newest-first
+  // across the pooled document was the defect.
+  candidates.sort((a, b) => b.allocation.createdAt - a.allocation.createdAt);
 
   let remainingMinor = args.amountMinor;
   let coveredMinor = 0;
-  for (const allocation of activeAllocations) {
+  for (const { allocation, payment } of candidates) {
     if (remainingMinor <= 0) break;
     const reversedMinor = Math.min(allocation.amountMinor, remainingMinor);
     await reverseAllocation(ctx, {
@@ -409,25 +516,59 @@ async function reverseAllocationsForRefund(
       actorId: args.actorId,
     });
     if (allocation.amountMinor > remainingMinor) {
-      await allocatePaymentToReceivable(ctx, {
+      const remainderAllocationId = await allocatePaymentToReceivable(ctx, {
         orgId: args.orgId,
         paymentId: allocation.paymentId,
         receivableDocumentId: args.receivableDocumentId,
         amountMinor: allocation.amountMinor - remainingMinor,
         actorId: args.actorId,
       });
+      // Keep the pointer live. Left alone it would name a REVERSED allocation
+      // while the remainder it stands for sits under a different id.
+      if (payment.paymentAllocationId === allocation._id) {
+        await ctx.db.patch(payment._id, { paymentAllocationId: remainderAllocationId });
+      }
       remainingMinor = 0;
     } else {
+      if (payment.paymentAllocationId === allocation._id) {
+        await ctx.db.patch(payment._id, { paymentAllocationId: undefined });
+      }
       remainingMinor -= allocation.amountMinor;
     }
     coveredMinor += reversedMinor;
   }
 
+  // Fail closed. A refund that cannot be traced to this row's own collections
+  // is a reconciliation problem, and a refusal an operator can act on beats
+  // reversing money that belonged to a different balance.
   if (remainingMinor > 0) {
+    const covered = fromMinorUnits(coveredMinor, args.currency);
+    const requested = fromMinorUnits(args.amountMinor, args.currency);
     throw new ConvexError(
-      `Canonical allocations cover only ${coveredMinor} of the requested refund ${args.amountMinor}.`
+      `Only ${covered} of the ${requested} refund can be traced to payments collected against this receivable. ` +
+        "Reconcile the payment history for this balance before refunding."
     );
   }
+}
+
+/**
+ * The row's OWN canonical twin, and only if the document really is that row's.
+ *
+ * Guards a cancellation from ever reaching the sale invoice: a `sourceType`
+ * check alone would still admit another row's twin, and following the stored
+ * pointer alone would admit whatever it happens to name.
+ */
+async function verifiedOwnLegacyTwin(
+  ctx: MutationCtx,
+  receivable: Doc<"receivables">
+): Promise<Id<"receivableDocuments"> | null> {
+  if (!receivable.canonicalReceivableDocumentId) return null;
+  const doc = await ctx.db.get(receivable.canonicalReceivableDocumentId);
+  if (!doc) return null;
+  if (doc.orgId !== receivable.orgId) return null;
+  if (doc.sourceType !== "legacy_receivable") return null;
+  if (doc.sourceId !== String(receivable._id)) return null;
+  return doc._id;
 }
 
 async function insertLedgerTransaction(
@@ -457,6 +598,228 @@ async function insertLedgerTransaction(
   });
 }
 
+// ─── SCRUM-56: one collection queue, one monetary authority ──────────────────
+//
+// A completed sale's debt lives in the CANONICAL `receivableDocuments` table
+// (utils/saleCompletion.ts), while the operational Collections workflow grew up
+// around the legacy `receivables` table. Reading only the legacy table left a
+// real outstanding balance invisible to the people whose job is to chase it,
+// and the workaround — re-keying it by hand — created a second copy of the same
+// money.
+//
+// So the queue reads both, and the two sources are kept from ever counting the
+// same debt twice:
+//
+//   * A canonical document raised FROM a legacy row (`sourceType:
+//     "legacy_receivable"`, created by ensureCanonicalReceivableForLegacy) is
+//     that row seen from the accounting side. The legacy row represents it.
+//   * A canonical sale invoice may still have hand-keyed legacy rows attached
+//     to the same sale. Those are sub-representations carved OUT of the sale
+//     debt, never additional money: the invoice contributes only what they do
+//     not already cover, so the queue total equals the canonical outstanding.
+//
+// The canonical document is the authority for its own balance — derived from
+// its allocations by subledger.getReceivableOutstandingMinor, never stored a
+// second time. Legacy rows keep their own balance, their own workflow metadata
+// (assignment, reminders, installment labels, reschedules) and every mutation
+// that operates on them, exactly as before.
+
+const QUEUE_SOURCE_SCAN_LIMIT = 500;
+const QUEUE_MAX_ITEMS = 500;
+const OPEN_LEGACY_STATUSES: ReceivableStatus[] = ["OPEN", "PARTIALLY_PAID", "OVERDUE", "RESCHEDULED"];
+const OPEN_CANONICAL_STATUSES: Doc<"receivableDocuments">["status"][] = ["OPEN", "PARTIALLY_PAID"];
+
+type CollectionQueueItem = {
+  key: string;
+  origin: "LEGACY" | "CANONICAL";
+  receivableId?: Id<"receivables">;
+  receivableDocumentId?: Id<"receivableDocuments">;
+  customerId: Id<"customers">;
+  customerName: string;
+  vehicleId?: Id<"vehicles">;
+  vehicleLabel?: string;
+  saleId?: Id<"sales">;
+  title: string;
+  sourceType?: Doc<"receivables">["sourceType"];
+  originalAmount: number;
+  outstandingAmount: number;
+  dueDate: number;
+  status: ReceivableStatus;
+  assignedTo?: Id<"users">;
+  lastReminderAt?: number;
+  lastPaymentAt?: number;
+  notes?: string;
+  paymentPlanLabel?: string;
+  installmentNumber?: number;
+  totalInstallments?: number;
+  /**
+   * Set on a hand-keyed legacy row that stands for a sale which already has its
+   * own canonical invoice. The row is shown so its workflow state stays
+   * reachable, but it carries no monetary authority: the summary and the aging
+   * report exclude it, and its stored balance never adjusts the invoice.
+   */
+  duplicateRepresentation?: boolean;
+};
+
+function canonicalQueueStatus(
+  doc: Doc<"receivableDocuments">,
+  outstanding: number,
+  originalAmount: number,
+  now: number
+): ReceivableStatus {
+  if (outstanding <= 0) return "PAID";
+  if (doc.dueDate < now) return "OVERDUE";
+  return outstanding < originalAmount ? "PARTIALLY_PAID" : "OPEN";
+}
+
+/**
+ * The single read model behind the collection queue, the collections summary
+ * and the aging report — so the three can never disagree about what a customer
+ * owes.
+ *
+ * Bounded like every other aggregate in this file (`.take(500)` per source).
+ * When a source hits that bound the result says so via `truncated`, because a
+ * silently short list of debts reads exactly like a dealership with fewer
+ * debts.
+ */
+async function buildCollectionQueue(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  currency: string
+): Promise<{ items: CollectionQueueItem[]; truncated: boolean }> {
+  const now = Date.now();
+  let truncated = false;
+
+  const legacyRows: Doc<"receivables">[] = [];
+  for (const status of OPEN_LEGACY_STATUSES) {
+    const rows = await ctx.db
+      .query("receivables")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
+      .take(QUEUE_SOURCE_SCAN_LIMIT + 1);
+    if (rows.length > QUEUE_SOURCE_SCAN_LIMIT) truncated = true;
+    // Soft-deleted rows are excluded here, unlike the pre-SCRUM-56 summary and
+    // aging report which counted them. A deleted receivable is not collectable
+    // money, and the queue, the summary and the report have to agree.
+    legacyRows.push(...rows.slice(0, QUEUE_SOURCE_SCAN_LIMIT).filter((row) => !row.isDeleted));
+  }
+
+  const items: CollectionQueueItem[] = [];
+  const canonicalItems: CollectionQueueItem[] = [];
+  for (const status of OPEN_CANONICAL_STATUSES) {
+    const docs = await ctx.db
+      .query("receivableDocuments")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
+      .take(QUEUE_SOURCE_SCAN_LIMIT + 1);
+    if (docs.length > QUEUE_SOURCE_SCAN_LIMIT) truncated = true;
+
+    for (const doc of docs.slice(0, QUEUE_SOURCE_SCAN_LIMIT)) {
+      // Finance-company AR is a different lane's queue, and a document raised
+      // from a legacy row is already in this list as that row.
+      if (doc.payerType !== "CUSTOMER") continue;
+      if (doc.sourceType === "legacy_receivable") continue;
+      if (!doc.customerId) continue;
+
+      const originalAmount = fromMinorUnits(doc.originalAmountMinor, currency);
+      const outstanding = fromMinorUnits(await getReceivableOutstandingMinor(ctx, doc._id), currency);
+
+      const saleId = doc.sourceType === "sales" ? ctx.db.normalizeId("sales", doc.sourceId) : null;
+
+      // Nothing left to chase: the customer has paid. Hand-keyed rows never
+      // reduce this figure — a copy of a number is not a payment, and letting
+      // one subtract here is what made a real debt disappear from the queue.
+      if (outstanding <= 0) continue;
+
+      const sale = saleId ? await ctx.db.get(saleId) : null;
+      const [customer, vehicle] = await Promise.all([
+        ctx.db.get(doc.customerId),
+        getOptionalVehicle(ctx, sale?.vehicleId),
+      ]);
+
+      canonicalItems.push({
+        key: `canonical:${doc._id}`,
+        origin: "CANONICAL",
+        receivableDocumentId: doc._id,
+        customerId: doc.customerId,
+        customerName: customerName(customer),
+        vehicleId: sale?.vehicleId,
+        vehicleLabel: vehicleLabel(vehicle),
+        saleId: saleId ?? undefined,
+        title: doc.documentNumber,
+        originalAmount,
+        outstandingAmount: outstanding,
+        dueDate: doc.dueDate,
+        status: canonicalQueueStatus(doc, outstanding, originalAmount, now),
+      });
+    }
+  }
+
+  for (const row of legacyRows) {
+    const [customer, vehicle, sale] = await Promise.all([
+      ctx.db.get(row.customerId),
+      getOptionalVehicle(ctx, row.vehicleId),
+      row.saleId ? ctx.db.get(row.saleId) : Promise.resolve(null),
+    ]);
+    // Identity, never arithmetic. If the sale this row was hand-keyed against
+    // raised a canonical invoice, the row is a second representation of that
+    // one debt: it keeps its assignment, reminders and installment label and
+    // stays workable, but it stops being money. Deriving this from the sale's
+    // own `canonicalReceivableDocumentId` — rather than from whichever invoices
+    // happen to be open — keeps the classification independent of any balance,
+    // so a settled invoice cannot turn a stale copy back into money.
+    const duplicateRepresentation =
+      sale?.orgId === orgId && Boolean(sale?.canonicalReceivableDocumentId);
+    items.push({
+      key: `legacy:${row._id}`,
+      origin: "LEGACY",
+      receivableId: row._id,
+      receivableDocumentId: row.canonicalReceivableDocumentId,
+      customerId: row.customerId,
+      customerName: customerName(customer),
+      vehicleId: row.vehicleId,
+      vehicleLabel: vehicleLabel(vehicle),
+      saleId: row.saleId,
+      title: row.title,
+      sourceType: row.sourceType,
+      originalAmount: row.originalAmount,
+      outstandingAmount: row.outstandingAmount,
+      dueDate: row.dueDate,
+      status: row.status,
+      assignedTo: row.assignedTo,
+      lastReminderAt: row.lastReminderAt,
+      lastPaymentAt: row.lastPaymentAt,
+      notes: row.notes,
+      paymentPlanLabel: row.paymentPlanLabel,
+      installmentNumber: row.installmentNumber,
+      totalInstallments: row.totalInstallments,
+      duplicateRepresentation: duplicateRepresentation || undefined,
+    });
+  }
+  items.push(...canonicalItems);
+
+  items.sort((a, b) => a.dueDate - b.dueDate || a.key.localeCompare(b.key));
+  if (items.length > QUEUE_MAX_ITEMS) truncated = true;
+  return { items: items.slice(0, QUEUE_MAX_ITEMS), truncated };
+}
+
+/**
+ * The Collections work queue: every outstanding customer debt, whichever table
+ * it lives in. Bounded rather than cursor-paginated, matching the summary and
+ * aging report it has to agree with — see buildCollectionQueue.
+ */
+export const listCollectionQueue = query({
+  args: {
+    orgId: v.id("organizations"),
+    status: v.optional(receivableStatusValidator),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    const currency = await getOrgCurrency(ctx, args.orgId);
+    const { items, truncated } = await buildCollectionQueue(ctx, args.orgId, currency);
+    const filtered = args.status ? items.filter((item) => item.status === args.status) : items;
+    return { items: filtered, truncated };
+  },
+});
+
 export const summary = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
@@ -465,21 +828,18 @@ export const summary = query({
 
     const now = Date.now();
     const today = dayRange(now);
-    const openStatuses: ReceivableStatus[] = ["OPEN", "PARTIALLY_PAID", "OVERDUE", "RESCHEDULED"];
+    const { items } = await buildCollectionQueue(ctx, args.orgId, currency);
     let totalOutstanding = 0;
     let overdueOutstanding = 0;
     let dueToday = 0;
 
-    for (const status of openStatuses) {
-      const rows = await ctx.db
-        .query("receivables")
-        .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", status))
-        .take(500);
-      for (const row of rows) {
-        totalOutstanding += row.outstandingAmount;
-        if (row.dueDate < now || row.status === "OVERDUE") overdueOutstanding += row.outstandingAmount;
-        if (row.dueDate >= today.start && row.dueDate <= today.end) dueToday += row.outstandingAmount;
-      }
+    for (const item of items) {
+      // A duplicate representation is the same debt already counted by its
+      // canonical invoice. Adding it here would report the sale twice.
+      if (item.duplicateRepresentation) continue;
+      totalOutstanding += item.outstandingAmount;
+      if (item.dueDate < now || item.status === "OVERDUE") overdueOutstanding += item.outstandingAmount;
+      if (item.dueDate >= today.start && item.dueDate <= today.end) dueToday += item.outstandingAmount;
     }
 
     const todaysPayments = await ctx.db
@@ -803,6 +1163,11 @@ export const recordPayment = mutation({
   args: {
     orgId: v.id("organizations"),
     receivableId: v.optional(v.id("receivables")),
+    /**
+     * SCRUM-56 — collect against a completed sale's canonical invoice, which
+     * has no legacy row to point at. Mutually exclusive with `receivableId`.
+     */
+    receivableDocumentId: v.optional(v.id("receivableDocuments")),
     customerId: v.optional(v.id("customers")),
     vehicleId: v.optional(v.id("vehicles")),
     saleId: v.optional(v.id("sales")),
@@ -830,6 +1195,26 @@ export const recordPayment = mutation({
           throw new ConvexError("Select a specific payment method — OTHER is not accepted for recording a payment.");
         }
 
+        if (args.receivableId && args.receivableDocumentId) {
+          throw new ConvexError(
+            "Select either a receivable or a sale invoice to collect against, not both."
+          );
+        }
+
+        const currency = await getOrgCurrency(ctx, args.orgId);
+
+        // Normalize ONCE, at the monetary boundary, BEFORE any cap is tested.
+        // Everything downstream — every cap, the payment row, the canonical
+        // allocation, the legacy balance and the ledger — derives from this one
+        // integer minor-unit value. Previously the payment row stored
+        // `roundMoney(args.amount)` while `applyPostedPayment` received the RAW
+        // `args.amount`, so a sub-minor input paid the canonical document down
+        // while the legacy row kept a sliver: a thousand of them left the
+        // invoice PAID and the row still PARTIALLY_PAID. Two numbers for one
+        // movement, one layer below the one this PR started on.
+        const amountMinor = toMinorUnits(args.amount, currency);
+        const amount = fromMinorUnits(amountMinor, currency);
+
         let receivable: Doc<"receivables"> | null = null;
         if (args.receivableId) {
           receivable = await ctx.db.get(args.receivableId);
@@ -837,20 +1222,55 @@ export const recordPayment = mutation({
           if (["PAID", "CANCELLED", "REFUNDED"].includes(receivable.status)) {
             throw new ConvexError("This receivable can no longer accept payments.");
           }
-          if (args.amount > receivable.outstandingAmount) {
+          if (amount > receivable.outstandingAmount) {
             throw new ConvexError("Payment amount cannot exceed the outstanding receivable amount.");
           }
         }
 
-        const customerId = receivable?.customerId ?? args.customerId;
+        // A hand-keyed row standing for a sale settles that sale's invoice, so
+        // the invoice's remaining balance caps the payment too.
+        if (receivable) {
+          await assertWithinSaleInvoiceBalance(ctx, receivable, amount, currency);
+        }
+
+        // SCRUM-56 — collecting against a completed sale's canonical invoice.
+        // The outstanding balance is derived from the document's allocations,
+        // never from a stored second copy, so the cap here is the same number
+        // the queue displayed.
+        let canonicalDocument: Doc<"receivableDocuments"> | null = null;
+        if (args.receivableDocumentId) {
+          canonicalDocument = await ctx.db.get(args.receivableDocumentId);
+          if (!canonicalDocument || canonicalDocument.orgId !== args.orgId) {
+            throw new ConvexError("Receivable not found.");
+          }
+          if (canonicalDocument.payerType !== "CUSTOMER" || !canonicalDocument.customerId) {
+            throw new ConvexError("This receivable is not owed by a customer.");
+          }
+          if (canonicalDocument.status !== "OPEN" && canonicalDocument.status !== "PARTIALLY_PAID") {
+            throw new ConvexError("This receivable can no longer accept payments.");
+          }
+          const outstanding = fromMinorUnits(
+            await getReceivableOutstandingMinor(ctx, canonicalDocument._id),
+            currency
+          );
+          if (amount > outstanding) {
+            throw new ConvexError("Payment amount cannot exceed the outstanding receivable amount.");
+          }
+        }
+
+        const customerId = receivable?.customerId ?? canonicalDocument?.customerId ?? args.customerId;
         if (!customerId) throw new ConvexError("Customer is required when no receivable is selected.");
         await validateOrgCustomer(ctx, args.orgId, customerId);
 
-        const vehicleId = receivable?.vehicleId ?? args.vehicleId;
-        const saleId = receivable?.saleId ?? args.saleId;
-        await validateOptionalLinks(ctx, args.orgId, { vehicleId, saleId });
+        const canonicalSaleId =
+          canonicalDocument?.sourceType === "sales"
+            ? ctx.db.normalizeId("sales", canonicalDocument.sourceId)
+            : null;
+        const canonicalSale = canonicalSaleId ? await ctx.db.get(canonicalSaleId) : null;
 
-        const currency = await getOrgCurrency(ctx, args.orgId);
+        const vehicleId = receivable?.vehicleId ?? canonicalSale?.vehicleId ?? args.vehicleId;
+        const saleId = receivable?.saleId ?? canonicalSaleId ?? args.saleId;
+        await validateOptionalLinks(ctx, args.orgId, { vehicleId, saleId });
         const now = Date.now();
         const paymentId = await ctx.db.insert("collectionPayments", {
           orgId: args.orgId,
@@ -861,7 +1281,7 @@ export const recordPayment = mutation({
           saleId,
           direction: "IN",
           method: args.method,
-          amount: roundMoney(args.amount, currency),
+          amount,
           paymentDate: args.paymentDate,
           status: "POSTED",
           idempotencyKey: args.idempotencyKey,
@@ -872,15 +1292,21 @@ export const recordPayment = mutation({
         });
 
         if (receivable) {
-          await applyPostedPayment(ctx, receivable, args.amount, args.paymentDate, currency);
+          await applyPostedPayment(ctx, receivable, amount, args.paymentDate, currency);
         }
 
         await insertLedgerTransaction(ctx, {
           orgId: args.orgId,
           direction: "IN",
-          amount: roundMoney(args.amount, currency),
+          amount,
           date: args.paymentDate,
-          description: `Collection payment${receivable ? ` for ${receivable.title}` : ""}`,
+          description: `Collection payment${
+            receivable
+              ? ` for ${receivable.title}`
+              : canonicalDocument
+                ? ` for ${canonicalDocument.documentNumber}`
+                : ""
+          }`,
           vehicleId,
           userId: user._id,
           category: "COLLECTION_PAYMENT",
@@ -893,6 +1319,7 @@ export const recordPayment = mutation({
             paymentId,
             payment,
             receivable,
+            receivableDocumentId: canonicalDocument?._id,
             actorId: user._id,
             currency,
           });
@@ -902,7 +1329,7 @@ export const recordPayment = mutation({
           orgId: args.orgId,
           paymentId,
           customerId,
-          amountMinor: toMinorUnits(roundMoney(args.amount, currency), currency),
+          amountMinor,
           currency,
           paymentMethod: args.method,
           actorId: user._id,
@@ -912,7 +1339,7 @@ export const recordPayment = mutation({
         const actorName = await getActorName(ctx);
         await notifyManagers(ctx, args.orgId, "collection.payment_recorded", {
           actorName,
-          amount: String(roundMoney(args.amount, currency)),
+          amount: String(amount),
         }, { link: `/${args.orgId}/accounting` });
 
         return paymentId;
@@ -1108,6 +1535,12 @@ export const clearCheque = mutation({
           receivable = await ctx.db.get(cheque.receivableId);
           if (receivable && cheque.amount > receivable.outstandingAmount) {
             throw new ConvexError("Cheque amount cannot exceed the outstanding receivable amount.");
+          }
+          // Clearing settles through the same monetary target as recordPayment,
+          // so it needs the same bound — a stale hand-keyed balance can admit a
+          // cheque the sale no longer owes.
+          if (receivable) {
+            await assertWithinSaleInvoiceBalance(ctx, receivable, cheque.amount, currency);
           }
         }
 
@@ -1328,6 +1761,24 @@ export const returnClearedCheque = mutation({
           .filter((q) => q.eq(q.field("status"), "POSTED"))
           .first();
 
+        // FAIL CLOSED. A cheque cleared through the finance-application flow
+        // never creates a `collectionPayments` row, so this path used to find
+        // nothing, treat the applied amount as zero, and still mark the cheque
+        // RETURNED — leaving its canonical receipt and GL entry ACTIVE with no
+        // record that the cheque bounced. Refusing is the only honest answer:
+        // there is money applied somewhere this mutation cannot see, and
+        // reconstructing it from face value is the guess this contract forbids.
+        if (!clearedPayment || !clearedPayment.canonicalPaymentId) {
+          throw new ConvexError(
+            "This cheque's cleared payment cannot be traced, so returning it here would leave its accounting entries active. " +
+              "Reverse the disbursement where it was confirmed."
+          );
+        }
+
+        const currency = await getOrgCurrency(ctx, args.orgId);
+        const chequeReceivable = cheque.receivableId ? await ctx.db.get(cheque.receivableId) : null;
+        let stillAppliedMinor = 0;
+
         // Reverse the GL impact of the original clearing.
         if (clearedPayment) {
           const clearingEvent = await ctx.db
@@ -1372,31 +1823,56 @@ export const returnClearedCheque = mutation({
             await cancelPendingPostByKey(ctx, args.orgId, `collection_payment_${clearedPayment._id}`);
           }
 
-          if (clearedPayment.paymentAllocationId) {
-            await reverseAllocation(ctx, {
-              orgId: args.orgId,
-              allocationId: clearedPayment.paymentAllocationId,
-              actorId: user._id,
+          // R3 + R4. This path was wrong twice, and fixing either alone still
+          // leaves it wrong: it selected by `clearedPayment.paymentAllocationId`
+          // — the moving pointer — and reopened `cheque.amount`, the frozen face
+          // value. Selection now goes through the immutable anchor, and the
+          // amount reopened is whatever of this cheque is STILL applied, which a
+          // prior partial refund may already have reduced.
+          if (clearedPayment.canonicalPaymentId && chequeReceivable) {
+            const chequeTargetDocumentId = await canonicalMonetaryTargetForLegacyRow(
+              ctx,
+              chequeReceivable,
+              user._id,
+              currency
+            );
+            const stillActive = await activeAllocationsForPayment(ctx, {
+              canonicalPaymentId: clearedPayment.canonicalPaymentId,
+              targetDocumentId: chequeTargetDocumentId,
             });
-          }
-          if (clearedPayment.canonicalPaymentId) {
+            for (const allocation of stillActive) {
+              stillAppliedMinor += allocation.amountMinor;
+              await reverseAllocation(ctx, {
+                orgId: args.orgId,
+                allocationId: allocation._id,
+                actorId: user._id,
+              });
+            }
             await ctx.db.patch(clearedPayment.canonicalPaymentId, { status: "VOIDED" });
           }
 
-          // Mark the payment as voided
-          await ctx.db.patch(clearedPayment._id, { status: "VOIDED" });
+          // The pointer named an allocation that is now reversed; leaving it set
+          // would hand the next reader a REVERSED row as if it were live.
+          await ctx.db.patch(clearedPayment._id, { status: "VOIDED", paymentAllocationId: undefined });
         }
 
-        // Reopen the linked legacy receivable
-        if (cheque.receivableId) {
-          const receivable = await ctx.db.get(cheque.receivableId);
-          if (receivable) {
-            await ctx.db.patch(receivable._id, {
-              outstandingAmount: (receivable.outstandingAmount ?? 0) + cheque.amount,
-              status: "OVERDUE",
-              updatedAt: now,
-            });
-          }
+        // R3 + R8 — the bank/cash reversal above concerns the whole returned
+        // cheque; the DEBT reopening is bounded by what was still applied. When
+        // no cleared payment or allocation is found, `stillAppliedMinor` is 0
+        // and nothing reopens: there is no evidence this cheque ever paid the
+        // debt down, so re-adding its face value would invent a balance. That
+        // is deliberate, and it is the case the old `+ cheque.amount` got wrong
+        // in the other direction.
+        if (chequeReceivable) {
+          const reopened = roundMoney(
+            (chequeReceivable.outstandingAmount ?? 0) + fromMinorUnits(stillAppliedMinor, currency),
+            currency
+          );
+          await ctx.db.patch(chequeReceivable._id, {
+            outstandingAmount: reopened,
+            status: reopened > 0 ? "OVERDUE" : chequeReceivable.status,
+            updatedAt: now,
+          });
         }
 
         // Post bank fee as expense if provided. Convert minor→major units with
@@ -1608,14 +2084,19 @@ export const respondToApproval = mutation({
               updatedAt: now,
             });
             // Keep the canonical receivable document in step with the legacy
-            // row — aging and dunning read the canonical dueDate.
-            const rescheduledDocId = await ensureCanonicalReceivableForLegacy(
-              ctx,
-              receivable,
-              user._id,
-              currency
-            );
-            await ctx.db.patch(rescheduledDocId, { dueDate: request.requestedDueDate });
+            // row — aging and dunning read the canonical dueDate. Skipped for a
+            // row that stands for a sale: giving one hand-keyed installment the
+            // power to move the whole sale invoice's due date would reschedule
+            // debt it does not own, and that invoice ages on its own terms.
+            if (!(await saleInvoiceForLegacyRow(ctx, receivable))) {
+              const rescheduledDocId = await ensureCanonicalReceivableForLegacy(
+                ctx,
+                receivable,
+                user._id,
+                currency
+              );
+              await ctx.db.patch(rescheduledDocId, { dueDate: request.requestedDueDate });
+            }
           } else if (request.requestType === "CANCEL_RECEIVABLE") {
             // Block if any payments have already been collected: cancelling a
             // financially-recognised receivable without a reversal GL event
@@ -1654,13 +2135,16 @@ export const respondToApproval = mutation({
               status: "CANCELLED",
               updatedAt: now,
             });
-            const cancelledDocId = await ensureCanonicalReceivableForLegacy(
-              ctx,
-              receivable,
-              user._id,
-              currency
-            );
-            await ctx.db.patch(cancelledDocId, { status: "CANCELLED" });
+            // Cancelling a hand-keyed row deletes a redundant copy, never the
+            // customer's debt. Retire only the row's OWN verified twin: the
+            // previous revision skipped the cleanup entirely for sale-linked
+            // rows, which kept the sale invoice safe but stranded those twins
+            // OPEN at full value forever. Verifying the document belongs to
+            // this row gets the cleanup back without ever reaching the invoice.
+            const ownTwinId = await verifiedOwnLegacyTwin(ctx, receivable);
+            if (ownTwinId) {
+              await ctx.db.patch(ownTwinId, { status: "CANCELLED" });
+            }
             // Reverse the RECEIVABLE_CREATED entry (or cancel its pending post)
             // so AR and the credit account it hit (income/deposit liability/
             // expense reimbursement) don't stay overstated once the receivable
@@ -1713,7 +2197,11 @@ export const respondToApproval = mutation({
             });
 
             const refundPayment = await ctx.db.get(refundPaymentId);
-            const canonicalReceivableDocumentId = await ensureCanonicalReceivableForLegacy(
+            // The refund must unwind the document the payment actually settled.
+            // Resolving the row's own twin here while `recordPayment` allocated
+            // to the sale invoice left nothing to reverse, and `CANCEL` is
+            // blocked behind a refund, so the operator had no way out at all.
+            const canonicalReceivableDocumentId = await canonicalMonetaryTargetForLegacyRow(
               ctx,
               receivable,
               user._id,
@@ -1733,11 +2221,13 @@ export const respondToApproval = mutation({
             // reopens by exactly the refunded amount — without this the
             // canonical doc stays PAID while the legacy row shows a balance.
             const refundAmountMinor = toMinorUnits(refundAmount, currency);
-            await reverseAllocationsForRefund(ctx, {
+            await reverseAllocationsForRow(ctx, {
               orgId: args.orgId,
+              receivable,
               receivableDocumentId: canonicalReceivableDocumentId,
               amountMinor: refundAmountMinor,
               actorId: user._id,
+              currency,
             });
 
             const newOutstanding = roundMoney(receivable.outstandingAmount + refundAmount, currency);
@@ -1995,7 +2485,6 @@ export const agingReport = query({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     const currency = await getOrgCurrency(ctx, args.orgId);
     const now = Date.now();
-    const statuses: ReceivableStatus[] = ["OPEN", "PARTIALLY_PAID", "OVERDUE", "RESCHEDULED"];
     const buckets = {
       current: { count: 0, amount: 0 },
       days1To30: { count: 0, amount: 0 },
@@ -2004,25 +2493,26 @@ export const agingReport = query({
       over90: { count: 0, amount: 0 },
     };
 
-    for (const status of statuses) {
-      const rows = await ctx.db
-        .query("receivables")
-        .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", status))
-        .take(500);
-      for (const row of rows) {
-        const ageDays = Math.floor((now - row.dueDate) / DAY_MS);
-        const bucket = ageDays <= 0
-          ? buckets.current
-          : ageDays <= 30
-            ? buckets.days1To30
-            : ageDays <= 60
-              ? buckets.days31To60
-              : ageDays <= 90
-                ? buckets.days61To90
-                : buckets.over90;
-        bucket.count += 1;
-        bucket.amount = roundMoney(bucket.amount + row.outstandingAmount, currency);
-      }
+    // Same read model as the queue and the summary, so a sale invoice ages
+    // alongside the hand-keyed rows instead of being absent from the report.
+    const { items } = await buildCollectionQueue(ctx, args.orgId, currency);
+    for (const item of items) {
+      // Excluded for the same reason as the summary: the canonical invoice is
+      // already ageing this debt, and a bucket that counted both would overstate
+      // both the amount and the number of debts outstanding.
+      if (item.duplicateRepresentation) continue;
+      const ageDays = Math.floor((now - item.dueDate) / DAY_MS);
+      const bucket = ageDays <= 0
+        ? buckets.current
+        : ageDays <= 30
+          ? buckets.days1To30
+          : ageDays <= 60
+            ? buckets.days31To60
+            : ageDays <= 90
+              ? buckets.days61To90
+              : buckets.over90;
+      bucket.count += 1;
+      bucket.amount = roundMoney(bucket.amount + item.outstandingAmount, currency);
     }
 
     return buckets;
