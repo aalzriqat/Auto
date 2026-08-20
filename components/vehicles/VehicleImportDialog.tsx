@@ -783,7 +783,12 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
         // guard is here as well because a disabled button is a hint, not a
         // control, and importBulk itself refuses an unstated method.
         // ⚠️ A LAST-RESORT FALLBACK, NOT THE CONTROL — and this comment used to
-        // claim otherwise.
+        // claim otherwise. A reviewer went further and showed these branches are
+        // currently UNREACHABLE: `ImportWizard.handleImport` runs the same
+        // checks against the same state before ever calling this, and the
+        // re-check below is strictly weaker. They are defence in depth against a
+        // future caller, not live paths, and nothing tests them — say so rather
+        // than let the next reader assume they are exercised.
         //
         // `ImportWizard.handleImport` blocks against the real whole-file counts
         // and is the guarantee. What arrives here is only the VALID SUBSET, so

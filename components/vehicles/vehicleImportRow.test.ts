@@ -440,3 +440,27 @@ describe("every placeholder in a message gets filled, not just the first", () =>
     }
   });
 });
+describe("interpolate cannot re-substitute its own output", () => {
+  // A reviewer caught the first version folding each key over the RUNNING
+  // result, which made it order-dependent: a value containing another key's
+  // placeholder was re-substituted by a later iteration. Reproduced then, and
+  // pinned here so a revert to the fold cannot pass.
+  test("key ORDER cannot change the result", () => {
+    expect(interpolate("{a}{b}", { a: "{b}", b: "X" })).toBe("{b}X");
+    expect(interpolate("{a}{b}", { b: "X", a: "{b}" })).toBe("{b}X");
+  });
+
+  test("a value that looks like a placeholder survives verbatim", () => {
+    // The realistic shape: this product puts dealer-entered spreadsheet text —
+    // company names, supplier names, VINs — into messages. Under the fold this
+    // silently became "5 Motors imported 5".
+    expect(
+      interpolate("{company} imported {count}", { company: "{count} Motors", count: 5 })
+    ).toBe("{count} Motors imported 5");
+  });
+
+  test("a missing key stays visible, and zero is not treated as absent", () => {
+    expect(interpolate("{a} {zz}", { a: "X" })).toBe("X {zz}");
+    expect(interpolate("{n}", { n: 0 })).toBe("0");
+  });
+});

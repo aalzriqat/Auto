@@ -15,13 +15,29 @@
  * Replacing every occurrence removes the whole class rather than that one
  * string. A missing key is left untouched rather than blanked, so a gap shows
  * up as a visible `{name}` instead of a sentence with a hole in it.
+ *
+ * ⚠️ SINGLE PASS OVER THE ORIGINAL TEMPLATE — never a fold over the running
+ * result. A reviewer caught the first version doing the latter, and it was
+ * order-dependent: a value that itself contained another key's placeholder got
+ * re-substituted by a later iteration. Reproduced —
+ *
+ *   fold: interpolate("{a}{b}", { a: "{b}", b: "X" })  ->  "XX"
+ *   fold: interpolate("{a}{b}", { b: "X", a: "{b}" })  ->  "{b}X"
+ *
+ * same inputs, different key order, different output; and realistically
+ * `{ company: "{count} Motors", count: 5 }` silently became "5 Motors". Only
+ * numbers reach the one call site today, so it was unreachable — but this
+ * signature accepts strings, and the values this product puts in messages are
+ * dealer-entered spreadsheet text: company names, supplier names, VINs.
+ *
+ * Scanning the template once cannot re-read inserted text, so the class is
+ * closed by construction rather than by every future caller being careful.
  */
 export function interpolate(
   template: string,
   values: Record<string, string | number>
 ): string {
-  return Object.entries(values).reduce(
-    (out, [key, value]) => out.split(`{${key}}`).join(String(value)),
-    template
+  return template.replace(/\{(\w+)\}/g, (match, key: string) =>
+    key in values ? String(values[key]) : match
   );
 }
