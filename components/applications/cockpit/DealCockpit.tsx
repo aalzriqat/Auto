@@ -40,6 +40,7 @@ import {
 import {
   ReopenApprovedPurchaseDialog,
 } from "./ReopenApprovedPurchaseDialog";
+import { RecordDirectSupplierAmountDialog } from "./RecordDirectSupplierAmountDialog";
 import { ConfirmHandoverDialog } from "./ConfirmHandoverDialog";
 import { ConfirmFinalizeDialog } from "./ConfirmFinalizeDialog";
 import {
@@ -167,6 +168,8 @@ const PROFIT_LINE_LABEL: Record<string, string> = {
  */
 const PROFIT_BLOCKED_REASON: Record<
   "NoApprovedPurchaseAmount"
+  /** The figure does not exist for this financing mode, so nothing is pending. */
+  | "NotApplicableForFinancingMode"
   | "NoSupplierSettlement"
   | "NoDealerContribution"
   | "CorruptInput"
@@ -180,6 +183,7 @@ const PROFIT_BLOCKED_REASON: Record<
   string
 > = {
   NoApprovedPurchaseAmount: "ProfitNeedsApprovedPurchase",
+  NotApplicableForFinancingMode: "ProfitNotApplicableForMode",
   NoSupplierSettlement: "ProfitNeedsSupplierSettlement",
   NoDealerContribution: "ProfitNeedsDealerContribution",
   CorruptInput: "ProfitInputCorrupt",
@@ -292,6 +296,12 @@ export function DealCockpit({
   const finalizeDeal = useMutation(api.applications.finalizeDeal);
   const approveDealerPurchaseAmount = useMutation(
     api.financingEconomics.approveDealerPurchaseAmount
+  );
+  // The manual provider's writer. A SEPARATE mutation, not a mode of the one
+  // above: that one applies a configured company's lending rules and refuses an
+  // application with no company, which is exactly the deal this serves.
+  const recordDirectSupplierReceiptAmount = useMutation(
+    api.applications.recordDirectSupplierReceiptAmount
   );
   const recordAppraisal = useMutation(api.financingEconomics.recordAppraisal);
   const { hasPermission, isLoading: permissionsLoading, membership } = usePermissions();
@@ -703,6 +713,13 @@ export function DealCockpit({
           onReopenApproved: async (values: { reason: string }) => {
             await reopenApproval({ orgId, applicationId, reason: values.reason });
           },
+          onRecordDirectSupplierAmount: async (values: {
+            approvedAmountMinor: number;
+            source: string;
+            notes?: string;
+          }) => {
+            await recordDirectSupplierReceiptAmount({ orgId, applicationId, ...values });
+          },
         }
       : undefined;
 
@@ -986,8 +1003,16 @@ function MoneyPanel({
           </>
         ) : (
           <>
+            {/* "Cannot be calculated YET" promises the figure is coming. On a
+                mode that never produces one it is simply not part of the deal,
+                and a headline that implies otherwise sends the operator looking
+                for a screen that will never accept the number. */}
             <p className="text-2xl font-semibold text-muted-foreground">
-              {t("ProfitNotCalculable")}
+              {t(
+                profit.reason === "NotApplicableForFinancingMode"
+                  ? "ProfitNotApplicable"
+                  : "ProfitNotCalculable"
+              )}
             </p>
             <p className="text-xs text-muted-foreground">
               {t(PROFIT_BLOCKED_REASON[profit.reason])}
@@ -1053,6 +1078,12 @@ function MoneyPanel({
  * are exactly what the tests have to vary.
  */
 export type FinanceDecisionWiring = {
+  /** The manual provider's supplier-amount writer — see the mutation's docblock. */
+  onRecordDirectSupplierAmount?: (values: {
+    approvedAmountMinor: number;
+    source: string;
+    notes?: string;
+  }) => Promise<void>;
   facts: FinanceDecisionFacts;
   /** The application's OWN pinned currency, which need not be the org's. */
   currency: string | null;
@@ -1215,6 +1246,9 @@ export function DealCockpitView({
   const [showCompleted, setShowCompleted] = useState(false);
   const [recordingQuotation, setRecordingQuotation] = useState(false);
   const [recordingApproval, setRecordingApproval] = useState(false);
+  const [recordingDirectSupplier, setRecordingDirectSupplier] = useState(false);
+  const [directSupplierSubmitting, setDirectSupplierSubmitting] = useState(false);
+  const [directSupplierError, setDirectSupplierError] = useState<string | null>(null);
   const [reopeningApproval, setReopeningApproval] = useState(false);
   const [recordingAppraisal, setRecordingAppraisal] = useState(false);
   const [appraisalSubmitting, setAppraisalSubmitting] = useState(false);
@@ -1817,6 +1851,27 @@ export function DealCockpitView({
             setReopenError(null);
             setReopeningApproval(true);
           }}
+          // Straight from the server payload. The screen does not decide which
+          // writer owns this figure — it cannot see the frozen quote mode, the
+          // company or the settlement route that decide it.
+          // Straight from the server payload. The screen does not decide which
+          // writer owns this figure — it cannot see the frozen quote mode, the
+          // company or the settlement route that decide it. A cash deal's payload
+          // has no such field, hence the `in` narrowing rather than a cast.
+          approvedPurchaseWriter={
+            deal && "approvedPurchaseWriter" in deal ? deal.approvedPurchaseWriter : "NONE"
+          }
+          // The server's verdict, forwarded unchanged. A cash deal's payload has
+          // no such field, hence the `in` narrowing rather than a cast.
+          directSupplierAmount={
+            deal && "directSupplierAmount" in deal
+              ? deal.directSupplierAmount
+              : { applicable: false, available: false, reasonKey: null }
+          }
+          onRecordDirectSupplierAmount={() => {
+            setDirectSupplierError(null);
+            setRecordingDirectSupplier(true);
+          }}
         />
       )}
 
@@ -2135,6 +2190,44 @@ export function DealCockpitView({
             onOpenChange={setRecordingApproval}
             onSubmit={handleRecordApproved}
           />
+          {financeDecision.onRecordDirectSupplierAmount && (
+            <RecordDirectSupplierAmountDialog
+              open={recordingDirectSupplier}
+              submitting={directSupplierSubmitting}
+              // The same two parties the rest of this screen names, read from
+              // the payload rather than restated, so the dialog cannot show a
+              // different supplier from the row above it.
+              supplierName={supplierRow?.name ?? null}
+              providerName={deal.financeCompanyName ?? null}
+              money={decisionMoney}
+              referenceMinor={financeDecision.facts.submittedQuotationMinor}
+              toMinor={(input) => {
+                const parsed = Number(input.replace(/,/g, "").trim());
+                if (!Number.isFinite(parsed)) return null;
+                return Math.round(parsed * decisionFactor);
+              }}
+              t={t}
+              onOpenChange={setRecordingDirectSupplier}
+              error={directSupplierError}
+              onSubmit={async (values) => {
+                setDirectSupplierSubmitting(true);
+                setDirectSupplierError(null);
+                try {
+                  await financeDecision.onRecordDirectSupplierAmount!(values);
+                  // Closed ONLY on success. Every refusal in the mutation names
+                  // what to change — the supplier is owed more, the vehicle is
+                  // dealership stock, the provider is unnamed, the vehicle has
+                  // gone out — so the dialog stays open carrying that sentence
+                  // rather than shutting on a write that never happened.
+                  setRecordingDirectSupplier(false);
+                } catch (caught) {
+                  setDirectSupplierError(getErrorMessage(caught));
+                } finally {
+                  setDirectSupplierSubmitting(false);
+                }
+              }}
+            />
+          )}
           <ReopenApprovedPurchaseDialog
             open={reopeningApproval}
             submitting={reopenSubmitting}

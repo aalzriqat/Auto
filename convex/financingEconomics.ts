@@ -18,6 +18,7 @@ import {
   isConsignedAgentSale,
 } from "./utils/vehicleOwnership";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
+import { describeWitness, witnessToStore } from "./utils/financingEconomics";
 import { toMinorUnits, assertSupportedDenomination, denominationOf } from "./utils/money";
 import {
   assertMinorAmount,
@@ -700,6 +701,35 @@ export const suggestQuotationForApplication = query({
 });
 
 /** Everything the dealership needs to answer "what happened on this deal". */
+/**
+ * Change-log rows that ARE settlement evidence, not merely rows about it.
+ *
+ * ⚠️ A REDACTED DOCUMENT WITH AN UNREDACTED CHANGE LOG IS NOT REDACTED.
+ * `redactSettlementEvidence` gates the supplier-entitlement witness and the
+ * direct-receipt paperwork on the document. Both writers ALSO file an override
+ * row, and this query blanks only those rows' values — leaving `field`,
+ * `changedBy` and `changedAt` in place. A default-SALES caller therefore still
+ * learned that a supplier-entitlement validation happened, WHEN, and BY WHOM:
+ * exactly the provenance the document gate had just been split three ways to
+ * withhold. Measured, not reasoned: 2 such rows reached a caller holding
+ * neither `view:finance` nor `view:cost_price`.
+ *
+ * These rows are withheld ENTIRELY from a non-finance caller rather than masked.
+ * Masking the field name would put a row in the log that names nothing, and
+ * inventing a placeholder name would put something false there. Nothing is lost
+ * that this caller acts on: an amount correction files its own
+ * `approvedDealerPurchaseAmountMinor` row, which they still receive with its own
+ * timestamp, so the workflow fact survives while the evidence provenance does
+ * not.
+ *
+ * This is the same mistake as the leak it sits beside — gating a field and
+ * publishing the sentence written next to it — one layer further down.
+ */
+const SETTLEMENT_EVIDENCE_OVERRIDE_FIELDS: ReadonlySet<string> = new Set([
+  "supplierEntitlementWitness",
+  "directSupplierReceipt",
+]);
+
 export const getEconomics = query({
   args: {
     orgId: v.id("organizations"),
@@ -743,6 +773,8 @@ export const getEconomics = query({
     const canSeeCost =
       isSystemOwnerRole(auth.role) ||
       auth.role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
+    const canSeeFinance =
+      isSystemOwnerRole(auth.role) || auth.role.permissions.includes(PERMISSIONS.VIEW_FINANCE);
 
     // The redaction's OWN decision about the approved amount, reused rather
     // than restated. Whether this caller may see the figure is a rule that
@@ -762,7 +794,37 @@ export const getEconomics = query({
         vehiclePurchaseCostMinor: canSeeCost ? app.vehiclePurchaseCostMinor : undefined,
       },
       appraisals: appraisals.sort((a, b) => b.appraisedAt - a.appraisedAt),
-      overrides: overrides.sort((a, b) => b.changedAt - a.changedAt),
+      /**
+       * THE CORRECTION HISTORY IS SETTLEMENT EVIDENCE, and it was served raw.
+       *
+       * These rows carry `previousValue`/`newValue`/`reason`, and every writer
+       * of this deal's money puts the figures INTO those strings — the approval
+       * as `"17000000 (MANUAL @ 85% LTV, approved by …)"`, the direct receipt as
+       * a serialized object containing the amount, the document it was read off,
+       * the operator's note and the supplier's entitlement. This query authorizes
+       * on VIEW_FINANCE_APPLICATIONS, which the default SALES template holds, so
+       * redacting the application document while publishing its own change log
+       * handed back everything the redaction had just withheld, one layer down.
+       *
+       * ⚠️ A KEY-WALKING GUARD CANNOT SEE THIS. The structural sweep recurses
+       * over object keys, and these payloads are STRINGS — the leak is inside a
+       * value, so the field name it hides behind is `newValue`. That is why the
+       * regressions for this are sentinel-VALUE scans over the fully serialized
+       * response, and why the two kinds of assertion both have to exist.
+       *
+       * The row's shape survives — a caller still learns THAT a figure was
+       * corrected, when, and by whom, which is the workflow fact — while the
+       * amounts and the paperwork behind them follow the same gate as the
+       * document they describe.
+       */
+      overrides: overrides
+        .filter((row) => canSeeFinance || !SETTLEMENT_EVIDENCE_OVERRIDE_FIELDS.has(row.field))
+        .sort((a, b) => b.changedAt - a.changedAt)
+        .map((row) =>
+          canSeeFinance
+            ? row
+            : { ...row, previousValue: undefined, newValue: undefined, reason: "" }
+        ),
       /**
        * Whether the recorded approved amount is unlike every figure on file.
        *
@@ -1581,17 +1643,52 @@ export const approveDealerPurchaseAmount = mutation({
     // approval, and `completeSale` refuses at the commit point regardless, so
     // neither ordering can slip through. This one exists so the operator learns
     // it here rather than at the finalize button.
+    /**
+     * The entitlement this approval was measured against, KEPT.
+     *
+     * Validating it here and storing nothing left a CONFIGURED direct deal with
+     * the same mutable-entitlement hole SCRUM-61 closed for the manual writer:
+     * approve against supplier cost A, edit the vehicle to B through its own
+     * public path, and every artefact handover checks — quotation, approval,
+     * funded split — is still present, so the vehicle goes out and finalization
+     * refuses afterwards. `applications.supplierEntitlementVerdictFor` re-checks
+     * this witness for BOTH writers; without it being written here, that check
+     * had nothing to read on the configured shape.
+     */
+    let validatedEntitlementMinor: number | undefined;
+    /**
+     * WHETHER A SUPPLIER ENTITLEMENT EXISTS AT ALL on this deal — asked of the
+     * VEHICLE, not of the route.
+     *
+     * Only a consigned agency sale has a supplier with an entitlement. On the
+     * dealership's own stock there is nobody to compare against, so recording
+     * "not validated" would be noise asserting a gap that does not exist. The
+     * route decides whether the entitlement is CHECKED; the vehicle decides
+     * whether there is one to check.
+     */
+    const entitlementVehicle = await ctx.db.get(app.vehicleId);
+    const entitlementApplies =
+      entitlementVehicle !== null &&
+      entitlementVehicle.orgId === args.orgId &&
+      isConsignedAgentSale(entitlementVehicle);
     if (!dealershipCollectsGross(consignedSettlementRoute(app))) {
-      const vehicle = await ctx.db.get(app.vehicleId);
+      const vehicle = entitlementVehicle;
       if (vehicle && vehicle.orgId === args.orgId && isConsignedAgentSale(vehicle)) {
         const costAmount = await computeVehicleCapitalizedCost(ctx, vehicle);
         // A vehicle with no recorded cost is not evidence that nothing is owed;
         // `completeSale` refuses that sale outright. Nothing is asserted here.
+        //
+        // Deliberately still not a refusal AT APPROVAL: the approval is not the
+        // irreversible step, and widening this path's refusals is not what the
+        // hole required. The witness is simply absent, and the handover guard
+        // treats an absent witness as UNPROVABLE and refuses there — while the
+        // vehicle is still on the lot and re-approving can fix it.
         if (costAmount > 0) {
           const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
+          validatedEntitlementMinor = toMinorUnits(costAmount, currency);
           const refusal = directSettlementBelowEntitlementRefusal({
             approvedAmountMinor: args.approvedAmountMinor,
-            supplierEntitlementMinor: toMinorUnits(costAmount, currency),
+            supplierEntitlementMinor: validatedEntitlementMinor,
             supplierName: vehicle.sourcedFromName,
           });
           if (refusal) throw new ConvexError(refusal);
@@ -1727,6 +1824,18 @@ export const approveDealerPurchaseAmount = mutation({
 
     const now = Date.now();
     const previousRawGapMinor = app.rawAppraisalGapMinor ?? 0;
+    /**
+     * THE AMOUNT ALONE — the only input the supplier-entitlement witness
+     * attests to.
+     *
+     * Deliberately separate from `approvalMateriallyChanged` below, which is
+     * broader by design: it also turns true for a basis, LTV, appraisal,
+     * approver or notes change, none of which move the figure the supplier's
+     * entitlement was compared against. `undefined` on the left makes a first
+     * approval a change, which it is.
+     */
+    const approvedAmountChanged =
+      app.approvedDealerPurchaseAmountMinor !== args.approvedAmountMinor;
     // Any material change, not only the amount. Narrowing this to the amount
     // meant re-approving 11,500 on the MANUAL basis instead of APPRAISAL
     // silently replaced the basis, the approver, the timestamp and the notes —
@@ -1776,6 +1885,111 @@ export const approveDealerPurchaseAmount = mutation({
       });
     }
 
+    /**
+     * The WITNESS has its own material-change test, and therefore its own row.
+     *
+     * `approvalMateriallyChanged` asks whether the finance company's decision
+     * moved. Creating or replacing the entitlement witness is a different event:
+     * on a legacy repair the approval is byte-identical — same amount, basis,
+     * appraisal, LTV, approver, notes — so that flag stays false, no override
+     * row was written, and the deal silently acquired a witness that nothing
+     * recorded. "The evidence this deal stands on was established today, by this
+     * person" is exactly the kind of fact this table exists for.
+     */
+    //
+    // ⚠️ RE-SUBMITTING AN IDENTICAL APPROVAL MUST NOT RE-BADGE THE WITNESS. The
+    // patch below wrote a fresh CONFIGURED_APPROVAL witness — new actor, new
+    // timestamp — whenever the entitlement was measurable, so a deal whose
+    // witness had been established at ROUTE_SELECTION quietly changed hands while
+    // the audit said nothing, because the AMOUNT had not moved. `witnessToStore`
+    // keeps an unchanged fact exactly as it was recorded.
+    /**
+     * WHAT THIS APPROVAL ACTUALLY CHECKED, recorded either way.
+     *
+     * On the direct route this writer compares the supplier's entitlement
+     * against the amount and refuses a shortfall, so the witness is VALIDATED.
+     * On the through route it compares nothing — the dealership collects the
+     * gross and the entitlement is an ordinary payable — and the first design
+     * recorded that by writing NOTHING.
+     *
+     * That silence was the hole a whole round was lost to: an amount approved
+     * against nothing looked identical to an amount not yet agreed, and a later
+     * route change treated the gap as an invitation to originate evidence. So
+     * the approval now says so out loud, with its own actor and timestamp, and
+     * carries no amount at all — zero, the current cost and a nullable number
+     * are each things a later reader could mistake for proof.
+     */
+    /**
+     * ⚠️ THE WITNESS IS ALWAYS RE-EVALUATED. `entitlementApplies` may decide
+     * whether to CREATE a marker on a deal that has none — never whether an
+     * EXISTING witness survives.
+     *
+     * The previous version made this entire call conditional on
+     * `entitlementApplies`, so a deal could be converted SOURCED → STOCK through
+     * the ordinary `vehicles.update` path, re-approved at a different amount,
+     * and converted back, carrying its original VALIDATED witness across
+     * untouched. Reproduced end to end: evidence for 17,000,000 survived a
+     * re-approval at 16,000,000 and the handover then succeeded on it.
+     *
+     * That conditional was added in the same commit, to make five unrelated
+     * tests stop failing — which is precisely the kind of change that earns the
+     * most suspicion rather than the least.
+     */
+    const stored = witnessToStore(
+      app.supplierEntitlementWitness,
+      validatedEntitlementMinor === undefined
+        ? { validated: false }
+        : { validated: true, entitlementMinor: validatedEntitlementMinor },
+      { validatedAt: now, validatedBy: user._id, via: "CONFIGURED_APPROVAL" },
+      approvedAmountChanged
+    );
+    /**
+     * The one thing applicability still decides: whether a deal that has NEVER
+     * held a witness acquires a NOT_VALIDATED marker.
+     *
+     * On the dealership's own stock there is no supplier and no entitlement, so
+     * recording "not validated" would assert a gap that does not exist. That is
+     * safe here and only here, because there is by definition no prior evidence
+     * to preserve — the stale-witness hole above needs an EXISTING witness to
+     * carry across, and this branch requires there to be none.
+     */
+    const suppressAbsentMarker =
+      app.supplierEntitlementWitness === undefined && !entitlementApplies;
+    const nextWitness = suppressAbsentMarker ? undefined : stored.witness;
+    const witnessChanged = suppressAbsentMarker ? false : stored.changed;
+    /**
+     * A row when evidence APPEARS or IS LOST, not on every approval.
+     *
+     * Recording "this approval compared nothing" for the first time on a deal
+     * that never had a witness says nothing the approval's own history does not
+     * already say, and it doubled the override rows on every ordinary consigned
+     * approval. What genuinely deserves its own line is a VALIDATED witness
+     * being established, replaced, or DOWNGRADED — the last being evidence
+     * disappearing, which is the case a reader must never have to infer.
+     */
+    const witnessWorthRecording =
+      witnessChanged &&
+      !(app.supplierEntitlementWitness === undefined && nextWitness?.status === "NOT_VALIDATED");
+    if (witnessWorthRecording) {
+      await recordOverride(ctx, {
+        orgId: args.orgId,
+        applicationId: args.applicationId,
+        field: "supplierEntitlementWitness",
+        previousValue:
+          app.supplierEntitlementWitness === undefined
+            ? undefined
+            : JSON.stringify(describeWitness(app.supplierEntitlementWitness)),
+        newValue: JSON.stringify(describeWitness(nextWitness)),
+        reason:
+          nextWitness?.status === "NOT_VALIDATED"
+            ? "This approval was taken while the deal settles through the dealership, so the supplier's entitlement was NOT compared against it. Recorded explicitly: an unchecked amount must not be mistaken later for an agreed one."
+            : app.supplierEntitlementWitness === undefined
+              ? "The supplier's entitlement was validated against this approval for the first time; the approval itself is unchanged."
+              : "The supplier's entitlement was re-validated against this approval.",
+        changedBy: user._id,
+      });
+    }
+
     // APPROVED on the appraisal row means the company approved AGAINST it. A
     // MANUAL approval is the one basis that says it did not, even where the
     // appraisal is still in play as the company's LTV base — so the row keeps
@@ -1794,6 +2008,23 @@ export const approveDealerPurchaseAmount = mutation({
       // have moved. See `economicsRevision` in the schema.
       economicsRevision: (app.economicsRevision ?? 0) + 1,
       approvedDealerPurchaseAmountMinor: args.approvedAmountMinor,
+      // Written on every approval, including a re-approval that changes nothing
+      // else: re-approving the identical amount is exactly how a deal whose
+      // witness is missing or superseded is repaired, so this must not be
+      // conditional on something else having moved.
+      //
+      // Its own actor and timestamp, NOT the approval's. On a legacy repair the
+      // finance company's approval is a real historical act that did not move,
+      // while the entitlement was observed just now — filing the second under
+      // the first's provenance would claim an observation the dealership never
+      // made. `approvedPurchaseApprovedAt/By` above are guarded by
+      // `approvalMateriallyChanged` precisely so they stay put.
+      //
+      // NOT cleared when the entitlement is unmeasurable here: a THROUGH-route
+      // approval has nothing to validate against, and wiping a witness that the
+      // route writer established would destroy evidence this act never examined.
+      ...(nextWitness === undefined ? {} : { supplierEntitlementWitness: nextWitness }),
+
       approvedPurchaseBasis: args.basis,
       approvedPurchaseAppraisalId: appraisal?._id,
       approvedPurchaseExceptionRuleVersion:

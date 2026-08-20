@@ -649,6 +649,54 @@ export const salesEn = {
   ProfitEstimatedAwaitingSettlement: "Estimated — awaiting settlement",
   ProfitActualUnpostable: "Actual — not posted to the books",
   ProfitNotCalculable: "Cannot be calculated yet",
+  // Deliberately NOT "yet". This deal's financing mode has no finance company
+  // approving a purchase amount, so there is no step to go and complete.
+  DirectSupplierAmountTitle: "Record what the supplier receives",
+  DirectSupplierAmountDescription:
+    "The finance provider pays the supplier directly on this deal, so what he receives is the figure the dealership's claim on him is measured from. Record it before the vehicle goes out.",
+  DirectSupplierAmountPayer: "Paid by",
+  DirectSupplierAmountPayee: "Paid to",
+  DirectSupplierAmountReference: "Agreed vehicle price",
+  DirectSupplierAmountLabel: "Amount the supplier receives",
+  DirectSupplierAmountInvalid: "Enter an amount greater than zero.",
+  DirectSupplierAmountSourceLabel: "Where this figure comes from",
+  DirectSupplierAmountSourceHelp:
+    "A document or agreement someone can check later — a purchase agreement, a signed offer, a settlement advice.",
+  DirectSupplierAmountNotesLabel: "Notes (optional)",
+  DirectSupplierAmountAction: "Record amount",
+  DirectSupplierAmountRowLabel: "Amount the supplier receives",
+  // NO DEFAULT ROLE BUT OWNER IS NAMED, because none of them qualifies.
+  //
+  // Checked against DEFAULT_ROLE_TEMPLATES rather than assumed: MANAGER holds
+  // `approve:finance_application` but NOT `view:finance`; ACCOUNTANT holds
+  // `view:finance` but NOT the approval. This mutation requires both, so naming
+  // either one sends the operator to somebody the server will refuse — the first
+  // draft said "a manager", the correction said "an accountant", and both were
+  // wrong for opposite reasons. An org that grants both to a custom role has
+  // somebody who qualifies; the copy points at the permissions, which is the
+  // thing that is actually true.
+  DirectSupplierAmountNeedsPermission:
+    "Recording what the supplier receives needs permission to see the deal's finances as well as to approve it. Ask the dealership owner, or someone whose role has both.",
+  DirectSupplierAmountOwnDeal:
+    "You cannot record this on your own deal. The dealership owner records it, or another approver who can also see the deal's finances.",
+  // Names the step that unblocks it, not the state it is stuck in. The finance
+  // company has to approve the application before anybody can record what the
+  // supplier receives against it.
+  DirectSupplierAmountNeedsApproval:
+    "This deal has not been approved yet, so what the supplier receives cannot be recorded against it. Approve the application first, then record it here.",
+  DirectSupplierAmountSealed:
+    "The vehicle has gone out, so this deal's figures are sealed and this can no longer be recorded here.",
+  // Both reachable through `directRouteRefusal`. Without them the dialog fell
+  // through to "no external financier", which is a false explanation — the
+  // financier is right there; the obstacle is the money.
+  RouteDirectUnavailableBelowEntitlement:
+    "The amount recorded for the supplier is less than he is owed for the car, so the finance company cannot pay him directly for it.",
+  RouteDirectUnavailableVehicleHandedOver:
+    "The vehicle has gone out, and settling direct to the supplier needs figures that can no longer be recorded once it has.",
+  DirectSupplierAmountClosed: "This deal is closed, so its figures are sealed.",
+  ProfitNotApplicable: "Not available for this financing mode",
+  ProfitNotApplicableForMode:
+    "The dealership's profit here is not measured from a finance company's approved purchase, because this deal has none.",
   ProfitNeedsApprovedPurchase: "The finance company's approved purchase amount is not recorded.",
   ProfitNeedsSupplierSettlement: "What the supplier settles at is not recorded.",
   ProfitNeedsDealerContribution: "The dealership's own contribution to the purchase is not recorded.",
@@ -1641,6 +1689,39 @@ export const salesAr = {
   ProfitEstimatedAwaitingSettlement: "تقديري — بانتظار التسوية",
   ProfitActualUnpostable: "فعلي — غير مُرحَّل للقيود",
   ProfitNotCalculable: "لا يمكن احتسابه بعد",
+  DirectSupplierAmountTitle: "سجّل المبلغ الذي يستلمه المورّد",
+  DirectSupplierAmountDescription:
+    "جهة التمويل تدفع للمورّد مباشرة في هذه الصفقة، والمبلغ الذي يستلمه هو الأساس الذي يُحتسب منه حق المعرض عليه. سجّله قبل خروج المركبة.",
+  DirectSupplierAmountPayer: "الدافع",
+  DirectSupplierAmountPayee: "المستفيد",
+  DirectSupplierAmountReference: "سعر المركبة المتفق عليه",
+  DirectSupplierAmountLabel: "المبلغ الذي يستلمه المورّد",
+  DirectSupplierAmountInvalid: "أدخل مبلغًا أكبر من صفر.",
+  DirectSupplierAmountSourceLabel: "مصدر هذا المبلغ",
+  DirectSupplierAmountSourceHelp:
+    "مستند أو اتفاق يمكن الرجوع إليه لاحقًا — اتفاقية شراء أو عرض موقّع أو إشعار تسوية.",
+  DirectSupplierAmountNotesLabel: "ملاحظات (اختياري)",
+  DirectSupplierAmountAction: "تسجيل المبلغ",
+  DirectSupplierAmountRowLabel: "المبلغ الذي يستلمه المورّد",
+  // لا يُذكر أي دور افتراضي غير المالك: المدير يملك صلاحية الاعتماد دون الاطلاع
+  // على المالية، والمحاسب يملك الاطلاع دون الاعتماد — وهذه العملية تتطلب
+  // الصلاحيتين معًا.
+  DirectSupplierAmountNeedsPermission:
+    "تسجيل ما يستلمه المورّد يتطلب صلاحية الاطلاع على مالية الصفقة إضافةً إلى صلاحية الاعتماد. راجع مالك المعرض أو مستخدمًا يملك الصلاحيتين معًا.",
+  DirectSupplierAmountOwnDeal:
+    "لا يمكنك تسجيل هذا على صفقتك. يسجّله مالك المعرض أو معتمِد آخر يملك أيضًا صلاحية الاطلاع على مالية الصفقة.",
+  DirectSupplierAmountNeedsApproval:
+    "لم تُعتمد هذه الصفقة بعد، لذلك لا يمكن تسجيل ما يستلمه المورّد عليها. اعتمد الطلب أولاً، ثم سجّله هنا.",
+  DirectSupplierAmountSealed:
+    "خرجت المركبة، لذلك أصبحت أرقام هذه الصفقة مثبّتة ولم يعد بالإمكان تسجيل هذا هنا.",
+  RouteDirectUnavailableBelowEntitlement:
+    "المبلغ المسجَّل للمورّد أقل مما هو مستحق له عن المركبة، لذلك لا يمكن أن تدفع له شركة التمويل مباشرةً.",
+  RouteDirectUnavailableVehicleHandedOver:
+    "خرجت المركبة، وتسوية المورّد مباشرةً تتطلب أرقامًا لم يعد بالإمكان تسجيلها بعد خروجها.",
+  DirectSupplierAmountClosed: "هذه الصفقة مغلقة، لذلك أصبحت أرقامها مثبّتة.",
+  ProfitNotApplicable: "غير متاح لهذا النوع من التمويل",
+  ProfitNotApplicableForMode:
+    "ربح المعرض في هذه الصفقة لا يُقاس من قيمة شراء معتمدة من شركة تمويل، لأن هذه الصفقة لا تتضمن واحدة.",
   ProfitNeedsApprovedPurchase: "قيمة الشراء المعتمدة من شركة التمويل غير مُسجَّلة.",
   ProfitNeedsSupplierSettlement: "قيمة تسوية المورد غير مُسجَّلة.",
   ProfitNeedsDealerContribution: "مساهمة المعرض في قيمة الشراء غير مُسجَّلة.",

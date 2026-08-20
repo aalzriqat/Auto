@@ -161,6 +161,37 @@ async function seedDealer(
 }
 
 /** Creates the quote and the application the economics hang off. */
+/**
+ * A deal on a financing mode that has NO finance company approving a purchase.
+ *
+ * The three denomination cases below need a deal that can legitimately reach
+ * handover carrying no economics. SCRUM-61 closed that door for CONFIGURED
+ * deals — a configured deal with no quotation is now refused before the vehicle
+ * goes out — but deliberately left it open for the modes where the figure does
+ * not exist to record. So the laundering vector those tests describe still
+ * lives here, and this is where they now aim.
+ *
+ * `saveQuote` refuses a `companyId` on any mode that is present and not
+ * configured, so this shape carries none — which is also what makes
+ * `financierApprovesPurchase` return false for it.
+ */
+async function createUnfinancedApplication(seed: Seed): Promise<Id<"financeApplications">> {
+  const quoteId = await seed.asUser.mutation(api.quotes.saveQuote, {
+    orgId: seed.orgId,
+    customerId: seed.customerId,
+    vehicleId: seed.vehicleId,
+    mode: "INTERNAL_INSTALLMENT",
+    vehiclePrice: DEAL.targetSelling,
+    downPayment: DEAL.customerFirstPayment,
+    termMonths: 48,
+    totalFinancedAmount: 10_736,
+  });
+  return await seed.asUser.mutation(api.applications.createFromQuote, {
+    orgId: seed.orgId,
+    quoteId,
+  });
+}
+
 async function createApplication(seed: Seed): Promise<Id<"financeApplications">> {
   const quoteId = await seed.asUser.mutation(api.quotes.saveQuote, {
     orgId: seed.orgId,
@@ -3985,8 +4016,16 @@ describe("handover seals the approved amount, and the amount that was verified",
     // The SCRUM-61 recovery path. Nothing money-bearing is being sealed here,
     // so there is no denomination to verify and refusing would build a new dead
     // end for exactly the historical deals that need the path most.
+    //
+    // On a mode with no financier, because SCRUM-61's own guard now refuses a
+    // CONFIGURED deal that reaches handover without economics — the state this
+    // test used to manufacture is exactly the one that issue stops arising. The
+    // recovery path itself is unchanged and still matters: rows that ALREADY
+    // carry it can record their economics after handover
+    // (`approveDealerPurchaseAmount` seals only a figure that exists), and
+    // `finalizeDeal` refuses until they do.
     const seed = await seedDealer();
-    const applicationId = await createApplication(seed);
+    const applicationId = await createUnfinancedApplication(seed);
     await seed.t.run((ctx) =>
       ctx.db.patch(applicationId, { status: "APPROVED", economicsCurrency: undefined })
     );
@@ -4010,7 +4049,7 @@ describe("handover seals the approved amount, and the amount that was verified",
     // no denomination check at all, and created a SALE from a figure scaled by
     // a guessed 2 instead of JOD's 3.
     const seed = await seedDealer();
-    const applicationId = await createApplication(seed);
+    const applicationId = await createUnfinancedApplication(seed);
     await seed.t.run((ctx) =>
       ctx.db.patch(applicationId, { status: "APPROVED", economicsCurrency: "JD" })
     );
@@ -4028,10 +4067,26 @@ describe("handover seals the approved amount, and the amount that was verified",
 
     // And the writers that would have carried it forward refuse too, so the
     // bad value cannot become money by any order of operations.
+    //
+    // Asserted on a CONFIGURED deal, because these two writers are the ones a
+    // financier's deal uses and they refuse an unfinanced mode for a different
+    // reason entirely ("this application has no finance company") — which would
+    // have made this half pass without the currency guard ever running. It also
+    // closes the vector completely for that shape: a configured deal carrying
+    // an unsupported code cannot record a quotation, so it can never satisfy
+    // SCRUM-61's economics requirement, so it can never reach handover at all.
+    // Its own dealer, because a vehicle may carry only one active application
+    // and the unfinanced deal above still holds this seed's.
+    const financedSeed = await seedDealer({}, "laundering");
+    const financed = await createApplication(financedSeed);
+    await financedSeed.t.run((ctx) =>
+      ctx.db.patch(financed, { status: "APPROVED", economicsCurrency: "JD" })
+    );
+
     await expect(
-      seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
-        orgId: seed.orgId,
-        applicationId,
+      financedSeed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: financedSeed.orgId,
+        applicationId: financed,
         submittedQuotationMinor: jod(12_000),
         source: "MANUAL_ENTRY",
       })
@@ -4043,9 +4098,9 @@ describe("handover seals the approved amount, and the amount that was verified",
     // currency guard fired here would be describing a refusal that did not
     // happen. What matters is that no ordering reaches money.
     await expect(
-      seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-        orgId: seed.orgId,
-        applicationId,
+      financedSeed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: financedSeed.orgId,
+        applicationId: financed,
         approvedAmountMinor: jod(12_000),
         basis: "MANUAL",
       })
@@ -4062,7 +4117,7 @@ describe("handover seals the approved amount, and the amount that was verified",
     // through. Present-but-meaningless is the most dangerous of the three
     // states: it looks recorded and scales by the guessed fallback.
     const seed = await seedDealer();
-    const applicationId = await createApplication(seed);
+    const applicationId = await createUnfinancedApplication(seed);
     await seed.t.run((ctx) =>
       ctx.db.patch(applicationId, { status: "APPROVED", economicsCurrency: "" })
     );
@@ -4129,11 +4184,15 @@ describe("handover seals the approved amount, and the amount that was verified",
     // where the approval could be corrected. A guard that admits a value the
     // rest of the system rejects is worse than no guard, because it promises
     // the deal is safe to seal.
-    const seed = await seedDealer();
-    const applicationId = await createApplication(seed);
-    await seed.t.run((ctx) =>
-      ctx.db.patch(applicationId, { status: "APPROVED", economicsCurrency: "jod" })
-    );
+    // A FULLY recorded deal whose stored spelling is then corrupted, which is
+    // the legacy shape this guard exists for. Seeding it bare no longer reaches
+    // the denomination check at all: SCRUM-61 made `assertDealerEconomicsRecorded`
+    // refuse a CONFIGURED deal with no quotation, and that guard runs first by
+    // design, so a bare fixture would fail here on the missing quotation and the
+    // currency assertion below would pass without the currency ever being
+    // examined — a test that no longer tests its own subject.
+    const { seed, applicationId } = await approvedDeal();
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { economicsCurrency: "jod" }));
 
     await expect(
       seed.asUser.mutation(api.applications.registerVehicleHandover, {

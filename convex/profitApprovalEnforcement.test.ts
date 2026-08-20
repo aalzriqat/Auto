@@ -28,6 +28,18 @@ async function seedOrg(t: any, seed: string, minimumProfit: number | undefined) 
       name: `Profit ${seed}`,
       createdAt: Date.now(),
     });
+    // CodeRabbit, ACCEPTED. The economics literals in this file multiply major
+    // units by 1_000, which is correct ONLY because `getOrgCurrency` falls back
+    // to "JOD" (`accounting/workflowHooks.ts`) when no `orgSettings` row exists.
+    // That made the scale depend on an unstated default: change the fallback, or
+    // seed a 100-scale currency, and every amount here is silently wrong by 10x
+    // while the tests stay green. Seeded so the scale is asserted, not inherited.
+    await ctx.db.insert("orgSettings", {
+      orgId,
+      currency: "JOD",
+      currencySymbol: "JD",
+      enabledPaymentTypes: ["CASH", "BANK_TRANSFER"],
+    });
     const userId = await ctx.db.insert("users", {
       clerkId: `profit_${seed}`,
       email: `${seed}@profit.example.com`,
@@ -75,6 +87,9 @@ async function seedOrg(t: any, seed: string, minimumProfit: number | undefined) 
       maxTermMonths: 72,
       gracePeriodMonths: 3,
       isActive: true,
+      // The quotation solver refuses a configured company with no lending
+      // ratio, and these fixtures now record their economics for real.
+      defaultLtvPercent: 85,
     });
     return { orgId, userId, approverId, vehicleId, customerId, companyId };
   });
@@ -286,6 +301,29 @@ describe("applications.finalizeDeal re-verifies at the commit point", () => {
       applicationId,
       status: "APPROVED",
     });
+    // These are CONFIGURED_FINANCE_COMPANY deals, so SCRUM-61 requires the
+    // finance company's economics before handover. Kept CONFIGURED — the
+    // subject is the minimum-profit re-check at the commit point, and that
+    // check only exists on a financed deal.
+    //
+    // Quoted and approved at this fixture's own vehicle price, which is
+    // `20000 + desiredProfit`, so the approval introduces no shortfall and no
+    // dealer contribution and leaves the margin arithmetic under test alone.
+    const quotedMinor = (20_000 + desiredProfit) * 1_000;
+    await ids.asOwner.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: ids.orgId,
+      applicationId,
+      submittedQuotationMinor: quotedMinor,
+      source: "MANUAL_ENTRY",
+    });
+    await ids.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: ids.orgId,
+      applicationId,
+      approvedAmountMinor: quotedMinor,
+      basis: "MANUAL",
+      notes: "Approved at the submitted quotation.",
+    });
+
     await registerHandover(ids.asOwner, api, ids.orgId, applicationId);
     await ids.asOwner.mutation(api.applications.registerExpectedPayment, {
       orgId: ids.orgId,

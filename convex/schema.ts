@@ -2261,6 +2261,93 @@ export default defineSchema({
     supplierDisbursementReference: v.optional(v.string()),
     supplierDisbursementConfirmedBy: v.optional(v.id("users")),
     /**
+     * The supplier's entitlement AS IT STOOD when this deal's approved purchase
+     * amount was agreed — the witness both irreversible transitions re-check.
+     *
+     * The vehicle's cost is editable through its own public path, and nothing
+     * about that edit touches this application. Without a witness the deal could
+     * be recorded correctly, have the supplier's entitlement moved underneath it,
+     * pass a handover that only checked the amount EXISTS, and be refused at
+     * finalization with the vehicle already gone and the writer sealed.
+     *
+     * ⚠️ GENERIC TO EVERY DIRECT-TO-SUPPLIER WRITER, deliberately — it is NOT
+     * part of `directSupplierReceipt` below. The first version stored it inside
+     * that MANUAL-only object, so a CONFIGURED direct deal — approved through
+     * `financingEconomics.approveDealerPurchaseAmount`, which validates the same
+     * entitlement and stored no witness — had the identical hole with none of the
+     * protection. One field, written by both writers, read by one resolver.
+     *
+     * Measured against `computeVehicleCapitalizedCost`, the SAME definition the
+     * configured writer validates against. For a SOURCED vehicle that reduces to
+     * `sourceCost`, but sharing the function is what keeps the witness and the
+     * validation from being two opinions that merely happen to agree.
+     *
+     * Absent on a row approved before this release: unprovable, not unchanged.
+     * See `supplierEntitlementVerdictFor` in `applications.ts` — the difference
+     * is the whole point of the field.
+     *
+     * ⚠️ NAMED FOR WHAT IT IS, NOT FOR WHEN IT HAPPENED. The first version was
+     * `supplierEntitlementAtApprovalMinor`, and three of the four ways it gets
+     * written are not the approval: choosing the direct route on an
+     * already-approved deal validates it later, and repairing a pre-release row
+     * validates it later still. A bare number under that name asserted a
+     * historical observation the dealership never made — and on the configured
+     * path it would have been filed beside a finance-company approval timestamp
+     * belonging to a different act. So the witness carries its OWN provenance:
+     * when it was validated, by whom, and through which action. The approval's
+     * own actor and timestamp are never borrowed or rewritten to stand in for it.
+     */
+    supplierEntitlementWitness: v.optional(
+      v.object({
+        /**
+         * WHETHER THE ENTITLEMENT WAS ACTUALLY CHECKED, said out loud.
+         *
+         * An approval taken while the deal settles THROUGH the dealership
+         * compares nothing against the supplier: the dealership collects the
+         * gross and his entitlement is an ordinary payable. The first design
+         * recorded that by writing no witness at all — and that SILENCE was the
+         * hole. A later route change read "no witness" as "nothing agreed yet"
+         * and felt free to originate one from the current vehicle cost, so an
+         * amount approved against nothing acquired evidence it had been checked.
+         *
+         * NOT_VALIDATED is therefore a real state with a real provenance, not an
+         * absence: it says a specific person, at a specific time, approved this
+         * amount WITHOUT the supplier's entitlement being compared. It carries no
+         * `amountMinor`, deliberately — zero, the current cost, and a nullable
+         * number are all things a later reader could mistake for evidence.
+         */
+        status: v.union(v.literal("VALIDATED"), v.literal("NOT_VALIDATED")),
+        /** Present only on VALIDATED — the entitlement that was actually compared. */
+        amountMinor: v.optional(v.number()),
+        validatedAt: v.number(),
+        validatedBy: v.id("users"),
+        /**
+         * ⚠️ NO `ROUTE_SELECTION`. Route selection has no economic approval
+         * authority and may not write this field at all — not to establish it,
+         * not to clear it, not to refresh it. It records HOW the money travels;
+         * only a writer that explicitly compares the entitlement and records an
+         * actor agreeing to it may touch this evidence. Two separate laundering
+         * paths were built on the exception that used to live here.
+         */
+        via: v.union(v.literal("CONFIGURED_APPROVAL"), v.literal("MANUAL_RECEIPT")),
+      })
+    ),
+    /**
+     * The MANUAL direct supplier-receipt provenance: which document the figure
+     * was read off, and any note the operator added.
+     *
+     * Kept so an exact retry is recognisable as the SAME ACT rather than
+     * fabricated into a second correction, and so a source-only or notes-only
+     * correction has a machine-readable before/after rather than living only in
+     * the human-readable audit prose.
+     */
+    directSupplierReceipt: v.optional(
+      v.object({
+        source: v.string(),
+        notes: v.optional(v.string()),
+      })
+    ),
+    /**
      * Whether the recorded advice agrees with what the deal was approved at.
      *
      * The dealership's ruling is one payment, for the approved amount — so a
