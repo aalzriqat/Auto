@@ -288,7 +288,14 @@ jobs:
         CONVEX_AGENT_MODE: anonymous
 
     - name: Verify generated Convex files are committed
-      run: git diff --exit-code convex/_generated
+      run: |
+        # `git diff` ignores newly generated untracked outputs.
+        generated_status="$(git status --porcelain=v1 --untracked-files=all -- convex/_generated)"
+        if [ -n "$generated_status" ]; then
+          echo "::error::Convex generated files are stale or uncommitted:"
+          printf '%s\n' "$generated_status"
+          exit 1
+        fi
 
     - name: Convex tsconfig type check
       run: pnpm typecheck:convex
@@ -366,6 +373,8 @@ jobs:
     steps:
     - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       with:
+        # Ratchet baselines verify their source commit and rename/move history.
+        fetch-depth: 0
         persist-credentials: false
 
     - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
@@ -383,6 +392,16 @@ jobs:
 
     - name: Lint
       run: pnpm lint
+
+    # Keep these in the already-required lint context so the guardrails are
+    # merge-blocking without a branch-protection race. The three repository
+    # scans run concurrently inside quality/run-all.mjs; this job still runs in
+    # parallel with typecheck, tests, builds, and the other existing jobs.
+    - name: Guardrail regression suite
+      run: pnpm quality:guardrails:test
+
+    - name: Maintainability, architecture, and AutoFlow safety guardrails
+      run: pnpm quality:guardrails
 
   dependency-audit:
     runs-on: ubuntu-latest
