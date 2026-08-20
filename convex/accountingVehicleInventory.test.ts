@@ -4287,4 +4287,127 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     expect(result.companiesCreated).toBe(1);
     expect((await worldDelta(t, orgId)).companies).toBe(1);
   });
+  // ── A blank company name resolves to NOTHING ──────────────────────────────
+  //
+  // `finance.createCompany` stores `name` untrimmed, so a company literally
+  // named "   " can exist, and it is indexed under the EMPTY key. A valuation
+  // naming no company then attached itself to that one via
+  // `companyIdByName.get("")` — a write the retry fingerprint does not describe,
+  // because it excludes entries with no usable company. So a re-sent row that
+  // changed it hashed identically and the change was discarded.
+  //
+  // The fix removes only the AMBIGUOUS name-only lookup. An explicit companyId
+  // still resolves, so an existing malformed company stays referenceable.
+
+  /** A finance company whose stored name is whitespace — legal today. */
+  async function seedBlankNamedCompany(t: Ctx["t"], orgId: Id<"organizations">) {
+    return t.run((ctx) =>
+      ctx.db.insert("financeCompanies", {
+        orgId, name: "   ", profitRate: 0, maxTermMonths: 84,
+        gracePeriodMonths: 0, isActive: false,
+      })
+    );
+  }
+
+  test("a blank-named valuation writes NOTHING, even when a blank-named company exists", async () => {
+    const { t, orgId, asOwner } = await seedDealer("r12blank");
+    await seedBlankNamedCompany(t, orgId);
+
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "r12-blank", purchasePaymentMethod: "CASH",
+      vehicles: [{
+        rowId: 1, ...baseImportRow, vin: "1HGCM82633A18181", purchasePrice: 10000,
+        valuations: [{ companyName: "   ", valuationAmount: 5000 }],
+      }],
+    });
+
+    // Positive amount, and still not stored — the name resolves to nothing.
+    expect((await worldDelta(t, orgId)).valuations).toBe(0);
+  });
+
+  test("...and re-sending it with a CHANGED amount is a true no-op, not a discarded write", async () => {
+    // Before the guard the first call stored 5000 against the blank-named
+    // company, the retry hashed identically because the fingerprint excludes
+    // the entry, and 9000 was silently dropped.
+    const { t, orgId, asOwner } = await seedDealer("r12blank2");
+    await seedBlankNamedCompany(t, orgId);
+    const row = (amount: number) => ({
+      rowId: 1, ...baseImportRow, vin: "1HGCM82633A19191", purchasePrice: 10000,
+      valuations: [{ companyName: "   ", valuationAmount: amount }],
+    });
+
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "r12-blank2", purchasePaymentMethod: "CASH",
+      vehicles: [row(5000)],
+    });
+    const before = await worldDelta(t, orgId);
+    expect(before.valuations).toBe(0);
+
+    const again = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "r12-blank2", purchasePaymentMethod: "CASH",
+      vehicles: [row(9000)],
+    });
+
+    expect(again).toMatchObject({ inserted: 0, alreadyRecorded: 1 });
+    // The proof and the database agree that nothing happened, both times.
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+
+  test("an EXPLICIT companyId for that same malformed company still works", async () => {
+    // The guard closes an ambiguous lookup; it must not orphan existing data.
+    const { t, orgId, asOwner } = await seedDealer("r12byid");
+    const companyId = await seedBlankNamedCompany(t, orgId);
+
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "r12-byid", purchasePaymentMethod: "CASH",
+      vehicles: [{
+        rowId: 1, ...baseImportRow, vin: "1HGCM82633A20202", purchasePrice: 10000,
+        valuations: [{ companyId, valuationAmount: 5000 }],
+      }],
+    });
+
+    const stored = await t.run((ctx) =>
+      ctx.db.query("vehicleValuations").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(stored).toHaveLength(1);
+    expect(stored[0].companyId).toBe(companyId);
+    expect(stored[0].valuationAmount).toBe(5000);
+  });
+
+  test("POSITIVE CONTROL: an ordinary named valuation is untouched by the guard", async () => {
+    const { t, orgId, asOwner } = await seedDealer("r12ok");
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "r12-ok", purchasePaymentMethod: "CASH",
+      vehicles: [{
+        rowId: 1, ...baseImportRow, vin: "1HGCM82633A21212", purchasePrice: 10000,
+        valuations: [{ companyName: "Orange Finance", valuationAmount: 12500 }],
+      }],
+    });
+
+    const delta = await worldDelta(t, orgId);
+    expect(delta.companies).toBe(1);
+    expect(delta.valuations).toBe(1);
+  });
+
+  test("OPENING_STOCK is UNCHANGED — a blank-named valuation still resolves there", async () => {
+    // Pinned deliberately. Only PURCHASE has an idempotency proof for a write
+    // to disagree with, and a cutover migration must not change shape because
+    // of a rule written for a different mode.
+    const { t, orgId, asOwner } = await seedDealer("r12os");
+    const companyId = await seedBlankNamedCompany(t, orgId);
+
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "OPENING_STOCK",
+      vehicles: [{
+        ...baseImportRow, vin: "1HGCM82633A22222", purchasePrice: 10000,
+        valuations: [{ companyName: "   ", valuationAmount: 5000 }],
+      }],
+    });
+
+    const stored = await t.run((ctx) =>
+      ctx.db.query("vehicleValuations").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(stored).toHaveLength(1);
+    expect(stored[0].companyId).toBe(companyId);
+  });
 });

@@ -2338,6 +2338,13 @@ const IMPORT_ROW_OPERATION = "vehicles.importBulk.row";
  * `sellingPrice`, `status`, `notes` and `valuations` were all persisted and all
  * omitted. If a field is added to the row validator, it belongs here too.
  *
+ * ⚠️ THE EXCLUSIONS BELOW ARE PAIRED WITH THE WRITER, NOT SUFFICIENT ALONE.
+ * This function drops entries the writer would not store — non-positive
+ * amounts, and entries with no usable company. That only holds because the
+ * writer drops the same shapes: if either side stops, the hash starts
+ * describing something other than what was written, which is how every defect
+ * on this function got in. Change one, change both.
+ *
  * ⚠️ ONE KNOWN RESIDUAL, AND THIS FUNCTION DOES NOT CLAIM OTHERWISE — SCRUM-173.
  * Valuations are keyed by the value the row SUBMITS, so an entry naming a
  * company by `companyId` and another naming the SAME company by name are one
@@ -3239,6 +3246,27 @@ export const importBulk = mutation({
         // most cars — so refusing on it would reject nearly every real
         // spreadsheet. An UNREADABLE valuation cell is a different matter and is
         // caught client-side by parseMoneyCell, which marks the row invalid.
+        // ⚠️ PURCHASE ONLY: a name-only entry whose name is blank resolves to
+        // NOTHING, and must not resolve to something by accident.
+        //
+        // `finance.createCompany` accepts `name: v.string()` and stores it
+        // untrimmed, so a company literally named "   " can exist. It is then
+        // indexed under the EMPTY key, and `companyIdByName.get("")` finds it —
+        // so a valuation naming no company at all silently attached itself to
+        // that one. The retry fingerprint excludes such an entry (it has no
+        // usable company), which made this a write the proof does not describe:
+        // a re-sent row changing it hashed identically and the change was
+        // discarded.
+        //
+        // Scoped to PURCHASE, and deliberately narrow: only the AMBIGUOUS
+        // name-only lookup is removed. An explicit `companyId` still resolves,
+        // so a malformed company that already exists stays fully referenceable
+        // — this closes a lookup, it does not orphan data. OPENING_STOCK has no
+        // idempotency proof to disagree with and keeps its behaviour.
+        //
+        // The underlying model problem — that whitespace-only company names can
+        // be created at all — is NOT fixed here. SCRUM-175.
+        if (postsAcquisitions && !val.companyId && !(val.companyName ?? "").trim()) continue;
         const companyId = val.companyId ?? (val.companyName ? companyIdByName.get(val.companyName.trim()) : undefined);
         if (!companyId || val.valuationAmount <= 0) continue;
 
