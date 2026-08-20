@@ -316,7 +316,7 @@ function recordConstDeclaration(node, state) {
     !ts.isIdentifier(node.name) ||
     !node.initializer ||
     !ts.isVariableDeclarationList(node.parent) ||
-    !Boolean(node.parent.flags & ts.NodeFlags.Const)
+    !ts.isVarConst(node)
   ) {
     return false;
   }
