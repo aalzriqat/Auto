@@ -19,6 +19,7 @@ import {
   type AcquisitionPaymentMethod,
 } from "@/components/payments/PaymentMethodSelect";
 import { PURCHASE_IMPORT_MAX_ROWS } from "@/convex/utils/importLimits";
+import { interpolate } from "@/lib/i18n/interpolate";
 import { assertDirectVehicleCreateStatus } from "@/convex/utils/vehicleStatusGuards";
 import { hasNonCanonicalVinCharacters, isPlaceholderVin } from "@/convex/utils/vin";
 import { cn } from "@/lib/utils";
@@ -604,9 +605,10 @@ function ImportAccountingChoice({
 
       {posting === "PURCHASE" && blockers.exceedsRowLimit && (
         <p className="text-xs font-medium leading-snug text-destructive">
-          {t("ImportPurchaseTooManyRows" as any)
-            .replace("{count}", String(totalCount))
-            .replace("{max}", String(IMPORT_PURCHASE_MAX_ROWS))}
+          {interpolate(t("ImportPurchaseTooManyRows" as any), {
+            count: totalCount,
+            max: IMPORT_PURCHASE_MAX_ROWS,
+          })}
         </p>
       )}
 
@@ -774,19 +776,29 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
         />
       )}
       onImport={(vehicles, { importId, sourceRows }) => {
-        if (!activeOrgId) return Promise.resolve({ inserted: 0, skipped: 0, alreadyRecorded: 0 });
+        if (!activeOrgId) {
+          return Promise.reject(new Error(t("ImportNoActiveOrg" as any)));
+        }
         // The wizard's Import button is disabled until this is answered; the
         // guard is here as well because a disabled button is a hint, not a
         // control, and importBulk itself refuses an unstated method.
-        // Same whole-file view the button and the wizard use. `vehicles` is the
-        // valid subset, so the counts have to come with it — re-checking against
-        // `vehicles.length` alone would silently re-admit the subset import this
-        // guard exists to refuse.
-        if (
-          posting === null ||
-          isBlocked({ validRows: vehicles, invalidCount: 0, totalCount: vehicles.length })
-        ) {
-          return Promise.resolve({ inserted: 0, skipped: 0, alreadyRecorded: 0 });
+        // ⚠️ A LAST-RESORT FALLBACK, NOT THE CONTROL — and this comment used to
+        // claim otherwise.
+        //
+        // `ImportWizard.handleImport` blocks against the real whole-file counts
+        // and is the guarantee. What arrives here is only the VALID SUBSET, so
+        // the `invalidCount: 0` below is a stand-in, not the file's true view: a
+        // dropped row is invisible to it. Saying "same whole-file view" was
+        // simply wrong.
+        //
+        // It also RESOLVED zero counts, which the result copy renders as
+        // "Imported 0." — a success toast for an import that was refused. A
+        // refusal must read as a refusal.
+        if (posting === null) {
+          return Promise.reject(new Error(t("ImportChooseAccountingFirst" as any)));
+        }
+        if (isBlocked({ validRows: vehicles, invalidCount: 0, totalCount: vehicles.length })) {
+          return Promise.reject(new Error(t("ImportBlockedFallback" as any)));
         }
         // A purchase import refuses without this, and would do so only after the
         // operator pressed Import. Saying it here keeps the failure legible.
@@ -834,7 +846,10 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
         const chunkSize =
           posting === "PURCHASE" ? IMPORT_PURCHASE_MAX_ROWS : IMPORT_CHUNK_SIZE;
         return (async () => {
-          const totals = { inserted: 0, skipped: 0, alreadyRecorded: 0 };
+          // `companiesCreated` was never accumulated — pre-existing, but this PR
+          // added a translated message for it, which could therefore never
+          // render. A counter nobody sums is a message nobody reads.
+          const totals = { inserted: 0, skipped: 0, alreadyRecorded: 0, companiesCreated: 0 };
           for (let i = 0; i < payload.length; i += chunkSize) {
             const chunk = payload.slice(i, i + chunkSize);
             try {
@@ -850,6 +865,7 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
               totals.inserted += result.inserted;
               totals.skipped += result.skipped;
               totals.alreadyRecorded += result.alreadyRecorded;
+              totals.companiesCreated += result.companiesCreated;
             } catch (err) {
               // Each chunk is its own transaction, so a failure here leaves the
               // earlier ones committed — vehicles AND, in PURCHASE mode, their

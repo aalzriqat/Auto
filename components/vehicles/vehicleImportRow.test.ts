@@ -4,6 +4,7 @@ import { PURCHASE_IMPORT_MAX_ROWS } from "@/convex/utils/importLimits";
 import { isPlaceholderVin } from "@/convex/utils/vin";
 import { commonAr, commonEn } from "@/lib/i18n/domains/common";
 import { describeImportResult, stripInternalFields } from "@/components/import/ImportWizard";
+import { interpolate } from "@/lib/i18n/interpolate";
 import {
   IMPORT_PURCHASE_MAX_ROWS,
   deriveVehicleRow,
@@ -385,5 +386,57 @@ describe("stripInternalFields — a consumer's row carries nothing the wizard ad
     const clean = stripInternalFields(deriveVehicleRow(stockRow));
     expect(Object.keys(clean).some((k) => k.startsWith("_"))).toBe(false);
     expect(clean.vin).toBe("IMPORTSUP0000001A");
+  });
+});
+describe("every placeholder in a message gets filled, not just the first", () => {
+  // CodeRabbit found this and it was a real, user-visible defect in BOTH
+  // locales: `ImportPurchaseTooManyRows` names {max} TWICE, and
+  // String.replace with a string pattern replaces only the FIRST match. Every
+  // operator who hit the row cap saw a literal "{max}" in the message.
+  //
+  // The existing placeholder test covered describeImportResult's strings, all
+  // of which use each placeholder once — so it could never have caught this.
+  // These assert over the messages that actually repeat one.
+  const dicts: Array<[string, Record<string, string>]> = [
+    ["en", commonEn as Record<string, string>],
+    ["ar", commonAr as Record<string, string>],
+  ];
+
+  test("ImportPurchaseTooManyRows really does repeat {max} — the premise", () => {
+    for (const [locale, d] of dicts) {
+      expect(d.ImportPurchaseTooManyRows.split("{max}").length - 1, locale).toBeGreaterThan(1);
+    }
+  });
+
+  test("interpolate leaves no placeholder behind, in either locale", () => {
+    for (const [locale, d] of dicts) {
+      const out = interpolate(d.ImportPurchaseTooManyRows, { count: 26, max: 25 });
+      expect(out, locale).not.toContain("{");
+      expect(out, locale).toContain("26");
+      expect(out, locale).toContain("25");
+    }
+  });
+
+  test("the OLD chained-replace approach demonstrably fails the same input", () => {
+    // Pins WHY the helper exists. If someone reverts to chained .replace, this
+    // states plainly what breaks.
+    const naive = commonEn.ImportPurchaseTooManyRows
+      .replace("{count}", "26")
+      .replace("{max}", "25");
+    expect(naive).toContain("{max}");
+  });
+
+  test("no dictionary message can be left with an unfilled repeat by this helper", () => {
+    // Sweeps every message carrying a repeated placeholder, so a future string
+    // with the same shape is covered without anyone remembering to add a test.
+    for (const [locale, d] of dicts) {
+      for (const [key, value] of Object.entries(d)) {
+        if (typeof value !== "string") continue;
+        const names = [...value.matchAll(/\{(\w+)\}/g)].map((m) => m[1]);
+        if (names.length < 2) continue;
+        const filled = interpolate(value, Object.fromEntries(names.map((n) => [n, "X"])));
+        expect(filled, `${locale}:${key}`).not.toContain("{");
+      }
+    }
   });
 });

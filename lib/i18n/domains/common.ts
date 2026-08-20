@@ -222,6 +222,12 @@ export const commonEn = {
 
   ImportCouldNotIdentifyItself:
     "This import could not identify itself, so it cannot be safely retried and nothing was saved. Reload the page and import the file again.",
+  ImportChooseAccountingFirst:
+    "Choose whether these are cars you already own or cars you just bought before importing.",
+  ImportBlockedFallback:
+    "This file still has problems that must be fixed before it can be imported. Nothing was saved.",
+  ImportNoActiveOrg:
+    "No dealership is selected, so there is nowhere to import these vehicles. Nothing was saved.",
   ImportResultImported: "Imported {count}.",
   ImportResultAlreadyRecorded:
     "{count} were already recorded with matching purchase evidence, so nothing was posted again for them.",
@@ -1154,6 +1160,12 @@ export const commonAr = {
 
   ImportCouldNotIdentifyItself:
     "تعذّر على هذا الاستيراد تعريف نفسه، لذا لا يمكن إعادة المحاولة بأمان ولم يُحفظ أي شيء. أعد تحميل الصفحة ثم استورد الملف مجدداً.",
+  ImportChooseAccountingFirst:
+    "اختر أولاً ما إذا كانت هذه مركبات تملكها بالفعل أم مركبات اشتريتها للتو قبل الاستيراد.",
+  ImportBlockedFallback:
+    "ما زال هذا الملف يحتوي على مشكلات يجب تصحيحها قبل استيراده. لم يُحفظ أي شيء.",
+  ImportNoActiveOrg:
+    "لا يوجد معرض محدد، لذا لا مكان لاستيراد هذه المركبات إليه. لم يُحفظ أي شيء.",
   ImportResultImported: "تم استيراد {count}.",
   ImportResultAlreadyRecorded:
     "{count} مسجّلة مسبقاً بأدلة شراء مطابقة، لذلك لم يُقيَّد لها شيء من جديد.",
