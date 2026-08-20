@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "sourceCommit": "4ab1dd3a8d4c745c1b2f02a404234d0f07d96ce7",
+  "engineVersion": "17.4.3",
+  "cyclicModules": [
+    "convex/accounting/postingengine.ts",
+    "convex/accounting/reversals.ts",
+    "convex/accounting/workflowhooks.ts",
+    "convex/accountingoutbox.ts",
+    "convex/accountingperiods.ts",
+    "convex/accountingreports.ts",
+    "convex/utils/depositapplications.ts"
+  ],
+  "cyclicEdges": [
+    {
+      "from": "convex/accounting/postingengine.ts",
+      "to": "convex/accountingperiods.ts"
+    },
+    {
+      "from": "convex/accounting/reversals.ts",
+      "to": "convex/accountingperiods.ts"
+    },
+    {
+      "from": "convex/accounting/workflowhooks.ts",
+      "to": "convex/accounting/postingengine.ts"
+    },
+    {
+      "from": "convex/accounting/workflowhooks.ts",
+      "to": "convex/accounting/reversals.ts"
+    },
+    {
+      "from": "convex/accounting/workflowhooks.ts",
+      "to": "convex/accountingoutbox.ts"
+    },
+    {
+      "from": "convex/accounting/workflowhooks.ts",
+      "to": "convex/accountingperiods.ts"
+    },
+    {
+      "from": "convex/accountingoutbox.ts",
+      "to": "convex/accounting/postingengine.ts"
+    },
+    {
+      "from": "convex/accountingoutbox.ts",
+      "to": "convex/accounting/reversals.ts"
+    },
+    {
+      "from": "convex/accountingoutbox.ts",
+      "to": "convex/accountingperiods.ts"
+    },
+    {
+      "from": "convex/accountingoutbox.ts",
+      "to": "convex/utils/depositapplications.ts"
+    },
+    {
+      "from": "convex/accountingperiods.ts",
+      "to": "convex/accountingreports.ts"
+    },
+    {
+      "from": "convex/accountingreports.ts",
+      "to": "convex/utils/depositapplications.ts"
+    },
+    {
+      "from": "convex/utils/depositapplications.ts",
+      "to": "convex/accounting/workflowhooks.ts"
+    }
+  ]
+}

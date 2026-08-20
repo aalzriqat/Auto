@@ -26,7 +26,12 @@
     "dealer-worker:build": "npm run --prefix dealer-worker build",
     "load:smoke": "k6 run load-tests/k6/autoflow-smoke.js",
     "load:auth-smoke": "k6 run load-tests/k6/autoflow-authenticated-smoke.js",
-    "load:1000": "k6 run load-tests/k6/autoflow-1000-users.js"
+    "load:1000": "k6 run load-tests/k6/autoflow-1000-users.js",
+    "quality:maintainability": "node quality/maintainability.mjs",
+    "quality:architecture": "node quality/architecture.mjs",
+    "quality:autoflow": "node quality/autoflow-rules.mjs",
+    "quality:guardrails": "node quality/run-all.mjs",
+    "quality:guardrails:test": "node --test quality/tests/maintainability.test.mjs quality/tests/architecture.test.mjs quality/tests/architecture-provenance.test.mjs quality/tests/autoflow-rules.test.mjs quality/tests/autoflow-domain-escape.test.mjs quality/tests/autoflow-runtime-escape.test.mjs quality/tests/next-runtime-entries.test.mjs quality/tests/ci-workflow.test.mjs"
   },
   "dependencies": {
     "@autoflow/shared": "workspace:*",
@@ -91,6 +96,7 @@
     "@types/web-push": "^3.6.4",
     "@vitest/coverage-v8": "^4.1.9",
     "convex-test": "^0.0.53",
+    "dependency-cruiser": "17.4.3",
     "eslint": "^9.39.4",
     "eslint-config-next": "^16.2.4",
     "jsdom": "^29.1.1",
