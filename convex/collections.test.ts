@@ -1638,10 +1638,33 @@ describe("Collections", () => {
     await expect(asFinance.mutation(api.collections.clearCheque, {
       orgId,
       chequeId: oversizedChequeId,
-    })).rejects.toThrow("Cheque amount cannot exceed");
+    })).resolves.toBeDefined();
+    // SCRUM-121 R3 — this used to THROW at clearing time. It must not: the bank
+    // has already cleared the funds, so a throw would roll back a confirmed
+    // receipt and the operator would be left with money and no record. The
+    // contract's third case applies — "target still proven, owes less" — so the
+    // live outstanding is allocated and the remainder stays unapplied.
+    // The "only cleared cheques can be returned" guard still holds — but the
+    // oversized cheque now genuinely clears, so it can no longer stand in for an
+    // uncleared one. Exercised against a cheque that really is still HELD.
+    const heldChequeId = await t.run(async (ctx) =>
+      ctx.db.insert("postDatedCheques", {
+        orgId,
+        receivableId: smallReceivableId,
+        customerId,
+        bank: "Oversized Bank",
+        chequeNumber: "BIG-2",
+        chequeDate: Date.now(),
+        amount: 5,
+        status: "HELD",
+        createdBy: userId,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    );
     await expect(asFinance.mutation(api.collections.returnClearedCheque, {
       orgId,
-      chequeId: oversizedChequeId,
+      chequeId: heldChequeId,
       idempotencyKey: "not-cleared-return",
     })).rejects.toThrow("Only cleared cheques can be returned after clearing");
   });
