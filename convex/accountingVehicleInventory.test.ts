@@ -4182,4 +4182,109 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     expect(again).toMatchObject({ inserted: 0, alreadyRecorded: 1 });
     expect(await worldDelta(t, orgId)).toEqual(before);
   });
+  // ── The company-creation side effect ──────────────────────────────────────
+  //
+  // The writer skips a non-positive valuation, and so does the retry
+  // fingerprint. The creation loop did not, so a named zero-valued entry still
+  // created an inert company — a real side effect outside everything the proof
+  // describes. `{A, 0}`, `{B, 0}` and no valuation at all were ONE command to
+  // the fingerprint and THREE different outcomes in the database.
+  //
+  // Fixed at the creation loop, NOT in the fingerprint: the fingerprint already
+  // mirrors the valuation storage rule correctly, and it had been through five
+  // consecutive rounds of fix-induced defects. This is a bounded alignment of a
+  // separate pre-write loop, not another identity rule.
+
+  test("a ZERO-valued named valuation creates no company in a PURCHASE import", async () => {
+    const { t, orgId, asOwner } = await seedDealer("r11zero");
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "r11-zero", purchasePaymentMethod: "CASH",
+      vehicles: [{
+        rowId: 1, ...baseImportRow, vin: "1HGCM82633A13131", purchasePrice: 10000,
+        valuations: [{ companyName: "Orange Finance", valuationAmount: 0 }],
+      }],
+    });
+
+    const delta = await worldDelta(t, orgId);
+    expect(delta.companies).toBe(0);
+    expect(delta.valuations).toBe(0);
+  });
+
+  test("a NEGATIVE named valuation creates no company either", async () => {
+    const { t, orgId, asOwner } = await seedDealer("r11neg");
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "r11-neg", purchasePaymentMethod: "CASH",
+      vehicles: [{
+        rowId: 1, ...baseImportRow, vin: "1HGCM82633A14141", purchasePrice: 10000,
+        valuations: [{ companyName: "Orange Finance", valuationAmount: -250 }],
+      }],
+    });
+
+    const delta = await worldDelta(t, orgId);
+    expect(delta.companies).toBe(0);
+    expect(delta.valuations).toBe(0);
+  });
+
+  test("a retry naming a DIFFERENT company at zero is a true no-op, not a discarded creation", async () => {
+    // THE REPORTED CASE. Both submissions hash identically — correctly, now
+    // that neither writes anything. Before the guard the first created company
+    // "Orange Finance", the retry was accepted as proven, and "Blue Finance"
+    // was silently never created: one command to the proof, two outcomes in the
+    // database.
+    const { t, orgId, asOwner } = await seedDealer("r11diff");
+    const row = (companyName: string) => ({
+      rowId: 1, ...baseImportRow, vin: "1HGCM82633A15151", purchasePrice: 10000,
+      valuations: [{ companyName, valuationAmount: 0 }],
+    });
+
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "r11-diff", purchasePaymentMethod: "CASH",
+      vehicles: [row("Orange Finance")],
+    });
+    const before = await worldDelta(t, orgId);
+    expect(before.companies).toBe(0);
+
+    const again = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "r11-diff", purchasePaymentMethod: "CASH",
+      vehicles: [row("Blue Finance")],
+    });
+
+    expect(again).toMatchObject({ inserted: 0, alreadyRecorded: 1, companiesCreated: 0 });
+    // The proof and the database now agree that nothing happened, in both calls.
+    expect(await worldDelta(t, orgId)).toEqual(before);
+  });
+
+  test("POSITIVE CONTROL: a real valuation still creates its company and its row", async () => {
+    // The guard must not have closed the ordinary path.
+    const { t, orgId, asOwner } = await seedDealer("r11pos");
+    const result = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", importId: "r11-pos", purchasePaymentMethod: "CASH",
+      vehicles: [{
+        rowId: 1, ...baseImportRow, vin: "1HGCM82633A16161", purchasePrice: 10000,
+        valuations: [{ companyName: "Orange Finance", valuationAmount: 12500 }],
+      }],
+    });
+
+    expect(result.companiesCreated).toBe(1);
+    const delta = await worldDelta(t, orgId);
+    expect(delta.companies).toBe(1);
+    expect(delta.valuations).toBe(1);
+  });
+
+  test("OPENING_STOCK is UNCHANGED — a zero-valued column still creates its company", async () => {
+    // Scoped to PURCHASE on purpose. Only that mode has an idempotency proof to
+    // disagree with, and a cutover migration must not change shape because of a
+    // rule written for a different mode.
+    const { t, orgId, asOwner } = await seedDealer("r11os");
+    const result = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "OPENING_STOCK",
+      vehicles: [{
+        ...baseImportRow, vin: "1HGCM82633A17171", purchasePrice: 10000,
+        valuations: [{ companyName: "Orange Finance", valuationAmount: 0 }],
+      }],
+    });
+
+    expect(result.companiesCreated).toBe(1);
+    expect((await worldDelta(t, orgId)).companies).toBe(1);
+  });
 });

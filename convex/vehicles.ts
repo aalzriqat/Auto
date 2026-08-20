@@ -3047,6 +3047,23 @@ export const importBulk = mutation({
       // evidence that makes this a retry at all.
       if (postsAcquisitions && provenRetries.has(row.rowId!)) continue;
       for (const val of row.valuations ?? []) {
+        // ⚠️ PURCHASE ONLY: a valuation the writer will never store must not
+        // create a company either.
+        //
+        // The writer skips a non-positive valuation (`valuationAmount <= 0`),
+        // and so does the retry fingerprint — but this loop had no amount check
+        // at all, so a named zero-valued entry still created an inert company.
+        // That put a real side effect outside everything the fingerprint
+        // describes: `{A, 0}`, `{B, 0}` and no valuation at all are one command
+        // to the proof and three different outcomes in the database, so a
+        // re-sent row naming a different company was accepted as a proven retry
+        // and its company silently never created.
+        //
+        // Scoped to PURCHASE deliberately. Only that mode has an idempotency
+        // proof to disagree with; OPENING_STOCK creates companies from
+        // zero-valued columns exactly as it always has, and a cutover migration
+        // must not change shape because of a rule written for a different mode.
+        if (postsAcquisitions && val.valuationAmount <= 0) continue;
         if (val.companyId || !val.companyName) continue;
         const name = val.companyName.trim();
         if (!name || companyIdByName.has(name)) continue;
