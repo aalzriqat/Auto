@@ -477,7 +477,7 @@ function displayedFields(variants) {
             ),
       ),
     ),
-  ].sort();
+  ].sort((left, right) => left.localeCompare(right, "en"));
 }
 
 /** Finds economics writes without a statically proven revision increment. */

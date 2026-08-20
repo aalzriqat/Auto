@@ -49,7 +49,7 @@ function recordConstDestructuring(node, values, bindings, builderNames) {
     !ts.isObjectBindingPattern(node.name) ||
     !node.initializer ||
     !ts.isVariableDeclarationList(node.parent) ||
-    !Boolean(node.parent.flags & ts.NodeFlags.Const)
+    !ts.isVarConst(node)
   ) {
     return;
   }

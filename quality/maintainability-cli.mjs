@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { TextDecoder } from "node:util";
 
@@ -27,6 +27,69 @@ import {
 
 const MAX_GIT_OUTPUT_BYTES = 256 * 1024 * 1024;
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
+let cachedGitExecutable;
+
+function windowsGitCandidates() {
+  const programFilesRoots = [
+    process.env.ProgramW6432,
+    process.env.ProgramFiles,
+    process.env["ProgramFiles(x86)"],
+    "C:\\Program Files",
+    "C:\\Program Files (x86)",
+  ].filter((root) => root && path.isAbsolute(root));
+  return [...new Set(programFilesRoots)].flatMap((root) => [
+    path.join(root, "Git", "cmd", "git.exe"),
+    path.join(root, "Git", "bin", "git.exe"),
+  ]);
+}
+
+function trustedGitCandidates() {
+  if (process.platform === "win32") return windowsGitCandidates();
+  return [
+    "/usr/bin/git",
+    "/bin/git",
+    "/usr/local/bin/git",
+    "/opt/homebrew/bin/git",
+    "/opt/local/bin/git",
+    "/home/linuxbrew/.linuxbrew/bin/git",
+    "/run/current-system/sw/bin/git",
+    "/nix/var/nix/profiles/default/bin/git",
+  ];
+}
+
+function validateGitExecutable(candidate) {
+  if (!path.isAbsolute(candidate)) {
+    throw new TypeError("The Git executable must be an absolute path.");
+  }
+  if (!/^git(?:\.exe)?$/iu.test(path.basename(candidate))) {
+    throw new TypeError("The Git executable must be named git or git.exe.");
+  }
+  const resolved = realpathSync(candidate);
+  if (!lstatSync(resolved).isFile()) {
+    throw new TypeError("The resolved Git executable is not a regular file.");
+  }
+  return resolved;
+}
+
+function gitExecutable() {
+  if (cachedGitExecutable) return cachedGitExecutable;
+
+  const configured = process.env.AUTOFLOW_GIT_EXECUTABLE;
+  if (configured) {
+    cachedGitExecutable = validateGitExecutable(configured);
+    return cachedGitExecutable;
+  }
+
+  const candidate = trustedGitCandidates().find((entry) => existsSync(entry));
+  if (!candidate) {
+    throw new Error(
+      "Git was not found in a standard system installation directory. " +
+        "Set AUTOFLOW_GIT_EXECUTABLE to its absolute executable path.",
+    );
+  }
+  cachedGitExecutable = validateGitExecutable(candidate);
+  return cachedGitExecutable;
+}
 
 function decodeUtf8(buffer, description) {
   try {
@@ -37,12 +100,16 @@ function decodeUtf8(buffer, description) {
 }
 
 function runGit(repositoryRoot, argumentsList, options = {}) {
-  const command = spawnSync("git", ["-C", repositoryRoot, ...argumentsList], {
-    encoding: null,
-    input: options.input,
-    maxBuffer: MAX_GIT_OUTPUT_BYTES,
-    windowsHide: true,
-  });
+  const command = spawnSync(
+    gitExecutable(),
+    ["-C", repositoryRoot, ...argumentsList],
+    {
+      encoding: null,
+      input: options.input,
+      maxBuffer: MAX_GIT_OUTPUT_BYTES,
+      windowsHide: true,
+    },
+  );
   if (command.error) throw command.error;
   if (
     command.status !== 0 &&

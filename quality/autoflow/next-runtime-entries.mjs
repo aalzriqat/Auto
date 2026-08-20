@@ -80,7 +80,7 @@ function topLevelConstBindings(sourceFile) {
   const bindings = new Map();
   for (const statement of sourceFile.statements) {
     if (!ts.isVariableStatement(statement)) continue;
-    if (!(statement.declarationList.flags & ts.NodeFlags.Const)) continue;
+    if (!statement.declarationList.declarations.some(ts.isVarConst)) continue;
     for (const declaration of statement.declarationList.declarations) {
       if (ts.isIdentifier(declaration.name) && declaration.initializer) {
         bindings.set(declaration.name.text, declaration.initializer);

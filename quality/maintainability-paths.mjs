@@ -93,6 +93,12 @@ export const FUNCTION_LINE_EXEMPTIONS = new Set([
   "apps/mobile/src/features/workspace/modules/moduleStyles.ts",
 ]);
 
+function compareCodeUnits(left, right) {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
 export const SCOPE_DESCRIPTOR = Object.freeze({
   pathIdentity: "case-insensitive",
   roots: [
@@ -108,16 +114,16 @@ export const SCOPE_DESCRIPTOR = Object.freeze({
     "public/**",
     "quality/**",
   ],
-  rootRuntimeFiles: [...ROOT_RUNTIME_FILES].sort(),
+  rootRuntimeFiles: [...ROOT_RUNTIME_FILES].sort(compareCodeUnits),
   nextRuntimeConfig: {
     configFiles: [...NEXT_CONFIG_FILES],
     defaultPageExtensions: [...DEFAULT_NEXT_PAGE_EXTENSIONS],
     supportedPageExtensions: [...SUPPORTED_NEXT_PAGE_EXTENSIONS],
   },
-  migrationsAndSeeds: [...MIGRATION_AND_SEED_FILES].sort(),
-  generatedFiles: [...GENERATED_FILES].sort(),
-  fileLineExemptions: [...FILE_LINE_EXEMPTIONS].sort(),
-  functionLineExemptions: [...FUNCTION_LINE_EXEMPTIONS].sort(),
+  migrationsAndSeeds: [...MIGRATION_AND_SEED_FILES].sort(compareCodeUnits),
+  generatedFiles: [...GENERATED_FILES].sort(compareCodeUnits),
+  fileLineExemptions: [...FILE_LINE_EXEMPTIONS].sort(compareCodeUnits),
+  functionLineExemptions: [...FUNCTION_LINE_EXEMPTIONS].sort(compareCodeUnits),
 });
 
 export function normalizeRepositoryPath(inputPath) {

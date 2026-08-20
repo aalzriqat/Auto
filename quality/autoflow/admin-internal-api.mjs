@@ -182,7 +182,7 @@ function recordDestructuredInternalAliases(sourceFile, bindingState) {
       ts.isObjectBindingPattern(node.name) &&
       node.initializer &&
       ts.isVariableDeclarationList(node.parent) &&
-      Boolean(node.parent.flags & ts.NodeFlags.Const)
+      ts.isVarConst(node)
     ) {
       const base = referenceChain(node.initializer, bindingState);
       if (base?.kind === "namespace" && base.parts.length === 0) {

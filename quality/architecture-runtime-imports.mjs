@@ -47,6 +47,12 @@ const GLOBAL_OBJECT_CODE_GENERATORS = new Set([
 ]);
 const GLOBAL_OBJECT_LOADERS = new Set(["module", "process", "require"]);
 
+function compareCodeUnits(left, right) {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
 function scriptKind(filePath) {
   if (/\.tsx$/iu.test(filePath)) return ts.ScriptKind.TSX;
   if (/\.jsx$/iu.test(filePath)) return ts.ScriptKind.JSX;
@@ -620,7 +626,7 @@ function safeModulePath(rootDir, modulePath) {
 
 export async function scanNonliteralRuntimeImports({ rootDir, modulePaths }) {
   const violations = [];
-  for (const modulePath of [...new Set(modulePaths)].sort()) {
+  for (const modulePath of [...new Set(modulePaths)].sort(compareCodeUnits)) {
     const source = await readFile(safeModulePath(rootDir, modulePath), "utf8");
     violations.push(...findNonliteralRuntimeImports(source, modulePath));
   }

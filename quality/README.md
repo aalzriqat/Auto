@@ -12,6 +12,10 @@ pnpm quality:guardrails:test
 pnpm quality:guardrails
 ```
 
+Git is invoked by a validated absolute path rather than searched through
+`PATH`. Custom, portable, or user-local Git installations can set
+`AUTOFLOW_GIT_EXECUTABLE` to the absolute `git`/`git.exe` path.
+
 The aggregate command runs the three repository scans concurrently and prints
 each scan's duration. Individual commands are available as
 `quality:maintainability`, `quality:architecture`, and `quality:autoflow`.

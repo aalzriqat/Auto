@@ -1,7 +1,7 @@
 import { isMigrationOrSeedPath } from "./maintainability-paths.mjs";
 
 const TEST_MODULE_PATTERN =
-  /(?:^|\/)__tests__\/|\.(?:test|spec)\.[cm]?[jt]sx?$/iu;
+  /(?:(?:^|\/)__tests__\/|\.(?:test|spec)\.[cm]?[jt]sx?$)/iu;
 
 const FRAMEWORK_RUNTIME_PATTERN =
   /^(?:(?:src\/)?(?:instrumentation-client\.(?:[jt]sx?|mjs)|(?:instrumentation|middleware|proxy)\.[jt]sx?)|sentry\.(?:client|edge|server)\.config\.[jt]s)$/iu;
