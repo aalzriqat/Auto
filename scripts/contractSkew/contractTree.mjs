@@ -47,7 +47,7 @@
  *         | {kind: "literal", values: Set<unknown>}
  *         | {kind: "scalar", type: string}
  *         | {kind: "object", fields: Map<string, ClientField>, keysComplete: boolean}
- *         | {kind: "array", element: ClientNode}
+ *         | {kind: "array", element: ClientNode | null, empty?: boolean}
  *         | {kind: "variants", nodes: ClientNode[]}} ClientNode
  *
  * @typedef {{node: ClientNode, provenance?: string, optional?: boolean}} ClientField
@@ -116,6 +116,13 @@ export function validatorTree(node) {
 export const clientNode = {
   object: (fields, keysComplete) => ({ kind: "object", fields, keysComplete }),
   array: (element) => ({ kind: "array", element }),
+  /**
+   * An array literal with NO elements. Knowledge, not ignorance: Convex
+   * validates zero elements, so the element validator cannot refuse anything.
+   * Modelling this as `array(unresolved)` fabricated a BREAKING finding at
+   * `field[*]` for completely valid code.
+   */
+  emptyArray: () => ({ kind: "array", element: null, empty: true }),
   literal: (values) => ({ kind: "literal", values }),
   scalar: (type) => ({ kind: "scalar", type }),
   /** The VALUE is unknown; we may still know it is present. */
@@ -193,6 +200,10 @@ export function mergeClientNodes(a, b) {
   }
 
   if (a.kind === "array" && b.kind === "array") {
+    // Two empty observations stay empty. One empty and one populated is NOT
+    // empty — the populated element still has to be checked, because that call
+    // site really does transmit elements.
+    if (a.empty && b.empty) return clientNode.emptyArray();
     return clientNode.array(mergeClientNodes(a.element, b.element));
   }
 
@@ -282,6 +293,33 @@ export function compareNode(client, validator, path, ctx) {
 
   // A validator that accepts anything ends the comparison.
   if (validator.kind === "any") return { findings, compatible: true };
+
+  // ⚠️ AN UNRESOLVED CLIENT NODE PROVES NOTHING IN EITHER DIRECTION.
+  //
+  // Found independently by both review seats in the first round on this model.
+  // There was a branch for `opaqueValue` and none for `unresolved`, so an
+  // unresolvable value fell through into the per-validator-kind comparisons and
+  // was treated as a definite shape. That produced BOTH failure directions at
+  // once, decided by nothing but which validator it happened to meet:
+  //
+  //   vs scalar / id     a silent PASS with zero findings — a false claim of
+  //                      verification, which the module header calls the one
+  //                      outcome that would make this control worse than useless
+  //   vs object / array  a fabricated BREAKING — a false production-skew alarm,
+  //                      which is how a monitor gets muted
+  //
+  // It is reachable from ordinary code, not a synthetic state: a method
+  // shorthand in a payload literal, and an unconstrained generic type parameter
+  // reaching a payload field, both produce it.
+  if (client.kind === "unresolved") {
+    const nested = validator.kind === "object" || validator.kind === "array";
+    add(
+      nested ? SEVERITY.SHAPE_UNKNOWN : SEVERITY.TYPE_UNKNOWN,
+      nested ? "SHAPE" : "VALUE",
+      `the client value could not be resolved to a type, so it is NOT verified against the declared ${describeValidator(validator)}`
+    );
+    return { findings, compatible: true };
+  }
 
   // An unresolvable client VALUE: we know it is sent, not what it is.
   //
@@ -411,6 +449,16 @@ export function compareNode(client, validator, path, ctx) {
     if (client.kind !== "array") {
       add(SEVERITY.BREAKING, "VALUE", `client sends ${describeClient(client)} where the backend declares array`);
       return { findings, compatible: false };
+    }
+    // Zero elements are transmitted, so the element validator has nothing to
+    // refuse. This is a proven clean result, not an unknown.
+    if (client.empty) return { findings, compatible: true };
+    // A non-empty array with no element node is a programming error. The safe
+    // answer to "what does it send?" when the answer is absent is "unknown",
+    // which denies PASS — never a silent clean result.
+    if (!client.element) {
+      add(SEVERITY.SHAPE_UNKNOWN, "SHAPE", "the array's element could not be resolved, so it is not verified");
+      return { findings, compatible: true };
     }
     // ⚠️ The element is a node, not a `[*]` path segment. Everything that works
     // for an object works for an element, because it IS an object.

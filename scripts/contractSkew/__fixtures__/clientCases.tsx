@@ -145,6 +145,36 @@ export function CaseOptionalLiteralUnion(opts: OptionalStatus) {
 }
 
 /**
+ * CASE 3i — an EMPTY array literal, from the round-1 cross-family review.
+ *
+ * `vehicles: []` is valid Convex: zero elements are validated, so the element
+ * validator cannot refuse anything. The extractor used to hand the comparator
+ * `array(unresolved)`, which was then compared against `v.array(v.object(...))`
+ * as though it were a real element — fabricating a BREAKING finding at
+ * `vehicles[*]` for correct code. A false production-skew alarm is the worst
+ * thing this control can emit.
+ */
+export function CaseEmptyArrayLiteral() {
+  const importBulk = useMutation(api.vehicles.importBulk);
+  void importBulk({ orgId: "o", vehicles: [] });
+}
+
+/**
+ * CASE 3j — a BRANDED PRIMITIVE is a primitive.
+ *
+ * Convex ids are `string & { __tableName: T }` — an INTERSECTION, which carries
+ * neither StringLike nor Object. It fell through to "unresolved", which was
+ * invisible while unresolved silently passed. The moment unresolved began
+ * reporting an honest unknown, every id argument in the app became one: 810 new
+ * TYPE_UNKNOWNs in one whole-repo run.
+ */
+type BrandedId = string & { __tableName: "vehicles" };
+export function CaseBrandedIdPayload(id: BrandedId) {
+  const update = useMutation(api.vehicles.update);
+  void update({ orgId: "o", vehicleId: id });
+}
+
+/**
  * CASE 4 — an optional parent makes its required child unproven.
  * `sourceLikeVehicle` is optional and unset here, so `sourceLikeVehicle.make`
  * is never transmitted even though it is required WITHIN that object.

@@ -20,6 +20,8 @@ type Node = {
   keysComplete?: boolean;
   values?: Set<unknown>;
   nodes?: Node[];
+  empty?: boolean;
+  type?: string;
 };
 type Call = {
   identifier: string;
@@ -216,6 +218,32 @@ describe("clientPaths extractor", () => {
     expect(status?.kind).toBe("literal");
     expect([...(status?.values ?? [])].sort()).toEqual(["AVAILABLE", "SOLD"]);
     expect([...(status?.values ?? [])]).not.toContain(undefined);
+  });
+
+  test("CASE 3i: an EMPTY array literal is marked empty, not unresolved", () => {
+    /**
+     * Surfaced by a surviving mutant: the model-level control built the empty
+     * node by hand, so nothing proved the EXTRACTOR produces it from real
+     * source. Neutering that line left every test green while restoring the
+     * fabricated-BREAKING defect the review found.
+     */
+    // Two fixtures call importBulk; select the empty-literal one BY SOURCE LINE
+    // rather than by the property being asserted, which would be circular.
+    const call = forFn("vehicles:importBulk").find((c) => c.line === lineOf("vehicles: [] }"));
+    expect(call).toBeDefined();
+    const vehicles = entryAt(call!.payload, "vehicles")?.node;
+    expect(vehicles?.kind).toBe("array");
+    expect(vehicles?.empty).toBe(true);
+  });
+
+  test("CASE 3j: a BRANDED primitive resolves to its primitive, not to unresolved", () => {
+    // Without this, every Convex `Id<T>` argument reads as unresolvable and the
+    // honest-unknown fix turns 808 verified values into noise.
+    const call = forFn("vehicles:update").find((c) => entryAt(c.payload, "vehicleId"));
+    expect(call).toBeDefined();
+    const node = entryAt(call!.payload, "vehicleId")?.node;
+    expect(node?.kind).toBe("scalar");
+    expect(node?.type).toBe("string");
   });
 
   test("CASE 4: an optional parent makes its required child UNPROVEN, not proven", () => {

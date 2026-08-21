@@ -29,6 +29,39 @@ const byText = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const tagged = (v) => `${v === null ? "null" : typeof v}:${String(v)}`;
 
 /**
+ * A COMPLETE structural fingerprint of a node and everything beneath it.
+ *
+ * ⚠️ BRANCH ORDER IS SIGNIFICANT AND THAT IS THE POINT. Object fields are
+ * sorted, because field order carries no meaning. Union branches are NOT
+ * sorted, because branch identity is positional: a required field moving from
+ * branch A to branch B is a real redeclaration, and any order-insensitive
+ * summary of the branches is byte-identical across that move. Sorting here
+ * would reintroduce exactly the defect this exists to fix.
+ */
+function digest(node) {
+  switch (node.kind) {
+    case "object": {
+      const fields = [...node.fields]
+        .map(([name, f]) => `${name}${f.optional ? "?" : ""}:${digest(f.node)}`)
+        .sort(byText);
+      return `{${fields.join(",")}}`;
+    }
+    case "array":
+      return `[${digest(node.element)}]`;
+    case "union":
+      return `(${node.branches.map(digest).join("|")})`;
+    case "literal":
+      return `lit(${tagged(node.value)})`;
+    case "scalar":
+      return `s(${node.type})`;
+    case "id":
+      return `id(${node.table ?? ""})`;
+    default:
+      return node.kind;
+  }
+}
+
+/**
  * Stable, comparable description of ONE NODE.
  *
  * ⚠️ THIS IS WHERE THE FLAT MODEL FAILED LAST, and the failure is the reason
@@ -54,6 +87,22 @@ function signatureOf(node, optional) {
       return `${head}:${node.type}`;
     case "id":
       return `${head}:${node.table ?? ""}`;
+    case "union":
+      // ⚠️ THE UNION CARRIES A FULL RECURSIVE DIGEST OF ITS BRANCHES, and the
+      // reason is a round-1 review finding that disproved this module's own
+      // justification. `collect` recurses into branches at the SAME path and
+      // merges their signatures into a set, so a field moving from one branch
+      // to another left that set byte-identical — same name, type and
+      // optionality, different branch. `changedContractPaths` returned [], and
+      // `classifyBreaking` then filed a genuine undeployed skew as a STANDING
+      // DEFECT: "deploying will not fix this", when deploying was the whole fix.
+      //
+      // ⚠️ I previously DELETED a union summary here, having "proven" it
+      // redundant by a byte-identical whole-repo run. That evidence was real and
+      // insufficient: this repo does not contain the shape. Equivalence on
+      // today's code is not equivalence, and a positional digest is what the
+      // merged set cannot express.
+      return `${head}:${digest(node)}`;
     default:
       return head;
   }

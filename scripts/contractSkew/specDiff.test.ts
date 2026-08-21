@@ -169,6 +169,60 @@ describe("changedContractPaths", () => {
     expect(changes[0].candidate).not.toContain("B");
   });
 
+  test("a required field MOVED between union branches IS a change", () => {
+    /**
+     * ⚠️ ROUND-1 REVIEW FINDING, and it disproved a justification I had written
+     * into this module. The comment claimed merging union branches at one path
+     * was sound "because a change in any branch changes the merged signature at
+     * that path". False: the branches were merged into a SET, and a field moving
+     * from branch A to branch B leaves that set byte-identical — same name, same
+     * type, same optionality, different branch.
+     *
+     * The consequence is not cosmetic. `classifyBreaking` reads exactly this
+     * output, so zero changed paths means a genuine undeployed backend change is
+     * filed as a STANDING DEFECT — "deploying will not fix this" — when
+     * deploying is the entire fix. Same wrong direction as symptom 6, reached by
+     * a different mechanism.
+     *
+     * ⚠️ It also shows the limit of the evidence I used to delete the old union
+     * summary: I proved equivalence by a byte-identical whole-repo run, and this
+     * repo simply does not contain the shape. Equivalence on today's code is not
+     * equivalence.
+     */
+    const branch = (fields: Record<string, boolean>) => ({
+      type: "object",
+      value: Object.fromEntries(
+        Object.entries(fields).map(([name, present]) => [
+          name,
+          present ? { fieldType: { type: "number" }, optional: false } : undefined,
+        ]).filter(([, v]) => v)
+      ),
+    });
+    const withY = (inFirstBranch: boolean) =>
+      fn("w.js:save", {
+        payload: {
+          optional: false,
+          fieldType: {
+            type: "union",
+            value: [
+              inFirstBranch
+                ? { type: "object", value: { x: { fieldType: { type: "string" }, optional: false }, y: { fieldType: { type: "number" }, optional: false } } }
+                : { type: "object", value: { x: { fieldType: { type: "string" }, optional: false } } },
+              inFirstBranch
+                ? { type: "object", value: { x: { fieldType: { type: "string" }, optional: false } } }
+                : { type: "object", value: { x: { fieldType: { type: "string" }, optional: false }, y: { fieldType: { type: "number" }, optional: false } } },
+            ],
+          },
+        },
+      });
+    void branch;
+    const changes = changedContractPaths(spec(withY(false)), spec(withY(true)));
+    expect(changes.length).toBeGreaterThan(0);
+    // The change must be reported at a path that OVERLAPS a client finding at
+    // `payload.y`, or the classifier still cannot see it.
+    expect(changes.some((c) => c.path === "payload" || c.path === "payload.y")).toBe(true);
+  });
+
   test("a no-argument function still records that it appeared", () => {
     // Otherwise it changes zero paths and vanishes from the report entirely.
     const before = spec();

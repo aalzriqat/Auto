@@ -438,7 +438,11 @@ function collectFromExpression(checker, expr, prefix, acc, depth, seen) {
         collectFromExpression(checker, el, elementPath, acc, depth + 1, seen)
       );
     }
-    return clientNode.array(element ?? clientNode.unresolved());
+    // An array literal with no elements transmits none, which is knowable.
+    // `array(unresolved)` would claim we could not read the element type and
+    // then be compared as though it were a real one.
+    if (element === null) return clientNode.emptyArray();
+    return clientNode.array(element);
   }
 
   // Not a literal — fall back to the type of the (unwrapped) expression.
@@ -719,6 +723,22 @@ function kindOfType(checker, type, flags) {
   if (flags & ts.TypeFlags.Null) return "null";
   if (type.isUnion?.()) return "union";
   if (checker.isArrayType?.(type) || checker.isTupleType?.(type)) return "array";
+  // ⚠️ A BRANDED PRIMITIVE IS A PRIMITIVE. Convex's `Id<"vehicles">` is
+  // `string & { __tableName: "vehicles" }` — an INTERSECTION, which carries
+  // neither StringLike nor Object, so it fell through to "unresolved".
+  //
+  // That was invisible while `unresolved` silently passed. The moment the
+  // review fix made `unresolved` report an honest unknown, every `Id` argument
+  // in the app became one: 810 new TYPE_UNKNOWNs in a single whole-repo run,
+  // almost all of them "declared id". Reporting ignorance we do not actually
+  // have is how a monitor earns being muted. The answer is to stop being
+  // ignorant, not to go back to passing silently.
+  if (type.isIntersection?.()) {
+    for (const part of type.types) {
+      const kind = kindOfType(checker, part, part.getFlags());
+      if (kind !== "unresolved" && kind !== "object") return kind;
+    }
+  }
   if (flags & ts.TypeFlags.Object) return "object";
   return "unresolved";
 }

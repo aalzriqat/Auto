@@ -51,7 +51,12 @@ export const CLASSIFICATION = {
  * call a real skew a standing defect and turn the alarm green during an actual
  * outage. Coarse and sound beats fine and wrong.
  *
- * @typedef {{ changedPaths?: {identifier: string, path: string}[],
+ * ⚠️ `changedPaths` entries carry more than identifier+path — `changedContractPaths`
+ * also returns `change`, `deployed` and `candidate`. The narrow shape here made
+ * a type error out of passing the REAL data, which is the wrong way round.
+ *
+ * @typedef {{ changedPaths?: {identifier: string, path: string, change?: string,
+ *                            deployed?: string|null, candidate?: string|null}[],
  *             backendIdenticalToDeployed?: boolean,
  *             deployedSha?: string,
  *             basis?: string }} BackendEvidence

@@ -203,3 +203,30 @@ describe("findings from the cross-family review", () => {
     expect(blockers.blocked).toBe(false);
   });
 });
+
+describe("a union-branch move is revision skew, not a standing defect", () => {
+  /**
+   * The end of the chain the specDiff finding breaks: if `changedContractPaths`
+   * cannot see the change, this classifies a real undeployed skew as a product
+   * bug and tells the responder that deploying will not help. That is the
+   * dangerous direction, and it is the one invariant 8 exists to protect.
+   */
+  test("a changed path overlapping the finding yields REVISION_SKEW", () => {
+    const breaking = [
+      { identifier: "w:save", path: "payload.y", severity: "BREAKING", file: "x.tsx", line: 1, detail: "..." },
+    ];
+    const result = classifyBreaking(breaking, {
+      changedPaths: [{ identifier: "w:save", path: "payload", change: "PATH_REDECLARED" }],
+    });
+    expect(result.classified[0].classification).toBe(CLASSIFICATION.REVISION_SKEW);
+    expect(result.standingDefects).toHaveLength(0);
+  });
+
+  test("and with NO changed path it is a standing defect — the honest opposite", () => {
+    const breaking = [
+      { identifier: "w:save", path: "payload.y", severity: "BREAKING", file: "x.tsx", line: 1, detail: "..." },
+    ];
+    const result = classifyBreaking(breaking, { changedPaths: [] });
+    expect(result.classified[0].classification).toBe(CLASSIFICATION.STANDING_DEFECT);
+  });
+});

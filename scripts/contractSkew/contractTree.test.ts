@@ -236,6 +236,84 @@ describe("opaque values and opaque keys are different facts", () => {
   });
 });
 
+describe("an UNRESOLVED client node (round-1 review, both seats)", () => {
+  /**
+   * ⚠️ FOUND INDEPENDENTLY BY BOTH REVIEW SEATS, which is why it is here as a
+   * whole describe rather than one case.
+   *
+   * `compareNode` had an explicit branch for `opaqueValue` and none for
+   * `unresolved`, so an unresolvable client value fell through into the
+   * ordinary per-validator-kind comparisons and was treated as a definite
+   * shape. That gave BOTH failure directions at once, decided by nothing more
+   * than which validator it happened to meet:
+   *
+   *   vs scalar / id      silent PASS with zero findings — a false claim of
+   *                       verification, the outcome the module header calls
+   *                       "worse than useless"
+   *   vs object / array   fabricated BREAKING — a false production-skew alarm,
+   *                       which is how a monitor gets muted
+   *
+   * `unresolved` means "we learned nothing here". It can prove neither
+   * direction, so it must report an unknown and never either verdict.
+   */
+  const cases: Array<[string, unknown]> = [
+    ["object", vObj({ a: [vStr] })],
+    ["array", vArr(vStr)],
+    ["id", { type: "id", tableName: "vehicles" }],
+    ["scalar", vStr],
+    ["literal union", vUnion(vLit("A"), vLit("B"))],
+  ];
+
+  for (const [label, validator] of cases) {
+    test(`vs ${label}: never BREAKING, and never a silent pass`, () => {
+      const result = run(cObj({ v: clientNode.unresolved() }), vObj({ v: [validator] }));
+      expect(breaking(result)).toHaveLength(0);
+      expect(result.findings.length).toBeGreaterThan(0);
+    });
+  }
+
+  test("the unknown names the right DIMENSION: keys can hide in an object", () => {
+    const result = run(cObj({ v: clientNode.unresolved() }), vObj({ v: [vObj({ a: [vStr] })] }));
+    expect(result.findings[0].severity).toBe(SEVERITY.SHAPE_UNKNOWN);
+    expect(result.findings[0].dimension).toBe("SHAPE");
+  });
+
+  test("and only the VALUE is at stake for a scalar", () => {
+    const result = run(cObj({ v: clientNode.unresolved() }), vObj({ v: [vStr] }));
+    expect(result.findings[0].severity).toBe(SEVERITY.TYPE_UNKNOWN);
+    expect(result.findings[0].dimension).toBe("VALUE");
+  });
+});
+
+describe("an EMPTY array literal is knowledge, not ignorance", () => {
+  /**
+   * `vehicles: []` is not an unresolved element — it is a KNOWN absence of
+   * elements. Convex validates zero of them, so the element validator cannot
+   * refuse anything and there is nothing to report. Modelling it as
+   * `array(unresolved)` produced a fabricated BREAKING at `vehicles[*]` for
+   * code that is completely valid.
+   */
+  const spec = vObj({ vehicles: [vArr(vObj({ vin: [vStr] }))] });
+
+  test("an empty array against an array-of-objects validator is CLEAN", () => {
+    const result = run(cObj({ vehicles: clientNode.emptyArray() }), spec);
+    expect(result.findings).toHaveLength(0);
+    expect(result.compatible).toBe(true);
+  });
+
+  test("a populated array is still checked — the fix must not blind the element", () => {
+    const bad = clientNode.array(cObj({ vin: cStr, ghost: cStr }));
+    expect(breaking(run(cObj({ vehicles: bad }), spec))).toHaveLength(1);
+  });
+
+  test("merging an empty observation with a populated one keeps the element", () => {
+    const merged = mergeClientNodes(clientNode.emptyArray(), clientNode.array(cObj({ ghost: cStr })));
+    expect(merged.kind).toBe("array");
+    expect(merged.empty).toBeFalsy();
+    expect(breaking(run(cObj({ vehicles: merged }), spec)).length).toBeGreaterThan(0);
+  });
+});
+
 describe("scalars and shapes", () => {
   test("a number where the backend declares a string is breaking", () => {
     expect(breaking(run(cObj({ name: clientNode.scalar("number") }), vObj({ name: [vStr] })))).toHaveLength(1);
