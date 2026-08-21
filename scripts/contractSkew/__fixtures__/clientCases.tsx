@@ -234,6 +234,28 @@ export function CaseAnyValue(blob: any) {
 }
 
 /**
+ * CASE 6a — a TUPLE payload field. Tuples reach the element type by a different
+ * checker call than arrays do, and the two had never been distinguished.
+ */
+export function CaseTuplePayload(pair: [string, string]) {
+  const update = useMutation(api.vehicles.update);
+  void update({ orgId: "o", tags: pair });
+}
+
+/**
+ * CASE 6b — nesting past MAX_DEPTH. The walk has to stop somewhere, and when it
+ * does it must record an unknown rather than quietly return a shallow answer
+ * that reads as complete.
+ */
+export function CaseVeryDeepPayload() {
+  const update = useMutation(api.vehicles.update);
+  void update({
+    orgId: "o",
+    a: { b: { c: { d: { e: { f: { g: { h: { i: { j: { k: { l: { m: "deep" } } } } } } } } } } } },
+  });
+}
+
+/**
  * CASE 4 — an optional parent makes its required child unproven.
  * `sourceLikeVehicle` is optional and unset here, so `sourceLikeVehicle.make`
  * is never transmitted even though it is required WITHIN that object.

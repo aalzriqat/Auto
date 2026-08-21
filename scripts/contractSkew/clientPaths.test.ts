@@ -338,6 +338,22 @@ describe("clientPaths extractor", () => {
     expect(call!.unknowns).toContain("notes");
   });
 
+  test("CASE 6a: a TUPLE resolves its element like an array does", () => {
+    const call = forFn("vehicles:update").find((c) => c.line === lineOf("tags: pair"));
+    expect(call).toBeDefined();
+    const tags = entryAt(call!.payload, "tags")?.node;
+    expect(tags?.kind).toBe("array");
+    expect(tags?.element?.kind).toBe("scalar");
+  });
+
+  test("CASE 6b: nesting past the depth limit records an unknown, not a shallow answer", () => {
+    // The walk has to stop somewhere. Stopping silently would let a payload we
+    // only half-read report as fully understood.
+    const call = forFn("vehicles:update").find((c) => entryAt(c.payload, "a"));
+    expect(call).toBeDefined();
+    expect(call!.unknowns.join(" ")).toContain("max depth");
+  });
+
   test("the fixture file loads at all — the module is syntactically valid", () => {
     // Blunt on purpose. A syntax error in clientPaths.mjs once survived a fully
     // green suite because nothing imported it.
