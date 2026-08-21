@@ -248,6 +248,61 @@ describe("changedContractPaths", () => {
     expect(changes.some((c) => c.path === "payload")).toBe(true);
   });
 
+  test("a literal value cannot FORGE a different branch structure", () => {
+    /**
+     * Found independently by me and by the Claude-family reviewer in the same
+     * round. Branch digests used to be joined with `|` and literal values
+     * interpolated raw, so a literal could embed the delimiters and produce a
+     * digest byte-identical to a genuinely different union:
+     *
+     *   union([ literal("A)}|{y:s(number") ])
+     *   union([ {x: literal("A")}, {y: number} ])
+     *
+     * The redeclaration was still caught then, but only because `collect`
+     * records each path's own signature separately and that independent signal
+     * differed. "Safe because a second mechanism happens to overlap" is not a
+     * property to rely on — a refactor removing the redundancy as dead weight
+     * would make it exploitable silently. The encoding is JSON now, so the
+     * guarantee stands on its own.
+     */
+    const real = fn("w.js:save", {
+      p: { optional: false, fieldType: { type: "union", value: [
+        { type: "object", value: { x: { fieldType: { type: "literal", value: "A" }, optional: false } } },
+        { type: "object", value: { y: { fieldType: { type: "number" }, optional: false } } },
+      ] } },
+    });
+    const forgeWith = (value: string) =>
+      fn("w.js:save", {
+        p: { optional: false, fieldType: { type: "union", value: [
+          { type: "object", value: { x: { fieldType: { type: "literal", value }, optional: false } } },
+        ] } },
+      });
+
+    // ⚠️ ONE PAYLOAD PER PLAUSIBLE ENCODING, not one per encoding we happen to
+    // use. A surviving mutant showed the first version of this test only closed
+    // the `|`-joined forgery it was crafted against: swap the encoding for a
+    // comma-joined one and the same test passed while the hole reopened. Each
+    // value below is crafted to forge a DIFFERENT joining scheme.
+    const forgeries: Array<[string, string]> = [
+      ["pipe-joined", "A)}|{y:s(number"],
+      ["comma-joined", "A,o,y,false,s,number"],
+      ["colon-joined", "A:o:y:false:s:number"],
+      ["quote-escaping", 'A","o","y","false","s","number'],
+    ];
+    for (const [label, value] of forgeries) {
+      const changes = changedContractPaths(spec(forgeWith(value)), spec(real));
+      // The UNION NODE itself must see it, not merely the paths below it.
+      expect(changes.some((c) => c.path === "p"), `${label} forgery was not detected at the union node`).toBe(true);
+    }
+  });
+
+  test("literals containing the old delimiters are still compared by VALUE", () => {
+    const withValue = (v: string) =>
+      fn("w.js:save", { s: { optional: false, fieldType: { type: "literal", value: v } } });
+    expect(changedContractPaths(spec(withValue("a|b")), spec(withValue("a|b")))).toEqual([]);
+    expect(changedContractPaths(spec(withValue("a|b")), spec(withValue("a|c"))).length).toBeGreaterThan(0);
+  });
+
   test("a pure REORDER of union branches is NOT a change", () => {
     /**
      * The other half, and the one that was missing. Branch position affects

@@ -39,39 +39,57 @@ const tagged = (v) => `${v === null ? "null" : typeof v}:${String(v)}`;
  * would reintroduce exactly the defect this exists to fix.
  */
 function digest(node) {
+  return JSON.stringify(digestValue(node));
+}
+
+/**
+ * The structured form, before encoding. Arrays and JSON, never hand-joined
+ * strings.
+ *
+ * ⚠️ THE HAND-JOINED VERSION WAS FORGEABLE, found independently by me and by
+ * the Claude-family reviewer in the same round. Branch digests were joined with
+ * `|` and literal values were interpolated raw, so a literal could embed the
+ * delimiters and impersonate a different branch structure:
+ *
+ *   union([ literal('A)}|{y:s(number') ])        -> "({x:lit(string:A)}|{y:s(number)})"
+ *   union([ {x: literal('A')}, {y: number} ])    -> "({x:lit(string:A)}|{y:s(number)})"
+ *
+ * Byte-identical. The redeclaration was still caught, but only because
+ * `collect` records each path's own signature separately and that INDEPENDENT
+ * signal happened to differ. Neither of us could reach a false PASS through
+ * `changedContractPaths`, and no literal in this repo contains `(`, `)`, `|` or
+ * `:` today — but "safe because a second mechanism happens to overlap" is not a
+ * property anyone can rely on. A future refactor that removed the redundancy as
+ * dead weight would silently make it exploitable.
+ *
+ * JSON encoding is unambiguous by construction, so the guarantee no longer
+ * depends on the redundancy. The redundancy remains, now as defence in depth
+ * rather than as the whole defence.
+ */
+function digestValue(node) {
   switch (node.kind) {
-    case "object": {
-      const fields = [...node.fields]
-        .map(([name, f]) => `${name}${f.optional ? "?" : ""}:${digest(f.node)}`)
-        .sort(byText);
-      return `{${fields.join(",")}}`;
-    }
+    case "object":
+      return [
+        "o",
+        [...node.fields]
+          .map(([name, f]) => [name, Boolean(f.optional), digest(f.node)])
+          .sort((a, b) => byText(a[0], b[0])),
+      ];
     case "array":
-      return `[${digest(node.element)}]`;
+      return ["a", digest(node.element)];
     case "union":
-      // ⚠️ BRANCH DIGESTS ARE SORTED, and getting this backwards cost a round.
-      //
-      // Convex validates a union by trying each branch and accepting on any
-      // match, so branch POSITION affects nothing about which payloads are
-      // accepted. Encoding position made a pure reorder look like a
-      // redeclaration — and a spurious changed path is not harmless: it
-      // overlaps a co-located STANDING_DEFECT and `classifyBreaking` promotes
-      // it to REVISION_SKEW, telling a responder to deploy when deploying
-      // fixes nothing. That is the dangerous direction, and it is the exact
-      // error `classify.mjs` exists to prevent.
-      //
-      // Sorting the branch digests keeps this sensitive to CONTENT — a branch
-      // added, removed, retyped, or a field added to one branch and not the
-      // other — while blind to order, which is what the semantics actually are.
-      return `(${node.branches.map(digest).sort(byText).join("|")})`;
+      // Sorted, because branch POSITION is not semantics: Convex accepts a
+      // union if ANY branch matches. Sorted on the ENCODED child, so ordering
+      // is deterministic without depending on the shape of the value.
+      return ["u", node.branches.map(digest).sort(byText)];
     case "literal":
-      return `lit(${tagged(node.value)})`;
+      return ["l", node.value === null ? "null" : typeof node.value, String(node.value)];
     case "scalar":
-      return `s(${node.type})`;
+      return ["s", node.type];
     case "id":
-      return `id(${node.table ?? ""})`;
+      return ["i", node.table ?? ""];
     default:
-      return node.kind;
+      return [node.kind];
   }
 }
 
