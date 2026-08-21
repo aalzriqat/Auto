@@ -1,0 +1,148 @@
+# Does the code on `main` match the backend users are actually served by?
+#
+# SCRUM-177: #227 merged, Vercel published the frontend within minutes, the
+# Convex backend was never deployed, and both opening-balance entry paths were
+# refused for 33.5 hours. Nothing detected it. The frontend and the backend ship
+# through different systems — Vercel's GitHub integration on merge, and
+# `deploy-production.yml` by manual dispatch — so a merge routinely ships half a
+# change, and the half that is missing is invisible from the repository.
+#
+# ⚠️ This runs on a schedule and on merge to main ON PURPOSE. A control that
+# only runs when someone remembers to run it would not have caught SCRUM-177
+# either, because nobody remembered for a day and a half.
+#
+# ⚠️ MAIN ONLY, and deliberately NOT on pull requests. Reading the live function
+# spec needs a Convex key carrying `deployment:data:view` — the capability Convex
+# itself named when a `deployment:metrics:view`-only key was refused. That
+# capability is wider than "read function metadata", so the credential must not
+# be reachable from a branch: a workflow file added on any branch would otherwise
+# be able to read it. It lives in the `contract-skew-prod-read` environment,
+# whose deployment-branch policy admits `main` alone. Declaring that environment
+# here is what binds the job to that policy.
+#
+# ⚠️ That environment has NO required reviewer and NO wait timer, which is the
+# other half of the design. The `production` environment — where
+# `CONVEX_PROD_DEPLOY_KEY` and `CONVEX_PROD_OPERATOR_KEY` live — requires a human
+# approver, so a job reading those would wait for a person on every fire. A
+# control that needs a human before it can look is not a control.
+#
+# ⚠️ UNAVAILABLE fails the job rather than passing it. A control that cannot see
+# production has not checked production, and a green tick that means "I did not
+# look" is worse than no control at all — it is the same false assurance that
+# let SCRUM-177 run for a day and a half.
+
+name: Contract skew
+
+on:
+  schedule:
+    # Hourly. SCRUM-177's exposure was 33.5 hours; this bounds the same failure
+    # to roughly one. Cheap: one Node process and one read of the function spec.
+    - cron: '17 * * * *'
+  push:
+    # The highest-value moment. A merge is when skew is CREATED, so checking
+    # here catches it in minutes rather than at the next hourly tick.
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # To read `deploy-production.yml`'s run history and learn which commit is
+  # actually deployed. Read-only, and it grants nothing over production.
+  actions: read
+
+concurrency:
+  group: contract-skew
+  cancel-in-progress: true
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The binding control. The environment's branch policy admits `main` only, so
+    # a run from any other ref cannot reach the credential — it fails closed
+    # rather than falling back to something weaker.
+    environment: contract-skew-prod-read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+          # Full history: the classifier compares `convex/` between HEAD and the
+          # deployed commit, and a shallow clone does not contain that commit.
+          # It fails closed if the commit is missing, so a shallow checkout would
+          # not be silently wrong — it would just alarm forever.
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.21.1'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      # Which commit is actually deployed? `deploy-production.yml` asserts that
+      # its `commit_sha` input equals main's tip, twice, and fails the run if it
+      # does not — so for a SUCCESSFUL run the run's own head_sha and the
+      # deployed commit are the same thing by construction.
+      #
+      # If no successful run is found the flag is simply omitted, and the
+      # classifier fails closed to "unclassified", which alarms. A missing deploy
+      # record must never read as "nothing changed".
+      - name: Find the commit that is actually deployed
+        id: deployed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          sha="$(gh api "repos/${REPO}/actions/workflows/deploy-production.yml/runs?status=success&per_page=1" --jq '.workflow_runs[0].head_sha // empty' || true)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          if [ -n "$sha" ]; then
+            echo "Deployed commit: $sha"
+          else
+            echo "::warning::No successful production deploy run found; incompatibilities will be reported as unclassified."
+          fi
+
+      # ⚠️ `CONVEX_PROD_DEPLOYMENT` is passed so the fetcher can REFUSE a spec
+      # from any other deployment. A preview key silently addresses a preview
+      # backend, and a control that verified a deployment nobody is served by
+      # would report success with total confidence — the 2026-08-07 targeting
+      # error in monitoring form.
+      - name: Compare the client on main against the deployed backend
+        id: detect
+        env:
+          CONVEX_PROD_READ_KEY: ${{ secrets.CONVEX_PROD_READ_KEY }}
+          CONVEX_PROD_DEPLOYMENT: ${{ vars.CONVEX_PROD_DEPLOYMENT }}
+          DEPLOYED_SHA: ${{ steps.deployed.outputs.sha }}
+        run: |
+          set +e
+          if [ -n "$DEPLOYED_SHA" ]; then
+            node scripts/contractSkew/cli.mjs --mode production --json skew-report.json --deployed-sha "$DEPLOYED_SHA"
+          else
+            node scripts/contractSkew/cli.mjs --mode production --json skew-report.json
+          fi
+          code=$?
+          set -e
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          case "$code" in
+            0) echo "No production skew detected." ;;
+            1) echo "::error::PRODUCTION SKEW — the deployed backend is behind the current one. Deploy the Convex backend at this commit." ;;
+            3) echo "::error::Control UNAVAILABLE — the credential could not read the production function spec. This is NOT a pass." ;;
+            6) echo "::error::COVERAGE GAP — a client file calling Convex is in no scanned surface. The control cannot answer for it, so this is NOT a pass." ;;
+            5) echo "::error::STANDING CONTRACT DEFECT — a client disagrees with a backend that is ALREADY deployed. This is a product bug, NOT a missing deploy; deploying will not fix it." ;;
+            *) echo "::error::contract-skew exited $code" ;;
+          esac
+          exit "$code"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: contract-skew-report
+          path: skew-report.json
+          retention-days: 30
+          if-no-files-found: ignore
