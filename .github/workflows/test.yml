@@ -39,6 +39,8 @@ jobs:
       run: |
         pnpm test:coverage
         pnpm test:coverage:sonar
+        # Separate process on purpose - see sonar-project.properties.
+        pnpm test:coverage:contract-skew
       env:
         NODE_ENV: test
 
