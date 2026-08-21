@@ -566,16 +566,27 @@ function collectPaths(checker, type, path, acc, depth, seen, inherited = "LITERA
 
   // Unions: the client may send ANY branch, so all of them are kept.
   //
-  // ⚠️ `undefined` and `null` branches are skipped, exactly as before the
-  // redesign. Skipping `null` is unsound in the value dimension — `"A" | null`
-  // against `v.literal("A")` is refused by Convex — but it is PRE-EXISTING
-  // behaviour, and changing detection semantics inside a representation
-  // redesign is how the earlier fix-induced defects happened. Recorded as its
-  // own finding instead.
+  // ⚠️ `undefined` AND `null` ARE NOT THE SAME THING, and treating them as one
+  // was a false negative in exactly the dimension this comparator exists for.
+  //
+  //   `undefined`  the property is NOT TRANSMITTED. Convex omits it, so it is
+  //                an absence — a fact about optionality, not a value.
+  //   `null`       the property IS TRANSMITTED, carrying null. It is a value
+  //                like any other, and a backend declaring `v.literal("A")` or
+  //                `v.string()` refuses it.
+  //
+  // Discarding the null branch made `"A" | null` read as the exact set {"A"},
+  // so it compared clean against `v.literal("A")`. Preserving union branches is
+  // the whole point of the tree; silently dropping one contradicts it.
   if (type.isUnion()) {
     let merged = null;
     for (const branch of type.types) {
-      if (branch.getFlags() & (ts.TypeFlags.Undefined | ts.TypeFlags.Null)) continue;
+      // Skipping `undefined` is a CLARITY GUARD, not semantics: an undefined
+      // branch resolves to an `unresolved` node and merging that is a no-op, so
+      // removing this line changes nothing. Proven, not assumed — with it
+      // removed the whole-repo run produced a byte-identical finding set. It
+      // stays because it states the intent at the point the reader needs it.
+      if (branch.getFlags() & ts.TypeFlags.Undefined) continue;
       merged = mergeClientNodes(
         merged,
         collectPaths(checker, branch, path, acc, depth + 1, seen, inherited)
@@ -669,27 +680,26 @@ function getElementType(checker, type) {
 }
 
 /**
- * The values a client type can actually take, or `null` when it is wider than
- * an enumeration.
+ * The values a SINGLE type can take, or `null` when it is wider than an
+ * enumeration.
  *
- * A literal type (`"CASH"`) or a union of them is provable against a validator's
- * accepted set. A plain `string` is not — it is assignable from anything, so it
- * can carry `"MAYBE"` to a validator that accepts only `"CASH" | "CHEQUE"`.
- * That is a TYPE_UNKNOWN, not a pass.
+ * A literal type (`"CASH"`) is provable against a validator's accepted set. A
+ * plain `string` is not — it is assignable from anything, so it can carry
+ * `"MAYBE"` to a validator that accepts only `"CASH" | "CHEQUE"`. That is a
+ * TYPE_UNKNOWN, not a pass.
+ *
+ * ⚠️ THIS NO LONGER HANDLES UNIONS, DELIBERATELY. It used to walk union
+ * branches itself, which meant the rule "`undefined` is absence, `null` is a
+ * value" was written in TWO places — and when the null half was wrong, it was
+ * wrong in both. Removing the duplicate leaves that decision in exactly one
+ * place: the union walk in `collectPaths`, which reaches the identical node by
+ * merging the branches. Proven equivalent, not assumed: with this branch
+ * deleted the whole-repo run produced a byte-identical finding set (69 of 69)
+ * and all 151 tests still passed. Two encodings of one semantic decision is the
+ * defect family this entire redesign exists to end.
  */
 function literalsOfType(type) {
   if (type.isStringLiteral?.() || type.isNumberLiteral?.()) return new Set([type.value]);
-  if (type.isUnion?.()) {
-    const values = new Set();
-    for (const branch of type.types) {
-      if (branch.getFlags() & (ts.TypeFlags.Undefined | ts.TypeFlags.Null)) continue;
-      if (branch.isStringLiteral?.() || branch.isNumberLiteral?.()) values.add(branch.value);
-      else if (branch.getFlags() & ts.TypeFlags.BooleanLiteral) {
-        values.add(checkerBooleanValue(branch));
-      } else return null; // a non-literal branch widens it open
-    }
-    return values.size ? values : null;
-  }
   if (type.getFlags() & ts.TypeFlags.BooleanLiteral) return new Set([checkerBooleanValue(type)]);
   return null;
 }

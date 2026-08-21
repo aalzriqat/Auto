@@ -18,6 +18,8 @@ type Node = {
   fields?: Map<string, { node: Node; provenance: string }>;
   element?: Node;
   keysComplete?: boolean;
+  values?: Set<unknown>;
+  nodes?: Node[];
 };
 type Call = {
   identifier: string;
@@ -178,6 +180,42 @@ describe("clientPaths extractor", () => {
     );
     // One call sends a resolved literal; the other sends a Record<string, T>.
     expect(wizardDataNodes.map((n) => n?.keysComplete).sort()).toEqual([false, true]);
+  });
+
+  test("CASE 3g: a NULL branch of a client union survives as a value", () => {
+    // `undefined` means "not transmitted"; `null` means "transmitted, as null".
+    // Collapsing the two discards a value the backend may refuse.
+    const [call] = forFn("vehicles:update");
+    expect(call).toBeDefined();
+    const status = entryAt(call.payload, "inspectionStatus")?.node;
+    expect(status?.kind).toBe("literal");
+    expect([...(status?.values ?? [])].map(String).sort()).toEqual(["SELF_REPORTED", "null"]);
+  });
+
+  test("CASE 3g: a null branch beside a WIDENED scalar is kept as a variant", () => {
+    // `string | null` cannot collapse to one node: the string half is unprovable
+    // and the null half is exactly provable. Both facts have to survive.
+    const [call] = forFn("vehicles:update");
+    const notes = entryAt(call.payload, "notes")?.node;
+    expect(notes?.kind).toBe("variants");
+    const kinds = (notes?.nodes ?? []).map((n: { kind: string }) => n.kind).sort();
+    expect(kinds).toEqual(["literal", "scalar"]);
+  });
+
+  test("CASE 3h: `undefined` is absence, so an OPTIONAL literal union stays enumerable", () => {
+    /**
+     * Surfaced by a surviving mutant. The null fix changed a predicate with two
+     * halves, and only the null half had coverage — so `undefined` could have
+     * silently become a value with every test still green. It is not a value:
+     * an optional enum must remain an exact, provable domain, or every optional
+     * enum in the app degrades to "not verified" at once.
+     */
+    const call = forFn("vehicles:update").find((c) => entryAt(c.payload, "status"));
+    expect(call).toBeDefined();
+    const status = entryAt(call!.payload, "status")?.node;
+    expect(status?.kind).toBe("literal");
+    expect([...(status?.values ?? [])].sort()).toEqual(["AVAILABLE", "SOLD"]);
+    expect([...(status?.values ?? [])]).not.toContain(undefined);
   });
 
   test("CASE 4: an optional parent makes its required child UNPROVEN, not proven", () => {

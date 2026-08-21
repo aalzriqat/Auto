@@ -115,6 +115,36 @@ export function CaseIndexSignaturePayload(bag: Record<string, string>) {
 }
 
 /**
+ * CASE 3g — a NULL BRANCH IS A VALUE, not an absence.
+ *
+ * `undefined` in a client union means the property is not transmitted at all;
+ * `null` means the property IS transmitted, carrying null. Discarding both as
+ * "not a value" made `"A" | null` read as the exact set {"A"}, so a backend
+ * declaring `v.literal("A")` — which Convex refuses null for — compared clean.
+ * That is a false negative in the one dimension this comparator exists for.
+ */
+type NullableEnum = "SELF_REPORTED" | null;
+export function CaseNullableEnumPayload(status: NullableEnum, note: string | null) {
+  const update = useMutation(api.vehicles.update);
+  void update({ orgId: "o", inspectionStatus: status, notes: note });
+}
+
+/**
+ * CASE 3h — the OTHER half of the null/undefined distinction.
+ *
+ * `status?: "AVAILABLE" | "SOLD"` types as `"AVAILABLE" | "SOLD" | undefined`.
+ * `undefined` means the property is simply not sent, so the transmitted domain
+ * is still the exact set {"AVAILABLE", "SOLD"} and stays provable. Treating it
+ * as a value instead would widen every optional enum in the codebase into
+ * "not verifiable" — noise that hides the findings that matter.
+ */
+type OptionalStatus = { status?: "AVAILABLE" | "SOLD" };
+export function CaseOptionalLiteralUnion(opts: OptionalStatus) {
+  const update = useMutation(api.vehicles.update);
+  void update({ orgId: "o", status: opts.status });
+}
+
+/**
  * CASE 4 — an optional parent makes its required child unproven.
  * `sourceLikeVehicle` is optional and unset here, so `sourceLikeVehicle.make`
  * is never transmitted even though it is required WITHIN that object.

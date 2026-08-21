@@ -164,6 +164,38 @@ describe("G-F2 / N1 / N3 — null enumerates, and prints", () => {
   });
 });
 
+describe("a client union carrying null (owner-specified pre-freeze controls)", () => {
+  /**
+   * An exact finite client domain that is NOT a subset of the backend domain is
+   * a proven refusal, and `null` is a member of that domain like any other
+   * value. The extractor used to discard the branch, which made the check pass
+   * on a payload Convex rejects.
+   */
+  test('"A" | null against v.literal("A") is BREAKING', () => {
+    const result = run(cObj({ status: cLit("A", null) }), vObj({ status: [vLit("A")] }));
+    expect(breaking(result)).toHaveLength(1);
+    expect(result.findings[0].detail).toContain("null");
+  });
+
+  test('"A" | null against v.union(v.literal("A"), v.null()) is compatible', () => {
+    const result = run(cObj({ status: cLit("A", null) }), vObj({ status: [vUnion(vLit("A"), vNull)] }));
+    expect(result.findings).toHaveLength(0);
+  });
+
+  test("a widened scalar beside null stays UNKNOWN for the scalar half", () => {
+    // The null half is provable; the string half is not. Reporting the whole
+    // thing as BREAKING would overstate, reporting it clean would understate.
+    const client = cObj({ status: clientNode.variants([cStr, cLit(null)]) });
+    const result = run(client, vObj({ status: [vUnion(vLit("A"), vNull)] }));
+    expect(breaking(result)).toHaveLength(0);
+    expect(result.findings.map((f) => f.severity)).toContain(SEVERITY.TYPE_UNKNOWN);
+  });
+
+  test("null against a backend that declares a plain string IS breaking", () => {
+    expect(breaking(run(cObj({ n: cLit(null) }), vObj({ n: [vStr] })))).toHaveLength(1);
+  });
+});
+
 describe("the array-of-literal-union case (the Claude-family blocking finding)", () => {
   const spec = vObj({ statuses: [vArr(vUnion(vLit("ACTIVE"), vLit("SOLD")))] });
 
