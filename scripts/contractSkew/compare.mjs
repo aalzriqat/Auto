@@ -27,7 +27,8 @@
  * argument validator in the function spec (they are keyed by path+method), so
  * webhook request-body contracts are NOT covered by this control.
  */
-import { declaredPaths, underDynamicPrefix, indexSpec, normalizeIdentifier } from "./declaredPaths.mjs";
+import { indexSpec, normalizeIdentifier } from "./declaredPaths.mjs";
+import { validatorTree, compareNode } from "./contractTree.mjs";
 
 /**
  * Does an evidence gap block a specific candidate release?
@@ -154,122 +155,12 @@ export function compareContracts(clientCalls, spec, extraUnresolved = []) {
       continue;
     }
 
-    const { paths: declared, dynamicPrefixes } = declaredPaths(fn.args);
-    const unknownSet = new Set(call.unknowns.map((u) => u.replace(/ \(max depth\)$/, "")));
+    // ⚠️ A SKIPPED QUERY TRANSMITS NOTHING, so neither direction applies — but
+    // the function-existence check above still does. `useQuery(fn, "skip")`
+    // referencing a function the backend no longer exposes is a defect waiting
+    // for the day the condition flips.
+    if (call.skipped) continue;
 
-    // ── Direction 1: the client sends something the backend does not declare.
-    for (const [sentPath, sentInfo] of call.sent) {
-      if (declared.has(sentPath)) {
-        // Shape is fine. Now the value dimension, kept separate on purpose.
-        const declaredKind = declared.get(sentPath).kind;
-        const clientKind = sentInfo.valueKind;
-
-        if (clientKind === "any") {
-          const nestedDeclared = NESTED_KINDS.has(declaredKind);
-          findings.push({
-            severity: nestedDeclared ? SEVERITY.SHAPE_UNKNOWN : SEVERITY.TYPE_UNKNOWN,
-            dimension: nestedDeclared ? "SHAPE" : "VALUE",
-            identifier: call.identifier,
-            path: sentPath,
-            file: call.file,
-            line: call.line,
-            detail: nestedDeclared
-              ? `value is \`any\` where the backend declares ${declaredKind}: undeclared keys could hide inside it`
-              : `key is declared (${declaredKind}) but the value is \`any\`: shape-safe, value NOT verified`,
-          });
-          continue;
-        }
-
-        // ── Literal unions: assignability is NOT verification.
-        //
-        // `v.union(v.literal("CASH"), v.literal("CHEQUE"))` and a client typed
-        // `string` are both "strings", and a coarse kind check calls that a
-        // match — while `"MAYBE"` is refused at runtime. Verification here
-        // means the client's possible values are provably a SUBSET of the
-        // accepted set; anything wider is unproven, not safe.
-        const accepted = declared.get(sentPath).literals;
-        if (accepted) {
-          const clientValues = sentInfo.literals;
-          if (!clientValues) {
-            findings.push({
-              severity: SEVERITY.TYPE_UNKNOWN,
-              dimension: "VALUE",
-              identifier: call.identifier,
-              path: sentPath,
-              file: call.file,
-              line: call.line,
-              detail: `backend accepts only [${[...accepted].join(", ")}]; the client type is wider than an enumeration, so the value is NOT verified`,
-            });
-            continue;
-          }
-          const offending = [...clientValues].filter((v) => !accepted.has(v));
-          if (offending.length) {
-            findings.push({
-              severity: SEVERITY.BREAKING,
-              dimension: "VALUE",
-              identifier: call.identifier,
-              path: sentPath,
-              file: call.file,
-              line: call.line,
-              detail: `client can send [${offending.join(", ")}]; backend accepts only [${[...accepted].join(", ")}]`,
-            });
-          }
-          continue; // provable subset -> verified
-        }
-
-        const allowed = COMPATIBLE[declaredKind];
-        if (allowed && !allowed.has(clientKind)) {
-          findings.push({
-            severity: SEVERITY.BREAKING,
-            dimension: "VALUE",
-            identifier: call.identifier,
-            path: sentPath,
-            file: call.file,
-            line: call.line,
-            detail: `client sends ${clientKind} where the backend declares ${declaredKind}`,
-          });
-        }
-        continue;
-      }
-
-      if (underDynamicPrefix(sentPath, dynamicPrefixes)) continue;
-
-      // A path under something we could not resolve is not proof of a bug —
-      // report it as needing evidence rather than as a defect.
-      const parentOpaque = [...unknownSet].some(
-        (u) => u !== "<root>" && (sentPath.startsWith(`${u}.`) || sentPath.startsWith(`${u}[`))
-      );
-      // ⚠️ BREAKING REQUIRES PROOF OF TRANSMISSION, NOT TYPE MEMBERSHIP.
-      //
-      // An OPTIONAL property of a shared type may never be assigned at this
-      // call site, in which case Convex never sees it and there is no defect.
-      // The first whole-repo run called thirteen such fields BREAKING; every
-      // one was type membership rather than evidence. So only an explicit
-      // literal, a resolvable spread, or a non-optional resolved property
-      // counts as proof — anything weaker is uncertainty, and says so.
-      const provenance = sentInfo.provenance ?? "TYPE_OPTIONAL";
-      const transmissionProven =
-        provenance === "LITERAL" || provenance === "SPREAD" || provenance === "TYPE_REQUIRED";
-
-      findings.push({
-        severity: parentOpaque || !transmissionProven ? SEVERITY.SHAPE_UNKNOWN : SEVERITY.BREAKING,
-        dimension: "SHAPE",
-        identifier: call.identifier,
-        path: sentPath,
-        file: call.file,
-        line: call.line,
-        provenance,
-        detail: parentOpaque
-          ? "sent under an opaque parent; cannot prove the backend accepts it"
-          : !transmissionProven
-            ? `the live backend declares no such field, but this path is only an OPTIONAL member of the payload type (${provenance}) — it may never be assigned, so transmission is unproven`
-            : "the live backend declares no such field — Convex rejects undeclared fields",
-      });
-    }
-
-    // ── Direction 2: the backend REQUIRES something the client never sends.
-    // This is the #227 shape seen from the other side, and it is how a backend
-    // deployed AHEAD of its frontend breaks.
     // ⚠️ THE FRAMEWORK SUPPLIES SOME ARGUMENTS, NOT THE CALLER.
     //
     // `usePaginatedQuery(api.x.list, { orgId }, { initialNumItems })` never
@@ -278,62 +169,23 @@ export function compareContracts(clientCalls, spec, extraUnresolved = []) {
     // whole-repo run: a fabricated outage across every paginated list in the
     // app, and precisely the kind of noise that gets a control switched off.
     const frameworkSupplied =
-      call.via === "usePaginatedQuery" ? (p) => p === "paginationOpts" || p.startsWith("paginationOpts.") : () => false;
+      call.via === "usePaginatedQuery"
+        ? (p) => p === "paginationOpts" || p.startsWith("paginationOpts.")
+        : () => false;
 
-    for (const [declaredPath, info] of declared) {
-      if (frameworkSupplied(declaredPath)) continue;
-      if (declaredPath.includes("[*]")) continue; // element fields are covered by the array itself
-      if (call.sent.has(declaredPath)) continue;
-      if (unknownSet.has("<root>")) continue; // whole payload opaque; reported once below
-
-      let detail = "the live backend requires this field and the client does not send it";
-
-      if (info.optional) {
-        // A CONDITIONAL requirement. Optionality is inherited so that a
-        // required field inside an OMITTED optional parent is not demanded
-        // of the payload - without that, four fabricated BREAKING findings
-        // appeared on the first whole-repo run. But the backend still
-        // demands the field when the parent IS present, and collapsing the
-        // two questions meant `profile: v.optional(v.object({ bio:
-        // v.string() }))` reported a clean PASS for a client sending
-        // `{ profile: {} }`, which Convex rejects outright.
-        //
-        // So it is demanded only where the demand is PROVABLE: the client
-        // proves it sends the parent, and the parent shape was resolved.
-        // An omitted parent, a merely-possible one, or an opaque one all
-        // stay silent - type membership is not proof of transmission.
-        if (!info.requiredWithinParent) continue;
-        const parent = parentPathOf(declaredPath);
-        if (!parent) continue;
-        const parentSent = call.sent.get(parent);
-        if (!parentSent || parentSent.provenance === "TYPE_OPTIONAL") continue;
-        if (unknownSet.has(parent)) continue;
-        detail =
-          "the client sends this optional object but omits a field the live backend requires inside it";
-      }
-
-      findings.push({
-        severity: SEVERITY.BREAKING,
-        dimension: "SHAPE",
-        identifier: call.identifier,
-        path: declaredPath,
-        file: call.file,
-        line: call.line,
-        detail,
-      });
-    }
-
-    if (unknownSet.has("<root>")) {
-      findings.push({
-        severity: SEVERITY.SHAPE_UNKNOWN,
-        dimension: "SHAPE",
-        identifier: call.identifier,
-        path: "<root>",
-        file: call.file,
-        line: call.line,
-        detail: "the whole payload is opaque (`any`); nothing about this call is verified",
-      });
-    }
+    // ⚠️ ONE TREE WALK, BOTH DIRECTIONS. The two questions — "does the client
+    // send something undeclared" and "does the backend require something the
+    // client omits" — are asked of the SAME node, which is why they can no
+    // longer disagree about what a node is. The flat model asked them of two
+    // different path maps and had to re-derive structure from strings at each,
+    // which is where the array-element blind spot and the union merge came
+    // from.
+    const site = { identifier: call.identifier, file: call.file, line: call.line };
+    const walked = compareNode(call.payload, validatorTree(fn.args), "", {
+      site,
+      frameworkSupplied,
+    });
+    findings.push(...walked.findings);
   }
 
   const breaking = findings.filter((f) => f.severity === SEVERITY.BREAKING);

@@ -1,6 +1,99 @@
 import { describe, expect, test } from "vitest";
 import { compareContracts, SEVERITY, blockersForRelease, pathsOverlap } from "./compare.mjs";
 import { declaredPaths } from "./declaredPaths.mjs";
+import { clientNode, mergeClientNodes } from "./contractTree.mjs";
+
+/**
+ * ⚠️ FIXTURE SHIM, NOT A MODEL.
+ *
+ * These fixtures were written against the flat `Map<pathString, metadata>` the
+ * comparator used before the tree redesign. Every one of them encodes a
+ * behaviour that was learned the hard way, so they are CONVERTED rather than
+ * rewritten: the path-based fixture data is parsed into the tree the comparator
+ * now takes. Path strings survive here as a convenient way to spell a shape in
+ * a test — never as the authority the comparator consults.
+ */
+type Info = {
+  valueKind?: string;
+  provenance?: string;
+  literals?: Set<unknown> | null;
+  optional?: boolean;
+};
+
+const leafFor = (info: Info): any => {
+  if (info.literals) return clientNode.literal(info.literals as Set<unknown>);
+  switch (info.valueKind) {
+    case "any":
+      return clientNode.opaqueValue();
+    case "object":
+      return clientNode.object(new Map(), true);
+    case "opaqueKeys":
+      return clientNode.opaqueKeys();
+    case "array":
+      return clientNode.array(clientNode.unresolved());
+    case "unresolved":
+    case undefined:
+      return clientNode.unresolved();
+    default:
+      return clientNode.scalar(info.valueKind);
+  }
+};
+
+type Seg = { k: "f"; n: string } | { k: "e" };
+const parseSegs = (path: string): Seg[] => {
+  const out: Seg[] = [];
+  for (const part of path.split(".")) {
+    const m = /^([^[]*)((?:\[\*\])*)$/.exec(part);
+    if (!m) continue;
+    if (m[1]) out.push({ k: "f", n: m[1] });
+    for (let i = 0; i < m[2].length / 3; i += 1) out.push({ k: "e" });
+  }
+  return out;
+};
+
+const containerFor = (node: any, next: Seg): any => {
+  if (next.k === "e") return node?.kind === "array" ? node : clientNode.array(clientNode.unresolved());
+  return node?.kind === "object" ? node : clientNode.object(new Map(), true);
+};
+
+/** Build the client payload tree a set of `path -> info` fixtures describes. */
+const fromFlat = (map: Map<string, Info>): any => {
+  const root = clientNode.object(new Map(), true);
+  for (const [path, raw] of map) {
+    const info: Info = raw ?? {};
+    const segs = parseSegs(path);
+    let cur: any = root;
+    for (let i = 0; i < segs.length; i += 1) {
+      const seg = segs[i];
+      const last = i === segs.length - 1;
+      if (seg.k === "f") {
+        if (cur.kind !== "object") break;
+        let entry = cur.fields.get(seg.n);
+        if (!entry) {
+          entry = { node: clientNode.unresolved(), provenance: "LITERAL", optional: false };
+          cur.fields.set(seg.n, entry);
+        }
+        if (last) {
+          entry.node = mergeClientNodes(entry.node, leafFor(info));
+          if (info.provenance) entry.provenance = info.provenance;
+        } else {
+          if (info.provenance && !cur.fields.get(seg.n)!.touched) entry.provenance = entry.provenance;
+          entry.node = containerFor(entry.node, segs[i + 1]);
+          cur = entry.node;
+        }
+      } else {
+        if (cur.kind !== "array") break;
+        if (last) cur.element = mergeClientNodes(cur.element, leafFor(info));
+        else {
+          cur.element = containerFor(cur.element, segs[i + 1]);
+          cur = cur.element;
+        }
+      }
+    }
+  }
+  return root;
+};
+
 
 /**
  * The two shapes in this file are not hypotheticals. Both reached production:
@@ -51,7 +144,7 @@ const call = (identifier: string, s: Sent, unknowns: string[] = []) => ({
   identifier,
   file: "components/Fixture.tsx",
   line: 1,
-  sent: s,
+  payload: fromFlat(s),
   unknowns,
   casts: [],
 });
@@ -253,7 +346,9 @@ describe("SCRUM-178 contract skew detector", () => {
     identifier: "a:b",
     file: "components/Fixture.tsx",
     line: 1,
-    sent: new Map([["method", { optional: false, valueKind: kind, literals: literals ? new Set(literals) : null }]]),
+    payload: fromFlat(
+      new Map([["method", { optional: false, valueKind: kind, literals: literals ? new Set(literals) : null }]])
+    ),
     unknowns: [],
     casts: [],
   });
@@ -513,13 +608,13 @@ describe("an array element is checked exactly as hard as a top-level field", () 
       },
     ],
   });
-  const callWith = (sent: Map<string, unknown>) => ({
+  const callWith = (sent: Map<string, Info>) => ({
     identifier: "w:save",
     file: "x.tsx",
     line: 1,
     casts: [],
     unknowns: [],
-    sent,
+    payload: fromFlat(sent),
   });
 
   const topLevel = (value: unknown) =>
@@ -598,13 +693,13 @@ describe("a required field is still required once its optional parent IS sent", 
       },
     ],
   };
-  const call = (sent: Map<string, unknown>, unknowns: string[] = []) => ({
+  const call = (sent: Map<string, Info>, unknowns: string[] = []) => ({
     identifier: "w:save",
     file: "x.tsx",
     line: 1,
     casts: [],
     unknowns,
-    sent,
+    payload: fromFlat(sent),
   });
 
   test("parent proven sent, required child omitted -> BREAKING", () => {
@@ -635,8 +730,13 @@ describe("a required field is still required once its optional parent IS sent", 
 
   test("parent sent but its shape is opaque -> not breaking", () => {
     // We cannot see inside it, so we cannot claim the child is missing.
+    //
+    // ⚠️ Opacity used to be spelled as a parallel `unknowns: ["profile"]` array
+    // that the comparator re-joined to the path map by string matching. It is
+    // now a property OF THE NODE — an object whose key set is not complete —
+    // which is why the two can no longer drift apart.
     const result = compareContracts(
-      [call(new Map([["profile", { valueKind: "object", provenance: "LITERAL" }]]), ["profile"])],
+      [call(new Map([["profile", { valueKind: "opaqueKeys", provenance: "LITERAL" }]]))],
       spec,
       []
     );
@@ -688,8 +788,15 @@ describe("a nullable enum keeps its enumeration", () => {
       },
     ],
   };
-  const callSending = (value: unknown) => [
-    { identifier: "w:save", file: "x.tsx", line: 1, casts: [], unknowns: [], sent: new Map([["status", value]]) },
+  const callSending = (value: Info) => [
+    {
+      identifier: "w:save",
+      file: "x.tsx",
+      line: 1,
+      casts: [],
+      unknowns: [],
+      payload: fromFlat(new Map([["status", value]])),
+    },
   ];
 
   test("the null branch is a value, not a reason to give up the whitelist", () => {

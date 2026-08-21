@@ -93,7 +93,106 @@ export const clientNode = {
   opaqueValue: () => ({ kind: "opaqueValue" }),
   /** The KEY SET is unknown; we cannot enumerate what is or is not sent. */
   opaqueKeys: () => ({ kind: "object", fields: new Map(), keysComplete: false }),
+  /**
+   * The client may send any ONE of these shapes -- a TypeScript union that does
+   * not collapse, e.g. `{ a: 1 } | string`. Every variant has to be acceptable,
+   * because we cannot tell which one runs.
+   */
+  variants: (nodes) => (nodes.length === 1 ? nodes[0] : { kind: "variants", nodes }),
+  /** Nothing has been learned about this node yet. */
+  unresolved: () => ({ kind: "unresolved" }),
 };
+
+/**
+ * PROVENANCE: HOW DO WE KNOW THIS FIELD IS ACTUALLY SENT?
+ *
+ * Presence in a shared TypeScript type is not transmission. The first
+ * whole-repo run reported `wizardData.vehicleItems` as BREAKING because the
+ * type permits it -- while the call site never sets it, so Convex never sees
+ * it. An OPTIONAL property nobody assigns is not a defect; claiming otherwise
+ * is the detector inventing an outage.
+ *
+ *   LITERAL        an explicit property in the object literal at the call site
+ *   SPREAD         contributed by a resolvable spread
+ *   TYPE_REQUIRED  a non-optional property of a resolved type: always present
+ *   TYPE_OPTIONAL  an optional property: MAY be sent, unproven
+ *
+ * Only the first three prove transmission and can justify BREAKING. The
+ * strongest provenance seen wins: one route that definitely sends a field is
+ * enough to prove it is transmitted.
+ */
+export const PROVENANCE_RANK = { TYPE_OPTIONAL: 0, TYPE_REQUIRED: 1, SPREAD: 2, LITERAL: 3 };
+const PROVEN = new Set(["LITERAL", "SPREAD", "TYPE_REQUIRED"]);
+
+export const strongerProvenance = (a, b) =>
+  (PROVENANCE_RANK[b] ?? 0) > (PROVENANCE_RANK[a] ?? 0) ? b : a;
+
+/**
+ * Combine two observations of the SAME node -- a union branch, a spread, a
+ * second element of an array literal, a second route to one field.
+ *
+ * Opacity is absorbing. If any route to a value is opaque, the value is opaque:
+ * two call paths sending the same field, one typed and one `any`, means the
+ * field is not verified. Taking the typed one would report a confidence the
+ * code does not support.
+ */
+export function mergeClientNodes(a, b) {
+  if (!a) return b ?? clientNode.unresolved();
+  if (!b) return a;
+  if (a === b) return a;
+  if (a.kind === "unresolved") return b;
+  if (b.kind === "unresolved") return a;
+  if (a.kind === "opaqueValue" || b.kind === "opaqueValue") return clientNode.opaqueValue();
+
+  if (a.kind === "object" && b.kind === "object") {
+    const fields = new Map(a.fields);
+    for (const [name, entry] of b.fields) {
+      const existing = fields.get(name);
+      fields.set(
+        name,
+        existing
+          ? {
+              node: mergeClientNodes(existing.node, entry.node),
+              provenance: strongerProvenance(existing.provenance, entry.provenance),
+            }
+          : entry
+      );
+    }
+    // Key completeness is a conjunction: one unenumerable route is enough to
+    // make the whole key set unknown.
+    return clientNode.object(fields, Boolean(a.keysComplete && b.keysComplete));
+  }
+
+  if (a.kind === "array" && b.kind === "array") {
+    return clientNode.array(mergeClientNodes(a.element, b.element));
+  }
+
+  if (a.kind === "literal" && b.kind === "literal") {
+    return clientNode.literal(new Set([...a.values, ...b.values]));
+  }
+
+  // A literal beside the scalar it belongs to is that scalar, widened: the
+  // enumeration stops being a whitelist, so it stops being provable.
+  const widened = widenLiteralInto(a, b) ?? widenLiteralInto(b, a);
+  if (widened) return widened;
+
+  if (a.kind === "scalar" && b.kind === "scalar" && a.type === b.type) return a;
+
+  // Genuinely different shapes. Keep both rather than collapsing to a label
+  // that means neither -- the comparator has to be able to reject the payload
+  // if EITHER shape would be rejected.
+  const nodes = [
+    ...(a.kind === "variants" ? a.nodes : [a]),
+    ...(b.kind === "variants" ? b.nodes : [b]),
+  ];
+  return clientNode.variants(nodes);
+}
+
+function widenLiteralInto(literal, scalar) {
+  if (literal.kind !== "literal" || scalar.kind !== "scalar") return null;
+  const ok = [...literal.values].every((v) => SCALAR_OK[scalar.type]?.has(typeof v));
+  return ok ? scalar : null;
+}
 
 // ── Comparison ───────────────────────────────────────────────────────────────
 
@@ -130,23 +229,66 @@ const joinPath = (path, segment) => (path ? `${path}${segment}` : segment.replac
 export function compareNode(client, validator, path, ctx) {
   const findings = [];
   const add = (severity, dimension, detail, at = path) => {
-    findings.push({ severity, dimension, path: at || "<root>", detail, ...ctx.site });
+    findings.push(finding(ctx, severity, dimension, at || path, detail));
   };
+
+  // ⚠️ A MISSING NODE FAILS CLOSED. Reaching here with nothing to compare is a
+  // programming error, and the safe answer to "what does this send?" when the
+  // answer is absent is "we do not know" — which denies PASS. Throwing would
+  // abort the whole scheduled run; claiming compatibility would be a lie.
+  if (!client) {
+    add(SEVERITY.SHAPE_UNKNOWN, "SHAPE", "no client payload could be resolved for this call");
+    return { findings, compatible: true };
+  }
 
   // A validator that accepts anything ends the comparison.
   if (validator.kind === "any") return { findings, compatible: true };
 
   // An unresolvable client VALUE: we know it is sent, not what it is.
+  //
+  // ⚠️ TWO DIFFERENT ANSWERS, kept apart. An `any` where the backend declares a
+  // scalar cannot hide an undeclared KEY, so it is shape-safe and only the
+  // value is unverified. An `any` where the backend declares an object or an
+  // array is worse: whole undeclared fields can hide inside it.
   if (client.kind === "opaqueValue") {
-    add(SEVERITY.TYPE_UNKNOWN, "VALUE", "the client value is opaque, so it is not verified against the declared type");
+    const nested = validator.kind === "object" || validator.kind === "array";
+    const label = describeValidator(validator);
+    if (!path) {
+      add(SEVERITY.SHAPE_UNKNOWN, "SHAPE", "the whole payload is opaque (`any`); nothing about this call is verified");
+    } else if (nested) {
+      add(SEVERITY.SHAPE_UNKNOWN, "SHAPE", `value is \`any\` where the backend declares ${label}: undeclared keys could hide inside it`);
+    } else {
+      add(SEVERITY.TYPE_UNKNOWN, "VALUE", `key is declared (${label}) but the value is \`any\`: shape-safe, value NOT verified`);
+    }
     return { findings, compatible: true };
+  }
+
+  if (client.kind === "variants") {
+    // The client may send any one of these, so a mismatch in ANY of them is a
+    // mismatch. (A validator union is the mirror image: satisfying ONE branch
+    // is enough. Collapsing the two directions is what made the flat model
+    // accept a payload built from two mutually exclusive branches.)
+    const seen = new Set();
+    const merged = [];
+    let ok = true;
+    for (const variant of client.nodes) {
+      const attempt = compareNode(variant, validator, path, ctx);
+      if (!attempt.compatible) ok = false;
+      for (const f of attempt.findings) {
+        const key = `${f.severity}|${f.dimension}|${f.path}|${f.detail}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(f);
+      }
+    }
+    return { findings: merged, compatible: ok };
   }
 
   if (validator.kind === "union") return compareUnion(client, validator, path, ctx);
 
   if (validator.kind === "object") {
     if (client.kind !== "object") {
-      add(SEVERITY.BREAKING, "SHAPE", `the backend declares an object here and the client sends ${client.kind}`);
+      add(SEVERITY.BREAKING, "VALUE", `client sends ${describeClient(client)} where the backend declares object`);
       return { findings, compatible: false };
     }
     let compatible = true;
@@ -155,14 +297,40 @@ export function compareNode(client, validator, path, ctx) {
     for (const [name, sent] of client.fields) {
       const declared = validator.fields.get(name);
       const at = joinPath(path, `.${name}`);
+
+      // A field whose transmission is unproven cannot prove a defect, and
+      // nothing below it can either. Descending with `unproven` set is what
+      // replaces the flat model's one-level parent lookup: the fact travels as
+      // far down the tree as it is true, instead of being re-derived from a
+      // path string at exactly one depth.
+      const childCtx = PROVEN.has(sent.provenance ?? "LITERAL") ? ctx : unprovenCtx(ctx);
+
       if (!declared) {
-        add(SEVERITY.BREAKING, "SHAPE", "the live backend declares no such field — Convex rejects undeclared fields", at);
-        compatible = false;
+        const provenance = sent.provenance ?? "LITERAL";
+        if (childCtx === ctx) {
+          findings.push({
+            ...finding(ctx, SEVERITY.BREAKING, "SHAPE", at,
+              "the live backend declares no such field — Convex rejects undeclared fields"),
+            provenance,
+          });
+          compatible = false;
+        } else {
+          findings.push({
+            ...finding(ctx, SEVERITY.SHAPE_UNKNOWN, "SHAPE", at,
+              `the live backend declares no such field, but this path is only an OPTIONAL member of the payload type (${provenance}) — it may never be assigned, so transmission is unproven`),
+            provenance,
+          });
+        }
         continue;
       }
-      const nested = compareNode(sent.node, declared.node, at, ctx);
+      const nested = compareNode(
+        sent.node,
+        declared.node,
+        at,
+        declared.optional && !childCtx.withinOptional ? { ...childCtx, withinOptional: true } : childCtx
+      );
       findings.push(...nested.findings);
-      if (!nested.compatible) compatible = false;
+      if (!nested.compatible && childCtx === ctx) compatible = false;
     }
 
     // Direction 2 — the backend requires something the client does not send.
@@ -178,7 +346,17 @@ export function compareNode(client, validator, path, ctx) {
         if (declared.optional) continue;
         if (client.fields.has(name)) continue;
         if (ctx.frameworkSupplied?.(joinPath(path, `.${name}`))) continue;
-        add(SEVERITY.BREAKING, "SHAPE", "the live backend requires this field and the client does not send it", joinPath(path, `.${name}`));
+        // A CONDITIONAL requirement reads differently from an absolute one:
+        // the backend demands this field only because the client chose to send
+        // the optional object around it.
+        add(
+          SEVERITY.BREAKING,
+          "SHAPE",
+          ctx.withinOptional
+            ? "the client sends this optional object but omits a field the live backend requires inside it"
+            : "the live backend requires this field and the client does not send it",
+          joinPath(path, `.${name}`)
+        );
         compatible = false;
       }
     } else if (validator.fields.size > 0) {
@@ -192,7 +370,7 @@ export function compareNode(client, validator, path, ctx) {
 
   if (validator.kind === "array") {
     if (client.kind !== "array") {
-      add(SEVERITY.BREAKING, "SHAPE", `the backend declares an array here and the client sends ${client.kind}`);
+      add(SEVERITY.BREAKING, "VALUE", `client sends ${describeClient(client)} where the backend declares array`);
       return { findings, compatible: false };
     }
     // ⚠️ The element is a node, not a `[*]` path segment. Everything that works
@@ -203,7 +381,7 @@ export function compareNode(client, validator, path, ctx) {
   if (validator.kind === "literal") return compareValues(client, new Set([validator.value]), path, ctx);
   if (validator.kind === "id") {
     if (client.kind === "object" || client.kind === "array") {
-      add(SEVERITY.BREAKING, "SHAPE", `the backend declares an id here and the client sends ${client.kind}`);
+      add(SEVERITY.BREAKING, "VALUE", `client sends ${describeClient(client)} where the backend declares id`);
       return { findings, compatible: false };
     }
     return { findings, compatible: true };
@@ -213,17 +391,17 @@ export function compareNode(client, validator, path, ctx) {
   if (client.kind === "literal") {
     const bad = [...client.values].filter((v) => !SCALAR_OK[validator.type]?.has(typeof v));
     if (SCALAR_OK[validator.type] && bad.length) {
-      add(SEVERITY.BREAKING, "VALUE", `the backend declares ${validator.type} and the client can send ${describe(bad)}`);
+      add(SEVERITY.BREAKING, "VALUE", `client can send ${describe(bad)} where the backend declares ${validator.type}`);
       return { findings, compatible: false };
     }
     return { findings, compatible: true };
   }
   if (client.kind === "object" || client.kind === "array") {
-    add(SEVERITY.BREAKING, "SHAPE", `the backend declares ${validator.type} here and the client sends ${client.kind}`);
+    add(SEVERITY.BREAKING, "VALUE", `client sends ${describeClient(client)} where the backend declares ${validator.type}`);
     return { findings, compatible: false };
   }
   if (SCALAR_OK[validator.type] && client.kind === "scalar" && !SCALAR_OK[validator.type].has(client.type)) {
-    add(SEVERITY.BREAKING, "VALUE", `the backend declares ${validator.type} and the client sends ${client.type}`);
+    add(SEVERITY.BREAKING, "VALUE", `client sends ${client.type} where the backend declares ${validator.type}`);
     return { findings, compatible: false };
   }
   return { findings, compatible: true };
@@ -260,11 +438,38 @@ function compareUnion(client, union, path, ctx) {
   return fewest ?? { findings: [], compatible: true };
 }
 
+/**
+ * A context whose findings can no longer be BREAKING.
+ *
+ * `unproven` means "we are inside something the client MAY never send". A
+ * defect that only manifests if an optional property is assigned has not been
+ * demonstrated, so it is reported as an unknown with the reason attached rather
+ * than as an outage. This is the rule that removed eight fabricated BREAKING
+ * findings from the third whole-repo run.
+ */
+const unprovenCtx = (ctx) => (ctx.unproven ? ctx : { ...ctx, unproven: true });
+
+function finding(ctx, severity, dimension, path, detail) {
+  const at = path || "<root>";
+  if (severity === SEVERITY.BREAKING && ctx.unproven) {
+    return {
+      severity: dimension === "SHAPE" ? SEVERITY.SHAPE_UNKNOWN : SEVERITY.TYPE_UNKNOWN,
+      dimension,
+      path: at,
+      detail: `${detail} — but this path is only an OPTIONAL member of the payload type, so transmission is unproven`,
+      ...ctx.site,
+    };
+  }
+  return { severity, dimension, path: at, detail, ...ctx.site };
+}
+
+const addTo = (findings, ctx, severity, dimension, path, detail) =>
+  findings.push(finding(ctx, severity, dimension, path, detail));
+
 /** Value-domain comparison against an exhaustive accepted set. */
 function compareValues(client, accepted, path, ctx) {
   const findings = [];
-  const add = (severity, detail) =>
-    findings.push({ severity, dimension: "VALUE", path: path || "<root>", detail, ...ctx.site });
+  const add = (severity, detail) => findings.push(finding(ctx, severity, "VALUE", path, detail));
 
   if (client.kind === "literal") {
     const rejected = [...client.values].filter((v) => !accepted.has(v));
@@ -288,6 +493,42 @@ function compareValues(client, accepted, path, ctx) {
  * coerces null to "", which printed "accepts only [ACTIVE, ]" — a diagnostic
  * that hides the very value it is talking about.
  */
+/** The legacy kind label for a validator node, used in diagnostics. */
+export function describeValidator(validator) {
+  switch (validator.kind) {
+    case "object":
+    case "array":
+    case "literal":
+    case "union":
+    case "id":
+    case "any":
+      return validator.kind;
+    default:
+      return validator.type ?? "unresolved";
+  }
+}
+
+/** The legacy kind label for a client node. */
+export function describeClient(client) {
+  switch (client.kind) {
+    case "object":
+    case "array":
+      return client.kind;
+    case "opaqueValue":
+      return "any";
+    case "variants":
+      return "union";
+    case "unresolved":
+      return "unresolved";
+    case "literal": {
+      const kinds = new Set([...client.values].map((v) => (v === null ? "null" : typeof v)));
+      return kinds.size === 1 ? [...kinds][0] : "union";
+    }
+    default:
+      return client.type ?? "unresolved";
+  }
+}
+
 export function describe(values) {
   return `[${values.map((v) => (v === null ? "null" : String(v))).join(", ")}]`;
 }

@@ -12,13 +12,57 @@ import { extractClientCalls } from "./clientPaths.mjs";
  *
  * Each case pins a defect that only a whole-repo run exposed.
  */
+type Node = {
+  kind: string;
+  fields?: Map<string, { node: Node; provenance: string }>;
+  element?: Node;
+  keysComplete?: boolean;
+};
 type Call = {
   identifier: string;
+  file?: string;
   line: number;
-  sent: Map<string, { valueKind: string; provenance: string }>;
+  payload: Node | null;
+  skipped?: boolean;
   unknowns: string[];
   casts: string[];
   via?: string;
+};
+
+/**
+ * ⚠️ PATHS ARE A READING OF THE TREE, NOT THE TREE.
+ *
+ * The extractor now emits a structure; these helpers flatten it so the
+ * assertions stay as readable as they were against the old path map. Producing
+ * the path here rather than in the extractor is the point of the redesign — the
+ * comparator never sees these strings.
+ */
+const pathsOf = (node: Node | null | undefined, prefix = ""): string[] => {
+  if (!node) return [];
+  if (node.kind === "object" && node.fields) {
+    return [...node.fields].flatMap(([name, entry]) => {
+      const at = prefix ? `${prefix}.${name}` : name;
+      return [at, ...pathsOf(entry.node, at)];
+    });
+  }
+  if (node.kind === "array") return pathsOf(node.element, `${prefix}[*]`);
+  return [];
+};
+
+/** The field entry a dotted/bracketed path names, or undefined. */
+const entryAt = (node: Node | null | undefined, path: string) => {
+  let cur: Node | undefined = node ?? undefined;
+  let entry: { node: Node; provenance: string } | undefined;
+  for (const part of path.split(".")) {
+    const name = part.replace(/(\[\*\])+$/, "");
+    const arrays = (part.length - name.length) / 3;
+    if (!cur || cur.kind !== "object" || !cur.fields) return undefined;
+    entry = cur.fields.get(name);
+    if (!entry) return undefined;
+    cur = entry.node;
+    for (let i = 0; i < arrays; i += 1) cur = cur?.kind === "array" ? cur.element : undefined;
+  }
+  return entry;
 };
 
 const FIXTURE = "scripts/contractSkew/__fixtures__/clientCases.tsx";
@@ -39,8 +83,8 @@ describe("clientPaths extractor", () => {
     // reports UNKNOWN for the single most important call site in the codebase.
     const [call] = forFn("vehicles:importBulk");
     expect(call).toBeDefined();
-    expect([...call.sent.keys()]).toContain("vehicles[*].rowId");
-    expect([...call.sent.keys()]).toContain("vehicles[*].make");
+    expect(pathsOf(call.payload)).toContain("vehicles[*].rowId");
+    expect(pathsOf(call.payload)).toContain("vehicles[*].make");
     // The cast is reported rather than silently compensated for: `as any` at a
     // Convex boundary disables the compiler's own contract check.
     expect(call.casts.join(" ")).toMatch(/as any/);
@@ -53,7 +97,7 @@ describe("clientPaths extractor", () => {
     const attributed = forFn("orgCustomFields:setValues");
     expect(attributed).toHaveLength(1);
     // The one real call sends orgId/entityId; the React state update sent {a}.
-    const keys = [...attributed[0].sent.keys()].sort();
+    const keys = pathsOf(attributed[0].payload).sort();
     expect(keys).toEqual(["entityId", "orgId"]);
     expect(keys).not.toContain("a");
   });
@@ -62,14 +106,19 @@ describe("clientPaths extractor", () => {
     // useMutation returns something you call later; useQuery sends its args at
     // the hook call and returns data. Conflating them made every
     // `const { results } = usePaginatedQuery(...)` look unresolvable.
-    const [call] = forFn("vehicles:list").filter((c) => c.sent.size > 0);
+    const [call] = forFn("vehicles:list").filter((c) => pathsOf(c.payload).length > 0);
     expect(call).toBeDefined();
-    expect([...call.sent.keys()].sort()).toEqual(["includeSold", "orgId"]);
+    expect(pathsOf(call.payload).sort()).toEqual(["includeSold", "orgId"]);
   });
 
   test("CASE 3b: a skipped query transmits nothing", () => {
-    const skipped = forFn("vehicles:list").filter((c) => c.sent.size === 0);
+    // ⚠️ NOT an unknown, and not an empty payload either. `useQuery(fn, "skip")`
+    // provably never runs, so neither direction of the comparison applies — but
+    // the call site is still counted, because dropping it would be exactly the
+    // silent coverage hole this control exists to detect.
+    const skipped = forFn("vehicles:list").filter((c) => c.skipped);
     expect(skipped.length).toBeGreaterThan(0);
+    expect(skipped[0].payload).toBeNull();
   });
 
   test("CASE 4: an optional parent makes its required child UNPROVEN, not proven", () => {
@@ -79,13 +128,13 @@ describe("clientPaths extractor", () => {
     // BREAKING findings.
     const [call] = forFn("wizardDrafts:saveDraft");
     expect(call).toBeDefined();
-    const parent = call.sent.get("wizardData.sourceLikeVehicle");
-    const child = call.sent.get("wizardData.sourceLikeVehicle.make");
+    const parent = entryAt(call.payload, "wizardData.sourceLikeVehicle");
+    const child = entryAt(call.payload, "wizardData.sourceLikeVehicle.make");
     expect(parent?.provenance).toBe("TYPE_OPTIONAL");
     expect(child?.provenance).toBe("TYPE_OPTIONAL");
     // The genuinely-present sibling stays proven, so the rule does not simply
     // weaken everything.
-    expect(call.sent.get("wizardData.vehicleId")?.provenance).not.toBe("TYPE_OPTIONAL");
+    expect(entryAt(call.payload, "wizardData.vehicleId")?.provenance).not.toBe("TYPE_OPTIONAL");
   });
 
   test("CASE 5: paginated queries are tagged so the comparator can exempt framework arguments", () => {
@@ -94,7 +143,7 @@ describe("clientPaths extractor", () => {
     const [call] = forFn("transactions:list");
     expect(call).toBeDefined();
     expect(call.via).toBe("usePaginatedQuery");
-    expect([...call.sent.keys()]).not.toContain("paginationOpts");
+    expect(pathsOf(call.payload)).not.toContain("paginationOpts");
   });
 
   test("CASE 6: the scan stays inside the declared client files", () => {
@@ -110,7 +159,7 @@ describe("clientPaths extractor", () => {
     const escaped = calls().filter((c) => /serverLike/.test(String((c as { file?: string }).file)));
     expect(escaped).toHaveLength(0);
     // And the field only that module sends must appear nowhere.
-    const everySentPath = calls().flatMap((c) => [...c.sent.keys()]);
+    const everySentPath = calls().flatMap((c) => pathsOf(c.payload));
     expect(everySentPath).not.toContain("serverOnlyField");
   });
 

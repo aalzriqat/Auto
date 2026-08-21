@@ -1,5 +1,11 @@
 import { describe, expect, test } from "vitest";
-import { validatorTree, clientNode, compareNode, SEVERITY } from "./contractTree.mjs";
+import {
+  validatorTree,
+  clientNode,
+  compareNode,
+  mergeClientNodes,
+  SEVERITY,
+} from "./contractTree.mjs";
 
 /**
  * The tree model has to re-establish, from scratch, every case the flat model
@@ -212,5 +218,157 @@ describe("scalars and shapes", () => {
 
   test("a matching scalar is silent", () => {
     expect(run(cObj({ n: clientNode.scalar("number") }), vObj({ n: [vNum] })).findings).toHaveLength(0);
+  });
+});
+
+describe("provenance — an unproven subtree cannot prove a defect", () => {
+  /**
+   * Presence in a TypeScript type is not transmission. The flat model answered
+   * this with a one-level parent lookup on a path string, which could only ever
+   * be right at exactly one depth; here the fact travels down the tree as far
+   * as it is true.
+   */
+  const cField = (node: unknown, provenance: string) => ({ node, provenance });
+  const cObjP = (fields: Record<string, { node: unknown; provenance: string }>, keysComplete = true) =>
+    clientNode.object(new Map(Object.entries(fields)), keysComplete);
+
+  test("an undeclared field that is only TYPE_OPTIONAL is unknown, not breaking", () => {
+    const result = run(cObjP({ ghost: cField(cStr, "TYPE_OPTIONAL") }), vObj({ orgId: [vStr, true] }));
+    expect(breaking(result)).toHaveLength(0);
+    expect(result.findings[0].severity).toBe(SEVERITY.SHAPE_UNKNOWN);
+    expect(result.findings[0].detail).toContain("transmission is unproven");
+  });
+
+  test("the same field, actually written at the call site, IS breaking", () => {
+    const result = run(cObjP({ ghost: cField(cStr, "LITERAL") }), vObj({ orgId: [vStr, true] }));
+    expect(breaking(result)).toHaveLength(1);
+  });
+
+  test("TYPE_REQUIRED and SPREAD also prove transmission", () => {
+    for (const provenance of ["TYPE_REQUIRED", "SPREAD"]) {
+      expect(breaking(run(cObjP({ ghost: cField(cStr, provenance) }), vObj({ orgId: [vStr, true] })))).toHaveLength(1);
+    }
+  });
+
+  test("the downgrade reaches NESTED defects, not just the field itself", () => {
+    // `maybe` may never be assigned, so a value mismatch two levels below it
+    // has not been demonstrated either.
+    const client = cObjP({ maybe: cField(cObj({ n: clientNode.scalar("number") }), "TYPE_OPTIONAL") });
+    const spec = vObj({ maybe: [vObj({ n: [vStr] }), true] });
+    const result = run(client, spec);
+    expect(breaking(result)).toHaveLength(0);
+    expect(paths(result)).toContain("maybe.n");
+  });
+
+  test("a required field missing from an unproven optional parent is not breaking", () => {
+    const client = cObjP({ profile: cField(cObj({}), "TYPE_OPTIONAL") });
+    const result = run(client, vObj({ profile: [vObj({ bio: [vStr] }), true] }));
+    expect(breaking(result)).toHaveLength(0);
+    expect(paths(result)).toContain("profile.bio");
+  });
+});
+
+describe("client variants — every branch the client might send must be accepted", () => {
+  test("a union where ONE branch is rejected is breaking", () => {
+    const client = cObj({
+      v: clientNode.variants([clientNode.scalar("string"), clientNode.scalar("number")]),
+    });
+    expect(breaking(run(client, vObj({ v: [vStr] })))).toHaveLength(1);
+  });
+
+  test("a union where every branch is accepted is silent", () => {
+    const client = cObj({ v: clientNode.variants([cLit("A"), cLit("B")]) });
+    expect(run(client, vObj({ v: [vUnion(vLit("A"), vLit("B"))] })).findings).toHaveLength(0);
+  });
+
+  test("a rejected variant REJECTS the payload, which steers union branch choice", () => {
+    /**
+     * Surfaced by a surviving mutant, then by a SECOND surviving mutant when
+     * the first replacement test was built at the wrong depth: a variants node
+     * is compared against the whole validator before any union branching
+     * happens, so its `compatible` flag is only ever read by a PARENT. Findings
+     * and incompatibility normally travel together; they come apart exactly
+     * here. A union whose branches all fail reports the least noisy branch, but
+     * only once no branch claims to be merely unproven — so a variants node
+     * that wrongly reports itself compatible hijacks the explanation and prints
+     * the noisiest branch instead.
+     */
+    const client = cObj({
+      w: cObj({ p: clientNode.variants([clientNode.scalar("number"), clientNode.scalar("boolean")]) }),
+    });
+    const spec = vObj({
+      w: [
+        vUnion(
+          vObj({ p: [vStr] }), // both variants are wrong here: 2 findings
+          vObj({ p: [vNum] }) // only the boolean variant is wrong: 1 finding
+        ),
+      ],
+    });
+    const result = run(client, spec);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].detail).toContain("boolean");
+  });
+
+  test("identical findings from two variants are reported once", () => {
+    const client = cObj({
+      v: clientNode.variants([cObj({ extra: cStr }), cObj({ extra: cStr })]),
+    });
+    expect(breaking(run(client, vObj({ v: [vObj({})] })))).toHaveLength(1);
+  });
+});
+
+describe("merging two observations of the same node", () => {
+  const merge = mergeClientNodes;
+
+  test("opacity is absorbing: one `any` route makes the value unverified", () => {
+    expect(merge(cStr, clientNode.opaqueValue()).kind).toBe("opaqueValue");
+    expect(merge(clientNode.opaqueValue(), cObj({ a: cStr })).kind).toBe("opaqueValue");
+  });
+
+  test("unresolved yields to anything that was actually observed", () => {
+    expect(merge(clientNode.unresolved(), cStr)).toEqual(cStr);
+    expect(merge(cStr, clientNode.unresolved())).toEqual(cStr);
+  });
+
+  test("objects union their fields and take the STRONGER provenance", () => {
+    const a = clientNode.object(new Map([["x", { node: cStr, provenance: "TYPE_OPTIONAL" }]]), true);
+    const b = clientNode.object(new Map([["x", { node: cStr, provenance: "LITERAL" }]]), true);
+    expect(merge(a, b).fields.get("x").provenance).toBe("LITERAL");
+  });
+
+  test("key completeness is a conjunction — one unenumerable route loses it", () => {
+    const known = cObj({ a: cStr });
+    expect(merge(known, clientNode.opaqueKeys()).keysComplete).toBe(false);
+    expect(merge(known, cObj({ b: cStr })).keysComplete).toBe(true);
+  });
+
+  test("literals accumulate into one enumeration", () => {
+    expect([...merge(cLit("A"), cLit("B")).values].sort()).toEqual(["A", "B"]);
+  });
+
+  test("a literal beside its own scalar widens open and stops being provable", () => {
+    const merged = merge(cLit("A"), cStr);
+    expect(merged.kind).toBe("scalar");
+    // and the widening is what makes the enumeration unverifiable
+    const result = run(cObj({ status: merged }), vObj({ status: [vUnion(vLit("A"), vLit("B"))] }));
+    expect(result.findings.map((f) => f.severity)).toContain(SEVERITY.TYPE_UNKNOWN);
+  });
+
+  test("incompatible shapes are kept as variants rather than collapsed", () => {
+    const merged = merge(cObj({ a: cStr }), cStr);
+    expect(merged.kind).toBe("variants");
+    expect(merged.nodes).toHaveLength(2);
+  });
+
+  test("merging variants does not nest them", () => {
+    const merged = merge(merge(cObj({ a: cStr }), cStr), clientNode.scalar("number"));
+    expect(merged.nodes).toHaveLength(3);
+    expect(merged.nodes.some((n: { kind: string }) => n.kind === "variants")).toBe(false);
+  });
+
+  test("arrays merge element-wise", () => {
+    const merged = merge(clientNode.array(cLit("A")), clientNode.array(cLit("B")));
+    expect(merged.kind).toBe("array");
+    expect([...merged.element.values].sort()).toEqual(["A", "B"]);
   });
 });

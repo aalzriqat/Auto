@@ -32,6 +32,7 @@
  */
 import ts from "typescript";
 import path from "node:path";
+import { clientNode, mergeClientNodes } from "./contractTree.mjs";
 
 /** Hooks and helpers whose first argument is a Convex function reference. */
 const CLIENT_BINDERS = new Set(["useMutation", "useQuery", "useAction", "usePaginatedQuery"]);
@@ -46,8 +47,47 @@ const CLIENT_BINDERS = new Set(["useMutation", "useQuery", "useAction", "usePagi
  * whole-repo baseline were this one category error, not a real limit.
  */
 const INLINE_PAYLOAD_BINDERS = new Set(["useQuery", "usePaginatedQuery"]);
-/** `useQuery(fn, "skip")` does not run, so it transmits nothing. */
+/**
+ * `useQuery(fn, "skip")` does not run, so it transmits nothing.
+ *
+ * ⚠️ THE REAL IDIOM IS A TERNARY, NOT A BARE LITERAL. Every one of the 283
+ * occurrences in this repo is `useQuery(fn, cond ? args : "skip")`, and none is
+ * the bare `useQuery(fn, "skip")` the original check looked for. The flat model
+ * never noticed because merging a union into a path map quietly dropped the
+ * string branch; the tree keeps it, and then correctly refuses a string where
+ * the backend declares an object — 269 fabricated BREAKING findings until the
+ * sentinel is removed where it actually appears.
+ */
 const SKIP_SENTINEL = "skip";
+
+/**
+ * Remove the non-running branch of a skippable query payload.
+ *
+ * Returns `null` when nothing but the sentinel remains. The caller decides what
+ * that means, because two different situations arrive here looking identical
+ * and they are NOT the same:
+ *
+ *   `cond ? undefined : "skip"`  the query RUNS, with no arguments. The
+ *                                `undefined` branch was already dropped by the
+ *                                optional-property rule inside collectPaths —
+ *                                correct for a property, wrong at the payload
+ *                                root, where it means "called with no args".
+ *   `"skip"`                     the query provably never runs.
+ *
+ * ⚠️ Neither may drop the CALL SITE. Losing three sites to this is a silent
+ * coverage hole of exactly the kind this control exists to detect.
+ */
+function stripSkipSentinel(node) {
+  if (node.kind === "literal") {
+    const values = [...node.values].filter((v) => v !== SKIP_SENTINEL);
+    return values.length ? clientNode.literal(new Set(values)) : null;
+  }
+  if (node.kind === "variants") {
+    const kept = node.nodes.map(stripSkipSentinel).filter(Boolean);
+    return kept.length ? clientNode.variants(kept) : null;
+  }
+  return node;
+}
 /** Direct invocation forms: convex.mutation(api.x.y, {...}) / ctx.runMutation(...). */
 const DIRECT_CALLERS = new Set([
   "mutation", "query", "action",
@@ -150,22 +190,33 @@ export function extractClientCalls(rootFiles, tsconfigPath) {
         const id = apiReferenceToIdentifier(node.arguments[0]);
         if (id) {
           const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart());
-          const sent = new Map();
-          const unknowns = [];
-          const casts = [];
-          const payload = node.arguments[1];
+          const acc = { unknowns: [], casts: [] };
+          const payloadExpr = node.arguments[1];
           const isSkip =
-            payload && ts.isStringLiteral(payload) && payload.text === SKIP_SENTINEL;
-          if (payload && !isSkip) {
-            collectFromExpression(checker, payload, "", sent, unknowns, casts, 0, new Set());
-          }
+            payloadExpr && ts.isStringLiteral(payloadExpr) && payloadExpr.text === SKIP_SENTINEL;
+          const collected =
+            payloadExpr && !isSkip
+              ? collectFromExpression(checker, payloadExpr, "", acc, 0, new Set())
+              : null;
+          const stripped = collected ? stripSkipSentinel(collected) : null;
+          // Provably never runs: no transmission, so neither direction of the
+          // comparison applies. That is knowable — NOT an unknown — and the
+          // call site is still counted, because losing it would be a silent
+          // coverage hole.
+          const neverRuns = Boolean(
+            !stripped && payloadExpr && !typeAdmitsUndefined(checker.getTypeAtLocation(payloadExpr))
+          );
+          // Runs with no arguments — knowable too, and it is what lets
+          // Direction 2 notice a backend that started requiring one.
+          const payload = stripped ?? (neverRuns ? null : EMPTY_PAYLOAD);
           calls.push({
+            skipped: neverRuns,
             identifier: id,
             file: path.relative(process.cwd(), sourceFile.fileName).replace(/\\/g, "/"),
             line: line + 1,
-            sent,
-            unknowns,
-            casts,
+            payload,
+            unknowns: acc.unknowns,
+            casts: acc.casts,
             // Which hook produced this call. The comparator needs it because
             // `usePaginatedQuery` supplies `paginationOpts` itself, so demanding
             // it from the caller is a fabricated finding.
@@ -247,21 +298,20 @@ export function extractClientCalls(rootFiles, tsconfigPath) {
 
         if (identifier) {
           const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart());
-          const sent = new Map();
-          const unknowns = [];
-          const casts = [];
-          if (argExpr) {
-            collectFromExpression(checker, argExpr, "", sent, unknowns, casts, 0, new Set());
-          } else {
-            // Called with no payload at all. That is knowable, not unknown.
-          }
+          const acc = { unknowns: [], casts: [] };
+          // Called with no payload at all is knowable, not unknown: an object
+          // with no fields and a COMPLETE key set, which is exactly what lets
+          // Direction 2 notice a backend that started requiring an argument.
+          const payload = argExpr
+            ? collectFromExpression(checker, argExpr, "", acc, 0, new Set())
+            : EMPTY_PAYLOAD;
           calls.push({
             identifier,
             file: path.relative(process.cwd(), sourceFile.fileName).replace(/\\/g, "/"),
             line: line + 1,
-            sent,
-            unknowns,
-            casts,
+            payload,
+            unknowns: acc.unknowns,
+            casts: acc.casts,
           });
         }
       }
@@ -296,10 +346,10 @@ export function extractClientCalls(rootFiles, tsconfigPath) {
  * Convex boundary disables the compiler's own contract checking, so it is worth
  * surfacing as a risk in its own right rather than silently compensating for it.
  */
-function collectFromExpression(checker, expr, prefix, out, unknowns, casts, depth, seen) {
+function collectFromExpression(checker, expr, prefix, acc, depth, seen) {
   if (depth > MAX_DEPTH) {
-    unknowns.push(`${prefix || "<root>"} (max depth)`);
-    return;
+    acc.unknowns.push(`${prefix || "<root>"} (max depth)`);
+    return clientNode.opaqueValue();
   }
 
   let node = expr;
@@ -311,7 +361,7 @@ function collectFromExpression(checker, expr, prefix, out, unknowns, casts, dept
       const toAny =
         node.type &&
         (node.type.kind === ts.SyntaxKind.AnyKeyword || node.type.kind === ts.SyntaxKind.UnknownKeyword);
-      if (toAny) casts.push(`${prefix || "<root>"} (as any)`);
+      if (toAny) acc.casts.push(`${prefix || "<root>"} (as any)`);
       node = node.expression;
       continue;
     }
@@ -319,45 +369,78 @@ function collectFromExpression(checker, expr, prefix, out, unknowns, casts, dept
   }
 
   if (ts.isObjectLiteralExpression(node)) {
-    if (prefix) setKind(out, prefix, "object");
+    const fields = new Map();
+    // The key set of an object LITERAL is knowable by construction. It stops
+    // being knowable the moment a computed key or an unresolvable spread joins
+    // it — and that distinction is the whole basis of the missing-required-
+    // field direction, so it is tracked here rather than guessed later.
+    let keysComplete = true;
+    let result = null;
+
     for (const prop of node.properties) {
       if (ts.isSpreadAssignment(prop)) {
         // `...rest` — resolvable by type; merge whatever it contributes.
         const spreadType = checker.getTypeAtLocation(prop.expression);
-        collectPaths(checker, spreadType, prefix, out, unknowns, depth + 1, seen);
+        const spread = collectPaths(checker, spreadType, prefix, acc, depth + 1, seen);
+        if (spread.kind === "object") result = mergeClientNodes(result, spread);
+        else if (spread.kind !== "unresolved") keysComplete = false;
         continue;
       }
       const name = propertyName(prop);
       if (name === null) {
-        // Computed key: the field name is not statically knowable.
-        unknowns.push(`${prefix ? `${prefix}.` : ""}[computed]`);
+        // Computed key: the field name is not statically knowable, so this
+        // object may carry keys we cannot see.
+        acc.unknowns.push(`${prefix ? `${prefix}.` : ""}[computed]`);
+        keysComplete = false;
         continue;
       }
       const childPath = prefix ? `${prefix}.${name}` : name;
-      record(out, childPath, false, "LITERAL");
       const value = ts.isPropertyAssignment(prop)
         ? prop.initializer
         : ts.isShorthandPropertyAssignment(prop)
           ? prop.name
           : null;
-      if (value) collectFromExpression(checker, value, childPath, out, unknowns, casts, depth + 1, seen);
+      const childNode = value
+        ? collectFromExpression(checker, value, childPath, acc, depth + 1, seen)
+        : clientNode.unresolved();
+      fields.set(name, { node: childNode, provenance: "LITERAL", optional: false });
     }
-    return;
+
+    const literal = clientNode.object(fields, keysComplete);
+    const merged = result ? mergeClientNodes(literal, result) : literal;
+    // An explicit property always beats whatever a spread contributed, so the
+    // literal is merged LAST and its key completeness governs.
+    if (merged.kind === "object") merged.keysComplete = keysComplete && merged.keysComplete;
+    return merged;
   }
 
   if (ts.isArrayLiteralExpression(node)) {
-    if (prefix) setKind(out, prefix, "array");
     const elementPath = `${prefix}[*]`;
-    record(out, elementPath, false, "LITERAL");
-    for (const element of node.elements) {
-      collectFromExpression(checker, element, elementPath, out, unknowns, casts, depth + 1, seen);
+    let element = null;
+    for (const el of node.elements) {
+      element = mergeClientNodes(
+        element,
+        collectFromExpression(checker, el, elementPath, acc, depth + 1, seen)
+      );
     }
-    return;
+    return clientNode.array(element ?? clientNode.unresolved());
   }
 
   // Not a literal — fall back to the type of the (unwrapped) expression.
   const type = checker.getTypeAtLocation(node);
-  collectPaths(checker, type, prefix, out, unknowns, depth, seen, out.get(prefix)?.provenance ?? "LITERAL");
+  return collectPaths(checker, type, prefix, acc, depth, seen, "LITERAL");
+}
+
+/** A call that transmits no arguments at all: no keys, and we know it. */
+const EMPTY_PAYLOAD = clientNode.object(new Map(), true);
+
+/** Can this expression evaluate to `undefined` — i.e. "call it with no args"? */
+function typeAdmitsUndefined(type) {
+  if (type.getFlags() & (ts.TypeFlags.Undefined | ts.TypeFlags.Void)) return true;
+  if (type.isUnion?.()) {
+    return type.types.some((t) => t.getFlags() & (ts.TypeFlags.Undefined | ts.TypeFlags.Void));
+  }
+  return false;
 }
 
 function propertyName(prop) {
@@ -428,25 +511,24 @@ function apiReferenceToIdentifier(node) {
 }
 
 /**
- * Walk a TS type into dotted/bracketed paths.
+ * Walk a TS type into a client NODE.
  *
  * `seen` guards recursive types; without it a self-referential payload type
  * (a tree node, a threaded comment) would recurse until the stack died and the
- * whole run would report nothing at all.
+ * whole run would report nothing at all. A cut recursion returns an object
+ * whose KEY SET is unknown rather than an empty one — we stopped looking, which
+ * is not the same as having looked and found nothing.
+ *
+ * `path` is carried for diagnostics only (the `unknowns` list names where it
+ * gave up). Nothing here consults it to decide anything.
  */
-function collectPaths(checker, type, prefix, out, unknowns, depth, seen, inherited = "LITERAL") {
+function collectPaths(checker, type, path, acc, depth, seen, inherited = "LITERAL") {
   if (depth > MAX_DEPTH) {
-    if (prefix) unknowns.push(`${prefix} (max depth)`);
-    return;
+    if (path) acc.unknowns.push(`${path} (max depth)`);
+    return clientNode.opaqueKeys();
   }
 
   const flags = type.getFlags();
-
-  // Stamp this path's own value kind. The extractor stays FACTUAL — it reports
-  // what the type is, and the comparator decides what that means. Keeping the
-  // policy out of here is what lets one honest fact ("this value is `any`")
-  // produce two different verdicts depending on what the backend declared.
-  if (prefix) setKind(out, prefix, kindOfType(checker, type, flags), literalsOfType(type));
 
   // any / unknown: the value is not statically knowable here.
   //
@@ -456,50 +538,71 @@ function collectPaths(checker, type, prefix, out, unknowns, depth, seen, inherit
   // `make: 123` against `v.string()` is rejected by Convex just as surely as
   // an unknown field. An `any` at a path the backend declares as an object or
   // array is worse: extra keys can hide inside it. The comparator draws that
-  // line; recording it as plain "unknown" here would throw away the
-  // information needed to draw it at all.
+  // line; collapsing it here would throw away what is needed to draw it.
   if (flags & ts.TypeFlags.Any || flags & ts.TypeFlags.Unknown) {
-    unknowns.push(prefix || "<root>");
-    return;
+    acc.unknowns.push(path || "<root>");
+    return clientNode.opaqueValue();
   }
 
-  // Unions: a property present in only some branches is optional overall.
+  // An enumerable value domain — a literal, or a union of them. Provable
+  // against a validator's accepted set, which a widened scalar is not.
+  const literals = literalsOfType(type);
+  if (literals) return clientNode.literal(literals);
+
+  // Unions: the client may send ANY branch, so all of them are kept.
+  //
+  // ⚠️ `undefined` and `null` branches are skipped, exactly as before the
+  // redesign. Skipping `null` is unsound in the value dimension — `"A" | null`
+  // against `v.literal("A")` is refused by Convex — but it is PRE-EXISTING
+  // behaviour, and changing detection semantics inside a representation
+  // redesign is how the earlier fix-induced defects happened. Recorded as its
+  // own finding instead.
   if (type.isUnion()) {
+    let merged = null;
     for (const branch of type.types) {
       if (branch.getFlags() & (ts.TypeFlags.Undefined | ts.TypeFlags.Null)) continue;
-      collectPaths(checker, branch, prefix, out, unknowns, depth + 1, seen, inherited);
+      merged = mergeClientNodes(
+        merged,
+        collectPaths(checker, branch, path, acc, depth + 1, seen, inherited)
+      );
     }
-    return;
+    return merged ?? clientNode.unresolved();
   }
 
-  // Arrays / tuples -> `[*]` and descend into the element type.
+  // Arrays / tuples -> descend into the element TYPE. The element is a node in
+  // its own right, so everything true of an object is true of an element.
   const elementType = getElementType(checker, type);
   if (elementType) {
-    const elementPath = `${prefix}[*]`;
-    const elementProvenance = out.get(prefix)?.provenance ?? inherited;
-    record(out, elementPath, false, elementProvenance);
-    collectPaths(checker, elementType, elementPath, out, unknowns, depth + 1, seen, elementProvenance);
-    return;
+    return clientNode.array(
+      collectPaths(checker, elementType, `${path}[*]`, acc, depth + 1, seen, inherited)
+    );
   }
 
-  // Primitives and Convex Ids are leaves; they were recorded by the parent.
-  if (!(flags & ts.TypeFlags.Object)) return;
+  // Primitives are leaves.
+  if (!(flags & ts.TypeFlags.Object)) {
+    const kind = kindOfType(checker, type, flags);
+    if (kind === "null") return clientNode.literal(new Set([null]));
+    return kind === "unresolved" ? clientNode.unresolved() : clientNode.scalar(kind);
+  }
 
   const typeId = type.id ?? checker.typeToString(type);
-  const seenKey = `${prefix}::${typeId}`;
-  if (seen.has(seenKey)) return;
+  const seenKey = `${path}::${typeId}`;
+  if (seen.has(seenKey)) return clientNode.opaqueKeys();
   seen.add(seenKey);
 
-  // An index signature accepts arbitrary keys: dynamic, not empty.
+  // An index signature accepts arbitrary keys: dynamic, not empty. The key set
+  // is therefore NOT complete, which is what stops the comparator from
+  // demanding a required field of an object that may already carry it under a
+  // name we cannot see.
   const stringIndex = checker.getIndexInfoOfType?.(type, ts.IndexKind.String);
-  if (stringIndex) {
-    unknowns.push(`${prefix ? prefix : "<root>"}[*key*]`);
-  }
+  const keysComplete = !stringIndex;
+  if (stringIndex) acc.unknowns.push(`${path ? path : "<root>"}[*key*]`);
 
+  const fields = new Map();
   for (const prop of checker.getPropertiesOfType(type)) {
     const name = prop.getName();
     if (name.startsWith("__")) continue;
-    const childPath = prefix ? `${prefix}.${name}` : name;
+    const childPath = path ? `${path}.${name}` : name;
     const optional = Boolean(prop.getFlags() & ts.SymbolFlags.Optional);
     // Provenance is inherited, exactly as optionality is on the validator side.
     // A REQUIRED field inside an OPTIONAL parent is not transmitted when the
@@ -508,17 +611,34 @@ function collectPaths(checker, type, prefix, out, unknowns, depth, seen, inherit
     // `sourceLikeVehicle` itself is only a maybe — eight fabricated BREAKING
     // findings in the third whole-repo run.
     const ownProvenance = optional ? "TYPE_OPTIONAL" : "TYPE_REQUIRED";
-    const childProvenance = inherited === "TYPE_OPTIONAL" ? "TYPE_OPTIONAL" : ownProvenance;
-    record(out, childPath, optional, childProvenance);
+    const provenance = inherited === "TYPE_OPTIONAL" ? "TYPE_OPTIONAL" : ownProvenance;
 
+    // ⚠️ A MAPPED-TYPE PROPERTY HAS NO DECLARATION.
+    //
+    // `Partial<Record<FieldKey, string>>` synthesises its members, so
+    // `valueDeclaration` is undefined for every one of them and the
+    // declaration-based overload cannot be used. The flat model recorded those
+    // as kind "unresolved", which its comparator treated as compatible — an
+    // unreadable value passing as verified. Asking the checker for the symbol
+    // type directly resolves them properly; only if THAT fails is the value
+    // genuinely opaque, and then it says so.
     const decl = prop.valueDeclaration ?? prop.declarations?.[0];
-    if (!decl) {
-      unknowns.push(childPath);
+    const propType =
+      checker.getTypeOfSymbol?.(prop) ??
+      (decl ? checker.getTypeOfSymbolAtLocation(prop, decl) : undefined);
+    if (!propType) {
+      acc.unknowns.push(childPath);
+      fields.set(name, { node: clientNode.opaqueValue(), provenance, optional });
       continue;
     }
-    const propType = checker.getTypeOfSymbolAtLocation(prop, decl);
-    collectPaths(checker, propType, childPath, out, unknowns, depth + 1, seen, childProvenance);
+    fields.set(name, {
+      node: collectPaths(checker, propType, childPath, acc, depth + 1, seen, provenance),
+      provenance,
+      optional,
+    });
   }
+
+  return clientNode.object(fields, keysComplete);
 }
 
 function getElementType(checker, type) {
@@ -531,65 +651,6 @@ function getElementType(checker, type) {
     return args?.[0] ?? null;
   }
   return null;
-}
-
-/**
- * ⚠️ PROVENANCE: HOW DO WE KNOW THIS FIELD IS ACTUALLY SENT?
- *
- * Presence in a shared TypeScript type is not transmission. The first whole-repo
- * run reported `wizardData.vehicleItems` as BREAKING because the type permits
- * it — while the call site never sets it, so Convex never sees it. An OPTIONAL
- * property nobody assigns is not a defect; claiming otherwise is the detector
- * inventing an outage.
- *
- *   LITERAL        an explicit property in the object literal at the call site
- *   SPREAD         contributed by a resolvable spread
- *   TYPE_REQUIRED  a non-optional property of a resolved type: always present
- *   TYPE_OPTIONAL  an optional property: MAY be sent, unproven
- *
- * Only the first three prove transmission and can justify BREAKING.
- * TYPE_OPTIONAL is SHAPE_UNKNOWN — real uncertainty, honestly labelled.
- *
- * The strongest provenance seen for a path wins: one call site that definitely
- * sends a field is enough to prove it is transmitted.
- */
-const PROVENANCE_RANK = { TYPE_OPTIONAL: 0, TYPE_REQUIRED: 1, SPREAD: 2, LITERAL: 3 };
-
-function record(out, pathKey, optional, provenance = "TYPE_OPTIONAL") {
-  const existing = out.get(pathKey);
-  if (!existing) {
-    out.set(pathKey, { optional, valueKind: "unresolved", provenance });
-    return;
-  }
-  existing.optional = existing.optional && optional;
-  if (PROVENANCE_RANK[provenance] > PROVENANCE_RANK[existing.provenance ?? "TYPE_OPTIONAL"]) {
-    existing.provenance = provenance;
-  }
-}
-
-/**
- * Attach the value kind to an already-recorded path.
- *
- * `any` wins over everything: if ANY route to this path is opaque, the path is
- * opaque. Two call sites sending the same field, one typed and one `any`, means
- * the field is not verified — taking the typed one would report a confidence
- * the code does not support.
- */
-function setKind(out, pathKey, kind, literals = null) {
-  const existing = out.get(pathKey);
-  if (!existing) {
-    out.set(pathKey, { optional: false, valueKind: kind, literals });
-    return;
-  }
-  if (existing.valueKind === "any" || kind === "any") existing.valueKind = "any";
-  else if (existing.valueKind === "unresolved") existing.valueKind = kind;
-  else if (existing.valueKind !== kind) existing.valueKind = "union";
-
-  // Merging call sites: the set stays a whitelist only while EVERY contributor
-  // is itself enumerable. One widened route makes the whole path unprovable.
-  if (existing.literals === undefined) existing.literals = literals;
-  else if (existing.literals && literals) for (const v of literals) existing.literals.add(v);
-  else existing.literals = null;
 }
 
 /**
