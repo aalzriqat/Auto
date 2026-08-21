@@ -158,6 +158,18 @@ jobs:
     - name: TypeScript type check
       run: pnpm typecheck
 
+    # The root tsconfig includes only **/*.ts and **/*.tsx and leaves checkJs
+    # off, so `pnpm typecheck` above type-checks NONE of the contract-skew
+    # detector — its .mjs modules are pulled in as imports and given syntax
+    # checking only. Demonstrated, not assumed: a JSDoc violation injected into
+    # contractTree.mjs produced ZERO diagnostics from the root project and one
+    # from this one. That gap is not cosmetic. The defect that forced the
+    # detector's comparator to be redesigned was a semantic dimension added to
+    # one consumer of a shared record and not the other, which a checked type
+    # refuses to compile.
+    - name: Contract-skew detector type check
+      run: pnpm typecheck:contract-skew
+
   # `pnpm build` ran nowhere in this workflow until now. It happens inside
   # playwright.yml (via playwright.config.ts's webServer) and twice more in
   # security.yml's zap-baseline/nuclei jobs — but none of those is a required

@@ -1,7 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { compareContracts, SEVERITY, blockersForRelease, pathsOverlap } from "./compare.mjs";
-import { declaredPaths } from "./declaredPaths.mjs";
-import { clientNode, mergeClientNodes } from "./contractTree.mjs";
+import { clientNode, mergeClientNodes, validatorTree } from "./contractTree.mjs";
 
 /**
  * ⚠️ FIXTURE SHIM, NOT A MODEL.
@@ -19,8 +18,14 @@ type Info = {
   literals?: Set<unknown> | null;
   optional?: boolean;
 };
+type TreeNode = {
+  kind: string;
+  fields?: Map<string, { node: TreeNode; provenance: string; optional?: boolean }>;
+  element?: TreeNode;
+  keysComplete?: boolean;
+};
 
-const leafFor = (info: Info): any => {
+const leafFor = (info: Info): TreeNode => {
   if (info.literals) return clientNode.literal(info.literals as Set<unknown>);
   switch (info.valueKind) {
     case "any":
@@ -51,33 +56,33 @@ const parseSegs = (path: string): Seg[] => {
   return out;
 };
 
-const containerFor = (node: any, next: Seg): any => {
+const containerFor = (node: TreeNode | undefined, next: Seg): TreeNode => {
   if (next.k === "e") return node?.kind === "array" ? node : clientNode.array(clientNode.unresolved());
   return node?.kind === "object" ? node : clientNode.object(new Map(), true);
 };
 
 /** Build the client payload tree a set of `path -> info` fixtures describes. */
-const fromFlat = (map: Map<string, Info>): any => {
-  const root = clientNode.object(new Map(), true);
+const fromFlat = (map: Map<string, Info>): TreeNode => {
+  const root: TreeNode = clientNode.object(new Map(), true);
   for (const [path, raw] of map) {
     const info: Info = raw ?? {};
     const segs = parseSegs(path);
-    let cur: any = root;
+    let cur: TreeNode = root;
     for (let i = 0; i < segs.length; i += 1) {
       const seg = segs[i];
       const last = i === segs.length - 1;
       if (seg.k === "f") {
-        if (cur.kind !== "object") break;
-        let entry = cur.fields.get(seg.n);
+        const fields = cur.fields;
+        if (cur.kind !== "object" || !fields) break;
+        let entry = fields.get(seg.n);
         if (!entry) {
           entry = { node: clientNode.unresolved(), provenance: "LITERAL", optional: false };
-          cur.fields.set(seg.n, entry);
+          fields.set(seg.n, entry);
         }
         if (last) {
           entry.node = mergeClientNodes(entry.node, leafFor(info));
           if (info.provenance) entry.provenance = info.provenance;
         } else {
-          if (info.provenance && !cur.fields.get(seg.n)!.touched) entry.provenance = entry.provenance;
           entry.node = containerFor(entry.node, segs[i + 1]);
           cur = entry.node;
         }
@@ -316,18 +321,31 @@ describe("SCRUM-178 contract skew detector", () => {
   test("the scope boundary is stated in the result, not left to the reader", () => {
     const result = compareContracts([], spec("a.js:b", obj({})));
     expect(result.scope.notCovered).toMatch(/HTTP action/);
+    // ⚠️ A SCOPE CLAIM IS A CLAIM. The report used to tell readers that
+    // discriminated unions were unchecked, which was true of the flat model and
+    // is false of the tree. Leaving it there would understate coverage as
+    // confidently as the old model overstated it.
+    expect(result.scope.notCovered).not.toMatch(/DISCRIMINATED/);
   });
 
-  test("declaredPaths flattens two levels of array nesting", () => {
-    const { paths } = declaredPaths(
+  test("the validator tree nests arrays inside arrays without flattening them", () => {
+    // The path `vehicles[*].valuations[*].companyName` used to be a KEY. It is
+    // now something the tree can be asked to produce, and the difference is the
+    // point: the structure is the authority and the string is a reading of it.
+    const tree = validatorTree(
       obj({
         vehicles: field(
           arr(obj({ valuations: field(arr(obj({ companyName: field(str, true) }))) }))
         ),
       })
     );
-    expect([...paths.keys()]).toContain("vehicles[*].valuations[*].companyName");
-    expect(paths.get("vehicles[*].valuations[*].companyName")?.optional).toBe(true);
+    const vehicles = tree.fields.get("vehicles")!.node;
+    const valuations = vehicles.element.fields.get("valuations")!.node;
+    const companyName = valuations.element.fields.get("companyName")!;
+    expect(vehicles.kind).toBe("array");
+    expect(valuations.kind).toBe("array");
+    expect(companyName.optional).toBe(true);
+    expect(companyName.node.kind).toBe("scalar");
   });
 
   // ── Literal unions: assignability is not verification ────────────────────
@@ -617,10 +635,10 @@ describe("an array element is checked exactly as hard as a top-level field", () 
     payload: fromFlat(sent),
   });
 
-  const topLevel = (value: unknown) =>
+  const topLevel = (value: Info) =>
     compareContracts([callWith(new Map([["status", value]]))], specWith(UNION, "status"), []);
 
-  const inArray = (value: unknown) =>
+  const inArray = (value: Info) =>
     compareContracts(
       [
         callWith(
@@ -634,11 +652,11 @@ describe("an array element is checked exactly as hard as a top-level field", () 
       []
     );
 
-  test("the literal set survives into the array element path", () => {
-    const { paths } = declaredPaths(specWith({ type: "array", value: UNION }, "statuses").functions[0].args);
-    const element = paths.get("statuses[*]");
-    expect(element?.literals).not.toBeNull();
-    expect([...(element?.literals ?? [])].sort()).toEqual(["ACTIVE", "SOLD"]);
+  test("the literal set survives into the array ELEMENT node", () => {
+    const tree = validatorTree(specWith({ type: "array", value: UNION }, "statuses").functions[0].args);
+    const element = tree.fields.get("statuses")!.node.element;
+    expect(element.kind).toBe("union");
+    expect(element.branches.map((b: { value: unknown }) => b.value).sort()).toEqual(["ACTIVE", "SOLD"]);
   });
 
   test("a value outside the enumeration is breaking inside an array too", () => {
@@ -658,6 +676,37 @@ describe("an array element is checked exactly as hard as a top-level field", () 
     const inside = { valueKind: "literal", literals: new Set(["ACTIVE"]), provenance: "LITERAL" };
     expect(inArray(inside).breaking).toHaveLength(0);
     expect(inArray(inside).verdict).toBe(topLevel(inside).verdict);
+  });
+});
+
+describe("a query that provably never runs", () => {
+  /**
+   * `useQuery(fn, "skip")` transmits nothing, so neither direction of the
+   * argument comparison applies. It is still a call SITE, and the function it
+   * names must still exist — the day the condition flips, a reference to a
+   * function the backend no longer exposes is a real break.
+   */
+  const skipped = {
+    identifier: "a:b",
+    file: "x.tsx",
+    line: 1,
+    casts: [],
+    unknowns: [],
+    payload: null,
+    skipped: true,
+  };
+
+  test("its arguments are not demanded, so a required field is not a finding", () => {
+    const live = spec("a.js:b", obj({ orgId: field(str), required: field(str) }));
+    const result = compareContracts([skipped], live, []);
+    expect(result.findings).toHaveLength(0);
+    expect(result.verdict).toBe("PASS");
+  });
+
+  test("but a function the live backend does not expose is still BREAKING", () => {
+    const result = compareContracts([{ ...skipped, identifier: "ghost:missing" }], spec("a.js:b", obj({})), []);
+    expect(result.breaking).toHaveLength(1);
+    expect(result.breaking[0].path).toBe("<function>");
   });
 });
 
@@ -800,10 +849,17 @@ describe("a nullable enum keeps its enumeration", () => {
   ];
 
   test("the null branch is a value, not a reason to give up the whitelist", () => {
-    const { paths } = declaredPaths(spec.functions[0].args);
-    const literals = paths.get("status")?.literals;
-    expect(literals).not.toBeNull();
-    expect([...(literals ?? [])].map(String).sort()).toEqual(["ACTIVE", "INACTIVE", "null"]);
+    // `v.null()` accepts exactly ONE value, so it belongs in the enumeration
+    // rather than being a reason to discard it — which is what made a nullable
+    // enum MORE permissive than the same enum without null.
+    const tree = validatorTree(spec.functions[0].args);
+    const branches = tree.fields.get("status")!.node.branches;
+    expect(branches.every((b: { kind: string }) => b.kind === "literal")).toBe(true);
+    expect(branches.map((b: { value: unknown }) => String(b.value)).sort()).toEqual([
+      "ACTIVE",
+      "INACTIVE",
+      "null",
+    ]);
   });
 
   test("an opaque string is unproven, not a clean PASS", () => {

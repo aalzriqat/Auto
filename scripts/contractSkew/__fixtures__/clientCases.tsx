@@ -71,6 +71,50 @@ export function CaseSkippedQuery() {
 }
 
 /**
+ * CASE 3c — the idiom that actually occurs. Every one of the 283 skippable
+ * queries in this repo is written as a ternary, and NONE as the bare literal
+ * above. The payload type is therefore `{...} | "skip"`, and the sentinel has
+ * to be removed from the union — the flat map dropped the string branch by
+ * accident, and keeping it without removing it deliberately produced 269
+ * fabricated BREAKING findings in one run.
+ */
+export function CaseConditionallySkippedQuery(ready: boolean) {
+  useQuery(api.vehicles.list, ready ? { orgId: "o", includeSold: false } : "skip");
+}
+
+/**
+ * CASE 3d — `undefined` on the running branch. This query DOES run, with no
+ * arguments at all. Dropping it as "never runs" cost three real call sites.
+ */
+export function CaseSkippableNoArgQuery(ready: boolean) {
+  useQuery(api.organizations.listMine, ready ? undefined : "skip");
+}
+
+/**
+ * CASE 3e — a MAPPED TYPE has no declaration for its members.
+ * `Partial<Record<K, V>>` synthesises every property, so `valueDeclaration` is
+ * undefined for all of them and the declaration-based type lookup fails. The
+ * flat model recorded those as "unresolved", which its comparator treated as
+ * compatible: an unreadable value passing as verified.
+ */
+type Overrides = Partial<Record<"email" | "phone", string>>;
+export function CaseMappedTypePayload(overrides: Overrides) {
+  const merge = useMutation(api.customers.mergeCustomers);
+  void merge({ orgId: "o", fieldOverrides: overrides });
+}
+
+/**
+ * CASE 3f — an INDEX SIGNATURE means the key set is not enumerable.
+ * `Record<string, string>` may already carry a field under a name we cannot
+ * see, so a required field missing from OUR reading of it is absence of
+ * evidence, not evidence of absence, and must never be demanded.
+ */
+export function CaseIndexSignaturePayload(bag: Record<string, string>) {
+  const save = useMutation(api.wizardDrafts.saveDraft);
+  void save({ orgId: "o", wizardData: bag });
+}
+
+/**
  * CASE 4 — an optional parent makes its required child unproven.
  * `sourceLikeVehicle` is optional and unset here, so `sourceLikeVehicle.make`
  * is never transmitted even though it is required WITHIN that object.

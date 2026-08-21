@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { readFileSync } from "node:fs";
 import { extractClientCalls } from "./clientPaths.mjs";
 
 /**
@@ -6,7 +7,7 @@ import { extractClientCalls } from "./clientPaths.mjs";
  *
  * ⚠️ These exist because `clientPaths.mjs` had NO unit tests while the rest of
  * the detector had twenty. A syntax error in it survived a fully green suite —
- * the tests imported `compare.mjs` and `declaredPaths.mjs` and never loaded the
+ * the tests imported `compare.mjs` and `specIndex.mjs` and never loaded the
  * file doing the hardest work. Coverage that stops at the easy modules is the
  * same false assurance this whole ticket is about.
  *
@@ -67,6 +68,10 @@ const entryAt = (node: Node | null | undefined, path: string) => {
 
 const FIXTURE = "scripts/contractSkew/__fixtures__/clientCases.tsx";
 
+/** 1-based line of the first fixture line containing `needle`. */
+const lineOf = (needle: string) =>
+  readFileSync(FIXTURE, "utf8").split(/\r?\n/).findIndex((l) => l.includes(needle)) + 1;
+
 let cached: Call[] | null = null;
 function calls(): Call[] {
   if (!cached) {
@@ -121,12 +126,69 @@ describe("clientPaths extractor", () => {
     expect(skipped[0].payload).toBeNull();
   });
 
+  test("CASE 3c: the SENTINEL is removed from a ternary payload, the args are kept", () => {
+    // ⚠️ The idiom that actually occurs — 283 times, against zero occurrences
+    // of the bare literal. The payload type is `{...} | "skip"`, so without
+    // removing the sentinel the client "sends a string" to every skippable
+    // query: 269 fabricated BREAKING findings in one whole-repo run.
+    const [call] = forFn("vehicles:list").filter((c) => c.line === lineOf("ready ? { orgId"));
+    expect(call).toBeDefined();
+    expect(call.skipped).toBeFalsy();
+    expect(call.payload?.kind).toBe("object");
+    expect(pathsOf(call.payload).sort()).toEqual(["includeSold", "orgId"]);
+  });
+
+  test("CASE 3d: `cond ? undefined : \"skip\"` RUNS, with no arguments", () => {
+    // Dropping this as "never runs" cost three real call sites. It transmits an
+    // empty payload, which is knowable — and which is exactly what lets the
+    // other direction notice a backend that started requiring an argument.
+    const [call] = forFn("organizations:listMine");
+    expect(call).toBeDefined();
+    expect(call.skipped).toBeFalsy();
+    expect(call.payload?.kind).toBe("object");
+    expect(call.payload?.keysComplete).toBe(true);
+    expect(pathsOf(call.payload)).toEqual([]);
+  });
+
+  test("CASE 3e: a MAPPED TYPE's members resolve, rather than reading as opaque", () => {
+    // `Partial<Record<K, V>>` has no valueDeclaration for any member, so the
+    // declaration-based lookup returns nothing. Recording that as "unresolved"
+    // let seven real values pass as compatible without ever being read.
+    const [call] = forFn("customers:mergeCustomers");
+    expect(call).toBeDefined();
+    const overrides = entryAt(call.payload, "fieldOverrides");
+    expect(overrides?.node.kind).toBe("object");
+    expect(pathsOf(call.payload).sort()).toEqual([
+      "fieldOverrides",
+      "fieldOverrides.email",
+      "fieldOverrides.phone",
+      "orgId",
+    ]);
+    expect(entryAt(call.payload, "fieldOverrides.email")?.node.kind).toBe("scalar");
+  });
+
+  test("CASE 3f: an INDEX SIGNATURE costs key completeness, so nothing is demanded of it", () => {
+    // `keysComplete` is the whole basis of the missing-required-field
+    // direction. An object that accepts arbitrary keys may already carry the
+    // field under a name we cannot see, so it must not be demanded — and the
+    // fact has to live ON the node, because that is the only place both
+    // directions of the comparison can read it.
+    const wizardDataNodes = forFn("wizardDrafts:saveDraft").map(
+      (c) => entryAt(c.payload, "wizardData")?.node
+    );
+    // One call sends a resolved literal; the other sends a Record<string, T>.
+    expect(wizardDataNodes.map((n) => n?.keysComplete).sort()).toEqual([false, true]);
+  });
+
   test("CASE 4: an optional parent makes its required child UNPROVEN, not proven", () => {
     // `sourceLikeVehicle` is optional and unset, so `sourceLikeVehicle.make` is
     // never transmitted even though it is required within that object. Without
     // inheritance the child read as TYPE_REQUIRED and produced eight fabricated
     // BREAKING findings.
-    const [call] = forFn("wizardDrafts:saveDraft");
+    // Two fixtures call this mutation; take the one whose payload was resolved.
+    const call = forFn("wizardDrafts:saveDraft").find(
+      (c) => entryAt(c.payload, "wizardData")?.node.keysComplete
+    )!;
     expect(call).toBeDefined();
     const parent = entryAt(call.payload, "wizardData.sourceLikeVehicle");
     const child = entryAt(call.payload, "wizardData.sourceLikeVehicle.make");

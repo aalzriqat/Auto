@@ -27,7 +27,7 @@
  * argument validator in the function spec (they are keyed by path+method), so
  * webhook request-body contracts are NOT covered by this control.
  */
-import { indexSpec, normalizeIdentifier } from "./declaredPaths.mjs";
+import { indexSpec, normalizeIdentifier } from "./specIndex.mjs";
 import { validatorTree, compareNode } from "./contractTree.mjs";
 
 /**
@@ -53,14 +53,6 @@ import { validatorTree, compareNode } from "./contractTree.mjs";
  *   UNKNOWN at vehicles[*].valuations[*]      does NOT block vehicles[*].rowId
  *     (siblings — neither contains the other)
  */
-/** `profile.bio` -> `profile`; `vehicles[*].rowId` -> `vehicles[*]`; a root field -> empty. */
-function parentPathOf(path) {
-  const dot = path.lastIndexOf(".");
-  const bracket = path.lastIndexOf("[*]");
-  if (bracket !== -1 && bracket > dot && bracket + 3 === path.length) return path.slice(0, bracket);
-  return dot === -1 ? "" : path.slice(0, dot);
-}
-
 export function pathsOverlap(a, b) {
   // ⚠️ `<root>` is not a path, it is "the whole payload is unresolvable". It
   // therefore overlaps EVERY path — and it must, because it is the most
@@ -105,25 +97,6 @@ export const SEVERITY = {
   SHAPE_UNKNOWN: "SHAPE_UNKNOWN",
   TYPE_UNKNOWN: "TYPE_UNKNOWN",
 };
-
-/** Convex validator kind -> the coarse client kinds that satisfy it. */
-const COMPATIBLE = {
-  string: new Set(["string", "union", "unresolved"]),
-  number: new Set(["number", "union", "unresolved"]),
-  float64: new Set(["number", "union", "unresolved"]),
-  int64: new Set(["number", "bigint", "union", "unresolved"]),
-  boolean: new Set(["boolean", "union", "unresolved"]),
-  id: new Set(["string", "union", "unresolved"]),
-  bytes: new Set(["object", "union", "unresolved"]),
-  null: new Set(["null", "union", "unresolved"]),
-  literal: new Set(["string", "number", "boolean", "union", "unresolved"]),
-  union: new Set(["string", "number", "boolean", "object", "array", "union", "null", "unresolved"]),
-  object: new Set(["object", "union", "unresolved"]),
-  array: new Set(["array", "union", "unresolved"]),
-};
-
-/** Kinds that carry nested keys — an opaque value here can hide a field. */
-const NESTED_KINDS = new Set(["object", "array"]);
 
 /**
  * @param {Array} clientCalls  from extractClientCalls()
@@ -255,7 +228,9 @@ export function compareContracts(clientCalls, spec, extraUnresolved = []) {
     scope: {
       covered: "Convex function argument validators (queries, mutations, actions)",
       notCovered:
-        "DISCRIMINATED OBJECT UNIONS — branches are flattened into one path map, so a payload combining fields from different branches (`{type:\"CASH\", cardNumber:\"...\"}` against `v.union(v.object({type:v.literal(\"CARD\"),cardNumber:...}), v.object({type:v.literal(\"CASH\")}))`) is checked per-path and reads as compatible although Convex rejects it. One such union exists in the live spec today. Also: HTTP action request bodies (no argument validator in the function spec), and DEFERRED Convex-to-Convex calls — `ctx.scheduler.runAfter`/`runAt` persist a function reference and arguments to be validated at EXECUTION time, so a deploy landing between enqueue and execution can have an already-queued call rejected. Synchronous `ctx.runMutation`/`runQuery`/`runAction` are safe (same transaction, same bundle) and are excluded deliberately; the scheduler forms are not, and are simply out of scope",
+        "HTTP action request bodies (they carry no argument validator in the function spec, being keyed by path+method). Also DEFERRED Convex-to-Convex calls — `ctx.scheduler.runAfter`/`runAt` persist a function reference and arguments to be validated at EXECUTION time, so a deploy landing between enqueue and execution can have an already-queued call rejected. Synchronous `ctx.runMutation`/`runQuery`/`runAction` are safe (same transaction, same bundle) and are excluded deliberately; the scheduler forms are not, and are simply out of scope. Finally, a client value the TYPE SYSTEM cannot narrow (an `any`, an index signature, a value crossing a cast) is reported as an UNKNOWN rather than checked — that is coverage the control does not have, stated rather than hidden",
+      previouslyNotCovered:
+        "DISCRIMINATED OBJECT UNIONS were out of scope while the comparator flattened a validator into one path map: a payload combining fields from mutually exclusive branches (`{type:\"CASH\", cardNumber:\"...\"}` against `v.union(v.object({type:v.literal(\"CARD\"),cardNumber:...}), v.object({type:v.literal(\"CASH\")}))`) was checked per-path and read as compatible although Convex rejects it. They ARE covered now: a union is satisfied by ONE branch, and the client is compared against each branch in turn"
     },
   };
 }

@@ -99,9 +99,24 @@ const DIRECT_CALLERS = new Set([
 const MAX_DEPTH = 12;
 
 /**
+ * ⚠️ THIS ANNOTATION WAS WRONG FOR AS LONG AS NOBODY CHECKED IT. It still
+ * described a `sent: Map<...>` that no longer exists, and because `checkJs` was
+ * off the compiler inferred THAT shape for every consumer — reporting
+ * `unresolvedBinders` and `casts` as properties that do not exist the moment
+ * checking was switched on. A comment that drifts is a comment; an annotation
+ * that drifts is a lie the toolchain repeats.
+ *
  * @param {string[]} rootFiles  entry files to type-check
  * @param {string} tsconfigPath
- * @returns {{ calls: Array<{identifier:string, file:string, line:number, sent:Map<string,{optional:boolean}>, unknowns:string[]}>, diagnosticsCount:number }}
+ * @returns {{
+ *   calls: Array<{
+ *     identifier: string, file: string, line: number,
+ *     payload: import("./contractTree.mjs").ClientNode | null,
+ *     skipped?: boolean, unknowns: string[], casts: string[], via?: string
+ *   }>,
+ *   unresolvedBinders: Array<{identifier: string, file: string, line: number, cause: string, reason: string}>,
+ *   diagnosticsCount: number
+ * }}
  */
 export function extractClientCalls(rootFiles, tsconfigPath) {
   const configFile = ts.readConfigFile(tsconfigPath, ts.sys.readFile);

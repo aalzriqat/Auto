@@ -59,11 +59,13 @@ const result = compareContracts(calls, spec, unresolvedBinders);
 
 // ── Classify every RESOLVED call site by how it was resolved, so the
 //    "resolved" number is not a black box either.
+/** @type {{DIRECT: any[], AS_ANY_STRIPPED: any[]}} */
 const resolvedByCause = { DIRECT: [], AS_ANY_STRIPPED: [] };
 for (const call of calls) {
   (call.casts?.length ? resolvedByCause.AS_ANY_STRIPPED : resolvedByCause.DIRECT).push(call);
 }
 
+/** @type {Record<string, any[]>} */
 const unresolvedByCause = {};
 for (const binder of unresolvedBinders) {
   (unresolvedByCause[binder.cause] ??= []).push(binder);

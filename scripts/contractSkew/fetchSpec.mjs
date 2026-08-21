@@ -225,5 +225,10 @@ function finish(spec, rung, expectedDeployment) {
       );
     }
   }
-  return { ok: true, spec, url, rung };
+  return /** @type {{ok: true, spec: object, url: string, rung: string}} */ ({
+    ok: true,
+    spec,
+    url,
+    rung,
+  });
 }

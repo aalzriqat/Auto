@@ -15,7 +15,8 @@ import {
  */
 
 const ctx = { site: { identifier: "w:save", file: "x.tsx", line: 1 } };
-const run = (client: unknown, validatorSpec: unknown) =>
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const run = (client: any, validatorSpec: unknown) =>
   compareNode(client, validatorTree(validatorSpec), "", ctx);
 
 // ── validator spec builders (the shape Convex actually renders) ──────────────

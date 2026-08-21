@@ -14,7 +14,8 @@
  * would be a second implementation of someone else's semantics, free to drift
  * from the one that actually runs.
  */
-import { declaredPaths, indexSpec, normalizeIdentifier } from "./declaredPaths.mjs";
+import { indexSpec, normalizeIdentifier } from "./specIndex.mjs";
+import { validatorTree } from "./contractTree.mjs";
 
 /**
  * Explicit ordering. Every value sorted here is a string, so the default sort
@@ -24,23 +25,87 @@ import { declaredPaths, indexSpec, normalizeIdentifier } from "./declaredPaths.m
  */
 const byText = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
-/** Stable, comparable description of one declared path. */
-function signature(entry) {
-  if (!entry) return null;
-  // ⚠️ Type-tagged. `.map(String)` alone rendered `v.literal(1)` and
-  // `v.literal("1")` identically, so a backend changing one to the other
-  // produced NO detected change — the release gate saw nothing to block on and
-  // production mode filed the resulting break as a standing defect rather than
-  // the revision skew it actually is.
-  const literals = entry.literals
-    ? [...entry.literals].map((v) => `${typeof v}:${String(v)}`).sort(byText).join("|")
-    : "*";
-  return `${entry.kind}:${entry.optional ? "opt" : "req"}:${literals}`;
+/** Type-tagged so `v.literal(1)` and `v.literal("1")` are not the same value. */
+const tagged = (v) => `${v === null ? "null" : typeof v}:${String(v)}`;
+
+/**
+ * Stable, comparable description of ONE NODE.
+ *
+ * ⚠️ THIS IS WHERE THE FLAT MODEL FAILED LAST, and the failure is the reason
+ * for the redesign rather than another patch. `declaredPaths` grew a
+ * `requiredWithinParent` dimension to fix a comparison defect; the signature
+ * here was never taught about it, so `changedContractPaths` returned `[]`
+ * across a required→optional flip. A real backend change that had not been
+ * deployed was then classified as a STANDING DEFECT — "deploying will not fix
+ * this" — when the truth was revision skew and deploying was the entire fix.
+ * Two consumers of one flat record, and only one of them was updated. Twice.
+ *
+ * A node signature cannot have that gap: requiredness lives on the FIELD, and
+ * the field is where the parent records it, so it is part of this node's own
+ * signature by construction. Inherited optionality is a fact about an ANCESTOR
+ * path, which carries its own entry.
+ */
+function signatureOf(node, optional) {
+  const head = `${node.kind}:${optional ? "opt" : "req"}`;
+  switch (node.kind) {
+    case "literal":
+      return `${head}:${tagged(node.value)}`;
+    case "scalar":
+      return `${head}:${node.type}`;
+    case "id":
+      return `${head}:${node.table ?? ""}`;
+    default:
+      return head;
+  }
+}
+
+/**
+ * Every declared path of one function, with the signature of the node there.
+ *
+ * ⚠️ A UNION RECORDS ITS BRANCHES AT ITS OWN PATH, so the branch set is part of
+ * that path's signature without the node needing to summarise itself. A branch
+ * removed, added or retyped changes the merged string. (Mutation testing proved
+ * an explicit summary redundant: neutering it changed no observable answer,
+ * which makes it complexity with no reader.)
+ *
+ * ⚠️ UNION BRANCHES ARE MERGED HERE, DELIBERATELY, and that is sound for this
+ * question only. Merging branches is wrong when deciding whether a payload is
+ * ACCEPTED — it is what let `{type:"CASH", cardNumber}` satisfy two mutually
+ * exclusive branches — but this function asks whether a declaration CHANGED,
+ * and a change in any branch changes the merged signature at that path. The
+ * paths must stay plain because they are intersected with client finding paths.
+ */
+function collect(node, path, out, optional) {
+  const existing = out.get(path);
+  const sig = signatureOf(node, optional);
+  out.set(path, existing ? [...new Set([...existing.split("&"), sig])].sort(byText).join("&") : sig);
+
+  if (node.kind === "object") {
+    for (const [name, field] of node.fields) {
+      collect(field.node, path ? `${path}.${name}` : name, out, field.optional);
+    }
+  } else if (node.kind === "array") {
+    collect(node.element, `${path}[*]`, out, false);
+  } else if (node.kind === "union") {
+    for (const branch of node.branches) collect(branch, path, out, optional);
+  }
 }
 
 function pathsOf(fn) {
-  if (!fn || !fn.args) return { paths: new Map(), rootDynamic: true };
-  return declaredPaths(fn.args);
+  const out = new Map();
+  if (!fn || !fn.args) return out;
+  const root = validatorTree(fn.args);
+  // ⚠️ The ARGUMENT OBJECT ITSELF gets no entry. Convex always renders it as an
+  // object, so its own signature can never change, and emitting it would give
+  // every altered function a spurious `""` change on top of the real ones —
+  // while stealing the one meaning `""` has here: a no-argument function that
+  // appeared or vanished, recorded below so it cannot slip out of the report.
+  if (root.kind === "object") {
+    for (const [name, field] of root.fields) collect(field.node, name, out, field.optional);
+  } else {
+    collect(root, "", out, false);
+  }
+  return out;
 }
 
 /**
@@ -76,13 +141,13 @@ export function changedContractPaths(deployedSpec, candidateSpec) {
     // `pathsOverlap` would have to special-case.
     const kind = !before ? "FUNCTION_ADDED" : !after ? "FUNCTION_REMOVED" : null;
 
-    const beforePaths = pathsOf(before).paths;
-    const afterPaths = pathsOf(after).paths;
+    const beforePaths = pathsOf(before);
+    const afterPaths = pathsOf(after);
 
     const allPaths = new Set([...beforePaths.keys(), ...afterPaths.keys()]);
     for (const path of [...allPaths].sort(byText)) {
-      const a = signature(beforePaths.get(path));
-      const b = signature(afterPaths.get(path));
+      const a = beforePaths.get(path) ?? null;
+      const b = afterPaths.get(path) ?? null;
       if (a === b) continue;
       changes.push({
         identifier,

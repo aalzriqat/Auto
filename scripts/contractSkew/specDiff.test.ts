@@ -119,6 +119,56 @@ describe("changedContractPaths", () => {
     expect(changes.every((c) => c.change === "FUNCTION_ADDED")).toBe(true);
   });
 
+  test("a required->optional flip INSIDE an optional parent is a change", () => {
+    /**
+     * ⚠️ THE DEFECT THAT ENDED THE FLAT MODEL. `declaredPaths` grew a
+     * `requiredWithinParent` dimension to fix a comparison defect, and this
+     * module's signature was never taught about it — so this exact diff
+     * returned `[]`. With no changed path, `classifyBreaking` had no evidence
+     * of a backend change and filed a real, undeployed revision skew as a
+     * STANDING DEFECT: "deploying will not fix this", when deploying was the
+     * whole fix.
+     *
+     * Two consumers of one flat record and only one updated, twice over. A node
+     * signature cannot carry that gap: requiredness lives ON the field.
+     */
+    const nested = (bioOptional: boolean) =>
+      fn("w.js:save", {
+        profile: {
+          optional: true,
+          fieldType: {
+            type: "object",
+            value: { bio: { fieldType: { type: "string" }, optional: bioOptional } },
+          },
+        },
+      });
+    const changes = changedContractPaths(spec(nested(false)), spec(nested(true)));
+    expect(changes.map((c) => c.path)).toEqual(["profile.bio"]);
+    expect(changes[0].change).toBe("PATH_REDECLARED");
+    expect(changes[0].deployed).toContain("req");
+    expect(changes[0].candidate).toContain("opt");
+  });
+
+  test("removing a branch from a union IS a redeclaration", () => {
+    // The accepted value set is the contract. A backend narrowing
+    // `v.union(v.literal("A"), v.literal("B"))` to just `"A"` refuses payloads
+    // it used to accept, and a signature that only counted the node's KIND
+    // would report no change at all — leaving the resulting break to be filed
+    // as a standing defect rather than the skew it is.
+    const withBranches = (values: string[]) =>
+      fn("w.js:save", {
+        status: {
+          optional: false,
+          fieldType: { type: "union", value: values.map((v) => ({ type: "literal", value: v })) },
+        },
+      });
+    const changes = changedContractPaths(spec(withBranches(["A", "B"])), spec(withBranches(["A"])));
+    expect(changes.map((c) => c.path)).toEqual(["status"]);
+    expect(changes[0].change).toBe("PATH_REDECLARED");
+    expect(changes[0].deployed).toContain("B");
+    expect(changes[0].candidate).not.toContain("B");
+  });
+
   test("a no-argument function still records that it appeared", () => {
     // Otherwise it changes zero paths and vanishes from the report entirely.
     const before = spec();

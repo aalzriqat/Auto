@@ -28,6 +28,35 @@
  * authority is the node.
  */
 
+/**
+ * ⚠️ THESE TYPES ARE CHECKED, not decorative. `scripts/contractSkew/tsconfig.json`
+ * turns on `checkJs` for exactly this reason: the defect that ended the flat
+ * model was a semantic dimension added to one consumer of a shared record and
+ * not the other, and a checked shape refuses to compile in that situation.
+ *
+ * @typedef {{kind: "any"}
+ *         | {kind: "literal", value: unknown}
+ *         | {kind: "scalar", type: string}
+ *         | {kind: "id", table?: string}
+ *         | {kind: "object", fields: Map<string, {node: ValidatorNode, optional: boolean}>}
+ *         | {kind: "array", element: ValidatorNode}
+ *         | {kind: "union", branches: ValidatorNode[]}} ValidatorNode
+ *
+ * @typedef {{kind: "unresolved"}
+ *         | {kind: "opaqueValue"}
+ *         | {kind: "literal", values: Set<unknown>}
+ *         | {kind: "scalar", type: string}
+ *         | {kind: "object", fields: Map<string, ClientField>, keysComplete: boolean}
+ *         | {kind: "array", element: ClientNode}
+ *         | {kind: "variants", nodes: ClientNode[]}} ClientNode
+ *
+ * @typedef {{node: ClientNode, provenance?: string, optional?: boolean}} ClientField
+ *
+ * @typedef {{site: {identifier: string, file: string, line: number},
+ *            frameworkSupplied?: (path: string) => boolean,
+ *            unproven?: boolean, withinOptional?: boolean}} CompareCtx
+ */
+
 // ── Validator side ───────────────────────────────────────────────────────────
 
 /** Convex validator kinds that mean "anything goes". */
@@ -215,13 +244,23 @@ const SCALAR_OK = {
 const joinPath = (path, segment) => (path ? `${path}${segment}` : segment.replace(/^\./, ""));
 
 /**
- * @typedef {{ severity: string, dimension: string, path: string, detail: string,
- *             identifier?: string, file?: string, line?: number }} Finding
+ * ⚠️ `identifier`, `file` and `line` are REQUIRED. A finding nobody can locate
+ * is not usable, and the optional form let a `string|undefined` identifier flow
+ * all the way into the classifier's `BreakingFinding` before anything noticed —
+ * the first thing switching `checkJs` on caught that the tests did not.
+ *
+ * @typedef {{identifier: string, file: string, line: number}} Site
+ * @typedef {{severity: string, dimension: string, path: string, detail: string,
+ *            provenance?: string} & Site} Finding
  */
 
 /**
  * Compare one client node against one validator node.
  *
+ * @param {import("./contractTree.mjs").ClientNode} client
+ * @param {import("./contractTree.mjs").ValidatorNode} validator
+ * @param {string} path  diagnostics only — never consulted to decide anything
+ * @param {CompareCtx} ctx
  * @returns {{findings: Finding[], compatible: boolean}} `compatible` is used by
  *   union-branch selection: it means "nothing here PROVES a mismatch", which is
  *   deliberately weaker than "proven correct".
@@ -449,6 +488,10 @@ function compareUnion(client, union, path, ctx) {
  */
 const unprovenCtx = (ctx) => (ctx.unproven ? ctx : { ...ctx, unproven: true });
 
+/**
+ * @param {CompareCtx} ctx
+ * @returns {Finding}
+ */
 function finding(ctx, severity, dimension, path, detail) {
   const at = path || "<root>";
   if (severity === SEVERITY.BREAKING && ctx.unproven) {
@@ -462,9 +505,6 @@ function finding(ctx, severity, dimension, path, detail) {
   }
   return { severity, dimension, path: at, detail, ...ctx.site };
 }
-
-const addTo = (findings, ctx, severity, dimension, path, detail) =>
-  findings.push(finding(ctx, severity, dimension, path, detail));
 
 /** Value-domain comparison against an exhaustive accepted set. */
 function compareValues(client, accepted, path, ctx) {

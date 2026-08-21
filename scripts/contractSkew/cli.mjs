@@ -38,12 +38,24 @@ import { classifyBreaking, alertsFor, releaseBlockingFindings } from "./classify
 
 const EXIT = { OK: 0, FAIL: 1, USAGE: 2, UNAVAILABLE: 3, BLOCKED: 4, STANDING_DEFECT: 5, COVERAGE_GAP: 6 };
 
+/**
+ * @param {string} name
+ * @param {string|boolean|undefined} [fallback]
+ * @returns {string|boolean|undefined}  `true` for a bare flag, the value for
+ *   `--name value`, the fallback when absent.
+ */
 function arg(name, fallback = undefined) {
   const i = process.argv.indexOf(`--${name}`);
   if (i === -1) return fallback;
   const next = process.argv[i + 1];
   return next && !next.startsWith("--") ? next : true;
 }
+
+/** The string form of an argument, or undefined for a bare flag / absence. */
+const strArg = (name) => {
+  const value = arg(name);
+  return typeof value === "string" ? value : undefined;
+};
 
 const mode = arg("mode", "production");
 if (mode !== "production" && mode !== "release") {
@@ -55,11 +67,8 @@ if (mode !== "production" && mode !== "release") {
 let deployed;
 try {
   deployed = fetchDeployedSpec({
-    specFile: typeof arg("spec") === "string" ? arg("spec") : undefined,
-    expectedDeployment:
-      typeof arg("expect-deployment") === "string"
-        ? arg("expect-deployment")
-        : process.env.CONVEX_PROD_DEPLOYMENT || undefined,
+    specFile: strArg("spec"),
+    expectedDeployment: strArg("expect-deployment") ?? process.env.CONVEX_PROD_DEPLOYMENT ?? undefined,
     allowWorkstation: arg("allow-workstation") === true,
   });
 } catch (error) {
@@ -67,7 +76,12 @@ try {
   // been proven about skew — the control was pointed at the wrong backend, and
   // reporting that as a skew verdict would attach a confident answer to a
   // question that was never asked of production.
-  deployed = { ok: false, unavailable: true, reason: String(error?.message ?? error), tried: [] };
+  deployed = {
+    ok: false,
+    unavailable: true,
+    reason: String(/** @type {Error} */ (error)?.message ?? error),
+    tried: [],
+  };
 }
 
 if (!deployed.ok) {
@@ -140,9 +154,15 @@ const currentSpecPath =
     : mode === "release" && typeof arg("candidate") === "string"
       ? arg("candidate")
       : undefined;
-const deployedSha = typeof arg("deployed-sha") === "string" ? arg("deployed-sha") : undefined;
+const deployedSha = strArg("deployed-sha");
 
-/** Whole-tree, because a shared validator can move a contract without its own module moving. */
+/**
+ * Whole-tree, because a shared validator can move a contract without its own
+ * module moving.
+ *
+ * @param {string} sha
+ * @returns {boolean|undefined} undefined when the question could not be asked.
+ */
 function backendUnchangedSince(sha) {
   try {
     execFileSync("git", ["diff", "--quiet", sha, "HEAD", "--", "convex"], { stdio: "ignore" });
@@ -151,7 +171,7 @@ function backendUnchangedSince(sha) {
     // `git diff --quiet` exits 1 for "there are differences" and >1 for a real
     // failure — an unknown commit, or a shallow clone that does not contain it.
     // Those are different answers and must not collapse into "changed".
-    return error?.status === 1 ? false : undefined;
+    return /** @type {{status?: number}} */ (error)?.status === 1 ? false : undefined;
   }
 }
 
@@ -162,7 +182,7 @@ if (currentSpecPath) {
     readSpecFile(currentSpecPath)
   );
 } else if (deployedSha) {
-  backendEvidence.backendIdenticalToDeployed = backendUnchangedSince(deployedSha);
+  backendEvidence.backendIdenticalToDeployed = backendUnchangedSince(String(deployedSha));
 }
 
 const classification = classifyBreaking(result.breaking, backendEvidence);
