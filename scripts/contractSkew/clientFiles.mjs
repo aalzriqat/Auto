@@ -112,11 +112,6 @@ export function listSurfaceFiles(root, surface) {
   return out;
 }
 
-/** Every scannable client file across every surface. */
-export function listClientFiles(root) {
-  return CLIENT_SURFACES.flatMap((surface) => listSurfaceFiles(root, surface));
-}
-
 const normalize = (p) => path.resolve(p).split(path.sep).join("/").toLowerCase();
 
 /**

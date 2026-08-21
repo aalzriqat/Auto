@@ -45,11 +45,3 @@ export function indexSpec(spec) {
 export function normalizeIdentifier(identifier) {
   return identifier.replace(/\.js:/, ":").replace(/\.ts:/, ":");
 }
-
-/** `api.vehicles.importBulk` -> `vehicles:importBulk` */
-export function apiPathToIdentifier(segments) {
-  if (segments.length < 2) return null;
-  const fn = segments[segments.length - 1];
-  const modulePath = segments.slice(0, -1).join("/");
-  return `${modulePath}:${fn}`;
-}

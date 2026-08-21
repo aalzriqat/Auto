@@ -4,6 +4,7 @@ import {
   clientNode,
   compareNode,
   mergeClientNodes,
+  describeClient,
   SEVERITY,
 } from "./contractTree.mjs";
 
@@ -311,6 +312,79 @@ describe("an EMPTY array literal is knowledge, not ignorance", () => {
     expect(merged.kind).toBe("array");
     expect(merged.empty).toBeFalsy();
     expect(breaking(run(cObj({ vehicles: merged }), spec)).length).toBeGreaterThan(0);
+  });
+});
+
+describe("every validator kind refuses the wrong client shape", () => {
+  /**
+   * One arm per validator kind. These are the branches that decide whether a
+   * payload is refused at all, and most of them had no test: the suite grew
+   * around the interesting cases (unions, arrays, provenance) and left the
+   * plain "wrong kind" answers to be assumed.
+   */
+  test("an array validator refuses a non-array client", () => {
+    const result = run(cObj({ v: cStr }), vObj({ v: [vArr(vStr)] }));
+    expect(breaking(result)).toHaveLength(1);
+    expect(result.findings[0].detail).toContain("declares array");
+  });
+
+  test("an object validator refuses a scalar client", () => {
+    const result = run(cObj({ v: cStr }), vObj({ v: [vObj({ a: [vStr] })] }));
+    expect(breaking(result)).toHaveLength(1);
+    expect(result.findings[0].detail).toContain("declares object");
+  });
+
+  test("an id validator refuses an object or an array", () => {
+    const id = { type: "id", tableName: "vehicles" };
+    expect(breaking(run(cObj({ v: cObj({ a: cStr }) }), vObj({ v: [id] })))).toHaveLength(1);
+    expect(breaking(run(cObj({ v: clientNode.array(cStr) }), vObj({ v: [id] })))).toHaveLength(1);
+  });
+
+  test("an id validator accepts a string, which is what an id is", () => {
+    expect(run(cObj({ v: cStr }), vObj({ v: [{ type: "id", tableName: "vehicles" }] })).findings).toHaveLength(0);
+  });
+
+  test("a scalar validator refuses an object", () => {
+    const result = run(cObj({ v: cObj({ a: cStr }) }), vObj({ v: [vNum] }));
+    expect(breaking(result)).toHaveLength(1);
+    expect(result.findings[0].detail).toContain("declares number");
+  });
+
+  test("a scalar validator refuses a literal of the wrong primitive", () => {
+    const result = run(cObj({ v: cLit(42) }), vObj({ v: [vStr] }));
+    expect(breaking(result)).toHaveLength(1);
+    expect(result.findings[0].detail).toContain("42");
+  });
+
+  test("an array whose element node is missing is UNKNOWN, never clean", () => {
+    // Defensive: a non-empty array with no element is a programming error, and
+    // the safe answer is "we do not know", which denies PASS.
+    const broken = { kind: "array", element: null } as never;
+    const result = run(cObj({ v: broken }), vObj({ v: [vArr(vStr)] }));
+    expect(breaking(result)).toHaveLength(0);
+    expect(result.findings.map((f) => f.severity)).toContain(SEVERITY.SHAPE_UNKNOWN);
+  });
+});
+
+describe("findings name the client shape they refused", () => {
+  /**
+   * The label is what a responder reads at 3am. Each client kind has to render
+   * as something they can act on rather than as an internal node name.
+   */
+  const cases: Array<[string, unknown, string]> = [
+    ["an opaque value", clientNode.opaqueValue(), "any"],
+    ["client variants", clientNode.variants([cObj({ a: cStr }), clientNode.array(cStr)]), "union"],
+    ["a mixed literal set", cLit("A", 1), "union"],
+    ["a single-kind literal set", cLit("A", "B"), "string"],
+  ];
+  for (const [label, node, expected] of cases) {
+    test(`${label} renders as "${expected}"`, () => {
+      expect(describeClient(node)).toBe(expected);
+    });
+  }
+
+  test("a scalar renders as its own type", () => {
+    expect(describeClient(clientNode.scalar("boolean"))).toBe("boolean");
   });
 });
 

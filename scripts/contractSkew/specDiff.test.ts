@@ -223,6 +223,48 @@ describe("changedContractPaths", () => {
     expect(changes.some((c) => c.path === "payload" || c.path === "payload.y")).toBe(true);
   });
 
+  test("the digest describes every node kind, not just objects", () => {
+    /**
+     * The union digest is what makes a branch move visible, and it is only as
+     * good as its coverage of the node kinds it can meet. Each of these is a
+     * distinct arm: change what is inside a branch and the signature must move.
+     */
+    const branchWith = (inner: unknown) =>
+      fn("w.js:save", {
+        payload: {
+          optional: false,
+          fieldType: { type: "union", value: [{ type: "object", value: { v: { fieldType: inner, optional: false } } }, { type: "null" }] },
+        },
+      });
+
+    const kinds: Array<[string, unknown, unknown]> = [
+      ["array element", { type: "array", value: { type: "string" } }, { type: "array", value: { type: "number" } }],
+      ["literal value", { type: "literal", value: "A" }, { type: "literal", value: "B" }],
+      ["scalar type", { type: "string" }, { type: "number" }],
+      ["id table", { type: "id", tableName: "vehicles" }, { type: "id", tableName: "customers" }],
+      ["a dynamic field becoming concrete", { type: "any" }, { type: "string" }],
+    ];
+
+    for (const [label, before, after] of kinds) {
+      const changes = changedContractPaths(spec(branchWith(before)), spec(branchWith(after)));
+      expect(changes.length, `${label} produced no change`).toBeGreaterThan(0);
+    }
+  });
+
+  test("a literal type change inside a union is not hidden by the merge", () => {
+    // `v.literal(1)` and `v.literal("1")` are different contracts; the digest is
+    // type-tagged so the two cannot render identically.
+    const withLiteral = (value: unknown) =>
+      fn("w.js:save", {
+        status: {
+          optional: false,
+          fieldType: { type: "union", value: [{ type: "literal", value }, { type: "null" }] },
+        },
+      });
+    const changes = changedContractPaths(spec(withLiteral(1)), spec(withLiteral("1")));
+    expect(changes.length).toBeGreaterThan(0);
+  });
+
   test("a no-argument function still records that it appeared", () => {
     // Otherwise it changes zero paths and vanishes from the report entirely.
     const before = spec();

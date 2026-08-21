@@ -175,6 +175,65 @@ export function CaseBrandedIdPayload(id: BrandedId) {
 }
 
 /**
+ * CASE 5a — the DIRECT invocation form, `convex.mutation(api.x.y, {...})`.
+ * Server components and plain modules use this instead of a hook, and it is the
+ * only form where the function reference and the payload are both arguments.
+ */
+declare const convex: { mutation: (fn: unknown, args: unknown) => Promise<unknown> };
+export function CaseDirectInvocation() {
+  void convex.mutation(api.vehicles.update, { orgId: "o", status: "SOLD" });
+}
+
+/** CASE 5b — a SPREAD contributes fields that are not written at the call site. */
+export function CaseSpreadPayload(rest: { notes: string; mileage: number }) {
+  const update = useMutation(api.vehicles.update);
+  void update({ orgId: "o", ...rest });
+}
+
+/**
+ * CASE 5c — a COMPUTED KEY makes the key set unknowable. The object may already
+ * carry a field under a name we cannot read, so nothing may be demanded of it.
+ */
+export function CaseComputedKey(key: string) {
+  const update = useMutation(api.vehicles.update);
+  void update({ orgId: "o", [key]: "whatever" });
+}
+
+/** CASE 5d — a POPULATED array literal, the ordinary counterpart to CASE 3i. */
+export function CasePopulatedArrayLiteral() {
+  const importBulk = useMutation(api.vehicles.importBulk);
+  void importBulk({ orgId: "o", vehicles: [{ vin: "V1", make: "M" }] });
+}
+
+/**
+ * CASE 5e — binders that cannot be followed. Each is a COVERAGE GAP the run
+ * must report with a cause, never silently skip: a destructured binding, a hook
+ * result returned straight out of a wrapper, and a reference that is not a
+ * literal `api.*` path.
+ */
+export function CaseDestructuredBinder() {
+  // A binding pattern rather than a simple name: the hook result cannot be
+  // followed to a call site, so its payload is never examined.
+  const { length } = useMutation(api.vehicles.update);
+  void length;
+}
+export function CaseWrapperReturn() {
+  return useMutation(api.vehicles.update);
+}
+export function CaseDynamicIdentity(pick: () => unknown) {
+  // The function reference is not a literal `api.*` path, so which backend
+  // function this even targets is unknowable.
+  void useMutation(pick());
+}
+
+/** CASE 5f — an `any` payload value: knowable as unknowable. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- the `any` IS the case under test
+export function CaseAnyValue(blob: any) {
+  const update = useMutation(api.vehicles.update);
+  void update({ orgId: "o", notes: blob });
+}
+
+/**
  * CASE 4 — an optional parent makes its required child unproven.
  * `sourceLikeVehicle` is optional and unset here, so `sourceLikeVehicle.make`
  * is never transmitted even though it is required WITHIN that object.

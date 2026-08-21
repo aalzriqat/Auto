@@ -291,6 +291,53 @@ describe("clientPaths extractor", () => {
     expect(everySentPath).not.toContain("serverOnlyField");
   });
 
+  test("CASE 5a: the DIRECT invocation form is resolved like a hook call", () => {
+    const call = forFn("vehicles:update").find((c) => c.line === lineOf("convex.mutation(api.vehicles.update"));
+    expect(call).toBeDefined();
+    expect(pathsOf(call!.payload).sort()).toEqual(["orgId", "status"]);
+  });
+
+  test("CASE 5b: a SPREAD contributes its fields", () => {
+    const call = forFn("vehicles:update").find((c) => c.line === lineOf("...rest }"));
+    expect(call).toBeDefined();
+    const paths = pathsOf(call!.payload).sort();
+    expect(paths).toContain("notes");
+    expect(paths).toContain("mileage");
+    expect(paths).toContain("orgId");
+  });
+
+  test("CASE 5c: a COMPUTED KEY costs key completeness and is recorded", () => {
+    const call = forFn("vehicles:update").find((c) => c.line === lineOf("[key]: \"whatever\""));
+    expect(call).toBeDefined();
+    expect(call!.payload?.keysComplete).toBe(false);
+    expect(call!.unknowns.join(" ")).toContain("[computed]");
+  });
+
+  test("CASE 5d: a POPULATED array literal keeps its element fields", () => {
+    const call = forFn("vehicles:importBulk").find((c) => c.line === lineOf("[{ vin: \"V1\""));
+    expect(call).toBeDefined();
+    const paths = pathsOf(call!.payload);
+    expect(paths).toContain("vehicles[*].vin");
+    expect(paths).toContain("vehicles[*].make");
+  });
+
+  test("CASE 5e: an unfollowable binder is a reported COVERAGE GAP, with a cause", () => {
+    // Never silently skipped: a binder we cannot follow is this control's own
+    // failure mode one level up, so each one denies PASS and says why.
+    const binders = extractClientCalls([FIXTURE], "tsconfig.json").unresolvedBinders;
+    const causes = new Set(binders.map((b: { cause: string }) => b.cause));
+    expect(binders.length).toBeGreaterThan(0);
+    expect(causes.has("DESTRUCTURED_BINDING") || causes.has("WRAPPER_RETURN")).toBe(true);
+    expect(causes.has("DYNAMIC_IDENTITY")).toBe(true);
+  });
+
+  test("CASE 5f: an `any` value is opaque, and recorded as an unknown", () => {
+    const call = forFn("vehicles:update").find((c) => c.line === lineOf("notes: blob"));
+    expect(call).toBeDefined();
+    expect(entryAt(call!.payload, "notes")?.node.kind).toBe("opaqueValue");
+    expect(call!.unknowns).toContain("notes");
+  });
+
   test("the fixture file loads at all — the module is syntactically valid", () => {
     // Blunt on purpose. A syntax error in clientPaths.mjs once survived a fully
     // green suite because nothing imported it.
