@@ -59,8 +59,15 @@
 
 // ── Validator side ───────────────────────────────────────────────────────────
 
-/** Convex validator kinds that mean "anything goes". */
-const DYNAMIC = new Set(["any", "unknown", "bytes", "record"]);
+/**
+ * Convex validator kinds that mean "anything goes".
+ *
+ * ⚠️ `bytes` IS NOT ONE OF THEM, and listing it here was a false PASS.
+ * `v.bytes()` accepts an ArrayBuffer, not arbitrary values — but mapping it to
+ * `any` ended the comparison before anything was checked, which also made the
+ * `SCALAR_OK.bytes` entry below unreachable dead code that read as coverage.
+ */
+const DYNAMIC = new Set(["any", "unknown", "record"]);
 
 /**
  * Convex's rendered spec is already a tree; this only normalizes it.
@@ -247,9 +254,16 @@ const SCALAR_OK = {
   string: new Set(["string"]),
   number: new Set(["number"]),
   float64: new Set(["number"]),
-  int64: new Set(["number", "bigint"]),
+  // ⚠️ `v.int64()` ACCEPTS ONLY bigint. Convex models a 64-bit integer as a
+  // JavaScript BigInt, and passing a `number` is refused at runtime — `number`
+  // and `bigint` are distinct primitives. Accepting `number` here reported a
+  // payload as compatible that the backend rejects: a false PASS, which is the
+  // one verdict this control must never produce.
+  int64: new Set(["bigint"]),
   boolean: new Set(["boolean"]),
-  bytes: new Set(["string"]),
+  // `v.bytes()` accepts an ArrayBuffer. The extractor classifies that as an
+  // object, so a `string` here is a real mismatch rather than a near-miss.
+  bytes: new Set(["object"]),
 };
 
 const joinPath = (path, segment) => (path ? `${path}${segment}` : segment.replace(/^\./, ""));

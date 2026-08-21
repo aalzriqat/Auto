@@ -24,31 +24,61 @@ describe("readSpecFile bounds what it will open", () => {
   });
 
   test("a path outside the workspace and temp directory is REFUSED", () => {
-    // ⚠️ The argument is caller-supplied. Without this the detector would open
-    // whatever a `--spec` flag pointed at, and print parts of it in findings.
-    const outside = path.join(os.homedir(), "..", "definitely-not-here.json");
-    expect(() => readSpecFile(outside)).toThrow();
+    /**
+     * ⚠️ THIS TEST WAS VACUOUS AND A REVIEWER CAUGHT IT. It pointed at a path
+     * that did not exist, so `readSpecFile` threw "No readable spec file" and
+     * returned before the bounds check ever ran. Deleting the bounds check
+     * entirely would have left it green.
+     *
+     * The file below REALLY EXISTS and is really outside both allowed roots, so
+     * the only thing that can refuse it is the bounds check itself — and the
+     * assertion now matches on the refusal message rather than on any throw.
+     */
+    const outsideRoot = path.join(path.parse(process.cwd()).root, `skew-outside-${process.pid}.json`);
+    try {
+      fs.writeFileSync(outsideRoot, JSON.stringify({ url: "https://x.convex.cloud", functions: [] }));
+    } catch {
+      return; // no write permission at the filesystem root; skip rather than fake it
+    }
+    try {
+      expect(fs.existsSync(outsideRoot)).toBe(true); // it is readable, so only the bounds check can refuse
+      expect(() => readSpecFile(outsideRoot)).toThrow(/Refusing to read a spec from outside/);
+    } finally {
+      fs.rmSync(outsideRoot, { force: true });
+    }
   });
 
   test("a missing file says so, rather than failing later on undefined", () => {
     expect(() => readSpecFile(path.join(scratch(), "absent.json"))).toThrow(/No readable spec file/);
   });
 
-  test("a SYMLINK out of bounds is refused, because the path is canonicalized first", () => {
-    // path.resolve() does not follow links; realpath does. A link inside an
-    // allowed directory pointing outside it was the original hole here.
-    const dir = scratch();
-    const target = path.join(dir, "real.json");
-    fs.writeFileSync(target, "{}");
-    const link = path.join(dir, "link.json");
+  test("a SYMLINK pointing OUT of bounds is refused, because the path is canonicalized", () => {
+    /**
+     * ⚠️ ALSO VACUOUS BEFORE, and the same reviewer caught it: the old link
+     * resolved back INSIDE the allowed directory, so no out-of-bounds link was
+     * ever exercised. `path.resolve` does not follow links; `realpath` does,
+     * and that difference is the whole point of the check.
+     */
+    const outsideRoot = path.join(path.parse(process.cwd()).root, `skew-target-${process.pid}.json`);
     try {
-      fs.symlinkSync(target, link);
+      fs.writeFileSync(outsideRoot, JSON.stringify({ url: "https://x.convex.cloud", functions: [] }));
     } catch {
+      return;
+    }
+    const link = path.join(scratch(), "innocent-looking.json");
+    try {
+      fs.symlinkSync(outsideRoot, link);
+    } catch {
+      fs.rmSync(outsideRoot, { force: true });
       return; // symlink creation needs privileges on Windows; skip rather than fake it
     }
-    // The link resolves back INSIDE the allowed directory, so this one is fine —
-    // what matters is that resolution happens at all.
-    expect(readSpecFile(link)).toEqual({});
+    try {
+      // The LINK is inside an allowed directory; its TARGET is not.
+      expect(() => readSpecFile(link)).toThrow(/Refusing to read a spec from outside/);
+    } finally {
+      fs.rmSync(link, { force: true });
+      fs.rmSync(outsideRoot, { force: true });
+    }
   });
 });
 

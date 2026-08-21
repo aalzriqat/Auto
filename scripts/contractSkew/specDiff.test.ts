@@ -600,6 +600,55 @@ describe("a new client surface cannot appear unnoticed", () => {
   });
 });
 
+describe("an unreadable spec is UNAVAILABLE, never a proven skew", () => {
+  /**
+   * ⚠️ `--current` and `--candidate` were read WITHOUT a guard, so a missing
+   * file, a path outside the bounded roots, or invalid JSON let the exception
+   * escape and Node exited 1 — which this CLI defines as FAIL, a PROVEN
+   * production skew. A mistyped path or a truncated artifact download would
+   * have been reported as an incident, and somebody sent hunting a break that
+   * does not exist.
+   *
+   * Exit 3 says "the control could not look", which is the truth. Run as a
+   * subprocess because the exit code IS the behaviour under test.
+   */
+  const cli = path.resolve("scripts/contractSkew/cli.mjs");
+
+  const runWith = (args: string[], dir: string) => {
+    try {
+      execFileSync(process.execPath, [cli, ...args], { cwd: dir, stdio: "pipe" });
+      return 0;
+    } catch (error) {
+      return (error as { status?: number }).status ?? -1;
+    }
+  };
+
+  const scaffoldSpec = () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "skew-cli-"));
+    fs.writeFileSync(
+      path.join(dir, "spec.json"),
+      JSON.stringify({ url: "https://x.convex.cloud", functions: [] })
+    );
+    return dir;
+  };
+
+  test("a missing --current spec exits UNAVAILABLE (3), not FAIL (1)", () => {
+    const dir = scaffoldSpec();
+    expect(runWith(["--mode", "production", "--spec", "spec.json", "--current", "absent.json"], dir)).toBe(3);
+  });
+
+  test("invalid JSON in --current exits UNAVAILABLE (3), not FAIL (1)", () => {
+    const dir = scaffoldSpec();
+    fs.writeFileSync(path.join(dir, "broken.json"), "{ this is not json");
+    expect(runWith(["--mode", "production", "--spec", "spec.json", "--current", "broken.json"], dir)).toBe(3);
+  });
+
+  test("a missing --candidate spec in release mode exits UNAVAILABLE (3)", () => {
+    const dir = scaffoldSpec();
+    expect(runWith(["--mode", "release", "--spec", "spec.json", "--candidate", "absent.json"], dir)).toBe(3);
+  });
+});
+
 describe("an unscanned client file fails the run rather than passing it", () => {
   /**
    * ⚠️ It used to exit 0. `unscannedConvexClients` forced the verdict to

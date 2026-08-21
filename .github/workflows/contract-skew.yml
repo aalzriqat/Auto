@@ -52,7 +52,19 @@ permissions:
 
 concurrency:
   group: contract-skew
-  cancel-in-progress: true
+  # ⚠️ NEVER CANCEL THIS ONE. Three triggers share this group — the hourly cron,
+  # every push to `main`, and manual dispatch — so cancelling means a merge kills
+  # the hourly run in flight, and the next hourly tick kills a merge-triggered
+  # run that is still going.
+  #
+  # A cancelled run answers NOTHING. It is neither a pass nor a failure, it
+  # uploads no report, and `gh pr checks` renders it as a plain fail. That is
+  # exactly the silent gap the header above rejects: a control that did not look
+  # must never read as a control that looked. Merge is also the highest-value
+  # moment to check, and it is the one cancellation would most often destroy.
+  #
+  # Queueing costs one runner-minute. Cancelling costs the answer.
+  cancel-in-progress: false
 
 jobs:
   detect:

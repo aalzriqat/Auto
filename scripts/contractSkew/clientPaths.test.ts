@@ -260,6 +260,26 @@ describe("clientPaths extractor", () => {
     expect(pathsOf(call!.payload).sort()).toEqual(["__legacyFlag", "orgId"]);
   });
 
+  test("CASE 7: an unresolvable SPREAD withdraws key completeness", () => {
+    // Fail-open otherwise: both comparison directions read `keysComplete`, so a
+    // false claim of completeness fabricates findings in one direction and
+    // hides them in the other.
+    const call = forFn("vehicles:update").find((c) =>
+      c.unknowns.some((u: string) => u.includes("unresolvable spread"))
+    );
+    expect(call, "the unresolvable spread was not recorded at all").toBeDefined();
+    expect(call!.payload?.keysComplete).toBe(false);
+  });
+
+  test("a tsconfig that cannot be read REFUSES, rather than degrading to defaults", () => {
+    // `createProgram` succeeds regardless, because rootFiles supplies the root
+    // names — but without the project's paths/jsx/lib/strict the type
+    // resolution collapses and every payload becomes an UNKNOWN. A wall of
+    // unknowns reads like honest uncertainty and is actually a broken
+    // toolchain, so the only honest answer is to refuse loudly.
+    expect(() => extractClientCalls([FIXTURE], "does-not-exist-tsconfig.json")).toThrow(/Cannot read/);
+  });
+
   test("CASE 4: an optional parent makes its required child UNPROVEN, not proven", () => {
     // `sourceLikeVehicle` is optional and unset, so `sourceLikeVehicle.make` is
     // never transmitted even though it is required within that object. Without

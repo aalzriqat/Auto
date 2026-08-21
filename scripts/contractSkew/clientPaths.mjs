@@ -126,6 +126,31 @@ export function extractClientCalls(rootFiles, tsconfigPath) {
     path.dirname(tsconfigPath)
   );
 
+  // ⚠️ A TSCONFIG THAT DID NOT LOAD IS NOT A TSCONFIG OF DEFAULTS.
+  //
+  // `readConfigFile` returns `{config, error}` and `parseJsonConfigFileContent`
+  // returns `errors`; neither was inspected. A missing, unreadable or malformed
+  // file left `config` undefined and `options` falling back to compiler
+  // defaults. `createProgram` still SUCCEEDS, because rootFiles supplies the
+  // root names — but it runs without the project's `paths`, `jsx`, `lib` and
+  // `strict` settings, so type resolution collapses and every payload degrades
+  // to `opaqueValue` or `unresolved`.
+  //
+  // The run then reports a wall of UNKNOWNs that looks like honest uncertainty
+  // and is actually a broken toolchain. Refusing loudly is the only honest
+  // answer: the caller asked us to read a project, and we could not.
+  if (configFile.error) {
+    throw new Error(
+      `Cannot read ${tsconfigPath}: ${ts.flattenDiagnosticMessageText(configFile.error.messageText, " ")}`
+    );
+  }
+  if (parsed.errors?.length) {
+    const first = parsed.errors[0];
+    throw new Error(
+      `Cannot parse ${tsconfigPath}: ${ts.flattenDiagnosticMessageText(first.messageText, " ")}`
+    );
+  }
+
   const program = ts.createProgram({
     rootNames: rootFiles.length ? rootFiles : parsed.fileNames,
     options: { ...parsed.options, noEmit: true },
@@ -397,8 +422,26 @@ function collectFromExpression(checker, expr, prefix, acc, depth, seen) {
         // `...rest` — resolvable by type; merge whatever it contributes.
         const spreadType = checker.getTypeAtLocation(prop.expression);
         const spread = collectPaths(checker, spreadType, prefix, acc, depth + 1, seen);
-        if (spread.kind === "object") result = mergeClientNodes(result, spread);
-        else if (spread.kind !== "unresolved") keysComplete = false;
+        if (spread.kind === "object") {
+          // A resolved object contributes its fields, and its own key
+          // completeness travels with it.
+          result = mergeClientNodes(result, spread);
+          if (!spread.keysComplete) keysComplete = false;
+        } else {
+          // ⚠️ ANY OTHER SPREAD WITHDRAWS KEY COMPLETENESS, INCLUDING
+          // `unresolved`. The previous condition excluded `unresolved`
+          // explicitly, so the ONE case where we know least about what is being
+          // spread was the one case that left `keysComplete` TRUE — the
+          // extractor asserting the key set was PROVEN COMPLETE while
+          // discarding a spread of unknown contents.
+          //
+          // Both comparison directions read that claim: Direction 2 demands
+          // every required backend field of a key-complete object, and
+          // Direction 1 reports an undeclared field as BREAKING. Fail-open in
+          // one, fabricated in the other.
+          acc.unknowns.push(`${prefix || "<root>"} (unresolvable spread)`);
+          keysComplete = false;
+        }
         continue;
       }
       const name = propertyName(prop);

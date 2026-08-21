@@ -270,6 +270,20 @@ export function CaseDunderField(p: LegacyPayload) {
 }
 
 /**
+ * CASE 7 — a spread whose contents cannot be resolved.
+ *
+ * An unconstrained generic reaching a spread yields an `unresolved` node. The
+ * guard used to read `spread.kind !== "unresolved"`, so the ONE case where we
+ * know least about what is being spread was the only one that left
+ * `keysComplete` TRUE — the extractor asserting the key set was PROVEN COMPLETE
+ * while discarding a spread of unknown contents.
+ */
+export function CaseUnresolvableSpread<T>(rest: T) {
+  const update = useMutation(api.vehicles.update);
+  void update({ orgId: "o", ...rest });
+}
+
+/**
  * CASE 4 — an optional parent makes its required child unproven.
  * `sourceLikeVehicle` is optional and unset here, so `sourceLikeVehicle.make`
  * is never transmitted even though it is required WITHIN that object.

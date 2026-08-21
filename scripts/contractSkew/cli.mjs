@@ -175,11 +175,34 @@ function backendUnchangedSince(sha) {
   }
 }
 
+/**
+ * ⚠️ AN UNREADABLE SPEC IS UNAVAILABLE, NEVER FAIL.
+ *
+ * `readSpecFile` throws for a missing file, a path outside the bounded roots,
+ * and invalid JSON. Uncaught, the exception escapes and Node exits 1 — which
+ * this CLI defines as a PROVEN production skew. A mistyped path or a truncated
+ * artifact download would then be reported as an incident, and somebody would
+ * be sent looking for a break that does not exist.
+ *
+ * The primary fetch already gets this right; these two readers did not.
+ */
+function readSpecOrUnavailable(specPath, what) {
+  try {
+    return readSpecFile(specPath);
+  } catch (error) {
+    const detail = String(/** @type {Error} */ (error)?.message ?? error);
+    const reason = `could not read the ${what} spec at ${specPath}: ${detail}`;
+    console.log(redact(JSON.stringify({ verdict: "UNAVAILABLE", reason }, null, 2)));
+    console.error(redact(`::warning::contract-skew UNAVAILABLE — ${reason}`));
+    process.exit(EXIT.UNAVAILABLE);
+  }
+}
+
 const backendEvidence = { deployedSha };
 if (currentSpecPath) {
   backendEvidence.changedPaths = changedContractPaths(
     deployed.spec,
-    readSpecFile(currentSpecPath)
+    readSpecOrUnavailable(currentSpecPath, "current backend")
   );
 } else if (deployedSha) {
   backendEvidence.backendIdenticalToDeployed = backendUnchangedSince(String(deployedSha));
@@ -231,7 +254,7 @@ if (mode === "release") {
     console.error("--mode release requires --candidate <function-spec.json>");
     process.exit(EXIT.USAGE);
   }
-  const candidate = readSpecFile(candidatePath);
+  const candidate = readSpecOrUnavailable(candidatePath, "candidate");
   const changed = changedContractPaths(deployed.spec, candidate);
 
   // ⚠️ Only SKEW blocks a release. A standing defect is by definition not

@@ -31,12 +31,16 @@ const tagged = (v) => `${v === null ? "null" : typeof v}:${String(v)}`;
 /**
  * A COMPLETE structural fingerprint of a node and everything beneath it.
  *
- * ⚠️ BRANCH ORDER IS SIGNIFICANT AND THAT IS THE POINT. Object fields are
- * sorted, because field order carries no meaning. Union branches are NOT
- * sorted, because branch identity is positional: a required field moving from
- * branch A to branch B is a real redeclaration, and any order-insensitive
- * summary of the branches is byte-identical across that move. Sorting here
- * would reintroduce exactly the defect this exists to fix.
+ * ⚠️ NOTHING HERE DEPENDS ON ORDER. Object fields are sorted because field
+ * order carries no meaning, and union BRANCHES are sorted too — see the union
+ * case below — because Convex accepts a union if ANY branch matches, so branch
+ * position is not semantics either.
+ *
+ * An earlier version of this comment claimed the opposite, and survived the
+ * change that made branches sorted. A stale comment on a security control is
+ * worse than none: it instructs the next reader to undo tested behaviour, and
+ * the behaviour it would have undone is the one that stops a pure reorder being
+ * reported as a redeclaration.
  */
 function digest(node) {
   return JSON.stringify(digestValue(node));

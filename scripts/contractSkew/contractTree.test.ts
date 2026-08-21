@@ -388,6 +388,37 @@ describe("findings name the client shape they refused", () => {
   });
 });
 
+describe("Convex scalar semantics, not approximations of them", () => {
+  /**
+   * Both of these reported a payload as compatible that the live backend
+   * refuses — a false PASS, which is the one verdict this control must never
+   * produce.
+   */
+  test("v.int64() accepts ONLY bigint, so a client number is BREAKING", () => {
+    // Convex models a 64-bit integer as a JavaScript BigInt. `number` and
+    // `bigint` are distinct primitives and the validator refuses the former.
+    expect(breaking(run(cObj({ n: clientNode.scalar("number") }), vObj({ n: [{ type: "int64" }] })))).toHaveLength(1);
+  });
+
+  test("and a client bigint is accepted", () => {
+    expect(run(cObj({ n: clientNode.scalar("bigint") }), vObj({ n: [{ type: "int64" }] })).findings).toHaveLength(0);
+  });
+
+  test("v.bytes() is NOT a wildcard — a string is refused", () => {
+    // Listing `bytes` as a dynamic kind turned the validator into `any`, which
+    // ended the comparison before anything was checked and made the
+    // SCALAR_OK.bytes entry unreachable dead code that read as coverage.
+    expect(breaking(run(cObj({ b: cStr }), vObj({ b: [{ type: "bytes" }] })))).toHaveLength(1);
+  });
+
+  test("v.record() and v.any() remain genuinely dynamic", () => {
+    // The fix must not over-correct: these two really do accept anything.
+    for (const kind of ["any", "record", "unknown"]) {
+      expect(run(cObj({ x: cStr }), vObj({ x: [{ type: kind }] })).findings).toHaveLength(0);
+    }
+  });
+});
+
 describe("scalars and shapes", () => {
   test("a number where the backend declares a string is breaking", () => {
     expect(breaking(run(cObj({ name: clientNode.scalar("number") }), vObj({ name: [vStr] })))).toHaveLength(1);
