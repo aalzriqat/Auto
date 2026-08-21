@@ -39,8 +39,6 @@ jobs:
       run: |
         pnpm test:coverage
         pnpm test:coverage:sonar
-        # Separate process on purpose - see sonar-project.properties.
-        pnpm test:coverage:contract-skew
       env:
         NODE_ENV: test
 
@@ -124,7 +122,16 @@ jobs:
     # Sonar's coverage number as meaningful — the security rating, which is what
     # this PR is about, is unaffected.
     - name: Generate coverage for Sonar
-      run: pnpm test:coverage:sonar
+      # ⚠️ BOTH reports, because THIS is the job that uploads. The detector's
+      # coverage lives in a second lcov produced by a second vitest process (see
+      # sonar-project.properties for why the pools cannot be merged), and
+      # generating it in the unit-and-integration job instead — which is where I
+      # first put it — left this job producing only the convex report. Every
+      # line of new code in the detector then had no coverage data at all and
+      # Sonar reported new_coverage 0.0%.
+      run: |
+        pnpm test:coverage:sonar
+        pnpm test:coverage:contract-skew
       env:
         NODE_ENV: test
 
