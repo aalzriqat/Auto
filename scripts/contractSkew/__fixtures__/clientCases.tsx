@@ -256,6 +256,20 @@ export function CaseVeryDeepPayload() {
 }
 
 /**
+ * CASE 6c — a field whose name begins with a double underscore.
+ *
+ * The extractor used to skip every such property while walking a TYPE, which
+ * dropped it from `fields`, left it out of `unknowns`, and still reported
+ * `keysComplete: true`. It asserted the key set was PROVEN COMPLETE having
+ * silently discarded a field — a false PASS on a real undeclared-field skew.
+ */
+type LegacyPayload = { orgId: string; __legacyFlag: boolean };
+export function CaseDunderField(p: LegacyPayload) {
+  const update = useMutation(api.vehicles.update);
+  void update(p);
+}
+
+/**
  * CASE 4 — an optional parent makes its required child unproven.
  * `sourceLikeVehicle` is optional and unset here, so `sourceLikeVehicle.make`
  * is never transmitted even though it is required WITHIN that object.

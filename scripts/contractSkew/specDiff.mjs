@@ -49,7 +49,21 @@ function digest(node) {
     case "array":
       return `[${digest(node.element)}]`;
     case "union":
-      return `(${node.branches.map(digest).join("|")})`;
+      // ⚠️ BRANCH DIGESTS ARE SORTED, and getting this backwards cost a round.
+      //
+      // Convex validates a union by trying each branch and accepting on any
+      // match, so branch POSITION affects nothing about which payloads are
+      // accepted. Encoding position made a pure reorder look like a
+      // redeclaration — and a spurious changed path is not harmless: it
+      // overlaps a co-located STANDING_DEFECT and `classifyBreaking` promotes
+      // it to REVISION_SKEW, telling a responder to deploy when deploying
+      // fixes nothing. That is the dangerous direction, and it is the exact
+      // error `classify.mjs` exists to prevent.
+      //
+      // Sorting the branch digests keeps this sensitive to CONTENT — a branch
+      // added, removed, retyped, or a field added to one branch and not the
+      // other — while blind to order, which is what the semantics actually are.
+      return `(${node.branches.map(digest).sort(byText).join("|")})`;
     case "literal":
       return `lit(${tagged(node.value)})`;
     case "scalar":

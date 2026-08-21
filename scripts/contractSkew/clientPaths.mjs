@@ -631,7 +631,21 @@ function collectPaths(checker, type, path, acc, depth, seen, inherited = "LITERA
   const fields = new Map();
   for (const prop of checker.getPropertiesOfType(type)) {
     const name = prop.getName();
-    if (name.startsWith("__")) continue;
+    // ⚠️ THERE IS NO NAME FILTER HERE, AND THERE MUST NOT BE.
+    //
+    // This used to skip every property starting with `__`, added for Convex's
+    // `Id<T>` brand marker (`__tableName`). Two things were wrong with it. It
+    // is now DEAD for that purpose — `kindOfType` resolves a branded
+    // intersection to its primitive before the walk ever reaches a structured
+    // object — and it was never limited to the brand: ANY field so named was
+    // dropped from `fields`, absent from `unknowns`, and left `keysComplete`
+    // true. The extractor asserted the key set was PROVEN COMPLETE while having
+    // silently discarded a field. If the backend does not declare it, Convex
+    // refuses the call and this control reports PASS.
+    //
+    // A field skipped for any reason must be VISIBLE: either kept, or recorded
+    // as unknown with key completeness withdrawn. Silence is the one thing it
+    // cannot be.
     const childPath = path ? `${path}.${name}` : name;
     const optional = Boolean(prop.getFlags() & ts.SymbolFlags.Optional);
     // Provenance is inherited, exactly as optionality is on the validator side.

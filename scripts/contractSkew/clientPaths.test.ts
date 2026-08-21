@@ -246,6 +246,20 @@ describe("clientPaths extractor", () => {
     expect(node?.type).toBe("string");
   });
 
+  test("CASE 6c: a `__`-prefixed field is NOT silently dropped", () => {
+    // A field skipped for any reason must be VISIBLE - kept, or recorded as
+    // unknown with key completeness withdrawn. Silence is the one thing it
+    // cannot be, because silence plus keysComplete:true is an assertion.
+    const call = forFn("vehicles:update").find((c) => entryAt(c.payload, "__legacyFlag"));
+    expect(call, "the __-prefixed field vanished from the payload entirely").toBeDefined();
+    // `boolean` is `true | false` in TypeScript, so it resolves to an exact
+    // value set rather than a widened scalar - which is more precise, not less.
+    const node = entryAt(call!.payload, "__legacyFlag")?.node;
+    expect(node?.kind).toBe("literal");
+    expect([...(node?.values ?? [])].sort()).toEqual([false, true]);
+    expect(pathsOf(call!.payload).sort()).toEqual(["__legacyFlag", "orgId"]);
+  });
+
   test("CASE 4: an optional parent makes its required child UNPROVEN, not proven", () => {
     // `sourceLikeVehicle` is optional and unset, so `sourceLikeVehicle.make` is
     // never transmitted even though it is required within that object. Without

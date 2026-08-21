@@ -169,58 +169,116 @@ describe("changedContractPaths", () => {
     expect(changes[0].candidate).not.toContain("B");
   });
 
-  test("a required field MOVED between union branches IS a change", () => {
+  test("a field added to ONE branch of a union is a change", () => {
     /**
-     * ⚠️ ROUND-1 REVIEW FINDING, and it disproved a justification I had written
-     * into this module. The comment claimed merging union branches at one path
-     * was sound "because a change in any branch changes the merged signature at
-     * that path". False: the branches were merged into a SET, and a field moving
-     * from branch A to branch B leaves that set byte-identical — same name, same
-     * type, same optionality, different branch.
+     * ⚠️ THIS TEST REPLACES A VACUOUS ONE, and the story is worth keeping.
      *
-     * The consequence is not cosmetic. `classifyBreaking` reads exactly this
-     * output, so zero changed paths means a genuine undeployed backend change is
-     * filed as a STANDING DEFECT — "deploying will not fix this" — when
-     * deploying is the entire fix. Same wrong direction as symptom 6, reached by
-     * a different mechanism.
+     * Round 1 found that merging union branches into a SET hid a change, and I
+     * fixed it by making the union's digest POSITIONAL. The regression test I
+     * wrote to prove that fix used a fixture where `y` moved from branch A to
+     * branch B — and round 2 showed that transformation is SEMANTICALLY INERT.
+     * Convex accepts a union if ANY branch matches, so the accepted-shape
+     * multiset `{ {x}, {x,y} }` is identical before and after. The test passed
+     * by asserting a difference in ORDER, which is not a contract at all.
      *
-     * ⚠️ It also shows the limit of the evidence I used to delete the old union
-     * summary: I proved equivalence by a byte-identical whole-repo run, and this
-     * repo simply does not contain the shape. Equivalence on today's code is not
-     * equivalence.
+     * So the fix was wrong in the other direction: a pure reorder produced a
+     * spurious changed path, which `classifyBreaking` promotes to
+     * REVISION_SKEW for any finding sharing that path — telling a responder to
+     * deploy when deploying fixes nothing.
+     *
+     * The fixture below is genuinely ASYMMETRIC: one branch gains a field and
+     * the other is untouched, so the set of payloads the union accepts really
+     * does change.
      */
-    const branch = (fields: Record<string, boolean>) => ({
-      type: "object",
-      value: Object.fromEntries(
-        Object.entries(fields).map(([name, present]) => [
-          name,
-          present ? { fieldType: { type: "number" }, optional: false } : undefined,
-        ]).filter(([, v]) => v)
-      ),
-    });
-    const withY = (inFirstBranch: boolean) =>
+    const branches = (withY: boolean) =>
       fn("w.js:save", {
         payload: {
           optional: false,
           fieldType: {
             type: "union",
             value: [
-              inFirstBranch
-                ? { type: "object", value: { x: { fieldType: { type: "string" }, optional: false }, y: { fieldType: { type: "number" }, optional: false } } }
-                : { type: "object", value: { x: { fieldType: { type: "string" }, optional: false } } },
-              inFirstBranch
-                ? { type: "object", value: { x: { fieldType: { type: "string" }, optional: false } } }
-                : { type: "object", value: { x: { fieldType: { type: "string" }, optional: false }, y: { fieldType: { type: "number" }, optional: false } } },
+              {
+                type: "object",
+                value: {
+                  x: { fieldType: { type: "string" }, optional: false },
+                  ...(withY ? { y: { fieldType: { type: "number" }, optional: false } } : {}),
+                },
+              },
+              { type: "object", value: { q: { fieldType: { type: "number" }, optional: false } } },
             ],
           },
         },
       });
-    void branch;
-    const changes = changedContractPaths(spec(withY(false)), spec(withY(true)));
+    const changes = changedContractPaths(spec(branches(false)), spec(branches(true)));
     expect(changes.length).toBeGreaterThan(0);
-    // The change must be reported at a path that OVERLAPS a client finding at
-    // `payload.y`, or the classifier still cannot see it.
     expect(changes.some((c) => c.path === "payload" || c.path === "payload.y")).toBe(true);
+  });
+
+  test("REGROUPING fields across branches is a change the path walk alone cannot see", () => {
+    /**
+     * Surfaced by a surviving mutant: replacing the union digest with a
+     * constant left every test green, because the other cases are ALSO caught
+     * by the per-path recursion (a new field creates a new path). This is the
+     * case only the digest can catch.
+     *
+     *   before   union( {x}, {y} )      accepts {x} or {y}, never {x,y}
+     *   after    union( {x,y}, {} )     accepts {x,y} or {} , never {x} alone
+     *
+     * The set of declared PATHS is identical (`payload.x`, `payload.y`) and so
+     * is each path's merged signature — only the branch grouping moved, and
+     * that grouping is exactly what decides which payloads Convex accepts.
+     */
+    const grouped = (together: boolean) => {
+      const x = { fieldType: { type: "string" }, optional: false };
+      const y = { fieldType: { type: "number" }, optional: false };
+      return fn("w.js:save", {
+        payload: {
+          optional: false,
+          fieldType: {
+            type: "union",
+            value: together
+              ? [{ type: "object", value: { x, y } }, { type: "object", value: {} }]
+              : [{ type: "object", value: { x } }, { type: "object", value: { y } }],
+          },
+        },
+      });
+    };
+    const changes = changedContractPaths(spec(grouped(false)), spec(grouped(true)));
+    expect(changes.length, "a real regrouping went undetected").toBeGreaterThan(0);
+    expect(changes.some((c) => c.path === "payload")).toBe(true);
+  });
+
+  test("a pure REORDER of union branches is NOT a change", () => {
+    /**
+     * The other half, and the one that was missing. Branch position affects
+     * nothing about which payloads Convex accepts, so reporting a reorder as a
+     * redeclaration manufactures evidence of a backend change that did not
+     * happen — and manufactured evidence is what turns a standing product
+     * defect into "deploy and this goes away".
+     */
+    const ordered = (aFirst: boolean) => {
+      const a = { type: "object", value: { a: { fieldType: { type: "string" }, optional: false } } };
+      const b = { type: "object", value: { b: { fieldType: { type: "number" }, optional: false } } };
+      return fn("w.js:save", {
+        payload: { optional: false, fieldType: { type: "union", value: aFirst ? [a, b] : [b, a] } },
+      });
+    };
+    expect(changedContractPaths(spec(ordered(true)), spec(ordered(false)))).toEqual([]);
+  });
+
+  test("swapping which branch holds a field is inert, and reported as inert", () => {
+    // The exact fixture the replaced test used. Kept deliberately, with the
+    // opposite expectation, so nobody re-derives the original mistake.
+    const swapped = (yInFirst: boolean) => {
+      const withY = { type: "object", value: {
+        x: { fieldType: { type: "string" }, optional: false },
+        y: { fieldType: { type: "number" }, optional: false } } };
+      const withoutY = { type: "object", value: { x: { fieldType: { type: "string" }, optional: false } } };
+      return fn("w.js:save", {
+        payload: { optional: false, fieldType: { type: "union", value: yInFirst ? [withY, withoutY] : [withoutY, withY] } },
+      });
+    };
+    expect(changedContractPaths(spec(swapped(true)), spec(swapped(false)))).toEqual([]);
   });
 
   test("the digest describes every node kind, not just objects", () => {
