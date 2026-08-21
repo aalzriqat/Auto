@@ -92,6 +92,30 @@ const KNOWN_UNCOVERED_PRE_EXISTING: readonly string[] = [
   "websiteLeadBlocklist",
 ];
 
+/**
+ * ⚠️ Org-scoped tables whose `_storage` blobs are orphaned by the org
+ * hard-delete today. PRE-EXISTING, found by the guard below the moment it was
+ * written — not decisions, and not introduced by the change that added it.
+ *
+ *  - `vehicleSupplierPayables` IS deleted (`adminOrgs.ts` `orgRows` step), but
+ *    by the generic plain-delete path, so its `documentStorageIds` survive with
+ *    nothing referencing them.
+ *  - `marketplaceWhatsAppFlows` is not deleted at all — see
+ *    `KNOWN_UNCOVERED_PRE_EXISTING` — so its `photoStorageIds` survive too.
+ *
+ * Listed rather than fixed because each needs its own review, and fixing an
+ * unrelated deletion path inside a security PR is how scope quietly grows. The
+ * point of writing them down is that the set cannot grow silently: the test
+ * below compares the schema's storage fields against the fields the deletion
+ * steps actually pass to `deleteStorageIds`, PER FIELD, so a new `_storage`
+ * field fails it on the day it lands — including on a table that already has a
+ * storage-aware step. Tracked as GitHub issues #220 and #221.
+ */
+const KNOWN_ORPHANED_STORAGE_PRE_EXISTING: Record<string, string[]> = {
+  marketplaceWhatsAppFlows: ["photoStorageIds"],
+  vehicleSupplierPayables: ["documentStorageIds"],
+};
+
 /** Table names in the schema that carry a direct `orgId` field. */
 function orgScopedTables(): string[] {
   const tables = schema.tables as Record<string, { validator: { fields?: Record<string, unknown> } }>;
@@ -228,5 +252,72 @@ describe("organization hard-delete coverage", () => {
     expect(RESET_TABLES_FOR_TEST).toContain("financeApplications");
     expect(RESET_TABLES_FOR_TEST).toContain("financeAppraisals");
     expect(RESET_TABLES_FOR_TEST).toContain("financeApplicationOverrides");
+  });
+  test("every org-scoped table carrying storage ids is deleted by a storage-aware step", () => {
+    // The name-based check above could not see this class of bug. websiteSettings
+    // was listed as covered — by the generic `orgRows` step, which is a plain
+    // ctx.db.delete loop — so adding logoStorageId to it would have orphaned the
+    // blob while hardDeleteOrg still reported COMPLETED, and the suite stayed
+    // green. Derive the requirement from the schema instead of a hand list, so
+    // the next _storage field on any org-scoped table fails here on the day it
+    // is added rather than after the data is already unreachable.
+    const schemaTables = schema.tables as Record<
+      string,
+      { validator: { fields?: Record<string, unknown> } }
+    >;
+
+    // The FIELDS each storage-aware step actually passes to deleteStorageIds.
+    // Field-level on purpose: a table-level set would mark orgSettings "covered"
+    // and then silently orphan a future orgSettings.faviconStorageId, because
+    // deleteOrgSettingsWithStorageBatch enumerates logoStorageId by name and
+    // nothing would notice the new field. That is the round-2 defect one level
+    // down, on the table this codebase now uses as its single logo source.
+    //
+    // Deliberately not derived from tablesCoveredByDeletion: that helper also
+    // counts the generic orgRows step, which is precisely what must not satisfy
+    // this test.
+    const STORAGE_AWARE_FIELDS: Record<string, { kind: string; fields: string[] }> = {
+      vehicles: { kind: "vehiclesWithStorage", fields: ["imageIds"] },
+      vehicleEdits: { kind: "vehicleEditsWithStorage", fields: ["payload"] },
+      applicationDocuments: { kind: "applicationDocumentsWithStorage", fields: ["fileId"] },
+      financeAppraisals: { kind: "financeAppraisalsWithStorage", fields: ["documentStorageIds"] },
+      financeDealFees: { kind: "financeDealFeesWithStorage", fields: ["documentStorageIds"] },
+      vehicleOwnershipConversions: {
+        kind: "vehicleOwnershipConversionsWithStorage",
+        fields: ["documentStorageIds"],
+      },
+      orgSettings: { kind: "orgSettingsWithStorage", fields: ["logoStorageId"] },
+      socialPosts: { kind: "socialPostsWithStorage", fields: ["imageStorageIds"] },
+    };
+
+    const unprotected: Record<string, string[]> = {};
+    for (const table of orgScopedTables()) {
+      const fields = schemaTables[table]?.validator.fields ?? {};
+      const storageFields = Object.entries(fields)
+        .filter(([, validator]) => JSON.stringify(validator).includes('"_storage"'))
+        .map(([name]) => name);
+      if (storageFields.length === 0) continue;
+
+      const aware = STORAGE_AWARE_FIELDS[table];
+      // The step must exist AND still be registered; a renamed or removed step
+      // must not leave its fields looking handled.
+      const handled =
+        aware && ORGANIZATION_DELETION_STEPS.some((step) => step.kind === aware.kind)
+          ? aware.fields
+          : [];
+      const missed = storageFields.filter((field) => !handled.includes(field)).sort();
+      if (missed.length > 0) unprotected[table] = missed;
+    }
+
+    expect(
+      unprotected,
+      `An org-scoped _storage FIELD is not deleted by the org purge, so ` +
+        `hardDeleteOrg would report COMPLETED and leave the blobs behind. ` +
+        `If the table has no storage-aware step, add one in convex/adminOrgs.ts ` +
+        `(mirror deleteOrgSettingsWithStorageBatch). If it already has one, that ` +
+        `step enumerates fields BY NAME and does not yet read this field — pass ` +
+        `it to deleteStorageIds too. Then register the field in ` +
+        `STORAGE_AWARE_FIELDS above.`
+    ).toEqual(KNOWN_ORPHANED_STORAGE_PRE_EXISTING);
   });
 });
