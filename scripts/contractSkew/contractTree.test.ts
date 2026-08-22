@@ -404,33 +404,22 @@ describe("a validator this control cannot model is an UNKNOWN, never a verdict",
   const compare = (client: unknown, node: unknown) =>
     compareNode(client as never, validatorTree(node as never), "field", { unproven: false } as never);
 
-  test("a spec node with NO type is reported UNKNOWN rather than passing clean", () => {
-    const r = compare(clientNode.scalar("string"), { value: undefined });
+  // Each row is a DIFFERENT WAY IN, not the same case with another value: a spec
+  // node carrying no type at all, a type this table does not model, and the
+  // literal branch, which carried its own copy of the same `SCALAR_OK[...] &&`
+  // guard and therefore its own copy of the hole.
+  test.each([
+    ["a spec node with NO type", clientNode.scalar("string"), { value: undefined }],
+    ["an unmodelled validator type", clientNode.scalar("boolean"), { type: "decimal128" }],
+    ["a literal client against an unmodelled type", clientNode.literal(["A"]), { type: "decimal128" }],
+  ])("%s is UNKNOWN — never silently clean, never a fabricated BREAKING", (_label, client, node) => {
+    const r = compare(client, node);
     expect(r.findings).toHaveLength(1);
     expect(r.findings[0].severity).toBe(SEVERITY.TYPE_UNKNOWN);
-  });
-
-  test("an unmodelled validator type is reported UNKNOWN rather than passing clean", () => {
-    const r = compare(clientNode.scalar("boolean"), { type: "decimal128" });
-    expect(r.findings).toHaveLength(1);
-    expect(r.findings[0].severity).toBe(SEVERITY.TYPE_UNKNOWN);
-  });
-
-  test("and it is NOT reported as BREAKING — we cannot substantiate a break", () => {
-    // Denying PASS is correct; inventing a defect is not. An UNKNOWN blocks a
-    // release through the coverage path without claiming something false.
-    for (const node of [{ value: undefined }, { type: "decimal128" }]) {
-      const r = compare(clientNode.scalar("string"), node);
-      expect(r.findings.some((f: { severity: string }) => f.severity === SEVERITY.BREAKING)).toBe(false);
-      expect(r.compatible).toBe(true);
-    }
-  });
-
-  test("a literal client against an unmodelled type is UNKNOWN too, not silently clean", () => {
-    // The literal branch had the same `SCALAR_OK[...] &&` guard and the same hole.
-    const r = compare(clientNode.literal(["A"]), { type: "decimal128" });
-    expect(r.findings).toHaveLength(1);
-    expect(r.findings[0].severity).toBe(SEVERITY.TYPE_UNKNOWN);
+    // Denying PASS is correct; inventing a defect we cannot substantiate is not.
+    // An UNKNOWN blocks a release through the coverage path without claiming
+    // something false, so `compatible` must stay true.
+    expect(r.compatible).toBe(true);
   });
 
   test("a MODELLED type still refuses a real mismatch — the fix did not soften the check", () => {
