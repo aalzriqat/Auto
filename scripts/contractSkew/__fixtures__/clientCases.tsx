@@ -298,3 +298,17 @@ export function CaseOptionalParent() {
 export function CasePaginated() {
   usePaginatedQuery(api.transactions.list, { orgId: "o" }, { initialNumItems: 10 });
 }
+
+/**
+ * CASE 8 — a real `ArrayBuffer` payload.
+ *
+ * The comparator's handling of `v.bytes()` rests entirely on what the EXTRACTOR
+ * produces for an ArrayBuffer, and an assumption about that was wrong once: the
+ * scalar table mapped bytes to the client type `"object"`, a shape the
+ * extractor never emits. This fixture exists so the premise is pinned by
+ * measurement rather than by belief.
+ */
+export function CaseArrayBufferPayload(buffer: ArrayBuffer) {
+  const upload = useMutation(api.vehicles.update);
+  void upload({ orgId: "o", blob: buffer });
+}

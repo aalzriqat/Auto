@@ -261,9 +261,13 @@ const SCALAR_OK = {
   // one verdict this control must never produce.
   int64: new Set(["bigint"]),
   boolean: new Set(["boolean"]),
-  // `v.bytes()` accepts an ArrayBuffer. The extractor classifies that as an
-  // object, so a `string` here is a real mismatch rather than a near-miss.
-  bytes: new Set(["object"]),
+  // ⚠️ NO `bytes` ENTRY. `v.bytes()` accepts an ArrayBuffer, and an ArrayBuffer
+  // is a TypeScript OBJECT type — so the extractor emits an object NODE for it,
+  // never `scalar("object")`. An entry mapping bytes to the client type
+  // `"object"` was therefore unreachable: it described a shape the extractor
+  // cannot produce, while real byte payloads took the object branch below and
+  // were reported BREAKING. `bytes` is handled explicitly in `compareValues`
+  // instead, where the object case can be answered honestly.
 };
 
 const joinPath = (path, segment) => (path ? `${path}${segment}` : segment.replace(/^\./, ""));
@@ -510,6 +514,40 @@ export function compareNode(client, validator, path, ctx) {
   // production spec that nothing reaches here today — zero type-less and zero
   // unmodelled nodes across 885 functions — so this refuses a defect rather
   // than degrading a working run.
+  // ⚠️ `v.bytes()` IS ANSWERABLE IN ONE DIRECTION ONLY, SO IT IS ANSWERED HERE.
+  //
+  // An ArrayBuffer is a TypeScript OBJECT type, so the extractor emits an
+  // object NODE for it — indistinguishable from `{ foo: 1 }`. The previous
+  // attempt mapped bytes to the client type `"object"`, a shape the extractor
+  // never produces: the entry was unreachable and read as coverage, while a
+  // real byte payload fell to the object branch and was reported BREAKING.
+  // A fabricated skew alarm on correct code, from the fix meant to prevent one.
+  //
+  // So the object case is genuinely unknowable today and says so. Everything
+  // else IS decidable — a string, a number, a literal or an array is provably
+  // not an ArrayBuffer — and stays BREAKING, because refusing to answer a
+  // question we can answer would be its own kind of dishonesty.
+  //
+  // Modelling ArrayBuffer distinctly in the extractor is the fuller fix and
+  // belongs in SCRUM-182. Revisit this branch when that lands: the object case
+  // becomes decidable and should stop being UNKNOWN.
+  if (validator.type === "bytes") {
+    if (client.kind === "object") {
+      add(
+        SEVERITY.TYPE_UNKNOWN,
+        "VALUE",
+        "the backend declares bytes and the client sends an object; an ArrayBuffer is indistinguishable from any other object here, so the value is NOT verified"
+      );
+      return { findings, compatible: true };
+    }
+    add(
+      SEVERITY.BREAKING,
+      "VALUE",
+      `client sends ${describeClient(client)} where the backend declares bytes, which accepts only an ArrayBuffer`
+    );
+    return { findings, compatible: false };
+  }
+
   if (!SCALAR_OK[validator.type]) {
     add(
       SEVERITY.TYPE_UNKNOWN,

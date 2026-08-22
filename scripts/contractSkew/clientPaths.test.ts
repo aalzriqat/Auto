@@ -260,6 +260,21 @@ describe("clientPaths extractor", () => {
     expect(pathsOf(call!.payload).sort()).toEqual(["__legacyFlag", "orgId"]);
   });
 
+  test("CASE 8: an ArrayBuffer is extracted as an OBJECT node, not a scalar", () => {
+    // ⚠️ THE PREMISE THE `v.bytes()` COMPARISON RESTS ON, pinned by measurement.
+    //
+    // `bytes` was mapped to the client type `"object"` on the assumption that an
+    // ArrayBuffer arrives as `scalar("object")`. It does not: an ArrayBuffer
+    // carries `ts.TypeFlags.Object`, so it never reaches the primitive branch
+    // and is emitted as an object NODE. That made the table entry unreachable
+    // and sent real byte payloads down the object branch as BREAKING.
+    const call = forFn("vehicles:update").find((c) => c.payload?.fields?.has?.("blob"));
+    expect(call, "the ArrayBuffer payload was not extracted at all").toBeDefined();
+    const blob = call!.payload!.fields!.get("blob")!.node;
+    expect(blob.kind).toBe("object");
+    expect(blob.kind).not.toBe("scalar");
+  });
+
   test("CASE 7: an unresolvable SPREAD withdraws key completeness", () => {
     // Fail-open otherwise: both comparison directions read `keysComplete`, so a
     // false claim of completeness fabricates findings in one direction and

@@ -401,17 +401,33 @@ describe("a validator this control cannot model is an UNKNOWN, never a verdict",
    * type, so a node with no `type` is not caught there and arrives as
    * `{kind: "scalar", type: "unknown"}`.
    */
+  // ⚠️ `site` IS REQUIRED ON EVERY FINDING, and omitting it here was silent.
+  // `finding()` spreads `ctx.site`, and spreading `undefined` contributes
+  // nothing — so this helper produced findings with no identifier, file or
+  // line, the three fields the production typedef declares mandatory. Nothing
+  // failed because these assertions never read them, which is exactly how an
+  // optional identifier reached the classifier once before.
   const compare = (client: unknown, node: unknown) =>
-    compareNode(client as never, validatorTree(node as never), "field", { unproven: false } as never);
+    compareNode(client as never, validatorTree(node as never), "field", {
+      unproven: false,
+      site: { identifier: "vehicles:update", file: "app/Uses.tsx", line: 1 },
+    } as never);
 
-  // Each row is a DIFFERENT WAY IN, not the same case with another value: a spec
-  // node carrying no type at all, a type this table does not model, and the
-  // literal branch, which carried its own copy of the same `SCALAR_OK[...] &&`
-  // guard and therefore its own copy of the hole.
+  // ⚠️ THE THIRD ROW USED TO BE A DUPLICATE, AND ITS COMMENT SAID OTHERWISE.
+  //
+  // It claimed the literal branch was "a different way in". It is not: the
+  // unmodelled-type check returns BEFORE the literal branch, so a literal
+  // client against `decimal128` exits at exactly the same line as row 2 and
+  // exercises nothing new. A reviewer disproved it after two independent seats
+  // had been asked this precise question and confirmed the rows were distinct.
+  //
+  // The false comment was the worse half: a duplicate row costs a little
+  // runtime, a comment asserting coverage that does not exist misleads whoever
+  // reads it next. The literal branch is now covered by a test that genuinely
+  // reaches it, below.
   test.each([
     ["a spec node with NO type", clientNode.scalar("string"), { value: undefined }],
     ["an unmodelled validator type", clientNode.scalar("boolean"), { type: "decimal128" }],
-    ["a literal client against an unmodelled type", clientNode.literal(["A"]), { type: "decimal128" }],
   ])("%s is UNKNOWN — never silently clean, never a fabricated BREAKING", (_label, client, node) => {
     const r = compare(client, node);
     expect(r.findings).toHaveLength(1);
@@ -420,6 +436,43 @@ describe("a validator this control cannot model is an UNKNOWN, never a verdict",
     // An UNKNOWN blocks a release through the coverage path without claiming
     // something false, so `compatible` must stay true.
     expect(r.compatible).toBe(true);
+    // Every finding must carry the site the production typedef declares
+    // required. Omitting it from the context was silent for exactly as long as
+    // nothing asserted it.
+    expect(r.findings[0]).toMatchObject({ identifier: "vehicles:update", file: "app/Uses.tsx", line: 1 });
+  });
+
+  test("v.bytes() vs an OBJECT is UNKNOWN — an ArrayBuffer is indistinguishable from any object", () => {
+    // ⚠️ A FABRICATED BREAKING ON CORRECT CODE, produced by the fix meant to
+    // stop one. `SCALAR_OK.bytes` accepted the client type `"object"`, which the
+    // extractor never emits (CASE 8 pins that), so a real ArrayBuffer took the
+    // object branch and was reported BREAKING. Neither verdict is honest here:
+    // accepting any object would be a false PASS in the other direction.
+    const r = compare(clientNode.object(new Map(), true), { type: "bytes" });
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].severity).toBe(SEVERITY.TYPE_UNKNOWN);
+    expect(r.compatible).toBe(true);
+  });
+
+  test.each([
+    ["a scalar", clientNode.scalar("string")],
+    ["an array", clientNode.array(clientNode.scalar("number"))],
+    ["a literal", clientNode.literal(new Set(["A"]))],
+  ])("but v.bytes() vs %s stays BREAKING — those are provably not an ArrayBuffer", (_l, client) => {
+    // Refusing to answer a question we CAN answer would be its own dishonesty.
+    const r = compare(client, { type: "bytes" });
+    expect(r.findings.some((f: { severity: string }) => f.severity === SEVERITY.BREAKING)).toBe(true);
+    expect(r.compatible).toBe(false);
+  });
+
+  test("the LITERAL branch is reached for a modelled type, and still refuses a bad value", () => {
+    // The branch the deleted row only claimed to cover. A modelled validator
+    // type gets past the unmodelled-type return, so the literal comparison
+    // actually runs — and `values` is a Set, which is what the ClientNode
+    // typedef declares.
+    const r = compare(clientNode.literal(new Set([1])), { type: "string" });
+    expect(r.findings.some((f: { severity: string }) => f.severity === SEVERITY.BREAKING)).toBe(true);
+    expect(r.compatible).toBe(false);
   });
 
   test("a MODELLED type still refuses a real mismatch — the fix did not soften the check", () => {

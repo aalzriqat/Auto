@@ -541,11 +541,15 @@ describe("nothing credential-shaped reaches a log", () => {
   // credential-derived material back in errors.
   test("an exact credential value we passed is removed", () => {
     const saved = process.env.CONVEX_PROD_READ_KEY;
-    process.env.CONVEX_PROD_READ_KEY = "prod:kindly-hound-172|SuperSecretValue123";
+    // ⚠️ Assembled at runtime, never written as a literal — the same rule this
+    // file states below and that this test was breaking. A credential-SHAPED
+    // literal is indistinguishable from a real one to a scanner, and an earlier
+    // literal in this file broke the required `secret-scan` check. The value is
+    // built from harmless parts so nothing key-shaped exists in the source.
+    const fake = ["prod", ":", "kindly-hound-172", "|", "not-a-real-value-", "0000"].join("");
+    process.env.CONVEX_PROD_READ_KEY = fake;
     try {
-      expect(redact("convex failed using prod:kindly-hound-172|SuperSecretValue123 oops")).toBe(
-        "convex failed using [REDACTED] oops"
-      );
+      expect(redact(`convex failed using ${fake} oops`)).toBe("convex failed using [REDACTED] oops");
     } finally {
       if (saved) process.env.CONVEX_PROD_READ_KEY = saved;
       else delete process.env.CONVEX_PROD_READ_KEY;
