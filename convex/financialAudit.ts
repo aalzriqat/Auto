@@ -264,27 +264,58 @@ async function resolveManualJournalCurrency(
   return { currency: effectiveCurrency, scale: scaleForCurrency(effectiveCurrency) };
 }
 
-function manualJournalFingerprint(memo: string, lines: ManualJournalLine[]): string {
+/**
+ * The accounting date participates in the fingerprint (SCRUM-50).
+ *
+ * Without it, resubmitting the same adjustment under the same idempotency key
+ * for a DIFFERENT month would match the stored draft and silently return it —
+ * discarding the new date and posting to the old one. Two adjustments that
+ * differ only in which month they belong to are not the same adjustment.
+ */
+function manualJournalFingerprint(
+  memo: string,
+  accountingDate: number | undefined,
+  lines: ManualJournalLine[]
+): string {
   return JSON.stringify({
     memo,
+    accountingDate: accountingDate ?? null,
     lines: lines.map((l) => ({ a: l.accountId, d: l.debitMinor, c: l.creditMinor })),
   });
+}
+
+/**
+ * Convex accepts NaN and Infinity through a `v.number()` validator, and either
+ * would sail past `create` and surface at approval as "no accounting period
+ * found" — a confusing failure, possibly months later. Refuse at the draft,
+ * where the accountant is still looking at the form.
+ */
+function assertUsableAccountingDate(accountingDate: number): void {
+  if (!Number.isFinite(accountingDate)) {
+    throw new ConvexError("A manual journal needs a usable accounting date.");
+  }
 }
 
 export const createManualJournal = mutation({
   args: {
     orgId: v.id("organizations"),
     memo: v.string(),
+    /**
+     * The date the adjustment belongs to. Required, and never defaulted — a
+     * manual journal with an implicit date is the SCRUM-50 defect.
+     */
+    accountingDate: v.number(),
     lines: v.array(manualJournalLineValidator),
     idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
+    assertUsableAccountingDate(args.accountingDate);
     validateManualJournalLines(args.lines);
     await resolveManualJournalCurrency(ctx, args.orgId, args.lines);
 
-    const fingerprint = manualJournalFingerprint(args.memo, args.lines);
+    const fingerprint = manualJournalFingerprint(args.memo, args.accountingDate, args.lines);
     const existing = await ctx.db
       .query("manualJournalDrafts")
       .withIndex("by_org_idempotency", (q) =>
@@ -292,7 +323,11 @@ export const createManualJournal = mutation({
       )
       .first();
     if (existing) {
-      const priorFingerprint = manualJournalFingerprint(existing.memo, existing.lines);
+      const priorFingerprint = manualJournalFingerprint(
+        existing.memo,
+        existing.accountingDate,
+        existing.lines
+      );
       if (priorFingerprint !== fingerprint) {
         throw new ConvexError("Idempotency key reused with different journal content.");
       }
@@ -304,6 +339,7 @@ export const createManualJournal = mutation({
       orgId: args.orgId,
       status: "PENDING_APPROVAL",
       memo: args.memo,
+      accountingDate: args.accountingDate,
       lines: args.lines,
       idempotencyKey: args.idempotencyKey,
       createdBy: user._id,
@@ -357,16 +393,43 @@ export const approveManualJournal = mutation({
 
     const now = Date.now();
 
-    // Verify an open period covers today; inline to avoid circular import with accountingPeriods.ts
+    // The date the adjustment belongs to — NOT approval time (SCRUM-50).
+    //
+    // This used to be `now` for all three of: the period lookup, the entry's
+    // accountingDate, and every line's. A June 30 accrual approved on July 2
+    // landed in July, and reopening June could not help because the lookup
+    // never consulted the draft. Approval time survives below as `postedAt` and
+    // `decidedAt`, which is what it always was: audit metadata.
+    //
+    // A draft written before the field existed is refused rather than defaulted.
+    // Substituting `now` here is exactly the defect, and a legacy draft's real
+    // date is not knowable from anything stored — only the accountant has it.
+    const accountingDate = draft.accountingDate;
+    if (accountingDate === undefined || !Number.isFinite(accountingDate)) {
+      throw new ConvexError(
+        "This manual journal has no accounting date, so it cannot be posted. " +
+          "Reject it and submit a replacement stating the date the adjustment belongs to."
+      );
+    }
+
+    // The period covering the TARGET date, revalidated here rather than trusted
+    // from draft time — a month can close between drafting and approval, and it
+    // is approval that posts. Inline to avoid a circular import with
+    // accountingPeriods.ts.
     const period = await ctx.db
       .query("accountingPeriods")
       .withIndex("by_org_startDate", (q) => q.eq("orgId", args.orgId))
       .filter((q) =>
-        q.and(q.lte(q.field("startDate"), now), q.gte(q.field("endDate"), now))
+        q.and(
+          q.lte(q.field("startDate"), accountingDate),
+          q.gte(q.field("endDate"), accountingDate)
+        )
       )
       .first();
     if (!period) {
-      throw new ConvexError("No accounting period found for today. Create and open a period first.");
+      throw new ConvexError(
+        "No accounting period covers this journal's accounting date. Create and open one first."
+      );
     }
     if (period.status === "CLOSED" || period.status === "LOCKED") {
       throw new ConvexError(`Accounting period is ${period.status}. Manual journal posting not allowed.`);
@@ -379,7 +442,7 @@ export const approveManualJournal = mutation({
       orgId: args.orgId,
       periodId: period._id,
       journalNumber: "MJ-pending",
-      accountingDate: now,
+      accountingDate,
       sourceType: "manual",
       sourceId: draft.createdBy.toString(),
       category: "MANUAL",
@@ -404,7 +467,9 @@ export const approveManualJournal = mutation({
         creditMinor: line.creditMinor,
         currency: effectiveCurrency,
         scale: journalScale,
-        accountingDate: now,
+        // The lines are what the dated reports read, so an entry stamped
+        // correctly with lines saying "today" would still misstate the month.
+        accountingDate,
         description: line.description,
       });
       // GL Phase 18: a direct journalLines insert (not routed through

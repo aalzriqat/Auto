@@ -11,6 +11,7 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import { toast } from "@/components/ui/sonner";
+import { format } from "date-fns";
 import { Plus, Trash2, CheckCircle2, XCircle, Loader2, ScrollText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -76,7 +77,7 @@ export function ManualJournalTab() {
 
   const form = useForm<ManualJournalFormValues>({
     resolver: zodResolver(manualJournalSchema),
-    defaultValues: { memo: "", lines: [emptyLine(), emptyLine()] },
+    defaultValues: { memo: "", accountingDate: "", lines: [emptyLine(), emptyLine()] },
   });
 
   const { fields, append, remove } = useFieldArray({ control: form.control, name: "lines" });
@@ -86,7 +87,7 @@ export function ManualJournalTab() {
   const balanced = totalDebits > 0 && Math.abs(totalDebits - totalCredits) < 1e-9;
 
   function resetForm() {
-    form.reset({ memo: "", lines: [emptyLine(), emptyLine()] });
+    form.reset({ memo: "", accountingDate: "", lines: [emptyLine(), emptyLine()] });
   }
 
   async function onSubmit(values: ManualJournalFormValues) {
@@ -97,9 +98,21 @@ export function ManualJournalTab() {
     }
     setIsSubmitting(true);
     try {
+      // Parsed as UTC midday, not local midnight. A `yyyy-MM-dd` string read
+      // through the local timezone can land on the previous day once it is
+      // stored as a UTC timestamp — which for a month-end adjustment moves it
+      // into the wrong period, the exact failure this field exists to stop.
+      const [year, month, day] = values.accountingDate.split("-").map(Number);
+      const accountingDate = Date.UTC(year, month - 1, day, 12, 0, 0, 0);
+      if (!Number.isFinite(accountingDate)) {
+        toast.error(t("AccountingDateRequired"));
+        return;
+      }
+
       await createDraft({
         orgId: activeOrgId,
         memo: values.memo,
+        accountingDate,
         lines: values.lines.map((l) => ({
           accountId: l.accountId as Id<"chartOfAccounts">,
           debitMinor: l.side === "DEBIT" ? Math.round(l.amount * factor) : 0,
@@ -179,6 +192,24 @@ export function ManualJournalTab() {
                     <CardTitle className="text-base">{draft.memo}</CardTitle>
                     <CardDescription>
                       {t("SubmittedBy")}: {draft.creatorName}
+                    </CardDescription>
+                    {/* The reviewer is approving a posting into a specific
+                        period, so they are shown which one. Before SCRUM-50
+                        there was no date to show and approval silently chose
+                        its own. A draft with no date can no longer be
+                        approved at all, and says so here rather than only on
+                        the failed click. */}
+                    <CardDescription className="mt-0.5">
+                      {t("AccountingDate")}:{" "}
+                      {draft.accountingDate === undefined ? (
+                        <span className="font-medium text-amber-600">
+                          {t("ManualJournalMissingDate")}
+                        </span>
+                      ) : (
+                        <span className="font-medium text-slate-700">
+                          <bdi>{format(new Date(draft.accountingDate), "MMM d, yyyy")}</bdi>
+                        </span>
+                      )}
                     </CardDescription>
                   </div>
                   <Badge variant="outline" className="bg-yellow-500/10 text-yellow-600 border-yellow-500/20 shrink-0">
@@ -268,6 +299,27 @@ export function ManualJournalTab() {
 
             <Form {...form}>
               <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+                <FormField
+                  control={form.control}
+                  name="accountingDate"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("AccountingDate")}</FormLabel>
+                      <FormControl>
+                        <Input type="date" {...field} />
+                      </FormControl>
+                      {/* Says what the field decides, because the consequence
+                          of getting it wrong is invisible until a report is
+                          run: this is the period the entry lands in, not the
+                          day it is approved. */}
+                      <p className="text-xs text-muted-foreground">
+                        {t("AccountingDateHelp")}
+                      </p>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
                 <FormField
                   control={form.control}
                   name="memo"
