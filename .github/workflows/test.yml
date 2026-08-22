@@ -113,18 +113,87 @@ jobs:
     - name: Install dependencies
       run: pnpm install --frozen-lockfile --ignore-scripts
 
-    # Produces coverage/lcov.info, which sonar-project.properties points at.
+    # Two coverage reports feed Sonar (SCRUM-185):
     #
-    # NOTE: `test:coverage:sonar` restricts --coverage.include to 7 convex
-    # modules, so everything else reports 0%. Against a gate with a
-    # coverage-on-new-code condition that will read as a regression the first
-    # time it runs. Widen the include list (or scope the gate) before treating
-    # Sonar's coverage number as meaningful — the security rating, which is what
-    # this PR is about, is unaffected.
-    - name: Generate coverage for Sonar
+    #   coverage-sonar/lcov.info             every production module under convex/
+    #   apps/mobile/coverage-sonar/lcov.info  every production module in the mobile app
+    #
+    # Both are generated here, in this job, so they are guaranteed to describe the
+    # same commit the scanner analyses. The mobile suite costs about 50s, which is
+    # not worth an artifact handoff between jobs and the skew risk that carries.
+    - name: Generate Convex coverage for Sonar
       run: pnpm test:coverage:sonar
       env:
         NODE_ENV: test
+
+    # `continue-on-error` here is about the REPORT, not about the tests.
+    #
+    # The mobile suite's real gate is `pnpm mobile:test` in the mobile-and-shared
+    # job, which is a required check enforcing 100% over its curated set. A
+    # genuine mobile test failure fails there and is not hidden by this.
+    #
+    # What this tolerates is a flaky run erasing the Sonar context altogether: if
+    # this step fails the job, GitHub skips every later step, the scan never runs,
+    # and the required `SonarCloud Code Analysis` context is never posted — a
+    # merge blocked with nothing to read (SCRUM-186). A partial report can only
+    # UNDERSTATE coverage, which pushes the gate toward red; it cannot manufacture
+    # a green. The verification below still refuses to scan on a missing report.
+    - name: Generate mobile coverage for Sonar
+      run: pnpm mobile:test:coverage:sonar
+      continue-on-error: true
+      env:
+        NODE_ENV: test
+
+    # jest writes SF: paths relative to its own rootDir, which is apps/mobile —
+    # so the mobile report says `SF:src/features/...`. Sonar resolves coverage
+    # paths against the PROJECT base directory, the repository root, where no
+    # `src/` exists. Left alone the whole mobile report resolves to nothing, and
+    # it does so SILENTLY: the scan still succeeds, the files just stay uncovered,
+    # which is indistinguishable from having no tests. The convex report does not
+    # need this — vitest already runs at the repository root, so its paths read
+    # `SF:convex/...` and resolve as-is.
+    - name: Rebase mobile coverage paths onto the repository root
+      run: |
+        sed -i 's|^SF:|SF:apps/mobile/|' apps/mobile/coverage-sonar/lcov.info
+        echo "rewrote $(grep -c '^SF:' apps/mobile/coverage-sonar/lcov.info) source paths"
+
+    # Sonar does NOT fail when a coverage report is missing or unresolvable. It
+    # analyses with no coverage data and reports 0.0% coverage on 0.0% of new
+    # code, which the Quality Gate PASSES. That vacuous green is the defect this
+    # ticket exists to remove, so the scan is not allowed to start until both
+    # reports exist AND their records point at files that are really there.
+    #
+    # Counting records is not enough on its own: a report full of paths that
+    # resolve to nothing has plenty of records and still measures nothing. That
+    # is exactly the failure the rewrite above prevents, so this is the check
+    # that would have caught it.
+    - name: Verify both coverage reports are real before scanning
+      run: |
+        fail=0
+        for report in coverage-sonar/lcov.info apps/mobile/coverage-sonar/lcov.info; do
+          if [ ! -s "$report" ]; then
+            echo "::error::$report is missing or empty. Refusing to scan: Sonar would report 0.0% coverage on 0.0% of new code and PASS the gate on no evidence."
+            fail=1
+            continue
+          fi
+          records=$(grep -c '^SF:' "$report" || true)
+          if [ "$records" -lt 1 ]; then
+            echo "::error::$report contains no SF: source records. Refusing to scan on an empty report."
+            fail=1
+            continue
+          fi
+          missing=0
+          while IFS= read -r path; do
+            [ -f "$path" ] || missing=$((missing + 1))
+          done < <(grep '^SF:' "$report" | sed 's|^SF:||')
+          if [ "$missing" -gt 0 ]; then
+            echo "::error::$report has $missing of $records source paths that do not exist at the repository root. Sonar would silently ignore them and measure less than it appears to."
+            fail=1
+            continue
+          fi
+          echo "$report: $records source records, all resolving to real files"
+        done
+        exit $fail
 
     - name: SonarCloud scan
       if: ${{ env.SONAR_TOKEN != '' }}
