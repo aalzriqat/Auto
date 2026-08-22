@@ -18,7 +18,9 @@ overrides:
   brace-expansion@>=3.0.0: 5.0.9
 
 patchedDependencies:
-  expo-sharing: 0eddd9192c3a88ec6dbc7a5ea7425cf4e1e0b759b9d9c296a2fd22c60ca12b3a
+  expo-sharing:
+    hash: 0eddd9192c3a88ec6dbc7a5ea7425cf4e1e0b759b9d9c296a2fd22c60ca12b3a
+    path: patches/expo-sharing.patch
 
 importers:
 
