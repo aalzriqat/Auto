@@ -32,7 +32,7 @@ import { execFileSync } from "node:child_process";
 import { extractClientCalls } from "./clientPaths.mjs";
 import { compareContracts, blockersForRelease } from "./compare.mjs";
 import { CLIENT_SURFACES, listSurfaceFiles, unscannedConvexClients } from "./clientFiles.mjs";
-import { fetchDeployedSpec, readSpecFile, redact } from "./fetchSpec.mjs";
+import { fetchDeployedSpec, isDeploymentName, readSpecFile, redact } from "./fetchSpec.mjs";
 import { changedContractPaths, summarizeChanges } from "./specDiff.mjs";
 import { classifyBreaking, alertsFor, releaseBlockingFindings } from "./classify.mjs";
 
@@ -56,11 +56,19 @@ const EXIT = { OK: 0, FAIL: 1, USAGE: 2, UNAVAILABLE: 3, BLOCKED: 4, STANDING_DE
  * the defect came straight back somewhere else. A boundary is the only form of
  * the fix that also covers the throw nobody has written yet.
  *
- * Mapping every escaped throw to UNAVAILABLE is safe in the direction that
- * matters: FAIL is only ever reached by an explicit path with real evidence
- * behind it, so nothing that could legitimately prove skew arrives here.
- * UNAVAILABLE is loud, is documented as NOT a pass, and is what "the control
- * could not complete" honestly is.
+ * ⚠️ AND THE FIRST VERSION OF THIS COMMENT OVERCLAIMED. It said "nothing that
+ * could legitimately prove skew arrives here", which was false: `emit` ran
+ * BEFORE the exit carrying the verdict, so an unwritable `--json` path turned a
+ * proven skew into UNAVAILABLE. A reviewer disproved it and it was reproduced
+ * on the real pipeline. `emit` is now best-effort, and after it the only
+ * remaining work is console writes and `process.exit`.
+ *
+ * The honest claim is therefore narrower, and stated as a property to PRESERVE
+ * rather than one that holds by luck: every verdict is decided before anything
+ * that can fail is attempted, so a throw reaching this handler means the
+ * control did not finish — not that it finished and found nothing. Anything
+ * added between a decided verdict and its `process.exit` must not be able to
+ * throw, or this handler will silently downgrade a real answer again.
  */
 function unavailable(reason) {
   console.log(redact(JSON.stringify({ verdict: "UNAVAILABLE", reason }, null, 2)));
@@ -99,12 +107,51 @@ if (mode !== "production" && mode !== "release") {
   process.exit(EXIT.USAGE);
 }
 
+// ⚠️ THE UNATTENDED MONITOR REQUIRES A DEPLOYMENT IDENTITY. ABSENCE OF
+// CONFIGURATION MUST NEVER DISABLE A CONTROL.
+//
+// `contract-skew.yml` passes `CONVEX_PROD_DEPLOYMENT` so the fetcher can refuse
+// a spec from any other deployment — a preview key silently addresses a preview
+// backend, and a control that verified a deployment nobody is served by would
+// report success with total confidence.
+//
+// The variable was defined only on the `production` environment, while this job
+// runs in `contract-skew-prod-read`. An unset `${{ vars.X }}` expands to the
+// EMPTY STRING, `??` does not skip `""`, and the check downstream was a
+// truthiness test — so the guard was inert and nothing said so. The first
+// unattended run would have passed, having verified nothing about WHICH
+// backend it read, and no test or CI job could have caught it.
+//
+// So the requirement is asserted here, before any credential is touched, and
+// the reason names the fix rather than the symptom.
+const suppliedDeployment = strArg("expect-deployment") ?? process.env.CONVEX_PROD_DEPLOYMENT;
+// An empty value is treated as ABSENT rather than as a request, so an ambient
+// empty variable cannot break a local run — but absence is still refused below
+// wherever the identity is required.
+const expectedDeployment =
+  typeof suppliedDeployment === "string" && suppliedDeployment.trim() !== ""
+    ? suppliedDeployment
+    : undefined;
+
+// A supplied spec file is evidence handed in by the caller and a workstation run
+// is a human reproducing a result locally; neither is the unattended monitor.
+const requiresDeploymentIdentity =
+  mode === "production" && !strArg("spec") && arg("allow-workstation") !== true;
+
+if (requiresDeploymentIdentity && !isDeploymentName(expectedDeployment)) {
+  unavailable(
+    `the production monitor requires the identity of the deployment it must verify. ` +
+      `Set CONVEX_PROD_DEPLOYMENT (or pass --expect-deployment) to that deployment's name. ` +
+      `Received ${suppliedDeployment === undefined ? "no value" : JSON.stringify(suppliedDeployment)}.`
+  );
+}
+
 // ── 1. Authoritative deployed contract ───────────────────────────────────────
 let deployed;
 try {
   deployed = fetchDeployedSpec({
     specFile: strArg("spec"),
-    expectedDeployment: strArg("expect-deployment") ?? process.env.CONVEX_PROD_DEPLOYMENT ?? undefined,
+    expectedDeployment,
     allowWorkstation: arg("allow-workstation") === true,
   });
 } catch (error) {
@@ -281,7 +328,26 @@ function emit(payload) {
   // public repository, so treating the file as the safe copy would be wrong.
   const body = redact(JSON.stringify(payload, null, 2));
   const out = arg("json");
-  if (typeof out === "string") fs.writeFileSync(out, body);
+  if (typeof out === "string") {
+    // ⚠️ WRITING THE REPORT IS BEST-EFFORT AND MUST NEVER REPLACE A VERDICT.
+    //
+    // `emit` runs BEFORE the exit that carries the verdict. An unguarded write
+    // therefore let an I/O failure decide the exit code: with the boundary
+    // above, a genuine production skew came out as UNAVAILABLE (3) instead of
+    // FAIL (1), and the workflow then told the responder to check credentials
+    // when the truth was "deploy the backend". Reproduced on the real pipeline —
+    // the same run exited 1 without `--json` and 3 with `--json` pointed at an
+    // unwritable path.
+    //
+    // The artifact is a convenience; the verdict is the product. A failure to
+    // save the convenience is worth a warning and nothing more.
+    try {
+      fs.writeFileSync(out, body);
+    } catch (error) {
+      const detail = String(/** @type {Error} */ (error)?.message ?? error);
+      console.error(redact(`::warning::contract-skew could not write the report to ${out}: ${detail}`));
+    }
+  }
   console.log(body);
 }
 

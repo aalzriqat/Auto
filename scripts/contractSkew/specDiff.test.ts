@@ -661,12 +661,41 @@ describe("an unreadable spec is UNAVAILABLE, never a proven skew", () => {
    */
   const cli = path.resolve("scripts/contractSkew/cli.mjs");
 
-  const runWith = (args: string[], dir: string) => {
+  /**
+   * The exit code IS the behaviour under test, so the environment must not be
+   * able to change it. `CONVEX_PROD_DEPLOYMENT` is stripped unless a test sets
+   * it deliberately — otherwise whether these tests pass would depend on
+   * whether the developer running them happens to export it.
+   */
+  const runWith = (args: string[], dir: string, env: Record<string, string> = {}) => {
+    const base = { ...process.env };
+    delete base.CONVEX_PROD_DEPLOYMENT;
     try {
-      execFileSync(process.execPath, [cli, ...args], { cwd: dir, stdio: "pipe" });
+      execFileSync(process.execPath, [cli, ...args], {
+        cwd: dir,
+        stdio: "pipe",
+        env: { ...base, ...env },
+      });
       return 0;
     } catch (error) {
       return (error as { status?: number }).status ?? -1;
+    }
+  };
+
+  /** Captures stderr as well, for the cases where the REASON is the behaviour. */
+  const runCapturing = (args: string[], dir: string, env: Record<string, string> = {}) => {
+    const base = { ...process.env };
+    delete base.CONVEX_PROD_DEPLOYMENT;
+    try {
+      execFileSync(process.execPath, [cli, ...args], {
+        cwd: dir,
+        stdio: "pipe",
+        env: { ...base, ...env },
+      });
+      return { code: 0, stderr: "" };
+    } catch (error) {
+      const e = error as { status?: number; stderr?: Buffer };
+      return { code: e.status ?? -1, stderr: String(e.stderr ?? "") };
     }
   };
 
@@ -727,6 +756,110 @@ describe("an unreadable spec is UNAVAILABLE, never a proven skew", () => {
   test("a tsconfig that cannot be PARSED exits UNAVAILABLE (3), not FAIL (1)", () => {
     const dir = scaffoldBrokenProject(JSON.stringify({ extends: "./nowhere.json" }));
     expect(runWith(["--mode", "production", "--spec", "spec.json"], dir)).toBe(3);
+  });
+
+  /**
+   * ⚠️ A PROVEN VERDICT MUST SURVIVE A FAILURE TO SAVE THE REPORT.
+   *
+   * `emit` runs BEFORE the exit that carries the verdict, and its `--json`
+   * write was unguarded — so with the error boundary in place, an I/O failure
+   * decided the exit code and a genuine production skew came out as
+   * UNAVAILABLE (3). The workflow then tells the responder the credential could
+   * not read the spec, when the truth is "deploy the backend".
+   *
+   * The artifact is a convenience. The verdict is the product.
+   */
+  const scaffoldSkew = () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "skew-cli-fail-"));
+    fs.writeFileSync(
+      path.join(dir, "spec.json"),
+      JSON.stringify(spec(fn("vehicles.js:update", { orgId: required(str) })))
+    );
+    fs.mkdirSync(path.join(dir, "app"), { recursive: true });
+    // `nope` is not declared by the backend, and Convex rejects undeclared
+    // fields — a real, proven incompatibility rather than an unknown.
+    fs.writeFileSync(
+      path.join(dir, "app", "uses-convex.tsx"),
+      // The extractor only follows a LITERAL `api.*` reference, which is what
+      // real client code uses; a string identifier yields no call site at all,
+      // and a scaffold with no call site can never produce the skew this test
+      // depends on. The control test above exists to catch exactly that.
+      'import { useMutation } from "convex/react";\n' +
+        'declare const api: { vehicles: { update: unknown } };\n' +
+        'export const go = () => {\n' +
+        '  const update = useMutation(api.vehicles.update);\n' +
+        '  return update({ orgId: "o", nope: "x" });\n' +
+        '};\n'
+    );
+    fs.writeFileSync(
+      path.join(dir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          target: "ES2022",
+          module: "ESNext",
+          moduleResolution: "Bundler",
+          strict: true,
+          noEmit: true,
+        },
+      })
+    );
+    return dir;
+  };
+
+  test("the scaffold really does prove a skew — exit FAIL (1)", () => {
+    // Without this control the next test could pass for the wrong reason: a
+    // scaffold that produces no skew at all would also never produce a 3.
+    expect(runWith(["--mode", "production", "--spec", "spec.json"], scaffoldSkew())).toBe(1);
+  });
+
+  test("a proven skew stays FAIL (1) when the --json report CANNOT be written", () => {
+    const dir = scaffoldSkew();
+    const result = runCapturing(
+      ["--mode", "production", "--spec", "spec.json", "--json", "no-such-dir/out.json"],
+      dir
+    );
+    expect(result.code).toBe(1);
+    // And the failure to save is reported rather than swallowed.
+    expect(result.stderr).toMatch(/could not write the report/);
+  });
+
+  /**
+   * ⚠️ ABSENCE OF CONFIGURATION MUST NEVER DISABLE A CONTROL.
+   *
+   * `CONVEX_PROD_DEPLOYMENT` was defined only on the `production` environment
+   * while this job runs in `contract-skew-prod-read`. An unset `${{ vars.X }}`
+   * expands to the EMPTY STRING, `??` does not skip `""`, and the check was a
+   * truthiness test — so the deployment-targeting guard was inert and the run
+   * would have reported a confident verdict without identifying which backend
+   * it read. No CI job could have caught that; only reading the config could.
+   */
+  test("the monitor REFUSES to run without a deployment identity", () => {
+    const result = runCapturing(["--mode", "production"], scaffoldSpec());
+    expect(result.code).toBe(3);
+    expect(result.stderr).toMatch(/requires the identity of the deployment/);
+  });
+
+  test("an EMPTY deployment variable is refused, not treated as an opt-out", () => {
+    // This is the exact shape an unset GitHub Actions variable produces.
+    const result = runCapturing(["--mode", "production"], scaffoldSpec(), {
+      CONVEX_PROD_DEPLOYMENT: "",
+    });
+    expect(result.code).toBe(3);
+    expect(result.stderr).toMatch(/requires the identity of the deployment/);
+  });
+
+  test("a MALFORMED deployment identity is refused too", () => {
+    const result = runCapturing(["--mode", "production"], scaffoldSpec(), {
+      CONVEX_PROD_DEPLOYMENT: "prod:kindly-hound-172",
+    });
+    expect(result.code).toBe(3);
+    expect(result.stderr).toMatch(/requires the identity of the deployment/);
+  });
+
+  test("a supplied spec file is NOT the unattended monitor, so it needs no identity", () => {
+    // A human handing in evidence may legitimately skip the check; only the
+    // unattended monitor is required to prove what it looked at.
+    expect(runWith(["--mode", "production", "--spec", "spec.json"], scaffoldSpec())).toBe(0);
   });
 });
 

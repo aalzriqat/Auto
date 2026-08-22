@@ -213,10 +213,40 @@ function firstLine(error) {
   return "unknown error";
 }
 
+/**
+ * A Convex deployment name as it appears in the spec URL host — `kindly-hound-172`
+ * in `https://kindly-hound-172.convex.cloud`.
+ *
+ * Shared with the CLI on purpose: the monitor decides whether an identity was
+ * SUPPLIED using the same rule that decides whether it MATCHES, so a value can
+ * never be good enough to accept and too malformed to compare.
+ */
+export function isDeploymentName(value) {
+  return typeof value === "string" && /^[a-z0-9][a-z0-9-]*$/.test(value);
+}
+
 function finish(spec, rung, expectedDeployment) {
   const url = typeof spec?.url === "string" ? spec.url : "";
-  if (expectedDeployment) {
-    // `https://kindly-hound-172.convex.cloud` must contain the expected name.
+  if (expectedDeployment !== undefined) {
+    // ⚠️ EMPTY OR MALFORMED IS A MISCONFIGURATION, NOT AN OPT-OUT.
+    //
+    // The test was `if (expectedDeployment)`, so an EMPTY STRING skipped the
+    // comparison silently. That is exactly what a missing GitHub Actions
+    // variable produces: `${{ vars.X }}` expands to `""` rather than to
+    // nothing, and `??` does not skip `""`. The guard the workflow comment
+    // describes as binding was therefore inert, and the run reported a
+    // confident verdict without ever identifying which deployment it read.
+    //
+    // `undefined` still means "no identity check was requested", which a local
+    // run may legitimately choose. Anything else means one WAS requested, and a
+    // request we cannot honour must refuse rather than quietly skip.
+    if (!isDeploymentName(expectedDeployment)) {
+      throw new Error(
+        `Expected deployment is set but is not a deployment name: ` +
+          `${JSON.stringify(expectedDeployment)}. Refusing to report without verifying ` +
+          `which deployment the spec came from.`
+      );
+    }
     const host = url.replace(/^https?:\/\//, "").split(".")[0];
     if (host !== expectedDeployment) {
       throw new Error(

@@ -178,6 +178,44 @@ describe("the credential ladder fails closed", () => {
     );
   });
 
+  test("an EMPTY expected deployment is a MISCONFIGURATION, never an opt-out", () => {
+    /**
+     * ⚠️ The check was `if (expectedDeployment)`, so `""` skipped it silently —
+     * and `""` is exactly what an unset GitHub Actions variable expands to. The
+     * guard the workflow calls binding was inert, and the run reported a
+     * confident verdict about a deployment it never identified.
+     *
+     * `undefined` still means "no check requested". Anything else means one WAS
+     * requested, and a request that cannot be honoured must refuse.
+     */
+    const dir = scratch();
+    const file = path.join(dir, "spec.json");
+    fs.writeFileSync(file, JSON.stringify({ url: "https://kindly-hound-172.convex.cloud", functions: [] }));
+    expect(() => fetchDeployedSpec({ specFile: file, expectedDeployment: "" })).toThrow(
+      /is not a deployment name/
+    );
+  });
+
+  test("a MALFORMED expected deployment is refused rather than compared", () => {
+    // `prod:kindly-hound-172` can never equal a URL host, so comparing it would
+    // fail for the right reason by accident. Refusing names the real problem.
+    const dir = scratch();
+    const file = path.join(dir, "spec.json");
+    fs.writeFileSync(file, JSON.stringify({ url: "https://kindly-hound-172.convex.cloud", functions: [] }));
+    expect(() =>
+      fetchDeployedSpec({ specFile: file, expectedDeployment: "prod:kindly-hound-172" })
+    ).toThrow(/is not a deployment name/);
+  });
+
+  test("and undefined still means no identity check was requested", () => {
+    const dir = scratch();
+    const file = path.join(dir, "spec.json");
+    fs.writeFileSync(file, JSON.stringify({ url: "https://anything.convex.cloud", functions: [] }));
+    expect(fetchDeployedSpec({ specFile: file, expectedDeployment: undefined })).toMatchObject({
+      ok: true,
+    });
+  });
+
   test("a spec from the EXPECTED deployment is accepted", () => {
     const dir = scratch();
     const file = path.join(dir, "spec.json");
