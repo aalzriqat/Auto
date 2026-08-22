@@ -17,15 +17,45 @@
  * Exit codes are deliberately distinct, and UNAVAILABLE is not success:
  *   0  PASS         proven compatible, complete coverage
  *   0  UNKNOWN      no proven break, but coverage is incomplete (warning only)
- *   1  FAIL         proven break — production skew
+ *   1  TOOLING FAILURE  the control did not complete. Node's DEFAULT for an
+ *                       uncaught throw, so this is the code you get when
+ *                       nothing classified anything. NOT a verdict about the
+ *                       backend — do NOT deploy on it.
  *   2  usage error
- *   3  UNAVAILABLE  no authoritative evidence could be obtained
+ *   3  UNAVAILABLE  no authoritative evidence could be obtained — a DELIBERATE
+ *                   classification, reached through the error boundary
  *   4  BLOCKED      release-mode: an UNKNOWN intersects a path this release changes
  *   5  STANDING DEFECT  the client disagrees with a backend that is ALREADY
  *                       deployed — a real product bug, but deploying fixes
  *                       nothing, so it must not fire the skew alarm
  *   6  COVERAGE GAP     a client file that calls Convex was never scanned, so
  *                       the control cannot answer for it at all
+ *   7  PRODUCTION SKEW  proven break against the DEPLOYED backend. The ONLY
+ *                       code that may carry a deploy instruction.
+ *   8  RELEASE BREAK    release-mode: shipping this candidate WOULD introduce a
+ *                       skew. A decision still available to us — deploying the
+ *                       backend is not the remedy, so it is not code 7.
+ *
+ * ⚠️ WHY PROVEN SKEW IS NOT EXIT 1, AND WHY THAT MATTERS MORE THAN IT LOOKS.
+ *
+ * It used to be. Node exits 1 for ANY uncaught throw, so a bad `typescript`
+ * install, a syntax error in a transitively imported module, an OOM — anything
+ * that died before a boundary existed — produced exit 1, and the workflow
+ * rendered exit 1 as "PRODUCTION SKEW — Deploy the Convex backend at this
+ * commit." A broken toolchain told an operator to change production.
+ *
+ * A boundary was written twice for that, and both times it fixed the INSTANCES
+ * rather than the CLASS: an import-time throw still escaped, because ESM
+ * evaluates every import before any statement in the importing module, so
+ * handlers registered in this file cannot cover this file's own imports.
+ * Reproduced at `clientPaths.mjs`: exit 1, rendered as a deploy order.
+ *
+ * The fix is to stop the DEFAULT code carrying a verdict at all. Nothing can
+ * accidentally exit 7 — it is reached only where this control has proven skew
+ * against a spec it actually read. Anything that dies before that point lands
+ * on 1, which now says "the control failed, do not deploy on this result".
+ * This also covers the failures no `try/catch` can reach, including ones that
+ * kill the process before any JavaScript runs.
  */
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -36,7 +66,23 @@ import { fetchDeployedSpec, isDeploymentName, readSpecFile, redact } from "./fet
 import { changedContractPaths, summarizeChanges } from "./specDiff.mjs";
 import { classifyBreaking, alertsFor, releaseBlockingFindings } from "./classify.mjs";
 
-const EXIT = { OK: 0, FAIL: 1, USAGE: 2, UNAVAILABLE: 3, BLOCKED: 4, STANDING_DEFECT: 5, COVERAGE_GAP: 6 };
+const EXIT = {
+  OK: 0,
+  // ⚠️ NOT A VERDICT. Node's default for an uncaught throw lands here, so this
+  // code must never mean "the backend is behind". See the header.
+  TOOLING_FAILURE: 1,
+  USAGE: 2,
+  UNAVAILABLE: 3,
+  BLOCKED: 4,
+  STANDING_DEFECT: 5,
+  COVERAGE_GAP: 6,
+  // ⚠️ THE ONLY CODE THAT MAY CARRY A DEPLOY INSTRUCTION. Deliberate, and
+  // unreachable by accident: nothing defaults to 7.
+  PRODUCTION_SKEW: 7,
+  // Release-mode proven break. Deploying the backend is not the remedy here,
+  // so this is deliberately NOT 7 and carries no deploy instruction.
+  RELEASE_BREAK: 8,
+};
 
 /**
  * ⚠️ AN EXCEPTION MEANS "THE CONTROL COULD NOT LOOK", NEVER "SKEW PROVEN".
@@ -392,7 +438,7 @@ if (mode === "release") {
         `::error file=${f.file},line=${f.line}::${f.identifier} ${f.path} is unproven and this release changes that path`
       );
     }
-    process.exit(releaseBreaking.length ? EXIT.FAIL : EXIT.BLOCKED);
+    process.exit(releaseBreaking.length ? EXIT.RELEASE_BREAK : EXIT.BLOCKED);
   }
   // Unrelated unknowns are control health, not this release's problem.
   if (blockers.unrelatedUnknowns > 0) {
@@ -446,7 +492,7 @@ if (alert.productionSkew) {
       `${classification.unclassified.length} unclassified. Deploy the Convex backend at this commit. ` +
       `Basis: ${classification.basis}`
   );
-  process.exit(EXIT.FAIL);
+  process.exit(EXIT.PRODUCTION_SKEW);
 }
 
 // ⚠️ A standing defect is a real failure and is reported as one — never

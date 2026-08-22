@@ -805,11 +805,28 @@ describe("LAYER 1: the relation itself, on DIRECTLY CONSTRUCTED pairs", () => {
     // ── VARIANTS. Not knowing which alternative runs is itself partial. ──
     ["variants admit any one of their alternatives", clientNode.variants([cStr, num]), cStr, true],
     ["a single shape does NOT admit variants it is only part of", cStr, clientNode.variants([cStr, num]), false],
-    ["variants admit variants they cover", clientNode.variants([cStr, num]), clientNode.variants([cStr]), true],
-    ["variants do NOT admit an alternative they lack", clientNode.variants([cStr]), clientNode.variants([cStr, num]), false],
+    // ⚠️ THESE TWO ROWS USED TO LIE. They passed `variants([cStr])`, and
+    // `clientNode.variants` COLLAPSES a single-element array to the bare
+    // element — so both compared a variants node against a plain scalar and
+    // silently duplicated the two rows above, while their labels claimed
+    // variants-vs-variants coverage. No coverage was lost (the merge-derived
+    // layer reaches genuine bipartite comparisons), but a label asserting
+    // coverage that does not exist is the same defect as a vacuous test.
+    // Both sides are now genuinely multi-element.
+    ["variants admit variants they fully cover", clientNode.variants([cStr, num, clientNode.literal(new Set(["A"]))]), clientNode.variants([cStr, num]), true],
+    ["variants do NOT admit variants carrying an alternative they lack", clientNode.variants([cStr, num]), clientNode.variants([cStr, clientNode.emptyArray()]), false],
 
     // ── SCALARS AND LITERALS at the leaves. ──
-    ["a scalar admits the same scalar", cStr, cStr, true],
+    // ⚠️ FRESHLY CONSTRUCTED ON BOTH SIDES, ON PURPOSE. Reusing the shared
+    // `cStr` constant as both operands made `wider === narrower` short-circuit
+    // before the scalar comparison ever ran, so mutating that branch to `false`
+    // left the ENTIRE repository suite green — 3917 passed. Fifth instance of
+    // the same shape: the specimen construction masking the branch, not the
+    // rule being wrong. Two independently built scalars are not the same
+    // object, so these rows reach the comparison.
+    ["a scalar admits an independently built scalar of the same type", clientNode.scalar("string"), clientNode.scalar("string"), true],
+    ["a number scalar admits an independently built number scalar", clientNode.scalar("number"), clientNode.scalar("number"), true],
+    ["the identity short-circuit still holds for the very same object", cStr, cStr, true],
     ["a scalar does NOT admit a different scalar", cStr, num, false],
     ["a scalar admits a literal of its own type", cStr, cLit("A"), true],
     ["a scalar does NOT admit a literal of another type", cStr, clientNode.literal(new Set([1])), false],

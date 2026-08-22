@@ -158,6 +158,66 @@ describe("path identity follows the filesystem, not the developer's machine", ()
   });
 });
 
+describe("the deploy instruction belongs to ONE exit code, and never to Node's default", () => {
+  /**
+   * ⚠️ A STRUCTURAL GUARD, BECAUSE THE DEFECT LIVES IN THE WORKFLOW, NOT THE
+   * SCRIPT — and no behavioural test of the CLI can see it.
+   *
+   * Proven skew used to exit 1. Node exits 1 for ANY uncaught throw, so a bad
+   * dependency install or a syntax error in a transitively imported module
+   * produced exit 1, and `contract-skew.yml` rendered exit 1 as
+   * "PRODUCTION SKEW — Deploy the Convex backend at this commit." A broken
+   * toolchain told an operator to change production. Reproduced against the
+   * real CLI, not theorised: an import-time throw escapes the process-level
+   * boundary entirely, because ESM evaluates every import before any statement
+   * in the importing module.
+   *
+   * Two things therefore have to stay true together, and each is checked here
+   * because either alone can be reintroduced without the other failing:
+   *   · the deploy instruction is attached to the dedicated skew code ONLY;
+   *   · exit 1 is answered with do-not-deploy guidance.
+   */
+  const workflow = fs.readFileSync(".github/workflows/contract-skew.yml", "utf8");
+
+  /** The `case` arms of the exit-code dispatch, as `code -> message` pairs. */
+  const arms = (): Array<[string, string]> =>
+    [...workflow.matchAll(/^\s{12}(\d+)\)\s+echo\s+"([^"]*)"/gm)].map((m) => [m[1], m[2]]);
+
+  test("the dispatch is actually found — the guard is not reading an empty file", () => {
+    // Without this the two tests below would pass on a workflow that had been
+    // renamed, reformatted or deleted: an empty input satisfies "no arm says
+    // deploy" trivially. The same false-confidence shape this control exists
+    // to catch.
+    expect(arms().length, "no exit-code case arms found in contract-skew.yml").toBeGreaterThan(4);
+  });
+
+  test("ONLY the dedicated production-skew code carries a deploy instruction", () => {
+    const deploying = arms()
+      .filter(([, message]) => /Deploy the Convex backend/i.test(message))
+      .map(([code]) => code);
+    expect(deploying, "exactly one arm may tell an operator to deploy").toEqual(["7"]);
+  });
+
+  test("raw exit 1 is answered with DO NOT DEPLOY, not with a verdict", () => {
+    const one = arms().find(([code]) => code === "1");
+    expect(one, "exit 1 must be handled explicitly, not left to the default arm").toBeDefined();
+    expect(one![1]).toMatch(/DO NOT DEPLOY/i);
+    expect(one![1], "exit 1 must not claim anything about the backend").not.toMatch(/Deploy the Convex backend/i);
+  });
+
+  test("the CLI never spends the deploy code on anything but proven production skew", () => {
+    // The other half of the same rule, on the script side: if a second exit
+    // site ever adopted code 7, the workflow guard above would still pass while
+    // the deploy instruction started firing for something else.
+    const cli = fs.readFileSync("scripts/contractSkew/cli.mjs", "utf8");
+    // Declared once in the map...
+    expect(cli.split(/^\s*PRODUCTION_SKEW: 7,$/m).length - 1, "the code must be declared exactly once").toBe(1);
+    // ...and spent at exactly one exit site.
+    const uses = cli.split("EXIT.PRODUCTION_SKEW").length - 1;
+    expect(uses, "the deploy code must be reachable from exactly ONE exit site").toBe(1);
+  });
+});
+
 describe("redaction removes what the process was handed", () => {
   test("a Convex deploy key is removed by shape, wherever it appears", () => {
     const key = "prod:" + "some-deployment" + "|" + "abcdefghijklmnopqrstuvwxyz012345";

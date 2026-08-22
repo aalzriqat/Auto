@@ -140,9 +140,21 @@ jobs:
           code=$?
           set -e
           echo "code=$code" >> "$GITHUB_OUTPUT"
+          # ⚠️ THE DEPLOY INSTRUCTION BELONGS TO CODE 7 AND NOTHING ELSE.
+          #
+          # It used to belong to exit 1 — which is ALSO Node's default for any
+          # uncaught throw, so a bad dependency install or a syntax error in a
+          # transitively imported module rendered as "Deploy the Convex backend
+          # at this commit." A broken toolchain told an operator to change
+          # production. Reproduced, not theorised.
+          #
+          # Exit 1 now means the control did not complete, and is answered with
+          # unavailable-class guidance. Nothing can reach 7 by accident.
           case "$code" in
             0) echo "No production skew detected." ;;
-            1) echo "::error::PRODUCTION SKEW — the deployed backend is behind the current one. Deploy the Convex backend at this commit." ;;
+            7) echo "::error::PRODUCTION SKEW — the deployed backend is behind the current one. Deploy the Convex backend at this commit." ;;
+            8) echo "::error::RELEASE BREAK — shipping this candidate would introduce a skew. Deploying the backend is NOT the remedy; fix the client or the candidate." ;;
+            1) echo "::error::CONTROL FAILED TO COMPLETE (raw exit 1) — this is a tooling or runtime failure, NOT a verdict about the backend. DO NOT DEPLOY on this result. Investigate the job log." ;;
             3) echo "::error::Control UNAVAILABLE — the credential could not read the production function spec. This is NOT a pass." ;;
             6) echo "::error::COVERAGE GAP — a client file calling Convex is in no scanned surface. The control cannot answer for it, so this is NOT a pass." ;;
             5) echo "::error::STANDING CONTRACT DEFECT — a client disagrees with a backend that is ALREADY deployed. This is a product bug, NOT a missing deploy; deploying will not fix it." ;;
