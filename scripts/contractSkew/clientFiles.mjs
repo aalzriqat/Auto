@@ -112,7 +112,27 @@ export function listSurfaceFiles(root, surface) {
   return out;
 }
 
-const normalize = (p) => path.resolve(p).split(path.sep).join("/").toLowerCase();
+/**
+ * ⚠️ CASE-FOLD ONLY WHERE THE FILESYSTEM ACTUALLY IS CASE-INSENSITIVE.
+ *
+ * This lowercased unconditionally. On Linux — which is what CI runs —
+ * `app/Foo.tsx` and `app/foo.tsx` are DIFFERENT files that collapsed to one
+ * key, so if either had been scanned the other was treated as scanned and
+ * dropped from the gap report. The run then exited 0 for a client file the
+ * control never examined, which is the exact failure the comment above
+ * describes.
+ *
+ * Only win32 is folded, deliberately not darwin: APFS can be configured either
+ * way. Being wrong there produces a false GAP (a scanned file reported as
+ * unscanned), which denies PASS and is loud. Folding when we should not
+ * produces a false PASS, which is silent. When the two error directions are
+ * unequal, take the loud one.
+ */
+const CASE_INSENSITIVE_FS = process.platform === "win32";
+const normalize = (p) => {
+  const abs = path.resolve(p).split(path.sep).join("/");
+  return CASE_INSENSITIVE_FS ? abs.toLowerCase() : abs;
+};
 
 /**
  * Client files that call Convex and are NOT covered by any surface — DERIVED by

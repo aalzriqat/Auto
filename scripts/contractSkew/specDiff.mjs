@@ -161,9 +161,24 @@ function signatureOf(node, optional) {
  * paths must stay plain because they are intersected with client finding paths.
  */
 function collect(node, path, out, optional) {
-  const existing = out.get(path);
+  // ⚠️ ACCUMULATE A SET, NEVER A HAND-JOINED STRING.
+  //
+  // This used to join merged signatures with a bare `&` and split on it to
+  // re-read them. Signatures embed literal VALUES, so a literal containing `&`
+  // made the merged string ambiguous: the set {"X&Y"} and the set {"X","Y"}
+  // both rendered as `X&Y`, and a real redeclaration between those two could
+  // not be seen.
+  //
+  // No false PASS was reachable, because a merged string only occurs under a
+  // union and the union node records its own recursive digest at the same path.
+  // That is exactly the "safe because a second mechanism happens to overlap"
+  // property this file rejects thirty lines above, and the same ambiguity class
+  // already found and closed in `digest`. Keeping the parts separate and
+  // encoding once removes the question instead of relying on the overlap.
+  const bucket = out.get(path);
   const sig = signatureOf(node, optional);
-  out.set(path, existing ? [...new Set([...existing.split("&"), sig])].sort(byText).join("&") : sig);
+  if (bucket) bucket.add(sig);
+  else out.set(path, new Set([sig]));
 
   if (node.kind === "object") {
     for (const [name, field] of node.fields) {
@@ -174,6 +189,28 @@ function collect(node, path, out, optional) {
   } else if (node.kind === "union") {
     for (const branch of node.branches) collect(branch, path, out, optional);
   }
+}
+
+/**
+ * One signature string per path, encoded unambiguously.
+ *
+ * `collect` accumulates a Set per path; the JSON encoding happens exactly once,
+ * here, so no separator can be confused with content. A single signature keeps
+ * its plain form, which is what a reader sees in the report for the ordinary
+ * case; only a genuinely merged path pays for the encoding.
+ *
+ * ⚠️ EXPORTED SO ITS PROPERTY CAN BE PINNED DIRECTLY. The ambiguity this closes
+ * is NOT reachable through `changedContractPaths`, because the union node's
+ * recursive digest at the same path already separates any structural
+ * difference. Two mutants proved it: reverting to the `&`-join and removing the
+ * sort both left every end-to-end test green. Testing it through that path
+ * would be testing nothing — so the injectivity is asserted here, where it is
+ * observable, and the integration overlap stays what it is: defence in depth,
+ * not the proof.
+ */
+export function encodeSignatures(set) {
+  const parts = [...set].sort(byText);
+  return parts.length === 1 ? parts[0] : JSON.stringify(parts);
 }
 
 function pathsOf(fn) {
@@ -190,6 +227,7 @@ function pathsOf(fn) {
   } else {
     collect(root, "", out, false);
   }
+  for (const [path, set] of out) out.set(path, encodeSignatures(set));
   return out;
 }
 

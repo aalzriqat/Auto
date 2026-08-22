@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import { changedContractPaths } from "./specDiff.mjs";
+import { changedContractPaths, encodeSignatures } from "./specDiff.mjs";
 import { fetchDeployedSpec, readSpecFile, redact } from "./fetchSpec.mjs";
 import { blockersForRelease } from "./compare.mjs";
 import { unscannedConvexClients } from "./clientFiles.mjs";
@@ -301,6 +301,40 @@ describe("changedContractPaths", () => {
       fn("w.js:save", { s: { optional: false, fieldType: { type: "literal", value: v } } });
     expect(changedContractPaths(spec(withValue("a|b")), spec(withValue("a|b")))).toEqual([]);
     expect(changedContractPaths(spec(withValue("a|b")), spec(withValue("a|c"))).length).toBeGreaterThan(0);
+  });
+
+  test("encodeSignatures is INJECTIVE — a separator inside a value cannot forge a set", () => {
+    /**
+     * The `&`-join twin of the digest forgery, pinned where it is observable.
+     *
+     * `collect` used to merge signatures at one path by joining with a bare
+     * `&` and splitting on it to re-read them. Signatures embed literal VALUES,
+     * so the set {"X&Y"} and the set {"X","Y"} rendered identically.
+     *
+     * ⚠️ This is asserted on the encoder DIRECTLY, on purpose. Driving it
+     * through `changedContractPaths` proves nothing: the union node's recursive
+     * digest at the same path already separates any structural difference, so
+     * both the `&`-join and the missing sort survive every end-to-end test.
+     * A test that cannot reach the property is not a test of it.
+     */
+    const joined = encodeSignatures(new Set(["X&Y"]));
+    const separate = encodeSignatures(new Set(["X", "Y"]));
+    expect(joined).not.toBe(separate);
+  });
+
+  test("encodeSignatures is deterministic regardless of insertion order", () => {
+    // Two runs observing the same branches in different orders must agree, or
+    // an inert difference reads as a redeclaration.
+    expect(encodeSignatures(new Set(["b", "a"]))).toBe(encodeSignatures(new Set(["a", "b"])));
+  });
+
+  test("an ordinary single-signature path keeps its plain readable form", () => {
+    // The encoding must not make every report unreadable for the common case.
+    const one = fn("w.js:save", { s: { optional: false, fieldType: { type: "string" } } });
+    const two = fn("w.js:save", { s: { optional: false, fieldType: { type: "number" } } });
+    const [change] = changedContractPaths(spec(one), spec(two));
+    expect(change.deployed).toBe("scalar:req:string");
+    expect(change.candidate).toBe("scalar:req:number");
   });
 
   test("a pure REORDER of union branches is NOT a change", () => {
