@@ -16,8 +16,10 @@ node_modules/
 /coverage
 coverage/
 # The Sonar-specific LCOV lives apart from coverage/ so the two runs stop
-# overwriting each other (SCRUM-185).
+# overwriting each other (SCRUM-185). The mobile app writes its own, next to its
+# strict-gate report, for the same reason.
 coverage-sonar/
+apps/mobile/coverage-sonar/
 
 # Playwright — .auth/ holds a real signed-in storageState (session cookies)
 playwright-report/
