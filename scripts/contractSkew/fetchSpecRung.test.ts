@@ -44,12 +44,25 @@ describe("a wrong deployment reached through a CREDENTIAL RUNG is a hard failure
   /** The rung the scheduled monitor actually uses. Value assembled, never a literal. */
   const withRungKey = (run: () => void) => {
     const saved = process.env.CONVEX_PROD_READ_KEY;
+    // ⚠️ THE LADDER HAS A SECOND RUNG, AND LEAVING IT SET MAKES A TEST'S
+    // VERDICT DEPEND ON THE MACHINE IT RUNS ON. With an ambient
+    // CONVEX_PROD_OPERATOR_KEY the `mockImplementationOnce` below throws for
+    // the FIRST rung only; the second rung then receives the default stub,
+    // returns the wrong-deployment spec, and `finish()` throws — so the
+    // genuine-failure test fails on the ENVIRONMENT rather than on the
+    // behaviour. Reproduced by exporting the key and running this file.
+    // The sibling suites already do this: `fetchSpec.test.ts` deletes every
+    // `CONVEX_*KEY`, `specDiff.test.ts` deletes both names.
+    const savedOperator = process.env.CONVEX_PROD_OPERATOR_KEY;
+    delete process.env.CONVEX_PROD_OPERATOR_KEY;
     process.env.CONVEX_PROD_READ_KEY = ["prod", ":", "kindly-hound-172", "|", "not-a-real-value-", "0000"].join("");
     try {
       run();
     } finally {
       if (saved) process.env.CONVEX_PROD_READ_KEY = saved;
       else delete process.env.CONVEX_PROD_READ_KEY;
+      if (savedOperator) process.env.CONVEX_PROD_OPERATOR_KEY = savedOperator;
+      else delete process.env.CONVEX_PROD_OPERATOR_KEY;
     }
   };
 

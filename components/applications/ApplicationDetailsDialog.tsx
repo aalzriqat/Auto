@@ -1034,7 +1034,13 @@ export function ApplicationDetailsDialog({
                               <Button
                                 size="sm"
                                 variant="default"
-                                onClick={() => updateDocStatus({ orgId: activeOrgId!, documentId: doc._id, status: "VERIFIED" })}
+                                onClick={() => {
+                                  // Every other handler in this file guards the
+                                  // org before calling; this inline one did not,
+                                  // and was relying on `!` instead.
+                                  if (!activeOrgId) return;
+                                  void updateDocStatus({ orgId: activeOrgId, documentId: doc._id, status: "VERIFIED" });
+                                }}
                                 disabled={status === "VERIFIED"}
                               >
                                 {t("Verify" as any)}

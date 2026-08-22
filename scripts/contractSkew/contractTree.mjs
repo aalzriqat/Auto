@@ -479,20 +479,74 @@ export function compareNode(client, validator, path, ctx) {
     // mismatch. (A validator union is the mirror image: satisfying ONE branch
     // is enough. Collapsing the two directions is what made the flat model
     // accept a payload built from two mutually exclusive branches.)
-    const seen = new Set();
-    const merged = [];
-    let ok = true;
-    for (const variant of client.nodes) {
-      const attempt = compareNode(variant, validator, path, ctx);
-      if (!attempt.compatible) ok = false;
-      for (const f of attempt.findings) {
+    const dedupe = (list) => {
+      const seen = new Set();
+      const out = [];
+      for (const f of list) {
         const key = `${f.severity}|${f.dimension}|${f.path}|${f.detail}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        merged.push(f);
+        out.push(f);
       }
+      return out;
+    };
+
+    const attempts = client.nodes.map((variant) => compareNode(variant, validator, path, ctx));
+    const rejected = attempts.filter((a) => !a.compatible);
+
+    // ⚠️ A MIXTURE IS NEITHER A BREAK NOR A PASS, AND CALLING IT EITHER IS A
+    // MEASURED DEFECT.
+    //
+    // When SOME members are accepted and some are refused, the client's TYPE
+    // admits a value the backend rejects — but nothing here proves that member
+    // is ever transmitted. Reporting BREAKING fabricates an outage; reporting
+    // CLEAN hides a real one. It is an unknown, and it must read as one.
+    //
+    // This is not hypothetical. The extractor deliberately strips `!`
+    // (`clientPaths.mjs`: "none changes the payload"), which is correct —
+    // a non-null assertion is erased at runtime and is a developer's claim, not
+    // evidence. So `orgId: activeOrgId!` extracts as `string | null`. Against a
+    // bare `v.id("organizations")` the null member is refused and the string
+    // member is accepted. Aggregating that as BREAKING would have emitted 15
+    // FABRICATED BREAKING findings on the first unattended whole-repo run —
+    // measured, exactly 15 — turning a false PASS into a false FAIL.
+    //
+    // ⚠️ AND THE OPPOSITE CASE MUST STAY CLEAN: `string | null` against
+    // `v.union(v.id("t"), v.null())` is fully accepted, because each member is
+    // compared against the WHOLE validator, unions included. Judging a member
+    // against one branch in isolation is what fabricated 8 findings in the
+    // measurement harness that produced these numbers.
+    if (rejected.length && rejected.length < attempts.length) {
+      const nested = validator.kind === "object" || validator.kind === "array";
+      const refused = client.nodes
+        .filter((_, i) => !attempts[i].compatible)
+        .map((n) => describeClient(n))
+        .join(", ");
+      const carried = attempts
+        .filter((a) => a.compatible)
+        .flatMap((a) => a.findings)
+        .filter((f) => f.severity !== SEVERITY.BREAKING);
+      return {
+        findings: dedupe([
+          finding(
+            ctx,
+            nested ? SEVERITY.SHAPE_UNKNOWN : SEVERITY.TYPE_UNKNOWN,
+            nested ? "SHAPE" : "VALUE",
+            path,
+            `client type admits ${refused}, which the backend's ${describeValidator(validator)} refuses, but other members are accepted — so transmission of the refused member is NOT proven`
+          ),
+          ...carried,
+        ]),
+        compatible: true,
+      };
     }
-    return { findings: merged, compatible: ok };
+
+    // Every member refused: no value this expression can produce is acceptable.
+    // Every member accepted: findings here are unknowns, not breaks.
+    return {
+      findings: dedupe(attempts.flatMap((a) => a.findings)),
+      compatible: rejected.length === 0,
+    };
   }
 
   if (validator.kind === "union") return compareUnion(client, validator, path, ctx);
@@ -601,11 +655,49 @@ export function compareNode(client, validator, path, ctx) {
 
   if (validator.kind === "literal") return compareValues(client, new Set([validator.value]), path, ctx);
   if (validator.kind === "id") {
-    if (client.kind === "object" || client.kind === "array") {
-      add(SEVERITY.BREAKING, "VALUE", `client sends ${describeClient(client)} where the backend declares id`);
+    // ⚠️ `v.id(table)` ACCEPTS ONLY A STRING. Reporting anything else as
+    // compatible was a FALSE PASS — the one verdict this control must never
+    // produce. The branch used to reject only `object` and `array`, so a
+    // client sending a number, boolean or bigint where the backend declares an
+    // id was reported CLEAN. Reproduced against the real `compareNode`:
+    // `scalar(number)`, `scalar(boolean)`, `scalar(bigint)` and
+    // `literal([42])` all returned `compatible: true`.
+    //
+    // ⚠️ STATED LIMITATION, NOT A SILENT GAP. This proves representation
+    // compatibility at the string / non-string level ONLY. It does NOT prove
+    // that a string is a valid document id for THIS table — `Id<"vehicles">`
+    // erases to a plain `string`, so a client sending `Id<"users">` here is
+    // NOT detected. Never describe this as "table identity verified".
+    // Table-qualified provenance is deliberately out of scope (SCRUM-182):
+    // measured on the real surface, demanding it would turn 1,170 of 1,321
+    // id comparisons (88.6%, across 465 functions) into UNKNOWN, which is a
+    // permanently amber monitor — and a monitor that is always amber is one
+    // that gets switched off.
+    //
+    // `variants`, `unresolved` and `opaqueValue` never reach here; they are
+    // answered above. That leaves exactly scalar, literal, object and array.
+    const idLabel = describeValidator(validator);
+    if (client.kind === "scalar") {
+      if (client.type === "string") return { findings, compatible: true };
+      add(
+        SEVERITY.BREAKING,
+        "VALUE",
+        `client sends ${describeClient(client)} where the backend declares ${idLabel}, which accepts only a string document id`
+      );
       return { findings, compatible: false };
     }
-    return { findings, compatible: true };
+    if (client.kind === "literal") {
+      const nonString = [...client.values].filter((v) => typeof v !== "string");
+      if (!nonString.length) return { findings, compatible: true };
+      add(
+        SEVERITY.BREAKING,
+        "VALUE",
+        `client can send ${describe(nonString)} where the backend declares ${idLabel}, which accepts only a string document id`
+      );
+      return { findings, compatible: false };
+    }
+    add(SEVERITY.BREAKING, "VALUE", `client sends ${describeClient(client)} where the backend declares id`);
+    return { findings, compatible: false };
   }
 
   // Scalar.

@@ -41,7 +41,7 @@ const cObj = (fields: Record<string, unknown>, keysComplete = true) =>
 const cLit = (...values: unknown[]) => clientNode.literal(new Set(values));
 const cStr = clientNode.scalar("string");
 
-const breaking = (r: { findings: { severity: string }[] }) =>
+const breaking = (r: { findings: { severity: string; detail?: string }[] }) =>
   r.findings.filter((f) => f.severity === SEVERITY.BREAKING);
 const paths = (r: { findings: { path: string }[] }) => r.findings.map((f) => f.path);
 
@@ -580,11 +580,43 @@ describe("provenance — an unproven subtree cannot prove a defect", () => {
 });
 
 describe("client variants — every branch the client might send must be accepted", () => {
-  test("a union where ONE branch is rejected is breaking", () => {
+  test("a union where ONE branch is rejected is UNKNOWN — not breaking, and not clean", () => {
+    /**
+     * ⚠️ THIS TEST ASSERTED `BREAKING` UNTIL THE v.id() MEASUREMENT, AND THAT
+     * WAS THE WRONG CONTRACT.
+     *
+     * A mixture means the client's TYPE admits a value the backend refuses,
+     * while nothing proves that member is ever transmitted. Reporting BREAKING
+     * fabricates an outage. Measured cost of getting this wrong: 15 fabricated
+     * BREAKING findings on the real repository, every one of them
+     * `orgId: activeOrgId!` — a non-null assertion the extractor deliberately
+     * strips because `!` is erased at runtime and is a claim, not evidence.
+     */
     const client = cObj({
       v: clientNode.variants([clientNode.scalar("string"), clientNode.scalar("number")]),
     });
-    expect(breaking(run(client, vObj({ v: [vStr] })))).toHaveLength(1);
+    const result = run(client, vObj({ v: [vStr] }));
+    expect(breaking(result)).toHaveLength(0);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].severity).toBe(SEVERITY.TYPE_UNKNOWN);
+    // It must not go silent either — that would be the false PASS.
+    expect(result.findings[0].detail).toContain("number");
+  });
+
+  test("a union where EVERY branch is rejected is still BREAKING", () => {
+    // The other half of the rule. If no value the expression can produce is
+    // acceptable, no execution of this call can succeed — that is proven, not
+    // unproven, and downgrading it would be the false PASS this control exists
+    // to prevent.
+    const client = cObj({
+      v: clientNode.variants([clientNode.scalar("number"), clientNode.scalar("boolean")]),
+    });
+    const result = breaking(run(client, vObj({ v: [vStr] })));
+    // One per refused member — which also proves the members are judged
+    // individually rather than collapsed into a single verdict.
+    expect(result).toHaveLength(2);
+    expect(result.map((f) => f.detail).join(" ")).toContain("number");
+    expect(result.map((f) => f.detail).join(" ")).toContain("boolean");
   });
 
   test("a union where every branch is accepted is silent", () => {
@@ -625,6 +657,115 @@ describe("client variants — every branch the client might send must be accepte
       v: clientNode.variants([cObj({ extra: cStr }), cObj({ extra: cStr })]),
     });
     expect(breaking(run(client, vObj({ v: [vObj({})] })))).toHaveLength(1);
+  });
+});
+
+describe("v.id(table) — what the client must prove, and what it need not", () => {
+  /**
+   * The authorized model (SCRUM-178 c14156), written out so a future change to
+   * any row is a deliberate act rather than an accident:
+   *
+   *   string scalar / all-string literal    -> CLEAN
+   *   number / boolean / bigint scalar      -> BREAKING
+   *   literal containing a non-string       -> BREAKING
+   *   object / array                        -> BREAKING
+   *   unresolved / opaque                   -> UNKNOWN
+   *   variants                              -> member-wise vs the WHOLE
+   *                                            validator: all accepted CLEAN,
+   *                                            all refused BREAKING,
+   *                                            mixture UNKNOWN
+   */
+  const vId = (table = "organizations") => ({ type: "id", tableName: table });
+  const unknowns = (r: { findings: { severity: string }[] }) =>
+    r.findings.filter((f) => f.severity !== SEVERITY.BREAKING);
+
+  test.each([
+    ["number", clientNode.scalar("number")],
+    ["boolean", clientNode.scalar("boolean")],
+    ["bigint", clientNode.scalar("bigint")],
+  ])("a %s scalar where the backend declares v.id() is BREAKING", (_label, node) => {
+    /**
+     * ⚠️ THE FALSE PASS THIS BLOCK EXISTS FOR. The branch used to reject only
+     * `object` and `array` and return `compatible: true` for everything else,
+     * so every one of these reported CLEAN. Convex `v.id()` accepts only a
+     * string document id.
+     */
+    const result = run(cObj({ orgId: node }), vObj({ orgId: [vId()] }));
+    expect(breaking(result)).toHaveLength(1);
+    expect(paths(result)).toContain("orgId");
+  });
+
+  test("a literal containing a non-string is BREAKING", () => {
+    expect(breaking(run(cObj({ orgId: cLit(42) }), vObj({ orgId: [vId()] })))).toHaveLength(1);
+  });
+
+  test("a literal of only strings is accepted", () => {
+    expect(run(cObj({ orgId: cLit("abc") }), vObj({ orgId: [vId()] })).findings).toHaveLength(0);
+  });
+
+  test("an object or an array is BREAKING", () => {
+    expect(breaking(run(cObj({ orgId: cObj({}) }), vObj({ orgId: [vId()] })))).toHaveLength(1);
+    expect(breaking(run(cObj({ orgId: clientNode.array(cStr) }), vObj({ orgId: [vId()] })))).toHaveLength(1);
+  });
+
+  test.each([
+    ["unresolved", clientNode.unresolved()],
+    ["opaque", clientNode.opaqueValue()],
+  ])("an %s value is UNKNOWN, never BREAKING and never silent", (_label, node) => {
+    const result = run(cObj({ orgId: node }), vObj({ orgId: [vId()] }));
+    expect(breaking(result)).toHaveLength(0);
+    expect(unknowns(result).length).toBeGreaterThan(0);
+  });
+
+  test("STATED LIMITATION: a plain string is admitted, so the WRONG TABLE is not detected", () => {
+    /**
+     * ⚠️ NOT AN OVERSIGHT — A RULED, DOCUMENTED BOUNDARY, PINNED SO IT CANNOT
+     * DRIFT INTO AN UNSTATED ONE.
+     *
+     * `Id<"users">` and `Id<"vehicles">` both erase to `string`, so this proves
+     * representation compatibility only. Demanding table-qualified provenance
+     * was measured against the real surface: it would convert 1,170 of 1,321
+     * id comparisons (88.6%, 465 functions) to UNKNOWN — a permanently amber
+     * monitor. Deliberately deferred (SCRUM-182). This must never be described
+     * as "table identity verified".
+     */
+    expect(run(cObj({ vehicleId: cStr }), vObj({ vehicleId: [vId("vehicles")] })).findings).toHaveLength(0);
+  });
+
+  describe("the non-null-assertion shape, which is where this got decided", () => {
+    // `orgId: activeOrgId!` extracts as `string | null`, because the extractor
+    // strips `!` on purpose: it is erased at runtime and proves nothing.
+    const stringOrNull = clientNode.variants([cLit(null), cStr]);
+
+    test("string | null against a BARE v.id() is UNKNOWN", () => {
+      const result = run(cObj({ orgId: stringOrNull }), vObj({ orgId: [vId()] }));
+      expect(breaking(result)).toHaveLength(0);
+      expect(unknowns(result)).toHaveLength(1);
+      expect(result.findings[0].severity).toBe(SEVERITY.TYPE_UNKNOWN);
+    });
+
+    test("...and is NOT reported clean either — silence here would be the false PASS", () => {
+      expect(run(cObj({ orgId: stringOrNull }), vObj({ orgId: [vId()] })).findings.length).toBeGreaterThan(0);
+    });
+
+    test("string | null against v.union(v.id(), v.null()) is CLEAN", () => {
+      /**
+       * ⚠️ EACH MEMBER IS JUDGED AGAINST THE WHOLE VALIDATOR, UNIONS INCLUDED.
+       * Judging a member against the `id` branch alone — while its sibling
+       * `v.null()` branch sits right there accepting the value — fabricated 8
+       * findings in the measurement harness that produced these numbers. The
+       * identical mistake is available to any patch of this comparator.
+       */
+      const result = run(cObj({ orgId: stringOrNull }), vObj({ orgId: [vUnion(vId(), vNull)] }));
+      expect(result.findings).toHaveLength(0);
+    });
+
+    test("a variants node where EVERY member is refused by v.id() is BREAKING", () => {
+      const allBad = clientNode.variants([clientNode.scalar("number"), clientNode.scalar("boolean")]);
+      const result = breaking(run(cObj({ orgId: allBad }), vObj({ orgId: [vId()] })));
+      expect(result).toHaveLength(2);
+      expect(result.map((f) => f.detail).join(" ")).toContain("string document id");
+    });
   });
 });
 

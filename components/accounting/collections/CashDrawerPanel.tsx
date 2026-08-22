@@ -48,8 +48,12 @@ export function CashDrawerPanel() {
   if (!activeOrgId) return null;
 
   async function begin(session: CashDrawerSession) {
+    // Matches the idiom already used three times in this file. The early return
+    // above proves the org is selected, but the narrowing does not reach into a
+    // function body — and `activeOrgId!` would be a claim, not evidence.
+    if (!activeOrgId) return;
     try {
-      await beginCount({ orgId: activeOrgId!, sessionId: session._id });
+      await beginCount({ orgId: activeOrgId, sessionId: session._id });
       toast.success(t("CashDrawerCountingStarted" as any));
     } catch {
       toast.error(t("UnexpectedError" as any));
@@ -57,8 +61,9 @@ export function CashDrawerPanel() {
   }
 
   async function approve(session: CashDrawerSession) {
+    if (!activeOrgId) return;
     try {
-      await approveVariance({ orgId: activeOrgId!, sessionId: session._id });
+      await approveVariance({ orgId: activeOrgId, sessionId: session._id });
       toast.success(t("CashDrawerApproved" as any));
     } catch {
       toast.error(t("UnexpectedError" as any));

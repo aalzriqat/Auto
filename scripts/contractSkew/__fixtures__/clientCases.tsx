@@ -383,3 +383,21 @@ export function CaseBareOptionalScalar(input: { note?: string }) {
   const save = useMutation(api.vehicles.update);
   void save({ orgId: "o", note: input.note });
 }
+
+/**
+ * CASE 13 — A NON-NULL ASSERTION AT AN `v.id()` PATH.
+ *
+ * `orgId: activeOrgId!` is the single most common shape in the repository's
+ * accounting and payroll screens — 15 call sites, measured. The extractor
+ * STRIPS `!` on purpose, because it is erased at runtime and is a developer's
+ * claim rather than evidence, so this must extract as `string | null`.
+ *
+ * That makes it the fixture for the rule that decided the v.id() model: a
+ * client type that admits a value the backend refuses, alongside members it
+ * accepts, is UNKNOWN — not BREAKING (which would fabricate 15 outages) and not
+ * CLEAN (which would be the false PASS).
+ */
+export function CaseNonNullAssertionAtIdPath(input: { activeOrgId: string | null }) {
+  const beginCount = useMutation(api.cashDrawer.beginCount);
+  void beginCount({ orgId: input.activeOrgId! });
+}

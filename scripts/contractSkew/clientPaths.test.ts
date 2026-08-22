@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { readFileSync } from "node:fs";
 import { extractClientCalls } from "./clientPaths.mjs";
+import { compareNode, validatorTree } from "./contractTree.mjs";
 
 /**
  * Direct tests for the extractor.
@@ -474,5 +475,71 @@ describe("clientPaths extractor", () => {
     // Blunt on purpose. A syntax error in clientPaths.mjs once survived a fully
     // green suite because nothing imported it.
     expect(calls().length).toBeGreaterThan(0);
+  });
+});
+
+describe("REAL TypeChecker -> extractor -> comparator, at a v.id() path", () => {
+  /**
+   * ⚠️ THE DIRECT COMPARATOR FIXTURES CANNOT PROVE THIS ON THEIR OWN.
+   *
+   * `contractTree.test.ts` builds `variants([literal(null), scalar(string)])`
+   * BY HAND and asserts the verdict. That proves the rule, not that the
+   * extractor ever produces the shape the rule was written for. This block runs
+   * the real TypeScript program over a real `!` call site and feeds whatever
+   * comes out into the real comparator, so the two halves are joined by
+   * evidence rather than by assumption.
+   */
+  const idField = (fieldType: unknown) => ({
+    type: "object",
+    value: { orgId: { fieldType, optional: false } },
+  });
+  const beginCount = () => {
+    const call = forFn("cashDrawer:beginCount")[0];
+    expect(call, "fixture CASE 13 did not extract").toBeDefined();
+    return call;
+  };
+  const compareCall = (validatorSpec: unknown) => {
+    const call = beginCount();
+    // The fixture always resolves a payload; assert it rather than coerce, so a
+    // future fixture change fails loudly instead of comparing against nothing.
+    expect(call.payload, "CASE 13 resolved no payload").not.toBeNull();
+    // The `Node` shim at the top of this file is deliberately looser than the
+    // comparator's `ClientNode` (it exists to poke at extracted trees), so the
+    // two have to be bridged. The VALUE is the real extractor output either way.
+    const payload = call.payload as unknown as Parameters<typeof compareNode>[0];
+    // `file` is optional on the shim but required on a Finding — a finding
+    // nobody can locate is not usable, which is why the real type demands it.
+    expect(call.file, "CASE 13 produced a call with no file").toBeTruthy();
+    return compareNode(payload, validatorTree(validatorSpec), "", {
+      site: { identifier: call.identifier, file: call.file ?? "", line: call.line },
+    });
+  };
+
+  test("the extractor really does strip `!`, producing string | null", () => {
+    // ⚠️ THE CONTROL FOR EVERYTHING BELOW. If `!` were honoured, the payload
+    // would be a plain string, both verdict tests would pass for the wrong
+    // reason, and the rule under test would never be exercised at all.
+    const orgId = entryAt(beginCount().payload, "orgId");
+    expect(orgId, "orgId did not resolve").toBeDefined();
+    expect(orgId!.node.kind).toBe("variants");
+    const members = (orgId!.node as unknown as {
+      nodes: { kind: string; type?: string; values?: Set<unknown> }[];
+    }).nodes;
+    expect(members.some((n) => n.kind === "scalar" && n.type === "string")).toBe(true);
+    expect(members.some((n) => n.kind === "literal" && [...(n.values ?? [])].includes(null))).toBe(true);
+  });
+
+  test("against a BARE v.id() it is UNKNOWN — no fabricated outage, no false pass", () => {
+    const result = compareCall(idField({ type: "id", tableName: "organizations" }));
+    expect(result.findings.filter((f) => f.severity === "BREAKING")).toHaveLength(0);
+    expect(result.findings.length, "silence here would be the false PASS").toBeGreaterThan(0);
+    expect(result.findings[0].severity).toBe("TYPE_UNKNOWN");
+  });
+
+  test("against v.union(v.id(), v.null()) it is CLEAN", () => {
+    const result = compareCall(
+      idField({ type: "union", value: [{ type: "id", tableName: "organizations" }, { type: "null" }] })
+    );
+    expect(result.findings).toHaveLength(0);
   });
 });

@@ -370,9 +370,13 @@ export function CustomerDetailsDialog({
                             className="h-8 gap-1 bg-primary text-primary-foreground hover:bg-primary/90"
                             onClick={async (e) => {
                               e.stopPropagation();
+                              // ⚠️ This file had NO org guard anywhere, so this
+                              // call relied entirely on `!`. The assertion is
+                              // erased at runtime; this check is not.
+                              if (!activeOrgId) return;
                               try {
                                 const appId = await createApplication({
-                                  orgId: activeOrgId!,
+                                  orgId: activeOrgId,
                                   quoteId: quote._id,
                                 });
                                 toast.success(t("ApplicationCreatedSuccess" as any));
