@@ -179,12 +179,82 @@ export const strongerProvenance = (a, b) =>
  * field is not verified. Taking the typed one would report a confidence the
  * code does not support.
  */
+/**
+ * ⚠️ THE ONE RULE THE EXTRACTOR MAY NOT BREAK: PARTIAL EVIDENCE NEVER BECOMES
+ * DEFINITIVE EVIDENCE.
+ *
+ * Three defects on this control turned out to be one design fault — the
+ * extractor inspected PART of a TypeScript shape and emitted a NARROWER node
+ * stated with FULL confidence. Tuple extraction kept `args[0]` and discarded
+ * every other member; the key-set check asked only about STRING index
+ * signatures and then claimed the key set was complete over an open NUMERIC
+ * domain; and `mergeClientNodes` let an unclassifiable route be absorbed by a
+ * classified one. Each was individually a one-line fix, and fixing them one at
+ * a time would have left the thing that generates them.
+ *
+ * So certainty is ranked once, here, and `mergeClientNodes` is required by test
+ * to never return a node ranked above either of its inputs.
+ *
+ * ⚠️ THE `never` DEFAULT IS THE COMPILER-CHECKED HALF. `checkJs` is on for this
+ * directory, so a node kind added to the `ClientNode` typedef and not ranked
+ * here stops compiling instead of silently falling through to "definite" — the
+ * exact failure mode being designed out. Do not replace it with a `return`.
+ *
+ * @param {ClientNode} node
+ * @returns {number} 0 nothing provable · 1 partial · 2 fully determined
+ */
+export function certaintyOf(node) {
+  if (!node) return 0;
+  switch (node.kind) {
+    // We looked and could not classify it, or it crossed an `any` boundary.
+    case "unresolved":
+    case "opaqueValue":
+      return 0;
+    // Several shapes are possible and we cannot tell which one runs.
+    case "variants":
+      return 1;
+    // Enumerated values and a named primitive are as determined as we get.
+    case "literal":
+    case "scalar":
+      return 2;
+    // An object is only as certain as its KEY SET. `keysComplete` false means
+    // keys may exist that we cannot see, which is partial evidence by
+    // definition — `opaqueKeys()` is exactly this.
+    case "object":
+      return node.keysComplete ? 2 : 1;
+    // An array is only as certain as its element. An EMPTY array literal is
+    // knowledge, not ignorance: Convex validates zero elements, so there is
+    // nothing left to be uncertain about.
+    case "array":
+      return node.empty || !node.element ? 2 : Math.min(2, certaintyOf(node.element));
+    default: {
+      /** @type {never} */
+      const unranked = node;
+      return unranked;
+    }
+  }
+}
+
 export function mergeClientNodes(a, b) {
   if (!a) return b ?? clientNode.unresolved();
   if (!b) return a;
   if (a === b) return a;
-  if (a.kind === "unresolved") return b;
-  if (b.kind === "unresolved") return a;
+  // ⚠️ `unresolved` ABSORBS. IT USED TO BE ABSORBED, AND A TEST PINNED THAT.
+  //
+  // It never meant "empty accumulator" — the accumulator seeds with `null`,
+  // handled by the `!a` branch directly above. Every producer of `unresolved`
+  // means "I INSPECTED THIS AND COULD NOT CLASSIFY IT": an unreadable property
+  // initialiser, a union that collapsed to nothing, a type `kindOfType` could
+  // not name. Yielding to the other side threw that finding away.
+  //
+  // Measured at 0d83ba7d1 across 918 real call sites: 5 live absorptions, every
+  // one `unresolved + literal(...) -> literal(...)`, reached from the union
+  // walk in `collectPaths` where one branch resolved to an enumeration and the
+  // other could not be classified at all. The extractor then asserted the field
+  // could carry ONLY that enumeration — the same false PASS the comment above
+  // that walk says was fixed for the `null` branch, still happening one level
+  // down for the unclassifiable one.
+  if (a.kind === "unresolved" || b.kind === "unresolved") return clientNode.unresolved();
   if (a.kind === "opaqueValue" || b.kind === "opaqueValue") return clientNode.opaqueValue();
 
   if (a.kind === "object" && b.kind === "object") {

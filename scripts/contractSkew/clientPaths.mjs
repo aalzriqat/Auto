@@ -656,11 +656,22 @@ function collectPaths(checker, type, path, acc, depth, seen, inherited = "LITERA
 
   // Arrays / tuples -> descend into the element TYPE. The element is a node in
   // its own right, so everything true of an object is true of an element.
-  const elementType = getElementType(checker, type);
-  if (elementType) {
-    return clientNode.array(
-      collectPaths(checker, elementType, `${path}[*]`, acc, depth + 1, seen, inherited)
-    );
+  const elementTypes = getElementTypes(checker, type);
+  if (elementTypes) {
+    // Every member contributes. A tuple's members are usually different shapes,
+    // so merging them yields `variants` — and the comparator requires EVERY
+    // variant to satisfy the validator, which is the fail-closed answer. A
+    // member the checker cannot classify absorbs the rest rather than being
+    // absorbed by them, so an unreadable member cannot be hidden by a readable
+    // one sitting next to it in the same tuple.
+    let element = null;
+    for (const memberType of elementTypes) {
+      element = mergeClientNodes(
+        element,
+        collectPaths(checker, memberType, `${path}[*]`, acc, depth + 1, seen, inherited)
+      );
+    }
+    return clientNode.array(element);
   }
 
   // Primitives are leaves.
@@ -679,9 +690,20 @@ function collectPaths(checker, type, path, acc, depth, seen, inherited = "LITERA
   // is therefore NOT complete, which is what stops the comparator from
   // demanding a required field of an object that may already carry it under a
   // name we cannot see.
+  // ⚠️ BOTH KEY DOMAINS, NOT JUST THE STRING ONE.
+  //
+  // This asked `IndexKind.String` alone, so `{ [k: number]: T }` — which has a
+  // NUMERIC index signature and no string one — reported `keysComplete: true`.
+  // The extractor asserted the key set was PROVEN COMPLETE over a domain that
+  // admits arbitrary numeric keys, which is the same fault as the tuple above:
+  // part of the shape inspected, a narrower answer stated with full confidence.
+  //
+  // Completeness is a conjunction over every domain that can carry a key. A
+  // domain we did not ask about is not a domain that is absent.
   const stringIndex = checker.getIndexInfoOfType?.(type, ts.IndexKind.String);
-  const keysComplete = !stringIndex;
-  if (stringIndex) acc.unknowns.push(`${path ? path : "<root>"}[*key*]`);
+  const numberIndex = checker.getIndexInfoOfType?.(type, ts.IndexKind.Number);
+  const keysComplete = !stringIndex && !numberIndex;
+  if (!keysComplete) acc.unknowns.push(`${path ? path : "<root>"}[*key*]`);
 
   const fields = new Map();
   for (const prop of checker.getPropertiesOfType(type)) {
@@ -740,14 +762,41 @@ function collectPaths(checker, type, path, acc, depth, seen, inherited = "LITERA
   return clientNode.object(fields, keysComplete);
 }
 
-function getElementType(checker, type) {
-  if (checker.isArrayType?.(type)) {
-    const args = checker.getTypeArguments(type);
-    return args?.[0] ?? null;
-  }
+/**
+ * The element types of an array-like, as a LIST — never a single type.
+ *
+ * ⚠️ THIS RETURNED `args[0]` FOR A TUPLE, AND THAT WAS A FALSE PASS.
+ *
+ * `[string, number]` was modelled as `array(scalar(string))`: the `number`
+ * member was discarded before the comparator ever saw it, so the payload
+ * compared clean against `v.array(v.string())` while Convex refuses it. The
+ * reachable form is worse, because it looks like ordinary code —
+ * `["CASH", "BANK_TRANSFER"] as const` is a TUPLE, and it collapsed to the
+ * enumeration `{"CASH"}`, asserting the client could send nothing else.
+ *
+ * Returning an ARRAY rather than a type is the point: there is no shape here
+ * that lets a caller quietly keep one member and drop the rest. An array has
+ * exactly one element type and yields a one-element list; a tuple yields all of
+ * them, and the caller merges them into a single element node — where an
+ * unclassifiable member now ABSORBS rather than being absorbed.
+ *
+ * @param {import("typescript").TypeChecker} checker
+ * @param {import("typescript").Type} type
+ * @returns {import("typescript").Type[] | null} null when not array-like
+ */
+function getElementTypes(checker, type) {
+  // `isTupleType` / `isArrayType` are plain predicates, not TypeScript type
+  // guards, so the compiler still sees a bare `Type` here. Both return true
+  // only for a `TypeReference`, which is what `getTypeArguments` requires — the
+  // cast states that, and is confined to the two lines the predicates guard.
+  const asReference = () => /** @type {import("typescript").TypeReference} */ (type);
   if (checker.isTupleType?.(type)) {
-    const args = checker.getTypeArguments(type);
-    return args?.[0] ?? null;
+    const args = checker.getTypeArguments(asReference());
+    return args?.length ? [...args] : null;
+  }
+  if (checker.isArrayType?.(type)) {
+    const args = checker.getTypeArguments(asReference());
+    return args?.[0] ? [args[0]] : null;
   }
   return null;
 }

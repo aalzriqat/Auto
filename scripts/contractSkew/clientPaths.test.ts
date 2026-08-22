@@ -275,6 +275,56 @@ describe("clientPaths extractor", () => {
     expect(blob.kind).not.toBe("scalar");
   });
 
+  test("CASE 9: a heterogeneous tuple keeps EVERY member, not just the first", () => {
+    // ⚠️ A FALSE PASS PRODUCED BY THE EXTRACTOR. `getElementType` returned
+    // `args[0]`, so `[string, number]` became `array(scalar(string))` and the
+    // `number` member was gone before the comparator ever ran. Against
+    // `v.array(v.string())` that is a clean PASS on a payload Convex refuses.
+    const call = forFn("vehicles:update").find((c) => c.payload?.fields?.has?.("pair"));
+    expect(call, "the tuple payload was not extracted at all").toBeDefined();
+    const pair = call!.payload!.fields!.get("pair")!.node;
+    expect(pair.kind).toBe("array");
+    // Both members must be reachable in the element node. They are different
+    // shapes, so merging them yields variants — and the comparator requires
+    // EVERY variant to satisfy the validator, which is the fail-closed answer.
+    const element = pair.element!;
+    const kinds = element.kind === "variants" ? element.nodes!.map((n) => n.type ?? n.kind) : [element.type ?? element.kind];
+    expect(kinds.sort()).toEqual(["number", "string"]);
+  });
+
+  test("CASE 9b: an `as const` tuple keeps every literal — the reachable form", () => {
+    // `["CASH","BANK_TRANSFER"] as const` is a TUPLE, not an array. Keeping only
+    // `args[0]` asserted the client could send ONLY "CASH".
+    const call = forFn("vehicles:update").find((c) => c.payload?.fields?.has?.("methods"));
+    expect(call, "the as-const tuple payload was not extracted at all").toBeDefined();
+    const methods = call!.payload!.fields!.get("methods")!.node;
+    expect(methods.kind).toBe("array");
+    expect([...(methods.element!.values ?? [])].sort()).toEqual(["BANK_TRANSFER", "CASH"]);
+  });
+
+  test("CASE 10: a NUMERIC index signature withdraws key completeness", () => {
+    // The check asked about STRING index signatures only, so a numerically
+    // keyed object claimed a PROVEN COMPLETE key set over an open domain.
+    const call = forFn("vehicles:update").find((c) => c.payload?.fields?.has?.("byIndex"));
+    expect(call, "the numeric-index payload was not extracted at all").toBeDefined();
+    const byIndex = call!.payload!.fields!.get("byIndex")!.node;
+    expect(byIndex.kind).toBe("object");
+    expect(byIndex.keysComplete).toBe(false);
+  });
+
+  test("CASE 11: an unclassifiable tuple member is NOT absorbed by its readable neighbour", () => {
+    // ⚠️ THE HALF THAT MAKES MEMBER-WISE MERGING SOUND. Preserving every member
+    // is worthless if merging them then discards the uncertain one: the tuple
+    // would report `scalar(string)` and read as fully determined. The readable
+    // member must not speak for the one the checker could not classify.
+    const call = forFn("vehicles:update").find((c) => c.payload?.fields?.has?.("mixed"));
+    expect(call, "the mixed tuple payload was not extracted at all").toBeDefined();
+    const mixed = call!.payload!.fields!.get("mixed")!.node;
+    expect(mixed.kind).toBe("array");
+    expect(mixed.element!.kind).toBe("unresolved");
+    expect(mixed.element!.kind).not.toBe("scalar");
+  });
+
   test("CASE 7: an unresolvable SPREAD withdraws key completeness", () => {
     // Fail-open otherwise: both comparison directions read `keysComplete`, so a
     // false claim of completeness fabricates findings in one direction and

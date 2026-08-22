@@ -35,7 +35,12 @@ const leafFor = (info: Info): TreeNode => {
     case "opaqueKeys":
       return clientNode.opaqueKeys();
     case "array":
-      return clientNode.array(clientNode.unresolved());
+      // ⚠️ SEED, not `unresolved()`. `valueKind: "array"` declares the field IS
+      // an array; the element arrives from the fixture's own `field[*]` entry a
+      // moment later and is merged in. Seeding with `unresolved()` said "I
+      // could not classify the element", which now correctly absorbs the real
+      // element instead of yielding to it. Same conflation as `SEED` below.
+      return clientNode.array(SEED);
     case "unresolved":
     case undefined:
       return clientNode.unresolved();
@@ -56,8 +61,24 @@ const parseSegs = (path: string): Seg[] => {
   return out;
 };
 
+/**
+ * ⚠️ THE SEED IS `null`, NOT `unresolved()`.
+ *
+ * This helper used to seed a fresh field or element with `clientNode.
+ * unresolved()` and merge the real leaf into it. That worked only because
+ * `mergeClientNodes` treated `unresolved` as ABSORBED — the same conflation
+ * that produced a live false PASS in production: `unresolved` never meant
+ * "nothing here yet", it meant "I inspected this and could not classify it".
+ *
+ * Production has always seeded with `null` (`if (!a) return b` in
+ * `mergeClientNodes`). This harness disagreed with production and nobody
+ * noticed, because under the old semantics the two were indistinguishable.
+ * They no longer are, which is the point.
+ */
+const SEED = null as unknown as TreeNode;
+
 const containerFor = (node: TreeNode | undefined, next: Seg): TreeNode => {
-  if (next.k === "e") return node?.kind === "array" ? node : clientNode.array(clientNode.unresolved());
+  if (next.k === "e") return node?.kind === "array" ? node : clientNode.array(SEED);
   return node?.kind === "object" ? node : clientNode.object(new Map(), true);
 };
 
@@ -76,7 +97,7 @@ const fromFlat = (map: Map<string, Info>): TreeNode => {
         if (cur.kind !== "object" || !fields) break;
         let entry = fields.get(seg.n);
         if (!entry) {
-          entry = { node: clientNode.unresolved(), provenance: "LITERAL", optional: false };
+          entry = { node: SEED, provenance: "LITERAL", optional: false };
           fields.set(seg.n, entry);
         }
         if (last) {

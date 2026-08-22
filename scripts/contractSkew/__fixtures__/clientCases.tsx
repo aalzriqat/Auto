@@ -312,3 +312,57 @@ export function CaseArrayBufferPayload(buffer: ArrayBuffer) {
   const upload = useMutation(api.vehicles.update);
   void upload({ orgId: "o", blob: buffer });
 }
+
+/**
+ * CASE 9 — a HETEROGENEOUS TUPLE payload.
+ *
+ * `getElementType` returned `args[0]` for a tuple, so `[string, number]` was
+ * modelled as `array(scalar(string))` and the `number` member vanished. Against
+ * `v.array(v.string())` the comparator then reported PASS on a payload Convex
+ * refuses — a false PASS produced by the EXTRACTOR, not the comparator.
+ */
+export function CaseHeterogeneousTuple(pair: [string, number]) {
+  const save = useMutation(api.vehicles.update);
+  void save({ orgId: "o", pair });
+}
+
+/**
+ * CASE 9b — the variant that makes CASE 9 reachable from ordinary code.
+ *
+ * `["CASH", "BANK_TRANSFER"] as const` is a TUPLE in TypeScript, not an array.
+ * It collapsed to the enumeration `{"CASH"}` alone, so the extractor asserted
+ * the client could only ever send `"CASH"`.
+ */
+export function CaseAsConstTuple() {
+  const save = useMutation(api.vehicles.update);
+  const methods = ["CASH", "BANK_TRANSFER"] as const;
+  void save({ orgId: "o", methods });
+}
+
+/**
+ * CASE 10 — a NUMERIC index signature.
+ *
+ * The key-set check asked `getIndexInfoOfType(type, IndexKind.String)` only, so
+ * a type keyed by NUMBER reported `keysComplete: true` — the extractor claiming
+ * the key set was PROVEN COMPLETE over a domain admitting arbitrary numeric
+ * keys. Both comparison directions read that claim: one demands every required
+ * backend field of a key-complete object, the other reports an undeclared field
+ * as BREAKING.
+ */
+export function CaseNumericIndexSignature(byIndex: { [index: number]: string }) {
+  const save = useMutation(api.vehicles.update);
+  void save({ orgId: "o", byIndex });
+}
+
+/**
+ * CASE 11 — a tuple with ONE UNCLASSIFIABLE MEMBER.
+ *
+ * The member-wise merge is only sound if uncertainty cannot be absorbed by the
+ * member sitting next to it. An unconstrained generic parameter is the ordinary
+ * way this arises — the checker cannot say what `T` is, so the member resolves
+ * to `unresolved`, and the readable `string` member must NOT speak for it.
+ */
+export function CaseTupleWithUnresolvedMember<T>(mixed: [string, T]) {
+  const save = useMutation(api.vehicles.update);
+  void save({ orgId: "o", mixed });
+}

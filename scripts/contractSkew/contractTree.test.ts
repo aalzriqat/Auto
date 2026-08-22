@@ -4,6 +4,7 @@ import {
   clientNode,
   compareNode,
   mergeClientNodes,
+  certaintyOf,
   describeClient,
   SEVERITY,
 } from "./contractTree.mjs";
@@ -635,9 +636,39 @@ describe("merging two observations of the same node", () => {
     expect(merge(clientNode.opaqueValue(), cObj({ a: cStr })).kind).toBe("opaqueValue");
   });
 
-  test("unresolved yields to anything that was actually observed", () => {
-    expect(merge(clientNode.unresolved(), cStr)).toEqual(cStr);
-    expect(merge(cStr, clientNode.unresolved())).toEqual(cStr);
+  // ⚠️ THIS TEST USED TO ASSERT THE OPPOSITE, AND THAT IS WHY NOBODY CAUGHT IT.
+  //
+  // It read "unresolved yields to anything that was actually observed" and
+  // pinned `merge(unresolved, scalar) === scalar`. A suite that asserts an
+  // information loss is correct is worse than no test: two adversarial reviewer
+  // seats and a CodeRabbit pass all read this file and none flagged the merge,
+  // because the behaviour was documented as intended.
+  //
+  // `unresolved` never meant "empty accumulator" — the accumulator seeds with
+  // `null`, handled by the `!a` branch above. Every producer of `unresolved`
+  // means "I INSPECTED THIS AND COULD NOT CLASSIFY IT": an unreadable property
+  // initialiser, a union that collapsed to nothing, a type `kindOfType` could
+  // not name. That is a finding about the code, and it has to survive.
+  //
+  // MEASURED ON THE REAL REPOSITORY at 0d83ba7d1: 5 live absorptions across 918
+  // call sites, all of the form `unresolved + literal(...) -> literal(...)` —
+  // reached from the union-branch walk, where one branch resolved to an
+  // enumeration and the other could not be classified at all. The extractor
+  // then asserts the field can ONLY carry that enumeration.
+  test("unresolved is ABSORBING — an unclassifiable route is never absorbed by a classified one", () => {
+    expect(merge(clientNode.unresolved(), cStr).kind).toBe("unresolved");
+    expect(merge(cStr, clientNode.unresolved()).kind).toBe("unresolved");
+    // and the exact live shape: a literal enumeration must not swallow it
+    expect(merge(clientNode.unresolved(), cLit("NONE")).kind).toBe("unresolved");
+    expect(merge(cLit("NONE"), clientNode.unresolved()).kind).toBe("unresolved");
+  });
+
+  test("the seed is null, not unresolved — merging into an empty accumulator still works", () => {
+    // The one case that legitimately yields: there is no observation yet at all.
+    // If this broke, no merge could ever start, and making `unresolved`
+    // absorbing would poison every accumulation from its first step.
+    expect(merge(null as never, cStr)).toEqual(cStr);
+    expect(merge(cStr, null as never)).toEqual(cStr);
   });
 
   test("objects union their fields and take the STRONGER provenance", () => {
@@ -680,5 +711,111 @@ describe("merging two observations of the same node", () => {
     const merged = merge(clientNode.array(cLit("A")), clientNode.array(cLit("B")));
     expect(merged.kind).toBe("array");
     expect([...merged.element.values].sort()).toEqual(["A", "B"]);
+  });
+});
+
+/**
+ * ⚠️ THE INVARIANT. Everything else in this file tests a case; this tests the
+ * RULE that the cases are instances of.
+ *
+ * Three separate defects in this extractor were one design fault: it observed
+ * part of a TypeScript shape and emitted a NARROWER result with FULL
+ * confidence. Tuple extraction kept `args[0]` and dropped the rest; the key-set
+ * check asked only about string index signatures and claimed completeness over
+ * an open numeric domain; and `mergeClientNodes` let an unclassifiable route be
+ * absorbed by a classified one.
+ *
+ * Patching three call sites would have closed three symptoms and left the
+ * generator intact, so the rule is stated once, here, and enforced over
+ * generated combinations rather than hand-picked pairs:
+ *
+ *   MERGING TWO OBSERVATIONS CAN NEVER PRODUCE MORE CERTAINTY THAN EITHER
+ *   OBSERVATION HELD.
+ *
+ * The compiler holds the other half: `certaintyOf` switches exhaustively over
+ * `ClientNode`, so a node kind added later that nobody ranked fails `tsc`
+ * rather than silently defaulting to "definite".
+ */
+describe("INVARIANT: information monotonicity — merging never manufactures certainty", () => {
+  /** One representative of every certainty class the extractor can emit. */
+  const specimens: Array<[string, unknown]> = [
+    ["unresolved", clientNode.unresolved()],
+    ["opaqueValue", clientNode.opaqueValue()],
+    ["opaqueKeys", clientNode.opaqueKeys()],
+    ["literal(A)", cLit("A")],
+    ["literal(B)", cLit("B")],
+    ["scalar(string)", cStr],
+    ["scalar(number)", clientNode.scalar("number")],
+    ["object keysComplete", cObj({ a: cStr })],
+    ["array(literal)", clientNode.array(cLit("A"))],
+    ["emptyArray", clientNode.emptyArray()],
+  ];
+
+  test("every pair: certainty(merge(a,b)) <= min(certainty(a), certainty(b))", () => {
+    const violations: string[] = [];
+    for (const [an, a] of specimens) {
+      for (const [bn, b] of specimens) {
+        const merged = mergeClientNodes(a as never, b as never);
+        const got = certaintyOf(merged as never);
+        const ceiling = Math.min(certaintyOf(a as never), certaintyOf(b as never));
+        if (got > ceiling) violations.push(`${an} + ${bn} -> ${(merged as { kind: string }).kind} (${got} > ${ceiling})`);
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  test("merging is commutative in CERTAINTY — order of observation cannot change confidence", () => {
+    // A field reached by two routes must not be more trusted because the
+    // classifiable route happened to be walked first.
+    const asymmetric: string[] = [];
+    for (const [an, a] of specimens) {
+      for (const [bn, b] of specimens) {
+        const ab = certaintyOf(mergeClientNodes(a as never, b as never) as never);
+        const ba = certaintyOf(mergeClientNodes(b as never, a as never) as never);
+        if (ab !== ba) asymmetric.push(`${an} + ${bn}: ${ab} vs ${ba}`);
+      }
+    }
+    expect(asymmetric).toEqual([]);
+  });
+
+  test("certaintyOf ranks every node kind the builders can produce", () => {
+    // Guards the exhaustiveness the compiler enforces: if a builder gains a
+    // kind and `certaintyOf` is not extended, this fails at runtime too rather
+    // than relying on `tsc` alone being run.
+    for (const [name, node] of specimens) {
+      expect(Number.isFinite(certaintyOf(node as never)), `${name} is unranked`).toBe(true);
+    }
+    expect(certaintyOf(clientNode.variants([cStr, cObj({ a: cStr })]) as never)).toBeLessThan(
+      certaintyOf(cStr as never)
+    );
+  });
+
+  // ⚠️ WITHOUT THIS, THE INVARIANT IS SATISFIED BY A CONSTANT.
+  //
+  // Found by mutation, not by reading: ranking every object `2` regardless of
+  // `keysComplete` killed NOTHING. The monotonicity test compares certainty to
+  // certainty, so inflating both sides equally keeps the inequality true — a
+  // `certaintyOf` that returned the same number for everything would pass it.
+  //
+  // So the ranking has to be pinned as MEANINGFUL, not merely consistent: each
+  // way of learning less must actually rank lower than the same node knowing
+  // more. This is the "adding an unknown may weaken certainty, never strengthen
+  // it" half of the rule, stated where it can fail.
+  test("every withdrawal of evidence RANKS LOWER than the same node without it", () => {
+    // An object whose key set is not provably complete knows less than one whose is.
+    expect(certaintyOf(clientNode.opaqueKeys() as never)).toBeLessThan(
+      certaintyOf(cObj({ a: cStr }) as never)
+    );
+    // An array whose element could not be classified knows less than one whose could.
+    expect(certaintyOf(clientNode.array(clientNode.unresolved()) as never)).toBeLessThan(
+      certaintyOf(clientNode.array(cStr) as never)
+    );
+    // Not knowing which of several shapes runs knows less than knowing the one.
+    expect(certaintyOf(clientNode.variants([cStr, clientNode.scalar("number")]) as never)).toBeLessThan(
+      certaintyOf(cStr as never)
+    );
+    // And the two ways of knowing nothing must both rank at the floor.
+    expect(certaintyOf(clientNode.unresolved() as never)).toBe(0);
+    expect(certaintyOf(clientNode.opaqueValue() as never)).toBe(0);
   });
 });
