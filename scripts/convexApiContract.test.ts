@@ -34,7 +34,16 @@ const CONTRACT = path.join(REPO_ROOT, "apps", "mobile", "src", "convexApi.ts");
 // the dealer home screen's workspace search. Same story: the query already
 // existed in `convex/search.ts`, so this is one more real reference now
 // checked against the backend, with nothing dropped from the extraction.
-const EXPECTED_REFERENCE_COUNT = 195;
+//
+// Moved 195→192 by SCRUM-53, and this one goes DOWN: `transactions:add`,
+// `transactions:update` and `transactions:remove` are deleted from the backend,
+// so the mobile contract can no longer declare them. This is the one direction
+// that needs care — a shrinking count is also what a broken extractor produces.
+// The two tests above hold the extractor honest independently (no duplicates,
+// and `new Set(references).size` must match), and `no mobile screen calls a
+// function that is not on the backend` is what caught these three: it reported
+// `export-missing` for all three names while the contract still declared them.
+const EXPECTED_REFERENCE_COUNT = 192;
 
 describe("mobile convexApi contract extraction", () => {
   test("reads the reference out of a multi-line declaration with nested generics", () => {
