@@ -715,6 +715,125 @@ describe("merging two observations of the same node", () => {
 });
 
 /**
+ * ⚠️ LAYER 1 — THE RELATION ITSELF, ON DIRECTLY CONSTRUCTED PAIRS.
+ *
+ * ⚠️ WHY THIS LAYER EXISTS, AND WHY ADDING ONE REGRESSION WOULD NOT HAVE DONE.
+ *
+ * The layer below this one checks `merge(a,b)` against its own inputs. That is
+ * the property that matters, and it is also the reason a real hole survived:
+ * **the operation under test manufactures every specimen for its own oracle.**
+ * `mergeClientNodes`'s object case UNIONS the two field maps, so the `wider`
+ * argument it hands the relation is STRUCTURALLY GUARANTEED to be a field-set
+ * superset of `narrower`. The branch that refuses a CLOSED wider claiming
+ * fewer keys than a CLOSED narrower therefore could not be reached by any
+ * merge-derived pair — deleting that branch left all 256 tests green.
+ *
+ * That was the FOURTH hole in this safety proof, and the fourth found by
+ * something other than reading it. Adding a single `closed{a}` vs
+ * `closed{a,c}` regression would have killed that one mutant while leaving the
+ * cause untouched, so this layer instead asserts the relation DIRECTLY, from
+ * hand-built pairs that no merge produced. The two layers now police different
+ * things and neither can generate the other's inputs:
+ *
+ *   LAYER 1 (here)  — is the relation itself correct, in both directions?
+ *   LAYER 2 (below) — does the real merge respect it?
+ *
+ * Each row states an EXPECTED answer, so a relation that drifts toward "yes"
+ * and one that drifts toward "no" both fail. Rows are grouped by the structural
+ * rule they exercise; every rule carries at least one admitting row AND one
+ * refusing row, because a rule tested in only one direction is half-tested.
+ */
+describe("LAYER 1: the relation itself, on DIRECTLY CONSTRUCTED pairs", () => {
+  const f = (node: unknown) => ({ node, provenance: "LITERAL" });
+  const o = (fields: Record<string, unknown>, keysComplete = true) =>
+    clientNode.object(new Map(Object.entries(fields).map(([k, v]) => [k, f(v)])), keysComplete);
+  const arr = (element: unknown) => clientNode.array(element);
+  const num = clientNode.scalar("number");
+  const unres = () => clientNode.unresolved();
+
+  /** [label, wider, narrower, wider admits narrower?] */
+  const CASES: Array<[string, unknown, unknown, boolean]> = [
+    // ── IGNORANCE IS THE TOP. Only total ignorance admits total ignorance. ──
+    ["unresolved admits a scalar", unres(), cStr, true],
+    ["unresolved admits a closed object", unres(), o({ a: cStr }), true],
+    ["opaqueValue admits a scalar", clientNode.opaqueValue(), cStr, true],
+    ["a scalar does NOT admit unresolved", cStr, unres(), false],
+    ["a literal does NOT admit unresolved", cLit("A"), unres(), false],
+    ["a closed object does NOT admit unresolved", o({ a: cStr }), unres(), false],
+    ["an array does NOT admit unresolved", arr(cStr), unres(), false],
+
+    // ── KEY DOMAIN. The dimension the merge-derived layer cannot reach. ──
+    ["a closed key set admits itself", o({ a: cStr }), o({ a: cStr }), true],
+    ["a closed SUPERSET admits a closed subset", o({ a: cStr, c: cStr }), o({ a: cStr }), true],
+    // ⚠️ THE ROW THE SURVIVING MUTANT PROVED WAS MISSING.
+    ["a closed key set does NOT admit a closed set with an EXTRA key", o({ a: cStr }), o({ a: cStr, c: cStr }), false],
+    ["a closed key set does NOT admit an OPEN one", o({ a: cStr }), o({ a: cStr }, false), false],
+    ["an OPEN key set admits a closed one", o({ a: cStr }, false), o({ a: cStr }), true],
+    ["an OPEN key set admits another OPEN one", o({ a: cStr }, false), o({ a: cStr }, false), true],
+    ["an OPEN key set is unconstrained on keys it does not name", o({ a: cStr }, false), o({ a: cStr, c: cStr }), true],
+    ["opaqueKeys admits any closed object", clientNode.opaqueKeys(), o({ a: cStr }), true],
+    ["an EMPTY closed object does NOT admit one carrying a key", o({}), o({ a: cStr }), false],
+
+    // ── VALUE DETERMINACY, pointwise and INDEPENDENT of the key domain. ──
+    ["a scalar field admits a literal field", o({ a: cStr }), o({ a: cLit("A") }), true],
+    ["a literal field does NOT admit a scalar field", o({ a: cLit("A") }), o({ a: cStr }), false],
+    ["an unresolved field admits a known field", o({ a: unres() }), o({ a: cStr }), true],
+    ["a known field does NOT admit an unresolved field", o({ a: cStr }), o({ a: unres() }), false],
+    ["a wider enumeration admits a narrower one", o({ a: cLit("A", "B") }), o({ a: cLit("A") }), true],
+    ["a narrower enumeration does NOT admit a wider one", o({ a: cLit("A") }), o({ a: cLit("A", "B") }), false],
+    // ⚠️ THE TWO DIMENSIONS ARE INDEPENDENT — an open key set does not excuse a
+    // narrowed VALUE. This is the combination the retired scalar model could
+    // not express at all, because it collapsed both onto one number.
+    ["OPEN keys do NOT excuse a narrowed value", o({ a: cStr }, false), o({ a: unres() }, false), false],
+    ["OPEN keys still admit a legitimately narrower value", o({ a: cStr }, false), o({ a: cLit("A") }, false), true],
+
+    // ── RECURSION. The same two rules, one level down. ──
+    ["nesting: an unresolved leaf is admitted by a known leaf's parent? NO", o({ a: o({ b: cStr }) }), o({ a: o({ b: unres() }) }), false],
+    ["nesting: an unresolved leaf's parent admits a known leaf", o({ a: o({ b: unres() }) }), o({ a: o({ b: cStr }) }), true],
+    ["nesting: an inner OPEN key set is not admitted by an inner CLOSED one", o({ a: o({ b: cStr }) }), o({ a: o({ b: cStr }, false) }), false],
+    ["nesting: an inner OPEN key set admits an inner CLOSED one", o({ a: o({ b: cStr }, false) }), o({ a: o({ b: cStr }) }), true],
+
+    // ── ARRAYS carry the element's determinacy. ──
+    ["an array of scalar admits an array of literal", arr(cStr), arr(cLit("A")), true],
+    ["an array of literal does NOT admit an array of scalar", arr(cLit("A")), arr(cStr), false],
+    ["an array does NOT admit an array whose element is unresolved", arr(cStr), arr(unres()), false],
+    ["an array of unresolved admits any array", arr(unres()), arr(cStr), true],
+    ["any array admits the EMPTY array", arr(cStr), clientNode.emptyArray(), true],
+    ["the EMPTY array does NOT admit a populated one", clientNode.emptyArray(), arr(cStr), false],
+    ["an array does NOT admit a non-array", arr(cStr), cStr, false],
+
+    // ── VARIANTS. Not knowing which alternative runs is itself partial. ──
+    ["variants admit any one of their alternatives", clientNode.variants([cStr, num]), cStr, true],
+    ["a single shape does NOT admit variants it is only part of", cStr, clientNode.variants([cStr, num]), false],
+    ["variants admit variants they cover", clientNode.variants([cStr, num]), clientNode.variants([cStr]), true],
+    ["variants do NOT admit an alternative they lack", clientNode.variants([cStr]), clientNode.variants([cStr, num]), false],
+
+    // ── SCALARS AND LITERALS at the leaves. ──
+    ["a scalar admits the same scalar", cStr, cStr, true],
+    ["a scalar does NOT admit a different scalar", cStr, num, false],
+    ["a scalar admits a literal of its own type", cStr, cLit("A"), true],
+    ["a scalar does NOT admit a literal of another type", cStr, clientNode.literal(new Set([1])), false],
+    ["a literal admits the same literal", cLit("A"), cLit("A"), true],
+    ["a literal does NOT admit an unrelated shape", cLit("A"), o({ a: cStr }), false],
+  ];
+
+  test.each(CASES)("%s", (_label, wider, narrower, expected) => {
+    expect(admitsAtLeast(wider as never, narrower as never)).toBe(expected);
+  });
+
+  test("the table exercises BOTH directions of every rule", () => {
+    // A table that only ever expected `false` would be satisfied by a relation
+    // that refuses everything, and one that only expected `true` by a relation
+    // that admits everything. Both degenerate forms have shipped in this file's
+    // history, so the balance is asserted rather than assumed.
+    const admits = CASES.filter(([, , , e]) => e === true).length;
+    const refuses = CASES.filter(([, , , e]) => e === false).length;
+    expect(admits, "no admitting rows — a refuse-everything relation would pass").toBeGreaterThan(10);
+    expect(refuses, "no refusing rows — an admit-everything relation would pass").toBeGreaterThan(10);
+  });
+});
+
+/**
  * ⚠️ THE INVARIANT. Everything else in this file tests a case; this tests the
  * RULE that the cases are instances of.
  *
@@ -755,7 +874,7 @@ describe("merging two observations of the same node", () => {
  * `ClientNode`, so a node kind added later and left unhandled fails `tsc`
  * rather than falling through to a permissive answer.
  */
-describe("INVARIANT: merging never produces evidence narrower than an input", () => {
+describe("LAYER 2: the real merge respects the relation — merging never produces evidence narrower than an input", () => {
   const f = (node: unknown) => ({ node, provenance: "LITERAL" });
   const objOf = (fields: Record<string, unknown>, keysComplete = true) =>
     clientNode.object(new Map(Object.entries(fields).map(([k, v]) => [k, f(v)])), keysComplete);
