@@ -188,6 +188,53 @@ export const commonEn = {
   // Import dialogs
   ImportVehiclesTitle: "Import Vehicles from Excel / CSV",
   ImportVehiclesDesc: "Upload your existing vehicle inventory spreadsheet. Supported: .xlsx, .csv",
+
+  // Import → accounting declaration (SCRUM-59)
+  ImportAccountingHeading: "How should these vehicles be recorded?",
+  ImportAccountingRequired: "Choose how this file affects your books before importing.",
+  ImportAsOpeningStock: "Stock I already own",
+  ImportAsOpeningStockHint:
+    "Carrying existing inventory over from a spreadsheet. No money moves today — these vehicles enter the ledger through your opening balance.",
+  ImportAsPurchase: "Vehicles I just bought",
+  ImportAsPurchaseHint:
+    "A real purchase. Each vehicle is added to Vehicle Inventory, and either paid for from the account you choose below or recorded as owed to the supplier.",
+  ImportPaidFrom: "Paid from",
+  ImportPaidFromPlaceholder: "Choose how you paid",
+  ImportPaidFromAppliesToAll:
+    "This applies to every vehicle in the file. If they were not all paid the same way, split the file and import each payment method separately.",
+  ImportSupplierRequiredOnAccount:
+    "{count} vehicle(s) have no supplier name. A purchase on account is money still owed, so the books have to say who it is owed to. Add the supplier column, or choose how you actually paid.",
+  ImportPurchaseAllRowsMustBeValid:
+    "{count} row(s) still have errors. A purchase import records the whole file in one go, so every row has to be right before any of it can be saved. Fix the rows marked above and try again.",
+  ImportPurchaseTooManyRows:
+    "This file has {count} vehicles, and a purchase import records at most {max} at a time so that it all succeeds or none of it does. Split it into files of {max} vehicles or fewer and import them one after another.",
+  ImportWillCapitalize: "Will add to Vehicle Inventory",
+  ImportWillCapitalizeNote: "{count} vehicle(s) with a cost. Rows with no cost, and sourced vehicles, post nothing.",
+  ImportVinRequiredForPurchase:
+    "{count} vehicle(s) have no VIN. A purchase records what the dealership paid for a specific car, so it needs something that identifies that car for good — otherwise the same vehicle bought once can be entered again later as a second car and paid for twice in the books. Add the VINs. Only import them as stock you already own if you did not just buy them, because that records no purchase.",
+  ImportVinCharactersForPurchase:
+    "{count} VIN(s) contain dashes, spaces or punctuation. A VIN can only be letters and numbers — with them, the same car entered without them is recorded as a different vehicle. Remove them. Only import these as stock you already own if you did not just buy them, because that records no purchase.",
+  ImportStoppedAfter: "Imported {count} vehicle(s), then stopped:",
+  ImportRetryAdvicePurchase:
+    "Nothing was saved — a purchase import records everything or nothing. Fix the reported rows and import the file again. A vehicle already recorded under the same VIN is skipped rather than bought twice, but only when the make, model, year, cost and payment method all still match what was recorded; if any of those changed, the import will say so rather than record it twice or quietly ignore the change. One already on record under a differently-written VIN may not be recognised as the same car.",
+  ImportRetryAdviceOpeningStock:
+    "Fix the reported rows and import the file again. Vehicles that carry a VIN will be skipped as duplicates, but rows without one would be added a second time — remove those that already imported.",
+
+  ImportCouldNotIdentifyItself:
+    "This import could not identify itself, so it cannot be safely retried and nothing was saved. Reload the page and import the file again.",
+  ImportChooseAccountingFirst:
+    "Choose whether these are cars you already own or cars you just bought before importing.",
+  ImportBlockedFallback:
+    "This file still has problems that must be fixed before it can be imported. Nothing was saved.",
+  ImportNoActiveOrg:
+    "No dealership is selected, so there is nowhere to import these vehicles. Nothing was saved.",
+  ImportResultImported: "Imported {count}.",
+  ImportResultAlreadyRecorded:
+    "{count} were already recorded with matching purchase evidence, so nothing was posted again for them.",
+  ImportResultSkippedDuplicates: "Skipped {count} duplicates.",
+  ImportResultCompaniesCreated:
+    "Created {count} new finance company/companies — configure their rates in Settings → Finance.",
+
   ImportCustomersTitle: "Import Customers from Excel / CSV",
   ImportCustomersDesc: "Upload your existing customer list from a spreadsheet. Supported: .xlsx, .csv",
   DropFileHere: "Drop your file here or click to browse",
@@ -584,6 +631,7 @@ export const commonEn = {
   PaymentMethod_BANK_TRANSFER: "Bank Transfer",
   PaymentMethod_CHEQUE: "Cheque",
   PaymentMethod_CARD: "Card",
+  PaymentMethod_ON_ACCOUNT: "On account (owed to supplier)",
   CollectionCreditAccountRequired: "Select what this receivable represents before saving.",
   CollectionCreditAccountPlaceholder: "What does this represent? (required)",
   CollectionCreditAccount_MISCELLANEOUS_INCOME: "Other income",
@@ -1078,6 +1126,53 @@ export const commonAr = {
   // Import dialogs
   ImportVehiclesTitle: "استيراد المركبات من Excel / CSV",
   ImportVehiclesDesc: "قم برفع جدول بيانات مخزون مركباتك. المدعوم: .xlsx و .csv",
+
+  // Import → accounting declaration (SCRUM-59)
+  ImportAccountingHeading: "كيف تُقيَّد هذه المركبات محاسبياً؟",
+  ImportAccountingRequired: "اختر كيف يؤثر هذا الملف على دفاترك قبل الاستيراد.",
+  ImportAsOpeningStock: "مركبات أملكها بالفعل",
+  ImportAsOpeningStockHint:
+    "ترحيل مخزون قائم من جدول بيانات. لا تتحرك أي أموال اليوم — تدخل هذه المركبات إلى الدفاتر عبر الرصيد الافتتاحي.",
+  ImportAsPurchase: "مركبات اشتريتها للتو",
+  ImportAsPurchaseHint:
+    "عملية شراء فعلية. تُضاف كل مركبة إلى مخزون المركبات، وتُدفع إما من الحساب الذي تختاره أدناه أو تُسجَّل كمبلغ مستحق للمورّد.",
+  ImportPaidFrom: "مدفوعة من",
+  ImportPaidFromPlaceholder: "اختر طريقة الدفع",
+  ImportPaidFromAppliesToAll:
+    "ينطبق هذا على كل مركبة في الملف. إن لم تُدفع جميعها بالطريقة نفسها، قسّم الملف واستورد كل طريقة دفع على حدة.",
+  ImportSupplierRequiredOnAccount:
+    "{count} مركبة بلا اسم مورّد. الشراء على الحساب مبلغ ما زال مستحقاً، لذا يجب أن تُبيّن الدفاتر الجهة المستحقة له. أضف عمود المورّد، أو اختر طريقة الدفع الفعلية.",
+  ImportPurchaseAllRowsMustBeValid:
+    "{count} صف ما زال يحتوي على أخطاء. استيراد الشراء يسجّل الملف كاملاً دفعة واحدة، لذا يجب تصحيح كل صف قبل حفظ أي منها. صحّح الصفوف المشار إليها أعلاه ثم أعد المحاولة.",
+  ImportPurchaseTooManyRows:
+    "يحتوي هذا الملف على {count} مركبة، واستيراد الشراء يسجّل {max} مركبة كحد أقصى في المرة الواحدة لضمان نجاح العملية كاملة أو عدم تنفيذها إطلاقاً. قسّم الملف إلى ملفات لا تتجاوز {max} مركبة واستوردها تباعاً.",
+  ImportWillCapitalize: "ستُضاف إلى مخزون المركبات",
+  ImportWillCapitalizeNote: "{count} مركبة لها تكلفة. الصفوف بلا تكلفة والمركبات الموردة لا تُقيَّد.",
+  ImportVinRequiredForPurchase:
+    "{count} مركبة بلا رقم شاصي. عملية الشراء تسجّل ما دفعه المعرض مقابل سيارة بعينها، لذا تحتاج إلى ما يُعرّف تلك السيارة بشكل دائم — وإلا فقد تُدخَل السيارة نفسها لاحقاً كمركبة ثانية ويُدفع ثمنها مرتين في الدفاتر. أضف أرقام الشاصي. ولا تستوردها كمركبات تملكها بالفعل إلا إذا لم تشترها للتو، لأن ذلك لا يسجّل أي عملية شراء.",
+  ImportVinCharactersForPurchase:
+    "{count} رقم شاصي يحتوي على شرطات أو مسافات أو علامات. رقم الشاصي حروف وأرقام فقط — بوجودها تُسجَّل السيارة نفسها المُدخَلة بدونها كمركبة مختلفة. احذفها. ولا تستوردها كمركبات تملكها بالفعل إلا إذا لم تشترها للتو، لأن ذلك لا يسجّل أي عملية شراء.",
+  ImportStoppedAfter: "تم استيراد {count} مركبة ثم توقف:",
+  ImportRetryAdvicePurchase:
+    "لم يُحفظ أي شيء — استيراد الشراء يسجّل كل شيء أو لا شيء. صحّح الصفوف المذكورة وأعد استيراد الملف. المركبة المسجّلة سابقاً بنفس رقم الشاصي يتم تخطيها ولا تُشترى مرتين، لكن فقط إذا بقيت الماركة والطراز والسنة والتكلفة وطريقة الدفع مطابقة لما سُجِّل؛ وإن تغيّر أي منها فسيُبلغك الاستيراد بذلك بدل أن يسجّلها مرتين أو يتجاهل التغيير بصمت. أما المسجّلة برقم شاصي مكتوب بصيغة مختلفة فقد لا يتم التعرّف عليها كالمركبة نفسها.",
+  ImportRetryAdviceOpeningStock:
+    "صحّح الصفوف المذكورة وأعد استيراد الملف. المركبات التي تحمل رقم شاصي سيتم تخطيها كمكررة، أما الصفوف بلا رقم شاصي فستُضاف مرة ثانية — احذف ما تم استيراده منها.",
+
+  ImportCouldNotIdentifyItself:
+    "تعذّر على هذا الاستيراد تعريف نفسه، لذا لا يمكن إعادة المحاولة بأمان ولم يُحفظ أي شيء. أعد تحميل الصفحة ثم استورد الملف مجدداً.",
+  ImportChooseAccountingFirst:
+    "اختر أولاً ما إذا كانت هذه مركبات تملكها بالفعل أم مركبات اشتريتها للتو قبل الاستيراد.",
+  ImportBlockedFallback:
+    "ما زال هذا الملف يحتوي على مشكلات يجب تصحيحها قبل استيراده. لم يُحفظ أي شيء.",
+  ImportNoActiveOrg:
+    "لا يوجد معرض محدد، لذا لا مكان لاستيراد هذه المركبات إليه. لم يُحفظ أي شيء.",
+  ImportResultImported: "تم استيراد {count}.",
+  ImportResultAlreadyRecorded:
+    "{count} مسجّلة مسبقاً بأدلة شراء مطابقة، لذلك لم يُقيَّد لها شيء من جديد.",
+  ImportResultSkippedDuplicates: "تم تخطي {count} مكررة.",
+  ImportResultCompaniesCreated:
+    "تم إنشاء {count} شركة تمويل جديدة — اضبط نسبها من الإعدادات ← التمويل.",
+
   ImportCustomersTitle: "استيراد العملاء من Excel / CSV",
   ImportCustomersDesc: "قم برفع قائمة عملائك من جدول بيانات. المدعوم: .xlsx و .csv",
   DropFileHere: "أفلت ملفك هنا أو انقر للتصفح",
@@ -1472,6 +1567,7 @@ export const commonAr = {
   PaymentMethod_BANK_TRANSFER: "حوالة بنكية",
   PaymentMethod_CHEQUE: "شيك",
   PaymentMethod_CARD: "بطاقة",
+  PaymentMethod_ON_ACCOUNT: "على الحساب (مستحق للمورّد)",
   CollectionCreditAccountRequired: "اختر ماذا تمثل هذه الذمة المدينة قبل الحفظ.",
   CollectionCreditAccountPlaceholder: "ماذا يمثل هذا؟ (مطلوب)",
   CollectionCreditAccount_MISCELLANEOUS_INCOME: "إيراد آخر",

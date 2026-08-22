@@ -1259,7 +1259,8 @@ describe("vehicles.importBulk — owned stock vs sourced", () => {
 
     const result = await asUser.mutation(api.vehicles.importBulk, {
       orgId,
-      vehicles: [{ ...baseImportRow, vin: "STOCK-IMPORT-1" }],
+      acquisitionPosting: "OPENING_STOCK",
+      vehicles:[{ ...baseImportRow, vin: "STOCK-IMPORT-1" }],
     });
 
     expect(result.inserted).toBe(1);
@@ -1278,7 +1279,8 @@ describe("vehicles.importBulk — owned stock vs sourced", () => {
 
     const result = await asUser.mutation(api.vehicles.importBulk, {
       orgId,
-      vehicles: [
+      acquisitionPosting: "OPENING_STOCK",
+      vehicles:[
         {
           ...baseImportRow,
           make: "BYD",
@@ -1313,7 +1315,8 @@ describe("vehicles.importBulk — owned stock vs sourced", () => {
 
     const result = await asUser.mutation(api.vehicles.importBulk, {
       orgId,
-      vehicles: [
+      acquisitionPosting: "OPENING_STOCK",
+      vehicles:[
         // Invalid: sourced but no supplier name/cost.
         { ...baseImportRow, vin: "SOURCED-BAD-1", sourceType: "SOURCED" },
         // Valid owned stock in the same batch must still import.
@@ -1342,7 +1345,8 @@ describe("vehicles.importBulk — owned stock vs sourced", () => {
     // imported and the rest were skipped as "duplicate VIN".
     const result = await asUser.mutation(api.vehicles.importBulk, {
       orgId,
-      vehicles: [
+      acquisitionPosting: "OPENING_STOCK",
+      vehicles:[
         { ...baseImportRow, make: "Neta", model: "V", vin: "xxxxxxxxxxxxxxxxx" },
         { ...baseImportRow, make: "Dongfeng", model: "Nano Box", vin: "xxxxxxxxxxxxxxxxx" },
         { ...baseImportRow, make: "SERES", model: "3", vin: "N/A" },
@@ -1371,7 +1375,8 @@ describe("vehicles.importBulk — owned stock vs sourced", () => {
 
     const result = await asUser.mutation(api.vehicles.importBulk, {
       orgId,
-      vehicles: [
+      acquisitionPosting: "OPENING_STOCK",
+      vehicles:[
         { ...baseImportRow, vin: "1HGCM82633A004321" },
         { ...baseImportRow, vin: "1hgcm82633a004321" }, // same VIN, different case
       ],
@@ -1401,7 +1406,8 @@ describe("vehicles.exportData", () => {
 
     await asUser.mutation(api.vehicles.importBulk, {
       orgId,
-      vehicles: [
+      acquisitionPosting: "OPENING_STOCK",
+      vehicles:[
         {
           ...baseImportRow,
           vin: "EXPORT-1",
@@ -1426,7 +1432,8 @@ describe("vehicles.exportData", () => {
 
     await asUser.mutation(api.vehicles.importBulk, {
       orgId,
-      vehicles: [{ ...baseImportRow, vin: "EXPORT-NOCOST-1" }],
+      acquisitionPosting: "OPENING_STOCK",
+      vehicles:[{ ...baseImportRow, vin: "EXPORT-NOCOST-1" }],
     });
 
     const data = await asUser.query(api.vehicles.exportData, { orgId });
@@ -1450,6 +1457,7 @@ describe("vehicles.exportData", () => {
 
     await asUserA.mutation(api.vehicles.importBulk, {
       orgId: orgA,
+      acquisitionPosting: "OPENING_STOCK",
       vehicles: [
         {
           ...baseImportRow,
@@ -1508,7 +1516,11 @@ describe("vehicles.exportData", () => {
       valuations: v.valuations.map((x) => ({ companyName: x.companyName, valuationAmount: x.amount })),
     }));
 
-    const result = await asUserB.mutation(api.vehicles.importBulk, { orgId: orgB, vehicles: reimport });
+    const result = await asUserB.mutation(api.vehicles.importBulk, {
+      orgId: orgB,
+      acquisitionPosting: "OPENING_STOCK",
+      vehicles: reimport,
+    });
 
     expect(result.inserted).toBe(1);
     expect(result.companiesCreated).toBe(1); // "بندار" auto-created in the new account
