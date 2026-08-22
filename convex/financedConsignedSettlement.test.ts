@@ -6251,3 +6251,90 @@ describe("the cockpit's workflow projections", () => {
     expect(view!.supplierSettlementRouteRequired).toBe(true);
   });
 });
+
+/**
+ * SCRUM-51 contract test (c) — "Settle the authoritative receivable and assert
+ * both GL and canonical outstanding become zero on the same document."
+ *
+ * The other two contract tests this ticket asked for became unreachable by
+ * construction: with `claims.add` and `claims.settle` gone there is no way to
+ * open a standalone claim receivable at all, and `claimsReadOnlyGuard.test.ts`
+ * fails CI if a writer returns. (c) is different — it is about the receivable
+ * that SURVIVES, so removing Claims did not satisfy it, and a search of the
+ * suite found only halves of it. `applications.test.ts` pins the canonical
+ * side (status PAID, one ACTIVE allocation for the full principal) but has no
+ * chart of accounts at all, so it cannot say anything about the ledger; the GL
+ * assertions in this file are all `AR-Finance === 0` on the DIRECT route,
+ * where it is never debited in the first place. Neither is the claim this
+ * ticket makes, which is that ONE settlement takes BOTH sides of ONE document
+ * to zero together.
+ *
+ * A STOCK car, deliberately. On the consigned routes the dealership either
+ * never debits AR-Finance (direct) or nets it against a supplier obligation;
+ * this contract is about the plain financed sale, where the whole chain is
+ * visible end to end.
+ *
+ * Asserted THROUGH the read-only Claims projection rather than off the
+ * receivable row, because the projection is what SCRUM-51 actually ships: an
+ * outstanding derived from active allocations, which has to agree with the
+ * ledger without being told to.
+ */
+describe("SCRUM-51 (c) — one settlement zeroes the ledger and the queue together", () => {
+  test("confirmDisbursement takes GL AR-Finance and the Claims outstanding to zero on the same receivable", async () => {
+    const s = await seedDealership("c51c", { sourceType: "STOCK" });
+    // No settlement route: `setSupplierSettlementRoute` refuses dealership
+    // stock outright ("there is no supplier to settle with"), which is itself
+    // the confirmation that this is the plain financed sale and not a
+    // consignment wearing one.
+    const { applicationId } = await runDeal(s, { downPayment: 3_000 });
+
+    const principalMinor = (VEHICLE_PRICE - 3_000) * SCALE;
+    const receivable = await financeReceivableOf(s, applicationId);
+    expect(receivable?.originalAmountMinor).toBe(principalMinor);
+
+    const queue = () =>
+      s.asUser.query(api.claims.listFinanceCompanyReceivables, {
+        orgId: s.orgId,
+        paginationOpts: { numItems: 10, cursor: null },
+      });
+    const totalsOf = () =>
+      s.asUser.query(api.claims.financeCompanyOutstandingTotals, { orgId: s.orgId });
+
+    // ANTI-VACUITY. If either side were already zero, "becomes zero" below
+    // would hold for the trivial reason. Both must be carrying the debt first,
+    // and it must be the SAME debt.
+    const ledgerBefore = await ledgerBySystemKey(s);
+    expect(ledgerBefore[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES]).toBe(principalMinor);
+
+    const rowBefore = (await queue()).page.find(
+      (r) => r.receivableDocumentId === receivable!._id
+    );
+    expect(rowBefore).toBeTruthy();
+    expect(rowBefore!.outstandingMinor).toBe(principalMinor);
+    expect(await totalsOf()).toEqual([
+      { currency: "JOD", scale: 3, outstandingMinor: principalMinor },
+    ]);
+
+    await s.asUser.mutation(api.applications.confirmDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: principalMinor,
+    });
+
+    // The GL half.
+    const ledgerAfter = await ledgerBySystemKey(s);
+    expect(ledgerAfter[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES] ?? 0).toBe(0);
+
+    // The canonical half — the same document, derived rather than stored.
+    const rowAfter = (await queue()).page.find(
+      (r) => r.receivableDocumentId === receivable!._id
+    );
+    expect(rowAfter).toBeTruthy();
+    expect(rowAfter!.outstandingMinor).toBe(0);
+    expect(rowAfter!.status).toBe("PAID");
+
+    // And the headline the accountant actually reads: nothing outstanding in
+    // any currency, rather than a JOD bucket that happens to sum to zero.
+    expect(await totalsOf()).toEqual([]);
+  });
+});
