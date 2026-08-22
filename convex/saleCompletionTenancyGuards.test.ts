@@ -229,27 +229,132 @@ describe("the sale-completion path refuses documents from another organization",
   });
 
   /**
-   * The finance-application guard has NO test here, and that is a finding
-   * rather than an omission.
+   * The finance-application guard is NOT tested from this door, and that is a
+   * property of the door rather than of the guard.
    *
    * `api.sales.create` does not accept an `applicationId` at all — its
    * validator refuses the field outright ("Unexpected field applicationId in
-   * object"), which is how the first attempt at this test failed. The only
-   * caller that supplies one is `completeExistingSale`, reached from
-   * `applications.finalizeDeal`, and finalizeDeal loads the application and
-   * org-checks it BEFORE calling through. So a foreign application is refused
-   * by the earlier door and never reaches the guard here.
+   * object"). So no fixture built here can reach it.
    *
-   * That makes the org conjunct of this guard defense in depth, exactly like
-   * the org conjuncts of the second trade-in check below — unreachable from
-   * any public entry point, so no fixture can hold it to account without
-   * being refused by a different guard first and proving nothing. Writing one
-   * anyway would produce a green test that asserts the wrong door.
-   *
-   * Its ACCEPT direction is covered: `financedConsignedSettlement.test.ts`
-   * drives real financed sales through this path, so a guard that began
-   * refusing valid same-org applications would fail that suite immediately.
+   * ⚠️ An earlier version of this comment went on to claim the guard was
+   * unreachable from ANY public entry point, and was wrong. It named
+   * `applications.finalizeDeal` as the only caller and concluded that
+   * finalizeDeal's own org check refused a foreign application first. In fact
+   * finalizeDeal calls `completeSale`, not `completeExistingSale`, and the
+   * caller that reaches this guard is `sales.completeDraft` — which takes the
+   * `applicationId` from the STORED DRAFT and org-checks only the SALE. The
+   * guard is reachable, and the tests in the next block reach it.
    */
+});
+
+/**
+ * THE THIRD DOOR — `sales.completeDraft` -> `completeExistingSale` -> `prepareSaleCompletion`.
+ *
+ * The guards above are all driven through `api.sales.create`. That reaches
+ * `prepareSaleCompletion` via `completeSale`, which is one of THREE callers.
+ * The other two are `createDraftSale` and `completeExistingSale`, and the last
+ * of those is the only path on which a finance application reaches the guard at
+ * all: `sales.completeDraft` accepts no `applicationId`, it reads one off the
+ * STORED DRAFT, and it org-checks only the sale.
+ *
+ * So the draft is the carrier. A sale legitimately created in this dealership
+ * can hold an application that belongs to another one — the application was
+ * moved, the row predates the guard, or the two drifted apart — and nothing
+ * between the API surface and this guard looks at whose application it is.
+ *
+ * The application fixtures below deliberately carry OUR customer and OUR
+ * vehicle. The guard has a second check immediately after the org comparison
+ * ("does not match the sale source records") which a mismatched fixture would
+ * trip first, refusing the sale for a different reason and leaving the org
+ * comparison untested while the suite went green. Matching those fields is what
+ * makes the org comparison the only term that can refuse these fixtures.
+ */
+describe("a finance application from another dealership is refused when the draft is completed", () => {
+  async function draftCarrying(
+    s: Seeded,
+    appOrg: Id<"organizations">,
+    options: { dangling?: boolean } = {}
+  ) {
+    // A real draft through the real door, so the sale itself is above suspicion.
+    const saleId = await s.asUser.mutation(api.sales.createDraft, {
+      orgId: s.orgId,
+      vehicleId: s.vehicleId,
+      customerId: s.customerId,
+      salespersonId: s.userId,
+      salePrice: 20000,
+      saleDate: Date.now(),
+    });
+
+    const quoteId = await s.t.run((ctx) =>
+      ctx.db.insert("quotes", {
+        orgId: appOrg,
+        customerId: s.customerId,
+        vehicleId: s.vehicleId,
+        vehiclePrice: 20000, downPayment: 0, termMonths: 12,
+        status: "ACCEPTED" as const,
+        createdBy: s.userId,
+        createdAt: Date.now(),
+      })
+    );
+    const applicationId = await s.t.run((ctx) =>
+      ctx.db.insert("financeApplications", {
+        orgId: appOrg,
+        quoteId,
+        // OUR customer and OUR vehicle — see the block comment. The second
+        // check must not be able to refuse these fixtures.
+        customerId: s.customerId,
+        vehicleId: s.vehicleId,
+        salespersonId: s.userId,
+        status: "APPROVED" as const,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    );
+    if (options.dangling) {
+      await s.t.run((ctx) => ctx.db.delete(applicationId));
+    }
+    // The drift itself. `createDraft` cannot express this and neither can any
+    // other public mutation, which is precisely why the guard exists.
+    await s.t.run((ctx) => ctx.db.patch(saleId, { applicationId }));
+    return saleId;
+  }
+
+  test("the draft completes when its application is the dealership's own", async () => {
+    const s = await seedGuardDealer();
+    const saleId = await draftCarrying(s, s.orgId);
+
+    // ANTI-VACUITY, and it carries two claims at once. It proves the fixture
+    // reaches `prepareSaleCompletion` through this door at all — a refusal
+    // anywhere earlier would fail here — and it proves the guard does not
+    // simply refuse every application, which is the state that would make the
+    // two refusals below pass while breaking every real financed sale.
+    await expect(
+      s.asUser.mutation(api.sales.completeDraft, { orgId: s.orgId, saleId })
+    ).resolves.toBeDefined();
+  });
+
+  test("a draft carrying another dealership's application is refused", async () => {
+    const s = await seedGuardDealer();
+    const saleId = await draftCarrying(s, s.otherOrgId);
+
+    await expect(
+      s.asUser.mutation(api.sales.completeDraft, { orgId: s.orgId, saleId })
+    ).rejects.toThrow(/Finance application not found in this organization/i);
+  });
+
+  test("a draft whose application row no longer exists is refused", async () => {
+    const s = await seedGuardDealer();
+    const saleId = await draftCarrying(s, s.orgId, { dangling: true });
+
+    // The `!app` half of the same guard, reached through the same door: the
+    // application was deleted after the draft referenced it, so the id is
+    // well-formed and resolves to nothing. `app?.orgId` is undefined, which is
+    // not this org, and the sale must not complete against a document that is
+    // no longer there.
+    await expect(
+      s.asUser.mutation(api.sales.completeDraft, { orgId: s.orgId, saleId })
+    ).rejects.toThrow(/Finance application not found in this organization/i);
+  });
 });
 
 describe("the same guards accept the dealership's own documents", () => {
@@ -297,12 +402,34 @@ describe("the second trade-in check owns one term the first does not", () => {
    * `applySaleCompletionSideEffects` re-reads the trade-in and adds
    * `|| tradeInVehicle.isDeleted`.
    *
-   * Its org and existence conjuncts are unreachable from this path — the guard
-   * in `prepareSaleCompletion` refuses a foreign or missing trade-in long
-   * before the side effects run, so a cross-org fixture would be refused by the
-   * EARLIER guard and prove nothing about this one. `isDeleted` is the only
-   * term this check uniquely owns, so it is the only fixture that can hold it
-   * to account, and it is what the rewrite must not drop.
+   * Its org and existence conjuncts are unreachable from EVERY path, not just
+   * this one — `applySaleCompletionSideEffects` has exactly two callers,
+   * `completeSale` and `completeExistingSale`, and both run
+   * `prepareSaleCompletion` first, which already refuses a foreign or missing
+   * trade-in. `createDraftSale`, the third caller of that function, stops
+   * before the side effects. Both guards throw the IDENTICAL message, so a
+   * cross-org fixture here would be refused by the earlier guard, go green, and
+   * assert nothing about this check at all.
+   *
+   * ⚠️ A mutation audit of all six guards confirms it rather than assuming it.
+   * Deleting the org comparison from each in turn — keeping the existence
+   * check, so only the org term is removed — and running this file:
+   *
+   *   vehicle           KILLED     (1 failed / 12 passed)
+   *   customer          KILLED     (1 failed / 12 passed)
+   *   trade-in, first   KILLED     (1 failed / 12 passed)
+   *   quote             KILLED     (1 failed / 12 passed)
+   *   application       KILLED     (1 failed / 12 passed)  <- by the third-door block above
+   *   trade-in, second  SURVIVED   (13 passed)
+   *
+   * The survivor is this one, and it survives because it is masked rather than
+   * because it is untested. No fixture can kill it while the earlier guard
+   * stands, so none is written here — writing one would produce exactly the
+   * green-test-asserting-the-wrong-door this suite exists to avoid.
+   *
+   * `isDeleted` is the only term this check uniquely owns, so it is the only
+   * fixture that can hold it to account, and it is what the rewrite must not
+   * drop.
    */
   test("a soft-deleted trade-in is refused even though it belongs to this dealership", async () => {
     const s = await seedGuardDealer();
