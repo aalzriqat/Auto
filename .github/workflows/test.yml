@@ -115,12 +115,10 @@ jobs:
 
     # Produces coverage/lcov.info, which sonar-project.properties points at.
     #
-    # NOTE: `test:coverage:sonar` restricts --coverage.include to 7 convex
-    # modules, so everything else reports 0%. Against a gate with a
-    # coverage-on-new-code condition that will read as a regression the first
-    # time it runs. Widen the include list (or scope the gate) before treating
-    # Sonar's coverage number as meaningful — the security rating, which is what
-    # this PR is about, is unaffected.
+    # The Sonar-specific suite combines the existing focused Convex LCOV with
+    # c8 coverage from the Node-based quality guardrail tests. This keeps new
+    # quality tooling subject to the same coverage-on-new-code gate as runtime
+    # TypeScript while preserving the intentionally focused Convex inventory.
     - name: Generate coverage for Sonar
       run: pnpm test:coverage:sonar
       env:
@@ -154,6 +152,11 @@ jobs:
 
     - name: Install dependencies
       run: pnpm install --frozen-lockfile --ignore-scripts
+
+    # This cheap sentinel also runs inside lint. Keeping it in a second required
+    # job makes an accidental job-level condition on either gate fail the other.
+    - name: Verify guardrail workflow wiring
+      run: node --test quality/tests/ci-workflow.test.mjs
 
     - name: TypeScript type check
       run: pnpm typecheck
@@ -288,7 +291,14 @@ jobs:
         CONVEX_AGENT_MODE: anonymous
 
     - name: Verify generated Convex files are committed
-      run: git diff --exit-code convex/_generated
+      run: |
+        # `git diff` ignores newly generated untracked outputs.
+        generated_status="$(git status --porcelain=v1 --untracked-files=all -- convex/_generated)"
+        if [ -n "$generated_status" ]; then
+          echo "::error::Convex generated files are stale or uncommitted:"
+          printf '%s\n' "$generated_status"
+          exit 1
+        fi
 
     - name: Convex tsconfig type check
       run: pnpm typecheck:convex
@@ -366,6 +376,8 @@ jobs:
     steps:
     - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       with:
+        # Ratchet baselines verify their source commit and rename/move history.
+        fetch-depth: 0
         persist-credentials: false
 
     - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
@@ -383,6 +395,16 @@ jobs:
 
     - name: Lint
       run: pnpm lint
+
+    # Keep these in the already-required lint context so the guardrails are
+    # merge-blocking without a branch-protection race. The three repository
+    # scans run concurrently inside quality/run-all.mjs; this job still runs in
+    # parallel with typecheck, tests, builds, and the other existing jobs.
+    - name: Guardrail regression suite
+      run: pnpm quality:guardrails:test
+
+    - name: Maintainability, architecture, and AutoFlow safety guardrails
+      run: pnpm quality:guardrails
 
   dependency-audit:
     runs-on: ubuntu-latest

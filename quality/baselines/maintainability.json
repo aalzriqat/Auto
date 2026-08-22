@@ -1,0 +1,4871 @@
+{
+  "schemaVersion": 1,
+  "engine": {
+    "name": "autoflow-maintainability",
+    "version": 1,
+    "parserVersion": "8.61.0"
+  },
+  "sourceCommit": "f2bc4dc8bd4881e9a9f3f47aa45475a57d04c3ec",
+  "scopeHash": "cbb251730b9ce5b780fddbe69f2ef29d365e7cf82e5b08053a48446d15635f8b",
+  "thresholds": {
+    "fileLines": 600,
+    "functionLines": 120,
+    "complexity": 15,
+    "nesting": 4,
+    "params": 5
+  },
+  "files": [
+    {
+      "path": "app/(dashboard)/[orgId]/applications/client.tsx",
+      "semanticHash": "047637e9f263f3b475b22c7e4ead91a1c5911e712ff255acdb170ef22656b235",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:ApplicationClient",
+          "semanticHash": "a6767ea8970b028b6cb5195515d32bd69d75daa18af35a506e196d41b07b4e54",
+          "metrics": {
+            "lines": 178
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/commissions/page.tsx",
+      "semanticHash": "72a91351cca2311043022671fa8758b63ffd80d490c1a530637a1806319b4163",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:CommissionsPage",
+          "semanticHash": "91263489a0bc82f6afe1689e1df2f2990c30b52e3b84a09a6fa3653ec7cd12c9",
+          "metrics": {
+            "lines": 515,
+            "complexity": 38,
+            "nesting": 5
+          }
+        },
+        {
+          "anchor": "module/function:CommissionsPage/return/call:filtered.map:arg0",
+          "semanticHash": "a2654d73bc2818df513597c0fd79ca2381ff45070a66369b644693bdc5872ff5",
+          "metrics": {
+            "lines": 184,
+            "complexity": 29,
+            "nesting": 6
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/customers/page.tsx",
+      "semanticHash": "5d34428df209ce244f9a0083f75c67ae5c411e12a5f3055b2194bdcceaab22bd",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:CustomersPage",
+          "semanticHash": "f57961da5669672da4da41890a2ef7ff9cfe6783624c1253c8d9f4bc74744ae9",
+          "metrics": {
+            "lines": 284
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/dashboard/page.tsx",
+      "semanticHash": "5628beb6d65d92ccc3a3a21e83f342b96ce712706168930f67e5890d2b4c806e",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:DashboardPage",
+          "semanticHash": "bf0e83996ee20c69c5c5cbc8823fdd3ef4c720dd4bde96b2a1f99e9396b5e7f7",
+          "metrics": {
+            "lines": 555,
+            "complexity": 140
+          }
+        },
+        {
+          "anchor": "module/function:DashboardPage/binding:displayLeads/call:paginatedLeads.map:arg0",
+          "semanticHash": "358ec1f08630b2cf79207858c5581328f73db8e28122c44066de78b289883870",
+          "metrics": {
+            "nesting": 8
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/expenses/page.tsx",
+      "semanticHash": "2c9872a2c004d46b7cf00e7ae0ee27265560556860c6a97e909ca82ba71e1b29",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:ExpensesPage",
+          "semanticHash": "cf16a23e16332e1a9de3f73ad5c4422984cfbc14b9c94492786c4fdbd40b7d55",
+          "metrics": {
+            "lines": 250
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/leads/page.tsx",
+      "semanticHash": "2828dca458c89ef9f3c29f2b4a8003cb5dec2f2dd04a5f9c128b85c34d44235b",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:LeadsPage",
+          "semanticHash": "39f1f9c79431cc64657b7bc0d5bfd1471b7070bfc9821d3788260da7f6207084",
+          "metrics": {
+            "lines": 473,
+            "complexity": 49
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/payroll/page.tsx",
+      "semanticHash": "3048b5349f867a1631b49710710736bca2a86b35a9d148e825cdf553c4ed87bc",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:PayrollPage",
+          "semanticHash": "4fe92eb807006b483d8786b843586742b31afe15c2191597c5c19edbc776ec12",
+          "metrics": {
+            "lines": 356,
+            "complexity": 25
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/reports/page.tsx",
+      "semanticHash": "3ff273968a540be9c01466019443591dbb0c6f933ea308275514a33da68251ef",
+      "metrics": {
+        "lines": 739
+      },
+      "functions": [
+        {
+          "anchor": "module/function:ReportsPage",
+          "semanticHash": "740cd651d313959401dacbc30a0614aedc269f2ebd448f6d0c162e29857d2053",
+          "metrics": {
+            "lines": 578,
+            "complexity": 112
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/sales/[saleId]/print/page.tsx",
+      "semanticHash": "c93d4f94929029eab56f6bc2a7f983190f5b21c539a19493ffa96667c13679c1",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:PrintBillOfSalePage",
+          "semanticHash": "9ce708ecdc5d5f2eda89c534039e9ed93ccf04cd05217501657c50016aa8df68",
+          "metrics": {
+            "lines": 171,
+            "complexity": 32
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/sales/page.tsx",
+      "semanticHash": "f55ff83fdb53b6da439c53c71d5d53bef943948cc4a3d4257f4898937d9a8d74",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:SalesHomePage",
+          "semanticHash": "3ffa255e9433a910cb79913207c9a8ad170ab3067c588a2ad249edd88b20bfdf",
+          "metrics": {
+            "lines": 377,
+            "complexity": 41
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/sales/sales/page.tsx",
+      "semanticHash": "84ebc2cbc17c4acaa94cb6b9c90e67e139589979b85d038354711190a55858db",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:SalesPage",
+          "semanticHash": "9860d23ceeec93be1a0aa749db5a35ca9a8495569e669bb8d16e45f46c729fc7",
+          "metrics": {
+            "lines": 249
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/settings/billing/page.tsx",
+      "semanticHash": "22e786d450655c395156d2953f88c658f1140e787f16ed03bca9be7460b947ad",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:BillingPage",
+          "semanticHash": "e27014f90d060cd6230a2f18143c87d56f736b578ab5c76a0e31ea4e8f5b0fcf",
+          "metrics": {
+            "lines": 260,
+            "complexity": 24
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/settings/branches/client.tsx",
+      "semanticHash": "5a1d8b87b7add4be6141dfbe47c37d731ecf0835200538cc14367a5cfa8c74c2",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:BranchesClient",
+          "semanticHash": "f556485d79a819f4f616ce5f27f56d320ae27529ae2a1b2086c03b528fe54cf8",
+          "metrics": {
+            "lines": 240
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/settings/commission/page.tsx",
+      "semanticHash": "14c5af696c3c7015329e6605344eb3d47f720972678108af286aa82bb175a3df",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:CommissionSettingsPage",
+          "semanticHash": "7b0fb9027a0b78714b6270f55016accec25e30e9c0a05592b59f076594103db2",
+          "metrics": {
+            "lines": 202
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/settings/feedback/page.tsx",
+      "semanticHash": "8c581a94c403880e6fc67ab93256eec96d3666a10d693d36cd22cf8c45072bf7",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:FeedbackInboxPage",
+          "semanticHash": "78985df7979631075c11ad30793ab12800fc6363ae7bf83d8473e914484cecd1",
+          "metrics": {
+            "lines": 158
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/settings/finance/page.tsx",
+      "semanticHash": "a93cdb4b5845fd8dba1b184fa208795803ffe4a04118d84a6028bd4a60710fb9",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:FinanceCompaniesPage",
+          "semanticHash": "63e3248398367ae925efbbf1f893273e46c07b659351ca6bdfe16c272659ca8f",
+          "metrics": {
+            "lines": 358
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/settings/general/page.tsx",
+      "semanticHash": "b010b8d485fffe025a13669262d3bd1865efb8e436c0cf8b206f884d7a9583f4",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:GeneralSettingsPage",
+          "semanticHash": "746941ceec351a0929b1fc35ffa99c2feb06a374da9eb3ac21f38867593e203d",
+          "metrics": {
+            "lines": 485
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/settings/integrations/client.tsx",
+      "semanticHash": "45d64216e898f1e6c140154030785c608cdce7baa7419e566a49f894d0285d78",
+      "metrics": {
+        "lines": 991
+      },
+      "functions": [
+        {
+          "anchor": "module/function:IntegrationsClient",
+          "semanticHash": "78254e09d06f33c55f96141198120205c4e80b243ec459d48bb03e00d243d58f",
+          "metrics": {
+            "lines": 954,
+            "complexity": 54
+          }
+        },
+        {
+          "anchor": "module/function:IntegrationsClient/binding:handleSaveSmartReply",
+          "semanticHash": "0c6a5db3083fd4cab8368bc534b6c5e846dfa13c1dc495df52ee469d441ecb51",
+          "metrics": {
+            "complexity": 19
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/settings/lead-sources/page.tsx",
+      "semanticHash": "250afc105e07645c156a1d145de233b06022eb4c664f3c625a157db9ca3fd570",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:LeadSourcesPage",
+          "semanticHash": "93c5c50bbef7870ad0d9d9d918068c75359337fdc245685ccb5b2d860bff0aa7",
+          "metrics": {
+            "lines": 174
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/settings/pipeline/page.tsx",
+      "semanticHash": "e4b778f0b8fde1e45c6f0c1e5edb8b1754854ae6ac7d1b558247e0d8861c795f",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:PipelineSettingsPage",
+          "semanticHash": "486249f31ab7a50a4038bf70adcefcb5b24eebadc62091c482c0e4f990bfd0b0",
+          "metrics": {
+            "lines": 171
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/settings/valuation-companies/page.tsx",
+      "semanticHash": "d8031a89ed1f89a93acd5fded3404c9ca34f065d3257a517c4a4c9a6548523bc",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:ValuationCompaniesPage",
+          "semanticHash": "75e88ed53614618a8224880c4584c40ea560d55a38775a78fb2b97f16392c04c",
+          "metrics": {
+            "lines": 156
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/settings/website/page.tsx",
+      "semanticHash": "9ddd1386530d034513c589f68ac0e4695591d720a73e7d86353ac34c0eb97f66",
+      "metrics": {
+        "lines": 770
+      },
+      "functions": [
+        {
+          "anchor": "module/function:WebsiteSettingsPage",
+          "semanticHash": "2764496bde17fc6d5bd3145194c2c55d7e0f423922c477a3f0221634a7001799",
+          "metrics": {
+            "lines": 601,
+            "complexity": 62
+          }
+        },
+        {
+          "anchor": "module/function:WebsiteSettingsPage/call:useEffect:arg0",
+          "semanticHash": "76a2e792726ef3d58dbff558ff7837f5c0de58ceb07ba6f6922f60835519a30d",
+          "metrics": {
+            "complexity": 20
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/social-inbox/page.tsx",
+      "semanticHash": "0744f44b6344f4ae20ce837e761693cd4e5d54a447cdef61d9df61c13b5a540e",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:SocialInboxPage",
+          "semanticHash": "0a270e6c5344584b43f32d2eddd07dd099c94af2d76fcaee8f00f1af0aa3937e",
+          "metrics": {
+            "lines": 447,
+            "complexity": 30
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/sourcing/client.tsx",
+      "semanticHash": "864cc9db9d0adb26c47e87b35445baf15821017579f3c4fb8d3f82db6bbf0885",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:SourcingClient",
+          "semanticHash": "2469fada7d3c04160f4a2370ad411bcfdc0822c48c709774472a22097ad473be",
+          "metrics": {
+            "lines": 339,
+            "complexity": 26
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/tasks/page.tsx",
+      "semanticHash": "8d4fd3b5f8ce48048c54bf6ea3ae2c3c05adc7fc12106f814d7d4476bedd5509",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:TasksPage",
+          "semanticHash": "7656fd4014919b608c5168ab826aaf98ef258339d4dfa51b1cba57ac693a73a1",
+          "metrics": {
+            "lines": 386,
+            "complexity": 32
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/team/page.tsx",
+      "semanticHash": "2fc65c6742980341706744f3ec3479017c2f73790c2e954b9cf8e70ce4915854",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:TeamPage",
+          "semanticHash": "113ebc516aab239ce2e6f438dc6878dd46d9bb12bc22b822fe3318dea7c2f02a",
+          "metrics": {
+            "lines": 399,
+            "complexity": 31
+          }
+        },
+        {
+          "anchor": "module/function:TeamPage/return/call:filteredMemberships.map:arg0",
+          "semanticHash": "c4497d2137419469a39f7f48be5ee8758ef5916033b7264bbe16f086598a01e3",
+          "metrics": {
+            "lines": 122,
+            "complexity": 24
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/[orgId]/vehicles/page.tsx",
+      "semanticHash": "bf1d427662124c445c21c925d5b0c790786d5c01f36847f934f02bb136c8eef5",
+      "metrics": {
+        "lines": 713
+      },
+      "functions": [
+        {
+          "anchor": "module/function:VehiclesPage",
+          "semanticHash": "e35b6a2d49c410b9ac18d7767ad604c294c29e845a3f18f0c0d97b77bd3d4e9b",
+          "metrics": {
+            "lines": 645,
+            "complexity": 51
+          }
+        },
+        {
+          "anchor": "module/function:VehiclesPage/return/call:filteredVehicles.map:arg0~2",
+          "semanticHash": "dc933d11939749cd4768453bfccdd61611c4493de5dd83e418d4bf46b5bbef4a",
+          "metrics": {
+            "complexity": 16
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/(dashboard)/dashboard/page.tsx",
+      "semanticHash": "30f254c51e9613022ab84777472ccd7c3ded74c9151e54f049671305d7a091b9",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:Onboarding",
+          "semanticHash": "07d0a1e1c106730c3def07b8761f28b9a11c94430904896614fed71451520e54",
+          "metrics": {
+            "lines": 192
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/admin/analytics/page.tsx",
+      "semanticHash": "d72f7c94038bfecb7c9737dc18c3cdb272c141e3df48dd048c1c0ba00cd3dcca",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:AdminAnalyticsPage",
+          "semanticHash": "041bffacd7b0f83b3447a4d71a872e8250c0827598c517c8bdfa26323d30fcaa",
+          "metrics": {
+            "lines": 221,
+            "complexity": 19
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/admin/changelog/page.tsx",
+      "semanticHash": "4c4104b6c04b92dffd54773ce66ab6ae72f4fd1658580955608ec030143719d8",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:AdminChangelogPage",
+          "semanticHash": "f4ca06bec356dce679fecf79fda36c7ec3dd819248a235b7b1b91f3934e6b73e",
+          "metrics": {
+            "lines": 197
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/admin/data/page.tsx",
+      "semanticHash": "9bf85b9df49ebf0081765c1a1dd43fa715378a1a656e3c40e3ed3f76c2ae7444",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:AdminDataPage",
+          "semanticHash": "f78cea2737408b3ba10b2f176b85b571b0b3f2ca6f88b5531293edeb4d0fa598",
+          "metrics": {
+            "lines": 246,
+            "complexity": 21
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/admin/feedback/page.tsx",
+      "semanticHash": "30088db8509ec301f7c3ccdf34d27c77c71be2189a3a5c2f8c93626bd432ed8a",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:FeedbackCard",
+          "semanticHash": "748d525e0110b97e9dd38be272cc093d40024b474e4dd52213c4de305ce2771f",
+          "metrics": {
+            "lines": 142,
+            "complexity": 16
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/admin/marketplace/page.tsx",
+      "semanticHash": "480438af6b0d9329e989e5a1d95810883c9a883e06f6227ccbbb70736aa630e5",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:AdminMarketplacePage",
+          "semanticHash": "e3f9e904e392612ea757b59cd323fad7f1805e648e854ed6960af79177743361",
+          "metrics": {
+            "lines": 124
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/admin/notifications/page.tsx",
+      "semanticHash": "c0b6f568621d7f61b24ad6f8f2e877499bbdc9b7394839eedc56bfcaf255a311",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:AdminNotificationsPage",
+          "semanticHash": "925f2ae5ea90e2f5a9a1163bc264db95d644ba6a12102e83477b4f9dd5f62d6b",
+          "metrics": {
+            "lines": 143
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/admin/organizations/[orgId]/page.tsx",
+      "semanticHash": "67b6135c8295a6f6186cea8d58ce4a78121988ffd63abe3bb5671767496d3eba",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:AdminOrgDetailPage",
+          "semanticHash": "631d1a896ba208351b4ad96ee1b6a1c0dc9fb0de80089bc2f41196440a90ed34",
+          "metrics": {
+            "lines": 162
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/admin/organizations/page.tsx",
+      "semanticHash": "fe5aa7a7eb997511053c021f6fc975cb530cfb290f9cd7d425e2da8cb56e1f5a",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:AdminOrganizationsPage",
+          "semanticHash": "b09851ee2e6cd1298c0cd422b05aebb1674913bfe8f9dbcb4118461f5b016e9e",
+          "metrics": {
+            "lines": 174
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/admin/page.tsx",
+      "semanticHash": "c7d85665293154acd017e7ffd40efa42a70328a6df3e97b18b8329ff29072833",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:AdminOverviewPage",
+          "semanticHash": "dbd2e4a31fca2626f122bfbad52f435abb4ec1e3023369a97e43c1bca85ec198",
+          "metrics": {
+            "lines": 219
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/admin/reviews/page.tsx",
+      "semanticHash": "b9b91f9c2960985cd31fddca8b9d372223de1d978d5bf84ea818c9ae03cd2c5a",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:DeletionRequestsView",
+          "semanticHash": "7b4ed7c103395578aa66998a1eff463adb8411d1794ee0708a7d79acd44b85b2",
+          "metrics": {
+            "lines": 130
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/admin/support-agents/page.tsx",
+      "semanticHash": "595c0ae868b92fe808b6f55a3853ffa19bc87dcb535aef7016772647f00bd169",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:AdminSupportAgentsPage",
+          "semanticHash": "a198ea9686d631f526ceecbf698670fddba199e6f83594aa2dc7cbb1dbb4ddd9",
+          "metrics": {
+            "lines": 156
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/admin/users/page.tsx",
+      "semanticHash": "ba8becbf501565b2896e16a953e860c33045c0fc284fcdfecbf1dfacd7ac37fa",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:AdminUsersPage",
+          "semanticHash": "73fedfc2a26ed08327ab8a110a37de40002d1b86f2457a5112f5ea5502dfc50d",
+          "metrics": {
+            "lines": 172
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/dealer-site/[[...slug]]/page.tsx",
+      "semanticHash": "5a52d7966c15293742f8e0b3fd728b150dd394980c13cd8f848f7361e3979906",
+      "metrics": {
+        "lines": 908
+      },
+      "functions": [
+        {
+          "anchor": "module/function:DealerSitePage",
+          "semanticHash": "d1272b8c291657e4fa8b30c0afac2f61d90937cc1b74f944bda5f42eeae2318e",
+          "metrics": {
+            "lines": 495,
+            "complexity": 69
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/dealer-site/[[...slug]]/themes/avant-theme.tsx",
+      "semanticHash": "3f9afeaeada58db2966a2ea54a06f45f25efd881d307d596ea89e19a0ee9f8f4",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:AvantTheme",
+          "semanticHash": "77dd835639a65c81ec810ccf061346391cf17a5bf7780f751def50a68d0c30c2",
+          "metrics": {
+            "lines": 365,
+            "complexity": 40
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/dealer-site/[[...slug]]/themes/kinetic-finance.tsx",
+      "semanticHash": "84e18f93d75af9ea78a04fe6e036ceccae7eb86a7e1c2a1d608d355eeedea813",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:KineticFinanceCalculator",
+          "semanticHash": "f2a815e04008e1c19690e69e311dee7912d1dd062927e39eb27f9c9c3d756748",
+          "metrics": {
+            "lines": 220
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/dealer-site/[[...slug]]/themes/kinetic-home-ev.tsx",
+      "semanticHash": "19b3a1797fb8e8a33225eb5b89fe9654a2e4b07599f117b98dd9f6d58189d3a2",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:KineticModernEvHome",
+          "semanticHash": "14d3b5843b3073d4ce16e34f74d5074ce6c474b54c16ae7423053deb113651d8",
+          "metrics": {
+            "lines": 284
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/dealer-site/[[...slug]]/themes/kinetic-home-luxury.tsx",
+      "semanticHash": "eab575966b2af860201d1a1519ce670159fee861a1cadd93e7adbab15747c88a",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:KineticLuxuryHome",
+          "semanticHash": "0f880fa2ff7a8161673a660297d7b07999ca165df319da9b18dcd825426ee575",
+          "metrics": {
+            "lines": 245
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/dealer-site/[[...slug]]/themes/kinetic-home-sales.tsx",
+      "semanticHash": "487f745dd059231c289414bbcb4a4eeeb80aa28b8389910712eb788a7dfd682a",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:KineticSalesHome",
+          "semanticHash": "267dd5ea63a3b3488c819c8e0ac27dc3d741563004608ac9a7a969882472bf8b",
+          "metrics": {
+            "lines": 264,
+            "complexity": 16
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/dealer-site/[[...slug]]/themes/kinetic-inventory.tsx",
+      "semanticHash": "c0ba560d06c8e339834f0d9d7154dec7718f1b04a59b1c388f0e963b6f508f2e",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:KineticVehicleDetail",
+          "semanticHash": "4bc23a66a1cf623bb127612a553b47673f149f2efaabc9adf80ebc2356d3ba31",
+          "metrics": {
+            "lines": 191,
+            "complexity": 25
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/dealer-site/[[...slug]]/themes/prestige-theme.tsx",
+      "semanticHash": "6b87991bbf617fdfc8a22e656228b288f220e24f4f17623e1532a7bf3aa66a88",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:PrestigeTheme",
+          "semanticHash": "a174852eee9fddd78429520161368bc959671a3d71bd46b15a4ca6a28df74870",
+          "metrics": {
+            "lines": 382,
+            "complexity": 40
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/dealer-site/[[...slug]]/themes/showcase-themes.tsx",
+      "semanticHash": "72d924fa8abdffeed7fc59dba6068a703d7d54394b5b658d391eec217d551185",
+      "metrics": {
+        "lines": 4904
+      },
+      "functions": [
+        {
+          "anchor": "module/function:ShowcaseRoot",
+          "semanticHash": "6246b61f3dd31b97fb6484cf404b341a80566139162c675fe742bb0e8a8cd497",
+          "metrics": {
+            "nesting": 7
+          }
+        },
+        {
+          "anchor": "module/function:ShowcaseStyles",
+          "semanticHash": "7048dd5e3c50c8aa33f6dc3faa92f4af0f40c8c91118822103b2dc1f3f1d8d84",
+          "metrics": {
+            "lines": 2399
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/dealer-site/[[...slug]]/themes/velocity-theme.tsx",
+      "semanticHash": "8956692bcfb3933c590530deea3dadfab33eb9e979009b2db2f1c87e4fdb576a",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:VelocityTheme",
+          "semanticHash": "10b96c4bfaabbddfebb0e5028946c3ab5d011c6f7d1ae3d38121ecc5e82f063f",
+          "metrics": {
+            "lines": 380,
+            "complexity": 41
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/marketplace/cars/page.tsx",
+      "semanticHash": "ea388abae5e4108768135a9c341c705f093a292f85b02b64ec5aac7fab54ec46",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:MarketplaceCarsPage",
+          "semanticHash": "88eb1b0aa4758ac7977f7d4ce3d4defe6ecd01fb9c9c0b86832447f2487c5acd",
+          "metrics": {
+            "lines": 191
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/marketplace/my-listings/page.tsx",
+      "semanticHash": "c419bacc2ffcc177c1f23e67ff39fb2e19861614792dbbe519be6fbd397479b8",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:EditListingForm",
+          "semanticHash": "56a20eff459e477ef62b698b7032ea5c231af7b26c89f724868ddea2bf91b56a",
+          "metrics": {
+            "lines": 129
+          }
+        },
+        {
+          "anchor": "module/function:ListingCard",
+          "semanticHash": "4f58686b5853995689810921ae08bc01c7a0502c2b2219c1f2742cd31d13ff6d",
+          "metrics": {
+            "lines": 130,
+            "complexity": 18
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/marketplace/request/page.tsx",
+      "semanticHash": "86b727ee1301ba9a4bababcd739c6934a2e46accd203fcfdbdb9f77217bf4686",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:MarketplaceRequestPage",
+          "semanticHash": "c8afad365c47478f5cc724c64956e8b80f858eab528a757af699f5f04b2b347a",
+          "metrics": {
+            "lines": 212
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/marketplace/sell/page.tsx",
+      "semanticHash": "c1e0a628d80da5f1916a4a70a6815e5ba2fd785d147e48d49b97d5d8864f8115",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:MarketplaceSellPage",
+          "semanticHash": "be36a5212803dda79f65e097cf3daa4658569fd85d3f99d74e436bf09f1101d8",
+          "metrics": {
+            "lines": 356,
+            "complexity": 26
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/marketplace/tradein/[id]/page.tsx",
+      "semanticHash": "2789d6a4a6c576e3222034cf63b8756b6573f51914edf4a2c9e18f3c4f646e36",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:MarketplaceTradeInStatusPage",
+          "semanticHash": "088d36c60d4057eaa4530c9c102bda56de254d5b1dd2ef32be0479cc74678293",
+          "metrics": {
+            "lines": 130
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/marketplace/tradein/page.tsx",
+      "semanticHash": "31014d2469e6b37e88d52598185804e0355c1fc983c5b8bcfbe6528d11a2cbf9",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:TradeInForm",
+          "semanticHash": "1dfd14159e0cc91fa954dac47a79e4d8da32138676f167b2ccce829aed8995eb",
+          "metrics": {
+            "lines": 168
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/setup-account/page.tsx",
+      "semanticHash": "fe48353c0ff9fe80d531a0248a47c11f0f4135ae41dee484ac72d5efe2f122a5",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:SetupAccountContent",
+          "semanticHash": "73663de0b310cc05f9e9f150a4d97e04e98af4f9b0ddd9a00cf2c28c141ac365",
+          "metrics": {
+            "lines": 143
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/support/layout.tsx",
+      "semanticHash": "863b4545f28f1fb88d5a5c250ee4644e02319d3233fdb75e3dfc4e6a0b47b9ff",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:SupportLayoutImpl",
+          "semanticHash": "6179ded09e42db27e2bad8d77d753bf256d51311a22085196ad1f08f854fef4e",
+          "metrics": {
+            "complexity": 19
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/support/page.tsx",
+      "semanticHash": "a9968ab47233810a08158ff0ec19193a117df3cf013a199f4fe8a7316f4fbc6a",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:ThreadView",
+          "semanticHash": "af99067745e9642d4186474a67b77fd3c63d12b490a8b7a24f4a785544106855",
+          "metrics": {
+            "lines": 188,
+            "complexity": 36
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/app/(auth)/sign-in.tsx",
+      "semanticHash": "5f33342763f79daaa38a38c89510fd7dcef6ed2df9141a5a510c9b0172dfa41f",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:SignInRoute",
+          "semanticHash": "16cdb45b897f54e1d6314f70424b02dc953a4ed94d327d10dbf7d407255036e5",
+          "metrics": {
+            "lines": 320
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/components/FormField.tsx",
+      "semanticHash": "f88373340b16544c19f48fba985cecf9c1df7bac2b905ea434192d6bf9e13f39",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:FormField",
+          "semanticHash": "4f359d295fb7f55dd5191ec44a05c4e56841d10701244d940b508182df276ec4",
+          "metrics": {
+            "complexity": 24
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/components/NotificationBell.tsx",
+      "semanticHash": "0e53da250bb5f15ee0e389b049fb4642a4e68151dd470f6911a3717e617db944",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:makeStyles",
+          "semanticHash": "5b7bdd4c059c5b708be4c2ebeb702b93e32db282063c36b3a59f2fb8af1cde4b",
+          "metrics": {
+            "lines": 138
+          }
+        },
+        {
+          "anchor": "module/function:NotificationBell",
+          "semanticHash": "ea81a0bd4456ddf190c0c920f905a09c4ef85df865efb906d5f0fc9d28b5e417",
+          "metrics": {
+            "lines": 129,
+            "complexity": 16
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/components/SearchableSelectField.tsx",
+      "semanticHash": "4e7f19691bfc95367d1a14db5f67345a15ccc710896df24f6bbf9ed80f970ac9",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:makeStyles",
+          "semanticHash": "b6737d76fc62f71e63a0dbd98a7e2758bd243ab2498c59d470e24fa977cc6240",
+          "metrics": {
+            "lines": 144
+          }
+        },
+        {
+          "anchor": "module/function:SearchableSelectField",
+          "semanticHash": "bfe10d547eca95390fd3ab800c6dfc399998ebd1d15bd79b34dfb7b155b7d6b4",
+          "metrics": {
+            "lines": 212,
+            "complexity": 35
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/config/env.ts",
+      "semanticHash": "766e29cf8515cbad5ae7a9663a9d0f607e643af0ea362fd000395265b9a1d7fb",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:validateMobileEnv",
+          "semanticHash": "54194466c716a3b21a69449009d3d9bdc3981ad088d07611589f59a8b83aaed8",
+          "metrics": {
+            "complexity": 25
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/account/BuyerAccountScreen.tsx",
+      "semanticHash": "3e1ca660b0ae295a4bc8d034d0dd01ac3ae7fb7ee0298d7a8c0fb5b9852a7a46",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:BuyerAccountScreen",
+          "semanticHash": "5ef99c50c333a0f1b2dc7296f1f87ae89a0842a7a2e1c1d419755c150573e55c",
+          "metrics": {
+            "complexity": 17
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/dashboard/HomePanels.tsx",
+      "semanticHash": "9b02c712275aed244e8d70e228bcddd1c571b9e3957bdba0e7c8324202e62156",
+      "metrics": {
+        "lines": 1471
+      },
+      "functions": [
+        {
+          "anchor": "module/binding:makeStyles",
+          "semanticHash": "f309150db59d2f8a4bae324c5468d218dbc694b8064a9b5ab22347c87f74bdc7",
+          "metrics": {
+            "lines": 470
+          }
+        },
+        {
+          "anchor": "module/function:HomeSearchRow",
+          "semanticHash": "76ca9d810f59710cf1967a3ba52cf4e5194850dd84c646e1fbb71eb7a3331647",
+          "metrics": {
+            "lines": 156,
+            "complexity": 18
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/dashboard/OrgDashboardScreen.tsx",
+      "semanticHash": "6f786335c645f2c0c2aea492e72117b8aeecdad08dc09099e03d98a78607c400",
+      "metrics": {
+        "lines": 723
+      },
+      "functions": [
+        {
+          "anchor": "module/binding:makeStyles",
+          "semanticHash": "260a40e62fcbd5551a448d3b712b2769422fe862f08d6c582ae85b30111faa3f",
+          "metrics": {
+            "lines": 185
+          }
+        },
+        {
+          "anchor": "module/function:DashboardContent",
+          "semanticHash": "af773f25cf03c0fbe6571ec98bf12b8f8200afaf74a4cdf52443f2d714297895",
+          "metrics": {
+            "lines": 131,
+            "complexity": 20
+          }
+        },
+        {
+          "anchor": "module/function:OrgDashboardScreen",
+          "semanticHash": "36f2b20c6d5d7425f0c74061d40bff68a74945b80d5af39667f772abf6aaf598",
+          "metrics": {
+            "complexity": 16
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/home/HomeScreen.tsx",
+      "semanticHash": "6f71a54f1ee38bbffdaf14d9cb1c1f073d4feb94a7f41b30816e3acf3e1f6d78",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:makeStyles",
+          "semanticHash": "c671bda408911ffb8f783e71124e0c4fc349c27ca723a44d0bb2f6709e4c560b",
+          "metrics": {
+            "lines": 222
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/marketplace/BuyerIntakePanels.tsx",
+      "semanticHash": "e6ec8646041da7c24660d9d083c7847840dd7e7dd80b7284512f3dbb7db07274",
+      "metrics": {
+        "lines": 1181
+      },
+      "functions": [
+        {
+          "anchor": "module/binding:makeStyles",
+          "semanticHash": "e59b61dd23844bb8fe7fe1b6c71301b64c2e32edbf5f23bd88375af75df77185",
+          "metrics": {
+            "lines": 252
+          }
+        },
+        {
+          "anchor": "module/function:BuyerRequestPanel",
+          "semanticHash": "816b86a811f54f197548cda18342d885217888f600da1d502f6d59642b3024f3",
+          "metrics": {
+            "lines": 286
+          }
+        },
+        {
+          "anchor": "module/function:TradeInRequestPanel",
+          "semanticHash": "81273d94f36691fa6ced63f92bddb120b00971774ffa936076889341b161f53c",
+          "metrics": {
+            "lines": 257,
+            "complexity": 17
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/marketplace/BuyerShell.tsx",
+      "semanticHash": "e9eccd7ffbbadf5dc1153d27bbfbd329722b41274515bf7b98a8fb1870599508",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:BuyerShell",
+          "semanticHash": "55dbb5ff435b6635cb14a4d33c6259a103baab221e8ec1c66deb0893d68cd9a1",
+          "metrics": {
+            "lines": 152
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/marketplace/DealerMarketplaceScreen.tsx",
+      "semanticHash": "947fbb59b229822dd34b193ce773ee15fe23c94e73d4b17db4cd9357777b310b",
+      "metrics": {
+        "lines": 888
+      },
+      "functions": [
+        {
+          "anchor": "module/binding:makeStyles",
+          "semanticHash": "0beeccd46eb1ee9877efd0e1cbb82f9d00963e20d13e1b9ce38b3cab09701faf",
+          "metrics": {
+            "lines": 276
+          }
+        },
+        {
+          "anchor": "module/function:ResponseForm",
+          "semanticHash": "bc04049d813d5c37d35bf373c3799b5f9d2523cea01d42930bd83f95053f1c8c",
+          "metrics": {
+            "lines": 229,
+            "complexity": 20
+          }
+        },
+        {
+          "anchor": "module/function:ResponseForm/function:submit",
+          "semanticHash": "33d067584ee83d8599b1a2885210ce7859d9de31d692b1d09e2264e11ca9806e",
+          "metrics": {
+            "complexity": 29
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/marketplace/MarketplaceHomeScreen.tsx",
+      "semanticHash": "0399b05fbeee9001cf1ee1643cb8a2102119894ded0a3e00e9489c892ecac84d",
+      "metrics": {
+        "lines": 843
+      },
+      "functions": [
+        {
+          "anchor": "module/binding:makeStyles",
+          "semanticHash": "da27a183c814d55e589401372e1fb515417c4cf46dffd12e5f847a16a97acfdc",
+          "metrics": {
+            "lines": 411
+          }
+        },
+        {
+          "anchor": "module/function:MarketplaceHomeScreen",
+          "semanticHash": "07ce3a92bd7b54721183c4ce77fd4e0b05fba88707be73fa060832f726e6fb8e",
+          "metrics": {
+            "lines": 237
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/marketplace/MarketplaceScreen.tsx",
+      "semanticHash": "70bf30d22934002e7cb8c8b262978e5592f3012aa32dd83c88dfd72b45306c05",
+      "metrics": {
+        "lines": 2231
+      },
+      "functions": [
+        {
+          "anchor": "module/binding:makeStyles",
+          "semanticHash": "009090017a83bafc7fb4555a6150014542d366cede0944a6e040d04c9a1a679d",
+          "metrics": {
+            "lines": 805
+          }
+        },
+        {
+          "anchor": "module/function:CarsPanel",
+          "semanticHash": "3ee2f654ad6ca6867ce9033052703f4392a826c51316e70652cc553a1b0927f5",
+          "metrics": {
+            "lines": 227
+          }
+        },
+        {
+          "anchor": "module/function:VehicleCard",
+          "semanticHash": "8e0e0a218ae9d4a0debcf4776a2c1e8bbed3f674830b4e98255c71206c7cd383",
+          "metrics": {
+            "lines": 130,
+            "complexity": 19
+          }
+        },
+        {
+          "anchor": "module/function:VehicleDetailModal",
+          "semanticHash": "344cf5b1df5e9d4d86f0b767b988b7bfd4ac9e3a12402400faf528df6122fbbf",
+          "metrics": {
+            "lines": 165,
+            "complexity": 19
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/marketplace/RequestRoomScreen.tsx",
+      "semanticHash": "ed174fb9f233bdfeb4644ab40e8c17d077f055abdd98bc070ad65dcb9e1b51e0",
+      "metrics": {
+        "lines": 1068
+      },
+      "functions": [
+        {
+          "anchor": "module/function:OfferCard",
+          "semanticHash": "18ebe4cb27925687b8bae1aaa41d99cd6c2311cdeffcf681b527413d7fbe7583",
+          "metrics": {
+            "lines": 154,
+            "complexity": 25
+          }
+        },
+        {
+          "anchor": "module/function:RequestRoomScreen",
+          "semanticHash": "3ff58690d09ff2674cb54c34819ff80bd7e3af8687ab6ad2aec5430c364fe244",
+          "metrics": {
+            "lines": 181
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/marketplace/SellCarScreen.tsx",
+      "semanticHash": "b0f777cf83945d14973b33e9d44001e395f10a5c802a934627da00e320188d3f",
+      "metrics": {
+        "lines": 627
+      },
+      "functions": [
+        {
+          "anchor": "module/binding:makeStyles",
+          "semanticHash": "cb1ed330c28461f126d6a64dc33179fe38bbca527bf8610880fae106512b7287",
+          "metrics": {
+            "lines": 144
+          }
+        },
+        {
+          "anchor": "module/function:SellCarScreen",
+          "semanticHash": "e2d54afd2880baebd132e42fa55b614e12816d11c151369abf69d7c54d715fb2",
+          "metrics": {
+            "lines": 334
+          }
+        },
+        {
+          "anchor": "module/function:SellCarScreen/function:pickAndUploadPhotos",
+          "semanticHash": "fb860ed63f0c0ce2acea5ef33f85b15ab7280f04f8f431995d1220c3d4dc2dd2",
+          "metrics": {
+            "complexity": 16
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/CustomerDetailScreen.tsx",
+      "semanticHash": "50c87c5f20e728b767a766a71c2931ed7277567285f67ad12aac3561d7fba366",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:CustomerDetailScreen",
+          "semanticHash": "2ade15085ea7a25fc9af15b1afe00d5a8087c935bb836e778c1fe78473a98afe",
+          "metrics": {
+            "lines": 498,
+            "complexity": 124
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/accounting.tsx",
+      "semanticHash": "ad38130549b2c8bb2d2a0cbb87e8300e6ca19f6548353c40f45f7954d64c56e1",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:AccountingModule",
+          "semanticHash": "86b44e16b4c6d0d10b42ddfa00268a3bab18b5372caa9a16d12b6bed0c63eb0f",
+          "metrics": {
+            "lines": 144
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/billing.tsx",
+      "semanticHash": "169683528ba76d227131a0940485d7dc347c1c1badfb11bb20966d7a3afba87d",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:BillingModule",
+          "semanticHash": "4184b17272457562943ac9c80a5b2c5c798e97c49b1091e41f8ced151e7a2af2",
+          "metrics": {
+            "complexity": 18
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/branches.tsx",
+      "semanticHash": "1b5632455ca1f50bcc401eff2618c9c7e2034ec1418382aae4fec91c99498dbe",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:BranchesModule",
+          "semanticHash": "0a744bfa331e1fb3decb989b1b837ea0416eff5c32fc54499fabcd64f8f7d919",
+          "metrics": {
+            "complexity": 20
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/customers.tsx",
+      "semanticHash": "704190bd2a44d382ddbb0acff0d4df0933eb001630badd91a7fa8c0390a953fb",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:CustomersModule",
+          "semanticHash": "8867dd092c8aca345723a6ff511c28e59f69b495a30b6de52ffbc329cc5a7291",
+          "metrics": {
+            "lines": 191,
+            "complexity": 23
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/customFields.tsx",
+      "semanticHash": "c68ceb62083e1fa8a54ae7c9b4f5654ac9c422a310ff827f5c2f6fa5ca36641c",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:CustomFieldsModule",
+          "semanticHash": "6f04fb1b6f14b9f0b66026a8e62616a75194d84f17beec909e16b62fbb768b54",
+          "metrics": {
+            "lines": 145,
+            "complexity": 28
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/expenses.tsx",
+      "semanticHash": "fbecc00db4260ce63ea4675cc9dc80f562fcd558d0a67ff9d14f83f8959ed7db",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:ExpensesModule",
+          "semanticHash": "e3ee1b753c4d7effdb2d68526882264a7795e1ca6edca1e461e5beda3e70b60e",
+          "metrics": {
+            "complexity": 16
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/feedback.tsx",
+      "semanticHash": "76b8d6842e6b2b2007bdff38183ec3f960a28886c6c44d885ac1239d344d7a8b",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:FeedbackModule",
+          "semanticHash": "dc165194d599b8a8811acd2fefc55d82fc48bc0d41ee960d761d0d53e8f366f2",
+          "metrics": {
+            "complexity": 16
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/financeCompanies.tsx",
+      "semanticHash": "44c52f87563f3f0fb5d97209f245ca51ddb29a6c154aed3fd117b55b41b7a6f9",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:FinanceCompaniesModule",
+          "semanticHash": "aa30b347181b433d5d3f1042ccacbe1263500bf3fbf2f49bde05bc06737a0fc9",
+          "metrics": {
+            "lines": 315,
+            "complexity": 99
+          }
+        },
+        {
+          "anchor": "module/function:FinanceCompaniesModule/function:fill",
+          "semanticHash": "878fb8c6b57723d461c61db84221fdb9b858cc0af627d66b34ad65a30fd4043e",
+          "metrics": {
+            "complexity": 18
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/integrations.tsx",
+      "semanticHash": "652f68037bd94c2d355b508f3b6ca72217619b3196bac4912f1930561d2b7b28",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:IntegrationPlatformCard",
+          "semanticHash": "80aaf80d5ef5f9804393fd5ade2f73a685d1b13e739ece23ff7316ea830dcd04",
+          "metrics": {
+            "complexity": 44
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/leads.tsx",
+      "semanticHash": "732f9b65786e04be93114d3560eb0e09c6ee3c5c31783d3b8de1c617c4012248",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:LeadsModule",
+          "semanticHash": "4ffec098ef0fc6f4868b2e70597635c521f4534a048a8f34652f735b41dce971",
+          "metrics": {
+            "lines": 319,
+            "complexity": 76
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/leadSources.tsx",
+      "semanticHash": "b01fc10426a75108d202dce1f9789fb105d8b19791f92eee7d2434dc20afaf82",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:LeadSourcesModule",
+          "semanticHash": "24974afb230b916f5856e705dd77469d446dae33272e6f979a891bb5c2545977",
+          "metrics": {
+            "complexity": 16
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/LeadStagePicker.tsx",
+      "semanticHash": "69a962534e920c4f2a05d852cc29a0ba169d48bbc116ecc6308847af594e02eb",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:makeStyles",
+          "semanticHash": "43babf48138c170d3d5be6e0dc10eb0a7aee7903491384239c6c6e049d24b763",
+          "metrics": {
+            "lines": 147
+          }
+        },
+        {
+          "anchor": "module/function:LeadStagePicker",
+          "semanticHash": "98bb91c3f846e49dc4e922a5a05d9c86105a6783badeede2b23009fa4b245740",
+          "metrics": {
+            "lines": 136,
+            "complexity": 20
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/marketplaceSettings.tsx",
+      "semanticHash": "1b2514ef01f489d03d0e0922a37ba4a1057ff62e72167a7edf75f4c04f0aa4f6",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:MarketplaceSettingsModule",
+          "semanticHash": "55fa61660e6475109c1d459596989146fb990709cdc2a76c5647ed7aed6c6b60",
+          "metrics": {
+            "complexity": 19
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/messages.tsx",
+      "semanticHash": "1c4b08fbc72cf460e8bb1c26d171949b6a21ea7a114521933d681027141f0f37",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:MessagesModule",
+          "semanticHash": "16f7f0f364d96c688abc4451ad7978fce6edb7fe8bc8f7670e6f1ca805671346",
+          "metrics": {
+            "lines": 420,
+            "complexity": 58
+          }
+        },
+        {
+          "anchor": "module/function:MessagesModule/return/call:chronologicalMessages.map:arg0",
+          "semanticHash": "60f34af54a567a7416f72c89b745b3388f9aa26ae28c4eea9e05d94f79324ff4",
+          "metrics": {
+            "complexity": 21
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/moduleShared.tsx",
+      "semanticHash": "08f7b0a6adef121fd27cd9ff0183f6e53c4a541be904159db75d47d489c4ba45",
+      "metrics": {
+        "lines": 1135
+      },
+      "functions": []
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/quotes.tsx",
+      "semanticHash": "622a6b1dd17a7d44a0ffd7403fcb6281f9f4199a47b37c7dc44971aaa3d0704e",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:QuotesModule",
+          "semanticHash": "ecb06de27a425d857f888e3fbd97d3dddfc0f485935b49b01be28bdef0e33198",
+          "metrics": {
+            "lines": 240,
+            "complexity": 62
+          }
+        },
+        {
+          "anchor": "module/function:QuotesModule/function:save",
+          "semanticHash": "9def535e88d410e5e21925733ab68f106c3e285209f8956c1e52ff7212e6e9ae",
+          "metrics": {
+            "complexity": 17
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/reports.tsx",
+      "semanticHash": "ff4f42602e47946edf3a9b2fa19a1d433a5836b37fd10bc762434aca95f9d176",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:ReportsModule",
+          "semanticHash": "6f0bb732fc992104f41bba084f2fe251824fc096bd425120dabc1d5848a60a2a",
+          "metrics": {
+            "complexity": 27
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/sales.tsx",
+      "semanticHash": "4971638fc159a76b39afbfc085eebc881df3942cad7c4ae83790813fdfad23f4",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:SalesModule",
+          "semanticHash": "cd4a066864378d8a0b2210b5efafbd9007ce46d0d9b54e99baaaee9b8bbba089",
+          "metrics": {
+            "lines": 355,
+            "complexity": 96
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/settings.tsx",
+      "semanticHash": "819fe471c765bd8b17ef3d969311e9e3ca43adf18fe2c024cfb0e512a3dd0e1d",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:SettingsModule",
+          "semanticHash": "585edf2f5577c742e45197880abe983408d9de70edbaf6f5a2b6f0a7b99a3cd5",
+          "metrics": {
+            "lines": 124,
+            "complexity": 29
+          }
+        },
+        {
+          "anchor": "module/function:SettingsModule/call:useEffect:arg0",
+          "semanticHash": "bea775230c5a671fff63b5c4c2de51caa5d8dd8b7abd4066aa885042d660d587",
+          "metrics": {
+            "complexity": 16
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/socialInbox.tsx",
+      "semanticHash": "0adad9e26169f61eb74138de18a339553879f3e0a909368454ee39165fe61b1a",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:SocialInboxModule",
+          "semanticHash": "03f04d3c6c82d30873c16193fa9d3cec0aa8c655638655d24acc41ab28c6ec61",
+          "metrics": {
+            "lines": 192,
+            "complexity": 34
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/tasks.tsx",
+      "semanticHash": "b1d86157f82c0f22927efe68125ec1d06729520ab414a3466293d94ca9fb13c0",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:TasksModule",
+          "semanticHash": "dbdd0d298fc4522f59ec68142803c878985d8fc5588c14e382dbbbf6d8fa2aa1",
+          "metrics": {
+            "lines": 136,
+            "complexity": 21
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/team.tsx",
+      "semanticHash": "e91874a4090da639f7042293f5caa03148c72f3c42d10c6d3b58df20d901bcb4",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:TeamModule",
+          "semanticHash": "4b4cbdacaa66acf9ae769bace46f8e077e3231fc6d7592e6a9dfa00b4012f992",
+          "metrics": {
+            "lines": 165,
+            "complexity": 22
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/valuationCompanies.tsx",
+      "semanticHash": "9369672ca69f1982ae0d0d393cd0e92842f415c801a0918a1a573f7a4ffd63d1",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:ValuationCompaniesModule",
+          "semanticHash": "6d650655df66564d16cda4cac6ec153bcc2a9d1d4825a8945fdaca47a56d2562",
+          "metrics": {
+            "complexity": 16
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/vehicles.tsx",
+      "semanticHash": "b2a4b125fdffd04b4fa26bf5ee840d2d3f251e0241bee46cc50baebdf55bc011",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:VehiclesModule",
+          "semanticHash": "f5b52cff6967136c3fa2447cae59eef649862502fe135898c535dd3bb5ea513d",
+          "metrics": {
+            "lines": 571,
+            "complexity": 85
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/website.tsx",
+      "semanticHash": "a6f29cc6e809186c17b0a1d0f04d4070a3176055c83ec6f3f1b9001cd0eded1a",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:WebsiteModule",
+          "semanticHash": "c3d6f31fe1c3f4bdef34de541f1a85bd247b99d0cdf93420b9f92a7277d73eba",
+          "metrics": {
+            "lines": 325,
+            "complexity": 99
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/WorkspaceModuleBody.tsx",
+      "semanticHash": "b0b6d8d3bce67c1027a3e00e7f96ac8981a8d602b75e4ffd391e115f534ef503",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:ModuleBody",
+          "semanticHash": "53fda3c6d0b15bc5445ab8a3aea2cab70a735d15b5a0283aca20f9c6ab67451e",
+          "metrics": {
+            "complexity": 33
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
+      "semanticHash": "ef76ea8b44cff8989e0e39d8f727f7840af2148f2a6fa79c7423246f93137c88",
+      "metrics": {
+        "lines": 1697
+      },
+      "functions": [
+        {
+          "anchor": "module/binding:makeStyles",
+          "semanticHash": "e320e6b06362cbfe3e7e56046ef3f2c2f04e8791efcbc6f01c1438de89bc5a86",
+          "metrics": {
+            "lines": 524
+          }
+        },
+        {
+          "anchor": "module/function:SalesWizardScreen",
+          "semanticHash": "4a487454fe96a1bce4b744c0b5b5268bb2dd3f1e862ebb4919e759f93991498d",
+          "metrics": {
+            "lines": 1061,
+            "complexity": 191,
+            "nesting": 7
+          }
+        },
+        {
+          "anchor": "module/function:SalesWizardScreen/function:handleCreateQuote",
+          "semanticHash": "25fc39576dc4d7b49e313d5166eb3f71cbc02dee27e131b1cd59cd69c69eaf8d",
+          "metrics": {
+            "complexity": 26
+          }
+        },
+        {
+          "anchor": "module/function:SalesWizardScreen/function:handleShareQuote",
+          "semanticHash": "9c04cec6b94a59bf67dd5c514c5e249f45d63c1d819964717fd30f7ce75e662e",
+          "metrics": {
+            "complexity": 17
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/tabScreens.tsx",
+      "semanticHash": "e38d7384b4a1272f9e89d8f10a3bb9e020393921a5a63f18b6d25cebbb09f893",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:makeStyles",
+          "semanticHash": "c051d7a29af72f6674ea65d93e59387ed28333a531b148eb4b5f6f2970967f8d",
+          "metrics": {
+            "lines": 136
+          }
+        },
+        {
+          "anchor": "module/function:SalesTabScreen",
+          "semanticHash": "aa72638d7df33fc32b760304c376295504ddc81e7c0389813373e2369298cbaf",
+          "metrics": {
+            "complexity": 21
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/VehicleDetailScreen.tsx",
+      "semanticHash": "f282fe9edfb92d75f516deac878eb221bd827c9aff16d66e66f5450397ca1e17",
+      "metrics": {
+        "lines": 947
+      },
+      "functions": [
+        {
+          "anchor": "module/function:VehicleDetailContent",
+          "semanticHash": "e85e6961ff7fdc187797937b4788758e1737f4ae99a626e173b2ef71c6866262",
+          "metrics": {
+            "lines": 787,
+            "complexity": 170,
+            "nesting": 5
+          }
+        },
+        {
+          "anchor": "module/function:VehicleDetailContent/return/call:reservationHistory.map:arg0",
+          "semanticHash": "47cd2f2442d5e1888aa7861de3cf43282f00c4109173d6d85ad85b769038381f",
+          "metrics": {
+            "complexity": 18
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/WorkspaceModuleLauncher.tsx",
+      "semanticHash": "628d73e167dd742e07bfb0baf465b2681fa506b7372f8ac1252f706fad6810db",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:makeStyles",
+          "semanticHash": "2633a21366bfe95a5934a128d192de3cd3ccea880fdc474d9a1207a082f5b4a9",
+          "metrics": {
+            "lines": 182
+          }
+        },
+        {
+          "anchor": "module/function:WorkspaceModuleLauncher",
+          "semanticHash": "5c0d22f368b6db5ff92599be16748bc1cf98ba6e9559b2be82c7f31f91a74f13",
+          "metrics": {
+            "lines": 188,
+            "complexity": 16
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/WorkspaceTabsLayout.tsx",
+      "semanticHash": "10a716734725b3f60ff5ee162ceacb985bbdd44eed152f7c89929790ae82924e",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:WorkspaceTabsLayout",
+          "semanticHash": "968e9e7e7145759439d67e2b91720d56975971beb0272db16bd75ac9e1e1b27d",
+          "metrics": {
+            "complexity": 17
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/security/BiometricLockGate.tsx",
+      "semanticHash": "98e53c41161a96bbfa23fe37eba1efae39327fd7038561e39c7893477f85d7d0",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:BiometricLockGate",
+          "semanticHash": "d2f4a0d76c4e38aeec6ae43eb91539c161c9bf3a9586aa19639040310867e2b7",
+          "metrics": {
+            "lines": 139
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/accounting/AccountingSetupTab.tsx",
+      "semanticHash": "6bcc4d6ecd33a7fa1d2d615177f33f33c8860d30a17eb5f78ad1f9dff7028692",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:AccountingSetupTab",
+          "semanticHash": "d73e6d63c037496e7d4e11e6d59680a5ce9fbdd5d07d670e7080a00bc6a3dd2d",
+          "metrics": {
+            "lines": 173
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/accounting/bankAccounts/BankStatementUploadDialog.tsx",
+      "semanticHash": "6753f57dc12f8436dc4b24caab8de4753615aa3cac4f18cfe4ea72993574d0af",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:BankStatementUploadDialog",
+          "semanticHash": "a675f354731c284a43e26c159c2ee752bce7edbafc980ef8bef0e04826008d75",
+          "metrics": {
+            "lines": 146
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/accounting/bankAccounts/ReconciliationPanel.tsx",
+      "semanticHash": "9bf9ee408a04ee72c21f9ae677af0b278b10a25326c08ff21e6aefe4fbe16f89",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:ReconciliationPanel",
+          "semanticHash": "570ed8ab2b30226c465f90dfe60dad2314d3732bdabdd1c2c0fc16fe131be84a",
+          "metrics": {
+            "lines": 181
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/accounting/ClaimsTab.tsx",
+      "semanticHash": "53f1c3156bc480f85c29a8dd90f08fcff28c2262a6408f773599d9bd425db961",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:ClaimsTab",
+          "semanticHash": "56d926497b280f5e721076f3d94555fe6f8dd504ba1aac121657c4642816f813",
+          "metrics": {
+            "lines": 123
+          }
+        },
+        {
+          "anchor": "module/function:NewClaimDialog",
+          "semanticHash": "c32610d7d0ecaed99d2e95abd2d26461aba8397a5d9a758dc617d92322fadf97",
+          "metrics": {
+            "lines": 135
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/accounting/CollectionsTab.tsx",
+      "semanticHash": "8827fcccff7a466cc7ab2c9defa5a7bf4939f8cf8d1051944c670962c1ec3c05",
+      "metrics": {
+        "lines": 1112
+      },
+      "functions": [
+        {
+          "anchor": "module/function:CollectionsTab",
+          "semanticHash": "08c671119b8717d9aecf23237d97651c562c3028266ead1c225c3fb2573656c9",
+          "metrics": {
+            "lines": 456,
+            "complexity": 58
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/accounting/FixedAssetsTab.tsx",
+      "semanticHash": "ad76df273d64f7f09e069b2fb4ae26fda93b743297344bd6821ec584ce73d97b",
+      "metrics": {
+        "lines": 605
+      },
+      "functions": [
+        {
+          "anchor": "module/function:CapitalizeAssetDialog",
+          "semanticHash": "b45441e2743b1adbc51b6dc850a71d4a3856909fe7c60547ac7ff2c737fde42a",
+          "metrics": {
+            "lines": 171
+          }
+        },
+        {
+          "anchor": "module/function:FixedAssetsTab",
+          "semanticHash": "a4e100f96b65a03a557dcd0ab19bae87ca7b016ccc5aeb3b699cb419b612eb11",
+          "metrics": {
+            "lines": 152
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/accounting/ManualJournalTab.tsx",
+      "semanticHash": "9e5fbedc2bf206a01081aa2ff8e563a1c18aaa72d11a50dec495a73efa2f655e",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:ManualJournalTab",
+          "semanticHash": "c0cf7246bb951a14b27349b94179074870255ff25d338dcb4813dc412192251e",
+          "metrics": {
+            "lines": 362,
+            "complexity": 16
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/accounting/PartnerEquityTab.tsx",
+      "semanticHash": "067dd2331f88c3fa62951f9c53258c0c9fcc03b8e8be491d5f0ddfb25087cf0f",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:PartnerEquityTab",
+          "semanticHash": "71115109c9d6b8b9742494ee560bff4c0d43eda1eae42eee2465c111140689f3",
+          "metrics": {
+            "lines": 142
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/accounting/PrepaidExpensesTab.tsx",
+      "semanticHash": "b25f3898ab4fc42822b61dd95531d03143f73762167b4f6a1f32c00ebf958179",
+      "metrics": {
+        "lines": 885
+      },
+      "functions": [
+        {
+          "anchor": "module/function:CorrectScheduleDialog",
+          "semanticHash": "5f5317b3ee678accc048769d956791c741db9aa575813d6dd8db50638421fde0",
+          "metrics": {
+            "lines": 244
+          }
+        },
+        {
+          "anchor": "module/function:PrepaidExpensesTab",
+          "semanticHash": "55538adef6f2bc08fa0551c77c33619f87ab4fdbd34453f9164d877f917b6d01",
+          "metrics": {
+            "lines": 180
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/accounting/setup/ClosePeriodReviewDialog.tsx",
+      "semanticHash": "7ded8b1f7a981b55dc843bddf5a6215c717324335ab5de3ba0ba4e5049cbc423",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:ClosePeriodReviewDialog",
+          "semanticHash": "edde8823996dcba2cbb65aabd983d027cc560bdde374411fe7229ddd2a3a5db7",
+          "metrics": {
+            "lines": 138,
+            "complexity": 22
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/accounting/setup/OpeningBalanceApprovalPanel.tsx",
+      "semanticHash": "260ad71ee0def63ff18f1287b429eda52e8b6d9e9d4890f4308f7e6dcf4667ff",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:OpeningBalanceApprovalView",
+          "semanticHash": "ebf6ccc75cda221fab35956cd93b6f95671ad71a9c0d8e90878b3fa3e3badd4e",
+          "metrics": {
+            "lines": 196
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/accounting/setup/OpeningBalanceCard.tsx",
+      "semanticHash": "c2412f5667c41c4db78296e6ce2991ca9b7aa42d616f9438f462f21f72780d08",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:OpeningBalanceCard",
+          "semanticHash": "7d284b6680a4caa7bb04b801e79449141291446ff411475e46c94920353f384c",
+          "metrics": {
+            "lines": 239,
+            "complexity": 22
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/applications/ApplicationDetailsDialog.tsx",
+      "semanticHash": "f79c28b05c1460ae19cc551dec37255226ebc603da858497c42d435770eec8d4",
+      "metrics": {
+        "lines": 1009
+      },
+      "functions": [
+        {
+          "anchor": "module/function:ApplicationDetailsDialog",
+          "semanticHash": "8287c59e809a5a734c4ac825d7637b816a6aa653a4be04115106973e61adb89a",
+          "metrics": {
+            "lines": 979,
+            "complexity": 125
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/applications/cockpit/ConfirmHandoverDialog.tsx",
+      "semanticHash": "2dd8fc4b14ac79170d7674fdf51c73e725289c6c1b5e198289052419763ac3fa",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:ConfirmHandoverDialog",
+          "semanticHash": "b0195259af1ed7436a490ca3e5c47389494ac5e0f0e8ed7ca91fa8a3d416e044",
+          "metrics": {
+            "lines": 156
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/applications/cockpit/DealCockpit.tsx",
+      "semanticHash": "e7ea39cbaa1b337ac42a720cd12896a67f253ea247dc948e7df623384d03005b",
+      "metrics": {
+        "lines": 1473
+      },
+      "functions": [
+        {
+          "anchor": "module/function:DealCockpit",
+          "semanticHash": "0a75caf485403d0b6bdb20069dbc45ef1cec0ccbb9a6abb27bce26f01a820e9b",
+          "metrics": {
+            "lines": 323,
+            "complexity": 49
+          }
+        },
+        {
+          "anchor": "module/function:DealCockpitView",
+          "semanticHash": "1f3edc7c66c331cedeef19c1f929175da2f4912f4f914d07d8e3618026e8ab0e",
+          "metrics": {
+            "lines": 832,
+            "complexity": 97
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/applications/cockpit/FinanceCompanyDecisionCard.tsx",
+      "semanticHash": "e886daab47678038fd8bedd5e518998682569919709a124fe6ba1de78a1bd327",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:FinanceCompanyDecisionCard",
+          "semanticHash": "ce9980b2897755f551a11536a1fa7b4c93c68c295b0af91f5adae6fab3ef4f3e",
+          "metrics": {
+            "lines": 197,
+            "complexity": 45
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/applications/cockpit/RecordAppraisalDialog.tsx",
+      "semanticHash": "04c54ed248fa5b6d8cdb3933ffa6462dfc3a635ae867feebe031ce18bccd3ae9",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:RecordAppraisalDialog",
+          "semanticHash": "c21f4abfe4abb35a9f38de7c5f87eeaf95d073a4a7fb33c1d52f1d29bd668806",
+          "metrics": {
+            "lines": 170,
+            "complexity": 19
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/applications/cockpit/RecordApprovedPurchaseDialog.tsx",
+      "semanticHash": "c6841b1fbe297c540d1b3aac6b9eba81233c0fa4c45ce6b95ad853314c16e6f1",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:RecordApprovedPurchaseDialog",
+          "semanticHash": "0f86340e94bd1ba31e643363160df62524683960920835b3ee6ca6839179543e",
+          "metrics": {
+            "lines": 248,
+            "complexity": 35
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/applications/cockpit/RecordSubmittedQuotationDialog.tsx",
+      "semanticHash": "4da93a32ccf3a30f3e32b9a3d84403db0550292e81a5192fad161f705d714520",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:RecordSubmittedQuotationDialog",
+          "semanticHash": "e5f9500c3cf4762dd80274c5a80e6388b729a6a6d84269c26c41a9bed6833f3d",
+          "metrics": {
+            "lines": 187,
+            "complexity": 33
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/applications/cockpit/SettlementAdviceCorrectionDialog.tsx",
+      "semanticHash": "a70e4aac2d08d625f3e749be3c612722e7defba18400a1b91481716b7317c9c2",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:SettlementAdviceCorrectionDialog",
+          "semanticHash": "102b69a2ab00f5334547148e0a319eb78676e9ad885f157c7498a809d854734d",
+          "metrics": {
+            "lines": 145
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/applications/cockpit/SupplierSettlementDialog.tsx",
+      "semanticHash": "0c70748a35a343d0fd84005eaff498d5e6196515bdf6b80dfb54a2b9d6a53c37",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:SupplierSettlementDialog",
+          "semanticHash": "10d99d17f76945df153b36a54fa5f44c360dedd884bf3d9d81639c5ccead7b1a",
+          "metrics": {
+            "lines": 128
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/applications/DisbursementConfirmationDialog.tsx",
+      "semanticHash": "de3c8e359a5afc96c570d8d59ee3ee8a3ba3b04298b12b15b9cce03e68833ea3",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:DisbursementConfirmationDialog",
+          "semanticHash": "ff1f77be0521ca5023337306af31befbe9e59427f59cfb848856aaa4a27bcac7",
+          "metrics": {
+            "lines": 147,
+            "complexity": 17
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/applications/RegisterExpectedPaymentDialog.tsx",
+      "semanticHash": "430620874f8ecd48731144f68374282a5450647054f97d9f5fb926b97e5a0ce2",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:RegisterExpectedPaymentDialog",
+          "semanticHash": "ca0d30e67aa4edd372d3ddc44f739fe22c37c4b6ad6fcd58efce0b5b14e770cf",
+          "metrics": {
+            "lines": 148
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/customers/CustomerDetailsDialog.tsx",
+      "semanticHash": "ec8013917c8ec0ce902d141dc2179b486b228e180d179bf40185294f425a393d",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:CustomerDetailsDialog",
+          "semanticHash": "04ffc33b7bff6a1e262b6d3e7d67ee7aed08b697be5d3f8b3d159cd0738a91b4",
+          "metrics": {
+            "lines": 370,
+            "complexity": 45
+          }
+        },
+        {
+          "anchor": "module/function:CustomerDetailsDialog/return/call:relations.quotes.map:arg0",
+          "semanticHash": "2c74aa17ccd082e14129f7a876a8a4f39eabbccc3312ebcfa82e8e555049c8fb",
+          "metrics": {
+            "complexity": 20
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/customers/CustomerDialog.tsx",
+      "semanticHash": "2178d17dce2fdfe5a67e4e9536fb094eed69f93279b8b07a9be589c554196e76",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:CustomerDialog",
+          "semanticHash": "3e45f0b5790f13abe608a17f07b69c4da96db4defe973d3d81a5790cb100e5c9",
+          "metrics": {
+            "lines": 244,
+            "complexity": 21
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/customers/CustomerFinancialsTab.tsx",
+      "semanticHash": "fdbc6651da9883fbc39b11de37668b611a46b557570e53ab8a6fa69b16571906",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:CustomerFinancialsTab",
+          "semanticHash": "7dc868291ccd9ab7f513bf20716866351f3fd722d9d0df8a760d137c6d8fa910",
+          "metrics": {
+            "lines": 188,
+            "complexity": 32
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/customers/GuarantorDialog.tsx",
+      "semanticHash": "7be2cf6ab831d358f9cd397c1a558566f1b0e82844baf642ddcbe19536a53571",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:GuarantorDialog",
+          "semanticHash": "d4d3d3efe47a42d564e1680e4b8eb37df15726844ef678403efb13cca2ab1e01",
+          "metrics": {
+            "lines": 148
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/customers/MergeCustomersDialog.tsx",
+      "semanticHash": "71e4d396682fdf1286bfb4c48125161e2b79ef7b1e3db375ff2dceeac04f85ab",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:MergeCustomersDialog",
+          "semanticHash": "4f2050709fd4a1c99b96aa4175cd07e72e8bee17bd1606a0060d28a52214c63f",
+          "metrics": {
+            "lines": 230,
+            "complexity": 39
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/deposits/DepositSettlementDecision.tsx",
+      "semanticHash": "db5d02853411969e5ddcde77a53b3b0b65114f69cac01d96489ae8a51246f991",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:DepositSettlementDecision",
+          "semanticHash": "abcfd08996575cd2e3a91a8c219351e9ab33116e7913a4773c058bb7bdbb1384",
+          "metrics": {
+            "lines": 125,
+            "complexity": 20
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/deposits/QuoteDepositManager.tsx",
+      "semanticHash": "c7c35dcfa1702924f1bba1352ee9767156e3e93807ccdd8df0287fa53ff6362d",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:QuoteDepositManager",
+          "semanticHash": "3143c98cad8c39dc15f639ce4d0002d5b1be6612375a322951df7e1954e03a01",
+          "metrics": {
+            "lines": 291
+          }
+        },
+        {
+          "anchor": "module/function:QuoteDepositManager/return/call:awaiting.map:arg0",
+          "semanticHash": "be0b67aaab5e970a7fd0f0577f90cade8f327dbad53e3c507be2f3175880116f",
+          "metrics": {
+            "lines": 122
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/expenses/ExpenseDialog.tsx",
+      "semanticHash": "8f93be0aca21a89f3e82a59eb07354a07654d6864e55a37413f12bb841260ccf",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:ExpenseDialog",
+          "semanticHash": "350c5f56e66acfe2c9a75405bb415c77821ea5719bec371904ef6e5370c0f191",
+          "metrics": {
+            "lines": 427
+          }
+        },
+        {
+          "anchor": "module/function:ExpenseDialog/binding:onSubmit",
+          "semanticHash": "eb4754fc8bc707a886d2da4fe0979c4381ade38bd12c5c7df2d801636d3dd7c7",
+          "metrics": {
+            "complexity": 20
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/feedback/FeedbackWidget.tsx",
+      "semanticHash": "ec5f66e01a54a24f0ec460d6ea3a4a86e45bab75db2e308f8a644592ac06598b",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:FeedbackWidget",
+          "semanticHash": "7d93da0b33a4b644569f2654b3d3e582954a82f1812736007aad77d1e282d897",
+          "metrics": {
+            "lines": 151
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/import/ImportWizard.tsx",
+      "semanticHash": "4f84970c84bf7c530b52eb8bc07dfd0654f71dbf65747fb8198f58cfb19dec48",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:ImportWizard",
+          "semanticHash": "ea444f6f16e2f33b26ced5eec5dc9d8d3d5353ac1e2fa4aec820b754dbd3fbab",
+          "metrics": {
+            "lines": 299,
+            "complexity": 26
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/layout/NotificationsBell.tsx",
+      "semanticHash": "362740b446239cdc842df58f9e40edffd0c7b7642a215636c41509d2aeb1a657",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:NotificationsBell",
+          "semanticHash": "83d4c0a2d212e1e38d913a95bacf5111d594e5d9743dbba3fdf000908bb51121",
+          "metrics": {
+            "lines": 181
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/layout/OrgSwitcher.tsx",
+      "semanticHash": "88e6ce064f60eabece67e14d958f3721f8bf19ad5ac9ff8366a3fbc82477a7a5",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:OrgSwitcher",
+          "semanticHash": "0895dc97317436ae75e2c4c43406b02d62c07aba583bf6d1a716ebaf5c514c5d",
+          "metrics": {
+            "lines": 128
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/layout/Sidebar.tsx",
+      "semanticHash": "6df4fb55888929fc208a016f161a5ccdfb997830c91b49e5c09c7f86397b6999",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:Sidebar",
+          "semanticHash": "7940792dc9f58333993bc62838e4c13e7ab2fa4bdaf58ca61c6148c12c8f02e2",
+          "metrics": {
+            "complexity": 19
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/layout/TopNav.tsx",
+      "semanticHash": "3379090f710eabf89fc610b03478619f7765c4c9230453982c8c679c16e81d8f",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:TopNav",
+          "semanticHash": "7a81bcef8a2324d208eea9fab1a19252b7150bedde14bc701f5bea872697f3f1",
+          "metrics": {
+            "lines": 161,
+            "complexity": 16
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/leads/LeadActivityTrail.tsx",
+      "semanticHash": "ae08054260a110c0bfae9c5e91865f493418c9e56108bff37d8fa5806c4d5c9d",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:LeadActivityTrail",
+          "semanticHash": "ccfb3c7b768399558fe031f637f85b16f07c1a9b8c11b51717b9aedbd40972bb",
+          "metrics": {
+            "lines": 154
+          }
+        },
+        {
+          "anchor": "module/function:LeadActivityTrail/return/call:LogicalExpression.map:arg0",
+          "semanticHash": "a71469f05c4e583d6ea84f6eeaf6ff6ba80e03c5d16892929c86312b5bd1055e",
+          "metrics": {
+            "complexity": 19
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/leads/LeadDialog.tsx",
+      "semanticHash": "0697f648a7fa9a6739562cddc71dbbc7caae194188f1d6790e61c74872f68444",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:LeadDialog",
+          "semanticHash": "ac4fa84ed8f77ec9f57af58167ebf587568b933e150a3d8ff3c00ce698899115",
+          "metrics": {
+            "lines": 397,
+            "complexity": 45
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/leads/SocialConversationDialog.tsx",
+      "semanticHash": "5ad403a366b15be377401be2c5ae60155bf6724f49f2ce74433ee2e1f99ded76",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:SocialConversationDialog",
+          "semanticHash": "c5354ba6c3d780baf9ff23b7b31359e5eec9c5f967f8d1b24846639a242a265d",
+          "metrics": {
+            "lines": 410,
+            "complexity": 56
+          }
+        },
+        {
+          "anchor": "module/function:SocialConversationDialog/return/call:events.map:arg0",
+          "semanticHash": "0a05c7155736657a58b897a490137c680571c0ae6f0e6db92e15d24f53eca365",
+          "metrics": {
+            "complexity": 17
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/marketing/home/CreativeMarketingPage.tsx",
+      "semanticHash": "c90d82a87297529be18637ad4fa91614a5c13a63c9c23e6084197cec98777082",
+      "metrics": {
+        "lines": 1123
+      },
+      "functions": [
+        {
+          "anchor": "module/function:CreativeMarketingPage",
+          "semanticHash": "de5224db5127e78668e624896d55ab8b8132757ed8dc858c48f1e8f61eac14c4",
+          "metrics": {
+            "lines": 1051
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/marketing/MarketingChatWidget.tsx",
+      "semanticHash": "4005f9661f4acb92785d1c79c9fecd543b1e21765d7790b9a4c862cb8a6b30a1",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:MarketingChatWidgetImpl",
+          "semanticHash": "fe82639711f55e81322cea2e77609705672ce14118afcff4c0a9a9049c174288",
+          "metrics": {
+            "lines": 265,
+            "complexity": 48
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/messages/ChatThread.tsx",
+      "semanticHash": "5ba2fe5a531adf0dd1e97f1afb5bfe6b28991aee964db95959456565b232357a",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:ChatThread",
+          "semanticHash": "f07425977aa3924a947b19f1f238440d34b3a02256ca308f48f530b37f26b44a",
+          "metrics": {
+            "lines": 218,
+            "complexity": 26
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/messages/ConversationList.tsx",
+      "semanticHash": "8fc4c79b2a8b9be3c8b1890c6778dc60b50b8e4bf8951cb8e8acb74c82f7ea32",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:ConversationList",
+          "semanticHash": "9c99ac8e1a1bca9c053f094e3473760c52782720dcca4bc503d168c488edcdb2",
+          "metrics": {
+            "lines": 153
+          }
+        },
+        {
+          "anchor": "module/function:ConversationList/return/call:filtered.map:arg0",
+          "semanticHash": "6e87878cd421d873486e0e36498388a92e47c5523d7ef6e0ba4b83a92dd8112a",
+          "metrics": {
+            "complexity": 18
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/messages/FloatingChatWindow.tsx",
+      "semanticHash": "0e0420893eb141350bbf60cc1cd82bc5854a27186db529562d7a3b25f6fb342e",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:FloatingChatWindow",
+          "semanticHash": "d172cab3ef73bcd0af71e432aa703a0d26fd08c6a3be3e6abbdaed95e9153c8a",
+          "metrics": {
+            "lines": 245,
+            "complexity": 34
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/messages/FloatingMessenger.tsx",
+      "semanticHash": "095fc41d3cca21f9de629d84aa25e48fa3aa739b7c2e0a84458883e457dc9548",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:FloatingMessengerInner",
+          "semanticHash": "fc700b6eb4442ca192f40288515e9cf3137e4161f066170223c3d58077230f96",
+          "metrics": {
+            "lines": 254,
+            "complexity": 18
+          }
+        },
+        {
+          "anchor": "module/function:FloatingMessengerInner/return/call:filtered.map:arg0",
+          "semanticHash": "66864d9b475eae26731b1a3a88067782094e1c6aeba815b7560c6994428a65ad",
+          "metrics": {
+            "complexity": 18
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/messages/MessageBubble.tsx",
+      "semanticHash": "efeef6f15d605c947eec4c26a3f57052abf8f0a4b0d322505648a4a5b5e03cfa",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:MessageBubble",
+          "semanticHash": "f0b29d78162658838e16c9e1fdf7b2e3b74a7da81c60129dc2de66a5653d3dcb",
+          "metrics": {
+            "complexity": 19
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/messages/NewConversationDialog.tsx",
+      "semanticHash": "cda183dfaa69f659c63cb30678acd4bb6cca1fdc439e5f3fc76f5d76401293fc",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:NewConversationDialog",
+          "semanticHash": "1220529138d6d0ce8ad3d7afe3ee713a29ba7f65520f60c1f278591758997929",
+          "metrics": {
+            "lines": 141
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/print/DocumentLetterhead.tsx",
+      "semanticHash": "15826ee14514442f942eb75af62af3a28b708387bac0a6d9d61158016707babb",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:DocumentLetterhead",
+          "semanticHash": "fcdaa9c72fe4792d74a85ab68b9a3d1bf0e431ded6497eca2e9cfc07ce5d4df2",
+          "metrics": {
+            "complexity": 28
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/sales/ConsignedSettlementSection.tsx",
+      "semanticHash": "d3736d9190189f69687a17ee18e8e6e1c0e8cf273f3e3d690e71c00e3159a2f8",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:ConsignedSettlementSection",
+          "semanticHash": "b3a78f5790e5ca1b0eee927d418953e39f85d8a9667f6f20e4d12e3587c571c2",
+          "metrics": {
+            "lines": 138,
+            "complexity": 17
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/sales/QuoteDialog.tsx",
+      "semanticHash": "c2640bbe9303a947baa7026a399281833bbf239f042674a9e0605540b95adb35",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:QuoteDialog",
+          "semanticHash": "02fbc886b7686077e5f60feafbb7f9a40e5187af23853793089c28415eb89431",
+          "metrics": {
+            "lines": 304
+          }
+        },
+        {
+          "anchor": "module/function:QuoteDialog/call:useEffect:arg0",
+          "semanticHash": "5bb1bcf421bf5502e465db37be438c3fc2c52b701892d9bd184d875a78872583",
+          "metrics": {
+            "complexity": 16
+          }
+        },
+        {
+          "anchor": "module/function:QuoteDialog/return/call:comparisons.map:arg0",
+          "semanticHash": "97c0bb02754cd6c13c82b894b7e2af2be70ce390e26dcd820c958fcc040aebad",
+          "metrics": {
+            "complexity": 16
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/sales/QuotePrintTemplate.tsx",
+      "semanticHash": "b4a4d6c0a16ec2391ea5c2ea990cdeae9d9da6cf4f3f7d2bb7ab9f9917d95e6e",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:QuotePrintTemplate",
+          "semanticHash": "c6404623cf9db587506be2a8add87b38a24a689a87f090fd2496f5280bf370f0",
+          "metrics": {
+            "lines": 181,
+            "complexity": 37
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/sales/SaleDialog.tsx",
+      "semanticHash": "bf79c80b768e39d9a0b4fa264fd98af382242006d464913aeef7e1453d7e9f7f",
+      "metrics": {
+        "lines": 689
+      },
+      "functions": [
+        {
+          "anchor": "module/function:SaleDialog",
+          "semanticHash": "a21e3c221b639daab3b3ad8d6af171ca8d573c6fde207ba0beb8214e8ac6497a",
+          "metrics": {
+            "lines": 648,
+            "complexity": 22
+          }
+        },
+        {
+          "anchor": "module/function:SaleDialog/call:useEffect:arg0~1",
+          "semanticHash": "4830ce74f2f016273fa2dce0e7004020ccd46940bfba4fe3c9eac18fcb79bbff",
+          "metrics": {
+            "complexity": 22
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/sales/SalesWizard.tsx",
+      "semanticHash": "d3fae2c628766ef692a5cd8b9ad876f2a4b0673ab3cff139d2e10c6311d52e23",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:SalesWizard",
+          "semanticHash": "ff28332d6b8ddd656f6f56c7f642ce642184b68b678d45ce6deda7160c0db747",
+          "metrics": {
+            "lines": 213,
+            "complexity": 25
+          }
+        },
+        {
+          "anchor": "module/function:SalesWizard/binding:ArrayPattern/call:useState:arg0~2",
+          "semanticHash": "fe6cafb0263fa992e5a5837c9cc629b42fe8d69ddb7ec081a0e420cc80e6ffb1",
+          "metrics": {
+            "complexity": 19
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/sales/wizard/components/CustomerCreateForm.tsx",
+      "semanticHash": "9526c9241b52670f4fdc2a56728474ce2fe1441f56114c3d7f2951ada137c9e3",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:CustomerCreateForm",
+          "semanticHash": "02382da115f89aa3e31e573f1e33c4d57ead12ae402e16ba6200ef607d4822a0",
+          "metrics": {
+            "lines": 197
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/sales/wizard/components/DepositAllocationPanel.tsx",
+      "semanticHash": "4abbd52d29a3b0d9b7b008da62b8a5645af2c2665f83bbd489ef712185de351c",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:DepositAllocationPanel",
+          "semanticHash": "d03d72f19b9d2d780e7e61dd34025cb8e6d23e162821fc4ec710d5d9134de0e9",
+          "metrics": {
+            "lines": 151
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/sales/wizard/components/FinanceCompanyCard.tsx",
+      "semanticHash": "6355ca9422dd05179561e4030248bdd2864e5964f512fb134e95ce74d332760a",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:FinanceCompanyCard",
+          "semanticHash": "f5f57e5f2e7d99e1c2f01f8a0993c6c55580dc186308979acb0e25f972b9892c",
+          "metrics": {
+            "lines": 205,
+            "complexity": 17
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/sales/wizard/components/ManualFinanceCard.tsx",
+      "semanticHash": "2519997819a9997c507d5e04335129770c937eaf38618574c04707674d1c2955",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:ManualFinanceCard",
+          "semanticHash": "66c4f0bbbf11248dc7265702c70394c1b287f4b03c493e53bc7a669008e4e2d2",
+          "metrics": {
+            "lines": 188
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/sales/wizard/components/VehicleCostBar.tsx",
+      "semanticHash": "09ec78063d6aedd23e3c4bfcb3e07284e2b867b650df8828c6f987b5b75d0302",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:VehicleCostBar",
+          "semanticHash": "724482857092983f1a2d08edcca8d94430cef89624455c5379e8474e4cace6ad",
+          "metrics": {
+            "complexity": 21
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/sales/wizard/components/VehiclePicker.tsx",
+      "semanticHash": "23e34112f6b70c85f5d3e03bb76b602c0d70c0cb0d70ccac66065652bf1d8920",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:VehiclePicker",
+          "semanticHash": "2507580b84b87dcee295c3b0156990aed1e122cf3b5c50f3a636a10cc392fa47",
+          "metrics": {
+            "lines": 326,
+            "complexity": 34
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/sales/wizard/hooks/useFinanceComparison.ts",
+      "semanticHash": "41f64d19400ce7a2c86bf0fdf22f832d017acddc6618079d3716a61219c22fab",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:useFinanceComparison",
+          "semanticHash": "159f12fcc84ce267c2d24e053a016092df09a1a03cdd5d13f9ad43ca8a597633",
+          "metrics": {
+            "lines": 129
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/sales/wizard/quotePayload.ts",
+      "semanticHash": "21522937df85332263182e66476aa818eeff2a336f675fab87b308f75c407fb5",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:buildWizardQuotePayload",
+          "semanticHash": "d42e09a410834ab840603e9f010d665cf7ee82c68a0183d40ce35ba6c7d2f9fb",
+          "metrics": {
+            "complexity": 19
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/sales/wizard/steps/Step1QuoteSetup.tsx",
+      "semanticHash": "f05dc41485cacda4958ebb4b7ed3b022de18921b6a6ff70959b2dd1977070b42",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:Step1QuoteSetup",
+          "semanticHash": "974c942dd52d003508586d6a9bebe4df57862e47508930e17191030b7d8a5920",
+          "metrics": {
+            "lines": 430,
+            "complexity": 49
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/sales/wizard/steps/Step3Review.tsx",
+      "semanticHash": "58046ef4e4cc65ddb98186e514a1e0ee31393217de7a56c5e017454c13e40676",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:Step3Review",
+          "semanticHash": "f23367a098c5c0205c69e283ed1feb1f3b852fd60239abc91714c3cd26283f3a",
+          "metrics": {
+            "lines": 259,
+            "complexity": 19
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/sales/wizard/steps/Step4QuoteSuccess.tsx",
+      "semanticHash": "0d5f22aba7ee6f388bc691e71104cfff36c400ddb6c99bf9c780a0ec39b9d842",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:Step4QuoteSuccess",
+          "semanticHash": "9da3332e3914eb59d549904e5ebdd803def9c98cc982141a0fff47a02814d4a4",
+          "metrics": {
+            "lines": 403,
+            "complexity": 49
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/settings/FinanceCompanyDialog.tsx",
+      "semanticHash": "f24967478c36a35fa681656dd24518f0a86bd3142b0ace16db84f3a67b089c7b",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:FinanceCompanyDialog",
+          "semanticHash": "da97e986b1bd4dcc6d3a4e7b7f82d0fb98c1916f17c0af8b986cf3ceb41742f6",
+          "metrics": {
+            "lines": 301,
+            "complexity": 38
+          }
+        },
+        {
+          "anchor": "module/function:FinanceCompanyDialog/call:useEffect:arg0",
+          "semanticHash": "25c888ec6bcb99726382258c19f99eb08d1af52480f41037fc9be2ba12e2905b",
+          "metrics": {
+            "complexity": 26
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/support/LiveChatWidget.tsx",
+      "semanticHash": "ff0423d0e98d1cce08f1fbc03a01f2b7d0dfa60a28ae36b55c9c7f39736c7d8e",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:LiveChatWidgetImpl",
+          "semanticHash": "698f0aabe7daa7a6fa8d33b98190e57a560a2d78af5d66a80975adf499e98c06",
+          "metrics": {
+            "lines": 269,
+            "complexity": 51
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/tasks/TaskDialog.tsx",
+      "semanticHash": "876edbc6d40a9fe4fbc5808e87e21fe6a8c30ccf32c562a87422ba352fedde51",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:TaskDialog",
+          "semanticHash": "92c5be5460d49ec8fa29fb9c618448ace11e68921b63e91d225655297f1aa0b9",
+          "metrics": {
+            "lines": 313,
+            "complexity": 16
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/team/InviteMemberDialog.tsx",
+      "semanticHash": "fd49f2e2343c0bf84b33c8fea1ee94ed0c9a624911535ff5e87c5d80396ad5b8",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:InviteMemberDialog",
+          "semanticHash": "166c78ee6cd4415d5822aaca4fd16fb0eb14c9eefd051198b495cc597a1f4887",
+          "metrics": {
+            "lines": 206
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/team/RolePermissionsEditor.tsx",
+      "semanticHash": "f97e7d51c5ac3105542af4f0f91ad9f77156026ce822f547f98c3dc15a1bf4a8",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:RolePermissionsEditor",
+          "semanticHash": "72c587f758db657f9534a249c9eeb4f6e1ab19df2c5752f20184bdb428d485f6",
+          "metrics": {
+            "lines": 146
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/test_drives/TestDriveDialog.tsx",
+      "semanticHash": "27969879ef40a1cab68c4069a7f823c9bc0e93f320fd3e2293b24507d1591823",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:TestDriveDialog",
+          "semanticHash": "80a388e48e6bf8feb67ca077f873cc2eca642def6e9a10053f14181071667d9b",
+          "metrics": {
+            "lines": 172
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/ui/searchable-select.tsx",
+      "semanticHash": "868207c1aa5f1e56a61823260413f8e5a6293938d746c6b2239dc953aad5c8e1",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:SearchableSelect",
+          "semanticHash": "6d2292355dae00c865d70e25020e457cdb112ac35d8d5f58763a1bfd0890771f",
+          "metrics": {
+            "lines": 147,
+            "complexity": 20
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/ui/sidebar.tsx",
+      "semanticHash": "cc15ec4522af921a105f6e7a18ee4f237da87ae60927cc3ed808beef1011e686",
+      "metrics": {
+        "lines": 706
+      },
+      "functions": []
+    },
+    {
+      "path": "components/ui/sonner.tsx",
+      "semanticHash": "45344964ade76c706d97d99ac0e678996e0d74cba33c96ae7709a67eb9b54559",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:formatFriendlyError",
+          "semanticHash": "c7b340377f3ac79c887129c0044ef6c37da526c58487efb2bd612439a21c1639",
+          "metrics": {
+            "lines": 235,
+            "complexity": 35
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/vehicles/VehicleDetailsDialog.tsx",
+      "semanticHash": "d853ce2fa6388f8f1a37a1c046ad042e362ba93358888fb593650e441bca5025",
+      "metrics": {
+        "lines": 991
+      },
+      "functions": [
+        {
+          "anchor": "module/function:VehicleDetailsDialog",
+          "semanticHash": "08670b2121e88b85d92ccd4ada8f8737c45900c377f6b6926876b54bf5c25d26",
+          "metrics": {
+            "lines": 925,
+            "complexity": 125,
+            "nesting": 6
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/vehicles/VehicleDialog.tsx",
+      "semanticHash": "9b046f1e84902a6122f5e2ef55721eb6314c4ee3477c5a98fa80fa320e55348f",
+      "metrics": {
+        "lines": 862
+      },
+      "functions": [
+        {
+          "anchor": "module/function:AuditLog",
+          "semanticHash": "866c695065582de69186e53e81412b0391aceb0121c90bdd24714f5334f5c584",
+          "metrics": {
+            "complexity": 18
+          }
+        },
+        {
+          "anchor": "module/function:VehicleDialog",
+          "semanticHash": "287cdf241e693a6f572c3ad6cd00cff88bbf6e1cb77bf93b341aaa76abc1a56c",
+          "metrics": {
+            "lines": 798,
+            "complexity": 36
+          }
+        },
+        {
+          "anchor": "module/function:VehicleDialog/binding:handleDecodeVIN",
+          "semanticHash": "a173ecb4dfc869c349527410cd64a2eb6036a8f559c6a05b36868fd32f8d6442",
+          "metrics": {
+            "complexity": 39
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/vehicles/VehicleImportDialog.tsx",
+      "semanticHash": "165cb112fa9a5bb0201aa4366fd78265feaab634416d3663dc4c31811584e0be",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:deriveVehicleRow",
+          "semanticHash": "9a0feee5e3d03fecf3da663aedb146d8f6b063a009f05ee33b050ff53f2749b8",
+          "metrics": {
+            "complexity": 31
+          }
+        },
+        {
+          "anchor": "module/function:ImportAccountingChoice",
+          "semanticHash": "5beb45c1a9ad4056f1b555accb0a0ec4e6f3fab3a621530e9d6f15bd4be6e70f",
+          "metrics": {
+            "lines": 144
+          }
+        },
+        {
+          "anchor": "module/function:renderVehiclePreviewCell",
+          "semanticHash": "71e4a216465eb56128880f878e99c4b91735eae30c384d19975d0fedcd8d7409",
+          "metrics": {
+            "complexity": 22
+          }
+        },
+        {
+          "anchor": "module/function:validateVehicleRow",
+          "semanticHash": "20f9ffe870583e8f762b995fde68214320b756fff91de7c076396100b9c4b0fc",
+          "metrics": {
+            "complexity": 20
+          }
+        },
+        {
+          "anchor": "module/function:VehicleImportDialog",
+          "semanticHash": "0b53d14fca69c61cb0c32b945a9bb12806e6202c94241a8cb730c92b4f773507",
+          "metrics": {
+            "lines": 154
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/vehicles/VehicleMarketingTab.tsx",
+      "semanticHash": "16a5d2cfb1302828cab61df3aa57b76cc2cfba57e94a11c32df092741881c7ed",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:PostHistoryItem",
+          "semanticHash": "6939c713d8995c79181daf859506b0a0af0c3073ea0fd58247b3f4822aa5de7d",
+          "metrics": {
+            "lines": 171,
+            "complexity": 26
+          }
+        },
+        {
+          "anchor": "module/function:VehicleMarketingTab",
+          "semanticHash": "a0aff982532304e0ac7c9d276af41a2e7c3f7ee23494d27a3bec098d0037821c",
+          "metrics": {
+            "lines": 157,
+            "complexity": 35
+          }
+        }
+      ]
+    },
+    {
+      "path": "components/work_orders/WorkOrderDialog.tsx",
+      "semanticHash": "4cf838ca5410e96f488afc94f2c5db4035f259b59baa49f5ffea468ab56258e4",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:WorkOrderDialog",
+          "semanticHash": "03d87e97053e8ab87d7768400d40f18eb2c142caf060bc808d9b2485714a46c4",
+          "metrics": {
+            "lines": 210
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/accounting/postingEngine.ts",
+      "semanticHash": "1b8eb43c2a00617eba6551224d48121809e6531852f6e067fcbf858b1ee85359",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:postAccountingEvent",
+          "semanticHash": "080095810f4a02431931dbe08046593486a1ae2215702a0cc172db43f3d711a1",
+          "metrics": {
+            "lines": 154,
+            "complexity": 16
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/accounting/postingRules.ts",
+      "semanticHash": "38e64a391535cba4b6f9ec1ab750d71d3a1e1e82285e2b67e0d397fc1d675abd",
+      "metrics": {
+        "lines": 1299
+      },
+      "functions": [
+        {
+          "anchor": "module/function:applyPostingRule",
+          "semanticHash": "e0557d6f15948f39c05d373edb941615ba5ddcabc1c66e7aa84b9ff380ed6730",
+          "metrics": {
+            "complexity": 49
+          }
+        },
+        {
+          "anchor": "module/function:consignedAgentSaleLines",
+          "semanticHash": "3e9f4dd72d4cb59efe1ac4c4029d3f0d09c6b48b302e111ff59efec65460698a",
+          "metrics": {
+            "complexity": 26
+          }
+        },
+        {
+          "anchor": "module/function:ruleSaleCompleted",
+          "semanticHash": "1f0621b64745b0d3fe3189d62cd89167dd03614e5b7dbb2b4865e617152f98c1",
+          "metrics": {
+            "complexity": 24
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/accounting/reversals.ts",
+      "semanticHash": "11509b7952726808ebc8e080768c57c92de6ca3903611eb1133064fa09b7e569",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:reverseAccountingEvent",
+          "semanticHash": "0c87f40a18123801220a208afc97bda60d9ca02ec453036e2090ed22dc979521",
+          "metrics": {
+            "lines": 155
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/accounting/workflowHooks.ts",
+      "semanticHash": "e0f07c987febc8e92f9f769f63ad81228ccf6b3de40658cc19b8cdd0edb2212b",
+      "metrics": {
+        "lines": 1880
+      },
+      "functions": []
+    },
+    {
+      "path": "convex/accountingPeriods.ts",
+      "semanticHash": "288306543cce967fcf730b69a44b6859e7478f73976877f2d60266a5b2879a3c",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:computeCloseChecklist",
+          "semanticHash": "0af3ad4744c42cc43f31b057d57e1cbc5200d4f83f2a7a11de32446673075c30",
+          "metrics": {
+            "complexity": 16
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/accountingReports.ts",
+      "semanticHash": "fe474a82d3c30759967da8d244ef7a519d1db0680f938658f2d0811a6ce18dd6",
+      "metrics": {
+        "lines": 898
+      },
+      "functions": [
+        {
+          "anchor": "module/binding:trialBalance/call:query:arg0/property:handler",
+          "semanticHash": "267c2111dd556bbce50ffe6291e98831d5bfc5bd82d3f4db8172dccb08bbff7e",
+          "metrics": {
+            "complexity": 20
+          }
+        },
+        {
+          "anchor": "module/function:computeCommissionRecognitionDivergence",
+          "semanticHash": "629323542ed40b956a27d35db27b97e8c1e90dcd2fc55abcb4b5b9037b4663b6",
+          "metrics": {
+            "complexity": 24
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/adminOrgs.ts",
+      "semanticHash": "8389cdccd9d14f9fe3e332d934092a7c1b253341e91180a9716693f1f8df3ab3",
+      "metrics": {
+        "lines": 736
+      },
+      "functions": []
+    },
+    {
+      "path": "convex/applications.ts",
+      "semanticHash": "4fc958ef09097878846a235c45dbfd3907996705de7f93185f6f2370e36d5eac",
+      "metrics": {
+        "lines": 2217
+      },
+      "functions": [
+        {
+          "anchor": "module/binding:amendSupplierDisbursementAdvice/call:mutation:arg0/property:handler/return/call:runWithIdempotency:arg2",
+          "semanticHash": "92c40deeb01ec74a4acdaf8519db9b0118421868b221a6d8e66d1d7b680a1167",
+          "metrics": {
+            "complexity": 18
+          }
+        },
+        {
+          "anchor": "module/binding:cancelApplication/call:mutation:arg0/property:handler",
+          "semanticHash": "fb3b123e9ddc8fdb1d1b8440614ae5c7bb91a2687adb6e13245e06f05759dcac",
+          "metrics": {
+            "lines": 140
+          }
+        },
+        {
+          "anchor": "module/binding:cancelApplication/call:mutation:arg0/property:handler/return/call:runWithIdempotency:arg2",
+          "semanticHash": "240d3ada81e175f8ac9ccfc40e00fb5375976fab1039578bcf4b4fa5645a6bc9",
+          "metrics": {
+            "lines": 127,
+            "complexity": 26
+          }
+        },
+        {
+          "anchor": "module/binding:confirmDisbursement/call:mutation:arg0/property:handler",
+          "semanticHash": "0f0bc1a11ec7051c1b1287865dd99c27cb6f47794ff244bcdca09d894de742eb",
+          "metrics": {
+            "lines": 138
+          }
+        },
+        {
+          "anchor": "module/binding:confirmDisbursement/call:mutation:arg0/property:handler/return/call:runWithIdempotency:arg2",
+          "semanticHash": "be7214d7a8b56e0320e182f42283e0c44bb0b88c8b8bb3f015f0a3a6e2971490",
+          "metrics": {
+            "lines": 121,
+            "complexity": 21
+          }
+        },
+        {
+          "anchor": "module/binding:confirmSupplierDisbursement/call:mutation:arg0/property:handler",
+          "semanticHash": "f17ec3ef48cd700296f162194f7af7fa4b46e29161ebeaf73bc9c25ebbd1a2bc",
+          "metrics": {
+            "lines": 145
+          }
+        },
+        {
+          "anchor": "module/binding:confirmSupplierDisbursement/call:mutation:arg0/property:handler/return/call:runWithIdempotency:arg2",
+          "semanticHash": "b0ac1fd3f6a2a2cec6b245b5476338af7d7a71ad3ebaa17025b2fc4dbf642c26",
+          "metrics": {
+            "complexity": 28
+          }
+        },
+        {
+          "anchor": "module/binding:createFromQuote/call:mutation:arg0/property:handler",
+          "semanticHash": "c05d8be6cff16524c1778ce9993aa9c90feaa659d10702b03da1311ba575d3e2",
+          "metrics": {
+            "lines": 182,
+            "complexity": 51
+          }
+        },
+        {
+          "anchor": "module/binding:dealCockpit/call:query:arg0/property:handler",
+          "semanticHash": "44974f7a2d9a492c623df9ada9ac5219b04f70a51fed57d7c12f6e6fac015678",
+          "metrics": {
+            "lines": 144,
+            "complexity": 37
+          }
+        },
+        {
+          "anchor": "module/binding:finalizeDeal/call:mutation:arg0/property:handler",
+          "semanticHash": "6f71bca28435a5852e51f57390fcd6d9a6b78285fa16d3658269c0abceaa23ea",
+          "metrics": {
+            "lines": 155
+          }
+        },
+        {
+          "anchor": "module/binding:finalizeDeal/call:mutation:arg0/property:handler/return/call:runWithIdempotency:arg2",
+          "semanticHash": "67bc126ff32dddfa5634ecad5b8cd8f69b78d1ffd0408bce332c869ac9446068",
+          "metrics": {
+            "lines": 143,
+            "complexity": 43
+          }
+        },
+        {
+          "anchor": "module/binding:list/call:query:arg0/property:handler/binding:page/call:Promise.all:arg0/call:pageResult.page.map:arg0",
+          "semanticHash": "3dc42264fe8c27a3158e642537e879edd226f8b815348ba6f65527b982761542",
+          "metrics": {
+            "complexity": 30
+          }
+        },
+        {
+          "anchor": "module/binding:registerExpectedPayment/call:mutation:arg0/property:handler",
+          "semanticHash": "20b7fe2b11e0b3791671669c3fd2c7838110223c0415c1e86b561ea658b36a6b",
+          "metrics": {
+            "complexity": 19
+          }
+        },
+        {
+          "anchor": "module/binding:setSupplierSettlementRoute/call:mutation:arg0/property:handler",
+          "semanticHash": "12a53fd90337a991a99f01f2aa7925bd55b17e8655b906312e34b569fbb3ded9",
+          "metrics": {
+            "complexity": 20
+          }
+        },
+        {
+          "anchor": "module/binding:updateStatus/call:mutation:arg0/property:handler",
+          "semanticHash": "c3808452678361c0210786e303e8c47ec960b4864697bfeae8fe70b59a825251",
+          "metrics": {
+            "complexity": 17
+          }
+        },
+        {
+          "anchor": "module/function:buildCockpitMoney",
+          "semanticHash": "bd4ad430cf4c9f71d54cd72abb7f5cea73cf5bb539b5dd06c9e4448bb6b91510",
+          "metrics": {
+            "lines": 141,
+            "complexity": 25
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/changelog.ts",
+      "semanticHash": "b77a1ba3c8b3347ce95f521b3a09772b249628311da7c22b6941d4370fa9fa97",
+      "metrics": {
+        "lines": 1285
+      },
+      "functions": []
+    },
+    {
+      "path": "convex/collections.ts",
+      "semanticHash": "6138981b2ea28054bafb42828dfce0c688b6614f80704927ea142df07213593f",
+      "metrics": {
+        "lines": 1939
+      },
+      "functions": [
+        {
+          "anchor": "module/binding:agingReport/call:query:arg0/property:handler",
+          "semanticHash": "a3d5c567c55ec16df75def2c2d3185b50b275a5ce0e4d803b5eca01bddd55239",
+          "metrics": {
+            "nesting": 6
+          }
+        },
+        {
+          "anchor": "module/binding:createInstallmentPlan/call:mutation:arg0/property:handler",
+          "semanticHash": "b18545db92a4f8ccf74a751c18d18dd9d675e20633862809c8bb6dc80cfab281",
+          "metrics": {
+            "complexity": 17
+          }
+        },
+        {
+          "anchor": "module/binding:recordPayment/call:mutation:arg0/property:handler/return/call:runWithIdempotency:arg2",
+          "semanticHash": "0f1b586438e5ea3bb6c7bf3217df74dcd5c91a0c195830b99badb4ec521277ba",
+          "metrics": {
+            "complexity": 19
+          }
+        },
+        {
+          "anchor": "module/binding:respondToApproval/call:mutation:arg0/property:handler",
+          "semanticHash": "c7a3e1cc9127a8776477d73a66ea5ecf3602e9464679d798636f5d94b17975ea",
+          "metrics": {
+            "lines": 181
+          }
+        },
+        {
+          "anchor": "module/binding:respondToApproval/call:mutation:arg0/property:handler/return/call:runWithIdempotency:arg2",
+          "semanticHash": "74405a1ea6dae7260aa507efc9c0b60022597ec84e74ffa5cd88c51baeac8c7a",
+          "metrics": {
+            "lines": 169,
+            "complexity": 23
+          }
+        },
+        {
+          "anchor": "module/binding:returnClearedCheque/call:mutation:arg0/property:handler",
+          "semanticHash": "03d784f8ae34153188e915571af6dbbc6f8c287132245ffb93ab793cc65f985a",
+          "metrics": {
+            "lines": 139
+          }
+        },
+        {
+          "anchor": "module/binding:returnClearedCheque/call:mutation:arg0/property:handler/return/call:runWithIdempotency:arg2",
+          "semanticHash": "648763fdcfc09e596a8398aa51ae44974ee66beb679cb99bad983797003245e9",
+          "metrics": {
+            "complexity": 16
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/customers.ts",
+      "semanticHash": "cdd9b4a540f01e7d04abbdac7710cb21e19e52a60e756e023c636e4f39bb5582",
+      "metrics": {
+        "lines": 733
+      },
+      "functions": [
+        {
+          "anchor": "module/binding:mergeCustomers/call:socialBulkMutation:arg0/property:handler",
+          "semanticHash": "783db08d198ad1d5490a5a5d58ef57c9aef2b2df8c3cfe692093a52099e9b5ea",
+          "metrics": {
+            "complexity": 25
+          }
+        },
+        {
+          "anchor": "module/binding:update/call:mutation:arg0/property:handler",
+          "semanticHash": "5c7ee40a139d53ac6221b5554c0357eac8610dd20ed19a144f1555548ae10a92",
+          "metrics": {
+            "complexity": 24
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/dashboard.ts",
+      "semanticHash": "99ee9e15544d1efffeb6b23fb379b571bdf9e540c83f0b47c0d21eea69faa584",
+      "metrics": {
+        "lines": 783
+      },
+      "functions": [
+        {
+          "anchor": "module/binding:stats/call:query:arg0/property:handler",
+          "semanticHash": "b5063a10c619a481f7bd735e7d7072430dd235eadef6bae9ace0937ac0154efd",
+          "metrics": {
+            "lines": 578,
+            "complexity": 115
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/depositRevenueImpact.ts",
+      "semanticHash": "9677f0367f1fd69bf4892f4dc2bdd2d6ea5013e11d051ee5e9dd3153e3c386c4",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:depositRevenueImpact/call:internalQuery:arg0/property:handler",
+          "semanticHash": "de197e304fec5043f49f6f97334f4cfd67fbdb4ca9a64c2c4edca443801fe5cd",
+          "metrics": {
+            "lines": 204,
+            "complexity": 34
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/deposits.ts",
+      "semanticHash": "0bf95dbccc0f35d63941abcf4023353db975ce065ab33b04f601bca8bda437c5",
+      "metrics": {
+        "lines": 802
+      },
+      "functions": [
+        {
+          "anchor": "module/binding:allocateToVehicles/call:mutation:arg0/property:handler",
+          "semanticHash": "64ea9c0bf3d9953ca526791d91e8ac0a16f110707c921378c15fc0d54e5c0862",
+          "metrics": {
+            "lines": 172,
+            "complexity": 27
+          }
+        },
+        {
+          "anchor": "module/binding:resolveReleasedAllocation/call:mutation:arg0/property:handler",
+          "semanticHash": "67cc0e5f005b5fe84a18958a237741204224638db4c7c8604310fef4d653bf96",
+          "metrics": {
+            "lines": 145,
+            "complexity": 32
+          }
+        },
+        {
+          "anchor": "module/binding:voidDeposit/call:mutation:arg0/property:handler",
+          "semanticHash": "ec38b604f594372f842a3f6defd65a464def1dddab6e6943a13b5433c2bd2257",
+          "metrics": {
+            "complexity": 16
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/diagnosePrepaidLedgerIntegrity.ts",
+      "semanticHash": "89a265a7c20255fd2cf3f26888269a20383af7917dd237cf2e7d53fc1e37eddf",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:surveyPrepaidLedgerIntegrity/call:internalQuery:arg0/property:handler",
+          "semanticHash": "080647e5be9018402e51ba9b93bcd6a487d818c16d58611a5d60b46748903fd8",
+          "metrics": {
+            "complexity": 37,
+            "nesting": 5
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/documents.ts",
+      "semanticHash": "4b08b05fdcaaf57180599e61e73f3e0f52a3a06eaf9cafb8ea6dd26cde097740",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:updateDocumentStatus/call:mutation:arg0/property:handler",
+          "semanticHash": "7ee9818fdc165adb6ed8608b50aa158aaf61668ff524bb41a29c40d335b06fd2",
+          "metrics": {
+            "complexity": 23
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/email.ts",
+      "semanticHash": "5cc6c7817ef9488559ce89968f73a87993792497a4199685158d8f3efd4d663c",
+      "metrics": {
+        "lines": 706
+      },
+      "functions": []
+    },
+    {
+      "path": "convex/expenses.ts",
+      "semanticHash": "6a2450090e9b2617cbeafde3165ad6968c2f37fededb66c5f2e09a2532cd4e38",
+      "metrics": {
+        "lines": 631
+      },
+      "functions": [
+        {
+          "anchor": "module/binding:update/call:mutation:arg0/property:handler",
+          "semanticHash": "0c3db64236a1dd8bb3a21e33223abed4698aa88e5d88e0f34bc212aef65ac5dc",
+          "metrics": {
+            "lines": 131,
+            "complexity": 83
+          }
+        },
+        {
+          "anchor": "module/function:recordPaidExpenseSideEffects",
+          "semanticHash": "47529eec6401aae9a25220a4544713c4fcbb8bc561b2818bec556f1711f19419",
+          "metrics": {
+            "complexity": 18
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/expoPush.ts",
+      "semanticHash": "217a10696d0199b1735b110b7457613b0f681fd18223e9398e644f95fc5439f7",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:sendMobilePush/call:internalAction:arg0/property:handler",
+          "semanticHash": "a3de2b943c8da81f01c5951120810fb7ce2dc146999d3b514702b77e2f99ffcf",
+          "metrics": {
+            "complexity": 18
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/facebookEngagement.ts",
+      "semanticHash": "b98fd07a660088c438cad3f61036d475de82c2b8a2971554046c814290bb73c5",
+      "metrics": {
+        "lines": 839
+      },
+      "functions": [
+        {
+          "anchor": "module/binding:enrichEventVehicleFromPost/call:internalAction:arg0/property:handler",
+          "semanticHash": "c26538382457e97dcb5f9c7694e54bdd3a3aefd2f03e65e0b762eea4d8883161",
+          "metrics": {
+            "complexity": 33
+          }
+        },
+        {
+          "anchor": "module/binding:handleIncomingFacebookEvent/call:internalMutation:arg0/property:handler",
+          "semanticHash": "a999ec29d11701599ba72a62280f400e051beda6cd4bdbc39a8e0674dc56fc7a",
+          "metrics": {
+            "lines": 240,
+            "complexity": 87
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/facebookIntegrations.ts",
+      "semanticHash": "c3929b2ec035521a3da418b2b7e25ff11ff92c59ccfd31f954ccee97219f1544",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:exchangeCodeForToken/call:internalAction:arg0/property:handler",
+          "semanticHash": "b9ef9151e3f2875f6f259e4f9837a85604c24eb77437f0a55d7fe0a166460718",
+          "metrics": {
+            "complexity": 19
+          }
+        },
+        {
+          "anchor": "module/binding:getConnectionStatus/call:query:arg0/property:handler",
+          "semanticHash": "0171b3810746234394ba3f882d33eaf079278a74fc4ec19dc3c2f5d2c343faf6",
+          "metrics": {
+            "complexity": 42
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/facebookPosting.ts",
+      "semanticHash": "ce93b54085e1ffbca2178ad1dce087c6a21068fd2bdd78eacfea15dda3d57921",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:publishToFacebook/call:internalAction:arg0/property:handler",
+          "semanticHash": "331196ea39d3efffc71b698b352acf31eb8816d7ab8d100868c7784153095018",
+          "metrics": {
+            "complexity": 29
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/finance.ts",
+      "semanticHash": "ecdb795a112ecc43414957b87b50be1c70cbc8637a6bf459c55e5fe16847e924",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:updateCompany/call:mutation:arg0/property:handler",
+          "semanticHash": "20fdd25964197337957a699fbbef9c269adc6969f2f7a3299123f310d8fee97f",
+          "metrics": {
+            "complexity": 18
+          }
+        },
+        {
+          "anchor": "module/function:assertDealerRulesValid",
+          "semanticHash": "7b707c3d12ccc48867288a018e0d7470eea650364da772b322fd005f2960400d",
+          "metrics": {
+            "complexity": 18
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/financeDealCosts.ts",
+      "semanticHash": "10fa2b71254958adc393daef667d69a48754756afc14944a93c692938100558e",
+      "metrics": {
+        "lines": 1056
+      },
+      "functions": []
+    },
+    {
+      "path": "convex/financingEconomics.ts",
+      "semanticHash": "56a984525d93b1b40b1749ce7d0b53a30e43494ae857bc004416b74988dd33c7",
+      "metrics": {
+        "lines": 1293
+      },
+      "functions": [
+        {
+          "anchor": "module/binding:approveDealerPurchaseAmount/call:mutation:arg0/property:handler",
+          "semanticHash": "f6940a9fe3bbd8d069481ba7d29622b0c0e1ea948ed2622d4d37a6cfda15000d",
+          "metrics": {
+            "lines": 214,
+            "complexity": 72
+          }
+        },
+        {
+          "anchor": "module/binding:recordAppraisal/call:mutation:arg0/property:handler",
+          "semanticHash": "ae6db588864cc224e3bb545149d4f50bee5ef8cd5d9ea0b88153fb157dca048f",
+          "metrics": {
+            "lines": 127,
+            "complexity": 23
+          }
+        },
+        {
+          "anchor": "module/binding:recordSubmittedQuotation/call:mutation:arg0/property:handler",
+          "semanticHash": "f63ff6a5a6dc62c7c491fa9e23f2b6a649fd56804fda3150e002f8ae4e7d10df",
+          "metrics": {
+            "lines": 249,
+            "complexity": 62
+          }
+        },
+        {
+          "anchor": "module/function:recomputeAndPatchEconomics",
+          "semanticHash": "1a504e7ff86d46fe55b456f5aabb22ffa3d9b17f8be6dcfffdddafea9dff507a",
+          "metrics": {
+            "complexity": 27
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/fixedAssets.ts",
+      "semanticHash": "b680d97c49b7b71127bb2ee80d5d4272abdd1cae110e25dff97b15fdb1a3ac91",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:depreciateAssetForMonth/call:internalMutation:arg0/property:handler",
+          "semanticHash": "16d90fbe88db3c541f0d590c548a18c3cd5b1c08ac32747a93041df6897281f6",
+          "metrics": {
+            "complexity": 17
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/http.ts",
+      "semanticHash": "49cc6aa7c85f441b578e969472b2690a4b96b731d0dca355b582dfd572953c44",
+      "metrics": {
+        "lines": 1669
+      },
+      "functions": [
+        {
+          "anchor": "module/call:http.route:arg0/property:handler/call:httpAction:arg0~12",
+          "semanticHash": "91bbd4f2be54b7bd97c1cb148b3b2aa556a1715e115575cc3ee8f6041748a4a9",
+          "metrics": {
+            "lines": 224,
+            "complexity": 62,
+            "nesting": 5
+          }
+        },
+        {
+          "anchor": "module/call:http.route:arg0/property:handler/call:httpAction:arg0~17",
+          "semanticHash": "588618f84993fca4183cefd6b8268a3a5c84a3243cccb68018adb56b72d07b2b",
+          "metrics": {
+            "lines": 220,
+            "complexity": 59,
+            "nesting": 5
+          }
+        },
+        {
+          "anchor": "module/call:http.route:arg0/property:handler/call:httpAction:arg0~2",
+          "semanticHash": "a6ca2cce3da43352e5d122a59ca8e5207e5a9cf00c5ddc7e8c6386e9ffcaa29c",
+          "metrics": {
+            "complexity": 22
+          }
+        },
+        {
+          "anchor": "module/call:http.route:arg0/property:handler/call:httpAction:arg0~3",
+          "semanticHash": "c67df33da0d1ee72cdd3384818580128ddd946637f5eb43db6ac0bdb31d3bf61",
+          "metrics": {
+            "complexity": 18
+          }
+        },
+        {
+          "anchor": "module/function:processMetaMessagingWebhook",
+          "semanticHash": "7a92dff9927672c3623ad5352b6d66e1101f9856f08bb7a0cdd920f9e8e85927",
+          "metrics": {
+            "complexity": 21
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/instagramEngagement.ts",
+      "semanticHash": "5f9f370fabf9cb6991d62f95a1d6552b685e41773c056cf08a65fe8945bc5dc6",
+      "metrics": {
+        "lines": 791
+      },
+      "functions": [
+        {
+          "anchor": "module/binding:handleIncomingInstagramEvent/call:internalMutation:arg0/property:handler",
+          "semanticHash": "cad544f32e32f9a5cf57475b10722684726e5986f03b58def8b56fe9af193fcf",
+          "metrics": {
+            "lines": 219,
+            "complexity": 83
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/leads.ts",
+      "semanticHash": "2c4ef88207ee2abacad5482aebd62449ff3e3ded6acc6ae4184b4d4c902f1fbf",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:get/call:query:arg0/property:handler",
+          "semanticHash": "22deee32de429780bb6913b33a217dd62079193686ed2727f6464d835ac671d4",
+          "metrics": {
+            "complexity": 17
+          }
+        },
+        {
+          "anchor": "module/binding:list/call:query:arg0/property:handler/binding:page/call:Promise.all:arg0/call:pageResult.page.map:arg0",
+          "semanticHash": "7ebb42abb7cd251f9b3c1007b4ea37be3e17f0baa6e7d283869e5d1b8290623d",
+          "metrics": {
+            "complexity": 23
+          }
+        },
+        {
+          "anchor": "module/binding:update/call:mutation:arg0/property:handler",
+          "semanticHash": "f45c82eb8f9c55e15de0dc04f24ce65bc320eb1cb31d6450c48f28b2209b27ec",
+          "metrics": {
+            "complexity": 21
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/liveChat.ts",
+      "semanticHash": "87beea7372be497625ece63398ca6213b56ed196be51ffb1a5f7ac009105977d",
+      "metrics": {
+        "lines": 986
+      },
+      "functions": []
+    },
+    {
+      "path": "convex/marketplaceBrowse.ts",
+      "semanticHash": "c25544d3032f1f95453f76a9a72e1ed01ebad62659a955ef3fe27fd2b7c03478",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:search/call:query:arg0/property:handler",
+          "semanticHash": "5c3e36fd5a50b9f9b057fbe1b948badac0faf9a96850e8f1a4c97f2bf3996c70",
+          "metrics": {
+            "lines": 144,
+            "complexity": 97
+          }
+        },
+        {
+          "anchor": "module/function:compareBrowseVehicles/binding:primary",
+          "semanticHash": "4f4b7fc33858bfd062434464a8131ea9e9455d537a85a89916b852e24e67edcd",
+          "metrics": {
+            "complexity": 16
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/marketplaceListings.ts",
+      "semanticHash": "3d3836c81283005708530762427e58905107f99434daf8efc3e2b366addc5375",
+      "metrics": {
+        "lines": 747
+      },
+      "functions": [
+        {
+          "anchor": "module/function:buildListingPatchFields",
+          "semanticHash": "12c30a371ffae5ad6ed18defb7c352fa18958bdbf61d35bb1b1eafa1ee6e1737",
+          "metrics": {
+            "complexity": 16
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/marketplaceRequests.ts",
+      "semanticHash": "2d479eb133ab3884ce4a5a252c0cd0e6659d929aa1897839ac6cf983cd9144dd",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:getBuyerOffers/call:query:arg0/property:handler/binding:offers/call:Promise.all:arg0/call:CallExpression.map:arg0",
+          "semanticHash": "b6277b0ae5846285028741c96d7031e5891521e323f1f684a1f7ee695f7057d9",
+          "metrics": {
+            "complexity": 20
+          }
+        },
+        {
+          "anchor": "module/function:matchDealersToRequest",
+          "semanticHash": "dd7bd6baf5ecba56be0af948b572c02cf26e91b1d5f7fb483c3ec44487ccad6e",
+          "metrics": {
+            "complexity": 33
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/marketplaceResponses.ts",
+      "semanticHash": "14cf1224162ccd7f1c08a9f715a90a4a0f99a90e9aa9c47a144dd5ee844b1ba8",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:respond/call:mutation:arg0/property:handler",
+          "semanticHash": "b68d23dced70467a3704acf80daac1e6d74b3571d7fda6745626d4944d4c0df9",
+          "metrics": {
+            "complexity": 32
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/marketplaceWhatsAppIntake.ts",
+      "semanticHash": "0108115fd87ab2b1bddf7ef85f08e8461c01917704979eb9ac99ef382ed45d3b",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:computeNextIntakeState",
+          "semanticHash": "0019ac6775c683a6a8959ffb04a9ef0f29bd59476eb1c2eb8211096e81daa597",
+          "metrics": {
+            "complexity": 17
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/memberships.ts",
+      "semanticHash": "187125295a99a476992c799c53b9fc2badfdb9665be4a9f2e2a47f949373344d",
+      "metrics": {
+        "lines": 1238
+      },
+      "functions": [
+        {
+          "anchor": "module/binding:createAccount/call:action:arg0/property:handler",
+          "semanticHash": "7c7e0a5ab7c7edf6bdd16762b3937479d95e15ae9523430146c1242aefd59ccc",
+          "metrics": {
+            "lines": 131,
+            "complexity": 33,
+            "nesting": 6
+          }
+        },
+        {
+          "anchor": "module/binding:updateRole/call:mutation:arg0/property:handler",
+          "semanticHash": "5d41dc3110861f0fca681b3b4dc87d82ca69c3af6c3f8b0aea04f2f0bfc3928e",
+          "metrics": {
+            "complexity": 19
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/orgFinancialReset.ts",
+      "semanticHash": "a62cd60e255aae37d398e005d1c31d500535ddbac78a809be7564d0b8c55a56d",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:resetOrgFinancialData/call:internalMutation:arg0/property:handler",
+          "semanticHash": "b1b2c97a32e7da54438265e4411110c17f0077993fd91758551241c3fcbb2c2e",
+          "metrics": {
+            "complexity": 19,
+            "nesting": 5
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/orgSettings.ts",
+      "semanticHash": "47e2469f070b3c0bdd718f442c120fc886bdf15f9cc6dd2f03eb85a7ac7a9971",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:upsert/call:mutation:arg0/property:handler",
+          "semanticHash": "3cba1e779705cf51419aa0af61093126cf5b2481255c22f4ef7f71dd787e326e",
+          "metrics": {
+            "complexity": 25
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/paymentIntents.ts",
+      "semanticHash": "53064876e4b9f4a405b35f3dd0994aea97927e7063c4212e48d033254a30f49b",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:create/call:mutation:arg0/property:handler/return/call:runWithIdempotency:arg2",
+          "semanticHash": "8d4a233d00f40ed3043f458bd4279607d0c7e3f45132d5f22830dc5208833d92",
+          "metrics": {
+            "complexity": 18
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/payroll.ts",
+      "semanticHash": "683bbd61ad12992544533eb610d76d859d167852886fff9036fd92ce14e29243",
+      "metrics": {
+        "lines": 1022
+      },
+      "functions": [
+        {
+          "anchor": "module/binding:approveRun/call:mutation:arg0/property:handler",
+          "semanticHash": "355b09b1ede04ab84a280618159269b06e76d1d4d956f4f62643a6860f49d452",
+          "metrics": {
+            "lines": 132,
+            "complexity": 22
+          }
+        },
+        {
+          "anchor": "module/binding:createRun/call:mutation:arg0/property:handler",
+          "semanticHash": "ab27eaee0acc8aa0417387b2ca5dd67013214f632a915b8e758e95201c6cd30b",
+          "metrics": {
+            "complexity": 17
+          }
+        },
+        {
+          "anchor": "module/binding:payRun/call:mutation:arg0/property:handler",
+          "semanticHash": "2460b0033eaa40b43338f8b7197655b30d5638325a7fd0bfb68564b135fdf7dd",
+          "metrics": {
+            "complexity": 19
+          }
+        },
+        {
+          "anchor": "module/function:assertAccrualsPosted",
+          "semanticHash": "f664213b44b23e3af12d258f177195e2b7d5406d307717c49b292fcfca83b0c7",
+          "metrics": {
+            "complexity": 18
+          }
+        },
+        {
+          "anchor": "module/function:payItem",
+          "semanticHash": "f66510f48fcbb8d118bd8d1afac31aaf55fce7b96650b9f4bd0f9b293e853d12",
+          "metrics": {
+            "params": 6
+          }
+        },
+        {
+          "anchor": "module/function:recoverItemAdvances",
+          "semanticHash": "826140e992f53138694dc87b259d089b71e8cbb749b172f4a303ba7dffe58248",
+          "metrics": {
+            "params": 8
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/prepaidExpenses.ts",
+      "semanticHash": "6b9b604dfa6d64a905c8cba3924727f73526539e557ae3e2766beaf92372cec1",
+      "metrics": {
+        "lines": 960
+      },
+      "functions": [
+        {
+          "anchor": "module/binding:correctSchedule/call:mutation:arg0/property:handler/return/call:runWithIdempotency:arg2",
+          "semanticHash": "71aa634745fe0e0fe2dc57e785f37a86bf972181384a75e5c824daaa9837a8a2",
+          "metrics": {
+            "complexity": 16
+          }
+        },
+        {
+          "anchor": "module/binding:listSchedules/call:query:arg0/property:handler",
+          "semanticHash": "c85ab306b1d77781f64012f0b5e800bd32ee0e676cacf48cab1f8649a127bfc3",
+          "metrics": {
+            "complexity": 25
+          }
+        },
+        {
+          "anchor": "module/function:applyScheduleCorrection",
+          "semanticHash": "6b97e59402da2ed45c09fab97e00db5b038a2965f04dc00440604d2b9c4813d2",
+          "metrics": {
+            "complexity": 23
+          }
+        },
+        {
+          "anchor": "module/function:validateCorrectionInputs",
+          "semanticHash": "637ee5afa1de0463eaf6f0d669bb8b2eae7f807ae11bf6eff3c917d48eb5e0e8",
+          "metrics": {
+            "complexity": 18
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/quotes.ts",
+      "semanticHash": "9a7d68e4825c551af2fc060b17613a595644d323b71dcb61b0f9cdf0d4521d66",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:saveQuote/call:mutation:arg0/property:handler",
+          "semanticHash": "89f05c51ba36cfa26a110bb5641ea350c5c74120a7b18057c63634929064e454",
+          "metrics": {
+            "complexity": 41
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/reports.ts",
+      "semanticHash": "ccd10d262854dee4d5f2c9869b99a8f63a91cea7e9b675dee23817196ba83965",
+      "metrics": {
+        "lines": 678
+      },
+      "functions": [
+        {
+          "anchor": "module/binding:getExpensesReport/call:query:arg0/property:handler",
+          "semanticHash": "66114d78c7a7534f0e6a2bff9f5ffd6a65ddfc752694d7c90979660201961977",
+          "metrics": {
+            "lines": 163,
+            "complexity": 19
+          }
+        },
+        {
+          "anchor": "module/binding:getProfitAndLoss/call:query:arg0/property:handler",
+          "semanticHash": "8eb9bb647c7b27d37f8cbea570a4f76e54200113b7b3c14180c442cf4832003f",
+          "metrics": {
+            "complexity": 21
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/roles.ts",
+      "semanticHash": "7ab6f9dc3368ab436e1728d38dec1726e6dc475a2b58794a706b97a2da65ce10",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:update/call:mutation:arg0/property:handler",
+          "semanticHash": "390e8b3a45d03c5f1f544a68cbb06e952e55d66b60a862a11cd4918b0118c1de",
+          "metrics": {
+            "complexity": 18
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/sales.ts",
+      "semanticHash": "bfba134f68f185e68f8d2404e0afa0ab7bf86bcc5262c021ec4921e97d5e675e",
+      "metrics": {
+        "lines": 1665
+      },
+      "functions": [
+        {
+          "anchor": "module/binding:consignedSalePreview/call:query:arg0/property:handler",
+          "semanticHash": "2ebb57b80cca225ff2c9d12fe2ecea4b3610d412767c4269f3f952b69532acfd",
+          "metrics": {
+            "complexity": 20
+          }
+        },
+        {
+          "anchor": "module/binding:dealCockpit/call:query:arg0/property:handler",
+          "semanticHash": "3bae02acb2e3f8b96acbe6379d4052c1a2aeadfc2fef9203815080a0abf80532",
+          "metrics": {
+            "lines": 225,
+            "complexity": 56
+          }
+        },
+        {
+          "anchor": "module/binding:getSaleTrail/call:query:arg0/property:handler",
+          "semanticHash": "a0a2ca1feda3bf968a7e08c450a3df887898aed6416fbf4aebed55399f602890",
+          "metrics": {
+            "complexity": 22
+          }
+        },
+        {
+          "anchor": "module/binding:recalculateCommission/call:mutation:arg0/property:handler",
+          "semanticHash": "910d9a36d9766dbb70292fd7c4337ce5502300989ddda226b83e283bef3181ab",
+          "metrics": {
+            "complexity": 34
+          }
+        },
+        {
+          "anchor": "module/binding:setCommissionAmount/call:mutation:arg0/property:handler",
+          "semanticHash": "7cd9b509edfaaf64c648908d54974aa21ab824211953748914d62d1dc5be3740",
+          "metrics": {
+            "lines": 139,
+            "complexity": 29
+          }
+        },
+        {
+          "anchor": "module/binding:update/call:mutation:arg0/property:handler",
+          "semanticHash": "a49fab6d254586b084ea00a21d0f6f394f728c73a51e3e62f05c46e943fef74f",
+          "metrics": {
+            "lines": 140,
+            "complexity": 65
+          }
+        },
+        {
+          "anchor": "module/function:commissionPage/binding:candidates/call:pageResult.page.filter:arg0",
+          "semanticHash": "a89a77d6b9b847cb9943a072b13451726a89dcb5c15e74ba44c1ec5e36e02811",
+          "metrics": {
+            "complexity": 22
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/search.ts",
+      "semanticHash": "54d1c2cf6776956c9f92a5a5a8ae8efe84f283f3f91dc4caa8b19075eef567db",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:globalSearch/call:query:arg0/property:handler",
+          "semanticHash": "f3ccabb0be913f6c2b61ef355964d5511bf39f4ca5deb46a498ac9d0e55f21bf",
+          "metrics": {
+            "complexity": 24
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/socialInboxBackfill.ts",
+      "semanticHash": "248c3d70618bcf4197380b6795f0eca5a213407a7573a394773e62a2a96a6f11",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:resyncEvents/call:action:arg0/property:handler",
+          "semanticHash": "1cb8e896b8b4d5f78df07d9fe7e15f13957a9a7aedfe5fdecfc9c647b778db26",
+          "metrics": {
+            "lines": 286,
+            "complexity": 73,
+            "nesting": 10
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/socialIntegrations.ts",
+      "semanticHash": "f3f8a34a74bc6383c4c6172ee2bbe0d8594903fbd313c1a31299a3ce76875045",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:getConnectionStatus/call:query:arg0/property:handler",
+          "semanticHash": "aacb86782993289319ada7cf09f1ea4594e2af1c8ce820dcd258b52304f21d5e",
+          "metrics": {
+            "complexity": 42
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/socialPosting.ts",
+      "semanticHash": "c672541da2abf2e86a647a0d92d3f27941787df856b2f102dd3f1a12e6b11a3e",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:publishToInstagram/call:internalAction:arg0/property:handler",
+          "semanticHash": "a850b0701f3e0ce7ce837603547cf50edab7148c729cf529f715e1969546528c",
+          "metrics": {
+            "complexity": 18
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/socialPostingData.ts",
+      "semanticHash": "f616afe2b289fa030bacbe9ab7d4eeff9b9b4f8ce6c0904466ee356d98aa8817",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:requestPost/call:mutation:arg0/property:handler",
+          "semanticHash": "2fb4192fb6c4895670927325f12535eca5b5446a56be1fa94d94faf9171bdbcd",
+          "metrics": {
+            "complexity": 19
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/sourcedAgentImpact.ts",
+      "semanticHash": "e057041384ab3c4ad291e209834fa49b2890fdd44a995e988562ff932cf11038",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:assessConsignedSale",
+          "semanticHash": "9991e7e19f50e58403d7cb576fc44c3b43a36f7f7402b6982c555ab3ecadc3a7",
+          "metrics": {
+            "complexity": 47
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/sourcingPayables.ts",
+      "semanticHash": "4455ad3788b17f995ab17d737b2f967ef58e9555c76fd6c008dae0a5e47d3135",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:list/call:query:arg0/property:handler/return/call:Promise.all:arg0/call:payables.map:arg0",
+          "semanticHash": "b2178dd1c0da1ea6023c0ddf0c9c5c954297830bc35b940802cbb3d49141801a",
+          "metrics": {
+            "complexity": 16
+          }
+        },
+        {
+          "anchor": "module/binding:listPipeline/call:query:arg0/property:handler/binding:rows/call:Promise.all:arg0/call:sourcedVehicles.map:arg0",
+          "semanticHash": "85b7aab1383f9b3e21867fabb7b08a2e8bcbe841a82ab7392ad2c7fdb87ff521",
+          "metrics": {
+            "complexity": 17
+          }
+        },
+        {
+          "anchor": "module/binding:markPaid/call:mutation:arg0/property:handler/return/call:runWithIdempotency:arg2",
+          "semanticHash": "0cb80e7d21df6bd750fe965f15716cca644ac0ed945b4051db0d6a1f0daf39b3",
+          "metrics": {
+            "complexity": 18
+          }
+        },
+        {
+          "anchor": "module/binding:recordPartialPayment/call:mutation:arg0/property:handler/return/call:runWithIdempotency:arg2",
+          "semanticHash": "690d1ca20cb544f86b2469971064bf9c83c5edd8750530f3a04c0db5e3df0365",
+          "metrics": {
+            "complexity": 17
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/subledger.ts",
+      "semanticHash": "a5546bbd9602633e7a7f79242b5bdadcf336c59e3cbf4791c3af3973f2d1915b",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:allocatePaymentToReceivable",
+          "semanticHash": "b6bd9a7fcc6a579c1d42dd39762e758dec3cab2287930207645c85f3a94ebe6c",
+          "metrics": {
+            "complexity": 20
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/supplierReceivables.ts",
+      "semanticHash": "a829de79801ba0c5bda5ed79f77e47bfe5e2cc9b5815f99051a925d9f825b5fd",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:recordReceipt/call:mutation:arg0/property:handler/return/call:runWithIdempotency:arg2",
+          "semanticHash": "541596d1d9dcb7f1dba8ec182bb1c0d89649ccbfe5f8cb8b87e3e5644a3dd532",
+          "metrics": {
+            "complexity": 20
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/tasks.ts",
+      "semanticHash": "baf9e27bf9111037fe20eeaa8d439647b81fdcbbf686ecc74d4fd0fbb30b8c96",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:update/call:mutation:arg0/property:handler",
+          "semanticHash": "5486579bcea362c9be0a728a3c1fb511b90d9a4540bf440a6f43e4f7fa25654e",
+          "metrics": {
+            "complexity": 35
+          }
+        },
+        {
+          "anchor": "module/function:validateTaskReferences",
+          "semanticHash": "2f073490090bc960e1a8b9760563afac939f808dcbf1e7469031f41af0dc8357",
+          "metrics": {
+            "complexity": 21
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/utils/commissionSourceLedger.ts",
+      "semanticHash": "f0caae08304d1cc352bfa3d686bebaf6cc4985be23213dd210e302f6a1bd9334",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:commissionPostingBlockedReason",
+          "semanticHash": "153aa1414c1d007973928e28dac0379a60623f6ee51beb4cc990444aaf25f213",
+          "metrics": {
+            "complexity": 18
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/utils/depositAllocation.ts",
+      "semanticHash": "cb96f1fdbf1e2c8a1d3919d1032c3c8d43d9176ae92d07005abcf8d7f5791256",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:quoteDepositAllocation",
+          "semanticHash": "bac5e2d92f26a6e59679cdd8ad0b5e66aeb003e76816d8632962754792a05457",
+          "metrics": {
+            "complexity": 29
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/utils/depositHelpers.ts",
+      "semanticHash": "02c9e0eef5691ccb487693a8bdca40e522cdcbda98dd3dd13a8a0d27e924e32b",
+      "metrics": {
+        "lines": 765
+      },
+      "functions": [
+        {
+          "anchor": "module/function:releaseHeldDeposit",
+          "semanticHash": "f3a508cf7709d8d2dfde36c4cd7918177339690da18fa7ec2bb4cad063c0b5df",
+          "metrics": {
+            "lines": 183,
+            "complexity": 31
+          }
+        },
+        {
+          "anchor": "module/function:resolveDepositsForQuote",
+          "semanticHash": "fac538e40d56db824c8f9e9c287cea81534601b4593ced7a23d21596b59861dc",
+          "metrics": {
+            "lines": 127,
+            "complexity": 28
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/utils/financingEconomics.ts",
+      "semanticHash": "a9c3f0a9093aa0e3cc7c4b91e2085972f92776d685229ce7e76bb038f0b4ef08",
+      "metrics": {
+        "lines": 717
+      },
+      "functions": [
+        {
+          "anchor": "module/function:deriveDealStages",
+          "semanticHash": "8bcdad26318343246e380c3d10574348cde37b1ddac05c9d79242c88c65de4b4",
+          "metrics": {
+            "complexity": 22
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/utils/materialization.ts",
+      "semanticHash": "4cd6d623311e3f383cfaf9238041d59d131618a2dea417742b7ba0ae45fe8b96",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:describeOrgMaterialization/binding:platforms/call:Promise.all:arg0/call:SOCIAL_PLATFORMS.map:arg0",
+          "semanticHash": "3025a92d6c8a85cb3175f335e6ee9eee8c87b26177d04adec21dba8893a9d4e0",
+          "metrics": {
+            "complexity": 19
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/utils/notifications.ts",
+      "semanticHash": "427fee296951046d888755d343e42f6d6b94f514e7d5a8f911b823c9f6f7479a",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:dispatch",
+          "semanticHash": "b7ce3b16afed8b238cac006b2860930f69dcebbab78f07568d5bb8efb72f5bf5",
+          "metrics": {
+            "complexity": 19,
+            "params": 6
+          }
+        },
+        {
+          "anchor": "module/function:notifyByPermission",
+          "semanticHash": "8a7ec935c16f9da75a76e5e66fb6c1d16d69a4a7e7aa38a4461d5c0d3c0e7cfe",
+          "metrics": {
+            "params": 6
+          }
+        },
+        {
+          "anchor": "module/function:notifyUser",
+          "semanticHash": "63094a1edbe0c75ceb1caf0021059d5ea4a27b8d4505474b3aed672897ebd771",
+          "metrics": {
+            "params": 6
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/utils/paymentWebhook.ts",
+      "semanticHash": "087b0e7d4fc1a901d6b8905c9ca05f097f61f3dab07e317142c2ae4efe4b8f75",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:buildTapHashString",
+          "semanticHash": "f0ab0c92cc538589a3a2b739344ae68852d7c1992031b487c45b5dd007ae264d",
+          "metrics": {
+            "complexity": 18
+          }
+        },
+        {
+          "anchor": "module/function:verifyStripeWebhook",
+          "semanticHash": "ad9a5f386b3368e6005c95de2adeefb405c461f19e8ab7e98b1d93162f50270a",
+          "metrics": {
+            "complexity": 30
+          }
+        },
+        {
+          "anchor": "module/function:verifyTapWebhook",
+          "semanticHash": "e3249e9f2e5e4caa067045b65ec7d38491bf389741d391b242907f2e2b379058",
+          "metrics": {
+            "complexity": 26
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/utils/payrollSourceLedger.ts",
+      "semanticHash": "36c128841a300978359556581dde6156d817b329ec2d122e1e3fd26e5dfa98d5",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:payrollPaidBlockedReason",
+          "semanticHash": "3c73cf1641a08195808a081a1c422c06ae42a9999797ab834e898a02de209555",
+          "metrics": {
+            "complexity": 30
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/utils/prepaidRecognitionEvents.ts",
+      "semanticHash": "7fe3a8216d281205fde44d35771a5708a04c6cbf4d0af2de14b89040d3f940a7",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:recognizedAmountInRangeFromEvents",
+          "semanticHash": "9f9738b8c3d3c4a10c6a35d65351ec290be1df0870a90c405c8602e5975f32db",
+          "metrics": {
+            "params": 6
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/utils/saleCancellation.ts",
+      "semanticHash": "eba80362171d636b28047a2944e31990d09092dd2925556635c4b63f8e57dcf2",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:reinstateAppliedDeposits",
+          "semanticHash": "8f0e8c20e47720be6a869e6a87252b89c42ef5effb52d91f8c34db0261db95eb",
+          "metrics": {
+            "complexity": 17
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/utils/saleCompletion.ts",
+      "semanticHash": "e653ad8a7e28113e578f97d66e1554147aa0818acc506e5fe6362f36dfad2027",
+      "metrics": {
+        "lines": 999
+      },
+      "functions": [
+        {
+          "anchor": "module/function:applySaleCompletionSideEffects",
+          "semanticHash": "c5c612c7df58bc4fdb905298b114c6e58601c5000a5179bbb05481946a34a82f",
+          "metrics": {
+            "lines": 318,
+            "complexity": 75
+          }
+        },
+        {
+          "anchor": "module/function:prepareSaleCompletion",
+          "semanticHash": "14c6710358bd1f7894414028836f9728d78f7ed65d73e2deea3311805ef06337",
+          "metrics": {
+            "complexity": 35
+          }
+        },
+        {
+          "anchor": "module/function:resolveReservationDeposits",
+          "semanticHash": "924e5ca16ef45005bdd5f64fca4af72cb3f463a37673832542d74010d1843af2",
+          "metrics": {
+            "lines": 140,
+            "complexity": 23
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/utils/smartReplyBuilder.ts",
+      "semanticHash": "866962a519a3feecb0eaae30e00ed3a6f1ce028e05abeef1cc55d757278fa8ec",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:buildSmartReplyText",
+          "semanticHash": "0615d1aa20e21aca9abaa5925c0d12f0486fc90f4b1343653219b6a794a39e41",
+          "metrics": {
+            "complexity": 37
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/utils/vehicleOwnership.ts",
+      "semanticHash": "02a88fd8a8906982271493d32fd1e072871dc75e7009405bc76426067fbb1990",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:saleEconomics",
+          "semanticHash": "e34c2e809fd27e44b6939511fb340c286c85820b7ecc2f711552b157e9c6075e",
+          "metrics": {
+            "complexity": 31
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/utils/vehicleTextMatch.ts",
+      "semanticHash": "022ded9a848b8799927e66d69c3a77a6d3a07945c35c9af8611270bb643fdc69",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:analyzeVehicleText",
+          "semanticHash": "1dc1574483b90c4cc5fd7c91b3fedd07a431e2d53b6d8d883557a4ff44760bf0",
+          "metrics": {
+            "complexity": 19
+          }
+        },
+        {
+          "anchor": "module/function:matchVehicleFromText",
+          "semanticHash": "25b5f6ea25d5fbe054c7955f46f54ed6656ada6e57c90c238d8c776fef3ecc34",
+          "metrics": {
+            "complexity": 17
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/vatReport.ts",
+      "semanticHash": "d2b9d2ecde01e9fea10d099d11aabfc07550a04629cf2b3579d6907630a4fd31",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:generateVatSummary/call:query:arg0/property:handler",
+          "semanticHash": "7755515c4e538738f25b14e1d7eb32633e05193c8951745a3eecf2f36d91c231",
+          "metrics": {
+            "complexity": 17
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/vehicleEdits.ts",
+      "semanticHash": "a47ea316a6234e5314bdf969152c5b598eeeddcd2b389a2b094276b1198fafa9",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/binding:requestCreate/call:mutation:arg0/property:handler",
+          "semanticHash": "dee00a6ff0cee064aed10aff81eac3c13c0f2d36312d1c1905af344073136faa",
+          "metrics": {
+            "complexity": 17
+          }
+        },
+        {
+          "anchor": "module/binding:requestUpdate/call:mutation:arg0/property:handler",
+          "semanticHash": "0d89a534b797066f06e03aa45d3f73e2317fbcaa1a47a45b09e653cd8201ec26",
+          "metrics": {
+            "complexity": 32
+          }
+        },
+        {
+          "anchor": "module/binding:resolve/call:mutation:arg0/property:handler",
+          "semanticHash": "a71c9056d8c8419e4c9058cad696a05ae79197d1a45eef86fafddcdf7de3a0a9",
+          "metrics": {
+            "lines": 125,
+            "complexity": 44
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/vehicles.ts",
+      "semanticHash": "a95d95b092aa44dc74327ab6a88fe799f14df93338d82d518d32a8f304635438",
+      "metrics": {
+        "lines": 2088
+      },
+      "functions": [
+        {
+          "anchor": "module/binding:create/call:mutation:arg0/property:handler",
+          "semanticHash": "525107c025e8e99ea0b8fc8798c82872724f0cbc8d80e38a7882a492b011eadd",
+          "metrics": {
+            "complexity": 28
+          }
+        },
+        {
+          "anchor": "module/binding:createReservation/call:mutation:arg0/property:handler",
+          "semanticHash": "c8f56e728213792b7a9faa43cf6354d767d36ca5e0e17cd2347be3b461badb7e",
+          "metrics": {
+            "complexity": 33
+          }
+        },
+        {
+          "anchor": "module/binding:createSourced/call:mutation:arg0/property:handler",
+          "semanticHash": "0edaa6b9a042c4ccc881f56745d98a21f206447b69d60b1db0a733fee845924a",
+          "metrics": {
+            "complexity": 18
+          }
+        },
+        {
+          "anchor": "module/binding:getReservationHistory/call:query:arg0/property:handler/binding:depositRows/call:Promise.all:arg0/call:CallExpression.map:arg0",
+          "semanticHash": "3dff731847a55d49af4510b4872533452d42aab4a4e56ff7b53c4d409ae64699",
+          "metrics": {
+            "complexity": 16
+          }
+        },
+        {
+          "anchor": "module/binding:importBulk/call:mutation:arg0/property:handler",
+          "semanticHash": "55317f823ddc446626f92fd5bcd9916ded375c5a7e7bcce05a100706bd21da03",
+          "metrics": {
+            "lines": 323,
+            "complexity": 91,
+            "nesting": 6
+          }
+        },
+        {
+          "anchor": "module/binding:update/call:mutation:arg0/property:handler",
+          "semanticHash": "92f705367f1d85485ed625ca3e207c4bb5042d91790f0227ba247edfb3eca366",
+          "metrics": {
+            "lines": 163,
+            "complexity": 65
+          }
+        },
+        {
+          "anchor": "module/function:insertPriceHistory",
+          "semanticHash": "1bd953aa64b907563b690317ea3f35e3d63cf286f800e1ada20c84e075261ed4",
+          "metrics": {
+            "params": 6
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/websiteProjection.ts",
+      "semanticHash": "24729e3ef6b4cc865060a6daaedebaa8a113b218a755168a7fa72649f8fe6adb",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:projectedVehicleRows/binding:publicVehicles/call:Promise.all:arg0/call:inventoryRows.map:arg0",
+          "semanticHash": "531540125510826f104f21c33b7abb9d79125aec10e4d6c13220620c68757fef",
+          "metrics": {
+            "complexity": 17
+          }
+        },
+        {
+          "anchor": "module/function:publicDealerProfile",
+          "semanticHash": "2afa9bffee594a42c54ac78242de19e59ecc912cdce664c77906353fe176ee7f",
+          "metrics": {
+            "complexity": 26
+          }
+        }
+      ]
+    },
+    {
+      "path": "convex/websites.ts",
+      "semanticHash": "9462c77ef54aca538afc9e22ef5d0418df2b7ae4a067c31cf1641a5c9e8e1a1b",
+      "metrics": {
+        "lines": 1226
+      },
+      "functions": [
+        {
+          "anchor": "module/binding:createPublicLead/call:internalMutation:arg0/property:handler",
+          "semanticHash": "356a8a6135715898c0c4a8e1adbbc4570b9de9d5d9455a780521319d80cf0e1c",
+          "metrics": {
+            "lines": 212,
+            "complexity": 50
+          }
+        },
+        {
+          "anchor": "module/binding:saveDraft/call:mutation:arg0/property:handler",
+          "semanticHash": "0ceb3c6a4a3de26f7082dc5c3355f82da9692c143831785c233afccd3a361a51",
+          "metrics": {
+            "complexity": 24
+          }
+        }
+      ]
+    },
+    {
+      "path": "dealer-worker/src/index.ts",
+      "semanticHash": "c3a99017d2c064ba87e40c31221c90c6845ba39001f7fcdda7ee24f0b3b693d2",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/export:default/property:fetch",
+          "semanticHash": "b8e1307fa4d099799afd51b9cae6efdaf67a5c906a812c5cf87cb06d4df546a8",
+          "metrics": {
+            "complexity": 20
+          }
+        }
+      ]
+    },
+    {
+      "path": "lib/messageSounds.ts",
+      "semanticHash": "2c06d1ad4ec998ee5a0873ba66173266f776522e218d94f4104d8fc7cda82a70",
+      "metrics": {},
+      "functions": [
+        {
+          "anchor": "module/function:playTone",
+          "semanticHash": "9625324dd7eb18f685d9821c2b7dc17d5e7ea0260c9177028e6c5849b42c7b64",
+          "metrics": {
+            "params": 6
+          }
+        }
+      ]
+    },
+    {
+      "path": "packages/shared/src/financingEconomics.ts",
+      "semanticHash": "9927917b73d013f3f1b6e6e7a53ea4345529b6f032748c00ff069dfffcc9ed2b",
+      "metrics": {
+        "lines": 653
+      },
+      "functions": []
+    }
+  ]
+}
