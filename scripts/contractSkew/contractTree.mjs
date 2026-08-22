@@ -180,70 +180,103 @@ export const strongerProvenance = (a, b) =>
  * code does not support.
  */
 /**
- * ⚠️ THE ONE RULE THE EXTRACTOR MAY NOT BREAK: PARTIAL EVIDENCE NEVER BECOMES
- * DEFINITIVE EVIDENCE.
+ * ⚠️ THE INFORMATION ORDER. `admitsAtLeast(wider, narrower)` asks one question:
+ * does `wider` admit every runtime value `narrower` admits?
  *
- * Three defects on this control turned out to be one design fault — the
- * extractor inspected PART of a TypeScript shape and emitted a NARROWER node
- * stated with FULL confidence. Tuple extraction kept `args[0]` and discarded
- * every other member; the key-set check asked only about STRING index
- * signatures and then claimed the key set was complete over an open NUMERIC
- * domain; and `mergeClientNodes` let an unclassifiable route be absorbed by a
- * classified one. Each was individually a one-line fix, and fixing them one at
- * a time would have left the thing that generates them.
+ * ⚠️ THIS REPLACES A SCALAR SCORE THAT WAS WRONG THREE TIMES. `certaintyOf`
+ * collapsed every kind of uncertainty onto a single 0–2 rank, and each hole in
+ * it was found by something other than reading it: a surviving mutant, then a
+ * reviewer, then the same reviewer again. The last one proved the model itself
+ * was the fault rather than any branch of it — an object has TWO independent
+ * dimensions, whether its KEY SET is complete and how determined its FIELD
+ * VALUES are, and no single total order can rank every combination of the two
+ * consistently. Making the object case member-aware simply moved the violation
+ * onto `opaqueKeys`, which is what ended the ternary-patching.
  *
- * So certainty is ranked once, here, and `mergeClientNodes` is required by test
- * to never return a node ranked above either of its inputs.
+ * So the model is now a PARTIAL order over what a node can actually carry, and
+ * incomparable pairs are expected rather than a defect. The rule it exists to
+ * enforce becomes a containment statement with no arithmetic in it:
  *
- * ⚠️ THE `never` DEFAULT IS THE COMPILER-CHECKED HALF. `checkJs` is on for this
- * directory, so a node kind added to the `ClientNode` typedef and not ranked
- * here stops compiling instead of silently falling through to "definite" — the
- * exact failure mode being designed out. Do not replace it with a `return`.
+ *   mergeClientNodes(a, b) must admit at least everything `a` admits AND at
+ *   least everything `b` admits. Merging may widen what is possible or keep
+ *   uncertainty; it may never yield evidence narrower than an input.
  *
- * @param {ClientNode} node
- * @returns {number} 0 nothing provable · 1 partial · 2 fully determined
+ * ⚠️ IT FAILS CLOSED. Where the structure cannot decide containment this
+ * returns FALSE, which surfaces as a loud test failure rather than a quiet
+ * pass. A test oracle that guesses "probably fine" is the same defect as a
+ * detector that does — and this file has shipped that defect twice.
+ *
+ * ⚠️ THE `never` DEFAULT IS THE COMPILER-CHECKED HALF. A node kind added to the
+ * `ClientNode` typedef and not handled here stops compiling instead of falling
+ * through to a permissive answer. Do not replace it with a `return`.
+ *
+ * @param {ClientNode|null} wider
+ * @param {ClientNode|null} narrower
+ * @returns {boolean}
  */
-export function certaintyOf(node) {
-  if (!node) return 0;
-  switch (node.kind) {
-    // We looked and could not classify it, or it crossed an `any` boundary.
-    case "unresolved":
-    case "opaqueValue":
-      return 0;
-    // Several shapes are possible and we cannot tell which one runs.
-    //
-    // ⚠️ THIS WAS A FLAT `1`, AND THAT BROKE THE RULE THIS FUNCTION EXISTS TO
-    // ENFORCE. `variants` is capped at 1 because not knowing which alternative
-    // runs is itself partial knowledge, even when every alternative is fully
-    // determined — but it must also never outrank its WORST member.
-    //
-    // The counterexample is ordinary code, `field: string | T[]`:
-    // `merge(scalar(string), array(unresolved))` produces `variants`, and a
-    // flat 1 made the result MORE certain (1) than one of its inputs (0). The
-    // absorption checks above did not prevent it, because they test the node's
-    // KIND — and `array(unresolved)` has kind "array", which absorbs nothing,
-    // while its certainty is 0 because this rank recurses into the element.
-    // Kind and certainty are different things; only one of them is the rule.
-    case "variants":
-      return Math.min(1, ...node.nodes.map(certaintyOf));
-    // Enumerated values and a named primitive are as determined as we get.
+export function admitsAtLeast(wider, narrower) {
+  // No observation constrains nothing, so there is nothing to admit.
+  if (!narrower) return true;
+  if (!wider) return false;
+  if (wider === narrower) return true;
+
+  // Having learned nothing, every runtime value remains possible — so total
+  // ignorance admits everything, and ONLY total ignorance admits it back.
+  // This asymmetry is the whole reason the absorbing `unresolved` fix exists.
+  if (wider.kind === "unresolved" || wider.kind === "opaqueValue") return true;
+  if (narrower.kind === "unresolved" || narrower.kind === "opaqueValue") return false;
+
+  // Every alternative the narrower side might send has to be admitted.
+  if (narrower.kind === "variants") return narrower.nodes.every((n) => admitsAtLeast(wider, n));
+  // Conversely SOME alternative must admit it. Sound but deliberately
+  // incomplete: a value spread across two alternatives is not recognised, and
+  // that under-approximation fails closed.
+  if (wider.kind === "variants") return wider.nodes.some((w) => admitsAtLeast(w, narrower));
+
+  switch (wider.kind) {
     case "literal":
+      return narrower.kind === "literal" && [...narrower.values].every((v) => wider.values.has(v));
+
     case "scalar":
-      return 2;
-    // An object is only as certain as its KEY SET. `keysComplete` false means
-    // keys may exist that we cannot see, which is partial evidence by
-    // definition — `opaqueKeys()` is exactly this.
-    case "object":
-      return node.keysComplete ? 2 : 1;
-    // An array is only as certain as its element. An EMPTY array literal is
-    // knowledge, not ignorance: Convex validates zero elements, so there is
-    // nothing left to be uncertain about.
-    case "array":
-      return node.empty || !node.element ? 2 : Math.min(2, certaintyOf(node.element));
+      if (narrower.kind === "scalar") return narrower.type === wider.type;
+      if (narrower.kind === "literal") {
+        return [...narrower.values].every((v) => SCALAR_OK[wider.type]?.has(typeof v));
+      }
+      return false;
+
+    case "array": {
+      if (narrower.kind !== "array") return false;
+      // An observed-empty array carries no elements, so any array admits it.
+      if (narrower.empty || !narrower.element) return true;
+      // ...and an empty one admits nothing else.
+      if (wider.empty || !wider.element) return false;
+      return admitsAtLeast(wider.element, narrower.element);
+    }
+
+    case "object": {
+      if (narrower.kind !== "object") return false;
+      // DIMENSION ONE — the key set. A node claiming to have seen every key
+      // cannot admit one that may still carry keys nobody has seen.
+      if (wider.keysComplete && !narrower.keysComplete) return false;
+      if (wider.keysComplete) {
+        for (const name of narrower.fields.keys()) {
+          if (!wider.fields.has(name)) return false;
+        }
+      }
+      // DIMENSION TWO — the field values, pointwise. A key the wider side does
+      // not name is unconstrained by it, which is only reachable when its key
+      // set is open; the check above already refused the closed case.
+      for (const [name, entry] of narrower.fields) {
+        const w = wider.fields.get(name);
+        if (w && !admitsAtLeast(w.node, entry.node)) return false;
+      }
+      return true;
+    }
+
     default: {
       /** @type {never} */
-      const unranked = node;
-      return unranked;
+      const unhandled = wider;
+      return unhandled;
     }
   }
 }

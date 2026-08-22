@@ -4,7 +4,7 @@ import {
   clientNode,
   compareNode,
   mergeClientNodes,
-  certaintyOf,
+  admitsAtLeast,
   describeClient,
   SEVERITY,
 } from "./contractTree.mjs";
@@ -725,19 +725,49 @@ describe("merging two observations of the same node", () => {
  * an open numeric domain; and `mergeClientNodes` let an unclassifiable route be
  * absorbed by a classified one.
  *
- * Patching three call sites would have closed three symptoms and left the
- * generator intact, so the rule is stated once, here, and enforced over
- * generated combinations rather than hand-picked pairs:
+ * ⚠️ THE FIRST ATTEMPT AT THIS RULE WAS A SCALAR SCORE, AND IT WAS WRONG THREE
+ * TIMES. `certaintyOf` ranked every node 0/1/2 and required
+ * `rank(merge(a,b)) <= min(rank(a), rank(b))`. Each hole in it was found by
+ * something other than reading it:
  *
- *   MERGING TWO OBSERVATIONS CAN NEVER PRODUCE MORE CERTAINTY THAN EITHER
- *   OBSERVATION HELD.
+ *   1. a mutant ranking every object fully certain regardless of `keysComplete`
+ *      KILLED NOTHING — comparing a rank to a rank means inflating both sides
+ *      equally keeps the inequality true, so a constant would have passed;
+ *   2. `variants` returned a flat 1 while `array(unresolved)` ranks 0, so
+ *      `merge(scalar, array(unresolved))` came out MORE certain than an input;
+ *   3. an object with a complete key set and an `unresolved` field ranked 2 —
+ *      identical to the same object with a fully known field.
  *
- * The compiler holds the other half: `certaintyOf` switches exhaustively over
- * `ClientNode`, so a node kind added later that nobody ranked fails `tsc`
- * rather than silently defaulting to "definite".
+ * The third ended the approach rather than adding a fourth patch: making the
+ * object case member-aware moved the violation onto `opaqueKeys`, because an
+ * object has TWO independent dimensions — whether its KEY SET is complete, and
+ * how determined its FIELD VALUES are — and no single total order ranks every
+ * combination of two dimensions consistently.
+ *
+ * So the rule is no longer arithmetic. It is CONTAINMENT over what a node can
+ * actually carry at runtime, which has no scalar to collapse:
+ *
+ *   MERGING TWO OBSERVATIONS MUST ADMIT AT LEAST EVERYTHING EACH OBSERVATION
+ *   ADMITTED. Merging may widen what is possible, or keep uncertainty; it may
+ *   never produce evidence narrower than an input.
+ *
+ * The compiler holds the other half: `admitsAtLeast` switches exhaustively over
+ * `ClientNode`, so a node kind added later and left unhandled fails `tsc`
+ * rather than falling through to a permissive answer.
  */
-describe("INVARIANT: information monotonicity — merging never manufactures certainty", () => {
-  /** One representative of every certainty class the extractor can emit. */
+describe("INVARIANT: merging never produces evidence narrower than an input", () => {
+  const f = (node: unknown) => ({ node, provenance: "LITERAL" });
+  const objOf = (fields: Record<string, unknown>, keysComplete = true) =>
+    clientNode.object(new Map(Object.entries(fields).map(([k, v]) => [k, f(v)])), keysComplete);
+
+  /**
+   * ⚠️ THE SPECIMEN SET IS WHERE ALL THREE EARLIER HOLES LIVED, not the rule.
+   *
+   * Every specimen in the scalar era was fully determined or fully unknown AT
+   * ITS TOP LEVEL, so nothing exercised a node that looks determined from
+   * outside while carrying zero information inside — which is exactly where
+   * each violation was. Compound and nested shapes are first-class here.
+   */
   const specimens: Array<[string, unknown]> = [
     ["unresolved", clientNode.unresolved()],
     ["opaqueValue", clientNode.opaqueValue()],
@@ -746,91 +776,95 @@ describe("INVARIANT: information monotonicity — merging never manufactures cer
     ["literal(B)", cLit("B")],
     ["scalar(string)", cStr],
     ["scalar(number)", clientNode.scalar("number")],
-    ["object keysComplete", cObj({ a: cStr })],
+    ["obj{a:scalar}", objOf({ a: cStr })],
+    ["obj{a:unresolved}", objOf({ a: clientNode.unresolved() })],
+    ["obj{a:scalar} OPEN keys", objOf({ a: cStr }, false)],
+    ["obj{b:literal}", objOf({ b: cLit("A") })],
     ["array(literal)", clientNode.array(cLit("A"))],
+    ["array(unresolved)", clientNode.array(clientNode.unresolved())],
+    ["array(scalar)", clientNode.array(cStr)],
     ["emptyArray", clientNode.emptyArray()],
-    // ⚠️ COMPOUND NODES CARRYING LOW CERTAINTY WITHOUT AN UNCERTAIN *KIND*.
-    //
-    // Every specimen above is either fully determined or fully unknown AT ITS
-    // TOP LEVEL, and that gap let a real violation through: `array(unresolved)`
-    // has kind "array" — which nothing treats as absorbing — while its
-    // certainty is 0, because the rank recurses into the element. Merging it
-    // with a determined node of a different kind produces `variants`, and a
-    // flat rank for `variants` made the result MORE certain than one of its
-    // inputs. A reviewer reproduced it through the real extractor with
-    // `field: string | T[]`; a second reviewer argued it was impossible on the
-    // grounds that certainty-0 nodes never enter `variants` — true of KINDS,
-    // false of VALUES, which is exactly the confusion these specimens exist to
-    // make impossible to repeat.
-    ["array(unresolved elem)", clientNode.array(clientNode.unresolved())],
-    ["object with an unresolved field", cObj({ a: clientNode.unresolved() })],
+    ["variants[scalar,obj]", clientNode.variants([cStr, objOf({ a: cStr })])],
+    ["array(variants)", clientNode.array(clientNode.variants([cStr, clientNode.scalar("number")]))],
+    ["obj{a:array(unresolved)}", objOf({ a: clientNode.array(clientNode.unresolved()) })],
+    ["obj{a:obj{b:unresolved}}", objOf({ a: objOf({ b: clientNode.unresolved() }) })],
   ];
 
-  test("every pair: certainty(merge(a,b)) <= min(certainty(a), certainty(b))", () => {
+  test("every pair: merge(a,b) admits at least everything a admits AND everything b admits", () => {
     const violations: string[] = [];
     for (const [an, a] of specimens) {
       for (const [bn, b] of specimens) {
         const merged = mergeClientNodes(a as never, b as never);
-        const got = certaintyOf(merged as never);
-        const ceiling = Math.min(certaintyOf(a as never), certaintyOf(b as never));
-        if (got > ceiling) violations.push(`${an} + ${bn} -> ${(merged as { kind: string }).kind} (${got} > ${ceiling})`);
+        if (!admitsAtLeast(merged as never, a as never)) {
+          violations.push(`merge(${an}, ${bn}) does NOT admit LEFT ${an}`);
+        }
+        if (!admitsAtLeast(merged as never, b as never)) {
+          violations.push(`merge(${an}, ${bn}) does NOT admit RIGHT ${bn}`);
+        }
       }
     }
     expect(violations).toEqual([]);
   });
 
-  test("merging is commutative in CERTAINTY — order of observation cannot change confidence", () => {
-    // A field reached by two routes must not be more trusted because the
+  test("operand order cannot change what a merge admits", () => {
+    // A field reached by two routes must not be narrower because the
     // classifiable route happened to be walked first.
     const asymmetric: string[] = [];
     for (const [an, a] of specimens) {
       for (const [bn, b] of specimens) {
-        const ab = certaintyOf(mergeClientNodes(a as never, b as never) as never);
-        const ba = certaintyOf(mergeClientNodes(b as never, a as never) as never);
-        if (ab !== ba) asymmetric.push(`${an} + ${bn}: ${ab} vs ${ba}`);
+        const ab = mergeClientNodes(a as never, b as never);
+        const ba = mergeClientNodes(b as never, a as never);
+        if (!admitsAtLeast(ab as never, ba as never) || !admitsAtLeast(ba as never, ab as never)) {
+          asymmetric.push(`${an} + ${bn}: order changes what is admitted`);
+        }
       }
     }
     expect(asymmetric).toEqual([]);
   });
 
-  test("certaintyOf ranks every node kind the builders can produce", () => {
-    // Guards the exhaustiveness the compiler enforces: if a builder gains a
-    // kind and `certaintyOf` is not extended, this fails at runtime too rather
-    // than relying on `tsc` alone being run.
+  test("the relation is REFLEXIVE — every specimen admits itself", () => {
+    // Without this the property above is satisfiable by a relation that says
+    // "no" to everything, which would make the whole suite vacuous.
     for (const [name, node] of specimens) {
-      expect(Number.isFinite(certaintyOf(node as never)), `${name} is unranked`).toBe(true);
+      expect(admitsAtLeast(node as never, node as never), `${name} does not admit itself`).toBe(true);
     }
-    expect(certaintyOf(clientNode.variants([cStr, cObj({ a: cStr })]) as never)).toBeLessThan(
-      certaintyOf(cStr as never)
-    );
   });
 
-  // ⚠️ WITHOUT THIS, THE INVARIANT IS SATISFIED BY A CONSTANT.
-  //
-  // Found by mutation, not by reading: ranking every object `2` regardless of
-  // `keysComplete` killed NOTHING. The monotonicity test compares certainty to
-  // certainty, so inflating both sides equally keeps the inequality true — a
-  // `certaintyOf` that returned the same number for everything would pass it.
-  //
-  // So the ranking has to be pinned as MEANINGFUL, not merely consistent: each
-  // way of learning less must actually rank lower than the same node knowing
-  // more. This is the "adding an unknown may weaken certainty, never strengthen
-  // it" half of the rule, stated where it can fail.
-  test("every withdrawal of evidence RANKS LOWER than the same node without it", () => {
-    // An object whose key set is not provably complete knows less than one whose is.
-    expect(certaintyOf(clientNode.opaqueKeys() as never)).toBeLessThan(
-      certaintyOf(cObj({ a: cStr }) as never)
-    );
-    // An array whose element could not be classified knows less than one whose could.
-    expect(certaintyOf(clientNode.array(clientNode.unresolved()) as never)).toBeLessThan(
-      certaintyOf(clientNode.array(cStr) as never)
-    );
-    // Not knowing which of several shapes runs knows less than knowing the one.
-    expect(certaintyOf(clientNode.variants([cStr, clientNode.scalar("number")]) as never)).toBeLessThan(
-      certaintyOf(cStr as never)
-    );
-    // And the two ways of knowing nothing must both rank at the floor.
-    expect(certaintyOf(clientNode.unresolved() as never)).toBe(0);
-    expect(certaintyOf(clientNode.opaqueValue() as never)).toBe(0);
+  test("total ignorance admits everything, and only total ignorance admits it back", () => {
+    // The asymmetry that makes absorbing `unresolved` correct. If this were
+    // symmetric, an unclassifiable route could be swallowed by a classified one
+    // and the relation would not notice — the original LIVE defect.
+    for (const [name, node] of specimens) {
+      expect(admitsAtLeast(clientNode.unresolved() as never, node as never), `unresolved should admit ${name}`).toBe(true);
+    }
+    expect(admitsAtLeast(cStr as never, clientNode.unresolved() as never)).toBe(false);
+    expect(admitsAtLeast(cLit("A") as never, clientNode.unresolved() as never)).toBe(false);
+    expect(admitsAtLeast(objOf({ a: cStr }) as never, clientNode.unresolved() as never)).toBe(false);
+  });
+
+  test("each way of knowing less is NOT admitted by the same node knowing more", () => {
+    // The direction that catches a narrowing. Stated per dimension, because
+    // conflating the two dimensions onto one scale is what failed three times.
+    //
+    // VALUE dimension: a determined field cannot stand in for an unresolved one.
+    expect(admitsAtLeast(objOf({ a: cStr }) as never, objOf({ a: clientNode.unresolved() }) as never)).toBe(false);
+    expect(admitsAtLeast(clientNode.array(cStr) as never, clientNode.array(clientNode.unresolved()) as never)).toBe(false);
+    // KEY dimension: a closed key set cannot stand in for an open one.
+    expect(admitsAtLeast(objOf({ a: cStr }) as never, objOf({ a: cStr }, false) as never)).toBe(false);
+    // ...and the two are INDEPENDENT: open keys do not excuse a narrowed value,
+    // which is the case the scalar model could not express at all.
+    expect(admitsAtLeast(objOf({ a: cStr }, false) as never, objOf({ a: clientNode.unresolved() }, false) as never)).toBe(false);
+    // Narrowing an enumeration is a narrowing too.
+    expect(admitsAtLeast(cLit("A") as never, clientNode.literal(new Set(["A", "B"])) as never)).toBe(false);
+  });
+
+  test("legitimate widening IS admitted — the relation is not simply refusing", () => {
+    // A relation that answers "no" often enough passes the property test while
+    // proving nothing. These are the widenings the extractor really performs.
+    expect(admitsAtLeast(clientNode.literal(new Set(["A", "B"])) as never, cLit("A") as never)).toBe(true);
+    expect(admitsAtLeast(cStr as never, cLit("A") as never)).toBe(true);
+    expect(admitsAtLeast(objOf({ a: cStr }, false) as never, objOf({ a: cStr }) as never)).toBe(true);
+    expect(admitsAtLeast(clientNode.variants([cStr, clientNode.scalar("number")]) as never, cStr as never)).toBe(true);
+    expect(admitsAtLeast(clientNode.array(cStr) as never, clientNode.emptyArray() as never)).toBe(true);
   });
 });
