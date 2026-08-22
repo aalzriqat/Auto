@@ -42,13 +42,21 @@
  *         | {kind: "array", element: ValidatorNode}
  *         | {kind: "union", branches: ValidatorNode[]}} ValidatorNode
  *
+ * ⚠️ `id` IS A CLIENT DOMAIN IN ITS OWN RIGHT, NOT A FLAVOUR OF `scalar`.
+ * `GenericId<T>` is `string & { __tableName: T }`, and the extractor used to
+ * collapse that intersection to primitive `string` — erasing the one dimension
+ * needed to tell `Id<"users">` from `Id<"vehicles">` at a `v.id()` path. It
+ * carries the SET of tables it may belong to, because a finite union of table
+ * names is knowable and must not be flattened to one.
+ *
  * @typedef {{kind: "unresolved"}
  *         | {kind: "opaqueValue"}
  *         | {kind: "literal", values: Set<unknown>}
  *         | {kind: "scalar", type: string}
+ *         | {kind: "id", tables: Set<string>}
  *         | {kind: "object", fields: Map<string, ClientField>, keysComplete: boolean}
  *         | {kind: "array", element: ClientNode | null, empty?: boolean}
- *         | {kind: "variants", nodes: ClientNode[]}} ClientNode
+ *         | {kind: "variants", nodes: ClientNode[], assertionNarrowed?: boolean}} ClientNode
  *
  * @typedef {{node: ClientNode, provenance?: string, optional?: boolean}} ClientField
  *
@@ -132,6 +140,13 @@ export const clientNode = {
   emptyArray: () => ({ kind: "array", element: null, empty: true }),
   literal: (values) => ({ kind: "literal", values }),
   scalar: (type) => ({ kind: "scalar", type }),
+  /**
+   * A Convex document id whose table domain is PROVEN, carrying every table it
+   * may name. An empty set is not permitted — a domain nobody can name is not
+   * evidence, and the extractor must emit a plain string in that case rather
+   * than an id nobody can check.
+   */
+  id: (tables) => ({ kind: "id", tables: new Set(tables) }),
   /** The VALUE is unknown; we may still know it is present. */
   opaqueValue: () => ({ kind: "opaqueValue" }),
   /** The KEY SET is unknown; we cannot enumerate what is or is not sent. */
@@ -234,11 +249,22 @@ export function admitsAtLeast(wider, narrower) {
   if (wider.kind === "variants") return wider.nodes.some((w) => admitsAtLeast(w, narrower));
 
   switch (wider.kind) {
+    // ⚠️ A WIDER ID ADMITS A NARROWER ID WITH A SUBSET OF ITS TABLES, and
+    // nothing else. A bare string is NOT admitted by an id — the string is the
+    // wider value, not the narrower one, so the relation runs the other way and
+    // is handled by the `scalar` case below.
+    case "id":
+      return narrower.kind === "id" && [...narrower.tables].every((t) => wider.tables.has(t));
     case "literal":
       return narrower.kind === "literal" && [...narrower.values].every((v) => wider.values.has(v));
 
     case "scalar":
       if (narrower.kind === "scalar") return narrower.type === wider.type;
+      // ⚠️ A BARE STRING ADMITS AN ID, and this line is load-bearing for the
+      // merge above: `id + string` widens to `string`, so if `string` did not
+      // admit `id` that merge would itself violate the information order the
+      // proof harness checks. A Convex document id IS a string at runtime.
+      if (narrower.kind === "id") return wider.type === "string";
       if (narrower.kind === "literal") {
         return [...narrower.values].every((v) => SCALAR_OK[wider.type]?.has(typeof v));
       }
@@ -333,6 +359,27 @@ export function mergeClientNodes(a, b) {
   if (a.kind === "literal" && b.kind === "literal") {
     return clientNode.literal(new Set([...a.values, ...b.values]));
   }
+
+  // ⚠️ TWO ID OBSERVATIONS UNION THEIR TABLE DOMAINS — THEY DO NOT INTERSECT.
+  //
+  // The field may carry EITHER, so the domain widens. Intersecting would narrow
+  // the evidence on merge, which is exactly the information-order violation
+  // `admitsAtLeast` exists to refuse.
+  if (a.kind === "id" && b.kind === "id") {
+    return clientNode.id([...a.tables, ...b.tables]);
+  }
+
+  // ⚠️ AN ID BESIDE A BARE STRING IS A BARE STRING.
+  //
+  // One route proves a table; the other proves nothing beyond "string". The
+  // merged value may have come from either, so the TABLE IS NO LONGER PROVEN.
+  // Keeping the id here would let one branded route launder an unbranded one
+  // into "table identity verified" — a false PASS created by merging, which is
+  // the shape that fired the breaker on this ticket twice before.
+  const idBesideString =
+    (a.kind === "id" && b.kind === "scalar" && b.type === "string") ||
+    (b.kind === "id" && a.kind === "scalar" && a.type === "string");
+  if (idBesideString) return clientNode.scalar("string");
 
   // A literal beside the scalar it belongs to is that scalar, widened: the
   // enumeration stops being a whitelist, so it stops being provable.
@@ -494,29 +541,32 @@ export function compareNode(client, validator, path, ctx) {
     const attempts = client.nodes.map((variant) => compareNode(variant, validator, path, ctx));
     const rejected = attempts.filter((a) => !a.compatible);
 
-    // ⚠️ A MIXTURE IS NEITHER A BREAK NOR A PASS, AND CALLING IT EITHER IS A
-    // MEASURED DEFECT.
+    // ⚠️ FAIL-CLOSED STAYS FAIL-CLOSED. The client may send any ONE of these,
+    // so a mismatch in ANY member is a mismatch — and that rule is NOT relaxed
+    // just because some other member happens to be acceptable. Relaxing it
+    // globally would silence a real defect anywhere a union contains one good
+    // branch, which is a far larger hole than the one it would close.
     //
-    // When SOME members are accepted and some are refused, the client's TYPE
-    // admits a value the backend rejects — but nothing here proves that member
-    // is ever transmitted. Reporting BREAKING fabricates an outage; reporting
-    // CLEAN hides a real one. It is an unknown, and it must read as one.
+    // ⚠️ ASSERTION UNCERTAINTY IS CARRIED STRUCTURALLY INSTEAD, BY THE NODE.
     //
-    // This is not hypothetical. The extractor deliberately strips `!`
-    // (`clientPaths.mjs`: "none changes the payload"), which is correct —
-    // a non-null assertion is erased at runtime and is a developer's claim, not
-    // evidence. So `orgId: activeOrgId!` extracts as `string | null`. Against a
-    // bare `v.id("organizations")` the null member is refused and the string
-    // member is accepted. Aggregating that as BREAKING would have emitted 15
-    // FABRICATED BREAKING findings on the first unattended whole-repo run —
-    // measured, exactly 15 — turning a false PASS into a false FAIL.
+    // `orgId: activeOrgId!` is the shape that forced this question. The `!` is
+    // erased at runtime, so it is a developer's claim rather than evidence, and
+    // the extractor is right to strip it — but the enclosing UI path may
+    // genuinely guarantee non-null in a way the TypeChecker will not carry into
+    // a closure. Measured on the real repository, treating that as BREAKING
+    // fabricates exactly 15 outages; treating it as CLEAN is the false PASS.
+    //
+    // So the EXTRACTOR marks only that node `assertionNarrowed`, and only that
+    // node degrades to an unknown. The general rule below is untouched, and a
+    // plain non-asserted union containing an incompatible member is still
+    // BREAKING.
     //
     // ⚠️ AND THE OPPOSITE CASE MUST STAY CLEAN: `string | null` against
     // `v.union(v.id("t"), v.null())` is fully accepted, because each member is
     // compared against the WHOLE validator, unions included. Judging a member
     // against one branch in isolation is what fabricated 8 findings in the
     // measurement harness that produced these numbers.
-    if (rejected.length && rejected.length < attempts.length) {
+    if (client.assertionNarrowed && rejected.length && rejected.length < attempts.length) {
       const nested = validator.kind === "object" || validator.kind === "array";
       const refused = client.nodes
         .filter((_, i) => !attempts[i].compatible)
@@ -533,7 +583,7 @@ export function compareNode(client, validator, path, ctx) {
             nested ? SEVERITY.SHAPE_UNKNOWN : SEVERITY.TYPE_UNKNOWN,
             nested ? "SHAPE" : "VALUE",
             path,
-            `client type admits ${refused}, which the backend's ${describeValidator(validator)} refuses, but other members are accepted — so transmission of the refused member is NOT proven`
+            `client type admits ${refused}, which the backend's ${describeValidator(validator)} refuses; the value's non-nullness rests on a \`!\` assertion that is erased at runtime, so transmission of the refused member is NOT proven`
           ),
           ...carried,
         ]),
@@ -655,47 +705,86 @@ export function compareNode(client, validator, path, ctx) {
 
   if (validator.kind === "literal") return compareValues(client, new Set([validator.value]), path, ctx);
   if (validator.kind === "id") {
-    // ⚠️ `v.id(table)` ACCEPTS ONLY A STRING. Reporting anything else as
-    // compatible was a FALSE PASS — the one verdict this control must never
-    // produce. The branch used to reject only `object` and `array`, so a
-    // client sending a number, boolean or bigint where the backend declares an
-    // id was reported CLEAN. Reproduced against the real `compareNode`:
-    // `scalar(number)`, `scalar(boolean)`, `scalar(bigint)` and
-    // `literal([42])` all returned `compatible: true`.
+    // ⚠️ `v.id(table)` MEANS MORE THAN "IS A JAVASCRIPT STRING".
     //
-    // ⚠️ STATED LIMITATION, NOT A SILENT GAP. This proves representation
-    // compatibility at the string / non-string level ONLY. It does NOT prove
-    // that a string is a valid document id for THIS table — `Id<"vehicles">`
-    // erases to a plain `string`, so a client sending `Id<"users">` here is
-    // NOT detected. Never describe this as "table identity verified".
-    // Table-qualified provenance is deliberately out of scope (SCRUM-182):
-    // measured on the real surface, demanding it would turn 1,170 of 1,321
-    // id comparisons (88.6%, across 465 functions) into UNKNOWN, which is a
-    // permanently amber monitor — and a monitor that is always amber is one
-    // that gets switched off.
+    // Two false PASSes lived here, one inside the other. The branch originally
+    // rejected only `object` and `array` and returned compatible for everything
+    // else, so `scalar(number)`, `scalar(boolean)`, `scalar(bigint)` and
+    // `literal([42])` were all reported CLEAN — reproduced against the real
+    // `compareNode`. Narrowing that to "must be a string" fixed the coarse half
+    // and left the finer one: `Id<"users">` and `Id<"vehicles">` are both
+    // strings, so a client sending the wrong table still passed.
     //
-    // `variants`, `unresolved` and `opaqueValue` never reach here; they are
-    // answered above. That leaves exactly scalar, literal, object and array.
+    // Convex's own contract distinguishes these states — `GenericId<T>` is
+    // `string & { __tableName: T }`, and callers holding an untrusted string are
+    // told to normalize it before treating it as an id. So an UNBRANDED string
+    // is not proof; it is an absence of proof, and it is reported as one.
+    //
+    // `variants`, `unresolved` and `opaqueValue` never reach here — they are
+    // answered above. That leaves id, scalar, literal, object and array.
     const idLabel = describeValidator(validator);
+    const expected = validator.table;
+
+    if (client.kind === "id") {
+      const tables = [...client.tables];
+      if (expected && tables.length && tables.every((t) => t === expected)) {
+        return { findings, compatible: true };
+      }
+      if (expected && tables.length && !tables.includes(expected)) {
+        add(
+          SEVERITY.BREAKING,
+          "VALUE",
+          `client sends ${describeClient(client)} where the backend declares ${idLabel}: a document id for a different table`
+        );
+        return { findings, compatible: false };
+      }
+      // A domain that MIXES the expected table with others, or an id whose
+      // table domain could not be pinned down. Neither proven wrong nor proven
+      // right — and a mixed domain must never clean-PASS.
+      add(
+        SEVERITY.TYPE_UNKNOWN,
+        "VALUE",
+        `client can send ${describeClient(client)} where the backend declares ${idLabel}: the table is NOT proven`
+      );
+      return { findings, compatible: true };
+    }
+
     if (client.kind === "scalar") {
-      if (client.type === "string") return { findings, compatible: true };
+      if (client.type === "string") {
+        add(
+          SEVERITY.TYPE_UNKNOWN,
+          "VALUE",
+          `client sends an unbranded string where the backend declares ${idLabel}: it is a string, but NOT verified as a document id for this table`
+        );
+        return { findings, compatible: true };
+      }
       add(
         SEVERITY.BREAKING,
         "VALUE",
-        `client sends ${describeClient(client)} where the backend declares ${idLabel}, which accepts only a string document id`
+        `client sends ${describeClient(client)} where the backend declares ${idLabel}, which accepts only a document id`
       );
       return { findings, compatible: false };
     }
+
     if (client.kind === "literal") {
       const nonString = [...client.values].filter((v) => typeof v !== "string");
-      if (!nonString.length) return { findings, compatible: true };
+      if (nonString.length) {
+        add(
+          SEVERITY.BREAKING,
+          "VALUE",
+          `client can send ${describe(nonString)} where the backend declares ${idLabel}, which accepts only a document id`
+        );
+        return { findings, compatible: false };
+      }
+      // An arbitrary string literal is still only a string.
       add(
-        SEVERITY.BREAKING,
+        SEVERITY.TYPE_UNKNOWN,
         "VALUE",
-        `client can send ${describe(nonString)} where the backend declares ${idLabel}, which accepts only a string document id`
+        `client sends the literal ${describe([...client.values])} where the backend declares ${idLabel}: NOT verified as a document id for this table`
       );
-      return { findings, compatible: false };
+      return { findings, compatible: true };
     }
+
     add(SEVERITY.BREAKING, "VALUE", `client sends ${describeClient(client)} where the backend declares id`);
     return { findings, compatible: false };
   }
@@ -768,6 +857,25 @@ export function compareNode(client, validator, path, ctx) {
   // Past this point `SCALAR_OK[validator.type]` is guaranteed, so the branches
   // below no longer test it — a guard that can silently skip a check is exactly
   // what produced the defect above.
+
+  // ⚠️ A PROVEN DOCUMENT ID IS STILL A JAVASCRIPT STRING — AND ONLY A STRING.
+  //
+  // Without this branch an `id` node matched none of the `client.kind` tests
+  // below and fell through to the compatible return at the bottom, so
+  // `Id<"vehicles">` against `v.number()` would have reported CLEAN. That is a
+  // false PASS created by the very node introduced to remove one, and it is the
+  // reason every consumer of a new client kind has to be enumerated rather than
+  // assumed to fall through safely.
+  if (client.kind === "id") {
+    if (SCALAR_OK[validator.type].has("string")) return { findings, compatible: true };
+    add(
+      SEVERITY.BREAKING,
+      "VALUE",
+      `client sends ${describeClient(client)} where the backend declares ${validator.type}`
+    );
+    return { findings, compatible: false };
+  }
+
   if (client.kind === "literal") {
     const bad = [...client.values].filter((v) => !SCALAR_OK[validator.type].has(typeof v));
     if (bad.length) {
@@ -901,6 +1009,13 @@ export function describeClient(client) {
       return "union";
     case "unresolved":
       return "unresolved";
+    // ⚠️ NAMES THE TABLES. A finding that says only "id" cannot tell a reader
+    // whether the defect is a wrong table or a wrong type, which is the whole
+    // reason this domain exists.
+    case "id": {
+      const tables = [...client.tables];
+      return tables.length === 1 ? `Id<"${tables[0]}">` : `Id<${tables.map((t) => `"${t}"`).join(" | ")}>`;
+    }
     case "literal": {
       const kinds = new Set([...client.values].map((v) => (v === null ? "null" : typeof v)));
       return kinds.size === 1 ? [...kinds][0] : "union";

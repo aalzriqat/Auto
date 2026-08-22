@@ -341,8 +341,18 @@ describe("every validator kind refuses the wrong client shape", () => {
     expect(breaking(run(cObj({ v: clientNode.array(cStr) }), vObj({ v: [id] })))).toHaveLength(1);
   });
 
-  test("an id validator accepts a string, which is what an id is", () => {
-    expect(run(cObj({ v: cStr }), vObj({ v: [{ type: "id", tableName: "vehicles" }] })).findings).toHaveLength(0);
+  test("an id validator does NOT accept an unbranded string as proof", () => {
+    /**
+     * ⚠️ THIS TEST ASSERTED THE OPPOSITE, AND THAT WAS THE FINER OF TWO FALSE
+     * PASSES. `v.id(table)` means more than "is a JS string" — Convex's own
+     * contract brands it, and tells callers holding an untrusted string to
+     * normalize it before treating it as an id. An unbranded string is an
+     * ABSENCE of proof and is now reported as one: not clean, not breaking.
+     */
+    const result = run(cObj({ v: cStr }), vObj({ v: [{ type: "id", tableName: "vehicles" }] }));
+    expect(breaking(result)).toHaveLength(0);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].severity).toBe(SEVERITY.TYPE_UNKNOWN);
   });
 
   test("a scalar validator refuses an object", () => {
@@ -580,22 +590,37 @@ describe("provenance — an unproven subtree cannot prove a defect", () => {
 });
 
 describe("client variants — every branch the client might send must be accepted", () => {
-  test("a union where ONE branch is rejected is UNKNOWN — not breaking, and not clean", () => {
+  test("a plain union where ONE branch is rejected is BREAKING — fail-closed stays fail-closed", () => {
     /**
-     * ⚠️ THIS TEST ASSERTED `BREAKING` UNTIL THE v.id() MEASUREMENT, AND THAT
-     * WAS THE WRONG CONTRACT.
+     * ⚠️ THIS RULE IS NOT RELAXED FOR MIXTURES, AND AN EARLIER ATTEMPT TO
+     * RELAX IT GLOBALLY WAS THE WRONG FIX.
      *
-     * A mixture means the client's TYPE admits a value the backend refuses,
-     * while nothing proves that member is ever transmitted. Reporting BREAKING
-     * fabricates an outage. Measured cost of getting this wrong: 15 fabricated
-     * BREAKING findings on the real repository, every one of them
-     * `orgId: activeOrgId!` — a non-null assertion the extractor deliberately
-     * strips because `!` is erased at runtime and is a claim, not evidence.
+     * The client may send any ONE of these, so a refused member is a refused
+     * payload. Weakening this globally to buy an answer for the
+     * `activeOrgId!` shape would have silenced a real defect anywhere a union
+     * happened to contain one acceptable branch — a far larger hole than the
+     * one it closed. Assertion uncertainty is carried by the NODE instead; see
+     * the assertion-narrowed test below.
      */
     const client = cObj({
       v: clientNode.variants([clientNode.scalar("string"), clientNode.scalar("number")]),
     });
     const result = run(client, vObj({ v: [vStr] }));
+    expect(breaking(result)).toHaveLength(1);
+    expect(breaking(result)[0].detail).toContain("number");
+  });
+
+  test("a union narrowed only by a `!` assertion is UNKNOWN — not breaking, and not clean", () => {
+    /**
+     * The same shape as above, differing ONLY by the flag the extractor sets
+     * when a `!` was stripped. That flag is the whole difference between an
+     * honest unknown and 15 fabricated outages, measured on the real repo.
+     */
+    const asserted = {
+      ...clientNode.variants([clientNode.scalar("string"), clientNode.scalar("number")]),
+      assertionNarrowed: true,
+    };
+    const result = run(cObj({ v: asserted }), vObj({ v: [vStr] }));
     expect(breaking(result)).toHaveLength(0);
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0].severity).toBe(SEVERITY.TYPE_UNKNOWN);
@@ -699,8 +724,41 @@ describe("v.id(table) — what the client must prove, and what it need not", () 
     expect(breaking(run(cObj({ orgId: cLit(42) }), vObj({ orgId: [vId()] })))).toHaveLength(1);
   });
 
-  test("a literal of only strings is accepted", () => {
-    expect(run(cObj({ orgId: cLit("abc") }), vObj({ orgId: [vId()] })).findings).toHaveLength(0);
+  test("a literal of only strings is NOT proof of a document id", () => {
+    // An arbitrary string literal is still only a string.
+    const result = run(cObj({ orgId: cLit("abc") }), vObj({ orgId: [vId()] }));
+    expect(breaking(result)).toHaveLength(0);
+    expect(result.findings[0].severity).toBe(SEVERITY.TYPE_UNKNOWN);
+  });
+
+  test("a PROVEN same-table id is clean", () => {
+    expect(
+      run(cObj({ orgId: clientNode.id(["organizations"]) }), vObj({ orgId: [vId()] })).findings
+    ).toHaveLength(0);
+  });
+
+  test("a PROVEN cross-table id is BREAKING", () => {
+    // ⚠️ THE DEFECT THE TABLE DOMAIN EXISTS FOR. Before the brand was
+    // preserved, `Id<"customers">` and `Id<"organizations">` were both
+    // `scalar("string")` and this comparison could not be made at all.
+    const result = run(cObj({ orgId: clientNode.id(["customers"]) }), vObj({ orgId: [vId()] }));
+    expect(breaking(result)).toHaveLength(1);
+    expect(breaking(result)[0].detail).toContain("different table");
+  });
+
+  test("a MIXED table domain must not clean-PASS", () => {
+    const mixed = clientNode.id(["organizations", "customers"]);
+    const result = run(cObj({ orgId: mixed }), vObj({ orgId: [vId()] }));
+    expect(breaking(result)).toHaveLength(0);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].severity).toBe(SEVERITY.TYPE_UNKNOWN);
+  });
+
+  test("a proven id satisfies v.string() but NOT v.number()", () => {
+    // A document id is a JavaScript string at runtime, so real subtype facts
+    // are preserved rather than the node being treated as an opaque new kind.
+    expect(run(cObj({ v: clientNode.id(["organizations"]) }), vObj({ v: [vStr] })).findings).toHaveLength(0);
+    expect(breaking(run(cObj({ v: clientNode.id(["organizations"]) }), vObj({ v: [vNum] })))).toHaveLength(1);
   });
 
   test("an object or an array is BREAKING", () => {
@@ -717,38 +775,56 @@ describe("v.id(table) — what the client must prove, and what it need not", () 
     expect(unknowns(result).length).toBeGreaterThan(0);
   });
 
-  test("STATED LIMITATION: a plain string is admitted, so the WRONG TABLE is not detected", () => {
+  test("an unbranded string is NOT VERIFIED — the wrong-table question stays open", () => {
     /**
-     * ⚠️ NOT AN OVERSIGHT — A RULED, DOCUMENTED BOUNDARY, PINNED SO IT CANNOT
-     * DRIFT INTO AN UNSTATED ONE.
+     * ⚠️ THIS TEST PREVIOUSLY ASSERTED THE OPPOSITE AND CALLED IT A "STATED
+     * LIMITATION". That was the superseded design: admitting a bare string as
+     * clean, on the argument that demanding the brand would turn 1,170 of 1,321
+     * comparisons into UNKNOWN.
      *
-     * `Id<"users">` and `Id<"vehicles">` both erase to `string`, so this proves
-     * representation compatibility only. Demanding table-qualified provenance
-     * was measured against the real surface: it would convert 1,170 of 1,321
-     * id comparisons (88.6%, 465 functions) to UNKNOWN — a permanently amber
-     * monitor. Deliberately deferred (SCRUM-182). This must never be described
-     * as "table identity verified".
+     * The correct reading of that same measurement is the other way round — the
+     * 1,170 count is evidence that a semantic dimension was ERASED by the
+     * extractor, not evidence that generic strings are sufficient proof. So the
+     * brand is preserved at extraction, and a value that genuinely arrives
+     * unbranded reports NOT VERIFIED rather than clean.
      */
-    expect(run(cObj({ vehicleId: cStr }), vObj({ vehicleId: [vId("vehicles")] })).findings).toHaveLength(0);
+    const result = run(cObj({ vehicleId: cStr }), vObj({ vehicleId: [vId("vehicles")] }));
+    expect(breaking(result)).toHaveLength(0);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].severity).toBe(SEVERITY.TYPE_UNKNOWN);
+    expect(result.findings[0].detail).toContain("NOT verified");
   });
 
   describe("the non-null-assertion shape, which is where this got decided", () => {
     // `orgId: activeOrgId!` extracts as `string | null`, because the extractor
     // strips `!` on purpose: it is erased at runtime and proves nothing.
-    const stringOrNull = clientNode.variants([cLit(null), cStr]);
+    // The extractor marks the node when a `!` was stripped; the id itself is
+    // real, so the only uncertainty is the nullability the assertion hid.
+    const idOrNull = {
+      ...clientNode.variants([cLit(null), clientNode.id(["organizations"])]),
+      assertionNarrowed: true,
+    };
 
-    test("string | null against a BARE v.id() is UNKNOWN", () => {
-      const result = run(cObj({ orgId: stringOrNull }), vObj({ orgId: [vId()] }));
+    test("Id | null against a BARE v.id() is UNKNOWN", () => {
+      const result = run(cObj({ orgId: idOrNull }), vObj({ orgId: [vId()] }));
       expect(breaking(result)).toHaveLength(0);
       expect(unknowns(result)).toHaveLength(1);
       expect(result.findings[0].severity).toBe(SEVERITY.TYPE_UNKNOWN);
     });
 
     test("...and is NOT reported clean either — silence here would be the false PASS", () => {
-      expect(run(cObj({ orgId: stringOrNull }), vObj({ orgId: [vId()] })).findings.length).toBeGreaterThan(0);
+      expect(run(cObj({ orgId: idOrNull }), vObj({ orgId: [vId()] })).findings.length).toBeGreaterThan(0);
     });
 
-    test("string | null against v.union(v.id(), v.null()) is CLEAN", () => {
+    test("WITHOUT the assertion flag the same shape is BREAKING — the flag is what moves it", () => {
+      // ⚠️ The control that stops the flag being decorative. If `assertionNarrowed`
+      // were ignored, this and the test above would agree, and neither would be
+      // testing anything.
+      const plain = clientNode.variants([cLit(null), clientNode.id(["organizations"])]);
+      expect(breaking(run(cObj({ orgId: plain }), vObj({ orgId: [vId()] })))).toHaveLength(1);
+    });
+
+    test("Id | null against v.union(v.id(), v.null()) is CLEAN", () => {
       /**
        * ⚠️ EACH MEMBER IS JUDGED AGAINST THE WHOLE VALIDATOR, UNIONS INCLUDED.
        * Judging a member against the `id` branch alone — while its sibling
@@ -756,7 +832,7 @@ describe("v.id(table) — what the client must prove, and what it need not", () 
        * findings in the measurement harness that produced these numbers. The
        * identical mistake is available to any patch of this comparator.
        */
-      const result = run(cObj({ orgId: stringOrNull }), vObj({ orgId: [vUnion(vId(), vNull)] }));
+      const result = run(cObj({ orgId: idOrNull }), vObj({ orgId: [vUnion(vId(), vNull)] }));
       expect(result.findings).toHaveLength(0);
     });
 
@@ -764,8 +840,44 @@ describe("v.id(table) — what the client must prove, and what it need not", () 
       const allBad = clientNode.variants([clientNode.scalar("number"), clientNode.scalar("boolean")]);
       const result = breaking(run(cObj({ orgId: allBad }), vObj({ orgId: [vId()] })));
       expect(result).toHaveLength(2);
-      expect(result.map((f) => f.detail).join(" ")).toContain("string document id");
+      expect(result.map((f) => f.detail).join(" ")).toContain("document id");
     });
+  });
+});
+
+describe("merging id observations — the table survives only where it is still true", () => {
+  const merge = mergeClientNodes;
+
+  test("two ids UNION their tables — the field may carry either", () => {
+    const merged = merge(clientNode.id(["organizations"]), clientNode.id(["customers"])) as unknown as {
+      kind: string;
+      tables: Set<string>;
+    };
+    expect(merged.kind).toBe("id");
+    expect([...merged.tables].sort()).toEqual(["customers", "organizations"]);
+  });
+
+  test("an id beside a BARE STRING widens to string — the table is no longer proven", () => {
+    /**
+     * ⚠️ FOUND BY A SURVIVING MUTANT. Keeping the id here kills no test unless
+     * this exists, and it is a false PASS manufactured by merging: one route
+     * proves a table, the other proves nothing beyond "string", and the merged
+     * value may have come from either. Keeping the id lets the branded route
+     * LAUNDER the unbranded one into "table identity verified".
+     */
+    expect(merge(clientNode.id(["organizations"]), cStr).kind).toBe("scalar");
+    // Both operand orders — merge is supposed to be symmetric here, and an
+     // order-dependent answer would be its own defect.
+    expect(merge(cStr, clientNode.id(["organizations"])).kind).toBe("scalar");
+  });
+
+  test("the widened result no longer clean-PASSes v.id()", () => {
+    // The consequence stated as behaviour rather than as shape, so the test
+    // still means something if the representation changes.
+    const merged = merge(clientNode.id(["organizations"]), cStr);
+    const result = run(cObj({ orgId: merged }), vObj({ orgId: [{ type: "id", tableName: "organizations" }] }));
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].severity).toBe(SEVERITY.TYPE_UNKNOWN);
   });
 });
 
@@ -1053,6 +1165,12 @@ describe("LAYER 2: the real merge respects the relation — merging never produc
     ["literal(B)", cLit("B")],
     ["scalar(string)", cStr],
     ["scalar(number)", clientNode.scalar("number")],
+    // ⚠️ ADDED AFTER A SURVIVING MUTANT. Making `id + string` merge KEEP the id
+    // instead of widening to string killed nothing, because no specimen here
+    // was an id — the property could not see a dimension it never sampled.
+    ["id{organizations}", clientNode.id(["organizations"])],
+    ["id{customers}", clientNode.id(["customers"])],
+    ["id{organizations,customers}", clientNode.id(["organizations", "customers"])],
     ["obj{a:scalar}", objOf({ a: cStr })],
     ["obj{a:unresolved}", objOf({ a: clientNode.unresolved() })],
     ["obj{a:scalar} OPEN keys", objOf({ a: cStr }, false)],

@@ -405,10 +405,21 @@ function collectFromExpression(checker, expr, prefix, acc, depth, seen) {
   }
 
   let node = expr;
+  // ⚠️ A `!` IS RECORDED, NOT JUST DISCARDED.
+  //
+  // Stripping it is right — it is erased at runtime, so it changes the type and
+  // not the payload — but the fact that the value's non-nullness rests on a
+  // developer's claim is EVIDENCE ABOUT THE VALUE, and throwing it away forces
+  // the comparator into a false choice. Measured on the real repository, 15
+  // call sites read `orgId: activeOrgId!`; treating the resulting `string|null`
+  // as BREAKING fabricates 15 outages, and treating it as CLEAN is a false
+  // PASS. Carrying the flag lets exactly those nodes report an honest unknown
+  // WITHOUT relaxing the fail-closed variants rule for everyone else.
+  let assertionNarrowed = false;
   // Strip parentheses, `as X`, `satisfies X` and `!` — none changes the payload.
   for (;;) {
     if (ts.isParenthesizedExpression(node)) { node = node.expression; continue; }
-    if (ts.isNonNullExpression(node)) { node = node.expression; continue; }
+    if (ts.isNonNullExpression(node)) { assertionNarrowed = true; node = node.expression; continue; }
     if (ts.isAsExpression(node) || (ts.isSatisfiesExpression?.(node) ?? false)) {
       const toAny =
         node.type &&
@@ -502,7 +513,14 @@ function collectFromExpression(checker, expr, prefix, acc, depth, seen) {
 
   // Not a literal — fall back to the type of the (unwrapped) expression.
   const type = checker.getTypeAtLocation(node);
-  return collectPaths(checker, type, prefix, acc, depth, seen, "LITERAL");
+  const collected = collectPaths(checker, type, prefix, acc, depth, seen, "LITERAL");
+  // The flag is only meaningful where the assertion actually removed an
+  // alternative — a `!` on an already-non-nullable value changes nothing and
+  // must not mark the node, or it would excuse genuine unions from the
+  // fail-closed rule.
+  return assertionNarrowed && collected.kind === "variants"
+    ? { ...collected, assertionNarrowed: true }
+    : collected;
 }
 
 /** A call that transmits no arguments at all: no keys, and we know it. */
@@ -694,6 +712,15 @@ function collectPaths(checker, type, path, acc, depth, seen, inherited = "LITERA
 
   // Primitives are leaves.
   if (!(flags & ts.TypeFlags.Object)) {
+    // ⚠️ ASK FOR THE TABLE BEFORE THE BRAND IS COLLAPSED.
+    //
+    // `kindOfType` resolves `string & { __tableName: "vehicles" }` to primitive
+    // `string`, which is correct for every OTHER purpose and destroys the one
+    // dimension `v.id(table)` is about. Once erased, `Id<"users">` and
+    // `Id<"vehicles">` are the same value and a wrong-table payload reports
+    // CLEAN. So the question is asked here, before the collapse.
+    const tables = idTablesOfType(checker, type);
+    if (tables) return clientNode.id(tables);
     const kind = kindOfType(checker, type, flags);
     if (kind === "null") return clientNode.literal(new Set([null]));
     return kind === "unresolved" ? clientNode.unresolved() : clientNode.scalar(kind);
@@ -850,6 +877,54 @@ function checkerBooleanValue(type) {
 }
 
 /** Coarse classification — enough to compare against a Convex validator. */
+/**
+ * The TABLE DOMAIN of a Convex document id, or `null` if this is not one.
+ *
+ * `GenericId<T>` is `string & { __tableName: T }`. Two conditions must BOTH
+ * hold before this claims a table, and each is a place where inventing evidence
+ * would be easy:
+ *
+ *  1. a string-like member must be present, so a random object carrying a
+ *     `__tableName` property is not mistaken for an id;
+ *  2. the brand's own type must be a FINITE domain of string literals. A
+ *     generic parameter, a widened `string`, or anything else is NOT proof of a
+ *     table — it falls back to ordinary string semantics, which report an
+ *     honest unknown rather than a fabricated table.
+ *
+ * A finite UNION of literals keeps every member, because `Id<"a"|"b">` really
+ * may be either and collapsing it to one would be the same "part of the shape
+ * inspected, narrower answer stated with full confidence" fault this ticket has
+ * now found four times.
+ *
+ * @returns {string[] | null}
+ */
+function idTablesOfType(checker, type) {
+  if (!type.isIntersection?.()) return null;
+  if (!type.types.some((part) => part.getFlags() & ts.TypeFlags.StringLike)) return null;
+
+  for (const part of type.types) {
+    const brand = checker.getPropertyOfType?.(part, "__tableName");
+    if (!brand) continue;
+    const decl = brand.valueDeclaration ?? brand.declarations?.[0];
+    const brandType =
+      checker.getTypeOfSymbol?.(brand) ??
+      (decl ? checker.getTypeOfSymbolAtLocation(brand, decl) : undefined);
+    if (!brandType) return null;
+    const members = brandType.isUnion?.() ? brandType.types : [brandType];
+    const tables = [];
+    for (const member of members) {
+      // Anything that is not an exact string literal makes the domain
+      // unprovable, and an unprovable domain is not an id.
+      if (!(member.getFlags() & ts.TypeFlags.StringLiteral)) return null;
+      const value = /** @type {{value?: unknown}} */ (member).value;
+      if (typeof value !== "string") return null;
+      tables.push(value);
+    }
+    return tables.length ? tables : null;
+  }
+  return null;
+}
+
 function kindOfType(checker, type, flags) {
   if (flags & ts.TypeFlags.Any || flags & ts.TypeFlags.Unknown) return "any";
   if (flags & (ts.TypeFlags.StringLike)) return "string";

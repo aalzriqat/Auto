@@ -397,7 +397,46 @@ export function CaseBareOptionalScalar(input: { note?: string }) {
  * accepts, is UNKNOWN — not BREAKING (which would fabricate 15 outages) and not
  * CLEAN (which would be the false PASS).
  */
-export function CaseNonNullAssertionAtIdPath(input: { activeOrgId: string | null }) {
+type OrgId = string & { __tableName: "organizations" };
+type CustomerId = string & { __tableName: "customers" };
+
+export function CaseNonNullAssertionAtIdPath(input: { activeOrgId: OrgId | null }) {
   const beginCount = useMutation(api.cashDrawer.beginCount);
   void beginCount({ orgId: input.activeOrgId! });
+}
+
+/**
+ * CASE 14 — a PROVEN SAME-TABLE id. The clean baseline: without it, "cross-table
+ * is BREAKING" could pass simply because every id was being refused.
+ */
+export function CaseSameTableId(orgId: OrgId) {
+  const approve = useMutation(api.cashDrawer.approveVariance);
+  void approve({ orgId });
+}
+
+/**
+ * CASE 15 — a PROVEN CROSS-TABLE id.
+ *
+ * ⚠️ THE DEFECT THE TABLE DOMAIN EXISTS FOR, and it was undetectable until the
+ * brand survived extraction: `Id<"customers">` and `Id<"organizations">` both
+ * erase to `string`, so this call was indistinguishable from a correct one.
+ */
+export function CaseCrossTableId(customerId: CustomerId) {
+  const deposit = useMutation(api.collections.depositCheque);
+  // The cast is stripped, so what reaches the comparator is the value's REAL
+  // type — a customers id at an organizations path.
+  void deposit({ orgId: customerId as unknown as OrgId });
+}
+
+/**
+ * CASE 16 — AN ASSERTION IS NOT PROVENANCE.
+ *
+ * `someString as OrgId` claims a table the value has not been shown to have. A
+ * cast changes TypeScript's view and not the transmitted value, so it must NOT
+ * be promoted to table-qualified proof — it stays an unbranded string and
+ * reports NOT VERIFIED.
+ */
+export function CaseAssertedId(raw: string) {
+  const clear = useMutation(api.collections.clearCheque);
+  void clear({ orgId: raw as OrgId });
 }

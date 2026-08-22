@@ -237,14 +237,28 @@ describe("clientPaths extractor", () => {
     expect(vehicles?.empty).toBe(true);
   });
 
-  test("CASE 3j: a BRANDED primitive resolves to its primitive, not to unresolved", () => {
-    // Without this, every Convex `Id<T>` argument reads as unresolvable and the
-    // honest-unknown fix turns 808 verified values into noise.
+  test("CASE 3j: a BRANDED primitive resolves to a TABLE-QUALIFIED id, not to a bare string", () => {
+    /**
+     * ⚠️ THIS TEST USED TO ASSERT `scalar("string")`, AND THAT ASSERTION WAS
+     * THE ERASURE.
+     *
+     * Resolving the brand to its primitive fixed an earlier defect — every
+     * `Id<T>` argument was reading as unresolvable — but it threw away the one
+     * dimension `v.id(table)` is about. Once `Id<"users">` and `Id<"vehicles">`
+     * are both `string`, a client sending the wrong table reports CLEAN.
+     *
+     * The table is now preserved. A brand that is NOT a finite string-literal
+     * domain still falls back to the old primitive behaviour, because an
+     * unprovable table is not a table.
+     */
     const call = forFn("vehicles:update").find((c) => entryAt(c.payload, "vehicleId"));
     expect(call).toBeDefined();
-    const node = entryAt(call!.payload, "vehicleId")?.node;
-    expect(node?.kind).toBe("scalar");
-    expect(node?.type).toBe("string");
+    const node = entryAt(call!.payload, "vehicleId")?.node as unknown as {
+      kind: string;
+      tables?: Set<string>;
+    };
+    expect(node?.kind).toBe("id");
+    expect([...(node.tables ?? [])]).toEqual(["vehicles"]);
   });
 
   test("CASE 6c: a `__`-prefixed field is NOT silently dropped", () => {
@@ -493,10 +507,19 @@ describe("REAL TypeChecker -> extractor -> comparator, at a v.id() path", () => 
     type: "object",
     value: { orgId: { fieldType, optional: false } },
   });
-  const beginCount = () => {
-    const call = forFn("cashDrawer:beginCount")[0];
-    expect(call, "fixture CASE 13 did not extract").toBeDefined();
+  const callOf = (identifier: string) => {
+    const call = forFn(identifier)[0];
+    expect(call, `fixture call ${identifier} did not extract`).toBeDefined();
     return call;
+  };
+  const beginCount = () => callOf("cashDrawer:beginCount");
+  const compareFor = (identifier: string, validatorSpec: unknown) => {
+    const call = callOf(identifier);
+    expect(call.payload, `${identifier} resolved no payload`).not.toBeNull();
+    const payload = call.payload as unknown as Parameters<typeof compareNode>[0];
+    return compareNode(payload, validatorTree(validatorSpec), "", {
+      site: { identifier: call.identifier, file: call.file ?? "", line: call.line },
+    });
   };
   const compareCall = (validatorSpec: unknown) => {
     const call = beginCount();
@@ -515,18 +538,57 @@ describe("REAL TypeChecker -> extractor -> comparator, at a v.id() path", () => 
     });
   };
 
-  test("the extractor really does strip `!`, producing string | null", () => {
-    // ⚠️ THE CONTROL FOR EVERYTHING BELOW. If `!` were honoured, the payload
-    // would be a plain string, both verdict tests would pass for the wrong
-    // reason, and the rule under test would never be exercised at all.
+  test("the extractor strips `!`, MARKS the node, and keeps the table", () => {
+    // ⚠️ THE CONTROL FOR EVERYTHING BELOW. If `!` were honoured the payload
+    // would be a plain id, the verdict tests would pass for the wrong reason,
+    // and the rule under test would never be exercised. If the node were not
+    // MARKED, the same shape would be BREAKING instead of UNKNOWN.
     const orgId = entryAt(beginCount().payload, "orgId");
     expect(orgId, "orgId did not resolve").toBeDefined();
-    expect(orgId!.node.kind).toBe("variants");
-    const members = (orgId!.node as unknown as {
-      nodes: { kind: string; type?: string; values?: Set<unknown> }[];
-    }).nodes;
-    expect(members.some((n) => n.kind === "scalar" && n.type === "string")).toBe(true);
-    expect(members.some((n) => n.kind === "literal" && [...(n.values ?? [])].includes(null))).toBe(true);
+    const node = orgId!.node as unknown as {
+      kind: string;
+      assertionNarrowed?: boolean;
+      nodes: { kind: string; tables?: Set<string>; values?: Set<unknown> }[];
+    };
+    expect(node.kind).toBe("variants");
+    expect(node.assertionNarrowed, "the `!` was not recorded on the node").toBe(true);
+    expect(node.nodes.some((n) => n.kind === "id" && [...(n.tables ?? [])].includes("organizations"))).toBe(true);
+    expect(node.nodes.some((n) => n.kind === "literal" && [...(n.values ?? [])].includes(null))).toBe(true);
+  });
+
+  test("a PROVEN SAME-TABLE id is clean through the real extractor", () => {
+    // The baseline. Without it, "cross-table is BREAKING" below could pass
+    // simply because every id was being refused.
+    const result = compareFor("cashDrawer:approveVariance", {
+      type: "object",
+      value: { orgId: { fieldType: { type: "id", tableName: "organizations" }, optional: false } },
+    });
+    expect(result.findings).toHaveLength(0);
+  });
+
+  test("a PROVEN CROSS-TABLE id is BREAKING through the real extractor", () => {
+    const result = compareFor("collections:depositCheque", {
+      type: "object",
+      value: { orgId: { fieldType: { type: "id", tableName: "organizations" }, optional: false } },
+    });
+    const breaking = result.findings.filter((f) => f.severity === "BREAKING");
+    expect(breaking).toHaveLength(1);
+    expect(breaking[0].detail).toContain("different table");
+  });
+
+  test("`raw as OrgId` is NOT promoted to table-qualified proof", () => {
+    // ⚠️ An assertion changes TypeScript's view, not the transmitted value. If
+    // the extractor took the ASSERTED type it would read this as a proven
+    // organizations id and report CLEAN — manufacturing provenance out of a
+    // cast.
+    const result = compareFor("collections:clearCheque", {
+      type: "object",
+      value: { orgId: { fieldType: { type: "id", tableName: "organizations" }, optional: false } },
+    });
+    expect(result.findings.filter((f) => f.severity === "BREAKING")).toHaveLength(0);
+    expect(result.findings, "an asserted id must not go silent").toHaveLength(1);
+    expect(result.findings[0].severity).toBe("TYPE_UNKNOWN");
+    expect(result.findings[0].detail).toContain("NOT verified");
   });
 
   test("against a BARE v.id() it is UNKNOWN — no fabricated outage, no false pass", () => {
