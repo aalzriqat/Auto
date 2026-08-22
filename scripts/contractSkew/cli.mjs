@@ -88,12 +88,22 @@ const EXIT = {
  * ⚠️ AN EXCEPTION MEANS "THE CONTROL COULD NOT LOOK", NEVER "SKEW PROVEN".
  *
  * Every verdict below is reached deliberately, through a `process.exit` with a
- * chosen code. Node's default for an UNCAUGHT throw is exit 1 — and 1 is the
- * one code that means FAIL, which `contract-skew.yml` renders as
- * "PRODUCTION SKEW — Deploy the Convex backend at this commit." So any
- * unhandled defect anywhere in this run told a responder to deploy, for what
- * was actually a tooling failure. Wrong, and expensively wrong: it sends
- * somebody to change production in response to a bug in this script.
+ * chosen code.
+ *
+ * ⚠️ HISTORICAL — THIS IS WHY THE BOUNDARY EXISTS, NOT WHAT THE CODES MEAN NOW.
+ * Node's default for an UNCAUGHT throw is exit 1, and 1 USED TO BE the code
+ * that meant proven skew, which `contract-skew.yml` rendered as "PRODUCTION
+ * SKEW — Deploy the Convex backend at this commit." So any unhandled defect
+ * anywhere in this run told a responder to deploy, for what was actually a
+ * tooling failure — expensively wrong: it sends somebody to change production
+ * in response to a bug in this script.
+ *
+ * ⚠️ CURRENT — that coupling is GONE. Proven production skew is exit 7, the
+ * only code carrying a deploy instruction, and exit 1 now means the control did
+ * not complete and must not be deployed on. See the exit-code contract at the
+ * top of this file. This boundary is still load-bearing: it is what turns a
+ * throw into a DELIBERATE `UNAVAILABLE` (3) rather than leaving it on the raw
+ * default, so the run says "I could not look" instead of "I did not finish".
  *
  * ⚠️ AND THIS IS THE SECOND TIME. `readSpecOrUnavailable` below was written to
  * fix exactly this for the two spec reads — it fixed the INSTANCES, not the
@@ -380,10 +390,14 @@ function emit(payload) {
     // `emit` runs BEFORE the exit that carries the verdict. An unguarded write
     // therefore let an I/O failure decide the exit code: with the boundary
     // above, a genuine production skew came out as UNAVAILABLE (3) instead of
-    // FAIL (1), and the workflow then told the responder to check credentials
-    // when the truth was "deploy the backend". Reproduced on the real pipeline —
-    // the same run exited 1 without `--json` and 3 with `--json` pointed at an
-    // unwritable path.
+    // the skew verdict, and the workflow then told the responder to check
+    // credentials when the truth was "deploy the backend". Reproduced on the
+    // real pipeline — the same run exited with its skew code without `--json`,
+    // and 3 with `--json` pointed at an unwritable path.
+    //
+    // ⚠️ The reproduction above predates the exit-code decoupling, when proven
+    // skew was exit 1. The verdict it must not replace is now exit 7; the
+    // property is unchanged, and `specDiff.test.ts` pins it at the current code.
     //
     // The artifact is a convenience; the verdict is the product. A failure to
     // save the convenience is worth a warning and nothing more.
