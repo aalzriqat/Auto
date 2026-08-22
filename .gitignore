@@ -15,6 +15,7 @@ node_modules/
 # testing
 /coverage
 coverage/
+coverage-contract-skew/
 
 # Playwright — .auth/ holds a real signed-in storageState (session cookies)
 playwright-report/
