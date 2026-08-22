@@ -29,6 +29,7 @@ const FUNCTION_TYPES = new Set([
   "ArrowFunctionExpression",
 ]);
 const NESTING_TYPES = new Set([
+  "ConditionalExpression",
   "IfStatement",
   "SwitchStatement",
   "TryStatement",

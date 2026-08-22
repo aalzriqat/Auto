@@ -6,12 +6,8 @@ import {
   moduleText,
   propertyNameText,
   unwrapExpression,
-  withoutModuleExtension,
 } from "./ast-utils.mjs";
-
-function isGeneratedApiModule(specifier) {
-  return /(?:^|\/)\_generated\/api$/.test(withoutModuleExtension(specifier));
-}
+import { isTrustedAdminModule } from "./admin-module-provenance.mjs";
 
 function addBinding(bindings, identifier) {
   const existing = bindings.get(identifier.text);
@@ -122,39 +118,45 @@ function importedKind(identifier, bindingState) {
 }
 
 function referenceChain(expression, bindingState, seen = new Set()) {
-  const current = unwrapExpression(expression);
-  if (ts.isIdentifier(current)) {
+  let current = unwrapExpression(expression);
+  const parts = [];
+  const visited = new Set(seen);
+  while (true) {
+    while (
+      ts.isPropertyAccessExpression(current) ||
+      ts.isElementAccessExpression(current)
+    ) {
+      const name = memberName(current);
+      if (!name) return undefined;
+      parts.unshift(name);
+      current = unwrapExpression(memberObject(current));
+    }
+    if (!ts.isIdentifier(current)) return undefined;
     const kind = importedKind(current, bindingState);
-    if (kind) return { kind, parts: [] };
-    if (seen.has(current.text)) return undefined;
+    if (kind) return { kind, parts };
     const resolved = bindingState.values.resolveAt(current.text, current);
     const binding = resolved && declarationBindingForValue(resolved);
     if (
       !resolved ||
       !binding ||
+      visited.has(binding) ||
       !bindingState.provenance.isUseOf(current, binding)
     ) {
       return undefined;
     }
-    const nextSeen = new Set(seen);
-    nextSeen.add(current.text);
-    return referenceChain(resolved, bindingState, nextSeen);
+    visited.add(binding);
+    current = unwrapExpression(resolved);
   }
-  const object = memberObject(current);
-  const name = memberName(current);
-  if (!object || !name) return undefined;
-  const base = referenceChain(object, bindingState, seen);
-  return base ? { ...base, parts: [...base.parts, name] } : undefined;
 }
 
-function recordApiImports(sourceFile, bindingState) {
+function recordApiImports(sourceFile, file, bindingState) {
   for (const statement of sourceFile.statements) {
     if (!ts.isImportDeclaration(statement)) continue;
     const specifier = moduleText(statement.moduleSpecifier);
     const clause = statement.importClause;
     if (
       !specifier ||
-      !isGeneratedApiModule(specifier) ||
+      !isTrustedAdminModule(file, specifier, "api") ||
       !clause ||
       clause.isTypeOnly
     ) {
@@ -208,6 +210,7 @@ export function createInternalReferenceResolver(
   sourceFile,
   values,
   provenance,
+  file,
 ) {
   const bindingState = {
     internal: new Map(),
@@ -216,7 +219,7 @@ export function createInternalReferenceResolver(
     provenance,
     values,
   };
-  recordApiImports(sourceFile, bindingState);
+  recordApiImports(sourceFile, file, bindingState);
   invalidateWrittenBindings(sourceFile, bindingState);
   recordDestructuredInternalAliases(sourceFile, bindingState);
   invalidateWrittenBindings(sourceFile, bindingState);

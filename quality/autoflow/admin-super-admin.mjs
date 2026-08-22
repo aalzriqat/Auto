@@ -5,9 +5,6 @@ import {
   RULE_IDS,
   collectUniqueValueDeclarations,
   diagnostic,
-  isFunctionsModule,
-  isGeneratedServerModule,
-  isTenancyModule,
   memberName,
   memberObject,
   moduleText,
@@ -22,6 +19,7 @@ import { collectDestructuredAdminAliases } from "./admin-aliases.mjs";
 import { handlerAuthenticates } from "./admin-auth-flow.mjs";
 import { exportedBuilderDeclarations } from "./admin-exported-builders.mjs";
 import { createInternalReferenceResolver } from "./admin-internal-api.mjs";
+import { isTrustedAdminModule } from "./admin-module-provenance.mjs";
 import { createLexicalBindingProvenance } from "./lexical-binding-provenance.mjs";
 import { scanAdminRuntimeExports } from "./admin-runtime-exports.mjs";
 
@@ -34,11 +32,22 @@ const INTERNAL_GENERATED_BUILDERS = new Set([
   "internalAction",
 ]);
 
-function objectProperty(object, name) {
+function unambiguousObjectProperty(object, name, values) {
+  let matchingProperty;
   for (const property of object.properties) {
-    if (propertyNameText(property.name) === name) return property;
+    if (ts.isSpreadAssignment(property)) return undefined;
+    const propertyName = propertyNameText(property.name, values);
+    if (
+      propertyName === undefined &&
+      ts.isComputedPropertyName(property.name)
+    ) {
+      return undefined;
+    }
+    if (propertyName !== name) continue;
+    if (matchingProperty) return undefined;
+    matchingProperty = property;
   }
-  return undefined;
+  return matchingProperty;
 }
 
 function functionLikeFromProperty(property, values) {
@@ -70,10 +79,13 @@ function functionLikeFromProperty(property, values) {
 
 function handlerFromBuilderCall(call, values) {
   const config = call.arguments[0]
-    ? resolveValue(call.arguments[0], values)
+    ? unwrapExpression(call.arguments[0])
     : undefined;
   if (!config || !ts.isObjectLiteralExpression(config)) return undefined;
-  return functionLikeFromProperty(objectProperty(config, "handler"), values);
+  return functionLikeFromProperty(
+    unambiguousObjectProperty(config, "handler", values),
+    values,
+  );
 }
 
 function emptyAdminBindingState() {
@@ -87,54 +99,62 @@ function emptyAdminBindingState() {
   };
 }
 
-function recordNamespaceBinding(namespaceImport, specifier, bindingState) {
+function recordNamespaceBinding(
+  namespaceImport,
+  specifier,
+  file,
+  bindingState,
+) {
   const local = namespaceImport.name.text;
-  if (isGeneratedServerModule(specifier)) {
+  if (isTrustedAdminModule(file, specifier, "server")) {
     bindingState.generatedNamespaces.add(local);
-  } else if (isFunctionsModule(specifier)) {
+  } else if (isTrustedAdminModule(file, specifier, "functions")) {
     bindingState.functionsNamespaces.add(local);
-  } else if (isTenancyModule(specifier)) {
+  } else if (isTrustedAdminModule(file, specifier, "tenancy")) {
     bindingState.tenancyNamespaces.set(local, namespaceImport.name);
   }
 }
 
-function recordNamedBinding(element, specifier, bindingState) {
+function recordNamedBinding(element, specifier, file, bindingState) {
   if (element.isTypeOnly) return;
   const imported = (element.propertyName ?? element.name).text;
   const local = element.name.text;
-  if (isGeneratedServerModule(specifier)) {
+  if (isTrustedAdminModule(file, specifier, "server")) {
     if (PUBLIC_GENERATED_BUILDERS.has(imported)) {
       bindingState.publicIdentifiers.set(local, imported);
     } else if (INTERNAL_GENERATED_BUILDERS.has(imported)) {
       bindingState.internalIdentifiers.set(local, imported);
     }
   } else if (
-    isFunctionsModule(specifier) &&
+    isTrustedAdminModule(file, specifier, "functions") &&
     PUBLIC_WRAPPED_BUILDERS.has(imported)
   ) {
     bindingState.publicIdentifiers.set(local, imported);
   } else if (
-    isFunctionsModule(specifier) &&
+    isTrustedAdminModule(file, specifier, "functions") &&
     INTERNAL_WRAPPED_BUILDERS.has(imported)
   ) {
     bindingState.internalIdentifiers.set(local, imported);
-  } else if (isTenancyModule(specifier) && imported === "requireSuperAdmin") {
+  } else if (
+    isTrustedAdminModule(file, specifier, "tenancy") &&
+    imported === "requireSuperAdmin"
+  ) {
     bindingState.directAuthIdentifiers.set(local, element.name);
   }
 }
 
-function recordAdminImport(statement, bindingState) {
+function recordAdminImport(statement, file, bindingState) {
   if (!ts.isImportDeclaration(statement)) return;
   const specifier = moduleText(statement.moduleSpecifier);
   const clause = statement.importClause;
   if (!specifier || !clause || clause.isTypeOnly || !clause.namedBindings)
     return;
   if (ts.isNamespaceImport(clause.namedBindings)) {
-    recordNamespaceBinding(clause.namedBindings, specifier, bindingState);
+    recordNamespaceBinding(clause.namedBindings, specifier, file, bindingState);
     return;
   }
   for (const element of clause.namedBindings.elements) {
-    recordNamedBinding(element, specifier, bindingState);
+    recordNamedBinding(element, specifier, file, bindingState);
   }
 }
 
@@ -219,53 +239,23 @@ function resolveVisibleValue(
   valueDeclarations,
   seen = new Set(),
 ) {
-  const current = unwrapExpression(expression);
-  if (!ts.isIdentifier(current) || seen.has(current.text)) return current;
-  const resolved = valueDeclarations.resolveAt(current.text, current);
-  const aliasBinding = resolved && declarationBindingForValue(resolved);
-  if (
-    !resolved ||
-    !aliasBinding ||
-    !bindingState.provenance.isUseOf(current, aliasBinding)
-  ) {
-    return current;
+  let current = unwrapExpression(expression);
+  const visited = new Set(seen);
+  while (ts.isIdentifier(current)) {
+    const resolved = valueDeclarations.resolveAt(current.text, current);
+    const aliasBinding = resolved && declarationBindingForValue(resolved);
+    if (
+      !resolved ||
+      !aliasBinding ||
+      visited.has(aliasBinding) ||
+      !bindingState.provenance.isUseOf(current, aliasBinding)
+    ) {
+      break;
+    }
+    visited.add(aliasBinding);
+    current = unwrapExpression(resolved);
   }
-  const nextSeen = new Set(seen);
-  nextSeen.add(current.text);
-  return resolveVisibleValue(
-    resolved,
-    bindingState,
-    valueDeclarations,
-    nextSeen,
-  );
-}
-
-function directIdentifierAuthTarget(
-  current,
-  bindingState,
-  valueDeclarations,
-  seen,
-) {
-  const trustedBinding = bindingState.directAuthIdentifiers.get(current.text);
-  if (
-    trustedBinding &&
-    bindingState.provenance.isUseOf(current, trustedBinding)
-  ) {
-    return true;
-  }
-  if (seen.has(current.text)) return false;
-  const resolved = valueDeclarations.resolveAt(current.text, current);
-  const aliasBinding = resolved && declarationBindingForValue(resolved);
-  if (
-    !resolved ||
-    !aliasBinding ||
-    !bindingState.provenance.isUseOf(current, aliasBinding)
-  ) {
-    return false;
-  }
-  const nextSeen = new Set(seen);
-  nextSeen.add(current.text);
-  return directAuthTarget(resolved, bindingState, valueDeclarations, nextSeen);
+  return current;
 }
 
 function namespaceAuthTarget(current, bindingState, valueDeclarations) {
@@ -292,17 +282,37 @@ function directAuthTarget(
   valueDeclarations,
   seen = new Set(),
 ) {
-  const current = unwrapExpression(expression);
-  return ts.isIdentifier(current)
-    ? directIdentifierAuthTarget(current, bindingState, valueDeclarations, seen)
-    : namespaceAuthTarget(current, bindingState, valueDeclarations);
+  let current = unwrapExpression(expression);
+  const visited = new Set(seen);
+  while (ts.isIdentifier(current)) {
+    const trustedBinding = bindingState.directAuthIdentifiers.get(current.text);
+    if (
+      trustedBinding &&
+      bindingState.provenance.isUseOf(current, trustedBinding)
+    ) {
+      return true;
+    }
+    const resolved = valueDeclarations.resolveAt(current.text, current);
+    const aliasBinding = resolved && declarationBindingForValue(resolved);
+    if (
+      !resolved ||
+      !aliasBinding ||
+      visited.has(aliasBinding) ||
+      !bindingState.provenance.isUseOf(current, aliasBinding)
+    ) {
+      return false;
+    }
+    visited.add(aliasBinding);
+    current = unwrapExpression(resolved);
+  }
+  return namespaceAuthTarget(current, bindingState, valueDeclarations);
 }
 
-function collectAdminBindings(sourceFile, valueDeclarations) {
+function collectAdminBindings(sourceFile, valueDeclarations, file) {
   const bindingState = emptyAdminBindingState();
   bindingState.provenance = createLexicalBindingProvenance(sourceFile);
   for (const statement of sourceFile.statements) {
-    recordAdminImport(statement, bindingState);
+    recordAdminImport(statement, file, bindingState);
   }
   collectDestructuredAdminAliases(sourceFile, valueDeclarations, bindingState, {
     publicGenerated: PUBLIC_GENERATED_BUILDERS,
@@ -314,10 +324,13 @@ function collectAdminBindings(sourceFile, valueDeclarations) {
     sourceFile,
     valueDeclarations,
     bindingState.provenance,
+    file,
   );
   return {
     builderKind: (expression) =>
       builderKind(expression, bindingState, valueDeclarations),
+    isStableValue: (identifier) =>
+      !valueDeclarations.isInvalidAt(identifier.text, identifier),
     isDirectAuthTarget: (expression) =>
       directAuthTarget(expression, bindingState, valueDeclarations),
     provenance: bindingState.provenance,
@@ -404,12 +417,42 @@ function publicAdminDiagnostics(declarations, authScan) {
   return diagnostics;
 }
 
+function statementLocationKey(node, sourceFile) {
+  let statement = node;
+  while (statement.parent && statement.parent !== sourceFile) {
+    statement = statement.parent;
+  }
+  const position = sourceFile.getLineAndCharacterOfPosition(
+    statement.getStart(sourceFile, false),
+  );
+  return `${position.line + 1}:${position.character + 1}`;
+}
+
+function runtimeDiagnosticsWithoutBuilderDeclarations(
+  runtimeDiagnostics,
+  declarations,
+  sourceFile,
+) {
+  const declarationLocations = new Set(
+    declarations.map((declaration) =>
+      statementLocationKey(declaration.node, sourceFile),
+    ),
+  );
+  return runtimeDiagnostics.filter(
+    (entry) => !declarationLocations.has(`${entry.line}:${entry.column}`),
+  );
+}
+
 /** Enforces the /admin boundary for public Convex functions. */
 export function scanAdminSuperAdmin(source, file = "convex/admin.ts") {
   const normalizedFile = normalizePath(file);
   const sourceFile = parseSource(source, normalizedFile);
   const values = collectUniqueValueDeclarations(sourceFile);
-  const adminBindings = collectAdminBindings(sourceFile, values);
+  const adminBindings = collectAdminBindings(
+    sourceFile,
+    values,
+    normalizedFile,
+  );
   const declarations = exportedBuilderDeclarations(
     sourceFile,
     values,
@@ -433,10 +476,15 @@ export function scanAdminSuperAdmin(source, file = "convex/admin.ts") {
   const runtimeExportDiagnostics = scanAdminRuntimeExports(
     sourceFile,
     normalizedFile,
-    adminBindings.provenance,
+    adminBindings,
+  );
+  const uniqueRuntimeDiagnostics = runtimeDiagnosticsWithoutBuilderDeclarations(
+    runtimeExportDiagnostics,
+    declarations,
+    sourceFile,
   );
   return sortDiagnostics([
-    ...runtimeExportDiagnostics,
+    ...uniqueRuntimeDiagnostics,
     ...publicAdminDiagnostics(declarations, {
       ...authScan,
       delegatedAuthFunctions,

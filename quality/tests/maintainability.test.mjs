@@ -264,6 +264,53 @@ describe("maintainability ratchet", () => {
     );
   });
 
+  test("an improved legacy file reserves its identity from an old-debt copy", () => {
+    const baseline = analyze("lib/original-file.ts", longFile(620));
+    const current = analyzeSourceEntries([
+      {
+        path: "lib/original-file.ts",
+        source: "export const replacement = true;\n",
+      },
+      { path: "lib/copied-file.ts", source: longFile(620) },
+    ]);
+
+    const comparison = compareAnalyses(current, baseline);
+    assert.equal(comparison.ok, false);
+    assert.ok(
+      comparison.issues.some(
+        (issue) =>
+          issue.entity === "file" &&
+          issue.path === "lib/copied-file.ts" &&
+          issue.kind === "NEW_MAINTAINABILITY_VIOLATION",
+      ),
+    );
+  });
+
+  test("an improved legacy function reserves its identity from an old-debt copy", () => {
+    const baseline = analyze("lib/original.ts", longFunction("legacy", 130));
+    const current = analyzeSourceEntries([
+      {
+        path: "lib/original.ts",
+        source: "export function legacy(input) { return input; }\n",
+      },
+      {
+        path: "lib/copied.ts",
+        source: longFunction("legacy", 130),
+      },
+    ]);
+
+    const comparison = compareAnalyses(current, baseline);
+    assert.equal(comparison.ok, false);
+    assert.ok(
+      comparison.issues.some(
+        (issue) =>
+          issue.entity === "function" &&
+          issue.path === "lib/copied.ts" &&
+          issue.kind === "NEW_MAINTAINABILITY_VIOLATION",
+      ),
+    );
+  });
+
   test("delete and recreate under the same anchor cannot inherit unrelated debt", () => {
     const baseline = analyze(
       "lib/legacy.ts",
@@ -526,6 +573,24 @@ describe("maintainability ratchet", () => {
       .functions[0];
 
     assert.equal(fn.metrics.complexity, 8);
+  });
+
+  test("nested ternaries count as nested control flow", () => {
+    const current = analyze(
+      "lib/nested-ternary.ts",
+      `
+        export function choose(a, b, c, d, e) {
+          return a ? (b ? (c ? (d ? (e ? 1 : 2) : 3) : 4) : 5) : 6;
+        }
+      `,
+    );
+
+    assert.equal(current.files[0].functions[0].metrics.nesting, 5);
+    assert.ok(
+      compareAnalyses(current, { files: [] }).issues.some(
+        (issue) => issue.entity === "function" && issue.metric === "nesting",
+      ),
+    );
   });
 
   test("baseline JSON is recomputed and canonical rather than trusted", () => {

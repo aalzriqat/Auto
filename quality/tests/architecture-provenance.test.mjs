@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import test from "node:test";
 
 import { validateBaselineProvenance } from "../architecture.mjs";
-import { readOriginMainArchitectureBaseline } from "../architecture-provenance.mjs";
+import {
+  readOriginMainArchitectureBaseline,
+  runArchitectureGit,
+} from "../architecture-provenance.mjs";
+import { resolveGitExecutable } from "../git-executable.mjs";
+import { repositoryRoot } from "../maintainability-cli.mjs";
 
 const SOURCE_COMMIT = "4ab1dd3a8d4c745c1b2f02a404234d0f07d96ce7";
 
@@ -17,6 +23,49 @@ function queuedGit(results) {
     return queue.shift();
   };
 }
+
+function normalizeFileSystemPath(value) {
+  const normalized = path.resolve(value).replaceAll("\\", "/");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+test("both guards use the validated Git override without consulting PATH", async () => {
+  const configuredGit = resolveGitExecutable();
+  const originalConfiguredGit = process.env.AUTOFLOW_GIT_EXECUTABLE;
+  const originalPath = process.env.PATH;
+  try {
+    process.env.AUTOFLOW_GIT_EXECUTABLE = configuredGit;
+    process.env.PATH = "";
+
+    const architectureResult = await runArchitectureGit(process.cwd(), [
+      "rev-parse",
+      "--show-toplevel",
+    ]);
+    assert.equal(architectureResult.exitCode, 0, architectureResult.stderr);
+    assert.equal(
+      normalizeFileSystemPath(architectureResult.stdout.trim()),
+      normalizeFileSystemPath(repositoryRoot(process.cwd())),
+    );
+  } finally {
+    if (originalConfiguredGit === undefined) {
+      delete process.env.AUTOFLOW_GIT_EXECUTABLE;
+    } else {
+      process.env.AUTOFLOW_GIT_EXECUTABLE = originalConfiguredGit;
+    }
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  }
+});
+
+test("the shared Git override rejects a relative executable", () => {
+  assert.throws(
+    () =>
+      resolveGitExecutable({
+        environment: { AUTOFLOW_GIT_EXECUTABLE: "git" },
+      }),
+    /must be an absolute path/,
+  );
+});
 
 test("baseline provenance accepts an origin/main and HEAD ancestor", async () => {
   const executeGit = queuedGit([

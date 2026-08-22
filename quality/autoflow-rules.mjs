@@ -107,7 +107,7 @@ export function scanRepository(repositoryRoot = process.cwd()) {
       ),
     );
     if (
-      /^convex\/admin(?:[^/]*|\/.+)\.(?:js|mjs|cjs|ts|tsx|mts|cts|jsx)$/.test(
+      /^convex\/admin(?:[^/]*|\/.+)\.(?:js|mjs|cjs|ts|tsx|mts|cts|jsx)$/i.test(
         relativeFile,
       )
     ) {

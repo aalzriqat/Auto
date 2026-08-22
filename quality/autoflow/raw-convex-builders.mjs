@@ -1,35 +1,77 @@
 import path from "node:path";
+
 import ts from "typescript";
 
 import { createLexicalBindingProvenance } from "./lexical-binding-provenance.mjs";
-import { inspectNamespaceEscapes } from "./raw-namespace-escapes.mjs";
-import { createGeneratedNamespaceResolver } from "./raw-namespace-provenance.mjs";
-
 import {
   RULE_IDS,
-  collectUniqueValueDeclarations,
   diagnostic,
   hasModifier,
-  isGeneratedServerModule,
-  memberName,
-  memberObject,
   moduleText,
   normalizePath,
   parseSource,
-  propertyNameText,
   sortDiagnostics,
-  staticString,
-  unwrapAwait,
+  unwrapExpression,
 } from "./ast-utils.mjs";
 
+const CANONICAL_GENERATED_SERVER = "convex/_generated/server";
 const RAW_MUTATION_BUILDERS = new Set(["mutation", "internalMutation"]);
+const SAFE_RUNTIME_MEMBERS = new Set([
+  "action",
+  "httpAction",
+  "internalAction",
+  "internalQuery",
+  "query",
+]);
+const SAFE_REQUIRE_METADATA = new Set(["extensions", "resolve"]);
 
-function isAllowedRawBuilderFile(file) {
-  const normalized = normalizePath(file);
-  if (path.posix.isAbsolute(normalized) || /^[A-Za-z]:\//.test(normalized)) {
-    return false;
+function repositoryPath(file) {
+  const normalized = path.posix.normalize(normalizePath(file));
+  if (path.posix.isAbsolute(normalized) || /^[A-Za-z]:\//u.test(normalized)) {
+    return undefined;
   }
-  return path.posix.normalize(normalized) === "convex/functions.ts";
+  return normalized.replace(/^\.\//u, "");
+}
+
+function moduleWithoutExtension(modulePath) {
+  return modulePath.replace(/\.(?:js|jsx|mjs|cjs|ts|tsx|mts|cts)$/u, "");
+}
+
+function resolvedModulePath(specifier, file) {
+  const sourcePath = path.posix.normalize(normalizePath(file));
+  if (!specifier.startsWith(".")) return undefined;
+  const resolved = path.posix.normalize(
+    path.posix.join(path.posix.dirname(sourcePath), normalizePath(specifier)),
+  );
+  return moduleWithoutExtension(resolved);
+}
+
+function canonicalGeneratedServerPath(file) {
+  const sourcePath = path.posix.normalize(normalizePath(file));
+  if (repositoryPath(sourcePath)?.startsWith("convex/")) {
+    return CANONICAL_GENERATED_SERVER;
+  }
+  if (!path.posix.isAbsolute(sourcePath) && !/^[A-Za-z]:\//u.test(sourcePath)) {
+    return undefined;
+  }
+  const markerIndex = sourcePath.indexOf("/convex/");
+  return markerIndex < 0
+    ? undefined
+    : `${sourcePath.slice(0, markerIndex)}/${CANONICAL_GENERATED_SERVER}`;
+}
+
+function isCanonicalGeneratedServer(specifier, file) {
+  return (
+    resolvedModulePath(specifier, file) === canonicalGeneratedServerPath(file)
+  );
+}
+
+function isCanonicalWrapperFile(file) {
+  return repositoryPath(file) === "convex/functions.ts";
+}
+
+function hasExportModifier(node) {
+  return hasModifier(node, ts.SyntaxKind.ExportKeyword);
 }
 
 function isInTypePosition(node) {
@@ -38,86 +80,157 @@ function isInTypePosition(node) {
     current = current.parent;
     if (ts.isTypeNode(current)) return true;
     if (
-      ts.isExpressionStatement(current) ||
-      ts.isVariableStatement(current) ||
-      ts.isReturnStatement(current) ||
-      ts.isSourceFile(current)
+      ts.isExportSpecifier(current) &&
+      (current.isTypeOnly || current.parent?.parent?.isTypeOnly)
     ) {
+      return true;
+    }
+    if (ts.isExpressionStatement(current) || ts.isSourceFile(current)) {
       return false;
     }
   }
   return false;
 }
 
-function bindingImportedName(element, valueDeclarations) {
-  if (element.dotDotDotToken) return "*";
-  return propertyNameText(
-    element.propertyName ?? element.name,
-    valueDeclarations,
+function expressionEnvelope(node) {
+  let current = node;
+  while (
+    current.parent &&
+    current.parent !== current &&
+    unwrapExpression(current.parent) === current
+  ) {
+    current = current.parent;
+  }
+  return current;
+}
+
+function isIdentifierReference(node) {
+  const parent = node.parent;
+  if (!parent) return true;
+  if (ts.isExportSpecifier(parent)) {
+    return !parent.propertyName || parent.propertyName === node;
+  }
+  if (parent.name === node && !ts.isShorthandPropertyAssignment(parent)) {
+    return false;
+  }
+  if (parent.propertyName === node) return false;
+  if (ts.isQualifiedName(parent) || ts.isTypeNode(parent)) return false;
+  if (
+    (ts.isBreakStatement(parent) || ts.isContinueStatement(parent)) &&
+    parent.label === node
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function literalMemberName(expression) {
+  if (ts.isPropertyAccessExpression(expression)) return expression.name.text;
+  if (!ts.isElementAccessExpression(expression)) return undefined;
+  const argument = expression.argumentExpression
+    ? unwrapExpression(expression.argumentExpression)
+    : undefined;
+  return argument &&
+    (ts.isStringLiteral(argument) ||
+      ts.isNoSubstitutionTemplateLiteral(argument))
+    ? argument.text
+    : undefined;
+}
+
+function directMemberUse(namespaceExpression) {
+  const envelope = expressionEnvelope(namespaceExpression);
+  const parent = envelope.parent;
+  if (
+    (!ts.isPropertyAccessExpression(parent) &&
+      !ts.isElementAccessExpression(parent)) ||
+    unwrapExpression(parent.expression) !== unwrapExpression(envelope)
+  ) {
+    return undefined;
+  }
+  return { member: literalMemberName(parent), node: parent };
+}
+
+function addNamespaceBinding(identifier, state) {
+  const existing = state.bindings.get(identifier.text);
+  if (existing) existing.push(identifier);
+  else state.bindings.set(identifier.text, [identifier]);
+}
+
+function report(state, node, message) {
+  state.diagnostics.push(
+    diagnostic({
+      sourceFile: state.sourceFile,
+      file: state.file,
+      node,
+      ruleId: RULE_IDS.RAW_CONVEX_MUTATION_BUILDER,
+      message,
+    }),
   );
 }
 
-function inspectForbiddenBindingPattern(
-  pattern,
-  report,
-  context,
-  valueDeclarations,
-) {
-  if (!ts.isObjectBindingPattern(pattern)) return;
-  for (const element of pattern.elements) {
-    const imported = bindingImportedName(element, valueDeclarations);
-    if (
-      imported === undefined ||
-      imported === "*" ||
-      RAW_MUTATION_BUILDERS.has(imported)
-    ) {
-      report(
-        element,
-        imported === undefined
-          ? `${context} uses a computed binding that cannot exclude mutation/internalMutation; use a statically named query/action member.`
-          : imported === "*"
-            ? `${context} uses a rest binding that exposes raw mutation builders; import mutation/internalMutation from convex/functions.ts.`
-            : `${context} takes raw ${imported}; import it from convex/functions.ts so aggregate triggers fire.`,
-      );
-    }
-  }
+function reportRawBuilder(state, node, name) {
+  report(
+    state,
+    node,
+    `Raw ${name} comes from convex/_generated/server; import it from convex/functions.ts so aggregate triggers fire.`,
+  );
 }
 
-function inspectForbiddenAssignmentPattern(
-  pattern,
-  report,
-  context,
-  valueDeclarations,
-) {
-  if (!ts.isObjectLiteralExpression(pattern)) {
-    report(
-      pattern,
-      `${context} cannot prove that mutation/internalMutation is excluded from the generated-server assignment.`,
-    );
+function reportNamespaceEscape(state, node) {
+  report(
+    state,
+    node,
+    "Generated-server namespace escapes its direct safe-member boundary; replace the namespace with a static named import.",
+  );
+}
+
+function inspectDirectNamespaceUse(namespaceExpression, state) {
+  const access = directMemberUse(namespaceExpression);
+  if (!access) {
+    reportNamespaceEscape(state, expressionEnvelope(namespaceExpression));
     return;
   }
-  for (const property of pattern.properties) {
-    const imported = ts.isSpreadAssignment(property)
-      ? "*"
-      : propertyNameText(property.name, valueDeclarations);
+  if (access.member && RAW_MUTATION_BUILDERS.has(access.member)) {
+    reportRawBuilder(state, access.node, access.member);
+    return;
+  }
+  if (!access.member || !SAFE_RUNTIME_MEMBERS.has(access.member)) {
+    report(
+      state,
+      access.node,
+      "Generated-server namespace access is not an approved static safe member; use query, action, internalQuery, internalAction, or httpAction.",
+    );
+  }
+}
+
+function inspectNamedImports(elements, state) {
+  for (const element of elements) {
+    const imported = (element.propertyName ?? element.name).text;
     if (
-      imported === undefined ||
-      imported === "*" ||
-      RAW_MUTATION_BUILDERS.has(imported)
+      !element.isTypeOnly &&
+      RAW_MUTATION_BUILDERS.has(imported) &&
+      !state.allowRawImport
     ) {
-      report(
-        property,
-        imported === undefined
-          ? `${context} uses a computed property that cannot exclude mutation/internalMutation.`
-          : imported === "*"
-            ? `${context} uses a rest target that exposes raw mutation builders.`
-            : `${context} takes raw ${imported}; import it from convex/functions.ts so aggregate triggers fire.`,
-      );
+      reportRawBuilder(state, element, imported);
     }
   }
 }
 
-function inspectGeneratedImportEquals(statement, namespaceResolver, report) {
+function inspectImportDeclaration(statement, state) {
+  const specifier = moduleText(statement.moduleSpecifier);
+  if (!specifier || !isCanonicalGeneratedServer(specifier, state.file)) return;
+  const clause = statement.importClause;
+  if (!clause || clause.isTypeOnly) return;
+  if (clause.name) reportNamespaceEscape(state, clause.name);
+  if (!clause.namedBindings) return;
+  if (ts.isNamespaceImport(clause.namedBindings)) {
+    addNamespaceBinding(clause.namedBindings.name, state);
+    return;
+  }
+  inspectNamedImports(clause.namedBindings.elements, state);
+}
+
+function inspectImportEquals(statement, state) {
   const reference = statement.moduleReference;
   const specifier =
     ts.isExternalModuleReference(reference) && reference.expression
@@ -125,387 +238,228 @@ function inspectGeneratedImportEquals(statement, namespaceResolver, report) {
       : undefined;
   if (
     !specifier ||
-    !isGeneratedServerModule(specifier) ||
+    !isCanonicalGeneratedServer(specifier, state.file) ||
     statement.isTypeOnly
   ) {
     return;
   }
-  if (hasModifier(statement, ts.SyntaxKind.ExportKeyword)) {
-    report(
-      statement,
-      `Exported import-equals binding from ${specifier} exposes raw mutation builders.`,
-    );
-    return;
-  }
-  namespaceResolver.addBinding(statement.name);
+  addNamespaceBinding(statement.name, state);
+  if (hasExportModifier(statement)) reportNamespaceEscape(state, statement);
 }
 
-function inspectGeneratedImport(statement, namespaceResolver, report) {
-  if (ts.isImportEqualsDeclaration(statement)) {
-    inspectGeneratedImportEquals(statement, namespaceResolver, report);
-    return;
-  }
-  if (!ts.isImportDeclaration(statement)) return;
-  const specifier = moduleText(statement.moduleSpecifier);
-  const clause = statement.importClause;
-  if (
-    !specifier ||
-    !isGeneratedServerModule(specifier) ||
-    !clause ||
-    clause.isTypeOnly ||
-    !clause.namedBindings
-  ) {
-    return;
-  }
-  if (ts.isNamespaceImport(clause.namedBindings)) {
-    namespaceResolver.addBinding(clause.namedBindings.name);
-    return;
-  }
-  for (const element of clause.namedBindings.elements) {
-    const imported = (element.propertyName ?? element.name).text;
-    if (!element.isTypeOnly && RAW_MUTATION_BUILDERS.has(imported)) {
-      report(
-        element,
-        `Raw ${imported} is imported from ${specifier}; import it from convex/functions.ts so aggregate triggers fire.`,
-      );
-    }
-  }
-}
-
-function inspectGeneratedReExport(statement, report) {
-  if (!ts.isExportDeclaration(statement)) return;
+function inspectExportDeclaration(statement, state) {
   const specifier = statement.moduleSpecifier
     ? moduleText(statement.moduleSpecifier)
     : undefined;
   if (
     !specifier ||
-    !isGeneratedServerModule(specifier) ||
+    !isCanonicalGeneratedServer(specifier, state.file) ||
     statement.isTypeOnly
   ) {
     return;
   }
   if (!statement.exportClause || ts.isNamespaceExport(statement.exportClause)) {
-    report(
-      statement,
-      `Runtime star re-export from ${specifier} exposes raw mutation builders; export wrapped builders from convex/functions.ts instead.`,
-    );
+    reportNamespaceEscape(state, statement);
     return;
   }
   for (const element of statement.exportClause.elements) {
-    const exportedFromModule = (element.propertyName ?? element.name).text;
-    if (!element.isTypeOnly && RAW_MUTATION_BUILDERS.has(exportedFromModule)) {
-      report(
-        element,
-        `Re-export of raw ${exportedFromModule} from ${specifier} bypasses convex/functions.ts.`,
-      );
+    const imported = (element.propertyName ?? element.name).text;
+    if (!element.isTypeOnly && RAW_MUTATION_BUILDERS.has(imported)) {
+      reportRawBuilder(state, element, imported);
     }
   }
 }
 
-function collectStaticBindings(sourceFile, namespaceResolver, report) {
+function inspectStaticModules(sourceFile, state) {
   for (const statement of sourceFile.statements) {
-    inspectGeneratedImport(statement, namespaceResolver, report);
-    inspectGeneratedReExport(statement, report);
-  }
-}
-
-function collectNamespaceAliases(sourceFile, namespaceContext) {
-  const visit = (node) => {
-    if (
-      ts.isVariableDeclaration(node) &&
-      node.initializer &&
-      namespaceContext.isNamespace(node.initializer)
-    ) {
-      if (ts.isIdentifier(node.name)) {
-        namespaceContext.resolver.addBinding(node.name);
-      } else {
-        inspectForbiddenBindingPattern(
-          node.name,
-          namespaceContext.report,
-          "Generated-server destructuring",
-          namespaceContext.valueDeclarations,
-        );
-      }
-    } else if (
-      ts.isParameter(node) &&
-      node.initializer &&
-      namespaceContext.isNamespace(node.initializer)
-    ) {
-      if (ts.isIdentifier(node.name)) {
-        namespaceContext.resolver.addBinding(node.name);
-      } else {
-        inspectForbiddenBindingPattern(
-          node.name,
-          namespaceContext.report,
-          "Generated-server default parameter",
-          namespaceContext.valueDeclarations,
-        );
-      }
-    } else if (
-      ts.isBinaryExpression(node) &&
-      node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-      namespaceContext.isNamespace(node.right) &&
-      !isUnshadowedModuleExports(node.left, namespaceContext.provenance)
-    ) {
-      inspectForbiddenAssignmentPattern(
-        node.left,
-        namespaceContext.report,
-        "Generated-server destructuring assignment",
-        namespaceContext.valueDeclarations,
-      );
+    if (ts.isImportDeclaration(statement)) {
+      inspectImportDeclaration(statement, state);
+    } else if (ts.isImportEqualsDeclaration(statement)) {
+      inspectImportEquals(statement, state);
+    } else if (ts.isExportDeclaration(statement)) {
+      inspectExportDeclaration(statement, state);
     }
-    ts.forEachChild(node, visit);
-  };
-  visit(sourceFile);
-}
-
-function inspectNamespaceMember(node, namespaceScan) {
-  if (
-    (!ts.isPropertyAccessExpression(node) &&
-      !ts.isElementAccessExpression(node)) ||
-    isInTypePosition(node)
-  ) {
-    return;
-  }
-  const object = memberObject(node);
-  if (!object || !namespaceScan.isNamespace(object)) return;
-  const name = ts.isElementAccessExpression(node)
-    ? staticString(node.argumentExpression, namespaceScan.valueDeclarations)
-    : memberName(node);
-  if (name && RAW_MUTATION_BUILDERS.has(name)) {
-    namespaceScan.report(
-      node,
-      `Raw ${name} is accessed through the generated-server namespace; import it from convex/functions.ts so aggregate triggers fire.`,
-    );
-  } else if (ts.isElementAccessExpression(node) && name === undefined) {
-    namespaceScan.report(
-      node,
-      "Computed generated-server access cannot prove that mutation/internalMutation is excluded; use a named query/action member or import wrapped mutations from convex/functions.ts.",
-    );
   }
 }
 
-function callbackNamespaceResolver(parameter, namespaceScan) {
-  const resolves = (expression, seen = new Set()) => {
-    const current = unwrapAwait(expression);
-    if (ts.isObjectLiteralExpression(current)) {
-      return current.properties.some(
-        (property) =>
-          ts.isSpreadAssignment(property) &&
-          resolves(property.expression, seen),
-      );
-    }
-    if (!ts.isIdentifier(current)) return false;
-    if (namespaceScan.provenance.isUseOf(current, parameter)) return true;
-    if (seen.has(current.text)) return false;
-    const resolved = namespaceScan.valueDeclarations.resolveAt(
-      current.text,
-      current,
-    );
-    const declaration = resolved?.parent;
-    if (
-      !resolved ||
-      !declaration ||
-      !ts.isVariableDeclaration(declaration) ||
-      declaration.initializer !== resolved ||
-      !ts.isIdentifier(declaration.name) ||
-      !namespaceScan.provenance.isUseOf(current, declaration.name)
-    ) {
-      return false;
-    }
-    const nextSeen = new Set(seen);
-    nextSeen.add(current.text);
-    return resolves(resolved, nextSeen);
-  };
-  return resolves;
-}
-
-function inspectCallbackNamespaceMember(
-  node,
-  isCallbackNamespace,
-  namespaceScan,
-) {
-  if (
-    (!ts.isPropertyAccessExpression(node) &&
-      !ts.isElementAccessExpression(node)) ||
-    isInTypePosition(node)
-  ) {
-    return;
-  }
-  const object = memberObject(node);
-  if (!object || !isCallbackNamespace(object)) return;
-  const name = ts.isElementAccessExpression(node)
-    ? staticString(node.argumentExpression, namespaceScan.valueDeclarations)
-    : memberName(node);
-  if (name && RAW_MUTATION_BUILDERS.has(name)) {
-    namespaceScan.report(
-      node,
-      `Raw ${name} is accessed through a generated dynamic-import namespace; import it from convex/functions.ts so aggregate triggers fire.`,
-    );
-  } else if (ts.isElementAccessExpression(node) && name === undefined) {
-    namespaceScan.report(
-      node,
-      "Computed generated dynamic-import access cannot prove that mutation/internalMutation is excluded; use a named query/action member.",
-    );
-  }
-}
-
-function inspectDynamicImportCallback(node, namespaceScan) {
-  if (!ts.isCallExpression(node) || memberName(node.expression) !== "then")
-    return;
-  const receiver = memberObject(node.expression);
-  const specifier = receiver
-    ? namespaceScan.namespaceResolver.generatedSpecifier(receiver)
-    : undefined;
-  const callbackExpression = node.arguments[0];
-  if (
-    !specifier ||
-    !isGeneratedServerModule(specifier) ||
-    !callbackExpression
-  ) {
-    return;
-  }
-  const callback =
-    namespaceScan.namespaceResolver.resolveLocalFunction(callbackExpression);
-  if (!callback) {
-    namespaceScan.report(
-      callbackExpression,
-      "Generated-server dynamic import uses a callback whose handling of mutation/internalMutation cannot be verified.",
-    );
-    return;
-  }
-  if (!callback.parameters[0]) return;
-  const parameter = callback.parameters[0].name;
-  inspectForbiddenBindingPattern(
-    parameter,
-    namespaceScan.report,
-    "Dynamic-import callback",
-    namespaceScan.valueDeclarations,
-  );
-  if (!ts.isIdentifier(parameter)) {
-    if (!ts.isObjectBindingPattern(parameter)) {
-      namespaceScan.report(
-        parameter,
-        "Generated-server dynamic import callback must use an identifier or statically named object binding.",
-      );
-    }
-    return;
-  }
-
-  const isCallbackNamespace = callbackNamespaceResolver(
-    parameter,
-    namespaceScan,
-  );
-  const visit = (candidate) => {
-    inspectCallbackNamespaceMember(
-      candidate,
-      isCallbackNamespace,
-      namespaceScan,
-    );
-    inspectNamespaceEscapes(candidate, {
-      ...namespaceScan,
-      isNamespace: isCallbackNamespace,
-      namespaceLabel: "generated dynamic-import namespace",
-    });
-    if (
-      ts.isVariableDeclaration(candidate) &&
-      candidate.initializer &&
-      isCallbackNamespace(candidate.initializer)
-    ) {
-      inspectForbiddenBindingPattern(
-        candidate.name,
-        namespaceScan.report,
-        "Dynamic-import namespace destructuring",
-        namespaceScan.valueDeclarations,
-      );
-    }
-    ts.forEachChild(candidate, visit);
-  };
-  visit(callback.body);
-}
-
-function isUnshadowedModuleExports(expression, provenance) {
-  const current = unwrapAwait(expression);
-  const object = memberObject(current);
+function directRequireCall(node, provenance) {
+  const callee = unwrapExpression(node.expression);
   return (
-    memberName(current) === "exports" &&
-    object &&
-    ts.isIdentifier(object) &&
-    object.text === "module" &&
-    !provenance.hasBinding(object)
+    ts.isIdentifier(callee) &&
+    callee.text === "require" &&
+    !provenance.hasBinding(callee)
   );
 }
 
-function inspectCommonJsReExport(node, namespaceScan) {
+function directModuleRequireCall(node, provenance) {
+  const callee = unwrapExpression(node.expression);
   if (
-    !ts.isBinaryExpression(node) ||
-    node.operatorToken.kind !== ts.SyntaxKind.EqualsToken ||
-    !isUnshadowedModuleExports(node.left, namespaceScan.provenance) ||
-    !namespaceScan.isNamespace(node.right)
+    !ts.isPropertyAccessExpression(callee) &&
+    !ts.isElementAccessExpression(callee)
+  ) {
+    return false;
+  }
+  const receiver = unwrapExpression(callee.expression);
+  return (
+    literalMemberName(callee) === "require" &&
+    ts.isIdentifier(receiver) &&
+    receiver.text === "module" &&
+    !provenance.hasBinding(receiver)
+  );
+}
+
+function literalLoaderSpecifier(node) {
+  return node.arguments.length === 1 && !node.questionDotToken
+    ? moduleText(node.arguments[0])
+    : undefined;
+}
+
+function constLoaderDeclaration(node) {
+  const envelope = expressionEnvelope(node);
+  const declaration = envelope.parent;
+  if (
+    !ts.isVariableDeclaration(declaration) ||
+    !declaration.initializer ||
+    unwrapExpression(declaration.initializer) !== unwrapExpression(envelope) ||
+    !ts.isIdentifier(declaration.name) ||
+    !(declaration.parent.flags & ts.NodeFlags.Const)
+  ) {
+    return undefined;
+  }
+  return declaration;
+}
+
+function declarationIsExported(declaration) {
+  const statement = declaration.parent?.parent;
+  return Boolean(statement && hasExportModifier(statement));
+}
+
+function inspectGeneratedRequire(node, state) {
+  const declaration = constLoaderDeclaration(node);
+  if (declaration) {
+    addNamespaceBinding(declaration.name, state);
+    if (declarationIsExported(declaration)) {
+      reportNamespaceEscape(state, declaration);
+    }
+    return;
+  }
+  inspectDirectNamespaceUse(node, state);
+}
+
+function inspectRequireCall(node, state) {
+  if (directModuleRequireCall(node, state.provenance)) {
+    report(
+      state,
+      node,
+      "module.require is not an auditable generated-server access; use a static named import.",
+    );
+    return;
+  }
+  if (!directRequireCall(node, state.provenance)) return;
+  const specifier = literalLoaderSpecifier(node);
+  if (specifier === undefined) {
+    report(
+      state,
+      node,
+      "CommonJS loader target cannot be verified; use a static named import with a literal module specifier.",
+    );
+  } else if (isCanonicalGeneratedServer(specifier, state.file)) {
+    inspectGeneratedRequire(node, state);
+  }
+}
+
+function inspectDynamicImport(node, state) {
+  if (node.expression.kind !== ts.SyntaxKind.ImportKeyword) return;
+  const specifier = literalLoaderSpecifier(node);
+  if (specifier === undefined) {
+    report(
+      state,
+      node,
+      "Dynamic import target cannot be verified; use a static named import with a literal module specifier.",
+    );
+  } else if (isCanonicalGeneratedServer(specifier, state.file)) {
+    report(
+      state,
+      node,
+      "Generated-server dynamic imports are forbidden; use a static named import.",
+    );
+  }
+}
+
+function collectRuntimeLoaders(node, state) {
+  if (ts.isCallExpression(node)) {
+    inspectDynamicImport(node, state);
+    inspectRequireCall(node, state);
+  }
+  ts.forEachChild(node, (child) => collectRuntimeLoaders(child, state));
+}
+
+function trackedBinding(identifier, state) {
+  return (state.bindings.get(identifier.text) ?? []).find((target) =>
+    state.provenance.isUseOf(identifier, target),
+  );
+}
+
+function isDirectCallee(identifier) {
+  const envelope = expressionEnvelope(identifier);
+  return (
+    ts.isCallExpression(envelope.parent) &&
+    unwrapExpression(envelope.parent.expression) === unwrapExpression(envelope)
+  );
+}
+
+function isSafeRequireMetadata(identifier) {
+  const access = directMemberUse(identifier);
+  return Boolean(access?.member && SAFE_REQUIRE_METADATA.has(access.member));
+}
+
+function inspectIndirectRequire(identifier, state) {
+  if (
+    identifier.text !== "require" ||
+    state.provenance.hasBinding(identifier) ||
+    !isIdentifierReference(identifier) ||
+    isDirectCallee(identifier) ||
+    isSafeRequireMetadata(identifier) ||
+    ts.isTypeOfExpression(expressionEnvelope(identifier).parent)
   ) {
     return;
   }
-  namespaceScan.report(
-    node,
-    "CommonJS whole-module re-export exposes raw mutation builders; export wrapped builders from convex/functions.ts instead.",
+  report(
+    state,
+    identifier,
+    "Indirect CommonJS loading cannot be audited; call require directly with a literal specifier or use a static named import.",
   );
 }
 
-function inspectRuntimeNamespaceUses(sourceFile, namespaceScan) {
-  const visit = (node) => {
-    inspectNamespaceMember(node, namespaceScan);
-    inspectDynamicImportCallback(node, namespaceScan);
-    inspectCommonJsReExport(node, namespaceScan);
-    inspectNamespaceEscapes(node, namespaceScan);
-    ts.forEachChild(node, visit);
-  };
-  visit(sourceFile);
+function inspectIdentifier(identifier, state) {
+  inspectIndirectRequire(identifier, state);
+  if (!isIdentifierReference(identifier) || isInTypePosition(identifier)) {
+    return;
+  }
+  const binding = trackedBinding(identifier, state);
+  if (!binding || binding === identifier) return;
+  inspectDirectNamespaceUse(identifier, state);
 }
 
-/**
- * Rejects raw mutation builders by module provenance, not spelling. Actions,
- * queries and type-only references are intentionally allowed: actions have no
- * ctx.db, and the aggregate wrapper exists only for mutation builders.
- */
+function inspectNamespaceUses(node, state) {
+  if (ts.isIdentifier(node)) inspectIdentifier(node, state);
+  ts.forEachChild(node, (child) => inspectNamespaceUses(child, state));
+}
+
+/** Enforces static named access to the canonical generated Convex server API. */
 export function scanRawConvexBuilders(source, file = "convex/module.ts") {
   const normalizedFile = normalizePath(file);
-  if (isAllowedRawBuilderFile(normalizedFile)) return [];
-
   const sourceFile = parseSource(source, normalizedFile);
-  const valueDeclarations = collectUniqueValueDeclarations(sourceFile);
-  const diagnostics = [];
-  const report = (node, message) => {
-    diagnostics.push(
-      diagnostic({
-        sourceFile,
-        file: normalizedFile,
-        node,
-        ruleId: RULE_IDS.RAW_CONVEX_MUTATION_BUILDER,
-        message,
-      }),
-    );
+  const state = {
+    allowRawImport: isCanonicalWrapperFile(normalizedFile),
+    bindings: new Map(),
+    diagnostics: [],
+    file: normalizedFile,
+    provenance: createLexicalBindingProvenance(sourceFile),
+    sourceFile,
   };
-  const provenance = createLexicalBindingProvenance(sourceFile);
-  const namespaceResolver = createGeneratedNamespaceResolver(
-    valueDeclarations,
-    provenance,
-  );
-  collectStaticBindings(sourceFile, namespaceResolver, report);
-  const isNamespace = namespaceResolver.isNamespace;
-  collectNamespaceAliases(sourceFile, {
-    isNamespace,
-    resolver: namespaceResolver,
-    provenance,
-    report,
-    valueDeclarations,
-  });
-  inspectRuntimeNamespaceUses(sourceFile, {
-    isNamespace,
-    namespaceResolver,
-    valueDeclarations,
-    provenance,
-    report,
-  });
-
-  return sortDiagnostics(diagnostics);
+  inspectStaticModules(sourceFile, state);
+  collectRuntimeLoaders(sourceFile, state);
+  inspectNamespaceUses(sourceFile, state);
+  return sortDiagnostics(state.diagnostics);
 }

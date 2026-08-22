@@ -11,6 +11,7 @@ import {
   validateBaselineProvenance,
 } from "./architecture-provenance.mjs";
 import { assertArchitectureBaselineIntegrity } from "./architecture-baseline-integrity.mjs";
+import { stronglyConnectedComponents } from "./architecture-cycles.mjs";
 import {
   architectureBoundaryViolations,
   isArchitectureAuditedPath,
@@ -268,61 +269,6 @@ export function architectureGraph(cruiseResult) {
     frameworkRuntimePaths,
     engineVersion: ARCHITECTURE_ENGINE_VERSION,
   };
-}
-
-function adjacencyFor(modules, edges) {
-  const adjacency = new Map(modules.map((modulePath) => [modulePath, []]));
-  for (const edge of edges) adjacency.get(edge.from)?.push(edge.to);
-  for (const dependencies of adjacency.values()) dependencies.sort(compareText);
-  return adjacency;
-}
-
-function stronglyConnectedComponents(modules, edges) {
-  const adjacency = adjacencyFor(modules, edges);
-  const indexes = new Map();
-  const lowLinks = new Map();
-  const stack = [];
-  const onStack = new Set();
-  const components = [];
-  let nextIndex = 0;
-
-  function visit(modulePath) {
-    indexes.set(modulePath, nextIndex);
-    lowLinks.set(modulePath, nextIndex);
-    nextIndex += 1;
-    stack.push(modulePath);
-    onStack.add(modulePath);
-
-    for (const dependency of adjacency.get(modulePath)) {
-      if (!indexes.has(dependency)) {
-        visit(dependency);
-        lowLinks.set(
-          modulePath,
-          Math.min(lowLinks.get(modulePath), lowLinks.get(dependency)),
-        );
-      } else if (onStack.has(dependency)) {
-        lowLinks.set(
-          modulePath,
-          Math.min(lowLinks.get(modulePath), indexes.get(dependency)),
-        );
-      }
-    }
-
-    if (lowLinks.get(modulePath) !== indexes.get(modulePath)) return;
-    const component = [];
-    let currentModule;
-    do {
-      currentModule = stack.pop();
-      onStack.delete(currentModule);
-      component.push(currentModule);
-    } while (currentModule !== modulePath);
-    components.push(component.sort(compareText));
-  }
-
-  for (const modulePath of modules) {
-    if (!indexes.has(modulePath)) visit(modulePath);
-  }
-  return components;
 }
 
 function isCyclicComponent(component, runtimeEdgeKeys) {

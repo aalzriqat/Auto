@@ -187,13 +187,13 @@ function matchFiles(currentFiles, baselineFiles) {
   );
   for (const current of currentFiles) {
     const baseline = baselineByPath.get(current.path);
+    if (!baseline) continue;
+    consumed.add(baseline);
     if (
-      baseline &&
       structuralSimilarity(current.structureTokens, baseline.structureTokens) >=
-        STRUCTURAL_SIMILARITY_FLOOR
+      STRUCTURAL_SIMILARITY_FLOOR
     ) {
       matches.set(current, baseline);
-      consumed.add(baseline);
     }
   }
   exactHashMatches(currentFiles, baselineFiles, matches, consumed);
@@ -201,14 +201,12 @@ function matchFiles(currentFiles, baselineFiles) {
   return matches;
 }
 
-function violatingFunctions(analysis) {
+function analyzedFunctions(analysis) {
   const functions = [];
   for (const file of analysis.files) {
     for (const fn of file.functions) {
       const violations = functionViolationMetrics(file.path, fn.metrics);
-      if (Object.keys(violations).length) {
-        functions.push({ ...fn, path: file.path, violations });
-      }
+      functions.push({ ...fn, path: file.path, violations });
     }
   }
   return functions.sort(
@@ -228,13 +226,13 @@ function matchFunctions(currentFunctions, baselineFunctions) {
     const baseline = baselineByIdentity.get(
       `${current.path}\u0000${current.anchor}`,
     );
+    if (!baseline) continue;
+    consumed.add(baseline);
     if (
-      baseline &&
       structuralSimilarity(current.structureTokens, baseline.structureTokens) >=
-        STRUCTURAL_SIMILARITY_FLOOR
+      STRUCTURAL_SIMILARITY_FLOOR
     ) {
       matches.set(current, baseline);
-      consumed.add(baseline);
     }
   }
   exactHashMatches(currentFunctions, baselineFunctions, matches, consumed);
@@ -306,15 +304,18 @@ export function combineRatchetComparisons(currentVsSource, currentVsOrigin) {
 }
 
 export function compareAnalyses(currentAnalysis, baselineAnalysis) {
-  const currentFiles = currentAnalysis.files
-    .filter((file) => Object.keys(fileViolationMetrics(file)).length)
-    .sort((left, right) => left.path.localeCompare(right.path));
+  const currentFiles = [...currentAnalysis.files].sort((left, right) =>
+    left.path.localeCompare(right.path),
+  );
+  const violatingCurrentFiles = currentFiles.filter(
+    (file) => Object.keys(fileViolationMetrics(file)).length,
+  );
   const baselineFiles = baselineAnalysis.files
     .filter((file) => Object.keys(fileViolationMetrics(file)).length)
     .sort((left, right) => left.path.localeCompare(right.path));
   const fileMatches = matchFiles(currentFiles, baselineFiles);
   const issues = [];
-  for (const current of currentFiles) {
+  for (const current of violatingCurrentFiles) {
     const baseline = fileMatches.get(current);
     issues.push(
       ...metricIssues(
@@ -326,10 +327,15 @@ export function compareAnalyses(currentAnalysis, baselineAnalysis) {
     );
   }
 
-  const currentFunctions = violatingFunctions(currentAnalysis);
-  const baselineFunctions = violatingFunctions(baselineAnalysis);
+  const currentFunctions = analyzedFunctions(currentAnalysis);
+  const violatingCurrentFunctions = currentFunctions.filter(
+    (fn) => Object.keys(fn.violations).length,
+  );
+  const baselineFunctions = analyzedFunctions(baselineAnalysis).filter(
+    (fn) => Object.keys(fn.violations).length,
+  );
   const functionMatches = matchFunctions(currentFunctions, baselineFunctions);
-  for (const current of currentFunctions) {
+  for (const current of violatingCurrentFunctions) {
     const baseline = functionMatches.get(current);
     issues.push(
       ...metricIssues(

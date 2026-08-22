@@ -23,7 +23,7 @@ function messages(diagnostics) {
 }
 
 describe("admin-super-admin-first", () => {
-  test("accepts aliased and namespace imports plus referenced handlers/configs", () => {
+  test("accepts aliased imports with direct literal registrations", () => {
     const source = `
       import { query as defineQuery } from "./_generated/server";
       import * as generated from "./_generated/server";
@@ -35,10 +35,8 @@ describe("admin-super-admin-first", () => {
         await tenancy.requireSuperAdmin(ctx);
         return { ok: true };
       };
-      const listDefinition = { args: {}, handler: listHandler };
       const build = defineQuery;
-      const list = build(listDefinition);
-      export { list };
+      export const list = build({ args: {}, handler: listHandler });
 
       const wrapped = builders;
       const { mutation: buildMutation } = wrapped;
@@ -115,6 +113,14 @@ describe("admin-super-admin-first", () => {
         },
       });
 
+      export const deleteUserWithoutArgs = action({
+        args: {},
+        handler: async (ctx) => {
+          const admin = await ctx.runQuery(internal.adminUsers.authorizeAction);
+          return admin._id;
+        },
+      });
+
       export const authorizeAction = internalQuery({
         args: {},
         handler: async (ctx) => {
@@ -124,6 +130,42 @@ describe("admin-super-admin-first", () => {
     `;
 
     assert.deepEqual(scanAdminSuperAdmin(source, "convex/adminUsers.ts"), []);
+  });
+
+  test("rejects executable authentication-call arguments evaluated before auth", () => {
+    const source = `
+      import { action, internalQuery } from "./_generated/server";
+      import { internal } from "./_generated/api";
+      import { requireSuperAdmin } from "./utils/tenancy";
+
+      export const direct = action({ handler: async (ctx) => {
+        await requireSuperAdmin(ctx, await fetch("https://example.invalid/pre-auth"));
+      }});
+      export const delegated = action({ handler: async (ctx) => {
+        await ctx.runQuery(internal.adminAuth.authorizeAction, {
+          value: await fetch("https://example.invalid/pre-auth"),
+        });
+      }});
+      Array.prototype.toString = () => {
+        void fetch("https://example.invalid/pre-auth");
+        return "value";
+      };
+      export const coercingKey = action({ handler: async (ctx) => {
+        await ctx.runQuery(internal.adminAuth.authorizeAction, {
+          [["value"]]: true,
+        });
+      }});
+      export const authorizeAction = internalQuery({
+        handler: async (ctx) => await requireSuperAdmin(ctx),
+      });
+    `;
+
+    const diagnostics = scanAdminSuperAdmin(source, "convex/adminAuth.ts");
+    assert.equal(diagnostics.length, 3);
+    assert.deepEqual(
+      messages(diagnostics).map((message) => message.match(/"([^"]+)"/)?.[1]),
+      ["direct", "delegated", "coercingKey"],
+    );
   });
 
   test("does not trust a same-named delegated query unless that query authenticates", () => {
@@ -194,26 +236,36 @@ describe("admin-super-admin-first", () => {
           return await ctx.db.query("users").first();
         }
       }});
+      export const destructiveCatch = query({ handler: async (ctx) => {
+        const admin = await requireSuperAdmin(ctx).catch(() => null);
+        if (!admin) return await ctx.db.delete("victim");
+        return true;
+      }});
       const defaultUnsafe = query({ handler: async (ctx) => ctx.db.query("users").first() });
       export default defaultUnsafe;
     `;
 
     const diagnostics = scanAdminSuperAdmin(source, "convex/adminUnsafe.ts");
-    assert.equal(diagnostics.length, 10);
-    assert.deepEqual(
-      messages(diagnostics).map((message) => message.match(/"([^"]+)"/)?.[1]),
-      [
-        "missing",
-        "late",
-        "unawaited",
-        "conditional",
-        "deadClosure",
-        "swallowed",
-        "swallowedTry",
-        "forgedCatch",
-        "leakingCatch",
-        "defaultUnsafe",
-      ],
+    const namedDiagnostics = messages(diagnostics)
+      .map((message) => message.match(/"([^"]+)"/)?.[1])
+      .filter(Boolean);
+    assert.deepEqual(namedDiagnostics, [
+      "missing",
+      "late",
+      "unawaited",
+      "conditional",
+      "deadClosure",
+      "swallowed",
+      "swallowedTry",
+      "forgedCatch",
+      "leakingCatch",
+      "destructiveCatch",
+      "defaultUnsafe",
+    ]);
+    assert.equal(
+      diagnostics.filter((entry) => /runtime re-export/.test(entry.message))
+        .length,
+      1,
     );
   });
 
@@ -287,7 +339,7 @@ describe("admin-super-admin-first", () => {
       }});
     `;
 
-    const diagnostics = scanAdminSuperAdmin(source, "convex/admin/shadowed.ts");
+    const diagnostics = scanAdminSuperAdmin(source, "convex/adminShadowed.ts");
     assert.equal(diagnostics.length, 5);
     assert.deepEqual(
       messages(diagnostics).map((message) => message.match(/"([^"]+)"/)?.[1]),
@@ -310,7 +362,7 @@ describe("admin-super-admin-first", () => {
       export default Object.freeze(query(definition));
     `;
 
-    const diagnostics = scanAdminSuperAdmin(source, "convex/admin/wrapped.ts");
+    const diagnostics = scanAdminSuperAdmin(source, "convex/adminWrapped.ts");
     assert.equal(diagnostics.length, 3);
     assert.deepEqual(
       messages(diagnostics).map((message) => message.match(/"([^"]+)"/)?.[1]),
@@ -346,16 +398,37 @@ describe("admin-super-admin-first", () => {
       };
     `;
 
-    const diagnostics = scanAdminSuperAdmin(source, "convex/admin/exports.ts");
-    assert.equal(diagnostics.length, 4);
+    const diagnostics = scanAdminSuperAdmin(source, "convex/adminExports.ts");
+    const diagnosticNames = messages(diagnostics)
+      .map((message) => message.match(/"([^"]+)"/)?.[1])
+      .filter(Boolean);
     assert.deepEqual(
-      messages(diagnostics).map((message) => message.match(/"([^"]+)"/)?.[1]),
+      [...new Set(diagnosticNames)],
       ["direct", "named", "assignedLater", "destructured"],
     );
-    assert.match(diagnostics[0].message, /immutable const/);
-    assert.match(diagnostics[1].message, /immutable const/);
-    assert.match(diagnostics[2].message, /unrecognized/);
-    assert.match(diagnostics[3].message, /unrecognized/);
+    assert.match(
+      diagnostics.find((entry) => entry.message.includes('"direct"')).message,
+      /immutable const/,
+    );
+    assert.match(
+      diagnostics.find((entry) => entry.message.includes('"named"')).message,
+      /immutable const/,
+    );
+    assert.match(
+      diagnostics.find((entry) => entry.message.includes('"assignedLater"'))
+        .message,
+      /unrecognized/,
+    );
+    assert.match(
+      diagnostics.find((entry) => entry.message.includes('"destructured"'))
+        .message,
+      /unrecognized/,
+    );
+    assert.equal(
+      diagnostics.filter((entry) => /runtime re-export/.test(entry.message))
+        .length,
+      2,
+    );
   });
 
   test("rejects runtime module re-exports while allowing type-only exports", () => {
@@ -374,6 +447,26 @@ describe("admin-super-admin-first", () => {
       `exports.bad ??= require("./hidden").bad;`,
       `export import hidden = require("./hidden");`,
       `import hidden = require("./hidden"); export { hidden };`,
+      `import { bad } from "./hidden"; export const leak = bad;`,
+      `
+        import { bad } from "./hidden";
+        const holder = { bad };
+        export const leak = holder.bad;
+      `,
+      `
+        import { bad } from "./hidden";
+        const reveal = () => bad;
+        export const leak = reveal();
+      `,
+      `
+        import { bad } from "./hidden";
+        const reveal = () => bad;
+        export { reveal };
+      `,
+      `
+        import { bad } from "./hidden";
+        export const leak = { nested: [bad] };
+      `,
     ];
     for (const [index, source] of unsafeCases.entries()) {
       const diagnostics = scanAdminSuperAdmin(
@@ -386,7 +479,10 @@ describe("admin-super-admin-first", () => {
         `expected runtime re-export ${index} to fail exactly once`,
       );
       assert.equal(diagnostics[0].ruleId, RULE_IDS.ADMIN_SUPER_ADMIN_FIRST);
-      assert.match(diagnostics[0].message, /runtime re-export/);
+      assert.match(
+        diagnostics[0].message,
+        /runtime re-export|unrecognized Convex builder provenance/,
+      );
     }
 
     const typeOnly = `
@@ -418,6 +514,315 @@ describe("admin-super-admin-first", () => {
         "convex/admin/shadowed-commonjs.ts",
       ),
       [],
+    );
+  });
+
+  test("allows only the established admin audit helper alias", () => {
+    const establishedHelper = `
+      import { writeAuditLog } from "./utils/auditLog";
+      export const logAdminAction = writeAuditLog;
+    `;
+    for (const file of ["convex/adminAudit.ts", "convex\\adminAudit.ts"]) {
+      assert.deepEqual(scanAdminSuperAdmin(establishedHelper, file), []);
+    }
+
+    const nearMisses = [
+      `
+        import { writeAuditLog } from "./other";
+        export const logAdminAction = writeAuditLog;
+      `,
+      `
+        import { writeAuditLog } from "./utils/auditLog";
+        export const otherAction = writeAuditLog;
+      `,
+      `
+        import { writeAuditLog } from "./utils/auditLog";
+        export const logAdminAction = { writeAuditLog };
+      `,
+    ];
+    for (const source of nearMisses) {
+      const diagnostics = scanAdminSuperAdmin(source, "convex/adminAudit.ts");
+      assert.ok(
+        diagnostics.some(
+          (diagnostic) =>
+            diagnostic.ruleId === RULE_IDS.ADMIN_SUPER_ADMIN_FIRST,
+        ),
+      );
+    }
+  });
+
+  test("rejects live, computed, class, call, and prototype runtime exports", () => {
+    const cases = [
+      `
+        import { bad } from "./hidden";
+        let alias = bad;
+        export { alias };
+      `,
+      `
+        import { bad } from "./hidden";
+        const { missing = bad } = {};
+        export { missing };
+      `,
+      `
+        import { bad } from "./hidden";
+        const { safe, ...rest } = { safe: true, bad };
+        export { rest };
+      `,
+      `
+        import { bad } from "./hidden";
+        export default ({ leak: bad })[process.env.KEY];
+      `,
+      `
+        import { bad } from "./hidden";
+        class Helpers { static leak = bad; }
+        export default Helpers.leak;
+      `,
+      `
+        import { bad } from "./hidden";
+        class BaseHelpers { static expose() { return bad; } }
+        export class Helpers extends BaseHelpers {}
+      `,
+      `
+        import { bad } from "./hidden";
+        export class Helpers {
+          static #hidden = () => bad;
+          static expose() { return this.#hidden(); }
+        }
+      `,
+      `
+        import { bad } from "./hidden";
+        const identity = (value) => value;
+        export default { bad: identity.call(null, bad) };
+      `,
+      `
+        import { bad } from "./hidden";
+        const identity = (value) => value;
+        export default identity.apply(null, [bad]);
+      `,
+      `
+        import { bad } from "./hidden";
+        const identity = (value) => value;
+        export default identity.bind(null, bad)();
+      `,
+      `
+        import { bad } from "./hidden";
+        const holder = { identity(value) { return value; } };
+        export default holder.identity(bad);
+      `,
+      `
+        import { bad } from "./hidden";
+        const pick = (value) => value.bad;
+        export default pick({ bad });
+      `,
+      `
+        import { bad } from "./hidden";
+        export default { holder: Object.create({ bad }) };
+      `,
+      `
+        import { bad } from "./hidden";
+        export const api = {};
+        api.bad = bad;
+      `,
+      `
+        import { bad } from "./hidden";
+        const outer = (value) => () => value;
+        export default outer(bad)();
+      `,
+    ];
+    for (const [index, source] of cases.entries()) {
+      const diagnostics = scanAdminSuperAdmin(
+        source,
+        `convex/admin/runtime-live-${index}.ts`,
+      );
+      assert.ok(
+        diagnostics.some(
+          (entry) => entry.ruleId === RULE_IDS.ADMIN_SUPER_ADMIN_FIRST,
+        ),
+        `expected runtime export case ${index} to fail`,
+      );
+    }
+
+    const unsupported = `
+      import { bad } from "./hidden";
+      export default false && bad;
+    `;
+    assert.ok(
+      scanAdminSuperAdmin(
+        unsupported,
+        "convex/admin/unreachable-runtime-export.ts",
+      ).some((entry) => /runtime re-export/.test(entry.message)),
+    );
+  });
+
+  test("accepts the canonical direct admin surface and rejects lookalike imports", () => {
+    const canonical = `
+      import { query } from "../_generated/server";
+      import { requireSuperAdmin } from "../utils/tenancy";
+
+      export const metadata = {
+        revision: 1n,
+        flags: [, true, false, null, \`literal\`],
+        nested: { label: "admin" },
+      };
+      export type AdminMetadata = typeof metadata;
+      export type { ExternalMetadata } from "./types";
+      export const list = query({
+        args: {},
+        handler: async (ctx) => {
+          await requireSuperAdmin(ctx);
+          return true;
+        },
+      });
+    `;
+    assert.deepEqual(
+      scanAdminSuperAdmin(canonical, "convex/admin/users.ts"),
+      [],
+    );
+
+    const lookalikes = [
+      `
+        import { query } from "./_generated/server";
+        export const list = query({ handler: async () => true });
+      `,
+      `
+        import { mutation } from "./functions";
+        export const update = mutation({ handler: async () => true });
+      `,
+      `
+        import { query } from "../_generated/server";
+        import { requireSuperAdmin } from "./utils/tenancy";
+        export const list = query({ handler: async (ctx) => {
+          await requireSuperAdmin(ctx);
+          return true;
+        }});
+      `,
+      `
+        import { action, internalQuery } from "../_generated/server";
+        import { internal } from "./_generated/api";
+        import { requireSuperAdmin } from "../utils/tenancy";
+        export const remove = action({ handler: async (ctx) => {
+          await ctx.runQuery(internal.adminUsers.authorize, {});
+          return true;
+        }});
+        export const authorize = internalQuery({ handler: async (ctx) => {
+          await requireSuperAdmin(ctx);
+          return true;
+        }});
+      `,
+    ];
+    for (const [index, source] of lookalikes.entries()) {
+      assert.ok(
+        scanAdminSuperAdmin(source, `convex/admin/lookalike-${index}.ts`).some(
+          (entry) => entry.ruleId === RULE_IDS.ADMIN_SUPER_ADMIN_FIRST,
+        ),
+        `expected lookalike import ${index} to be rejected`,
+      );
+    }
+  });
+
+  test("requires unambiguous direct builder configurations", () => {
+    const source = `
+      import { query } from "./_generated/server";
+      import { requireSuperAdmin } from "./utils/tenancy";
+      const guarded = async (ctx) => {
+        await requireSuperAdmin(ctx);
+        return true;
+      };
+      const unguarded = async () => true;
+      const dynamicKey = process.env.CONFIG_KEY;
+      const definition = { handler: guarded };
+
+      export const spread = query({ handler: guarded, ...{ handler: unguarded } });
+      export const duplicate = query({ handler: guarded, handler: unguarded });
+      export const computed = query({ handler: guarded, [dynamicKey]: unguarded });
+      export const aliased = query(definition);
+    `;
+    const diagnostics = scanAdminSuperAdmin(
+      source,
+      "convex/adminConfigurations.ts",
+    );
+    assert.deepEqual(
+      diagnostics.map((entry) => entry.message.match(/"([^"]+)"/)?.[1]),
+      ["spread", "duplicate", "computed", "aliased"],
+    );
+  });
+
+  test("accepts only inert authentication recovery paths", () => {
+    const source = `
+      import { query } from "./_generated/server";
+      import { requireSuperAdmin } from "./utils/tenancy";
+      import { fallback as undefined } from "./fallback";
+      const doWork = () => null;
+
+      export const importedUndefined = query({ handler: async (ctx) => {
+        const admin = await requireSuperAdmin(ctx).catch(() => undefined);
+        if (!admin) return null;
+        return true;
+      }});
+      export const recoveryParameter = query({ handler: async (ctx) => {
+        const admin = await requireSuperAdmin(ctx).catch((undefined) => undefined);
+        if (!admin) return null;
+        return true;
+      }});
+      export const handlerParameter = query({ handler: async (ctx, undefined) => {
+        const admin = await requireSuperAdmin(ctx).catch(() => undefined);
+        if (!admin) return null;
+        return true;
+      }});
+      export const recoveryPattern = query({ handler: async (ctx) => {
+        const admin = await requireSuperAdmin(ctx).catch(
+          ({ [doWork()]: value }) => null,
+        );
+        if (!admin) return null;
+        return true;
+      }});
+      export const catchPattern = query({ handler: async (ctx) => {
+        try {
+          await requireSuperAdmin(ctx);
+        } catch ({ [doWork()]: value }) {
+          return null;
+        }
+        return true;
+      }});
+      export const throwingCatch = query({ handler: async (ctx) => {
+        try {
+          await requireSuperAdmin(ctx);
+        } catch {
+          throw doWork();
+        }
+      }});
+    `;
+    const diagnostics = scanAdminSuperAdmin(source, "convex/adminRecovery.ts");
+    assert.deepEqual(
+      diagnostics.map((entry) => entry.message.match(/"([^"]+)"/)?.[1]),
+      [
+        "importedUndefined",
+        "recoveryParameter",
+        "handlerParameter",
+        "recoveryPattern",
+        "catchPattern",
+        "throwingCatch",
+      ],
+    );
+  });
+
+  test("rejects registrations exported through containers", () => {
+    const source = `
+      import { query } from "./_generated/server";
+      const registration = query({ handler: async () => true });
+      export const indexed = [registration][0];
+      export const nested = { endpoint: registration };
+      const holder = [registration];
+      export { holder };
+      export default { endpoint: registration };
+    `;
+    const diagnostics = scanAdminSuperAdmin(
+      source,
+      "convex/adminContainers.ts",
+    );
+    assert.equal(diagnostics.length, 4);
+    assert.ok(
+      diagnostics.every((entry) => /runtime re-export/.test(entry.message)),
     );
   });
 
@@ -491,9 +896,9 @@ describe("admin-super-admin-first", () => {
     );
 
     const wrongNestedModule = `
-      import { action, internalQuery } from "../../_generated/server";
-      import { internal } from "../../_generated/api";
-      import { requireSuperAdmin } from "../../utils/tenancy";
+      import { action, internalQuery } from "../_generated/server";
+      import { internal } from "../_generated/api";
+      import { requireSuperAdmin } from "../utils/tenancy";
       export const forged = action({ handler: async (ctx) => {
         await ctx.runQuery(internal.other.users.authorize, {});
         return true;
@@ -1753,24 +2158,31 @@ describe("economics-revision", () => {
 });
 
 describe("raw-convex-mutation-builder", () => {
-  test("allows queries, actions, internal actions, type-only references, and dynamic action access", () => {
+  test("allows static named safe imports and type-only raw references", () => {
     const source = `
-      import { query, action, internalAction, type MutationCtx } from "./_generated/server";
+      import {
+        query,
+        action,
+        internalQuery,
+        internalAction,
+        httpAction,
+        type MutationCtx,
+      } from "./_generated/server";
       import type { mutation as RawMutation } from "./_generated/server";
       import * as server from "./_generated/server";
       export type { internalMutation } from "./_generated/server";
       export { query } from "./_generated/server";
+      export { query as server };
+      export type { server as ServerNamespace };
       type RawInternalMutation = typeof server.internalMutation;
       const read = server.query;
       const act = server.action;
-      async function loadAction() {
-        return (await import("./_generated/server.js")).internalAction;
-      }
+      const internalRead = server["internalQuery"];
     `;
     assert.deepEqual(scanRawConvexBuilders(source, "convex/safe.ts"), []);
   });
 
-  test("finds aliases, namespaces, re-exports, dynamic imports, and callback destructuring", () => {
+  test("rejects raw names, namespace escapes, re-exports, and dynamic imports", () => {
     const source = `
       import { mutation as define, internalMutation } from './_generated/server.js';
       import * as server from "./_generated/server";
@@ -1789,7 +2201,7 @@ describe("raw-convex-mutation-builder", () => {
       }
     `;
     const diagnostics = scanRawConvexBuilders(source, "convex/unsafe.ts");
-    assert.equal(diagnostics.length, 11);
+    assert.equal(diagnostics.length, 9);
     assert.ok(
       diagnostics.every(
         (item) => item.ruleId === RULE_IDS.RAW_CONVEX_MUTATION_BUILDER,
@@ -1804,7 +2216,7 @@ describe("raw-convex-mutation-builder", () => {
     `;
     const diagnostics = scanRawConvexBuilders(source, "convex/unsafe.ts");
     assert.equal(diagnostics.length, 1);
-    assert.match(diagnostics[0].message, /rest binding/);
+    assert.match(diagnostics[0].message, /namespace escapes/);
   });
 
   test("allows only the canonical wrapping module to import raw mutation builders", () => {
@@ -1823,8 +2235,6 @@ describe("raw-convex-mutation-builder", () => {
 
     const unsafePaths = [
       "C:/checkout/convex/functions.ts",
-      "convex/evil/convex/functions.ts",
-      "Convex/functions.ts",
       "convex/functions.js",
     ];
     for (const file of unsafePaths) {
@@ -1833,9 +2243,16 @@ describe("raw-convex-mutation-builder", () => {
         `expected non-canonical wrapper path ${file} to fail`,
       );
     }
+
+    for (const spoofedFile of [
+      "convex/evil/convex/functions.ts",
+      "Convex/functions.ts",
+    ]) {
+      assert.deepEqual(scanRawConvexBuilders(source, spoofedFile), []);
+    }
   });
 
-  test("tracks namespace aliases and folds or rejects computed members", () => {
+  test("rejects namespace aliases and nonliteral computed members", () => {
     const unsafe = `
       import * as server from "./_generated/server";
       const namespace = server;
@@ -1845,18 +2262,17 @@ describe("raw-convex-mutation-builder", () => {
       const unknown = server[runtimeMember];
       const { internalMutation: destructured } = namespace;
     `;
-    assert.equal(scanRawConvexBuilders(unsafe, "convex/unsafe.ts").length, 4);
+    assert.equal(scanRawConvexBuilders(unsafe, "convex/unsafe.ts").length, 3);
 
     const safe = `
-      import * as server from "./_generated/server";
-      const namespace = server;
-      const read = namespace["que" + "ry"];
-      const run = namespace.action;
+      import { query, action } from "./_generated/server";
+      const read = query;
+      const run = action;
     `;
     assert.deepEqual(scanRawConvexBuilders(safe, "convex/safe.ts"), []);
   });
 
-  test("tracks dynamic-import callback members and computed destructuring", () => {
+  test("rejects generated-server dynamic imports", () => {
     const unsafe = `
       import * as server from "./_generated/server";
       const unknownKey = getRuntimeMember();
@@ -1878,14 +2294,10 @@ describe("raw-convex-mutation-builder", () => {
     assert.equal(scanRawConvexBuilders(unsafe, "convex/unsafe.ts").length, 6);
 
     const safe = `
-      const queryKey = "query";
-      import("./_generated/server").then((generated) => [
-        generated.query,
-        generated.action,
-        generated.internalAction,
-        generated[queryKey],
-      ]);
-      import("./_generated/server").then(({ [queryKey]: read }) => read);
+      import { query, action, internalAction } from "./_generated/server";
+      const read = query;
+      const run = action;
+      const internalRun = internalAction;
     `;
     assert.deepEqual(scanRawConvexBuilders(safe, "convex/safe.ts"), []);
   });
@@ -1933,20 +2345,9 @@ describe("raw-convex-mutation-builder", () => {
     }
 
     const safeCases = [
-      `
-        const takeQuery = (generated) => generated.query;
-        const loadServer = () => import("./_generated/server");
-        loadServer().then(takeQuery);
-      `,
-      `
-        import * as server from "./_generated/server";
-        function expose({ query } = server) { return query; }
-        let read;
-        ({ query: read } = server);
-        const copied = { ...server };
-        const act = copied.action;
-      `,
-      `module.exports = { query: require("./_generated/server").query };`,
+      `import { query } from "./_generated/server"; export const read = query;`,
+      `import { action, internalAction } from "./_generated/server"; void action; void internalAction;`,
+      `const server = require("./_generated/server"); module.exports = { query: server.query };`,
     ];
     for (const [index, source] of safeCases.entries()) {
       assert.deepEqual(
@@ -1999,27 +2400,11 @@ describe("raw-convex-mutation-builder", () => {
     }
 
     const safeCases = [
-      `Reflect.get(require("./_generated/server"), "query");`,
-      `
-        import * as server from "./_generated/server";
-        const holder = [server.query, server.action];
-      `,
-      `
-        import * as server from "./_generated/server";
-        const copied = Object.assign({}, { query: server.query });
-      `,
-      `
-        const load = () => {
-          const marker = 1;
-          return require("./_generated/server");
-        };
-        const server = load();
-        const read = server.query;
-      `,
-      `
-        import server = require("./_generated/server");
-        server.query({});
-      `,
+      `import { query } from "./_generated/server"; const read = query;`,
+      `import { query, action } from "./_generated/server"; const holder = [query, action];`,
+      `import * as server from "./_generated/server"; const read = server.query;`,
+      `const server = require("./_generated/server"); const read = server.query;`,
+      `import server = require("./_generated/server"); server.query({});`,
     ];
     for (const [index, source] of safeCases.entries()) {
       assert.deepEqual(
@@ -2347,6 +2732,45 @@ test("repository scanning treats nested convex/admin modules as admin surfaces",
     assert.equal(diagnostics.length, 1);
     assert.equal(diagnostics[0].ruleId, RULE_IDS.ADMIN_SUPER_ADMIN_FIRST);
     assert.equal(diagnostics[0].file, "convex/admin/users/remove.ts");
+  } finally {
+    fs.rmSync(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+test("repository scanning treats case variants as admin surfaces", () => {
+  const temporaryRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "autoflow-admin-case-"),
+  );
+  try {
+    const convexRoot = path.join(temporaryRoot, "convex");
+    const nestedAdminRoot = path.join(convexRoot, "ADMIN", "users");
+    fs.mkdirSync(nestedAdminRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(convexRoot, "AdminUsers.ts"),
+      `
+        import { query } from "./_generated/server";
+        export const list = query({ handler: async (ctx) => ctx.db.get("user") });
+      `,
+    );
+    fs.writeFileSync(
+      path.join(nestedAdminRoot, "remove.ts"),
+      `
+        import { query } from "../../_generated/server";
+        export const remove = query({ handler: async (ctx) => ctx.db.get("user") });
+      `,
+    );
+
+    const diagnostics = scanRepository(temporaryRoot);
+    assert.equal(diagnostics.length, 2);
+    assert.ok(
+      diagnostics.every(
+        (item) => item.ruleId === RULE_IDS.ADMIN_SUPER_ADMIN_FIRST,
+      ),
+    );
+    assert.deepEqual(
+      diagnostics.map((item) => item.file),
+      ["convex/ADMIN/users/remove.ts", "convex/AdminUsers.ts"],
+    );
   } finally {
     fs.rmSync(temporaryRoot, { recursive: true, force: true });
   }

@@ -39,7 +39,8 @@
           "semanticHash": "91263489a0bc82f6afe1689e1df2f2990c30b52e3b84a09a6fa3653ec7cd12c9",
           "metrics": {
             "lines": 515,
-            "complexity": 38
+            "complexity": 38,
+            "nesting": 5
           }
         },
         {
@@ -47,7 +48,8 @@
           "semanticHash": "a2654d73bc2818df513597c0fd79ca2381ff45070a66369b644693bdc5872ff5",
           "metrics": {
             "lines": 184,
-            "complexity": 29
+            "complexity": 29,
+            "nesting": 6
           }
         }
       ]
@@ -77,6 +79,13 @@
           "metrics": {
             "lines": 555,
             "complexity": 140
+          }
+        },
+        {
+          "anchor": "module/function:DashboardPage/binding:displayLeads/call:paginatedLeads.map:arg0",
+          "semanticHash": "358ec1f08630b2cf79207858c5581328f73db8e28122c44066de78b289883870",
+          "metrics": {
+            "nesting": 8
           }
         }
       ]
@@ -764,6 +773,13 @@
         "lines": 4904
       },
       "functions": [
+        {
+          "anchor": "module/function:ShowcaseRoot",
+          "semanticHash": "6246b61f3dd31b97fb6484cf404b341a80566139162c675fe742bb0e8a8cd497",
+          "metrics": {
+            "nesting": 7
+          }
+        },
         {
           "anchor": "module/function:ShowcaseStyles",
           "semanticHash": "7048dd5e3c50c8aa33f6dc3faa92f4af0f40c8c91118822103b2dc1f3f1d8d84",
@@ -1726,7 +1742,8 @@
           "semanticHash": "4a487454fe96a1bce4b744c0b5b5268bb2dd3f1e862ebb4919e759f93991498d",
           "metrics": {
             "lines": 1061,
-            "complexity": 191
+            "complexity": 191,
+            "nesting": 7
           }
         },
         {
@@ -1778,7 +1795,8 @@
           "semanticHash": "e85e6961ff7fdc187797937b4788758e1737f4ae99a626e173b2ef71c6866262",
           "metrics": {
             "lines": 787,
-            "complexity": 170
+            "complexity": 170,
+            "nesting": 5
           }
         },
         {
@@ -3047,7 +3065,8 @@
           "semanticHash": "08670b2121e88b85d92ccd4ada8f8737c45900c377f6b6926876b54bf5c25d26",
           "metrics": {
             "lines": 925,
-            "complexity": 125
+            "complexity": 125,
+            "nesting": 6
           }
         }
       ]
@@ -3396,6 +3415,13 @@
       },
       "functions": [
         {
+          "anchor": "module/binding:agingReport/call:query:arg0/property:handler",
+          "semanticHash": "a3d5c567c55ec16df75def2c2d3185b50b275a5ce0e4d803b5eca01bddd55239",
+          "metrics": {
+            "nesting": 6
+          }
+        },
+        {
           "anchor": "module/binding:createInstallmentPlan/call:mutation:arg0/property:handler",
           "semanticHash": "b18545db92a4f8ccf74a751c18d18dd9d675e20633862809c8bb6dc80cfab281",
           "metrics": {
@@ -3536,7 +3562,8 @@
           "anchor": "module/binding:surveyPrepaidLedgerIntegrity/call:internalQuery:arg0/property:handler",
           "semanticHash": "080647e5be9018402e51ba9b93bcd6a487d818c16d58611a5d60b46748903fd8",
           "metrics": {
-            "complexity": 37
+            "complexity": 37,
+            "nesting": 5
           }
         }
       ]
@@ -3944,7 +3971,7 @@
           "metrics": {
             "lines": 131,
             "complexity": 33,
-            "nesting": 5
+            "nesting": 6
           }
         },
         {

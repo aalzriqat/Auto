@@ -521,11 +521,13 @@ export function collectUniqueValueDeclarations(sourceFile) {
 }
 
 export function resolveValue(expression, values, seen = new Set()) {
-  const current = unwrapExpression(expression);
-  if (!ts.isIdentifier(current) || seen.has(current.text)) return current;
-  const resolved = values.resolveAt(current.text, current);
-  if (!resolved) return current;
-  const nextSeen = new Set(seen);
-  nextSeen.add(current.text);
-  return resolveValue(resolved, values, nextSeen);
+  let current = unwrapExpression(expression);
+  const visited = new Set(seen);
+  while (ts.isIdentifier(current) && !visited.has(current.text)) {
+    visited.add(current.text);
+    const resolved = values.resolveAt(current.text, current);
+    if (!resolved) break;
+    current = unwrapExpression(resolved);
+  }
+  return current;
 }

@@ -2,6 +2,8 @@ import { execFile } from "node:child_process";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 
+import { resolveGitExecutable } from "./git-executable.mjs";
+
 const execFileAsync = promisify(execFile);
 
 function edgeKey(edge) {
@@ -105,7 +107,7 @@ export function canonicalizeArchitectureBaseline(candidate, normalizePath) {
 
 export async function runArchitectureGit(rootDir, arguments_) {
   try {
-    const result = await execFileAsync("git", arguments_, {
+    const result = await execFileAsync(resolveGitExecutable(), arguments_, {
       cwd: resolve(rootDir),
       encoding: "utf8",
       windowsHide: true,

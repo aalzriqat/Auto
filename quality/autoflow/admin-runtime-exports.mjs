@@ -1,305 +1,138 @@
 import ts from "typescript";
 
-import {
-  RULE_IDS,
-  collectUniqueValueDeclarations,
-  diagnostic,
-  memberName,
-  memberObject,
-  staticString,
-  unwrapExpression,
-} from "./ast-utils.mjs";
+import { RULE_IDS, diagnostic, unwrapExpression } from "./ast-utils.mjs";
+import { expressionIsInert } from "./admin-parameters.mjs";
+import { trustedAdminAuditHelperExport } from "./admin-runtime-provenance.mjs";
 
-function addImportBinding(bindings, identifier) {
-  const existing = bindings.get(identifier.text);
-  if (existing) existing.push(identifier);
-  else bindings.set(identifier.text, [identifier]);
+function hasModifier(node, kind) {
+  return Boolean(node.modifiers?.some((modifier) => modifier.kind === kind));
 }
 
-function runtimeImportBindings(sourceFile) {
-  const bindings = new Map();
-  for (const statement of sourceFile.statements) {
-    if (ts.isImportEqualsDeclaration(statement)) {
-      if (!statement.isTypeOnly) addImportBinding(bindings, statement.name);
-      continue;
-    }
-    if (!ts.isImportDeclaration(statement)) continue;
-    const clause = statement.importClause;
-    if (!clause || clause.isTypeOnly) continue;
-    if (clause.name) addImportBinding(bindings, clause.name);
-    const named = clause.namedBindings;
-    if (!named) continue;
-    if (ts.isNamespaceImport(named)) addImportBinding(bindings, named.name);
-    else {
-      for (const element of named.elements) {
-        if (!element.isTypeOnly) addImportBinding(bindings, element.name);
-      }
-    }
-  }
-  return bindings;
-}
-
-function isImportedUse(identifier, bindings, provenance) {
-  return (bindings.get(identifier.text) ?? []).some((target) =>
-    provenance.isUseOf(identifier, target),
+function isTypeOnlyStatement(statement) {
+  return (
+    ts.isTypeAliasDeclaration(statement) ||
+    ts.isInterfaceDeclaration(statement) ||
+    (ts.isExportDeclaration(statement) && statement.isTypeOnly) ||
+    hasModifier(statement, ts.SyntaxKind.DeclareKeyword)
   );
 }
 
-function runtimeModuleReExport(statement) {
-  if (!ts.isExportDeclaration(statement) || !statement.moduleSpecifier) {
-    return false;
+function isDirectTrustedBuilder(expression, adminBindings) {
+  const current = unwrapExpression(expression);
+  return Boolean(
+    ts.isCallExpression(current) &&
+    adminBindings.builderKind(current.expression),
+  );
+}
+
+function variableExportIsCanonical(statement, adminBindings) {
+  if (!(statement.declarationList.flags & ts.NodeFlags.Const)) return false;
+  return statement.declarationList.declarations.every(
+    (declaration) =>
+      ts.isIdentifier(declaration.name) &&
+      adminBindings.isStableValue(declaration.name) &&
+      declaration.initializer &&
+      (expressionIsInert(declaration.initializer) ||
+        isDirectTrustedBuilder(declaration.initializer, adminBindings)),
+  );
+}
+
+function exportDeclarationIsTypeOnly(statement) {
+  return Boolean(
+    statement.isTypeOnly ||
+    (statement.exportClause &&
+      ts.isNamedExports(statement.exportClause) &&
+      statement.exportClause.elements.every((element) => element.isTypeOnly)),
+  );
+}
+
+function runtimeExportIsCanonical(statement, adminBindings) {
+  if (isTypeOnlyStatement(statement)) return true;
+  if (ts.isExportDeclaration(statement)) {
+    return exportDeclarationIsTypeOnly(statement);
   }
-  if (statement.isTypeOnly) return false;
-  if (!statement.exportClause || ts.isNamespaceExport(statement.exportClause)) {
+  if (ts.isImportEqualsDeclaration(statement)) {
+    return !hasModifier(statement, ts.SyntaxKind.ExportKeyword);
+  }
+  if (ts.isExportAssignment(statement)) {
+    return (
+      !statement.isExportEquals &&
+      (expressionIsInert(statement.expression) ||
+        isDirectTrustedBuilder(statement.expression, adminBindings))
+    );
+  }
+  if (!hasModifier(statement, ts.SyntaxKind.ExportKeyword)) return true;
+  return (
+    ts.isVariableStatement(statement) &&
+    variableExportIsCanonical(statement, adminBindings)
+  );
+}
+
+function identifierIsPropertyName(identifier) {
+  const parent = identifier.parent;
+  if (ts.isPropertyAccessExpression(parent) && parent.name === identifier) {
     return true;
   }
-  return statement.exportClause.elements.some((element) => !element.isTypeOnly);
-}
-
-function localImportedReExport(statement, imports, provenance) {
   if (
-    !ts.isExportDeclaration(statement) ||
-    statement.moduleSpecifier ||
-    statement.isTypeOnly ||
-    !statement.exportClause ||
-    !ts.isNamedExports(statement.exportClause)
+    (ts.isPropertyAssignment(parent) ||
+      ts.isMethodDeclaration(parent) ||
+      ts.isPropertyDeclaration(parent) ||
+      ts.isGetAccessor(parent) ||
+      ts.isSetAccessor(parent)) &&
+    parent.name === identifier &&
+    !ts.isComputedPropertyName(parent.name)
   ) {
-    return false;
+    return true;
   }
-  return statement.exportClause.elements.some((element) => {
-    if (element.isTypeOnly) return false;
-    const local = element.propertyName ?? element.name;
-    return isImportedUse(local, imports, provenance);
-  });
+  return false;
 }
 
-function importedExportValue(expression, imports, provenance) {
-  let current = unwrapExpression(expression);
-  while (
-    ts.isPropertyAccessExpression(current) ||
-    ts.isElementAccessExpression(current)
-  ) {
-    current = memberObject(current);
+function containsAmbientCommonJs(statement, provenance) {
+  const pending = [statement];
+  while (pending.length > 0) {
+    const node = pending.pop();
+    if (ts.isTypeNode(node)) continue;
+    if (
+      ts.isIdentifier(node) &&
+      (node.text === "module" || node.text === "exports") &&
+      !identifierIsPropertyName(node) &&
+      !provenance.hasBinding(node)
+    ) {
+      return true;
+    }
+    ts.forEachChild(node, (child) => {
+      pending.push(child);
+    });
   }
-  return (
-    ts.isIdentifier(current) && isImportedUse(current, imports, provenance)
-  );
+  return false;
 }
 
-function esmRuntimeExport(statement, imports, provenance) {
-  if (ts.isImportEqualsDeclaration(statement)) {
-    return (
-      !statement.isTypeOnly &&
-      Boolean(
-        statement.modifiers?.some(
-          (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
-        ),
-      )
-    );
-  }
-  if (runtimeModuleReExport(statement)) return true;
-  if (localImportedReExport(statement, imports, provenance)) return true;
-  if (!ts.isExportAssignment(statement)) return false;
-  return (
-    statement.isExportEquals ||
-    importedExportValue(statement.expression, imports, provenance)
-  );
-}
-
-function expressionChain(expression) {
-  const parts = [];
-  let current = unwrapExpression(expression);
-  while (
-    ts.isPropertyAccessExpression(current) ||
-    ts.isElementAccessExpression(current)
-  ) {
-    const name = memberName(current);
-    if (!name) return undefined;
-    parts.unshift(name);
-    current = memberObject(current);
-  }
-  return ts.isIdentifier(current) ? { root: current, parts } : undefined;
-}
-
-function directCommonJsExportReference(chain, provenance) {
-  if (provenance.hasBinding(chain.root)) return undefined;
-  if (chain.root.text === "module" && chain.parts[0] === "exports") {
-    return { kind: "module.exports", remainingParts: chain.parts.length - 1 };
-  }
-  if (chain.root.text === "exports") {
-    return { kind: "exports", remainingParts: chain.parts.length };
-  }
-  return undefined;
-}
-
-function commonJsExportReference(
-  expression,
-  provenance,
-  seenBindings = new Set(),
-) {
-  const chain = expressionChain(expression);
-  if (!chain) return undefined;
-  const direct = directCommonJsExportReference(chain, provenance);
-  if (direct) return direct;
-
-  const binding = provenance.bindingOf(chain.root);
-  const declaration = binding?.parent;
-  if (
-    !binding ||
-    seenBindings.has(binding) ||
-    !declaration ||
-    !ts.isVariableDeclaration(declaration) ||
-    declaration.name !== binding ||
-    !declaration.initializer ||
-    !(declaration.parent.flags & ts.NodeFlags.Const)
-  ) {
-    return undefined;
-  }
-  const nextSeen = new Set(seenBindings);
-  nextSeen.add(binding);
-  const target = commonJsExportReference(
-    declaration.initializer,
-    provenance,
-    nextSeen,
-  );
-  return target
-    ? {
-        ...target,
-        remainingParts: target.remainingParts + chain.parts.length,
-      }
-    : undefined;
-}
-
-function commonJsExportTarget(expression, provenance, allowExportsObject) {
-  const target = commonJsExportReference(expression, provenance);
-  if (!target) return false;
-  return (
-    target.kind === "module.exports" ||
-    allowExportsObject ||
-    target.remainingParts > 0
-  );
-}
-
-function assignmentOperator(kind) {
-  return (
-    kind >= ts.SyntaxKind.FirstAssignment &&
-    kind <= ts.SyntaxKind.LastAssignment
-  );
-}
-
-function resolveImmutableAlias(expression, provenance, seen = new Set()) {
-  const current = unwrapExpression(expression);
-  if (!ts.isIdentifier(current)) return current;
-  const binding = provenance.bindingOf(current);
-  if (!binding || seen.has(binding)) return current;
-  const declaration = binding.parent;
-  if (
-    !ts.isVariableDeclaration(declaration) ||
-    declaration.name !== binding ||
-    !declaration.initializer ||
-    !(declaration.parent.flags & ts.NodeFlags.Const)
-  ) {
-    return current;
-  }
-  const nextSeen = new Set(seen);
-  nextSeen.add(binding);
-  return resolveImmutableAlias(declaration.initializer, provenance, nextSeen);
-}
-
-function unshadowedBuiltinMember(
-  expression,
-  objectName,
-  operation,
-  provenance,
-  values,
-) {
-  const current = resolveImmutableAlias(expression, provenance);
-  const object = memberObject(current);
-  const operationName = ts.isElementAccessExpression(current)
-    ? staticString(current.argumentExpression, values)
-    : memberName(current);
-  return (
-    operationName === operation &&
-    object &&
-    ts.isIdentifier(object) &&
-    object.text === objectName &&
-    !provenance.hasBinding(object)
-  );
-}
-
-function commonJsRuntimeExport(node, provenance, values) {
-  if (
-    ts.isBinaryExpression(node) &&
-    assignmentOperator(node.operatorToken.kind)
-  ) {
-    return commonJsExportTarget(node.left, provenance, false);
-  }
-  if (!ts.isCallExpression(node) || node.arguments.length === 0) return false;
-  const mutatesTarget =
-    unshadowedBuiltinMember(
-      node.expression,
-      "Object",
-      "assign",
-      provenance,
-      values,
-    ) ||
-    unshadowedBuiltinMember(
-      node.expression,
-      "Object",
-      "defineProperty",
-      provenance,
-      values,
-    ) ||
-    unshadowedBuiltinMember(
-      node.expression,
-      "Object",
-      "defineProperties",
-      provenance,
-      values,
-    ) ||
-    unshadowedBuiltinMember(
-      node.expression,
-      "Reflect",
-      "set",
-      provenance,
-      values,
-    ) ||
-    unshadowedBuiltinMember(
-      node.expression,
-      "Reflect",
-      "defineProperty",
-      provenance,
-      values,
-    );
-  return (
-    mutatesTarget && commonJsExportTarget(node.arguments[0], provenance, true)
-  );
-}
-
-/** Rejects runtime re-export surfaces that cannot prove handler authentication. */
-export function scanAdminRuntimeExports(sourceFile, file, provenance) {
-  const imports = runtimeImportBindings(sourceFile);
-  const values = collectUniqueValueDeclarations(sourceFile);
+/** Enforces a small, auditable runtime export surface for admin modules. */
+export function scanAdminRuntimeExports(sourceFile, file, adminBindings) {
   const diagnostics = [];
-  const report = (node) => {
-    diagnostics.push(
-      diagnostic({
-        sourceFile,
-        file,
-        node,
-        ruleId: RULE_IDS.ADMIN_SUPER_ADMIN_FIRST,
-        message:
-          "Admin modules may not runtime re-export imported or CommonJS values because super-admin authentication cannot be proven; export authenticated local Convex registrations or type-only symbols.",
-      }),
-    );
-  };
   for (const statement of sourceFile.statements) {
-    if (esmRuntimeExport(statement, imports, provenance)) report(statement);
+    const allowedAuditHelper = trustedAdminAuditHelperExport(
+      statement,
+      sourceFile,
+      file,
+      adminBindings.provenance,
+    );
+    if (
+      !allowedAuditHelper &&
+      (!runtimeExportIsCanonical(statement, adminBindings) ||
+        containsAmbientCommonJs(statement, adminBindings.provenance))
+    ) {
+      diagnostics.push(
+        diagnostic({
+          sourceFile,
+          file,
+          node: statement,
+          ruleId: RULE_IDS.ADMIN_SUPER_ADMIN_FIRST,
+          message:
+            "Admin runtime re-exports must be immutable direct trusted Convex registrations or inert local constants; use type-only exports for types.",
+        }),
+      );
+    }
   }
-  const visit = (node) => {
-    if (commonJsRuntimeExport(node, provenance, values)) report(node);
-    ts.forEachChild(node, visit);
-  };
-  visit(sourceFile);
   return diagnostics;
 }

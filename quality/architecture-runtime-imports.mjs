@@ -3,6 +3,7 @@ import path from "node:path";
 
 import ts from "typescript";
 
+import { traceableLoaderSpecifier } from "./architecture-import-attributes.mjs";
 import { createLexicalBindingProvenance } from "./autoflow/lexical-binding-provenance.mjs";
 import { codeGenerationViolationForNode } from "./autoflow/dynamic-code-generation.mjs";
 import {
@@ -73,14 +74,6 @@ function unwrapStaticExpression(expression) {
     current = current.expression;
   }
   return current;
-}
-
-function literalModuleSpecifier(expression) {
-  const current = unwrapStaticExpression(expression);
-  return current &&
-    (ts.isStringLiteral(current) || ts.isNoSubstitutionTemplateLiteral(current))
-    ? current.text
-    : undefined;
 }
 
 function isRepositoryModuleSpecifier(specifier) {
@@ -353,14 +346,14 @@ function importEqualsModuleText(node) {
 }
 
 function isNodeLoaderApiCall(node, bindings) {
-  if (!ts.isCallExpression(node) || node.arguments.length !== 1) return false;
-  if (!nodeLoaderExports(literalModuleSpecifier(node.arguments[0]))) {
-    return false;
-  }
+  if (!ts.isCallExpression(node)) return false;
   const callee = unwrapStaticExpression(node.expression);
-  return (
-    callee.kind === ts.SyntaxKind.ImportKeyword ||
-    commonJsLoaderKind(callee, bindings) !== undefined
+  const loaderKind =
+    callee.kind === ts.SyntaxKind.ImportKeyword
+      ? "import"
+      : commonJsLoaderKind(callee, bindings);
+  return Boolean(
+    loaderKind && nodeLoaderExports(traceableLoaderSpecifier(node, loaderKind)),
   );
 }
 
@@ -445,10 +438,7 @@ function callViolation(sourceFile, modulePath, node, bindings) {
   if (!ts.isCallExpression(node)) return undefined;
   const loaderKind = runtimeLoaderKind(node.expression, bindings);
   if (!loaderKind) return undefined;
-  const specifier =
-    node.arguments.length === 1 && !node.questionDotToken
-      ? literalModuleSpecifier(node.arguments[0])
-      : undefined;
+  const specifier = traceableLoaderSpecifier(node, loaderKind);
   const dependencyCruiserTracesLoader =
     loaderKind === "import" || loaderKind === "require";
   if (specifier !== undefined && dependencyCruiserTracesLoader)

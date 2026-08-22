@@ -243,6 +243,40 @@ test("nested public executable sources participate in architecture checks", asyn
   ]);
 });
 
+test("deep dependency graphs do not overflow the cycle scanner", () => {
+  const moduleCount = 5_000;
+  const modules = Array.from(
+    { length: moduleCount },
+    (_, index) => `lib/module-${String(index).padStart(6, "0")}.ts`,
+  );
+  const edges = modules.slice(0, -1).map((from, index) => ({
+    from,
+    to: modules[index + 1],
+    runtime: true,
+  }));
+
+  assert.deepEqual(runtimeCycleSnapshot({ modules, edges }), {
+    cyclicModules: [],
+    cyclicEdges: [],
+  });
+
+  const closingEdge = {
+    from: modules.at(-1),
+    to: modules[0],
+    runtime: true,
+  };
+  assert.deepEqual(
+    runtimeCycleSnapshot({ modules, edges: [...edges, closingEdge] }),
+    {
+      cyclicModules: modules,
+      cyclicEdges: [...edges, closingEdge].map(({ from, to }) => ({
+        from,
+        to,
+      })),
+    },
+  );
+});
+
 test("a new runtime cycle fails while the exact grandfathered cycle passes", async (t) => {
   const fixture = await createFixture(t, {
     "lib/a.ts": 'import { b } from "./b";\nexport const a = b + 1;\n',
@@ -625,6 +659,48 @@ test("nonliteral runtime imports fail closed while literal imports remain resolv
     },
   );
   assert.deepEqual(report.snapshot, { cyclicModules: [], cyclicEdges: [] });
+});
+
+test("literal dynamic imports accept only static import attributes", () => {
+  const allowed = [
+    'export const data = import("./data.json", { with: { type: "json" } });',
+    'export const data = import(`./data.json`, { "with": { "type": "json" } });',
+  ];
+  for (const [index, source] of allowed.entries()) {
+    assert.deepEqual(
+      findNonliteralRuntimeImports(source, `lib/attributes-${index}.ts`),
+      [],
+    );
+  }
+
+  const blocked = [
+    'const target = "./data.json"; export const data = import(target, { with: { type: "json" } });',
+    'const options = { with: { type: "json" } }; export const data = import("./data.json", options);',
+    'const attributes = { type: "json" }; export const data = import("./data.json", { with: attributes });',
+    'const type = "json"; export const data = import("./data.json", { with: { type } });',
+    'export const data = import("./data.json", { with: { ...{ type: "json" } } });',
+    'export const data = import("./data.json", { with: { type: "json" }, extra: true });',
+    'export const data = import(("./data.json" as string), { with: { type: "json" } });',
+    'export const data = import("./data.json", { with: { type: "json" } }, "extra");',
+    'export const data = require("./data.json", { with: { type: "json" } });',
+  ];
+  for (const [index, source] of blocked.entries()) {
+    assert.ok(
+      findNonliteralRuntimeImports(source, `lib/invalid-attributes-${index}.ts`)
+        .length > 0,
+      `expected invalid import attributes case ${index} to fail`,
+    );
+  }
+
+  const nodeLoader = findNonliteralRuntimeImports(
+    'export const moduleApi = import("node:module", { with: {} });',
+    "lib/node-loader-attributes.ts",
+  );
+  assert.ok(
+    nodeLoader.some(
+      (violation) => violation.kind === "UNTRACEABLE NODE MODULE LOADER",
+    ),
+  );
 });
 
 test("CommonJS runtime loaders cannot hide repository dependencies", async (t) => {

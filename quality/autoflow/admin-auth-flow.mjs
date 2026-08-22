@@ -6,7 +6,11 @@ import {
   memberObject,
   unwrapExpression,
 } from "./ast-utils.mjs";
-import { parameterInitializersAreInert } from "./admin-parameters.mjs";
+import {
+  bindingInitializersAreInert,
+  expressionIsInert,
+  parameterInitializersAreInert,
+} from "./admin-parameters.mjs";
 
 function firstRuntimeStatement(block) {
   return block.statements.find(
@@ -17,12 +21,19 @@ function firstRuntimeStatement(block) {
   );
 }
 
+function delegatedArgumentsAreInert(argumentsList) {
+  return (
+    argumentsList.length === 1 ||
+    (argumentsList.length === 2 && expressionIsInert(argumentsList[1]))
+  );
+}
+
 function authCall(expression, authContext) {
   const current = unwrapExpression(expression);
   if (!ts.isCallExpression(current)) return false;
   if (authContext.adminBindings.isDirectAuthTarget(current.expression)) {
     return (
-      current.arguments.length > 0 &&
+      current.arguments.length === 1 &&
       identifierName(current.arguments[0]) === authContext.ctxName
     );
   }
@@ -32,7 +43,7 @@ function authCall(expression, authContext) {
   if (
     !receiver ||
     identifierName(receiver) !== authContext.ctxName ||
-    current.arguments.length === 0
+    !delegatedArgumentsAreInert(current.arguments)
   ) {
     return false;
   }
@@ -53,29 +64,26 @@ function awaitedAuthExpression(expression, authContext) {
   );
 }
 
-function firstRuntimeStatementTerminates(block) {
-  const first = firstRuntimeStatement(block);
-  return Boolean(
-    first && (ts.isReturnStatement(first) || ts.isThrowStatement(first)),
-  );
-}
-
-function isNullishOrFalse(expression) {
+function isNullishOrFalse(expression, provenance) {
   if (!expression) return true;
   const current = unwrapExpression(expression);
   return (
     current.kind === ts.SyntaxKind.NullKeyword ||
     current.kind === ts.SyntaxKind.FalseKeyword ||
-    (ts.isIdentifier(current) && current.text === "undefined") ||
+    (ts.isIdentifier(current) &&
+      current.text === "undefined" &&
+      !provenance.hasBinding(current)) ||
     (ts.isVoidExpression(current) && ts.isNumericLiteral(current.expression))
   );
 }
 
-function authFailureBlockTerminatesSafely(block) {
+function authFailureBlockTerminatesSafely(block, provenance) {
   const first = firstRuntimeStatement(block);
   if (!first) return false;
-  if (ts.isThrowStatement(first)) return true;
-  return ts.isReturnStatement(first) && isNullishOrFalse(first.expression);
+  return (
+    ts.isReturnStatement(first) &&
+    isNullishOrFalse(first.expression, provenance)
+  );
 }
 
 function tryStatementAuthenticates(statement, authContext) {
@@ -86,7 +94,14 @@ function tryStatementAuthenticates(statement, authContext) {
   }
   return (
     !statement.catchClause ||
-    authFailureBlockTerminatesSafely(statement.catchClause.block)
+    ((!statement.catchClause.variableDeclaration ||
+      bindingInitializersAreInert(
+        statement.catchClause.variableDeclaration.name,
+      )) &&
+      authFailureBlockTerminatesSafely(
+        statement.catchClause.block,
+        authContext.adminBindings.provenance,
+      ))
   );
 }
 
@@ -127,9 +142,13 @@ function caughtAuthBinding(statement, authContext) {
   const caughtCall = unwrapExpression(initializer.expression);
   const recovery = catchRecovery(caughtCall);
   if (!recovery) return undefined;
+  if (!parameterInitializersAreInert(recovery)) return undefined;
   const recoveryIsNullish = ts.isBlock(recovery.body)
-    ? authFailureBlockTerminatesSafely(recovery.body)
-    : isNullishOrFalse(recovery.body);
+    ? authFailureBlockTerminatesSafely(
+        recovery.body,
+        authContext.adminBindings.provenance,
+      )
+    : isNullishOrFalse(recovery.body, authContext.adminBindings.provenance);
   if (!recoveryIsNullish) return undefined;
   const authPromise = memberObject(caughtCall.expression);
   return authPromise && authCall(authPromise, authContext)
@@ -151,7 +170,7 @@ function catchRecovery(caughtCall) {
     : undefined;
 }
 
-function isImmediateNullReturnGuard(statement, bindingName) {
+function isImmediateNullReturnGuard(statement, bindingName, provenance) {
   if (!ts.isIfStatement(statement)) return false;
   const condition = unwrapExpression(statement.expression);
   if (
@@ -162,9 +181,12 @@ function isImmediateNullReturnGuard(statement, bindingName) {
     return false;
   }
   const guarded = statement.thenStatement;
-  if (ts.isReturnStatement(guarded) || ts.isThrowStatement(guarded))
-    return true;
-  return ts.isBlock(guarded) && firstRuntimeStatementTerminates(guarded);
+  if (ts.isReturnStatement(guarded)) {
+    return isNullishOrFalse(guarded.expression, provenance);
+  }
+  return (
+    ts.isBlock(guarded) && authFailureBlockTerminatesSafely(guarded, provenance)
+  );
 }
 
 /** Proves that the handler's first runtime path performs super-admin auth. */
@@ -201,6 +223,10 @@ export function handlerAuthenticates(
   return Boolean(
     bindingName &&
     runtimeStatements[1] &&
-    isImmediateNullReturnGuard(runtimeStatements[1], bindingName),
+    isImmediateNullReturnGuard(
+      runtimeStatements[1],
+      bindingName,
+      adminBindings.provenance,
+    ),
   );
 }

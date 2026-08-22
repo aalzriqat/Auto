@@ -161,7 +161,12 @@ under `quality/tests`.
    executable work. The established delegated authentication used by the admin
    user action is supported. Builder aliases and exported registrations are
    traced; missing, late, unawaited, swallowed, conditional, shadowed,
-   reassigned, or dead-closure checks fail.
+   reassigned, or dead-closure checks fail. Runtime re-exports and CommonJS
+   publication paths fail closed because authentication cannot be proven. The
+   sole exact exception is the established plain `logAdminAction` alias in
+   `convex/adminAudit.ts`, imported as `writeAuditLog` from
+   `./utils/auditLog`; changing its file, import, export name, or expression
+   invalidates the exception.
 2. **Financing economics revision coupling.** A patch or replacement that
    writes a protected financing economics field must co-write
    a statically proven `economicsRevision` increment in the same resolved
@@ -183,14 +188,18 @@ under `quality/tests`.
    invalidates that proof.
 3. **Aggregate-aware mutation builders.** Production Convex modules must import
    `mutation` and `internalMutation` from `convex/functions.ts`, never from
-   `_generated/server`. Aliases, namespaces, re-exports, `.js` specifiers, and
-   dynamic imports are covered. A generated-server namespace may not escape
-   through an object/array container, helper call, callback, proxy, or
-   unverified reflection alias; pass an explicitly safe query/action member
-   instead. Queries, actions, internal actions, and type-only imports remain
-   allowed because the aggregate wrapper does not replace them. Only the five
-   generated Convex binding outputs are skipped; other JavaScript/TypeScript
-   under `_generated` remains subject to the rule.
+   `_generated/server`. Static named imports and re-exports remain allowed for
+   queries, actions, HTTP actions, contexts, and types. A namespace binding may
+   only be used as the immediate receiver of a literal safe member such as
+   `server.query`; aliases, containers, callbacks, classes, exports, computed
+   names, and other escapes fail at that first use. Generated-server dynamic
+   imports, indirect or nonliteral CommonJS loading, and whole-module CommonJS
+   escapes fail closed with a named-import remediation. Module specifiers are
+   resolved relative to the scanned file, so an unrelated module whose path
+   merely ends in `_generated/server` is not misclassified. Type-only access,
+   including `typeof import("./_generated/server").mutation`, remains allowed.
+   Only the five generated Convex binding outputs are skipped; other
+   JavaScript/TypeScript under `_generated` remains subject to the rule.
 4. **Exact aggregate trigger wiring.** Every `TableAggregate` variable needs
    its own `idempotentTrigger()` registration, and both database writer trigger
    sets must call the shared registrar. Matching uses aggregate variable

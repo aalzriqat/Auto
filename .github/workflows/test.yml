@@ -155,6 +155,11 @@ jobs:
     - name: Install dependencies
       run: pnpm install --frozen-lockfile --ignore-scripts
 
+    # This cheap sentinel also runs inside lint. Keeping it in a second required
+    # job makes an accidental job-level condition on either gate fail the other.
+    - name: Verify guardrail workflow wiring
+      run: node --test quality/tests/ci-workflow.test.mjs
+
     - name: TypeScript type check
       run: pnpm typecheck
 

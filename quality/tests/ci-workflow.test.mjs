@@ -34,25 +34,64 @@ function namedStep(job, stepName) {
   return match[0];
 }
 
-test("the required lint job runs every guardrail with complete history", () => {
-  const lintJob = jobBlock(workflowSource(), "lint");
+function assertGuardrailWorkflow(source) {
+  const lintJob = jobBlock(source, "lint");
+  const typeCheckJob = jobBlock(source, "type-check");
   const lintStep = namedStep(lintJob, "Lint");
   const regressionStep = namedStep(lintJob, "Guardrail regression suite");
   const liveStep = namedStep(
     lintJob,
     "Maintainability, architecture, and AutoFlow safety guardrails",
   );
+  const wiringStep = namedStep(
+    typeCheckJob,
+    "Verify guardrail workflow wiring",
+  );
 
+  for (const job of [lintJob, typeCheckJob]) {
+    assert.doesNotMatch(job, /^    (?:if|needs|continue-on-error):/mu);
+  }
   assert.match(lintJob, /fetch-depth:\s*0/u);
   assert.match(lintJob, /persist-credentials:\s*false/u);
   assert.match(lintStep, /run:\s*pnpm lint\s*$/mu);
   assert.match(regressionStep, /run:\s*pnpm quality:guardrails:test\s*$/mu);
   assert.match(liveStep, /run:\s*pnpm quality:guardrails\s*$/mu);
+  assert.match(
+    wiringStep,
+    /run:\s*node --test quality\/tests\/ci-workflow\.test\.mjs\s*$/mu,
+  );
   assert.ok(lintJob.indexOf(lintStep) < lintJob.indexOf(regressionStep));
   assert.ok(lintJob.indexOf(regressionStep) < lintJob.indexOf(liveStep));
 
-  for (const step of [regressionStep, liveStep]) {
+  for (const step of [regressionStep, liveStep, wiringStep]) {
     assert.doesNotMatch(step, /(?:continue-on-error|if:|\|\||&&|\|\s*true)/u);
+  }
+}
+
+test("the required lint job runs every guardrail with complete history", () => {
+  assertGuardrailWorkflow(workflowSource());
+});
+
+test("protected guardrail jobs reject job-level skip and dependency controls", () => {
+  const source = workflowSource();
+  const controls = [
+    "if: false",
+    "needs: skipped-job",
+    "continue-on-error: true",
+  ];
+  for (const jobName of ["lint", "type-check"]) {
+    for (const control of controls) {
+      const mutated = source.replace(
+        new RegExp(`^  ${jobName}:\\r?$`, "mu"),
+        (jobHeader) => `${jobHeader}\n    ${control}`,
+      );
+      assert.notEqual(mutated, source, `expected to mutate ${jobName}`);
+      assert.throws(
+        () => assertGuardrailWorkflow(mutated),
+        undefined,
+        `${jobName} must reject ${control}`,
+      );
+    }
   }
 });
 
