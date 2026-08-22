@@ -178,7 +178,7 @@ async function prepareSaleCompletion(
   args: SaleCompletionArgs
 ): Promise<PreparedSaleCompletion> {
   const vehicle = await ctx.db.get(args.vehicleId);
-  if (!vehicle || vehicle.orgId !== args.orgId) {
+  if (vehicle?.orgId !== args.orgId) {
     throwAppError(AppErrorCode.VEHICLE_NOT_FOUND, "Vehicle not found in this organization.");
   }
   if (vehicle.status === "SOLD") {
@@ -189,13 +189,13 @@ async function prepareSaleCompletion(
   }
 
   const customer = await ctx.db.get(args.customerId);
-  if (!customer || customer.orgId !== args.orgId) {
+  if (customer?.orgId !== args.orgId) {
     throwAppError(AppErrorCode.CUSTOMER_NOT_FOUND, "Customer not found in this organization.");
   }
 
   if (args.tradeInVehicleId) {
     const tradeInVehicle = await ctx.db.get(args.tradeInVehicleId);
-    if (!tradeInVehicle || tradeInVehicle.orgId !== args.orgId) {
+    if (tradeInVehicle?.orgId !== args.orgId) {
       throw new ConvexError("Trade-in vehicle not found in this organization.");
     }
   }
@@ -203,7 +203,7 @@ async function prepareSaleCompletion(
   let leadId: Id<"leads"> | undefined;
   if (args.quoteId) {
     const quote = await ctx.db.get(args.quoteId);
-    if (!quote || quote.orgId !== args.orgId) {
+    if (quote?.orgId !== args.orgId) {
       throwAppError(AppErrorCode.QUOTE_NOT_FOUND, "Quote not found in this organization.");
     }
     // A multi-vehicle quote's vehicleId is only its first line item — accept
@@ -219,7 +219,7 @@ async function prepareSaleCompletion(
 
   if (args.applicationId) {
     const app = await ctx.db.get(args.applicationId);
-    if (!app || app.orgId !== args.orgId) {
+    if (app?.orgId !== args.orgId) {
       throw new ConvexError("Finance application not found in this organization.");
     }
     if (
@@ -939,8 +939,25 @@ async function applySaleCompletionSideEffects(
     isSourced && !dealershipCollectsGross(settlementRoute)
       ? 0
       : toMinorUnits(args.salePrice, prepared.currency);
+  // Sales tax is billed ON TOP of the price, so it is part of what the customer
+  // owes (SCRUM-22). It has to be here as well as in `ruleSaleCompleted`'s AR
+  // debit, or the canonical receivable document and the GL diverge by exactly
+  // the tax for the same sale.
+  //
+  // Safe on the consigned branch above without a further condition: an agency
+  // sale carrying tax is refused outright further down and by
+  // `consignedAgentSaleLines`, so `taxMinor` is always 0 by the time a sourced
+  // sale reaches here.
+  const saleTaxMinor =
+    args.taxAmount != null && args.taxAmount > 0
+      ? toMinorUnits(args.taxAmount, prepared.currency)
+      : 0;
   const customerBillableMinor =
-    vehicleReceivableMinor + (dealerFeesMinor ?? 0) + (warrantySoldMinor ?? 0) + (gapSoldMinor ?? 0);
+    vehicleReceivableMinor +
+    saleTaxMinor +
+    (dealerFeesMinor ?? 0) +
+    (warrantySoldMinor ?? 0) +
+    (gapSoldMinor ?? 0);
 
   // Hoisted above the deposit resolution because the settlement treatment is
   // capped at the margin, and the margin cannot be known without the cost.
@@ -1314,7 +1331,10 @@ async function applySaleCompletionSideEffects(
       throw new ConvexError("A vehicle cannot be traded in against its own sale.");
     }
     const tradeInVehicle = await ctx.db.get(args.tradeInVehicleId);
-    if (!tradeInVehicle || tradeInVehicle.orgId !== args.orgId || tradeInVehicle.isDeleted) {
+    // `isDeleted` is the only term this second check owns that the guard in
+    // `prepareSaleCompletion` does not — that one already refused a missing or
+    // foreign trade-in long before the side effects run. Keep it.
+    if (tradeInVehicle?.orgId !== args.orgId || tradeInVehicle.isDeleted) {
       throw new ConvexError("Trade-in vehicle not found in this organization.");
     }
     if (tradeInVehicle.status === "SOLD" || tradeInVehicle.status === "ARCHIVED") {
