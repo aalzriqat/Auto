@@ -157,31 +157,58 @@ export function fetchDeployedSpec(options = {}) {
       tried.push(`${rung.name}: absent (${rung.note})`);
       continue;
     }
+    // ⚠️ ONLY THE FETCH AND THE PARSE LIVE INSIDE THIS `try`. `finish()` IS
+    // DELIBERATELY OUTSIDE IT.
+    //
+    // `finish()` throws when the spec came from the WRONG DEPLOYMENT, or when
+    // the expected identity is malformed. While that call sat inside the catch,
+    // both throws were swallowed, recorded as "this rung failed", and the loop
+    // moved on — so a successfully-read spec addressing the wrong backend came
+    // out as `unavailable: true` with the reason "no credential could read the
+    // production function spec".
+    //
+    // That reason is FALSE. The credential DID read a spec. Only the true cause
+    // survived, buried inside `tried[0]`, while the headline sent the responder
+    // to investigate credentials when the actual problem was that the control
+    // was pointed at a backend nobody is served by. The module header above
+    // calls a mismatch a HARD failure; the control flow had made it a soft one.
+    //
+    // A genuine command, auth or parse failure still falls through to the next
+    // rung, exactly as before. Only the identity verdict is now allowed out.
+    let parsed;
     try {
       // No `--prod`: the deploy key itself selects the deployment. Passing both
       // invites a disagreement between them that neither side reports.
-      const out = runConvex(["function-spec"], { CONVEX_DEPLOY_KEY: key });
-      return finish(JSON.parse(out), rung.name, expectedDeployment);
+      parsed = JSON.parse(runConvex(["function-spec"], { CONVEX_DEPLOY_KEY: key }));
     } catch (error) {
       tried.push(`${rung.name}: failed — ${firstLine(error)}`);
+      continue;
     }
+    return finish(parsed, rung.name, expectedDeployment);
   }
 
   // The workstation account token can read production, but it is also the
   // credential that can DEPLOY production. It is never a CI rung; it exists so
   // a human can reproduce a scheduled result locally.
   if (allowWorkstation) {
+    // Same split as the rung loop above, and for the same reason: a wrong
+    // deployment is a verdict, not a rung that did not work.
+    let parsed;
+    let read = false;
     try {
       // ⚠️ `--prod` selects the production deployment OF A CONFIGURED PROJECT.
       // Without `CONVEX_DEPLOYMENT` (normally from `.env.local`) the CLI has no
       // project to resolve and fails with "No CONVEX_DEPLOYMENT set" — which is
       // a configuration gap, not an authorization one, and the two must not be
       // reported as the same thing.
-      const out = runConvex(["function-spec", "--prod"], {});
-      return finish(JSON.parse(out), "WORKSTATION_ACCOUNT", expectedDeployment);
+      parsed = JSON.parse(runConvex(["function-spec", "--prod"], {}));
+      read = true;
     } catch (error) {
       tried.push(`WORKSTATION_ACCOUNT: failed — ${firstLine(error)}`);
     }
+    // `read` rather than a truthiness test on `parsed`: a spec that legitimately
+    // parses to `null` or `0` must still reach the identity check.
+    if (read) return finish(parsed, "WORKSTATION_ACCOUNT", expectedDeployment);
   } else {
     tried.push("WORKSTATION_ACCOUNT: not attempted (requires --allow-workstation)");
   }

@@ -821,7 +821,12 @@ describe("an unreadable spec is UNAVAILABLE, never a proven skew", () => {
     const code = runWith(["--mode", "production", "--spec", "spec.json"], scaffoldSkew());
     expect(code).toBe(7);
     expect(code, "proven skew must never share Node's default exit code").not.toBe(1);
-  });
+    // ⚠️ The established timeout for every test on this slow path: a real
+    // tsconfig, a real .tsx, a TypeScript program build and call-site
+    // extraction. At the 5s default a COLD RUNNER fails this on time rather
+    // than on verdict — and since this is the test pinning exit 7, a timing
+    // failure would read as a verdict regression.
+  }, 60_000);
 
   test("a proven skew stays PRODUCTION_SKEW (7) when the --json report CANNOT be written", () => {
     const dir = scaffoldSkew();
@@ -832,7 +837,7 @@ describe("an unreadable spec is UNAVAILABLE, never a proven skew", () => {
     expect(result.code).toBe(7);
     // And the failure to save is reported rather than swallowed.
     expect(result.stderr).toMatch(/could not write the report/);
-  });
+  }, 60_000);
 
   /**
    * ⚠️ ABSENCE OF CONFIGURATION MUST NEVER DISABLE A CONTROL.
