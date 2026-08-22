@@ -15,6 +15,9 @@ node_modules/
 # testing
 /coverage
 coverage/
+# The Sonar-specific LCOV lives apart from coverage/ so the two runs stop
+# overwriting each other (SCRUM-185).
+coverage-sonar/
 
 # Playwright — .auth/ holds a real signed-in storageState (session cookies)
 playwright-report/
