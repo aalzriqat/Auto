@@ -178,7 +178,7 @@ async function prepareSaleCompletion(
   args: SaleCompletionArgs
 ): Promise<PreparedSaleCompletion> {
   const vehicle = await ctx.db.get(args.vehicleId);
-  if (!vehicle || vehicle.orgId !== args.orgId) {
+  if (vehicle?.orgId !== args.orgId) {
     throwAppError(AppErrorCode.VEHICLE_NOT_FOUND, "Vehicle not found in this organization.");
   }
   if (vehicle.status === "SOLD") {
@@ -189,13 +189,13 @@ async function prepareSaleCompletion(
   }
 
   const customer = await ctx.db.get(args.customerId);
-  if (!customer || customer.orgId !== args.orgId) {
+  if (customer?.orgId !== args.orgId) {
     throwAppError(AppErrorCode.CUSTOMER_NOT_FOUND, "Customer not found in this organization.");
   }
 
   if (args.tradeInVehicleId) {
     const tradeInVehicle = await ctx.db.get(args.tradeInVehicleId);
-    if (!tradeInVehicle || tradeInVehicle.orgId !== args.orgId) {
+    if (tradeInVehicle?.orgId !== args.orgId) {
       throw new ConvexError("Trade-in vehicle not found in this organization.");
     }
   }
@@ -203,7 +203,7 @@ async function prepareSaleCompletion(
   let leadId: Id<"leads"> | undefined;
   if (args.quoteId) {
     const quote = await ctx.db.get(args.quoteId);
-    if (!quote || quote.orgId !== args.orgId) {
+    if (quote?.orgId !== args.orgId) {
       throwAppError(AppErrorCode.QUOTE_NOT_FOUND, "Quote not found in this organization.");
     }
     // A multi-vehicle quote's vehicleId is only its first line item — accept
@@ -219,7 +219,7 @@ async function prepareSaleCompletion(
 
   if (args.applicationId) {
     const app = await ctx.db.get(args.applicationId);
-    if (!app || app.orgId !== args.orgId) {
+    if (app?.orgId !== args.orgId) {
       throw new ConvexError("Finance application not found in this organization.");
     }
     if (
@@ -1331,7 +1331,10 @@ async function applySaleCompletionSideEffects(
       throw new ConvexError("A vehicle cannot be traded in against its own sale.");
     }
     const tradeInVehicle = await ctx.db.get(args.tradeInVehicleId);
-    if (!tradeInVehicle || tradeInVehicle.orgId !== args.orgId || tradeInVehicle.isDeleted) {
+    // `isDeleted` is the only term this second check owns that the guard in
+    // `prepareSaleCompletion` does not — that one already refused a missing or
+    // foreign trade-in long before the side effects run. Keep it.
+    if (tradeInVehicle?.orgId !== args.orgId || tradeInVehicle.isDeleted) {
       throw new ConvexError("Trade-in vehicle not found in this organization.");
     }
     if (tradeInVehicle.status === "SOLD" || tradeInVehicle.status === "ARCHIVED") {
