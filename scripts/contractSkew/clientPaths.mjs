@@ -33,6 +33,7 @@
 import ts from "typescript";
 import path from "node:path";
 import { clientNode, mergeClientNodes } from "./contractTree.mjs";
+import { normalizeSurfacePath } from "./clientFiles.mjs";
 
 /** Hooks and helpers whose first argument is a Convex function reference. */
 const CLIENT_BINDERS = new Set(["useMutation", "useQuery", "useAction", "usePaginatedQuery"]);
@@ -174,13 +175,24 @@ export function extractClientCalls(rootFiles, tsconfigPath) {
   // entire failure mode this control exists for is unreachable there. Counting
   // them inflated the coverage denominator with call sites that are
   // structurally incapable of the thing being measured.
-  const normalize = (p) => path.resolve(p).split(path.sep).join("/").toLowerCase();
-  const inScope = new Set(rootFiles.map(normalize));
+  // ⚠️ ONE DEFINITION OF PATH IDENTITY, SHARED — NOT A SECOND COPY HERE.
+  //
+  // This used to lowercase unconditionally, which is the same defect already
+  // fixed in `clientFiles.mjs`. Fixing one writer and leaving the other is
+  // worse than either: two modules then answer "is this file in scope?"
+  // differently, which is precisely what the shared helper exists to prevent.
+  //
+  // The direction of harm here is the opposite one. On Linux `convex/Foo.ts`
+  // and `convex/foo.ts` are DIFFERENT files that collapsed to one key, so a
+  // file never passed in `rootFiles` could pass this `inScope` test and be
+  // scanned as a client call site — scope WIDENING, and fabricated findings
+  // attributed to a file nobody asked to scan.
+  const inScope = new Set(rootFiles.map((p) => normalizeSurfacePath(p)));
 
   for (const sourceFile of program.getSourceFiles()) {
     if (sourceFile.isDeclarationFile) continue;
     if (sourceFile.fileName.includes("node_modules")) continue;
-    if (inScope.size && !inScope.has(normalize(sourceFile.fileName))) continue;
+    if (inScope.size && !inScope.has(normalizeSurfacePath(sourceFile.fileName))) continue;
 
     // ⚠️ KEYED BY SYMBOL, NOT BY NAME.
     //

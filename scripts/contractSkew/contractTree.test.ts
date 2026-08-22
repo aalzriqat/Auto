@@ -388,6 +388,58 @@ describe("findings name the client shape they refused", () => {
   });
 });
 
+describe("a validator this control cannot model is an UNKNOWN, never a verdict", () => {
+  /**
+   * ⚠️ THIS WAS A SILENT CLEAN PASS — the one verdict this control must never
+   * produce. Every branch of the scalar comparison was guarded by
+   * `SCALAR_OK[validator.type] && …`, so a type with no entry skipped every
+   * check and fell through to `{findings: [], compatible: true}`: reported
+   * VERIFIED where nothing was verified.
+   *
+   * It is reachable from a malformed or partial spec, not only from a future
+   * Convex kind — `validatorTree` tests `DYNAMIC.has(type)` against the RAW
+   * type, so a node with no `type` is not caught there and arrives as
+   * `{kind: "scalar", type: "unknown"}`.
+   */
+  const compare = (client: unknown, node: unknown) =>
+    compareNode(client as never, validatorTree(node as never), "field", { unproven: false } as never);
+
+  test("a spec node with NO type is reported UNKNOWN rather than passing clean", () => {
+    const r = compare(clientNode.scalar("string"), { value: undefined });
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].severity).toBe(SEVERITY.TYPE_UNKNOWN);
+  });
+
+  test("an unmodelled validator type is reported UNKNOWN rather than passing clean", () => {
+    const r = compare(clientNode.scalar("boolean"), { type: "decimal128" });
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].severity).toBe(SEVERITY.TYPE_UNKNOWN);
+  });
+
+  test("and it is NOT reported as BREAKING — we cannot substantiate a break", () => {
+    // Denying PASS is correct; inventing a defect is not. An UNKNOWN blocks a
+    // release through the coverage path without claiming something false.
+    for (const node of [{ value: undefined }, { type: "decimal128" }]) {
+      const r = compare(clientNode.scalar("string"), node);
+      expect(r.findings.some((f: { severity: string }) => f.severity === SEVERITY.BREAKING)).toBe(false);
+      expect(r.compatible).toBe(true);
+    }
+  });
+
+  test("a literal client against an unmodelled type is UNKNOWN too, not silently clean", () => {
+    // The literal branch had the same `SCALAR_OK[...] &&` guard and the same hole.
+    const r = compare(clientNode.literal(["A"]), { type: "decimal128" });
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].severity).toBe(SEVERITY.TYPE_UNKNOWN);
+  });
+
+  test("a MODELLED type still refuses a real mismatch — the fix did not soften the check", () => {
+    const r = compare(clientNode.scalar("string"), { type: "boolean" });
+    expect(r.findings.some((f: { severity: string }) => f.severity === SEVERITY.BREAKING)).toBe(true);
+    expect(r.compatible).toBe(false);
+  });
+});
+
 describe("Convex scalar semantics, not approximations of them", () => {
   /**
    * Both of these reported a payload as compatible that the live backend

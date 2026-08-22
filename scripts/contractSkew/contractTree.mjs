@@ -489,9 +489,42 @@ export function compareNode(client, validator, path, ctx) {
   }
 
   // Scalar.
+  //
+  // ⚠️ A VALIDATOR TYPE THIS TABLE DOES NOT MODEL IS AN UNKNOWN, NEVER A PASS.
+  //
+  // `SCALAR_OK` had no entry for an unmodelled type, and every branch below was
+  // guarded by `SCALAR_OK[validator.type] && …` — so an unmodelled type skipped
+  // every check and fell through to `{findings: [], compatible: true}`. The
+  // comparison reported VERIFIED where nothing was verified, which is the one
+  // verdict this control must never produce.
+  //
+  // It is reachable from a malformed or partial spec, not only from some future
+  // Convex validator kind: `validatorTree` tests `DYNAMIC.has(type)` against the
+  // RAW type, so a node with no `type` at all is not caught there and arrives
+  // here as `{kind: "scalar", type: "unknown"}`. Reproduced — a type-less node
+  // against a client `string`, and a `decimal128` against a client `boolean`,
+  // both returned zero findings and `compatible: true`.
+  //
+  // UNKNOWN is the honest answer and it is the safe one: it denies PASS without
+  // fabricating a BREAKING we cannot substantiate. Verified against the live
+  // production spec that nothing reaches here today — zero type-less and zero
+  // unmodelled nodes across 885 functions — so this refuses a defect rather
+  // than degrading a working run.
+  if (!SCALAR_OK[validator.type]) {
+    add(
+      SEVERITY.TYPE_UNKNOWN,
+      "VALUE",
+      `the backend declares ${JSON.stringify(validator.type)}, which this control does not model, so the value is NOT verified against it`
+    );
+    return { findings, compatible: true };
+  }
+
+  // Past this point `SCALAR_OK[validator.type]` is guaranteed, so the branches
+  // below no longer test it — a guard that can silently skip a check is exactly
+  // what produced the defect above.
   if (client.kind === "literal") {
-    const bad = [...client.values].filter((v) => !SCALAR_OK[validator.type]?.has(typeof v));
-    if (SCALAR_OK[validator.type] && bad.length) {
+    const bad = [...client.values].filter((v) => !SCALAR_OK[validator.type].has(typeof v));
+    if (bad.length) {
       add(SEVERITY.BREAKING, "VALUE", `client can send ${describe(bad)} where the backend declares ${validator.type}`);
       return { findings, compatible: false };
     }
@@ -501,7 +534,7 @@ export function compareNode(client, validator, path, ctx) {
     add(SEVERITY.BREAKING, "VALUE", `client sends ${describeClient(client)} where the backend declares ${validator.type}`);
     return { findings, compatible: false };
   }
-  if (SCALAR_OK[validator.type] && client.kind === "scalar" && !SCALAR_OK[validator.type].has(client.type)) {
+  if (client.kind === "scalar" && !SCALAR_OK[validator.type].has(client.type)) {
     add(SEVERITY.BREAKING, "VALUE", `client sends ${client.type} where the backend declares ${validator.type}`);
     return { findings, compatible: false };
   }

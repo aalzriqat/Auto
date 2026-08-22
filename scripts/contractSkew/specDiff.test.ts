@@ -913,6 +913,41 @@ describe("an unscanned client file fails the run rather than passing it", () => 
       fs.rmSync(dir, { recursive: true, force: true });
     }
   }, 60_000);
+
+  /**
+   * ⚠️ AND THE RELEASE GATE HAS TO REFUSE IT TOO.
+   *
+   * Production mode acted on `unscannedFiles`; release mode reached its OK exit
+   * FIRST, so a release went green while a client surface calling Convex was
+   * never analysed. Not "we looked and found nothing" — "we never looked".
+   *
+   * That is worse in the gate than in the monitor: the monitor reports an
+   * incident that already exists, the gate decides whether to create one.
+   */
+  const runRelease = (dir: string) => {
+    try {
+      execFileSync(
+        process.execPath,
+        [cli, "--mode", "release", "--spec", "spec.json", "--candidate", "spec.json"],
+        { cwd: dir, stdio: "pipe" }
+      );
+      return 0;
+    } catch (error) {
+      return (error as { status?: number }).status ?? -1;
+    }
+  };
+
+  test("RELEASE mode also refuses to clear a release with an unscanned client file", () => {
+    const dir = scaffold();
+    try {
+      expect(runRelease(dir)).toBe(0);
+      fs.mkdirSync(path.join(dir, "somewhere"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "somewhere", "Screen.tsx"), "const x = useQuery(api.a.b, {});");
+      expect(runRelease(dir)).toBe(6);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
 
 describe("redaction covers what the process was handed", () => {

@@ -400,6 +400,33 @@ if (mode === "release") {
       `::warning::${blockers.unrelatedUnknowns} unproven path(s) elsewhere in the client — control coverage, not a skew`
     );
   }
+
+  // ⚠️ A COVERAGE GAP BLOCKS A RELEASE TOO, AND IT USED TO ONLY BLOCK THE
+  // MONITOR.
+  //
+  // Production mode acts on `unscannedFiles` and exits COVERAGE_GAP. Release
+  // mode reached the OK exit below FIRST, so a release could go green while a
+  // client surface calling Convex was never analysed at all — not "we looked
+  // and found nothing", but "we never looked". That is the same false assurance
+  // this control exists to remove, and it is worse in the release gate than in
+  // the monitor: the monitor reports an incident that already exists, the gate
+  // decides whether to create one.
+  //
+  // Latent today because the derived scan returns an empty list. Stated at the
+  // gate rather than left to fall through, so it cannot become reachable
+  // silently the day a surface is added.
+  if (unscannedFiles > 0) {
+    for (const entry of unscanned) {
+      console.error(
+        `::error file=${entry.file}::calls Convex but is in no scanned client surface — this control cannot answer for it`
+      );
+    }
+    console.error(
+      `::error::COVERAGE GAP — ${unscannedFiles} client file(s) calling Convex were never scanned, so this release cannot be cleared. Add them to CLIENT_SURFACES in scripts/contractSkew/clientFiles.mjs.`
+    );
+    process.exit(EXIT.COVERAGE_GAP);
+  }
+
   process.exit(EXIT.OK);
 }
 

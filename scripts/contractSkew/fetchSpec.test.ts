@@ -129,6 +129,33 @@ describe("path identity follows the filesystem, not the developer's machine", ()
       normalizeSurfacePath("app/foo.tsx", "win32")
     );
   });
+
+  test("and NOTHING else in the detector folds case on its own", () => {
+    /**
+     * ⚠️ FIXING ONE WRITER AND LEAVING THE OTHER IS WORSE THAN EITHER.
+     *
+     * `clientFiles.mjs` was corrected to fold only on win32, and
+     * `clientPaths.mjs` kept its own private `normalize` that lowercased
+     * unconditionally — so two modules answered "is this file in scope?"
+     * differently. The direction of harm there was the opposite one: on Linux
+     * `convex/Foo.ts` and `convex/foo.ts` collapsed to one key, letting a file
+     * never passed in `rootFiles` pass the `inScope` test and be scanned.
+     *
+     * A structural guard, deliberately: the defect is the EXISTENCE of a second
+     * definition, which no behavioural test of the shared one can detect.
+     */
+    const dir = path.resolve("scripts/contractSkew");
+    const offenders: string[] = [];
+    for (const file of fs.readdirSync(dir)) {
+      if (!file.endsWith(".mjs")) continue;
+      const src = fs.readFileSync(path.join(dir, file), "utf8");
+      const hits = src.split("toLowerCase(").length - 1;
+      // The single legitimate site is inside `normalizeSurfacePath` itself.
+      const allowed = file === "clientFiles.mjs" ? 1 : 0;
+      if (hits > allowed) offenders.push(`${file} (${hits} case-folding site(s))`);
+    }
+    expect(offenders, "case folding must have exactly one definition").toEqual([]);
+  });
 });
 
 describe("redaction removes what the process was handed", () => {
