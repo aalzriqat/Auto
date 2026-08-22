@@ -137,3 +137,40 @@ test("generated Convex freshness includes untracked outputs", () => {
   assert.match(freshnessStep, /exit 1/u);
   assert.doesNotMatch(freshnessStep, /git diff --exit-code/u);
 });
+
+test("Sonar coverage includes the Node-based guardrail suite", () => {
+  const packageJson = JSON.parse(
+    fs.readFileSync(path.join(REPOSITORY_ROOT, "package.json"), "utf8"),
+  );
+  const sonarCommand = packageJson.scripts["test:coverage:sonar"];
+  const guardrailCoverageCommand =
+    packageJson.scripts["test:coverage:sonar:guardrails"];
+  assert.equal(packageJson.devDependencies.c8, "12.0.0");
+  assert.match(sonarCommand, /pnpm test:coverage:sonar:convex/u);
+  assert.match(sonarCommand, /pnpm test:coverage:sonar:guardrails/u);
+  assert.match(
+    sonarCommand,
+    /appendFileSync\('coverage\/lcov\.info',fs\.readFileSync\('coverage\/quality\/lcov\.info'\)\)/u,
+  );
+  assert.match(guardrailCoverageCommand, /^c8 --all /u);
+  assert.match(guardrailCoverageCommand, /--include="quality\/\*\*\/\*\.mjs"/u);
+  assert.match(guardrailCoverageCommand, /--exclude="quality\/tests\/\*\*"/u);
+  assert.match(guardrailCoverageCommand, /pnpm quality:guardrails:test$/u);
+
+  const sonarProperties = fs.readFileSync(
+    path.join(REPOSITORY_ROOT, "sonar-project.properties"),
+    "utf8",
+  );
+  assert.match(
+    sonarProperties,
+    /^sonar\.test\.inclusions=.*\*\*\/\*\.test\.mjs/mu,
+  );
+  assert.match(
+    sonarProperties,
+    /^sonar\.coverage\.exclusions=.*\*\*\/\*\.test\.mjs/mu,
+  );
+
+  const sonarJob = jobBlock(workflowSource(), "sonarcloud");
+  const coverageStep = namedStep(sonarJob, "Generate coverage for Sonar");
+  assert.match(coverageStep, /run:\s*pnpm test:coverage:sonar\s*$/mu);
+});
