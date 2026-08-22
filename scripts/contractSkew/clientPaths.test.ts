@@ -325,6 +325,23 @@ describe("clientPaths extractor", () => {
     expect(mixed.element!.kind).not.toBe("scalar");
   });
 
+  test("CASE 12: a bare OPTIONAL SCALAR keeps its type — the undefined-skip guard is load-bearing", () => {
+    // ⚠️ PINS A GUARD THAT WAS DOCUMENTED AS REMOVABLE AND IS NOT.
+    //
+    // Under `strict`, `note?: string` is `string | undefined`. The union walk
+    // skips the `undefined` branch; since `unresolved` became ABSORBING, not
+    // skipping it collapses the field — and every optional field in the repo —
+    // to `unresolved`. The comment beside that guard claimed removing it
+    // "changes nothing", a proof that expired when the merge semantics changed.
+    //
+    // Reverting the guard fails this test plus CASE 3d, 3e, 3h and 4.
+    const call = forFn("vehicles:update").find((c) => c.payload?.fields?.has?.("note"));
+    expect(call, "the optional scalar payload was not extracted at all").toBeDefined();
+    const note = call!.payload!.fields!.get("note")!.node;
+    expect(note.kind).toBe("scalar");
+    expect(note.kind).not.toBe("unresolved");
+  });
+
   test("CASE 7: an unresolvable SPREAD withdraws key completeness", () => {
     // Fail-open otherwise: both comparison directions read `keysComplete`, so a
     // false claim of completeness fabricates findings in one direction and

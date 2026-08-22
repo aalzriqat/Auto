@@ -211,8 +211,21 @@ export function certaintyOf(node) {
     case "opaqueValue":
       return 0;
     // Several shapes are possible and we cannot tell which one runs.
+    //
+    // ⚠️ THIS WAS A FLAT `1`, AND THAT BROKE THE RULE THIS FUNCTION EXISTS TO
+    // ENFORCE. `variants` is capped at 1 because not knowing which alternative
+    // runs is itself partial knowledge, even when every alternative is fully
+    // determined — but it must also never outrank its WORST member.
+    //
+    // The counterexample is ordinary code, `field: string | T[]`:
+    // `merge(scalar(string), array(unresolved))` produces `variants`, and a
+    // flat 1 made the result MORE certain (1) than one of its inputs (0). The
+    // absorption checks above did not prevent it, because they test the node's
+    // KIND — and `array(unresolved)` has kind "array", which absorbs nothing,
+    // while its certainty is 0 because this rank recurses into the element.
+    // Kind and certainty are different things; only one of them is the rule.
     case "variants":
-      return 1;
+      return Math.min(1, ...node.nodes.map(certaintyOf));
     // Enumerated values and a named primitive are as determined as we get.
     case "literal":
     case "scalar":

@@ -640,11 +640,29 @@ function collectPaths(checker, type, path, acc, depth, seen, inherited = "LITERA
   if (type.isUnion()) {
     let merged = null;
     for (const branch of type.types) {
-      // Skipping `undefined` is a CLARITY GUARD, not semantics: an undefined
-      // branch resolves to an `unresolved` node and merging that is a no-op, so
-      // removing this line changes nothing. Proven, not assumed — with it
-      // removed the whole-repo run produced a byte-identical finding set. It
-      // stays because it states the intent at the point the reader needs it.
+      // ⚠️ LOAD-BEARING. REMOVING THIS LINE BREAKS EVERY OPTIONAL FIELD IN THE
+      // REPOSITORY. Do not "simplify" it.
+      //
+      // ⚠️ AND THIS COMMENT USED TO SAY THE OPPOSITE. It called the line a
+      // "CLARITY GUARD, not semantics", on the grounds that an `undefined`
+      // branch resolves to an `unresolved` node and "merging that is a no-op,
+      // so removing this line changes nothing — proven, not assumed, byte-
+      // identical finding set."
+      //
+      // That proof was real, and it EXPIRED. It held only while `unresolved`
+      // was ABSORBED on merge. `unresolved` now ABSORBS, so merging in a stray
+      // one no longer does nothing — it destroys everything already learned
+      // about the field. Under `strict`, `field?: T` resolves to `T | undefined`,
+      // so without this line EVERY optional field in the codebase collapses to
+      // `unresolved`: over-uncertain rather than over-certain, but the same
+      // silent, sweeping, unflagged change in what this control actually knows.
+      //
+      // Measured by reversion at this head: disabling the guard fails 4 tests
+      // (CASE 3d, 3e, 3h, 4) plus the bare-optional-scalar regression added for
+      // exactly this reason. The stale claim survived the change that falsified
+      // it because the commit that made `unresolved` absorbing never revisited
+      // the neighbouring proof — the module header's own warning, that an
+      // annotation which drifts is a lie the toolchain repeats, aimed at itself.
       if (branch.getFlags() & ts.TypeFlags.Undefined) continue;
       merged = mergeClientNodes(
         merged,

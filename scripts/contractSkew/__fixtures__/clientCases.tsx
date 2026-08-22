@@ -366,3 +366,20 @@ export function CaseTupleWithUnresolvedMember<T>(mixed: [string, T]) {
   const save = useMutation(api.vehicles.update);
   void save({ orgId: "o", mixed });
 }
+
+/**
+ * CASE 12 — a BARE OPTIONAL SCALAR, pinning the `TypeFlags.Undefined` guard.
+ *
+ * Under `strict`, `note?: string` is `string | undefined`, and the union walk
+ * must SKIP the `undefined` branch. Once `unresolved` became absorbing, failing
+ * to skip it collapses the field to `unresolved` — and with it every optional
+ * field in the repository. The guard was previously documented as removable.
+ *
+ * Existing cases only reach this incidentally, through an optional OBJECT; this
+ * asserts the plainest possible form directly, so the guard's load-bearing
+ * nature is pinned rather than discovered by accident.
+ */
+export function CaseBareOptionalScalar(input: { note?: string }) {
+  const save = useMutation(api.vehicles.update);
+  void save({ orgId: "o", note: input.note });
+}

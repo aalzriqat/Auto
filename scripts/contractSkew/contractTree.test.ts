@@ -749,6 +749,21 @@ describe("INVARIANT: information monotonicity — merging never manufactures cer
     ["object keysComplete", cObj({ a: cStr })],
     ["array(literal)", clientNode.array(cLit("A"))],
     ["emptyArray", clientNode.emptyArray()],
+    // ⚠️ COMPOUND NODES CARRYING LOW CERTAINTY WITHOUT AN UNCERTAIN *KIND*.
+    //
+    // Every specimen above is either fully determined or fully unknown AT ITS
+    // TOP LEVEL, and that gap let a real violation through: `array(unresolved)`
+    // has kind "array" — which nothing treats as absorbing — while its
+    // certainty is 0, because the rank recurses into the element. Merging it
+    // with a determined node of a different kind produces `variants`, and a
+    // flat rank for `variants` made the result MORE certain than one of its
+    // inputs. A reviewer reproduced it through the real extractor with
+    // `field: string | T[]`; a second reviewer argued it was impossible on the
+    // grounds that certainty-0 nodes never enter `variants` — true of KINDS,
+    // false of VALUES, which is exactly the confusion these specimens exist to
+    // make impossible to repeat.
+    ["array(unresolved elem)", clientNode.array(clientNode.unresolved())],
+    ["object with an unresolved field", cObj({ a: clientNode.unresolved() })],
   ];
 
   test("every pair: certainty(merge(a,b)) <= min(certainty(a), certainty(b))", () => {
