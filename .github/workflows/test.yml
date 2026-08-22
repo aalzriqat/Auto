@@ -35,10 +35,22 @@ jobs:
     - name: Install dependencies
       run: pnpm install --frozen-lockfile --ignore-scripts
 
+    # ⚠️ THIS RUNS `test:coverage` ONLY, AND THE SECOND COMMAND WAS REMOVED ON
+    # PURPOSE. Do not "restore" it.
+    #
+    # `test:coverage:sonar` runs `vitest run convex` with `--coverage.include`
+    # restricted to seven convex files, and it does NOT override
+    # `--coverage.reportsDirectory`. So it wrote into the same default
+    # `coverage/` that `test:coverage` had just filled, OVERWRITING the
+    # repo-wide report with a seven-file one — and the upload step below then
+    # published that narrow report under the name `coverage-report`, as though
+    # it covered the repository.
+    #
+    # Nothing is weakened by removing it: the `sonarcloud` job generates its own
+    # coverage in its own step and scans that. This job's report is now what its
+    # name says it is.
     - name: Run unit + integration tests with coverage
-      run: |
-        pnpm test:coverage
-        pnpm test:coverage:sonar
+      run: pnpm test:coverage
       env:
         NODE_ENV: test
 

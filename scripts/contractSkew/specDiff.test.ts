@@ -999,3 +999,122 @@ describe("redaction covers what the process was handed", () => {
     expect(redact("vehicles[*].rowId is unproven")).toBe("vehicles[*].rowId is unproven");
   });
 });
+
+/**
+ * ⚠️ THE 4-vs-8 SPLIT WAS A SURVIVING MUTANT UNTIL THIS BLOCK EXISTED.
+ *
+ * `cli.mjs` ends release mode with
+ * `process.exit(releaseBreaking.length ? EXIT.RELEASE_BREAK : EXIT.BLOCKED)`,
+ * and INVERTING that ternary changed nothing: 308 passed. Nothing exercised
+ * `--mode release` through the real CLI with an actual finding, so the two
+ * codes were interchangeable as far as the suite could tell.
+ *
+ * The distinction is the whole reason the owner kept `8` rather than folding it
+ * into `4`, and it is a statement about EVIDENCE:
+ *
+ *   4 BLOCKED       we CANNOT PROVE this release safe — unproven evidence
+ *                   intersects a path the candidate changes.
+ *   8 RELEASE_BREAK we PROVED it unsafe — a real incompatibility the candidate
+ *                   introduces. Deploying the backend is not the remedy, which
+ *                   is why this is deliberately not 7.
+ *
+ * An inverted ternary would report every proved-unsafe candidate as "cannot
+ * prove safe" and every unproven one as "proved unsafe" — the exact inversion
+ * of the diagnostic, silent until somebody wired release mode up and believed
+ * it. Both scaffolds below were built by measuring the real CLI, not by
+ * reasoning about the classifier.
+ */
+describe("release mode distinguishes PROVED UNSAFE from CANNOT PROVE SAFE", () => {
+  const cli = path.resolve("scripts/contractSkew/cli.mjs");
+
+  const releaseDir = (deployedArgs: Record<string, unknown>, candidateArgs: Record<string, unknown>, client: string) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rel-split-"));
+    fs.writeFileSync(path.join(dir, "spec.json"), JSON.stringify(spec(fn("vehicles.js:update", deployedArgs))));
+    fs.writeFileSync(path.join(dir, "candidate.json"), JSON.stringify(spec(fn("vehicles.js:update", candidateArgs))));
+    fs.writeFileSync(
+      path.join(dir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: { target: "ES2022", module: "ESNext", moduleResolution: "Bundler", strict: true, noEmit: true },
+      })
+    );
+    fs.mkdirSync(path.join(dir, "app"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "app", "uses-convex.tsx"), client);
+    return dir;
+  };
+
+  const runRelease = (dir: string) => {
+    try {
+      execFileSync(
+        process.execPath,
+        [cli, "--mode", "release", "--spec", "spec.json", "--candidate", "candidate.json"],
+        { cwd: dir, stdio: "pipe" }
+      );
+      return 0;
+    } catch (error) {
+      return (error as { status?: number }).status ?? -1;
+    }
+  };
+
+  /** A payload the candidate accepts and the DEPLOYED backend does not. */
+  const SENDS_NOPE =
+    'import { useMutation } from "convex/react";\n' +
+    "declare const api: { vehicles: { update: unknown } };\n" +
+    "export const go = () => {\n" +
+    "  const update = useMutation(api.vehicles.update);\n" +
+    '  return update({ orgId: "o", nope: "x" });\n' +
+    "};\n";
+
+  /** A payload whose VALUE cannot be proven, on a path the candidate changes. */
+  const SENDS_UNPROVEN =
+    'import { useMutation } from "convex/react";\n' +
+    "declare const api: { vehicles: { update: unknown } };\n" +
+    "export const go = (v: unknown) => {\n" +
+    "  const update = useMutation(api.vehicles.update);\n" +
+    "  return update({ orgId: v });\n" +
+    "};\n";
+
+  test("PROVED UNSAFE — a break the candidate introduces exits RELEASE_BREAK (8)", () => {
+    // The candidate declares `nope`; the deployed backend does not; the client
+    // already sends it. Shipping this candidate means the client is broken
+    // against what is live — a proven incompatibility, not an unknown.
+    const dir = releaseDir({ orgId: required(str) }, { orgId: required(str), nope: required(str) }, SENDS_NOPE);
+    try {
+      const code = runRelease(dir);
+      expect(code).toBe(8);
+      // ⚠️ THE INVERSION IS THE POINT. Swapping the ternary must not pass here.
+      expect(code, "a proven release break must never report as 'cannot prove safe'").not.toBe(4);
+      // ...and it must never borrow the code that orders a production deploy.
+      expect(code, "deploying the backend is not the remedy for a release break").not.toBe(7);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  test("CANNOT PROVE SAFE — an unproven value on a changed path exits BLOCKED (4)", () => {
+    // Nothing is proven broken here. The candidate changes `orgId`'s type and
+    // the client's value cannot be resolved, so the release is refused for
+    // insufficient evidence rather than for a demonstrated defect.
+    const dir = releaseDir({ orgId: required(str) }, { orgId: required({ type: "number" }) }, SENDS_UNPROVEN);
+    try {
+      const code = runRelease(dir);
+      expect(code).toBe(4);
+      expect(code, "insufficient evidence must never be reported as a proven break").not.toBe(8);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  test("a STANDING defect does not block a release at all", () => {
+    // The control that stops the two tests above passing for the wrong reason.
+    // Same undeclared field, but absent from the candidate too — so it is not
+    // introduced by this release, and the gate must let it through while the
+    // monitor reports it separately. Without this, a scaffold that blocked
+    // everything would satisfy both assertions above.
+    const dir = releaseDir({ orgId: required(str) }, { orgId: required(str) }, SENDS_NOPE);
+    try {
+      expect(runRelease(dir)).toBe(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
