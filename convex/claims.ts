@@ -1,326 +1,229 @@
-import { v, ConvexError } from "convex/values";
+/**
+ * Finance-company claims — a READ-ONLY work queue (SCRUM-51).
+ *
+ * This module used to be a second finance-company AR authority. `add` opened a
+ * canonical `receivableDocuments` row with `payerType: FINANCE_COMPANY` while no
+ * `CLAIM_CREATED` accounting event ever existed, so the subledger carried a
+ * balance the GL had never debited. `settle` and `reject` then *credited*
+ * `ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES`, discharging a receivable that was
+ * never originated, and the free-text creation form could open a second
+ * receivable for a financed sale that Finance Applications had already booked.
+ *
+ * Finance Applications own that receivable: `applications.ts`
+ * (`ensureFinanceCompanyReceivable`) creates it and `ruleFinanceDisbursed` posts
+ * the real Dr AR-Finance / Cr AR-Customers transfer, with
+ * `ruleFinanceCashReceived` settling it on `confirmDisbursement`.
+ *
+ * So Claims originates nothing and settles nothing. It projects the
+ * authoritative receivables for the accountant to work from, and the actions
+ * live with the application that owns the deal. Settling *through* Claims would
+ * not have been a safe alternative: `confirmDisbursement` posts
+ * `hookFinanceCashReceived` before it computes `allocationMinor`, and skips the
+ * allocation when the receivable is already fully allocated rather than
+ * throwing — so a second settlement door would silently double-credit the GL.
+ *
+ * `convex/claimsReadOnlyGuard.test.ts` fails CI if a writer is added back.
+ *
+ * The legacy `claims` table is retained with no writer so historical rows are
+ * not destroyed. In-org Accounting does not read it — the only remaining reader
+ * is the cross-tenant Super Admin browser (`adminData.ts`). Both production and
+ * dev carried zero rows at 214c843a, so nothing is hidden by that.
+ */
+import { v } from "convex/values";
 import { query } from "./_generated/server";
-import { mutation } from "./functions";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
-import { notifyManagers, getActorName } from "./utils/notifications";
-import { ensureReceivableDocument, createCanonicalPayment, allocatePaymentToReceivable } from "./subledger";
-import { hookClaimSettled, hookClaimWrittenOff, getOrgCurrency } from "./accounting/workflowHooks";
+import { getReceivableOutstandingMinor } from "./subledger";
 
-const CLAIM_DUE_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+/** `applications.ts` stamps this on the receivable it owns. */
+const FINANCE_APP_RECEIVABLE_SOURCE = "finance_application";
 
-const paymentMethodValidator = v.union(
-  v.literal("CASH"),
-  v.literal("BANK_TRANSFER"),
-  v.literal("CARD"),
-  v.literal("CHEQUE"),
-);
+/**
+ * Statuses that mean nothing is collectible.
+ *
+ * `getReceivableOutstandingMinor` only zeroes CANCELLED, so a WRITTEN_OFF or
+ * REVERSED document with no active allocations comes back at its **full**
+ * original amount. Reporting that as outstanding would assert the financier
+ * still owes money the dealership has already given up on — and would mark it
+ * overdue and add it to the headline. `applications.ts` excludes exactly these
+ * three for the same reason; this is that rule, not a second one.
+ */
+const NOT_COLLECTIBLE_STATUSES = new Set(["CANCELLED", "WRITTEN_OFF", "REVERSED"]);
 
-export const list = query({
+function collectibleOutstanding(status: string, derivedOutstandingMinor: number) {
+  return NOT_COLLECTIBLE_STATUSES.has(status) ? 0 : derivedOutstandingMinor;
+}
+
+/**
+ * The finance-company AR work queue: every canonical receivable owed by a
+ * financier, with the outstanding balance derived from active allocations
+ * rather than stored, so it can never drift from the subledger.
+ */
+export const listFinanceCompanyReceivables = query({
   args: {
     orgId: v.id("organizations"),
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
-    return await ctx.db
-      .query("claims")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+
+    const page = await ctx.db
+      .query("receivableDocuments")
+      // by_org_payerType, not the status variant: an index sorts by its
+      // trailing components, so leaving status unbound would order the queue by
+      // status first and put OPEN rows last. This one is newest-first.
+      .withIndex("by_org_payerType", (q) =>
+        q.eq("orgId", args.orgId).eq("payerType", "FINANCE_COMPANY")
+      )
       .order("desc")
-      .filter((q) => q.neq(q.field("isDeleted"), true)).paginate(args.paginationOpts);
+      .paginate(args.paginationOpts);
+
+    const rows = await Promise.all(
+      page.page.map(async (doc) => {
+        const outstandingMinor = collectibleOutstanding(
+          doc.status,
+          await getReceivableOutstandingMinor(ctx, doc._id)
+        );
+
+        // The financier's name comes from the configured company when there is
+        // one. A MANUAL_FINANCE_COMPANY deal has no company row by
+        // construction, so the application's own snapshot is the only record of
+        // who the financier was.
+        let financingEntity: string | null = null;
+        if (doc.financeCompanyId) {
+          const company = await ctx.db.get(doc.financeCompanyId);
+          financingEntity = company?.orgId === args.orgId ? company.name : null;
+        }
+
+        let applicationId: string | null = null;
+        if (doc.sourceType === FINANCE_APP_RECEIVABLE_SOURCE) {
+          // sourceId is a plain string on the document, so it is normalized
+          // rather than cast: a legacy or malformed value must read as "no
+          // owning deal", never be handed to the UI as a link target. A link
+          // built from an unresolvable id lands on a page that can only fail.
+          const appId = ctx.db.normalizeId("financeApplications", doc.sourceId);
+          const app = appId ? await ctx.db.get(appId) : null;
+          if (app && app.orgId === args.orgId) {
+            applicationId = appId;
+            financingEntity = financingEntity ?? app.manualFinanceSnapshot?.providerName ?? null;
+          }
+        }
+
+        let buyerName: string | null = null;
+        if (doc.customerId) {
+          const customer = await ctx.db.get(doc.customerId);
+          buyerName =
+            customer?.orgId === args.orgId
+              ? `${customer.firstName} ${customer.lastName}`.trim()
+              : null;
+        }
+
+        return {
+          receivableDocumentId: doc._id,
+          documentNumber: doc.documentNumber,
+          applicationId,
+          sourceType: doc.sourceType,
+          // A row whose receivable was not raised by a finance application has
+          // no deal to act on. The screen says so rather than rendering a row
+          // with a silently missing action.
+          hasOwningDeal: applicationId !== null,
+          financingEntity,
+          buyerName,
+          originalAmountMinor: doc.originalAmountMinor,
+          outstandingMinor,
+          currency: doc.currency,
+          scale: doc.scale,
+          status: doc.status,
+          issueDate: doc.issueDate,
+          dueDate: doc.dueDate,
+        };
+      })
+    );
+
+    return { ...page, page: rows };
   },
 });
 
 /**
- * GL Phase 13: creating a claim opens a finance-company receivable in the
- * subledger. Claims always start PENDING — settlement and rejection are the
- * only status transitions, each with its own GL posting; the old free-form
- * status arg is gone.
+ * Org-wide outstanding per currency.
+ *
+ * Separate from the paginated queue on purpose: a headline computed from
+ * whichever page happened to load is a subtotal wearing the word "total", and
+ * this table is ordered newest-first, so the oldest and most overdue balances
+ * are exactly the ones a page-bounded sum would omit.
+ *
+ * Never summed across currencies — a receivable is denominated when it is
+ * raised, and one cross-currency number is the misstatement `accountingPhase14`
+ * exists to prevent.
+ *
+ * Reads only the OPEN/PARTIALLY_PAID working set. Settled and written-off
+ * history accumulates forever and contributes nothing to an outstanding total,
+ * so scanning it would make this query grow without bound for exactly the
+ * long-lived orgs that can least afford it. The statuses left out are the ones
+ * whose outstanding is necessarily zero: PAID by definition, and CANCELLED /
+ * WRITTEN_OFF / REVERSED by `NOT_COLLECTIBLE_STATUSES`.
+ *
+ * No row outside this set can hide an outstanding balance, and it takes both
+ * halves of the argument to know that — a review found the first half stated
+ * alone and it was not sufficient:
+ *
+ *  - `allocatePaymentToReceivable` and `reverseAllocation` (subledger.ts) each
+ *    recompute `status` from the derived balance, so OPEN/PARTIALLY_PAID/PAID
+ *    always agree with the allocations;
+ *  - every other writer — `cancelSaleReceivableIfSafe`
+ *    (utils/saleCancellation.ts), the finance-application void path
+ *    (applications.ts) and the legacy-receivable cancellation in
+ *    collections.ts — moves the row straight to CANCELLED, which
+ *    `getReceivableOutstandingMinor` forces to zero regardless of its
+ *    allocations;
+ *  - and `reverseAllocation` will not overwrite a terminal disposition on the
+ *    way back, so the recompute cannot move a row out of that set either. It
+ *    used to relabel a CANCELLED document PAID. No traced mutation chain
+ *    actually reached that state — the reasons are recorded at the guard in
+ *    `subledger.ts` — so it is defense in depth rather than a bug this query
+ *    was ever exposed to. It is enforced at the writer instead of filtered out
+ *    here, so every consumer gets it, and `subledger.test.ts` holds the rule.
+ *
+ * So a status transition either keeps the balance honest or lands somewhere
+ * this query already treats as nothing owed.
  */
-export const add = mutation({
-  args: {
-    orgId: v.id("organizations"),
-    claimDate: v.number(),
-    financingEntity: v.string(),
-    buyerName: v.string(),
-    claimAmountMinor: v.number(),
-    notes: v.optional(v.string()),
-    saleId: v.optional(v.id("sales")),
-  },
+const OUTSTANDING_STATUSES = ["OPEN", "PARTIALLY_PAID"] as const;
+
+export const financeCompanyOutstandingTotals = query({
+  args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
 
-    if (!Number.isSafeInteger(args.claimAmountMinor) || args.claimAmountMinor <= 0) {
-      throw new ConvexError("Claim amount must be a positive integer minor-unit amount.");
-    }
-    if (args.saleId) {
-      const sale = await ctx.db.get(args.saleId);
-      if (!sale || sale.orgId !== args.orgId) {
-        throw new ConvexError("Sale not found in this organization.");
-      }
-    }
+    const docs = (
+      await Promise.all(
+        OUTSTANDING_STATUSES.map((status) =>
+          ctx.db
+            .query("receivableDocuments")
+            .withIndex("by_org_payerType_status", (q) =>
+              q.eq("orgId", args.orgId).eq("payerType", "FINANCE_COMPANY").eq("status", status)
+            )
+            .collect()
+        )
+      )
+    ).flat();
 
-    const currency = await getOrgCurrency(ctx, args.orgId);
-
-    const claimId = await ctx.db.insert("claims", {
-      orgId: args.orgId,
-      claimDate: args.claimDate,
-      financingEntity: args.financingEntity,
-      buyerName: args.buyerName,
-      claimAmountMinor: args.claimAmountMinor,
-      currency,
-      status: "PENDING",
-      notes: args.notes,
-      saleId: args.saleId,
-    });
-
-    // Claims have no contractual due date of their own; 30 days is the
-    // conventional settlement window and only drives aging buckets.
-    const receivableDocumentId = await ensureReceivableDocument(ctx, {
-      orgId: args.orgId,
-      documentType: "INVOICE",
-      payerType: "FINANCE_COMPANY",
-      sourceType: "claims",
-      sourceId: claimId.toString(),
-      originalAmountMinor: args.claimAmountMinor,
-      currency,
-      issueDate: args.claimDate,
-      dueDate: args.claimDate + CLAIM_DUE_DAYS_MS,
-      actorId: user._id,
-    });
-    await ctx.db.patch(claimId, { receivableDocumentId });
-
-    const actorName = await getActorName(ctx);
-    await notifyManagers(
-      ctx,
-      args.orgId,
-      "claim.updated",
-      { actorName, claimLabel: `${args.buyerName} (${args.financingEntity})` },
-      { link: `/${args.orgId}/accounting` }
-    );
-
-    return claimId;
-  },
-});
-
-/**
- * Settles a PENDING claim in full: records the canonical inbound payment,
- * allocates it against the claim's receivable, and posts DR Bank-or-cash /
- * CR Finance-company AR.
- */
-export const settle = mutation({
-  args: {
-    orgId: v.id("organizations"),
-    claimId: v.id("claims"),
-    paymentMethod: paymentMethodValidator,
-    occurredAt: v.optional(v.number()),
-  },
-  handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-
-    const claim = await ctx.db.get(args.claimId);
-    if (!claim || claim.orgId !== args.orgId || claim.isDeleted) {
-      throw new ConvexError("Claim not found in this organization.");
-    }
-    if (claim.status !== "PENDING") {
-      throw new ConvexError(`Only a PENDING claim can be settled (this one is ${claim.status}).`);
-    }
-    if (claim.claimAmountMinor == null) {
-      throw new ConvexError("This claim predates GL Phase 13 and has no minor-unit amount on record; it cannot be settled through this flow.");
+    const byCurrency = new Map<string, { currency: string; scale: number; outstandingMinor: number }>();
+    for (const doc of docs) {
+      const outstandingMinor = collectibleOutstanding(
+        doc.status,
+        await getReceivableOutstandingMinor(ctx, doc._id)
+      );
+      if (outstandingMinor <= 0) continue;
+      const bucket = byCurrency.get(doc.currency) ?? {
+        currency: doc.currency,
+        scale: doc.scale,
+        outstandingMinor: 0,
+      };
+      bucket.outstandingMinor += outstandingMinor;
+      byCurrency.set(doc.currency, bucket);
     }
 
-    const occurredAt = args.occurredAt ?? Date.now();
-    const currency = claim.currency ?? (await getOrgCurrency(ctx, args.orgId));
-
-    const paymentId = await createCanonicalPayment(ctx, {
-      orgId: args.orgId,
-      direction: "IN",
-      payerType: "FINANCE_COMPANY",
-      method: args.paymentMethod,
-      amountMinor: claim.claimAmountMinor,
-      currency,
-      idempotencyKey: `claim_settlement_${args.claimId}`,
-      actorId: user._id,
-      receivedAt: occurredAt,
-    });
-
-    // A claim backfilled by GL Phase 17's minor-unit migration has an amount
-    // but never had a receivable opened (that only happens in add(), and the
-    // backfill only touches claimAmountMinor/currency). Self-heal one here
-    // rather than silently skipping the allocation — otherwise this claim
-    // settles and posts to the GL with no subledger record at all.
-    let receivableDocumentId = claim.receivableDocumentId;
-    if (!receivableDocumentId) {
-      receivableDocumentId = await ensureReceivableDocument(ctx, {
-        orgId: args.orgId,
-        documentType: "INVOICE",
-        payerType: "FINANCE_COMPANY",
-        sourceType: "claims",
-        sourceId: args.claimId.toString(),
-        originalAmountMinor: claim.claimAmountMinor,
-        currency,
-        issueDate: claim.claimDate,
-        dueDate: claim.claimDate + CLAIM_DUE_DAYS_MS,
-        actorId: user._id,
-      });
-      await ctx.db.patch(args.claimId, { receivableDocumentId });
-    }
-
-    await allocatePaymentToReceivable(ctx, {
-      orgId: args.orgId,
-      paymentId,
-      receivableDocumentId,
-      amountMinor: claim.claimAmountMinor,
-      actorId: user._id,
-    });
-
-    await hookClaimSettled(ctx, {
-      orgId: args.orgId,
-      claimId: args.claimId,
-      amountMinor: claim.claimAmountMinor,
-      currency,
-      paymentMethod: args.paymentMethod,
-      actorId: user._id,
-      occurredAt,
-    });
-
-    await ctx.db.patch(args.claimId, {
-      status: "PAID",
-      settledAt: occurredAt,
-      settledBy: user._id,
-    });
-
-    const actorName = await getActorName(ctx);
-    await notifyManagers(
-      ctx,
-      args.orgId,
-      "claim.updated",
-      { actorName, claimLabel: `${claim.buyerName} (${claim.financingEntity})` },
-      { link: `/${args.orgId}/accounting` }
-    );
-  },
-});
-
-/**
- * Rejects a PENDING claim: writes the receivable off the books with a
- * balanced DR Claim Write-off Expense / CR Finance-company AR entry.
- * Pre-Phase-13 legacy claims (no minor-unit amount, no receivable) just flip
- * status — they never had a GL presence to unwind.
- */
-export const reject = mutation({
-  args: {
-    orgId: v.id("organizations"),
-    claimId: v.id("claims"),
-    occurredAt: v.optional(v.number()),
-  },
-  handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-
-    const claim = await ctx.db.get(args.claimId);
-    if (!claim || claim.orgId !== args.orgId || claim.isDeleted) {
-      throw new ConvexError("Claim not found in this organization.");
-    }
-    if (claim.status !== "PENDING") {
-      throw new ConvexError(`Only a PENDING claim can be rejected (this one is ${claim.status}).`);
-    }
-
-    const occurredAt = args.occurredAt ?? Date.now();
-
-    if (claim.receivableDocumentId) {
-      await ctx.db.patch(claim.receivableDocumentId, { status: "WRITTEN_OFF" });
-    }
-
-    if (claim.claimAmountMinor != null) {
-      const currency = claim.currency ?? (await getOrgCurrency(ctx, args.orgId));
-      await hookClaimWrittenOff(ctx, {
-        orgId: args.orgId,
-        claimId: args.claimId,
-        amountMinor: claim.claimAmountMinor,
-        currency,
-        actorId: user._id,
-        occurredAt,
-      });
-    }
-
-    await ctx.db.patch(args.claimId, {
-      status: "REJECTED",
-      rejectedAt: occurredAt,
-      rejectedBy: user._id,
-    });
-
-    const actorName = await getActorName(ctx);
-    await notifyManagers(
-      ctx,
-      args.orgId,
-      "claim.updated",
-      { actorName, claimLabel: `${claim.buyerName} (${claim.financingEntity})` },
-      { link: `/${args.orgId}/accounting` }
-    );
-  },
-});
-
-/** Notes only — status transitions go through settle/reject (GL Phase 13 event-driven rule). */
-export const update = mutation({
-  args: {
-    orgId: v.id("organizations"),
-    claimId: v.id("claims"),
-    notes: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-
-    const claim = await ctx.db.get(args.claimId);
-    if (!claim || claim.orgId !== args.orgId) {
-      throw new ConvexError("Claim not found in this organization.");
-    }
-
-    if (args.notes !== undefined) {
-      await ctx.db.patch(args.claimId, { notes: args.notes });
-    }
-
-    const actorName = await getActorName(ctx);
-    await notifyManagers(
-      ctx,
-      args.orgId,
-      "claim.updated",
-      { actorName, claimLabel: `${claim.buyerName} (${claim.financingEntity})` },
-      { link: `/${args.orgId}/accounting` }
-    );
-  },
-});
-
-export const remove = mutation({
-  args: {
-    orgId: v.id("organizations"),
-    claimId: v.id("claims"),
-  },
-  handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    const claim = await ctx.db.get(args.claimId);
-    if (!claim || claim.orgId !== args.orgId) {
-      throw new ConvexError("Claim not found in this organization.");
-    }
-    // A pending claim with a receivable has open AR on the books — settling
-    // or rejecting is the only GL-safe exit (mirrors fixedAssets.remove).
-    if (claim.status === "PENDING" && claim.receivableDocumentId) {
-      throw new ConvexError("This claim has an open receivable on the ledger. Settle or reject it instead of deleting it.");
-    }
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new ConvexError("Unauthenticated");
-    await ctx.db.patch(args.claimId, {
-      isDeleted: true,
-      deletedAt: Date.now(),
-      deletedBy: identity.subject
-    });
-
-    const actorName = await getActorName(ctx);
-    await notifyManagers(
-      ctx,
-      args.orgId,
-      "claim.updated",
-      { actorName, claimLabel: `${claim.buyerName} (${claim.financingEntity})` },
-      { link: `/${args.orgId}/accounting` }
-    );
+    return [...byCurrency.values()];
   },
 });

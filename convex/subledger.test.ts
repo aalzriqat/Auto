@@ -229,3 +229,122 @@ describe("subledger balances", () => {
     expect(noFilterAllocations).toEqual([]);
   });
 });
+
+/**
+ * A terminal receivable disposition is a business decision, not an arithmetic
+ * result (SCRUM-51 review).
+ *
+ * `reverseAllocation` recomputes the receivable's status from its remaining
+ * active allocations. That is correct while the document is live, but it used
+ * to run unconditionally, so a document whose status had already been decided
+ * — CANCELLED because the sale was cancelled or the deal voided — could be
+ * relabelled by the arithmetic of an unrelated reversal.
+ *
+ * What that produced is worth stating precisely, because the reviews that
+ * raised it predicted something else. `getReceivableOutstandingMinor` returns 0
+ * for CANCELLED before the recompute reads it, and 0 maps to PAID — so a
+ * cancelled receivable was relabelled **PAID**, not reopened. Nothing became
+ * collectible again. WRITTEN_OFF and REVERSED would have landed on OPEN.
+ *
+ * These tests pin the WRITER, and reach it directly rather than through a
+ * business flow, because no business flow reaches it: this is defense in depth
+ * against an unreachable state, not a live bug. The reachability argument was
+ * wrong when first made, and the correction is recorded in `subledger.ts` so it
+ * is not re-derived — briefly, CANCEL_RECEIVABLE throws on `paidAmount > 0`
+ * before it ever reads a cheque's status, `cancelSaleReceivableIfSafe` reverses
+ * allocations before cancelling, and nothing writes WRITTEN_OFF or REVERSED at
+ * all.
+ *
+ * That is exactly why the setup patches the status directly. Driving a real
+ * mutation chain here would assert that the chain refuses — a different and
+ * already-covered claim — and would leave the writer itself untested, which is
+ * the thing consumers depend on.
+ */
+describe("terminal receivable dispositions survive allocation reversal", () => {
+  test.each(["CANCELLED", "WRITTEN_OFF", "REVERSED"] as const)(
+    "a %s receivable keeps its disposition when an allocation is reversed",
+    async (terminalStatus) => {
+      const { t, orgId, customerId, asManager } = await setupSubledgerOrg();
+      const now = Date.now();
+
+      const receivableDocumentId = await asManager.mutation(internal.subledger.createReceivable, {
+        orgId,
+        documentType: "INVOICE",
+        payerType: "CUSTOMER",
+        customerId,
+        sourceType: "manual_invoice",
+        sourceId: `invoice-terminal-${terminalStatus}`,
+        originalAmountMinor: 100_000,
+        currency: "JOD",
+        issueDate: now,
+        dueDate: now + 7 * 24 * 60 * 60 * 1000,
+      });
+      const paymentId = await asManager.mutation(internal.subledger.recordPayment, {
+        orgId,
+        direction: "IN",
+        customerId,
+        method: "CHEQUE",
+        amountMinor: 60_000,
+        currency: "JOD",
+        idempotencyKey: `subledger-terminal-${terminalStatus}`,
+      });
+      // The allocation is made while the document is still live — that is the
+      // only order the real flows produce, and it is what leaves an ACTIVE
+      // allocation attached to a document that is terminated afterwards.
+      const allocationId = await asManager.mutation(internal.subledger.allocate, {
+        orgId,
+        paymentId,
+        receivableDocumentId,
+        amountMinor: 60_000,
+      });
+      await t.run((ctx) => ctx.db.patch(receivableDocumentId, { status: terminalStatus }));
+
+      await asManager.mutation(internal.subledger.reverseAllocationMutation, { orgId, allocationId });
+
+      const doc = await t.run((ctx) => ctx.db.get(receivableDocumentId));
+      expect(doc?.status).toBe(terminalStatus);
+    }
+  );
+
+  test("a live receivable still recomputes its status from the reversal", async () => {
+    // The guard must refuse to overwrite a decision, not stop maintaining the
+    // status at all — a fix that simply skipped the patch would satisfy the
+    // three cases above while breaking every ordinary reversal.
+    const { t, orgId, customerId, asManager } = await setupSubledgerOrg();
+    const now = Date.now();
+
+    const receivableDocumentId = await asManager.mutation(internal.subledger.createReceivable, {
+      orgId,
+      documentType: "INVOICE",
+      payerType: "CUSTOMER",
+      customerId,
+      sourceType: "manual_invoice",
+      sourceId: "invoice-live-reversal",
+      originalAmountMinor: 100_000,
+      currency: "JOD",
+      issueDate: now,
+      dueDate: now + 7 * 24 * 60 * 60 * 1000,
+    });
+    const paymentId = await asManager.mutation(internal.subledger.recordPayment, {
+      orgId,
+      direction: "IN",
+      customerId,
+      method: "CASH",
+      amountMinor: 100_000,
+      currency: "JOD",
+      idempotencyKey: "subledger-live-reversal",
+    });
+    const allocationId = await asManager.mutation(internal.subledger.allocate, {
+      orgId,
+      paymentId,
+      receivableDocumentId,
+      amountMinor: 100_000,
+    });
+    expect(await t.run(async (ctx) => (await ctx.db.get(receivableDocumentId))?.status)).toBe("PAID");
+
+    await asManager.mutation(internal.subledger.reverseAllocationMutation, { orgId, allocationId });
+
+    const doc = await t.run((ctx) => ctx.db.get(receivableDocumentId));
+    expect(doc?.status).toBe("OPEN");
+  });
+});

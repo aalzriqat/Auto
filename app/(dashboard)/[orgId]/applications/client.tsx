@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { usePaginatedQuery } from "convex/react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -34,6 +35,38 @@ export function ApplicationClient() {
 
   const [selectedAppId, setSelectedAppId] = useState<any>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+
+  // `confirmDisbursement` — the only mutation that settles finance-company AR —
+  // lives in this dialog, and the dialog used to be reachable only by finding
+  // the row and clicking it. Accounting's finance-company AR queue reports the
+  // outstanding balance but deliberately cannot settle it, so it needs to send
+  // the accountant to the door that can; a link is only an answer if it opens.
+  //
+  // The parameter is arbitrary URL input, so it is resolved server-side before
+  // anything mounts: handing a raw string to a `v.id()` query argument throws
+  // an argument-validation error into the React tree, and `?application=garbage`
+  // would take the page down instead of simply showing nothing.
+  const searchParams = useSearchParams();
+  const candidateApplicationId = searchParams.get("application");
+  const resolvedApplicationId = useQuery(
+    api.applications.resolveApplicationId,
+    activeOrgId && candidateApplicationId
+      ? { orgId: activeOrgId, candidateId: candidateApplicationId }
+      : "skip"
+  );
+  useEffect(() => {
+    // Only drives the dialog while a candidate is in the URL. Navigating the
+    // parameter away must not leave the previous deal on screen, but with no
+    // candidate at all this must keep its hands off the row-click path.
+    if (!candidateApplicationId) return;
+    if (!resolvedApplicationId) {
+      setIsDialogOpen(false);
+      setSelectedAppId(null);
+      return;
+    }
+    setSelectedAppId(resolvedApplicationId);
+    setIsDialogOpen(true);
+  }, [candidateApplicationId, resolvedApplicationId]);
   const [statusFilter, setStatusFilter] = useState("ALL");
   const statusValueFor = (app: { status: string; hasPendingDepositResolution?: boolean }) =>
     app.hasPendingDepositResolution ? "DEPOSIT_PENDING" : app.status;

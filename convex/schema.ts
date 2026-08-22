@@ -350,7 +350,23 @@ export default defineSchema({
     .index("by_org_customer", ["orgId", "customerId"])
     .index("by_org_source", ["orgId", "sourceType", "sourceId"])
     .index("by_org_status", ["orgId", "status"])
-    .index("by_org_dueDate", ["orgId", "dueDate"]),
+    .index("by_org_dueDate", ["orgId", "dueDate"])
+    // Finance-company AR is a small slice of a table dominated by customer
+    // receivables. Without this, the finance-company queue scans every
+    // customer receivable in the org and post-filters, which grows with sales
+    // volume rather than with financed deals.
+    //
+    .index("by_org_payerType", ["orgId", "payerType"])
+    // Both are needed, and the difference is the sort key, not just the filter.
+    // An index sorts by its trailing components, so querying
+    // by_org_payerType_status with only (orgId, payerType) bound orders rows by
+    // STATUS first and creation time second — the queue would lead with
+    // WRITTEN_OFF and bury OPEN, which is the opposite of a work queue. The
+    // queue therefore uses by_org_payerType (newest-first), while the
+    // outstanding total binds status too, so it can read just the
+    // OPEN/PARTIALLY_PAID working set instead of every receivable ever raised —
+    // settled history grows without bound, the open set does not.
+    .index("by_org_payerType_status", ["orgId", "payerType", "status"]),
 
   canonicalPayments: defineTable({
     orgId: v.id("organizations"),
