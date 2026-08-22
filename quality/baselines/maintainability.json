@@ -5,7 +5,7 @@
     "version": 1,
     "parserVersion": "8.61.0"
   },
-  "sourceCommit": "4ab1dd3a8d4c745c1b2f02a404234d0f07d96ce7",
+  "sourceCommit": "f2bc4dc8bd4881e9a9f3f47aa45475a57d04c3ec",
   "scopeHash": "cbb251730b9ce5b780fddbe69f2ef29d365e7cf82e5b08053a48446d15635f8b",
   "thresholds": {
     "fileLines": 600,
@@ -2384,15 +2384,15 @@
     },
     {
       "path": "components/import/ImportWizard.tsx",
-      "semanticHash": "14e7bbaf2759918371425f4283998542a925b9df0bf4f93bf063103df34711cf",
+      "semanticHash": "4f84970c84bf7c530b52eb8bc07dfd0654f71dbf65747fb8198f58cfb19dec48",
       "metrics": {},
       "functions": [
         {
           "anchor": "module/function:ImportWizard",
-          "semanticHash": "9ab06c9803bbac1d2196ac9081d37e094bdf8742e495a53ffb8affe2f1c4ab57",
+          "semanticHash": "ea444f6f16e2f33b26ced5eec5dc9d8d3d5353ac1e2fa4aec820b754dbd3fbab",
           "metrics": {
-            "lines": 285,
-            "complexity": 22
+            "lines": 299,
+            "complexity": 26
           }
         }
       ]
@@ -3104,14 +3104,21 @@
     },
     {
       "path": "components/vehicles/VehicleImportDialog.tsx",
-      "semanticHash": "684062e17bfc6ca1152c60ad32b165d4effd381ea09bd83e797865f9fd67a089",
+      "semanticHash": "165cb112fa9a5bb0201aa4366fd78265feaab634416d3663dc4c31811584e0be",
       "metrics": {},
       "functions": [
         {
           "anchor": "module/function:deriveVehicleRow",
-          "semanticHash": "17b3a83dc91861f458adab4bdc2cc1d5e38c5138ab7b3cc9ebe1cd9d3a48e49f",
+          "semanticHash": "9a0feee5e3d03fecf3da663aedb146d8f6b063a009f05ee33b050ff53f2749b8",
           "metrics": {
-            "complexity": 32
+            "complexity": 31
+          }
+        },
+        {
+          "anchor": "module/function:ImportAccountingChoice",
+          "semanticHash": "5beb45c1a9ad4056f1b555accb0a0ec4e6f3fab3a621530e9d6f15bd4be6e70f",
+          "metrics": {
+            "lines": 144
           }
         },
         {
@@ -3119,6 +3126,20 @@
           "semanticHash": "71e4a216465eb56128880f878e99c4b91735eae30c384d19975d0fedcd8d7409",
           "metrics": {
             "complexity": 22
+          }
+        },
+        {
+          "anchor": "module/function:validateVehicleRow",
+          "semanticHash": "20f9ffe870583e8f762b995fde68214320b756fff91de7c076396100b9c4b0fc",
+          "metrics": {
+            "complexity": 20
+          }
+        },
+        {
+          "anchor": "module/function:VehicleImportDialog",
+          "semanticHash": "0b53d14fca69c61cb0c32b945a9bb12806e6202c94241a8cb730c92b4f773507",
+          "metrics": {
+            "lines": 154
           }
         }
       ]
@@ -4706,9 +4727,9 @@
     },
     {
       "path": "convex/vehicles.ts",
-      "semanticHash": "a839d0023e56e3a99f94e09325b4635f55a1c2e3aafe5c3b410cc80cae337295",
+      "semanticHash": "a95d95b092aa44dc74327ab6a88fe799f14df93338d82d518d32a8f304635438",
       "metrics": {
-        "lines": 1731
+        "lines": 2088
       },
       "functions": [
         {
@@ -4741,9 +4762,11 @@
         },
         {
           "anchor": "module/binding:importBulk/call:mutation:arg0/property:handler",
-          "semanticHash": "1b1d70d65ac39b635580219754a205de7065ae3ad31df7f51b10736c0361ace8",
+          "semanticHash": "55317f823ddc446626f92fd5bcd9916ded375c5a7e7bcce05a100706bd21da03",
           "metrics": {
-            "complexity": 40
+            "lines": 323,
+            "complexity": 91,
+            "nesting": 6
           }
         },
         {
