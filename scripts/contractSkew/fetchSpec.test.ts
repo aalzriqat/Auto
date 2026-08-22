@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readSpecFile, redact, fetchDeployedSpec } from "./fetchSpec.mjs";
-import { listSurfaceFiles, unscannedConvexClients } from "./clientFiles.mjs";
+import { listSurfaceFiles, normalizeSurfacePath, unscannedConvexClients } from "./clientFiles.mjs";
 
 /**
  * The reader and the credential ladder are the two places this control touches
@@ -15,6 +15,35 @@ import { listSurfaceFiles, unscannedConvexClients } from "./clientFiles.mjs";
 
 const scratch = () => fs.mkdtempSync(path.join(os.tmpdir(), "skew-spec-"));
 
+/**
+ * A location that really exists, is really outside every allowed root, and that
+ * an unprivileged CI user can actually create.
+ *
+ * ⚠️ THE PREVIOUS VERSION WROTE TO THE FILESYSTEM ROOT AND RETURNED SILENTLY IF
+ * THAT FAILED — and `return` inside a vitest callback is a PASS, not a skip. On
+ * `ubuntu-latest` the job user is not root and `/` is `drwxr-xr-x root:root`,
+ * so the write raises EACCES: the test reported green on the one machine whose
+ * answer counts, having asserted nothing. Measured on Linux as a non-root user:
+ * `touch /x` → `Permission denied`.
+ *
+ * That is the THIRD time in this PR that a test of this control proved nothing,
+ * so the fix is not another location. A fixture that cannot be established now
+ * FAILS. The parent of the workspace is writable by an ordinary user on both
+ * CI and a developer machine, and the check below refuses to proceed unless it
+ * really is outside every allowed root — because a fixture that is not out of
+ * bounds cannot demonstrate that out-of-bounds is refused.
+ */
+function outsideEveryAllowedRoot(name: string): string {
+  const candidate = path.resolve(process.cwd(), "..", name);
+  for (const root of [process.cwd(), os.tmpdir()]) {
+    const real = fs.realpathSync(path.resolve(root));
+    if (candidate === real || candidate.startsWith(real + path.sep)) {
+      throw new Error(`fixture proves nothing: ${candidate} is INSIDE the allowed root ${real}`);
+    }
+  }
+  return candidate;
+}
+
 describe("readSpecFile bounds what it will open", () => {
   test("a spec inside the temp directory is read", () => {
     const dir = scratch();
@@ -24,27 +53,18 @@ describe("readSpecFile bounds what it will open", () => {
   });
 
   test("a path outside the workspace and temp directory is REFUSED", () => {
-    /**
-     * ⚠️ THIS TEST WAS VACUOUS AND A REVIEWER CAUGHT IT. It pointed at a path
-     * that did not exist, so `readSpecFile` threw "No readable spec file" and
-     * returned before the bounds check ever ran. Deleting the bounds check
-     * entirely would have left it green.
-     *
-     * The file below REALLY EXISTS and is really outside both allowed roots, so
-     * the only thing that can refuse it is the bounds check itself — and the
-     * assertion now matches on the refusal message rather than on any throw.
-     */
-    const outsideRoot = path.join(path.parse(process.cwd()).root, `skew-outside-${process.pid}.json`);
+    // No try/catch around the write: if the fixture cannot be created this test
+    // FAILS. Silence here is what made the previous version worthless.
+    const outside = outsideEveryAllowedRoot(`skew-outside-${process.pid}.json`);
+    fs.writeFileSync(outside, JSON.stringify({ url: "https://x.convex.cloud", functions: [] }));
     try {
-      fs.writeFileSync(outsideRoot, JSON.stringify({ url: "https://x.convex.cloud", functions: [] }));
-    } catch {
-      return; // no write permission at the filesystem root; skip rather than fake it
-    }
-    try {
-      expect(fs.existsSync(outsideRoot)).toBe(true); // it is readable, so only the bounds check can refuse
-      expect(() => readSpecFile(outsideRoot)).toThrow(/Refusing to read a spec from outside/);
+      // It exists and is readable, so the bounds check is the only thing that
+      // can refuse it — and the assertion matches the refusal MESSAGE, not any
+      // throw, so "No readable spec file" cannot pass for a refusal.
+      expect(fs.existsSync(outside)).toBe(true);
+      expect(() => readSpecFile(outside)).toThrow(/Refusing to read a spec from outside/);
     } finally {
-      fs.rmSync(outsideRoot, { force: true });
+      fs.rmSync(outside, { force: true });
     }
   });
 
@@ -52,33 +72,62 @@ describe("readSpecFile bounds what it will open", () => {
     expect(() => readSpecFile(path.join(scratch(), "absent.json"))).toThrow(/No readable spec file/);
   });
 
-  test("a SYMLINK pointing OUT of bounds is refused, because the path is canonicalized", () => {
+  test("a SYMLINK pointing OUT of bounds is refused, because the path is canonicalized", (ctx) => {
     /**
-     * ⚠️ ALSO VACUOUS BEFORE, and the same reviewer caught it: the old link
-     * resolved back INSIDE the allowed directory, so no out-of-bounds link was
-     * ever exercised. `path.resolve` does not follow links; `realpath` does,
-     * and that difference is the whole point of the check.
+     * `path.resolve` does not follow links; `realpath` does, and that difference
+     * is the whole point of the check — the LINK is inside an allowed directory
+     * and its TARGET is not.
      */
-    const outsideRoot = path.join(path.parse(process.cwd()).root, `skew-target-${process.pid}.json`);
-    try {
-      fs.writeFileSync(outsideRoot, JSON.stringify({ url: "https://x.convex.cloud", functions: [] }));
-    } catch {
-      return;
-    }
+    const target = outsideEveryAllowedRoot(`skew-target-${process.pid}.json`);
+    fs.writeFileSync(target, JSON.stringify({ url: "https://x.convex.cloud", functions: [] }));
     const link = path.join(scratch(), "innocent-looking.json");
     try {
-      fs.symlinkSync(outsideRoot, link);
+      fs.symlinkSync(target, link);
     } catch {
-      fs.rmSync(outsideRoot, { force: true });
-      return; // symlink creation needs privileges on Windows; skip rather than fake it
+      // Creating a symlink needs a privilege Windows does not grant by default.
+      // That is a genuine platform limit rather than a fixture failure, so it
+      // is a VISIBLE skip — never a bare `return`, which vitest reports as a
+      // pass and which is exactly how this file came to prove nothing twice.
+      fs.rmSync(target, { force: true });
+      ctx.skip();
+      return;
     }
     try {
-      // The LINK is inside an allowed directory; its TARGET is not.
       expect(() => readSpecFile(link)).toThrow(/Refusing to read a spec from outside/);
     } finally {
       fs.rmSync(link, { force: true });
-      fs.rmSync(outsideRoot, { force: true });
+      fs.rmSync(target, { force: true });
     }
+  });
+});
+
+describe("path identity follows the filesystem, not the developer's machine", () => {
+  /**
+   * ⚠️ THIS FOLD USED TO BE UNCONDITIONAL, AND CI RUNS ON LINUX. `app/Foo.tsx`
+   * and `app/foo.tsx` are DIFFERENT files there, and collapsing them to one key
+   * made an unscanned file look scanned — a false PASS in the very detector
+   * whose job is to notice a file nobody scanned.
+   *
+   * Deliberately not folded on darwin: APFS can be configured either way, and
+   * being wrong there yields a false GAP, which is loud and denies PASS, rather
+   * than a false PASS, which is silent.
+   */
+  test("two casings are DISTINCT paths on linux", () => {
+    expect(normalizeSurfacePath("app/Foo.tsx", "linux")).not.toBe(
+      normalizeSurfacePath("app/foo.tsx", "linux")
+    );
+  });
+
+  test("and on darwin, deliberately — a false gap is louder than a false pass", () => {
+    expect(normalizeSurfacePath("app/Foo.tsx", "darwin")).not.toBe(
+      normalizeSurfacePath("app/foo.tsx", "darwin")
+    );
+  });
+
+  test("but the SAME path on win32, where the filesystem really is case-insensitive", () => {
+    expect(normalizeSurfacePath("app/Foo.tsx", "win32")).toBe(
+      normalizeSurfacePath("app/foo.tsx", "win32")
+    );
   });
 });
 

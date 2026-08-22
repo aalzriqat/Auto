@@ -39,6 +39,42 @@ import { classifyBreaking, alertsFor, releaseBlockingFindings } from "./classify
 const EXIT = { OK: 0, FAIL: 1, USAGE: 2, UNAVAILABLE: 3, BLOCKED: 4, STANDING_DEFECT: 5, COVERAGE_GAP: 6 };
 
 /**
+ * ⚠️ AN EXCEPTION MEANS "THE CONTROL COULD NOT LOOK", NEVER "SKEW PROVEN".
+ *
+ * Every verdict below is reached deliberately, through a `process.exit` with a
+ * chosen code. Node's default for an UNCAUGHT throw is exit 1 — and 1 is the
+ * one code that means FAIL, which `contract-skew.yml` renders as
+ * "PRODUCTION SKEW — Deploy the Convex backend at this commit." So any
+ * unhandled defect anywhere in this run told a responder to deploy, for what
+ * was actually a tooling failure. Wrong, and expensively wrong: it sends
+ * somebody to change production in response to a bug in this script.
+ *
+ * ⚠️ AND THIS IS THE SECOND TIME. `readSpecOrUnavailable` below was written to
+ * fix exactly this for the two spec reads — it fixed the INSTANCES, not the
+ * CLASS. The very next thing that same commit did was add a throw for an
+ * unreadable tsconfig, reached through an unguarded `extractClientCalls`, and
+ * the defect came straight back somewhere else. A boundary is the only form of
+ * the fix that also covers the throw nobody has written yet.
+ *
+ * Mapping every escaped throw to UNAVAILABLE is safe in the direction that
+ * matters: FAIL is only ever reached by an explicit path with real evidence
+ * behind it, so nothing that could legitimately prove skew arrives here.
+ * UNAVAILABLE is loud, is documented as NOT a pass, and is what "the control
+ * could not complete" honestly is.
+ */
+function unavailable(reason) {
+  console.log(redact(JSON.stringify({ verdict: "UNAVAILABLE", reason }, null, 2)));
+  console.error(redact(`::warning::contract-skew UNAVAILABLE — ${reason}`));
+  process.exit(EXIT.UNAVAILABLE);
+}
+
+for (const event of ["uncaughtException", "unhandledRejection"]) {
+  process.on(event, (error) => {
+    unavailable(`the control could not complete (${event}): ${String(error?.stack ?? error)}`);
+  });
+}
+
+/**
  * @param {string} name
  * @param {string|boolean|undefined} [fallback]
  * @returns {string|boolean|undefined}  `true` for a bare flag, the value for
@@ -185,16 +221,18 @@ function backendUnchangedSince(sha) {
  * be sent looking for a break that does not exist.
  *
  * The primary fetch already gets this right; these two readers did not.
+ *
+ * The boundary at the top of this file now catches these too. This stays
+ * because it names WHICH read failed and which file it was — a message worth
+ * having when a scheduled run reports UNAVAILABLE at 04:00 and nobody is
+ * watching. The boundary is the floor, not the replacement.
  */
 function readSpecOrUnavailable(specPath, what) {
   try {
     return readSpecFile(specPath);
   } catch (error) {
     const detail = String(/** @type {Error} */ (error)?.message ?? error);
-    const reason = `could not read the ${what} spec at ${specPath}: ${detail}`;
-    console.log(redact(JSON.stringify({ verdict: "UNAVAILABLE", reason }, null, 2)));
-    console.error(redact(`::warning::contract-skew UNAVAILABLE — ${reason}`));
-    process.exit(EXIT.UNAVAILABLE);
+    unavailable(`could not read the ${what} spec at ${specPath}: ${detail}`);
   }
 }
 

@@ -128,11 +128,12 @@ export function listSurfaceFiles(root, surface) {
  * produces a false PASS, which is silent. When the two error directions are
  * unequal, take the loud one.
  */
-const CASE_INSENSITIVE_FS = process.platform === "win32";
-const normalize = (p) => {
+export function normalizeSurfacePath(p, platform = process.platform) {
   const abs = path.resolve(p).split(path.sep).join("/");
-  return CASE_INSENSITIVE_FS ? abs.toLowerCase() : abs;
-};
+  return platform === "win32" ? abs.toLowerCase() : abs;
+}
+
+const normalize = (p) => normalizeSurfacePath(p);
 
 /**
  * Client files that call Convex and are NOT covered by any surface — DERIVED by

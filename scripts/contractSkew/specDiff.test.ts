@@ -322,6 +322,19 @@ describe("changedContractPaths", () => {
     expect(joined).not.toBe(separate);
   });
 
+  test("encodeSignatures is injective ON ITS OWN TERMS, not by luck of the caller", () => {
+    // A single signature keeps its plain form, so a lone element that ALREADY
+    // looks like the encoded form used to collide with the set it encodes:
+    //   {'["a","b"]'}  and  {"a","b"}  both rendered as  ["a","b"]
+    //
+    // Unreachable today — every real signature starts `${kind}:` and no kind
+    // begins with `[` — but that is a property of signatureOf, not of this
+    // function, and it would break silently the day a node kind is added.
+    expect(encodeSignatures(new Set(['["a","b"]']))).not.toBe(
+      encodeSignatures(new Set(["a", "b"]))
+    );
+  });
+
   test("encodeSignatures is deterministic regardless of insertion order", () => {
     // Two runs observing the same branches in different orders must agree, or
     // an inert difference reads as a redeclaration.
@@ -680,6 +693,40 @@ describe("an unreadable spec is UNAVAILABLE, never a proven skew", () => {
   test("a missing --candidate spec in release mode exits UNAVAILABLE (3)", () => {
     const dir = scaffoldSpec();
     expect(runWith(["--mode", "release", "--spec", "spec.json", "--candidate", "absent.json"], dir)).toBe(3);
+  });
+
+  /**
+   * ⚠️ THE SAME DEFECT CAME BACK SOMEWHERE ELSE, WHICH IS WHY THESE EXIST.
+   *
+   * Guarding the two spec reads fixed the instances and not the class. The very
+   * next change added a throw for an unreadable tsconfig — correctly, because a
+   * config that did not load silently degrades every payload to UNKNOWN — but
+   * `extractClientCalls` is called unguarded, so the throw escaped and Node
+   * exited 1. Exit 1 is FAIL, which the workflow renders as "PRODUCTION SKEW —
+   * Deploy the Convex backend at this commit."
+   *
+   * A tooling failure told a responder to change production. These two run the
+   * real CLI against a real broken project and assert on the EXIT CODE, which
+   * is the whole behaviour: 3, not 1.
+   */
+  const scaffoldBrokenProject = (tsconfig: string) => {
+    const dir = scaffoldSpec();
+    fs.mkdirSync(path.join(dir, "app"), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "app", "uses-convex.tsx"),
+      'import { useMutation } from "convex/react";\nexport const x = () => useMutation("vehicles:update");\n'
+    );
+    fs.writeFileSync(path.join(dir, "tsconfig.json"), tsconfig);
+    return dir;
+  };
+
+  test("a tsconfig that cannot be READ exits UNAVAILABLE (3), not FAIL (1)", () => {
+    expect(runWith(["--mode", "production", "--spec", "spec.json"], scaffoldBrokenProject("{ not json"))).toBe(3);
+  });
+
+  test("a tsconfig that cannot be PARSED exits UNAVAILABLE (3), not FAIL (1)", () => {
+    const dir = scaffoldBrokenProject(JSON.stringify({ extends: "./nowhere.json" }));
+    expect(runWith(["--mode", "production", "--spec", "spec.json"], dir)).toBe(3);
   });
 });
 

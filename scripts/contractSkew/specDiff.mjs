@@ -210,7 +210,21 @@ function collect(node, path, out, optional) {
  */
 export function encodeSignatures(set) {
   const parts = [...set].sort(byText);
-  return parts.length === 1 ? parts[0] : JSON.stringify(parts);
+  // ⚠️ THE PLAIN FORM IS ONLY SAFE WHILE NO SIGNATURE CAN LOOK LIKE THE ENCODED
+  // FORM — AND THAT WAS A PROPERTY OF A DIFFERENT FUNCTION. Every signature
+  // `signatureOf` produces begins `${node.kind}:`, and every node kind is
+  // alphabetic, so none can begin with `[`. That is what made the shortcut
+  // safe, and it was held implicitly: add a node kind, or change how a
+  // signature renders, and this quietly stops being injective with no test
+  // failing anywhere.
+  //
+  // The guard costs one comparison and makes the function injective on its own
+  // terms. Distinct sets now always differ: two plain forms because their
+  // contents do, two encoded forms because JSON of a sorted array is
+  // injective, and a plain form can never equal an encoded one because only
+  // the encoded form starts with `[`.
+  if (parts.length === 1 && !parts[0].startsWith("[")) return parts[0];
+  return JSON.stringify(parts);
 }
 
 function pathsOf(fn) {
