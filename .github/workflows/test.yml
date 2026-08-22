@@ -35,10 +35,14 @@ jobs:
     - name: Install dependencies
       run: pnpm install --frozen-lockfile --ignore-scripts
 
+    # Only the repo-wide report, which is what the artifact below uploads.
+    # `test:coverage:sonar` used to run here too, back when it wrote to the same
+    # coverage/ directory and so changed what got uploaded. It writes to
+    # coverage-sonar/ now, and nothing in this job reads that — it was ~2 minutes
+    # of dead work on every PR, in a required check. The sonarcloud job below
+    # generates its own reports.
     - name: Run unit + integration tests with coverage
-      run: |
-        pnpm test:coverage
-        pnpm test:coverage:sonar
+      run: pnpm test:coverage
       env:
         NODE_ENV: test
 
@@ -126,21 +130,34 @@ jobs:
       env:
         NODE_ENV: test
 
-    # `continue-on-error` here is about the REPORT, not about the tests.
+    # Only a SUCCESSFUL run produces a report Sonar is allowed to read.
     #
-    # The mobile suite's real gate is `pnpm mobile:test` in the mobile-and-shared
-    # job, which is a required check enforcing 100% over its curated set. A
-    # genuine mobile test failure fails there and is not hidden by this.
+    # An earlier version of this step carried `continue-on-error`, on the argument
+    # that a partial report can only understate coverage and so only pushes the
+    # gate toward red. That argument is wrong, because it quietly assumes the
+    # leftover report is merely incomplete rather than misshapen: a jest run that
+    # died partway leaves a file that still parses, still lists source records,
+    # and still passes every structural check below, while describing a run that
+    # never finished. "It looks valid" is not "it is a successful measurement".
     #
-    # What this tolerates is a flaky run erasing the Sonar context altogether: if
-    # this step fails the job, GitHub skips every later step, the scan never runs,
-    # and the required `SonarCloud Code Analysis` context is never posted — a
-    # merge blocked with nothing to read (SCRUM-186). A partial report can only
-    # UNDERSTATE coverage, which pushes the gate toward red; it cannot manufacture
-    # a green. The verification below still refuses to scan on a missing report.
+    # So a failure discards its own output and is retried exactly once — which
+    # covers the flake this is actually exposed to — and a second failure stops
+    # the job before the scan. That does mean the required Sonar context goes
+    # ABSENT rather than red in that case (SCRUM-186); an absent gate that blocks
+    # the merge is the correct outcome when the evidence could not be produced.
+    #
+    # The mobile suite's real test gate is `pnpm mobile:test` in the
+    # mobile-and-shared job, a required check enforcing 100% over its curated set.
+    # Nothing here weakens or substitutes for it.
     - name: Generate mobile coverage for Sonar
-      run: pnpm mobile:test:coverage:sonar
-      continue-on-error: true
+      run: |
+        rm -rf apps/mobile/coverage-sonar
+        if pnpm mobile:test:coverage:sonar; then
+          exit 0
+        fi
+        echo "::warning::mobile coverage run failed — discarding its output and retrying once so a half-written report cannot be scanned"
+        rm -rf apps/mobile/coverage-sonar
+        pnpm mobile:test:coverage:sonar
       env:
         NODE_ENV: test
 
