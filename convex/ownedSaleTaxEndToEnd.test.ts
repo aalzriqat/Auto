@@ -231,6 +231,57 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     expect(await netOnAccount(t, orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(jod(40_000));
   });
 
+  test("a zero-price sale is refused whether or not it carries add-ons", async () => {
+    // Emitting the revenue line only when there IS revenue removed a SECOND
+    // accidental fail-closed, and this pins the replacement.
+    //
+    // Before, a `salePrice: 0` sale threw "A journal line must have either a
+    // debit or credit amount" on the empty revenue line and the whole mutation
+    // rolled back. Once that line is omitted, the same sale with a dealer fee
+    // posts a perfectly balanced entry — Dr AR 500 / Cr Dealer Fee Income 500,
+    // plus a full-cost COGS relief against zero revenue — and marks the vehicle
+    // SOLD. Whether a mistyped price failed closed would then depend on whether
+    // an unrelated fee field happened to be set, which is not a rule anyone
+    // could reason about.
+    //
+    // `completeSalesForLineItems` has refused `unitPrice <= 0` all along. The
+    // single-vehicle door simply never had the same floor, and nothing noticed
+    // while the arithmetic was refusing these by accident.
+    const withFees = await seedDealer("zeroprice");
+    await expect(
+      withFees.asUser.mutation(api.sales.create, {
+        orgId: withFees.orgId,
+        vehicleId: withFees.vehicleId,
+        customerId: withFees.customerId,
+        salespersonId: withFees.userId,
+        salePrice: 0,
+        dealerFees: 500,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+        financingType: "CASH",
+      })
+    ).rejects.toThrow(/price/i);
+    expect(
+      await netOnAccount(withFees.t, withFees.orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)
+    ).toBe(0);
+
+    // The same refusal without add-ons. Previously this one failed closed and
+    // the one above did not; the point of the floor is that they agree.
+    const bare = await seedDealer("zeroprice2");
+    await expect(
+      bare.asUser.mutation(api.sales.create, {
+        orgId: bare.orgId,
+        vehicleId: bare.vehicleId,
+        customerId: bare.customerId,
+        salespersonId: bare.userId,
+        salePrice: 0,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+        financingType: "CASH",
+      })
+    ).rejects.toThrow(/price/i);
+  });
+
   test("a sale queued against a closed period carries the convention marker and drains to the same number", async () => {
     // The marker is only load-bearing on the DEFERRED path, and every other
     // test here posts immediately against an open period — so nothing proved

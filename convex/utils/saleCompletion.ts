@@ -177,6 +177,30 @@ async function prepareSaleCompletion(
   ctx: MutationCtx,
   args: SaleCompletionArgs
 ): Promise<PreparedSaleCompletion> {
+  // A sale needs a price.
+  //
+  // `completeSalesForLineItems` has refused `unitPrice <= 0` all along; this
+  // door never had the same floor, and nothing noticed because the arithmetic
+  // was refusing these by accident: a zero price made the revenue line 0/0, and
+  // `validateBalance` rejects a line carrying neither a debit nor a credit, so
+  // the mutation rolled back.
+  //
+  // Once that empty line is omitted (SCRUM-22), the accident stops happening —
+  // but only for a sale that has some OTHER credit to post. A zero-price sale
+  // with a dealer fee posts Dr AR 500 / Cr Dealer Fee Income 500 alongside a
+  // full-cost COGS relief against no revenue, and marks the vehicle SOLD, while
+  // the same sale without the fee still fails on its 0/0 AR line. Whether a
+  // mistyped price fails closed cannot depend on whether an unrelated field
+  // happens to be set.
+  //
+  // So it is stated here, where both doors already pass, rather than left to
+  // arithmetic that no longer produces it.
+  if (args.salePrice <= 0) {
+    throw new ConvexError(
+      "A completed sale needs a sale price greater than zero. Enter the price before completing the sale."
+    );
+  }
+
   // Sales tax cannot exceed the price it is charged on.
   //
   // This used to be refused by accident. Revenue was `salePrice - taxAmount`,
@@ -1304,8 +1328,11 @@ async function applySaleCompletionSideEffects(
   }
 
   // The receivable's total must match what the AR debit in hookSaleCompleted
-  // actually posted (salePrice + dealerFees + warranty/GAP premiums) — not
-  // just salePrice — or the subledger and GL diverge by that amount. That is
+  // actually posted (salePrice + sales tax + dealerFees + warranty/GAP
+  // premiums) — not just salePrice — or the subledger and GL diverge by that
+  // amount. The tax belongs in that list as of SCRUM-22, and this comment is
+  // the one place naming the invariant, so leaving it out here is how the next
+  // reader concludes the tax was deliberately excluded. That is
   // exactly `customerBillableMinor`, computed above so the deposit cap and this
   // document cannot disagree about what the customer was billed.
   const saleReceivableId = await ensureReceivableDocument(ctx, {

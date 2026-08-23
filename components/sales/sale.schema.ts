@@ -36,6 +36,17 @@ export const saleSchema = z.object({
 ).refine(
   (data) => !data.gapSold || (data.gapTermMonths ?? 0) > 0,
   { message: "A GAP term (in months) is required when a GAP premium is charged", path: ["gapTermMonths"] }
+  // Both of the following mirror refusals that `prepareSaleCompletion` now
+  // makes server-side (SCRUM-22). The server is the control — these exist so an
+  // operator meets the problem on the field that caused it, rather than as a
+  // failed save with no field path. Same reason the two term refines above
+  // exist, and they mirror server checks in `saleCompletion.ts` the same way.
+).refine(
+  (data) => (data.taxAmount ?? 0) <= data.salePrice,
+  { message: "The sales tax cannot be more than the sale price", path: ["taxAmount"] }
+).refine(
+  (data) => data.salePrice > 0,
+  { message: "A sale needs a price greater than zero", path: ["salePrice"] }
 );
 
 export type SaleFormValues = z.infer<typeof saleSchema>;
