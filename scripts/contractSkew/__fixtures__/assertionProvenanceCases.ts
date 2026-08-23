@@ -60,6 +60,37 @@ export function AliasAssertion(raw: string) {
   void mutate({ orgId: asserted });
 }
 
+export function ShorthandAssertion(raw: string) {
+  const mutate = useMutation(api.assertions.shorthandAssertion);
+  const orgId = raw as OrgId;
+  void mutate({ orgId });
+}
+
+export function TransitiveShorthandAssertion(raw: string) {
+  const mutate = useMutation(api.assertions.transitiveShorthandAssertion);
+  const claimed = raw as OrgId;
+  const orgId = claimed;
+  void mutate({ orgId });
+}
+
+export function ShorthandAssertionInSpread(raw: string) {
+  const mutate = useMutation(api.assertions.shorthandAssertionInSpread);
+  const orgId = raw as OrgId;
+  void mutate({ ...{ orgId } });
+}
+
+export function DestructuredAssertionAlias(raw: { claimed: string }) {
+  const mutate = useMutation(api.assertions.destructuredAssertionAlias);
+  const { claimed: orgId } = raw as unknown as { claimed: OrgId };
+  void mutate({ orgId });
+}
+
+export function ShorthandNumberAssertion(value: number) {
+  const mutate = useMutation(api.assertions.shorthandNumberAssertion);
+  const orgId = value as unknown as OrgId;
+  void mutate({ orgId });
+}
+
 export function AliasBaseline(raw: string) {
   const mutate = useMutation(api.assertions.aliasBaseline);
   const value = raw;

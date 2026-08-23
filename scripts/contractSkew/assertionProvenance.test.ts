@@ -49,6 +49,10 @@ describe("assertion provenance through the real TypeChecker and extractor", () =
     "assertedSpread",
     "conditionalAssertion",
     "aliasAssertion",
+    "shorthandAssertion",
+    "transitiveShorthandAssertion",
+    "shorthandAssertionInSpread",
+    "destructuredAssertionAlias",
     "callArgumentAssertion",
     "calleeBodyAssertion",
     "propertyAccessAssertion",
@@ -68,7 +72,7 @@ describe("assertion provenance through the real TypeChecker and extractor", () =
     expect(cross.findings.some((finding) => finding.detail.includes("different table"))).toBe(true);
   });
 
-  test.each(["numberAssertion", "crossTableAssertion"])(
+  test.each(["numberAssertion", "shorthandNumberAssertion", "crossTableAssertion"])(
     "%s: an assertion cannot hide a definite mismatch",
     (name) => {
       const mismatch = compareCall(name);
@@ -90,6 +94,21 @@ describe("assertion provenance through the real TypeChecker and extractor", () =
     ["callArgumentAssertion", "callArgumentBaseline"],
   ])("metamorphic: adding an assertion in %s never increases trust", (asserted, baseline) => {
     expect(admitsAtLeast(fieldAt(asserted), fieldAt(baseline))).toBe(true);
+  });
+
+  test.each([
+    "shorthandAssertion",
+    "transitiveShorthandAssertion",
+    "shorthandAssertionInSpread",
+  ])("%s is no more trusted than the equivalent explicit property", (name) => {
+    expect(admitsAtLeast(fieldAt(name), fieldAt("aliasAssertion"))).toBe(true);
+    expect(admitsAtLeast(fieldAt("aliasAssertion"), fieldAt(name))).toBe(true);
+  });
+
+  test("a destructured assertion alias is no more trusted than the explicit property", () => {
+    expect(
+      admitsAtLeast(fieldAt("destructuredAssertionAlias"), fieldAt("aliasAssertion")),
+    ).toBe(true);
   });
 
   test("the metamorphic oracle is anti-vacuous for genuinely proven ids", () => {

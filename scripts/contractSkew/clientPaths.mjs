@@ -282,7 +282,7 @@ export function extractClientCalls(rootFiles, tsconfigPath) {
                   seen: new Set(),
                   evidence,
                   expressionSeen: new Set(),
-                  refinements: new Map(),
+                  refinements: createFlowRefinements(),
                 })
               : null;
           const stripped = collected ? stripSkipSentinel(collected) : null;
@@ -398,7 +398,7 @@ export function extractClientCalls(rootFiles, tsconfigPath) {
                 seen: new Set(),
                 evidence,
                 expressionSeen: new Set(),
-                refinements: new Map(),
+                refinements: createFlowRefinements(),
               })
             : EMPTY_PAYLOAD;
           calls.push({
@@ -451,7 +451,7 @@ export function extractClientCalls(rootFiles, tsconfigPath) {
  *   seen: Set<string>,
  *   evidence: ReturnType<typeof createEvidenceAnalysis>,
  *   expressionSeen: Set<import("typescript").Symbol>,
- *   refinements: Map<import("typescript").Symbol, "truthy" | "falsy">
+ *   refinements: ReturnType<typeof createFlowRefinements>
  * }} ExpressionContext
  */
 
@@ -460,7 +460,7 @@ export function extractClientCalls(rootFiles, tsconfigPath) {
  * @param {ExpressionContext} context
  */
 function collectFromExpression(expr, context) {
-  const { checker, prefix, acc, depth, seen, evidence, expressionSeen, refinements } = context;
+  const { checker, prefix, acc, depth, seen, evidence, refinements } = context;
   const nested = (nestedPrefix = prefix, nestedRefinements = refinements) => ({
     ...context,
     prefix: nestedPrefix,
@@ -483,6 +483,12 @@ function collectFromExpression(expr, context) {
   // never runtime evidence: recursively inspect the operand, then retain a
   // required wrapper so every consumer must account for the trust boundary.
   if (ts.isAssertionExpression(node)) {
+    // `as const` preserves literal/read-only information without claiming a
+    // different runtime value. Treat it as transparent while still inspecting
+    // its operand for nested assertions.
+    if (ts.isConstTypeReference(node.type)) {
+      return collectFromExpression(node.expression, nested());
+    }
     const toAny =
       node.type.kind === ts.SyntaxKind.AnyKeyword || node.type.kind === ts.SyntaxKind.UnknownKeyword;
     if (toAny) acc.casts.push(`${prefix || "<root>"} (as any)`);
@@ -501,10 +507,12 @@ function collectFromExpression(expr, context) {
   // `string | string[]` hook type cannot express. Preserve every assertion on
   // the way back to `useParams()` but derive the value shape from `[id]` versus
   // `[...id]` / `[[...id]]`, never from an asserted target type.
-  const routeParam = routeParamRuntimeNode(node, checker);
+  const routeParam = routeParamRuntimeNode(node, checker, evidence);
   if (routeParam) {
-    const symbol = ts.isIdentifier(node) ? resolveSymbol(checker, node) : null;
-    return applyUseSiteRefinement(routeParam, symbol ? refinements.get(symbol) : undefined);
+    return applyUseSiteRefinement(
+      routeParam,
+      refinementForExpression(checker, node, refinements),
+    );
   }
 
   // Follow immutable assertion-bearing aliases back to their runtime source.
@@ -514,20 +522,7 @@ function collectFromExpression(expr, context) {
   // only after the runtime source has been reconstructed.
   if (ts.isIdentifier(node)) {
     const symbol = resolveSymbol(checker, node);
-    const refinement = symbol ? refinements.get(symbol) : undefined;
-    const alias = evidence.assertionInitializer(node);
-    if (alias) {
-      if (expressionSeen.has(alias.symbol)) return clientNode.assertion("TYPE_CLAIM", clientNode.opaqueValue());
-      expressionSeen.add(alias.symbol);
-      try {
-        return applyUseSiteRefinement(
-          collectFromExpression(alias.expression, nested()),
-          refinement,
-        );
-      } finally {
-        expressionSeen.delete(alias.symbol);
-      }
-    }
+    return collectIdentifierFromSymbol(node, symbol, context);
   }
 
   if (ts.isObjectLiteralExpression(node)) {
@@ -575,14 +570,15 @@ function collectFromExpression(expr, context) {
         continue;
       }
       const childPath = prefix ? `${prefix}.${name}` : name;
-      const value = ts.isPropertyAssignment(prop)
-        ? prop.initializer
+      const childNode = ts.isPropertyAssignment(prop)
+        ? collectFromExpression(prop.initializer, nested(childPath))
         : ts.isShorthandPropertyAssignment(prop)
-          ? prop.name
-          : null;
-      const childNode = value
-        ? collectFromExpression(value, nested(childPath))
-        : clientNode.unresolved();
+          ? collectIdentifierFromSymbol(
+              prop.name,
+              checker.getShorthandAssignmentValueSymbol(prop) ?? resolveSymbol(checker, prop.name),
+              nested(childPath),
+            )
+          : clientNode.unresolved();
       fields.set(name, { node: childNode, provenance: "LITERAL", optional: false });
     }
     return clientNode.object(fields, keysComplete);
@@ -640,13 +636,75 @@ function collectFromExpression(expr, context) {
   // Not a literal — fall back to the assertion-free type of the expression.
   const type = checker.getTypeAtLocation(node);
   const collected = collectPaths(checker, type, prefix, acc, depth, seen, "LITERAL");
-  if (!ts.isIdentifier(node)) return collected;
-  const symbol = resolveSymbol(checker, node);
-  return applyUseSiteRefinement(collected, symbol ? refinements.get(symbol) : undefined);
+  return collected;
+}
+
+function collectIdentifierFromSymbol(node, symbol, context) {
+  const { checker, prefix, acc, depth, seen, evidence, expressionSeen, refinements } = context;
+  const refinement = refinementForExpression(checker, node, refinements, symbol);
+  const routeParam = routeParamRuntimeNode(node, checker, evidence, new Set(), symbol);
+  if (routeParam) return applyUseSiteRefinement(routeParam, refinement);
+
+  const alias = evidence.assertionInitializerForSymbol(symbol);
+  if (alias) {
+    if (expressionSeen.has(alias.symbol)) {
+      return clientNode.assertion("TYPE_CLAIM", clientNode.opaqueValue());
+    }
+    expressionSeen.add(alias.symbol);
+    try {
+      return applyUseSiteRefinement(
+        collectFromExpression(alias.expression, { ...context, depth: depth + 1 }),
+        refinement,
+      );
+    } finally {
+      expressionSeen.delete(alias.symbol);
+    }
+  }
+
+  if (symbol && evidence.hasAssertionOriginForSymbol(symbol)) {
+    return clientNode.assertion("TYPE_CLAIM", clientNode.opaqueValue());
+  }
+
+  const type = symbol
+    ? checker.getTypeOfSymbolAtLocation(symbol, node)
+    : checker.getTypeAtLocation(node);
+  return applyUseSiteRefinement(
+    collectPaths(checker, type, prefix, acc, depth, seen, "LITERAL"),
+    refinement,
+  );
 }
 
 function isUndefinedExpression(node) {
   return ts.isIdentifier(node) && node.text === "undefined";
+}
+
+function createFlowRefinements() {
+  return { identifiers: new Map(), properties: new Map() };
+}
+
+function cloneFlowRefinements(refinements) {
+  return {
+    identifiers: new Map(refinements.identifiers),
+    properties: new Map(
+      [...refinements.properties].map(([symbol, properties]) => [
+        symbol,
+        new Map(properties),
+      ]),
+    ),
+  };
+}
+
+function refinementForExpression(checker, expression, refinements, knownSymbol = null) {
+  if (ts.isIdentifier(expression)) {
+    const symbol = knownSymbol ?? resolveSymbol(checker, expression);
+    return symbol ? refinements.identifiers.get(symbol) : undefined;
+  }
+  const access = routeParamAccess(expression);
+  if (!access) return undefined;
+  const receiverSymbol = resolveSymbol(checker, access.receiver);
+  return receiverSymbol
+    ? refinements.properties.get(receiverSymbol)?.get(access.name)
+    : undefined;
 }
 
 /**
@@ -656,13 +714,13 @@ function isUndefinedExpression(node) {
  * result and therefore contribute no fabricated narrowing evidence.
  */
 function truthyRefinementsForCondition(checker, condition, currentRefinements) {
-  const branchRefinements = new Map(currentRefinements);
+  const branchRefinements = cloneFlowRefinements(currentRefinements);
   recordTruthyCondition(checker, condition, branchRefinements);
   return branchRefinements;
 }
 
 function falsyRefinementsForCondition(checker, condition, currentRefinements) {
-  const branchRefinements = new Map(currentRefinements);
+  const branchRefinements = cloneFlowRefinements(currentRefinements);
   recordFalsyCondition(checker, condition, branchRefinements);
   return branchRefinements;
 }
@@ -684,7 +742,7 @@ function recordTruthyCondition(checker, condition, refinements) {
     recordTruthyCondition(checker, condition.right, refinements);
     return;
   }
-  recordIdentifierRefinement(checker, condition, refinements, "truthy");
+  recordExpressionRefinement(checker, condition, refinements, "truthy");
 }
 
 function recordFalsyCondition(checker, condition, refinements) {
@@ -704,13 +762,22 @@ function recordFalsyCondition(checker, condition, refinements) {
     recordFalsyCondition(checker, condition.right, refinements);
     return;
   }
-  recordIdentifierRefinement(checker, condition, refinements, "falsy");
+  recordExpressionRefinement(checker, condition, refinements, "falsy");
 }
 
-function recordIdentifierRefinement(checker, condition, refinements, refinement) {
-  if (!ts.isIdentifier(condition)) return;
-  const symbol = resolveSymbol(checker, condition);
-  if (symbol) refinements.set(symbol, refinement);
+function recordExpressionRefinement(checker, condition, refinements, refinement) {
+  if (ts.isIdentifier(condition)) {
+    const symbol = resolveSymbol(checker, condition);
+    if (symbol) refinements.identifiers.set(symbol, refinement);
+    return;
+  }
+  const access = routeParamAccess(condition);
+  if (!access) return;
+  const receiverSymbol = resolveSymbol(checker, access.receiver);
+  if (!receiverSymbol) return;
+  const properties = refinements.properties.get(receiverSymbol) ?? new Map();
+  properties.set(access.name, refinement);
+  refinements.properties.set(receiverSymbol, properties);
 }
 
 /**
@@ -772,25 +839,54 @@ function falsyNode(node) {
  * aliases and transparent assertions are followed, and assertions are retained
  * as TYPE_CLAIM wrappers. This is route-topology evidence, not type trust.
  */
-function routeParamRuntimeNode(node, checker, visiting = new Set()) {
+function routeParamRuntimeNode(
+  node,
+  checker,
+  evidence,
+  visiting = new Set(),
+  knownSymbol = null,
+) {
   if (ts.isParenthesizedExpression(node)) {
-    return routeParamRuntimeNode(node.expression, checker, visiting);
+    return routeParamRuntimeNode(node.expression, checker, evidence, visiting);
   }
   if (ts.isAssertionExpression(node)) {
-    const inner = routeParamRuntimeNode(node.expression, checker, visiting);
+    const inner = routeParamRuntimeNode(node.expression, checker, evidence, visiting);
     return inner ? clientNode.assertion("TYPE_CLAIM", inner) : null;
   }
   if (ts.isIdentifier(node)) {
-    const symbol = resolveSymbol(checker, node);
+    const symbol = knownSymbol ?? resolveSymbol(checker, node);
     if (!symbol || visiting.has(symbol)) return null;
+    if (evidence.isWrittenSymbol(symbol)) return null;
     visiting.add(symbol);
     try {
       for (const declaration of symbol.declarations ?? []) {
-        if (!ts.isVariableDeclaration(declaration) || !declaration.initializer) continue;
-        const list = declaration.parent;
-        if (!ts.isVariableDeclarationList(list) || !(list.flags & ts.NodeFlags.Const)) continue;
-        const resolved = routeParamRuntimeNode(declaration.initializer, checker, visiting);
-        if (resolved) return resolved;
+        if (ts.isVariableDeclaration(declaration) && declaration.initializer) {
+          const list = declaration.parent;
+          if (!ts.isVariableDeclarationList(list) || !(list.flags & ts.NodeFlags.Const)) continue;
+          const resolved = routeParamRuntimeNode(
+            declaration.initializer,
+            checker,
+            evidence,
+            visiting,
+          );
+          if (resolved) return resolved;
+          continue;
+        }
+        if (ts.isBindingElement(declaration)) {
+          const variable = containingVariableDeclaration(declaration);
+          const parameterName = bindingElementPropertyName(declaration);
+          if (!variable?.initializer || parameterName === null) continue;
+          const list = variable.parent;
+          if (!ts.isVariableDeclarationList(list) || !(list.flags & ts.NodeFlags.Const)) continue;
+          const resolved = routeParamNodeForAccess(
+            variable.initializer,
+            parameterName,
+            declaration.getSourceFile().fileName,
+            checker,
+            evidence,
+          );
+          if (resolved) return resolved;
+        }
       }
     } finally {
       visiting.delete(symbol);
@@ -799,11 +895,28 @@ function routeParamRuntimeNode(node, checker, visiting = new Set()) {
   }
 
   const access = routeParamAccess(node);
-  if (!access || !isNextUseParamsResult(access.receiver, checker)) return null;
-  const segmentKind = routeSegmentKind(node.getSourceFile().fileName, access.name);
+  if (!access) return null;
+  return routeParamNodeForAccess(
+    access.receiver,
+    access.name,
+    node.getSourceFile().fileName,
+    checker,
+    evidence,
+  );
+}
+
+function routeParamNodeForAccess(receiver, parameterName, fileName, checker, evidence) {
+  if (nextUseParamsResultStatus(receiver, checker, evidence) !== "trusted") return null;
+  const segmentKind = routeSegmentKind(fileName, parameterName);
   if (segmentKind === "single") return clientNode.scalar("string");
-  if (segmentKind === "catchAll" || segmentKind === "optionalCatchAll") {
+  if (segmentKind === "catchAll") {
     return clientNode.array(clientNode.scalar("string"));
+  }
+  if (segmentKind === "optionalCatchAll") {
+    return clientNode.variants([
+      clientNode.array(clientNode.scalar("string")),
+      clientNode.literal(new Set([undefined])),
+    ]);
   }
   return null;
 }
@@ -823,23 +936,74 @@ function routeParamAccess(node) {
   return null;
 }
 
-function isNextUseParamsResult(receiver, checker) {
-  const symbol = resolveSymbol(checker, receiver);
-  if (!symbol) return false;
-  for (const declaration of symbol.declarations ?? []) {
-    if (!ts.isVariableDeclaration(declaration) || !declaration.initializer) continue;
-    const list = declaration.parent;
-    if (!ts.isVariableDeclarationList(list) || !(list.flags & ts.NodeFlags.Const)) continue;
-    const initializer = declaration.initializer;
-    if (
-      ts.isCallExpression(initializer) &&
-      ts.isIdentifier(initializer.expression) &&
-      isNamedImport(initializer.expression, checker, "useParams", "next/navigation")
-    ) {
-      return true;
-    }
+function nextUseParamsResultStatus(receiver, checker, evidence, visiting = new Set()) {
+  const expression = unwrapAliasExpression(receiver);
+  if (
+    ts.isCallExpression(expression) &&
+    ts.isIdentifier(expression.expression) &&
+    isNamedImport(expression.expression, checker, "useParams", "next/navigation")
+  ) {
+    return "trusted";
   }
-  return false;
+  if (!ts.isIdentifier(expression)) return null;
+
+  const symbol = resolveSymbol(checker, expression);
+  if (!symbol || visiting.has(symbol)) return null;
+  visiting.add(symbol);
+  try {
+    for (const declaration of symbol.declarations ?? []) {
+      if (!ts.isVariableDeclaration(declaration) || !declaration.initializer) continue;
+      const list = declaration.parent;
+      if (!ts.isVariableDeclarationList(list) || !(list.flags & ts.NodeFlags.Const)) continue;
+      const status = nextUseParamsResultStatus(
+        declaration.initializer,
+        checker,
+        evidence,
+        visiting,
+      );
+      if (status) return evidence.isWrittenSymbol(symbol) ? "unsafe" : status;
+    }
+  } finally {
+    visiting.delete(symbol);
+  }
+  return null;
+}
+
+function bindingElementPropertyName(declaration) {
+  if (declaration.dotDotDotToken) return null;
+  const property = declaration.propertyName ?? declaration.name;
+  if (ts.isIdentifier(property) || ts.isStringLiteral(property)) return property.text;
+  return null;
+}
+
+function containingVariableDeclaration(node) {
+  let current = node.parent;
+  while (current) {
+    if (ts.isVariableDeclaration(current)) return current;
+    if (ts.isParameter(current)) return null;
+    if (
+      !ts.isBindingElement(current) &&
+      !ts.isObjectBindingPattern(current) &&
+      !ts.isArrayBindingPattern(current)
+    ) {
+      return null;
+    }
+    current = current.parent;
+  }
+  return null;
+}
+
+function unwrapAliasExpression(node) {
+  let current = node;
+  while (
+    ts.isParenthesizedExpression(current) ||
+    ts.isAssertionExpression(current) ||
+    ts.isNonNullExpression(current) ||
+    ts.isSatisfiesExpression?.(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
 }
 
 function isNamedImport(identifier, checker, importedName, moduleName) {
@@ -1021,7 +1185,7 @@ function createEvidenceAnalysis(program, checker) {
   }
 
   function hasAssertionOrigin(node) {
-    if (ts.isAssertionExpression(node)) return true;
+    if (ts.isAssertionExpression(node) && !ts.isConstTypeReference(node.type)) return true;
     if (ts.isIdentifier(node)) {
       const symbol = resolveSymbol(checker, node);
       if (symbol && symbolHasAssertionOrigin(symbol)) return true;
@@ -1035,9 +1199,10 @@ function createEvidenceAnalysis(program, checker) {
 
   return {
     hasTypeAssertionOrigin: hasAssertionOrigin,
-    assertionInitializer(node) {
-      const symbol = resolveSymbol(checker, node);
-      if (!symbol || !symbolHasAssertionOrigin(symbol)) return null;
+    hasAssertionOriginForSymbol: (symbol) => Boolean(symbol && symbolHasAssertionOrigin(symbol)),
+    isWrittenSymbol: (symbol) => Boolean(symbol && written.has(symbol)),
+    assertionInitializerForSymbol(symbol) {
+      if (!symbol || written.has(symbol) || !symbolHasAssertionOrigin(symbol)) return null;
       for (const declaration of symbol.declarations ?? []) {
         if (!ts.isVariableDeclaration(declaration) || !declaration.initializer) continue;
         const list = declaration.parent;
@@ -1071,24 +1236,73 @@ function indexWrittenSymbols(program, checker) {
   for (const sourceFile of program.getSourceFiles()) {
     if (!sourceFile.isDeclarationFile) visit(sourceFile);
   }
+  propagateWrittenAliases(program, checker, written);
   return written;
 }
 
 function recordWrittenTarget(checker, written, target) {
-  const symbolNode = ts.isPropertyAccessExpression(target)
-    ? target.name
-    : ts.isElementAccessExpression(target) && ts.isIdentifier(target.expression)
-      ? target.expression
-      : ts.isIdentifier(target)
-        ? target
-        : null;
-  if (symbolNode) {
-    const symbol = resolveSymbol(checker, symbolNode);
+  const unwrapped = unwrapAliasExpression(target);
+  if (ts.isIdentifier(unwrapped)) {
+    const symbol = resolveSymbol(checker, unwrapped);
     if (symbol) written.add(symbol);
     return;
   }
-  if (ts.isArrayLiteralExpression(target) || ts.isObjectLiteralExpression(target)) {
-    ts.forEachChild(target, (child) => recordWrittenTarget(checker, written, child));
+  if (ts.isPropertyAccessExpression(unwrapped) || ts.isElementAccessExpression(unwrapped)) {
+    recordWrittenTarget(checker, written, unwrapped.expression);
+    return;
+  }
+  if (ts.isArrayLiteralExpression(unwrapped)) {
+    for (const element of unwrapped.elements) {
+      if (!ts.isOmittedExpression(element)) recordWrittenTarget(checker, written, element);
+    }
+    return;
+  }
+  if (ts.isObjectLiteralExpression(unwrapped)) {
+    for (const property of unwrapped.properties) {
+      if (ts.isPropertyAssignment(property)) {
+        recordWrittenTarget(checker, written, property.initializer);
+      } else if (ts.isShorthandPropertyAssignment(property)) {
+        recordWrittenTarget(checker, written, property.name);
+      } else if (ts.isSpreadAssignment(property)) {
+        recordWrittenTarget(checker, written, property.expression);
+      }
+    }
+  }
+}
+
+function propagateWrittenAliases(program, checker, written) {
+  /** @type {Map<import("typescript").Symbol, Set<import("typescript").Symbol>>} */
+  const aliases = new Map();
+  const connect = (left, right) => {
+    const leftEdges = aliases.get(left) ?? new Set();
+    leftEdges.add(right);
+    aliases.set(left, leftEdges);
+    const rightEdges = aliases.get(right) ?? new Set();
+    rightEdges.add(left);
+    aliases.set(right, rightEdges);
+  };
+  const visit = (node) => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      const source = unwrapAliasExpression(node.initializer);
+      if (ts.isIdentifier(source)) {
+        const targetSymbol = resolveSymbol(checker, node.name);
+        const sourceSymbol = resolveSymbol(checker, source);
+        if (targetSymbol && sourceSymbol) connect(targetSymbol, sourceSymbol);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  for (const sourceFile of program.getSourceFiles()) {
+    if (!sourceFile.isDeclarationFile) visit(sourceFile);
+  }
+
+  const queue = [...written];
+  for (let index = 0; index < queue.length; index += 1) {
+    for (const alias of aliases.get(queue[index]) ?? []) {
+      if (written.has(alias)) continue;
+      written.add(alias);
+      queue.push(alias);
+    }
   }
 }
 
@@ -1110,7 +1324,16 @@ function evidenceSourceOfDeclaration(declaration) {
   if (ts.isPropertyDeclaration(declaration) || ts.isPropertyAssignment(declaration)) {
     return { mutable: false, node: declaration.initializer };
   }
-  if (ts.isBindingElement(declaration) || ts.isParameter(declaration)) {
+  if (ts.isBindingElement(declaration)) {
+    const variable = containingVariableDeclaration(declaration);
+    if (variable) {
+      const list = variable.parent;
+      const mutable = !ts.isVariableDeclarationList(list) || !(list.flags & ts.NodeFlags.Const);
+      return { mutable, node: variable.initializer };
+    }
+    return { mutable: false, node: declaration.initializer };
+  }
+  if (ts.isParameter(declaration)) {
     return { mutable: false, node: declaration.initializer };
   }
   return { mutable: false, node: undefined };

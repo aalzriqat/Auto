@@ -60,3 +60,9 @@ export function CaseMutableUnprovableAlias(source: unknown, rewrite: boolean) {
   if (rewrite) args = null;
   useQuery(api.reachability.mutableAlias, args ? args : "skip");
 }
+
+export function CaseMutatedAssertedObject(source: unknown) {
+  const args = { value: "ok" } as { value: string };
+  args.value = source as string;
+  useQuery(api.reachability.mutatedAssertedObject, args ? args : "skip");
+}

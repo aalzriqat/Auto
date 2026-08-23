@@ -5,13 +5,14 @@ import { compareContracts, SEVERITY } from "./compare.mjs";
 type Validator = {
   type: string;
   tableName?: string;
-  value?: Record<string, { fieldType: Validator; optional: boolean }>;
+  value?: Validator | Record<string, { fieldType: Validator; optional: boolean }>;
 };
 
 type ExtractedCall = ReturnType<typeof extractClientCalls>["calls"][number];
 
 const stringValidator: Validator = { type: "string" };
 const idValidator = (tableName: string): Validator => ({ type: "id", tableName });
+const arrayValidator = (value: Validator): Validator => ({ type: "array", value });
 const objectValidator = (fields: Record<string, Validator>): Validator => ({
   type: "object",
   value: Object.fromEntries(
@@ -41,6 +42,17 @@ const reachabilityCalls = () => {
     "scripts/contractSkew/tsconfig.json",
   ).calls;
   return cachedReachabilityCalls;
+};
+
+const singularRouteFixture =
+  "scripts/contractSkew/__fixtures__/routes/singular/[id]/page.tsx";
+let cachedSingularRouteCalls: ExtractedCall[] | null = null;
+const singularRouteCalls = () => {
+  cachedSingularRouteCalls ??= extractClientCalls(
+    [singularRouteFixture],
+    "scripts/contractSkew/tsconfig.json",
+  ).calls;
+  return cachedSingularRouteCalls;
 };
 
 const exactLiveSpec = functionSpec({
@@ -167,6 +179,74 @@ describe("transmission reachability through the real TypeChecker and comparator"
     );
   });
 
+  test("optional catch-all route evidence distinguishes the absent and array-valued states", () => {
+    const routeFiles = [
+      "scripts/contractSkew/__fixtures__/routes/catch-all/[...id]/page.tsx",
+      "scripts/contractSkew/__fixtures__/routes/optional-catch-all/[[...id]]/page.tsx",
+    ];
+    const calls = extractClientCalls(routeFiles, "scripts/contractSkew/tsconfig.json").calls;
+    const spec = functionSpec({
+      "routes:catchAll": objectValidator({ requestId: arrayValidator(stringValidator) }),
+      "routes:optionalCatchAll": objectValidator({ requestId: arrayValidator(stringValidator) }),
+      "routes:optionalCatchAllAbsent": objectValidator({
+        requestId: arrayValidator(stringValidator),
+      }),
+      "routes:optionalCatchAllSpread": objectValidator({
+        requestId: arrayValidator(stringValidator),
+      }),
+    });
+
+    for (const identifier of [
+      "routes:catchAll",
+      "routes:optionalCatchAll",
+      "routes:optionalCatchAllSpread",
+    ]) {
+      expect(compareContracts([callFor(calls, identifier)], spec).findings).toEqual([]);
+    }
+
+    expect(
+      compareContracts([callFor(calls, "routes:optionalCatchAllAbsent")], spec).breaking,
+    ).toContainEqual(
+      expect.objectContaining({
+        identifier: "routes:optionalCatchAllAbsent",
+        path: "requestId",
+      }),
+    );
+  });
+
+  test("stable renamed and destructured aliases retain singular route topology", () => {
+    const calls = singularRouteCalls();
+    const spec = functionSpec({
+      "routes:stableAlias": objectValidator({ requestId: stringValidator }),
+      "routes:destructuredAlias": objectValidator({ requestId: stringValidator }),
+    });
+
+    for (const identifier of ["routes:stableAlias", "routes:destructuredAlias"]) {
+      expect(compareContracts([callFor(calls, identifier)], spec).findings).toEqual([]);
+    }
+  });
+
+  test.each([
+    "directMutation",
+    "bracketMutation",
+    "aliasMutationAfterCreation",
+    "aliasMutationBeforeCreation",
+    "indirectMutation",
+    "destructuringMutation",
+  ])("route object mutation %s cannot retain scalar PASS evidence", (name) => {
+    const calls = singularRouteCalls();
+    const identifier = `routes:${name}`;
+    const result = compareContracts(
+      [callFor(calls, identifier)],
+      functionSpec({ [identifier]: objectValidator({ requestId: stringValidator }) }),
+    );
+
+    expect(result.breaking).toEqual([]);
+    expect(result.needsEvidence).toContainEqual(
+      expect.objectContaining({ identifier, path: "requestId" }),
+    );
+  });
+
   test("nullable scoped args are narrowed at the running use site", () => {
     const calls = reachabilityCalls();
     const result = compareContracts(
@@ -223,6 +303,24 @@ describe("transmission reachability through the real TypeChecker and comparator"
       result.needsEvidence.some(
         (finding) =>
           finding.identifier === "reachability:mutableAlias" &&
+          finding.severity.endsWith("_UNKNOWN"),
+      ),
+    ).toBe(true);
+  });
+
+  test("mutating a const asserted object invalidates its stale initializer evidence", () => {
+    const calls = reachabilityCalls();
+    const result = compareContracts(
+      [callFor(calls, "reachability:mutatedAssertedObject")],
+      functionSpec({
+        "reachability:mutatedAssertedObject": objectValidator({ value: stringValidator }),
+      }),
+    );
+    expect(result.breaking).toEqual([]);
+    expect(
+      result.needsEvidence.some(
+        (finding) =>
+          finding.identifier === "reachability:mutatedAssertedObject" &&
           finding.severity.endsWith("_UNKNOWN"),
       ),
     ).toBe(true);
