@@ -78,16 +78,41 @@ const SKIP_SENTINEL = "skip";
  * ⚠️ Neither may drop the CALL SITE. Losing three sites to this is a silent
  * coverage hole of exactly the kind this control exists to detect.
  */
+/**
+ * @param {import("./contractTree.mjs").ClientNode} node
+ * @returns {import("./contractTree.mjs").ClientNode | null}
+ */
 function stripSkipSentinel(node) {
   if (node.kind === "literal") {
     const values = [...node.values].filter((v) => v !== SKIP_SENTINEL);
-    return values.length ? clientNode.literal(new Set(values)) : null;
+    return values.length
+      ? /** @type {import("./contractTree.mjs").ClientNode} */ (clientNode.literal(new Set(values)))
+      : null;
   }
   if (node.kind === "variants") {
     const kept = node.nodes.map(stripSkipSentinel).filter(Boolean);
     return kept.length ? clientNode.variants(kept) : null;
   }
-  return node;
+  if (node.kind === "assertion") {
+    const inner = stripSkipSentinel(node.node);
+    return inner
+      ? /** @type {import("./contractTree.mjs").ClientNode} */ (clientNode.assertion(node.effect, inner))
+      : null;
+  }
+  switch (node.kind) {
+    case "unresolved":
+    case "opaqueValue":
+    case "scalar":
+    case "id":
+    case "object":
+    case "array":
+      return node;
+    default: {
+      /** @type {never} */
+      const unhandled = node;
+      return unhandled;
+    }
+  }
 }
 /** Direct invocation forms: convex.mutation(api.x.y, {...}) / ctx.runMutation(...). */
 const DIRECT_CALLERS = new Set([
@@ -157,6 +182,7 @@ export function extractClientCalls(rootFiles, tsconfigPath) {
     options: { ...parsed.options, noEmit: true },
   });
   const checker = program.getTypeChecker();
+  const evidence = createEvidenceAnalysis(program, checker);
 
   const calls = [];
   const unresolvedBinders = [];
@@ -248,7 +274,15 @@ export function extractClientCalls(rootFiles, tsconfigPath) {
             payloadExpr && ts.isStringLiteral(payloadExpr) && payloadExpr.text === SKIP_SENTINEL;
           const collected =
             payloadExpr && !isSkip
-              ? collectFromExpression(checker, payloadExpr, "", acc, 0, new Set())
+              ? collectFromExpression(payloadExpr, {
+                  checker,
+                  prefix: "",
+                  acc,
+                  depth: 0,
+                  seen: new Set(),
+                  evidence,
+                  expressionSeen: new Set(),
+                })
               : null;
           const stripped = collected ? stripSkipSentinel(collected) : null;
           // Provably never runs: no transmission, so neither direction of the
@@ -355,7 +389,15 @@ export function extractClientCalls(rootFiles, tsconfigPath) {
           // with no fields and a COMPLETE key set, which is exactly what lets
           // Direction 2 notice a backend that started requiring an argument.
           const payload = argExpr
-            ? collectFromExpression(checker, argExpr, "", acc, 0, new Set())
+            ? collectFromExpression(argExpr, {
+                checker,
+                prefix: "",
+                acc,
+                depth: 0,
+                seen: new Set(),
+                evidence,
+                expressionSeen: new Set(),
+              })
             : EMPTY_PAYLOAD;
           calls.push({
             identifier,
@@ -389,46 +431,78 @@ export function extractClientCalls(rootFiles, tsconfigPath) {
  * in the codebase — it would not have caught the outage it was built to catch.
  *
  * A cast is an assertion by the author, not a change to what is transmitted:
- * `chunk as any` still sends `chunk`'s shape over the wire. So assertions are
- * stripped and the underlying expression is typed instead. Object and array
- * literals are walked syntactically for the same reason — it keeps per-property
- * precision when an inner property is itself cast.
+ * `chunk as any` still sends `chunk`'s shape over the wire. The target type is
+ * therefore ignored while a first-class assertion wrapper retains the trust
+ * boundary. Object and array literals are walked syntactically for the same
+ * reason — it keeps per-property precision when an inner property is cast.
  *
- * Every cast stripped is recorded in `casts`. That is deliberate: `as any` at a
+ * Every `as any` boundary is recorded in `casts`. That is deliberate: `as any` at a
  * Convex boundary disables the compiler's own contract checking, so it is worth
  * surfacing as a risk in its own right rather than silently compensating for it.
  */
-function collectFromExpression(checker, expr, prefix, acc, depth, seen) {
+/**
+ * @typedef {{
+ *   checker: import("typescript").TypeChecker,
+ *   prefix: string,
+ *   acc: {unknowns: string[], casts: string[]},
+ *   depth: number,
+ *   seen: Set<string>,
+ *   evidence: ReturnType<typeof createEvidenceAnalysis>,
+ *   expressionSeen: Set<import("typescript").Symbol>
+ * }} ExpressionContext
+ */
+
+/**
+ * @param {import("typescript").Expression} expr
+ * @param {ExpressionContext} context
+ */
+function collectFromExpression(expr, context) {
+  const { checker, prefix, acc, depth, seen, evidence, expressionSeen } = context;
+  const nested = (nestedPrefix = prefix) => ({ ...context, prefix: nestedPrefix, depth: depth + 1 });
   if (depth > MAX_DEPTH) {
     acc.unknowns.push(`${prefix || "<root>"} (max depth)`);
     return clientNode.opaqueValue();
   }
 
-  let node = expr;
-  // ⚠️ A `!` IS RECORDED, NOT JUST DISCARDED.
-  //
-  // Stripping it is right — it is erased at runtime, so it changes the type and
-  // not the payload — but the fact that the value's non-nullness rests on a
-  // developer's claim is EVIDENCE ABOUT THE VALUE, and throwing it away forces
-  // the comparator into a false choice. Measured on the real repository, 15
-  // call sites read `orgId: activeOrgId!`; treating the resulting `string|null`
-  // as BREAKING fabricates 15 outages, and treating it as CLEAN is a false
-  // PASS. Carrying the flag lets exactly those nodes report an honest unknown
-  // WITHOUT relaxing the fail-closed variants rule for everyone else.
-  let assertionNarrowed = false;
-  // Strip parentheses, `as X`, `satisfies X` and `!` — none changes the payload.
-  for (;;) {
-    if (ts.isParenthesizedExpression(node)) { node = node.expression; continue; }
-    if (ts.isNonNullExpression(node)) { assertionNarrowed = true; node = node.expression; continue; }
-    if (ts.isAsExpression(node) || (ts.isSatisfiesExpression?.(node) ?? false)) {
-      const toAny =
-        node.type &&
-        (node.type.kind === ts.SyntaxKind.AnyKeyword || node.type.kind === ts.SyntaxKind.UnknownKeyword);
-      if (toAny) acc.casts.push(`${prefix || "<root>"} (as any)`);
-      node = node.expression;
-      continue;
+  const node = expr;
+
+  if (ts.isParenthesizedExpression(node)) {
+    return collectFromExpression(node.expression, nested());
+  }
+  if (ts.isSatisfiesExpression?.(node)) return collectFromExpression(node.expression, nested());
+
+  // Both `value as T` and `<T>value` are TypeScript assertions. The target is
+  // never runtime evidence: recursively inspect the operand, then retain a
+  // required wrapper so every consumer must account for the trust boundary.
+  if (ts.isAssertionExpression(node)) {
+    const toAny =
+      node.type.kind === ts.SyntaxKind.AnyKeyword || node.type.kind === ts.SyntaxKind.UnknownKeyword;
+    if (toAny) acc.casts.push(`${prefix || "<root>"} (as any)`);
+    return clientNode.assertion(
+      "TYPE_CLAIM",
+      collectFromExpression(node.expression, nested())
+    );
+  }
+
+  if (ts.isNonNullExpression(node)) {
+    const operand = collectFromExpression(node.expression, nested());
+    return markNonNullErasure(operand);
+  }
+
+  // Follow immutable assertion-bearing aliases back to their runtime source.
+  // The symbol stack prevents self-referential initializers from laundering
+  // through an infinite recursion into a trusted checker type.
+  if (ts.isIdentifier(node)) {
+    const alias = evidence.assertionInitializer(node);
+    if (alias) {
+      if (expressionSeen.has(alias.symbol)) return clientNode.assertion("TYPE_CLAIM", clientNode.opaqueValue());
+      expressionSeen.add(alias.symbol);
+      try {
+        return collectFromExpression(alias.expression, nested());
+      } finally {
+        expressionSeen.delete(alias.symbol);
+      }
     }
-    break;
   }
 
   if (ts.isObjectLiteralExpression(node)) {
@@ -438,17 +512,16 @@ function collectFromExpression(checker, expr, prefix, acc, depth, seen) {
     // it — and that distinction is the whole basis of the missing-required-
     // field direction, so it is tracked here rather than guessed later.
     let keysComplete = true;
-    let result = null;
 
     for (const prop of node.properties) {
       if (ts.isSpreadAssignment(prop)) {
-        // `...rest` — resolvable by type; merge whatever it contributes.
-        const spreadType = checker.getTypeAtLocation(prop.expression);
-        const spread = collectPaths(checker, spreadType, prefix, acc, depth + 1, seen);
+        // A spread's asserted target is not its runtime shape. Read the source
+        // expression and unwrap only transparent TYPE_CLAIM wrappers.
+        const spread = unwrapTypeClaims(
+          collectFromExpression(prop.expression, nested())
+        );
         if (spread.kind === "object") {
-          // A resolved object contributes its fields, and its own key
-          // completeness travels with it.
-          result = mergeClientNodes(result, spread);
+          applySpread(fields, spread);
           if (!spread.keysComplete) keysComplete = false;
         } else {
           // ⚠️ ANY OTHER SPREAD WITHDRAWS KEY COMPLETENESS, INCLUDING
@@ -463,6 +536,7 @@ function collectFromExpression(checker, expr, prefix, acc, depth, seen) {
           // Direction 1 reports an undeclared field as BREAKING. Fail-open in
           // one, fabricated in the other.
           acc.unknowns.push(`${prefix || "<root>"} (unresolvable spread)`);
+          obscureOverwritableValues(fields);
           keysComplete = false;
         }
         continue;
@@ -482,17 +556,11 @@ function collectFromExpression(checker, expr, prefix, acc, depth, seen) {
           ? prop.name
           : null;
       const childNode = value
-        ? collectFromExpression(checker, value, childPath, acc, depth + 1, seen)
+        ? collectFromExpression(value, nested(childPath))
         : clientNode.unresolved();
       fields.set(name, { node: childNode, provenance: "LITERAL", optional: false });
     }
-
-    const literal = clientNode.object(fields, keysComplete);
-    const merged = result ? mergeClientNodes(literal, result) : literal;
-    // An explicit property always beats whatever a spread contributed, so the
-    // literal is merged LAST and its key completeness governs.
-    if (merged.kind === "object") merged.keysComplete = keysComplete && merged.keysComplete;
-    return merged;
+    return clientNode.object(fields, keysComplete);
   }
 
   if (ts.isArrayLiteralExpression(node)) {
@@ -501,7 +569,7 @@ function collectFromExpression(checker, expr, prefix, acc, depth, seen) {
     for (const el of node.elements) {
       element = mergeClientNodes(
         element,
-        collectFromExpression(checker, el, elementPath, acc, depth + 1, seen)
+        collectFromExpression(el, nested(elementPath))
       );
     }
     // An array literal with no elements transmits none, which is knowable.
@@ -511,16 +579,94 @@ function collectFromExpression(checker, expr, prefix, acc, depth, seen) {
     return clientNode.array(element);
   }
 
-  // Not a literal — fall back to the type of the (unwrapped) expression.
+  if (ts.isConditionalExpression(node)) {
+    // `undefined` means no transmitted value. Preserve the other alternative
+    // directly so a query's `cond ? undefined : "skip"` can still normalize to
+    // the known empty-payload state after the sentinel is removed.
+    if (isUndefinedExpression(node.whenTrue)) {
+      return collectFromExpression(node.whenFalse, nested());
+    }
+    if (isUndefinedExpression(node.whenFalse)) {
+      return collectFromExpression(node.whenTrue, nested());
+    }
+    return mergeClientNodes(
+      collectFromExpression(node.whenTrue, nested()),
+      collectFromExpression(node.whenFalse, nested())
+    );
+  }
+
+  // An assertion hidden in an argument, property chain, alias, or local callee
+  // body invalidates the enclosing checker type as provenance. Unsupported
+  // flows degrade to opaque evidence; they never inherit the asserted target.
+  if (evidence.hasTypeAssertionOrigin(node)) {
+    return clientNode.assertion("TYPE_CLAIM", clientNode.opaqueValue());
+  }
+
+  // Not a literal — fall back to the assertion-free type of the expression.
   const type = checker.getTypeAtLocation(node);
-  const collected = collectPaths(checker, type, prefix, acc, depth, seen, "LITERAL");
-  // The flag is only meaningful where the assertion actually removed an
-  // alternative — a `!` on an already-non-nullable value changes nothing and
-  // must not mark the node, or it would excuse genuine unions from the
-  // fail-closed rule.
-  return assertionNarrowed && collected.kind === "variants"
-    ? { ...collected, assertionNarrowed: true }
-    : collected;
+  return collectPaths(checker, type, prefix, acc, depth, seen, "LITERAL");
+}
+
+function isUndefinedExpression(node) {
+  return ts.isIdentifier(node) && node.text === "undefined";
+}
+
+/** Apply a spread in source order; later properties overwrite earlier ones. */
+function applySpread(fields, spread) {
+  if (!spread.keysComplete) obscureOverwritableValues(fields);
+  for (const [name, entry] of spread.fields) {
+    const existing = fields.get(name);
+    if (entry.optional && existing) {
+      fields.set(name, {
+        node: mergeClientNodes(existing.node, entry.node),
+        provenance: existing.provenance,
+        optional: false,
+      });
+      continue;
+    }
+    fields.set(name, {
+      ...entry,
+      provenance: entry.optional ? "TYPE_OPTIONAL" : "SPREAD",
+    });
+  }
+}
+
+/** An open/opaque later spread may replace any value already assigned. */
+function obscureOverwritableValues(fields) {
+  for (const [name, entry] of fields) {
+    fields.set(name, { ...entry, node: clientNode.opaqueValue() });
+  }
+}
+
+/** Remove transparent type-claim wrappers when a container must inspect shape. */
+function unwrapTypeClaims(node) {
+  let current = node;
+  while (current.kind === "assertion" && current.effect === "TYPE_CLAIM") current = current.node;
+  return current;
+}
+
+/**
+ * Attach non-null uncertainty only to nullish alternatives actually erased by
+ * `!`. A no-op assertion returns the original node byte-for-byte, while nested
+ * variants preserve the wrapper on the affected member through later merges.
+ */
+function markNonNullErasure(node) {
+  if (node.kind === "literal") {
+    const erased = [...node.values].filter((value) => value === null || value === undefined);
+    if (!erased.length) return node;
+    const retained = [...node.values].filter((value) => value !== null && value !== undefined);
+    const uncertain = clientNode.assertion("NON_NULL_ERASURE", clientNode.literal(new Set(erased)));
+    return retained.length
+      ? clientNode.variants([clientNode.literal(new Set(retained)), uncertain])
+      : uncertain;
+  }
+  if (node.kind === "variants") {
+    return clientNode.variants(node.nodes.map(markNonNullErasure));
+  }
+  if (node.kind === "assertion" && node.effect === "TYPE_CLAIM") {
+    return clientNode.assertion("TYPE_CLAIM", markNonNullErasure(node.node));
+  }
+  return node;
 }
 
 /** A call that transmits no arguments at all: no keys, and we know it. */
@@ -583,6 +729,137 @@ function resolveSymbol(checker, node) {
     }
   }
   return symbol ?? null;
+}
+
+/**
+ * Trace whether a checker type ultimately depends on a TypeScript assertion.
+ *
+ * Syntax is traversed generically with `forEachChild`, so a new expression
+ * container cannot become an accidental laundering route. Symbols extend that
+ * walk through immutable aliases and local function bodies. Mutable or written
+ * bindings fail closed because their current runtime source is not statically
+ * attributable to a single initializer.
+ */
+function createEvidenceAnalysis(program, checker) {
+  const written = indexWrittenSymbols(program, checker);
+  /** @type {Map<import("typescript").Symbol, boolean>} */
+  const symbolMemo = new Map();
+  /** @type {Set<import("typescript").Symbol>} */
+  const visitingSymbols = new Set();
+
+  function symbolHasAssertionOrigin(symbol) {
+    if (written.has(symbol)) return true;
+    const memoized = symbolMemo.get(symbol);
+    if (memoized !== undefined) return memoized;
+    if (visitingSymbols.has(symbol)) return false;
+    visitingSymbols.add(symbol);
+    let found = false;
+    for (const declaration of symbol.declarations ?? []) {
+      const source = evidenceSourceOfDeclaration(declaration);
+      if (source.mutable || (source.node && hasAssertionOrigin(source.node))) {
+        found = true;
+        break;
+      }
+    }
+    visitingSymbols.delete(symbol);
+    symbolMemo.set(symbol, found);
+    return found;
+  }
+
+  function hasAssertionOrigin(node) {
+    if (ts.isAssertionExpression(node)) return true;
+    if (ts.isIdentifier(node)) {
+      const symbol = resolveSymbol(checker, node);
+      if (symbol && symbolHasAssertionOrigin(symbol)) return true;
+    }
+    let found = false;
+    ts.forEachChild(node, (child) => {
+      if (!found && hasAssertionOrigin(child)) found = true;
+    });
+    return found;
+  }
+
+  return {
+    hasTypeAssertionOrigin: hasAssertionOrigin,
+    assertionInitializer(node) {
+      const symbol = resolveSymbol(checker, node);
+      if (!symbol || !symbolHasAssertionOrigin(symbol)) return null;
+      for (const declaration of symbol.declarations ?? []) {
+        if (!ts.isVariableDeclaration(declaration) || !declaration.initializer) continue;
+        const list = declaration.parent;
+        if (ts.isVariableDeclarationList(list) && list.flags & ts.NodeFlags.Const) {
+          return { symbol, expression: declaration.initializer };
+        }
+      }
+      return null;
+    },
+  };
+}
+
+function indexWrittenSymbols(program, checker) {
+  /** @type {Set<import("typescript").Symbol>} */
+  const written = new Set();
+  const visit = (node) => {
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+    ) {
+      recordWrittenTarget(checker, written, node.left);
+    } else if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)
+    ) {
+      recordWrittenTarget(checker, written, node.operand);
+    }
+    ts.forEachChild(node, visit);
+  };
+  for (const sourceFile of program.getSourceFiles()) {
+    if (!sourceFile.isDeclarationFile) visit(sourceFile);
+  }
+  return written;
+}
+
+function recordWrittenTarget(checker, written, target) {
+  const symbolNode = ts.isPropertyAccessExpression(target)
+    ? target.name
+    : ts.isElementAccessExpression(target) && ts.isIdentifier(target.expression)
+      ? target.expression
+      : ts.isIdentifier(target)
+        ? target
+        : null;
+  if (symbolNode) {
+    const symbol = resolveSymbol(checker, symbolNode);
+    if (symbol) written.add(symbol);
+    return;
+  }
+  if (ts.isArrayLiteralExpression(target) || ts.isObjectLiteralExpression(target)) {
+    ts.forEachChild(target, (child) => recordWrittenTarget(checker, written, child));
+  }
+}
+
+function evidenceSourceOfDeclaration(declaration) {
+  if (ts.isVariableDeclaration(declaration)) {
+    const list = declaration.parent;
+    const mutable = !ts.isVariableDeclarationList(list) || !(list.flags & ts.NodeFlags.Const);
+    return { mutable, node: declaration.initializer };
+  }
+  if (
+    ts.isFunctionDeclaration(declaration) ||
+    ts.isFunctionExpression(declaration) ||
+    ts.isArrowFunction(declaration) ||
+    ts.isMethodDeclaration(declaration) ||
+    ts.isGetAccessorDeclaration(declaration)
+  ) {
+    return { mutable: false, node: declaration.body };
+  }
+  if (ts.isPropertyDeclaration(declaration) || ts.isPropertyAssignment(declaration)) {
+    return { mutable: false, node: declaration.initializer };
+  }
+  if (ts.isBindingElement(declaration) || ts.isParameter(declaration)) {
+    return { mutable: false, node: declaration.initializer };
+  }
+  return { mutable: false, node: undefined };
 }
 
 /** `api.vehicles.importBulk` (or `internal.x.y`) -> `vehicles:importBulk` */

@@ -54,10 +54,12 @@
  *         | {kind: "literal", values: Set<unknown>}
  *         | {kind: "scalar", type: string}
  *         | {kind: "id", tables: Set<string>}
+ *         | {kind: "assertion", effect: AssertionEffect, node: ClientNode}
  *         | {kind: "object", fields: Map<string, ClientField>, keysComplete: boolean}
  *         | {kind: "array", element: ClientNode | null, empty?: boolean}
- *         | {kind: "variants", nodes: ClientNode[], assertionNarrowed?: boolean}} ClientNode
+ *         | {kind: "variants", nodes: ClientNode[]}} ClientNode
  *
+ * @typedef {"TYPE_CLAIM" | "NON_NULL_ERASURE"} AssertionEffect
  * @typedef {{node: ClientNode, provenance?: string, optional?: boolean}} ClientField
  *
  * @typedef {{site: {identifier: string, file: string, line: number},
@@ -147,6 +149,8 @@ export const clientNode = {
    * than an id nobody can check.
    */
   id: (tables) => ({ kind: "id", tables: new Set(tables) }),
+  /** Runtime evidence carried through a compile-time assertion boundary. */
+  assertion: (effect, node) => ({ kind: "assertion", effect, node }),
   /** The VALUE is unknown; we may still know it is present. */
   opaqueValue: () => ({ kind: "opaqueValue" }),
   /** The KEY SET is unknown; we cannot enumerate what is or is not sent. */
@@ -241,12 +245,33 @@ export function admitsAtLeast(wider, narrower) {
   if (wider.kind === "unresolved" || wider.kind === "opaqueValue") return true;
   if (narrower.kind === "unresolved" || narrower.kind === "opaqueValue") return false;
 
+  // A type assertion changes no runtime values. Its operand remains the
+  // evidence domain in both directions; the wrapper exists so every consumer
+  // is forced to acknowledge that the asserted target supplied no proof.
+  if (wider.kind === "assertion" && wider.effect === "TYPE_CLAIM") {
+    return admitsAtLeast(wider.node, narrower.kind === "assertion" && narrower.effect === "TYPE_CLAIM" ? narrower.node : narrower);
+  }
+  if (narrower.kind === "assertion" && narrower.effect === "TYPE_CLAIM") {
+    return admitsAtLeast(wider, narrower.node);
+  }
+
   // Every alternative the narrower side might send has to be admitted.
   if (narrower.kind === "variants") return narrower.nodes.every((n) => admitsAtLeast(wider, n));
   // Conversely SOME alternative must admit it. Sound but deliberately
   // incomplete: a value spread across two alternatives is not recognised, and
   // that under-approximation fails closed.
   if (wider.kind === "variants") return wider.nodes.some((w) => admitsAtLeast(w, narrower));
+
+  // `!` erases a runtime alternative from TypeScript's type without proving it
+  // impossible. The wrapper is therefore wider (less trusted) than its inner
+  // alternative, never narrower than another such wrapper.
+  if (wider.kind === "assertion" && wider.effect === "NON_NULL_ERASURE") {
+    return admitsAtLeast(
+      wider.node,
+      narrower.kind === "assertion" && narrower.effect === "NON_NULL_ERASURE" ? narrower.node : narrower
+    );
+  }
+  if (narrower.kind === "assertion" && narrower.effect === "NON_NULL_ERASURE") return false;
 
   switch (wider.kind) {
     // ⚠️ A WIDER ID ADMITS A NARROWER ID WITH A SUBSET OF ITS TABLES, and
@@ -299,6 +324,21 @@ export function admitsAtLeast(wider, narrower) {
       return true;
     }
 
+    case "assertion": {
+      // Both effects return before structural dispatch. Retaining an explicit
+      // exhaustive switch here makes a newly added effect a compile failure.
+      switch (wider.effect) {
+        case "TYPE_CLAIM":
+        case "NON_NULL_ERASURE":
+          return false;
+        default: {
+          /** @type {never} */
+          const unhandledEffect = wider.effect;
+          return unhandledEffect;
+        }
+      }
+    }
+
     default: {
       /** @type {never} */
       const unhandled = wider;
@@ -328,6 +368,25 @@ export function mergeClientNodes(a, b) {
   // down for the unclassifiable one.
   if (a.kind === "unresolved" || b.kind === "unresolved") return clientNode.unresolved();
   if (a.kind === "opaqueValue" || b.kind === "opaqueValue") return clientNode.opaqueValue();
+
+  // TYPE_CLAIM is transparent to the runtime domain but must survive every
+  // merge so an asserted target can never become stronger evidence.
+  if (a.kind === "assertion" && a.effect === "TYPE_CLAIM") {
+    return clientNode.assertion("TYPE_CLAIM", mergeClientNodes(a.node, b.kind === "assertion" && b.effect === "TYPE_CLAIM" ? b.node : b));
+  }
+  if (b.kind === "assertion" && b.effect === "TYPE_CLAIM") {
+    return clientNode.assertion("TYPE_CLAIM", mergeClientNodes(a, b.node));
+  }
+
+  // Equal non-null uncertainty can merge internally. Beside a certain
+  // alternative it remains its own variant; wrapping the sibling would spread
+  // uncertainty to a value the assertion never affected.
+  if (
+    a.kind === "assertion" && a.effect === "NON_NULL_ERASURE" &&
+    b.kind === "assertion" && b.effect === "NON_NULL_ERASURE"
+  ) {
+    return clientNode.assertion("NON_NULL_ERASURE", mergeClientNodes(a.node, b.node));
+  }
 
   if (a.kind === "object" && b.kind === "object") {
     const fields = new Map(a.fields);
@@ -475,6 +534,38 @@ export function compareNode(client, validator, path, ctx) {
   // A validator that accepts anything ends the comparison.
   if (validator.kind === "any") return { findings, compatible: true };
 
+  // Assertions never create runtime evidence. A type claim is transparent to
+  // comparison because its operand already carries the honest domain. A `!`
+  // wrapper is different: only the alternative TypeScript erased is uncertain,
+  // so a proven refusal of that one alternative becomes UNKNOWN while accepted
+  // alternatives and unrelated variants retain their ordinary verdicts.
+  if (client.kind === "assertion") {
+    const attempt = compareNode(client.node, validator, path, ctx);
+    switch (client.effect) {
+      case "TYPE_CLAIM":
+        return attempt;
+      case "NON_NULL_ERASURE":
+        if (attempt.compatible) return attempt;
+        return {
+          compatible: true,
+          findings: attempt.findings.map((entry) =>
+            entry.severity === SEVERITY.BREAKING
+              ? {
+                  ...entry,
+                  severity: entry.dimension === "SHAPE" ? SEVERITY.SHAPE_UNKNOWN : SEVERITY.TYPE_UNKNOWN,
+                  detail: `${entry.detail}; the refused alternative survives only because a \`!\` assertion erased it from TypeScript's type, so its transmission is NOT proven`,
+                }
+              : entry
+          ),
+        };
+      default: {
+        /** @type {never} */
+        const unhandledEffect = client.effect;
+        return unhandledEffect;
+      }
+    }
+  }
+
   // ⚠️ AN UNRESOLVED CLIENT NODE PROVES NOTHING IN EITHER DIRECTION.
   //
   // Found independently by both review seats in the first round on this model.
@@ -540,56 +631,6 @@ export function compareNode(client, validator, path, ctx) {
 
     const attempts = client.nodes.map((variant) => compareNode(variant, validator, path, ctx));
     const rejected = attempts.filter((a) => !a.compatible);
-
-    // ⚠️ FAIL-CLOSED STAYS FAIL-CLOSED. The client may send any ONE of these,
-    // so a mismatch in ANY member is a mismatch — and that rule is NOT relaxed
-    // just because some other member happens to be acceptable. Relaxing it
-    // globally would silence a real defect anywhere a union contains one good
-    // branch, which is a far larger hole than the one it would close.
-    //
-    // ⚠️ ASSERTION UNCERTAINTY IS CARRIED STRUCTURALLY INSTEAD, BY THE NODE.
-    //
-    // `orgId: activeOrgId!` is the shape that forced this question. The `!` is
-    // erased at runtime, so it is a developer's claim rather than evidence, and
-    // the extractor is right to strip it — but the enclosing UI path may
-    // genuinely guarantee non-null in a way the TypeChecker will not carry into
-    // a closure. Measured on the real repository, treating that as BREAKING
-    // fabricates exactly 15 outages; treating it as CLEAN is the false PASS.
-    //
-    // So the EXTRACTOR marks only that node `assertionNarrowed`, and only that
-    // node degrades to an unknown. The general rule below is untouched, and a
-    // plain non-asserted union containing an incompatible member is still
-    // BREAKING.
-    //
-    // ⚠️ AND THE OPPOSITE CASE MUST STAY CLEAN: `string | null` against
-    // `v.union(v.id("t"), v.null())` is fully accepted, because each member is
-    // compared against the WHOLE validator, unions included. Judging a member
-    // against one branch in isolation is what fabricated 8 findings in the
-    // measurement harness that produced these numbers.
-    if (client.assertionNarrowed && rejected.length && rejected.length < attempts.length) {
-      const nested = validator.kind === "object" || validator.kind === "array";
-      const refused = client.nodes
-        .filter((_, i) => !attempts[i].compatible)
-        .map((n) => describeClient(n))
-        .join(", ");
-      const carried = attempts
-        .filter((a) => a.compatible)
-        .flatMap((a) => a.findings)
-        .filter((f) => f.severity !== SEVERITY.BREAKING);
-      return {
-        findings: dedupe([
-          finding(
-            ctx,
-            nested ? SEVERITY.SHAPE_UNKNOWN : SEVERITY.TYPE_UNKNOWN,
-            nested ? "SHAPE" : "VALUE",
-            path,
-            `client type admits ${refused}, which the backend's ${describeValidator(validator)} refuses; the value's non-nullness rests on a \`!\` assertion that is erased at runtime, so transmission of the refused member is NOT proven`
-          ),
-          ...carried,
-        ]),
-        compatible: true,
-      };
-    }
 
     // Every member refused: no value this expression can produce is acceptable.
     // Every member accepted: findings here are unknowns, not breaks.
@@ -1009,6 +1050,8 @@ export function describeClient(client) {
       return "union";
     case "unresolved":
       return "unresolved";
+    case "assertion":
+      return describeClient(client.node);
     // ⚠️ NAMES THE TABLES. A finding that says only "id" cannot tell a reader
     // whether the defect is a wrong table or a wrong type, which is the whole
     // reason this domain exists.

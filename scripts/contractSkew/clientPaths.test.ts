@@ -21,6 +21,8 @@ type Node = {
   keysComplete?: boolean;
   values?: Set<unknown>;
   nodes?: Node[];
+  effect?: "TYPE_CLAIM" | "NON_NULL_ERASURE";
+  node?: Node;
   empty?: boolean;
   type?: string;
 };
@@ -45,6 +47,7 @@ type Call = {
  */
 const pathsOf = (node: Node | null | undefined, prefix = ""): string[] => {
   if (!node) return [];
+  if (node.kind === "assertion") return pathsOf(node.node, prefix);
   if (node.kind === "object" && node.fields) {
     return [...node.fields].flatMap(([name, entry]) => {
       const at = prefix ? `${prefix}.${name}` : name;
@@ -60,13 +63,17 @@ const entryAt = (node: Node | null | undefined, path: string) => {
   let cur: Node | undefined = node ?? undefined;
   let entry: { node: Node; provenance: string } | undefined;
   for (const part of path.split(".")) {
+    while (cur?.kind === "assertion") cur = cur.node;
     const name = part.replace(/(\[\*\])+$/, "");
     const arrays = (part.length - name.length) / 3;
     if (!cur || cur.kind !== "object" || !cur.fields) return undefined;
     entry = cur.fields.get(name);
     if (!entry) return undefined;
     cur = entry.node;
-    for (let i = 0; i < arrays; i += 1) cur = cur?.kind === "array" ? cur.element : undefined;
+    for (let i = 0; i < arrays; i += 1) {
+      while (cur?.kind === "assertion") cur = cur.node;
+      cur = cur?.kind === "array" ? cur.element : undefined;
+    }
   }
   return entry;
 };
@@ -538,7 +545,7 @@ describe("REAL TypeChecker -> extractor -> comparator, at a v.id() path", () => 
     });
   };
 
-  test("the extractor strips `!`, MARKS the node, and keeps the table", () => {
+  test("the extractor keeps `!` uncertainty on only the erased alternative and keeps the table", () => {
     // ⚠️ THE CONTROL FOR EVERYTHING BELOW. If `!` were honoured the payload
     // would be a plain id, the verdict tests would pass for the wrong reason,
     // and the rule under test would never be exercised. If the node were not
@@ -547,13 +554,13 @@ describe("REAL TypeChecker -> extractor -> comparator, at a v.id() path", () => 
     expect(orgId, "orgId did not resolve").toBeDefined();
     const node = orgId!.node as unknown as {
       kind: string;
-      assertionNarrowed?: boolean;
-      nodes: { kind: string; tables?: Set<string>; values?: Set<unknown> }[];
+      nodes: { kind: string; effect?: string; node?: Node; tables?: Set<string>; values?: Set<unknown> }[];
     };
     expect(node.kind).toBe("variants");
-    expect(node.assertionNarrowed, "the `!` was not recorded on the node").toBe(true);
+    const erased = node.nodes.find((n) => n.kind === "assertion" && n.effect === "NON_NULL_ERASURE");
+    expect(erased, "the `!` was not recorded on the erased alternative").toBeDefined();
+    expect([...(erased?.node?.values ?? [])]).toContain(null);
     expect(node.nodes.some((n) => n.kind === "id" && [...(n.tables ?? [])].includes("organizations"))).toBe(true);
-    expect(node.nodes.some((n) => n.kind === "literal" && [...(n.values ?? [])].includes(null))).toBe(true);
   });
 
   test("a PROVEN SAME-TABLE id is clean through the real extractor", () => {

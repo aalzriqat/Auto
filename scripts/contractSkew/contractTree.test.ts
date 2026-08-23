@@ -612,14 +612,13 @@ describe("client variants — every branch the client might send must be accepte
 
   test("a union narrowed only by a `!` assertion is UNKNOWN — not breaking, and not clean", () => {
     /**
-     * The same shape as above, differing ONLY by the flag the extractor sets
-     * when a `!` was stripped. That flag is the whole difference between an
-     * honest unknown and 15 fabricated outages, measured on the real repo.
+     * The same runtime alternatives as above, but the incompatible member is
+     * structurally marked as the one TypeScript erased through `!`.
      */
-    const asserted = {
-      ...clientNode.variants([clientNode.scalar("string"), clientNode.scalar("number")]),
-      assertionNarrowed: true,
-    };
+    const asserted = clientNode.variants([
+      clientNode.scalar("string"),
+      clientNode.assertion("NON_NULL_ERASURE", clientNode.scalar("number")),
+    ]);
     const result = run(cObj({ v: asserted }), vObj({ v: [vStr] }));
     expect(breaking(result)).toHaveLength(0);
     expect(result.findings).toHaveLength(1);
@@ -798,12 +797,12 @@ describe("v.id(table) — what the client must prove, and what it need not", () 
   describe("the non-null-assertion shape, which is where this got decided", () => {
     // `orgId: activeOrgId!` extracts as `string | null`, because the extractor
     // strips `!` on purpose: it is erased at runtime and proves nothing.
-    // The extractor marks the node when a `!` was stripped; the id itself is
-    // real, so the only uncertainty is the nullability the assertion hid.
-    const idOrNull = {
-      ...clientNode.variants([cLit(null), clientNode.id(["organizations"])]),
-      assertionNarrowed: true,
-    };
+    // The extractor wraps only the erased null alternative; the id itself is
+    // real and remains independently proven.
+    const idOrNull = clientNode.variants([
+      clientNode.assertion("NON_NULL_ERASURE", cLit(null)),
+      clientNode.id(["organizations"]),
+    ]);
 
     test("Id | null against a BARE v.id() is UNKNOWN", () => {
       const result = run(cObj({ orgId: idOrNull }), vObj({ orgId: [vId()] }));
@@ -816,10 +815,8 @@ describe("v.id(table) — what the client must prove, and what it need not", () 
       expect(run(cObj({ orgId: idOrNull }), vObj({ orgId: [vId()] })).findings.length).toBeGreaterThan(0);
     });
 
-    test("WITHOUT the assertion flag the same shape is BREAKING — the flag is what moves it", () => {
-      // ⚠️ The control that stops the flag being decorative. If `assertionNarrowed`
-      // were ignored, this and the test above would agree, and neither would be
-      // testing anything.
+    test("WITHOUT the assertion wrapper the same shape is BREAKING — the wrapper is what moves it", () => {
+      // ⚠️ The control that stops the wrapper being decorative.
       const plain = clientNode.variants([cLit(null), clientNode.id(["organizations"])]);
       expect(breaking(run(cObj({ orgId: plain }), vObj({ orgId: [vId()] })))).toHaveLength(1);
     });
@@ -1069,6 +1066,13 @@ describe("LAYER 1: the relation itself, on DIRECTLY CONSTRUCTED pairs", () => {
     ["variants admit variants they fully cover", clientNode.variants([cStr, num, clientNode.literal(new Set(["A"]))]), clientNode.variants([cStr, num]), true],
     ["variants do NOT admit variants carrying an alternative they lack", clientNode.variants([cStr, num]), clientNode.variants([cStr, clientNode.emptyArray()]), false],
 
+    // ── ASSERTIONS. Type claims are runtime-transparent; an erased nullish
+    // alternative is strictly less trusted than the same certain alternative. ──
+    ["a type claim admits its assertion-free operand", clientNode.assertion("TYPE_CLAIM", cStr), cStr, true],
+    ["an assertion-free operand admits the same type claim", cStr, clientNode.assertion("TYPE_CLAIM", cStr), true],
+    ["a non-null-erased alternative admits its certain operand", clientNode.assertion("NON_NULL_ERASURE", cLit(null)), cLit(null), true],
+    ["a certain alternative does NOT admit non-null uncertainty", cLit(null), clientNode.assertion("NON_NULL_ERASURE", cLit(null)), false],
+
     // ── SCALARS AND LITERALS at the leaves. ──
     // ⚠️ FRESHLY CONSTRUCTED ON BOTH SIDES, ON PURPOSE. Reusing the shared
     // `cStr` constant as both operands made `wider === narrower` short-circuit
@@ -1171,6 +1175,13 @@ describe("LAYER 2: the real merge respects the relation — merging never produc
     ["id{organizations}", clientNode.id(["organizations"])],
     ["id{customers}", clientNode.id(["customers"])],
     ["id{organizations,customers}", clientNode.id(["organizations", "customers"])],
+    ["assertion(TYPE,string)", clientNode.assertion("TYPE_CLAIM", clientNode.scalar("string"))],
+    ["assertion(TYPE,id)", clientNode.assertion("TYPE_CLAIM", clientNode.id(["organizations"]))],
+    ["assertion(NON_NULL,null)", clientNode.assertion("NON_NULL_ERASURE", cLit(null))],
+    ["variants[id,asserted-null]", clientNode.variants([
+      clientNode.id(["organizations"]),
+      clientNode.assertion("NON_NULL_ERASURE", cLit(null)),
+    ])],
     ["obj{a:scalar}", objOf({ a: cStr })],
     ["obj{a:unresolved}", objOf({ a: clientNode.unresolved() })],
     ["obj{a:scalar} OPEN keys", objOf({ a: cStr }, false)],
