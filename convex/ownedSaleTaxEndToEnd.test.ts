@@ -231,6 +231,120 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     expect(await netOnAccount(t, orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(jod(40_000));
   });
 
+  test("a PENDING draft may carry no agreed price, and stays editable", async () => {
+    // The backend explicitly permits this — `CreateDraftSaleSchema` bounds
+    // `salePrice` at min(0) and the sale form submits a zero default. A draft is
+    // a deal in progress; the price is often the last thing agreed. An earlier
+    // attempt at the completion invariant lived in `prepareSaleCompletion`,
+    // which draft creation also passes through, and refused this outright.
+    const s = await seedDealer("draftzero");
+    const draftId = await s.asUser.mutation(api.sales.createDraft, {
+      orgId: s.orgId,
+      vehicleId: s.vehicleId,
+      customerId: s.customerId,
+      salespersonId: s.userId,
+      salePrice: 0,
+      saleDate: Date.now(),
+      financingType: "CASH",
+    });
+    const draft = await s.t.run((ctx) => ctx.db.get(draftId));
+    expect(draft?.status).toBe("PENDING");
+    // Nothing financial happened: a draft posts no journal and raises no bill.
+    expect(await netOnAccount(s.t, s.orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(0);
+    expect(await s.t.run((ctx) => ctx.db.query("receivableDocuments").collect())).toHaveLength(0);
+
+    // ...and completing it while still unpriced is refused, without the draft
+    // being consumed. It remains a draft that can be repriced.
+    await expect(
+      s.asUser.mutation(api.sales.completeDraft, { orgId: s.orgId, saleId: draftId })
+    ).rejects.toThrow(/price/i);
+    expect((await s.t.run((ctx) => ctx.db.get(draftId)))?.status).toBe("PENDING");
+    expect(
+      await s.t.run(async (ctx) => (await ctx.db.get(s.vehicleId))?.status)
+    ).not.toBe("SOLD");
+  });
+
+  test("a price that rounds to nothing is refused BEFORE anything financial is written", async () => {
+    // The HIGH regression. 0.0004 JOD is positive in the caller's major units
+    // and 0 in the ledger's minor units, so a major-unit floor waves it through.
+    // With a dealer fee to balance the journal it posted Dr AR 500 / Cr Dealer
+    // Fee 500 plus a full-cost COGS relief against ZERO revenue, and marked the
+    // vehicle SOLD — an input `main` refuses.
+    const s = await seedDealer("subprec");
+    await expect(
+      s.asUser.mutation(api.sales.create, {
+        orgId: s.orgId,
+        vehicleId: s.vehicleId,
+        customerId: s.customerId,
+        salespersonId: s.userId,
+        salePrice: 0.0004,
+        dealerFees: 500,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+        financingType: "CASH",
+      })
+    ).rejects.toThrow(/rounds to nothing/i);
+
+    // The refusal must be TOTAL — this is the half a posting-rule-only fix
+    // cannot deliver.
+    expect(await netOnAccount(s.t, s.orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(0);
+    expect(await netOnAccount(s.t, s.orgId, SYSTEM_KEYS.COST_OF_VEHICLES_SOLD)).toBe(0);
+    expect(await s.t.run((ctx) => ctx.db.query("sales").collect())).toHaveLength(0);
+    expect(await s.t.run((ctx) => ctx.db.query("receivableDocuments").collect())).toHaveLength(0);
+    expect(await s.t.run(async (ctx) => (await ctx.db.get(s.vehicleId))?.status)).toBe("AVAILABLE");
+  });
+
+  test("the smallest representable price gets past the invariant — it is not 'refuse small numbers'", async () => {
+    // ANTI-VACUITY for the case above. 0.001 JOD is 1 minor unit: the smallest
+    // thing the currency can express. A guard that refused it would be rejecting
+    // by magnitude rather than by representability, and the sub-precision test
+    // would still pass.
+    const s = await seedDealer("minprice");
+    await s.asUser.mutation(api.sales.create, {
+      orgId: s.orgId,
+      vehicleId: s.vehicleId,
+      customerId: s.customerId,
+      salespersonId: s.userId,
+      salePrice: 0.001,
+      saleDate: Date.now(),
+      status: "COMPLETED",
+      financingType: "CASH",
+    });
+    expect(await netOnAccount(s.t, s.orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(1);
+  });
+
+  test("the invariant refuses BEFORE the outbox, even when accounting would be deferred", async () => {
+    // THE ANTI-VACUITY PROOF THAT MATTERS. `postOrEnqueue` defers to the outbox
+    // whenever the chart is uninitialized or no period is open, so a refusal
+    // that lives in `ruleSaleCompleted` would arrive at DRAIN time — long after
+    // the sale row, the vehicle status and the receivable were committed. A
+    // control that only fires when accounting happens to post immediately is
+    // not a control.
+    //
+    // Dating the sale into a year with no period reaches the deferred branch.
+    const s = await seedDealer("deferredzero");
+    const priorYear = new Date().getUTCFullYear() - 1;
+
+    await expect(
+      s.asUser.mutation(api.sales.create, {
+        orgId: s.orgId,
+        vehicleId: s.vehicleId,
+        customerId: s.customerId,
+        salespersonId: s.userId,
+        salePrice: 0.0004,
+        dealerFees: 500,
+        saleDate: Date.UTC(priorYear, 5, 15),
+        status: "COMPLETED",
+        financingType: "CASH",
+      })
+    ).rejects.toThrow(/rounds to nothing/i);
+
+    // No queued accounting event, and no sale to queue one for.
+    expect(await s.t.run((ctx) => ctx.db.query("pendingAccountingEvents").collect())).toHaveLength(0);
+    expect(await s.t.run((ctx) => ctx.db.query("sales").collect())).toHaveLength(0);
+    expect(await s.t.run(async (ctx) => (await ctx.db.get(s.vehicleId))?.status)).toBe("AVAILABLE");
+  });
+
   test("a zero-price sale is refused whether or not it carries add-ons", async () => {
     // Emitting the revenue line only when there IS revenue removed a SECOND
     // accidental fail-closed, and this pins the replacement.

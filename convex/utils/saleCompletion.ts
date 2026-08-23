@@ -177,53 +177,6 @@ async function prepareSaleCompletion(
   ctx: MutationCtx,
   args: SaleCompletionArgs
 ): Promise<PreparedSaleCompletion> {
-  // A sale needs a price.
-  //
-  // `completeSalesForLineItems` has refused `unitPrice <= 0` all along; this
-  // door never had the same floor, and nothing noticed because the arithmetic
-  // was refusing these by accident: a zero price made the revenue line 0/0, and
-  // `validateBalance` rejects a line carrying neither a debit nor a credit, so
-  // the mutation rolled back.
-  //
-  // Once that empty line is omitted (SCRUM-22), the accident stops happening —
-  // but only for a sale that has some OTHER credit to post. A zero-price sale
-  // with a dealer fee posts Dr AR 500 / Cr Dealer Fee Income 500 alongside a
-  // full-cost COGS relief against no revenue, and marks the vehicle SOLD, while
-  // the same sale without the fee still fails on its 0/0 AR line. Whether a
-  // mistyped price fails closed cannot depend on whether an unrelated field
-  // happens to be set.
-  //
-  // So it is stated here, where both doors already pass, rather than left to
-  // arithmetic that no longer produces it.
-  if (args.salePrice <= 0) {
-    throw new ConvexError(
-      "A completed sale needs a sale price greater than zero. Enter the price before completing the sale."
-    );
-  }
-
-  // Sales tax cannot exceed the price it is charged on.
-  //
-  // This used to be refused by accident. Revenue was `salePrice - taxAmount`,
-  // which went negative, and `validateBalance` rejects a negative journal line,
-  // so the mutation rolled back — with "An unexpected error occurred", but it
-  // rolled back. SCRUM-22 makes revenue the full price, so that side effect is
-  // gone and the entry now balances perfectly at any tax.
-  //
-  // Nothing else bounds it: `validations/sales.ts` has `taxAmount: min(0)` with
-  // no ceiling, and `taxRate` and `taxAmount` are independent fields that no
-  // server code cross-checks. A mistyped 32,000 for 3,200 would raise a 52,000
-  // invoice and a 32,000 tax liability, and `sales.update` locks financial
-  // fields afterwards, so the only repair is cancel-and-recreate.
-  //
-  // Stated here, at the shared entry both completion callers pass through, and
-  // before anything is written. `expenses.ts` refuses the same shape on its own
-  // path; this is that rule, on this one.
-  if (args.taxAmount !== undefined && args.taxAmount > args.salePrice) {
-    throw new ConvexError(
-      "The sales tax cannot be more than the sale price. Check the tax amount before completing the sale."
-    );
-  }
-
   const vehicle = await ctx.db.get(args.vehicleId);
   if (vehicle?.orgId !== args.orgId) {
     throwAppError(AppErrorCode.VEHICLE_NOT_FOUND, "Vehicle not found in this organization.");
@@ -1574,6 +1527,54 @@ async function applySaleCompletionSideEffects(
   );
 }
 
+/**
+ * The monetary invariants a sale must satisfy to become COMPLETED (SCRUM-22).
+ *
+ * THREE things about where this lives, each of which was learned the hard way:
+ *
+ * 1. **Completion only.** A PENDING draft is a deal in progress and may carry no
+ *    agreed price yet — `CreateDraftSaleSchema` permits zero and the sale form
+ *    submits a zero default. Putting these rules in `prepareSaleCompletion`,
+ *    which draft creation also passes through, refused a state the backend
+ *    explicitly supports. So they are asserted from the completion doors only.
+ *
+ * 2. **Canonical minor units.** The caller's major-unit number is not the number
+ *    the journal is built from. `toMinorUnits` rounds, so `0.0004` JOD is
+ *    positive to a major-unit check and `0` to the ledger — and a zero-minor
+ *    price with any other credit (a dealer fee) posts a balanced entry that
+ *    relieves full inventory into COGS against no revenue and marks the vehicle
+ *    SOLD. The guard has to speak the same units as the posting it protects, so
+ *    it runs after the currency is resolved and uses the same money authority.
+ *
+ * 3. **Before any write.** Not in the posting rule. Accounting is deferred to
+ *    the outbox whenever the chart is uninitialized or no period is open
+ *    (`postOrEnqueue`), so a rule-time refusal can arrive long after the sale
+ *    row, the vehicle status and the receivable have been committed. A control
+ *    that only fires when accounting happens to post immediately is not a
+ *    control. This runs before the insert/patch, so the refusal is total.
+ */
+function assertCompletableSaleAmounts(args: SaleCompletionArgs, currency: string): void {
+  // `toMinorUnits` refuses NaN/Infinity by way of its safe-integer check, so a
+  // non-finite price fails closed here rather than reaching the ledger.
+  const salePriceMinor = toMinorUnits(args.salePrice, currency);
+  if (salePriceMinor <= 0) {
+    throw new ConvexError(
+      `A sale cannot be completed for ${args.salePrice} ${currency} — it rounds to nothing in ${currency}. Enter a price the currency can represent before completing the sale.`
+    );
+  }
+
+  // The tax ceiling, compared in the same canonical units for the same reason.
+  // Equal to the price stays allowed — this is a ceiling, not a ban — and only
+  // a tax ABOVE the price after rounding is refused. No tax-rate policy is
+  // invented here; this only bounds what was entered.
+  const taxMinor = args.taxAmount != null ? toMinorUnits(args.taxAmount, currency) : 0;
+  if (taxMinor > salePriceMinor) {
+    throw new ConvexError(
+      "The sales tax cannot be more than the sale price. Check the tax amount before completing the sale."
+    );
+  }
+}
+
 export async function createDraftSale(
   ctx: MutationCtx,
   args: SaleCompletionArgs
@@ -1597,6 +1598,9 @@ export async function completeSale(
   }
 
   const prepared = await prepareSaleCompletion(ctx, args);
+  // Before the insert, so a refusal leaves no sale row, no vehicle status
+  // change, no receivable and no queued accounting event behind.
+  assertCompletableSaleAmounts(args, prepared.currency);
   const saleId = await insertSaleRecord(ctx, args, prepared, "COMPLETED", prepared.commissionAmount);
   await applySaleCompletionSideEffects(ctx, args, prepared, saleId);
 
@@ -1736,6 +1740,10 @@ export async function completeExistingSale(
   };
 
   const prepared = await prepareSaleCompletion(ctx, completionArgs);
+  // Same authority, same position: before the status patch, so a draft that
+  // cannot legally complete stays a draft rather than becoming a COMPLETED sale
+  // whose accounting is refused afterwards.
+  assertCompletableSaleAmounts(completionArgs, prepared.currency);
   await ctx.db.patch(args.saleId, {
     status: "COMPLETED",
     commissionAmount: prepared.commissionAmount,

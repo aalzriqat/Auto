@@ -209,6 +209,75 @@ describe("the sale-completion path refuses documents from another organization",
     ).rejects.toThrow(/Trade-in vehicle not found in this organization/i);
   });
 
+  /**
+   * MISSING-ROW controls for the guards that had none.
+   *
+   * The `!row || row.orgId !== orgId` -> `row?.orgId !== orgId` rewrite has two
+   * halves, and the NULL half is the subtle one. Only the vehicle had a dangling
+   * fixture; an adversarial reviewer flipped the quote guard to its fail-open
+   * form (`quote != null && quote.orgId !== orgId`) and this file stayed 13/13
+   * green, with 199/199 across six related files. A surviving mutant is itself a
+   * finding, and the stated purpose of this file is "prove they still refuse".
+   *
+   * Each of these deletes a row this dealership genuinely owns, so nothing but
+   * the existence half of the guard under test can refuse it, and each asserts
+   * that guard's own exact message.
+   */
+  test("a customer id whose row no longer exists is refused", async () => {
+    const s = await seedGuardDealer();
+    const gone = await s.customerIn(s.orgId, "Vanished");
+    await s.t.run((ctx) => ctx.db.delete(gone));
+
+    await expect(
+      s.asUser.mutation(api.sales.create, s.sale({ customerId: gone, idempotencyKey: "gm1" }))
+    ).rejects.toThrow(/Customer not found in this organization/i);
+  });
+
+  test("a quote id whose row no longer exists is refused", async () => {
+    const s = await seedGuardDealer();
+    const gone = await s.t.run((ctx) =>
+      ctx.db.insert("quotes", {
+        orgId: s.orgId,
+        customerId: s.customerId,
+        vehicleId: s.vehicleId,
+        vehiclePrice: 20000, downPayment: 0, termMonths: 12,
+        status: "ACCEPTED" as const,
+        createdBy: s.userId,
+        createdAt: Date.now(),
+      })
+    );
+    await s.t.run((ctx) => ctx.db.delete(gone));
+
+    await expect(
+      s.asUser.mutation(api.sales.create, s.sale({ quoteId: gone, idempotencyKey: "gm2" }))
+    ).rejects.toThrow(/Quote not found in this organization/i);
+  });
+
+  test("a trade-in id whose row no longer exists is refused by prepareSaleCompletion", async () => {
+    // Driven through `createDraft`, NOT `create`, and that is the whole point.
+    //
+    // TWO guards carry this identical message: the one in `prepareSaleCompletion`
+    // and a second in `applySaleCompletionSideEffects` that owns `isDeleted`. A
+    // dangling row satisfies BOTH, so completing the sale asserts nothing about
+    // which one fired — I wrote it that way first and the mutation proved it:
+    // flipping the FIRST guard to its fail-open form left the suite 16/16 green,
+    // because the second guard caught the fixture and produced the same message.
+    //
+    // `createDraft` runs `prepareSaleCompletion` and then inserts; it never
+    // reaches the side effects. So only the first guard can refuse this, and the
+    // fail-open mutant now dies.
+    const s = await seedGuardDealer();
+    const gone = await s.tradeInIn(s.orgId, "GUARDTRADEGONE");
+    await s.t.run((ctx) => ctx.db.delete(gone));
+
+    await expect(
+      s.asUser.mutation(api.sales.createDraft, {
+        ...s.sale({ tradeInVehicleId: gone, tradeInValue: 5000, idempotencyKey: "gm3" }),
+        status: "PENDING" as const,
+      })
+    ).rejects.toThrow(/Trade-in vehicle not found in this organization/i);
+  });
+
   test("a quote owned by another dealership is refused", async () => {
     const s = await seedGuardDealer();
     const theirQuote = await s.t.run((ctx) =>

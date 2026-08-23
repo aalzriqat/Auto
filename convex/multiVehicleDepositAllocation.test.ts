@@ -2576,3 +2576,40 @@ describe("completeFromQuote returns one sale per line, in line order", () => {
     expect(vehicleIds).toEqual([s.vehicleA]);
   });
 });
+
+/**
+ * Multi-vehicle completion inherits the completion monetary invariant.
+ *
+ * `completeSalesForLineItems` has exactly ONE completion path — it calls
+ * `completeSale` per line and performs no insert, status patch or side effect of
+ * its own — so it cannot bypass `assertCompletableSaleAmounts`. This proves that
+ * by execution rather than by reading the call graph.
+ *
+ * It also refuses `unitPrice <= 0` itself, so the fixture is priced BELOW
+ * currency precision instead: positive to that check, zero to the ledger. Only
+ * the canonical minor-unit invariant can refuse it.
+ */
+describe("the completion monetary invariant reaches multi-vehicle completion", () => {
+  test("a line priced below currency precision is refused, and no sale is written", async () => {
+    const s = await seed("subprecline");
+
+    await s.t.run(async (ctx) => {
+      const quote = await ctx.db.get(s.quoteId);
+      const items = (quote!.vehicleItems ?? []).map((item, i) =>
+        i === 0 ? { ...item, unitPrice: 0.0004 } : item
+      );
+      await ctx.db.patch(s.quoteId, { vehicleItems: items });
+    });
+
+    await expect(
+      s.asUser.mutation(api.sales.completeFromQuote, {
+        orgId: s.orgId,
+        quoteId: s.quoteId,
+        idempotencyKey: "subprec-line",
+      })
+    ).rejects.toThrow(/rounds to nothing/i);
+
+    // Atomicity makes the refusal total across every line, not just the bad one.
+    expect(await s.t.run((ctx) => ctx.db.query("sales").collect())).toHaveLength(0);
+  });
+});
