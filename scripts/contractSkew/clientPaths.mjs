@@ -282,6 +282,7 @@ export function extractClientCalls(rootFiles, tsconfigPath) {
                   seen: new Set(),
                   evidence,
                   expressionSeen: new Set(),
+                  refinements: new Map(),
                 })
               : null;
           const stripped = collected ? stripSkipSentinel(collected) : null;
@@ -397,6 +398,7 @@ export function extractClientCalls(rootFiles, tsconfigPath) {
                 seen: new Set(),
                 evidence,
                 expressionSeen: new Set(),
+                refinements: new Map(),
               })
             : EMPTY_PAYLOAD;
           calls.push({
@@ -448,7 +450,8 @@ export function extractClientCalls(rootFiles, tsconfigPath) {
  *   depth: number,
  *   seen: Set<string>,
  *   evidence: ReturnType<typeof createEvidenceAnalysis>,
- *   expressionSeen: Set<import("typescript").Symbol>
+ *   expressionSeen: Set<import("typescript").Symbol>,
+ *   refinements: Map<import("typescript").Symbol, "truthy" | "falsy">
  * }} ExpressionContext
  */
 
@@ -457,8 +460,13 @@ export function extractClientCalls(rootFiles, tsconfigPath) {
  * @param {ExpressionContext} context
  */
 function collectFromExpression(expr, context) {
-  const { checker, prefix, acc, depth, seen, evidence, expressionSeen } = context;
-  const nested = (nestedPrefix = prefix) => ({ ...context, prefix: nestedPrefix, depth: depth + 1 });
+  const { checker, prefix, acc, depth, seen, evidence, expressionSeen, refinements } = context;
+  const nested = (nestedPrefix = prefix, nestedRefinements = refinements) => ({
+    ...context,
+    prefix: nestedPrefix,
+    depth: depth + 1,
+    refinements: nestedRefinements,
+  });
   if (depth > MAX_DEPTH) {
     acc.unknowns.push(`${prefix || "<root>"} (max depth)`);
     return clientNode.opaqueValue();
@@ -489,16 +497,33 @@ function collectFromExpression(expr, context) {
     return markNonNullErasure(operand);
   }
 
+  // A concrete Next route is runtime evidence that the framework's broad
+  // `string | string[]` hook type cannot express. Preserve every assertion on
+  // the way back to `useParams()` but derive the value shape from `[id]` versus
+  // `[...id]` / `[[...id]]`, never from an asserted target type.
+  const routeParam = routeParamRuntimeNode(node, checker);
+  if (routeParam) {
+    const symbol = ts.isIdentifier(node) ? resolveSymbol(checker, node) : null;
+    return applyUseSiteRefinement(routeParam, symbol ? refinements.get(symbol) : undefined);
+  }
+
   // Follow immutable assertion-bearing aliases back to their runtime source.
   // The symbol stack prevents self-referential initializers from laundering
-  // through an infinite recursion into a trusted checker type.
+  // through an infinite recursion into a trusted checker type. A truthiness
+  // fact belongs to this USE SITE, not to the initializer, so it is applied
+  // only after the runtime source has been reconstructed.
   if (ts.isIdentifier(node)) {
+    const symbol = resolveSymbol(checker, node);
+    const refinement = symbol ? refinements.get(symbol) : undefined;
     const alias = evidence.assertionInitializer(node);
     if (alias) {
       if (expressionSeen.has(alias.symbol)) return clientNode.assertion("TYPE_CLAIM", clientNode.opaqueValue());
       expressionSeen.add(alias.symbol);
       try {
-        return collectFromExpression(alias.expression, nested());
+        return applyUseSiteRefinement(
+          collectFromExpression(alias.expression, nested()),
+          refinement,
+        );
       } finally {
         expressionSeen.delete(alias.symbol);
       }
@@ -589,9 +614,19 @@ function collectFromExpression(expr, context) {
     if (isUndefinedExpression(node.whenFalse)) {
       return collectFromExpression(node.whenTrue, nested());
     }
+    const whenTrueRefinements = truthyRefinementsForCondition(
+      checker,
+      node.condition,
+      refinements,
+    );
+    const whenFalseRefinements = falsyRefinementsForCondition(
+      checker,
+      node.condition,
+      refinements,
+    );
     return mergeClientNodes(
-      collectFromExpression(node.whenTrue, nested()),
-      collectFromExpression(node.whenFalse, nested())
+      collectFromExpression(node.whenTrue, nested(prefix, whenTrueRefinements)),
+      collectFromExpression(node.whenFalse, nested(prefix, whenFalseRefinements))
     );
   }
 
@@ -604,11 +639,228 @@ function collectFromExpression(expr, context) {
 
   // Not a literal — fall back to the assertion-free type of the expression.
   const type = checker.getTypeAtLocation(node);
-  return collectPaths(checker, type, prefix, acc, depth, seen, "LITERAL");
+  const collected = collectPaths(checker, type, prefix, acc, depth, seen, "LITERAL");
+  if (!ts.isIdentifier(node)) return collected;
+  const symbol = resolveSymbol(checker, node);
+  return applyUseSiteRefinement(collected, symbol ? refinements.get(symbol) : undefined);
 }
 
 function isUndefinedExpression(node) {
   return ts.isIdentifier(node) && node.text === "undefined";
+}
+
+/**
+ * Add only branch facts that are logically forced by a condition. For `a && b`
+ * the true branch proves both operands; for `a || b` the false branch proves
+ * both false. The opposite branches do not prove which operand decided the
+ * result and therefore contribute no fabricated narrowing evidence.
+ */
+function truthyRefinementsForCondition(checker, condition, currentRefinements) {
+  const branchRefinements = new Map(currentRefinements);
+  recordTruthyCondition(checker, condition, branchRefinements);
+  return branchRefinements;
+}
+
+function falsyRefinementsForCondition(checker, condition, currentRefinements) {
+  const branchRefinements = new Map(currentRefinements);
+  recordFalsyCondition(checker, condition, branchRefinements);
+  return branchRefinements;
+}
+
+function recordTruthyCondition(checker, condition, refinements) {
+  if (ts.isParenthesizedExpression(condition)) {
+    recordTruthyCondition(checker, condition.expression, refinements);
+    return;
+  }
+  if (ts.isPrefixUnaryExpression(condition) && condition.operator === ts.SyntaxKind.ExclamationToken) {
+    recordFalsyCondition(checker, condition.operand, refinements);
+    return;
+  }
+  if (
+    ts.isBinaryExpression(condition) &&
+    condition.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken
+  ) {
+    recordTruthyCondition(checker, condition.left, refinements);
+    recordTruthyCondition(checker, condition.right, refinements);
+    return;
+  }
+  recordIdentifierRefinement(checker, condition, refinements, "truthy");
+}
+
+function recordFalsyCondition(checker, condition, refinements) {
+  if (ts.isParenthesizedExpression(condition)) {
+    recordFalsyCondition(checker, condition.expression, refinements);
+    return;
+  }
+  if (ts.isPrefixUnaryExpression(condition) && condition.operator === ts.SyntaxKind.ExclamationToken) {
+    recordTruthyCondition(checker, condition.operand, refinements);
+    return;
+  }
+  if (
+    ts.isBinaryExpression(condition) &&
+    condition.operatorToken.kind === ts.SyntaxKind.BarBarToken
+  ) {
+    recordFalsyCondition(checker, condition.left, refinements);
+    recordFalsyCondition(checker, condition.right, refinements);
+    return;
+  }
+  recordIdentifierRefinement(checker, condition, refinements, "falsy");
+}
+
+function recordIdentifierRefinement(checker, condition, refinements, refinement) {
+  if (!ts.isIdentifier(condition)) return;
+  const symbol = resolveSymbol(checker, condition);
+  if (symbol) refinements.set(symbol, refinement);
+}
+
+/**
+ * Restrict reconstructed runtime evidence to alternatives reachable at the
+ * call site. This filters only enumerable falsy values and structurally truthy
+ * containers. Wider scalars remain wider, so a truthiness check can never turn
+ * an unproven string into an ID or an enumeration member.
+ */
+function applyUseSiteRefinement(node, refinement) {
+  if (!refinement) return node;
+  const refined = refinement === "truthy" ? truthyNode(node) : falsyNode(node);
+  // A contradictory branch is unreachable. `unresolved` is the conservative
+  // fallback if TypeScript and the syntax evidence ever disagree; it denies a
+  // clean PASS without fabricating a concrete BREAKING value.
+  return refined ?? clientNode.unresolved();
+}
+
+function truthyNode(node) {
+  if (node.kind === "literal") {
+    const values = new Set([...node.values].filter(Boolean));
+    return values.size ? clientNode.literal(values) : null;
+  }
+  if (node.kind === "variants") {
+    const nodes = node.nodes
+      .map(truthyNode)
+      .filter(Boolean);
+    return nodes.length ? clientNode.variants(nodes) : null;
+  }
+  if (node.kind === "assertion") {
+    const inner = truthyNode(node.node);
+    return inner ? clientNode.assertion(node.effect, inner) : null;
+  }
+  return node;
+}
+
+function falsyNode(node) {
+  if (node.kind === "literal") {
+    const values = new Set([...node.values].filter((value) => !value));
+    return values.size ? clientNode.literal(values) : null;
+  }
+  if (node.kind === "variants") {
+    const nodes = node.nodes
+      .map(falsyNode)
+      .filter(Boolean);
+    return nodes.length ? clientNode.variants(nodes) : null;
+  }
+  if (node.kind === "assertion") {
+    const inner = falsyNode(node.node);
+    return inner ? clientNode.assertion(node.effect, inner) : null;
+  }
+  if (node.kind === "object" || node.kind === "array" || node.kind === "id") {
+    return null;
+  }
+  return node;
+}
+
+/**
+ * Resolve a value back to a concrete Next `useParams()` access. Only immutable
+ * aliases and transparent assertions are followed, and assertions are retained
+ * as TYPE_CLAIM wrappers. This is route-topology evidence, not type trust.
+ */
+function routeParamRuntimeNode(node, checker, visiting = new Set()) {
+  if (ts.isParenthesizedExpression(node)) {
+    return routeParamRuntimeNode(node.expression, checker, visiting);
+  }
+  if (ts.isAssertionExpression(node)) {
+    const inner = routeParamRuntimeNode(node.expression, checker, visiting);
+    return inner ? clientNode.assertion("TYPE_CLAIM", inner) : null;
+  }
+  if (ts.isIdentifier(node)) {
+    const symbol = resolveSymbol(checker, node);
+    if (!symbol || visiting.has(symbol)) return null;
+    visiting.add(symbol);
+    try {
+      for (const declaration of symbol.declarations ?? []) {
+        if (!ts.isVariableDeclaration(declaration) || !declaration.initializer) continue;
+        const list = declaration.parent;
+        if (!ts.isVariableDeclarationList(list) || !(list.flags & ts.NodeFlags.Const)) continue;
+        const resolved = routeParamRuntimeNode(declaration.initializer, checker, visiting);
+        if (resolved) return resolved;
+      }
+    } finally {
+      visiting.delete(symbol);
+    }
+    return null;
+  }
+
+  const access = routeParamAccess(node);
+  if (!access || !isNextUseParamsResult(access.receiver, checker)) return null;
+  const segmentKind = routeSegmentKind(node.getSourceFile().fileName, access.name);
+  if (segmentKind === "single") return clientNode.scalar("string");
+  if (segmentKind === "catchAll" || segmentKind === "optionalCatchAll") {
+    return clientNode.array(clientNode.scalar("string"));
+  }
+  return null;
+}
+
+function routeParamAccess(node) {
+  if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression)) {
+    return { receiver: node.expression, name: node.name.text };
+  }
+  if (
+    ts.isElementAccessExpression(node) &&
+    ts.isIdentifier(node.expression) &&
+    node.argumentExpression &&
+    ts.isStringLiteral(node.argumentExpression)
+  ) {
+    return { receiver: node.expression, name: node.argumentExpression.text };
+  }
+  return null;
+}
+
+function isNextUseParamsResult(receiver, checker) {
+  const symbol = resolveSymbol(checker, receiver);
+  if (!symbol) return false;
+  for (const declaration of symbol.declarations ?? []) {
+    if (!ts.isVariableDeclaration(declaration) || !declaration.initializer) continue;
+    const initializer = declaration.initializer;
+    if (
+      ts.isCallExpression(initializer) &&
+      ts.isIdentifier(initializer.expression) &&
+      isNamedImport(initializer.expression, checker, "useParams", "next/navigation")
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isNamedImport(identifier, checker, importedName, moduleName) {
+  const symbol = checker.getSymbolAtLocation(identifier);
+  if (!symbol) return false;
+  return (symbol.declarations ?? []).some((declaration) => {
+    if (!ts.isImportSpecifier(declaration)) return false;
+    const importDeclaration = declaration.parent.parent.parent;
+    return (
+      ts.isImportDeclaration(importDeclaration) &&
+      ts.isStringLiteral(importDeclaration.moduleSpecifier) &&
+      importDeclaration.moduleSpecifier.text === moduleName &&
+      (declaration.propertyName?.text ?? declaration.name.text) === importedName
+    );
+  });
+}
+
+function routeSegmentKind(fileName, parameterName) {
+  const segments = fileName.replace(/\\/g, "/").split("/");
+  if (segments.includes(`[[...${parameterName}]]`)) return "optionalCatchAll";
+  if (segments.includes(`[...${parameterName}]`)) return "catchAll";
+  if (segments.includes(`[${parameterName}]`)) return "single";
+  return null;
 }
 
 /** Apply a spread in source order; later properties overwrite earlier ones. */
