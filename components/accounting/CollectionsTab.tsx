@@ -165,12 +165,16 @@ export function CollectionsTab() {
   if (!activeOrgId) return null;
 
   async function runChequeAction(action: "deposit" | "clear", cheque: ChequeRow) {
+    // The early return above proves the org is selected, but a narrowing does
+    // not cross a function boundary. A `!` here would be an assertion rather
+    // than evidence — and an assertion is erased at runtime.
+    if (!activeOrgId) return;
     try {
       if (action === "deposit") {
-        await depositCheque({ orgId: activeOrgId!, chequeId: cheque._id });
+        await depositCheque({ orgId: activeOrgId, chequeId: cheque._id });
         toast.success(t("CollectionToastChequeDeposited" as any));
       } else {
-        await clearCheque({ orgId: activeOrgId!, chequeId: cheque._id });
+        await clearCheque({ orgId: activeOrgId, chequeId: cheque._id });
         toast.success(t("CollectionToastChequeCleared" as any));
       }
     } catch (error) {
@@ -179,8 +183,9 @@ export function CollectionsTab() {
   }
 
   async function decideApproval(row: ApprovalRow, status: "APPROVED" | "REJECTED") {
+    if (!activeOrgId) return;
     try {
-      await respondApproval({ orgId: activeOrgId!, requestId: row._id, status });
+      await respondApproval({ orgId: activeOrgId, requestId: row._id, status });
       toast.success(status === "APPROVED" ? t("CollectionToastRequestApproved" as any) : t("CollectionToastRequestRejected" as any));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
@@ -188,8 +193,9 @@ export function CollectionsTab() {
   }
 
   async function decideReconciliation(id: Id<"cashierReconciliations">, status: "APPROVED" | "REJECTED") {
+    if (!activeOrgId) return;
     try {
-      await reviewReconciliation({ orgId: activeOrgId!, reconciliationId: id, status });
+      await reviewReconciliation({ orgId: activeOrgId, reconciliationId: id, status });
       toast.success(status === "APPROVED" ? t("CollectionToastReconciliationApproved" as any) : t("CollectionToastReconciliationRejected" as any));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));

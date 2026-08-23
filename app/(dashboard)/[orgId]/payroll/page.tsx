@@ -136,8 +136,15 @@ export default function PayrollPage() {
     }
   }
 
-  async function doAction(fn: () => Promise<unknown>, ok: string) {
-    try { await fn(); toast.success(t(ok as any)); }
+  // ⚠️ THE ORG GUARD LIVES HERE BECAUSE EVERY CALLER NEEDS IT.
+  //
+  // All four callers previously wrote `orgId: activeOrgId!`. A non-null
+  // assertion is erased at runtime, so it proved nothing — it only silenced the
+  // compiler. Narrowing once here hands each caller an org id that is genuinely
+  // non-null, and removes the assertion from four call sites at the same time.
+  async function doAction(fn: (orgId: Id<"organizations">) => Promise<unknown>, ok: string) {
+    if (!activeOrgId) return;
+    try { await fn(activeOrgId); toast.success(t(ok as any)); }
     catch (e) { toast.error(e instanceof Error ? e.message : String(e)); }
   }
 
@@ -321,7 +328,7 @@ export default function PayrollPage() {
                   <Label className="text-xs">{t("Month" as any)}</Label>
                   <Input type="number" min="1" max="12" className="h-9 w-20" value={runMonth} onChange={(e) => setRunMonth(e.target.value)} />
                 </div>
-                <Button onClick={() => doAction(() => createRun({ orgId: activeOrgId!, periodYear: Number.parseInt(runYear, 10), periodMonth: Number.parseInt(runMonth, 10) }), "PayrollRunCreated")}>
+                <Button onClick={() => doAction((orgId) => createRun({ orgId, periodYear: Number.parseInt(runYear, 10), periodMonth: Number.parseInt(runMonth, 10) }), "PayrollRunCreated")}>
                   {t("CreateRun" as any)}
                 </Button>
               </div>
@@ -356,12 +363,12 @@ export default function PayrollPage() {
                       <Button size="sm" variant="ghost" onClick={() => setOpenRun(openRun === r._id ? null : r._id)}>{t("View" as any)}</Button>
                       {canManage && r.status === "DRAFT" && (
                         <>
-                          <Button size="sm" variant="outline" onClick={() => doAction(() => approveRun({ orgId: activeOrgId!, runId: r._id }), "PayrollRunApproved")}>{t("Approve" as any)}</Button>
-                          <Button size="sm" variant="ghost" className="text-destructive" onClick={() => doAction(() => cancelRun({ orgId: activeOrgId!, runId: r._id }), "PayrollRunCancelled")}>{t("CancelRun" as any)}</Button>
+                          <Button size="sm" variant="outline" onClick={() => doAction((orgId) => approveRun({ orgId, runId: r._id }), "PayrollRunApproved")}>{t("Approve" as any)}</Button>
+                          <Button size="sm" variant="ghost" className="text-destructive" onClick={() => doAction((orgId) => cancelRun({ orgId, runId: r._id }), "PayrollRunCancelled")}>{t("CancelRun" as any)}</Button>
                         </>
                       )}
                       {canManage && r.status === "NEEDS_REAPPROVAL" && (
-                        <Button size="sm" variant="outline" onClick={() => doAction(() => approveRun({ orgId: activeOrgId!, runId: r._id }), "PayrollRunApproved")}>{t("Reapprove" as any)}</Button>
+                        <Button size="sm" variant="outline" onClick={() => doAction((orgId) => approveRun({ orgId, runId: r._id }), "PayrollRunApproved")}>{t("Reapprove" as any)}</Button>
                       )}
                       {canManage && r.status === "APPROVED" && (
                         <div className="inline-flex items-center gap-1.5">

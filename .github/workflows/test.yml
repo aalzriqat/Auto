@@ -35,10 +35,22 @@ jobs:
     - name: Install dependencies
       run: pnpm install --frozen-lockfile --ignore-scripts
 
+    # ⚠️ THIS RUNS `test:coverage` ONLY, AND THE SECOND COMMAND WAS REMOVED ON
+    # PURPOSE. Do not "restore" it.
+    #
+    # `test:coverage:sonar` runs `vitest run convex` with `--coverage.include`
+    # restricted to seven convex files, and it does NOT override
+    # `--coverage.reportsDirectory`. So it wrote into the same default
+    # `coverage/` that `test:coverage` had just filled, OVERWRITING the
+    # repo-wide report with a seven-file one — and the upload step below then
+    # published that narrow report under the name `coverage-report`, as though
+    # it covered the repository.
+    #
+    # Nothing is weakened by removing it: the `sonarcloud` job generates its own
+    # coverage in its own step and scans that. This job's report is now what its
+    # name says it is.
     - name: Run unit + integration tests with coverage
-      run: |
-        pnpm test:coverage
-        pnpm test:coverage:sonar
+      run: pnpm test:coverage
       env:
         NODE_ENV: test
 
@@ -122,7 +134,16 @@ jobs:
     # Sonar's coverage number as meaningful — the security rating, which is what
     # this PR is about, is unaffected.
     - name: Generate coverage for Sonar
-      run: pnpm test:coverage:sonar
+      # ⚠️ BOTH reports, because THIS is the job that uploads. The detector's
+      # coverage lives in a second lcov produced by a second vitest process (see
+      # sonar-project.properties for why the pools cannot be merged), and
+      # generating it in the unit-and-integration job instead — which is where I
+      # first put it — left this job producing only the convex report. Every
+      # line of new code in the detector then had no coverage data at all and
+      # Sonar reported new_coverage 0.0%.
+      run: |
+        pnpm test:coverage:sonar
+        pnpm test:coverage:contract-skew
       env:
         NODE_ENV: test
 
@@ -157,6 +178,18 @@ jobs:
 
     - name: TypeScript type check
       run: pnpm typecheck
+
+    # The root tsconfig includes only **/*.ts and **/*.tsx and leaves checkJs
+    # off, so `pnpm typecheck` above type-checks NONE of the contract-skew
+    # detector — its .mjs modules are pulled in as imports and given syntax
+    # checking only. Demonstrated, not assumed: a JSDoc violation injected into
+    # contractTree.mjs produced ZERO diagnostics from the root project and one
+    # from this one. That gap is not cosmetic. The defect that forced the
+    # detector's comparator to be redesigned was a semantic dimension added to
+    # one consumer of a shared record and not the other, which a checked type
+    # refuses to compile.
+    - name: Contract-skew detector type check
+      run: pnpm typecheck:contract-skew
 
   # `pnpm build` ran nowhere in this workflow until now. It happens inside
   # playwright.yml (via playwright.config.ts's webServer) and twice more in

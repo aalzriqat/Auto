@@ -282,8 +282,9 @@ export default function FinanceCompaniesPage() {
                             size="icon"
                             className="text-red-500 hover:text-red-600"
                             onClick={async () => {
+                              if (!activeOrgId) return;
                               if (confirm(t("RemoveRuleConfirm" as any))) {
-                                await removeRule({ orgId: activeOrgId!, ruleId: rule._id });
+                                await removeRule({ orgId: activeOrgId, ruleId: rule._id });
                                 toast.success(t("RuleRemovedSuccess" as any));
                               }
                             }}

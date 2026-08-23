@@ -190,8 +190,9 @@ export function CustomerFinancialsTab({ customer }: { customer: any }) {
                     size="sm"
                     className="h-8 w-8 p-0 text-red-500 hover:text-red-600 hover:bg-red-50"
                     onClick={async () => {
+                      if (!activeOrgId) return;
                       if (confirm(t("RemoveGuarantorConfirm" as any))) {
-                        await removeGuarantor({ orgId: activeOrgId!, guarantorId: g._id });
+                        await removeGuarantor({ orgId: activeOrgId, guarantorId: g._id });
                         toast.success(t("GuarantorRemoved" as any));
                       }
                     }}

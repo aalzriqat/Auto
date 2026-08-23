@@ -39,9 +39,14 @@ export default function ApprovalsPage() {
   });
 
   const handleRespond = async (requestId: Id<"profitApprovalRequests">, status: "APPROVED" | "REJECTED") => {
+    // The early return below means this handler is only reachable with an org
+    // selected, but a narrowing does not cross a function boundary — and a `!`
+    // here would be an assertion rather than evidence, which is exactly what
+    // the contract-skew detector correctly refuses to accept.
+    if (!activeOrgId) return;
     try {
       await respondToApproval({
-        orgId: activeOrgId!,
+        orgId: activeOrgId,
         requestId,
         status,
       });
