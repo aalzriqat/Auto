@@ -16,7 +16,7 @@ export function CaseScopedArgs(
   activeTab: "overview" | "financials",
 ) {
   const scopedArgs: ScopedArgs | null =
-    ready && orgId && customerId ? { orgId, customerId } : null;
+    ready && orgId && customerId ? ({ orgId, customerId } as ScopedArgs) : null;
   useQuery(
     api.reachability.scopedArgs,
     scopedArgs && activeTab === "financials" ? scopedArgs : "skip",
@@ -24,27 +24,27 @@ export function CaseScopedArgs(
 }
 
 export function CaseNonRunningBaseline() {
-  const args = { value: "ok" };
+  const args = { value: "ok" } as { value: string };
   useQuery(api.reachability.nonRunningBaseline, args ? args : "skip");
 }
 
 export function CaseNonRunningNull(ready: boolean) {
-  const args = ready ? { value: "ok" } : null;
+  const args = ready ? ({ value: "ok" } as { value: string }) : null;
   useQuery(api.reachability.nonRunningNull, args ? args : "skip");
 }
 
 export function CaseNonRunningFalse(ready: boolean) {
-  const args = ready ? { value: "ok" } : false;
+  const args = ready ? ({ value: "ok" } as { value: string }) : false;
   useQuery(api.reachability.nonRunningFalse, args ? args : "skip");
 }
 
 export function CaseNonRunningZero(ready: boolean) {
-  const args = ready ? { value: "ok" } : 0;
+  const args = ready ? ({ value: "ok" } as { value: string }) : 0;
   useQuery(api.reachability.nonRunningZero, args ? args : "skip");
 }
 
 export function CaseNonRunningEmptyString(ready: boolean) {
-  const args = ready ? { value: "ok" } : "";
+  const args = ready ? ({ value: "ok" } as { value: string }) : "";
   useQuery(api.reachability.nonRunningEmptyString, args ? args : "skip");
 }
 

@@ -828,6 +828,8 @@ function isNextUseParamsResult(receiver, checker) {
   if (!symbol) return false;
   for (const declaration of symbol.declarations ?? []) {
     if (!ts.isVariableDeclaration(declaration) || !declaration.initializer) continue;
+    const list = declaration.parent;
+    if (!ts.isVariableDeclarationList(list) || !(list.flags & ts.NodeFlags.Const)) continue;
     const initializer = declaration.initializer;
     if (
       ts.isCallExpression(initializer) &&

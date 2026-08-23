@@ -151,6 +151,20 @@ describe("transmission reachability through the real TypeChecker and comparator"
         expect.objectContaining({ identifier, path: "requestId" }),
       );
     }
+
+    const mutable = compareContracts(
+      [callFor(calls, "routes:mutable")],
+      functionSpec({
+        "routes:mutable": objectValidator({ requestId: stringValidator }),
+      }),
+    );
+    expect(mutable.breaking).toEqual([]);
+    expect(mutable.needsEvidence).toContainEqual(
+      expect.objectContaining({
+        identifier: "routes:mutable",
+        path: "requestId",
+      }),
+    );
   });
 
   test("nullable scoped args are narrowed at the running use site", () => {

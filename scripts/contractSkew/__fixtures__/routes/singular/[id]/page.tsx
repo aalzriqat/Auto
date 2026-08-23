@@ -16,3 +16,9 @@ export function ShadowedRouteCase(
   const params = useParams();
   useQuery(api.routes.shadowed, { requestId: params.id });
 }
+
+export function MutableRouteCase(rewrite: boolean) {
+  let params = useParams();
+  if (rewrite) params = { id: ["a", "b"] };
+  useQuery(api.routes.mutable, { requestId: params.id });
+}
