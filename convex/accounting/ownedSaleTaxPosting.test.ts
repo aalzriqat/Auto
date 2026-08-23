@@ -38,6 +38,11 @@ const owned: SaleCompletedPayload = {
   vehicleId: "veh_1",
   salespersonId: "user_1",
   consignmentEvaluated: true,
+  // What the current emitter stamps. These fixtures stand for events written by
+  // `hookSaleCompleted` as it is TODAY, so they carry the marker; the
+  // pre-deploy queued case is a different scenario and lives in
+  // `saleTaxUpgradeBoundary.test.ts`.
+  taxConventionExclusive: true,
 };
 
 /** Net movement on an account across the whole entry: debits minus credits. */

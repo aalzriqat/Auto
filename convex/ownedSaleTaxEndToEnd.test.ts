@@ -173,6 +173,64 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     expect(await netOnAccount(t, orgId, SYSTEM_KEYS.SALES_TAX_PAYABLE)).toBe(-jod(3_200));
   });
 
+  test("a tax larger than the price is refused, and nothing reaches either book", async () => {
+    // Before SCRUM-22 this was refused by accident: revenue was
+    // `salePrice - tax`, which went negative, and `validateBalance` rejects a
+    // negative journal line, so the whole mutation rolled back. Making revenue
+    // the full price removed that side effect and nothing replaced it —
+    // `validations/sales.ts` bounds `taxAmount` at `min(0)` with no ceiling, so
+    // a mistyped 32,000 instead of 3,200 posted a balanced, valid journal
+    // debiting AR 52,000 and crediting a 32,000 tax liability. `sales.update`
+    // then locks financial fields, so the only repair is cancel-and-recreate.
+    //
+    // `expenses.ts` already refuses `taxAmount > amount` on the sibling path.
+    // The sales path now says so explicitly rather than relying on arithmetic
+    // that no longer produces it.
+    const { t, orgId, userId, customerId, vehicleId, asUser } = await seedDealer("overtax");
+
+    await expect(
+      asUser.mutation(api.sales.create, {
+        orgId,
+        vehicleId,
+        customerId,
+        salespersonId: userId,
+        salePrice: 20_000,
+        taxAmount: 32_000,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+        financingType: "CASH",
+      })
+    ).rejects.toThrow(/tax/i);
+
+    // The refusal must be total. A mutation that threw after writing the
+    // receivable would leave a 52,000 invoice with no journal behind it, which
+    // is a worse failure than the one being closed.
+    expect(await netOnAccount(t, orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(0);
+    const receivables = await t.run((ctx) => ctx.db.query("receivableDocuments").collect());
+    expect(receivables).toHaveLength(0);
+  });
+
+  test("a tax equal to the price is still allowed — the bound is a ceiling, not a ban", async () => {
+    // ANTI-VACUITY for the refusal above: without this, a guard that rejected
+    // every taxed sale outright would pass it while breaking the ordinary case
+    // the whole ticket exists to make work.
+    const { t, orgId, userId, customerId, vehicleId, asUser } = await seedDealer("edgetax");
+
+    await asUser.mutation(api.sales.create, {
+      orgId,
+      vehicleId,
+      customerId,
+      salespersonId: userId,
+      salePrice: 20_000,
+      taxAmount: 20_000,
+      saleDate: Date.now(),
+      status: "COMPLETED",
+      financingType: "CASH",
+    });
+
+    expect(await netOnAccount(t, orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(jod(40_000));
+  });
+
   test("an untaxed sale is unchanged in both books", async () => {
     // The common case. A fix that shifted this would restate every sale ever
     // recorded, so it is pinned at the same level as the taxed one.

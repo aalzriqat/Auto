@@ -177,6 +177,29 @@ async function prepareSaleCompletion(
   ctx: MutationCtx,
   args: SaleCompletionArgs
 ): Promise<PreparedSaleCompletion> {
+  // Sales tax cannot exceed the price it is charged on.
+  //
+  // This used to be refused by accident. Revenue was `salePrice - taxAmount`,
+  // which went negative, and `validateBalance` rejects a negative journal line,
+  // so the mutation rolled back — with "An unexpected error occurred", but it
+  // rolled back. SCRUM-22 makes revenue the full price, so that side effect is
+  // gone and the entry now balances perfectly at any tax.
+  //
+  // Nothing else bounds it: `validations/sales.ts` has `taxAmount: min(0)` with
+  // no ceiling, and `taxRate` and `taxAmount` are independent fields that no
+  // server code cross-checks. A mistyped 32,000 for 3,200 would raise a 52,000
+  // invoice and a 32,000 tax liability, and `sales.update` locks financial
+  // fields afterwards, so the only repair is cancel-and-recreate.
+  //
+  // Stated here, at the shared entry both completion callers pass through, and
+  // before anything is written. `expenses.ts` refuses the same shape on its own
+  // path; this is that rule, on this one.
+  if (args.taxAmount !== undefined && args.taxAmount > args.salePrice) {
+    throw new ConvexError(
+      "The sales tax cannot be more than the sale price. Check the tax amount before completing the sale."
+    );
+  }
+
   const vehicle = await ctx.db.get(args.vehicleId);
   if (vehicle?.orgId !== args.orgId) {
     throwAppError(AppErrorCode.VEHICLE_NOT_FOUND, "Vehicle not found in this organization.");

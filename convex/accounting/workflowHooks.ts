@@ -671,6 +671,14 @@ export async function hookSaleCompleted(
       vehicleId: args.vehicleId.toString(),
       salespersonId: args.salespersonId.toString(),
       taxMinor: args.taxMinor,
+      // Stamped unconditionally, like `consignmentEvaluated` below and for the
+      // same reason: it says "this payload was built by code that knows
+      // `saleAmountMinor` is tax-EXCLUSIVE" (SCRUM-22). An event queued before
+      // this deploy carries no marker, and its receivable was sized without the
+      // tax, so `ruleSaleCompleted` posts it on the old basis and the two stay
+      // consistent. Without the marker the drain would debit AR the tax as
+      // well and strand it against a receivable that can never cover it.
+      taxConventionExclusive: true,
       isSourced: args.isSourced ?? false,
       // Stamped unconditionally. It says "this payload was built by code that
       // considers consignment", which is what lets ruleSaleCompleted refuse a

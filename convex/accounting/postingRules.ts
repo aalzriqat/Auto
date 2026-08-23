@@ -211,6 +211,31 @@ export interface SaleCompletedPayload {
    */
   consignmentEvaluated?: boolean;
   /**
+   * Set by every emitter that knows `saleAmountMinor` is tax-EXCLUSIVE — i.e.
+   * every one of them from this deploy onward (SCRUM-22). It is how this rule
+   * tells an event written under the new convention from one that predates it.
+   *
+   * Same reason `consignmentEvaluated` exists, and the same hazard: outbox
+   * entries outlive deploys. `postOrEnqueue` stores the RAW payload whenever
+   * the chart is uninitialized or no period is open, and the outbox replays it
+   * through whatever this rule says at DRAIN time. But
+   * `applySaleCompletionSideEffects` writes the canonical receivable
+   * unconditionally, in the same mutation as the sale, sized by the
+   * `customerBillableMinor` of the code deployed THEN.
+   *
+   * So a taxed sale completed before this release with a closed period has a
+   * receivable that EXCLUDES the tax. Draining it under the new arithmetic
+   * would debit AR the tax-inclusive amount and leave the difference stranded
+   * in the general ledger forever — allocation is capped by the receivable, so
+   * paying the invoice in full could never clear it. That is this ticket's own
+   * invariant broken in the opposite direction, for in-flight rows.
+   *
+   * A legacy event therefore posts on the basis it was WRITTEN for, exactly as
+   * it would have before this change, and stays consistent with its own
+   * receivable. Restating history is not this rule's job.
+   */
+  taxConventionExclusive?: boolean;
+  /**
    * Present when the vehicle is legally the supplier's and the dealership sold
    * it as his agent. Its presence switches this rule to agent basis entirely:
    * commission on the spread, no vehicle revenue, no COGS, no inventory.
@@ -790,8 +815,18 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
   // `args.salePrice` with `args.taxAmount` alongside it, `completeMultiVehicleSale`
   // computes `unitPrice * taxRate/100` additively, and `SaleDialog` bills
   // `salePrice + taxAmount + fees + …`. Only this rule read it the other way.
+  //
+  // ...but only for an event the current emitter wrote. An event queued before
+  // this deploy carries a receivable sized under the OLD convention, so it must
+  // post under the old convention too or the two disagree by exactly the tax,
+  // permanently. See `taxConventionExclusive`.
+  const taxExclusive = p.taxConventionExclusive === true;
   const taxMinor = p.taxMinor && p.taxMinor > 0 ? p.taxMinor : 0;
-  const revenueMinor = p.saleAmountMinor;
+  // The tax is still credited to SALES_TAX_PAYABLE either way — both
+  // conventions agree the liability exists and how big it is. What they
+  // disagree about is who funded it: the new one bills the customer, the old
+  // one took it out of revenue.
+  const revenueMinor = taxExclusive ? p.saleAmountMinor : p.saleAmountMinor - taxMinor;
   const dims = { customerId: p.customerId, vehicleId: p.vehicleId, salespersonId: p.salespersonId };
   const dealerFeesMinor = p.dealerFeesMinor && p.dealerFeesMinor > 0 ? p.dealerFeesMinor : 0;
   const warrantySoldMinor = p.warrantySoldMinor && p.warrantySoldMinor > 0 ? p.warrantySoldMinor : 0;
@@ -801,7 +836,11 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
   // AR subledger disagreeing about one customer's bill is the failure this
   // arithmetic is shared to prevent.
   const arDebitMinor =
-    p.saleAmountMinor + taxMinor + dealerFeesMinor + warrantySoldMinor + gapSoldMinor;
+    p.saleAmountMinor +
+    (taxExclusive ? taxMinor : 0) +
+    dealerFeesMinor +
+    warrantySoldMinor +
+    gapSoldMinor;
   const lines: LineSpec[] = [
     line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, arDebitMinor, 0, "Sale receivable", dims),
     line(SYSTEM_KEYS.SALES_REVENUE, 0, revenueMinor, "Vehicle sale revenue", dims),
@@ -1223,6 +1262,13 @@ export interface SaleCancelledPayload {
   vehicleId: string;
   salespersonId?: string;
   taxMinor?: number;
+  /**
+   * Only ever set by an emitter that writes the tax-EXCLUSIVE convention. This
+   * rule does not implement that convention, so its presence means the payload
+   * came from somewhere this rule cannot correctly reverse — see
+   * `ruleSaleCancelled`.
+   */
+  taxConventionExclusive?: boolean;
 }
 
 export interface ChequeDepositedPayload {
@@ -1307,6 +1353,23 @@ export function rulePaymentLinkReceived(p: PaymentLinkReceivedPayload): RuleResu
  * does, this becomes wrong for a live path.
  */
 export function ruleSaleCancelled(p: SaleCancelledPayload): RuleResult {
+  // The source scan in `saleTaxConventionGuard.test.ts` catches a LITERAL
+  // emitter. It structurally cannot catch a dynamic one, and one already
+  // exists: `accountingMigration.ts` passes a variable `eventType` straight to
+  // `postAccountingEvent`. A future caller routing SALE_CANCELLED through a
+  // variable would slip past that scan with CI green.
+  //
+  // So the boundary is also enforced here, where it cannot be evaded. A payload
+  // carrying the tax-exclusive marker was produced under an arithmetic this
+  // rule does not implement; reversing it on the old basis would return only
+  // `saleAmountMinor` of AR against an entry that debited `saleAmountMinor +
+  // tax`, stranding the tax in AR and in revenue permanently. Refuse, loudly,
+  // rather than post a reversal that silently disagrees with what it reverses.
+  if (p.taxConventionExclusive === true) {
+    throw new ConvexError(
+      `Sale ${p.saleId} was posted under the tax-exclusive convention, and this cancellation rule reverses the tax-inclusive one, so it would strand the sales tax in receivables and revenue. Cancel the sale through the operational reversal path, which mirrors the original journal's own lines, instead of posting a SALE_CANCELLED event.`
+    );
+  }
   const revenueMinor = p.taxMinor ? p.saleAmountMinor - p.taxMinor : p.saleAmountMinor;
   const dims = { customerId: p.customerId, vehicleId: p.vehicleId, salespersonId: p.salespersonId };
   const lines: LineSpec[] = [
