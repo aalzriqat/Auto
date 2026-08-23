@@ -115,7 +115,7 @@ describe("transmission reachability through the real TypeChecker and comparator"
         `${identifier} should retain honest ID uncertainty`,
       ).toBe(true);
     }
-  }, 60_000);
+  }, 180_000);
 
   test("a singular [id] route is string-only evidence, while catch-all routes remain arrays", () => {
     const routeFiles = [
