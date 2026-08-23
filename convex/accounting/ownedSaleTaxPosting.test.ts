@@ -8,7 +8,7 @@ import { SYSTEM_KEYS } from "../utils/defaultChart";
  * `saleAmountMinor` is tax-EXCLUSIVE. Two independent producers prove it:
  * `applySaleCompletionSideEffects` passes `args.salePrice` straight through
  * while `taxMinor` arrives as a separate `args.taxAmount`, and
- * `completeMultiVehicleSale` computes `taxAmount = item.unitPrice * taxRate/100`
+ * `completeSalesForLineItems` computes `taxAmount = item.unitPrice * taxRate/100`
  * — additive, not carved out. The sale form agrees: `SaleDialog` bills the
  * customer `salePrice + taxAmount + dealerFees + warranty + GAP`.
  *

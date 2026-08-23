@@ -231,6 +231,79 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     expect(await netOnAccount(t, orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(jod(40_000));
   });
 
+  test("a sale queued against a closed period carries the convention marker and drains to the same number", async () => {
+    // The marker is only load-bearing on the DEFERRED path, and every other
+    // test here posts immediately against an open period — so nothing proved
+    // the marker survives `pendingAccountingEvents`. It is stored as
+    // `v.optional(v.any())` today, but a later hardening of that validator, or
+    // any payload-normalising layer, would drop it silently: the immediate path
+    // would stay correct while every deferred taxed sale quietly reverted to
+    // the old convention, against a receivable sized under the new one. The
+    // journal would still balance, which is the exact blindness SCRUM-22 exists
+    // to close.
+    const { t, orgId, userId, customerId, vehicleId, asUser } = await seedDealer("deferred");
+
+    // Deferral is driven by `shouldPost` → `getOpenPeriodForDate`. Dating the
+    // sale into a year the seed created no period for is the cleanest way to
+    // reach that branch; closing the seeded period instead runs an unrelated
+    // close checklist that has nothing to do with this invariant.
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await asUser.mutation(api.sales.create, {
+      orgId,
+      vehicleId,
+      customerId,
+      salespersonId: userId,
+      salePrice: 20_000,
+      taxAmount: 3_200,
+      saleDate: Date.UTC(priorYear, 5, 15),
+      status: "COMPLETED",
+      financingType: "CASH",
+    });
+
+    // Nothing posted yet — the event is queued, not journalled.
+    expect(await netOnAccount(t, orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(0);
+
+    const queued = await t.run(async (ctx) =>
+      (await ctx.db.query("pendingAccountingEvents").collect()).find(
+        (p) => p.eventType === "SALE_COMPLETED"
+      )
+    );
+    // ANTI-VACUITY: if the sale had posted immediately, or the outbox row were
+    // missing, every assertion below would pass for the wrong reason.
+    expect(queued).toBeTruthy();
+    expect((queued!.payload as { taxConventionExclusive?: boolean }).taxConventionExclusive).toBe(true);
+
+    await asUser.mutation(api.accountingPeriods.create, {
+      orgId,
+      startDate: Date.UTC(priorYear, 0, 1),
+      endDate: Date.UTC(priorYear, 11, 31, 23, 59, 59, 999),
+      fiscalYear: priorYear,
+      periodNumber: 1,
+    });
+    const priorPeriod = (await asUser.query(api.accountingPeriods.list, { orgId })).find(
+      (p) => p.fiscalYear === priorYear
+    );
+    expect(priorPeriod).toBeTruthy();
+    await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: priorPeriod!._id });
+    await asUser.mutation(api.accountingOutbox.redrive, { orgId });
+
+    const invoiceMinor = jod(23_200);
+    const arDebitMinor = await netOnAccount(t, orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS);
+    expect(arDebitMinor).toBe(invoiceMinor);
+
+    const receivable = await t.run(async (ctx) => {
+      const sale = await ctx.db.get(saleId);
+      const id = sale?.canonicalReceivableDocumentId;
+      return id ? await ctx.db.get(id) : null;
+    });
+    expect(receivable).toBeTruthy();
+    // The invariant, on the deferred path this time: one customer, one bill,
+    // two books.
+    expect(receivable!.originalAmountMinor).toBe(arDebitMinor);
+    expect(await netOnAccount(t, orgId, SYSTEM_KEYS.SALES_REVENUE)).toBe(-jod(20_000));
+    expect(await netOnAccount(t, orgId, SYSTEM_KEYS.SALES_TAX_PAYABLE)).toBe(-jod(3_200));
+  });
+
   test("an untaxed sale is unchanged in both books", async () => {
     // The common case. A fix that shifted this would restate every sale ever
     // recorded, so it is pinned at the same level as the taxed one.

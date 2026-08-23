@@ -652,14 +652,16 @@ function consignedAgentSaleLines(p: SaleCompletedPayload): RuleResult {
   // bills the customer `salePrice + taxAmount + fees + …`. So the tax is added
   // on top of the price, not contained in it.
   //
-  // What the principal rule does with it: treats it as INCLUSIVE — revenue is
-  // `saleAmount - tax` and the AR debit omits the tax, so the dealership funds
-  // the customer's tax out of its own revenue and never bills anyone for it.
-  // That is wrong, it is wrong on `main` today, and it is wrong on the
-  // dealership's OWN sales — which is why it is not corrected here. Fixing it
-  // moves `customerBillableMinor`, the AR subledger document and every owned
-  // sale's revenue, and that is a change to make on its own evidence, not a
-  // side effect of enabling agent basis.
+  // What the principal rule USED to do with it: treat it as INCLUSIVE — revenue
+  // was `saleAmount - tax` and the AR debit omitted the tax, so the dealership
+  // funded the customer's tax out of its own revenue and never billed anyone
+  // for it. That was wrong, and SCRUM-22 corrected it in `ruleSaleCompleted`
+  // below: revenue is now the whole tax-exclusive price and the tax is billed
+  // on top, with `customerBillableMinor` moved to match so the GL and the AR
+  // subledger cannot diverge.
+  //
+  // It was corrected there and not here on purpose. Agent basis is a different
+  // question — see the three candidates below — and it still has no answer.
   //
   // So the three candidate postings, and why each is refused:
   //
@@ -812,7 +814,7 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
   //
   // The convention is not chosen here — it is read off the producers, which
   // never disagreed with each other. `applySaleCompletionSideEffects` passes
-  // `args.salePrice` with `args.taxAmount` alongside it, `completeMultiVehicleSale`
+  // `args.salePrice` with `args.taxAmount` alongside it, `completeSalesForLineItems`
   // computes `unitPrice * taxRate/100` additively, and `SaleDialog` bills
   // `salePrice + taxAmount + fees + …`. Only this rule read it the other way.
   //
@@ -821,6 +823,21 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
   // post under the old convention too or the two disagree by exactly the tax,
   // permanently. See `taxConventionExclusive`.
   const taxExclusive = p.taxConventionExclusive === true;
+  // A negative tax is refused rather than clamped away.
+  //
+  // On `main` it was refused by accident: `saleAmount - (-100)` inflated revenue
+  // with no matching tax line (that one is guarded on `> 0`), so credits
+  // exceeded debits and `validateBalance` threw. Clamping to 0 would balance the
+  // entry and silently discard the number instead — a payload that says
+  // something impossible would post as though it had said nothing.
+  //
+  // Unreachable through any current entry point (`validations/sales.ts` bounds
+  // `taxAmount` at `min(0)`), which is exactly why it is cheap to keep closed.
+  if (p.taxMinor !== undefined && p.taxMinor < 0) {
+    throw new ConvexError(
+      `Sale ${p.saleId} carries a negative sales tax of ${p.taxMinor} minor units, which cannot be posted. Correct the tax amount on the sale.`
+    );
+  }
   const taxMinor = p.taxMinor && p.taxMinor > 0 ? p.taxMinor : 0;
   // The tax is still credited to SALES_TAX_PAYABLE either way — both
   // conventions agree the liability exists and how big it is. What they
@@ -843,8 +860,24 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
     gapSoldMinor;
   const lines: LineSpec[] = [
     line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, arDebitMinor, 0, "Sale receivable", dims),
-    line(SYSTEM_KEYS.SALES_REVENUE, 0, revenueMinor, "Vehicle sale revenue", dims),
   ];
+  // Only when there IS revenue. On the legacy branch `price - tax` is zero when
+  // the two are equal, and `validateBalance` refuses a line carrying neither a
+  // debit nor a credit — so the drain threw, the outbox retried, and after
+  // MAX_ATTEMPTS the event went FAILED and a real sale never reached the
+  // ledger. Reachable exactly because the pre-deploy code had no tax ceiling.
+  //
+  // The entry is complete without the empty line: AR carries the price and the
+  // tax payable carries the same amount, so it balances.
+  //
+  // Deliberately `> 0` and not `!== 0`. A legacy event whose tax EXCEEDS its
+  // price still produces a negative figure, and `validateBalance` still refuses
+  // it — as it should. What such a sale means is an accounting question nobody
+  // has answered, and failing closed is the only honest answer available here;
+  // inventing a posting for it would be worse than refusing one.
+  if (revenueMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.SALES_REVENUE, 0, revenueMinor, "Vehicle sale revenue", dims));
+  }
   if (dealerFeesMinor > 0) {
     lines.push(line(SYSTEM_KEYS.DEALER_FEE_INCOME, 0, dealerFeesMinor, "Dealer fee income", dims));
   }

@@ -97,6 +97,47 @@ describe("a payload queued before the convention changed posts on the basis it w
     expect(() => validateBalance(result.lines)).not.toThrow();
   });
 
+  test("a legacy payload whose tax equals its price still posts, instead of dead-lettering", () => {
+    // The legacy branch recomputes `price - tax` as revenue, which is zero when
+    // the two are equal. The revenue line was emitted unconditionally, and
+    // `validateBalance` refuses a line with neither a debit nor a credit — so
+    // the drain threw, the outbox retried, and after MAX_ATTEMPTS the event went
+    // FAILED. A real sale never reached the general ledger at all.
+    //
+    // Reachable precisely because the pre-deploy code had no tax ceiling: a
+    // sale could be completed with tax equal to (or above) its price and queued
+    // against a closed period. The entry is perfectly good without the empty
+    // line — AR carries the price, the tax payable carries the same amount, and
+    // they balance.
+    const result = ruleSaleCompleted({ ...legacyQueued, taxMinor: jod(20_000) });
+
+    expect(net(result, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(jod(20_000));
+    expect(net(result, SYSTEM_KEYS.SALES_TAX_PAYABLE)).toBe(-jod(20_000));
+    // Not "zero net on revenue" — the LINE must be absent. A 0/0 line nets to
+    // zero too, and that is exactly the shape validateBalance rejects.
+    expect(result.lines.some((l) => l.accountSystemKey === SYSTEM_KEYS.SALES_REVENUE)).toBe(false);
+    expect(() => validateBalance(result.lines)).not.toThrow();
+  });
+
+  test("an ordinary legacy payload still carries its revenue line", () => {
+    // ANTI-VACUITY for the assertion above: dropping the revenue line whenever
+    // it was inconvenient would pass that test while silently deleting revenue
+    // from every legacy sale.
+    const result = ruleSaleCompleted(legacyQueued);
+    expect(result.lines.some((l) => l.accountSystemKey === SYSTEM_KEYS.SALES_REVENUE)).toBe(true);
+  });
+
+  test("a negative tax is refused, not silently clamped to nothing", () => {
+    // `main` refused this by accident — `saleAmount - (-100)` inflated revenue
+    // with no matching tax line, so credits exceeded debits and validateBalance
+    // threw. Clamping to 0 would balance the entry and discard the number, so a
+    // payload asserting something impossible would post as if it had asserted
+    // nothing. Unreachable today through `validations/sales.ts`, which is
+    // exactly why keeping it closed is cheap.
+    expect(() => ruleSaleCompleted({ ...legacyQueued, taxMinor: -100 })).toThrow(/negative/i);
+    expect(() => ruleSaleCompleted({ ...currentEmitter, taxMinor: -100 })).toThrow(/negative/i);
+  });
+
   test("a zero-tax legacy payload is unaffected — the two conventions only differ when tax exists", () => {
     const { taxMinor: _dropped, ...untaxed } = legacyQueued;
     const result = ruleSaleCompleted(untaxed);
