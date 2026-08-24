@@ -4,9 +4,14 @@ import baseConfig from "./vitest.config";
 /**
  * Coverage for SonarCloud, defined by rule instead of by list (SCRUM-185).
  *
- * `test:coverage:sonar` used to name eight Convex files one by one, and it runs
+ * SCOPE: Convex production modules AND authored release/control scripts. This
+ * report is no longer "the Convex report" despite the name it grew up with —
+ * `scripts/` is in it deliberately, see the include below. Tests, generated
+ * bindings and everything outside those two trees stay out.
+ *
+ * `test:coverage:sonar` used to name nine Convex files one by one, and it runs
  * after `test:coverage` and overwrites `coverage/lcov.info` — so the report
- * uploaded to Sonar contained those eight files and nothing else. Any PR that
+ * uploaded to Sonar contained those nine files and nothing else. Any PR that
  * touched a Convex module outside the list had its new lines reported as 0%
  * covered no matter how well tested they were, because the file had no entry in
  * the report at all.
@@ -47,7 +52,16 @@ const sonarConfig: ViteUserConfig = {
     coverage: {
       provider: "v8",
       // The rule. Everything else in this file exists to keep it honest.
-      include: ["convex/**/*.ts"],
+      //
+      // `scripts/` is here for the same reason `convex/` is, and it was found
+      // the same way. `scripts/releaseGuard.ts` reported 0.0% coverage with 195
+      // uncovered lines against a full `releaseGuard.test.ts` suite, and
+      // `tenantWriteGuard.ts` 0.0% against `tenantWriteGuard.test.ts` — not
+      // because they are untested, but because no report Sonar reads ever
+      // mentioned them. These are the release-gating and tenancy-guard modules;
+      // "well tested and reported as zero" is the worst place for that to be
+      // true, because it is indistinguishable from "nobody tests the gate".
+      include: ["convex/**/*.ts", "scripts/**/*.{ts,mjs}"],
       exclude: [
         // Generated bindings are not authored code and nobody can test them.
         "convex/_generated/**",

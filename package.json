@@ -9,7 +9,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:coverage:sonar": "vitest run convex --coverage --config vitest.sonar.config.ts",
+    "test:coverage:sonar": "vitest run convex scripts --coverage --config vitest.sonar.config.ts",
     "typecheck": "tsc --noEmit",
     "typecheck:convex": "tsc -p convex/tsconfig.json --noEmit",
     "shared:typecheck": "pnpm --filter @autoflow/shared typecheck",
