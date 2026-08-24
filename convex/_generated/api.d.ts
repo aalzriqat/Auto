@@ -155,6 +155,7 @@ import type * as utils_env from "../utils/env.js";
 import type * as utils_errors from "../utils/errors.js";
 import type * as utils_expenseAmortization from "../utils/expenseAmortization.js";
 import type * as utils_facebookApi from "../utils/facebookApi.js";
+import type * as utils_financedCompletionBoundary from "../utils/financedCompletionBoundary.js";
 import type * as utils_financialGuards from "../utils/financialGuards.js";
 import type * as utils_financingEconomics from "../utils/financingEconomics.js";
 import type * as utils_financingProvenance from "../utils/financingProvenance.js";
@@ -368,6 +369,7 @@ declare const fullApi: ApiFromModules<{
   "utils/errors": typeof utils_errors;
   "utils/expenseAmortization": typeof utils_expenseAmortization;
   "utils/facebookApi": typeof utils_facebookApi;
+  "utils/financedCompletionBoundary": typeof utils_financedCompletionBoundary;
   "utils/financialGuards": typeof utils_financialGuards;
   "utils/financingEconomics": typeof utils_financingEconomics;
   "utils/financingProvenance": typeof utils_financingProvenance;
