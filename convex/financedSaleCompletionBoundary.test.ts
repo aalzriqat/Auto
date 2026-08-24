@@ -6,6 +6,7 @@ import { api } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import {
   assertFinancedDealCommitsThroughApplication,
+  dealerEconomicsGap,
   financeApplicationCompletionGap,
 } from "./utils/financedCompletionBoundary";
 
@@ -572,6 +573,52 @@ describe("SCRUM-69: a financed deal commits through its finance application", ()
           })
         )
       ).rejects.toThrow(/handover/i);
+    });
+
+    test("a finished application cannot authorize a second sale of the same car", async () => {
+      // The remaining guard branch, and it was the last uncovered line in the
+      // module. A CANCELLED application is not in the live set, so supplying its
+      // id resolves to nothing — and "nothing" must refuse rather than fall
+      // through. An uncovered branch inside a guard is where the next bypass
+      // hides, which is the whole lesson of this issue.
+      const seed = await seedDealer("finished-app");
+      const { quoteId, vehicleId } = await configuredQuote(seed, "BND0000000000016");
+      const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
+        orgId: seed.orgId,
+        quoteId,
+      });
+      await seed.t.run((ctx) => ctx.db.patch(applicationId, { status: "CANCELLED" }));
+
+      await expect(
+        seed.t.run((ctx) =>
+          assertFinancedDealCommitsThroughApplication(ctx, {
+            orgId: seed.orgId,
+            vehicleId,
+            quote: { mode: "CONFIGURED_FINANCE_COMPANY", companyId: seed.companyId },
+            applicationId,
+          })
+        )
+      ).rejects.toThrow(/no longer open/i);
+    });
+
+    test("a deal missing its approved purchase amount is refused", async () => {
+      // `dealerEconomicsGap` moved here from applications.ts so the finance
+      // lifecycle and this boundary cannot grow two definitions of "ready to
+      // finalize". Its first branch had no coverage on either side of the move —
+      // the move did not lose it, nothing ever exercised it — so it is pinned
+      // now rather than left as an untested refusal on a money path.
+      const app = {
+        submittedQuotationMinor: 100,
+        approvedDealerPurchaseAmountMinor: undefined,
+        financeCompanyFundedPortionMinor: undefined,
+      } as unknown as Doc<"financeApplications">;
+
+      expect(dealerEconomicsGap(app, "finalizing")).toMatch(/approved purchase amount/i);
+
+      // A deal with no submitted quotation is a legacy shape with no economics
+      // to check, and must still pass — the anti-vacuity half.
+      const legacy = { submittedQuotationMinor: undefined } as unknown as Doc<"financeApplications">;
+      expect(dealerEconomicsGap(legacy, "finalizing")).toBeNull();
     });
   });
 });
