@@ -375,6 +375,19 @@ describe("a finance application from another dealership is refused when the draf
         vehicleId: s.vehicleId,
         salespersonId: s.userId,
         status: "APPROVED" as const,
+        // SCRUM-69: the completion boundary now derives a financed deal's
+        // authority from its application's lifecycle state, so an APPROVED row
+        // with no handover and no expected payment is refused — that is the
+        // whole point of the boundary, and this fixture used to be exactly that
+        // shape. Filling the prerequisites in keeps this helper's actual job
+        // intact (proving the TENANCY guard does not refuse everything) without
+        // it doubling as an assertion that the lifecycle can be skipped.
+        //
+        // The refusal cases below are unaffected: they refuse on org identity,
+        // which is checked before this.
+        vehicleHandoverAt: Date.now(),
+        expectedPaymentMethod: "CASH" as const,
+        expectedPaymentDate: Date.now(),
         createdAt: Date.now(),
         updatedAt: Date.now(),
       })

@@ -12,6 +12,7 @@ import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifi
 import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
 import { depositMethodValidator, type DepositMethod } from "./utils/depositRecording";
 import { completeSale } from "./utils/saleCompletion";
+import { dealerEconomicsGap } from "./utils/financedCompletionBoundary";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { runWithIdempotency } from "./utils/idempotency";
 import { registerChequeCore, markChequeClearedCore } from "./collections";
@@ -140,24 +141,19 @@ async function getActiveReceivableAllocations(
  * money-path gate drift, and the drift shows up as the stricter one being
  * quietly bypassed through the other door.
  */
+/**
+ * The rule itself lives in `utils/financedCompletionBoundary`, because the
+ * sale-completion boundary has to ask the same question this asks — whether a
+ * deal's economics are recorded well enough to sell on — and two copies of
+ * "ready to finalize" drifting apart is exactly how a guard stops guarding.
+ * This stays as the throwing form the finance lifecycle already uses.
+ */
 function assertDealerEconomicsRecorded(
   app: Doc<"financeApplications">,
   action: "handing over the vehicle" | "finalizing"
 ): void {
-  if (app.submittedQuotationMinor === undefined) return;
-  if (app.approvedDealerPurchaseAmountMinor === undefined) {
-    throw new ConvexError(
-      `The finance company's approved purchase amount is not recorded on this deal. Record it before ${action}.`
-    );
-  }
-  // An approval whose funding split could not be computed — the company's LTV
-  // basis names an amount nobody recorded — is not something to hand a vehicle
-  // over against, or to sell on. The approval being present is not enough.
-  if (app.financeCompanyFundedPortionMinor === undefined) {
-    throw new ConvexError(
-      `This deal's funding split could not be calculated. Resolve the reconciliation note on it before ${action}.`
-    );
-  }
+  const gap = dealerEconomicsGap(app, action);
+  if (gap) throw new ConvexError(gap);
 }
 
 /**
