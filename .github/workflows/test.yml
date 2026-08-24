@@ -78,16 +78,22 @@ jobs:
   # and why `sonar.javascript.lcov.reportPaths` has never actually delivered a
   # coverage report.
   #
-  # This job runs the scanner from CI, which makes that file authoritative. It
-  # activates the moment a SONAR_TOKEN repo secret exists and is skipped
-  # otherwise, so merging it changes nothing until the token is added.
+  # This job runs the scanner from CI, which makes that file authoritative.
+  #
+  # ⚠️ It is LIVE and it GATES. This comment used to say the job "activates the
+  # moment a SONAR_TOKEN repo secret exists", implying it had not yet, and that
+  # it "is not a required check, so it will not block a merge either way". Both
+  # halves are false and were false before this PR was opened (SCRUM-185 review,
+  # corrected in passing): SONAR_TOKEN was created 2026-08-21, and
+  # `SonarCloud Code Analysis` is listed in main's branch-protection
+  # required_status_checks.contexts. Anything wrong in this job blocks merges to
+  # main today — it is not dormant, and it should not be read as low-stakes.
   #
   # ORDERING IS MANDATORY, not advisory: SonarCloud REJECTS a CI submission while
   # Automatic Analysis is enabled ("You are running CI analysis while Automatic
   # Analysis is enabled") and the scanner exits non-zero. So switch Automatic
   # Analysis off in the SonarCloud UI in the same sitting as adding the token, or
-  # this job goes red on every push in between. It is not a required check, so it
-  # will not block a merge either way.
+  # this job goes red on every push in between.
   sonarcloud:
     runs-on: ubuntu-latest
     # Forked PRs get no secrets, so the scan would always be a no-op there.
@@ -126,14 +132,27 @@ jobs:
     # same commit the scanner analyses. The mobile suite costs about 50s, which is
     # not worth an artifact handoff between jobs and the skew risk that carries.
     #
-    # Retried once from a clean state, for a DIFFERENT reason than the mobile
-    # step below. A failed vitest run writes no LCOV at all — verified — so there
-    # is no partial-report or false-green risk here to guard against. The risk is
-    # availability of the control: `convex/collections.test.ts` has a known
-    # parallel-load flake (SCRUM-186 owns the root cause), and when it trips, this
-    # step fails, the scan never runs, and the REQUIRED Sonar context goes ABSENT
-    # rather than red. A flake that can silently remove a required gate from the
-    # board is worth one clean retry; two failures still hard-fail the job and the
+    # Retried once from a clean state. `rm -rf` before EVERY attempt is the
+    # load-bearing part, and it is not belt-and-braces.
+    #
+    # ⚠️ An earlier revision of this comment claimed a failed vitest run writes no
+    # LCOV at all. That is FALSE, and the correction is worth stating because the
+    # failure shape is nastier than the claim: when the v8 provider lost one
+    # worker's temp shard to an ENOENT, the run exited non-zero and still wrote a
+    # report with the COMPLETE file list, correct `LF:` for every file, and
+    # UNDER-COUNTED `LH:` — postingRules.ts 294 hits reported as 281,
+    # subledger.ts 126 as 107. Structurally perfect, every path resolving, and
+    # wrong by ~7%. `assertCoverageReports.mjs` cannot detect that; nothing can,
+    # from the report alone. The only thing standing between it and Sonar is that
+    # the exit code is respected and the directory is wiped before the retry.
+    #
+    # The error direction is under-reporting, so it fails a gate rather than
+    # passing one — but a required check going red on a lie is still a lie.
+    #
+    # The retry itself is for availability: `convex/collections.test.ts` has a
+    # known parallel-load flake (SCRUM-186 owns the root cause), and when it
+    # trips this step fails, the scan never runs, and the REQUIRED Sonar context
+    # goes ABSENT rather than red. Two failures still hard-fail the job and the
     # scanner still does not run.
     #
     # Deliberately not `continue-on-error`, not `if: always()`, and not an
@@ -183,56 +202,22 @@ jobs:
       env:
         NODE_ENV: test
 
-    # jest writes SF: paths relative to its own rootDir, which is apps/mobile —
-    # so the mobile report says `SF:src/features/...`. Sonar resolves coverage
-    # paths against the PROJECT base directory, the repository root, where no
-    # `src/` exists. Left alone the whole mobile report resolves to nothing, and
-    # it does so SILENTLY: the scan still succeeds, the files just stay uncovered,
-    # which is indistinguishable from having no tests. The convex report does not
-    # need this — vitest already runs at the repository root, so its paths read
-    # `SF:convex/...` and resolve as-is.
-    - name: Rebase mobile coverage paths onto the repository root
-      run: |
-        sed -i 's|^SF:|SF:apps/mobile/|' apps/mobile/coverage-sonar/lcov.info
-        echo "rewrote $(grep -c '^SF:' apps/mobile/coverage-sonar/lcov.info) source paths"
-
-    # Sonar does NOT fail when a coverage report is missing or unresolvable. It
-    # analyses with no coverage data and reports 0.0% coverage on 0.0% of new
-    # code, which the Quality Gate PASSES. That vacuous green is the defect this
-    # ticket exists to remove, so the scan is not allowed to start until both
-    # reports exist AND their records point at files that are really there.
+    # Rebase the mobile report's paths onto the repository root, then refuse to
+    # scan unless both reports are real evidence. One step, because the ordering
+    # between them is load-bearing — verification has to run AFTER the rebase or
+    # every mobile path fails to resolve — and it used to be implied by step
+    # order alone.
     #
-    # Counting records is not enough on its own: a report full of paths that
-    # resolve to nothing has plenty of records and still measures nothing. That
-    # is exactly the failure the rewrite above prevents, so this is the check
-    # that would have caught it.
-    - name: Verify both coverage reports are real before scanning
-      run: |
-        fail=0
-        for report in coverage-sonar/lcov.info apps/mobile/coverage-sonar/lcov.info; do
-          if [ ! -s "$report" ]; then
-            echo "::error::$report is missing or empty. Refusing to scan: Sonar would report 0.0% coverage on 0.0% of new code and PASS the gate on no evidence."
-            fail=1
-            continue
-          fi
-          records=$(grep -c '^SF:' "$report" || true)
-          if [ "$records" -lt 1 ]; then
-            echo "::error::$report contains no SF: source records. Refusing to scan on an empty report."
-            fail=1
-            continue
-          fi
-          missing=0
-          while IFS= read -r path; do
-            [ -f "$path" ] || missing=$((missing + 1))
-          done < <(grep '^SF:' "$report" | sed 's|^SF:||')
-          if [ "$missing" -gt 0 ]; then
-            echo "::error::$report has $missing of $records source paths that do not exist at the repository root. Sonar would silently ignore them and measure less than it appears to."
-            fail=1
-            continue
-          fi
-          echo "$report: $records source records, all resolving to real files"
-        done
-        exit $fail
+    # The logic lives in scripts/, not here, and is unit-tested. Both halves were
+    # defeated in review while they were inline bash (SCRUM-185): the verifier
+    # accepted a report that named a real file and measured nothing, and accepted
+    # one truncated mid-write with no `end_of_record`; the rebase was a `sed`
+    # that doubled its own prefix if applied twice. This repository already keeps
+    # release-gating logic in tested modules (`releaseChecks.mjs`,
+    # `releaseGuard.ts`) — untested YAML bash on a required check was the one
+    # place that convention was not followed, and it is where the defects were.
+    - name: Rebase mobile coverage paths and verify both reports are real
+      run: node scripts/assertCoverageReports.mjs
 
     - name: SonarCloud scan
       if: ${{ env.SONAR_TOKEN != '' }}
