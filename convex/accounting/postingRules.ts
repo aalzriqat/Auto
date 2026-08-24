@@ -211,6 +211,31 @@ export interface SaleCompletedPayload {
    */
   consignmentEvaluated?: boolean;
   /**
+   * Set by every emitter that knows `saleAmountMinor` is tax-EXCLUSIVE — i.e.
+   * every one of them from this deploy onward (SCRUM-22). It is how this rule
+   * tells an event written under the new convention from one that predates it.
+   *
+   * Same reason `consignmentEvaluated` exists, and the same hazard: outbox
+   * entries outlive deploys. `postOrEnqueue` stores the RAW payload whenever
+   * the chart is uninitialized or no period is open, and the outbox replays it
+   * through whatever this rule says at DRAIN time. But
+   * `applySaleCompletionSideEffects` writes the canonical receivable
+   * unconditionally, in the same mutation as the sale, sized by the
+   * `customerBillableMinor` of the code deployed THEN.
+   *
+   * So a taxed sale completed before this release with a closed period has a
+   * receivable that EXCLUDES the tax. Draining it under the new arithmetic
+   * would debit AR the tax-inclusive amount and leave the difference stranded
+   * in the general ledger forever — allocation is capped by the receivable, so
+   * paying the invoice in full could never clear it. That is this ticket's own
+   * invariant broken in the opposite direction, for in-flight rows.
+   *
+   * A legacy event therefore posts on the basis it was WRITTEN for, exactly as
+   * it would have before this change, and stays consistent with its own
+   * receivable. Restating history is not this rule's job.
+   */
+  taxConventionExclusive?: boolean;
+  /**
    * Present when the vehicle is legally the supplier's and the dealership sold
    * it as his agent. Its presence switches this rule to agent basis entirely:
    * commission on the spread, no vehicle revenue, no COGS, no inventory.
@@ -627,14 +652,16 @@ function consignedAgentSaleLines(p: SaleCompletedPayload): RuleResult {
   // bills the customer `salePrice + taxAmount + fees + …`. So the tax is added
   // on top of the price, not contained in it.
   //
-  // What the principal rule does with it: treats it as INCLUSIVE — revenue is
-  // `saleAmount - tax` and the AR debit omits the tax, so the dealership funds
-  // the customer's tax out of its own revenue and never bills anyone for it.
-  // That is wrong, it is wrong on `main` today, and it is wrong on the
-  // dealership's OWN sales — which is why it is not corrected here. Fixing it
-  // moves `customerBillableMinor`, the AR subledger document and every owned
-  // sale's revenue, and that is a change to make on its own evidence, not a
-  // side effect of enabling agent basis.
+  // What the principal rule USED to do with it: treat it as INCLUSIVE — revenue
+  // was `saleAmount - tax` and the AR debit omitted the tax, so the dealership
+  // funded the customer's tax out of its own revenue and never billed anyone
+  // for it. That was wrong, and SCRUM-22 corrected it in `ruleSaleCompleted`
+  // below: revenue is now the whole tax-exclusive price and the tax is billed
+  // on top, with `customerBillableMinor` moved to match so the GL and the AR
+  // subledger cannot diverge.
+  //
+  // It was corrected there and not here on purpose. Agent basis is a different
+  // question — see the three candidates below — and it still has no answer.
   //
   // So the three candidate postings, and why each is refused:
   //
@@ -772,16 +799,95 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
   // the memo so the entry is identifiable without reconstructing why.
   const legacySourced = p.isSourced === true && p.consignmentEvaluated !== true;
 
-  const revenueMinor = p.taxMinor ? p.saleAmountMinor - p.taxMinor : p.saleAmountMinor;
+  // `saleAmountMinor` is tax-EXCLUSIVE, so the whole of it is revenue and the
+  // tax is billed on top of it (SCRUM-22).
+  //
+  // This rule used to read the same number as tax-INCLUSIVE: revenue was
+  // `saleAmountMinor - taxMinor` and the AR debit carried no tax at all. For a
+  // 20,000 sale at 16% that posted Dr AR 20,000 / Cr Revenue 16,800 / Cr Tax
+  // 3,200 while the customer was invoiced 23,200 — the dealership funded the
+  // customer's tax out of its own revenue and never billed anyone for it.
+  //
+  // Revenue and AR were understated by exactly the same amount, so the entry
+  // BALANCED. `validateBalance` cannot see this class of defect, which is why
+  // `ownedSaleTaxPosting.test.ts` asserts per-account amounts.
+  //
+  // The convention is not chosen here — it is read off the producers, which
+  // never disagreed with each other. `applySaleCompletionSideEffects` passes
+  // `args.salePrice` with `args.taxAmount` alongside it, `completeSalesForLineItems`
+  // computes `unitPrice * taxRate/100` additively, and `SaleDialog` bills
+  // `salePrice + taxAmount + fees + …`. Only this rule read it the other way.
+  //
+  // ...but only for an event the current emitter wrote. An event queued before
+  // this deploy carries a receivable sized under the OLD convention, so it must
+  // post under the old convention too or the two disagree by exactly the tax,
+  // permanently. See `taxConventionExclusive`.
+  const taxExclusive = p.taxConventionExclusive === true;
+  // A negative tax is refused rather than clamped away.
+  //
+  // On `main` it was refused by accident: `saleAmount - (-100)` inflated revenue
+  // with no matching tax line (that one is guarded on `> 0`), so credits
+  // exceeded debits and `validateBalance` threw. Clamping to 0 would balance the
+  // entry and silently discard the number instead — a payload that says
+  // something impossible would post as though it had said nothing.
+  //
+  // Unreachable through any current entry point (`validations/sales.ts` bounds
+  // `taxAmount` at `min(0)`), which is exactly why it is cheap to keep closed.
+  if (p.taxMinor !== undefined && p.taxMinor < 0) {
+    throw new ConvexError(
+      `Sale ${p.saleId} carries a negative sales tax of ${p.taxMinor} minor units, which cannot be posted. Correct the tax amount on the sale.`
+    );
+  }
+  const taxMinor = p.taxMinor && p.taxMinor > 0 ? p.taxMinor : 0;
+  // The tax is still credited to SALES_TAX_PAYABLE either way — both
+  // conventions agree the liability exists and how big it is. What they
+  // disagree about is who funded it: the new one bills the customer, the old
+  // one took it out of revenue.
+  const revenueMinor = taxExclusive ? p.saleAmountMinor : p.saleAmountMinor - taxMinor;
   const dims = { customerId: p.customerId, vehicleId: p.vehicleId, salespersonId: p.salespersonId };
   const dealerFeesMinor = p.dealerFeesMinor && p.dealerFeesMinor > 0 ? p.dealerFeesMinor : 0;
   const warrantySoldMinor = p.warrantySoldMinor && p.warrantySoldMinor > 0 ? p.warrantySoldMinor : 0;
   const gapSoldMinor = p.gapSoldMinor && p.gapSoldMinor > 0 ? p.gapSoldMinor : 0;
-  const arDebitMinor = p.saleAmountMinor + dealerFeesMinor + warrantySoldMinor + gapSoldMinor;
+  // Must stay equal to `customerBillableMinor` in utils/saleCompletion.ts, which
+  // sizes the canonical receivable document for the same sale. The GL and the
+  // AR subledger disagreeing about one customer's bill is the failure this
+  // arithmetic is shared to prevent.
+  const arDebitMinor =
+    p.saleAmountMinor +
+    (taxExclusive ? taxMinor : 0) +
+    dealerFeesMinor +
+    warrantySoldMinor +
+    gapSoldMinor;
   const lines: LineSpec[] = [
     line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, arDebitMinor, 0, "Sale receivable", dims),
-    line(SYSTEM_KEYS.SALES_REVENUE, 0, revenueMinor, "Vehicle sale revenue", dims),
   ];
+  // Only when there IS revenue. On the legacy branch `price - tax` is zero when
+  // the two are equal, and `validateBalance` refuses a line carrying neither a
+  // debit nor a credit — so the drain threw, the outbox retried, and after
+  // MAX_ATTEMPTS the event went FAILED and a real sale never reached the
+  // ledger. Reachable exactly because the pre-deploy code had no tax ceiling.
+  //
+  // The entry is complete without the empty line: AR carries the price and the
+  // tax payable carries the same amount, so it balances.
+  //
+  // Deliberately `> 0` and not `!== 0`. A LEGACY event whose tax EXCEEDS its
+  // price still produces a negative figure, and `validateBalance` still refuses
+  // it — as it should. What such a sale means is an accounting question nobody
+  // has answered, and failing closed is the only honest answer available here;
+  // inventing a posting for it would be worse than refusing one.
+  //
+  // Precisely: that refusal is a property of the LEGACY branch only. On the
+  // tax-exclusive branch revenue is the price, so a tax above it posts a
+  // balanced Dr AR (price + tax) entry rather than being refused. Every product
+  // door is guarded before the rule ever sees it — `prepareSaleCompletion`
+  // refuses `taxAmount > salePrice` at the single choke point all completion
+  // callers pass through — so the only way to reach the rule with that shape is
+  // to write a payload directly through the super-admin raw-JSON editor, which
+  // can post an arbitrary payload to any rule by design. Stated because the
+  // earlier wording claimed the refusal held generally, and it does not.
+  if (revenueMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.SALES_REVENUE, 0, revenueMinor, "Vehicle sale revenue", dims));
+  }
   if (dealerFeesMinor > 0) {
     lines.push(line(SYSTEM_KEYS.DEALER_FEE_INCOME, 0, dealerFeesMinor, "Dealer fee income", dims));
   }
@@ -791,8 +897,8 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
   if (gapSoldMinor > 0) {
     addResoldProductLines(lines, gapSoldMinor, p.gapCostMinor ?? 0, "GAP", dims);
   }
-  if (p.taxMinor && p.taxMinor > 0) {
-    lines.push(line(SYSTEM_KEYS.SALES_TAX_PAYABLE, 0, p.taxMinor, "Sales tax payable", { vehicleId: p.vehicleId }));
+  if (taxMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.SALES_TAX_PAYABLE, 0, taxMinor, "Sales tax payable", { vehicleId: p.vehicleId }));
   }
   if (p.costMinor && p.costMinor > 0) {
     lines.push(line(SYSTEM_KEYS.COST_OF_VEHICLES_SOLD, p.costMinor, 0, "Cost of vehicle sold", { vehicleId: p.vehicleId }));
@@ -1199,6 +1305,13 @@ export interface SaleCancelledPayload {
   vehicleId: string;
   salespersonId?: string;
   taxMinor?: number;
+  /**
+   * Only ever set by an emitter that writes the tax-EXCLUSIVE convention. This
+   * rule does not implement that convention, so its presence means the payload
+   * came from somewhere this rule cannot correctly reverse — see
+   * `ruleSaleCancelled`.
+   */
+  taxConventionExclusive?: boolean;
 }
 
 export interface ChequeDepositedPayload {
@@ -1267,7 +1380,39 @@ export function rulePaymentLinkReceived(p: PaymentLinkReceivedPayload): RuleResu
   };
 }
 
+/**
+ * DEAD for new events, and deliberately left on the OLD tax convention.
+ *
+ * Nothing emits `SALE_CANCELLED` — `hookSaleCancelled` is a `makeReversalHook`,
+ * so a cancellation mirrors the original journal's own lines rather than
+ * recomputing them here. This rule is reachable only by an event queued before
+ * that was true, and such an event must reverse what the old convention
+ * actually posted. "Fixing" it to match `ruleSaleCompleted` (SCRUM-22) would
+ * make a reversal disagree with the entry it reverses, leaving the difference
+ * stranded in AR forever.
+ *
+ * So the divergence below is intentional, not an oversight. `saleTaxConventionGuard.test.ts`
+ * fails if anything ever starts emitting this event, because the moment one
+ * does, this becomes wrong for a live path.
+ */
 export function ruleSaleCancelled(p: SaleCancelledPayload): RuleResult {
+  // The source scan in `saleTaxConventionGuard.test.ts` catches a LITERAL
+  // emitter. It structurally cannot catch a dynamic one, and one already
+  // exists: `accountingMigration.ts` passes a variable `eventType` straight to
+  // `postAccountingEvent`. A future caller routing SALE_CANCELLED through a
+  // variable would slip past that scan with CI green.
+  //
+  // So the boundary is also enforced here, where it cannot be evaded. A payload
+  // carrying the tax-exclusive marker was produced under an arithmetic this
+  // rule does not implement; reversing it on the old basis would return only
+  // `saleAmountMinor` of AR against an entry that debited `saleAmountMinor +
+  // tax`, stranding the tax in AR and in revenue permanently. Refuse, loudly,
+  // rather than post a reversal that silently disagrees with what it reverses.
+  if (p.taxConventionExclusive === true) {
+    throw new ConvexError(
+      `Sale ${p.saleId} was posted under the tax-exclusive convention, and this cancellation rule reverses the tax-inclusive one, so it would strand the sales tax in receivables and revenue. Cancel the sale through the operational reversal path, which mirrors the original journal's own lines, instead of posting a SALE_CANCELLED event.`
+    );
+  }
   const revenueMinor = p.taxMinor ? p.saleAmountMinor - p.taxMinor : p.saleAmountMinor;
   const dims = { customerId: p.customerId, vehicleId: p.vehicleId, salespersonId: p.salespersonId };
   const lines: LineSpec[] = [

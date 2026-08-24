@@ -44,6 +44,10 @@ const SALE_PRICE = 12_500;
 const SUPPLIER_ENTITLEMENT = 9_500;
 const MARGIN = SALE_PRICE - SUPPLIER_ENTITLEMENT;
 const DEPOSIT = 1_000;
+// A bill the DEPOSIT exceeds, without using zero. Zero would be refused first by
+// prepareSaleCompletion's price floor (SCRUM-22), and a fixture that dies on an
+// earlier guard proves nothing about the later one under test here.
+const BELOW_DEPOSIT = 500;
 const SCALE = 1000; // JOD minor units
 
 type Treatment =
@@ -1145,7 +1149,7 @@ describe("the trigger is the deposit balance, not the settlement route", () => {
     // deposit, so a balance is left with nowhere determined to go.
     const s = await seed("thruExcess");
     await expect(
-      completeWith(s, "THROUGH_DEALERSHIP", undefined, { salePriceOverride: 0 })
+      completeWith(s, "THROUGH_DEALERSHIP", undefined, { salePriceOverride: BELOW_DEPOSIT })
     ).rejects.toThrow(/larger than what the dealership billed the customer/i);
   });
 
@@ -1154,7 +1158,7 @@ describe("the trigger is the deposit balance, not the settlement route", () => {
     // invoice is undetermined on the dealership's own stock too.
     const s = await seed("ownedExcess", { sourceType: "STOCK" });
     await expect(
-      completeWith(s, "THROUGH_DEALERSHIP", undefined, { salePriceOverride: 0 })
+      completeWith(s, "THROUGH_DEALERSHIP", undefined, { salePriceOverride: BELOW_DEPOSIT })
     ).rejects.toThrow(/larger than what the dealership billed the customer/i);
   });
 

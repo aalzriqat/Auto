@@ -178,7 +178,7 @@ async function prepareSaleCompletion(
   args: SaleCompletionArgs
 ): Promise<PreparedSaleCompletion> {
   const vehicle = await ctx.db.get(args.vehicleId);
-  if (!vehicle || vehicle.orgId !== args.orgId) {
+  if (vehicle?.orgId !== args.orgId) {
     throwAppError(AppErrorCode.VEHICLE_NOT_FOUND, "Vehicle not found in this organization.");
   }
   if (vehicle.status === "SOLD") {
@@ -189,13 +189,13 @@ async function prepareSaleCompletion(
   }
 
   const customer = await ctx.db.get(args.customerId);
-  if (!customer || customer.orgId !== args.orgId) {
+  if (customer?.orgId !== args.orgId) {
     throwAppError(AppErrorCode.CUSTOMER_NOT_FOUND, "Customer not found in this organization.");
   }
 
   if (args.tradeInVehicleId) {
     const tradeInVehicle = await ctx.db.get(args.tradeInVehicleId);
-    if (!tradeInVehicle || tradeInVehicle.orgId !== args.orgId) {
+    if (tradeInVehicle?.orgId !== args.orgId) {
       throw new ConvexError("Trade-in vehicle not found in this organization.");
     }
   }
@@ -203,7 +203,7 @@ async function prepareSaleCompletion(
   let leadId: Id<"leads"> | undefined;
   if (args.quoteId) {
     const quote = await ctx.db.get(args.quoteId);
-    if (!quote || quote.orgId !== args.orgId) {
+    if (quote?.orgId !== args.orgId) {
       throwAppError(AppErrorCode.QUOTE_NOT_FOUND, "Quote not found in this organization.");
     }
     // A multi-vehicle quote's vehicleId is only its first line item — accept
@@ -219,7 +219,7 @@ async function prepareSaleCompletion(
 
   if (args.applicationId) {
     const app = await ctx.db.get(args.applicationId);
-    if (!app || app.orgId !== args.orgId) {
+    if (app?.orgId !== args.orgId) {
       throw new ConvexError("Finance application not found in this organization.");
     }
     if (
@@ -939,8 +939,25 @@ async function applySaleCompletionSideEffects(
     isSourced && !dealershipCollectsGross(settlementRoute)
       ? 0
       : toMinorUnits(args.salePrice, prepared.currency);
+  // Sales tax is billed ON TOP of the price, so it is part of what the customer
+  // owes (SCRUM-22). It has to be here as well as in `ruleSaleCompleted`'s AR
+  // debit, or the canonical receivable document and the GL diverge by exactly
+  // the tax for the same sale.
+  //
+  // Safe on the consigned branch above without a further condition: an agency
+  // sale carrying tax is refused outright further down and by
+  // `consignedAgentSaleLines`, so `taxMinor` is always 0 by the time a sourced
+  // sale reaches here.
+  const saleTaxMinor =
+    args.taxAmount != null && args.taxAmount > 0
+      ? toMinorUnits(args.taxAmount, prepared.currency)
+      : 0;
   const customerBillableMinor =
-    vehicleReceivableMinor + (dealerFeesMinor ?? 0) + (warrantySoldMinor ?? 0) + (gapSoldMinor ?? 0);
+    vehicleReceivableMinor +
+    saleTaxMinor +
+    (dealerFeesMinor ?? 0) +
+    (warrantySoldMinor ?? 0) +
+    (gapSoldMinor ?? 0);
 
   // Hoisted above the deposit resolution because the settlement treatment is
   // capped at the margin, and the margin cannot be known without the cost.
@@ -1264,8 +1281,11 @@ async function applySaleCompletionSideEffects(
   }
 
   // The receivable's total must match what the AR debit in hookSaleCompleted
-  // actually posted (salePrice + dealerFees + warranty/GAP premiums) — not
-  // just salePrice — or the subledger and GL diverge by that amount. That is
+  // actually posted (salePrice + sales tax + dealerFees + warranty/GAP
+  // premiums) — not just salePrice — or the subledger and GL diverge by that
+  // amount. The tax belongs in that list as of SCRUM-22, and this comment is
+  // the one place naming the invariant, so leaving it out here is how the next
+  // reader concludes the tax was deliberately excluded. That is
   // exactly `customerBillableMinor`, computed above so the deposit cap and this
   // document cannot disagree about what the customer was billed.
   const saleReceivableId = await ensureReceivableDocument(ctx, {
@@ -1314,7 +1334,10 @@ async function applySaleCompletionSideEffects(
       throw new ConvexError("A vehicle cannot be traded in against its own sale.");
     }
     const tradeInVehicle = await ctx.db.get(args.tradeInVehicleId);
-    if (!tradeInVehicle || tradeInVehicle.orgId !== args.orgId || tradeInVehicle.isDeleted) {
+    // `isDeleted` is the only term this second check owns that the guard in
+    // `prepareSaleCompletion` does not — that one already refused a missing or
+    // foreign trade-in long before the side effects run. Keep it.
+    if (tradeInVehicle?.orgId !== args.orgId || tradeInVehicle.isDeleted) {
       throw new ConvexError("Trade-in vehicle not found in this organization.");
     }
     if (tradeInVehicle.status === "SOLD" || tradeInVehicle.status === "ARCHIVED") {
@@ -1504,6 +1527,54 @@ async function applySaleCompletionSideEffects(
   );
 }
 
+/**
+ * The monetary invariants a sale must satisfy to become COMPLETED (SCRUM-22).
+ *
+ * THREE things about where this lives, each of which was learned the hard way:
+ *
+ * 1. **Completion only.** A PENDING draft is a deal in progress and may carry no
+ *    agreed price yet — `CreateDraftSaleSchema` permits zero and the sale form
+ *    submits a zero default. Putting these rules in `prepareSaleCompletion`,
+ *    which draft creation also passes through, refused a state the backend
+ *    explicitly supports. So they are asserted from the completion doors only.
+ *
+ * 2. **Canonical minor units.** The caller's major-unit number is not the number
+ *    the journal is built from. `toMinorUnits` rounds, so `0.0004` JOD is
+ *    positive to a major-unit check and `0` to the ledger — and a zero-minor
+ *    price with any other credit (a dealer fee) posts a balanced entry that
+ *    relieves full inventory into COGS against no revenue and marks the vehicle
+ *    SOLD. The guard has to speak the same units as the posting it protects, so
+ *    it runs after the currency is resolved and uses the same money authority.
+ *
+ * 3. **Before any write.** Not in the posting rule. Accounting is deferred to
+ *    the outbox whenever the chart is uninitialized or no period is open
+ *    (`postOrEnqueue`), so a rule-time refusal can arrive long after the sale
+ *    row, the vehicle status and the receivable have been committed. A control
+ *    that only fires when accounting happens to post immediately is not a
+ *    control. This runs before the insert/patch, so the refusal is total.
+ */
+function assertCompletableSaleAmounts(args: SaleCompletionArgs, currency: string): void {
+  // `toMinorUnits` refuses NaN/Infinity by way of its safe-integer check, so a
+  // non-finite price fails closed here rather than reaching the ledger.
+  const salePriceMinor = toMinorUnits(args.salePrice, currency);
+  if (salePriceMinor <= 0) {
+    throw new ConvexError(
+      `A sale cannot be completed for ${args.salePrice} ${currency} — it rounds to nothing in ${currency}. Enter a price the currency can represent before completing the sale.`
+    );
+  }
+
+  // The tax ceiling, compared in the same canonical units for the same reason.
+  // Equal to the price stays allowed — this is a ceiling, not a ban — and only
+  // a tax ABOVE the price after rounding is refused. No tax-rate policy is
+  // invented here; this only bounds what was entered.
+  const taxMinor = args.taxAmount != null ? toMinorUnits(args.taxAmount, currency) : 0;
+  if (taxMinor > salePriceMinor) {
+    throw new ConvexError(
+      "The sales tax cannot be more than the sale price. Check the tax amount before completing the sale."
+    );
+  }
+}
+
 export async function createDraftSale(
   ctx: MutationCtx,
   args: SaleCompletionArgs
@@ -1527,6 +1598,9 @@ export async function completeSale(
   }
 
   const prepared = await prepareSaleCompletion(ctx, args);
+  // Before the insert, so a refusal leaves no sale row, no vehicle status
+  // change, no receivable and no queued accounting event behind.
+  assertCompletableSaleAmounts(args, prepared.currency);
   const saleId = await insertSaleRecord(ctx, args, prepared, "COMPLETED", prepared.commissionAmount);
   await applySaleCompletionSideEffects(ctx, args, prepared, saleId);
 
@@ -1666,6 +1740,10 @@ export async function completeExistingSale(
   };
 
   const prepared = await prepareSaleCompletion(ctx, completionArgs);
+  // Same authority, same position: before the status patch, so a draft that
+  // cannot legally complete stays a draft rather than becoming a COMPLETED sale
+  // whose accounting is refused afterwards.
+  assertCompletableSaleAmounts(completionArgs, prepared.currency);
   await ctx.db.patch(args.saleId, {
     status: "COMPLETED",
     commissionAmount: prepared.commissionAmount,

@@ -36,6 +36,24 @@ export const saleSchema = z.object({
 ).refine(
   (data) => !data.gapSold || (data.gapTermMonths ?? 0) > 0,
   { message: "A GAP term (in months) is required when a GAP premium is charged", path: ["gapTermMonths"] }
+  // Both of the following mirror refusals the backend makes at COMPLETION only
+  // (SCRUM-22, `assertCompletableSaleAmounts`). The server is the control —
+  // these exist so an operator meets the problem on the field that caused it
+  // rather than as a failed save with no field path, the same reason the two
+  // term refines above exist.
+  //
+  // Scoped to COMPLETED deliberately. A PENDING draft is a deal in progress and
+  // may legitimately carry no agreed price yet; the backend permits that, and a
+  // client that forbids a state the backend allows is a worse defect than the
+  // missing hint. These are also compared in major units here, which is only a
+  // hint — the authoritative comparison happens in canonical minor units, so
+  // the client cannot see a value that rounds to nothing.
+).refine(
+  (data) => data.status !== "COMPLETED" || (data.taxAmount ?? 0) <= data.salePrice,
+  { message: "The sales tax cannot be more than the sale price", path: ["taxAmount"] }
+).refine(
+  (data) => data.status !== "COMPLETED" || data.salePrice > 0,
+  { message: "A completed sale needs a price greater than zero", path: ["salePrice"] }
 );
 
 export type SaleFormValues = z.infer<typeof saleSchema>;
