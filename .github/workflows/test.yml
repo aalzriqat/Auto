@@ -125,8 +125,30 @@ jobs:
     # Both are generated here, in this job, so they are guaranteed to describe the
     # same commit the scanner analyses. The mobile suite costs about 50s, which is
     # not worth an artifact handoff between jobs and the skew risk that carries.
+    #
+    # Retried once from a clean state, for a DIFFERENT reason than the mobile
+    # step below. A failed vitest run writes no LCOV at all — verified — so there
+    # is no partial-report or false-green risk here to guard against. The risk is
+    # availability of the control: `convex/collections.test.ts` has a known
+    # parallel-load flake (SCRUM-186 owns the root cause), and when it trips, this
+    # step fails, the scan never runs, and the REQUIRED Sonar context goes ABSENT
+    # rather than red. A flake that can silently remove a required gate from the
+    # board is worth one clean retry; two failures still hard-fail the job and the
+    # scanner still does not run.
+    #
+    # Deliberately not `continue-on-error`, not `if: always()`, and not an
+    # exception for a named test. The ordinary enforcement run in
+    # unit-and-integration gets no retry and no tolerance from this — it is a
+    # different job with a different purpose.
     - name: Generate Convex coverage for Sonar
-      run: pnpm test:coverage:sonar
+      run: |
+        rm -rf coverage-sonar
+        if pnpm test:coverage:sonar; then
+          exit 0
+        fi
+        echo "::warning::convex coverage run failed - discarding its output and retrying once so a known flake cannot make the required Sonar context disappear"
+        rm -rf coverage-sonar
+        pnpm test:coverage:sonar
       env:
         NODE_ENV: test
 
