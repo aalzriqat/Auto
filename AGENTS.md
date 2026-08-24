@@ -306,3 +306,33 @@ deploy — those want different responses, and the workflow summary says which o
 happened along with every outstanding organization. Re-running is safe: the
 backfills skip organizations already proven complete, so a second run resumes
 rather than restarting.
+
+## When a finding turns out to be real
+
+Fixing the instance is not the deliverable. The defect class is.
+
+For every **validated, important** finding — high severity, a recurring class, a
+production or process incident, or a correctness / security / tenancy /
+data-integrity invariant:
+
+1. **Fix the root cause, then search for siblings.** Structurally equivalent
+   instances across the whole codebase, not only the file you were in. A fix that
+   lands on one writer of a record and not on its siblings has closed nothing.
+2. **Route the lesson to the strongest cheap protection**, taking the first that
+   genuinely applies: regression test > deterministic script or hook >
+   type/schema shape > scoped instruction > nothing. A regression test must fail
+   first. A guard must fail closed on the dangerous case, and each conjunct of
+   its predicate must be mutated separately with every mutant dying — a
+   surviving mutant is either dead code or a missing assertion.
+3. **A second occurrence of a class is evidence the previous guardrail failed,**
+   not merely that the code did. Do not simply fix it again; ask why the earlier
+   protection did not fire, and improve that layer. Classes that move money,
+   auth, tenancy or production data are mechanized on the first occurrence.
+4. **Close it honestly — FIX VERIFIED is not DEFECT CLASS CLOSED.** Claim the
+   latter only when the reproduction fails before and passes after, siblings are
+   searched and fixed, the protection's mutants die, and any prose that survived
+   carries the condition that will delete it. Otherwise state what remains open.
+
+Prose is the last resort, not the default: it is the only protection that can be
+loaded and still not fire. Anything written down names the executable check that
+retires it, and when that check exists the prose is deleted rather than kept.
