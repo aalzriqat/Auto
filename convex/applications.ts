@@ -285,12 +285,37 @@ async function getQuoteDeposits(ctx: QueryCtx, quoteId: Id<"quotes">): Promise<A
   return deposits;
 }
 
+/**
+ * Move the financed portion of a deal off the customer's canonical receivable.
+ *
+ * This is a TRANSFER, and the word matters. The GL does it as one:
+ * `ruleFinanceDisbursed` debits Finance-company AR and credits Customer AR by
+ * the same amount, so GL Customer AR becomes `what the customer was billed`
+ * minus `what the financier funded`. The subledger has to describe the same
+ * economic fact or the two disagree about a single debt.
+ *
+ * ⚠️ It used to take a `saleAmountMinor` and OVERWRITE the receivable with
+ * `saleAmountMinor − financed`. That is not a transfer, it is a replacement, and
+ * it is only correct while the customer was billed exactly the vehicle price.
+ * `customerBillableMinor` is `vehicle + tax + dealerFees + warranty + GAP`
+ * (SCRUM-22 put tax on top), so the moment a sale carries any of those the
+ * replacement destroyed the difference — the customer stopped owing money they
+ * really owed while the GL kept the debit. Worse in the other direction: when
+ * the passed amount EXCEEDED the receivable, the "transfer" raised the balance.
+ * A customer billed 5,000 with 9,000 financed came out owing 11,000.
+ *
+ * Only one caller reaches this, and it happened to pass `quote.vehiclePrice` on
+ * a path where quotes carry no tax or fees — so the defect was latent rather
+ * than live. Correct-by-coincidence is one quote field away from wrong, so the
+ * basis is now read from the receivable itself and the parameter is gone. There
+ * is no longer an amount to pass incorrectly.
+ */
 export async function transferFinancedAmountFromCustomerReceivable(
   ctx: MutationCtx,
   args: {
     orgId: Id<"organizations">;
     saleId: Id<"sales">;
-    saleAmountMinor: number;
+    applicationId: Id<"financeApplications">;
     financedAmountMinor: number;
   }
 ) {
@@ -305,7 +330,35 @@ export async function transferFinancedAmountFromCustomerReceivable(
     throw new ConvexError("Sale customer receivable not found.");
   }
 
-  const customerPortionMinor = Math.max(0, args.saleAmountMinor - args.financedAmountMinor);
+  // ⚠️ Reading the basis from the receivable makes this correct but NOT
+  // self-idempotent: run it twice and the second pass would deduct the financed
+  // amount from an already-reduced balance. The old `saleAmountMinor` version
+  // was idempotent only because its basis was a constant — it recomputed the
+  // same wrong answer every time.
+  //
+  // So the guard is the finance-company receivable this deal opens alongside the
+  // transfer. If it exists, the financier's portion has already been moved and
+  // there is nothing left to move. That is a fact about the deal rather than a
+  // balance that later payments will change, which is what makes it safe to
+  // retry against.
+  const alreadyTransferred = await ctx.db
+    .query("receivableDocuments")
+    .withIndex("by_org_source", (q) =>
+      q
+        .eq("orgId", args.orgId)
+        .eq("sourceType", FINANCE_APP_RECEIVABLE_SOURCE)
+        .eq("sourceId", args.applicationId)
+    )
+    .first();
+  if (alreadyTransferred) return;
+
+  // What the customer was actually BILLED, not what the vehicle cost. This is
+  // the only basis that can agree with the GL, because the GL credits Customer
+  // AR against the same billed total.
+  const customerPortionMinor = Math.max(
+    0,
+    customerReceivable.originalAmountMinor - args.financedAmountMinor
+  );
   if (customerReceivable.originalAmountMinor === customerPortionMinor) return;
 
   const activeAllocations = await getActiveReceivableAllocations(ctx, customerReceivable._id);
@@ -3223,7 +3276,6 @@ export const finalizeDeal = mutation({
         if (!directToSupplier && app.companyId && quote.totalFinancedAmount && quote.totalFinancedAmount > 0) {
           const currency = await getOrgCurrency(ctx, args.orgId);
           const loanAmountMinor = toMinorUnits(quote.totalFinancedAmount, currency);
-          const saleAmountMinor = toMinorUnits(quote.vehiclePrice, currency);
           await hookFinanceDisbursed(ctx, {
             orgId: args.orgId,
             applicationId: args.applicationId,
@@ -3239,7 +3291,7 @@ export const finalizeDeal = mutation({
           await transferFinancedAmountFromCustomerReceivable(ctx, {
             orgId: args.orgId,
             saleId,
-            saleAmountMinor,
+            applicationId: args.applicationId,
             financedAmountMinor: loanAmountMinor,
           });
 
