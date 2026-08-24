@@ -8,6 +8,7 @@ import {
   assertFinancedDealCommitsThroughApplication,
   dealerEconomicsGap,
   financeApplicationCompletionGap,
+  quoteCommitsThroughApplication,
 } from "./utils/financedCompletionBoundary";
 
 vi.mock("./rateLimit", () => ({
@@ -568,6 +569,7 @@ describe("SCRUM-69: a financed deal commits through its finance application", ()
           assertFinancedDealCommitsThroughApplication(ctx, {
             orgId: seed.orgId,
             vehicleId,
+            customerId: seed.customerId,
             quote: { mode: "CONFIGURED_FINANCE_COMPANY", companyId: seed.companyId },
             applicationId,
           })
@@ -594,6 +596,7 @@ describe("SCRUM-69: a financed deal commits through its finance application", ()
           assertFinancedDealCommitsThroughApplication(ctx, {
             orgId: seed.orgId,
             vehicleId,
+            customerId: seed.customerId,
             quote: { mode: "CONFIGURED_FINANCE_COMPANY", companyId: seed.companyId },
             applicationId,
           })
@@ -619,6 +622,200 @@ describe("SCRUM-69: a financed deal commits through its finance application", ()
       // to check, and must still pass — the anti-vacuity half.
       const legacy = { submittedQuotationMinor: undefined } as unknown as Doc<"financeApplications">;
       expect(dealerEconomicsGap(legacy, "finalizing")).toBeNull();
+    });
+  });
+
+  describe("the classifier covers every financing mode, not only the two with fixtures", () => {
+    // Mutation testing found this hole and the door tests could never have.
+    // Flipping `quote.mode !== undefined` to `=== undefined` survived all 21
+    // tests, because every fixture coincidentally agrees under that mutant:
+    // CONFIGURED falls through to the companyId check and still says true, the
+    // mode-less quote returns `undefined !== "CASH"` and still says true, and
+    // the cash quote still says false. Under the mutant these three modes flip
+    // to NOT financed and the bypass reopens for them silently.
+    //
+    // MANUAL_FINANCE_COMPANY, INTERNAL_INSTALLMENT and LEASE structurally
+    // CANNOT carry a companyId — `quotes.saveQuote` refuses one on any mode but
+    // CONFIGURED — so the mode is the only evidence there is for all three.
+    test("MANUAL_FINANCE_COMPANY commits through its application", () => {
+      expect(quoteCommitsThroughApplication({ mode: "MANUAL_FINANCE_COMPANY" })).toBe(true);
+    });
+
+    test("INTERNAL_INSTALLMENT commits through its application even though the dealership is the financier", () => {
+      // The discriminator that proves this is NOT `settlementPayer`'s question.
+      // There, INTERNAL_INSTALLMENT is correctly `external: false` — nobody
+      // outside the dealership pays the supplier. Here it is financed, because
+      // the deal still owes the finance-application lifecycle.
+      expect(quoteCommitsThroughApplication({ mode: "INTERNAL_INSTALLMENT" })).toBe(true);
+    });
+
+    test("LEASE commits through its application", () => {
+      expect(quoteCommitsThroughApplication({ mode: "LEASE" })).toBe(true);
+    });
+
+    test("CASH does not, and neither does a bare quote", () => {
+      expect(quoteCommitsThroughApplication({ mode: "CASH" })).toBe(false);
+      expect(quoteCommitsThroughApplication({})).toBe(false);
+    });
+  });
+
+  describe("financing evidence survives an omitted quote", () => {
+    test("a financed quote with NO application yet is not completable by leaving quoteId off", async () => {
+      // The widest form of the bypass, and the one every earlier test missed.
+      //
+      // All the omitted-quote tests above seed an application first, so both
+      // signals were present. In the window BEFORE the application is created
+      // there is no application to find and no quote passed — so a boundary that
+      // reads only those two arguments sees nothing and lets the sale through.
+      // The customer's own persisted quotes are the evidence that remains.
+      const seed = await seedDealer("prequote");
+      const { vehicleId } = await configuredQuote(seed, "BND0000000000017");
+
+      const noApplication = await seed.t.run((ctx) =>
+        ctx.db
+          .query("financeApplications")
+          .withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicleId))
+          .first()
+      );
+      expect(noApplication).toBeNull();
+
+      await expect(
+        seed.asUser.mutation(api.sales.create, {
+          orgId: seed.orgId,
+          vehicleId,
+          customerId: seed.customerId,
+          salespersonId: seed.userId,
+          salePrice: PRICE,
+          saleDate: Date.now(),
+          status: "COMPLETED" as const,
+        })
+      ).rejects.toThrow(COMMITS_THROUGH_APPLICATION);
+    });
+  });
+
+  describe("a rejected application still holds the car, because rejection is reopenable", () => {
+    test("a REJECTED application refuses the cash sale rather than letting it through", async () => {
+      // `applications.ts` permits REJECTED -> PENDING_DOCS. Treating rejection
+      // as terminal let the car sell and the application then reopen onto a SOLD
+      // vehicle, where it can never finalize. Only CLOSED and CANCELLED end an
+      // application's claim.
+      const seed = await seedDealer("rejected");
+      const { quoteId, vehicleId } = await configuredQuote(seed, "BND0000000000018");
+      const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
+        orgId: seed.orgId,
+        quoteId,
+      });
+      await seed.t.run((ctx) => ctx.db.patch(applicationId, { status: "REJECTED" }));
+
+      const cash = await seed.asUser.mutation(api.quotes.saveQuote, {
+        orgId: seed.orgId,
+        customerId: seed.customerId,
+        vehicleId,
+        mode: "CASH",
+        vehiclePrice: PRICE,
+        downPayment: 0,
+        termMonths: 0,
+        totalFinancedAmount: 0,
+      });
+
+      await expect(
+        seed.asUser.mutation(api.sales.create, {
+          ...saleArgs(seed, cash, vehicleId),
+          status: "COMPLETED" as const,
+        })
+      ).rejects.toThrow(/cancel that application first/i);
+    });
+
+    test("a CANCELLED application genuinely releases the car", async () => {
+      // The other side, so the previous test cannot be satisfied by a guard that
+      // simply refuses on any application at all.
+      const seed = await seedDealer("cancelled-releases");
+      const { quoteId, vehicleId } = await configuredQuote(seed, "BND0000000000019");
+      const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
+        orgId: seed.orgId,
+        quoteId,
+      });
+      await seed.t.run((ctx) => ctx.db.patch(applicationId, { status: "CANCELLED" }));
+
+      const cash = await seed.asUser.mutation(api.quotes.saveQuote, {
+        orgId: seed.orgId,
+        customerId: seed.customerId,
+        vehicleId,
+        mode: "CASH",
+        vehiclePrice: PRICE,
+        downPayment: 0,
+        termMonths: 0,
+        totalFinancedAmount: 0,
+      });
+
+      const saleId = await seed.asUser.mutation(api.sales.create, {
+        ...saleArgs(seed, cash, vehicleId),
+        status: "COMPLETED" as const,
+      });
+      const sale = await seed.t.run((ctx) => ctx.db.get(saleId));
+      expect(sale?.status).toBe("COMPLETED");
+    });
+  });
+
+  describe("one customer's application does not lock the car against everyone else", () => {
+    test("another customer's live application does not block an ordinary cash sale", async () => {
+      // Keying the lookup on the vehicle ALONE made one abandoned application
+      // lock that car permanently — nothing expires a finance application — and
+      // refused an unrelated walk-in buyer while telling the operator the deal
+      // was "financed" when it was not.
+      const seed = await seedDealer("other-customer");
+      const { quoteId, vehicleId } = await configuredQuote(seed, "BND0000000000020");
+      await seed.asUser.mutation(api.applications.createFromQuote, {
+        orgId: seed.orgId,
+        quoteId,
+      });
+
+      const otherCustomerId = await seed.t.run((ctx) =>
+        ctx.db.insert("customers", { orgId: seed.orgId, firstName: "Walk", lastName: "In" })
+      );
+
+      const saleId = await seed.asUser.mutation(api.sales.create, {
+        orgId: seed.orgId,
+        vehicleId,
+        customerId: otherCustomerId,
+        salespersonId: seed.userId,
+        salePrice: PRICE,
+        saleDate: Date.now(),
+        status: "COMPLETED" as const,
+      });
+      const sale = await seed.t.run((ctx) => ctx.db.get(saleId));
+      expect(sale?.status).toBe("COMPLETED");
+    });
+
+    test("the SAME customer's live application does block, and names the remedy", async () => {
+      // The other half. Cancelling is not a status flip — it releases the
+      // vehicle hold and unwinds the deal — so a cash sale must not simply step
+      // around it. The message has to name that, because "quote the deal as
+      // cash" is already true here and fixes nothing.
+      const seed = await seedDealer("same-customer");
+      const { quoteId, vehicleId } = await configuredQuote(seed, "BND0000000000021");
+      await seed.asUser.mutation(api.applications.createFromQuote, {
+        orgId: seed.orgId,
+        quoteId,
+      });
+
+      const cash = await seed.asUser.mutation(api.quotes.saveQuote, {
+        orgId: seed.orgId,
+        customerId: seed.customerId,
+        vehicleId,
+        mode: "CASH",
+        vehiclePrice: PRICE,
+        downPayment: 0,
+        termMonths: 0,
+        totalFinancedAmount: 0,
+      });
+
+      await expect(
+        seed.asUser.mutation(api.sales.create, {
+          ...saleArgs(seed, cash, vehicleId),
+          status: "COMPLETED" as const,
+        })
+      ).rejects.toThrow(/cancel that application first/i);
     });
   });
 });

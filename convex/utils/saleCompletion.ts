@@ -243,6 +243,7 @@ async function prepareSaleCompletion(
   await assertFinancedDealCommitsThroughApplication(ctx, {
     orgId: args.orgId,
     vehicleId: args.vehicleId,
+    customerId: args.customerId,
     quote,
     applicationId: args.applicationId,
   });

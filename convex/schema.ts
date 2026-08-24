@@ -2041,7 +2041,10 @@ export default defineSchema({
     .index("by_customer", ["customerId"])
     .index("by_vehicle", ["vehicleId"])
     .index("by_status", ["status"])
-    .index("by_lead", ["leadId"]),
+    .index("by_lead", ["leadId"])
+    // SCRUM-69: the sale-completion boundary asks whether THIS customer has
+    // un-expired financing intent on THIS vehicle when no quote is supplied.
+    .index("by_vehicle_customer", ["vehicleId", "customerId"]),
 
   applicationStatusLog: defineTable({
     orgId: v.id("organizations"),
@@ -2392,7 +2395,11 @@ export default defineSchema({
     .index("by_vehicle", ["vehicleId"])
     .index("by_status", ["status"])
     .index("by_org_status", ["orgId", "status"])
-    .index("by_org_reconciliation", ["orgId", "needsFinancingReconciliation"]),
+    .index("by_org_reconciliation", ["orgId", "needsFinancingReconciliation"])
+    // SCRUM-69: bounded point lookup for a live application on ONE deal.
+    // Collecting a vehicle's whole application history could exceed the
+    // transaction read limit and refuse every later sale of that car.
+    .index("by_vehicle_customer_status", ["vehicleId", "customerId", "status"]),
 
   /**
    * Every appraisal ever recorded against one application.
