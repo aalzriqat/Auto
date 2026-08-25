@@ -53,6 +53,24 @@ import { anyApi, FunctionReference } from "convex/server";
  *   6. **No mechanism claims to prove the whole design.** Traceability only
  *      answers "does every binding rule have at least one executable contract",
  *      and says nothing about consistency between them.
+ *
+ * ## ⚠️ THIS FILE CANNOT MERGE WHILE IT IS RED, AND THAT IS DELIBERATE
+ *
+ * `unit-and-integration` is a REQUIRED status check on `main` with
+ * `enforce_admins: true` (verified against live GitHub branch protection, not
+ * inferred from the workflow file). It runs an unscoped `vitest run`, and
+ * `vitest.config.ts` does not exclude `convex/**`, so these tests execute there
+ * and a red one blocks the merge for everyone, admins included.
+ *
+ * Fourteen of these are red right now. That is not an accident to be worked
+ * around with `.skip` — nine of them are LIVE DEFECTS in shipped code, and
+ * skipping them would delete the only evidence those defects exist. The
+ * remaining five name surfaces the implementation must build.
+ *
+ * So the gate is functioning as intended: this content becomes mergeable when
+ * the defects are fixed and the pending surfaces exist, not before. Stated here
+ * because a pre-freeze audit found it, and an operational consequence that only
+ * surfaces at PR time is a surprise nobody should have to discover twice.
  */
 
 vi.mock("./rateLimit", () => ({
@@ -650,6 +668,38 @@ describe("E. deal lineage", () => {
     expect(deposits.every((d) => d.holdActive === true)).toBe(true);
   });
 
+  test("total deposits on a quote may not exceed the quote's price", async () => {
+    // ⚠️ RESTORED. This guard is LIVE at `deposits.ts:94` — "Total deposits
+    // cannot exceed the quote amount." The deleted suite covered it and the
+    // scenario genuinely PASSED; the pre-freeze audit proved that by restoring
+    // the old file and running it in isolation rather than taking the old
+    // rule list at face value.
+    //
+    // My migration dropped it from the tests AND from the rule list, so the
+    // file's own coverage check could not notice: a rule absent from the map is
+    // invisible to a map-completeness test. Working protection for real money,
+    // silently deleted. Its `BINDING_RULES` entry below is what stops that
+    // recurring.
+    const seed = await seedDealer("ceiling");
+    const v = await vehicle(seed);
+    const quoteId = await cashQuote(seed, seed.customerA, v);
+    await seed.asUser.mutation(api.deposits.create, {
+      orgId: seed.orgId,
+      quoteId,
+      amount: 20_000,
+    });
+
+    await expect(
+      seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 10_000 })
+    ).rejects.toThrow(/exceed/i);
+
+    // Postcondition: the over-cap deposit left nothing behind.
+    const deposits = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("deposits").collect()).filter((d) => d.quoteId === quoteId)
+    );
+    expect(deposits).toHaveLength(1);
+  });
+
   test("new evidence citing a SUPERSEDED revision is refused; the current head accepts it", async () => {
     const seed = await seedDealer("stale-head");
     const v = await vehicle(seed);
@@ -714,10 +764,18 @@ describe("E. deal lineage", () => {
     // Ownership axis: a rival may genuinely take the released car. This is the
     // behaviour cancellation already produces, and an authority that re-locked
     // it would break the existing flow.
+    // Asserted by CONSEQUENCE, not by `toBeDefined` — this file's own preamble
+    // says a returned value is not an outcome, and the audit rightly flagged
+    // that this one test still used the pattern it criticises.
     const rival = await cashQuote(seed, seed.customerB, freed);
-    await expect(
-      seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: rival, amount: 1_500 })
-    ).resolves.toBeDefined();
+    const rivalDeposit = await seed.asUser.mutation(api.deposits.create, {
+      orgId: seed.orgId,
+      quoteId: rival,
+      amount: 1_500,
+    });
+    const rivalRow = await seed.t.run((ctx) => ctx.db.get(rivalDeposit));
+    expect(rivalRow?.quoteId, "the rival really holds the released car").toBe(rival);
+    expect(rivalRow?.holdActive).toBe(true);
 
     // Money axis: the customer's 2,000 has NOT gone anywhere. Both axes are
     // asserted here together because conflating them fails in both directions.
@@ -762,11 +820,29 @@ export function checkDeploymentIdentityContract(rawSource: string): string[] {
     .replace(/(^|[^:])\/\/.*$/gm, "$1");
 
   const exports = [...source.matchAll(/export\s+const\s+(\w+)\s*=\s*([A-Za-z_$][\w$]*)\s*\(/g)];
-  const reExports = [...source.matchAll(/export\s*\{([^}]*)\}/g)];
 
-  if (reExports.length) {
+  // ⚠️ FAIL CLOSED ON ANY EXPORT SHAPE THIS CHECKER DOES NOT RECOGNISE.
+  //
+  // This is the THIRD bypass of this checker. Round 8 broke it with an alias
+  // (`const writer = mutation`) and with `socialBulkMutation`. The pre-freeze
+  // audit then broke the "allowlist" rewrite by EXECUTING it against
+  // `export const seed = server.mutation({...})` and `export let seed = ...`:
+  // the recogniser regex matches only `export const NAME = IDENT(`, so a
+  // member-expression builder or a non-const declaration was never added to
+  // `exports` at all — and a loop over `exports` cannot flag what it cannot see.
+  //
+  // Enumerating export syntaxes with a regex has now failed three times, so
+  // this stops trying. EVERY export site is counted; only the exact permitted
+  // shape is subtracted; whatever remains is a violation *because* it was not
+  // understood. An unrecognised export is now suspect by construction rather
+  // than invisible by omission.
+  const allExportSites = [
+    ...source.matchAll(/export\s+(?:const|let|var|function|class|default|async|\{|\*)/g),
+  ];
+  const recognisedQueryExports = exports.filter(([, , builder]) => builder === "query").length;
+  if (allExportSites.length > recognisedQueryExports) {
     violations.push(
-      `RE_EXPORT_FORM: ${reExports.length} \`export { ... }\` statement(s) — the contract is checked on direct \`export const NAME = query(...)\` declarations only, so re-export hides the builder`
+      `UNRECOGNISED_EXPORT: ${allExportSites.length} export site(s) but only ${recognisedQueryExports} recognised as \`export const NAME = query(...)\`. Every other shape — re-export, namespace member, let/var, function, default — is refused because this checker cannot verify what it did not parse.`
     );
   }
 
@@ -779,7 +855,6 @@ export function checkDeploymentIdentityContract(rawSource: string): string[] {
     violations.push(`NOT_A_QUERY: built from ${identity[2]}(), and only query() is permitted`);
   }
 
-  // ALLOWLIST, not denylist: any other export must also be a query.
   for (const [, name, builder] of exports) {
     if (name !== "deploymentIdentity" && builder !== "query") {
       violations.push(
@@ -854,7 +929,23 @@ describe("F. structural checks", () => {
     const viaReExport = `${compliant}
       const seedAnything = mutation({ args: {}, handler: async () => null });
       export { seedAnything };`;
-    expect(checkDeploymentIdentityContract(viaReExport).join(" ")).toMatch(/RE_EXPORT_FORM/);
+    expect(checkDeploymentIdentityContract(viaReExport).join(" ")).toMatch(/UNRECOGNISED_EXPORT/);
+
+    // The two shapes the pre-freeze audit proved returned ZERO violations
+    // against the previous "allowlist" rewrite. Both are regression tests now.
+    const viaNamespaceMember = `${compliant}
+      export const seedAnything = server.mutation({ args: {}, handler: async () => null });`;
+    expect(checkDeploymentIdentityContract(viaNamespaceMember).join(" ")).toMatch(
+      /UNRECOGNISED_EXPORT/
+    );
+
+    const viaLet = `${compliant}
+      export let seedAnything = mutation({ args: {}, handler: async () => null });`;
+    expect(checkDeploymentIdentityContract(viaLet).join(" ")).toMatch(/UNRECOGNISED_EXPORT/);
+
+    const viaFunction = `${compliant}
+      export function seedAnything() { return null; }`;
+    expect(checkDeploymentIdentityContract(viaFunction).join(" ")).toMatch(/UNRECOGNISED_EXPORT/);
 
     const viaComment = `
       export const deploymentIdentity = query({
@@ -907,12 +998,39 @@ describe("F. structural checks", () => {
     const { readFileSync, readdirSync, statSync } = await import("node:fs");
     const { join, relative, sep } = await import("node:path");
 
+    // ⚠️ EXCLUDE-LIST FROM THE REPO ROOT, not an include-list of directories.
+    //
+    // The previous version scanned five hardcoded roots. The pre-freeze audit
+    // found real application code outside them — `packages/shared`, which
+    // `apps/mobile` imports from in a dozen files and which already holds
+    // domain logic, plus a root-level `hooks/` used by the web app. No caller
+    // lives there TODAY (the audit ran this exact regex repo-wide and got the
+    // same four), so the check was not vacuous — but a gate described as "the
+    // cutover gate" that silently misses any directory added later is
+    // overclaiming. New top-level directories are now covered by default.
+    const SKIP = new Set([
+      "node_modules",
+      "_generated",
+      ".git",
+      ".next",
+      "dist",
+      "build",
+      "coverage",
+      ".turbo",
+      ".vercel",
+    ]);
     const found: string[] = [];
     const walk = (dir: string) => {
       for (const entry of readdirSync(dir)) {
-        if (entry === "node_modules" || entry === "_generated") continue;
+        if (SKIP.has(entry)) continue;
         const full = join(dir, entry);
-        if (statSync(full).isDirectory()) {
+        let isDir = false;
+        try {
+          isDir = statSync(full).isDirectory();
+        } catch {
+          continue; // a symlink or a file that vanished mid-walk
+        }
+        if (isDir) {
           walk(full);
           continue;
         }
@@ -926,32 +1044,42 @@ describe("F. structural checks", () => {
         }
       }
     };
-    for (const root of ["components", "app", "lib", "apps", "convex"]) {
-      try {
-        walk(root);
-      } catch {
-        // absent in this checkout
-      }
-    }
+    walk(".");
+
     expect([...new Set(found)].sort()).toEqual([...CALLERS].sort());
   });
 
   test("org-purge deletes the commitment claim AFTER everything it protects", async () => {
+    // ⚠️ NO EARLY RETURN. The previous version returned early whenever the
+    // claim table was absent from the schema — which is always, today — so the
+    // ordering loop below has never executed once, and the test sat among the
+    // passing ones with its actual assertion dead. That is a wrong-reason PASS,
+    // and it directly contradicted its own neighbour four tests above:
+    // "treating absence as not-applicable is how a gate quietly stops being a
+    // gate". Two tests in one file, opposite philosophies. This one was wrong.
+    //
+    // It is now loudly red until the table exists, exactly like the
+    // `testSupport.ts` contract, and the ordering assertions run the moment it
+    // does.
     const { ORGANIZATION_DELETION_STEPS } = await import("./adminOrgs");
     const stepOf = (table: string) =>
       ORGANIZATION_DELETION_STEPS.findIndex((s) => String(s).includes(table));
-    const claim = stepOf("vehicleCommitmentClaims");
 
-    if (!Object.keys(schema.tables).includes("vehicleCommitmentClaims")) {
-      expect(claim, "no claim table in the schema yet, so nothing to sequence").toBe(-1);
-      return;
-    }
+    expect(
+      Object.keys(schema.tables),
+      "vehicleCommitmentClaims does not exist in the schema yet"
+    ).toContain("vehicleCommitmentClaims");
+
+    const claim = stepOf("vehicleCommitmentClaims");
     expect(
       claim,
       "the claim exists but is absent from ORGANIZATION_DELETION_STEPS — a purge would orphan it"
     ).toBeGreaterThan(-1);
     for (const protectedTable of ["vehiclesWithStorage", "deposits", "financeApplications"]) {
-      expect(claim).toBeGreaterThan(stepOf(protectedTable));
+      expect(
+        claim,
+        `the claim must outlive ${protectedTable}: an aborted purge that is later unsuspended would otherwise leave it unprotected`
+      ).toBeGreaterThan(stepOf(protectedTable));
     }
   });
 });
@@ -1040,6 +1168,11 @@ const BINDING_RULES: { ruling: string; rule: string; evidence: string }[] = [
     ruling: "c14554",
     rule: "Instalments on one quote are more evidence for one deal, not a conflict.",
     evidence: "a further instalment on the SAME quote is accepted",
+  },
+  {
+    ruling: "c14833",
+    rule: "Total deposits on a quote may not exceed its price.",
+    evidence: "total deposits on a quote may not exceed the quote's price",
   },
   {
     ruling: "c14796",
