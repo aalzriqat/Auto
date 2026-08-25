@@ -166,6 +166,22 @@ async function raceAll(n, makeCall) {
   }));
 }
 
+/**
+ * Name which cross-authority failure actually happened.
+ *
+ * Zero winners and two winners are OPPOSITE bugs — starvation versus
+ * double-booking — and a bare count reports them identically. Whoever reads a
+ * failed run needs to know which one they are chasing.
+ */
+function describeCrossOutcome(race) {
+  const winners = race.filter((r) => r.ok).length;
+  if (winners === 1) return "exactly one won, as required";
+  if (winners === 0) {
+    return "STARVATION: neither succeeded on a free vehicle, so the two subsystems refused each other";
+  }
+  return "DOUBLE BOOKING: both succeeded, so the two subsystems did not serialize against each other";
+}
+
 const results = [];
 function check(name, ok, detail) {
   results.push({ name, ok, detail });
@@ -257,11 +273,21 @@ async function main() {
       acquire.ok ? owner?.applicationId === acquire.value : true,
       `acquire=${acquire.ok} value=${acquire.value ?? "-"} owner=${owner?.applicationId ?? "none"}`
     );
-    check(
-      "B. a refused acquisition never owns the vehicle",
-      acquire.ok || owner?.applicationId !== acquire.value,
-      `acquire refused; owner=${owner?.applicationId ?? "none"}`
-    );
+    // DELIBERATELY NOT ASSERTED: "a refused acquisition never owns the vehicle".
+    //
+    // It reads as the natural mirror of the check above and it is unsound. A
+    // refused call carries no application id, so `acquire.value` is `undefined`
+    // by construction — and on the interleaving this race's own header names as
+    // LEGITIMATE (the acquirer sees the incumbent claim, refuses, the release
+    // then succeeds) the vehicle has no owner either. The comparison becomes
+    // `undefined !== undefined`, which is false, and the probe reports
+    // INVARIANT VIOLATED against a perfectly correct implementation.
+    //
+    // Verified by executing the predicate in isolation rather than reasoning
+    // about it. A safety probe that cries wolf on correct behaviour is worse
+    // than one assertion short: it trains the reader to disbelieve it, or sends
+    // someone to "fix" working code. The sound content of this idea is already
+    // covered by the two checks either side of it.
     check(
       "B. never two owners",
       (await client.query("testSupport:liveClaimCount", {
@@ -336,10 +362,16 @@ async function main() {
             status: "COMPLETED",
           })
     );
+    // `=== 1`, not `<= 1`. Race D starts from a genuinely FREE vehicle, so
+    // exactly one of the two must win. Accepting zero would let the starvation
+    // bug through silently — both cross-subsystem calls spuriously refusing
+    // because each defers to the other over index ranges OCC never serialized
+    // against one another. That is precisely the two-subsystems-disagree class
+    // Race D was added to catch, so tolerating zero would defeat its purpose.
     check(
-      "D. a finance claim and a cash sale never both succeed on one vehicle",
-      race.filter((r) => r.ok).length <= 1,
-      `application=${race[0].ok} cashSale=${race[1].ok}`
+      "D. exactly one of finance claim / cash sale wins on a free vehicle",
+      race.filter((r) => r.ok).length === 1,
+      `application=${race[0].ok} cashSale=${race[1].ok} — ${describeCrossOutcome(race)}`
     );
   }
 
@@ -358,9 +390,9 @@ async function main() {
           })
     );
     check(
-      "D. a finance claim and a manual reservation never both succeed on one vehicle",
-      race.filter((r) => r.ok).length <= 1,
-      `application=${race[0].ok} reservation=${race[1].ok}`
+      "D. exactly one of finance claim / manual reservation wins on a free vehicle",
+      race.filter((r) => r.ok).length === 1,
+      `application=${race[0].ok} reservation=${race[1].ok} — ${describeCrossOutcome(race)}`
     );
   }
 
