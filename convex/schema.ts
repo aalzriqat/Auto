@@ -2036,12 +2036,133 @@ export default defineSchema({
     expiresAt: v.optional(v.number()),
     createdBy: v.id("users"),
     createdAt: v.number(),
+
+    // ── SCRUM-195 lineage ────────────────────────────────────────────────────
+    //
+    // A quote is EVIDENCE of a deal, not the deal's identity. `rootId` says
+    // which commitment this quote belongs to; the root is what actually holds
+    // the car. Optional because every quote written before SCRUM-195 has none,
+    // and a legacy quote must keep working rather than being retro-claimed.
+    rootId: v.optional(v.id("commitmentRoots")),
+
+    /**
+     * The revision this quote replaces. Only the CURRENT head may be
+     * superseded, and superseding is compare-and-swap on the root's monotonic
+     * revision — two negotiators renegotiating the same deal concurrently must
+     * not both win, because the loser's price would silently become the deal.
+     */
+    supersedesQuoteId: v.optional(v.id("quotes")),
+    /** Set on the superseded row, so a stale reader can be redirected forward. */
+    supersededByQuoteId: v.optional(v.id("quotes")),
+
+    /**
+     * Explicit, server-validated proof that this quote ADOPTS an existing
+     * reservation's root (c14659/c14833, restated by c14865).
+     *
+     * ⚠️ Adoption has to be explicit. Inferring it from "same customer, same
+     * vehicle" was ruled out by name: a customer may legitimately hold a
+     * reservation and separately open an unrelated deal, and treating those as
+     * one root lets the second consume the first's car. Omitted proof leaves a
+     * quote on independent lineage, which is exactly what makes it refusable.
+     */
+    adoptedReservationId: v.optional(v.id("vehicleReservations")),
+
+    /** Retry key. An exact retry must return the SAME quote, never mint a second root. */
+    idempotencyKey: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
     .index("by_customer", ["customerId"])
     .index("by_vehicle", ["vehicleId"])
     .index("by_status", ["status"])
-    .index("by_lead", ["leadId"]),
+    .index("by_lead", ["leadId"])
+    .index("by_root", ["rootId"])
+    .index("by_org_idempotency", ["orgId", "idempotencyKey"]),
+
+  /**
+   * SCRUM-195 — WHO OWNS A PHYSICAL CAR.
+   *
+   * One vehicle row is one physical unit, so at most one root may hold it at a
+   * time. Identity is SERVER-OWNED and deliberately not derivable from the
+   * facts hanging off it: not `(customerId, vehicleId)`, not a row count, not
+   * "the quote with the newest timestamp".
+   *
+   * That matters because the same customer can legitimately have two unrelated
+   * deals on one car (a lapsed reservation and a fresh enquiry), and two
+   * different customers can legitimately be part of one deal. Keying ownership
+   * on the customer gets both cases wrong, in opposite directions.
+   */
+  commitmentRoots: defineTable({
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    /** Who the deal is FOR. Descriptive — never the identity, and never the lock. */
+    customerId: v.id("customers"),
+
+    /**
+     * OPEN holds the car. RELEASED no longer holds it but may still be
+     * financially open — a released deposit share is money the dealership still
+     * owes an answer for, so the money axis outlives the ownership axis.
+     * CONSUMED means the deal completed into a sale.
+     */
+    status: v.union(v.literal("OPEN"), v.literal("RELEASED"), v.literal("CONSUMED")),
+
+    /** The current head of the linear revision chain. */
+    headQuoteId: v.optional(v.id("quotes")),
+    /** Monotonic. The CAS target for a supersession. */
+    revision: v.number(),
+
+    /** The reservation this root started life as, when it began that way. */
+    originReservationId: v.optional(v.id("vehicleReservations")),
+
+    createdAt: v.number(),
+    createdBy: v.id("users"),
+    closedAt: v.optional(v.number()),
+    closedReason: v.optional(v.string()),
+  })
+    .index("by_org_vehicle_status", ["orgId", "vehicleId", "status"])
+    .index("by_org_vehicle", ["orgId", "vehicleId"])
+    .index("by_head_quote", ["headQuoteId"])
+    .index("by_org_reservation", ["orgId", "originReservationId"]),
+
+  /**
+   * SCRUM-195 — WHAT EVIDENCE HOLDS A CAR FOR A ROOT.
+   *
+   * Deposits, finance applications and manual reservations are three separate
+   * kinds of evidence, historically enforced by three code paths that did not
+   * consult one another. `grep -c financeApplications` over `deposits.ts`,
+   * `vehicles.ts` and `utils/depositHelpers.ts` returned 0, 0, 0 — which is how
+   * an application-held car stayed acquirable through every other door.
+   *
+   * Kinds stay distinct here rather than collapsing into "held", because a root
+   * may hold several at once and releasing one must not free the car while
+   * another still stands.
+   */
+  vehicleCommitmentClaims: defineTable({
+    orgId: v.id("organizations"),
+    rootId: v.id("commitmentRoots"),
+    vehicleId: v.id("vehicles"),
+    kind: v.union(v.literal("DEPOSIT"), v.literal("FINANCE"), v.literal("RESERVATION")),
+    /** ACTIVE holds the car; RELEASED let it go; CONSUMED completed into a sale. */
+    status: v.union(v.literal("ACTIVE"), v.literal("RELEASED"), v.literal("CONSUMED")),
+
+    // Exactly one of these is set, matching `kind`.
+    depositId: v.optional(v.id("deposits")),
+    applicationId: v.optional(v.id("financeApplications")),
+    reservationId: v.optional(v.id("vehicleReservations")),
+
+    /** The revision that created this claim, for audit and stale-head diagnosis. */
+    quoteId: v.optional(v.id("quotes")),
+
+    createdAt: v.number(),
+    createdBy: v.id("users"),
+    resolvedAt: v.optional(v.number()),
+    resolvedReason: v.optional(v.string()),
+  })
+    .index("by_org_vehicle_status", ["orgId", "vehicleId", "status"])
+    .index("by_root", ["rootId"])
+    .index("by_root_status", ["rootId", "status"])
+    .index("by_deposit", ["depositId"])
+    .index("by_application", ["applicationId"])
+    .index("by_reservation", ["reservationId"]),
 
   applicationStatusLog: defineTable({
     orgId: v.id("organizations"),
