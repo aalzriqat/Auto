@@ -529,6 +529,49 @@ async function main() {
     );
   }
 
+  // ── Race F — CONCURRENT SUPERSESSION, the linear current-head CAS ─────────
+  // c14796: a lineage has ONE `currentQuoteId` and a monotonic revision, and
+  // only the current head may be superseded. Two simultaneous supersessions of
+  // the same head must not both produce "valid" sibling revisions — one commits
+  // atomically, the stale one refuses.
+  //
+  // This is structurally unlike Races A–E. They contend a single index range
+  // keyed on one vehicle; this one reads across TWO quote documents to decide
+  // which revision governs the deal, which is exactly the shape most likely to
+  // mint two heads under real OCC. It was flagged as the one new mechanism with
+  // no race of its own.
+  {
+    const s = await freshScenario("race-f-supersede", 1);
+    const race = await raceAll(2, (i) =>
+      client.mutation("quotes:saveQuote", {
+        orgId: s.orgId,
+        customerId: s.customerId,
+        vehicleId: s.vehicleId,
+        mode: "CASH",
+        vehiclePrice: s.price + i, // distinct terms, same predecessor
+        downPayment: 0,
+        termMonths: 0,
+        totalFinancedAmount: 0,
+        supersedesQuoteId: s.quoteIds[0],
+      })
+    );
+    const head = await client.query("testSupport:currentHead", {
+      orgId: s.orgId,
+      quoteId: s.quoteIds[0],
+    });
+
+    check(
+      "F. two concurrent supersessions of one head — exactly one commits",
+      race.filter((r) => r.ok).length === 1,
+      `first=${race[0].ok} second=${race[1].ok} — ${describeCrossOutcome(race)}`
+    );
+    check(
+      "F. the committed revision IS the new head — no sibling revisions",
+      race.filter((r) => r.ok).length === 1 && head?.currentQuoteId === race.find((r) => r.ok)?.value,
+      `head=${JSON.stringify(head)}`
+    );
+  }
+
   const failed = results.filter((r) => !r.ok);
   console.log("");
   console.log(

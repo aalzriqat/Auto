@@ -42,9 +42,15 @@ const MODULES = import.meta.glob("./**/*.*s");
  * commitment may have MANY evidence rows. **Identity is deal lineage — a root —
  * never row count and never `(customerId, vehicleId)`.**
  *
- *   - a quote with no hard participant is informational: no commitment;
- *   - the first deposit or Finance Application on a quote establishes or joins
- *     that deal's root;
+ *   - **the root EXISTS from the first quote save** (c14796), but is purely
+ *     informational and holds nothing — a quote does not lock a car;
+ *   - the first deposit, Finance Application or proven reservation **ACTIVATES**
+ *     the vehicle commitment under that already-existing root. It activates;
+ *     it never creates. Creating the identity lazily at first hard evidence —
+ *     which is what I originally proposed — leaves two linked re-quotes able to
+ *     take their first deposits concurrently and each mint a root, and the fix
+ *     is structural rather than a lock: if the identity already exists there is
+ *     no window in which two writers can both decide to create one;
  *   - further deposits on that SAME quote are more evidence for the same root;
  *   - a Finance Application from that same quote joins that same root and must
  *     not conflict with its own deposit rows;
@@ -924,6 +930,141 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
       expect(live).toHaveLength(2);
       expect(new Set(live.map((row) => String(row.quoteId)))).toHaveProperty("size", 2);
       expect(new Set(live.map((row) => String(row.customerId)))).toHaveProperty("size", 2);
+    });
+  });
+
+  describe("11. c14796: the root exists from the first quote, and supersession is linear", () => {
+    /**
+     * The three rulings this block encodes, and why each replaced something.
+     *
+     * 1. LINEAR CURRENT-HEAD + CAS. A lineage has one `currentQuoteId` and a
+     *    monotonic revision. ONLY the current quote may be superseded, so two
+     *    simultaneous supersessions cannot mint sibling "valid" revisions —
+     *    one wins atomically, the stale one refuses. Every new deposit,
+     *    application and reservation must originate from the CURRENT revision.
+     *
+     * 2. THE ROOT IS CREATED AT THE FIRST QUOTE SAVE, NOT AT FIRST HARD
+     *    EVIDENCE. This overrode my own recommendation, and the override is
+     *    the better answer. I proposed creating the root lazily, when the first
+     *    deposit or application arrives — which leaves exactly the race Codex
+     *    described open: two linked re-quotes taking their first deposits
+     *    concurrently, each finding no root and each minting one. Creating the
+     *    identity up front removes the race by construction: activation becomes
+     *    an UPDATE to something that already exists, never a creation, so there
+     *    is no window in which two writers can both decide to create.
+     *
+     *    The root is INFORMATIONAL AND NON-LOCKING until activated. Saving a
+     *    quote must not hold a car — that would turn every browsing customer
+     *    into an inventory lock, which is the failure mode this whole issue
+     *    exists to avoid at the other extreme.
+     *
+     * 3. MONEY BELONGS TO THE ROOT; `quoteId` IS PROVENANCE. A Q1 deposit
+     *    survives a linked Q2 re-quote as evidence on the same root. Completion
+     *    on Q2 must inspect and resolve ALL live evidence across EVERY revision.
+     *    If even one deposit, hold, reservation or finance claim cannot be
+     *    deterministically handled, completion fails ATOMICALLY — no orphaning,
+     *    no automatic refund, no silent reassignment, no silent deactivation,
+     *    no double application.
+     */
+
+    test("saving a quote does NOT lock the vehicle", async () => {
+      // The non-locking half, and it must keep passing. A root exists from the
+      // first save, but an informational quote holds nothing — two customers
+      // may both be quoted the same car, and an uncommitted car still sells.
+      // Without this control, "create the root early" would quietly become
+      // "browsing locks inventory".
+      const seed = await seedDealer("root-nonlocking");
+      const v = await vehicle(seed, "LIN0000000000024");
+
+      await quoteFor(seed, seed.customerA, v);
+      await expect(quoteFor(seed, seed.customerB, v)).resolves.toBeDefined();
+
+      const saleId = await seed.asUser.mutation(api.sales.create, {
+        orgId: seed.orgId,
+        vehicleId: v,
+        customerId: seed.customerB,
+        salespersonId: seed.userId,
+        salePrice: PRICE,
+        saleDate: Date.now(),
+        status: "COMPLETED" as const,
+      });
+      expect(await seed.t.run((ctx) => ctx.db.get(saleId))).toBeTruthy();
+    });
+
+    // SKIPPED — specification. No `supersedesQuoteId`, no `currentQuoteId` and
+    // no revision counter exist on `quotes` yet, so none of the CAS behaviour
+    // is expressible without inventing the fields inside the test.
+    //
+    // REQUIRED CONTRACT (c14796):
+    //   - the lineage carries `currentQuoteId` and a monotonic `revision`;
+    //   - `saveQuote({ supersedesQuoteId })` succeeds ONLY when the named quote
+    //     IS the current head — a compare-and-set;
+    //   - superseding a STALE revision refuses, atomically, with no new quote
+    //     row written;
+    //   - two concurrent supersessions of the same head: exactly one commits.
+    test.skip("only the CURRENT head may be superseded — a stale revision refuses", async () => {
+      const seed = await seedDealer("cas-stale");
+      const v = await vehicle(seed, "LIN0000000000025");
+      const r1 = await quoteFor(seed, seed.customerA, v);
+
+      // const r2 = await saveQuote({ ..., supersedesQuoteId: r1 });   // ok, head moves to r2
+      // await expect(
+      //   saveQuote({ ..., supersedesQuoteId: r1 })                    // r1 is stale now
+      // ).rejects.toThrow(/not the current revision|superseded|stale/i);
+      expect(r1).toBeDefined();
+    });
+
+    // SKIPPED — specification. Same missing surfaces.
+    //
+    // REQUIRED CONTRACT (c14796): new hard evidence must originate from the
+    // CURRENT revision. A deposit, application or reservation quoting a
+    // superseded revision is refused — otherwise money attaches to terms the
+    // deal has already moved past, which is how a renegotiated price silently
+    // fails to apply.
+    test.skip("new evidence must originate from the current revision", async () => {
+      const seed = await seedDealer("cas-evidence");
+      const v = await vehicle(seed, "LIN0000000000026");
+      const r1 = await quoteFor(seed, seed.customerA, v);
+
+      // const r2 = await saveQuote({ ..., supersedesQuoteId: r1 });
+      // await expect(
+      //   deposits.create({ quoteId: r1, amount: 500 })   // stale revision
+      // ).rejects.toThrow(/current revision|superseded/i);
+      // await expect(
+      //   deposits.create({ quoteId: r2, amount: 500 })   // the head
+      // ).resolves.toBeDefined();
+      expect(r1).toBeDefined();
+    });
+
+    // SKIPPED — specification, and this is the ruling with the sharpest teeth.
+    //
+    // REQUIRED CONTRACT (c14796): money belongs economically to the ROOT;
+    // `quoteId` is provenance only. A Q1 deposit survives a linked Q2 re-quote
+    // as live evidence on the same root, and completion on Q2 must inspect and
+    // resolve EVERY live piece of evidence across EVERY revision.
+    //
+    // If even one deposit, hold, reservation or finance claim cannot be
+    // deterministically handled, completion FAILS ATOMICALLY. Explicitly
+    // forbidden: orphaning it, refunding it automatically, reassigning it
+    // silently, deactivating it silently, or applying it twice. A completion
+    // that "mostly" resolves the money is the defect, not a partial success.
+    test.skip("completion on a later revision resolves ALL live evidence on the root, or refuses", async () => {
+      const seed = await seedDealer("root-money");
+      const v = await vehicle(seed, "LIN0000000000027");
+      const r1 = await quoteFor(seed, seed.customerA, v);
+      await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: r1, amount: 1_000 });
+
+      // const r2 = await saveQuote({ ..., supersedesQuoteId: r1 });
+      //
+      // The Q1 deposit is still live, on the same root, under an older
+      // revision. Completing r2 must APPLY it — not ignore it because its
+      // quoteId differs from the one being completed.
+      // const saleId = await sales.create({ ..., quoteId: r2 });
+      // expect(depositApplicationsFor(saleId)).toContainEqual(the Q1 deposit);
+      //
+      // And the refusal half: if any live evidence cannot be deterministically
+      // handled, the whole completion fails with zero state delta.
+      expect(r1).toBeDefined();
     });
   });
 });
