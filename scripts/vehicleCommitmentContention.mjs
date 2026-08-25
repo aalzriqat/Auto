@@ -65,6 +65,7 @@
  */
 
 import { ConvexHttpClient } from "convex/browser";
+import { pathToFileURL } from "node:url";
 
 const DEFAULT_CONCURRENCY = 32;
 
@@ -804,7 +805,22 @@ async function main() {
   process.exit(failed.length === 0 ? 0 : 1);
 }
 
-main().catch((error) => {
-  console.error(`probe could not run: ${error.message}`);
-  process.exit(2);
-});
+/**
+ * Only run when invoked directly.
+ *
+ * c14843 requires executable negative AND positive controls on the
+ * fail-closed gate. Those controls have to import this module to call
+ * `assertDeploymentIsDisposable`, and an unconditional `main()` would fire the
+ * whole probe on import — so the guard is what makes the gate testable at all.
+ */
+const invokedDirectly =
+  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (invokedDirectly) {
+  main().catch((error) => {
+    console.error(`probe could not run: ${error.message}`);
+    process.exit(2);
+  });
+}
+
+export { assertDeploymentIsDisposable, deploymentNameOf };

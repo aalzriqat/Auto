@@ -82,7 +82,19 @@ type VehicleState =
   /** Held by a DIFFERENT live root. */
   | "HELD_BY_OTHER_ROOT"
   /** Its share was released; per c14833 the car is genuinely free again. */
-  | "RELEASED_AWAITING_DECISION";
+  | "RELEASED_AWAITING_DECISION"
+  /**
+   * Its finance claim was REJECTED but the same root's deposit still lives.
+   * Rejection releases the CLAIM, not the customer's money — the unit stays
+   * held, and treating rejection as a full release silently discards a deal.
+   */
+  | "REJECTED_APP_SAME_ROOT_DEPOSIT_LIVES"
+  /**
+   * Two live roots on one car — the pre-cutover state a backfill inherits.
+   * Only reachable by direct seeding, which c14840 permits precisely because
+   * the repaired public API can no longer produce it.
+   */
+  | "LEGACY_MULTI_ROOT";
 
 /** Which revision of the lineage the operation cites as its proof. */
 type RevisionState =
@@ -126,12 +138,27 @@ type IdentityState =
   | "KEY_REPLAY_DIFFERENT_TERMS"
   | "NO_KEY_LEGACY";
 
+/**
+ * What the vehicle IS to the operation. A car can be the thing being bought or
+ * the thing being taken in part-exchange, and the authority must treat both as
+ * acquisitions — the trade-in path was a second, unguarded writer.
+ */
+type VehicleRole = "PRIMARY" | "TRADE_IN";
+
+/**
+ * SOURCED rows are one physical car that several dealers may list. That is the
+ * case where "two applications, one vehicle" looks legitimate and is not.
+ */
+type VehicleSource = "OWNED" | "SOURCED";
+
 interface World {
   vehicle?: VehicleState;
   revision?: RevisionState;
   proof?: ProofState;
   money?: MoneyState;
   identity?: IdentityState;
+  role?: VehicleRole;
+  source?: VehicleSource;
   /** Set when a rule is about multi-vehicle quotes specifically. */
   multiVehicle?: boolean;
 }
@@ -142,7 +169,10 @@ type Operation =
   | "deposits.resolveReleasedAllocation"
   | "applications.createFromQuote"
   | "applications.finalizeDeal"
+  | "applications.reopenRejected"
   | "vehicles.createReservation"
+  | "vehicles.softDelete"
+  | "vehicles.archive"
   | "quotes.saveQuote"
   | "sales.create"
   | "sales.completeFromQuote"
@@ -181,11 +211,14 @@ interface Scenario {
 const RELEVANT_DIMENSIONS: Record<Operation, (keyof World)[]> = {
   "deposits.create": ["vehicle", "revision", "proof", "money", "multiVehicle"],
   "deposits.resolveReleasedAllocation": ["vehicle", "multiVehicle"],
-  "applications.createFromQuote": ["vehicle", "revision", "proof"],
+  "applications.createFromQuote": ["vehicle", "revision", "proof", "source", "multiVehicle"],
   "applications.finalizeDeal": ["vehicle", "revision"],
+  "applications.reopenRejected": ["vehicle"],
   "vehicles.createReservation": ["vehicle", "revision", "proof"],
+  "vehicles.softDelete": ["vehicle"],
+  "vehicles.archive": ["vehicle"],
   "quotes.saveQuote": ["proof", "revision", "money", "identity", "multiVehicle"],
-  "sales.create": ["vehicle", "revision", "proof"],
+  "sales.create": ["vehicle", "revision", "proof", "role"],
   "sales.completeFromQuote": ["vehicle", "revision", "money"],
   "commitments.closeRoot": ["vehicle", "money"],
 };
@@ -463,7 +496,7 @@ export const SCENARIOS: Scenario[] = [
   {
     id: "sale/other-root-cash",
     rule: "A cash sale cannot consume a vehicle another root holds.",
-    world: { vehicle: "HELD_BY_OTHER_ROOT", revision: "NO_LINEAGE", proof: "NONE" },
+    world: { vehicle: "HELD_BY_OTHER_ROOT", revision: "NO_LINEAGE", proof: "NONE", role: "PRIMARY" },
     operation: "sales.create",
     outcome: "REFUSE",
     reason: /committed|another deal|already held|no longer available/i,
@@ -471,7 +504,12 @@ export const SCENARIOS: Scenario[] = [
   {
     id: "sale/stale-quote",
     rule: "A sale may not complete against a superseded revision's terms.",
-    world: { vehicle: "HELD_BY_SAME_ROOT", revision: "STALE", proof: "SUPERSEDES_MATCHING" },
+    world: {
+      vehicle: "HELD_BY_SAME_ROOT",
+      revision: "STALE",
+      proof: "SUPERSEDES_MATCHING",
+      role: "PRIMARY",
+    },
     operation: "sales.create",
     outcome: "REFUSE",
     reason: /current revision|superseded|stale|current head/i,
@@ -497,14 +535,14 @@ export const SCENARIOS: Scenario[] = [
   {
     id: "application/same-root",
     rule: "An application from the same quote joins that root rather than competing.",
-    world: { vehicle: "HELD_BY_SAME_ROOT", revision: "HEAD", proof: "NONE" },
+    world: { vehicle: "HELD_BY_SAME_ROOT", revision: "HEAD", proof: "NONE", source: "OWNED" },
     operation: "applications.createFromQuote",
     outcome: "ACCEPT",
   },
   {
     id: "application/other-root",
     rule: "An application on a vehicle a different root holds is refused.",
-    world: { vehicle: "HELD_BY_OTHER_ROOT", revision: "HEAD", proof: "NONE" },
+    world: { vehicle: "HELD_BY_OTHER_ROOT", revision: "HEAD", proof: "NONE", source: "OWNED" },
     operation: "applications.createFromQuote",
     outcome: "REFUSE",
     reason: /committed|another deal|already held|no longer available/i,
@@ -512,7 +550,7 @@ export const SCENARIOS: Scenario[] = [
   {
     id: "application/stale-revision",
     rule: "An application citing a superseded revision is refused.",
-    world: { vehicle: "HELD_BY_SAME_ROOT", revision: "STALE", proof: "NONE" },
+    world: { vehicle: "HELD_BY_SAME_ROOT", revision: "STALE", proof: "NONE", source: "OWNED" },
     operation: "applications.createFromQuote",
     outcome: "REFUSE",
     reason: /current revision|superseded|stale|current head/i,
@@ -533,6 +571,116 @@ export const SCENARIOS: Scenario[] = [
     world: { vehicle: "RELEASED_AWAITING_DECISION", multiVehicle: true },
     operation: "deposits.resolveReleasedAllocation",
     outcome: "ACCEPT",
+  },
+
+  // ── migrated from the free-form authority matrix (c14843) ────────────────
+  // These were 21 hand-written fixtures. Expressing them as worlds collapses
+  // several into scenarios that already existed — which is itself the point:
+  // duplicates that stated the same rule in different prose could drift apart,
+  // and now cannot.
+  // ⚠️ DELETED IN MIGRATION, deliberately: "a financed multi-vehicle quote is
+  // refused with NO partial state".
+  //
+  // The engine refuses multi-vehicle finance applications outright ("Finance
+  // applications currently support…"), so that fixture could never reach the
+  // commitment rule it was named for — the wrong-reason class, caught here by
+  // the classifier before it could be committed a fifth time.
+  //
+  // Its actual value was the "no partial state" half, and that is no longer
+  // one fixture's job: whole-world zero-delta is now asserted on EVERY refusal
+  // the table declares. The property survives the deletion, strengthened.
+  {
+    id: "application/sourced-double-hold",
+    rule: "A SOURCED row is ONE physical car: two applications cannot both hold it.",
+    world: { vehicle: "HELD_BY_OTHER_ROOT", revision: "HEAD", proof: "NONE", source: "SOURCED" },
+    operation: "applications.createFromQuote",
+    outcome: "REFUSE",
+    reason: /committed|another deal|already held|no longer available/i,
+  },
+  {
+    id: "application/reopen-rejected-taken",
+    rule: "Reopening a rejected application must RE-ACQUIRE, and loses if another deal took the car.",
+    world: { vehicle: "HELD_BY_OTHER_ROOT" },
+    operation: "applications.reopenRejected",
+    outcome: "REFUSE",
+    reason: /committed|another deal|already held|no longer available/i,
+  },
+  {
+    id: "application/reopen-rejected-free",
+    rule: "Reopening succeeds while the car is still free — rejection releases, it does not forfeit.",
+    world: { vehicle: "FREE" },
+    operation: "applications.reopenRejected",
+    outcome: "ACCEPT",
+  },
+  {
+    id: "sale/tradein-committed",
+    rule: "A committed vehicle cannot be taken in as another deal's trade-in.",
+    world: { vehicle: "HELD_BY_OTHER_ROOT", revision: "NO_LINEAGE", proof: "NONE", role: "TRADE_IN" },
+    operation: "sales.create",
+    outcome: "REFUSE",
+    reason: /committed|another deal|already held|no longer available/i,
+  },
+  {
+    id: "sale/tradein-free",
+    rule: "An uncommitted vehicle is still accepted as a trade-in.",
+    world: { vehicle: "FREE", revision: "NO_LINEAGE", proof: "NONE", role: "TRADE_IN" },
+    operation: "sales.create",
+    outcome: "ACCEPT",
+  },
+  {
+    id: "sale/walkin-free-vehicle",
+    rule: "An ordinary walk-in cash sale on an uncommitted car still completes.",
+    world: { vehicle: "FREE", revision: "NO_LINEAGE", proof: "NONE", role: "PRIMARY" },
+    operation: "sales.create",
+    outcome: "ACCEPT",
+  },
+  {
+    id: "vehicle/softdelete-committed",
+    rule: "Soft-deleting a vehicle a live commitment holds is refused.",
+    world: { vehicle: "HELD_BY_OTHER_ROOT" },
+    operation: "vehicles.softDelete",
+    outcome: "REFUSE",
+    reason: /committed|another deal|already held|in use|cannot delete/i,
+  },
+  {
+    id: "vehicle/archive-committed",
+    rule: "Archiving is a second door out of inventory and is refused on a committed car.",
+    world: { vehicle: "HELD_BY_OTHER_ROOT" },
+    operation: "vehicles.archive",
+    outcome: "REFUSE",
+    // Widened to the refusal the engine ALREADY gives ("Release the
+    // reservation or deposit…"). This rule is enforced today; my first pattern
+    // was narrower than the real message and read a satisfied rule as a
+    // violation — the same mistake as the reservation scenario.
+    reason: /committed|another deal|already held|in use|cannot archive|release the (reservation|deposit)/i,
+  },
+  {
+    id: "vehicle/softdelete-free",
+    rule: "An uncommitted vehicle may still be soft-deleted.",
+    world: { vehicle: "FREE" },
+    operation: "vehicles.softDelete",
+    outcome: "ACCEPT",
+  },
+  {
+    id: "deposit/rejected-app-still-held",
+    rule: "Rejecting the finance claim releases the CLAIM, not the money: same-root deposit keeps the car.",
+    world: {
+      vehicle: "REJECTED_APP_SAME_ROOT_DEPOSIT_LIVES",
+      revision: "HEAD",
+      proof: "NONE",
+      money: "NONE",
+    },
+    operation: "deposits.create",
+    outcome: "REFUSE",
+    reason: /committed|another deal|already held|no longer available|deposit/i,
+  },
+  {
+    id: "deposit/legacy-multi-root-fails-closed",
+    rule: "A vehicle carrying two legacy roots is ambiguous, and ambiguity is never free inventory.",
+    world: { vehicle: "LEGACY_MULTI_ROOT", revision: "HEAD", proof: "NONE", money: "NONE" },
+    operation: "deposits.create",
+    outcome: "REFUSE",
+    reason: /conflict|ambiguous|committed|another deal|already held|not cutover/i,
   },
 ];
 
@@ -676,7 +824,7 @@ async function seedDealer(suffix: string) {
 }
 
 let vinCounter = 0;
-async function vehicle(seed: Seed): Promise<Id<"vehicles">> {
+async function vehicle(seed: Seed, source: VehicleSource = "OWNED"): Promise<Id<"vehicles">> {
   const vin = `SPEC${String(vinCounter++).padStart(13, "0")}`;
   return await seed.t.run((ctx) =>
     ctx.db.insert("vehicles", {
@@ -691,6 +839,10 @@ async function vehicle(seed: Seed): Promise<Id<"vehicles">> {
       transmission: "Automatic",
       sellingPrice: PRICE,
       status: "AVAILABLE",
+      // A SOURCED row is one physical car several dealers may list, which is
+      // the case where "two applications on one vehicle" looks legitimate and
+      // is not.
+      ...(source === "SOURCED" ? { sourceType: "SOURCED" as const } : {}),
     })
   );
 }
@@ -719,6 +871,10 @@ async function mustSucceed<T>(label: string, op: Promise<T>): Promise<T> {
 
 interface BuiltWorld {
   vehicleId: Id<"vehicles">;
+  /** The application under test, for the reopen path. */
+  rejectedApplicationId?: Id<"financeApplications">;
+  /** The car actually being SOLD when `vehicleId` is a trade-in. */
+  primaryVehicleId?: Id<"vehicles">;
   /** The root under test, when the scenario has one. */
   ownQuoteId?: Id<"quotes">;
   /** The current head, when a supersession has happened. */
@@ -763,8 +919,50 @@ async function quoteFor(
  */
 async function buildWorld(seed: Seed, scenario: Scenario): Promise<BuiltWorld> {
   const { world } = scenario;
-  const vehicleId = await vehicle(seed);
+  const vehicleId = await vehicle(seed, world.source ?? "OWNED");
   const built: BuiltWorld = { vehicleId };
+
+  // A trade-in is a SECOND vehicle role in one sale. The car being bought must
+  // exist and be free, or the sale fails on the primary rather than on the
+  // trade-in rule under test.
+  if (world.role === "TRADE_IN") {
+    built.primaryVehicleId = await vehicle(seed);
+  }
+
+  // The reopen path needs a genuinely rejected application, reached the
+  // ordinary way rather than seeded — rejection is what releases the claim, so
+  // manufacturing the row would skip the very transition being measured.
+  if (scenario.operation === "applications.reopenRejected") {
+    const ownQuote = await quoteFor(seed, seed.customerA, vehicleId);
+    built.ownQuoteId = ownQuote;
+    built.rejectedApplicationId = (await mustSucceed(
+      "create the application that will be rejected",
+      seed.asUser.mutation(api.applications.createFromQuote, {
+        orgId: seed.orgId,
+        quoteId: ownQuote,
+      })
+    )) as Id<"financeApplications">;
+    await mustSucceed(
+      "reject it",
+      seed.asUser.mutation(api.applications.updateStatus, {
+        orgId: seed.orgId,
+        applicationId: built.rejectedApplicationId,
+        status: "REJECTED" as const,
+      })
+    );
+    if (world.vehicle === "HELD_BY_OTHER_ROOT") {
+      built.rivalQuoteId = await quoteFor(seed, seed.customerB, vehicleId);
+      await mustSucceed(
+        "a rival takes the car the rejection released",
+        seed.asUser.mutation(api.deposits.create, {
+          orgId: seed.orgId,
+          quoteId: built.rivalQuoteId,
+          amount: 1_500,
+        })
+      );
+    }
+    return built;
+  }
 
   // ── reacquisition has its own shape ──────────────────────────────────────
   // `resolveReleasedAllocation` needs a released SHARE to move and a TARGET to
@@ -952,6 +1150,70 @@ async function buildWorld(seed: Seed, scenario: Scenario): Promise<BuiltWorld> {
   }
 
   // ── vehicle commitment state ─────────────────────────────────────────────
+  if (world.vehicle === "REJECTED_APP_SAME_ROOT_DEPOSIT_LIVES") {
+    const ownQuote = built.ownQuoteId ?? (await quoteFor(seed, seed.customerA, vehicleId));
+    built.ownQuoteId = ownQuote;
+    await mustSucceed(
+      "the root's own deposit, which must survive the rejection",
+      seed.asUser.mutation(api.deposits.create, {
+        orgId: seed.orgId,
+        quoteId: ownQuote,
+        amount: 1_000,
+      })
+    );
+    const applicationId = await mustSucceed(
+      "the finance application on the same root",
+      seed.asUser.mutation(api.applications.createFromQuote, {
+        orgId: seed.orgId,
+        quoteId: ownQuote,
+      })
+    );
+    await mustSucceed(
+      "reject it",
+      seed.asUser.mutation(api.applications.updateStatus, {
+        orgId: seed.orgId,
+        applicationId,
+        status: "REJECTED" as const,
+      })
+    );
+  }
+
+  if (world.vehicle === "LEGACY_MULTI_ROOT") {
+    // Seeded DIRECTLY, and c14840 permits exactly this: once the acquisition
+    // guard lands, the public path refuses the second deposit and the state
+    // becomes unconstructible through the API — while remaining precisely what
+    // a backfill inherits from today's data. A specification expressible only
+    // before the fix is no specification for the fix.
+    const rootA = await quoteFor(seed, seed.customerA, vehicleId);
+    const rootB = await quoteFor(seed, seed.customerB, vehicleId);
+    await seed.t.run(async (ctx) => {
+      for (const [customerId, quoteId, amount] of [
+        [seed.customerA, rootA, 1_000],
+        [seed.customerB, rootB, 2_000],
+      ] as const) {
+        await ctx.db.insert("deposits", {
+          orgId: seed.orgId,
+          customerId,
+          quoteId,
+          vehicleId,
+          amount,
+          amountMinor: amount * 1_000,
+          currency: "JOD",
+          method: "CASH" as const,
+          status: "HELD" as const,
+          holdActive: true,
+          createdAt: Date.now(),
+          createdBy: seed.userId,
+        });
+      }
+    });
+    // The acting quote is a THIRD, independent quote on the SAME car — that is
+    // what "a new deposit lands on an ambiguous vehicle" means. It must not be
+    // pointed at a different vehicle, or the scenario silently stops being
+    // about ambiguity at all.
+    built.ownQuoteId = await quoteFor(seed, seed.customerA, vehicleId);
+  }
+
   if (world.vehicle === "HELD_BY_OTHER_ROOT") {
     built.rivalQuoteId = await quoteFor(seed, seed.customerB, vehicleId);
     await mustSucceed(
@@ -1160,16 +1422,53 @@ async function invoke(seed: Seed, scenario: Scenario, built: BuiltWorld): Promis
       return seed.asUser.mutation(notYetBuilt.quotes.saveQuote, { ...args, idempotencyKey: key });
     }
 
-    case "sales.create":
+    case "sales.create": {
+      // When the vehicle under test is a TRADE-IN, the sale is of a different,
+      // free car and the vehicle under test arrives as `tradeInVehicleId`. That
+      // is a second acquisition path into one mutation, and it was an unguarded
+      // writer: the trade-in guard refuses SOLD and ARCHIVED but has never
+      // consulted commitments.
+      const isTradeIn = world.role === "TRADE_IN";
       return seed.asUser.mutation(api.sales.create, {
         orgId: seed.orgId,
-        vehicleId,
+        vehicleId: isTradeIn ? built.primaryVehicleId! : vehicleId,
         customerId: seed.customerA,
         salespersonId: seed.userId,
         salePrice: PRICE,
         saleDate: Date.now(),
         status: "COMPLETED" as const,
-        ...(quoteId ? { quoteId } : {}),
+        ...(isTradeIn ? { tradeInVehicleId: vehicleId, tradeInValue: 5_000 } : {}),
+        ...(quoteId && !isTradeIn ? { quoteId } : {}),
+      });
+    }
+
+    case "applications.reopenRejected":
+      // Rejection RELEASED the claim, so reopening must re-acquire and lose if
+      // a competitor got there first.
+      // PENDING_DOCS, not UNDER_REVIEW: `REJECTED: ["PENDING_DOCS"]` is the
+      // only legal transition out of rejection. Using any other status fails
+      // on the state machine before the commitment authority is consulted —
+      // a refusal that matched no rule, wearing the costume of one.
+      return seed.asUser.mutation(api.applications.updateStatus, {
+        orgId: seed.orgId,
+        applicationId: built.rejectedApplicationId!,
+        status: "PENDING_DOCS" as const,
+      });
+
+    case "vehicles.softDelete":
+      return seed.asUser.mutation(api.vehicles.softDelete, {
+        orgId: seed.orgId,
+        vehicleId,
+      });
+
+    case "vehicles.archive":
+      // The SECOND door out of inventory. `vehicles.update` accepts a status
+      // change independently of `softDelete`, so a guard on one is not a guard
+      // on the other.
+      return seed.asUser.mutation(api.vehicles.update, {
+        orgId: seed.orgId,
+        vehicleId,
+        status: "ARCHIVED" as const,
       });
 
     case "sales.completeFromQuote":
@@ -1195,15 +1494,54 @@ async function invoke(seed: Seed, scenario: Scenario, built: BuiltWorld): Promis
   }
 }
 
-describe("SCRUM-195 spec — structural invariants", () => {
-  /**
-   * Not scenarios: these are properties of the SOURCE, and a scenario table
-   * cannot express them. They are forcing functions in the same sense as
-   * `customerMergeRegistry.test.ts` — a rule nobody is required to update is a
-   * comment, and comments do not survive contact with a hurried change.
-   */
+/**
+ * Every table a refused operation could plausibly touch.
+ *
+ * "Nothing was written" is only a claim if the world is actually counted.
+ * Asserting that no DEPOSIT row appeared would miss the payment, transaction,
+ * hold, ledger and notification residue that is the entire reason the rule
+ * exists.
+ */
+const WORLD_TABLES = [
+  "deposits",
+  "depositVehicleHolds",
+  "depositApplications",
+  "transactions",
+  "vehicleReservations",
+  "notifications",
+  "financeApplications",
+  "sales",
+  "receivableDocuments",
+  "journalEntries",
+  "pendingAccountingEvents",
+  "collectionPayments",
+  "canonicalPayments",
+  "paymentVouchers",
+] as const;
 
-  test("the contention harness declares no public testSupport SEED MUTATION", async () => {
+async function snapshotWorld(seed: Seed): Promise<Record<string, number>> {
+  return await seed.t.run(async (ctx) => {
+    const counts: Record<string, number> = {};
+    for (const table of WORLD_TABLES) {
+      counts[table] = (await ctx.db.query(table).collect()).length;
+    }
+    return counts;
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STRUCTURAL INVARIANTS (c14843)
+//
+// Properties of the SOURCE, which a scenario table cannot express. Each carries
+// an explicit invariant ID so it can be cited, and NONE of them may hide an
+// ACCEPT/REFUSE product rule — every such rule belongs in SCENARIOS, where the
+// contradiction preflight can see it. What lives here is "does this file exist,
+// is this surface shaped this way, is this list complete" — never "is this
+// operation permitted".
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("SCRUM-195 spec — structural invariants", () => {
+  test("INV-1 the contention harness declares no public testSupport SEED MUTATION", async () => {
     // c14840: preview contention bootstraps through real authenticated
     // product/admin paths. A public mutation that manufactures scenario state
     // is reachable by anyone holding a session, and the probe's own
@@ -1224,7 +1562,7 @@ describe("SCRUM-195 spec — structural invariants", () => {
     expect(seedMutations).toEqual([]);
   });
 
-  test("every saveQuote caller is inventoried, web and mobile alike", async () => {
+  test("INV-2 every saveQuote caller is inventoried, web and mobile alike", async () => {
     // c14840 put `apps/mobile` IN SCOPE and made this the cutover gate rather
     // than a curiosity: supported callers must declare NEW vs REVISE and carry
     // a stable operation identity, and no fallback may be removed until this
@@ -1276,18 +1614,153 @@ describe("SCRUM-195 spec — structural invariants", () => {
 
     expect([...new Set(found)].sort()).toEqual([...CALLERS].sort());
   });
+
+  test("INV-3 org-purge deletes the commitment claim AFTER everything it protects", async () => {
+    // Ordering, not behaviour — which is why it belongs here rather than in
+    // SCENARIOS. The requirement was REVERSED once already: I asserted the
+    // claim must be purged before its referents, and c14659 corrected it.
+    //
+    // `ACTIVE_DELETION_STATUSES` omits FAILED, so `unsuspendOrg` can revive an
+    // organisation whose purge died mid-run. If claims were deleted first, that
+    // revival leaves surviving vehicles and live deposits with NO authority
+    // over them — unprotected inventory, which is a far worse hazard than an
+    // inert claim pointing at a deleted vehicle (Convex has no FK enforcement,
+    // so the dangling claim is merely useless).
+    const { ORGANIZATION_DELETION_STEPS } = await import("./adminOrgs");
+    const stepOf = (table: string) =>
+      ORGANIZATION_DELETION_STEPS.findIndex((s) => String(s).includes(table));
+
+    const claim = stepOf("vehicleCommitmentClaims");
+    if (claim === -1) {
+      // The table does not exist yet. Asserting its ABSENCE here is deliberate:
+      // this must fail loudly the moment the claim table lands unsequenced,
+      // rather than silently continuing to pass and letting the ordering ship
+      // unconsidered.
+      expect(claim, "vehicleCommitmentClaims is not yet in the purge sequence").toBe(-1);
+      return;
+    }
+
+    for (const protectedTable of ["vehiclesWithStorage", "deposits", "financeApplications"]) {
+      expect(
+        claim,
+        `the claim must outlive ${protectedTable}, or an aborted-then-unsuspended purge leaves it unprotected`
+      ).toBeGreaterThan(stepOf(protectedTable));
+    }
+  });
+
+  test("INV-4 testSupport:deploymentIdentity stays a read-only identity query", async () => {
+    // c14843 keeps this ONE surface under an extremely narrow contract: a
+    // read-only query, exactly empty args, returning only the canonical
+    // deployment identity plus a disposable boolean, with no secrets and no
+    // write authority. It exists solely so the external contention harness can
+    // fail closed BEFORE it performs any writes.
+    //
+    // The contract is checked at the source, because the harness's own use of
+    // it cannot prove what the surface is allowed to do.
+    const { readFileSync, existsSync } = await import("node:fs");
+    const path = "convex/testSupport.ts";
+    if (!existsSync(path)) {
+      // Not built yet. Fail loudly rather than vacuously pass, so this contract
+      // is written the day the surface is.
+      expect(existsSync(path), "convex/testSupport.ts does not exist yet").toBe(true);
+      return;
+    }
+    const source = readFileSync(path, "utf8");
+
+    expect(source).toMatch(/export const deploymentIdentity = query\(/);
+    // No mutation may be exported from this module at all.
+    expect(source).not.toMatch(/export const \w+ = (?:internal)?mutation\(/);
+    // And nothing that would leak configuration beyond the two allowed fields.
+    for (const forbidden of ["process.env.CONVEX_AUTH", "SECRET", "TOKEN", "KEY="]) {
+      expect(source, `deploymentIdentity must not expose ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+});
+
+describe("SCRUM-195 spec — INV-5 the fail-closed deployment gate (c14843)", () => {
+  /**
+   * The gate exists so the external contention probe refuses to write to
+   * anything but a deployment that has explicitly declared itself disposable.
+   * c14843 requires BOTH negative controls and a positive one — and the
+   * positive matters most: a gate that refuses everything is trivially "safe"
+   * and makes the probe permanently unable to run anywhere, which would leave
+   * this design with no concurrency evidence at all while every test stayed
+   * green.
+   *
+   * These call the real gate with stub identities. That is why the harness now
+   * only runs `main()` when invoked directly.
+   */
+  const gate = async (identity: unknown, expected = "kindly-preview-999") => {
+    const { assertDeploymentIsDisposable } = await import(
+      "../scripts/vehicleCommitmentContention.mjs"
+    );
+    const client = { query: async () => identity };
+    return assertDeploymentIsDisposable(client, expected);
+  };
+
+  test("refuses a deployment that will not say which one it is", async () => {
+    await expect(gate({ disposable: true })).rejects.toThrow(/will not say which one it is/i);
+  });
+
+  test("refuses a deployment other than the one named", async () => {
+    await expect(
+      gate({ cloudUrl: "https://production-hound-172.convex.cloud", disposable: true })
+    ).rejects.toThrow(/pointed somewhere else/i);
+  });
+
+  test("refuses a correctly-named deployment that does not declare itself disposable", async () => {
+    await expect(
+      gate({ cloudUrl: "https://kindly-preview-999.convex.cloud", disposable: false })
+    ).rejects.toThrow(/does not declare itself disposable/i);
+  });
+
+  test("refuses when the disposable flag is merely absent, not false", async () => {
+    // Fail CLOSED. A missing flag is the shape a real production deployment
+    // presents, since it has no reason to carry one.
+    await expect(
+      gate({ cloudUrl: "https://kindly-preview-999.convex.cloud" })
+    ).rejects.toThrow(/does not declare itself disposable/i);
+  });
+
+  test("ACCEPTS an explicitly disposable preview that matches the named deployment", async () => {
+    // The positive control. Without it every refusal above is satisfied by a
+    // gate that refuses unconditionally.
+    await expect(
+      gate({ cloudUrl: "https://kindly-preview-999.convex.cloud", disposable: true })
+    ).resolves.toBe("kindly-preview-999");
+  });
 });
 
 describe("SCRUM-195 spec — declared scenarios", () => {
   test.each(SCENARIOS.map((s) => [s.id, s] as const))("%s", async (_id, scenario) => {
     const seed = await seedDealer(scenario.id.replace(/[^a-z0-9]/gi, "").slice(0, 24));
     const built = await buildWorld(seed, scenario);
-    const call = invoke(seed, scenario, built);
 
     if (scenario.outcome === "ACCEPT") {
-      await expect(call, `${scenario.id}: ${scenario.rule}`).resolves.toBeDefined();
-    } else {
-      await expect(call, `${scenario.id}: ${scenario.rule}`).rejects.toThrow(scenario.reason!);
+      await expect(
+        invoke(seed, scenario, built),
+        `${scenario.id}: ${scenario.rule}`
+      ).resolves.toBeDefined();
+      return;
     }
+
+    // ⚠️ WHOLE-WORLD ZERO DELTA ON EVERY REFUSAL, not in one dedicated fixture.
+    //
+    // The free-form suite proved "a refused deposit writes nothing anywhere"
+    // exactly once, for one operation, in one world. Every other refusal in the
+    // design was free to leave a payment row, an orphaned hold, a notification
+    // or a half-posted journal entry behind, and nothing would have noticed.
+    //
+    // Making it a property of the executor means it holds for every refusal the
+    // table declares, including every refusal added later — the residue problem
+    // is closed by construction rather than by remembering to test for it.
+    const before = await snapshotWorld(seed);
+    await expect(invoke(seed, scenario, built), `${scenario.id}: ${scenario.rule}`).rejects.toThrow(
+      scenario.reason!
+    );
+    expect(
+      await snapshotWorld(seed),
+      `${scenario.id}: the refusal must leave the world untouched`
+    ).toEqual(before);
   });
 });
