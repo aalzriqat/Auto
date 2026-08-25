@@ -386,7 +386,17 @@ async function main() {
             orgId: s.orgId,
             quoteId: s.quoteIds[0],
           })
-        : client.mutation("sales:create", {
+        : // QUOTE-BACKED deliberately. The previous version raced an UNQUOTED
+          // walk-in sale and then asserted the winner had "registered
+          // ownership" — but a walk-in has no quote and no reservation, so
+          // under the root union (`QUOTE | RESERVATION`) its ownership is
+          // literally unrepresentable. The assertion could therefore only ever
+          // fail, on correct behaviour, for a reason unrelated to the race.
+          //
+          // A walk-in on an uncommitted vehicle needs no root at all — it just
+          // sells the car. What Race D exists to test is two ROOTED subsystems
+          // colliding, so the cash leg carries its own root.
+          client.mutation("sales:create", {
             orgId: s.orgId,
             vehicleId: s.vehicleId,
             customerId: s.otherCustomerId,
@@ -394,6 +404,7 @@ async function main() {
             salePrice: s.price,
             saleDate: Date.now(),
             status: "COMPLETED",
+            quoteId: s.rivalQuoteId,
           })
     );
     // `=== 1`, not `<= 1`. Race D starts from a genuinely FREE vehicle, so

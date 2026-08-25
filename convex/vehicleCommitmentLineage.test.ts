@@ -178,7 +178,14 @@ async function vehicle(seed: Seed, vin: string): Promise<Id<"vehicles">> {
   );
 }
 
-/** A quote is the ROOT. Cash or financed changes who joins it, not its identity. */
+/**
+ * A quote, which the server RESOLVES to a root — it is not the root itself.
+ *
+ * The previous wording here said "a quote is the ROOT", which contradicted
+ * c14659 and survived the edit that introduced the server-owned model. Left
+ * uncorrected it would have told an implementer exactly the wrong thing, in the
+ * one place they are most likely to look.
+ */
 async function quoteFor(
   seed: Seed,
   customerId: Id<"customers">,
@@ -564,6 +571,86 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
       expect(await snapshotWorld(seed)).toEqual(before);
     });
 
+    test("a RELEASED allocation cannot be reactivated onto a vehicle a rival root has since taken", async () => {
+      // The reachable reacquisition my previous fixture stopped covering.
+      //
+      // Replacing the unreachable reallocation test closed the INITIAL
+      // acquisition and silently dropped the later-write problem it existed
+      // for. This sequence is entirely public and entirely supported:
+      //
+      //   1. a multi-vehicle deposit claims A and B;
+      //   2. `releaseVehicleAllocation` drops B from the deal and frees it;
+      //   3. a rival root legitimately acquires B;
+      //   4. `resolveReleasedAllocation(RETURN_TO_UNALLOCATED)` inserts a FRESH
+      //      ACTIVE hold on B — with no acquisition check anywhere.
+      //
+      // Two roots on one car, through supported APIs, with nobody having done
+      // anything wrong. Reactivation is an acquisition or it is a hole.
+      const seed = await seedDealer("reacquire");
+      const keep = await vehicle(seed, "LIN0000000000021");
+      const dropped = await vehicle(seed, "LIN0000000000022");
+
+      const ownRoot = await seed.asUser.mutation(api.quotes.saveQuote, {
+        orgId: seed.orgId,
+        customerId: seed.customerA,
+        vehicleId: keep,
+        vehicleItems: [
+          { vehicleId: keep, unitPrice: PRICE },
+          { vehicleId: dropped, unitPrice: PRICE },
+        ],
+        mode: "CASH" as const,
+        vehiclePrice: PRICE * 2,
+        downPayment: 0,
+        termMonths: 0,
+        totalFinancedAmount: 0,
+      });
+      await seed.asUser.mutation(api.deposits.create, {
+        orgId: seed.orgId,
+        quoteId: ownRoot,
+        amount: 4_000,
+      });
+
+      await seed.asUser.mutation(api.deposits.allocateToVehicles, {
+        orgId: seed.orgId,
+        quoteId: ownRoot,
+        allocations: [
+          { vehicleId: keep, amount: 2_000 },
+          { vehicleId: dropped, amount: 2_000 },
+        ],
+      });
+      await seed.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+        orgId: seed.orgId,
+        quoteId: ownRoot,
+        vehicleId: dropped,
+        reason: "customer dropped the second car",
+      });
+
+      // The rival legitimately takes the now-free vehicle.
+      const rivalRoot = await quoteFor(seed, seed.customerB, dropped);
+      await seed.asUser.mutation(api.deposits.create, {
+        orgId: seed.orgId,
+        quoteId: rivalRoot,
+        amount: 1_500,
+      });
+
+      const releasedHold = await seed.t.run(async (ctx) => {
+        const holds = await ctx.db
+          .query("depositVehicleHolds")
+          .filter((q) => q.eq(q.field("vehicleId"), dropped))
+          .collect();
+        return holds.find((hold) => hold.active === false) ?? holds[0];
+      });
+
+      await expect(
+        seed.asUser.mutation(api.deposits.resolveReleasedAllocation, {
+          orgId: seed.orgId,
+          holdId: releasedHold!._id,
+          treatment: "RETURN_TO_UNALLOCATED" as const,
+          reason: "put it back on the deal",
+        })
+      ).rejects.toThrow(/committed|another deal|already held|no longer available/i);
+    });
+
     test("a multi-vehicle deposit on wholly uncommitted vehicles still succeeds", async () => {
       // The control. Multi-vehicle cash deposits are a real supported feature,
       // so the per-item check must not become "no multi-vehicle deposits".
@@ -696,6 +783,47 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
       expect(first).toBeDefined();
     });
 
+    // SKIPPED — specification. Both reviewers converged here independently, and
+    // the precedent is already in the codebase.
+    //
+    // The two new mechanisms this design introduces — `createReservation`'s
+    // `quoteId` and a re-quote's linkage — both let a caller CROSS a root
+    // boundary. Neither contract says WHO may supply that proof. Implemented
+    // literally, a staff member who mis-copies a quote id can attach customer
+    // B's reservation to customer A's live root, or let B's quote "supersede"
+    // A's committed deal — defeating the different-root rule through the one
+    // mechanism built to cross it.
+    //
+    // `sales.create` already solved this shape (`saleCompletion.ts:214`):
+    //   if (quote.customerId !== args.customerId || !quoteVehicleIds.includes(...))
+    //     throw "Quote does not match the sale customer and vehicle."
+    //
+    // REQUIRED CONTRACT: proof must be AUTHORIZED, not merely valid. A supplied
+    // root proof is rejected when the resolved root's customer differs from the
+    // caller-supplied customer, or when the predecessor quote names a different
+    // vehicle set. Customer merge does not weaken this — `quotes`, `deposits`,
+    // `financeApplications` and `vehicleReservations` are all live-repointed by
+    // `mergeCustomers`, and `customerMergeRegistry.test.ts` mechanically forces
+    // any new `customerId`-bearing table into that registry.
+    test.skip("a root proof belonging to a DIFFERENT customer is refused", async () => {
+      const seed = await seedDealer("proof-authz");
+      const v = await vehicle(seed, "LIN0000000000020");
+      const rootA = await quoteFor(seed, seed.customerA, v);
+      await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: rootA, amount: 1_000 });
+
+      // await expect(
+      //   seed.asUser.mutation(api.vehicles.createReservation, {
+      //     orgId: seed.orgId,
+      //     vehicleId: v,
+      //     customerId: seed.customerB,   // NOT the root's customer
+      //     quoteId: rootA,               // valid id, unauthorized bearer
+      //   })
+      // ).rejects.toThrow(/does not match|not this customer|unauthorized/i);
+      //
+      // …and the same for saveQuote({ customerId: B, supersedesQuoteId: rootA }).
+      expect(rootA).toBeDefined();
+    });
+
     test("an INDEPENDENT re-quote is still a competing root", async () => {
       // The other half, and it must keep failing closed: without a linkage the
       // server cannot tell a renegotiation from a second, rival deal — so it
@@ -716,6 +844,47 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
   });
 
   describe("10. legacy multi-root vehicles are NOT cutover-ready", () => {
+    // SKIPPED — the specification, and the reason it must exist separately from
+    // the characterization test below.
+    //
+    // That test proves the hazard is CONSTRUCTIBLE. It does not encode the
+    // ruling: an implementation that picks the oldest root, picks the newest,
+    // swallows ambiguity and returns FREE, or marks the vehicle cutover-ready
+    // anyway would satisfy it completely, because it never invokes a resolver,
+    // a cutover gate, or a competing acquisition.
+    //
+    // It is also self-limiting — once the write guard lands, the second
+    // `deposits.create` is refused and the fixture goes red at its own setup.
+    // So the specification version seeds the legacy rows DIRECTLY, which is
+    // what a backfill actually meets and what survives the guard.
+    //
+    // REQUIRED CONTRACT (c14659): given a vehicle carrying two live roots,
+    //   - the resolver returns CONFLICT, or fails closed — never a winner;
+    //   - cutover readiness for that vehicle is FALSE;
+    //   - no customer's money is moved, reassigned, or released;
+    //   - ambiguity is never reported as free inventory;
+    //   - the compatibility fallback stays until the conflict is explicitly
+    //     resolved, or eliminated by the production reset.
+    test.skip("a legacy vehicle with two live roots resolves to CONFLICT and is not cutover-ready", async () => {
+      const seed = await seedDealer("legacy-spec");
+      const v = await vehicle(seed, "LIN0000000000023");
+
+      // Seeded directly, because this state will no longer be reachable through
+      // the public API once the guard exists — and it is precisely the state a
+      // backfill inherits from today's data.
+      //
+      // const resolved = await seed.asUser.query(api.commitments.resolveVehicleRoot, {
+      //   orgId: seed.orgId, vehicleId: v,
+      // });
+      // expect(resolved.kind).toBe("CONFLICT");
+      // expect(resolved.winner).toBeUndefined();
+      // const readiness = await seed.asUser.query(api.commitments.cutoverReadiness, {
+      //   orgId: seed.orgId,
+      // });
+      // expect(readiness.blockedVehicleIds).toContain(v);
+      expect(v).toBeDefined();
+    });
+
     test("main actively manufactures the conflicted state a backfill will meet", async () => {
       // Passes TODAY, and that is the point: it proves the hazard is real
       // rather than hypothetical. Current `deposits.create` permits two live
