@@ -4,36 +4,41 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { anyApi, FunctionReference } from "convex/server";
+import { getActiveDepositHolds } from "./utils/depositHelpers";
 
 /**
- * SCRUM-195 — DIRECT EXECUTABLE CONTRACTS (owner ruling c14852).
+ * SCRUM-195 — DIRECT BEHAVIOURAL CONTRACTS ONLY (owner ruling c14860).
  *
- * ## Why this replaced the declarative model
+ * ## What c14860 removed, and why
  *
- * Rounds 6–8 kept producing the same shape of failure, and it was not in the
- * accounting model — the domain rulings held up under every attack. It was in
- * the PROOF MACHINERY. Each round I built a more sophisticated mechanism to
- * prove the design was consistent, verified it myself, and published a claim
- * about it. Each round an executing reviewer showed the mechanism itself was
- * manufacturing confidence it had not earned:
+ * Rounds 6–9 produced the same shape of failure four times, and not once was it
+ * in the accounting model — every domain ruling survived every attack. It was
+ * in the PROOF MACHINERY built around the model. Three classes, all in that
+ * meta-layer:
  *
- *   - the contradiction preflight covered scenarios but not query contracts,
- *     while I described the contradiction class as unrepresentable;
- *   - INV-4 was "proven three ways" and fell to `socialBulkMutation`, an idiom
- *     already used in this repository;
- *   - "zero wrong-reason failures" was true of the 44 failing tests and false
- *     of the 32 passing ones, because I only ever audited failures. One test
- *     was green because a SETUP error message happened to contain "idempoten",
- *     which matched the refusal regex, so the call under test never ran.
+ *   - **tests unsatisfiable by a correct implementation** (six instances). The
+ *     last one is the clearest: an org-purge test whose `stepOf` predicate did
+ *     `String(step).includes(table)` over entries that are object literals, so
+ *     it compared against `"[object Object]"` and could never match anything.
+ *     That same test had been "fixed" the round before to be honestly red, and
+ *     was made red in a way no implementation could turn green.
+ *   - **source-checkers being bypassed** — five bypasses of ONE checker across
+ *     three rewrites: aliasing, `socialBulkMutation`, unrecognised syntax,
+ *     `import { mutation as query }`, and a second wide-open export.
+ *   - **migrations losing working coverage or context** (three instances).
  *
- * The generic executor was the common cause. A single `buildWorld` meant one
- * mis-built world silently mis-stated many rules at once; a single `invoke`
- * meant setup failures were funnelled through the same promise the assertion
- * inspected; and an abstract world value like HELD_BY_OTHER_ROOT quietly
- * collapsed *deposit-held*, *application-held* and *reservation-held* into one
- * construction path that only ever built a deposit. That last one is the
- * originating PR #258 defect — three subsystems disagreeing about whether a car
- * is spoken for — reproduced by omission inside the design meant to retire it.
+ * So the owner deleted the instruments rather than repairing them again: no
+ * identity regex/parser test, no purge-order parser test, no `saveQuote` caller
+ * regex gate, no traceability/source-title map, no contention harness.
+ *
+ * ## ⚠️ Deleting the proof does NOT delete the obligation
+ *
+ * Deployment identity, organization-purge safety, the web + mobile caller
+ * cutover and real disposable-deployment contention all remain BINDING
+ * requirements of SCRUM-195. What changed is how they are verified: against
+ * real code and real runtime when those surfaces exist, by people, rather than
+ * by regex tests that five independent attempts have now defeated. c14860 also
+ * forbids replacing them with a new AST or generalised proof framework.
  *
  * ## The rules this file follows
  *
@@ -41,18 +46,41 @@ import { anyApi, FunctionReference } from "convex/server";
  *   2. **Setup runs before the subject call and outside every `expect`.** A
  *      setup failure fails the test with its own error; it can never be matched
  *      against the refusal the test expects.
- *   3. **Exactly ONE subject call** per test, so what is being measured is
- *      never ambiguous.
+ *   3. **Exactly ONE subject call** per test — the operation whose accept or
+ *      refuse is the rule. Everything before it is setup and everything after
+ *      it is observation, so what is being measured is never ambiguous. Where a
+ *      rule is inherently two-sided (E.3 refuses the stale revision AND
+ *      requires the head to accept), both halves are stated in the test's own
+ *      comment rather than left for a reader to infer.
  *   4. **An unmistakable postcondition.** "The mutation returned something" is
- *      not a result. A retry must return the SAME quote; a reopen must show the
- *      application's status changed AND the vehicle reacquired; a completion
- *      must show the money applied exactly once with no duplicate receivable.
+ *      not a result.
  *   5. **Evidence kinds are never collapsed.** Deposit-held, application-held
  *      and reservation-held are separate contracts, because in this codebase
  *      they are enforced by separate code paths that do not consult each other.
- *   6. **No mechanism claims to prove the whole design.** Traceability only
- *      answers "does every binding rule have at least one executable contract",
- *      and says nothing about consistency between them.
+ *   6. **Every refusal is paired with a positive control** wherever a blunt fix
+ *      could satisfy the refusal by breaking a legitimate flow.
+ *
+ * ## 🛑 SUPERSESSION THE IMPLEMENTATION MUST CARRY OUT — `deposits.test.ts`
+ *
+ * `convex/deposits.test.ts` contains a GREEN, shipped test titled
+ *
+ *     "a second deposit from a different quote on the same vehicle does not
+ *      error (soft warning, not a hard block)"
+ *
+ * which asserts `.resolves.toBeDefined()` for exactly the scenario contract A.1
+ * below asserts must be REFUSED. Both run under the same required check, so
+ * they are mechanically impossible to satisfy at the same time.
+ *
+ * Owner ruling c14860 SUPERSEDES that rule: one vehicle row is one physical
+ * unit, so once a hard commitment exists a different deal/root cannot acquire
+ * it. Same-root additional instalments remain legal — contract E.1 is what
+ * stops the supersession being implemented as a blanket "one deposit per car".
+ *
+ * **This is a policy decision, already taken — not a defect to be discovered
+ * later.** The SCRUM-195 implementation must update that test in the same
+ * change that makes A.1 pass. It is recorded here, in the artefact, because a
+ * previous migration dropped the supersession note and the contradiction had to
+ * be re-found by a reviewer.
  *
  * ## ⚠️ THIS FILE CANNOT MERGE WHILE IT IS RED, AND THAT IS DELIBERATE
  *
@@ -62,15 +90,10 @@ import { anyApi, FunctionReference } from "convex/server";
  * `vitest.config.ts` does not exclude `convex/**`, so these tests execute there
  * and a red one blocks the merge for everyone, admins included.
  *
- * Fourteen of these are red right now. That is not an accident to be worked
- * around with `.skip` — nine of them are LIVE DEFECTS in shipped code, and
- * skipping them would delete the only evidence those defects exist. The
- * remaining five name surfaces the implementation must build.
- *
- * So the gate is functioning as intended: this content becomes mergeable when
- * the defects are fixed and the pending surfaces exist, not before. Stated here
- * because a pre-freeze audit found it, and an operational consequence that only
- * surfaces at PR time is a surprise nobody should have to discover twice.
+ * The red ones are LIVE DEFECTS in shipped code plus a small number of surfaces
+ * the implementation must build. Skipping them would delete the only evidence
+ * those defects exist. The gate is therefore working as intended: this content
+ * becomes mergeable when the defects are fixed, not before.
  */
 
 vi.mock("./rateLimit", () => ({
@@ -201,7 +224,7 @@ async function cashQuote(
 /**
  * A FINANCED quote — required for anything that becomes a finance application.
  *
- * The previous suite built every world from cash quotes, including the finance
+ * An earlier suite built every world from cash quotes, including the finance
  * ones, so an application fixture would have failed on a mode guard rather than
  * on the rule it named.
  */
@@ -229,9 +252,9 @@ async function financedQuote(
 // because the whole point is that these are DIFFERENT paths through DIFFERENT
 // code that historically did not consult one another.
 
-/** Rival takes the car with a DEPOSIT. */
-async function rivalHoldsByDeposit(seed: Seed, vehicleId: Id<"vehicles">) {
-  const quoteId = await cashQuote(seed, seed.customerB, vehicleId);
+/** Somebody takes the car with a DEPOSIT. */
+async function heldByDeposit(seed: Seed, vehicleId: Id<"vehicles">, customerId: Id<"customers">) {
+  const quoteId = await cashQuote(seed, customerId, vehicleId);
   const depositId = await seed.asUser.mutation(api.deposits.create, {
     orgId: seed.orgId,
     quoteId,
@@ -240,9 +263,13 @@ async function rivalHoldsByDeposit(seed: Seed, vehicleId: Id<"vehicles">) {
   return { quoteId, depositId };
 }
 
-/** Rival takes the car with a live FINANCE APPLICATION and no deposit at all. */
-async function rivalHoldsByApplication(seed: Seed, vehicleId: Id<"vehicles">) {
-  const quoteId = await financedQuote(seed, seed.customerB, vehicleId);
+/** Somebody takes the car with a live FINANCE APPLICATION and no deposit at all. */
+async function heldByApplication(
+  seed: Seed,
+  vehicleId: Id<"vehicles">,
+  customerId: Id<"customers">
+) {
+  const quoteId = await financedQuote(seed, customerId, vehicleId);
   const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
     orgId: seed.orgId,
     quoteId,
@@ -250,12 +277,16 @@ async function rivalHoldsByApplication(seed: Seed, vehicleId: Id<"vehicles">) {
   return { quoteId, applicationId };
 }
 
-/** Rival takes the car with a manual RESERVATION. */
-async function rivalHoldsByReservation(seed: Seed, vehicleId: Id<"vehicles">) {
+/** Somebody takes the car with a manual RESERVATION. */
+async function heldByReservation(
+  seed: Seed,
+  vehicleId: Id<"vehicles">,
+  customerId: Id<"customers">
+) {
   const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
     orgId: seed.orgId,
     vehicleId,
-    customerId: seed.customerB,
+    customerId,
   });
   return { reservationId };
 }
@@ -268,14 +299,31 @@ async function vehicleRow(seed: Seed, vehicleId: Id<"vehicles">): Promise<Doc<"v
   return row!;
 }
 
-async function liveDepositHolds(seed: Seed, vehicleId: Id<"vehicles">) {
-  return await seed.t.run(async (ctx) => {
-    const holds = await ctx.db
-      .query("depositVehicleHolds")
-      .filter((q) => q.eq(q.field("vehicleId"), vehicleId))
-      .collect();
-    return holds.filter((h) => h.active === true);
-  });
+/**
+ * Which deposits actively hold this car — resolved through the PRODUCT's own
+ * `getActiveDepositHolds`, not a hand-written query.
+ *
+ * ⚠️ The previous version of this helper read `depositVehicleHolds` alone, and
+ * that was wrong in both directions at once. `deposits.ts:118` says so in the
+ * source: *"Only multi-vehicle deposits need a join row per vehicle — a
+ * single-vehicle deposit is already fully tracked by the deposit's own
+ * vehicleId"*, guarded by `if (depositVehicleItems.length > 1)`. So:
+ *
+ *   - the deposit-held contract expected ONE join row where a single-vehicle
+ *     deposit creates NONE — it would have stayed red against a perfectly
+ *     correct implementation, forever;
+ *   - the `toHaveLength(0)` residue checks in the application- and
+ *     reservation-held contracts were VACUOUS, because a leftover direct
+ *     deposit row — exactly the residue they exist to catch — never appears in
+ *     that table at all.
+ *
+ * Calling the real resolver fixes both: it unions the direct
+ * `deposits.by_vehicle_hold` index with the `depositVehicleHolds` join rows,
+ * and it is the same function `createReservation` and `syncVehicleHoldStatus`
+ * already use to decide whether a car is spoken for.
+ */
+async function depositsHolding(seed: Seed, vehicleId: Id<"vehicles">): Promise<Doc<"deposits">[]> {
+  return await seed.t.run(async (ctx) => await getActiveDepositHolds(ctx, vehicleId));
 }
 
 async function applicationRow(
@@ -291,8 +339,117 @@ async function countIn(seed: Seed, table: "sales" | "deposits" | "receivableDocu
   return await seed.t.run(async (ctx) => (await ctx.db.query(table).collect()).length);
 }
 
+/** A completed cash sale, in the shape `sales.create` actually takes. */
+function completedSaleArgs(
+  seed: Seed,
+  opts: {
+    vehicleId: Id<"vehicles">;
+    customerId: Id<"customers">;
+    quoteId?: Id<"quotes">;
+    tradeInVehicleId?: Id<"vehicles">;
+    tradeInValue?: number;
+  }
+) {
+  return {
+    orgId: seed.orgId,
+    vehicleId: opts.vehicleId,
+    customerId: opts.customerId,
+    salespersonId: seed.userId,
+    salePrice: PRICE,
+    saleDate: Date.now(),
+    status: "COMPLETED" as const,
+    ...(opts.quoteId ? { quoteId: opts.quoteId } : {}),
+    ...(opts.tradeInVehicleId
+      ? { tradeInVehicleId: opts.tradeInVehicleId, tradeInValue: opts.tradeInValue }
+      : {}),
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// A. THE THREE EVIDENCE KINDS ARE ENFORCED SEPARATELY
+// A. A VEHICLE HELD BY A DEPOSIT
+//
+// A deposit promotes the car to RESERVED (`holdVehicleForDeposit`), so the
+// naive reading is that everything downstream is already protected. It is not:
+// `prepareSaleCompletion` refuses only SOLD and ARCHIVED.
+//
+// The refusal here is therefore paired with a POSITIVE CONTROL proving the deal
+// that owns the hold can still complete. That pairing is deliberate: SCRUM-196
+// explicitly forbids fixing the rival-sale hole with a blanket RESERVED
+// rejection, because that would refuse the legitimate customer too.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("A. a vehicle held by a DEPOSIT", () => {
+  test("refuses a rival deposit from a different deal", async () => {
+    // ⚠️ SUPERSEDES the green `deposits.test.ts` soft-warning test. See the
+    // supersession note in this file's header — that test must be updated in
+    // the same change that makes this one pass.
+    const seed = await seedDealer("dep-dep");
+    const v = await vehicle(seed);
+    await heldByDeposit(seed, v, seed.customerB);
+    const ours = await cashQuote(seed, seed.customerA, v);
+
+    await expect(
+      seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: ours, amount: 1_000 })
+    ).rejects.toThrow(/committed|another deal|another customer|already held|no longer available/i);
+
+    // Exactly the holder's deposit, nothing of ours. Resolved through the
+    // product's own hold resolver, so a leftover direct deposit row is visible.
+    const holds = await depositsHolding(seed, v);
+    expect(holds, "only the original holder's deposit may hold this car").toHaveLength(1);
+    expect(holds[0].customerId).toBe(seed.customerB);
+  });
+
+  test("refuses a rival CASH SALE — the originating incident (SCRUM-196)", async () => {
+    // ⚠️ LIVE PRODUCTION DEFECT, reproduced by execution in round 9 and tracked
+    // as SCRUM-196. `prepareSaleCompletion` (utils/saleCompletion.ts:176) tests
+    // only `status === "SOLD"` and `status === "ARCHIVED"`. A deposit-held car
+    // is RESERVED, which it never inspects, so a rival's completed cash sale
+    // consumes the car and flips it to SOLD out from under the depositor.
+    const seed = await seedDealer("dep-sale");
+    const v = await vehicle(seed);
+    await heldByDeposit(seed, v, seed.customerB);
+    const salesBefore = await countIn(seed, "sales");
+
+    await expect(
+      seed.asUser.mutation(
+        api.sales.create,
+        completedSaleArgs(seed, { vehicleId: v, customerId: seed.customerA })
+      )
+    ).rejects.toThrow(/committed|another deal|another customer|already held|no longer available/i);
+
+    // No sale, and the car is still held rather than sold.
+    expect(await countIn(seed, "sales")).toBe(salesBefore);
+    expect((await vehicleRow(seed, v)).status).toBe("RESERVED");
+    expect(await depositsHolding(seed, v)).toHaveLength(1);
+  });
+
+  test("POSITIVE CONTROL: the depositor's OWN sale still completes", async () => {
+    // The guard that makes the test above pass must not make this one fail.
+    // A blanket `status === "RESERVED"` rejection in `prepareSaleCompletion`
+    // would satisfy that refusal while breaking every legitimate deposit-then-
+    // complete flow in the product — which is precisely why SCRUM-196 rules
+    // that fix out. GREEN today, and it must stay green.
+    const seed = await seedDealer("dep-own");
+    const v = await vehicle(seed);
+    const { quoteId } = await heldByDeposit(seed, v, seed.customerA);
+    const salesBefore = await countIn(seed, "sales");
+
+    const saleId = await seed.asUser.mutation(
+      api.sales.create,
+      completedSaleArgs(seed, { vehicleId: v, customerId: seed.customerA, quoteId })
+    );
+
+    // Proven by outcome, not by "it returned an id": one new sale, belonging to
+    // the holder, and the car actually left inventory.
+    expect(await countIn(seed, "sales")).toBe(salesBefore + 1);
+    const sale = await seed.t.run((ctx) => ctx.db.get(saleId as Id<"sales">));
+    expect(sale?.customerId, "the sale belongs to the deal that held the car").toBe(seed.customerA);
+    expect((await vehicleRow(seed, v)).status).toBe("SOLD");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// B. A VEHICLE HELD BY A LIVE FINANCE APPLICATION
 //
 // ⚠️ This section exists because round 8 proved the previous design never
 // tested it. `grep -c financeApplications` over `deposits.ts`, `vehicles.ts`
@@ -304,52 +461,37 @@ async function countIn(seed: Seed, table: "sales" | "deposits" | "receivableDocu
 //
 // Collapsing these into one "held by another root" fixture built from a deposit
 // hid that completely: the deposit path sets status = RESERVED, so those tests
-// pass on a pre-existing guard that has nothing to do with this design.
+// passed on a pre-existing guard that has nothing to do with this design.
 // ─────────────────────────────────────────────────────────────────────────────
-
-describe("A. a vehicle held by a DEPOSIT", () => {
-  test("refuses a rival deposit, and the rival's hold is not created", async () => {
-    const seed = await seedDealer("dep-dep");
-    const v = await vehicle(seed);
-    await rivalHoldsByDeposit(seed, v);
-    const ours = await cashQuote(seed, seed.customerA, v);
-
-    await expect(
-      seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: ours, amount: 1_000 })
-    ).rejects.toThrow(/committed|another deal|already held|no longer available/i);
-
-    // Postcondition: exactly the rival's hold, nothing of ours.
-    expect(await liveDepositHolds(seed, v)).toHaveLength(1);
-  });
-});
 
 describe("B. a vehicle held by a live FINANCE APPLICATION", () => {
   /**
-   * The application path holds NO deposit and never touches `vehicle.status`.
-   * Every test below therefore also asserts the car is still `AVAILABLE` at the
-   * moment of refusal — proving the refusal came from commitment authority and
-   * not from the incidental SOLD/RESERVED guards that already exist.
+   * Every test below also asserts the car is still `AVAILABLE` at the moment of
+   * refusal — proving the refusal came from commitment authority and not from
+   * the incidental SOLD/RESERVED guards that already exist.
    */
 
   test("refuses a rival DEPOSIT", async () => {
     const seed = await seedDealer("app-dep");
     const v = await vehicle(seed);
-    await rivalHoldsByApplication(seed, v);
+    await heldByApplication(seed, v, seed.customerB);
     const ours = await cashQuote(seed, seed.customerA, v);
 
     expect((await vehicleRow(seed, v)).status).toBe("AVAILABLE");
 
     await expect(
       seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: ours, amount: 1_000 })
-    ).rejects.toThrow(/committed|another deal|already held|no longer available|application/i);
+    ).rejects.toThrow(
+      /committed|another deal|another customer|already held|no longer available|application/i
+    );
 
-    expect(await liveDepositHolds(seed, v)).toHaveLength(0);
+    expect(await depositsHolding(seed, v)).toHaveLength(0);
   });
 
   test("refuses a manual RESERVATION", async () => {
     const seed = await seedDealer("app-res");
     const v = await vehicle(seed);
-    await rivalHoldsByApplication(seed, v);
+    await heldByApplication(seed, v, seed.customerB);
 
     expect((await vehicleRow(seed, v)).status).toBe("AVAILABLE");
 
@@ -359,7 +501,9 @@ describe("B. a vehicle held by a live FINANCE APPLICATION", () => {
         vehicleId: v,
         customerId: seed.customerA,
       })
-    ).rejects.toThrow(/committed|another deal|already held|no longer available|application/i);
+    ).rejects.toThrow(
+      /committed|another deal|another customer|already held|no longer available|application/i
+    );
 
     const reservations = await seed.t.run(async (ctx) =>
       (await ctx.db.query("vehicleReservations").collect()).filter((r) => r.vehicleId === v)
@@ -370,22 +514,19 @@ describe("B. a vehicle held by a live FINANCE APPLICATION", () => {
   test("refuses a CASH SALE to a different customer", async () => {
     const seed = await seedDealer("app-sale");
     const v = await vehicle(seed);
-    await rivalHoldsByApplication(seed, v);
+    await heldByApplication(seed, v, seed.customerB);
 
     expect((await vehicleRow(seed, v)).status).toBe("AVAILABLE");
     const salesBefore = await countIn(seed, "sales");
 
     await expect(
-      seed.asUser.mutation(api.sales.create, {
-        orgId: seed.orgId,
-        vehicleId: v,
-        customerId: seed.customerA,
-        salespersonId: seed.userId,
-        salePrice: PRICE,
-        saleDate: Date.now(),
-        status: "COMPLETED" as const,
-      })
-    ).rejects.toThrow(/committed|another deal|already held|no longer available|application/i);
+      seed.asUser.mutation(
+        api.sales.create,
+        completedSaleArgs(seed, { vehicleId: v, customerId: seed.customerA })
+      )
+    ).rejects.toThrow(
+      /committed|another deal|another customer|already held|no longer available|application/i
+    );
 
     expect(await countIn(seed, "sales")).toBe(salesBefore);
     expect((await vehicleRow(seed, v)).status).toBe("AVAILABLE");
@@ -394,7 +535,7 @@ describe("B. a vehicle held by a live FINANCE APPLICATION", () => {
   test("refuses SOFT-DELETE", async () => {
     const seed = await seedDealer("app-del");
     const v = await vehicle(seed);
-    await rivalHoldsByApplication(seed, v);
+    await heldByApplication(seed, v, seed.customerB);
 
     await expect(
       seed.asUser.mutation(api.vehicles.softDelete, { orgId: seed.orgId, vehicleId: v })
@@ -408,7 +549,7 @@ describe("B. a vehicle held by a live FINANCE APPLICATION", () => {
   test("refuses ARCHIVE, which is a second door out of inventory", async () => {
     const seed = await seedDealer("app-arch");
     const v = await vehicle(seed);
-    await rivalHoldsByApplication(seed, v);
+    await heldByApplication(seed, v, seed.customerB);
 
     await expect(
       seed.asUser.mutation(api.vehicles.update, {
@@ -427,63 +568,126 @@ describe("B. a vehicle held by a live FINANCE APPLICATION", () => {
     const seed = await seedDealer("app-trade");
     const tradeIn = await vehicle(seed);
     const bought = await vehicle(seed);
-    await rivalHoldsByApplication(seed, tradeIn);
+    await heldByApplication(seed, tradeIn, seed.customerB);
 
     const salesBefore = await countIn(seed, "sales");
 
     await expect(
-      seed.asUser.mutation(api.sales.create, {
-        orgId: seed.orgId,
-        vehicleId: bought,
-        customerId: seed.customerA,
-        salespersonId: seed.userId,
-        salePrice: PRICE,
-        saleDate: Date.now(),
-        status: "COMPLETED" as const,
-        tradeInVehicleId: tradeIn,
-        tradeInValue: 5_000,
-      })
-    ).rejects.toThrow(/committed|another deal|already held|no longer available|application/i);
+      seed.asUser.mutation(
+        api.sales.create,
+        completedSaleArgs(seed, {
+          vehicleId: bought,
+          customerId: seed.customerA,
+          tradeInVehicleId: tradeIn,
+          tradeInValue: 5_000,
+        })
+      )
+    ).rejects.toThrow(
+      /committed|another deal|another customer|already held|no longer available|application/i
+    );
 
     expect(await countIn(seed, "sales")).toBe(salesBefore);
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// C. A VEHICLE HELD BY A MANUAL RESERVATION
+//
+// A reservation also promotes the car to RESERVED, via `syncVehicleHoldStatus`
+// → `hasActiveReservationHold`. As with deposits, that status is invisible to
+// `prepareSaleCompletion`, so the same rival-sale hole exists on this axis too.
+// ─────────────────────────────────────────────────────────────────────────────
+
 describe("C. a vehicle held by a manual RESERVATION", () => {
   test("refuses a rival DEPOSIT", async () => {
     const seed = await seedDealer("res-dep");
     const v = await vehicle(seed);
-    await rivalHoldsByReservation(seed, v);
+    await heldByReservation(seed, v, seed.customerB);
     const ours = await cashQuote(seed, seed.customerA, v);
 
     await expect(
       seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: ours, amount: 1_000 })
-    ).rejects.toThrow(/committed|another deal|already held|no longer available|reserv/i);
+    ).rejects.toThrow(
+      /committed|another deal|another customer|already held|no longer available|reserv/i
+    );
 
-    expect(await liveDepositHolds(seed, v)).toHaveLength(0);
+    expect(await depositsHolding(seed, v)).toHaveLength(0);
   });
 
   test("refuses a rival FINANCE APPLICATION", async () => {
     const seed = await seedDealer("res-app");
     const v = await vehicle(seed);
-    await rivalHoldsByReservation(seed, v);
+    await heldByReservation(seed, v, seed.customerB);
     const ours = await financedQuote(seed, seed.customerA, v);
 
     await expect(
       seed.asUser.mutation(api.applications.createFromQuote, { orgId: seed.orgId, quoteId: ours })
-    ).rejects.toThrow(/committed|another deal|already held|no longer available|reserv/i);
+    ).rejects.toThrow(
+      /committed|another deal|another customer|already held|no longer available|reserv/i
+    );
 
     const apps = await seed.t.run(async (ctx) =>
       (await ctx.db.query("financeApplications").collect()).filter((a) => a.vehicleId === v)
     );
     expect(apps).toHaveLength(0);
   });
+
+  test("refuses a rival CASH SALE — the originating incident (SCRUM-196)", async () => {
+    // ⚠️ LIVE PRODUCTION DEFECT, reproduced by execution in round 9. The same
+    // hole as A.2 reached down a different axis: the reservation makes the car
+    // RESERVED, and `prepareSaleCompletion` never reads RESERVED.
+    const seed = await seedDealer("res-sale");
+    const v = await vehicle(seed);
+    await heldByReservation(seed, v, seed.customerB);
+    const salesBefore = await countIn(seed, "sales");
+
+    await expect(
+      seed.asUser.mutation(
+        api.sales.create,
+        completedSaleArgs(seed, { vehicleId: v, customerId: seed.customerA })
+      )
+    ).rejects.toThrow(
+      /committed|another deal|another customer|already held|no longer available|reserv/i
+    );
+
+    expect(await countIn(seed, "sales")).toBe(salesBefore);
+    expect((await vehicleRow(seed, v)).status).toBe("RESERVED");
+    const reservations = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("vehicleReservations").collect()).filter(
+        (r) => r.vehicleId === v && r.status === "ACTIVE"
+      )
+    );
+    expect(reservations, "the holder's reservation must survive the refusal").toHaveLength(1);
+  });
+
+  test("POSITIVE CONTROL: the reservation holder's OWN sale still completes", async () => {
+    // The paired control for C.3, for the same reason as A.3: the fix must
+    // refuse the rival without refusing the customer the car is being held for.
+    // GREEN today, and it must stay green.
+    const seed = await seedDealer("res-own");
+    const v = await vehicle(seed);
+    await heldByReservation(seed, v, seed.customerB);
+    const quoteId = await cashQuote(seed, seed.customerB, v);
+    const salesBefore = await countIn(seed, "sales");
+
+    const saleId = await seed.asUser.mutation(
+      api.sales.create,
+      completedSaleArgs(seed, { vehicleId: v, customerId: seed.customerB, quoteId })
+    );
+
+    expect(await countIn(seed, "sales")).toBe(salesBefore + 1);
+    const sale = await seed.t.run((ctx) => ctx.db.get(saleId as Id<"sales">));
+    expect(sale?.customerId, "the sale belongs to the customer holding the reservation").toBe(
+      seed.customerB
+    );
+    expect((await vehicleRow(seed, v)).status).toBe("SOLD");
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // D. ACCEPTANCE MEANS A PROVEN OUTCOME, NOT A DEFINED RETURN VALUE
 //
-// ⚠️ Every acceptance test in the previous suite asserted only
+// ⚠️ Every acceptance test in an earlier suite asserted only
 // `.resolves.toBeDefined()`. An implementation could satisfy all of them while
 // `closeRoot` closed nothing, a reopen changed no status, a reallocation moved
 // no money, and a retry minted a second root — because every one of those
@@ -523,7 +727,16 @@ describe("D. accepted operations must prove what they did", () => {
     expect(quotes).toHaveLength(1);
   });
 
-  test("reopening a rejected application changes its status AND reacquires the car", async () => {
+  test("reopening a rejected application reacquires THE SAME root it released", async () => {
+    // ⚠️ STRENGTHENED. The previous version asserted only that the status moved
+    // and that `resolveVehicleRoot` afterwards reported kind OWNED with a
+    // truthy id. A status-blind stub returning a constant `{kind:"OWNED"}`
+    // satisfied all of that without the reopen doing anything at all.
+    //
+    // Three observations now, and a constant-returning stub fails the middle
+    // one: the car is owned by root R while the application is live; it is NOT
+    // owned by R once the application is rejected; and the reopen reacquires it
+    // under THAT SAME root R rather than minting a new one.
     const seed = await seedDealer("reopen-proves");
     const v = await vehicle(seed);
     const quoteId = await financedQuote(seed, seed.customerA, v);
@@ -531,12 +744,27 @@ describe("D. accepted operations must prove what they did", () => {
       orgId: seed.orgId,
       quoteId,
     });
+    const whileLive = (await seed.asUser.query(notYetBuiltQuery.commitments.resolveVehicleRoot, {
+      orgId: seed.orgId,
+      vehicleId: v,
+    })) as { kind: string; rootId?: unknown };
+    expect(whileLive.kind, "a live application must own the car").toBe("OWNED");
+    const rootWhileLive = String(whileLive.rootId);
+    expect(rootWhileLive).toBeTruthy();
+
     await seed.asUser.mutation(api.applications.updateStatus, {
       orgId: seed.orgId,
       applicationId,
       status: "REJECTED" as const,
     });
-    expect((await applicationRow(seed, applicationId)).status).toBe("REJECTED");
+    const whileRejected = (await seed.asUser.query(
+      notYetBuiltQuery.commitments.resolveVehicleRoot,
+      { orgId: seed.orgId, vehicleId: v }
+    )) as { kind: string };
+    expect(
+      whileRejected.kind,
+      "a rejected application must RELEASE the car — this is what a constant stub cannot fake"
+    ).not.toBe("OWNED");
 
     await seed.asUser.mutation(api.applications.updateStatus, {
       orgId: seed.orgId,
@@ -544,16 +772,16 @@ describe("D. accepted operations must prove what they did", () => {
       status: "PENDING_DOCS" as const,
     });
 
-    // Two postconditions, because either alone can be satisfied by a no-op:
-    // the status really moved, and the reopened application really holds the
-    // car again rather than merely existing.
     expect((await applicationRow(seed, applicationId)).status).toBe("PENDING_DOCS");
-    const owner = await seed.asUser.query(notYetBuiltQuery.commitments.resolveVehicleRoot, {
+    const afterReopen = (await seed.asUser.query(notYetBuiltQuery.commitments.resolveVehicleRoot, {
       orgId: seed.orgId,
       vehicleId: v,
-    });
-    expect((owner as { kind: string }).kind).toBe("OWNED");
-    expect(String((owner as { rootId: unknown }).rootId)).toBeTruthy();
+    })) as { kind: string; rootId?: unknown };
+    expect(afterReopen.kind).toBe("OWNED");
+    expect(
+      String(afterReopen.rootId),
+      "the reopened deal continues its own lineage rather than starting a new one"
+    ).toBe(rootWhileLive);
   });
 
   test("completion applies the deposit EXACTLY ONCE and creates no duplicate sale", async () => {
@@ -660,7 +888,8 @@ describe("E. deal lineage", () => {
     await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
 
     // Both deposits live, on one car, under one quote — instalments are the
-    // behaviour that made naive "one hold per vehicle" wrong in the first place.
+    // behaviour that made a naive "one hold per vehicle" wrong in the first
+    // place, and they are what contract A.1's supersession must NOT break.
     const deposits = await seed.t.run(async (ctx) =>
       (await ctx.db.query("deposits").collect()).filter((d) => d.quoteId === quoteId)
     );
@@ -670,16 +899,16 @@ describe("E. deal lineage", () => {
 
   test("total deposits on a quote may not exceed the quote's price", async () => {
     // ⚠️ RESTORED. This guard is LIVE at `deposits.ts:94` — "Total deposits
-    // cannot exceed the quote amount." The deleted suite covered it and the
-    // scenario genuinely PASSED; the pre-freeze audit proved that by restoring
-    // the old file and running it in isolation rather than taking the old
-    // rule list at face value.
+    // cannot exceed the quote amount." An earlier suite covered it and the
+    // scenario genuinely PASSED; a pre-freeze audit proved that by restoring
+    // the old file and running it in isolation rather than taking the old rule
+    // list at face value.
     //
-    // My migration dropped it from the tests AND from the rule list, so the
+    // A migration dropped it from the tests AND from the rule map, so the
     // file's own coverage check could not notice: a rule absent from the map is
-    // invisible to a map-completeness test. Working protection for real money,
-    // silently deleted. Its `BINDING_RULES` entry below is what stops that
-    // recurring.
+    // invisible to a map-completeness test. That is one of the reasons c14860
+    // retired the map — a mechanism blind to its own gap is worse than no
+    // mechanism, because it reports coverage it does not have.
     const seed = await seedDealer("ceiling");
     const v = await vehicle(seed);
     const quoteId = await cashQuote(seed, seed.customerA, v);
@@ -722,9 +951,19 @@ describe("E. deal lineage", () => {
 
     // The rule is a REDIRECT, not a block: the head must still take the money,
     // or a renegotiation would strand the customer entirely.
-    await expect(
-      seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: r2, amount: 500 })
-    ).resolves.toBeDefined();
+    //
+    // ⚠️ Asserted by CONSEQUENCE. `.resolves.toBeDefined()` was the pattern
+    // this file's own preamble rejects, and it would have been satisfied by a
+    // mutation that returned an id while recording the money against the stale
+    // revision — the exact fragmentation the rule exists to prevent.
+    const depositId = (await seed.asUser.mutation(api.deposits.create, {
+      orgId: seed.orgId,
+      quoteId: r2,
+      amount: 500,
+    })) as Id<"deposits">;
+    const row = await seed.t.run((ctx) => ctx.db.get(depositId));
+    expect(row?.quoteId, "the money must land on the CURRENT head, not the superseded one").toBe(r2);
+    expect(row?.holdActive).toBe(true);
   });
 
   test("RELEASED money frees the CAR but leaves the deal financially open", async () => {
@@ -763,10 +1002,9 @@ describe("E. deal lineage", () => {
 
     // Ownership axis: a rival may genuinely take the released car. This is the
     // behaviour cancellation already produces, and an authority that re-locked
-    // it would break the existing flow.
-    // Asserted by CONSEQUENCE, not by `toBeDefined` — this file's own preamble
-    // says a returned value is not an outcome, and the audit rightly flagged
-    // that this one test still used the pattern it criticises.
+    // it would break the existing flow. It is also the boundary that keeps
+    // contract A.1 honest: A.1 refuses a rival on a LIVE hold, not a released
+    // one.
     const rival = await cashQuote(seed, seed.customerB, freed);
     const rivalDeposit = await seed.asUser.mutation(api.deposits.create, {
       orgId: seed.orgId,
@@ -786,447 +1024,5 @@ describe("E. deal lineage", () => {
     );
     expect(awaiting, "the released share must still be awaiting a decision").toHaveLength(1);
     expect(awaiting[0].allocatedAmountMinor).toBeGreaterThan(0);
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// F. STRUCTURAL CHECKS
-//
-// Properties of the source. c14852 demotes traceability: the map below answers
-// ONLY "does every binding rule have at least one executable contract". It does
-// NOT claim the contracts agree with one another — that claim is exactly the
-// false assurance the previous architecture kept producing.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * The `testSupport:deploymentIdentity` contract (c14843), rebuilt.
- *
- * The previous checker DENYLISTED the literal token `mutation`. Two reviewers
- * broke it independently: `const writer = mutation; export const seed = writer(...)`
- * and `export const seed = socialBulkMutation(...)` — and `socialBulkMutation`
- * is not hypothetical, it is defined at `convex/functions.ts:77` and used in
- * `customers.ts` and `socialInbox.ts`. An author following this repository's own
- * convention would have defeated the gate silently.
- *
- * So it now ALLOWLISTS: the only builder an export in this module may be
- * constructed from is `query`. Anything else is suspect by default. Comments
- * are stripped first, because the old checker also accepted `// args: {}`.
- */
-export function checkDeploymentIdentityContract(rawSource: string): string[] {
-  const violations: string[] = [];
-  // Comments are not code. The previous checker matched inside them.
-  const source = rawSource
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1");
-
-  const exports = [...source.matchAll(/export\s+const\s+(\w+)\s*=\s*([A-Za-z_$][\w$]*)\s*\(/g)];
-
-  // ⚠️ FAIL CLOSED ON ANY EXPORT SHAPE THIS CHECKER DOES NOT RECOGNISE.
-  //
-  // This is the THIRD bypass of this checker. Round 8 broke it with an alias
-  // (`const writer = mutation`) and with `socialBulkMutation`. The pre-freeze
-  // audit then broke the "allowlist" rewrite by EXECUTING it against
-  // `export const seed = server.mutation({...})` and `export let seed = ...`:
-  // the recogniser regex matches only `export const NAME = IDENT(`, so a
-  // member-expression builder or a non-const declaration was never added to
-  // `exports` at all — and a loop over `exports` cannot flag what it cannot see.
-  //
-  // Enumerating export syntaxes with a regex has now failed three times, so
-  // this stops trying. EVERY export site is counted; only the exact permitted
-  // shape is subtracted; whatever remains is a violation *because* it was not
-  // understood. An unrecognised export is now suspect by construction rather
-  // than invisible by omission.
-  const allExportSites = [
-    ...source.matchAll(/export\s+(?:const|let|var|function|class|default|async|\{|\*)/g),
-  ];
-  const recognisedQueryExports = exports.filter(([, , builder]) => builder === "query").length;
-  if (allExportSites.length > recognisedQueryExports) {
-    violations.push(
-      `UNRECOGNISED_EXPORT: ${allExportSites.length} export site(s) but only ${recognisedQueryExports} recognised as \`export const NAME = query(...)\`. Every other shape — re-export, namespace member, let/var, function, default — is refused because this checker cannot verify what it did not parse.`
-    );
-  }
-
-  const identity = exports.find(([, name]) => name === "deploymentIdentity");
-  if (!identity) {
-    violations.push("NOT_A_QUERY: deploymentIdentity is not exported as a direct declaration");
-    return violations;
-  }
-  if (identity[2] !== "query") {
-    violations.push(`NOT_A_QUERY: built from ${identity[2]}(), and only query() is permitted`);
-  }
-
-  for (const [, name, builder] of exports) {
-    if (name !== "deploymentIdentity" && builder !== "query") {
-      violations.push(
-        `NON_QUERY_EXPORT: ${name} is built from ${builder}() — only query() is allowed in this module, whatever it is named`
-      );
-    }
-  }
-
-  const blockStart = source.indexOf("(", identity.index! + identity[0].length - 1);
-  const block = balancedFrom(source, blockStart, "(", ")");
-
-  const args = block.match(/args\s*:\s*\{([^}]*)\}/);
-  if (!args || args[1].trim() !== "") {
-    violations.push(
-      args ? `ARGS_NOT_EMPTY: accepts ${args[1].trim()}` : "ARGS_NOT_EMPTY: no args validator"
-    );
-  }
-  if (/\.\.\./.test(block)) {
-    violations.push(
-      "SPREAD_IN_DEFINITION: a spread hides the real args/returns from this check"
-    );
-  }
-
-  const returnsIdx = block.search(/returns\s*:\s*v\.object\s*\(/);
-  if (returnsIdx === -1) {
-    violations.push("NO_RETURN_VALIDATOR: the returned surface is unbounded");
-  } else {
-    const objOpen = block.indexOf("{", block.indexOf("v.object", returnsIdx));
-    const fields = [
-      ...new Set(
-        [...balancedFrom(block, objOpen, "{", "}").matchAll(/(\w+)\s*:/g)].map((m) => m[1])
-      ),
-    ].sort();
-    if (JSON.stringify(fields) !== JSON.stringify(["cloudUrl", "disposable"])) {
-      violations.push(
-        `RETURN_SURFACE_NOT_EXACT: returns { ${fields.join(", ")} }; only { cloudUrl, disposable } is permitted`
-      );
-    }
-  }
-
-  return violations;
-}
-
-function balancedFrom(source: string, openIdx: number, open: string, close: string): string {
-  let depth = 0;
-  for (let i = openIdx; i < source.length; i++) {
-    if (source[i] === open) depth++;
-    else if (source[i] === close) {
-      depth--;
-      if (depth === 0) return source.slice(openIdx, i + 1);
-    }
-  }
-  return "";
-}
-
-describe("F. structural checks", () => {
-  test("the identity-contract checker rejects every bypass two reviewers found", () => {
-    const compliant = `
-      export const deploymentIdentity = query({
-        args: {},
-        returns: v.object({ cloudUrl: v.string(), disposable: v.boolean() }),
-        handler: async () => ({ cloudUrl: "", disposable: false }),
-      });
-    `;
-    expect(checkDeploymentIdentityContract(compliant)).toEqual([]);
-
-    // The two bypasses that defeated the previous checker.
-    const viaRepoIdiom = `${compliant}
-      export const seedAnything = socialBulkMutation({ args: {}, handler: async () => null });`;
-    expect(checkDeploymentIdentityContract(viaRepoIdiom).join(" ")).toMatch(/NON_QUERY_EXPORT/);
-
-    const viaReExport = `${compliant}
-      const seedAnything = mutation({ args: {}, handler: async () => null });
-      export { seedAnything };`;
-    expect(checkDeploymentIdentityContract(viaReExport).join(" ")).toMatch(/UNRECOGNISED_EXPORT/);
-
-    // The two shapes the pre-freeze audit proved returned ZERO violations
-    // against the previous "allowlist" rewrite. Both are regression tests now.
-    const viaNamespaceMember = `${compliant}
-      export const seedAnything = server.mutation({ args: {}, handler: async () => null });`;
-    expect(checkDeploymentIdentityContract(viaNamespaceMember).join(" ")).toMatch(
-      /UNRECOGNISED_EXPORT/
-    );
-
-    const viaLet = `${compliant}
-      export let seedAnything = mutation({ args: {}, handler: async () => null });`;
-    expect(checkDeploymentIdentityContract(viaLet).join(" ")).toMatch(/UNRECOGNISED_EXPORT/);
-
-    const viaFunction = `${compliant}
-      export function seedAnything() { return null; }`;
-    expect(checkDeploymentIdentityContract(viaFunction).join(" ")).toMatch(/UNRECOGNISED_EXPORT/);
-
-    const viaComment = `
-      export const deploymentIdentity = query({
-        // args: {}
-        // returns: v.object({ cloudUrl: v.string(), disposable: v.boolean() })
-        ...leaking,
-      });`;
-    const commentViolations = checkDeploymentIdentityContract(viaComment).join(" ");
-    expect(commentViolations).toMatch(/ARGS_NOT_EMPTY/);
-    expect(commentViolations).toMatch(/SPREAD_IN_DEFINITION/);
-
-    // And the clauses the contract exists for.
-    expect(
-      checkDeploymentIdentityContract(compliant.replace("args: {},", "args: { orgId: v.string() },")).join(" ")
-    ).toMatch(/ARGS_NOT_EMPTY/);
-    expect(
-      checkDeploymentIdentityContract(
-        compliant.replace("disposable: v.boolean() }", "disposable: v.boolean(), deployKey: v.string() }")
-      ).join(" ")
-    ).toMatch(/RETURN_SURFACE_NOT_EXACT/);
-  });
-
-  test("testSupport, once it exists, satisfies that contract", async () => {
-    const { readFileSync, existsSync } = await import("node:fs");
-    const path = "convex/testSupport.ts";
-    // Loudly red until the module is written — treating absence as
-    // not-applicable is how a gate quietly stops being a gate.
-    expect(existsSync(path), "convex/testSupport.ts does not exist yet").toBe(true);
-    expect(checkDeploymentIdentityContract(readFileSync(path, "utf8"))).toEqual([]);
-  });
-
-  test("the contention harness declares no public testSupport seed mutation", async () => {
-    const { readFileSync } = await import("node:fs");
-    const harness = readFileSync("scripts/vehicleCommitmentContention.mjs", "utf8");
-    const seedMutations = [
-      ...harness.matchAll(/client\.mutation\(\s*["'`](testSupport:[A-Za-z0-9_]+)["'`]/g),
-    ].map((m) => m[1]);
-    expect(seedMutations).toEqual([]);
-  });
-
-  test("every saveQuote caller is inventoried, web and mobile alike", async () => {
-    // c14843 makes this the cutover gate: no fallback removal until every
-    // caller carries explicit NEW-vs-REVISE intent and a stable operation id.
-    const CALLERS = [
-      "apps/mobile/src/features/workspace/modules/quotes.tsx",
-      "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "components/sales/QuoteDialog.tsx",
-      "components/sales/wizard/steps/Step3Review.tsx",
-    ];
-    const { readFileSync, readdirSync, statSync } = await import("node:fs");
-    const { join, relative, sep } = await import("node:path");
-
-    // ⚠️ EXCLUDE-LIST FROM THE REPO ROOT, not an include-list of directories.
-    //
-    // The previous version scanned five hardcoded roots. The pre-freeze audit
-    // found real application code outside them — `packages/shared`, which
-    // `apps/mobile` imports from in a dozen files and which already holds
-    // domain logic, plus a root-level `hooks/` used by the web app. No caller
-    // lives there TODAY (the audit ran this exact regex repo-wide and got the
-    // same four), so the check was not vacuous — but a gate described as "the
-    // cutover gate" that silently misses any directory added later is
-    // overclaiming. New top-level directories are now covered by default.
-    const SKIP = new Set([
-      "node_modules",
-      "_generated",
-      ".git",
-      ".next",
-      "dist",
-      "build",
-      "coverage",
-      ".turbo",
-      ".vercel",
-    ]);
-    const found: string[] = [];
-    const walk = (dir: string) => {
-      for (const entry of readdirSync(dir)) {
-        if (SKIP.has(entry)) continue;
-        const full = join(dir, entry);
-        let isDir = false;
-        try {
-          isDir = statSync(full).isDirectory();
-        } catch {
-          continue; // a symlink or a file that vanished mid-walk
-        }
-        if (isDir) {
-          walk(full);
-          continue;
-        }
-        if (!/\.(ts|tsx|js|jsx|mjs)$/.test(entry) || /\.test\./.test(entry)) continue;
-        const text = readFileSync(full, "utf8");
-        if (
-          /api\s*\.\s*quotes\s*\.\s*saveQuote/.test(text) ||
-          /api\s*(?:\.\s*quotes|\[\s*["'`]quotes["'`]\s*\])\s*\[\s*["'`]saveQuote["'`]\s*\]/.test(text)
-        ) {
-          found.push(relative(process.cwd(), full).split(sep).join("/"));
-        }
-      }
-    };
-    walk(".");
-
-    expect([...new Set(found)].sort()).toEqual([...CALLERS].sort());
-  });
-
-  test("org-purge deletes the commitment claim AFTER everything it protects", async () => {
-    // ⚠️ NO EARLY RETURN. The previous version returned early whenever the
-    // claim table was absent from the schema — which is always, today — so the
-    // ordering loop below has never executed once, and the test sat among the
-    // passing ones with its actual assertion dead. That is a wrong-reason PASS,
-    // and it directly contradicted its own neighbour four tests above:
-    // "treating absence as not-applicable is how a gate quietly stops being a
-    // gate". Two tests in one file, opposite philosophies. This one was wrong.
-    //
-    // It is now loudly red until the table exists, exactly like the
-    // `testSupport.ts` contract, and the ordering assertions run the moment it
-    // does.
-    const { ORGANIZATION_DELETION_STEPS } = await import("./adminOrgs");
-    const stepOf = (table: string) =>
-      ORGANIZATION_DELETION_STEPS.findIndex((s) => String(s).includes(table));
-
-    expect(
-      Object.keys(schema.tables),
-      "vehicleCommitmentClaims does not exist in the schema yet"
-    ).toContain("vehicleCommitmentClaims");
-
-    const claim = stepOf("vehicleCommitmentClaims");
-    expect(
-      claim,
-      "the claim exists but is absent from ORGANIZATION_DELETION_STEPS — a purge would orphan it"
-    ).toBeGreaterThan(-1);
-    for (const protectedTable of ["vehiclesWithStorage", "deposits", "financeApplications"]) {
-      expect(
-        claim,
-        `the claim must outlive ${protectedTable}: an aborted purge that is later unsuspended would otherwise leave it unprotected`
-      ).toBeGreaterThan(stepOf(protectedTable));
-    }
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// G. TRACEABILITY — DEMOTED ON PURPOSE (c14852)
-//
-// ⚠️ READ WHAT THIS DOES AND DOES NOT CLAIM.
-//
-// It answers exactly one question: does every binding rule have at least one
-// executable contract in this file? That is a COVERAGE question.
-//
-// It does NOT claim the contracts are consistent with one another, that they
-// are sufficient, or that a passing suite means the design is correct. The
-// previous architecture made precisely that claim — a "semantic preflight" that
-// was supposed to make contradictions unrepresentable — and it was the single
-// largest source of false assurance across three review rounds. It covered only
-// half the specification while I described the whole class as closed.
-//
-// A coverage map that knows it is only a coverage map is worth more than a
-// consistency proof that is not one.
-// ─────────────────────────────────────────────────────────────────────────────
-
-const BINDING_RULES: { ruling: string; rule: string; evidence: string }[] = [
-  {
-    ruling: "c14554",
-    rule: "A vehicle held by a deposit refuses a rival deposit.",
-    evidence: "refuses a rival deposit, and the rival's hold is not created",
-  },
-  {
-    ruling: "c14554/c14852",
-    rule: "A vehicle held by a live finance application refuses a rival deposit.",
-    evidence: "refuses a rival DEPOSIT",
-  },
-  {
-    ruling: "c14659",
-    rule: "A vehicle held by a finance application refuses a manual reservation.",
-    evidence: "refuses a manual RESERVATION",
-  },
-  {
-    ruling: "c14554",
-    rule: "A vehicle held by a finance application refuses a cash sale.",
-    evidence: "refuses a CASH SALE to a different customer",
-  },
-  {
-    ruling: "c14551",
-    rule: "A committed vehicle cannot be soft-deleted out of inventory.",
-    evidence: "refuses SOFT-DELETE",
-  },
-  {
-    ruling: "c14551",
-    rule: "Archive is a second door out of inventory and is equally refused.",
-    evidence: "refuses ARCHIVE, which is a second door out of inventory",
-  },
-  {
-    ruling: "c14551",
-    rule: "A committed vehicle cannot be taken as another deal's trade-in.",
-    evidence: "refuses being taken as another deal's TRADE-IN",
-  },
-  {
-    ruling: "c14659",
-    rule: "A reserved vehicle refuses a rival finance application.",
-    evidence: "refuses a rival FINANCE APPLICATION",
-  },
-  {
-    ruling: "c14840",
-    rule: "An exact retry returns the same quote rather than minting a second root.",
-    evidence: "an exact retry returns the SAME quote",
-  },
-  {
-    ruling: "c14554",
-    rule: "Reopening a rejected application re-acquires the vehicle.",
-    evidence: "reopening a rejected application changes its status AND reacquires the car",
-  },
-  {
-    ruling: "c14833",
-    rule: "Completion applies the deposit exactly once, with no duplicate sale.",
-    evidence: "completion applies the deposit EXACTLY ONCE",
-  },
-  {
-    ruling: "c14833",
-    rule: "Resolving a released share actually moves that money.",
-    evidence: "re-allocating a released share MOVES that money to the named car",
-  },
-  {
-    ruling: "c14554",
-    rule: "Instalments on one quote are more evidence for one deal, not a conflict.",
-    evidence: "a further instalment on the SAME quote is accepted",
-  },
-  {
-    ruling: "c14833",
-    rule: "Total deposits on a quote may not exceed its price.",
-    evidence: "total deposits on a quote may not exceed the quote's price",
-  },
-  {
-    ruling: "c14796",
-    rule: "A superseded revision cannot carry new evidence; the head can.",
-    evidence: "new evidence citing a SUPERSEDED revision is refused",
-  },
-  {
-    ruling: "c14833",
-    rule: "Released money frees the car but leaves the deal financially open.",
-    evidence: "RELEASED money frees the CAR but leaves the deal financially open",
-  },
-  {
-    ruling: "c14843",
-    rule: "The testSupport identity surface stays a narrow read-only query.",
-    evidence: "testSupport, once it exists, satisfies that contract",
-  },
-  {
-    ruling: "c14840",
-    rule: "No public write-capable testSupport seed mutation exists.",
-    evidence: "the contention harness declares no public testSupport seed mutation",
-  },
-  {
-    ruling: "c14843",
-    rule: "Every saveQuote caller is inventoried before cutover, mobile included.",
-    evidence: "every saveQuote caller is inventoried, web and mobile alike",
-  },
-  {
-    ruling: "c14659",
-    rule: "The commitment claim outlives everything an aborted purge could strand.",
-    evidence: "org-purge deletes the commitment claim AFTER everything it protects",
-  },
-];
-
-describe("G. traceability — coverage only, no consistency claim", () => {
-  test("every binding rule names a contract that exists in this file", async () => {
-    const { readFileSync } = await import("node:fs");
-    const source = readFileSync("convex/vehicleCommitmentContracts.test.ts", "utf8");
-    // The closing quote must be the SAME character as the opening one. A
-    // simple `["'`](.+?)["'`]` truncates at the first apostrophe inside a
-    // title — "the rival's hold" — and then reports a false coverage gap for a
-    // test that plainly exists. Caught by this check firing on itself.
-    const titles = [...source.matchAll(/^\s*test\(\s*(["'`])((?:\\.|(?!\1).)*)\1/gm)].map(
-      (m) => m[2]
-    );
-
-    const missing = BINDING_RULES.filter(
-      (entry) => !titles.some((title) => title.includes(entry.evidence))
-    ).map((entry) => `${entry.ruling}: ${entry.rule} → no test titled "${entry.evidence}"`);
-
-    expect(missing).toEqual([]);
-  });
-
-  test("every rule cites the ruling it comes from, so the map stays auditable", () => {
-    const unattributed = BINDING_RULES.filter((entry) => !/^c\d{5}/.test(entry.ruling));
-    expect(unattributed.map((entry) => entry.rule)).toEqual([]);
   });
 });
