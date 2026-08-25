@@ -1434,4 +1434,346 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
       ).rejects.toThrow(/unresolved|awaiting|decision|cannot close/i);
     });
   });
+
+  describe("14. c14833 item 5: a reservation-first deal has an explicit bridge into a quote", () => {
+    /**
+     * `createReservation` can establish a reservation root before any quote
+     * exists — the ordinary walk-in who puts money down on a car and does the
+     * paperwork afterwards. Every bridge specified so far runs the other way:
+     * a reservation supplying a quote as proof. Nothing said how the deal gets
+     * FROM a reservation root INTO a quote, which left the implementer to
+     * invent whether sales infer an active reservation, whether quotes accept a
+     * `reservationId`, or whether reservation roots convert into quote roots.
+     *
+     * c14833: the later first quote may explicitly ADOPT the reservation root
+     * via `reservationId`, after the server validates org, customer, vehicle
+     * and authorization. No proof means an independent quote — which cannot
+     * take a vehicle the reservation already holds.
+     */
+    test("a first quote may ADOPT the reservation root with explicit proof", async () => {
+      const seed = await seedDealer("bridge-adopt");
+      const v = await vehicle(seed, "LIN0000000000035");
+
+      const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+        orgId: seed.orgId,
+        vehicleId: v,
+        customerId: seed.customerA,
+      });
+
+      const adopted = (await seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+        orgId: seed.orgId,
+        customerId: seed.customerA,
+        vehicleId: v,
+        mode: "CASH",
+        vehiclePrice: PRICE,
+        downPayment: 0,
+        termMonths: 0,
+        totalFinancedAmount: 0,
+        reservationId,
+      })) as Id<"quotes">;
+
+      // Adoption is proven by consequence: a deposit on the adopting quote is
+      // accepted even though the reservation already holds the car. That is
+      // only possible if the quote joined the reservation's root rather than
+      // competing with it.
+      await expect(
+        seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: adopted, amount: 1_000 })
+      ).resolves.toBeDefined();
+    });
+
+    test("without proof the quote is INDEPENDENT and cannot take the reserved vehicle", async () => {
+      // The fail-closed half. A quote that merely happens to name the same car
+      // and the same customer is not evidence of the same deal — that is the
+      // "no broad same-customer exemption" rule, applied to the direction the
+      // design had not covered.
+      const seed = await seedDealer("bridge-noproof");
+      const v = await vehicle(seed, "LIN0000000000036");
+
+      await seed.asUser.mutation(api.vehicles.createReservation, {
+        orgId: seed.orgId,
+        vehicleId: v,
+        customerId: seed.customerA,
+      });
+
+      const independent = await quoteFor(seed, seed.customerA, v);
+      await expect(
+        seed.asUser.mutation(api.deposits.create, {
+          orgId: seed.orgId,
+          quoteId: independent,
+          amount: 1_000,
+        })
+      ).rejects.toThrow(/reserved|committed|another deal|already held/i);
+    });
+
+    test("adoption proof belonging to a DIFFERENT customer is refused", async () => {
+      // Same authorization rule as every other proof surface: valid id,
+      // unauthorized bearer. Pinned here rather than assumed to carry over,
+      // because assuming it carried over is exactly how the saveQuote half of
+      // this rule went unpinned the first time.
+      const seed = await seedDealer("bridge-authz");
+      const v = await vehicle(seed, "LIN0000000000037");
+
+      const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+        orgId: seed.orgId,
+        vehicleId: v,
+        customerId: seed.customerA,
+      });
+
+      await expect(
+        seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+          orgId: seed.orgId,
+          customerId: seed.customerB, // not the reservation's customer
+          vehicleId: v,
+          mode: "CASH",
+          vehiclePrice: PRICE,
+          downPayment: 0,
+          termMonths: 0,
+          totalFinancedAmount: 0,
+          reservationId,
+        })
+      ).rejects.toThrow(/does not match|not this customer|unauthorized|different customer/i);
+    });
+  });
+
+  describe("17. c14833 item 4: cross-surface — a rule pinned on ONE mutation is not pinned", () => {
+    /**
+     * Every rule in this design spans several mutations, and the failure mode
+     * has already happened once here: the cross-customer authorization rule was
+     * pinned for `createReservation` and left as a trailing COMMENT for
+     * `saveQuote`, so an implementer could have made every test green while
+     * leaving half the rule unbuilt.
+     *
+     * These are the remaining surfaces for the stale-head and reacquisition
+     * rules. They are not variations for completeness — each is a different
+     * mutation with its own code path, and a guard added to one is not a guard
+     * added to the others.
+     */
+    async function supersededHead(seed: Seed, vin: string) {
+      const v = await vehicle(seed, vin);
+      const r1 = await quoteFor(seed, seed.customerA, v);
+      await seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+        orgId: seed.orgId,
+        customerId: seed.customerA,
+        vehicleId: v,
+        mode: "CASH",
+        vehiclePrice: PRICE - 500,
+        downPayment: 0,
+        termMonths: 0,
+        totalFinancedAmount: 0,
+        supersedesQuoteId: r1,
+      });
+      return { v, stale: r1 };
+    }
+
+    test("createFromQuote refuses a superseded revision", async () => {
+      const seed = await seedDealer("xsurface-app");
+      const { stale } = await supersededHead(seed, "LIN0000000000040");
+
+      await expect(
+        seed.asUser.mutation(api.applications.createFromQuote, { orgId: seed.orgId, quoteId: stale })
+      ).rejects.toThrow(/current revision|superseded|stale|current head/i);
+    });
+
+    test("createReservation refuses a superseded revision as lineage proof", async () => {
+      const seed = await seedDealer("xsurface-res");
+      const { v, stale } = await supersededHead(seed, "LIN0000000000041");
+
+      await expect(
+        seed.asUser.mutation(notYetBuilt.vehicles.createReservation, {
+          orgId: seed.orgId,
+          vehicleId: v,
+          customerId: seed.customerA,
+          quoteId: stale,
+        })
+      ).rejects.toThrow(/current revision|superseded|stale|current head/i);
+    });
+
+    test("REALLOCATE_TO_VEHICLE is an acquisition too, not only RETURN_TO_UNALLOCATED", async () => {
+      // The sibling treatment. Both reinsert an active hold, so pinning only
+      // one leaves the other as an unchecked second writer — the same
+      // one-of-two omission this whole block exists to prevent.
+      const seed = await seedDealer("xsurface-realloc");
+      const keep = await vehicle(seed, "LIN0000000000042");
+      const freed = await vehicle(seed, "LIN0000000000043");
+
+      const root = await seed.asUser.mutation(api.quotes.saveQuote, {
+        orgId: seed.orgId,
+        customerId: seed.customerA,
+        vehicleId: keep,
+        vehicleItems: [
+          { vehicleId: keep, unitPrice: PRICE },
+          { vehicleId: freed, unitPrice: PRICE },
+        ],
+        mode: "CASH" as const,
+        vehiclePrice: PRICE * 2,
+        downPayment: 0,
+        termMonths: 0,
+        totalFinancedAmount: 0,
+      });
+      await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: root, amount: 4_000 });
+      await seed.asUser.mutation(api.deposits.allocateToVehicles, {
+        orgId: seed.orgId,
+        quoteId: root,
+        allocations: [
+          { vehicleId: keep, amount: 2_000 },
+          { vehicleId: freed, amount: 2_000 },
+        ],
+      });
+      await seed.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+        orgId: seed.orgId,
+        quoteId: root,
+        vehicleId: freed,
+        reason: "dropped",
+      });
+
+      // A rival legitimately takes the freed car.
+      const rival = await quoteFor(seed, seed.customerB, freed);
+      await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: rival, amount: 1_500 });
+
+      const releasedHold = await seed.t.run(async (ctx) => {
+        const holds = await ctx.db
+          .query("depositVehicleHolds")
+          .filter((q) => q.eq(q.field("vehicleId"), freed))
+          .collect();
+        return holds.find((hold) => hold.active === false) ?? holds[0];
+      });
+
+      await expect(
+        seed.asUser.mutation(api.deposits.resolveReleasedAllocation, {
+          orgId: seed.orgId,
+          holdId: releasedHold!._id,
+          treatment: "REALLOCATE_TO_VEHICLE" as const,
+          toVehicleId: freed,
+          reason: "put it back",
+        })
+      ).rejects.toThrow(/committed|another deal|already held|no longer available/i);
+    });
+  });
+
+  describe("15. c14833 item 3: saveQuote must be idempotent", () => {
+    /**
+     * `saveQuote` is an unconditional insert with no idempotency protection,
+     * while `deposits.create` — a sibling money-adjacent mutation — wraps every
+     * call in `runWithIdempotency`. Once a quote save CREATES the deal-lineage
+     * identity, that asymmetry stops being cosmetic: a double-click or a
+     * network retry mints TWO roots for what the user did once, and evidence
+     * landing on the "wrong" duplicate gets the customer's own deal refused as
+     * a competing root.
+     *
+     * That is a self-inflicted version of the failure this whole design exists
+     * to prevent — no adversary, no race between two people, just a retry.
+     */
+    test("an exact retry returns the SAME quote rather than minting a second root", async () => {
+      const seed = await seedDealer("idem-retry");
+      const v = await vehicle(seed, "LIN0000000000038");
+
+      const args = {
+        orgId: seed.orgId,
+        customerId: seed.customerA,
+        vehicleId: v,
+        mode: "CASH",
+        vehiclePrice: PRICE,
+        downPayment: 0,
+        termMonths: 0,
+        totalFinancedAmount: 0,
+        idempotencyKey: "quote-save-retry-1",
+      };
+
+      const first = await seed.asUser.mutation(notYetBuilt.quotes.saveQuote, args);
+      const second = await seed.asUser.mutation(notYetBuilt.quotes.saveQuote, args);
+      expect(second).toBe(first);
+
+      const quotes = await seed.t.run((ctx) =>
+        ctx.db
+          .query("quotes")
+          .filter((q) => q.eq(q.field("vehicleId"), v))
+          .collect()
+      );
+      expect(quotes).toHaveLength(1);
+    });
+
+    test("the same key with CHANGED terms conflicts rather than silently winning", async () => {
+      // The other half, and the one that makes idempotency safe rather than
+      // merely convenient. Returning the first quote for a genuinely different
+      // request would silently discard the operator's new terms; writing the
+      // new terms under the same key would make the retry non-idempotent. A
+      // conflict is the only answer that loses nothing.
+      const seed = await seedDealer("idem-conflict");
+      const v = await vehicle(seed, "LIN0000000000039");
+
+      const base = {
+        orgId: seed.orgId,
+        customerId: seed.customerA,
+        vehicleId: v,
+        mode: "CASH",
+        downPayment: 0,
+        termMonths: 0,
+        totalFinancedAmount: 0,
+        idempotencyKey: "quote-save-conflict-1",
+      };
+
+      await seed.asUser.mutation(notYetBuilt.quotes.saveQuote, { ...base, vehiclePrice: PRICE });
+      await expect(
+        seed.asUser.mutation(notYetBuilt.quotes.saveQuote, { ...base, vehiclePrice: PRICE - 2_000 })
+      ).rejects.toThrow(/idempoten|conflict|different|reused/i);
+    });
+  });
+});
+
+describe("16. c14833 item 3: every saveQuote caller is mapped and pinned", () => {
+  /**
+   * The Revise Quote client work stays inside SCRUM-195 and is owned by the
+   * same implementation lane as the backend — server support with no usable
+   * client workflow is not cutover-ready. Until that lane runs, no production
+   * client changes are made here; what IS made is a forcing function.
+   *
+   * Once `saveQuote` creates the deal-lineage identity, every caller of it
+   * becomes a place where a root is minted. A caller that is added later
+   * without a `supersedesQuoteId`/`reservationId` path silently produces
+   * independent roots for continuing deals — the renegotiation dead-end,
+   * reintroduced by omission rather than by design.
+   *
+   * So the caller set is asserted. Adding or moving one fails this test and
+   * forces the question rather than letting it pass unnoticed. This is a
+   * source-scan for the same reason `customerMergeRegistry.test.ts` is one:
+   * a registry nobody is required to update is a comment.
+   */
+  const CALLERS = [
+    "components/sales/QuoteDialog.tsx",
+    "components/sales/wizard/steps/Step3Review.tsx",
+  ] as const;
+
+  test("the known callers are exactly the ones that exist", async () => {
+    const { readFileSync, readdirSync, statSync } = await import("node:fs");
+    const { join, relative, sep } = await import("node:path");
+
+    const roots = ["components", "app", "lib"];
+    const found: string[] = [];
+
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir)) {
+        const full = join(dir, entry);
+        if (statSync(full).isDirectory()) {
+          walk(full);
+          continue;
+        }
+        if (!/\.(ts|tsx)$/.test(entry) || /\.test\./.test(entry)) continue;
+        const text = readFileSync(full, "utf8");
+        // The call itself, not a mention in a comment.
+        if (/useMutation\(\s*api\.quotes\.saveQuote\s*\)/.test(text)) {
+          found.push(relative(process.cwd(), full).split(sep).join("/"));
+        }
+      }
+    };
+
+    for (const root of roots) {
+      try {
+        walk(root);
+      } catch {
+        // A root that does not exist in this checkout is not a caller.
+      }
+    }
+
+    expect(found.sort()).toEqual([...CALLERS].sort());
+  });
 });
