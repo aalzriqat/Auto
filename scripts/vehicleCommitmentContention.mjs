@@ -216,16 +216,32 @@ async function main() {
    *
    * The previous revision asked for `{ applicationId }`, which was correct for
    * the pre-c14554 model and is wrong for this one. Under deal lineage a root
-   * may be owned by deposits alone (`QUOTE:<quoteId>` with no application at
-   * all), or by a standalone reservation (`RESERVATION:<id>`), or may outlive
-   * the release of its application evidence while its deposit stays live.
-   * Correlating winners by application id could not express any of those, so
-   * the probe would have reported green while the authority disagreed.
+   * may be owned by deposits alone with no application at all, or by a
+   * standalone reservation, or may outlive the release of its application
+   * evidence while its deposit stays live. Correlating winners by application
+   * id could not express any of those, so the probe would have reported green
+   * while the authority disagreed.
    *
-   * Contract: `{ rootKind: "QUOTE" | "RESERVATION", rootId } | null`.
+   * ⚠️ Round-6 correction, TWO parts.
+   *
+   * 1. The root is SERVER-OWNED (c14659/c14796). An earlier draft of this
+   *    comment described quote-origin roots as `QUOTE:<quoteId>`, which
+   *    contradicts the ruling that a `quoteId` is lineage PROOF and never the
+   *    identity itself. `rootKind` says where the root came from; `rootId` is
+   *    the server's own id, not a quote's.
+   *
+   * 2. The query must report CONSUMED ownership, not only live ownership.
+   *    Race D completes a SALE, and the authority's own contract says a
+   *    successful completion moves the claim to CONSUMED. A probe that asked
+   *    only for the LIVE owner would therefore get `null` from a CORRECT
+   *    implementation and fail it — a false negative that would have sent an
+   *    accurate implementation back for repair.
+   *
+   * Contract: `{ rootKind: "QUOTE" | "RESERVATION", rootId,
+   *              state: "LIVE" | "CONSUMED" } | null`.
    */
   const ownerOf = (scenario) =>
-    client.query("testSupport:liveCommitmentRoot", {
+    client.query("testSupport:commitmentRootFor", {
       orgId: scenario.orgId,
       vehicleId: scenario.vehicleId,
     });
@@ -234,7 +250,11 @@ async function main() {
   const rootOf = (scenario, kind, id) =>
     client.query("testSupport:rootForEvidence", { orgId: scenario.orgId, kind, id });
 
+  /** Same root, regardless of whether the claim is still live or consumed. */
   const sameRoot = (a, b) => a != null && b != null && a.rootKind === b.rootKind && a.rootId === b.rootId;
+
+  /** Same root AND still holding the car. */
+  const sameLiveRoot = (a, b) => sameRoot(a, b) && a.state === "LIVE";
 
   // ── Race A — acquire vs acquire ───────────────────────────────────────────
   {
@@ -254,7 +274,7 @@ async function main() {
       winners.length === 1 ? await rootOf(s, "application", winners[0].value) : null;
     check(
       "A. the winner's ROOT is the owner — not merely 'someone' owns it",
-      sameRoot(owner, winnerRoot),
+      sameLiveRoot(owner, winnerRoot),
       `owner=${JSON.stringify(owner)} winnerRoot=${JSON.stringify(winnerRoot)}`
     );
   }
@@ -299,12 +319,12 @@ async function main() {
     );
     check(
       "B. the incumbent never remains the owner after a successful release",
-      !(release.ok && sameRoot(owner, incumbentRoot)),
+      !(release.ok && sameLiveRoot(owner, incumbentRoot)),
       `release=${release.ok} owner=${JSON.stringify(owner)} incumbentRoot=${JSON.stringify(incumbentRoot)}`
     );
     check(
       "B. a successful acquisition owns the vehicle",
-      acquire.ok ? sameRoot(owner, acquiredRoot) : true,
+      acquire.ok ? sameLiveRoot(owner, acquiredRoot) : true,
       `acquire=${acquire.ok} owner=${JSON.stringify(owner)} acquiredRoot=${JSON.stringify(acquiredRoot)}`
     );
     // DELIBERATELY NOT ASSERTED: "a refused acquisition never owns the vehicle".
@@ -366,7 +386,7 @@ async function main() {
     const contenderRoot = acquire.ok ? await rootOf(s, "application", acquire.value) : null;
     check(
       "C. the winner's ROOT owns the vehicle",
-      reopen.ok ? sameRoot(owner, reopenedRoot) : sameRoot(owner, contenderRoot),
+      reopen.ok ? sameLiveRoot(owner, reopenedRoot) : sameLiveRoot(owner, contenderRoot),
       `owner=${JSON.stringify(owner)} reopen=${reopen.ok}`
     );
   }
@@ -429,10 +449,20 @@ async function main() {
       : race[1].ok
         ? await rootOf(s, "sale", race[1].value)
         : null;
+    // State-AGNOSTIC on purpose: if the cash sale wins, a correct authority
+    // marks the claim CONSUMED rather than leaving it live. Demanding a LIVE
+    // owner here would fail the very implementation this probe is meant to
+    // certify. What must hold is that the winner OWNS the outcome — live or
+    // consumed — and that the loser does not.
     check(
       "D. the winner actually REGISTERED ownership, not merely succeeded",
       sameRoot(owner, winnerRoot),
-      `owner=${JSON.stringify(owner)} winnerRoot=${JSON.stringify(winnerRoot)}`
+      `owner=${JSON.stringify(owner)} winnerRoot=${JSON.stringify(winnerRoot)} state=${owner?.state}`
+    );
+    check(
+      "D. a cash-sale win leaves the claim CONSUMED, not still live",
+      !race[1].ok || owner?.state === "CONSUMED",
+      `cashSale=${race[1].ok} ownerState=${owner?.state}`
     );
   }
 
@@ -463,7 +493,7 @@ async function main() {
         : null;
     check(
       "D. the reservation winner registered a ROOT rather than just a hold row",
-      sameRoot(owner, winnerRoot),
+      sameLiveRoot(owner, winnerRoot),
       `owner=${JSON.stringify(owner)} winnerRoot=${JSON.stringify(winnerRoot)}`
     );
   }
@@ -503,7 +533,7 @@ async function main() {
     );
     check(
       "E. the winning deposit's root owns the vehicle",
-      sameRoot(owner, winnerRoot),
+      sameLiveRoot(owner, winnerRoot),
       `owner=${JSON.stringify(owner)} winnerRoot=${JSON.stringify(winnerRoot)}`
     );
   }
@@ -526,6 +556,24 @@ async function main() {
       "E. a deposit and a finance application from DIFFERENT roots — exactly one wins",
       race.filter((r) => r.ok).length === 1,
       `deposit=${race[0].ok} application=${race[1].ok} — ${describeCrossOutcome(race)}`
+    );
+    // Round-6: this was the ONE cross-race that counted winners without ever
+    // asking who owns the car — the exact omission the correlate-don't-count
+    // rule was written for, left in place two races after it was established.
+    // A LEGACY deposit path can succeed without registering a root while the
+    // application loses for some unrelated projection reason: one winner, no
+    // owner, and this race reports green on a vehicle the authority thinks is
+    // free.
+    const owner = await ownerOf(s);
+    const winnerRoot = race[0].ok
+      ? await rootOf(s, "deposit", race[0].value)
+      : race[1].ok
+        ? await rootOf(s, "application", race[1].value)
+        : null;
+    check(
+      "E. the cross-primitive winner actually owns the vehicle",
+      sameLiveRoot(owner, winnerRoot),
+      `owner=${JSON.stringify(owner)} winnerRoot=${JSON.stringify(winnerRoot)}`
     );
   }
 

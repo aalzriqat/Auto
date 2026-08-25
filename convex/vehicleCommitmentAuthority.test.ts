@@ -743,7 +743,7 @@ describe("SCRUM-195: one authority decides whether a vehicle is committed", () =
   });
 
   describe("13. abandonment is surfaced, never silently expired", () => {
-    // SKIPPED DELIBERATELY, and the skip IS the specification.
+    // PENDING SURFACE — the failing call IS the specification.
     //
     // This is the one requirement that cannot be expressed as a running
     // failing-first test today: the surfacing query does not exist, so the

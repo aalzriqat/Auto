@@ -26,6 +26,28 @@ import { anyApi, FunctionReference } from "convex/server";
  * failing-first test is supposed to do. When the surface lands they will fail
  * on the ASSERTION until the behaviour is right, and only then go green.
  *
+ * ## One honest qualification (round-6)
+ *
+ * "Every test invokes the surface it is named for" is too strong TODAY, and
+ * saying it flatly was an overclaim. A number of the cross-surface fixtures
+ * first have to build a superseded head, and that setup itself goes through
+ * `saveQuote({ supersedesQuoteId })` — a field that does not exist yet. Those
+ * tests are therefore PREREQUISITE-red: they fail in setup, before the
+ * mutation under test is ever reached.
+ *
+ * That is not the same defect as a test that fails for an unrelated reason —
+ * the rejection is the deliberate pending-surface boundary, and every one of
+ * them becomes target-red the moment supersession lands, with no edit. But an
+ * implementer should know which is which, because a prerequisite-red test
+ * proves nothing about its own subject until the prerequisite exists. Where a
+ * fixture could be made independently red by seeding root/head state directly,
+ * that is the better form; it is not available until a seeding surface exists.
+ *
+ * The distinction that actually matters, and the one this file must never get
+ * wrong, is a test failing on a rule that has NOTHING to do with its subject.
+ * Round 6 found exactly one (`REALLOCATE_TO_VEHICLE`, since rebuilt) and it
+ * would have stayed red forever against a perfectly correct implementation.
+ *
  * The untyped reference is the minimum needed to make an unbuilt function
  * callable. It is deliberately not a cast that would let a missing function
  * silently resolve: `anyApi` produces a real function reference, so the call
@@ -245,6 +267,51 @@ async function quoteFor(
 }
 
 /**
+ * A two-car deal whose second share has been released and is AWAITING A
+ * DECISION: 4,000 taken, 2,000 against each car, the second one released.
+ *
+ * Module-scoped because two different blocks need it — the root-wide ceiling
+ * (does unresolved money still count?) and the ownership/money axes (does it
+ * still hold the car?). Those are the two questions this exact state answers,
+ * and they live in different describes.
+ */
+async function dealWithReleasedShare(seed: Seed, keepVin: string, freedVin: string) {
+  const keep = await vehicle(seed, keepVin);
+  const freed = await vehicle(seed, freedVin);
+
+  const root = await seed.asUser.mutation(api.quotes.saveQuote, {
+    orgId: seed.orgId,
+    customerId: seed.customerA,
+    vehicleId: keep,
+    vehicleItems: [
+      { vehicleId: keep, unitPrice: PRICE },
+      { vehicleId: freed, unitPrice: PRICE },
+    ],
+    mode: "CASH" as const,
+    vehiclePrice: PRICE * 2,
+    downPayment: 0,
+    termMonths: 0,
+    totalFinancedAmount: 0,
+  });
+  await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: root, amount: 4_000 });
+  await seed.asUser.mutation(api.deposits.allocateToVehicles, {
+    orgId: seed.orgId,
+    quoteId: root,
+    allocations: [
+      { vehicleId: keep, amount: 2_000 },
+      { vehicleId: freed, amount: 2_000 },
+    ],
+  });
+  await seed.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+    orgId: seed.orgId,
+    quoteId: root,
+    vehicleId: freed,
+    reason: "customer dropped the second car",
+  });
+  return { root, keep, freed };
+}
+
+/**
  * Every table a refused deposit could plausibly touch.
  *
  * "Whole-world zero delta" is only a real claim if the world is actually
@@ -383,9 +450,13 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
       const rootB = await quoteFor(seed, seed.customerB, v);
       const before = await snapshotWorld(seed);
 
+      // Matched, not bare. A bare `rejects.toThrow()` would go green on ANY
+      // future rejection — an auth change, a validator tightening, a rate
+      // limit — and the zero-delta assertion below would then be proving that
+      // a call which never ran wrote nothing.
       await expect(
         seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: rootB, amount: 2_000 })
-      ).rejects.toThrow();
+      ).rejects.toThrow(/committed|another deal|already held|no longer available|different root/i);
 
       expect(await snapshotWorld(seed)).toEqual(before);
     });
@@ -416,7 +487,7 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
       ).rejects.toThrow(/root|deal|which deal|cannot be proven|ambiguous/i);
     });
 
-    // SKIPPED, and the skip is the specification — same discipline as the aged
+    // PENDING SURFACE — the failing call is the specification; same discipline as the aged
     // commitments query. `createReservation`'s args are `orgId, vehicleId,
     // customerId, depositAmount?, depositMethod?, expiresAt?` — there is no
     // `quoteId`, so this cannot compile, and casting to force it green would
@@ -809,7 +880,7 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
     // `quoteId`. If the quote id WERE the root, a price change after a deposit
     // would strand the customer's own deal behind the different-root rule.
 
-    // SKIPPED — the specification. No linkage field exists on `quotes` (no
+    // PENDING SURFACE — the failing call is the specification. No linkage field exists on `quotes` (no
     // `supersedesQuoteId`, no revision pointer anywhere in the schema), so a
     // LINKED re-quote is not expressible today and this cannot be written as a
     // running assertion without inventing the field in the test.
@@ -848,7 +919,7 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
       ).resolves.toBeDefined();
     });
 
-    // SKIPPED — specification. Both reviewers converged here independently, and
+    // PENDING SURFACE — the failing call is the specification. Both reviewers converged here independently, and
     // the precedent is already in the codebase.
     //
     // The two new mechanisms this design introduces — `createReservation`'s
@@ -930,7 +1001,7 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
   });
 
   describe("10. legacy multi-root vehicles are NOT cutover-ready", () => {
-    // SKIPPED — the specification, and the reason it must exist separately from
+    // PENDING SURFACE — the failing call is the specification, and the reason it must exist separately from
     // the characterization test below.
     //
     // That test proves the hazard is CONSTRUCTIBLE. It does not encode the
@@ -1097,7 +1168,7 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
       expect(await seed.t.run((ctx) => ctx.db.get(saleId))).toBeTruthy();
     });
 
-    // SKIPPED — specification. No `supersedesQuoteId`, no `currentQuoteId` and
+    // PENDING SURFACE — the failing call is the specification. No `supersedesQuoteId`, no `currentQuoteId` and
     // no revision counter exist on `quotes` yet, so none of the CAS behaviour
     // is expressible without inventing the fields inside the test.
     //
@@ -1136,7 +1207,7 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
       );
     });
 
-    // SKIPPED — specification. Same missing surfaces.
+    // PENDING SURFACE — the failing call is the specification. Same missing surfaces.
     //
     // REQUIRED CONTRACT (c14796): new hard evidence must originate from the
     // CURRENT revision. A deposit, application or reservation quoting a
@@ -1172,7 +1243,7 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
       ).resolves.toBeDefined();
     });
 
-    // SKIPPED — specification, and this is the ruling with the sharpest teeth.
+    // PENDING SURFACE — the failing call is the specification, and this is the ruling with the sharpest teeth.
     //
     // REQUIRED CONTRACT (c14796): money belongs economically to the ROOT;
     // `quoteId` is provenance only. A Q1 deposit survives a linked Q2 re-quote
@@ -1319,6 +1390,143 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
         seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: r1, amount: 2_000 })
       ).resolves.toBeDefined();
     });
+
+    /**
+     * ## Round-6: "economically retained" was a phrase, not a formula
+     *
+     * Both seats landed on the same gap from different directions. The tests
+     * above vary only the PRICE and never the AMOUNT, so every one of them
+     * passes under the most naive reading — the raw sum of deposit face values
+     * — while `deposits.releasedAmountMinor` (a real, shipped field, with
+     * refunded and forfeited parts kept apart) is never consulted anywhere in
+     * this file.
+     *
+     * The binding formula, stated so an implementer does not have to guess:
+     *
+     *     retained(root) = Σ deposit.amountMinor − Σ deposit.releasedAmountMinor
+     *
+     * across every revision of the root. Money that was actually paid back or
+     * forfeited has left the customer's credit and must stop counting. Money
+     * that is APPLIED or merely RELEASED_AWAITING_DECISION has NOT left — it is
+     * still the customer's, still on the deal, and still counts. The three
+     * tests below are the ones that distinguish that formula from the naive
+     * sum; without them the two are indistinguishable.
+     */
+    test("a price RISE lifts the ceiling — headroom is recomputed, not remembered", async () => {
+      const seed = await seedDealer("ceiling-rise");
+      const v = await vehicle(seed, "LIN0000000000055");
+      const r1 = await quoteFor(seed, seed.customerA, v);
+      await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: r1, amount: PRICE });
+
+      // Renegotiated UP: 28,000 held against a 35,000 head leaves 7,000 of room.
+      await seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+        orgId: seed.orgId,
+        customerId: seed.customerA,
+        vehicleId: v,
+        mode: "CASH",
+        vehiclePrice: 35_000,
+        downPayment: 0,
+        termMonths: 0,
+        totalFinancedAmount: 0,
+        supersedesQuoteId: r1,
+      });
+
+      await expect(
+        seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: r1, amount: 7_000 })
+      ).resolves.toBeDefined();
+    });
+
+    /**
+     * The discriminating PAIR. Both start from the identical state — a 4,000
+     * deposit on a two-car deal with a 2,000 share released — and both
+     * renegotiate the head down to 3,000. The ONLY difference is whether that
+     * released share was actually paid back.
+     *
+     * Under the naive face-value sum both refuse. Under the binding formula
+     * one refuses and one succeeds. That is what makes them evidence rather
+     * than decoration; either test alone proves nothing.
+     *
+     * Note `deposits.release` takes no amount — it resolves a whole deposit,
+     * and refuses outright while any share is still allocated. The genuine
+     * partial-refund mechanism is per-share resolution, which is why the
+     * refund half goes through `resolveReleasedAllocation`.
+     */
+    test("money merely AWAITING A DECISION still counts — it has not left the deal", async () => {
+      const seed = await seedDealer("ceiling-awaiting");
+      const { root, keep, freed } = await dealWithReleasedShare(
+        seed,
+        "LIN0000000000057",
+        "LIN0000000000157"
+      );
+
+      // Nothing was refunded, so all 4,000 is still the customer's credit.
+      await expect(
+        seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+          orgId: seed.orgId,
+          customerId: seed.customerA,
+          vehicleId: keep,
+          vehicleItems: [
+            { vehicleId: keep, unitPrice: 1_500 },
+            { vehicleId: freed, unitPrice: 1_500 },
+          ],
+          mode: "CASH",
+          vehiclePrice: 3_000,
+          downPayment: 0,
+          termMonths: 0,
+          totalFinancedAmount: 0,
+          supersedesQuoteId: root,
+        })
+      ).rejects.toThrow(/below|already held|deposits|exceed/i);
+    });
+
+    test("money actually REFUNDED stops counting — the same head is then admissible", async () => {
+      const seed = await seedDealer("ceiling-refunded");
+      const { root, keep, freed } = await dealWithReleasedShare(
+        seed,
+        "LIN0000000000058",
+        "LIN0000000000158"
+      );
+
+      const releasedHold = await seed.t.run(async (ctx) => {
+        const holds = await ctx.db
+          .query("depositVehicleHolds")
+          .filter((q) => q.eq(q.field("vehicleId"), freed))
+          .collect();
+        return holds.find((hold) => hold.allocationStatus === "RELEASED_AWAITING_DECISION");
+      });
+
+      // 2,000 genuinely paid back: retained falls to 2,000.
+      //
+      // Resolved by the APPROVER, not the creator: `assertDifferentActors`
+      // enforces maker-checker on refunds, so using the same identity fails on
+      // that guard instead of on the ceiling — the wrong-reason failure this
+      // round was called to eliminate.
+      await seed.asApprover.mutation(api.deposits.resolveReleasedAllocation, {
+        orgId: seed.orgId,
+        holdId: releasedHold!._id,
+        treatment: "REFUND_TO_CUSTOMER" as const,
+        refundMethod: "CASH" as const,
+        reason: "customer took the money back",
+      });
+
+      await expect(
+        seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+          orgId: seed.orgId,
+          customerId: seed.customerA,
+          vehicleId: keep,
+          vehicleItems: [
+            { vehicleId: keep, unitPrice: 1_500 },
+            { vehicleId: freed, unitPrice: 1_500 },
+          ],
+          mode: "CASH",
+          vehiclePrice: 3_000,
+          downPayment: 0,
+          termMonths: 0,
+          totalFinancedAmount: 0,
+          supersedesQuoteId: root,
+        })
+      ).resolves.toBeDefined();
+    });
   });
 
   describe("13. c14833 item 6: vehicle ownership and unresolved money are SEPARATE axes", () => {
@@ -1354,42 +1562,6 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
      * fixture bug. The engine only produces awaiting-decision shares when a
      * share can be released while the deal continues, which needs two cars.
      */
-    async function dealWithReleasedShare(seed: Seed, keepVin: string, freedVin: string) {
-      const keep = await vehicle(seed, keepVin);
-      const freed = await vehicle(seed, freedVin);
-
-      const root = await seed.asUser.mutation(api.quotes.saveQuote, {
-        orgId: seed.orgId,
-        customerId: seed.customerA,
-        vehicleId: keep,
-        vehicleItems: [
-          { vehicleId: keep, unitPrice: PRICE },
-          { vehicleId: freed, unitPrice: PRICE },
-        ],
-        mode: "CASH" as const,
-        vehiclePrice: PRICE * 2,
-        downPayment: 0,
-        termMonths: 0,
-        totalFinancedAmount: 0,
-      });
-      await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: root, amount: 4_000 });
-      await seed.asUser.mutation(api.deposits.allocateToVehicles, {
-        orgId: seed.orgId,
-        quoteId: root,
-        allocations: [
-          { vehicleId: keep, amount: 2_000 },
-          { vehicleId: freed, amount: 2_000 },
-        ],
-      });
-      await seed.asUser.mutation(api.deposits.releaseVehicleAllocation, {
-        orgId: seed.orgId,
-        quoteId: root,
-        vehicleId: freed,
-        reason: "customer dropped the second car",
-      });
-      return { root, keep, freed };
-    }
-
     test("RELEASED_AWAITING_DECISION money does not hold the vehicle", async () => {
       // Ownership axis. Cancellation freed the car on purpose; an independent
       // deal may take it. This must keep passing — a commitment authority that
@@ -1432,6 +1604,93 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
           quoteId: root,
         })
       ).rejects.toThrow(/unresolved|awaiting|decision|cannot close/i);
+    });
+
+    /**
+     * ## Round-6: one negative test is not a contract (both seats)
+     *
+     * `closeRoot` was pinned ONLY against the multi-vehicle
+     * RELEASED_AWAITING_DECISION edge case. A mutation that special-cases
+     * exactly that state and otherwise closes anything satisfies it — so the
+     * FIRST-ORDER case, an ordinary mid-deal root with live money and nothing
+     * released at all, was the one state nothing checked. That is the silent
+     * deactivation c14833 forbids, reachable through the plainest path there is.
+     *
+     * And with only a negative test, a `closeRoot` that refuses everything and
+     * does nothing else is also conformant. A terminal state nothing can reach
+     * is not a lifecycle; the successful closure has to be pinned too.
+     */
+    test("an ordinary root with live money cannot be closed either", async () => {
+      const seed = await seedDealer("axes-ordinary");
+      const v = await vehicle(seed, "LIN0000000000059");
+      const root = await quoteFor(seed, seed.customerA, v);
+      await seed.asUser.mutation(api.deposits.create, {
+        orgId: seed.orgId,
+        quoteId: root,
+        amount: 3_000,
+      });
+
+      // Nothing released, nothing cancelled — just a deal in progress.
+      await expect(
+        seed.asUser.mutation(notYetBuilt.commitments.closeRoot, {
+          orgId: seed.orgId,
+          quoteId: root,
+        })
+      ).rejects.toThrow(/unresolved|live|open|in progress|cannot close/i);
+    });
+
+    test("a root whose money is fully resolved CAN be closed", async () => {
+      // The positive half. Without it, "refuses when unresolved" is satisfied
+      // by a mutation that never closes anything.
+      const seed = await seedDealer("axes-closable");
+      const { root, keep } = await dealWithReleasedShare(
+        seed,
+        "LIN0000000000060",
+        "LIN0000000000160"
+      );
+
+      // The kept car's share is released too, so BOTH shares are awaiting a
+      // decision and the root has no money still holding anything.
+      //
+      // The engine enforces this order and refuses to shortcut it:
+      // `deposits.release` will not touch a deposit whose share is still
+      // "allocated to a vehicle still on the deal". Every share must be
+      // released and then explicitly resolved — which is precisely the
+      // "explicit disposition for every share" rule this test is pinning, so
+      // the sequencing is the contract rather than an obstacle to it.
+      await seed.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+        orgId: seed.orgId,
+        quoteId: root,
+        vehicleId: keep,
+        reason: "deal wound down",
+      });
+
+      const awaiting = await seed.t.run(async (ctx) => {
+        const holds = await ctx.db.query("depositVehicleHolds").collect();
+        return holds
+          .filter((hold) => hold.allocationStatus === "RELEASED_AWAITING_DECISION")
+          .map((hold) => hold._id);
+      });
+      expect(awaiting.length).toBe(2);
+
+      // Maker-checker: refunds are resolved by a different actor than the one
+      // who took the deposit (`assertDifferentActors`).
+      for (const holdId of awaiting) {
+        await seed.asApprover.mutation(api.deposits.resolveReleasedAllocation, {
+          orgId: seed.orgId,
+          holdId,
+          treatment: "REFUND_TO_CUSTOMER" as const,
+          refundMethod: "CASH" as const,
+          reason: "resolved",
+        });
+      }
+
+      await expect(
+        seed.asUser.mutation(notYetBuilt.commitments.closeRoot, {
+          orgId: seed.orgId,
+          quoteId: root,
+        })
+      ).resolves.toBeDefined();
     });
   });
 
@@ -1533,6 +1792,214 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
         })
       ).rejects.toThrow(/does not match|not this customer|unauthorized|different customer/i);
     });
+
+    /**
+     * ## Round-6 CRITICAL: the bridge never tested the money it exists for
+     *
+     * Every fixture above created the reservation with NO `depositAmount`, so
+     * the only money in the whole section arrived after adoption, through the
+     * quote. The prose describes a customer who puts money down before there
+     * is any paperwork — and that is precisely the case nothing exercised.
+     *
+     * `vehicles.createReservation` accepts `depositAmount` and
+     * `depositMethod`, so reservation-origin money is real and constructible
+     * today. An implementation whose root-wide ceiling scans only
+     * quote-linked deposits passes every test written so far and still lets a
+     * customer's own money exceed the price of the car — after which
+     * completion applies the quote deposit and STRANDS the reservation one.
+     * Money-loss, reachable, and previously invisible to this file.
+     */
+    test("reservation-origin money joins the adopted root and counts against its ceiling", async () => {
+      const seed = await seedDealer("bridge-money");
+      const v = await vehicle(seed, "LIN0000000000045");
+
+      const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+        orgId: seed.orgId,
+        vehicleId: v,
+        customerId: seed.customerA,
+        depositAmount: 5_000,
+      });
+
+      const adopted = (await seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+        orgId: seed.orgId,
+        customerId: seed.customerA,
+        vehicleId: v,
+        mode: "CASH",
+        vehiclePrice: PRICE,
+        downPayment: 0,
+        termMonths: 0,
+        totalFinancedAmount: 0,
+        reservationId,
+      })) as Id<"quotes">;
+
+      // 5,000 already held through the reservation. A further 24,000 would put
+      // 29,000 of the customer's money against a 28,000 car.
+      await expect(
+        seed.asUser.mutation(api.deposits.create, {
+          orgId: seed.orgId,
+          quoteId: adopted,
+          amount: 24_000,
+        })
+      ).rejects.toThrow(/exceed|more than|price|already held|ceiling/i);
+    });
+
+    test("an adoption proof naming a DIFFERENT vehicle is refused", async () => {
+      // The other half of the authorization rule, and the half that was left
+      // unpinned. The cited precedent — `saleCompletion.ts:214` — checks the
+      // customer AND the vehicle together in a single condition. Pinning only
+      // the customer half is exactly how half an accepted rule ships unbuilt.
+      const seed = await seedDealer("bridge-wrongcar");
+      const reserved = await vehicle(seed, "LIN0000000000046");
+      const other = await vehicle(seed, "LIN0000000000047");
+
+      const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+        orgId: seed.orgId,
+        vehicleId: reserved,
+        customerId: seed.customerA,
+      });
+
+      // Right customer, right reservation — wrong car.
+      await expect(
+        seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+          orgId: seed.orgId,
+          customerId: seed.customerA,
+          vehicleId: other,
+          mode: "CASH",
+          vehiclePrice: PRICE,
+          downPayment: 0,
+          termMonths: 0,
+          totalFinancedAmount: 0,
+          reservationId,
+        })
+      ).rejects.toThrow(/does not match|not this vehicle|different vehicle|unauthorized/i);
+    });
+
+    test("an adoption proof is refused when the quote's vehicle SET is not the reserved car alone", async () => {
+      // `vehicleId` is not the authoritative vehicle set — `vehicleItems` is.
+      // Validating the scalar while the quote carries a materially different
+      // set adopts a single-car reservation's root onto a multi-car deal.
+      const seed = await seedDealer("bridge-setdrift");
+      const reserved = await vehicle(seed, "LIN0000000000048");
+      const smuggled = await vehicle(seed, "LIN0000000000049");
+
+      const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+        orgId: seed.orgId,
+        vehicleId: reserved,
+        customerId: seed.customerA,
+      });
+
+      await expect(
+        seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+          orgId: seed.orgId,
+          customerId: seed.customerA,
+          vehicleId: reserved,
+          vehicleItems: [
+            { vehicleId: reserved, unitPrice: PRICE },
+            { vehicleId: smuggled, unitPrice: PRICE },
+          ],
+          mode: "CASH",
+          vehiclePrice: PRICE * 2,
+          downPayment: 0,
+          termMonths: 0,
+          totalFinancedAmount: 0,
+          reservationId,
+        })
+      ).rejects.toThrow(/does not match|vehicle set|different vehicle|unauthorized/i);
+    });
+
+    test("supplying BOTH proofs that resolve to DIFFERENT roots is refused, not silently reconciled", async () => {
+      // Two proofs, two roots, no stated precedence. Whichever one "wins"
+      // either merges an independent deal's money into the reservation's root
+      // or uses the reservation as permission to move that deal onto the
+      // reserved car. The contract must refuse rather than pick.
+      const seed = await seedDealer("bridge-bothproofs");
+      const reserved = await vehicle(seed, "LIN0000000000050");
+
+      const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+        orgId: seed.orgId,
+        vehicleId: reserved,
+        customerId: seed.customerA,
+      });
+      // An unrelated live deal of the same customer, on its own root.
+      const otherCar = await vehicle(seed, "LIN0000000000051");
+      const independent = await quoteFor(seed, seed.customerA, otherCar);
+
+      await expect(
+        seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+          orgId: seed.orgId,
+          customerId: seed.customerA,
+          vehicleId: reserved,
+          mode: "CASH",
+          vehiclePrice: PRICE,
+          downPayment: 0,
+          termMonths: 0,
+          totalFinancedAmount: 0,
+          reservationId,
+          supersedesQuoteId: independent,
+        })
+      ).rejects.toThrow(/conflicting|both|ambiguous|one root|mutually exclusive|does not match/i);
+    });
+
+    test("a reservation that is no longer ACTIVE cannot be adopted", async () => {
+      // `vehicleReservations.status` allows RELEASED / CONVERTED / EXPIRED. A
+      // proof is only proof while it is live; adopting a dead reservation
+      // resurrects a root nobody is holding.
+      const seed = await seedDealer("bridge-dead");
+      const v = await vehicle(seed, "LIN0000000000052");
+
+      const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+        orgId: seed.orgId,
+        vehicleId: v,
+        customerId: seed.customerA,
+      });
+      await seed.t.run(async (ctx) => {
+        await ctx.db.patch(reservationId as Id<"vehicleReservations">, { status: "RELEASED" });
+      });
+
+      await expect(
+        seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+          orgId: seed.orgId,
+          customerId: seed.customerA,
+          vehicleId: v,
+          mode: "CASH",
+          vehiclePrice: PRICE,
+          downPayment: 0,
+          termMonths: 0,
+          totalFinancedAmount: 0,
+          reservationId,
+        })
+      ).rejects.toThrow(/not active|released|expired|converted|no longer/i);
+    });
+
+    test("a reservation already adopted by one quote cannot be adopted by a second", async () => {
+      // Otherwise the proof is reusable and two quotes claim one root — the
+      // multi-root state this whole design exists to make impossible, reached
+      // through the bridge instead of around it.
+      const seed = await seedDealer("bridge-twice");
+      const v = await vehicle(seed, "LIN0000000000053");
+
+      const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+        orgId: seed.orgId,
+        vehicleId: v,
+        customerId: seed.customerA,
+      });
+      const shared = {
+        orgId: seed.orgId,
+        customerId: seed.customerA,
+        vehicleId: v,
+        mode: "CASH",
+        vehiclePrice: PRICE,
+        downPayment: 0,
+        termMonths: 0,
+        totalFinancedAmount: 0,
+        reservationId,
+      };
+      await seed.asUser.mutation(notYetBuilt.quotes.saveQuote, shared);
+
+      await expect(
+        seed.asUser.mutation(notYetBuilt.quotes.saveQuote, shared)
+      ).rejects.toThrow(/already adopted|already claimed|already linked|not available/i);
+    });
   });
 
   describe("17. c14833 item 4: cross-surface — a rule pinned on ONE mutation is not pinned", () => {
@@ -1588,13 +2055,117 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
       ).rejects.toThrow(/current revision|superseded|stale|current head/i);
     });
 
+    /**
+     * ## Round-6: the stale-head rule stopped short of the paths that spend money
+     *
+     * The block above covers surfaces that CREATE evidence — deposits,
+     * applications, reservations. It never covered the surfaces that CONSUME
+     * the deal. An implementation can refuse new evidence on a stale revision
+     * and still let a sale complete against the OLD price after the customer
+     * renegotiated, because completion reads its own quote and never asks
+     * whether that quote is still the head.
+     *
+     * That is the renegotiation failure in its most expensive form: the money
+     * is taken at terms the customer already replaced. All three completion
+     * doors are separate handlers, so a guard on one is not a guard on any
+     * other — the same one-of-two omission this describe exists to prevent,
+     * now one-of-five.
+     */
+    test("completeFromQuote refuses a superseded revision", async () => {
+      const seed = await seedDealer("xsurface-complete");
+      const { stale } = await supersededHead(seed, "LIN0000000000061");
+
+      await expect(
+        seed.asUser.mutation(api.sales.completeFromQuote, {
+          orgId: seed.orgId,
+          quoteId: stale,
+        })
+      ).rejects.toThrow(/current revision|superseded|stale|current head/i);
+    });
+
+    test("sales.create refuses a superseded revision as its quote", async () => {
+      const seed = await seedDealer("xsurface-salecreate");
+      const { v, stale } = await supersededHead(seed, "LIN0000000000062");
+
+      await expect(
+        seed.asUser.mutation(api.sales.create, {
+          orgId: seed.orgId,
+          vehicleId: v,
+          customerId: seed.customerA,
+          salespersonId: seed.userId,
+          quoteId: stale,
+          salePrice: PRICE,
+          saleDate: Date.now(),
+          status: "COMPLETED" as const,
+        })
+      ).rejects.toThrow(/current revision|superseded|stale|current head/i);
+    });
+
+    test("finalizeDeal refuses once its application's quote has been superseded", async () => {
+      // The subtlest of the three: the application was created legitimately
+      // against the then-current head, and the head moved AFTERWARDS. Whether
+      // an in-flight application pins its original terms or must follow the
+      // current head is exactly the question an implementer would otherwise
+      // have to invent an answer to.
+      const seed = await seedDealer("xsurface-finalize");
+      const v = await vehicle(seed, "LIN0000000000063");
+      const r1 = await quoteFor(seed, seed.customerA, v, true);
+      const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
+        orgId: seed.orgId,
+        quoteId: r1,
+      });
+
+      // The customer renegotiates after the application exists.
+      await seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+        orgId: seed.orgId,
+        customerId: seed.customerA,
+        vehicleId: v,
+        mode: "CONFIGURED_FINANCE_COMPANY",
+        companyId: seed.companyId,
+        vehiclePrice: PRICE - 1_500,
+        downPayment: 0,
+        termMonths: 48,
+        totalFinancedAmount: PRICE - 1_500,
+        supersedesQuoteId: r1,
+      });
+
+      await expect(
+        seed.asUser.mutation(api.applications.finalizeDeal, {
+          orgId: seed.orgId,
+          applicationId,
+        })
+      ).rejects.toThrow(/current revision|superseded|stale|current head/i);
+    });
+
     test("REALLOCATE_TO_VEHICLE is an acquisition too, not only RETURN_TO_UNALLOCATED", async () => {
       // The sibling treatment. Both reinsert an active hold, so pinning only
       // one leaves the other as an unchecked second writer — the same
       // one-of-two omission this whole block exists to prevent.
+      //
+      // ## Why this fixture needs THREE vehicles (round-6, both seats)
+      //
+      // The first version of this test released `freed` and then re-allocated
+      // the share back onto `freed` itself. That can never reach the
+      // commitment authority: `deposits.ts:731` refuses same-source
+      // re-allocation outright ("Re-allocating a share to the vehicle it came
+      // from is not a decision") BEFORE any hold is inserted. The test was red,
+      // but red for an unrelated, already-shipped rule — so it would have
+      // stayed red after the authority was built correctly, and never once
+      // exercised the acquisition it is named for.
+      //
+      // `REALLOCATE_TO_VEHICLE` and `RETURN_TO_UNALLOCATED` have OPPOSITE
+      // targeting rules: the latter deliberately reactivates the same vehicle
+      // and accepts no `toVehicleId` at all, the former requires a DIFFERENT
+      // vehicle already on the quote. Copying the sibling's shape onto it was
+      // the mistake. The target must therefore be a third line on the same
+      // quote that this deal never allocated against — so no hard commitment
+      // of ours exists on it, a rival may legitimately acquire it (a quote
+      // alone locks nothing, c14796), and moving money onto it afterwards is a
+      // genuine acquisition that must be refused.
       const seed = await seedDealer("xsurface-realloc");
       const keep = await vehicle(seed, "LIN0000000000042");
-      const freed = await vehicle(seed, "LIN0000000000043");
+      const dropped = await vehicle(seed, "LIN0000000000043");
+      const third = await vehicle(seed, "LIN0000000000044");
 
       const root = await seed.asUser.mutation(api.quotes.saveQuote, {
         orgId: seed.orgId,
@@ -1602,38 +2173,41 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
         vehicleId: keep,
         vehicleItems: [
           { vehicleId: keep, unitPrice: PRICE },
-          { vehicleId: freed, unitPrice: PRICE },
+          { vehicleId: dropped, unitPrice: PRICE },
+          { vehicleId: third, unitPrice: PRICE },
         ],
         mode: "CASH" as const,
-        vehiclePrice: PRICE * 2,
+        vehiclePrice: PRICE * 3,
         downPayment: 0,
         termMonths: 0,
         totalFinancedAmount: 0,
       });
       await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: root, amount: 4_000 });
+      // Deliberately NOT allocating anything to `third`: it stays a line on the
+      // quote with no money and therefore no hard commitment from this deal.
       await seed.asUser.mutation(api.deposits.allocateToVehicles, {
         orgId: seed.orgId,
         quoteId: root,
         allocations: [
           { vehicleId: keep, amount: 2_000 },
-          { vehicleId: freed, amount: 2_000 },
+          { vehicleId: dropped, amount: 2_000 },
         ],
       });
       await seed.asUser.mutation(api.deposits.releaseVehicleAllocation, {
         orgId: seed.orgId,
         quoteId: root,
-        vehicleId: freed,
+        vehicleId: dropped,
         reason: "dropped",
       });
 
-      // A rival legitimately takes the freed car.
-      const rival = await quoteFor(seed, seed.customerB, freed);
+      // A rival legitimately acquires the untouched third car.
+      const rival = await quoteFor(seed, seed.customerB, third);
       await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: rival, amount: 1_500 });
 
       const releasedHold = await seed.t.run(async (ctx) => {
         const holds = await ctx.db
           .query("depositVehicleHolds")
-          .filter((q) => q.eq(q.field("vehicleId"), freed))
+          .filter((q) => q.eq(q.field("vehicleId"), dropped))
           .collect();
         return holds.find((hold) => hold.active === false) ?? holds[0];
       });
@@ -1643,8 +2217,8 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
           orgId: seed.orgId,
           holdId: releasedHold!._id,
           treatment: "REALLOCATE_TO_VEHICLE" as const,
-          toVehicleId: freed,
-          reason: "put it back",
+          toVehicleId: third,
+          reason: "move it to the third car",
         })
       ).rejects.toThrow(/committed|another deal|already held|no longer available/i);
     });
@@ -1717,6 +2291,62 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
         seed.asUser.mutation(notYetBuilt.quotes.saveQuote, { ...base, vehiclePrice: PRICE - 2_000 })
       ).rejects.toThrow(/idempoten|conflict|different|reused/i);
     });
+
+    /**
+     * ## Round-6 CRITICAL: both tests above supply a key. No real caller does.
+     *
+     * Verified on this commit: all four production callers of `saveQuote` —
+     * `QuoteDialog.tsx`, `Step3Review.tsx`, `SalesWizardScreen.tsx` and mobile
+     * `quotes.tsx` — omit `idempotencyKey` entirely. `runWithIdempotency`
+     * treats the key as OPTIONAL, so an implementation that dedupes only when
+     * a key happens to be supplied passes both tests above while every real
+     * double-click and every network retry still mints a second root.
+     *
+     * That is the vacuity class this whole file is meant to prevent, and it
+     * had reappeared inside the very section written to close it. The contract
+     * therefore has to say what happens with NO key — either the key becomes
+     * mandatory (and the four callers must supply a retry-stable one), or the
+     * server derives a stable operation identity itself. It cannot stay
+     * "idempotent if you ask nicely".
+     */
+    test("a retry with NO key supplied still does not mint a second root", async () => {
+      const seed = await seedDealer("idem-nokey");
+      const v = await vehicle(seed, "LIN0000000000054");
+
+      const args = {
+        orgId: seed.orgId,
+        customerId: seed.customerA,
+        vehicleId: v,
+        mode: "CASH",
+        vehiclePrice: PRICE,
+        downPayment: 0,
+        termMonths: 0,
+        totalFinancedAmount: 0,
+      };
+
+      // The shape every real caller uses today: a double-submit.
+      const first = await seed.asUser.mutation(notYetBuilt.quotes.saveQuote, args);
+      const second = await seed.asUser.mutation(notYetBuilt.quotes.saveQuote, args);
+
+      // Returned as an ARRAY, not a Set: `seed.t.run` serialises its result as
+      // a Convex value and a Set is not one. Building the Set out here keeps
+      // the failure about roots rather than about serialisation.
+      const rootIds = await seed.t.run(async (ctx) => {
+        const quotes = await ctx.db
+          .query("quotes")
+          .filter((q) => q.eq(q.field("vehicleId"), v))
+          .collect();
+        return quotes.map((q) => String((q as { rootId?: unknown }).rootId ?? q._id));
+      });
+      const roots = new Set(rootIds);
+
+      // Whether the server returns the same quote or a second revision of the
+      // same lineage is an implementation choice; producing two COMPETING
+      // ROOTS from one operator action is not.
+      expect(roots.size).toBe(1);
+      expect(second).toBeDefined();
+      expect(first).toBeDefined();
+    });
   });
 });
 
@@ -1738,7 +2368,30 @@ describe("16. c14833 item 3: every saveQuote caller is mapped and pinned", () =>
    * source-scan for the same reason `customerMergeRegistry.test.ts` is one:
    * a registry nobody is required to update is a comment.
    */
+  /**
+   * ## Round-6: this registry was blind to half its subject (both seats)
+   *
+   * It scanned `components`, `app` and `lib` only — and `apps/mobile` contains
+   * TWO live production callers on this very commit. The forcing function was
+   * pointed at the half of the codebase that was already going to be handled.
+   *
+   * That is not a cosmetic miss. `apps/mobile` has NO revise path at all: its
+   * quote save is always a fresh insert, so under the cross-root refusal rule
+   * a mobile salesperson who re-prices their own customer's deal produces a
+   * COMPETING root and that customer's own second deposit is refused — with no
+   * UI, no argument to pass, and nothing anywhere that would have caught it
+   * before it shipped. The design would have introduced that breakage itself.
+   *
+   * ⚠️ OPEN OWNER DECISION — mobile is in scope or explicitly out, and it is
+   * not mine to choose. Either the mobile quote flow gets the same
+   * `supersedesQuoteId`/`reservationId` support in this lane, or mobile is
+   * consciously descoped WITH the consequence written down. What is not
+   * acceptable is the third option this registry was silently taking: not
+   * knowing mobile existed.
+   */
   const CALLERS = [
+    "apps/mobile/src/features/workspace/modules/quotes.tsx",
+    "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
     "components/sales/QuoteDialog.tsx",
     "components/sales/wizard/steps/Step3Review.tsx",
   ] as const;
@@ -1747,11 +2400,15 @@ describe("16. c14833 item 3: every saveQuote caller is mapped and pinned", () =>
     const { readFileSync, readdirSync, statSync } = await import("node:fs");
     const { join, relative, sep } = await import("node:path");
 
-    const roots = ["components", "app", "lib"];
+    // `convex` is scanned too: a server-side `ctx.runMutation` caller would
+    // mint roots exactly like a client one, and none exists today only by
+    // accident rather than by any rule.
+    const roots = ["components", "app", "lib", "apps", "convex"];
     const found: string[] = [];
 
     const walk = (dir: string) => {
       for (const entry of readdirSync(dir)) {
+        if (entry === "node_modules" || entry === "_generated") continue;
         const full = join(dir, entry);
         if (statSync(full).isDirectory()) {
           walk(full);
@@ -1759,8 +2416,14 @@ describe("16. c14833 item 3: every saveQuote caller is mapped and pinned", () =>
         }
         if (!/\.(ts|tsx)$/.test(entry) || /\.test\./.test(entry)) continue;
         const text = readFileSync(full, "utf8");
-        // The call itself, not a mention in a comment.
-        if (/useMutation\(\s*api\.quotes\.saveQuote\s*\)/.test(text)) {
+        // Any REFERENCE to the function, not only the exact
+        // `useMutation(api.quotes.saveQuote)` spelling. Round-6: matching that
+        // one spelling missed aliasing (`const fn = api.quotes.saveQuote`),
+        // bracket access, wrapper hooks and `ctx.runMutation` — every one of
+        // which mints a root just the same. A string-built dynamic reference
+        // still evades this; that is the residual hole and it is stated rather
+        // than papered over.
+        if (/api\s*\.\s*quotes\s*\.\s*saveQuote/.test(text)) {
           found.push(relative(process.cwd(), full).split(sep).join("/"));
         }
       }
@@ -1774,6 +2437,46 @@ describe("16. c14833 item 3: every saveQuote caller is mapped and pinned", () =>
       }
     }
 
-    expect(found.sort()).toEqual([...CALLERS].sort());
+    expect([...new Set(found)].sort()).toEqual([...CALLERS].sort());
   });
+});
+
+describe("18. round-6: the contention harness's own seeding surfaces must fail closed", () => {
+  /**
+   * `scripts/vehicleCommitmentContention.mjs` proves concurrency against a REAL
+   * Convex deployment, which means it needs public `testSupport:*` functions
+   * that seed scenarios and read commitment state.
+   *
+   * The script asks the deployment to self-declare `disposable` before calling
+   * them. Review found that this is a check by the CALLER — and the caller is
+   * the one party whose good behaviour proves nothing. An implementation that
+   * ships these as authenticated-but-otherwise-unguarded endpoints makes the
+   * probe green while leaving seeding mutations reachable on any deployment
+   * where someone holds a valid session. Production included.
+   *
+   * So the guard belongs on the SERVER, and it has to be executable. These run
+   * under `convex-test`, where no disposable-deployment marker exists, so a
+   * correct implementation refuses here. A surface that seeds happily in this
+   * context is the defect.
+   *
+   * ⚠️ This is the one contract in this file that protects PRODUCTION rather
+   * than a customer's deal, and the only one whose failure mode is silent:
+   * nothing in the probe's own output would ever reveal it.
+   */
+  const SEED_SURFACES = [
+    "seedCommitmentScenario",
+    "commitmentRootFor",
+    "rootForEvidence",
+    "deploymentIdentity",
+  ] as const;
+
+  test.each(SEED_SURFACES)(
+    "testSupport:%s refuses when the deployment is not provably disposable",
+    async (surface) => {
+      const seed = await seedDealer(`guard-${surface}`);
+      await expect(
+        seed.asUser.mutation(notYetBuilt.testSupport[surface], { orgId: seed.orgId })
+      ).rejects.toThrow(/disposable|not permitted|refus|production|test support/i);
+    }
+  );
 });
