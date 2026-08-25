@@ -4,6 +4,20 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
+import { anyApi, FunctionReference } from "convex/server";
+
+/**
+ * A query this design REQUIRES that does not exist yet.
+ *
+ * This was a `test.skip` whose body never invoked anything — it would have
+ * passed green if merely unskipped, which makes it a comment rather than a
+ * specification. It is now an ordinary active test that genuinely calls the
+ * surface and genuinely fails until that surface exists.
+ */
+const notYetBuiltQuery = anyApi as unknown as Record<
+  string,
+  Record<string, FunctionReference<"query", "public", Record<string, unknown>, unknown>>
+>;
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -746,7 +760,7 @@ describe("SCRUM-195: one authority decides whether a vehicle is committed", () =
     // authentically — which is only acceptable if abandoned commitments are
     // VISIBLE, letting an operator decide to cancel rather than discovering the
     // lock when a sale is refused.
-    test.skip("an aged live commitment is discoverable so an operator can cancel it deliberately", async () => {
+    test("an aged live commitment is discoverable so an operator can cancel it deliberately", async () => {
       // FAILS TODAY — no such query exists. This is the mitigant that replaces
       // the inventory-lock objection to fixture 5a. The ruling is explicit that
       // there must be NO silent TTL: a commitment blocks until someone releases
@@ -768,14 +782,11 @@ describe("SCRUM-195: one authority decides whether a vehicle is committed", () =
         ctx.db.patch(appA, { createdAt: ninetyDaysAgo, updatedAt: ninetyDaysAgo })
       );
 
-      // The call this test exists for, written out so the contract is
-      // unambiguous, and left unreachable because the query does not exist:
-      //
-      //   const aged = await seed.asUser.query(api.applications.listAgedCommitments, {
-      //     orgId: seed.orgId,
-      //     olderThanMs: 30 * 24 * 60 * 60 * 1000,
-      //   });
-      //   expect(aged.map((row) => row.applicationId)).toContain(appA);
+      const aged = (await seed.asUser.query(notYetBuiltQuery.applications.listAgedCommitments, {
+        orgId: seed.orgId,
+        olderThanMs: 30 * 24 * 60 * 60 * 1000,
+      })) as Array<{ applicationId: Id<"financeApplications"> }>;
+      expect(aged.map((row) => row.applicationId)).toContain(appA);
 
       // And it is still holding the car — surfacing is not releasing.
       expect(await vehicleStatus(seed, vehicleId)).not.toBe("SOLD");

@@ -4,6 +4,38 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { ORGANIZATION_DELETION_STEPS } from "./adminOrgs";
+import { anyApi, FunctionReference } from "convex/server";
+
+/**
+ * A reference to a surface this design REQUIRES but that does not exist yet.
+ *
+ * ## Why this exists, and why the previous approach was worse than useless
+ *
+ * These contracts were first written as `test.skip` with the call commented out
+ * and a trailing `expect(something).toBeDefined()`. I described them as "the
+ * specification". A reviewer showed they were nothing of the kind: **every one
+ * would have passed green if merely unskipped**, because the body never invoked
+ * the surface it was named for. An implementer could have un-skipped all eight,
+ * seen green, and built none of it — the exact "passes for the wrong reason"
+ * failure I had spent the day finding in other people's work, sitting inside my
+ * own device for recording the rulings.
+ *
+ * So these are now ORDINARY ACTIVE TESTS. They build real state, invoke the
+ * intended surface through an untyped reference, and assert real behaviour.
+ * Today they fail because the function does not exist — which is what a
+ * failing-first test is supposed to do. When the surface lands they will fail
+ * on the ASSERTION until the behaviour is right, and only then go green.
+ *
+ * The untyped reference is the minimum needed to make an unbuilt function
+ * callable. It is deliberately not a cast that would let a missing function
+ * silently resolve: `anyApi` produces a real function reference, so the call
+ * genuinely executes and genuinely throws.
+ */
+type UnbuiltMutation = FunctionReference<"mutation", "public", Record<string, unknown>, unknown>;
+type UnbuiltQuery = FunctionReference<"query", "public", Record<string, unknown>, unknown>;
+
+const notYetBuilt = anyApi as unknown as Record<string, Record<string, UnbuiltMutation>>;
+const notYetBuiltQuery = anyApi as unknown as Record<string, Record<string, UnbuiltQuery>>;
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -403,21 +435,33 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
     // what is removed is the unsafe way it was admitted, on customer identity
     // alone. That existing test must be rewritten to pass the root, not deleted:
     // the business flow is not superseded, only its proof is.
-    test.skip("a reservation supplying the SAME root as the live deposit is admitted", async () => {
+    test("a reservation supplying the SAME root as the live deposit is admitted", async () => {
       const seed = await seedDealer("bridge-proven");
       const v = await vehicle(seed, "LIN0000000000016");
       const root = await quoteFor(seed, seed.customerA, v);
       await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: root, amount: 1_200 });
 
-      // await expect(
-      //   seed.asUser.mutation(api.vehicles.createReservation, {
-      //     orgId: seed.orgId,
-      //     vehicleId: v,
-      //     customerId: seed.customerA,
-      //     quoteId: root,
-      //   })
-      // ).resolves.toBeDefined();
-      expect(root).toBeDefined();
+      // Fails today: `createReservation` has no `quoteId`, so its validator
+      // rejects the field. Once the argument lands this keeps failing until the
+      // reservation is genuinely admitted on the proven root — the behaviour,
+      // not the signature.
+      const reservationId = await seed.asUser.mutation(notYetBuilt.vehicles.createReservation, {
+        orgId: seed.orgId,
+        vehicleId: v,
+        customerId: seed.customerA,
+        quoteId: root,
+      });
+      expect(reservationId).toBeDefined();
+
+      // And it JOINED rather than competing — one commitment on the car, not two.
+      const active = await seed.t.run(async (ctx) => {
+        const rows = await ctx.db
+          .query("vehicleReservations")
+          .filter((q) => q.eq(q.field("vehicleId"), v))
+          .collect();
+        return rows.filter((row) => row.status === "ACTIVE");
+      });
+      expect(active).toHaveLength(1);
     });
 
     test("a standalone reservation on an uncommitted vehicle still establishes its own root", async () => {
@@ -773,20 +817,35 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
     // REQUIRED CONTRACT (c14659): a re-quote the server can tie to the same
     // deal RESOLVES TO THE SAME ROOT, so the deal continues — the second
     // quote's deposit, application and completion are all admitted.
-    test.skip("a LINKED re-quote resolves to the same root and the deal continues", async () => {
+    test("a LINKED re-quote resolves to the same root and the deal continues", async () => {
       const seed = await seedDealer("requote-linked");
       const v = await vehicle(seed, "LIN0000000000017");
       const first = await quoteFor(seed, seed.customerA, v);
       await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: first, amount: 1_000 });
 
-      // const revised = await seed.asUser.mutation(api.quotes.saveQuote, {
-      //   ...same customer/vehicle, renegotiated price...,
-      //   supersedesQuoteId: first,
-      // });
-      // await expect(
-      //   seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: revised, amount: 500 })
-      // ).resolves.toBeDefined();
-      expect(first).toBeDefined();
+      // Fails today: `saveQuote` has no `supersedesQuoteId`. Once it does, this
+      // keeps failing until the revision genuinely resolves to the same root —
+      // proven by the deposit on the NEW quote being accepted, which under the
+      // different-root rule is only possible if the root was shared.
+      const revised = await seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+        orgId: seed.orgId,
+        customerId: seed.customerA,
+        vehicleId: v,
+        mode: "CASH",
+        vehiclePrice: PRICE - 1_000, // renegotiated down
+        downPayment: 0,
+        termMonths: 0,
+        totalFinancedAmount: 0,
+        supersedesQuoteId: first,
+      });
+
+      await expect(
+        seed.asUser.mutation(api.deposits.create, {
+          orgId: seed.orgId,
+          quoteId: revised as Id<"quotes">,
+          amount: 500,
+        })
+      ).resolves.toBeDefined();
     });
 
     // SKIPPED — specification. Both reviewers converged here independently, and
@@ -811,23 +870,44 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
     // `financeApplications` and `vehicleReservations` are all live-repointed by
     // `mergeCustomers`, and `customerMergeRegistry.test.ts` mechanically forces
     // any new `customerId`-bearing table into that registry.
-    test.skip("a root proof belonging to a DIFFERENT customer is refused", async () => {
-      const seed = await seedDealer("proof-authz");
+    test("a reservation root proof belonging to a DIFFERENT customer is refused", async () => {
+      const seed = await seedDealer("proof-authz-res");
       const v = await vehicle(seed, "LIN0000000000020");
       const rootA = await quoteFor(seed, seed.customerA, v);
       await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: rootA, amount: 1_000 });
 
-      // await expect(
-      //   seed.asUser.mutation(api.vehicles.createReservation, {
-      //     orgId: seed.orgId,
-      //     vehicleId: v,
-      //     customerId: seed.customerB,   // NOT the root's customer
-      //     quoteId: rootA,               // valid id, unauthorized bearer
-      //   })
-      // ).rejects.toThrow(/does not match|not this customer|unauthorized/i);
-      //
-      // …and the same for saveQuote({ customerId: B, supersedesQuoteId: rootA }).
-      expect(rootA).toBeDefined();
+      await expect(
+        seed.asUser.mutation(notYetBuilt.vehicles.createReservation, {
+          orgId: seed.orgId,
+          vehicleId: v,
+          customerId: seed.customerB, // NOT the root's customer
+          quoteId: rootA, // a valid id, an unauthorized bearer
+        })
+      ).rejects.toThrow(/does not match|not this customer|unauthorized|different customer/i);
+    });
+
+    test("a saveQuote supersession proof belonging to a DIFFERENT customer is refused", async () => {
+      // The sibling that previously existed ONLY as a trailing comment on the
+      // test above — which is exactly how half of an accepted security rule
+      // goes unimplemented while every pinned test stays green.
+      const seed = await seedDealer("proof-authz-quote");
+      const v = await vehicle(seed, "LIN0000000000028");
+      const rootA = await quoteFor(seed, seed.customerA, v);
+      await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: rootA, amount: 1_000 });
+
+      await expect(
+        seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+          orgId: seed.orgId,
+          customerId: seed.customerB, // rival hijacking A's committed root
+          vehicleId: v,
+          mode: "CASH",
+          vehiclePrice: PRICE,
+          downPayment: 0,
+          termMonths: 0,
+          totalFinancedAmount: 0,
+          supersedesQuoteId: rootA,
+        })
+      ).rejects.toThrow(/does not match|not this customer|unauthorized|different customer/i);
     });
 
     test("an INDEPENDENT re-quote is still a competing root", async () => {
@@ -871,24 +951,50 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
     //   - ambiguity is never reported as free inventory;
     //   - the compatibility fallback stays until the conflict is explicitly
     //     resolved, or eliminated by the production reset.
-    test.skip("a legacy vehicle with two live roots resolves to CONFLICT and is not cutover-ready", async () => {
+    test("a legacy vehicle with two live roots resolves to CONFLICT and is not cutover-ready", async () => {
       const seed = await seedDealer("legacy-spec");
       const v = await vehicle(seed, "LIN0000000000023");
+      const rootA = await quoteFor(seed, seed.customerA, v);
+      const rootB = await quoteFor(seed, seed.customerB, v);
 
-      // Seeded directly, because this state will no longer be reachable through
-      // the public API once the guard exists — and it is precisely the state a
-      // backfill inherits from today's data.
-      //
-      // const resolved = await seed.asUser.query(api.commitments.resolveVehicleRoot, {
-      //   orgId: seed.orgId, vehicleId: v,
-      // });
-      // expect(resolved.kind).toBe("CONFLICT");
-      // expect(resolved.winner).toBeUndefined();
-      // const readiness = await seed.asUser.query(api.commitments.cutoverReadiness, {
-      //   orgId: seed.orgId,
-      // });
-      // expect(readiness.blockedVehicleIds).toContain(v);
-      expect(v).toBeDefined();
+      // Seeded DIRECTLY rather than through `deposits.create`, because once the
+      // acquisition guard lands the public path refuses the second deposit and
+      // this scenario becomes unconstructible through the API — while remaining
+      // exactly what a backfill inherits from today's data. A specification that
+      // can only be expressed before the fix is no specification for the fix.
+      await seed.t.run(async (ctx) => {
+        for (const [customerId, quoteId, amount] of [
+          [seed.customerA, rootA, 1_000],
+          [seed.customerB, rootB, 2_000],
+        ] as const) {
+          await ctx.db.insert("deposits", {
+            orgId: seed.orgId,
+            customerId,
+            quoteId,
+            vehicleId: v,
+            amount,
+            amountMinor: amount * 1_000,
+            currency: "JOD",
+            method: "CASH" as const,
+            status: "HELD" as const,
+            holdActive: true,
+            createdAt: Date.now(),
+            createdBy: seed.userId,
+          });
+        }
+      });
+
+      const resolved = await seed.asUser.query(notYetBuiltQuery.commitments.resolveVehicleRoot, {
+        orgId: seed.orgId,
+        vehicleId: v,
+      });
+      expect((resolved as { kind: string }).kind).toBe("CONFLICT");
+      expect((resolved as { winner?: unknown }).winner).toBeUndefined();
+
+      const readiness = await seed.asUser.query(notYetBuiltQuery.commitments.cutoverReadiness, {
+        orgId: seed.orgId,
+      });
+      expect((readiness as { blockedVehicleIds: unknown[] }).blockedVehicleIds).toContain(v);
     });
 
     test("main actively manufactures the conflicted state a backfill will meet", async () => {
@@ -1002,16 +1108,32 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
     //   - superseding a STALE revision refuses, atomically, with no new quote
     //     row written;
     //   - two concurrent supersessions of the same head: exactly one commits.
-    test.skip("only the CURRENT head may be superseded — a stale revision refuses", async () => {
+    test("only the CURRENT head may be superseded — a stale revision refuses", async () => {
       const seed = await seedDealer("cas-stale");
       const v = await vehicle(seed, "LIN0000000000025");
       const r1 = await quoteFor(seed, seed.customerA, v);
 
-      // const r2 = await saveQuote({ ..., supersedesQuoteId: r1 });   // ok, head moves to r2
-      // await expect(
-      //   saveQuote({ ..., supersedesQuoteId: r1 })                    // r1 is stale now
-      // ).rejects.toThrow(/not the current revision|superseded|stale/i);
-      expect(r1).toBeDefined();
+      const revise = (predecessor: Id<"quotes">, price: number) =>
+        seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+          orgId: seed.orgId,
+          customerId: seed.customerA,
+          vehicleId: v,
+          mode: "CASH",
+          vehiclePrice: price,
+          downPayment: 0,
+          termMonths: 0,
+          totalFinancedAmount: 0,
+          supersedesQuoteId: predecessor,
+        });
+
+      // r1 is the head, so this moves it to r2.
+      await revise(r1, PRICE - 500);
+
+      // r1 is now stale. Superseding it again must refuse rather than fork the
+      // lineage into two sibling "valid" revisions.
+      await expect(revise(r1, PRICE - 900)).rejects.toThrow(
+        /not the current revision|superseded|stale|current head/i
+      );
     });
 
     // SKIPPED — specification. Same missing surfaces.
@@ -1021,19 +1143,33 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
     // superseded revision is refused — otherwise money attaches to terms the
     // deal has already moved past, which is how a renegotiated price silently
     // fails to apply.
-    test.skip("new evidence must originate from the current revision", async () => {
+    test("new evidence must originate from the current revision", async () => {
       const seed = await seedDealer("cas-evidence");
       const v = await vehicle(seed, "LIN0000000000026");
       const r1 = await quoteFor(seed, seed.customerA, v);
 
-      // const r2 = await saveQuote({ ..., supersedesQuoteId: r1 });
-      // await expect(
-      //   deposits.create({ quoteId: r1, amount: 500 })   // stale revision
-      // ).rejects.toThrow(/current revision|superseded/i);
-      // await expect(
-      //   deposits.create({ quoteId: r2, amount: 500 })   // the head
-      // ).resolves.toBeDefined();
-      expect(r1).toBeDefined();
+      const r2 = (await seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+        orgId: seed.orgId,
+        customerId: seed.customerA,
+        vehicleId: v,
+        mode: "CASH",
+        vehiclePrice: PRICE - 500,
+        downPayment: 0,
+        termMonths: 0,
+        totalFinancedAmount: 0,
+        supersedesQuoteId: r1,
+      })) as Id<"quotes">;
+
+      // Money must not attach to terms the deal has already moved past — that
+      // is precisely how a renegotiated price silently fails to apply.
+      await expect(
+        seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: r1, amount: 500 })
+      ).rejects.toThrow(/current revision|superseded|stale/i);
+
+      // …and the head still works, so the rule is a redirect, not a block.
+      await expect(
+        seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: r2, amount: 500 })
+      ).resolves.toBeDefined();
     });
 
     // SKIPPED — specification, and this is the ruling with the sharpest teeth.
@@ -1048,23 +1184,47 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
     // forbidden: orphaning it, refunding it automatically, reassigning it
     // silently, deactivating it silently, or applying it twice. A completion
     // that "mostly" resolves the money is the defect, not a partial success.
-    test.skip("completion on a later revision resolves ALL live evidence on the root, or refuses", async () => {
+    test("completion on a later revision resolves ALL live evidence on the root", async () => {
       const seed = await seedDealer("root-money");
       const v = await vehicle(seed, "LIN0000000000027");
       const r1 = await quoteFor(seed, seed.customerA, v);
       await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: r1, amount: 1_000 });
 
-      // const r2 = await saveQuote({ ..., supersedesQuoteId: r1 });
-      //
-      // The Q1 deposit is still live, on the same root, under an older
-      // revision. Completing r2 must APPLY it — not ignore it because its
-      // quoteId differs from the one being completed.
-      // const saleId = await sales.create({ ..., quoteId: r2 });
-      // expect(depositApplicationsFor(saleId)).toContainEqual(the Q1 deposit);
-      //
-      // And the refusal half: if any live evidence cannot be deterministically
-      // handled, the whole completion fails with zero state delta.
-      expect(r1).toBeDefined();
+      const r2 = (await seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+        orgId: seed.orgId,
+        customerId: seed.customerA,
+        vehicleId: v,
+        mode: "CASH",
+        vehiclePrice: PRICE,
+        downPayment: 0,
+        termMonths: 0,
+        totalFinancedAmount: 0,
+        supersedesQuoteId: r1,
+      })) as Id<"quotes">;
+
+      const saleId = await seed.asUser.mutation(api.sales.create, {
+        orgId: seed.orgId,
+        vehicleId: v,
+        customerId: seed.customerA,
+        salespersonId: seed.userId,
+        salePrice: PRICE,
+        saleDate: Date.now(),
+        status: "COMPLETED" as const,
+        quoteId: r2,
+      });
+
+      // The Q1 deposit is live, on the same root, under an OLDER revision.
+      // Completing r2 must APPLY it — not ignore it because its provenance
+      // quoteId differs from the one being completed. An unapplied deposit here
+      // is money the customer paid that the sale never credited.
+      const applications = await seed.t.run(async (ctx) => {
+        const rows = await ctx.db
+          .query("depositApplications")
+          .filter((q) => q.eq(q.field("saleId"), saleId))
+          .collect();
+        return rows;
+      });
+      expect(applications.length).toBeGreaterThan(0);
     });
   });
 });
