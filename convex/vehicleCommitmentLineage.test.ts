@@ -44,7 +44,7 @@ const MODULES = import.meta.glob("./**/*.*s");
  *
  *   - a quote with no hard participant is informational: no commitment;
  *   - the first deposit or Finance Application on a quote establishes or joins
- *     `QUOTE:<quoteId>`;
+ *     that deal's root;
  *   - further deposits on that SAME quote are more evidence for the same root;
  *   - a Finance Application from that same quote joins that same root and must
  *     not conflict with its own deposit rows;
@@ -52,7 +52,28 @@ const MODULES = import.meta.glob("./**/*.*s");
  *   - a reservation layered over an existing deal may JOIN it only when the
  *     server can explicitly or unambiguously prove that exact same root.
  *     **Ambiguity fails closed. There is no broad same-customer exemption.**
- *   - a different quote is a COMPETING owner **even for the same customer**.
+ *   - a different, INDEPENDENT quote is a COMPETING owner **even for the same
+ *     customer**.
+ *
+ * ## ⚠️ The root is SERVER-OWNED. A quoteId is proof, not the root itself
+ *
+ * Refined by c14659, and the distinction is load-bearing rather than
+ * terminological. An earlier draft of this file used `QUOTE:<quoteId>` as the
+ * identity itself, which looked equivalent and was not:
+ *
+ *   - `saveQuote` has **no update path** — every save mints a brand-new
+ *     `quoteId` (it is an unconditional insert; the only patch is
+ *     `updateQuoteStatus`, on `status` alone). So identity-equals-quoteId means
+ *     that renegotiating a price after a deposit is down mints a NEW root, and
+ *     the different-root rule then refuses the customer's own deal. That is a
+ *     closed-loop dead-end on the most ordinary workflow there is, and it is
+ *     the same class of defect that sank the previous attempt.
+ *
+ * So a quote RESOLVES to a stable, server-owned root. A **linked** re-quote —
+ * one the server can tie to the same deal — shares that root and may continue
+ * the deal. An **independent** quote remains a competing owner. `createReservation`
+ * accepts an optional `quoteId` as *lineage proof* for the same reason: it is
+ * evidence the server resolves, never the identity it stores.
  *
  * Two consequences that are easy to get backwards, and are pinned below:
  *
@@ -220,7 +241,7 @@ async function snapshotWorld(seed: Seed): Promise<Record<string, number>> {
   return counts;
 }
 
-describe("SCRUM-195 c14554: the commitment owner is a DEAL ROOT, not a row or a customer", () => {
+describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL ROOT", () => {
   describe("1. multiple evidence rows may support ONE commitment", () => {
     test("a second and third deposit on the SAME quote succeed", async () => {
       // The behaviour naive uniqueness would have broken. Instalments are one
@@ -348,6 +369,42 @@ describe("SCRUM-195 c14554: the commitment owner is a DEAL ROOT, not a row or a 
           customerId: seed.customerA,
         })
       ).rejects.toThrow(/root|deal|which deal|cannot be proven|ambiguous/i);
+    });
+
+    // SKIPPED, and the skip is the specification — same discipline as the aged
+    // commitments query. `createReservation`'s args are `orgId, vehicleId,
+    // customerId, depositAmount?, depositMethod?, expiresAt?` — there is no
+    // `quoteId`, so this cannot compile, and casting to force it green would
+    // hide the fact that the argument does not exist yet.
+    //
+    // REQUIRED CONTRACT (c14659):
+    //   vehicles.createReservation({ orgId, vehicleId, customerId, quoteId? })
+    //
+    // `quoteId` is LINEAGE PROOF, not the root. The server resolves it to the
+    // stable root and admits the reservation only when it resolves to the SAME
+    // root that already holds the vehicle.
+    //
+    // This is what PRESERVES the supported sourced flow that
+    // `convex/sourcedVehicleHolds.test.ts` protects — "a SOURCING vehicle that
+    // already carries a deposit hold can still be reserved". That flow stays;
+    // what is removed is the unsafe way it was admitted, on customer identity
+    // alone. That existing test must be rewritten to pass the root, not deleted:
+    // the business flow is not superseded, only its proof is.
+    test.skip("a reservation supplying the SAME root as the live deposit is admitted", async () => {
+      const seed = await seedDealer("bridge-proven");
+      const v = await vehicle(seed, "LIN0000000000016");
+      const root = await quoteFor(seed, seed.customerA, v);
+      await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: root, amount: 1_200 });
+
+      // await expect(
+      //   seed.asUser.mutation(api.vehicles.createReservation, {
+      //     orgId: seed.orgId,
+      //     vehicleId: v,
+      //     customerId: seed.customerA,
+      //     quoteId: root,
+      //   })
+      // ).resolves.toBeDefined();
+      expect(root).toBeDefined();
     });
 
     test("a standalone reservation on an uncommitted vehicle still establishes its own root", async () => {
@@ -602,6 +659,102 @@ describe("SCRUM-195 c14554: the commitment owner is a DEAL ROOT, not a row or a 
       // That is the safe direction, but it would fail for the wrong reason
       // today, so the absence is what is pinned.
       expect(order).not.toContain("vehicleCommitmentClaims");
+    });
+  });
+
+  describe("9. re-quoting a live deal must not orphan it", () => {
+    // The dead-end that identity-equals-quoteId would have created, and the
+    // reason c14659 made the root server-owned.
+    //
+    // `saveQuote` has no update path — verified: an unconditional
+    // `ctx.db.insert("quotes", ...)`, with the only patch being
+    // `updateQuoteStatus` on `status` alone. So every renegotiation mints a new
+    // `quoteId`. If the quote id WERE the root, a price change after a deposit
+    // would strand the customer's own deal behind the different-root rule.
+
+    // SKIPPED — the specification. No linkage field exists on `quotes` (no
+    // `supersedesQuoteId`, no revision pointer anywhere in the schema), so a
+    // LINKED re-quote is not expressible today and this cannot be written as a
+    // running assertion without inventing the field in the test.
+    //
+    // REQUIRED CONTRACT (c14659): a re-quote the server can tie to the same
+    // deal RESOLVES TO THE SAME ROOT, so the deal continues — the second
+    // quote's deposit, application and completion are all admitted.
+    test.skip("a LINKED re-quote resolves to the same root and the deal continues", async () => {
+      const seed = await seedDealer("requote-linked");
+      const v = await vehicle(seed, "LIN0000000000017");
+      const first = await quoteFor(seed, seed.customerA, v);
+      await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: first, amount: 1_000 });
+
+      // const revised = await seed.asUser.mutation(api.quotes.saveQuote, {
+      //   ...same customer/vehicle, renegotiated price...,
+      //   supersedesQuoteId: first,
+      // });
+      // await expect(
+      //   seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: revised, amount: 500 })
+      // ).resolves.toBeDefined();
+      expect(first).toBeDefined();
+    });
+
+    test("an INDEPENDENT re-quote is still a competing root", async () => {
+      // The other half, and it must keep failing closed: without a linkage the
+      // server cannot tell a renegotiation from a second, rival deal — so it
+      // must assume rival. This is the same shape as the same-customer refusal
+      // in section 2, asserted here against the re-quote framing so the two
+      // halves of c14659 sit side by side.
+      const seed = await seedDealer("requote-independent");
+      const v = await vehicle(seed, "LIN0000000000018");
+
+      const first = await quoteFor(seed, seed.customerA, v);
+      await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: first, amount: 1_000 });
+
+      const unlinked = await quoteFor(seed, seed.customerA, v);
+      await expect(
+        seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: unlinked, amount: 500 })
+      ).rejects.toThrow(/committed|another deal|already held|different deal/i);
+    });
+  });
+
+  describe("10. legacy multi-root vehicles are NOT cutover-ready", () => {
+    test("main actively manufactures the conflicted state a backfill will meet", async () => {
+      // Passes TODAY, and that is the point: it proves the hazard is real
+      // rather than hypothetical. Current `deposits.create` permits two live
+      // deposits from different quotes and different customers on one vehicle
+      // — `convex/deposits.test.ts` requires it — so any backfill WILL find
+      // vehicles carrying two roots' worth of live money.
+      //
+      // c14659 rules how that is handled: FAIL CLOSED, no automatic winner.
+      // Never oldest, never newest, never silently move a customer's money,
+      // and never read ambiguity as free inventory. A conflicted vehicle is
+      // NOT CUTOVER-READY and the compatibility fallback stays until the
+      // conflict is explicitly resolved — or eliminated by the production
+      // reset, since no historical repair migration is being built to preserve
+      // rows that are going away.
+      //
+      // Asserted as a live constructible state so that if a future change makes
+      // it unconstructible, this test fails and tells us the hazard closed —
+      // rather than the requirement quietly outliving the problem.
+      const seed = await seedDealer("legacy-conflict");
+      const v = await vehicle(seed, "LIN0000000000019");
+
+      const rootA = await quoteFor(seed, seed.customerA, v);
+      const rootB = await quoteFor(seed, seed.customerB, v);
+      await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: rootA, amount: 1_000 });
+      await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: rootB, amount: 2_000 });
+
+      const live = await seed.t.run(async (ctx) => {
+        const rows = await ctx.db
+          .query("deposits")
+          .filter((q) => q.eq(q.field("vehicleId"), v))
+          .collect();
+        return rows.filter((row) => row.holdActive === true);
+      });
+
+      // Two live holders, two different quotes, two different customers, one
+      // physical car. This is the input the cutover must refuse.
+      expect(live).toHaveLength(2);
+      expect(new Set(live.map((row) => String(row.quoteId)))).toHaveProperty("size", 2);
+      expect(new Set(live.map((row) => String(row.customerId)))).toHaveProperty("size", 2);
     });
   });
 });
