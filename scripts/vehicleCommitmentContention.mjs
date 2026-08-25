@@ -211,11 +211,30 @@ async function main() {
   const freshScenario = (label, quotes) =>
     client.mutation("testSupport:seedCommitmentScenario", { label, quotes });
 
+  /**
+   * WHO owns this vehicle, expressed as a ROOT — not as an application.
+   *
+   * The previous revision asked for `{ applicationId }`, which was correct for
+   * the pre-c14554 model and is wrong for this one. Under deal lineage a root
+   * may be owned by deposits alone (`QUOTE:<quoteId>` with no application at
+   * all), or by a standalone reservation (`RESERVATION:<id>`), or may outlive
+   * the release of its application evidence while its deposit stays live.
+   * Correlating winners by application id could not express any of those, so
+   * the probe would have reported green while the authority disagreed.
+   *
+   * Contract: `{ rootKind: "QUOTE" | "RESERVATION", rootId } | null`.
+   */
   const ownerOf = (scenario) =>
-    client.query("testSupport:liveClaimOwner", {
+    client.query("testSupport:liveCommitmentRoot", {
       orgId: scenario.orgId,
       vehicleId: scenario.vehicleId,
     });
+
+  /** The root a given call's result belongs to, for winner correlation. */
+  const rootOf = (scenario, kind, id) =>
+    client.query("testSupport:rootForEvidence", { orgId: scenario.orgId, kind, id });
+
+  const sameRoot = (a, b) => a != null && b != null && a.rootKind === b.rootKind && a.rootId === b.rootId;
 
   // ── Race A — acquire vs acquire ───────────────────────────────────────────
   {
@@ -231,10 +250,12 @@ async function main() {
       winners.length === 1,
       `${winners.length} succeeded of ${args.concurrency}`
     );
+    const winnerRoot =
+      winners.length === 1 ? await rootOf(s, "application", winners[0].value) : null;
     check(
-      "A. the winner is the owner — not merely 'someone' owns it",
-      winners.length === 1 && owner?.applicationId === winners[0].value,
-      `owner=${owner?.applicationId ?? "none"} winner=${winners[0]?.value ?? "none"}`
+      "A. the winner's ROOT is the owner — not merely 'someone' owns it",
+      sameRoot(owner, winnerRoot),
+      `owner=${JSON.stringify(owner)} winnerRoot=${JSON.stringify(winnerRoot)}`
     );
   }
 
@@ -263,15 +284,28 @@ async function main() {
     const [release, acquire] = race;
     const owner = await ownerOf(s);
 
+    const incumbentRoot = await rootOf(s, "application", incumbent);
+    const acquiredRoot = acquire.ok ? await rootOf(s, "application", acquire.value) : null;
+
+    // Added after review: the whole race is vacuous if the release itself
+    // fails. Every conditional below is satisfied when BOTH calls reject and
+    // the incumbent simply stays — so without this, Race B could report green
+    // having proven nothing about releasing at all. Cancelling one's own live
+    // application under contention is not permitted to fail.
+    check(
+      "B. the release itself succeeded — otherwise this race proves nothing",
+      release.ok,
+      `release=${release.ok}${release.error ? ` (${release.error})` : ""}`
+    );
     check(
       "B. the incumbent never remains the owner after a successful release",
-      !(release.ok && owner?.applicationId === incumbent),
-      `release=${release.ok} owner=${owner?.applicationId ?? "none"} incumbent=${incumbent}`
+      !(release.ok && sameRoot(owner, incumbentRoot)),
+      `release=${release.ok} owner=${JSON.stringify(owner)} incumbentRoot=${JSON.stringify(incumbentRoot)}`
     );
     check(
       "B. a successful acquisition owns the vehicle",
-      acquire.ok ? owner?.applicationId === acquire.value : true,
-      `acquire=${acquire.ok} value=${acquire.value ?? "-"} owner=${owner?.applicationId ?? "none"}`
+      acquire.ok ? sameRoot(owner, acquiredRoot) : true,
+      `acquire=${acquire.ok} owner=${JSON.stringify(owner)} acquiredRoot=${JSON.stringify(acquiredRoot)}`
     );
     // DELIBERATELY NOT ASSERTED: "a refused acquisition never owns the vehicle".
     //
@@ -328,12 +362,12 @@ async function main() {
       race.filter((r) => r.ok).length === 1,
       `reopen=${reopen.ok} acquire=${acquire.ok}`
     );
+    const reopenedRoot = await rootOf(s, "application", rejected);
+    const contenderRoot = acquire.ok ? await rootOf(s, "application", acquire.value) : null;
     check(
-      "C. the winner owns the vehicle",
-      reopen.ok
-        ? owner?.applicationId === rejected
-        : acquire.ok && owner?.applicationId === acquire.value,
-      `owner=${owner?.applicationId ?? "none"}`
+      "C. the winner's ROOT owns the vehicle",
+      reopen.ok ? sameRoot(owner, reopenedRoot) : sameRoot(owner, contenderRoot),
+      `owner=${JSON.stringify(owner)} reopen=${reopen.ok}`
     );
   }
 
@@ -373,6 +407,22 @@ async function main() {
       race.filter((r) => r.ok).length === 1,
       `application=${race[0].ok} cashSale=${race[1].ok} — ${describeCrossOutcome(race)}`
     );
+    // Counting winners is not enough, and this is the gap review found: a
+    // LEGACY path can succeed WITHOUT acquiring a root. If the cash sale wins
+    // but never registers ownership, the count says "exactly one" while the
+    // authority says the car is FREE — green on a vehicle that has just been
+    // sold out from under the authority. Correlate, do not count.
+    const owner = await ownerOf(s);
+    const winnerRoot = race[0].ok
+      ? await rootOf(s, "application", race[0].value)
+      : race[1].ok
+        ? await rootOf(s, "sale", race[1].value)
+        : null;
+    check(
+      "D. the winner actually REGISTERED ownership, not merely succeeded",
+      sameRoot(owner, winnerRoot),
+      `owner=${JSON.stringify(owner)} winnerRoot=${JSON.stringify(winnerRoot)}`
+    );
   }
 
   {
@@ -393,6 +443,78 @@ async function main() {
       "D. exactly one of finance claim / manual reservation wins on a free vehicle",
       race.filter((r) => r.ok).length === 1,
       `application=${race[0].ok} reservation=${race[1].ok} — ${describeCrossOutcome(race)}`
+    );
+    const owner = await ownerOf(s);
+    const winnerRoot = race[0].ok
+      ? await rootOf(s, "application", race[0].value)
+      : race[1].ok
+        ? await rootOf(s, "reservation", race[1].value)
+        : null;
+    check(
+      "D. the reservation winner registered a ROOT rather than just a hold row",
+      sameRoot(owner, winnerRoot),
+      `owner=${JSON.stringify(owner)} winnerRoot=${JSON.stringify(winnerRoot)}`
+    );
+  }
+
+  // ── Race E — DEPOSITS, which c14554 made a root-establishing operation ─────
+  // The gap review found in the previous revision: the word "deposit" did not
+  // appear anywhere in this probe. That was correct for the pre-c14554 model,
+  // where only a Finance Application could claim — and wrong the moment the
+  // ruling made "the first deposit OR Finance Application on a quote
+  // establishes the root".
+  //
+  // It matters more than the other races, not less: the primitive deposits go
+  // through, `holdVehicleForDeposit`, was BUILT for parallel non-exclusive
+  // holds ("the same car can be sourced again"). Turning it into an exclusive
+  // acquisition is the largest behavioural change in this design, and it is the
+  // one path no race touched.
+  {
+    const s = await freshScenario("race-e-deposits", 2);
+    const race = await raceAll(2, (i) =>
+      client.mutation("deposits:create", {
+        orgId: s.orgId,
+        quoteId: s.quoteIds[i],
+        amount: 1_000,
+      })
+    );
+    const owner = await ownerOf(s);
+    const winnerRoot = race[0].ok
+      ? await rootOf(s, "deposit", race[0].value)
+      : race[1].ok
+        ? await rootOf(s, "deposit", race[1].value)
+        : null;
+
+    check(
+      "E. two first deposits from different quotes — exactly one wins",
+      race.filter((r) => r.ok).length === 1,
+      `first=${race[0].ok} second=${race[1].ok} — ${describeCrossOutcome(race)}`
+    );
+    check(
+      "E. the winning deposit's root owns the vehicle",
+      sameRoot(owner, winnerRoot),
+      `owner=${JSON.stringify(owner)} winnerRoot=${JSON.stringify(winnerRoot)}`
+    );
+  }
+
+  {
+    const s = await freshScenario("race-e-cross", 2);
+    const race = await raceAll(2, (i) =>
+      i === 0
+        ? client.mutation("deposits:create", {
+            orgId: s.orgId,
+            quoteId: s.quoteIds[0],
+            amount: 1_000,
+          })
+        : client.mutation("applications:createFromQuote", {
+            orgId: s.orgId,
+            quoteId: s.quoteIds[1],
+          })
+    );
+    check(
+      "E. a deposit and a finance application from DIFFERENT roots — exactly one wins",
+      race.filter((r) => r.ok).length === 1,
+      `deposit=${race[0].ok} application=${race[1].ok} — ${describeCrossOutcome(race)}`
     );
   }
 

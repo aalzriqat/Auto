@@ -197,6 +197,16 @@ const WORLD_TABLES = [
   "receivableDocuments",
   "journalEntries",
   "pendingAccountingEvents",
+  // Added after review: `recordHeldDeposit` writes all three unconditionally on
+  // every successful deposit, before any chart-of-accounts gating. Omitting them
+  // made the comment above ("every table a refused deposit could touch") false.
+  // Convex's mutation atomicity means the assertion passed either way today —
+  // which is precisely why the omission was invisible, and precisely why it
+  // would stop being invisible the moment any of this moved to a scheduled
+  // action outside the transaction.
+  "collectionPayments",
+  "canonicalPayments",
+  "paymentVouchers",
 ] as const;
 
 async function snapshotWorld(seed: Seed): Promise<Record<string, number>> {
@@ -439,19 +449,36 @@ describe("SCRUM-195 c14554: the commitment owner is a DEAL ROOT, not a row or a 
     });
   });
 
-  describe("7. reallocation and reactivation are ACQUISITIONS, never blind resurrection", () => {
-    test("reallocating a deposit onto a vehicle another root holds is refused", async () => {
-      // `deposits.allocateToVehicles` activates a hold, so it is an acquisition
-      // and must go through the same authority. A reallocation that simply
-      // inserts an active hold row would be a second writer creating a
-      // commitment nobody checked.
-      const seed = await seedDealer("realloc");
+  describe("7. a multi-vehicle deposit acquires EVERY vehicle on the quote", () => {
+    // ⚠️ REPLACES an earlier fixture that both reviewers showed was
+    // UNREACHABLE, and the reason is worth keeping.
+    //
+    // It set up a multi-vehicle quote containing an already-committed vehicle,
+    // called `deposits.create` on it EXPECTING SUCCESS, and only asserted that
+    // the later `allocateToVehicles` refused. But `deposits.create` already
+    // holds every vehicle on the quote — `depositVehicleItems` iterates
+    // `quote.vehicleItems` and calls `holdVehicleForDeposit` on each — so under
+    // a correct authority the SETUP call must itself be refused, and the test
+    // would throw before reaching its assertion.
+    //
+    // It was also unreachable for a second reason: reallocation can only target
+    // vehicles already on the same immutable quote, so "acquire a NEW vehicle
+    // during allocation" is not a state any supported API can produce.
+    //
+    // The rule it was groping for is this one, and this one is reachable.
+    test("a deposit is refused when ANY line item is already committed to another root", async () => {
+      // The multi-vehicle hole: a guard that validates only `quote.vehicleId`
+      // — the convenience field `saveQuote` derives from `vehicleItems[0]` —
+      // would let a deposit plant an active hold on someone else's committed
+      // car through the SECOND slot, and pass every other fixture here.
+      const seed = await seedDealer("multi-item");
       const held = await vehicle(seed, "LIN0000000000012");
       const spare = await vehicle(seed, "LIN0000000000013");
 
       const ownerRoot = await quoteFor(seed, seed.customerA, held);
       await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: ownerRoot, amount: 1_000 });
 
+      // `held` is the SECOND line item, so only a per-item check catches it.
       const moverRoot = await seed.asUser.mutation(api.quotes.saveQuote, {
         orgId: seed.orgId,
         customerId: seed.customerB,
@@ -466,77 +493,114 @@ describe("SCRUM-195 c14554: the commitment owner is a DEAL ROOT, not a row or a 
         termMonths: 0,
         totalFinancedAmount: 0,
       });
-      // Establishes the mover root; the reallocation below is keyed on the
-      // quote, so the id itself is not needed.
-      await seed.asUser.mutation(api.deposits.create, {
+
+      const before = await snapshotWorld(seed);
+      await expect(
+        seed.asUser.mutation(api.deposits.create, {
+          orgId: seed.orgId,
+          quoteId: moverRoot,
+          amount: 3_000,
+        })
+      ).rejects.toThrow(/committed|another deal|already held/i);
+
+      // Atomic: the uncontested first line item must not be quietly held either.
+      expect(await snapshotWorld(seed)).toEqual(before);
+    });
+
+    test("a multi-vehicle deposit on wholly uncommitted vehicles still succeeds", async () => {
+      // The control. Multi-vehicle cash deposits are a real supported feature,
+      // so the per-item check must not become "no multi-vehicle deposits".
+      const seed = await seedDealer("multi-item-ok");
+      const one = await vehicle(seed, "LIN0000000000014");
+      const two = await vehicle(seed, "LIN0000000000015");
+
+      const root = await seed.asUser.mutation(api.quotes.saveQuote, {
         orgId: seed.orgId,
-        quoteId: moverRoot,
-        amount: 3_000,
+        customerId: seed.customerA,
+        vehicleId: one,
+        vehicleItems: [
+          { vehicleId: one, unitPrice: PRICE },
+          { vehicleId: two, unitPrice: PRICE },
+        ],
+        mode: "CASH" as const,
+        vehiclePrice: PRICE * 2,
+        downPayment: 0,
+        termMonths: 0,
+        totalFinancedAmount: 0,
       });
 
       await expect(
-        seed.asUser.mutation(api.deposits.allocateToVehicles, {
-          orgId: seed.orgId,
-          quoteId: moverRoot,
-          allocations: [
-            { vehicleId: spare, amount: 1_500 },
-            { vehicleId: held, amount: 1_500 },
-          ],
-        })
-      ).rejects.toThrow(/committed|another deal|already held/i);
+        seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: root, amount: 3_000 })
+      ).resolves.toBeDefined();
     });
   });
 
   describe("8. rollout and org-purge sequencing", () => {
-    test("the purge registry already orders every referent the claim row will join", async () => {
-      // Sequencing evidence, made executable instead of left in review prose.
+    test("the claim must OUTLIVE its vehicle during a purge, not precede it", async () => {
+      // ⚠️ THIS REQUIREMENT IS THE REVERSE OF WHAT I FIRST WROTE, and the
+      // correction matters more than the original.
       //
-      // A commitment-claim row will reference the vehicle, the application and
-      // the deposit. Org purge deletes children before parents so a FAILED run
-      // never strands rows pointing at deleted documents — the registry says so
-      // in its own comments. This pins the orderings the claim row must slot
-      // into, so that when it is added, putting it after any of these fails
-      // here rather than in a half-purged organisation.
+      // I reasoned "a claim is a child of the vehicle, children purge first",
+      // and asserted the claim must precede its earliest referent. One reviewer
+      // checked the arithmetic and agreed. The other checked something I had
+      // not: whether a FAILED purge can be returned to service.
+      //
+      // It can. `ACTIVE_DELETION_STATUSES` is ["PENDING_REVIEW","APPROVED",
+      // "RUNNING"] — FAILED is NOT among them — so `unsuspendOrg` permits
+      // unsuspending an organisation whose purge failed part-way. Deletion is
+      // batched across transactions, so "part-way" is an ordinary outcome.
+      //
+      // Under my original ordering: claims are deleted, the next batch fails,
+      // the org is unsuspended, and the vehicles and the customers' live
+      // deposits both SURVIVE — with no claims. The authority then reports
+      // every car free and admits a competing sale. My purge order would have
+      // manufactured exactly the defect this authority exists to prevent.
+      //
+      // Convex enforces no foreign keys, so a claim briefly pointing at a
+      // deleted vehicle is inert. A surviving sellable vehicle with no claim is
+      // not. The safe rule is therefore: NEVER delete the authority while its
+      // vehicle can survive a recoverable purge.
+      //
+      // The registry itself corroborates that child-before-parent was never the
+      // real invariant here — `financeApplications` (41) already outlives
+      // `vehiclesWithStorage` (19).
       const order = ORGANIZATION_DELETION_STEPS.map((step) =>
         step.kind === "orgRows" ? step.table : step.kind
       );
       const at = (name: (typeof order)[number]) => order.indexOf(name);
 
-      // Measured, not assumed. My first version of this test asserted that
-      // `financeApplications` is purged before `vehiclesWithStorage` and it is
-      // not — vehicles go at 19 and applications at 41, so an application
-      // outlives its own vehicle during a purge. Worth stating plainly because
-      // it inverts the intuition, and because a sequencing requirement built on
-      // the guessed order would have been wrong in the one direction that
-      // matters.
       const referents = [
         "vehicleReservations",
         "vehiclesWithStorage",
         "financeApplications",
         "deposits",
+        "quotes",
       ] as const;
       for (const referent of referents) {
         expect(at(referent)).toBeGreaterThanOrEqual(0);
       }
 
-      // These two orderings ARE real and the claim row inherits their logic.
-      expect(at("vehicleReservations")).toBeLessThan(at("vehiclesWithStorage"));
-      expect(at("depositApplications")).toBeLessThan(at("deposits"));
+      // The precedent: an application already outlives the vehicle it names.
+      expect(at("financeApplications")).toBeGreaterThan(at("vehiclesWithStorage"));
 
-      // THE REQUIREMENT, expressed against the real order rather than a guess:
-      // a commitment-claim row references the vehicle, the application, the
-      // deposit and possibly the reservation, so it must be purged before the
-      // EARLIEST of them. Anything later strands a claim pointing at a document
-      // that is already gone if a run FAILs between steps — which is the exact
-      // hazard every child-first comment in this registry exists to prevent.
-      const earliestReferent = Math.min(...referents.map((name) => at(name)));
-      expect(earliestReferent).toBe(at("vehicleReservations"));
+      // THE REQUIREMENT: the claim step must come after the LATEST referent
+      // that could survive a failed run holding real value — the vehicle and
+      // the money. Placing it before any of them re-creates the free-car state.
+      const latestValueBearer = Math.max(
+        at("vehiclesWithStorage"),
+        at("deposits"),
+        at("financeApplications")
+      );
+      expect(latestValueBearer).toBe(at("deposits"));
 
-      // When the claim step is added, this becomes:
-      //   expect(at("vehicleCommitmentClaims")).toBeLessThan(earliestReferent);
-      // It is written out rather than asserted because the table does not exist
-      // yet, and a test that silently passes on an absent step would be worse
-      // than no test — `indexOf` returns -1, which is less than everything.
+      // When the claim step is added this becomes:
+      //   expect(at("vehicleCommitmentClaims")).toBeGreaterThan(latestValueBearer);
+      //
+      // Asserted as ABSENT rather than written as the real check, because
+      // `indexOf` returns -1 for a missing step — and -1 > anything is false,
+      // so the real assertion would fail loudly rather than pass vacuously.
+      // That is the safe direction, but it would fail for the wrong reason
+      // today, so the absence is what is pinned.
       expect(order).not.toContain("vehicleCommitmentClaims");
     });
   });
