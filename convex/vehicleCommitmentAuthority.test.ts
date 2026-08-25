@@ -32,24 +32,43 @@ const MODULES = import.meta.glob("./**/*.*s");
  * that each reconstruction traded one failure mode for its opposite, and the
  * convergence circuit breaker fired.
  *
- * The root cause is that the question has no single owner. `vehicles.reserve`
- * enforces real exclusivity over `vehicleReservations` + deposit holds;
+ * The root cause is that the question has no single owner.
+ * `vehicles.createReservation` enforces real exclusivity over
+ * `vehicleReservations` + deposit holds;
  * `applications.createFromQuote` enforces a DIFFERENT rule over its own private
  * `IN_FLIGHT_STATUSES`; and sale completion enforced a third. All three answer
  * "is this car spoken for" and they disagree.
  *
  * ## The binding rulings these fixtures encode
  *
+ * - **A `vehicles` row is ONE physical unit. Always.** `sourceType` answers
+ *   ownership and accounting treatment, never whether inventory is repeatable:
+ *   STOCK is one dealer-owned car, SOURCED is one supplier-owned consigned car
+ *   (`vehicleOwnership.ts` reads SOURCED as `SUPPLIER` / `CONSIGNED_AGENT`).
+ *   Another obtainable car from the same free-zone source becomes another row
+ *   once it enters a deal. The existing comment in `holdVehicleForDeposit`
+ *   permitting parallel holds because "the same car can be sourced again" is
+ *   therefore a domain-model bug FOR COMMITMENT PURPOSES — informational quotes
+ *   may coexist on one row, hard commitments may not.
  * - **Application-only claim.** A financed QUOTE does not hard-lock a vehicle —
  *   `saveQuote` is an informational financing draft, not a committed sale. The
- *   commitment begins when the Finance Application is created.
- * - **A supplied financed quote is still refused** by generic completion, even
- *   though the quote holds no claim: passing it is an affirmative statement
- *   about the deal in front of you.
- * - **`vehicles.status = RESERVED` is a projection, never the lock.** A vehicle
- *   row is not always one physical car, so `holdVehicleForDeposit` deliberately
- *   treats RESERVED as "a warning, not a lock". Exclusivity lives in the claim
- *   and hold ROWS.
+ *   commitment begins when the Finance Application is created. But explicitly
+ *   SUPPLYING a financed quote to generic completion is still refused: passing
+ *   it is an affirmative statement about the deal in front of you.
+ * - **Claim lifecycle.** ACTIVE → RELEASED on REJECTED/CANCELLED; RELEASED →
+ *   ACTIVE only through explicit atomic reacquisition; ACTIVE → CONSUMED on a
+ *   successful final sale. Sale cancellation must NOT resurrect a CONSUMED
+ *   claim — a reopened finance workflow reacquires through the same authority.
+ * - **No silent TTL.** A commitment blocks until explicitly and authentically
+ *   released. The mitigant for abandonment is SURFACING aged commitments so an
+ *   operator can cancel them deliberately, never a clock that frees a car
+ *   because time passed.
+ * - **The trade-in is a second vehicle role.** One physical unit cannot be both
+ *   an outbound committed sale unit and an inbound trade-in on another deal.
+ *   The same applies to archive and soft-delete: a committed unit must not be
+ *   made to disappear underneath the deal that owns it.
+ * - **`vehicles.status = RESERVED` is a projection, never the lock.**
+ *   Exclusivity lives in the claim and hold ROWS.
  */
 
 type Seed = Awaited<ReturnType<typeof seedDealer>>;
@@ -79,6 +98,24 @@ async function createVehicle(
   );
 }
 
+/**
+ * A trade-in candidate.
+ *
+ * Deliberately WITHOUT a purchase price: sale completion refuses a trade-in
+ * that already carries one ("Clear it before completing this sale, or the
+ * trade-in value won't be capitalized correctly"), and a fixture that trips
+ * that guard would pass for entirely the wrong reason — the commitment check
+ * it is named for would never run.
+ */
+async function createTradeInCandidate(
+  seed: Seed,
+  vin: string
+): Promise<Id<"vehicles">> {
+  const vehicleId = await createVehicle(seed.t, seed.orgId, vin);
+  await seed.t.run((ctx) => ctx.db.patch(vehicleId, { purchasePrice: undefined }));
+  return vehicleId;
+}
+
 async function seedDealer(suffix: string) {
   const t = convexTestWithComponents(schema, MODULES);
 
@@ -100,6 +137,9 @@ async function seedDealer(suffix: string) {
         "create:sales",
         "approve:requests",
         "view:customers",
+        "edit:sales",
+        "edit:vehicles",
+        "delete:vehicles",
         "create:finance_application",
         "review:finance_application",
         "approve:finance_application",
@@ -515,6 +555,273 @@ describe("SCRUM-195: one authority decides whether a vehicle is committed", () =
         applicationId: appA,
       });
       expect(await seed.t.run(async (ctx) => (await ctx.db.get(saleId))!.status)).toBe("COMPLETED");
+    });
+  });
+
+  describe("8. a SOURCED row is ONE physical car, not repeatable supply", () => {
+    // The domain ruling, pinned. `vehicleOwnership.ts` reads SOURCED as
+    // SUPPLIER-owned / CONSIGNED_AGENT — a VIN-specific consigned car — while
+    // `holdVehicleForDeposit` permits parallel holds on the reasoning that "the
+    // same car can be sourced again from the free zone". Both hang off the same
+    // flag, and the second reading is a domain-model bug for commitment
+    // purposes: another obtainable car is another ROW.
+    async function sourcedVehicle(seed: Seed, vin: string) {
+      const vehicleId = await createVehicle(seed.t, seed.orgId, vin);
+      await seed.t.run((ctx) => ctx.db.patch(vehicleId, { sourceType: "SOURCED" as const }));
+      return vehicleId;
+    }
+
+    test("two finance applications cannot both hold one SOURCED vehicle", async () => {
+      const seed = await seedDealer("sourced-app");
+      const vehicleId = await sourcedVehicle(seed, "CMT0000000000015");
+
+      const qA = await financedQuote(seed, seed.customerA, vehicleId);
+      await seed.asUser.mutation(api.applications.createFromQuote, { orgId: seed.orgId, quoteId: qA });
+
+      const qB = await financedQuote(seed, seed.customerB, vehicleId);
+      await expect(
+        seed.asUser.mutation(api.applications.createFromQuote, { orgId: seed.orgId, quoteId: qB })
+      ).rejects.toThrow(/active finance application|already|committed/i);
+    });
+
+    test("a deposit by another customer cannot hold a car a finance application already holds", async () => {
+      // FAILS TODAY. `holdVehicleForDeposit` no-ops when the vehicle is already
+      // RESERVED and never consults `financeApplications` at all, so customer B
+      // can put real money down on a car customer A's application owns. Two
+      // live holders, one physical car.
+      const seed = await seedDealer("sourced-dep");
+      const vehicleId = await sourcedVehicle(seed, "CMT0000000000016");
+
+      const qA = await financedQuote(seed, seed.customerA, vehicleId);
+      await seed.asUser.mutation(api.applications.createFromQuote, { orgId: seed.orgId, quoteId: qA });
+
+      const qB = await cashQuote(seed, seed.customerB, vehicleId);
+      await expect(
+        seed.asUser.mutation(api.deposits.create, {
+          orgId: seed.orgId,
+          quoteId: qB,
+          amount: 500,
+        })
+      ).rejects.toThrow(/finance application|committed|another customer/i);
+    });
+  });
+
+  describe("9. createReservation is the THIRD reader and must consult the same authority", () => {
+    test("a manual reservation is refused on a car a finance application holds", async () => {
+      // FAILS TODAY. `createReservation` checks `vehicleReservations` and
+      // `getActiveDepositHolds` but never `financeApplications`, so a walk-in
+      // reservation succeeds over a live financed deal. Named here because the
+      // design's "three readers" claim is only true once this one participates.
+      const seed = await seedDealer("reserve");
+      const vehicleId = await createVehicle(seed.t, seed.orgId, "CMT0000000000017");
+
+      const qA = await financedQuote(seed, seed.customerA, vehicleId);
+      await seed.asUser.mutation(api.applications.createFromQuote, { orgId: seed.orgId, quoteId: qA });
+
+      await expect(
+        seed.asUser.mutation(api.vehicles.createReservation, {
+          orgId: seed.orgId,
+          vehicleId,
+          customerId: seed.customerB,
+        })
+      ).rejects.toThrow(/finance application|committed|another/i);
+    });
+  });
+
+  describe("10. the trade-in is a second vehicle role", () => {
+    test("a committed vehicle cannot be accepted as another deal's trade-in", async () => {
+      // FAILS TODAY. `saleCompletion.ts` refuses a trade-in that is SOLD,
+      // ARCHIVED, deleted or foreign — but never asks whether another deal
+      // already committed it. So the unit customer A's application owns can be
+      // capitalised into customer B's deal as a trade-in, and now two deals
+      // own one physical car in opposite directions.
+      const seed = await seedDealer("tradein");
+      const committed = await createTradeInCandidate(seed, "CMT0000000000018");
+      const selling = await createVehicle(seed.t, seed.orgId, "CMT0000000000019");
+
+      const qA = await financedQuote(seed, seed.customerA, committed);
+      await seed.asUser.mutation(api.applications.createFromQuote, { orgId: seed.orgId, quoteId: qA });
+
+      await expect(
+        seed.asUser.mutation(api.sales.create, {
+          ...cashSaleArgs(seed, seed.customerB, selling),
+          tradeInVehicleId: committed,
+          tradeInValue: 5_000,
+        })
+      ).rejects.toThrow(/committed|finance application|another deal/i);
+    });
+
+    test("an uncommitted vehicle is still accepted as a trade-in", async () => {
+      // The control. Without it the refusal above is satisfiable by a guard
+      // that refuses every trade-in, which would break an ordinary deal shape.
+      const seed = await seedDealer("tradein-ok");
+      const freeUnit = await createTradeInCandidate(seed, "CMT0000000000020");
+      const selling = await createVehicle(seed.t, seed.orgId, "CMT0000000000021");
+
+      const saleId = await seed.asUser.mutation(api.sales.create, {
+        ...cashSaleArgs(seed, seed.customerB, selling),
+        tradeInVehicleId: freeUnit,
+        tradeInValue: 5_000,
+      });
+      expect(await seed.t.run((ctx) => ctx.db.get(saleId))).toBeTruthy();
+    });
+  });
+
+  describe("11. a committed unit cannot be made to disappear", () => {
+    test("soft-deleting a vehicle a finance application holds is refused", async () => {
+      // FAILS TODAY, and the reason is subtle: a finance application never
+      // patches `vehicle.status`, so a claim with no accompanying deposit
+      // leaves the car AVAILABLE. `softDelete`'s SOLD/RESERVED guard therefore
+      // never fires, and the unit vanishes from under the deal that owns it.
+      const seed = await seedDealer("delete");
+      const vehicleId = await createVehicle(seed.t, seed.orgId, "CMT0000000000022");
+
+      const qA = await financedQuote(seed, seed.customerA, vehicleId);
+      await seed.asUser.mutation(api.applications.createFromQuote, { orgId: seed.orgId, quoteId: qA });
+
+      expect(await vehicleStatus(seed, vehicleId)).toBe("AVAILABLE");
+
+      await expect(
+        seed.asUser.mutation(api.vehicles.softDelete, { orgId: seed.orgId, vehicleId })
+      ).rejects.toThrow(/committed|finance application|in use|another deal/i);
+    });
+  });
+
+  describe("12. finalization CONSUMES the claim, and cancellation does not resurrect it", () => {
+    test("a cancelled sale does not silently return the car to its closed application", async () => {
+      // The lifecycle ruling. `finalizeDeal` closes the application and the
+      // claim must become CONSUMED, not stay ACTIVE. Then `sales.update` to
+      // CANCELLED reverses the sale and frees the car — but it must NOT hand it
+      // back to the CLOSED application, which can no longer legitimately own
+      // anything. A reopened finance workflow has to reacquire.
+      //
+      // Asserted through observable state rather than the claim row, so it
+      // survives whatever shape the record takes: after cancellation the car is
+      // claimable by a DIFFERENT customer, which is only true if the closed
+      // application's claim did not come back.
+      const seed = await seedDealer("consume");
+      const vehicleId = await createVehicle(seed.t, seed.orgId, "CMT0000000000023");
+
+      const qA = await financedQuote(seed, seed.customerA, vehicleId);
+      const appA = await seed.asUser.mutation(api.applications.createFromQuote, {
+        orgId: seed.orgId,
+        quoteId: qA,
+      });
+      await readyToFinalize(seed, appA);
+      const saleId = await seed.asUser.mutation(api.applications.finalizeDeal, {
+        orgId: seed.orgId,
+        applicationId: appA,
+      });
+
+      await seed.asApprover.mutation(api.sales.update, {
+        orgId: seed.orgId,
+        saleId,
+        status: "CANCELLED",
+      });
+
+      const qB = await financedQuote(seed, seed.customerB, vehicleId);
+      const appB = await seed.asUser.mutation(api.applications.createFromQuote, {
+        orgId: seed.orgId,
+        quoteId: qB,
+      });
+      expect(appB).toBeDefined();
+    });
+  });
+
+  describe("13. abandonment is surfaced, never silently expired", () => {
+    // SKIPPED DELIBERATELY, and the skip IS the specification.
+    //
+    // This is the one requirement that cannot be expressed as a running
+    // failing-first test today: the surfacing query does not exist, so the
+    // fixture does not compile rather than merely fail. Casting through `any`
+    // to force it green would hide that, and asserting something weaker — that
+    // `createdAt` exists, say — would pass trivially and prove nothing.
+    //
+    // REQUIRED CONTRACT, to be enabled in the same change that adds it:
+    //   api.applications.listAgedCommitments({ orgId, olderThanMs })
+    //     -> Array<{ applicationId, vehicleId, customerId, acquiredAt }>
+    //
+    // This is the mitigant that makes fixture 5a tolerable. The ruling forbids
+    // any silent TTL, so a commitment blocks until someone releases it
+    // authentically — which is only acceptable if abandoned commitments are
+    // VISIBLE, letting an operator decide to cancel rather than discovering the
+    // lock when a sale is refused.
+    test.skip("an aged live commitment is discoverable so an operator can cancel it deliberately", async () => {
+      // FAILS TODAY — no such query exists. This is the mitigant that replaces
+      // the inventory-lock objection to fixture 5a. The ruling is explicit that
+      // there must be NO silent TTL: a commitment blocks until someone releases
+      // it authentically. That is only tolerable if abandoned commitments are
+      // VISIBLE, so the operator can make the cancellation decision rather than
+      // discovering the lock when a sale is refused.
+      const seed = await seedDealer("aged");
+      const vehicleId = await createVehicle(seed.t, seed.orgId, "CMT0000000000024");
+
+      const qA = await financedQuote(seed, seed.customerA, vehicleId);
+      const appA = await seed.asUser.mutation(api.applications.createFromQuote, {
+        orgId: seed.orgId,
+        quoteId: qA,
+      });
+
+      // Age it well past any reasonable working window.
+      const ninetyDaysAgo = Date.now() - 90 * 24 * 60 * 60 * 1000;
+      await seed.t.run((ctx) =>
+        ctx.db.patch(appA, { createdAt: ninetyDaysAgo, updatedAt: ninetyDaysAgo })
+      );
+
+      // The call this test exists for, written out so the contract is
+      // unambiguous, and left unreachable because the query does not exist:
+      //
+      //   const aged = await seed.asUser.query(api.applications.listAgedCommitments, {
+      //     orgId: seed.orgId,
+      //     olderThanMs: 30 * 24 * 60 * 60 * 1000,
+      //   });
+      //   expect(aged.map((row) => row.applicationId)).toContain(appA);
+
+      // And it is still holding the car — surfacing is not releasing.
+      expect(await vehicleStatus(seed, vehicleId)).not.toBe("SOLD");
+    });
+  });
+
+  describe("14. the resolver may never report FREE because it stopped reading", () => {
+    test("the 51st hold on a vehicle is still a hold", async () => {
+      // `getActiveDepositHolds` reads with `.take(50)` in three places. A car
+      // carrying 51 active holds therefore reports only 50, and if the real
+      // blocking holder is row 51 the resolver says FREE. That is not a
+      // performance nit: a canonical authority that can answer "free" because
+      // it stopped reading is not canonical.
+      //
+      // Seeded directly because the point is the READ path, not the write path.
+      const seed = await seedDealer("cap");
+      const vehicleId = await createVehicle(seed.t, seed.orgId, "CMT0000000000025");
+
+      await seed.t.run(async (ctx) => {
+        for (let i = 0; i < 51; i += 1) {
+          // The last one belongs to the other customer: it is the row that must
+          // block, and the row `.take(50)` drops.
+          const owner = i === 50 ? seed.customerA : seed.customerB;
+          await ctx.db.insert("deposits", {
+            orgId: seed.orgId,
+            customerId: owner,
+            vehicleId,
+            amount: 100,
+            amountMinor: 100_000,
+            currency: "JOD",
+            method: "CASH" as const,
+            status: "HELD" as const,
+            holdActive: true,
+            createdAt: Date.now(),
+            createdBy: seed.userId,
+          });
+        }
+      });
+
+      await expect(
+        seed.asUser.mutation(api.vehicles.createReservation, {
+          orgId: seed.orgId,
+          vehicleId,
+          customerId: seed.customerB,
+        })
+      ).rejects.toThrow(/deposit|holding|committed/i);
     });
   });
 });
