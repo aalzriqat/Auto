@@ -981,6 +981,65 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
       ).rejects.toThrow(/does not match|not this customer|unauthorized|different customer/i);
     });
 
+    test("a supersession proof naming a DIFFERENT vehicle is refused", async () => {
+      // ⚠️ The vehicle half of the supersession rule, which existed only for
+      // the RESERVATION bridge. Same omission shape as the customer half above:
+      // a rule pinned on one proof surface and merely described on the other.
+      //
+      // Concrete hazard: an implementation validating only the customer lets a
+      // supersession inherit a live root and swing it onto INVENTORY THE ROOT
+      // NEVER COVERED — the customer is right, so every collision fixture stays
+      // green while an unrelated car is quietly absorbed into a committed deal.
+      const seed = await seedDealer("proof-vehicle-quote");
+      const owned = await vehicle(seed, "LIN0000000000066");
+      const unrelated = await vehicle(seed, "LIN0000000000067");
+      const rootA = await quoteFor(seed, seed.customerA, owned);
+      await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: rootA, amount: 1_000 });
+
+      await expect(
+        seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+          orgId: seed.orgId,
+          customerId: seed.customerA, // right customer — wrong car
+          vehicleId: unrelated,
+          mode: "CASH",
+          vehiclePrice: PRICE,
+          downPayment: 0,
+          termMonths: 0,
+          totalFinancedAmount: 0,
+          supersedesQuoteId: rootA,
+        })
+      ).rejects.toThrow(/does not match|vehicle|different vehicle|unauthorized/i);
+    });
+
+    test("a supersession proof whose vehicle SET differs from the predecessor is refused", async () => {
+      // `vehicleId` is a convenience field; `vehicleItems` is authoritative. A
+      // guard reading only the scalar lets a single-car root grow a second car
+      // it never held — inventory smuggled in through renegotiation.
+      const seed = await seedDealer("proof-set-quote");
+      const owned = await vehicle(seed, "LIN0000000000068");
+      const smuggled = await vehicle(seed, "LIN0000000000069");
+      const rootA = await quoteFor(seed, seed.customerA, owned);
+      await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: rootA, amount: 1_000 });
+
+      await expect(
+        seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+          orgId: seed.orgId,
+          customerId: seed.customerA,
+          vehicleId: owned, // scalar matches the predecessor…
+          vehicleItems: [
+            { vehicleId: owned, unitPrice: PRICE },
+            { vehicleId: smuggled, unitPrice: PRICE }, // …the SET does not
+          ],
+          mode: "CASH",
+          vehiclePrice: PRICE * 2,
+          downPayment: 0,
+          termMonths: 0,
+          totalFinancedAmount: 0,
+          supersedesQuoteId: rootA,
+        })
+      ).rejects.toThrow(/does not match|vehicle set|different vehicle|unauthorized/i);
+    });
+
     test("an INDEPENDENT re-quote is still a competing root", async () => {
       // The other half, and it must keep failing closed: without a linkage the
       // server cannot tell a renegotiation from a second, rival deal — so it
@@ -1086,27 +1145,31 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
       // Asserted as a live constructible state so that if a future change makes
       // it unconstructible, this test fails and tells us the hazard closed —
       // rather than the requirement quietly outliving the problem.
-      const seed = await seedDealer("legacy-conflict");
-      const v = await vehicle(seed, "LIN0000000000019");
+      // ⚠️ REWRITTEN — this test used to MANUFACTURE the conflict through the
+      // public API: two quotes, two customers, one car, and two successful
+      // `deposits.create` calls, then asserted both holds were live.
+      //
+      // That is a direct contradiction with describe 2 (`:388`), which requires
+      // exactly that second call to be REFUSED. Both fixtures constructed the
+      // same public-API situation and demanded opposite outcomes, so no
+      // authority could satisfy both and the suite could never go fully green.
+      // It hid from my first contradiction sweep because those two deposits
+      // were bare SETUP calls with no `expect()` wrapper — an unasserted call
+      // is a specification exactly as binding as a decorated one.
+      //
+      // The evidence it carried is still worth keeping: proof that the hazard
+      // is REAL rather than hypothetical. But that proof does not have to be
+      // manufactured here — it already exists on `main`, as a test that
+      // REQUIRES today's permissive behaviour. Asserting that test still exists
+      // keeps the hazard documented while requiring nothing of the fixed API.
+      // The conflicted STATE itself is constructed by the sibling test above,
+      // which seeds legacy rows directly and therefore survives the fix.
+      const { readFileSync } = await import("node:fs");
+      const superseded = readFileSync("convex/deposits.test.ts", "utf8");
 
-      const rootA = await quoteFor(seed, seed.customerA, v);
-      const rootB = await quoteFor(seed, seed.customerB, v);
-      await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: rootA, amount: 1_000 });
-      await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: rootB, amount: 2_000 });
-
-      const live = await seed.t.run(async (ctx) => {
-        const rows = await ctx.db
-          .query("deposits")
-          .filter((q) => q.eq(q.field("vehicleId"), v))
-          .collect();
-        return rows.filter((row) => row.holdActive === true);
-      });
-
-      // Two live holders, two different quotes, two different customers, one
-      // physical car. This is the input the cutover must refuse.
-      expect(live).toHaveLength(2);
-      expect(new Set(live.map((row) => String(row.quoteId)))).toHaveProperty("size", 2);
-      expect(new Set(live.map((row) => String(row.customerId)))).toHaveProperty("size", 2);
+      expect(superseded).toContain(
+        "a second deposit from a different quote on the same vehicle does not error (soft warning, not a hard block)"
+      );
     });
   });
 
@@ -1401,16 +1464,38 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
      * refunded and forfeited parts kept apart) is never consulted anywhere in
      * this file.
      *
-     * The binding formula, stated so an implementer does not have to guess:
+     * The binding rule:
      *
-     *     retained(root) = Σ deposit.amountMinor − Σ deposit.releasedAmountMinor
+     *     retained(root) = Σ (economically live deposit amounts)
+     *                    − Σ (amounts actually paid back or forfeited)
      *
-     * across every revision of the root. Money that was actually paid back or
-     * forfeited has left the customer's credit and must stop counting. Money
-     * that is APPLIED or merely RELEASED_AWAITING_DECISION has NOT left — it is
-     * still the customer's, still on the deal, and still counts. The three
-     * tests below are the ones that distinguish that formula from the naive
-     * sum; without them the two are indistinguishable.
+     * across every revision of the root. Money that genuinely left the customer
+     * — refunded or forfeited — stops counting. Money that is APPLIED or merely
+     * RELEASED_AWAITING_DECISION has NOT left: still the customer's, still on
+     * the deal, still counts. `VOIDED` / soft-deleted deposit rows contribute
+     * ZERO; they are not customer credit and must not inflate the ceiling.
+     *
+     * ⚠️ WHERE THE PREVIOUS VERSION OF THIS COMMENT WAS WRONG — and it was
+     * wrong in the one way that matters, because it claimed to remove guesswork.
+     *
+     * It stated the rule as a direct field read,
+     * `Σ amountMinor − Σ deposit.releasedAmountMinor`, "so an implementer does
+     * not have to guess". But `releasedAmountMinor` is written ONLY by
+     * `releaseHeldDeposit` (`utils/depositHelpers.ts:902+`). The per-share path
+     * — `resolveReleasedAllocation` → `payOutDepositSlice` (`754–901`) — never
+     * patches the deposit row at all. Both halves of the pair below resolve a
+     * share, so under the literal formula BOTH read zero and the pair does not
+     * discriminate: the exact property it was written to have.
+     *
+     * The codebase already knows this. `utils/depositAllocation.ts:223-311`
+     * computes refunded/forfeited as `sliceRefunded + rowLevelRefundedMinor` —
+     * an explicit row-PLUS-slice split that exists precisely because the row
+     * field alone is insufficient for multi-vehicle deposits. That is the
+     * required precedent. An implementation may instead keep the row aggregate
+     * in sync from `payOutDepositSlice`, but it may not read the row field and
+     * assume it is complete.
+     *
+     * Legacy rows with absent release totals normalise to "nothing released".
      */
     test("a price RISE lifts the ceiling — headroom is recomputed, not remembered", async () => {
       const seed = await seedDealer("ceiling-rise");
@@ -1419,7 +1504,15 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
       await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: r1, amount: PRICE });
 
       // Renegotiated UP: 28,000 held against a 35,000 head leaves 7,000 of room.
-      await seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+      //
+      // ⚠️ The new head is CAPTURED and used. The first version of this test
+      // discarded it and deposited against `r1` — which describe 11 requires to
+      // be REFUSED as a superseded revision (`:1237`). Two fixtures demanding
+      // opposite outcomes for one operation shape: no implementation could
+      // satisfy both, so this test would have stayed red forever against a
+      // correct stale-head guard, or forced an implementer to punch a hole in
+      // it. Both seats found it independently.
+      const r2 = (await seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
         orgId: seed.orgId,
         customerId: seed.customerA,
         vehicleId: v,
@@ -1429,10 +1522,10 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
         termMonths: 0,
         totalFinancedAmount: 0,
         supersedesQuoteId: r1,
-      });
+      })) as Id<"quotes">;
 
       await expect(
-        seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: r1, amount: 7_000 })
+        seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: r2, amount: 7_000 })
       ).resolves.toBeDefined();
     });
 
@@ -1524,6 +1617,77 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
           termMonths: 0,
           totalFinancedAmount: 0,
           supersedesQuoteId: root,
+        })
+      ).resolves.toBeDefined();
+    });
+
+    test("an AWAITING-DECISION root is still supersedable when the new head clears the retained amount", async () => {
+      // ⚠️ THE ANTI-CONFOUND. Without this control the pair above is satisfied
+      // by an implementation that never computes a ceiling at all and simply
+      // says "refuse any supersession while a share is awaiting a decision" —
+      // that shortcut refuses the first half and permits the second, scoring
+      // two green lights for a rule it does not implement.
+      //
+      // Here the money is untouched and unresolved exactly as in the refusing
+      // case; only the proposed head differs, and it CLEARS the 4,000 retained.
+      // The shortcut refuses this; a real ceiling calculation allows it.
+      const seed = await seedDealer("ceiling-awaiting-ok");
+      const { root, keep, freed } = await dealWithReleasedShare(
+        seed,
+        "LIN0000000000064",
+        "LIN0000000000164"
+      );
+
+      await expect(
+        seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+          orgId: seed.orgId,
+          customerId: seed.customerA,
+          vehicleId: keep,
+          vehicleItems: [
+            { vehicleId: keep, unitPrice: 2_500 },
+            { vehicleId: freed, unitPrice: 2_500 },
+          ],
+          mode: "CASH",
+          vehiclePrice: 5_000, // above the 4,000 still retained
+          downPayment: 0,
+          termMonths: 0,
+          totalFinancedAmount: 0,
+          supersedesQuoteId: root,
+        })
+      ).resolves.toBeDefined();
+    });
+
+    test("a VOIDED deposit contributes NOTHING to the ceiling", async () => {
+      // A voided row is not customer credit. Counting its face value would
+      // refuse renegotiations on money that does not exist — and the raw
+      // formula, read literally, counts it, because voiding does not populate
+      // `releasedAmountMinor` (`voidDeposit` in fact refuses when that field is
+      // already non-zero).
+      const seed = await seedDealer("ceiling-voided");
+      const v = await vehicle(seed, "LIN0000000000065");
+      const r1 = await quoteFor(seed, seed.customerA, v);
+      const depositId = await seed.asUser.mutation(api.deposits.create, {
+        orgId: seed.orgId,
+        quoteId: r1,
+        amount: 20_000,
+      });
+      await seed.asApprover.mutation(api.deposits.voidDeposit, {
+        orgId: seed.orgId,
+        depositId,
+        reason: "entered against the wrong deal",
+      });
+
+      await expect(
+        seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+          orgId: seed.orgId,
+          customerId: seed.customerA,
+          vehicleId: v,
+          mode: "CASH",
+          vehiclePrice: 6_000, // far below the voided 20,000 face value
+          downPayment: 0,
+          termMonths: 0,
+          totalFinancedAmount: 0,
+          supersedesQuoteId: r1,
         })
       ).resolves.toBeDefined();
     });
@@ -1690,6 +1854,30 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
           orgId: seed.orgId,
           quoteId: root,
         })
+      ).resolves.toBeDefined();
+
+      // ⚠️ Resolving is not closing. Asserting only that the call succeeds is
+      // satisfied by a mutation that validates "no unresolved money" and then
+      // returns null without changing a single row — a terminal state nothing
+      // can actually reach. What makes this a lifecycle rather than a
+      // validator is the state AFTER it.
+      const state = await seed.asUser.query(notYetBuiltQuery.commitments.rootFinancialState, {
+        orgId: seed.orgId,
+        quoteId: root,
+      });
+      expect((state as { financiallyOpen: boolean }).financiallyOpen).toBe(false);
+
+      const owner = await seed.asUser.query(notYetBuiltQuery.commitments.resolveVehicleRoot, {
+        orgId: seed.orgId,
+        vehicleId: keep,
+      });
+      expect((owner as { kind: string }).kind).not.toBe("OWNED");
+
+      // And the strongest evidence that the claim really let go: somebody else
+      // can now buy the car.
+      const next = await quoteFor(seed, seed.customerB, keep);
+      await expect(
+        seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: next, amount: 1_000 })
       ).resolves.toBeDefined();
     });
   });
@@ -1971,10 +2159,23 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
       ).rejects.toThrow(/not active|released|expired|converted|no longer/i);
     });
 
-    test("a reservation already adopted by one quote cannot be adopted by a second", async () => {
+    test("a reservation already adopted by one quote cannot be adopted by a DIFFERENT second quote", async () => {
       // Otherwise the proof is reusable and two quotes claim one root — the
       // multi-root state this whole design exists to make impossible, reached
       // through the bridge instead of around it.
+      //
+      // ⚠️ The second call is DELIBERATELY DIFFERENT (another customer), and
+      // that distinction is load-bearing. The first version replayed byte-
+      // identical arguments with no idempotency key — which is indistinguishable
+      // from a double-click, and section 15 requires exactly that shape to
+      // succeed under one root. Two fixtures demanding opposite outcomes for an
+      // identical request: a server with no retry-stable operation id cannot
+      // satisfy both, and picking either one silently breaks the other.
+      //
+      // Making the second call a genuinely different operation removes the
+      // ambiguity instead of resolving it by fiat. A reused proof is refused
+      // because the RESERVATION is already spoken for — a state rule — not
+      // because of anything to do with retries.
       const seed = await seedDealer("bridge-twice");
       const v = await vehicle(seed, "LIN0000000000053");
 
@@ -1985,7 +2186,6 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
       });
       const shared = {
         orgId: seed.orgId,
-        customerId: seed.customerA,
         vehicleId: v,
         mode: "CASH",
         vehiclePrice: PRICE,
@@ -1994,11 +2194,19 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
         totalFinancedAmount: 0,
         reservationId,
       };
-      await seed.asUser.mutation(notYetBuilt.quotes.saveQuote, shared);
+      await seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+        ...shared,
+        customerId: seed.customerA,
+      });
 
       await expect(
-        seed.asUser.mutation(notYetBuilt.quotes.saveQuote, shared)
-      ).rejects.toThrow(/already adopted|already claimed|already linked|not available/i);
+        seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+          ...shared,
+          customerId: seed.customerB,
+        })
+      ).rejects.toThrow(
+        /already adopted|already claimed|already linked|not available|does not match|different customer/i
+      );
     });
   });
 
@@ -2142,26 +2350,30 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
       // one leaves the other as an unchecked second writer — the same
       // one-of-two omission this whole block exists to prevent.
       //
-      // ## Why this fixture needs THREE vehicles (round-6, both seats)
+      // ## Why this fixture is shaped exactly this way — TWO corrections deep
       //
-      // The first version of this test released `freed` and then re-allocated
-      // the share back onto `freed` itself. That can never reach the
-      // commitment authority: `deposits.ts:731` refuses same-source
-      // re-allocation outright ("Re-allocating a share to the vehicle it came
-      // from is not a decision") BEFORE any hold is inserted. The test was red,
-      // but red for an unrelated, already-shipped rule — so it would have
-      // stayed red after the authority was built correctly, and never once
-      // exercised the acquisition it is named for.
+      // v1 released `freed` and re-allocated the share back onto `freed`.
+      // Unreachable: `deposits.ts:731` refuses same-source re-allocation
+      // outright, before any hold is inserted. Red for an unrelated shipped
+      // rule, and it would have stayed red against a CORRECT authority.
       //
-      // `REALLOCATE_TO_VEHICLE` and `RETURN_TO_UNALLOCATED` have OPPOSITE
-      // targeting rules: the latter deliberately reactivates the same vehicle
-      // and accepts no `toVehicleId` at all, the former requires a DIFFERENT
-      // vehicle already on the quote. Copying the sibling's shape onto it was
-      // the mistake. The target must therefore be a third line on the same
-      // quote that this deal never allocated against — so no hard commitment
-      // of ours exists on it, a rival may legitimately acquire it (a quote
-      // alone locks nothing, c14796), and moving money onto it afterwards is a
-      // genuine acquisition that must be refused.
+      // v2 added a third car and left it UNALLOCATED, on the theory that "no
+      // allocation" meant "no hard commitment", so a rival could take it. That
+      // contradicted describe 7 of this very file: `deposits.create` calls
+      // `holdVehicleForDeposit` for EVERY line on `vehicleItems`, so a deposit
+      // acquires all three cars regardless of how the money is split. Under a
+      // correct authority the rival's acquisition would refuse first and the
+      // call under test would never be reached — a second unreachable fixture,
+      // inside the fix for the first. Codex caught it; I had contradicted my
+      // own describe 7.
+      //
+      // v3 — this one. The ONLY way a rival may legitimately hold a car that
+      // is a line on our quote is if our root has RELEASED it, because
+      // `RELEASED_AWAITING_DECISION` money does not hold a vehicle (describe
+      // 13). So `third` gets a real allocation, is released, and is then taken
+      // by the rival. Re-allocating `dropped`'s released share onto it is then
+      // a genuine acquisition of a car another root owns, which is the rule
+      // this test is named for and the first time it is actually exercised.
       const seed = await seedDealer("xsurface-realloc");
       const keep = await vehicle(seed, "LIN0000000000042");
       const dropped = await vehicle(seed, "LIN0000000000043");
@@ -2182,35 +2394,51 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
         termMonths: 0,
         totalFinancedAmount: 0,
       });
-      await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: root, amount: 4_000 });
-      // Deliberately NOT allocating anything to `third`: it stays a line on the
-      // quote with no money and therefore no hard commitment from this deal.
+      await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: root, amount: 6_000 });
+      // Every line gets a real share: `releaseVehicleAllocation` refuses a
+      // vehicle that "holds no active share of this quote's deposit", so a
+      // zero-allocated car could not be released and therefore could never be
+      // freed for the rival to take.
       await seed.asUser.mutation(api.deposits.allocateToVehicles, {
         orgId: seed.orgId,
         quoteId: root,
         allocations: [
           { vehicleId: keep, amount: 2_000 },
           { vehicleId: dropped, amount: 2_000 },
+          { vehicleId: third, amount: 2_000 },
         ],
       });
-      await seed.asUser.mutation(api.deposits.releaseVehicleAllocation, {
-        orgId: seed.orgId,
-        quoteId: root,
-        vehicleId: dropped,
-        reason: "dropped",
-      });
+      for (const [vehicleId, reason] of [
+        [dropped, "customer dropped this one"],
+        [third, "customer dropped this one too"],
+      ] as const) {
+        await seed.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+          orgId: seed.orgId,
+          quoteId: root,
+          vehicleId,
+          reason,
+        });
+      }
 
-      // A rival legitimately acquires the untouched third car.
+      // Released means genuinely free, so the rival's acquisition is legitimate
+      // — that is the ownership/money axis split, relied on rather than
+      // restated.
       const rival = await quoteFor(seed, seed.customerB, third);
       await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: rival, amount: 1_500 });
 
+      // Selected by allocationStatus, not by `active === false`. The status is
+      // what `resolveReleasedAllocation` itself checks, so matching on it means
+      // a wrong pick fails loudly here rather than surfacing later as "that
+      // allocation has not been released" — an unrelated refusal wearing the
+      // costume of the rule under test.
       const releasedHold = await seed.t.run(async (ctx) => {
         const holds = await ctx.db
           .query("depositVehicleHolds")
           .filter((q) => q.eq(q.field("vehicleId"), dropped))
           .collect();
-        return holds.find((hold) => hold.active === false) ?? holds[0];
+        return holds.find((hold) => hold.allocationStatus === "RELEASED_AWAITING_DECISION");
       });
+      expect(releasedHold).toBeDefined();
 
       await expect(
         seed.asUser.mutation(api.deposits.resolveReleasedAllocation, {
@@ -2328,17 +2556,35 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
       const first = await seed.asUser.mutation(notYetBuilt.quotes.saveQuote, args);
       const second = await seed.asUser.mutation(notYetBuilt.quotes.saveQuote, args);
 
-      // Returned as an ARRAY, not a Set: `seed.t.run` serialises its result as
-      // a Convex value and a Set is not one. Building the Set out here keeps
-      // the failure about roots rather than about serialisation.
-      const rootIds = await seed.t.run(async (ctx) => {
+      // ⚠️ Lineage is resolved by ASKING THE SERVER, not by reading a field
+      // this test guessed the name of.
+      //
+      // The first version read `q.rootId ?? q._id`. Describe 11's own contract
+      // says the lineage carries `currentQuoteId` and a revision — which does
+      // not require a field literally called `rootId` on each quote row. An
+      // implementer who links revisions through `currentQuoteId` instead would
+      // hit the `?? q._id` fallback, see two distinct ids, and be failed by
+      // this test for building something the design explicitly permits.
+      //
+      // `rootForEvidence` is already a required surface (the contention harness
+      // depends on it), so using it here costs nothing and pins no field name.
+      const quoteIds = await seed.t.run(async (ctx) => {
         const quotes = await ctx.db
           .query("quotes")
           .filter((q) => q.eq(q.field("vehicleId"), v))
           .collect();
-        return quotes.map((q) => String((q as { rootId?: unknown }).rootId ?? q._id));
+        return quotes.map((q) => q._id);
       });
-      const roots = new Set(rootIds);
+      const resolved = await Promise.all(
+        quoteIds.map((id) =>
+          seed.asUser.query(notYetBuiltQuery.commitments.rootForEvidence, {
+            orgId: seed.orgId,
+            kind: "quote",
+            id,
+          })
+        )
+      );
+      const roots = new Set(resolved.map((r) => JSON.stringify(r)));
 
       // Whether the server returns the same quote or a second revision of the
       // same lineage is an implementation choice; producing two COMPETING
@@ -2414,16 +2660,23 @@ describe("16. c14833 item 3: every saveQuote caller is mapped and pinned", () =>
           walk(full);
           continue;
         }
-        if (!/\.(ts|tsx)$/.test(entry) || /\.test\./.test(entry)) continue;
+        if (!/\.(ts|tsx|js|jsx|mjs)$/.test(entry) || /\.test\./.test(entry)) continue;
         const text = readFileSync(full, "utf8");
         // Any REFERENCE to the function, not only the exact
-        // `useMutation(api.quotes.saveQuote)` spelling. Round-6: matching that
-        // one spelling missed aliasing (`const fn = api.quotes.saveQuote`),
-        // bracket access, wrapper hooks and `ctx.runMutation` — every one of
-        // which mints a root just the same. A string-built dynamic reference
-        // still evades this; that is the residual hole and it is stated rather
-        // than papered over.
-        if (/api\s*\.\s*quotes\s*\.\s*saveQuote/.test(text)) {
+        // `useMutation(api.quotes.saveQuote)` spelling. Matching that one
+        // spelling missed aliasing (`const fn = api.quotes.saveQuote`), wrapper
+        // hooks and `ctx.runMutation` — every one of which mints a root just
+        // the same.
+        //
+        // ⚠️ The bracket form is matched by the SECOND alternative below. An
+        // earlier revision's comment claimed bracket access was covered while
+        // the pattern only handled dots — a comment asserting a property the
+        // code did not have, which is the same defect this file spends its
+        // length hunting. A string-built fully dynamic reference still evades
+        // this; that residual hole is stated rather than papered over.
+        const DOTTED = /api\s*\.\s*quotes\s*\.\s*saveQuote/;
+        const BRACKET = /api\s*(?:\.\s*quotes|\[\s*["'`]quotes["'`]\s*\])\s*\[\s*["'`]saveQuote["'`]\s*\]/;
+        if (DOTTED.test(text) || BRACKET.test(text)) {
           found.push(relative(process.cwd(), full).split(sep).join("/"));
         }
       }
@@ -2463,20 +2716,121 @@ describe("18. round-6: the contention harness's own seeding surfaces must fail c
    * than a customer's deal, and the only one whose failure mode is silent:
    * nothing in the probe's own output would ever reveal it.
    */
-  const SEED_SURFACES = [
-    "seedCommitmentScenario",
-    "commitmentRootFor",
-    "rootForEvidence",
-    "deploymentIdentity",
-  ] as const;
+  /**
+   * ⚠️ REWRITTEN. The first version invoked all four surfaces as MUTATIONS with
+   * `{ orgId }`. Three of them are QUERIES and none of them takes that argument
+   * shape, so Convex's argument validator refused every call before the
+   * disposable-deployment guard could run. Four fixtures, four red results, and
+   * not one of them was testing the thing it was named for — the same
+   * wrong-reason class, in the block written to close a different gap.
+   *
+   * It also listed four of SEVEN surfaces the harness actually calls. The three
+   * omitted ones included `seedRejectedApplication`, which is itself a
+   * production-dangerous seeding mutation — precisely the kind this block
+   * exists to fence.
+   *
+   * So the shapes are now declared explicitly, queries are called as queries,
+   * and the omission is made structurally impossible by scanning the harness.
+   */
+  interface SeedSurface {
+    name: string;
+    kind: "query" | "mutation";
+    args: (ctx: {
+      seed: Seed;
+      vehicleId: Id<"vehicles">;
+      quoteId: Id<"quotes">;
+      depositId: Id<"deposits">;
+    }) => Record<string, unknown>;
+  }
 
-  test.each(SEED_SURFACES)(
+  const SURFACES: SeedSurface[] = [
+    { name: "deploymentIdentity", kind: "query", args: () => ({}) },
+    {
+      name: "seedCommitmentScenario",
+      kind: "mutation",
+      args: () => ({ label: "guard-probe", quotes: 2 }),
+    },
+    {
+      name: "commitmentRootFor",
+      kind: "query",
+      args: ({ seed, vehicleId }) => ({ orgId: seed.orgId, vehicleId }),
+    },
+    {
+      name: "rootForEvidence",
+      kind: "query",
+      args: ({ seed, depositId }) => ({ orgId: seed.orgId, kind: "deposit", id: depositId }),
+    },
+    {
+      name: "liveClaimCount",
+      kind: "query",
+      args: ({ seed, vehicleId }) => ({ orgId: seed.orgId, vehicleId }),
+    },
+    {
+      name: "seedRejectedApplication",
+      kind: "mutation",
+      args: ({ seed, quoteId }) => ({ orgId: seed.orgId, quoteId }),
+    },
+    {
+      name: "currentHead",
+      kind: "query",
+      args: ({ seed, quoteId }) => ({ orgId: seed.orgId, quoteId }),
+    },
+  ];
+
+  test.each(SURFACES.map((surface) => [surface.name, surface] as const))(
     "testSupport:%s refuses when the deployment is not provably disposable",
-    async (surface) => {
-      const seed = await seedDealer(`guard-${surface}`);
-      await expect(
-        seed.asUser.mutation(notYetBuilt.testSupport[surface], { orgId: seed.orgId })
-      ).rejects.toThrow(/disposable|not permitted|refus|production|test support/i);
+    async (_name, surface) => {
+      const seed = await seedDealer(`guard-${surface.name}`);
+      const vehicleId = await vehicle(seed, "LIN0000000000090");
+      const quoteId = await quoteFor(seed, seed.customerA, vehicleId);
+      const depositId = await seed.asUser.mutation(api.deposits.create, {
+        orgId: seed.orgId,
+        quoteId,
+        amount: 500,
+      });
+
+      const args = surface.args({ seed, vehicleId, quoteId, depositId });
+      const call =
+        surface.kind === "query"
+          ? seed.asUser.query(notYetBuiltQuery.testSupport[surface.name], args)
+          : seed.asUser.mutation(notYetBuilt.testSupport[surface.name], args);
+
+      await expect(call).rejects.toThrow(
+        /disposable|not permitted|refus|production|test support/i
+      );
     }
   );
+
+  test("every testSupport surface the harness calls is fenced here", async () => {
+    // The forcing function. Without it, adding an eighth seeding surface to the
+    // harness silently creates an unfenced public endpoint, and every fixture
+    // above still passes. Same reasoning as the `saveQuote` caller registry:
+    // a registry nobody is required to update is a comment.
+    const { readFileSync } = await import("node:fs");
+    const harness = readFileSync("scripts/vehicleCommitmentContention.mjs", "utf8");
+    const used = [...harness.matchAll(/testSupport:([A-Za-z0-9_]+)/g)].map((m) => m[1]);
+
+    expect([...new Set(used)].sort()).toEqual(SURFACES.map((s) => s.name).sort());
+  });
+
+  /**
+   * ⚠️ KNOWN GAP, stated rather than left implied.
+   *
+   * These are refusal-only contracts. An implementation that throws
+   * unconditionally — with no real disposable-deployment check at all —
+   * satisfies every fixture above while making the contention harness, this
+   * design's ONLY source of real-concurrency evidence, permanently unable to
+   * run anywhere.
+   *
+   * The positive half cannot be written here: `convex-test` has no way to
+   * present itself as a provably disposable deployment, so "succeeds when the
+   * deployment IS disposable" is not expressible in this suite. That is a real
+   * boundary, not an oversight — and the same PREREQUISITE-red situation this
+   * file names elsewhere rather than papering over.
+   *
+   * The positive control is therefore an OPERATIONAL gate, and it is recorded
+   * as one: `scripts/vehicleCommitmentContention.mjs` must be observed running
+   * successfully against a real disposable deployment before this ships. No
+   * fixture in this file can stand in for that.
+   */
 });

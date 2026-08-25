@@ -318,8 +318,13 @@ async function main() {
       `release=${release.ok}${release.error ? ` (${release.error})` : ""}`
     );
     check(
+      // ⚠️ `sameRoot`, NOT `sameLiveRoot` — and the distinction is the whole
+      // assertion. A previous revision used the live-only form, which passes
+      // when a broken release leaves the incumbent owning the vehicle in a
+      // CONSUMED state: not live, so "not the live owner", so green. Released
+      // means the incumbent is not the owner in ANY state.
       "B. the incumbent never remains the owner after a successful release",
-      !(release.ok && sameLiveRoot(owner, incumbentRoot)),
+      !(release.ok && sameRoot(owner, incumbentRoot)),
       `release=${release.ok} owner=${JSON.stringify(owner)} incumbentRoot=${JSON.stringify(incumbentRoot)}`
     );
     check(
@@ -574,6 +579,54 @@ async function main() {
       "E. the cross-primitive winner actually owns the vehicle",
       sameLiveRoot(owner, winnerRoot),
       `owner=${JSON.stringify(owner)} winnerRoot=${JSON.stringify(winnerRoot)}`
+    );
+  }
+
+  // ── Race E′ — DEPOSIT vs CASH SALE: the originating incident ──────────────
+  // The matrix raced application↔cash, application↔reservation, deposit↔deposit
+  // and deposit↔application — but never deposit↔cash, which is the exact
+  // sequence that started this whole design: B puts money on a car,
+  // `prepareSaleCompletion` consults only SOLD and ARCHIVED, and A buys it for
+  // cash. Every other race being green says nothing about whether THESE two
+  // mutations read a common OCC range; a sequential test cannot show it either,
+  // because the hole is a hole precisely when the two run at once.
+  {
+    const s = await freshScenario("race-e-deposit-cash", 2);
+    const race = await raceAll(2, (i) =>
+      i === 0
+        ? client.mutation("deposits:create", {
+            orgId: s.orgId,
+            quoteId: s.quoteIds[0],
+            amount: 1_000,
+          })
+        : client.mutation("sales:create", {
+            orgId: s.orgId,
+            vehicleId: s.vehicleId,
+            customerId: s.otherCustomerId,
+            salespersonId: s.salespersonId,
+            salePrice: s.price,
+            saleDate: Date.now(),
+            status: "COMPLETED",
+            quoteId: s.quoteIds[1],
+          })
+    );
+    check(
+      "E′. a first deposit and a cash sale on a FREE vehicle — exactly one wins",
+      race.filter((r) => r.ok).length === 1,
+      `deposit=${race[0].ok} cashSale=${race[1].ok} — ${describeCrossOutcome(race)}`
+    );
+    const owner = await ownerOf(s);
+    const winnerRoot = race[0].ok
+      ? await rootOf(s, "deposit", race[0].value)
+      : race[1].ok
+        ? await rootOf(s, "sale", race[1].value)
+        : null;
+    // State-agnostic for the same reason as Race D: a cash-sale win consumes
+    // the claim rather than leaving it live.
+    check(
+      "E′. the winner owns the vehicle — live if the deposit won, consumed if the sale did",
+      sameRoot(owner, winnerRoot),
+      `owner=${JSON.stringify(owner)} winnerRoot=${JSON.stringify(winnerRoot)} state=${owner?.state}`
     );
   }
 
