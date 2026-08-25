@@ -1834,14 +1834,26 @@ describe("SCRUM-195 spec — structural invariants", () => {
       ORGANIZATION_DELETION_STEPS.findIndex((s) => String(s).includes(table));
 
     const claim = stepOf("vehicleCommitmentClaims");
-    if (claim === -1) {
-      // The table does not exist yet. Asserting its ABSENCE here is deliberate:
-      // this must fail loudly the moment the claim table lands unsequenced,
-      // rather than silently continuing to pass and letting the ordering ship
-      // unconsidered.
-      expect(claim, "vehicleCommitmentClaims is not yet in the purge sequence").toBe(-1);
+
+    // ⚠️ The absence check is against the SCHEMA, not against the purge list.
+    //
+    // An earlier version returned early whenever the table was missing from
+    // ORGANIZATION_DELETION_STEPS. That passes today — and would go on passing
+    // the day the claim table ships WITHOUT being sequenced, which is precisely
+    // the failure it exists to catch. A gate whose green light survives the bug
+    // is not a gate.
+    //
+    // So: while the table is absent from the schema this is genuinely
+    // not-yet-applicable; the moment it exists, it MUST appear in the sequence.
+    const schemaTables = Object.keys(schema.tables);
+    if (!schemaTables.includes("vehicleCommitmentClaims")) {
+      expect(claim, "no claim table in the schema yet, so nothing to sequence").toBe(-1);
       return;
     }
+    expect(
+      claim,
+      "vehicleCommitmentClaims exists but is absent from ORGANIZATION_DELETION_STEPS — an org purge would orphan it"
+    ).toBeGreaterThan(-1);
 
     for (const protectedTable of ["vehiclesWithStorage", "deposits", "financeApplications"]) {
       expect(
