@@ -60,7 +60,9 @@ vi.mock("./rateLimit", () => ({
 const MODULES = import.meta.glob("./**/*.*s");
 
 type UnbuiltMutation = FunctionReference<"mutation", "public", Record<string, unknown>, unknown>;
+type UnbuiltQuery = FunctionReference<"query", "public", Record<string, unknown>, unknown>;
 const notYetBuilt = anyApi as unknown as Record<string, Record<string, UnbuiltMutation>>;
+const notYetBuiltQuery = anyApi as unknown as Record<string, Record<string, UnbuiltQuery>>;
 
 const PRICE = 28_000;
 
@@ -94,7 +96,26 @@ type VehicleState =
    * Only reachable by direct seeding, which c14840 permits precisely because
    * the repaired public API can no longer produce it.
    */
-  | "LEGACY_MULTI_ROOT";
+  | "LEGACY_MULTI_ROOT"
+  /**
+   * Held, with the holding row sitting BEYOND a default page of results.
+   *
+   * A resolver that reads holds with `.take(50)` reports a car with 51 holds
+   * as FREE — the most dangerous possible wrong answer, since it hands
+   * someone else's committed vehicle to a new deal, and it only appears on
+   * the busiest cars. Pagination is a correctness property here, not a
+   * performance one.
+   */
+  | "HELD_PAST_PAGINATION_LIMIT"
+  /**
+   * Held, and held for a long time.
+   *
+   * An exclusive commitment that nobody revisits quietly takes a car off the
+   * market forever. The authority must make aged commitments DISCOVERABLE so
+   * an operator can cancel one deliberately — the alternative is an expiry
+   * that releases someone's deal behind their back.
+   */
+  | "HELD_LONG_AGO";
 
 /** Which revision of the lineage the operation cites as its proof. */
 type RevisionState =
@@ -684,6 +705,89 @@ export const SCENARIOS: Scenario[] = [
   },
 ];
 
+/**
+ * ── QUERY CONTRACTS ─────────────────────────────────────────────────────────
+ *
+ * Some normative behaviour is not an ACCEPT/REFUSE decision at all: it is what
+ * the system must SAY about a world. "This vehicle is ambiguous", "this org is
+ * not cutover-ready", "this root is still financially open" are answers, not
+ * permissions, and forcing them into the scenario table would either distort
+ * the model or — worse — leave them in a structural check, which c14843
+ * forbids from carrying product rules.
+ *
+ * So they get their own table with the SAME discipline: a declared world, a
+ * query, and a declared expected answer that is comparable, so the same
+ * contradiction preflight can run over them. An expectation expressed as a
+ * callback would be unreadable to the preflight, which is exactly the property
+ * that let contradictions survive in the free-form suite.
+ */
+type QueryName =
+  | "commitments.resolveVehicleRoot"
+  | "commitments.cutoverReadiness"
+  | "commitments.rootFinancialState"
+  | "commitments.listAgedCommitments";
+
+interface QueryContract {
+  id: string;
+  rule: string;
+  world: World;
+  query: QueryName;
+  /** Comparable by construction, so the preflight can detect disagreement. */
+  expected: Record<string, string | boolean>;
+}
+
+export const QUERY_CONTRACTS: QueryContract[] = [
+  {
+    id: "resolve/legacy-multi-root-is-conflict",
+    rule: "A vehicle with two live legacy roots resolves to CONFLICT — never a winner.",
+    world: { vehicle: "LEGACY_MULTI_ROOT" },
+    query: "commitments.resolveVehicleRoot",
+    expected: { kind: "CONFLICT" },
+  },
+  {
+    id: "resolve/free-vehicle-is-free",
+    rule: "A vehicle no root holds resolves to FREE.",
+    world: { vehicle: "FREE" },
+    query: "commitments.resolveVehicleRoot",
+    expected: { kind: "FREE" },
+  },
+  {
+    id: "resolve/held-vehicle-names-an-owner",
+    rule: "A vehicle a live root holds resolves to OWNED.",
+    world: { vehicle: "HELD_BY_OTHER_ROOT" },
+    query: "commitments.resolveVehicleRoot",
+    expected: { kind: "OWNED" },
+  },
+  {
+    id: "cutover/conflicted-vehicle-blocks-readiness",
+    rule: "A conflicted vehicle makes the org NOT cutover-ready, so ambiguity cannot ship.",
+    world: { vehicle: "LEGACY_MULTI_ROOT" },
+    query: "commitments.cutoverReadiness",
+    expected: { blocked: true },
+  },
+  {
+    id: "money/awaiting-decision-keeps-root-open",
+    rule: "Released-but-unresolved money leaves the root financially OPEN even though the car is free.",
+    world: { vehicle: "RELEASED_AWAITING_DECISION", money: "AWAITING_DECISION" },
+    query: "commitments.rootFinancialState",
+    expected: { financiallyOpen: true },
+  },
+  {
+    id: "resolve/never-reports-free-because-it-paginated",
+    rule: "The 51st hold is still a hold: a paginated read must never report a held car as FREE.",
+    world: { vehicle: "HELD_PAST_PAGINATION_LIMIT" },
+    query: "commitments.resolveVehicleRoot",
+    expected: { kind: "OWNED" },
+  },
+  {
+    id: "aged/long-held-commitment-is-discoverable",
+    rule: "An aged live commitment is discoverable so an operator can cancel it deliberately.",
+    world: { vehicle: "HELD_LONG_AGO" },
+    query: "commitments.listAgedCommitments",
+    expected: { listed: true },
+  },
+];
+
 describe("SCRUM-195 spec — consistency preflight (c14840)", () => {
   /**
    * ⚠️ THIS RUNS BEFORE ANY SCENARIO AND IS THE POINT OF THE RE-DERIVATION.
@@ -743,8 +847,41 @@ describe("SCRUM-195 spec — consistency preflight (c14840)", () => {
   });
 
   test("every rule is stated in one line of prose, so the table reads as a specification", () => {
-    const bad = SCENARIOS.filter((s) => !s.rule || s.rule.length < 20 || s.rule.includes("\n"));
+    const bad = [...SCENARIOS, ...QUERY_CONTRACTS].filter(
+      (s) => !s.rule || s.rule.length < 20 || s.rule.includes("\n")
+    );
     expect(bad.map((s) => s.id)).toEqual([]);
+  });
+
+  test("no two query contracts require different answers for the same world", () => {
+    // The same discipline as the scenario preflight, for the half of the
+    // specification that is an ANSWER rather than a permission. Without it,
+    // "this vehicle is FREE" and "this vehicle is OWNED" could sit in the same
+    // file describing the same world, exactly as the ACCEPT/REFUSE pairs did.
+    const byKey = new Map<string, QueryContract[]>();
+    for (const contract of QUERY_CONTRACTS) {
+      const key = `${contract.query}::${JSON.stringify(contract.world, Object.keys(contract.world).sort())}`;
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key)!.push(contract);
+    }
+
+    const contradictions: string[] = [];
+    for (const [key, group] of byKey) {
+      const answers = new Set(group.map((c) => JSON.stringify(c.expected)));
+      if (answers.size > 1) {
+        contradictions.push(
+          `${key}\n      ${group.map((c) => `${c.id} → ${JSON.stringify(c.expected)}`).join("  vs  ")}`
+        );
+      }
+    }
+    expect(contradictions, `Contradictory query contracts:\n  ${contradictions.join("\n  ")}`).toEqual(
+      []
+    );
+  });
+
+  test("scenario and query-contract ids do not collide", () => {
+    const all = [...SCENARIOS.map((s) => s.id), ...QUERY_CONTRACTS.map((c) => c.id)];
+    expect(all.length).toBe(new Set(all).size);
   });
 });
 
@@ -1212,6 +1349,72 @@ async function buildWorld(seed: Seed, scenario: Scenario): Promise<BuiltWorld> {
     // pointed at a different vehicle, or the scenario silently stops being
     // about ambiguity at all.
     built.ownQuoteId = await quoteFor(seed, seed.customerA, vehicleId);
+  }
+
+  if (world.vehicle === "HELD_LONG_AGO") {
+    const rival = await quoteFor(seed, seed.customerB, vehicleId);
+    built.rivalQuoteId = rival;
+    await mustSucceed(
+      "an ordinary commitment",
+      seed.asUser.mutation(api.deposits.create, {
+        orgId: seed.orgId,
+        quoteId: rival,
+        amount: 1_500,
+      })
+    );
+    // Then age it. Backdating the row is the only way to get a months-old
+    // commitment inside a test, and the age is the entire subject.
+    const ninetyDaysAgo = Date.now() - 90 * 24 * 60 * 60 * 1000;
+    await seed.t.run(async (ctx) => {
+      for (const row of await ctx.db
+        .query("deposits")
+        .filter((q) => q.eq(q.field("vehicleId"), vehicleId))
+        .collect()) {
+        await ctx.db.patch(row._id, { createdAt: ninetyDaysAgo });
+      }
+    });
+  }
+
+  if (world.vehicle === "HELD_PAST_PAGINATION_LIMIT") {
+    // 50 dead holds, then one LIVE one. Seeded directly because producing 51
+    // holds through the public API would take 51 deals; the shape is what
+    // matters, and it is what a busy car actually looks like after a year of
+    // quotes that went nowhere.
+    const rival = await quoteFor(seed, seed.customerB, vehicleId);
+    built.rivalQuoteId = rival;
+    await seed.t.run(async (ctx) => {
+      for (let i = 0; i < 50; i++) {
+        const depositId = await ctx.db.insert("deposits", {
+          orgId: seed.orgId,
+          customerId: seed.customerA,
+          quoteId: rival,
+          vehicleId,
+          amount: 1,
+          amountMinor: 1_000,
+          currency: "JOD",
+          method: "CASH" as const,
+          status: "REFUNDED" as const,
+          holdActive: false,
+          createdAt: Date.now(),
+          createdBy: seed.userId,
+        });
+        await ctx.db.insert("depositVehicleHolds", {
+          orgId: seed.orgId,
+          depositId,
+          vehicleId,
+          active: false,
+          createdAt: Date.now(),
+        });
+      }
+    });
+    await mustSucceed(
+      "the 51st, LIVE hold",
+      seed.asUser.mutation(api.deposits.create, {
+        orgId: seed.orgId,
+        quoteId: rival,
+        amount: 1_500,
+      })
+    );
   }
 
   if (world.vehicle === "HELD_BY_OTHER_ROOT") {
@@ -1762,5 +1965,61 @@ describe("SCRUM-195 spec — declared scenarios", () => {
       await snapshotWorld(seed),
       `${scenario.id}: the refusal must leave the world untouched`
     ).toEqual(before);
+  });
+});
+
+describe("SCRUM-195 spec — declared query contracts", () => {
+  test.each(QUERY_CONTRACTS.map((c) => [c.id, c] as const))("%s", async (_id, contract) => {
+    const seed = await seedDealer(contract.id.replace(/[^a-z0-9]/gi, "").slice(0, 24));
+    // Query contracts describe a world, not an operation, so they reuse the
+    // same builder — one construction path for both halves of the spec means a
+    // world cannot mean one thing here and something else over there.
+    const built = await buildWorld(seed, {
+      id: contract.id,
+      rule: contract.rule,
+      world: contract.world,
+      operation: "deposits.create",
+      outcome: "ACCEPT",
+    });
+
+    const [, queryName] = contract.query.split(".");
+    const args: Record<string, unknown> =
+      contract.query === "commitments.cutoverReadiness" ||
+      contract.query === "commitments.listAgedCommitments"
+        ? { orgId: seed.orgId }
+        : contract.query === "commitments.rootFinancialState"
+          ? { orgId: seed.orgId, quoteId: built.ownQuoteId }
+          : { orgId: seed.orgId, vehicleId: built.vehicleId };
+
+    const result = (await seed.asUser.query(
+      notYetBuiltQuery.commitments[queryName],
+      args
+    )) as Record<string, unknown>;
+
+    for (const [key, want] of Object.entries(contract.expected)) {
+      if (key === "listed") {
+        // The vehicle must appear BY NAME. A non-empty list would pass while
+        // containing something else entirely.
+        const rows = (Array.isArray(result) ? result : (result?.items ?? [])) as {
+          vehicleId?: unknown;
+        }[];
+        expect(
+          rows.map((r) => String(r?.vehicleId)),
+          `${contract.id}: ${contract.rule}`
+        ).toContain(String(built.vehicleId));
+        continue;
+      }
+      if (key === "blocked") {
+        // Readiness reports WHICH vehicles block it, so "blocked" means this
+        // vehicle is named — a bare boolean would pass while pointing at some
+        // unrelated car.
+        const ids = (result?.blockedVehicleIds ?? []) as unknown[];
+        expect(ids.map(String), `${contract.id}: ${contract.rule}`).toContain(
+          String(built.vehicleId)
+        );
+        continue;
+      }
+      expect(result?.[key], `${contract.id}: ${contract.rule}`).toBe(want);
+    }
   });
 });
