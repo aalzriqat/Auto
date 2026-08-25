@@ -128,6 +128,16 @@ function refuseObviouslyUnsafeArgs(args) {
  * it a persuasive URL.
  */
 async function assertDeploymentIsDisposable(client, expected) {
+  // ⚠️ The ONLY `testSupport:` surface that survives c14840, and deliberately.
+  //
+  // The ruling removes production-dangerous public SEED MUTATIONS. This is
+  // neither: it is read-only, it writes nothing, and it exists to REFUSE
+  // rather than to enable. Removing it would not make anything safer — it
+  // would delete the check that stops this probe writing to a deployment that
+  // will not say which one it is.
+  //
+  // It must stay read-only. The moment it can mutate, this justification is
+  // void and it falls under the ruling like everything else.
   const identity = await client.query("testSupport:deploymentIdentity", {});
   const reported = deploymentNameOf(identity?.cloudUrl);
   if (!reported) {
@@ -203,13 +213,99 @@ async function main() {
   console.log("");
 
   /**
-   * A fresh org + vehicle + quotes for ONE race.
+   * A fresh customer set + vehicle + quotes for ONE race.
    *
    * Per-race rather than shared: a race inheriting the previous race's state
    * cannot support a claim about either of them.
+   *
+   * ⚠️ BOOTSTRAPPED THROUGH REAL PRODUCT PATHS (owner ruling c14840).
+   *
+   * This used to call `testSupport:seedCommitmentScenario`, a public mutation
+   * that existed only to set up tests. Two things were wrong with that. It is a
+   * production-dangerous seeding endpoint reachable by anyone holding a valid
+   * session — the probe's own caller-side "is this deployment disposable?"
+   * check protects the probe, not the endpoint. And it meant the contention
+   * evidence was gathered against state no real user flow can produce, so a
+   * green race proved the authority serializes SEEDED rows.
+   *
+   * Now the scenario is built the way a salesperson builds one: create the
+   * customers, create the vehicle, save the quotes. Same public mutations, same
+   * validators, same authorization. If a race is green, it is green about the
+   * paths customers actually travel.
+   *
+   * The org is not created either — it comes from the authenticated identity,
+   * which is what makes this an ordinary authenticated session rather than a
+   * privileged one.
    */
-  const freshScenario = (label, quotes) =>
-    client.mutation("testSupport:seedCommitmentScenario", { label, quotes });
+  const membership = await client.query("memberships:getMyMembership", {});
+  const orgId = membership?.orgId;
+  if (!orgId) {
+    throw new Error(
+      "The authenticated identity is not a member of any organization, so no scenario can be built through product paths."
+    );
+  }
+
+  let scenarioSeq = 0;
+  const freshScenario = async (label, quotes) => {
+    const seq = scenarioSeq++;
+    const price = 28_000;
+
+    const customerId = await client.mutation("customers:create", {
+      orgId,
+      firstName: `Probe${seq}`,
+      lastName: label,
+    });
+    const otherCustomerId = await client.mutation("customers:create", {
+      orgId,
+      firstName: `Rival${seq}`,
+      lastName: label,
+    });
+    const vehicleId = await client.mutation("vehicles:create", {
+      orgId,
+      vin: `PROBE${String(seq).padStart(12, "0")}`,
+      make: "Toyota",
+      model: "Land Cruiser",
+      year: 2024,
+      mileage: 20,
+      color: "White",
+      fuelType: "Gasoline",
+      transmission: "Automatic",
+      sellingPrice: price,
+      status: "AVAILABLE",
+      sourceType: "OWNED",
+    });
+
+    // One quote per contender. A quote does NOT lock inventory (c14796), so
+    // creating several against one car is legitimate and is exactly the
+    // starting line a contention race needs.
+    const quoteIds = [];
+    for (let i = 0; i < quotes; i++) {
+      quoteIds.push(
+        await client.mutation("quotes:saveQuote", {
+          orgId,
+          customerId: i === 0 ? customerId : otherCustomerId,
+          vehicleId,
+          mode: "CASH",
+          vehiclePrice: price,
+          downPayment: 0,
+          termMonths: 0,
+          totalFinancedAmount: 0,
+          idempotencyKey: `probe-${label}-${seq}-${i}`,
+        })
+      );
+    }
+
+    return {
+      orgId,
+      vehicleId,
+      customerId,
+      otherCustomerId,
+      salespersonId: membership.userId,
+      price,
+      quoteIds,
+      rivalQuoteId: quoteIds[quoteIds.length - 1],
+    };
+  };
 
   /**
    * WHO owns this vehicle, expressed as a ROOT — not as an application.
@@ -240,15 +336,25 @@ async function main() {
    * Contract: `{ rootKind: "QUOTE" | "RESERVATION", rootId,
    *              state: "LIVE" | "CONSUMED" } | null`.
    */
+  /**
+   * ⚠️ These are PRODUCT queries, not test-only surfaces (c14840).
+   *
+   * `commitments.resolveVehicleRoot` and `commitments.rootForEvidence` are
+   * already required by the design — "who holds this car, and under which
+   * root" is a question the application itself must answer, for the deal
+   * workspace and for cutover readiness. Reading them here means the probe
+   * observes the system through the same lens the product does, and adds no
+   * public surface that exists only for tests.
+   */
   const ownerOf = (scenario) =>
-    client.query("testSupport:commitmentRootFor", {
+    client.query("commitments:resolveVehicleRoot", {
       orgId: scenario.orgId,
       vehicleId: scenario.vehicleId,
     });
 
   /** The root a given call's result belongs to, for winner correlation. */
   const rootOf = (scenario, kind, id) =>
-    client.query("testSupport:rootForEvidence", { orgId: scenario.orgId, kind, id });
+    client.query("commitments:rootForEvidence", { orgId: scenario.orgId, kind, id });
 
   /** Same root, regardless of whether the claim is still live or consumed. */
   const sameRoot = (a, b) => a != null && b != null && a.rootKind === b.rootKind && a.rootId === b.rootId;
@@ -349,7 +455,7 @@ async function main() {
     // covered by the two checks either side of it.
     check(
       "B. never two owners",
-      (await client.query("testSupport:liveClaimCount", {
+      (await client.query("commitments:liveClaimCount", {
         orgId: s.orgId,
         vehicleId: s.vehicleId,
       })) <= 1,
@@ -362,10 +468,25 @@ async function main() {
   // so reopening must RE-ACQUIRE and lose if a competitor got there first.
   {
     const s = await freshScenario("race-c", 2);
-    const rejected = await client.mutation("testSupport:seedRejectedApplication", {
+    // ⚠️ Built through the REAL lifecycle, not a seeding mutation (c14840).
+    //
+    // `testSupport:seedRejectedApplication` was the most dangerous surface in
+    // this probe — a public mutation that manufactured finance-application
+    // state, reachable by anyone with a session. It is also unnecessary: a
+    // rejected application is reached the ordinary way, by creating one and
+    // rejecting it. Doing that means Race C contends against an application
+    // whose history a real reviewer could have produced, which is the only
+    // kind whose reopening behaviour is worth measuring.
+    const created = await client.mutation("applications:createFromQuote", {
       orgId: s.orgId,
       quoteId: s.quoteIds[0],
     });
+    await client.mutation("applications:updateStatus", {
+      orgId: s.orgId,
+      applicationId: created,
+      status: "REJECTED",
+    });
+    const rejected = created;
 
     const race = await raceAll(2, (i) =>
       i === 0
@@ -656,7 +777,7 @@ async function main() {
         supersedesQuoteId: s.quoteIds[0],
       })
     );
-    const head = await client.query("testSupport:currentHead", {
+    const head = await client.query("commitments:currentHead", {
       orgId: s.orgId,
       quoteId: s.quoteIds[0],
     });

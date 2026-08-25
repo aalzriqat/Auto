@@ -1195,6 +1195,89 @@ async function invoke(seed: Seed, scenario: Scenario, built: BuiltWorld): Promis
   }
 }
 
+describe("SCRUM-195 spec — structural invariants", () => {
+  /**
+   * Not scenarios: these are properties of the SOURCE, and a scenario table
+   * cannot express them. They are forcing functions in the same sense as
+   * `customerMergeRegistry.test.ts` — a rule nobody is required to update is a
+   * comment, and comments do not survive contact with a hurried change.
+   */
+
+  test("the contention harness declares no public testSupport SEED MUTATION", async () => {
+    // c14840: preview contention bootstraps through real authenticated
+    // product/admin paths. A public mutation that manufactures scenario state
+    // is reachable by anyone holding a session, and the probe's own
+    // caller-side "is this deployment disposable?" check protects the probe,
+    // not the endpoint.
+    //
+    // One read-only `testSupport:deploymentIdentity` query survives on purpose:
+    // it writes nothing and exists to REFUSE rather than to enable. If it ever
+    // becomes a mutation, this test must start failing — which is why the
+    // assertion is on `client.mutation`, not on the string `testSupport:`.
+    const { readFileSync } = await import("node:fs");
+    const harness = readFileSync("scripts/vehicleCommitmentContention.mjs", "utf8");
+
+    const seedMutations = [
+      ...harness.matchAll(/client\.mutation\(\s*["'`](testSupport:[A-Za-z0-9_]+)["'`]/g),
+    ].map((m) => m[1]);
+
+    expect(seedMutations).toEqual([]);
+  });
+
+  test("every saveQuote caller is inventoried, web and mobile alike", async () => {
+    // c14840 put `apps/mobile` IN SCOPE and made this the cutover gate rather
+    // than a curiosity: supported callers must declare NEW vs REVISE and carry
+    // a stable operation identity, and no fallback may be removed until this
+    // inventory proves zero supported legacy callers remain.
+    //
+    // Mobile has no revise path today, so under the cross-root rule a mobile
+    // salesperson re-pricing their own customer's deal would mint a competing
+    // root and have that customer's own second deposit refused. The registry
+    // exists so that fact cannot go unnoticed again — it was invisible for
+    // three rounds because the scan only looked at `components`, `app`, `lib`.
+    const CALLERS = [
+      "apps/mobile/src/features/workspace/modules/quotes.tsx",
+      "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
+      "components/sales/QuoteDialog.tsx",
+      "components/sales/wizard/steps/Step3Review.tsx",
+    ];
+
+    const { readFileSync, readdirSync, statSync } = await import("node:fs");
+    const { join, relative, sep } = await import("node:path");
+
+    const found: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir)) {
+        if (entry === "node_modules" || entry === "_generated") continue;
+        const full = join(dir, entry);
+        if (statSync(full).isDirectory()) {
+          walk(full);
+          continue;
+        }
+        if (!/\.(ts|tsx|js|jsx|mjs)$/.test(entry) || /\.test\./.test(entry)) continue;
+        const text = readFileSync(full, "utf8");
+        const DOTTED = /api\s*\.\s*quotes\s*\.\s*saveQuote/;
+        const BRACKET =
+          /api\s*(?:\.\s*quotes|\[\s*["'`]quotes["'`]\s*\])\s*\[\s*["'`]saveQuote["'`]\s*\]/;
+        if (DOTTED.test(text) || BRACKET.test(text)) {
+          found.push(relative(process.cwd(), full).split(sep).join("/"));
+        }
+      }
+    };
+    // `convex` is scanned too: a server-side `ctx.runMutation` caller mints a
+    // root exactly like a client one, and none exists today only by accident.
+    for (const root of ["components", "app", "lib", "apps", "convex"]) {
+      try {
+        walk(root);
+      } catch {
+        // A root absent from this checkout is not a caller.
+      }
+    }
+
+    expect([...new Set(found)].sort()).toEqual([...CALLERS].sort());
+  });
+});
+
 describe("SCRUM-195 spec — declared scenarios", () => {
   test.each(SCENARIOS.map((s) => [s.id, s] as const))("%s", async (_id, scenario) => {
     const seed = await seedDealer(scenario.id.replace(/[^a-z0-9]/gi, "").slice(0, 24));
