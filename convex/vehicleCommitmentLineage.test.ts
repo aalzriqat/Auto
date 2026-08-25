@@ -1227,4 +1227,211 @@ describe("SCRUM-195 c14554 + c14659: the commitment owner is a SERVER-OWNED DEAL
       expect(applications.length).toBeGreaterThan(0);
     });
   });
+
+  describe("12. c14833 item 2: the deposit ceiling is ROOT-wide, not quote-wide", () => {
+    /**
+     * Today's ceiling is scoped to one quote: `deposits.create` sums
+     * `by_quote(args.quoteId)` and compares against that quote's own
+     * `vehiclePrice`. Under lineage that is not a ceiling at all — it is a
+     * ceiling per revision, and a deal can hold more money than it is for.
+     *
+     * The failure this produces is not abstract. It is the exact interaction
+     * between two rules that were each individually sensible: the per-quote cap
+     * lets the money in, and "resolve all evidence or fail atomically" then has
+     * nowhere to put the excess — so completion must refuse, and the customer
+     * who has paid MORE than the price cannot buy the car.
+     *
+     * c14833: all economically retained deposit money across every revision
+     * counts against the CURRENT head's price, and a linked price reduction
+     * below money already held refuses IMMEDIATELY rather than deferring the
+     * contradiction to completion time.
+     */
+    test("money across revisions counts against the CURRENT head price", async () => {
+      const seed = await seedDealer("ceiling-lineage");
+      const v = await vehicle(seed, "LIN0000000000029");
+
+      // Q1 at full price, 5,000 down — comfortably inside Q1's own cap.
+      const r1 = await quoteFor(seed, seed.customerA, v);
+      await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: r1, amount: 5_000 });
+
+      // Renegotiated DOWN by 1,000.
+      const r2 = (await seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+        orgId: seed.orgId,
+        customerId: seed.customerA,
+        vehicleId: v,
+        mode: "CASH",
+        vehiclePrice: PRICE - 1_000,
+        downPayment: 0,
+        termMonths: 0,
+        totalFinancedAmount: 0,
+        supersedesQuoteId: r1,
+      })) as Id<"quotes">;
+
+      // This tops the ROOT above the new head price while sitting inside R2's
+      // own per-quote cap — which is precisely the gap. It must be refused at
+      // acquisition, not discovered at completion.
+      await expect(
+        seed.asUser.mutation(api.deposits.create, {
+          orgId: seed.orgId,
+          quoteId: r2,
+          amount: PRICE - 1_000 - 4_000,
+        })
+      ).rejects.toThrow(/exceed|ceiling|already held|total deposits/i);
+    });
+
+    test("a linked price reduction BELOW money already held refuses immediately", async () => {
+      // The other direction, and the one that prevents the dead-end rather than
+      // merely detecting it. If the renegotiated price is lower than the money
+      // already down, the contradiction exists the moment the revision is
+      // saved. Refusing there is recoverable — the operator picks a different
+      // price or resolves the deposit. Allowing it and refusing at completion
+      // strands a paid-up customer at the last step.
+      const seed = await seedDealer("ceiling-reduction");
+      const v = await vehicle(seed, "LIN0000000000030");
+
+      const r1 = await quoteFor(seed, seed.customerA, v);
+      await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: r1, amount: 9_000 });
+
+      await expect(
+        seed.asUser.mutation(notYetBuilt.quotes.saveQuote, {
+          orgId: seed.orgId,
+          customerId: seed.customerA,
+          vehicleId: v,
+          mode: "CASH",
+          vehiclePrice: 4_000, // below the 9,000 already held
+          downPayment: 0,
+          termMonths: 0,
+          totalFinancedAmount: 0,
+          supersedesQuoteId: r1,
+        })
+      ).rejects.toThrow(/below|already held|deposits|exceed/i);
+    });
+
+    test("a lineage total WITHIN the head price is still accepted", async () => {
+      // The control. A root-wide ceiling must not become "one deposit per
+      // deal" — instalments are the behaviour that started this whole design.
+      const seed = await seedDealer("ceiling-ok");
+      const v = await vehicle(seed, "LIN0000000000031");
+      const r1 = await quoteFor(seed, seed.customerA, v);
+
+      await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: r1, amount: 1_000 });
+      await expect(
+        seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: r1, amount: 2_000 })
+      ).resolves.toBeDefined();
+    });
+  });
+
+  describe("13. c14833 item 6: vehicle ownership and unresolved money are SEPARATE axes", () => {
+    /**
+     * ⚠️ THIS CORRECTS SOMETHING I ENCODED BACKWARDS.
+     *
+     * I fused the two axes — "releasing the finance claim does not free the
+     * unit while live money remains on the root". That is right for money that
+     * is still HOLDING the car, and wrong as a general rule, because the
+     * existing engine deliberately produces a state where it is not:
+     *
+     *   `convex/deposits.test.ts` — "cancelling every sale row of a
+     *   multi-vehicle deal FREES EVERY VEHICLE and leaves each share AWAITING A
+     *   DECISION".
+     *
+     * So `RELEASED_AWAITING_DECISION` money does NOT hold a vehicle. The car is
+     * genuinely free and another deal may legitimately take it. What remains
+     * open is the ROOT's financial position: that customer's money still exists
+     * and still needs an explicit decision.
+     *
+     * Two axes, and conflating them fails in both directions — treat released
+     * money as holding and you lock inventory that cancellation deliberately
+     * freed; treat the root as closed and you silently discard a customer's
+     * money.
+     */
+    /**
+     * The RELEASED_AWAITING_DECISION state only arises on a MULTI-vehicle deal.
+     *
+     * My first version of these fixtures used a single-vehicle quote and every
+     * one failed on "This quote covers a single vehicle, so its deposit is
+     * already allocated to it in full" — a refusal from a completely different
+     * rule, which would have recorded three findings that were really one
+     * fixture bug. The engine only produces awaiting-decision shares when a
+     * share can be released while the deal continues, which needs two cars.
+     */
+    async function dealWithReleasedShare(seed: Seed, keepVin: string, freedVin: string) {
+      const keep = await vehicle(seed, keepVin);
+      const freed = await vehicle(seed, freedVin);
+
+      const root = await seed.asUser.mutation(api.quotes.saveQuote, {
+        orgId: seed.orgId,
+        customerId: seed.customerA,
+        vehicleId: keep,
+        vehicleItems: [
+          { vehicleId: keep, unitPrice: PRICE },
+          { vehicleId: freed, unitPrice: PRICE },
+        ],
+        mode: "CASH" as const,
+        vehiclePrice: PRICE * 2,
+        downPayment: 0,
+        termMonths: 0,
+        totalFinancedAmount: 0,
+      });
+      await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: root, amount: 4_000 });
+      await seed.asUser.mutation(api.deposits.allocateToVehicles, {
+        orgId: seed.orgId,
+        quoteId: root,
+        allocations: [
+          { vehicleId: keep, amount: 2_000 },
+          { vehicleId: freed, amount: 2_000 },
+        ],
+      });
+      await seed.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+        orgId: seed.orgId,
+        quoteId: root,
+        vehicleId: freed,
+        reason: "customer dropped the second car",
+      });
+      return { root, keep, freed };
+    }
+
+    test("RELEASED_AWAITING_DECISION money does not hold the vehicle", async () => {
+      // Ownership axis. Cancellation freed the car on purpose; an independent
+      // deal may take it. This must keep passing — a commitment authority that
+      // re-locks it would break the cancellation flow the engine already has.
+      const seed = await seedDealer("axes-free");
+      const { freed } = await dealWithReleasedShare(seed, "LIN0000000000032", "LIN0000000000132");
+
+      const rival = await quoteFor(seed, seed.customerB, freed);
+      await expect(
+        seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: rival, amount: 1_500 })
+      ).resolves.toBeDefined();
+    });
+
+    test("but the original root stays FINANCIALLY open until that money is resolved", async () => {
+      // Money axis. The car is gone; the customer's money is not. Closing the
+      // root while a share sits AWAITING A DECISION would be exactly the silent
+      // discard c14833 forbids — no orphaning, no automatic refund, no silent
+      // deactivation.
+      const seed = await seedDealer("axes-open");
+      const { root } = await dealWithReleasedShare(seed, "LIN0000000000033", "LIN0000000000133");
+
+      const state = await seed.asUser.query(notYetBuiltQuery.commitments.rootFinancialState, {
+        orgId: seed.orgId,
+        quoteId: root,
+      });
+      expect((state as { financiallyOpen: boolean }).financiallyOpen).toBe(true);
+      expect((state as { unresolvedMinor: number }).unresolvedMinor).toBeGreaterThan(0);
+    });
+
+    test("final closure of a root cannot strand awaiting-decision money", async () => {
+      // The closing rule. A root may only reach terminal closure once every
+      // share has an explicit disposition — applied, refunded or forfeited by
+      // decision. "Mostly resolved" is the defect, not a partial success.
+      const seed = await seedDealer("axes-closure");
+      const { root } = await dealWithReleasedShare(seed, "LIN0000000000034", "LIN0000000000134");
+
+      await expect(
+        seed.asUser.mutation(notYetBuilt.commitments.closeRoot, {
+          orgId: seed.orgId,
+          quoteId: root,
+        })
+      ).rejects.toThrow(/unresolved|awaiting|decision|cannot close/i);
+    });
+  });
 });
