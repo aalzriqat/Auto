@@ -1743,6 +1743,115 @@ async function snapshotWorld(seed: Seed): Promise<Record<string, number>> {
 // operation permitted".
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * The c14843 contract for `testSupport:deploymentIdentity`, mechanically.
+ *
+ * The ruling is narrow and every clause of it is load-bearing: a read-only
+ * query, EXACTLY empty args, returning ONLY the canonical deployment identity
+ * plus a disposable boolean, carrying no secrets and no write authority.
+ *
+ * An earlier version of INV-4 checked only that the export was a query, that
+ * the module exported no mutation, and that a few obvious secret words were
+ * absent. That leaves the two clauses that actually BOUND the authority
+ * unenforced — nothing stopped the surface growing an `orgId` argument, or
+ * returning a deploy key alongside the two allowed fields. "Read-only" is not
+ * the same as "narrow": a query that accepts arbitrary arguments and returns
+ * arbitrary configuration is a read-only information-disclosure endpoint.
+ *
+ * Returned as a list of coded violations rather than a boolean so a failure
+ * says WHICH clause broke, and so each clause can be proven to fire.
+ */
+type IdentityViolationCode =
+  | "NOT_A_QUERY"
+  | "ARGS_NOT_EMPTY"
+  | "NO_RETURN_VALIDATOR"
+  | "RETURN_SURFACE_NOT_EXACT"
+  | "MODULE_EXPORTS_MUTATION"
+  | "LEAKS_AUTHORITY";
+
+interface IdentityContractViolation {
+  code: IdentityViolationCode;
+  detail: string;
+}
+
+/** The complete authority surface c14843 permits. Nothing else may be returned. */
+const ALLOWED_IDENTITY_FIELDS = ["cloudUrl", "disposable"];
+
+function balancedFrom(source: string, openIdx: number, open: string, close: string): string {
+  let depth = 0;
+  for (let i = openIdx; i < source.length; i++) {
+    if (source[i] === open) depth++;
+    else if (source[i] === close) {
+      depth--;
+      if (depth === 0) return source.slice(openIdx, i + 1);
+    }
+  }
+  return "";
+}
+
+export function checkDeploymentIdentityContract(source: string): IdentityContractViolation[] {
+  const violations: IdentityContractViolation[] = [];
+
+  const decl = source.match(/export\s+const\s+deploymentIdentity\s*=\s*(\w+)\s*\(/);
+  if (!decl || decl[1] !== "query") {
+    violations.push({
+      code: "NOT_A_QUERY",
+      detail: decl ? `declared as ${decl[1]}(), not query()` : "not exported at all",
+    });
+    return violations; // Nothing below is meaningful without the declaration.
+  }
+
+  const block = balancedFrom(source, source.indexOf("(", decl.index!), "(", ")");
+
+  // Clause: EXACTLY empty args.
+  const args = block.match(/args\s*:\s*\{([^}]*)\}/);
+  if (!args || args[1].trim() !== "") {
+    violations.push({
+      code: "ARGS_NOT_EMPTY",
+      detail: args ? `accepts ${args[1].trim()}` : "declares no args validator",
+    });
+  }
+
+  // Clause: the returned surface is exactly the two allowed fields. An explicit
+  // `returns:` validator is required — inferring the shape from the handler
+  // body would mean the contract is enforced by reading prose, which is what
+  // this whole file exists to stop doing.
+  const returnsIdx = block.search(/returns\s*:\s*v\.object\s*\(/);
+  if (returnsIdx === -1) {
+    violations.push({
+      code: "NO_RETURN_VALIDATOR",
+      detail: "no returns: v.object({...}) — the returned surface is unbounded",
+    });
+  } else {
+    const objOpen = block.indexOf("{", block.indexOf("v.object", returnsIdx));
+    const fields = [...new Set([...balancedFrom(block, objOpen, "{", "}").matchAll(/(\w+)\s*:/g)].map((m) => m[1]))].sort();
+    if (JSON.stringify(fields) !== JSON.stringify([...ALLOWED_IDENTITY_FIELDS].sort())) {
+      violations.push({
+        code: "RETURN_SURFACE_NOT_EXACT",
+        detail: `returns { ${fields.join(", ")} }; c14843 permits exactly { ${ALLOWED_IDENTITY_FIELDS.join(", ")} }`,
+      });
+    }
+  }
+
+  // Clause: no write authority anywhere in the module.
+  const mutation = source.match(/export\s+const\s+(\w+)\s*=\s*(?:internal)?[Mm]utation\s*\(/);
+  if (mutation) {
+    violations.push({
+      code: "MODULE_EXPORTS_MUTATION",
+      detail: `exports mutation ${mutation[1]} — c14843 forbids public write-capable testSupport surfaces`,
+    });
+  }
+
+  // Clause: no secrets or authority-bearing material.
+  for (const token of ["SECRET", "TOKEN", "PRIVATE_KEY", "DEPLOY_KEY", "CONVEX_AUTH"]) {
+    if (source.includes(token)) {
+      violations.push({ code: "LEAKS_AUTHORITY", detail: `mentions ${token}` });
+    }
+  }
+
+  return violations;
+}
+
 describe("SCRUM-195 spec — structural invariants", () => {
   test("INV-1 the contention harness declares no public testSupport SEED MUTATION", async () => {
     // c14840: preview contention bootstraps through real authenticated
@@ -1863,6 +1972,64 @@ describe("SCRUM-195 spec — structural invariants", () => {
     }
   });
 
+  test("INV-4a the contract checker itself detects each way the contract can be broken", () => {
+    // ⚠️ INV-4 applies `checkDeploymentIdentityContract` to a module that does
+    // not exist yet, so it is red and stays red. That makes the CHECKER
+    // unexercised by INV-4 — and an unexercised checker is worth nothing the
+    // day the module lands.
+    //
+    // So the checker is proven here against inline fixtures, one per way the
+    // contract can be broken. This is the same discipline as proving the
+    // contradiction preflight by injecting a contradiction: a gate nobody has
+    // watched fail is not known to work.
+    const compliant = `
+      export const deploymentIdentity = query({
+        args: {},
+        returns: v.object({ cloudUrl: v.string(), disposable: v.boolean() }),
+        handler: async () => ({ cloudUrl: process.env.CONVEX_CLOUD_URL, disposable: false }),
+      });
+    `;
+    expect(checkDeploymentIdentityContract(compliant)).toEqual([]);
+
+    // Each mutant below must be REJECTED, and rejected for its OWN reason.
+    const nonEmptyArgs = compliant.replace("args: {},", "args: { orgId: v.id('organizations') },");
+    expect(checkDeploymentIdentityContract(nonEmptyArgs).map((v) => v.code)).toContain(
+      "ARGS_NOT_EMPTY"
+    );
+
+    const extraReturnField = compliant.replace(
+      "disposable: v.boolean() }",
+      "disposable: v.boolean(), deployKey: v.string() }"
+    );
+    expect(checkDeploymentIdentityContract(extraReturnField).map((v) => v.code)).toContain(
+      "RETURN_SURFACE_NOT_EXACT"
+    );
+
+    const missingReturnField = compliant.replace(", disposable: v.boolean()", "");
+    expect(checkDeploymentIdentityContract(missingReturnField).map((v) => v.code)).toContain(
+      "RETURN_SURFACE_NOT_EXACT"
+    );
+
+    const noReturnValidator = compliant
+      .split("\n")
+      .filter((line) => !line.includes("returns:"))
+      .join("\n");
+    expect(checkDeploymentIdentityContract(noReturnValidator).map((v) => v.code)).toContain(
+      "NO_RETURN_VALIDATOR"
+    );
+
+    const asMutation = compliant.replace("= query({", "= mutation({");
+    expect(checkDeploymentIdentityContract(asMutation).map((v) => v.code)).toContain("NOT_A_QUERY");
+
+    const alsoExportsMutation = `${compliant}\nexport const seedThing = mutation({ args: {}, handler: async () => null });`;
+    expect(checkDeploymentIdentityContract(alsoExportsMutation).map((v) => v.code)).toContain(
+      "MODULE_EXPORTS_MUTATION"
+    );
+
+    const absent = "// nothing here";
+    expect(checkDeploymentIdentityContract(absent).map((v) => v.code)).toContain("NOT_A_QUERY");
+  });
+
   test("INV-4 testSupport:deploymentIdentity stays a read-only identity query", async () => {
     // c14843 keeps this ONE surface under an extremely narrow contract: a
     // read-only query, exactly empty args, returning only the canonical
@@ -1870,25 +2037,26 @@ describe("SCRUM-195 spec — structural invariants", () => {
     // write authority. It exists solely so the external contention harness can
     // fail closed BEFORE it performs any writes.
     //
-    // The contract is checked at the source, because the harness's own use of
-    // it cannot prove what the surface is allowed to do.
+    // The contract is checked at the SOURCE, because the harness's own use of
+    // it cannot prove what the surface is allowed to do — a caller that happens
+    // to pass `{}` says nothing about what the surface would accept.
     const { readFileSync, existsSync } = await import("node:fs");
     const path = "convex/testSupport.ts";
     if (!existsSync(path)) {
-      // Not built yet. Fail loudly rather than vacuously pass, so this contract
-      // is written the day the surface is.
+      // Not built yet, and this stays LOUDLY RED. Treating "module absent" as
+      // not-applicable is the vacuous-pass shape removed from INV-3; the whole
+      // point is that this contract gets written the day the surface is.
       expect(existsSync(path), "convex/testSupport.ts does not exist yet").toBe(true);
       return;
     }
-    const source = readFileSync(path, "utf8");
 
-    expect(source).toMatch(/export const deploymentIdentity = query\(/);
-    // No mutation may be exported from this module at all.
-    expect(source).not.toMatch(/export const \w+ = (?:internal)?mutation\(/);
-    // And nothing that would leak configuration beyond the two allowed fields.
-    for (const forbidden of ["process.env.CONVEX_AUTH", "SECRET", "TOKEN", "KEY="]) {
-      expect(source, `deploymentIdentity must not expose ${forbidden}`).not.toContain(forbidden);
-    }
+    const violations = checkDeploymentIdentityContract(readFileSync(path, "utf8"));
+    expect(
+      violations,
+      `deploymentIdentity breaks its c14843 contract:\n  ${violations
+        .map((v) => `${v.code}: ${v.detail}`)
+        .join("\n  ")}`
+    ).toEqual([]);
   });
 });
 
