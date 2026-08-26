@@ -3942,3 +3942,107 @@ describe("25. a handed-over car is not sellable until it is back", () => {
     expect((await vehicleRow(seed, v)).status, "nothing changed for ordinary sales").toBe("SOLD");
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 26. THE SCREEN IS TOLD THE SAME THING THE RULE ENFORCES
+//
+// `commitments.dealContinuation` is what makes linked revision and reservation
+// adoption reachable at all: the salesperson never types a `supersedesQuoteId`,
+// the screen asks what saving would DO and says so. That makes this query
+// load-bearing — a wrong answer here sends the wrong lineage to a mutation that
+// will take it.
+//
+// ⚠️ The one that matters most is 26.5. A display figure that DISAGREES with
+// the rule it describes is worse than no figure: it tells the salesperson their
+// requote is fine and then the server refuses it, or the reverse. So the money
+// this query reports is asserted to be the money the ceiling actually uses,
+// rather than merely "a number that looks right".
+//
+// This is advisory only and says so in its own doc comment — `saveQuote`
+// re-derives every one of these decisions inside its transaction. These
+// contracts pin the ADVICE, and section 24 pins the enforcement.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("26. what the screen is told about a deal", () => {
+  async function continuationFor(seed: Seed, v: Id<"vehicles">, customerId: Id<"customers">) {
+    return (await seed.asUser.query(api.commitments.dealContinuation, {
+      orgId: seed.orgId,
+      vehicleId: v,
+      customerId,
+    })) as { kind: string; [k: string]: unknown };
+  }
+
+  test("26.1 a free car is an ordinary new deal", async () => {
+    const seed = await seedDealer("cont-free");
+    const v = await vehicle(seed);
+    expect((await continuationFor(seed, v, seed.customerA)).kind).toBe("NEW");
+  });
+
+  test("26.2 their own reservation is offered for adoption, by id", async () => {
+    const seed = await seedDealer("cont-resv");
+    const v = await vehicle(seed);
+    const { reservationId } = await heldByReservation(seed, v, seed.customerA);
+
+    const answer = await continuationFor(seed, v, seed.customerA);
+    expect(answer.kind, "the reservation is the deal's first evidence").toBe("ADOPT_RESERVATION");
+    // The id matters: the client sends this straight back as
+    // `adoptReservationId`, and the server validates it against the vehicle,
+    // the customer and the reservation's own status.
+    expect(answer.reservationId).toEqual(reservationId);
+  });
+
+  test("26.3 somebody else's live deal is named as such, not as a new deal", async () => {
+    const seed = await seedDealer("cont-rival");
+    const v = await vehicle(seed);
+    await heldByDeposit(seed, v, seed.customerB);
+
+    // ⚠️ Asked for customerA — the OTHER customer. Answering "NEW" here would
+    // let the screen invite a save the server is certain to refuse.
+    expect((await continuationFor(seed, v, seed.customerA)).kind).toBe("HELD_BY_ANOTHER_DEAL");
+  });
+
+  test("26.4 a reservation belonging to someone else is not offered for adoption", async () => {
+    const seed = await seedDealer("cont-resv-rival");
+    const v = await vehicle(seed);
+    await heldByReservation(seed, v, seed.customerB);
+
+    const answer = await continuationFor(seed, v, seed.customerA);
+    expect(answer.kind, "adoption is proof, and this customer has none").not.toBe(
+      "ADOPT_RESERVATION"
+    );
+    expect(answer.kind).toBe("HELD_BY_ANOTHER_DEAL");
+  });
+
+  test("26.5 the money it reports IS the money the ceiling enforces", async () => {
+    const seed = await seedDealer("cont-money");
+    const v = await vehicle(seed);
+    const quoteId = await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+      vehicleId: v,
+      mode: "CASH" as const,
+      vehiclePrice: 30_000,
+      downPayment: 0,
+      termMonths: 0,
+      totalFinancedAmount: 0,
+    });
+    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 12_000 });
+
+    const answer = await continuationFor(seed, v, seed.customerA);
+    expect(answer.kind).toBe("REVISE_QUOTE");
+    expect(answer.quoteId, "the successor supersedes the current head").toEqual(quoteId);
+    expect(answer.unresolvedMoney, "12,000 is on this deal").toBe(12_000);
+
+    // The tie. The screen shows 12,000 and warns below it; the ceiling refuses
+    // a further deposit that would push past 30,000. Both must be reading the
+    // same figure, or one of them is lying to the salesperson.
+    await expectRefusal(
+      seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 18_001 }),
+      /exceed/i,
+      "26.5"
+    );
+    // And the amount that exactly reaches the ceiling is accepted, so the
+    // agreement is on the NUMBER and not merely on refusing generously.
+    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 18_000 });
+  });
+});
