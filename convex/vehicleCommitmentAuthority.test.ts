@@ -1331,3 +1331,254 @@ describe("10. sourced inventory", () => {
     expect(await depositsHolding(seed, v)).toHaveLength(0);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 11. NO FIXED PAGE MAY DECIDE THAT A CAR IS FREE  ("row-51", c14867)
+//
+// ⚠️ These two contracts exist because the owner read the foundation I had just
+// committed and found the defect in it: `findOwningRoot` took a fixed page of
+// 50 claim rows and answered from that page. A car whose decisive owner sits at
+// row 51 therefore reported FREE — and FREE is the answer that hands a car to a
+// rival. A cap is not a performance detail when the thing being capped is the
+// evidence that something is already sold.
+//
+// 11.1 and 11.2 are a matched pair on purpose: 11.1 alone could be satisfied by
+// deleting the cap AND breaking the free case, so the control proves the fix
+// did not simply make everything look owned.
+// ═════════════════════════════════════════════════════════════════════════════
+
+/** Direct DB seeding. Public writers must never be able to create these shapes. */
+async function seedRoot(
+  seed: Seed,
+  vehicleId: Id<"vehicles">,
+  status: "OPEN" | "RELEASED" | "CONSUMED",
+  customerId?: Id<"customers">
+): Promise<Id<"commitmentRoots">> {
+  return await seed.t.run((ctx) =>
+    ctx.db.insert("commitmentRoots", {
+      orgId: seed.orgId,
+      vehicleId,
+      customerId: customerId ?? seed.customerA,
+      status,
+      revision: 1,
+      createdAt: Date.now(),
+      createdBy: seed.userId,
+    })
+  );
+}
+
+/** N ACTIVE-index claim rows whose roots are NOT OPEN — stale bookkeeping, not ownership. */
+async function seedStaleClaims(seed: Seed, vehicleId: Id<"vehicles">, count: number) {
+  const rootId = await seedRoot(seed, vehicleId, "RELEASED");
+  await seed.t.run(async (ctx) => {
+    for (let i = 0; i < count; i++) {
+      await ctx.db.insert("vehicleCommitmentClaims", {
+        orgId: seed.orgId,
+        rootId,
+        vehicleId,
+        kind: "DEPOSIT" as const,
+        status: "ACTIVE" as const,
+        createdAt: Date.now(),
+        createdBy: seed.userId,
+      });
+    }
+  });
+  return rootId;
+}
+
+async function seedActiveClaim(
+  seed: Seed,
+  vehicleId: Id<"vehicles">,
+  rootId: Id<"commitmentRoots">
+) {
+  return await seed.t.run((ctx) =>
+    ctx.db.insert("vehicleCommitmentClaims", {
+      orgId: seed.orgId,
+      rootId,
+      vehicleId,
+      kind: "DEPOSIT" as const,
+      status: "ACTIVE" as const,
+      createdAt: Date.now(),
+      createdBy: seed.userId,
+    })
+  );
+}
+
+describe("11. row-51 — a fixed page must not decide freeness", () => {
+  test("11.1 the decisive owner at row 51 is found, and a rival is refused", async () => {
+    const seed = await seedDealer("row51-owned");
+    const v = await vehicle(seed);
+    // Rows 1–50: ACTIVE in the index, but their root is not OPEN, so none of
+    // them decides anything.
+    await seedStaleClaims(seed, v, 50);
+    // Row 51: the real owner.
+    const owningRoot = await seedRoot(seed, v, "OPEN", seed.customerB);
+    await seedActiveClaim(seed, v, owningRoot);
+
+    const view = await resolveRoot(seed, v);
+
+    expect(view.kind, "row 51 decides — a 50-row page must not answer this").toBe("OWNED");
+    expect(view.rootId).toEqual(owningRoot);
+
+    // And the authority is load-bearing, not merely reported: a rival writer
+    // must be refused on the strength of that row-51 owner.
+    const rivalQuote = await cashQuote(seed, seed.customerA, v);
+    await expectRefusal(
+      seed.asUser.mutation(api.deposits.create, {
+        orgId: seed.orgId,
+        quoteId: rivalQuote,
+        amount: 1_000,
+      })
+    , REFUSED, "row-51 owner must block a rival");
+  });
+
+  test("11.2 CONTROL: the same 50 stale rows with NO decisive owner resolve FREE", async () => {
+    // Without this, 11.1 could be satisfied by an implementation that treats
+    // any stale row as ownership — which would lock cars nobody is buying.
+    const seed = await seedDealer("row51-free");
+    const v = await vehicle(seed);
+    await seedStaleClaims(seed, v, 50);
+
+    const view = await resolveRoot(seed, v);
+
+    expect(view.kind, "stale bookkeeping is not ownership").toBe("FREE");
+    expect(view.rootId ?? null).toBeNull();
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 12. LEGACY MULTI-ROOT AMBIGUITY IS ITS OWN ANSWER  (c14867)
+//
+// Historical data can contain two OPEN roots on one physical car. No public
+// writer may create that state, but the resolver will meet it during cutover
+// and must say so.
+//
+// ⚠️ The forbidden answers are the tempting ones: FREE (hands the car away),
+// and any "oldest / newest / first / the one whose customer matches" tie-break.
+// Every one of those invents an owner out of corrupt data and then lets
+// somebody sell a car on the strength of it. AMBIGUOUS is the honest answer,
+// and it must REFUSE rather than pick — including for a caller who genuinely
+// belongs to one of the contenders, because being one of two claimants does not
+// establish which one owns the car.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("12. legacy AMBIGUOUS / not cutover ready", () => {
+  async function twoOpenRoots(seed: Seed, v: Id<"vehicles">) {
+    const rootOne = await seedRoot(seed, v, "OPEN", seed.customerA);
+    await seedActiveClaim(seed, v, rootOne);
+    const rootTwo = await seedRoot(seed, v, "OPEN", seed.customerB);
+    await seedActiveClaim(seed, v, rootTwo);
+    return { rootOne, rootTwo };
+  }
+
+  test("12.1 two OPEN roots resolve to AMBIGUOUS, never FREE and never a winner", async () => {
+    const seed = await seedDealer("amb-typed");
+    const v = await vehicle(seed);
+    const { rootOne, rootTwo } = await twoOpenRoots(seed, v);
+
+    const view = await resolveRoot(seed, v);
+
+    expect(view.kind, "corrupt state has its own answer").toBe("AMBIGUOUS");
+    expect(view.kind).not.toBe("FREE");
+    expect(view.rootId ?? null, "no contender may be reported as THE owner").toBeNull();
+    // Enough conflict identity to diagnose it, per c14867.
+    const conflicting = (view as { conflictingRootIds?: unknown }).conflictingRootIds as
+      | Id<"commitmentRoots">[]
+      | undefined;
+    expect(conflicting, "the answer must name the contenders").toBeDefined();
+    expect([...(conflicting ?? [])].sort()).toEqual([rootOne, rootTwo].sort());
+  });
+
+  test("12.2 acquisition is refused while the car is ambiguous", async () => {
+    const seed = await seedDealer("amb-acquire");
+    const v = await vehicle(seed);
+    await twoOpenRoots(seed, v);
+    const rivalQuote = await cashQuote(seed, seed.customerA, v);
+
+    await expectRefusal(
+      seed.asUser.mutation(api.deposits.create, {
+        orgId: seed.orgId,
+        quoteId: rivalQuote,
+        amount: 1_000,
+      })
+    , /ambiguous|cannot be determined|conflicting|not ready|committed|another deal/i);
+  });
+
+  test("12.3 acquisition is refused EVEN FOR a caller belonging to one contender", async () => {
+    // ⚠️ The contract that stops "I am one of the two, therefore I am the
+    // owner". Being one of two claimants says nothing about which one holds
+    // the car, and letting that through is how corrupt data becomes a sale.
+    const seed = await seedDealer("amb-insider");
+    const v = await vehicle(seed);
+    const { rootOne } = await twoOpenRoots(seed, v);
+    const insiderQuote = await cashQuote(seed, seed.customerA, v);
+    await seed.t.run((ctx) => ctx.db.patch(insiderQuote, { rootId: rootOne }));
+
+    await expectRefusal(
+      seed.asUser.mutation(api.deposits.create, {
+        orgId: seed.orgId,
+        quoteId: insiderQuote,
+        amount: 1_000,
+      })
+    , /ambiguous|cannot be determined|conflicting|not ready|committed|another deal/i);
+  });
+
+  test("12.4 SALE / consumption is refused while the car is ambiguous", async () => {
+    const seed = await seedDealer("amb-sale");
+    const v = await vehicle(seed);
+    const { rootOne } = await twoOpenRoots(seed, v);
+    const quoteId = await cashQuote(seed, seed.customerA, v);
+    await seed.t.run((ctx) => ctx.db.patch(quoteId, { rootId: rootOne }));
+    const salesBefore = await countIn(seed, "sales");
+
+    await expectRefusal(
+      seed.asUser.mutation(
+        api.sales.create,
+        completedSale(seed, { vehicleId: v, customerId: seed.customerA, quoteId })
+      )
+    , /ambiguous|cannot be determined|conflicting|not ready|committed|another deal/i);
+
+    expect(await countIn(seed, "sales")).toBe(salesBefore);
+    expect((await vehicleRow(seed, v)).status).not.toBe("SOLD");
+  });
+
+  test("12.5 releasing one contender resolves the ambiguity to OWNED", async () => {
+    // Ambiguity must be ESCAPABLE. A state that refuses everything including
+    // its own remedy is a dead end, and cutover would have no way forward.
+    const seed = await seedDealer("amb-resolve");
+    const v = await vehicle(seed);
+    const { rootOne, rootTwo } = await twoOpenRoots(seed, v);
+    expect((await resolveRoot(seed, v)).kind).toBe("AMBIGUOUS");
+
+    await seed.t.run(async (ctx) => {
+      const claims = (await ctx.db.query("vehicleCommitmentClaims").collect()).filter(
+        (c) => c.vehicleId === v && c.rootId === rootTwo
+      );
+      for (const claim of claims) await ctx.db.patch(claim._id, { status: "RELEASED" as const });
+      await ctx.db.patch(rootTwo, { status: "RELEASED" as const });
+    });
+
+    const view = await resolveRoot(seed, v);
+    expect(view.kind, "one live root remains").toBe("OWNED");
+    expect(view.rootId).toEqual(rootOne);
+  });
+
+  test("12.6 releasing BOTH contenders resolves to FREE", async () => {
+    const seed = await seedDealer("amb-all-gone");
+    const v = await vehicle(seed);
+    const { rootOne, rootTwo } = await twoOpenRoots(seed, v);
+
+    await seed.t.run(async (ctx) => {
+      const claims = (await ctx.db.query("vehicleCommitmentClaims").collect()).filter(
+        (c) => c.vehicleId === v
+      );
+      for (const claim of claims) await ctx.db.patch(claim._id, { status: "RELEASED" as const });
+      await ctx.db.patch(rootOne, { status: "RELEASED" as const });
+      await ctx.db.patch(rootTwo, { status: "RELEASED" as const });
+    });
+
+    const view = await resolveRoot(seed, v);
+    expect(view.kind).toBe("FREE");
+    expect(view.rootId ?? null).toBeNull();
+  });
+});

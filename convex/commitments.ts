@@ -51,6 +51,14 @@ export const COMMITMENT_MESSAGES = {
     "That trade-in vehicle is already committed to another deal and cannot be taken in on this one.",
   heldByAnotherDealRemoval:
     "This vehicle is committed to a live deal and cannot be removed from inventory. Release the commitment first.",
+  /**
+   * Legacy multi-root state. Deliberately says the ownership CANNOT BE
+   * DETERMINED rather than that the car is taken — because "taken by whom" is
+   * precisely what is unknown, and a manager needs to know this is a records
+   * problem to be fixed, not a rival deal to be negotiated around.
+   */
+  ambiguousOwnership:
+    "This vehicle's ownership cannot be determined: it carries conflicting commitment records. Resolve the conflicting deals before it can be committed or sold.",
   staleRevision:
     "This deal has moved on since that quote was written. Use the deal's current revision.",
   notTheHead:
@@ -69,44 +77,109 @@ export type RootView =
       customerId: Id<"customers">;
       headQuoteId: Id<"quotes"> | null;
       revision: number;
+      conflictingRootIds: Id<"commitmentRoots">[];
     }
-  | { kind: "FREE"; rootId: null; customerId: null; headQuoteId: null; revision: null };
+  | {
+      kind: "FREE";
+      rootId: null;
+      customerId: null;
+      headQuoteId: null;
+      revision: null;
+      conflictingRootIds: Id<"commitmentRoots">[];
+    }
+  | {
+      kind: "AMBIGUOUS";
+      rootId: null;
+      customerId: null;
+      headQuoteId: null;
+      revision: null;
+      conflictingRootIds: Id<"commitmentRoots">[];
+    };
 
-const FREE: RootView = { kind: "FREE", rootId: null, customerId: null, headQuoteId: null, revision: null };
+const FREE_VIEW: RootView = {
+  kind: "FREE",
+  rootId: null,
+  customerId: null,
+  headQuoteId: null,
+  revision: null,
+  conflictingRootIds: [],
+};
+
+/** The internal answer, before it is flattened for the wire. */
+export type Ownership =
+  | { kind: "FREE" }
+  | { kind: "OWNED"; root: Doc<"commitmentRoots"> }
+  | { kind: "AMBIGUOUS"; conflictingRootIds: Id<"commitmentRoots">[] };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Reading the authority
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * The OPEN root holding this car, if any.
+ * Who holds this car: nobody, exactly one root, or — in legacy data — more than
+ * one, which is its own answer rather than a tie to be broken.
  *
- * A root is only holding while at least one of its claims is ACTIVE. A root
- * whose claims have all been released is still a row — the deal may remain
- * financially open — but it no longer owns the car, which is the whole point of
- * keeping the ownership axis and the money axis apart.
+ * ⚠️ NO FIXED PAGE. This streams the ACTIVE-claim index instead of taking a
+ * page, because the decisive owner can sit at any position. An earlier version
+ * of this function took 50 rows and answered from them, so a car whose owner
+ * was at row 51 reported FREE — and FREE is the answer that hands a sold car to
+ * a rival. A cap is not a performance detail when the thing being capped is the
+ * evidence that a car is already spoken for. (c14867, "row-51".)
+ *
+ * ⚠️ AND NO TIE-BREAK. Two OPEN roots on one physical car is corrupt historical
+ * state that no public writer may create. Meeting it, the honest answers are
+ * "I cannot tell" and a refusal. Picking the oldest, the newest, the first
+ * encountered, or the one whose customer matches the caller all invent an owner
+ * out of broken data and then let somebody sell a car on the strength of it.
+ *
+ * Cost is one index scan plus one read per DISTINCT root — the fifty stale rows
+ * of a single released deal cost one root read between them, not fifty.
+ */
+export async function resolveOwnership(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">
+): Promise<Ownership> {
+  const inspected = new Map<string, Doc<"commitmentRoots"> | null>();
+  const openRoots: Doc<"commitmentRoots">[] = [];
+
+  for await (const claim of ctx.db
+    .query("vehicleCommitmentClaims")
+    .withIndex("by_org_vehicle_status", (q) =>
+      q.eq("orgId", orgId).eq("vehicleId", vehicleId).eq("status", "ACTIVE")
+    )) {
+    const key = claim.rootId as unknown as string;
+    if (inspected.has(key)) continue;
+    const root = await ctx.db.get(claim.rootId);
+    // A claim pointing at a non-OPEN root is stale bookkeeping, not ownership.
+    // Skipping it rather than trusting it keeps a half-finished release from
+    // locking a car nobody is actually buying — which is what contract 11.2
+    // exists to hold on to.
+    const decisive = root && root.orgId === orgId && root.status === "OPEN" ? root : null;
+    inspected.set(key, decisive);
+    if (decisive) openRoots.push(decisive);
+  }
+
+  if (openRoots.length === 0) return { kind: "FREE" };
+  if (openRoots.length === 1) return { kind: "OWNED", root: openRoots[0] };
+  return { kind: "AMBIGUOUS", conflictingRootIds: openRoots.map((r) => r._id) };
+}
+
+/**
+ * The single OPEN root holding this car — `null` when nothing holds it AND when
+ * ownership is ambiguous.
+ *
+ * ⚠️ Never enforce with this. `null` conflates "free" with "cannot tell", and
+ * those need opposite treatment: one permits, the other must refuse. Guards
+ * call `assertAcquirable`, which keeps them apart.
  */
 export async function findOwningRoot(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   vehicleId: Id<"vehicles">
 ): Promise<Doc<"commitmentRoots"> | null> {
-  const active = await ctx.db
-    .query("vehicleCommitmentClaims")
-    .withIndex("by_org_vehicle_status", (q) =>
-      q.eq("orgId", orgId).eq("vehicleId", vehicleId).eq("status", "ACTIVE")
-    )
-    .take(50);
-  if (active.length === 0) return null;
-
-  for (const claim of active) {
-    const root = await ctx.db.get(claim.rootId);
-    // A claim pointing at a non-OPEN root is stale bookkeeping, not ownership.
-    // Skipping rather than trusting it keeps a half-finished release from
-    // locking a car nobody is actually buying.
-    if (root && root.status === "OPEN" && root.orgId === orgId) return root;
-  }
-  return null;
+  const ownership = await resolveOwnership(ctx, orgId, vehicleId);
+  return ownership.kind === "OWNED" ? ownership.root : null;
 }
 
 export async function resolveRootView(
@@ -114,15 +187,41 @@ export async function resolveRootView(
   orgId: Id<"organizations">,
   vehicleId: Id<"vehicles">
 ): Promise<RootView> {
-  const root = await findOwningRoot(ctx, orgId, vehicleId);
-  if (!root) return FREE;
+  const ownership = await resolveOwnership(ctx, orgId, vehicleId);
+  if (ownership.kind === "FREE") return FREE_VIEW;
+  if (ownership.kind === "AMBIGUOUS") {
+    return {
+      kind: "AMBIGUOUS",
+      rootId: null,
+      customerId: null,
+      headQuoteId: null,
+      revision: null,
+      conflictingRootIds: ownership.conflictingRootIds,
+    };
+  }
   return {
     kind: "OWNED",
-    rootId: root._id,
-    customerId: root.customerId,
-    headQuoteId: root.headQuoteId ?? null,
-    revision: root.revision,
+    rootId: ownership.root._id,
+    customerId: ownership.root.customerId,
+    headQuoteId: ownership.root.headQuoteId ?? null,
+    revision: ownership.root.revision,
+    conflictingRootIds: [],
   };
+}
+
+/**
+ * Whether this vehicle is safe for the canonical authority to act on.
+ *
+ * False while ambiguous. Cutover readiness is a property of the DATA, not of
+ * the deployment, so it is asked per vehicle rather than assumed once.
+ */
+export async function isCutoverReady(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">
+): Promise<boolean> {
+  const ownership = await resolveOwnership(ctx, orgId, vehicleId);
+  return ownership.kind !== "AMBIGUOUS";
 }
 
 /**
@@ -173,9 +272,18 @@ export async function assertAcquirable(
     message?: string;
   }
 ): Promise<void> {
-  const owner = await findOwningRoot(ctx, args.orgId, args.vehicleId);
-  if (!owner) return;
-  if (args.actingRootId && owner._id === args.actingRootId) return;
+  const ownership = await resolveOwnership(ctx, args.orgId, args.vehicleId);
+
+  // ⚠️ Ambiguity refuses BEFORE the lineage check, and refuses the insider too.
+  // A caller who genuinely belongs to one of two conflicting roots still cannot
+  // be granted the car: being one of two claimants says nothing about which one
+  // owns it, and letting that through is exactly how corrupt legacy data turns
+  // into a real sale. (c14867.)
+  if (ownership.kind === "AMBIGUOUS") {
+    throw new ConvexError(COMMITMENT_MESSAGES.ambiguousOwnership);
+  }
+  if (ownership.kind === "FREE") return;
+  if (args.actingRootId && ownership.root._id === args.actingRootId) return;
   throw new ConvexError(args.message ?? COMMITMENT_MESSAGES.heldByAnotherDeal);
 }
 

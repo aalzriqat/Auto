@@ -158,25 +158,26 @@ export async function getActiveDepositHolds(
   ctx: QueryCtx | MutationCtx,
   vehicleId: Id<"vehicles">
 ): Promise<Doc<"deposits">[]> {
-  const direct = await ctx.db
-    .query("deposits")
-    .withIndex("by_vehicle_hold", (q) => q.eq("vehicleId", vehicleId).eq("holdActive", true))
-    .take(50);
-
-  const secondaryHolds = await ctx.db
-    .query("depositVehicleHolds")
-    .withIndex("by_vehicle_active", (q) => q.eq("vehicleId", vehicleId).eq("active", true))
-    .take(50);
-  const secondary = await Promise.all(secondaryHolds.map((hold) => ctx.db.get(hold.depositId)));
-
+  // ⚠️ STREAMED, NOT PAGED. These reads decide whether a car is spoken for, and
+  // a fixed `take(N)` answers "nobody holds it" as soon as the holder sits at
+  // row N+1 — the false-free that hands a sold car to a rival. This resolver is
+  // a canonical input during the SCRUM-195 cutover, so it carries the same
+  // no-fixed-page rule as the commitment authority itself (c14867, "row-51").
   const byId = new Map<string, Doc<"deposits">>();
-  for (const deposit of secondary) {
+
+  for await (const hold of ctx.db
+    .query("depositVehicleHolds")
+    .withIndex("by_vehicle_active", (q) => q.eq("vehicleId", vehicleId).eq("active", true))) {
+    const deposit = await ctx.db.get(hold.depositId);
     if (!deposit || deposit.isDeleted === true) continue;
     if (deposit.status !== "HELD" || deposit.holdActive !== true) continue;
     byId.set(deposit._id, deposit);
   }
-  for (const deposit of direct) {
-    if (!deposit || deposit.isDeleted === true) continue;
+
+  for await (const deposit of ctx.db
+    .query("deposits")
+    .withIndex("by_vehicle_hold", (q) => q.eq("vehicleId", vehicleId).eq("holdActive", true))) {
+    if (deposit.isDeleted === true) continue;
     if (deposit.status !== "HELD" || deposit.holdActive !== true) continue;
     if (byId.has(deposit._id)) continue;
     // Where a deposit carries hold rows, those rows are the whole truth about
@@ -187,11 +188,13 @@ export async function getActiveDepositHolds(
     // car A reserved through this direct index even after A's own share had
     // been consumed, released, or refunded. The car could not be freed by any
     // means short of resolving the whole deposit.
-    const holds = await ctx.db
+    //
+    // An existence check, so it reads one row rather than a page of them.
+    const anyHoldRow = await ctx.db
       .query("depositVehicleHolds")
       .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))
-      .take(50);
-    if (holds.length > 0) continue;
+      .first();
+    if (anyHoldRow) continue;
     byId.set(deposit._id, deposit);
   }
   return Array.from(byId.values());
