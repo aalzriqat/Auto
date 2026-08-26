@@ -135,7 +135,17 @@ async function finalState(ctx: Ctx, vehicleId: Id<"vehicles">) {
     orgId: ctx.orgId,
     vehicleId,
   });
-  const reservations = await ctx.client.query(api.vehicles.getReservationHistory, {
+  // ⚠️ Despite the name, this query is a UNIFIED HOLD HISTORY, not a list of
+  // reservations. It deliberately renders held DEPOSITS as hold entries too --
+  // its own comment explains why: a deposit "holds the vehicle just as hard as
+  // a reservation does" but writes only a deposits row, so the tab used to read
+  // "No reservations recorded" over a car that was genuinely off the market.
+  //
+  // Reservation rows carry `origin: "RESERVATION"`; deposit-derived entries
+  // carry `origin: "DEPOSIT"` and are ACTIVE while `holdActive` is true. Race D
+  // read the name and not the implementation, so a winning DEPOSIT counted as a
+  // surviving reservation and the deposit branch failed on its own winner.
+  const holdHistory = await ctx.client.query(api.vehicles.getReservationHistory, {
     orgId: ctx.orgId,
     vehicleId,
   });
@@ -145,9 +155,10 @@ async function finalState(ctx: Ctx, vehicleId: Id<"vehicles">) {
     liveDeposits: ((deposits ?? []) as Array<{ holdActive?: boolean }>).filter(
       (d) => d.holdActive === true
     ),
-    activeReservations: ((reservations ?? []) as Array<{ status?: string }>).filter(
-      (r) => r.status === "ACTIVE"
-    ),
+    /** Genuine reservation rows only — see the note above. */
+    activeReservations: (
+      (holdHistory ?? []) as Array<{ status?: string; origin?: string }>
+    ).filter((r) => r.status === "ACTIVE" && r.origin === "RESERVATION"),
   };
 }
 
