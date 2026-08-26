@@ -110,6 +110,42 @@ async function resolveRoot(ctx: Ctx, vehicleId: Id<"vehicles">) {
   });
 }
 
+/**
+ * The whole observable outcome, read through the same public queries a screen
+ * would use.
+ *
+ * The first version of these races asked only "did exactly one call succeed,
+ * and are there no conflicting roots". That is satisfiable by an implementation
+ * that picks a winner and then records the WRONG one — a rival's deposit
+ * accepted while the car ends up owned by the holder reads as a clean pass. So
+ * every race below now correlates WHICH side won to WHAT must then be true.
+ */
+async function finalState(ctx: Ctx, vehicleId: Id<"vehicles">) {
+  const root = await resolveRoot(ctx, vehicleId);
+  const vehicle = await ctx.client.query(api.vehicles.get, {
+    orgId: ctx.orgId,
+    vehicleId,
+  });
+  const deposits = await ctx.client.query(api.deposits.listByVehicle, {
+    orgId: ctx.orgId,
+    vehicleId,
+  });
+  const reservations = await ctx.client.query(api.vehicles.getReservationHistory, {
+    orgId: ctx.orgId,
+    vehicleId,
+  });
+  return {
+    root,
+    status: (vehicle as { status?: string } | null)?.status ?? null,
+    liveDeposits: ((deposits ?? []) as Array<{ holdActive?: boolean }>).filter(
+      (d) => d.holdActive === true
+    ),
+    activeReservations: ((reservations ?? []) as Array<{ status?: string }>).filter(
+      (r) => r.status === "ACTIVE"
+    ),
+  };
+}
+
 /** How many of a set of concurrent calls actually succeeded. */
 function fulfilled<T>(results: PromiseSettledResult<T>[]) {
   return results.filter(
@@ -173,7 +209,6 @@ test.describe("commitment authority under real concurrency", () => {
         "The backend answering these races is running a different commit than the workflow checked out."
       ).toBe(process.env.GITHUB_SHA);
     }
-    // eslint-disable-next-line no-console
     console.log(
       `[contention] backend=${identity.deployment} sha=${identity.gitSha} disposable=${identity.isDisposable}`
     );
@@ -220,7 +255,7 @@ test.describe("commitment authority under real concurrency", () => {
     ).toHaveLength(0);
   });
 
-  test("RACE B — release vs acquire: the outcome is serializable either way", async ({ page }) => {
+  test("RACE B — release vs acquire: the winner is named, not merely counted", async ({ page }) => {
     await page.goto("/");
     const client = await authenticatedConvexClient(page);
     const orgId = (await resolveOrgId(page)) as Id<"organizations">;
@@ -239,9 +274,9 @@ test.describe("commitment authority under real concurrency", () => {
     const rivalCustomer = await makeCustomer(ctx, "Briv");
     const rivalQuote = await makeCashQuote(ctx, rivalCustomer, vehicleId);
 
-    // The holder lets go at the same moment a rival reaches for it. BOTH
-    // orderings are legitimate — what is not legitimate is both winning, or
-    // the car ending up owned by nobody while a live deposit still exists.
+    // The holder lets go at the same moment a rival reaches for it. Both
+    // orderings are legitimate; what each one OBLIGES afterwards is not
+    // negotiable, and that is what this asserts.
     const [releaseResult, rivalResult] = await Promise.allSettled([
       client.mutation(api.deposits.release, {
         orgId,
@@ -252,28 +287,48 @@ test.describe("commitment authority under real concurrency", () => {
       client.mutation(api.deposits.create, { orgId, quoteId: rivalQuote, amount: 1_000 }),
     ]);
 
-    const root = await resolveRoot(ctx, vehicleId);
+    // A holder may always let go of their own car. Nothing a rival attempts
+    // concurrently may prevent it — if this ever fails, a customer can be
+    // trapped in a deal by a stranger's timing.
     expect(
-      root.conflictingRootIds,
+      releaseResult.status,
+      `the holder's own release must succeed. Got: ${rejectionMessages([releaseResult]).join(" | ")}`
+    ).toBe("fulfilled");
+
+    const after = await finalState(ctx, vehicleId);
+    expect(
+      after.root.conflictingRootIds,
       "no ordering may leave two live roots on one car"
     ).toHaveLength(0);
 
     if (rivalResult.status === "fulfilled") {
-      // Rival got there first, or the release landed first and freed it.
-      expect(root.kind, "a successful rival acquisition must leave the car owned").toBe("OWNED");
+      // The release landed first, so the rival took a genuinely free car. The
+      // car must now be THEIRS — not merely "owned by somebody".
+      expect(after.root.kind, "the rival acquired it, so it is owned").toBe("OWNED");
+      expect(
+        after.root.customerId,
+        "and owned by the RIVAL — a race that hands the car to the wrong deal is the defect, not the pass"
+      ).toEqual(rivalCustomer);
+      expect(
+        after.liveDeposits.length,
+        "exactly one live hold: the rival's. The released one must not still be holding"
+      ).toBe(1);
     } else {
-      expectCommitmentRefusals([String((rivalResult.reason as Error)?.message)]);
-      // The rival lost. Whether the car is still held depends on which side
-      // won, but it must not be silently owned by the rival.
-      expect(["OWNED", "FREE"]).toContain(root.kind);
+      // The rival was refused while the hold was still live, and the release
+      // then completed. Nobody holds the car.
+      expectCommitmentRefusals(rejectionMessages([rivalResult]));
+      expect(
+        after.root.kind,
+        "the rival lost and the holder let go, so the car is free"
+      ).toBe("FREE");
+      expect(
+        after.liveDeposits,
+        "and no money is still holding it — a FREE car with a live hold is the false-free"
+      ).toHaveLength(0);
     }
-    expect(
-      releaseResult.status === "fulfilled" || rivalResult.status === "fulfilled",
-      "at least one side of the race must have made progress"
-    ).toBe(true);
   });
 
-  test("RACE C — reopen vs competing acquire: exactly one winner", async ({ page }) => {
+  test("RACE C — reopen vs competing acquire: one winner, and the root names them", async ({ page }) => {
     await page.goto("/");
     const client = await authenticatedConvexClient(page);
     const orgId = (await resolveOrgId(page)) as Id<"organizations">;
@@ -281,12 +336,21 @@ test.describe("commitment authority under real concurrency", () => {
     expect((await client.query(api.deploymentIdentity.identity, {})).isDisposable).toBe(true);
 
     const vehicleId = await makeVehicle(ctx, "C");
-    const financeCompanies = await client.query(api.finance.listCompanies, { orgId });
-    const companyId = financeCompanies?.[0]?._id as Id<"financeCompanies"> | undefined;
-    expect(
-      companyId,
-      "this race needs a finance company; the org has none and the fixture must not invent one behind the product"
-    ).toBeTruthy();
+
+    // A fresh preview has no finance companies. Create one through the real
+    // product mutation rather than failing the fixture — this is the same call
+    // Settings > Finance Companies makes, so it is still no backdoor.
+    const existing = await client.query(api.finance.listCompanies, { orgId });
+    const companyId = (existing?.[0]?._id ??
+      (await client.mutation(api.finance.createCompany, {
+        orgId,
+        name: `E2E Race Finance ${testDataSuffix()}`,
+        profitRate: 5,
+        maxTermMonths: 60,
+        gracePeriodMonths: 0,
+        isActive: true,
+      }))) as Id<"financeCompanies">;
+    expect(companyId, "the race needs a finance company to exist").toBeTruthy();
 
     const applicantCustomer = await makeCustomer(ctx, "Capp");
     const applicantQuote = (await client.mutation(api.quotes.saveQuote, {
@@ -306,12 +370,20 @@ test.describe("commitment authority under real concurrency", () => {
       quoteId: applicantQuote,
     })) as Id<"financeApplications">;
 
-    // Rejected: the car is genuinely free again, and now two people want it.
     await client.mutation(api.applications.updateStatus, {
       orgId,
       applicationId,
       status: "REJECTED",
     });
+
+    // The premise, asserted rather than assumed. If REJECTED did not actually
+    // free the car, the race below would be starting from a held vehicle and
+    // whatever it proved would be about something else entirely.
+    const afterReject = await finalState(ctx, vehicleId);
+    expect(
+      afterReject.root.kind,
+      "a rejected application must genuinely release the car before the race begins"
+    ).toBe("FREE");
 
     const rivalCustomer = await makeCustomer(ctx, "Criv");
     const rivalQuote = await makeCashQuote(ctx, rivalCustomer, vehicleId);
@@ -334,13 +406,30 @@ test.describe("commitment authority under real concurrency", () => {
       reopenResult.status === "fulfilled" || rivalResult.status === "fulfilled",
       "one of them has to win — a race where nobody makes progress is a livelock"
     ).toBe(true);
+    expectCommitmentRefusals(rejectionMessages([reopenResult, rivalResult]));
 
-    const root = await resolveRoot(ctx, vehicleId);
-    expect(root.kind, "the winner genuinely owns it").toBe("OWNED");
-    expect(root.conflictingRootIds, "and there is exactly one root").toHaveLength(0);
+    const after = await finalState(ctx, vehicleId);
+    expect(after.root.kind, "the winner genuinely owns it").toBe("OWNED");
+    expect(after.root.conflictingRootIds, "and there is exactly one root").toHaveLength(0);
+
+    if (reopenResult.status === "fulfilled") {
+      // Reopening reacquired the SAME deal's car, so the applicant holds it and
+      // the rival's money never landed.
+      expect(
+        after.root.customerId,
+        "the reopened application owns it — not the rival whose deposit was refused"
+      ).toEqual(applicantCustomer);
+      expect(after.liveDeposits, "and the rival holds no live deposit").toHaveLength(0);
+    } else {
+      expect(
+        after.root.customerId,
+        "the rival got there first, so the car is theirs and the reopen was refused"
+      ).toEqual(rivalCustomer);
+      expect(after.liveDeposits.length, "held by the rival's money").toBe(1);
+    }
   });
 
-  test("RACE D — deposit vs reservation vs cash sale: one car, one outcome", async ({ page }) => {
+  test("RACE D — deposit vs reservation vs cash sale: the winner's consequences are specific", async ({ page }) => {
     await page.goto("/");
     const client = await authenticatedConvexClient(page);
     const orgId = (await resolveOrgId(page)) as Id<"organizations">;
@@ -363,25 +452,27 @@ test.describe("commitment authority under real concurrency", () => {
     // Three DIFFERENT primitives, three different deals, one car. Historically
     // these three subsystems did not consult one another at all, so this is the
     // race the whole design exists to answer.
-    const results: PromiseSettledResult<unknown>[] = await Promise.allSettled<unknown>([
-      client.mutation(api.deposits.create, { orgId, quoteId: depositQuote, amount: 1_000 }),
-      client.mutation(api.vehicles.createReservation, {
-        orgId,
-        vehicleId,
-        customerId: reservationCustomer,
-      }),
-      client.mutation(api.sales.create, {
-        orgId,
-        vehicleId,
-        customerId: saleCustomer,
-        salespersonId,
-        salePrice: 28_000,
-        saleDate: Date.now(),
-        status: "COMPLETED",
-        quoteId: saleQuote,
-      }),
-    ]);
+    const [depositResult, reservationResult, saleResult]: PromiseSettledResult<unknown>[] =
+      await Promise.allSettled<unknown>([
+        client.mutation(api.deposits.create, { orgId, quoteId: depositQuote, amount: 1_000 }),
+        client.mutation(api.vehicles.createReservation, {
+          orgId,
+          vehicleId,
+          customerId: reservationCustomer,
+        }),
+        client.mutation(api.sales.create, {
+          orgId,
+          vehicleId,
+          customerId: saleCustomer,
+          salespersonId,
+          salePrice: 28_000,
+          saleDate: Date.now(),
+          status: "COMPLETED",
+          quoteId: saleQuote,
+        }),
+      ]);
 
+    const results = [depositResult, reservationResult, saleResult];
     const winners = fulfilled(results);
     expect(
       winners.length,
@@ -390,22 +481,40 @@ test.describe("commitment authority under real concurrency", () => {
     ).toBe(1);
     expectCommitmentRefusals(rejectionMessages(results));
 
-    const root = await resolveRoot(ctx, vehicleId);
+    const after = await finalState(ctx, vehicleId);
     expect(
-      root.conflictingRootIds,
+      after.root.conflictingRootIds,
       "no duplicate ACTIVE roots — the AMBIGUOUS state must not be reachable through a race"
     ).toHaveLength(0);
-    // Either somebody holds it, or the cash sale won and it is sold. What is
-    // forbidden is FREE while money sits against it.
-    const holdingDeposits = await client.query(api.deposits.listByVehicle, { orgId, vehicleId });
-    const liveMoney = (holdingDeposits ?? []).filter(
-      (d: { holdActive?: boolean }) => d.holdActive === true
-    );
-    if (liveMoney.length > 0) {
+
+    // Which primitive won dictates a DIFFERENT observable world. Asserting only
+    // "one of them won" would accept a deposit that succeeded while the car
+    // silently went SOLD to somebody else.
+    if (depositResult.status === "fulfilled") {
+      expect(after.root.kind, "the deposit holds the car").toBe("OWNED");
+      expect(after.root.customerId, "for the depositor's deal").toEqual(depositCustomer);
+      expect(after.liveDeposits.length, "and their money is live against it").toBe(1);
+      expect(after.status, "a deposit does not sell a car").not.toBe("SOLD");
+      expect(after.activeReservations, "and the refused reservation left nothing").toHaveLength(0);
+    } else if (reservationResult.status === "fulfilled") {
+      expect(after.root.kind, "the reservation holds the car").toBe("OWNED");
+      expect(after.root.customerId, "for the reserving customer").toEqual(reservationCustomer);
+      expect(after.status, "a reservation does not sell a car").not.toBe("SOLD");
+      expect(after.activeReservations.length, "exactly one live reservation").toBe(1);
+      expect(after.liveDeposits, "and the refused deposit left no live money").toHaveLength(0);
+    } else {
+      // The cash sale won: the car left inventory, and NOTHING may still be
+      // holding it. A surviving hard hold on a sold car is the state that lets
+      // the same car be sold twice.
+      expect(after.status, "the cash sale completed, so the car is sold").toBe("SOLD");
       expect(
-        root.kind,
-        "money is held against this car, so it must not read as FREE — that is the false-free that hands a sold car to a rival"
-      ).toBe("OWNED");
+        after.liveDeposits,
+        "no deposit may still hold a car that has been sold to somebody else"
+      ).toHaveLength(0);
+      expect(
+        after.activeReservations,
+        "and no reservation may still hold it either"
+      ).toHaveLength(0);
     }
   });
 });

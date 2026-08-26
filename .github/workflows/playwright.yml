@@ -133,9 +133,23 @@ jobs:
           set -euo pipefail
           pnpm exec convex env set --preview-name "$CONVEX_PREVIEW_NAME" AUTOFLOW_DISPOSABLE_DEPLOYMENT true
           pnpm exec convex env set --preview-name "$CONVEX_PREVIEW_NAME" DEPLOYMENT_GIT_SHA "$GITHUB_SHA"
+
+          # The approver seat is provisioned through the product's own Add Team
+          # Member path (`memberships.createAccount`), and that action calls
+          # Clerk from the BACKEND -- so the key has to be on the Convex
+          # deployment. Having it in this workflow's environment is not the same
+          # thing, which is why auth.setup.ts names that distinction explicitly
+          # when it fails.
+          #
+          # `--preview-name` is what keeps this narrow: a preview deploy key
+          # cannot reach production at all, and the name is the same one the
+          # step above just marked disposable. Never echoed -- `convex env set`
+          # does not print the value, and GitHub masks the secret regardless.
+          pnpm exec convex env set --preview-name "$CONVEX_PREVIEW_NAME" CLERK_SECRET_KEY "$CLERK_SECRET_KEY"
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
           GITHUB_SHA: ${{ github.sha }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
 
       - name: Run Playwright tests
         # playwright.config.ts's webServer builds and starts the production
