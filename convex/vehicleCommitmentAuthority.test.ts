@@ -1620,6 +1620,281 @@ describe("11. row-51 — a fixed page must not decide freeness", () => {
 // a reused key is a genuine retry or a contradiction.
 // ═════════════════════════════════════════════════════════════════════════════
 
+// ═════════════════════════════════════════════════════════════════════════════
+// 17. THE REMAINING AUTHORITY DOORS
+//
+// Every path that puts a car back under a deal is a FRESH ACQUISITION, however
+// old the money behind it is. Reallocating a released share, returning it to
+// the deal, reactivating a hold when a sale is cancelled — each one ends with a
+// car being held again, and between the release and the reactivation the car
+// was genuinely free for somebody else to take.
+//
+// ⚠️ The tempting reading is that these are restorations rather than
+// acquisitions: the money was always the customer's, so putting it back looks
+// like undoing rather than doing. But the CAR does not work that way. A rival
+// who acquired it in the meantime holds it legitimately, and quietly
+// re-attaching the first customer's money produces two live claims on one car
+// with nothing having refused anything.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("17. authority doors", () => {
+  /** A multi-vehicle deal with `dropped`'s share released and awaiting a decision. */
+  async function dealWithReleasedShare(seed: Seed) {
+    const keep = await vehicle(seed);
+    const dropped = await vehicle(seed);
+    const quoteId = await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+      vehicleId: keep,
+      vehicleItems: [
+        { vehicleId: keep, unitPrice: PRICE },
+        { vehicleId: dropped, unitPrice: PRICE },
+      ],
+      mode: "CASH" as const,
+      vehiclePrice: PRICE * 2,
+      downPayment: 0,
+      termMonths: 0,
+      totalFinancedAmount: 0,
+    });
+    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 4_000 });
+    await seed.asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId: seed.orgId,
+      quoteId,
+      allocations: [
+        { vehicleId: keep, amount: 2_000 },
+        { vehicleId: dropped, amount: 2_000 },
+      ],
+    });
+    await seed.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+      orgId: seed.orgId,
+      quoteId,
+      vehicleId: dropped,
+      reason: "customer dropped it",
+    });
+    const holdId = await seed.t.run(async (ctx) => {
+      const holds = (await ctx.db.query("depositVehicleHolds").collect()).filter(
+        (h) => h.vehicleId === dropped && h.allocationStatus === "RELEASED_AWAITING_DECISION"
+      );
+      return holds[0]._id;
+    });
+    return { keep, dropped, quoteId, holdId };
+  }
+
+  test("17.1 RETURN_TO_UNALLOCATED is refused once a rival has taken the freed car", async () => {
+    const seed = await seedDealer("door-return");
+    const { dropped, holdId } = await dealWithReleasedShare(seed);
+    // The release genuinely freed the car, and a rival legitimately took it.
+    const rivalQuote = await cashQuote(seed, seed.customerB, dropped);
+    await seed.asUser.mutation(api.deposits.create, {
+      orgId: seed.orgId,
+      quoteId: rivalQuote,
+      amount: 1_000,
+    });
+    const holdsBefore = await depositsHolding(seed, dropped);
+
+    await expectRefusal(
+      seed.asApprover.mutation(api.deposits.resolveReleasedAllocation, {
+        orgId: seed.orgId,
+        holdId,
+        treatment: "RETURN_TO_UNALLOCATED" as const,
+        reason: "customer changed their mind again",
+      })
+    , /committed|another deal|another customer|already held|no longer available/i,
+      "putting money back on a car somebody else now holds is a fresh acquisition");
+
+    // Zero residue: the rival still holds it alone, and the released share is
+    // untouched and still decidable.
+    expect(await depositsHolding(seed, dropped)).toEqual(holdsBefore);
+    const stillAwaiting = await seed.t.run(async (ctx) => {
+      const row = await ctx.db.get(holdId);
+      return row?.allocationStatus;
+    });
+    expect(stillAwaiting, "the share is left as it was, still awaiting a decision").toBe(
+      "RELEASED_AWAITING_DECISION"
+    );
+  });
+
+  /**
+   * A three-car deal with TWO shares released.
+   *
+   * ⚠️ Shaped this way because a reallocation target must already be a line on
+   * the deposit's quote — the product refuses anything else, and an earlier
+   * version of these tests used an unrelated car and "passed" on that refusal
+   * instead of on the commitment rule. So the rival has to take a car that IS
+   * on our quote, which it can only do once our own claim on it is released.
+   */
+  async function dealWithTwoReleasedShares(seed: Seed) {
+    const keep = await vehicle(seed);
+    const dropA = await vehicle(seed);
+    const dropB = await vehicle(seed);
+    const quoteId = await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+      vehicleId: keep,
+      vehicleItems: [
+        { vehicleId: keep, unitPrice: PRICE },
+        { vehicleId: dropA, unitPrice: PRICE },
+        { vehicleId: dropB, unitPrice: PRICE },
+      ],
+      mode: "CASH" as const,
+      vehiclePrice: PRICE * 3,
+      downPayment: 0,
+      termMonths: 0,
+      totalFinancedAmount: 0,
+    });
+    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 3_000 });
+    await seed.asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId: seed.orgId,
+      quoteId,
+      allocations: [
+        { vehicleId: keep, amount: 1_000 },
+        { vehicleId: dropA, amount: 1_000 },
+        { vehicleId: dropB, amount: 1_000 },
+      ],
+    });
+    for (const carId of [dropA, dropB]) {
+      await seed.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+        orgId: seed.orgId,
+        quoteId,
+        vehicleId: carId,
+        reason: "customer dropped it",
+      });
+    }
+    const holdIdFor = async (carId: Id<"vehicles">) =>
+      await seed.t.run(async (ctx) => {
+        const holds = (await ctx.db.query("depositVehicleHolds").collect()).filter(
+          (h) => h.vehicleId === carId && h.allocationStatus === "RELEASED_AWAITING_DECISION"
+        );
+        return holds[0]._id;
+      });
+    return { keep, dropA, dropB, quoteId, holdIdFor };
+  }
+
+  test("17.2 REALLOCATE_TO_VEHICLE is refused when a rival took the target car", async () => {
+    const seed = await seedDealer("door-realloc");
+    const { dropA, dropB, holdIdFor } = await dealWithTwoReleasedShares(seed);
+    // dropB was genuinely freed by the release, and a rival took it.
+    const rivalQuote = await cashQuote(seed, seed.customerB, dropB);
+    await seed.asUser.mutation(api.deposits.create, {
+      orgId: seed.orgId,
+      quoteId: rivalQuote,
+      amount: 1_000,
+    });
+    const holdsBefore = await depositsHolding(seed, dropB);
+    const holdId = await holdIdFor(dropA);
+
+    await expectRefusal(
+      seed.asApprover.mutation(api.deposits.resolveReleasedAllocation, {
+        orgId: seed.orgId,
+        holdId,
+        treatment: "REALLOCATE_TO_VEHICLE" as const,
+        toVehicleId: dropB,
+        reason: "move it onto the other car",
+      })
+    , /committed|another deal|another customer|already held|no longer available/i,
+      "money may not be moved onto a car another deal now holds");
+
+    expect(await depositsHolding(seed, dropB), "the rival's hold is untouched").toEqual(
+      holdsBefore
+    );
+    const stillAwaiting = await seed.t.run(async (ctx) => (await ctx.db.get(holdId))?.allocationStatus);
+    expect(stillAwaiting, "and dropA's share is left decidable").toBe(
+      "RELEASED_AWAITING_DECISION"
+    );
+  });
+
+  test("17.3 CONTROL: reallocating onto a car THIS deal still holds works", async () => {
+    // Without this, 17.1 and 17.2 could be satisfied by refusing every
+    // reallocation, which would strand released money permanently.
+    const seed = await seedDealer("door-realloc-ok");
+    const { keep, dropA, holdIdFor } = await dealWithTwoReleasedShares(seed);
+    const holdId = await holdIdFor(dropA);
+
+    await seed.asApprover.mutation(api.deposits.resolveReleasedAllocation, {
+      orgId: seed.orgId,
+      holdId,
+      treatment: "REALLOCATE_TO_VEHICLE" as const,
+      toVehicleId: keep,
+      reason: "put it on the car they are keeping",
+    });
+
+    const moved = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("depositVehicleHolds").collect()).filter(
+        (h) => h.vehicleId === keep && h.active === true
+      )
+    );
+    expect(moved.length, "the money really moved onto the kept car").toBeGreaterThan(0);
+  });
+
+  test("17.4 cancelling a sale RE-ESTABLISHES the commitment, not just the money", async () => {
+    // ⚠️ Cancellation reactivates the deposit hold. If it restores the money
+    // without restoring the authority, the car comes back to the lot with a
+    // live deposit against it and NOTHING saying it is spoken for — so a rival
+    // can take a car the original customer has already paid on.
+    const seed = await seedDealer("door-cancel");
+    const v = await vehicle(seed);
+    const { quoteId } = await heldByDeposit(seed, v, seed.customerA);
+    const saleId = await seed.asUser.mutation(
+      api.sales.create,
+      completedSale(seed, { vehicleId: v, customerId: seed.customerA, quoteId })
+    );
+
+    // Cancelled by a second person: reversing a completed sale is maker-checker,
+    // and the salesperson may not approve their own.
+    await seed.asApprover.mutation(api.sales.update, {
+      orgId: seed.orgId,
+      saleId: saleId as Id<"sales">,
+      status: "CANCELLED" as const,
+    });
+
+    // The money is back...
+    const holds = await depositsHolding(seed, v);
+    expect(holds, "the customer's deposit is live again").toHaveLength(1);
+    // ...and so is the authority.
+    const root = await resolveRoot(seed, v);
+    expect(root.kind, "the car is spoken for again").toBe("OWNED");
+    expect(root.customerId).toBe(seed.customerA);
+
+    const rivalQuote = await cashQuote(seed, seed.customerB, v);
+    await expectRefusal(
+      seed.asUser.mutation(api.deposits.create, {
+        orgId: seed.orgId,
+        quoteId: rivalQuote,
+        amount: 1_000,
+      })
+    , REFUSED, "a rival must not take a car whose deposit came back to life");
+  });
+
+  test("17.5 STOCK and SOURCED behave identically — one row is one physical unit", async () => {
+    // `sourceType` decides ownership economics, not inventory capacity. A
+    // sourced car is still one car, and must refuse a rival exactly as stock
+    // does — asserted side by side so a divergence cannot hide.
+    const seed = await seedDealer("door-parity");
+    const stock = await vehicle(seed, "AVAILABLE");
+    const sourced = await vehicle(seed, "SOURCING");
+    await seed.t.run((ctx) => ctx.db.patch(sourced, { sourceType: "SOURCED" as const }));
+    await heldByDeposit(seed, stock, seed.customerB);
+    await heldByDeposit(seed, sourced, seed.customerB);
+
+    for (const [label, carId] of [
+      ["stock", stock],
+      ["sourced", sourced],
+    ] as const) {
+      const ours = await cashQuote(seed, seed.customerA, carId);
+      await expectRefusal(
+        seed.asUser.mutation(api.deposits.create, {
+          orgId: seed.orgId,
+          quoteId: ours,
+          amount: 1_000,
+        })
+      , REFUSED, `${label} must refuse a rival deposit`);
+      const holds = await depositsHolding(seed, carId);
+      expect(holds, `${label}: only the holder`).toHaveLength(1);
+      expect(holds[0].customerId).toBe(seed.customerB);
+    }
+  });
+});
+
 describe("16. operation identity vs payload fingerprint", () => {
   function newQuoteArgs(seed: Seed, v: Id<"vehicles">, over: Record<string, unknown> = {}) {
     return {

@@ -812,6 +812,25 @@ export const resolveReleasedAllocation = mutation({
           "That vehicle is not a line on this deposit's quote, so it cannot receive the released amount."
         );
       }
+      // SCRUM-195: moving money onto a car is a FRESH ACQUISITION, however old
+      // the money is.
+      //
+      // ⚠️ The tempting reading is that this is a restoration — the money was
+      // always this customer's, so putting it somewhere looks like undoing
+      // rather than doing. The CAR does not work that way. The release genuinely
+      // freed this vehicle, and a rival who took it in the meantime holds it
+      // legitimately; re-attaching the first customer's money on top produces
+      // two live claims on one car with nothing having refused anything.
+      await assertAcquirable(ctx, {
+        orgId: args.orgId,
+        vehicleId: args.toVehicleId,
+        actingRootId: await actingRootForQuoteOnVehicle(
+          ctx,
+          args.orgId,
+          deposit.quoteId,
+          args.toVehicleId
+        ),
+      });
       const targetHolds = await ctx.db
         .query("depositVehicleHolds")
         .withIndex("by_deposit_vehicle", (q) =>
@@ -851,6 +870,17 @@ export const resolveReleasedAllocation = mutation({
         allocationStatus: "ALLOCATED",
         sourceHoldId: hold._id,
       });
+      // The car is held again, so the authority has to say so. Without a claim
+      // the money would sit on a vehicle that still reads FREE.
+      await acquireVehicleForQuote(ctx, {
+        orgId: args.orgId,
+        vehicleId: args.toVehicleId,
+        quoteId: deposit.quoteId ?? null,
+        customerId: deposit.customerId,
+        createdBy: user._id,
+        kind: "DEPOSIT",
+        depositId: hold.depositId,
+      });
       await syncVehicleHoldStatus(ctx, args.toVehicleId, user._id);
     } else if (args.treatment === "RETURN_TO_UNALLOCATED") {
       // No cash movement and no revenue: the money never left, it simply stops
@@ -859,6 +889,20 @@ export const resolveReleasedAllocation = mutation({
       // permanently unsellable on this quote, because an allocation can only be
       // written onto an active hold row and every path out of RESOLVED is
       // terminal.
+      // SCRUM-195: also a FRESH ACQUISITION. The release freed this car, and
+      // between then and now somebody else may legitimately have taken it —
+      // putting the money back is asking for the car again, not undoing a
+      // mistake.
+      await assertAcquirable(ctx, {
+        orgId: args.orgId,
+        vehicleId: hold.vehicleId,
+        actingRootId: await actingRootForQuoteOnVehicle(
+          ctx,
+          args.orgId,
+          deposit.quoteId,
+          hold.vehicleId
+        ),
+      });
       await ctx.db.insert("depositVehicleHolds", {
         orgId: args.orgId,
         depositId: hold.depositId,
@@ -866,6 +910,15 @@ export const resolveReleasedAllocation = mutation({
         active: true,
         createdAt: now,
         sourceHoldId: hold._id,
+      });
+      await acquireVehicleForQuote(ctx, {
+        orgId: args.orgId,
+        vehicleId: hold.vehicleId,
+        quoteId: deposit.quoteId ?? null,
+        customerId: deposit.customerId,
+        createdBy: user._id,
+        kind: "DEPOSIT",
+        depositId: hold.depositId,
       });
       await syncVehicleHoldStatus(ctx, hold.vehicleId, user._id);
     } else if (args.treatment === "REFUND_TO_CUSTOMER" || args.treatment === "FORFEITED") {

@@ -10,6 +10,7 @@ import {
 import { reverseAllocation, voidCanonicalPayment } from "../subledger";
 import { cancelSupplierReceivablesForSale } from "../supplierReceivables";
 import { restoreVehicleFromSale } from "./saleHelpers";
+import { acquireVehicleForQuote } from "../commitments";
 import {
   reactivateAllVehiclesForDeposit,
   syncVehicleHoldStatus,
@@ -338,6 +339,26 @@ async function reopenDepositAfterReversal(
   // was re-sold at full price with the customer's own money uncredited, and its
   // share left active on a vehicle now marked SOLD. Every control agreed the
   // books were fine, because they were — the money simply never moved.
+  // SCRUM-195: whatever branch below brings the money back must also bring the
+  // AUTHORITY back.
+  //
+  // ⚠️ Restoring the hold without restoring the claim returns the car to the lot
+  // with a live deposit against it and nothing saying it is spoken for — so a
+  // rival can take a car the original customer has already paid on. The money
+  // and the commitment were separated at completion (claims CONSUMED, deposit
+  // APPLIED) and they have to come back together.
+  const restoreCommitment = async (row: Doc<"deposits">) => {
+    await acquireVehicleForQuote(ctx, {
+      orgId: row.orgId,
+      vehicleId: row.vehicleId,
+      quoteId: row.quoteId ?? null,
+      customerId: row.customerId,
+      createdBy: row.createdBy,
+      kind: "DEPOSIT",
+      depositId: row._id,
+    });
+  };
+
   if (deposit.status === "HELD" && deposit.holdActive === false) {
     await ctx.db.patch(deposit._id, {
       holdActive: true,
@@ -347,6 +368,7 @@ async function reopenDepositAfterReversal(
       resolutionReason: undefined,
       resolutionSaleId: undefined,
     });
+    await restoreCommitment(deposit);
     return await ctx.db.get(depositId);
   }
   if (deposit.status !== "APPLIED") return deposit;
@@ -362,6 +384,7 @@ async function reopenDepositAfterReversal(
     resolutionReason: undefined,
     resolutionSaleId: undefined,
   });
+  await restoreCommitment(deposit);
   return await ctx.db.get(depositId);
 }
 
