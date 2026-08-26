@@ -3318,3 +3318,167 @@ describe("22. a customer holding a car cannot be deleted", () => {
     ).toBe(false);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 23. A CANCELLED DEAL STOPS HOLDING THE CAR — AND A LIVE DEPOSIT STILL DOES
+//
+// Sonnet MAX reviewed frozen head 684ee9ef and reported as CRITICAL that
+// reversing a completed pure-finance sale never restores the FINANCE claim, so
+// the car becomes acquirable by a rival while the original customer still
+// physically has it (handover is a precondition of finalization).
+//
+// The FACT is true and I reproduced it. The CONCLUSION is wrong, and this
+// section exists so nobody "fixes" it again.
+//
+// `applications.cancelApplication` states the rule in its own non-finalized
+// branch: "a cancelled application stops holding the car. Released rather than
+// consumed — the deal did not complete." A cancelled deal is DEAD. Making it
+// re-hold a vehicle is not a repair; it strands the car on a deal nobody can
+// ever complete, and `financedConsignedSettlement.test.ts` already pins the
+// consequence — "a vehicle re-sold after a cancellation is judged on the live
+// sale only" — a flow whose own comment calls it the case the obligations
+// redesign existed to rescue.
+//
+// I implemented the reviewer's remedy before checking that. It went green on
+// their scenario and turned that contract RED. The finding was real; the
+// remedy would have shipped a worse defect than the one it addressed.
+//
+// What actually governs is EVIDENCE, not the application's ghost: the car is
+// held exactly while something live holds it. 23.3 is the half that proves the
+// rule is not simply "cancellation frees everything".
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("23. a cancelled deal stops holding the car", () => {
+  /** A finalized financed deal. `withDeposit` decides whether money is involved. */
+  async function finalizedFinancedDeal(
+    seed: Seed,
+    v: Id<"vehicles">,
+    opts: { withDeposit: boolean }
+  ) {
+    // A deposit has to sit against a NON-FINANCED customer portion, so the
+    // deposit case needs a down payment. Without one  refuses
+    // with "allocations exceed the non-financed customer balance" -- a SETUP
+    // failure that would otherwise be mistaken for the behaviour under test.
+    const quoteId = opts.withDeposit
+      ? ((await seed.asUser.mutation(api.quotes.saveQuote, {
+          orgId: seed.orgId,
+          customerId: seed.customerA,
+          vehicleId: v,
+          mode: "CONFIGURED_FINANCE_COMPANY" as const,
+          companyId: seed.companyId,
+          vehiclePrice: PRICE,
+          downPayment: 3_000,
+          termMonths: 48,
+          totalFinancedAmount: PRICE - 3_000,
+        })) as Id<"quotes">)
+      : await financedQuote(seed, seed.customerA, v);
+    if (opts.withDeposit) {
+      await seed.asUser.mutation(api.deposits.create, {
+        orgId: seed.orgId,
+        quoteId,
+        amount: 1_500,
+      });
+    }
+    const applicationId = (await seed.asUser.mutation(api.applications.createFromQuote, {
+      orgId: seed.orgId,
+      quoteId,
+    })) as Id<"financeApplications">;
+
+    await seed.asUser.mutation(api.applications.updateStatus, {
+      orgId: seed.orgId,
+      applicationId,
+      status: "UNDER_REVIEW" as const,
+    });
+    await seed.asApprover.mutation(api.applications.updateStatus, {
+      orgId: seed.orgId,
+      applicationId,
+      status: "APPROVED" as const,
+    });
+    await registerHandover(seed.asUser, api, seed.orgId, applicationId);
+    await seed.asUser.mutation(api.applications.registerExpectedPayment, {
+      orgId: seed.orgId,
+      applicationId,
+      method: "CASH" as const,
+      expectedDate: Date.now(),
+    });
+    await seed.asUser.mutation(api.applications.finalizeDeal, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    return { quoteId, applicationId };
+  }
+
+  test("23.1 a cancelled PURE-FINANCE deal releases the car for resale", async () => {
+    const seed = await seedDealer("cancel-pure-finance");
+    const v = await vehicle(seed);
+    const { applicationId } = await finalizedFinancedDeal(seed, v, { withDeposit: false });
+    expect((await vehicleRow(seed, v)).status, "the sale completed").toBe("SOLD");
+
+    await seed.asUser.mutation(api.applications.cancelApplication, {
+      orgId: seed.orgId,
+      applicationId,
+      reason: "financing fell through",
+    });
+
+    // Asserted by CONSEQUENCE. A dead deal must not keep a car nobody can ever
+    // sell through it — the dealership has to be able to put it back on the lot.
+    const rivalQuote = await cashQuote(seed, seed.customerB, v);
+    const rivalDeposit = (await seed.asUser.mutation(api.deposits.create, {
+      orgId: seed.orgId,
+      quoteId: rivalQuote,
+      amount: 1_000,
+    })) as Id<"deposits">;
+    const rivalRow = await seed.t.run((ctx) => ctx.db.get(rivalDeposit));
+    expect(
+      rivalRow?.holdActive,
+      "the car genuinely goes back on the lot and can be sold again"
+    ).toBe(true);
+  });
+
+  test("23.2 the cancelled application itself holds nothing", async () => {
+    const seed = await seedDealer("cancel-holds-nothing");
+    const v = await vehicle(seed);
+    const { applicationId } = await finalizedFinancedDeal(seed, v, { withDeposit: false });
+
+    await seed.asUser.mutation(api.applications.cancelApplication, {
+      orgId: seed.orgId,
+      applicationId,
+      reason: "financing fell through",
+    });
+
+    const root = await resolveRoot(seed, v);
+    expect(
+      root.kind,
+      "a cancelled application stops holding the car — it is not a live deal"
+    ).not.toBe("OWNED");
+  });
+
+  test("23.3 but a reinstated DEPOSIT keeps holding it", async () => {
+    const seed = await seedDealer("cancel-with-deposit");
+    const v = await vehicle(seed);
+    const { applicationId } = await finalizedFinancedDeal(seed, v, { withDeposit: true });
+
+    await seed.asUser.mutation(api.applications.cancelApplication, {
+      orgId: seed.orgId,
+      applicationId,
+      reason: "financing fell through",
+    });
+
+    // The money came back to HELD, so something LIVE holds the car and the
+    // customer's payment is not stranded against a vehicle anyone may take.
+    // This is why 23.1 is not "cancellation frees everything": what governs is
+    // live evidence, not the dead application.
+    const root = await resolveRoot(seed, v);
+    expect(root.kind, "live money still holds the car").toBe("OWNED");
+    expect(root.customerId, "for the customer whose money it is").toEqual(seed.customerA);
+
+    const rivalQuote = await cashQuote(seed, seed.customerB, v);
+    await expectRefusal(
+      seed.asUser.mutation(api.deposits.create, {
+        orgId: seed.orgId,
+        quoteId: rivalQuote,
+        amount: 1_000,
+      })
+    , REFUSED, "23.3");
+  });
+});
