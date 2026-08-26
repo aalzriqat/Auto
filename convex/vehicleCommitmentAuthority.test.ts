@@ -1,4 +1,4 @@
-import { convexTestWithComponents } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -166,6 +166,7 @@ async function seedDealer(suffix: string) {
         "view:finance_applications",
         "register:vehicle_handover",
         "register:expected_payment",
+        "merge:customers",
       ],
     })
   );
@@ -2769,5 +2770,217 @@ describe("12. legacy AMBIGUOUS / not cutover ready", () => {
     const view = await resolveRoot(seed, v);
     expect(view.kind).toBe("FREE");
     expect(view.rootId ?? null).toBeNull();
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 18. CURRENT REVISION AT THE IRREVERSIBLE DOOR (owner ruling c15179)
+//
+// Section 6 already proves the linear head and the CAS: a quote that has been
+// superseded cannot itself be superseded again, and `supersededByQuoteId` is
+// the durable marker. Sections 2 and 3 prove the evidence doors refuse a stale
+// revision — `deposits.create` and `applications.createFromQuote` both call
+// `assertCurrentRevision`.
+//
+// None of that reaches the LAST door. `finalizeDeal` takes an applicationId and
+// reads the quote off the application, so an application approved on Q1 still
+// carries Q1 after a linked REVISE advanced the deal to Q2. `prepareSaleCompletion`
+// then asks `actingRootForQuoteOnVehicle(Q1)`, which answers the OWNERSHIP
+// question — is this the deal that holds the car — and answers it correctly:
+// Q1's root is the same root, still OPEN. Ownership was never the missing
+// dimension. **Current revision was.**
+//
+// Reloading Q1 does not make Q1 current, and the reload's org/customer/vehicle
+// checks all pass on a stale quote by construction. So the sale, the SOLD
+// transition, the claim consumption, the receivable, the allocation, the
+// journal and the outbox all commit against a revision the deal has moved past
+// — at the one step that cannot be taken back.
+//
+// This is the same shape as the failure this lane keeps producing: a rule
+// applied to two writers of a record and not the third. The fix belongs in the
+// shared pre-write boundary so every quote-backed completion door inherits it,
+// not on `finalizeDeal` alone.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("18. current revision at the irreversible door", () => {
+  /** An APPROVED financed deal ready to finalize, built only through real doors. */
+  async function readyToFinalize(
+    seed: Seed,
+    v: Id<"vehicles">,
+    customerId: Id<"customers">
+  ) {
+    const quoteId = await financedQuote(seed, customerId, v);
+    const applicationId = (await seed.asUser.mutation(api.applications.createFromQuote, {
+      orgId: seed.orgId,
+      quoteId,
+    })) as Id<"financeApplications">;
+
+    await seed.asUser.mutation(api.applications.updateStatus, {
+      orgId: seed.orgId,
+      applicationId,
+      status: "UNDER_REVIEW" as const,
+    });
+    // Maker-checker: approving is a second identity by design, so the deal
+    // reaches APPROVED the way a real one does.
+    await seed.asApprover.mutation(api.applications.updateStatus, {
+      orgId: seed.orgId,
+      applicationId,
+      status: "APPROVED" as const,
+    });
+
+    await registerHandover(seed.asUser, api, seed.orgId, applicationId);
+    await seed.asUser.mutation(api.applications.registerExpectedPayment, {
+      orgId: seed.orgId,
+      applicationId,
+      method: "CASH" as const,
+      expectedDate: Date.now(),
+    });
+
+    return { quoteId, applicationId };
+  }
+
+  /**
+   * Everything `completeSale` writes that cannot be taken back.
+   *
+   * Counted rather than inspected: the contract is that a refused finalize
+   * leaves NOTHING behind, and a count catches a row this test did not think
+   * to name. Compared against a snapshot taken after the revision, so it
+   * isolates the finalize attempt itself.
+   */
+  async function irreversibleResidue(seed: Seed) {
+    return await seed.t.run(async (ctx) => ({
+      sales: (await ctx.db.query("sales").collect()).length,
+      receivables: (await ctx.db.query("receivables").collect()).length,
+      allocations: (await ctx.db.query("paymentAllocations").collect()).length,
+      journals: (await ctx.db.query("journalEntries").collect()).length,
+      accountingEvents: (await ctx.db.query("pendingAccountingEvents").collect()).length,
+    }));
+  }
+
+  test("18.1 a SUPERSEDED quote cannot finalize the deal", async () => {
+    const seed = await seedDealer("rev-stale");
+    const v = await vehicle(seed);
+    const { quoteId: q1, applicationId } = await readyToFinalize(seed, v, seed.customerA);
+
+    // The linked REVISE. Same customer, same car, same root — this is the deal
+    // renegotiating with itself, not a rival, so nothing about OWNERSHIP
+    // changes and the ownership gate will keep saying yes.
+    const q2 = (await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+      vehicleId: v,
+      mode: "CONFIGURED_FINANCE_COMPANY" as const,
+      companyId: seed.companyId,
+      vehiclePrice: PRICE - 2_000,
+      downPayment: 0,
+      termMonths: 48,
+      totalFinancedAmount: PRICE - 2_000,
+      supersedesQuoteId: q1,
+    })) as Id<"quotes">;
+
+    // The premise, asserted rather than assumed: Q1 really is stale and the
+    // application really does still point at it. Without both, 18.1 would pass
+    // for a reason that has nothing to do with the rule.
+    const q1Row = await seed.t.run((ctx) => ctx.db.get(q1));
+    expect(q1Row?.supersededByQuoteId, "the REVISE must mark Q1 superseded").toEqual(q2);
+    const appRow = await seed.t.run((ctx) => ctx.db.get(applicationId));
+    expect(appRow?.quoteId, "and the application must still carry the stale Q1").toEqual(q1);
+    const rootBefore = await resolveRoot(seed, v);
+    expect(rootBefore.kind, "the deal still owns the car — this is not a rival").toBe("OWNED");
+
+    const residueBefore = await irreversibleResidue(seed);
+
+    await expectRefusal(
+      seed.asUser.mutation(api.applications.finalizeDeal, {
+        orgId: seed.orgId,
+        applicationId,
+      }),
+      /moved on since that quote|current revision/i,
+      "18.1"
+    );
+
+    // Refused BEFORE the writes, not rolled back after — though in Convex a
+    // throw rolls the transaction back either way, so the count proves the
+    // outcome and the placement is what the fix has to get right.
+    expect(await irreversibleResidue(seed), "a refused finalize writes nothing").toEqual(
+      residueBefore
+    );
+
+    const vRow = await vehicleRow(seed, v);
+    expect(vRow.status, "the car did not change hands on a stale revision").not.toBe("SOLD");
+
+    const after = await seed.t.run((ctx) => ctx.db.get(applicationId));
+    expect(after?.status, "the application is not closed").toBe("APPROVED");
+    expect(after?.finalizedSaleId ?? null, "and no sale was stamped on it").toBeNull();
+
+    // The claim was not consumed: the deal still holds its car and can finalize
+    // once it presents the current revision.
+    const rootAfter = await resolveRoot(seed, v);
+    expect(rootAfter.kind, "the deal keeps the car").toBe("OWNED");
+    expect(rootAfter.rootId, "on the same root it always had").toEqual(rootBefore.rootId);
+  });
+
+  test("18.2 positive control — the CURRENT head still finalizes", async () => {
+    const seed = await seedDealer("rev-current");
+    const v = await vehicle(seed);
+    const { applicationId } = await readyToFinalize(seed, v, seed.customerA);
+
+    // Identical to 18.1 in every respect except the one under test: no REVISE,
+    // so the application's quote is still the deal's head. If this went red the
+    // refusal above would be proving nothing but a broken setup.
+    const saleId = await seed.asUser.mutation(api.applications.finalizeDeal, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+
+    expect(saleId, "the current head completes normally").toBeTruthy();
+    expect(await countIn(seed, "sales"), "and it is a real sale row").toBe(1);
+    const vRow = await vehicleRow(seed, v);
+    expect(vRow.status, "the car is sold").toBe("SOLD");
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 19. THE ROOT SURVIVES A CUSTOMER MERGE
+//
+// `commitmentRoots.customerId` is descriptive, never identity — a customer can
+// never key a root, which is the whole of section 1. It is still a real foreign
+// key, and the resolver hands it back as the answer to "whose deal holds this
+// car", so a merge that leaves it naming a customer that no longer exists
+// produces a live root pointing at a soft-deleted row.
+//
+// `customerMergeRegistry.test.ts` catches the omission structurally: every
+// table carrying a `customerId` must be registered as rewritten or declared
+// derived. That is a COVERAGE assertion though — it proves the table is named
+// in a list, not that a merge moves the field. This is the behavioural half.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("19. the root survives a customer merge", () => {
+  test("19.1 a merged-away customer's root follows the survivor", async () => {
+    const seed = await seedDealer("merge-root");
+    const v = await vehicle(seed);
+
+    // The RIVAL customer holds the car, so the root genuinely names the one
+    // about to be merged away rather than the one that survives.
+    await heldByDeposit(seed, v, seed.customerB);
+    const before = await resolveRoot(seed, v);
+    expect(before.kind).toBe("OWNED");
+    expect(before.customerId, "the root names the customer about to disappear").toEqual(
+      seed.customerB
+    );
+
+    await seed.asUser.mutation(api.customers.mergeCustomers, {
+      orgId: seed.orgId,
+      survivorId: seed.customerA,
+      loserId: seed.customerB,
+    });
+
+    const after = await resolveRoot(seed, v);
+    expect(after.customerId, "the root now names the survivor").toEqual(seed.customerA);
+
+    // And the merge did not quietly cost the deal its car. Reassigning a
+    // foreign key must not touch the ownership axis: same root, still holding.
+    expect(after.kind, "the car is still held").toBe("OWNED");
+    expect(after.rootId, "by the same root it always was").toEqual(before.rootId);
   });
 });

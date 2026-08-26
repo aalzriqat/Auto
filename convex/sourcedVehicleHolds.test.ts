@@ -217,7 +217,7 @@ describe("createReservation on a sourced vehicle", () => {
     expect(vehicle.preHoldStatus).toBe("SOURCING");
   });
 
-  test("a SOURCING vehicle that already carries a deposit hold can still be reserved", async () => {
+  test("a SOURCING vehicle's deposit hold RESERVES it, and a second standalone hold refuses", async () => {
     const { t, orgId, customerId, asUser } = await setup();
     const vehicleId = await makeSourcedVehicle(t, orgId);
 
@@ -231,14 +231,26 @@ describe("createReservation on a sourced vehicle", () => {
     });
     await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 500, method: "CASH" });
 
-    // createReservation calls syncVehicleHoldStatus *before* it checks the
-    // status, so the deposit hold promotes the car to RESERVED first. Rejecting
-    // RESERVED threw and rolled the promotion back with it, leaving the vehicle
-    // exactly as it started — the case this flow exists for could never pass.
-    await asUser.mutation(api.vehicles.createReservation, { orgId, vehicleId, customerId });
+    // The outcome this test was written for still holds, and it never needed
+    // the reservation: the deposit hold alone promotes a SOURCING car to
+    // RESERVED. That was always the assertion -- `createReservation` was only
+    // the thing that happened to trigger the sync.
+    expect((await getVehicle(t, vehicleId)).status).toBe("RESERVED");
 
-    const vehicle = await getVehicle(t, vehicleId);
-    expect(vehicle.status).toBe("RESERVED");
+    // SCRUM-195 / c14865. What HAS changed is the second hold. A standalone
+    // reservation carries no lineage proof, and same-customer is not proof of
+    // same-deal -- that inference is exactly what the ruling forbids, because
+    // a customer can open two genuinely independent deals on one car. So the
+    // car is already this deal's, and a second independent mechanism may not
+    // also claim it. A reservation-origin deal joins a root by explicit
+    // adoption on the quote instead.
+    await expect(
+      asUser.mutation(api.vehicles.createReservation, { orgId, vehicleId, customerId })
+    ).rejects.toThrow(/already committed to another deal/i);
+
+    // And the refusal cost the deal nothing: the car it already held is still
+    // held, by the deposit, exactly as before.
+    expect((await getVehicle(t, vehicleId)).status).toBe("RESERVED");
   });
 
   test("another customer's deposit hold still blocks a reservation", async () => {

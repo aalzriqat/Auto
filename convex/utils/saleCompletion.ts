@@ -19,6 +19,7 @@ import { throwAppError, AppErrorCode } from "./errors";
 import {
   actingRootForQuoteOnVehicle,
   assertAcquirable,
+  assertCurrentRevision,
   consumeClaimsForVehicle,
   recomputeRootsForVehicle,
   awaitingDecisionMoneyMinor,
@@ -223,6 +224,35 @@ async function prepareSaleCompletion(
     actingRootId: completingRootId,
     message: COMMITMENT_MESSAGES.heldByAnotherDealSale,
   });
+
+  // c15179. Ownership was never the missing dimension — CURRENT REVISION was.
+  //
+  // The gate above answers "is this the deal that holds the car", and on a
+  // superseded quote it correctly answers yes: a linked REVISE keeps the same
+  // server-owned root, so Q1 and Q2 prove lineage to the same OPEN root. The
+  // deal is entitled to the car. It is not entitled to complete on a revision
+  // it has already moved past.
+  //
+  // `finalizeDeal` reads the quote off the application, so an application
+  // approved on Q1 still carries Q1 after the deal renegotiated to Q2, and
+  // the reload it performs checks org, customer, vehicle and company —
+  // every one of which a stale quote satisfies. Reloading Q1 does not make
+  // Q1 current.
+  //
+  // ⚠️ It belongs HERE rather than on `finalizeDeal`, because this is the
+  // shared pre-write boundary every quote-backed completion door passes
+  // through. `assertCurrentRevision` already guarded the two EVIDENCE doors
+  // (`deposits.create`, `applications.createFromQuote`) and not this one —
+  // the same rule applied to two writers of a record and not the third,
+  // which is precisely the shape of defect this lane keeps producing. Put on
+  // the boundary, a future door inherits it instead of having to remember.
+  //
+  // Before the sale row, the SOLD transition, claim consumption, the
+  // receivable, the allocation, the journal and the outbox — the step that
+  // cannot be taken back.
+  if (args.quoteId) {
+    await assertCurrentRevision(ctx, args.quoteId);
+  }
 
   // c14909. A deal cannot complete while it is still holding money that came
   // off a vehicle and has not been ruled on.
@@ -907,15 +937,6 @@ async function heldDepositRowsForVehicle(
   return deposits
     .filter((d) => d.holdActive && d.isDeleted !== true && d.vehicleId === vehicleId)
     .map((d) => ({ depositId: d._id, customerId: d.customerId, amount: d.amount, method: d.method }));
-}
-
-async function heldDepositTotalForVehicle(
-  ctx: MutationCtx,
-  quoteId: Id<"quotes">,
-  vehicleId: Id<"vehicles">
-): Promise<number> {
-  const rows = await heldDepositRowsForVehicle(ctx, quoteId, vehicleId);
-  return rows.reduce((sum, r) => sum + r.amount, 0);
 }
 
 

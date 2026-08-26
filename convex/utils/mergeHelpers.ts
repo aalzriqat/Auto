@@ -41,6 +41,19 @@ export const CUSTOMER_REFERENCING_TABLES = [
         .collect(),
   },
   {
+    // SCRUM-195. `commitmentRoots.customerId` is descriptive rather than
+    // identity -- the root is server-owned and a customer never keys it --
+    // but it is still a real foreign key, and the resolver returns it as the
+    // answer to "whose deal holds this car". Left out of this registry, a
+    // merge would leave a live root naming a customer that was merged away.
+    table: "commitmentRoots" as const,
+    find: (ctx: QueryCtx, orgId: Id<"organizations">, customerId: Id<"customers">) =>
+      ctx.db
+        .query("commitmentRoots")
+        .withIndex("by_org_customer", (q) => q.eq("orgId", orgId).eq("customerId", customerId))
+        .collect(),
+  },
+  {
     table: "leads" as const,
     find: (ctx: QueryCtx, orgId: Id<"organizations">, customerId: Id<"customers">) =>
       ctx.db

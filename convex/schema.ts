@@ -2150,7 +2150,10 @@ export default defineSchema({
     .index("by_org_vehicle_status", ["orgId", "vehicleId", "status"])
     .index("by_org_vehicle", ["orgId", "vehicleId"])
     .index("by_head_quote", ["headQuoteId"])
-    .index("by_org_reservation", ["orgId", "originReservationId"]),
+    .index("by_org_reservation", ["orgId", "originReservationId"])
+    // Merging two customers has to be able to FIND the roots that name the
+    // loser, or a root keeps pointing at a customer that no longer exists.
+    .index("by_org_customer", ["orgId", "customerId"]),
 
   /**
    * SCRUM-195 — WHAT EVIDENCE HOLDS A CAR FOR A ROOT.
