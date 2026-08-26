@@ -21,7 +21,7 @@ import {
   assertAcquirable,
   consumeClaimsForVehicle,
   recomputeRootsForVehicle,
-  residualAfterCompletionMinor,
+  awaitingDecisionMoneyMinor,
   COMMITMENT_MESSAGES,
 } from "../commitments";
 import { requireOrgMember } from "./tenancy";
@@ -225,22 +225,19 @@ async function prepareSaleCompletion(
   });
 
   // c14909. A deal cannot complete while it is still holding money that came
-  // off another vehicle and has not been ruled on.
+  // off a vehicle and has not been ruled on.
   //
-  // ⚠️ Measured AFTER subtracting what this completion itself will settle —
-  // otherwise every sale with a deposit would refuse itself. What blocks the
-  // sale is the money this completion will NOT touch.
+  // Only the genuinely undecided buckets count — RELEASED_AWAITING_DECISION and
+  // REVERSING. Money still ALLOCATED to another car on the deal is not
+  // undecided; it is assigned, waiting for that car's own sale, and counting it
+  // would refuse every ordinary multi-vehicle completion.
   //
-  // ⚠️ And it is checked HERE, in prepare, before the sale row, the vehicle
-  // patch, the claims and the accounting. Refusing afterwards would mean the
-  // car had already changed hands while part of the customer's payment sat
+  // ⚠️ Checked HERE, in prepare, before the sale row, the vehicle patch, the
+  // claims and the accounting. Refusing afterwards would mean the car had
+  // already changed hands while part of the customer's payment sat
   // unattributed, which is the failure this rule exists to prevent.
   if (completingRootId) {
-    const undecidedMinor = await residualAfterCompletionMinor(
-      ctx,
-      completingRootId,
-      args.vehicleId
-    );
+    const undecidedMinor = await awaitingDecisionMoneyMinor(ctx, completingRootId);
     if (undecidedMinor > 0) {
       throw new ConvexError(COMMITMENT_MESSAGES.residualMoneyUndecided);
     }

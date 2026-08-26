@@ -104,6 +104,25 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // deposit, so it must not outlive the row it points at.
   { kind: "orgRows", table: "depositApplications", index: "by_org" },
   { kind: "orgRows", table: "deposits", index: "by_org" },
+  // ── SCRUM-195 commitment authority ──────────────────────────────────────
+  //
+  // ⚠️ DELIBERATELY LATE, and later than the usual child-first instinct would
+  // put them. Every other step here is ordered so a child never outlives its
+  // parent. These two are ordered the other way round on purpose.
+  //
+  // A purge can fail partway and leave the organization half-deleted, and it is
+  // recoverable — so what matters is what a SURVIVING row looks like at every
+  // intermediate point. If the claims went early, a failed run could leave
+  // vehicles still present and deposits still present with no commitment
+  // evidence between them: every one of those cars would read FREE and be
+  // sellable to anyone, and the money against them would have no owner. That is
+  // strictly worse than a dangling reference.
+  //
+  // Placed after BOTH `vehiclesWithStorage` and `deposits`, so at no point does
+  // a sellable vehicle or live deposit money survive without the evidence that
+  // says who it belongs to.
+  { kind: "orgRows", table: "vehicleCommitmentClaims", index: "by_org_vehicle_status" },
+  { kind: "orgRows", table: "commitmentRoots", index: "by_org_vehicle" },
   { kind: "orgRows", table: "receivables", index: "by_org" },
   { kind: "orgRows", table: "collectionPayments", index: "by_org" },
   { kind: "orgRows", table: "postDatedCheques", index: "by_org" },

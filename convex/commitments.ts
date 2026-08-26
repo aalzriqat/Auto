@@ -1047,23 +1047,33 @@ export async function residualUnsettledRootMoneyMinor(
 }
 
 /**
- * What would STILL be undecided after this completion has done its own work.
+ * Money on this deal that is waiting for a PERSON to decide what happens to it.
  *
- * ⚠️ The subtraction is the whole point. A completion applies the slices for
- * the car being sold, so counting those as "undecided" would refuse every
- * completion that had any deposit at all. What must block the sale is money
- * this completion will NOT touch — a share taken off another vehicle and left
- * awaiting a refund-or-forfeit ruling.
+ * ⚠️ The name and the signature were both wrong before, and the owner caught it.
+ * This was called `residualAfterCompletionMinor`, took a `completingVehicleId`
+ * it never used, and claimed to "subtract what this completion settles". It
+ * does no subtraction at all — it counts two buckets.
  *
- * c14909: that ruling has to happen BEFORE the sale, not after. Completing
- * around it finalises the sale, posts the accounting and hands over the car
- * while part of the customer's money is unattributed — and nothing afterwards
- * is obliged to come back and ask.
+ * The subtraction was real in the first version and was removed for a good
+ * reason: it also counted another car's still-ALLOCATED slice, which refused
+ * every ordinary multi-vehicle completion. Allocated money is not undecided; it
+ * is assigned to a car and waiting for that car's own sale. Once the buckets
+ * narrowed to the genuinely undecided ones, the completing vehicle stopped
+ * mattering — but the name, the parameter and the comment all stayed behind
+ * describing a design that no longer existed.
+ *
+ * Counted: RELEASED_AWAITING_DECISION — money taken off a vehicle and waiting
+ * for refund, forfeit or reallocation — and REVERSING, which is the same
+ * question caught mid-unwind.
+ *
+ * c14909: that decision has to happen BEFORE a sale completes, not after.
+ * Completing around it finalises the sale, posts the accounting and hands over
+ * the car while part of the customer's money is unattributed, and nothing
+ * afterwards is obliged to come back and ask.
  */
-export async function residualAfterCompletionMinor(
+export async function awaitingDecisionMoneyMinor(
   ctx: QueryCtx | MutationCtx,
-  rootId: Id<"commitmentRoots">,
-  completingVehicleId: Id<"vehicles">
+  rootId: Id<"commitmentRoots">
 ): Promise<number> {
   const deposits = await depositsForRoot(ctx, rootId);
   let total = 0;

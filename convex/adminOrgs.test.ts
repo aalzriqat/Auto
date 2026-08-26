@@ -41,6 +41,137 @@ async function runDeletionToCompletion(
 }
 
 describe("adminOrgs", () => {
+  /**
+   * SCRUM-195. An organization purge can fail partway and leave the org
+   * half-deleted, and that state is recoverable — so what matters is what a
+   * SURVIVING row looks like at every intermediate point, not only at the end.
+   *
+   * ⚠️ The dangerous ordering is the one the rest of this list uses. Every other
+   * step is child-first, so a child never outlives its parent. Applied to the
+   * commitment tables that is exactly backwards: a failed run would leave
+   * vehicles present and deposits present with no evidence between them, so
+   * every one of those cars would read FREE and be sellable to anyone, and the
+   * money against them would have no owner. A dangling reference is recoverable;
+   * a silently unowned car that somebody then sells is not.
+   *
+   * This walks the REAL purge one batch at a time and checks the invariant
+   * after each one, rather than inspecting the step list — a list can be
+   * reordered without anyone noticing that the meaning changed.
+   */
+  test("commitment evidence outlives every surviving vehicle and deposit during a purge", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, ownerId } = await seedOrgWithOwner(t);
+    await t.run(async (ctx) => ctx.db.insert("users", { clerkId: "dev_purge", email: "admin@autoflow.dev" }));
+    const asAdmin = t.withIdentity({ subject: "dev_purge" });
+
+    const customerId = await t.run(async (ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Held", lastName: "Buyer" })
+    );
+    const vehicleId = await t.run(async (ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "PURGEORDER0000001",
+        make: "Toyota",
+        model: "Land Cruiser",
+        year: 2024,
+        mileage: 10,
+        color: "White",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        sellingPrice: 28_000,
+        status: "RESERVED",
+      })
+    );
+    const rootId = await t.run(async (ctx) =>
+      ctx.db.insert("commitmentRoots", {
+        orgId,
+        vehicleId,
+        customerId,
+        status: "OPEN",
+        revision: 1,
+        createdAt: Date.now(),
+        createdBy: ownerId,
+      })
+    );
+    const depositId = await t.run(async (ctx) =>
+      ctx.db.insert("deposits", {
+        orgId,
+        vehicleId,
+        customerId,
+        amount: 1_500,
+        status: "HELD",
+        holdActive: true,
+        createdBy: ownerId,
+        createdAt: Date.now(),
+      })
+    );
+    await t.run(async (ctx) =>
+      ctx.db.insert("vehicleCommitmentClaims", {
+        orgId,
+        rootId,
+        vehicleId,
+        kind: "DEPOSIT",
+        status: "ACTIVE",
+        depositId,
+        createdAt: Date.now(),
+        createdBy: ownerId,
+      })
+    );
+
+    const request = await asAdmin.mutation(api.adminOrgs.hardDeleteOrg, {
+      orgId,
+      confirmName: "Acme Motors",
+    });
+
+    let sawVehicleStillPresent = false;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const current = await t.run(async (ctx) => ctx.db.get(request.requestId));
+      if (current?.status !== "RUNNING") break;
+      await t.mutation(internal.adminOrgs.runDeletionRequestBatch, { requestId: request.requestId });
+
+      const surviving = await t.run(async (ctx) => ({
+        vehicles: (await ctx.db.query("vehicles").collect()).filter((v) => v.orgId === orgId).length,
+        deposits: (await ctx.db.query("deposits").collect()).filter((d) => d.orgId === orgId).length,
+        claims: (await ctx.db.query("vehicleCommitmentClaims").collect()).filter(
+          (c) => c.orgId === orgId
+        ).length,
+        roots: (await ctx.db.query("commitmentRoots").collect()).filter((r) => r.orgId === orgId)
+          .length,
+      }));
+
+      if (surviving.vehicles > 0) {
+        sawVehicleStillPresent = true;
+        expect(
+          surviving.claims,
+          "a surviving vehicle must still carry the evidence that says it is spoken for"
+        ).toBeGreaterThan(0);
+        expect(surviving.roots, "and the root that owns it").toBeGreaterThan(0);
+      }
+      if (surviving.deposits > 0) {
+        expect(
+          surviving.claims,
+          "surviving deposit money must still have an owner"
+        ).toBeGreaterThan(0);
+      }
+    }
+
+    // Proves the loop actually observed the risky window rather than passing
+    // because the vehicle was gone by the first batch.
+    expect(sawVehicleStillPresent, "the purge must have been observed mid-flight").toBe(true);
+
+    const leftovers = await t.run(async (ctx) => ({
+      claims: (await ctx.db.query("vehicleCommitmentClaims").collect()).filter(
+        (c) => c.orgId === orgId
+      ).length,
+      roots: (await ctx.db.query("commitmentRoots").collect()).filter((r) => r.orgId === orgId)
+        .length,
+    }));
+    expect(leftovers, "and a completed purge leaves nothing behind").toEqual({
+      claims: 0,
+      roots: 0,
+    });
+  });
+
   test("event tables are purged in smaller batches than ordinary org rows", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithOwner(t);
