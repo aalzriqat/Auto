@@ -92,6 +92,29 @@ jobs:
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
 
+      - name: Mark the preview backend disposable and stamp the commit
+        # SCRUM-195. The commitment contention suite deliberately tries to
+        # double-book inventory, so it refuses to run unless the BACKEND says it
+        # is a throwaway. That declaration lives on the deployment rather than
+        # in the workflow, because a workflow variable proves what CI intended
+        # and not what actually answered the races.
+        #
+        # `DEPLOYMENT_GIT_SHA` is the other half: without it a green run cannot
+        # be attributed to a candidate commit, and a race that passed against a
+        # stale preview would be reported under the SHA that was merely checked
+        # out. The suite treats a missing value as absent evidence, not a pass.
+        #
+        # No `|| true`. If these do not take, the contention gate cannot mean
+        # anything, and a step that swallows its own failure is how an
+        # unexecuted gate comes to read as a passing one.
+        run: |
+          set -euo pipefail
+          pnpm exec convex env set AUTOFLOW_DISPOSABLE_DEPLOYMENT true
+          pnpm exec convex env set DEPLOYMENT_GIT_SHA "$GITHUB_SHA"
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          GITHUB_SHA: ${{ github.sha }}
+
       - name: Run Playwright tests
         # playwright.config.ts's webServer builds and starts the production
         # server itself and waits for it to be ready, so no separate
@@ -112,6 +135,10 @@ jobs:
           # skip reads exactly like a pass.
           E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
           E2E_APPROVER_PASSWORD: ${{ secrets.E2E_APPROVER_PASSWORD }}
+          # SCRUM-195: the contention suite compares this against the SHA the
+          # BACKEND reports, so a race can only be attributed to the commit that
+          # actually answered it.
+          GITHUB_SHA: ${{ github.sha }}
           CI: true
 
       - name: Upload Playwright report

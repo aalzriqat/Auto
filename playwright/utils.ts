@@ -99,7 +99,7 @@ function testVin(): string {
   return `E2E${timePart}${randomPart}`;
 }
 
-async function authenticatedConvexClient(page: Page): Promise<ConvexHttpClient> {
+export async function authenticatedConvexClient(page: Page): Promise<ConvexHttpClient> {
   const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
   if (!convexUrl) {
     throw new Error("NEXT_PUBLIC_CONVEX_URL must be set to seed dealer-site E2E data.");
