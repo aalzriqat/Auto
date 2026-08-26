@@ -1,6 +1,7 @@
 // Native port of the web SalesWizard (components/sales/SalesWizard.tsx):
 // the same 4-step quote flow — Setup → Customer → Review → Success — with
 // CASH (teal) and INSTALLMENT (indigo) accents, murabaha finance comparison,
+import { stableQuoteIdempotencyKey } from "@autoflow/shared/quoteIdentity";
 // customer-status gating, and profit-approval blocking.
 import { useMutation, useQuery } from "convex/react";
 import * as Print from "expo-print";
@@ -22,6 +23,7 @@ import {
   api,
   type MobileCustomer,
   type MobileFinanceCompany,
+  type MobileQuoteMode,
 } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { type AppTheme } from "../../../theme";
@@ -449,12 +451,18 @@ export function SalesWizardScreen({
     setSaving(true);
     try {
       const manual = selectedCompanyId === OTHER_COMPANY_ID;
-      const id = await saveQuote({
+      const quotePayload = {
         orgId,
         customerId: customer._id,
         vehicleId,
         companyId: !isCash && !manual ? selectedCompanyId : undefined,
-        mode: isCash ? "CASH" : manual ? "MANUAL_FINANCE_COMPANY" : "CONFIGURED_FINANCE_COMPANY",
+        // Annotated because lifting the literal into a variable widens the
+        // ternary to `string`, which no longer satisfies the mode union.
+        mode: (isCash
+          ? "CASH"
+          : manual
+            ? "MANUAL_FINANCE_COMPANY"
+            : "CONFIGURED_FINANCE_COMPANY") as MobileQuoteMode,
         vehiclePrice: price,
         desiredProfit: profit,
         downPayment: down,
@@ -471,6 +479,15 @@ export function SalesWizardScreen({
         manualAdminFees: manual ? parseOptionalNumber(manualFees) ?? 0 : undefined,
         manualCommission: manual ? parseOptionalNumber(manualCommission) ?? 0 : undefined,
         manualIncludesCommissionInDebt: manual ? manualIncludesCommission : undefined,
+      };
+      // SCRUM-195. Mobile needs this more than the web does, not less: a
+      // salesperson on dealership wifi taps Save, the response is lost, they
+      // tap again — and without a stable key that is two deals on one car.
+      // Derived from the payload, so a genuine edit-and-resubmit is a new
+      // revision rather than a conflict.
+      const id = await saveQuote({
+        ...quotePayload,
+        idempotencyKey: stableQuoteIdempotencyKey(quotePayload),
       });
       setQuoteId(id);
       clearDraft({ orgId }).catch((error: unknown) => console.error(error));

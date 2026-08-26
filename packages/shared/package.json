@@ -22,6 +22,10 @@
       "types": "./src/whatsapp.ts",
       "default": "./src/whatsapp.ts"
     },
+    "./quoteIdentity": {
+      "types": "./src/quoteIdentity.ts",
+      "default": "./src/quoteIdentity.ts"
+    },
     "./financing": {
       "types": "./src/financing.ts",
       "default": "./src/financing.ts"

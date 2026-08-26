@@ -1919,6 +1919,26 @@ type QuoteSaveArgs = OrgScopedArgs & {
   manualAdminFees?: number;
   manualCommission?: number;
   manualIncludesCommissionInDebt?: boolean;
+
+  // ── SCRUM-195 lineage ──────────────────────────────────────────────────────
+  //
+  // Mobile binds this mutation by STRING (`"quotes:saveQuote"`), so nothing
+  // about the backend's argument list reaches it automatically — this hand-kept
+  // type is the whole contract. Adding the fields on the server without adding
+  // them here leaves mobile permanently unable to send them, and silently: the
+  // calls keep compiling and keep working, just always as unidentified,
+  // un-lineaged quotes.
+  //
+  // Optional during the backend-first rollout. A caller sending none of them is
+  // NOT cutover ready, and the server-side fallback cannot be removed while any
+  // supported caller still omits them.
+
+  /** Stable per user intention, so a retry returns the same quote rather than a second deal. */
+  idempotencyKey?: string;
+  /** REVISE: the current head this quote replaces. Checked as compare-and-swap. */
+  supersedesQuoteId?: string;
+  /** Explicit proof that this quote adopts a reservation's deal. Never inferred from the customer. */
+  adoptReservationId?: string;
 };
 
 type TransactionMutationArgs = OrgScopedArgs & {

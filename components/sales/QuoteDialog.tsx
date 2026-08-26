@@ -33,6 +33,7 @@ import { CheckCircle2 } from "lucide-react";
 
 import { quoteSchema, QuoteFormValues, QuoteDialogProps } from "./quote.schema";
 import { getErrorMessage } from "@/lib/errors";
+import { stableQuoteIdempotencyKey } from "@autoflow/shared/quoteIdentity";
 
 
 export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCustomerId }: QuoteDialogProps) {
@@ -170,11 +171,13 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
         (vehicle: Doc<"vehicles">) => vehicle._id === values.vehicleId
       );
       const desiredProfit = Number(values.vehiclePrice) - (quotedVehicle?.sellingPrice ?? 0);
-      await saveQuote({
+      const quotePayload = {
         orgId: activeOrgId,
         vehicleId: values.vehicleId as Id<"vehicles">,
         customerId: values.customerId as Id<"customers">,
-        mode: companyResult.isCash ? "CASH" : "CONFIGURED_FINANCE_COMPANY",
+        mode: (companyResult.isCash ? "CASH" : "CONFIGURED_FINANCE_COMPANY") as
+          | "CASH"
+          | "CONFIGURED_FINANCE_COMPANY",
         companyId: companyResult.isCash ? undefined : (companyResult.companyId as Id<"financeCompanies">),
         vehiclePrice: Number(values.vehiclePrice),
         desiredProfit,
@@ -184,6 +187,14 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
         monthlyInstallment: companyResult.monthlyInstallment,
         profitRateApplied: companyResult.profitRateApplied,
         totalProfit: companyResult.totalProfit,
+      };
+      await saveQuote({
+        ...quotePayload,
+        // SCRUM-195. Same reasoning as the wizard: a duplicate quote is a
+        // second claimant on the car, not a duplicate row. The key is lifted
+        // from the payload so an identical resubmit is idempotent and an edited
+        // one is a new revision.
+        idempotencyKey: stableQuoteIdempotencyKey(quotePayload),
       });
       toast.success(t("QuoteSavedSuccess" as any));
       onOpenChange(false);

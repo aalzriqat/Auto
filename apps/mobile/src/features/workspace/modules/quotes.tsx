@@ -1,3 +1,4 @@
+import { stableQuoteIdempotencyKey } from "@autoflow/shared/quoteIdentity";
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { useState } from "react";
 import { Text, View } from "react-native";
@@ -128,7 +129,7 @@ export function QuotesModule({ orgId }: { orgId: string }) {
     const listPrice = (vehicles ?? []).find((vehicle) => vehicle._id === form.vehicleId)?.sellingPrice ?? 0;
     setSaving(true);
     try {
-      await saveQuote({
+      const quotePayload = {
         orgId,
         customerId: form.customerId,
         vehicleId: form.vehicleId,
@@ -140,6 +141,12 @@ export function QuotesModule({ orgId }: { orgId: string }) {
         termMonths,
         monthlyInstallment: parseOptionalNumber(form.monthlyInstallment),
         recipientName: maybeText(form.recipientName),
+      };
+      // SCRUM-195: stable operation identity, so a retry on a bad connection
+      // returns the same quote instead of opening a second deal on the car.
+      await saveQuote({
+        ...quotePayload,
+        idempotencyKey: stableQuoteIdempotencyKey(quotePayload),
       });
       setCustomerId(form.customerId);
       closeQuoteForm();

@@ -18,6 +18,7 @@ import { ArrowLeft, CheckCircle2, Car, User, TrendingUp, FileText } from "lucide
 import  ReviewVehicleCard  from "../components/ReviewVehicleCard";
 import  ReviewVehicleListCard  from "../components/ReviewVehicleListCard";
 import  ReviewCustomerCard  from "../components/ReviewCustomerCard";
+import { stableQuoteIdempotencyKey } from "@autoflow/shared/quoteIdentity";
 import  ReviewFinanceSummary  from "../components/ReviewFinanceSummary";
 import { buildWizardQuotePayload } from "../quotePayload";
 
@@ -196,6 +197,12 @@ export function Step3Review({
         customerId: quotePayload.customerId as Id<"customers">,
         leadId: quotePayload.leadId as Id<"leads"> | undefined,
         companyId: quotePayload.companyId as Id<"financeCompanies"> | undefined,
+        // SCRUM-195. A saved quote can open a commitment root, and a root holds
+        // a physical car — so a double-submit here is a second claimant on the
+        // vehicle, not a duplicate row in a list. Derived from the payload, so
+        // an identical resubmission returns the same quote while an edited one
+        // is a genuinely new revision.
+        idempotencyKey: stableQuoteIdempotencyKey(quotePayload),
       });
 
       toast.success(t("QuoteSavedSuccess"));
