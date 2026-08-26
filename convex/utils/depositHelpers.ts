@@ -10,6 +10,7 @@ import { fromMinorUnits } from "./money";
 import { liveAppliedMinorForDeposit } from "./depositApplications";
 import { assertQuoteDepositConservation } from "./depositAllocation";
 import { createCanonicalPayment } from "../subledger";
+import { hasActiveFinanceClaim } from "../commitments";
 import {
   getOrgCurrency,
   hookDepositRefunded,
@@ -254,9 +255,19 @@ export async function syncVehicleHoldStatus(
   if (!vehicle || vehicle.isDeleted) return;
   if (vehicle.status === "SOLD" || vehicle.status === "ARCHIVED") return;
 
+  // c14865: an ACTIVE finance commitment participates in the advisory RESERVED
+  // projection alongside deposits and reservations. It did not before, because
+  // nothing in this path knew finance applications existed — which is why a car
+  // held only by a live application sat on the lot reading AVAILABLE.
+  //
+  // ⚠️ Still only a PROJECTION. Enforcement lives in the commitment authority;
+  // this decides what the screen says, not what is permitted. The three inputs
+  // are OR-ed rather than ranked because any one of them means somebody is
+  // waiting on this car.
   const hasHold =
     (await hasActiveDepositHold(ctx, vehicleId)) ||
-    (await hasActiveReservationHold(ctx, { orgId: vehicle.orgId, vehicleId }));
+    (await hasActiveReservationHold(ctx, { orgId: vehicle.orgId, vehicleId })) ||
+    (await hasActiveFinanceClaim(ctx, vehicle.orgId, vehicleId));
 
   // One resolver decides the target for both this function and the
   // reconcileVehicleHolds migration, so a dry-run preview cannot disagree with

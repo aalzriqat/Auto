@@ -1148,15 +1148,24 @@ describe("8. finance claim lifecycle", () => {
 
     const root = await resolveRoot(seed, v);
     expect(root.kind, "a rejected application no longer holds the car").not.toBe("OWNED");
-    // And the car is genuinely acquirable by someone else.
+    // And the car is genuinely acquirable by someone else — asserted by
+    // CONSEQUENCE. "It resolved" would have been satisfied by a mutation that
+    // returned an id while leaving the car held, which is the failure this
+    // release exists to prevent.
     const rivalQuote = await cashQuote(seed, seed.customerB, v);
-    await expectRefusal(
-      seed.asUser.mutation(api.deposits.create, {
-        orgId: seed.orgId,
-        quoteId: rivalQuote,
-        amount: 1_000,
-      })
-    ).resolves.toBeTruthy();
+    const rivalDeposit = (await seed.asUser.mutation(api.deposits.create, {
+      orgId: seed.orgId,
+      quoteId: rivalQuote,
+      amount: 1_000,
+    })) as Id<"deposits">;
+
+    const rivalRow = await seed.t.run((ctx) => ctx.db.get(rivalDeposit));
+    expect(rivalRow?.holdActive, "the rival really holds the freed car").toBe(true);
+    const afterRival = await resolveRoot(seed, v);
+    expect(afterRival.kind).toBe("OWNED");
+    expect(afterRival.customerId, "and the car belongs to the rival's deal now").toBe(
+      seed.customerB
+    );
   });
 
   test("8.2 REOPENING reacquires THE SAME root it released", async () => {
@@ -1285,6 +1294,62 @@ describe("9. status projection", () => {
     // SOLD wins. A projection that recomputed RESERVED from the consumed claim
     // would take a sold car back out of the sold state.
     expect((await vehicleRow(seed, v)).status).toBe("SOLD");
+  });
+
+  test("9.5 SOFT-DELETE consults the authority, not the projection", async () => {
+    // ⚠️ This contract exists because 3.4 went green without soft-delete ever
+    // being wired. It passed on `vehicle.status === "RESERVED"` — a guard that
+    // only fired because the new finance claim happens to project RESERVED.
+    // Correct answer, wrong authority, and a projection-based guard is exactly
+    // what 9.4 proves can be bypassed. Forcing the status apart from the
+    // commitment separates the two: the refusal must survive the lie.
+    const seed = await seedDealer("del-not-projection");
+    const v = await vehicle(seed);
+    await heldByFinance(seed, v, seed.customerB);
+    await seed.t.run((ctx) => ctx.db.patch(v, { status: "AVAILABLE" as const }));
+
+    await expectRefusal(
+      seed.asUser.mutation(api.vehicles.softDelete, { orgId: seed.orgId, vehicleId: v })
+    , /committed|another deal|already held|in use|cannot delete|application/i,
+      "a live commitment must block deletion even when the status says AVAILABLE");
+
+    const row = await vehicleRow(seed, v);
+    expect(row.isDeleted ?? false).toBe(false);
+  });
+
+  test("9.6 ARCHIVE consults the authority, not the projection", async () => {
+    const seed = await seedDealer("arch-not-projection");
+    const v = await vehicle(seed);
+    await heldByFinance(seed, v, seed.customerB);
+    await seed.t.run((ctx) => ctx.db.patch(v, { status: "AVAILABLE" as const }));
+
+    await expectRefusal(
+      seed.asUser.mutation(api.vehicles.update, {
+        orgId: seed.orgId,
+        vehicleId: v,
+        status: "ARCHIVED" as const,
+      })
+    , /committed|another deal|already held|in use|cannot archive|application|release the (reservation|deposit)/i,
+      "a live commitment must block archiving even when the status says AVAILABLE");
+
+    expect((await vehicleRow(seed, v)).status).not.toBe("ARCHIVED");
+  });
+
+  test("9.7 an AMBIGUOUS car cannot be quietly removed from inventory", async () => {
+    // The car with conflicting records is precisely the one that must not
+    // vanish from the lot while the conflict is unresolved.
+    const seed = await seedDealer("amb-no-removal");
+    const v = await vehicle(seed);
+    const rootOne = await seedRoot(seed, v, "OPEN", seed.customerA);
+    await seedActiveClaim(seed, v, rootOne);
+    const rootTwo = await seedRoot(seed, v, "OPEN", seed.customerB);
+    await seedActiveClaim(seed, v, rootTwo);
+
+    await expectRefusal(
+      seed.asUser.mutation(api.vehicles.softDelete, { orgId: seed.orgId, vehicleId: v })
+    , /ambiguous|cannot be determined|conflicting|committed|another deal|cannot delete/i);
+
+    expect((await vehicleRow(seed, v)).isDeleted ?? false).toBe(false);
   });
 
   test("9.4 forcing the STATUS does not move the AUTHORITY", async () => {

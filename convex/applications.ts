@@ -9,7 +9,19 @@ import {
 } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifications";
-import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
+import {
+  releaseHoldForApplicationQuote,
+  syncVehicleHoldStatus,
+  type DepositTreatment,
+} from "./utils/depositHelpers";
+import {
+  acquireVehicleForQuote,
+  actingRootForQuoteOnVehicle,
+  assertAcquirable,
+  assertCurrentRevision,
+  reacquireForApplication,
+  releaseClaimsForApplication,
+} from "./commitments";
 import { depositMethodValidator, type DepositMethod } from "./utils/depositRecording";
 import { completeSale } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
@@ -2056,6 +2068,35 @@ export const createFromQuote = mutation({
       }
     }
 
+    // SCRUM-195. Asked AFTER the shape checks above and BEFORE any write, so a
+    // multi-vehicle or malformed quote fails on its own error and never leaves
+    // a partial claim behind.
+    //
+    // The in-flight check above is about APPLICATIONS competing with each
+    // other. This is about the car: a deposit or a reservation held by another
+    // deal blocks a finance application too, and neither of those is visible to
+    // a `financeApplications` query. `grep -c financeApplications` over
+    // deposits.ts, vehicles.ts and utils/depositHelpers.ts returned 0, 0, 0 —
+    // the three readers never consulted one another, which is how a car could
+    // be spoken for three times at once.
+    //
+    // ⚠️ The quote is the lineage proof, and customer identity is never
+    // consulted. The same customer opening a second independent deal on a car
+    // they already hold is a rival here, exactly as it is for deposits.
+    await assertCurrentRevision(ctx, args.quoteId);
+    for (const item of quoteVehicleItems) {
+      await assertAcquirable(ctx, {
+        orgId: args.orgId,
+        vehicleId: item.vehicleId,
+        actingRootId: await actingRootForQuoteOnVehicle(
+          ctx,
+          args.orgId,
+          args.quoteId,
+          item.vehicleId
+        ),
+      });
+    }
+
     const guarantors = await ctx.db
       .query("guarantors")
       .withIndex("by_customer", (q) => q.eq("customerId", quote.customerId))
@@ -2173,6 +2214,26 @@ export const createFromQuote = mutation({
       ...(manualFinanceSnapshot ? { manualFinanceSnapshot } : {}),
       underwritingSnapshot,
     });
+
+    // SCRUM-195: the live application is per-vehicle commitment evidence in its
+    // own right — no deposit required. This either joins the root the deal
+    // already holds the car under (a deposit taken before applying for finance
+    // is the ordinary financed flow) or opens the root the deal is known by.
+    for (const item of quoteVehicleItems) {
+      await acquireVehicleForQuote(ctx, {
+        orgId: args.orgId,
+        vehicleId: item.vehicleId,
+        quoteId: args.quoteId,
+        customerId: quote.customerId,
+        createdBy: auth.user._id,
+        kind: "FINANCE",
+        applicationId: appId,
+      });
+    }
+    // The advisory projection follows the authority: an ACTIVE finance
+    // commitment reads RESERVED (c14865), which it did not before because
+    // nothing in the status path knew finance applications existed.
+    await syncVehicleHoldStatus(ctx, quote.vehicleId, auth.user._id);
 
     await ctx.db.insert("applicationStatusLog", {
       orgId: args.orgId,
@@ -2310,6 +2371,32 @@ export const updateStatus = mutation({
 
     if (args.status === "REJECTED" && app.status !== "REJECTED") {
       await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId, actorId: auth.user._id });
+      // SCRUM-195: a rejected application stops holding the car. Released, not
+      // consumed — the deal did not complete, and `resolveClaim` recomputes the
+      // root, so a same-root deposit still holding the car keeps it held.
+      await releaseClaimsForApplication(
+        ctx,
+        args.applicationId,
+        "finance application rejected"
+      );
+      await syncVehicleHoldStatus(ctx, app.vehicleId, auth.user._id);
+    }
+
+    // Reopening out of REJECTED is a REAL ACQUISITION, not a bookkeeping undo:
+    // the car was genuinely free in between and may now belong to someone else.
+    // It goes through the authority like any other writer, and lands back on
+    // the SAME root — a fresh one would orphan the deal's money, revisions and
+    // audit trail.
+    if (app.status === "REJECTED" && args.status !== "REJECTED") {
+      await reacquireForApplication(ctx, {
+        orgId: args.orgId,
+        applicationId: args.applicationId,
+        vehicleId: app.vehicleId,
+        customerId: app.customerId,
+        quoteId: app.quoteId,
+        createdBy: auth.user._id,
+      });
+      await syncVehicleHoldStatus(ctx, app.vehicleId, auth.user._id);
     }
   },
 });

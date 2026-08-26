@@ -59,6 +59,14 @@ export const COMMITMENT_MESSAGES = {
    */
   ambiguousOwnership:
     "This vehicle's ownership cannot be determined: it carries conflicting commitment records. Resolve the conflicting deals before it can be committed or sold.",
+  /**
+   * Reopening after a rejection is a real acquisition. Between the two, the car
+   * was genuinely free, so somebody else may legitimately have taken it — and
+   * saying so is kinder than a generic refusal, because the salesperson needs
+   * to know the car is gone rather than that "something went wrong".
+   */
+  reopenLostTheCar:
+    "This vehicle was committed to another deal while this application was rejected, so it cannot be reopened on the same car. Choose another vehicle or release the other commitment.",
   staleRevision:
     "This deal has moved on since that quote was written. Use the deal's current revision.",
   notTheHead:
@@ -591,6 +599,93 @@ export async function releaseClaimsForDeposit(
   }
 }
 
+/** Release every ACTIVE FINANCE claim carried by one application. */
+export async function releaseClaimsForApplication(
+  ctx: MutationCtx,
+  applicationId: Id<"financeApplications">,
+  reason: string
+): Promise<void> {
+  const claims = await ctx.db
+    .query("vehicleCommitmentClaims")
+    .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+    .take(50);
+  for (const claim of claims) {
+    if (claim.status !== "ACTIVE") continue;
+    await resolveClaim(ctx, claim._id, "RELEASED", reason);
+  }
+}
+
+/**
+ * Reopen a released application back onto THE ROOT IT RELEASED, or refuse.
+ *
+ * ⚠️ Reacquisition is a real acquisition, not a bookkeeping undo. Between the
+ * rejection and the reopen the car was genuinely free, and somebody else may
+ * have taken it — so this goes through `assertAcquirable` like any other
+ * writer, and refuses if a rival root now owns it or if ownership is ambiguous.
+ *
+ * ⚠️ And it must land on the SAME concrete root. Minting a fresh one would
+ * fragment the deal's lineage: its earlier money, revisions and audit trail all
+ * hang off the original, and a reopened application pointing at a new root
+ * quietly orphans them. A previous design "proved" this with
+ * `String(rootId)` — where `String(undefined)` is `"undefined"`, truthy, and
+ * equal to itself — so a resolver that never minted a root satisfied it. The
+ * root id is carried on the released claim and compared as a real value.
+ */
+export async function reacquireForApplication(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    applicationId: Id<"financeApplications">;
+    vehicleId: Id<"vehicles">;
+    customerId: Id<"customers">;
+    quoteId?: Id<"quotes">;
+    createdBy: Id<"users">;
+  }
+): Promise<Id<"commitmentRoots"> | null> {
+  const priorClaims = await ctx.db
+    .query("vehicleCommitmentClaims")
+    .withIndex("by_application", (q) => q.eq("applicationId", args.applicationId))
+    .take(50);
+  const forVehicle = priorClaims.filter((c) => c.vehicleId === args.vehicleId);
+  if (forVehicle.some((c) => c.status === "ACTIVE")) return forVehicle[0].rootId;
+
+  // Applications predating SCRUM-195 carry no claim at all; those acquire
+  // fresh rather than being refused for a lineage they never had.
+  const previous = forVehicle.sort((a, b) => b.createdAt - a.createdAt)[0];
+  if (!previous) {
+    return await acquireVehicleForQuote(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      quoteId: args.quoteId,
+      customerId: args.customerId,
+      createdBy: args.createdBy,
+      kind: "FINANCE",
+      applicationId: args.applicationId,
+    });
+  }
+
+  const root = await ctx.db.get(previous.rootId);
+  if (!root || root.orgId !== args.orgId) return null;
+
+  await assertAcquirable(ctx, {
+    orgId: args.orgId,
+    vehicleId: args.vehicleId,
+    actingRootId: root._id,
+    message: COMMITMENT_MESSAGES.reopenLostTheCar,
+  });
+
+  await attachClaim(ctx, {
+    orgId: args.orgId,
+    rootId: root._id,
+    vehicleId: args.vehicleId,
+    kind: "FINANCE",
+    createdBy: args.createdBy,
+    applicationId: args.applicationId,
+    quoteId: args.quoteId,
+  });
+  return root._id;
+}
+
 /** Every ACTIVE claim on a vehicle, whatever root or kind it belongs to. */
 export async function activeClaimsForVehicle(
   ctx: QueryCtx | MutationCtx,
@@ -744,11 +839,16 @@ export async function hasActiveFinanceClaim(
   orgId: Id<"organizations">,
   vehicleId: Id<"vehicles">
 ): Promise<boolean> {
-  const claims = await ctx.db
+  // Streamed with an early exit on the first match. The index is keyed by
+  // status rather than kind, so a fixed page could miss a FINANCE claim sitting
+  // behind other kinds — the same row-51 shape, and this one decides whether a
+  // held car looks available on the lot.
+  for await (const claim of ctx.db
     .query("vehicleCommitmentClaims")
     .withIndex("by_org_vehicle_status", (q) =>
       q.eq("orgId", orgId).eq("vehicleId", vehicleId).eq("status", "ACTIVE")
-    )
-    .take(50);
-  return claims.some((c) => c.kind === "FINANCE");
+    )) {
+    if (claim.kind === "FINANCE") return true;
+  }
+  return false;
 }

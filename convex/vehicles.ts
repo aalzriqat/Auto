@@ -33,6 +33,11 @@ function generateImportVinPlaceholder(): string {
 }
 import { syncVehicleHoldStatus, getDefaultReservationExpiry, getActiveDepositHolds } from "./utils/depositHelpers";
 import {
+  acquireVehicleForQuote,
+  assertAcquirable,
+  assertRemovableFromInventory,
+} from "./commitments";
+import {
   amountToMinorOrThrow,
   depositMethodValidator,
   methodOrDefault,
@@ -1081,6 +1086,21 @@ export const update = mutation({
       throw new ConvexError("Vehicle not found in this organization.");
     }
     assertDirectVehicleStatusTransition(vehicle.status, args.status);
+
+    // SCRUM-195. Archiving is the SECOND door out of inventory, and the
+    // transition guard above works off `vehicle.status` — a projection that can
+    // be stale or patched directly, and which says nothing about WHOSE deal
+    // holds the car. A live commitment refuses regardless of what the status
+    // currently reads, and so does ambiguity.
+    if (args.status === "ARCHIVED" && vehicle.status !== "ARCHIVED") {
+      await assertRemovableFromInventory(
+        ctx,
+        args.orgId,
+        args.vehicleId,
+        "This vehicle is committed to a live deal and cannot be archived. Release the commitment first."
+      );
+    }
+
     await assertVehicleImagesAllowed(ctx, args.imageIds);
 
     // When switching to or retaining SOURCED, mirror the create-time invariant:
@@ -1639,6 +1659,22 @@ export const createReservation = mutation({
       throw new ConvexError("Another customer's deposit is currently holding this vehicle.");
     }
 
+    // SCRUM-195. The deposit-holder check above is a good guard but a narrow
+    // one: it only ever consulted DEPOSITS, so a car held by a live finance
+    // application — which touches no deposit at all — could still be reserved
+    // out from under that deal.
+    //
+    // A standalone reservation carries no lineage proof, so any live commitment
+    // refuses. Customer match is deliberately NOT an exemption: c14865 ruled
+    // that same-customer never implies same-deal, and a reservation-origin deal
+    // joins an existing root through explicit adoption on the quote, not by
+    // being recognised here.
+    await assertAcquirable(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      actingRootId: null,
+    });
+
     const reservationId = await ctx.db.insert("vehicleReservations", {
       orgId: args.orgId,
       vehicleId: args.vehicleId,
@@ -1669,6 +1705,19 @@ export const createReservation = mutation({
       });
       await ctx.db.patch(reservationId, { depositId });
     }
+
+    // SCRUM-195: a standalone reservation opens its OWN server-owned root. The
+    // reservation is the deal's first evidence, and a later quote joins this
+    // root only by adopting it explicitly.
+    await acquireVehicleForQuote(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      quoteId: null,
+      customerId: args.customerId,
+      createdBy: user._id,
+      kind: "RESERVATION",
+      reservationId,
+    });
 
     await syncVehicleHoldStatus(ctx, args.vehicleId, user._id);
 
@@ -2014,6 +2063,20 @@ export const softDelete = mutation({
         `Cannot delete a vehicle with status "${vehicle.status}". Archive it first.`
       );
     }
+
+    // SCRUM-195. The status check above is a PROJECTION check and is not
+    // sufficient on its own: it fired correctly for a finance-held car only
+    // because that car happens to project RESERVED, and a projection can be
+    // stale or patched directly. Deletion is a door out of inventory, so it
+    // asks the authority as well — and ambiguity refuses too, because a car
+    // with conflicting records is precisely the one that must not quietly
+    // disappear from the lot.
+    await assertRemovableFromInventory(
+      ctx,
+      args.orgId,
+      args.vehicleId,
+      "This vehicle is committed to a live deal and cannot be deleted. Release the commitment first."
+    );
 
     // We no longer delete associated images, we just soft-delete the record
     await ctx.db.patch(args.vehicleId, {
