@@ -150,6 +150,21 @@ async function completeVerificationIfNeeded(
 async function completeOnboardingIfNeeded(page: Page): Promise<void> {
   if (isOrgRoute(new URL(page.url()))) return;
 
+  // Onboarding opens on a CHOICE screen — run a dealership, or browse as an
+  // individual — and "Dealership Name" only mounts after picking the first.
+  //
+  // ⚠️ The sibling branch in `signIn` already knew this and says so in as many
+  // words; this function, ten lines above it, did not. Waiting straight for the
+  // name field found nothing, concluded "no onboarding needed", returned
+  // silently, and left the caller on the choice screen until its own 30s URL
+  // wait expired — a timeout that names a navigation and not the reason.
+  const dealershipChoice = page.getByRole("button", { name: /I run a dealership/ });
+  const onChoiceScreen = await dealershipChoice
+    .waitFor({ state: "visible", timeout: 15_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (onChoiceScreen) await dealershipChoice.click();
+
   const dealershipNameField = page.getByRole("textbox", {
     name: "Dealership Name",
   });
@@ -157,7 +172,19 @@ async function completeOnboardingIfNeeded(page: Page): Promise<void> {
     .waitFor({ state: "visible", timeout: 15_000 })
     .then(() => true)
     .catch(() => false);
-  if (!needsOnboarding) return;
+  // Still nothing after the choice was taken means the wizard did not open at
+  // all. Say so here rather than let the caller time out on a URL, because that
+  // failure names the navigation and never the cause.
+  if (!needsOnboarding) {
+    if (onChoiceScreen) {
+      throw new Error(
+        'Clicked "I run a dealership" but the Dealership Name step never ' +
+          "appeared, so onboarding could not be completed and this identity " +
+          "will never reach an org route.",
+      );
+    }
+    return;
+  }
 
   await dealershipNameField.fill(`AutoFlow Playwright QA ${Date.now()}`);
   await page.getByRole("button", { name: /^Continue/ }).click();
