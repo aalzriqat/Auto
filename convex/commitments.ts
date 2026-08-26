@@ -49,6 +49,12 @@ export const COMMITMENT_MESSAGES = {
     "This vehicle is already committed to another deal and cannot be sold on this one. Release the existing commitment first, or complete the sale on the deal that holds it.",
   heldByAnotherDealTradeIn:
     "That trade-in vehicle is already committed to another deal and cannot be taken in on this one.",
+  /**
+   * Names the remedy rather than just the refusal, because there are three
+   * legitimate answers and only a person can pick one.
+   */
+  residualMoneyUndecided:
+    "This deal is still holding money that came off another vehicle and has not been decided yet. Refund it, forfeit it or move it to another car before completing this sale.",
   heldByAnotherDealRemoval:
     "This vehicle is committed to a live deal and cannot be removed from inventory. Release the commitment first.",
   /**
@@ -1034,6 +1040,66 @@ export async function residualUnsettledRootMoneyMinor(
       // The one that matters most: APPLIED is settled, everything else is not.
       if (hold.allocationStatus === "APPLIED") continue;
       total += hold.allocatedAmountMinor ?? 0;
+    }
+  }
+
+  return total;
+}
+
+/**
+ * What would STILL be undecided after this completion has done its own work.
+ *
+ * ⚠️ The subtraction is the whole point. A completion applies the slices for
+ * the car being sold, so counting those as "undecided" would refuse every
+ * completion that had any deposit at all. What must block the sale is money
+ * this completion will NOT touch — a share taken off another vehicle and left
+ * awaiting a refund-or-forfeit ruling.
+ *
+ * c14909: that ruling has to happen BEFORE the sale, not after. Completing
+ * around it finalises the sale, posts the accounting and hands over the car
+ * while part of the customer's money is unattributed — and nothing afterwards
+ * is obliged to come back and ask.
+ */
+export async function residualAfterCompletionMinor(
+  ctx: QueryCtx | MutationCtx,
+  rootId: Id<"commitmentRoots">,
+  completingVehicleId: Id<"vehicles">
+): Promise<number> {
+  const deposits = await depositsForRoot(ctx, rootId);
+  let total = 0;
+
+  for (const deposit of deposits) {
+    if (deposit.isDeleted === true) continue;
+    if (deposit.status === "VOIDED") continue;
+    if (deposit.status === "REFUNDED" || deposit.status === "FORFEITED") continue;
+
+    const holds: Doc<"depositVehicleHolds">[] = [];
+    for await (const hold of ctx.db
+      .query("depositVehicleHolds")
+      .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))) {
+      holds.push(hold);
+    }
+
+    // A single-vehicle deposit has nothing detached from a car, so there is
+    // nothing here that could be awaiting a decision.
+    if (holds.length === 0) continue;
+
+    for (const hold of holds) {
+      // ⚠️ ONLY the genuinely UNDECIDED buckets, and the narrowness is the
+      // point. An earlier version also counted another car's ALLOCATED slice,
+      // which refused every ordinary multi-vehicle completion — two shipped
+      // tests caught it. Allocated money is not undecided: it is assigned to a
+      // car and waiting for that car's own sale.
+      //
+      // What blocks a completion is money that has come OFF a vehicle and is
+      // waiting for a person to say refund, forfeit or move it — plus a
+      // reversal still in flight, which is the same thing mid-unwind.
+      if (
+        hold.allocationStatus === "RELEASED_AWAITING_DECISION" ||
+        hold.allocationStatus === "REVERSING"
+      ) {
+        total += hold.allocatedAmountMinor ?? 0;
+      }
     }
   }
 

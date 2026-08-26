@@ -142,6 +142,11 @@ async function seedDealer(suffix: string) {
   const userId = await t.run((ctx) =>
     ctx.db.insert("users", { clerkId: `c_${suffix}`, email: `c${suffix}@x.com`, name: "Closer" })
   );
+  // A second identity, because deciding what happens to somebody's money is
+  // maker-checker: whoever took the deposit may not also rule on it.
+  const approverId = await t.run((ctx) =>
+    ctx.db.insert("users", { clerkId: `ca_${suffix}`, email: `ca${suffix}@x.com`, name: "Approver" })
+  );
   const roleId = await t.run((ctx) =>
     ctx.db.insert("roles", {
       orgId,
@@ -165,6 +170,7 @@ async function seedDealer(suffix: string) {
     })
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: approverId, roleId }));
 
   const customerA = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Aisha", lastName: "Buyer" })
@@ -191,6 +197,7 @@ async function seedDealer(suffix: string) {
     customerB,
     companyId,
     asUser: t.withIdentity({ subject: `c_${suffix}`, clerkId: `c_${suffix}` }),
+    asApprover: t.withIdentity({ subject: `ca_${suffix}`, clerkId: `ca_${suffix}` }),
   };
 }
 
@@ -292,6 +299,22 @@ async function depositsHolding(seed: Seed, v: Id<"vehicles">): Promise<Doc<"depo
 
 async function countIn(seed: Seed, table: "sales" | "deposits" | "financeApplications") {
   return await seed.t.run(async (ctx) => (await ctx.db.query(table).collect()).length);
+}
+
+/**
+ * A comparable picture of what is holding a car right now.
+ *
+ * Used to assert a refusal touched NOTHING. "The sale count is unchanged" is
+ * not enough on its own — a guard that fired after consuming claims would still
+ * leave the count alone while having quietly dismantled the commitment.
+ */
+async function activeClaimSnapshot(seed: Seed, vehicleId: Id<"vehicles">) {
+  return await seed.t.run(async (ctx) =>
+    (await ctx.db.query("vehicleCommitmentClaims").collect())
+      .filter((c) => c.vehicleId === vehicleId)
+      .map((c) => `${c.kind}:${c.status}`)
+      .sort()
+  );
 }
 
 async function activeReservations(seed: Seed, v: Id<"vehicles">) {
@@ -1761,6 +1784,47 @@ describe("16. operation identity vs payload fingerprint", () => {
     expect(quotes).toHaveLength(1);
   });
 
+  test("16.7 an exact retry of a COMMITTED operation survives changed domain state", async () => {
+    // ⚠️ Ordering, and my comment claimed the opposite of what the code did. It
+    // said "idempotency first, so a retry never re-runs any of the work below"
+    // — but the key lookup happened AFTER customer, vehicle, company, profit
+    // and lead validation.
+    //
+    // So the case idempotency exists for was the case it failed: the server
+    // commits, the response is lost, and by the time the client retries a
+    // manager has raised the vehicle's minimum profit. The retry is not asking
+    // for anything new — that quote already exists — but it was re-validated
+    // against the changed rule and refused, leaving the salesperson unable to
+    // recover a quote the server had already written.
+    const seed = await seedDealer("op-committed-retry");
+    const v = await vehicle(seed);
+    const args = {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+      vehicleId: v,
+      mode: "CONFIGURED_FINANCE_COMPANY" as const,
+      companyId: seed.companyId,
+      vehiclePrice: PRICE,
+      desiredProfit: 0,
+      downPayment: 0,
+      termMonths: 48,
+      totalFinancedAmount: PRICE,
+      idempotencyKey: "op-committed",
+    };
+    const committed = await seed.asUser.mutation(api.quotes.saveQuote, args);
+
+    // The world moves on between the commit and the retry.
+    await seed.t.run((ctx) => ctx.db.patch(v, { minimumProfit: 10_000 }));
+
+    const retried = await seed.asUser.mutation(api.quotes.saveQuote, args);
+
+    expect(retried, "the already-committed quote is returned, not re-evaluated").toBe(committed);
+    const quotes = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("quotes").collect()).filter((q) => q.vehicleId === v)
+    );
+    expect(quotes).toHaveLength(1);
+  });
+
   test("16.6 an edited NEW submission is an INDEPENDENT quote, not a revision", async () => {
     // ⚠️ Correcting a factual error I published: I described an edited payload
     // as producing "a new revision". It does not. The server only links a
@@ -1795,8 +1859,20 @@ describe("15. residual money keeps the deal open", () => {
     return await seed.t.run((ctx) => ctx.db.get(rootId));
   }
 
-  test("15.1 a completion does NOT mark the root CONSUMED around a released share", async () => {
-    const seed = await seedDealer("residual-open");
+  test("15.1 completion REFUSES while a released share is still awaiting a decision", async () => {
+    // ⚠️ REWRITTEN. My first version of this contract asserted that the car
+    // could be SOLD as long as the root stayed OPEN. That is not what c14909
+    // requires — it requires the completion to REFUSE until somebody has ruled
+    // on the released money — and I built to a one-line summary of the rule
+    // instead of the rule, so the test satisfied the sentence while
+    // contradicting the requirement. That is a policy change dressed as a fix.
+    //
+    // The difference matters in the shop. "Sell now, keep the root open"
+    // finalises the sale, posts the accounting and hands over the car while
+    // 2,000 of the customer's money is still unattributed. Refusing keeps the
+    // decision in front of the person who has to make it, before anything is
+    // irreversible.
+    const seed = await seedDealer("residual-refuses");
     const keep = await vehicle(seed);
     const dropped = await vehicle(seed);
     const quoteId = await seed.asUser.mutation(api.quotes.saveQuote, {
@@ -1830,19 +1906,21 @@ describe("15. residual money keeps the deal open", () => {
     });
     const keepRootId = (await resolveRoot(seed, keep)).rootId as Id<"commitmentRoots">;
     expect(keepRootId, "the kept car has a root before completion").toBeTruthy();
+    const salesBefore = await countIn(seed, "sales");
+    const claimsBefore = await activeClaimSnapshot(seed, keep);
 
-    await seed.asUser.mutation(api.sales.completeFromQuote, { orgId: seed.orgId, quoteId });
+    await expectRefusal(
+      seed.asUser.mutation(api.sales.completeFromQuote, { orgId: seed.orgId, quoteId })
+    , /awaiting|undecided|unresolved|released|decide|refund|forfeit/i,
+      "a released share must be ruled on before the deal can complete");
 
-    // The CAR is gone — that half must still happen.
-    expect((await vehicleRow(seed, keep)).status).toBe("SOLD");
-    expect((await resolveRoot(seed, keep)).kind).not.toBe("OWNED");
-
-    // The DEAL is not finished: 2,000 is still awaiting a human decision.
+    // Refused BEFORE any side effect — sale, vehicle, claims and root all
+    // exactly as they were.
+    expect(await countIn(seed, "sales"), "no sale row").toBe(salesBefore);
+    expect((await vehicleRow(seed, keep)).status, "the car is NOT sold").not.toBe("SOLD");
+    expect(await activeClaimSnapshot(seed, keep), "claims untouched").toEqual(claimsBefore);
     const root = await rootRow(seed, keepRootId);
-    expect(
-      root?.status,
-      "a deal that still owes somebody an answer has not been consumed"
-    ).not.toBe("CONSUMED");
+    expect(root?.status, "the root is untouched").toBe("OPEN");
 
     const awaiting = await seed.t.run(async (ctx) =>
       (await ctx.db.query("depositVehicleHolds").collect()).filter(
@@ -1851,6 +1929,142 @@ describe("15. residual money keeps the deal open", () => {
     );
     expect(awaiting, "and the released share is still there to be decided").toHaveLength(1);
     expect(awaiting[0].allocatedAmountMinor).toBeGreaterThan(0);
+  });
+
+  test("15.3 once the released share is RULED ON, the same completion succeeds and consumes", async () => {
+    // The other half of 15.1, and the reason it is not simply a block: the
+    // refusal has to be escapable by doing the right thing. Refund the stray
+    // share and the identical completion goes through.
+    const seed = await seedDealer("residual-then-resolved");
+    const keep = await vehicle(seed);
+    const dropped = await vehicle(seed);
+    const quoteId = await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+      vehicleId: keep,
+      vehicleItems: [
+        { vehicleId: keep, unitPrice: PRICE },
+        { vehicleId: dropped, unitPrice: PRICE },
+      ],
+      mode: "CASH" as const,
+      vehiclePrice: PRICE * 2,
+      downPayment: 0,
+      termMonths: 0,
+      totalFinancedAmount: 0,
+    });
+    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 4_000 });
+    await seed.asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId: seed.orgId,
+      quoteId,
+      allocations: [
+        { vehicleId: keep, amount: 2_000 },
+        { vehicleId: dropped, amount: 2_000 },
+      ],
+    });
+    await seed.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+      orgId: seed.orgId,
+      quoteId,
+      vehicleId: dropped,
+      reason: "customer dropped the second car",
+    });
+    const releasedHold = await seed.t.run(async (ctx) => {
+      const holds = (await ctx.db.query("depositVehicleHolds").collect()).filter(
+        (h) => h.vehicleId === dropped && h.allocationStatus === "RELEASED_AWAITING_DECISION"
+      );
+      return holds[0]._id;
+    });
+    const keepRootId = (await resolveRoot(seed, keep)).rootId as Id<"commitmentRoots">;
+
+    // The explicit human decision the refusal was waiting for.
+    await seed.asApprover.mutation(api.deposits.resolveReleasedAllocation, {
+      orgId: seed.orgId,
+      holdId: releasedHold,
+      treatment: "REFUND_TO_CUSTOMER" as const,
+      refundMethod: "CASH" as const,
+      reason: "returned to the customer",
+    });
+
+    await seed.asUser.mutation(api.sales.completeFromQuote, { orgId: seed.orgId, quoteId });
+
+    expect((await vehicleRow(seed, keep)).status).toBe("SOLD");
+    const root = await rootRow(seed, keepRootId);
+    expect(root?.status, "nothing is left undecided, so the deal is finished").toBe("CONSUMED");
+  });
+
+  test("15.4 resolving the released share RECOMPUTES the root — it cannot stay open forever", async () => {
+    // The mechanical half the owner flagged: `resolveReleasedAllocation` is the
+    // moment the last undecided money goes away, so it is the moment the root's
+    // answer changes. Without a recompute there, a root that legitimately
+    // stayed open would never be revisited by anything.
+    const seed = await seedDealer("residual-recompute");
+    const keep = await vehicle(seed);
+    const dropped = await vehicle(seed);
+    const quoteId = await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+      vehicleId: keep,
+      vehicleItems: [
+        { vehicleId: keep, unitPrice: PRICE },
+        { vehicleId: dropped, unitPrice: PRICE },
+      ],
+      mode: "CASH" as const,
+      vehiclePrice: PRICE * 2,
+      downPayment: 0,
+      termMonths: 0,
+      totalFinancedAmount: 0,
+    });
+    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 4_000 });
+    await seed.asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId: seed.orgId,
+      quoteId,
+      allocations: [
+        { vehicleId: keep, amount: 2_000 },
+        { vehicleId: dropped, amount: 2_000 },
+      ],
+    });
+    // BOTH cars are dropped, so once both shares are ruled on the deal has
+    // nothing undecided left anywhere. Scoped this way deliberately: with only
+    // one car released, the other's still-allocated money is legitimately
+    // undecided, and a root staying open would be the right answer rather than
+    // the bug. See the note below.
+    for (const carId of [dropped, keep]) {
+      await seed.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+        orgId: seed.orgId,
+        quoteId,
+        vehicleId: carId,
+        reason: "customer walked away from the whole deal",
+      });
+    }
+    const droppedRoot = await seed.t.run(async (ctx) => {
+      const claims = (await ctx.db.query("vehicleCommitmentClaims").collect()).filter(
+        (c) => c.vehicleId === dropped
+      );
+      return claims[0]?.rootId;
+    });
+    expect(droppedRoot, "the dropped car had a root").toBeTruthy();
+    const releasedHolds = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("depositVehicleHolds").collect())
+        .filter((h) => h.allocationStatus === "RELEASED_AWAITING_DECISION")
+        .map((h) => h._id)
+    );
+    expect(releasedHolds, "both shares are awaiting a decision").toHaveLength(2);
+
+    for (const holdId of releasedHolds) {
+      await seed.asApprover.mutation(api.deposits.resolveReleasedAllocation, {
+        orgId: seed.orgId,
+        holdId,
+        treatment: "REFUND_TO_CUSTOMER" as const,
+        refundMethod: "CASH" as const,
+        reason: "returned",
+      });
+    }
+
+    // Nothing active, nothing undecided. The root must have been ASKED AGAIN at
+    // the moment of the decision — nothing else in the system will ever come
+    // back to it, so without a recompute here it reads as an unfinished deal
+    // forever.
+    const row = await rootRow(seed, droppedRoot as Id<"commitmentRoots">);
+    expect(row?.status, "the root was recomputed after the decision").not.toBe("OPEN");
   });
 
   test("15.2 CONTROL: an ordinary completion with nothing residual DOES consume the root", async () => {

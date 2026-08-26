@@ -145,13 +145,58 @@ export const saveQuote = mutation({
     // than CREATE_SALES, which is reserved for finalizing an actual sale.
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
 
+    // ── Operation identity comes FIRST, right after auth ────────────────────
+    //
+    // ⚠️ This used to sit below the customer, vehicle, company, profit and lead
+    // validations, and a comment above it claimed idempotency ran first. It did
+    // not, and the gap was exactly the case idempotency exists for: the server
+    // commits, the response is lost, and by the time the client retries a
+    // manager has changed something the quote references — a minimum profit, a
+    // finance company. The retry asks for nothing new, but it was re-validated
+    // against the changed world and refused, leaving the caller unable to
+    // recover a quote the server had already written.
+    //
+    // The derivation below is deliberately ARITHMETIC ONLY: first line item,
+    // sum of line items. No database reads, so it cannot depend on mutable
+    // state, which is what lets it run before the validations rather than
+    // after them.
+    const vehicleId =
+      args.vehicleItems && args.vehicleItems.length > 0
+        ? args.vehicleItems[0].vehicleId
+        : args.vehicleId;
+    const vehiclePrice =
+      args.vehicleItems && args.vehicleItems.length > 0
+        ? args.vehicleItems.reduce((sum, item) => sum + item.unitPrice, 0)
+        : args.vehiclePrice;
+
+    const { idempotencyKey: _operationKey, ...materialRequest } = args;
+    const requestFingerprint = canonicalRequestFingerprint({
+      ...materialRequest,
+      vehicleId,
+      vehiclePrice,
+    });
+
+    if (args.idempotencyKey) {
+      const priorQuote = await ctx.db
+        .query("quotes")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", args.orgId).eq("idempotencyKey", args.idempotencyKey)
+        )
+        .first();
+      if (priorQuote) {
+        if (priorQuote.requestFingerprint !== requestFingerprint) {
+          throw new ConvexError(
+            "This save was already completed with different details. Reload the deal and submit the change as a new quote rather than reusing the same request."
+          );
+        }
+        return priorQuote._id;
+      }
+    }
+
     const customer = await ctx.db.get(args.customerId);
     if (!customer || customer.orgId !== args.orgId) {
       throw new ConvexError("Customer not found in this organization.");
     }
-
-    let vehicleId = args.vehicleId;
-    let vehiclePrice = args.vehiclePrice;
 
     if (args.vehicleItems && args.vehicleItems.length > 0) {
       const seen = new Set<string>();
@@ -168,8 +213,9 @@ export const saveQuote = mutation({
           throw new ConvexError("Vehicle not found in this organization.");
         }
       }
-      vehicleId = args.vehicleItems[0].vehicleId;
-      vehiclePrice = args.vehicleItems.reduce((sum, item) => sum + item.unitPrice, 0);
+      // `vehicleId` / `vehiclePrice` were already derived above, before the
+      // idempotency check; this loop only validates that the line items are
+      // real, distinct and in this organization.
     } else {
       const vehicle = await ctx.db.get(args.vehicleId);
       if (!vehicle || vehicle.orgId !== args.orgId) {
@@ -221,44 +267,6 @@ export const saveQuote = mutation({
     // exact retry returns the SAME quote; a reused key carrying a materially
     // different payload is a conflict rather than a silent overwrite, because
     // the two callers disagree about what the deal is and only one can be right.
-    // The fingerprint covers the WHOLE material request, built by omitting the
-    // operation key rather than by listing what to include.
-    //
-    // ⚠️ That construction is the fix, not a tidier version of the old one. The
-    // first implementation compared seven remembered fields — customer, vehicle,
-    // price, down payment, term, mode, supersedes — so a reused key carrying a
-    // changed finance company, margin, financed amount, recipient, lead or
-    // secondary vehicle line silently returned the EARLIER quote. A different
-    // promise to the customer, answered with an older one. A list of fields is
-    // something people forget to extend; omitting one key is not.
-    //
-    // The resolved `vehicleId` and `vehiclePrice` are used rather than the raw
-    // arguments, because on a multi-vehicle quote the server derives both from
-    // the line items and the client's values are ignored.
-    const { idempotencyKey: _operationKey, ...materialRequest } = args;
-    const requestFingerprint = canonicalRequestFingerprint({
-      ...materialRequest,
-      vehicleId,
-      vehiclePrice,
-    });
-
-    if (args.idempotencyKey) {
-      const priorQuote = await ctx.db
-        .query("quotes")
-        .withIndex("by_org_idempotency", (q) =>
-          q.eq("orgId", args.orgId).eq("idempotencyKey", args.idempotencyKey)
-        )
-        .first();
-      if (priorQuote) {
-        if (priorQuote.requestFingerprint !== requestFingerprint) {
-          throw new ConvexError(
-            "This save was already completed with different details. Reload the deal and submit the change as a new quote rather than reusing the same request."
-          );
-        }
-        return priorQuote._id;
-      }
-    }
-
     // Intent is stated, not inferred. REVISE without a predecessor would open
     // an independent lineage while the caller believed it was continuing one,
     // which is precisely how a deal's history fragments silently.

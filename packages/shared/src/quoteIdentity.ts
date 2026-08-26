@@ -93,3 +93,34 @@ export function newQuoteOperationKey(): string {
   const more = Math.random().toString(36).slice(2, 10);
   return `op_${time}_${rand}${more}`;
 }
+
+/** What a client remembers between a failed save and the next attempt. */
+export type PendingQuoteAttempt = { key: string; fingerprint: string } | null;
+
+/**
+ * Decide whether the next submission is a RETRY of the pending attempt or a NEW
+ * intention, and give it the right operation key.
+ *
+ * ⚠️ Keeping only the key was not enough, and the gap is a real one. Suppose the
+ * server commits but the response is lost. The salesperson sees a failure,
+ * changes the price, and submits again. Holding the key alone, the client sends
+ * the SAME key with different terms — the server correctly refuses as a
+ * contradiction, and the salesperson is blocked from doing something entirely
+ * reasonable, with a message about a request id that means nothing to them.
+ *
+ * From the user's point of view that edit IS a new intention. So the client
+ * remembers what it asked for as well as which attempt it was, and rotates the
+ * key the moment those diverge. Retry the same thing → same key, and the lost
+ * response is recovered. Change anything → new key, and it is a new quote.
+ *
+ * Shared rather than written four times: this is the kind of rule that drifts
+ * apart per platform and then only misbehaves on the one nobody re-checked.
+ */
+export function resolveQuoteOperationKey(
+  pending: PendingQuoteAttempt,
+  materialRequest: unknown
+): { key: string; fingerprint: string } {
+  const fingerprint = canonicalRequestFingerprint(materialRequest);
+  if (pending && pending.fingerprint === fingerprint) return pending;
+  return { key: newQuoteOperationKey(), fingerprint };
+}

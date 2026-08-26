@@ -18,7 +18,10 @@ import { ArrowLeft, CheckCircle2, Car, User, TrendingUp, FileText } from "lucide
 import  ReviewVehicleCard  from "../components/ReviewVehicleCard";
 import  ReviewVehicleListCard  from "../components/ReviewVehicleListCard";
 import  ReviewCustomerCard  from "../components/ReviewCustomerCard";
-import { newQuoteOperationKey } from "@autoflow/shared/quoteIdentity";
+import {
+  resolveQuoteOperationKey,
+  type PendingQuoteAttempt,
+} from "@autoflow/shared/quoteIdentity";
 import  ReviewFinanceSummary  from "../components/ReviewFinanceSummary";
 import { buildWizardQuotePayload } from "../quotePayload";
 
@@ -170,20 +173,12 @@ export function Step3Review({
   ]);
 
   const [recipientName, setRecipientName] = useState("");
-  const pendingOperationKey = useRef<string | null>(null);
+  const pendingAttempt = useRef<PendingQuoteAttempt>(null);
 
   const handleGenerate = async () => {
     if (!activeOrgId || !selectedResult) return;
 
     setIsSubmitting(true);
-
-    // Kept in a ref, not state, so a re-render cannot mint a second identity
-    // mid-attempt. Reused if this save fails and the user tries again — that is
-    // the same intention, and the retry is the case idempotency exists for.
-    if (!pendingOperationKey.current) {
-      pendingOperationKey.current = newQuoteOperationKey();
-    }
-    const operationKey = pendingOperationKey.current;
 
     try {
       const quotePayload = buildWizardQuotePayload({
@@ -195,6 +190,16 @@ export function Step3Review({
         recipientName,
         manualProviderName: t("OtherFinanceOption" as any),
       });
+
+      // Retry or new intention? Same request as the pending attempt reuses its
+      // key, so a lost response is recovered; anything edited rotates it,
+      // because from the user's side an edit is a new intention and must not
+      // be refused as a contradiction.
+      const attempt = resolveQuoteOperationKey(pendingAttempt.current, {
+        ...quotePayload,
+        intent: "NEW",
+      });
+      pendingAttempt.current = attempt;
 
       const quoteId = await saveQuote({
         ...quotePayload,
@@ -213,11 +218,11 @@ export function Step3Review({
         // its identity, so the same customer could never be quoted the same car
         // on the same terms twice — the second enquiry silently returned the
         // first quote forever.
-        idempotencyKey: operationKey,
+        idempotencyKey: attempt.key,
         intent: "NEW" as const,
       });
       // Acknowledged: the next submission is a new intention.
-      pendingOperationKey.current = null;
+      pendingAttempt.current = null;
 
       toast.success(t("QuoteSavedSuccess"));
       onSuccess({

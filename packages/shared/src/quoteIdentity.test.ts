@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { canonicalRequestFingerprint, newQuoteOperationKey } from "./quoteIdentity";
+import {
+  canonicalRequestFingerprint,
+  newQuoteOperationKey,
+  resolveQuoteOperationKey,
+} from "./quoteIdentity";
 
 /**
  * The properties this key has to have, stated as tests rather than as comments,
@@ -104,6 +108,55 @@ describe("canonicalRequestFingerprint", () => {
       keys.add(canonicalRequestFingerprint({ ...payload, vehiclePrice: price }));
     }
     expect(keys.size).toBe(5_000);
+  });
+});
+
+describe("resolveQuoteOperationKey — retry vs new intention", () => {
+  const request = { orgId: "org1", customerId: "c1", vehicleId: "v1", vehiclePrice: 28_000 };
+
+  test("a LOST RESPONSE retry of the same request reuses the same key", () => {
+    // The case idempotency exists for: the server may already have committed,
+    // and the same key is what recovers that quote instead of minting a second.
+    const first = resolveQuoteOperationKey(null, request);
+    const retry = resolveQuoteOperationKey(first, { ...request });
+
+    expect(retry.key).toBe(first.key);
+  });
+
+  test("EDIT AFTER FAILURE rotates the key — it is a new intention", () => {
+    // ⚠️ The gap that keeping only the key left open. Holding the old key here
+    // sends changed terms under an identity the server has already recorded,
+    // and the salesperson is refused for doing something entirely reasonable.
+    const first = resolveQuoteOperationKey(null, request);
+    const edited = resolveQuoteOperationKey(first, { ...request, vehiclePrice: 27_000 });
+
+    expect(edited.key).not.toBe(first.key);
+    expect(edited.fingerprint).not.toBe(first.fingerprint);
+  });
+
+  test("no pending attempt always mints a fresh key", () => {
+    const a = resolveQuoteOperationKey(null, request);
+    const b = resolveQuoteOperationKey(null, request);
+    expect(a.key).not.toBe(b.key);
+  });
+
+  test("property ORDER in the request does not rotate the key", () => {
+    // Otherwise a genuine retry built through a different code path would look
+    // like an edit and mint a duplicate quote.
+    const first = resolveQuoteOperationKey(null, request);
+    const reordered = resolveQuoteOperationKey(first, {
+      vehiclePrice: 28_000,
+      vehicleId: "v1",
+      customerId: "c1",
+      orgId: "org1",
+    });
+    expect(reordered.key).toBe(first.key);
+  });
+
+  test("INTENT is part of the identity — NEW and REVISE are different requests", () => {
+    const asNew = resolveQuoteOperationKey(null, { ...request, intent: "NEW" });
+    const asRevise = resolveQuoteOperationKey(asNew, { ...request, intent: "REVISE" });
+    expect(asRevise.key).not.toBe(asNew.key);
   });
 });
 

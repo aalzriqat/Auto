@@ -1,7 +1,10 @@
 // Native port of the web SalesWizard (components/sales/SalesWizard.tsx):
 // the same 4-step quote flow — Setup → Customer → Review → Success — with
 // CASH (teal) and INSTALLMENT (indigo) accents, murabaha finance comparison,
-import { newQuoteOperationKey } from "@autoflow/shared/quoteIdentity";
+import {
+  resolveQuoteOperationKey,
+  type PendingQuoteAttempt,
+} from "@autoflow/shared/quoteIdentity";
 // customer-status gating, and profit-approval blocking.
 import { useMutation, useQuery } from "convex/react";
 import * as Print from "expo-print";
@@ -170,8 +173,8 @@ export function SalesWizardScreen({
 
   // ── Step 3/4 state ───────────────────────────────────────────
   const [saving, setSaving] = useState(false);
-  /** This submission's id. Survives retries of the same attempt; cleared on success. */
-  const pendingOperationKey = useRef<string | null>(null);
+  /** This attempt's key AND what it asked for, so an edit can rotate the key. */
+  const pendingAttempt = useRef<PendingQuoteAttempt>(null);
   const [quoteId, setQuoteId] = useState<string | null>(null);
   const [shared, setShared] = useState(false);
   const [depositOpen, setDepositOpen] = useState(false);
@@ -451,10 +454,6 @@ export function SalesWizardScreen({
   async function handleCreateQuote() {
     if (!customer || !vehicleId) return;
     setSaving(true);
-    if (!pendingOperationKey.current) {
-      pendingOperationKey.current = newQuoteOperationKey();
-    }
-    const operationKey = pendingOperationKey.current;
     try {
       const manual = selectedCompanyId === OTHER_COMPANY_ID;
       const quotePayload = {
@@ -489,12 +488,20 @@ export function SalesWizardScreen({
       // SCRUM-195. Mobile needs this more than the web does, not less: a
       // salesperson on dealership wifi taps Save, the response is lost, they
       // tap again — and without a submission id that is two deals on one car.
+      // If they EDIT before retrying, that is a new intention and rotates the
+      // key rather than colliding with the committed one.
+      const attempt = resolveQuoteOperationKey(pendingAttempt.current, {
+        ...quotePayload,
+        intent: "NEW",
+      });
+      pendingAttempt.current = attempt;
+
       const id = await saveQuote({
         ...quotePayload,
-        idempotencyKey: operationKey,
+        idempotencyKey: attempt.key,
         intent: "NEW" as const,
       });
-      pendingOperationKey.current = null;
+      pendingAttempt.current = null;
       setQuoteId(id);
       clearDraft({ orgId }).catch((error: unknown) => console.error(error));
       setStep(4);

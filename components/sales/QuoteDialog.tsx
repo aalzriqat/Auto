@@ -33,7 +33,10 @@ import { CheckCircle2 } from "lucide-react";
 
 import { quoteSchema, QuoteFormValues, QuoteDialogProps } from "./quote.schema";
 import { getErrorMessage } from "@/lib/errors";
-import { newQuoteOperationKey } from "@autoflow/shared/quoteIdentity";
+import {
+  resolveQuoteOperationKey,
+  type PendingQuoteAttempt,
+} from "@autoflow/shared/quoteIdentity";
 
 
 export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCustomerId }: QuoteDialogProps) {
@@ -54,7 +57,7 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
 
   const saveQuote = useMutation(api.quotes.saveQuote);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const pendingOperationKey = useRef<string | null>(null);
+  const pendingAttempt = useRef<PendingQuoteAttempt>(null);
 
   const form = useForm<z.infer<typeof quoteSchema>>({
     resolver: zodResolver(quoteSchema as any),
@@ -162,13 +165,6 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
 
     if (!activeOrgId) return;
     setIsSubmitting(true);
-    // Held across retries of THIS attempt, rotated once the save is
-    // acknowledged. Not derived from the payload: two identical quote
-    // intentions are two quotes, not one.
-    if (!pendingOperationKey.current) {
-      pendingOperationKey.current = newQuoteOperationKey();
-    }
-    const operationKey = pendingOperationKey.current;
     try {
       const values = form.getValues();
       // This dialog has no explicit margin field: the quoted price is the
@@ -196,12 +192,20 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
         profitRateApplied: companyResult.profitRateApplied,
         totalProfit: companyResult.totalProfit,
       };
+      // Same request as the pending attempt reuses its key (lost-response
+      // recovery); an edited one rotates it, because that is a new intention.
+      const attempt = resolveQuoteOperationKey(pendingAttempt.current, {
+        ...quotePayload,
+        intent: "NEW",
+      });
+      pendingAttempt.current = attempt;
+
       await saveQuote({
         ...quotePayload,
-        idempotencyKey: operationKey,
+        idempotencyKey: attempt.key,
         intent: "NEW" as const,
       });
-      pendingOperationKey.current = null;
+      pendingAttempt.current = null;
       toast.success(t("QuoteSavedSuccess" as any));
       onOpenChange(false);
     } catch (error) {

@@ -18,6 +18,7 @@ import {
   actingRootForQuoteOnVehicle,
   assertAcquirable,
   assertCurrentRevision,
+  recomputeRootsForVehicle,
   releaseDepositClaimsForVehicle,
   unresolvedRootMoneyMinor,
 } from "./commitments";
@@ -907,6 +908,16 @@ export const resolveReleasedAllocation = mutation({
 
     if (deposit.quoteId) {
       await assertQuoteDepositConservation(ctx, { quoteId: deposit.quoteId, currency });
+    }
+
+    // SCRUM-195 / c14909: this is the moment the last undecided money can go
+    // away, so it is the moment the root's answer can change. Without asking
+    // again here, a root that legitimately stayed open — because it was waiting
+    // on exactly this decision — would never be revisited by anything and would
+    // read as an unfinished deal forever.
+    await recomputeRootsForVehicle(ctx, args.orgId, hold.vehicleId);
+    if (args.toVehicleId && args.toVehicleId !== hold.vehicleId) {
+      await recomputeRootsForVehicle(ctx, args.orgId, args.toVehicleId);
     }
 
     await auditLog(ctx, {
