@@ -6,6 +6,12 @@ import { PERMISSIONS } from "./utils/permissions";
 import { advanceLeadStage } from "./utils/leadStageHelpers";
 import { notifyUser, getActorName } from "./utils/notifications";
 import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/profitApproval";
+import {
+  COMMITMENT_MESSAGES,
+  rootIdForReservation,
+  validateReservationAdoption,
+} from "./commitments";
+import type { Id } from "./_generated/dataModel";
 
 const quoteModeValidator = v.optional(v.union(
   v.literal("CASH"),
@@ -78,6 +84,42 @@ export const saveQuote = mutation({
     manualAdminFees: v.optional(v.number()),
     manualCommission: v.optional(v.number()),
     manualIncludesCommissionInDebt: v.optional(v.boolean()),
+
+    // ── SCRUM-195 lineage (c14865) ───────────────────────────────────────────
+    //
+    // All three are OPTIONAL during the backend-first rollout so existing web
+    // and mobile callers keep working while they migrate. That compatibility is
+    // temporary by design: a caller that sends none of them is not cutover
+    // ready, and the fallback cannot be removed until no supported legacy
+    // caller remains.
+
+    /**
+     * Stable operation identity. An exact retry must return the SAME quote
+     * rather than minting a second deal for one customer intention — a
+     * duplicate root is not a cosmetic problem, it is a second claimant on the
+     * same car.
+     */
+    idempotencyKey: v.optional(v.string()),
+
+    /**
+     * REVISE: the revision this quote replaces. Only the CURRENT head may be
+     * superseded, checked as compare-and-swap, so two people renegotiating the
+     * same deal concurrently cannot both win and silently make the loser's
+     * price the deal.
+     */
+    supersedesQuoteId: v.optional(v.id("quotes")),
+
+    /**
+     * Explicit, server-validated proof that this quote adopts a reservation's
+     * root.
+     *
+     * ⚠️ Adoption is never inferred from the customer matching. A customer may
+     * legitimately hold a reservation and separately open an unrelated deal on
+     * the same car, and treating those as one root lets the second consume the
+     * first's vehicle. Omitting this leaves the quote on independent lineage,
+     * which is exactly what makes it refusable later.
+     */
+    adoptReservationId: v.optional(v.id("vehicleReservations")),
   },
   handler: async (ctx, args) => {
     // A quote is an informational financing draft, not a committed sale —
@@ -155,6 +197,78 @@ export const saveQuote = mutation({
       }
     }
 
+    // ── SCRUM-195: identity, lineage and the current head ───────────────────
+
+    // Idempotency first, so a retry never re-runs any of the work below. An
+    // exact retry returns the SAME quote; a reused key carrying a materially
+    // different payload is a conflict rather than a silent overwrite, because
+    // the two callers disagree about what the deal is and only one can be right.
+    if (args.idempotencyKey) {
+      const priorQuote = await ctx.db
+        .query("quotes")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", args.orgId).eq("idempotencyKey", args.idempotencyKey)
+        )
+        .first();
+      if (priorQuote) {
+        const samePayload =
+          priorQuote.customerId === args.customerId &&
+          priorQuote.vehicleId === vehicleId &&
+          priorQuote.vehiclePrice === vehiclePrice &&
+          priorQuote.downPayment === args.downPayment &&
+          priorQuote.termMonths === args.termMonths &&
+          (priorQuote.mode ?? null) === (args.mode ?? null) &&
+          (priorQuote.supersedesQuoteId ?? null) === (args.supersedesQuoteId ?? null);
+        if (!samePayload) {
+          throw new ConvexError(
+            "This request id was already used for a different quote. Start a new revision instead of reusing it."
+          );
+        }
+        return priorQuote._id;
+      }
+    }
+
+    let lineageRootId: Id<"commitmentRoots"> | undefined;
+
+    // REVISE. Compare-and-swap against the root's current head.
+    if (args.supersedesQuoteId) {
+      const predecessor = await ctx.db.get(args.supersedesQuoteId);
+      if (!predecessor || predecessor.orgId !== args.orgId) {
+        throw new ConvexError("The quote being revised was not found in this organization.");
+      }
+      if (predecessor.customerId !== args.customerId) {
+        throw new ConvexError(
+          "A revision has to stay on the same deal. That quote belongs to a different customer."
+        );
+      }
+      // The CAS itself. `supersededByQuoteId` is the durable marker, so a
+      // second reviser reading the same predecessor loses here rather than
+      // quietly forking the deal into two live heads.
+      if (predecessor.supersededByQuoteId) {
+        throw new ConvexError(COMMITMENT_MESSAGES.notTheHead);
+      }
+      if (predecessor.rootId) {
+        const root = await ctx.db.get(predecessor.rootId);
+        if (root && root.headQuoteId && root.headQuoteId !== predecessor._id) {
+          throw new ConvexError(COMMITMENT_MESSAGES.notTheHead);
+        }
+        lineageRootId = predecessor.rootId;
+      }
+    }
+
+    // ADOPT. A reservation-origin deal joins the reservation's root, and only
+    // through proof this server validated itself.
+    if (args.adoptReservationId) {
+      await validateReservationAdoption(ctx, {
+        orgId: args.orgId,
+        reservationId: args.adoptReservationId,
+        customerId: args.customerId,
+        vehicleId,
+      });
+      const reservationRootId = await rootIdForReservation(ctx, args.adoptReservationId);
+      if (reservationRootId) lineageRootId = reservationRootId;
+    }
+
     const {
       manualProviderName,
       manualProfitRate,
@@ -162,13 +276,20 @@ export const saveQuote = mutation({
       manualAdminFees,
       manualCommission,
       manualIncludesCommissionInDebt,
+      // Pulled out of the spread deliberately. The ARGUMENT is imperative —
+      // "adopt this reservation" — while the stored FIELD is a record of what
+      // happened, so they are named differently and only the stored form
+      // belongs on the row.
+      adoptReservationId,
       ...quoteArgs
     } = args;
 
-    return await ctx.db.insert("quotes", {
+    const quoteId = await ctx.db.insert("quotes", {
       ...quoteArgs,
       vehicleId,
       vehiclePrice,
+      ...(lineageRootId ? { rootId: lineageRootId } : {}),
+      ...(adoptReservationId ? { adoptedReservationId: adoptReservationId } : {}),
       // Always written, never left undefined: `applications.finalizeDeal` reads
       // its absence as "quote predates this check" and skips its re-verification.
       desiredProfit: args.desiredProfit ?? 0,
@@ -182,6 +303,26 @@ export const saveQuote = mutation({
       createdBy: user._id,
       createdAt: Date.now(),
     });
+
+    // Advance the head ATOMICALLY with the insert — same mutation, same
+    // transaction. Writing the successor and advancing the head in two steps
+    // would leave a window where the root points at a revision that is no
+    // longer current, and evidence written in that window would attach to the
+    // wrong price.
+    if (args.supersedesQuoteId) {
+      await ctx.db.patch(args.supersedesQuoteId, { supersededByQuoteId: quoteId });
+      if (lineageRootId) {
+        const root = await ctx.db.get(lineageRootId);
+        if (root) {
+          await ctx.db.patch(lineageRootId, {
+            headQuoteId: quoteId,
+            revision: root.revision + 1,
+          });
+        }
+      }
+    }
+
+    return quoteId;
   },
 });
 

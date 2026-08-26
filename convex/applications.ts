@@ -2437,6 +2437,15 @@ export const cancelApplication = mutation({
 
         if (app.status === "CANCELLED") {
           await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId, actorId: auth.user._id });
+          // SCRUM-195: a cancelled application stops holding the car. Released
+          // rather than consumed — the deal did not complete — and the root
+          // recomputes, so a same-root deposit still holding it keeps it held.
+          await releaseClaimsForApplication(ctx, args.applicationId, "finance application cancelled");
+          // Re-projected AFTER the finance claim goes, not before.
+          // releaseHoldForApplicationQuote syncs internally while that claim is
+          // still ACTIVE, so without this the car stays RESERVED on a
+          // commitment that no longer exists.
+          await syncVehicleHoldStatus(ctx, app.vehicleId, auth.user._id);
           return;
         }
 
@@ -2581,6 +2590,15 @@ export const cancelApplication = mutation({
           }
         } else {
           await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId, actorId: auth.user._id });
+          // SCRUM-195: a cancelled application stops holding the car. Released
+          // rather than consumed — the deal did not complete — and the root
+          // recomputes, so a same-root deposit still holding it keeps it held.
+          await releaseClaimsForApplication(ctx, args.applicationId, "finance application cancelled");
+          // Re-projected AFTER the finance claim goes, not before.
+          // releaseHoldForApplicationQuote syncs internally while that claim is
+          // still ACTIVE, so without this the car stays RESERVED on a
+          // commitment that no longer exists.
+          await syncVehicleHoldStatus(ctx, app.vehicleId, auth.user._id);
         }
 
         await ctx.db.patch(args.applicationId, {

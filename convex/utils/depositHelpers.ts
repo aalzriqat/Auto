@@ -10,7 +10,7 @@ import { fromMinorUnits } from "./money";
 import { liveAppliedMinorForDeposit } from "./depositApplications";
 import { assertQuoteDepositConservation } from "./depositAllocation";
 import { createCanonicalPayment } from "../subledger";
-import { hasActiveFinanceClaim } from "../commitments";
+import { hasActiveFinanceClaim, releaseClaimsForReservation } from "../commitments";
 import {
   getOrgCurrency,
   hookDepositRefunded,
@@ -727,6 +727,11 @@ async function releaseMatchingReservationHoldsForQuote(
         releasedAt: now,
         releasedBy: args.actorId,
       });
+      // SCRUM-195: released evidence stops holding the car. Without this the
+      // reservation reads RELEASED while its commitment claim goes on keeping
+      // the vehicle RESERVED — the row and the authority disagreeing, which is
+      // the whole class of bug this design exists to remove.
+      await releaseClaimsForReservation(ctx, reservation._id, "application released the reservation");
       await syncVehicleHoldStatus(ctx, reservation.vehicleId, args.actorId);
     }
   }

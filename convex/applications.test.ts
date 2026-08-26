@@ -739,6 +739,7 @@ describe("applications hold release and deposit resolution", () => {
       vehiclePrice: 20000,
       downPayment: 3000,
       termMonths: 48,
+      adoptReservationId: reservationId,
     });
     const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
 
@@ -782,6 +783,7 @@ describe("applications hold release and deposit resolution", () => {
       vehiclePrice: 20000,
       downPayment: 3000,
       termMonths: 48,
+      adoptReservationId: reservationId,
     });
     const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
 
@@ -821,6 +823,7 @@ describe("applications hold release and deposit resolution", () => {
       vehiclePrice: 20000,
       downPayment: 3000,
       termMonths: 48,
+      adoptReservationId: reservationId,
     });
     const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
 

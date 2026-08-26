@@ -859,19 +859,23 @@ describe("inventory intelligence", () => {
       vehicleId,
       customerId,
     });
-    const quoteId = await t.run((ctx) =>
-      ctx.db.insert("quotes", {
-        orgId,
-        customerId,
-        vehicleId,
-        vehiclePrice: 20_000,
-        downPayment: 0,
-        termMonths: 0,
-        status: "DRAFT",
-        createdBy: userId,
-        createdAt: Date.now(),
-      })
-    );
+    // FIXTURE CHANGE, not an assertion change (SCRUM-195). This used to insert
+    // the quote row directly, which no longer reaches the behaviour under test:
+    // a quote with no lineage is an independent deal, and an independent deal
+    // may not deposit on a car this customer's own reservation is holding.
+    // Same customer never implies same deal — the quote has to ADOPT the
+    // reservation, which is the real flow this fixture was standing in for.
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      mode: "CASH" as const,
+      vehiclePrice: 20_000,
+      downPayment: 0,
+      termMonths: 0,
+      totalFinancedAmount: 0,
+      adoptReservationId: reservationId,
+    });
     await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 500 });
 
     await asUser.mutation(api.vehicles.releaseReservation, { orgId, reservationId });

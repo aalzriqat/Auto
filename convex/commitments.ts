@@ -599,6 +599,22 @@ export async function releaseClaimsForDeposit(
   }
 }
 
+/** Release every ACTIVE claim carried by one reservation. */
+export async function releaseClaimsForReservation(
+  ctx: MutationCtx,
+  reservationId: Id<"vehicleReservations">,
+  reason: string
+): Promise<void> {
+  const claims = await ctx.db
+    .query("vehicleCommitmentClaims")
+    .withIndex("by_reservation", (q) => q.eq("reservationId", reservationId))
+    .take(50);
+  for (const claim of claims) {
+    if (claim.status !== "ACTIVE") continue;
+    await resolveClaim(ctx, claim._id, "RELEASED", reason);
+  }
+}
+
 /** Release every ACTIVE FINANCE claim carried by one application. */
 export async function releaseClaimsForApplication(
   ctx: MutationCtx,

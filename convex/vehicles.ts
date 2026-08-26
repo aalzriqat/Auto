@@ -36,6 +36,7 @@ import {
   acquireVehicleForQuote,
   assertAcquirable,
   assertRemovableFromInventory,
+  releaseClaimsForReservation,
 } from "./commitments";
 import {
   amountToMinorOrThrow,
@@ -1821,6 +1822,11 @@ export const releaseReservation = mutation({
       releasedAt: now,
       releasedBy: user._id,
     });
+    // SCRUM-195: the reservation stops being evidence, so its claim stops
+    // holding the car. `resolveClaim` recomputes the root rather than closing
+    // it, so a same-root deposit still holding the car keeps it held — which is
+    // exactly what this mutation's own regression test asserts.
+    await releaseClaimsForReservation(ctx, args.reservationId, "reservation released");
     await syncVehicleHoldStatus(ctx, reservation.vehicleId, user._id);
   },
 });
