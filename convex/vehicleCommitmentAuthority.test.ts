@@ -1562,6 +1562,313 @@ describe("11. row-51 — a fixed page must not decide freeness", () => {
 // Terminal refunds and forfeits are excluded, as are VOIDED and deleted rows.
 // ═════════════════════════════════════════════════════════════════════════════
 
+// ═════════════════════════════════════════════════════════════════════════════
+// 15. A DEAL IS NOT FINISHED WHILE IT STILL OWES SOMEBODY AN ANSWER  (c14909)
+//
+// ⚠️ Completion consumes every claim and recomputes the root to CONSUMED. But
+// CONSUMED means *finished*, and a deal carrying a RELEASED_AWAITING_DECISION
+// share is not finished — that money is sitting on the books waiting for a
+// human to decide whether it goes back to the customer or is kept. Marking the
+// root terminal around it strands the decision: nothing is holding it open, and
+// nothing will ask again.
+//
+// The two axes come apart here exactly as they are supposed to. The car really
+// has left inventory and must not stay held. The DEAL has not ended, because
+// somebody is still owed an answer about their money.
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 16. AN OPERATION KEY IDENTIFIES A SUBMISSION, NOT A SET OF BUSINESS FIELDS
+//     (c14977)
+//
+// ⚠️ My first implementation derived the key from a hash of the quote payload.
+// The owner rejected it, and the rejection is right: that makes the CONTENT the
+// identity, so two legitimate NEW intentions with identical terms — the same
+// customer asking again next week for the same car at the same price — can
+// never both exist. They collapse onto the first quote id forever.
+//
+// Idempotency answers "is this the same submission attempt as the one whose
+// response I lost". It is not a uniqueness constraint on business content, and
+// a quote is informational until evidence attaches to it.
+//
+// So the two concepts are separated: the client mints an OPERATION KEY per
+// submission attempt and keeps it only while retrying that attempt, and the
+// server independently fingerprints the FULL material payload to decide whether
+// a reused key is a genuine retry or a contradiction.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("16. operation identity vs payload fingerprint", () => {
+  function newQuoteArgs(seed: Seed, v: Id<"vehicles">, over: Record<string, unknown> = {}) {
+    return {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+      vehicleId: v,
+      mode: "CASH" as const,
+      vehiclePrice: PRICE,
+      downPayment: 0,
+      termMonths: 0,
+      totalFinancedAmount: 0,
+      ...over,
+    };
+  }
+
+  test("16.1 an exact retry of the same submission returns the SAME quote", async () => {
+    const seed = await seedDealer("op-retry");
+    const v = await vehicle(seed);
+    const args = newQuoteArgs(seed, v, { idempotencyKey: "op-aaa" });
+
+    const first = await seed.asUser.mutation(api.quotes.saveQuote, args);
+    const second = await seed.asUser.mutation(api.quotes.saveQuote, args);
+
+    expect(second).toBe(first);
+    const quotes = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("quotes").collect()).filter((q) => q.vehicleId === v)
+    );
+    expect(quotes, "a retry must not mint a second quote").toHaveLength(1);
+  });
+
+  test("16.2 TWO DISTINCT submissions with IDENTICAL terms produce TWO quotes", async () => {
+    // ⚠️ The contract that rules out the content-hash design. A customer may
+    // legitimately be quoted the same car on the same terms twice, and a quote
+    // is informational — nothing is held until evidence attaches. Collapsing
+    // them is not deduplication, it is losing the second enquiry.
+    const seed = await seedDealer("op-two-intentions");
+    const v = await vehicle(seed);
+
+    const first = await seed.asUser.mutation(
+      api.quotes.saveQuote,
+      newQuoteArgs(seed, v, { idempotencyKey: "op-first" })
+    );
+    const second = await seed.asUser.mutation(
+      api.quotes.saveQuote,
+      newQuoteArgs(seed, v, { idempotencyKey: "op-second" })
+    );
+
+    expect(second, "different submissions are different quotes").not.toBe(first);
+    const quotes = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("quotes").collect()).filter((q) => q.vehicleId === v)
+    );
+    expect(quotes).toHaveLength(2);
+  });
+
+  test("16.3 the same key with a CHANGED PRICE is a hard conflict, and writes nothing", async () => {
+    const seed = await seedDealer("op-conflict-price");
+    const v = await vehicle(seed);
+    await seed.asUser.mutation(
+      api.quotes.saveQuote,
+      newQuoteArgs(seed, v, { idempotencyKey: "op-bbb" })
+    );
+
+    await expectRefusal(
+      seed.asUser.mutation(
+        api.quotes.saveQuote,
+        newQuoteArgs(seed, v, { idempotencyKey: "op-bbb", vehiclePrice: PRICE - 1_000 })
+      )
+    , /already used|different|conflict|does not match/i);
+
+    const quotes = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("quotes").collect()).filter((q) => q.vehicleId === v)
+    );
+    expect(quotes, "a conflict writes nothing").toHaveLength(1);
+    expect(quotes[0].vehiclePrice).toBe(PRICE);
+  });
+
+  /**
+   * ⚠️ The fields the first implementation forgot.
+   *
+   * It compared customer, vehicle, price, down payment, term, mode and
+   * supersedes — a hand-picked subset. Every field below is material to what
+   * the dealership is promising, and every one could change under a reused key
+   * while the server silently returned the earlier quote. The owner found this
+   * by reading the comparison rather than by running anything, which is exactly
+   * why the fingerprint has to be exhaustive by construction and not a list
+   * somebody remembered to extend.
+   */
+  const MATERIAL_FIELDS: Array<[string, Record<string, unknown>]> = [
+    ["desiredProfit", { desiredProfit: 5_000 }],
+    ["totalFinancedAmount", { totalFinancedAmount: 12_345 }],
+    ["monthlyInstallment", { monthlyInstallment: 999 }],
+    ["profitRateApplied", { profitRateApplied: 7 }],
+    ["totalProfit", { totalProfit: 4_321 }],
+    ["recipientName", { recipientName: "Someone Else" }],
+  ];
+
+  test.each(MATERIAL_FIELDS)(
+    "16.4 the same key with a changed %s is a conflict, not a silent old quote",
+    async (_label, override) => {
+      const seed = await seedDealer(`op-field-${_label}`);
+      const v = await vehicle(seed);
+      const key = `op-${_label}`;
+      const original = await seed.asUser.mutation(
+        api.quotes.saveQuote,
+        newQuoteArgs(seed, v, { idempotencyKey: key })
+      );
+
+      await expectRefusal(
+        seed.asUser.mutation(
+          api.quotes.saveQuote,
+          newQuoteArgs(seed, v, { idempotencyKey: key, ...override })
+        )
+      , /already used|different|conflict|does not match/i,
+        `a changed ${_label} must not silently return the earlier quote`);
+
+      const quotes = await seed.t.run(async (ctx) =>
+        (await ctx.db.query("quotes").collect()).filter((q) => q.vehicleId === v)
+      );
+      expect(quotes).toHaveLength(1);
+      expect(quotes[0]._id).toBe(original);
+    }
+  );
+
+  test("16.5 the same key with changed VEHICLE ITEMS is a conflict", async () => {
+    // Secondary line items decide which cars the deal covers, and they were not
+    // in the compared subset at all.
+    const seed = await seedDealer("op-items");
+    const a = await vehicle(seed);
+    const b = await vehicle(seed);
+    const base = {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+      vehicleId: a,
+      mode: "CASH" as const,
+      vehiclePrice: PRICE * 2,
+      downPayment: 0,
+      termMonths: 0,
+      totalFinancedAmount: 0,
+      idempotencyKey: "op-items",
+    };
+    await seed.asUser.mutation(api.quotes.saveQuote, {
+      ...base,
+      vehicleItems: [
+        { vehicleId: a, unitPrice: PRICE },
+        { vehicleId: b, unitPrice: PRICE },
+      ],
+    });
+
+    await expectRefusal(
+      seed.asUser.mutation(api.quotes.saveQuote, {
+        ...base,
+        vehicleItems: [
+          { vehicleId: a, unitPrice: PRICE + 500 },
+          { vehicleId: b, unitPrice: PRICE - 500 },
+        ],
+      })
+    , /already used|different|conflict|does not match/i);
+
+    const quotes = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("quotes").collect()).filter((q) => q.vehicleId === a)
+    );
+    expect(quotes).toHaveLength(1);
+  });
+
+  test("16.6 an edited NEW submission is an INDEPENDENT quote, not a revision", async () => {
+    // ⚠️ Correcting a factual error I published: I described an edited payload
+    // as producing "a new revision". It does not. The server only links a
+    // revision when `supersedesQuoteId` is given; without it this is an
+    // independent lineage, and calling it a revision misdescribes what the
+    // deal's history actually looks like.
+    const seed = await seedDealer("op-edited-is-new");
+    const v = await vehicle(seed);
+    const first = await seed.asUser.mutation(
+      api.quotes.saveQuote,
+      newQuoteArgs(seed, v, { idempotencyKey: "op-e1" })
+    );
+
+    const edited = await seed.asUser.mutation(
+      api.quotes.saveQuote,
+      newQuoteArgs(seed, v, { idempotencyKey: "op-e2", vehiclePrice: PRICE - 500 })
+    );
+
+    expect(edited).not.toBe(first);
+    const firstRow = await seed.t.run((ctx) => ctx.db.get(first as Id<"quotes">));
+    const editedRow = await seed.t.run((ctx) => ctx.db.get(edited as Id<"quotes">));
+    expect(
+      firstRow?.supersededByQuoteId ?? null,
+      "an independent NEW submission does not supersede anything"
+    ).toBeNull();
+    expect(editedRow?.supersedesQuoteId ?? null).toBeNull();
+  });
+});
+
+describe("15. residual money keeps the deal open", () => {
+  async function rootRow(seed: Seed, rootId: Id<"commitmentRoots">) {
+    return await seed.t.run((ctx) => ctx.db.get(rootId));
+  }
+
+  test("15.1 a completion does NOT mark the root CONSUMED around a released share", async () => {
+    const seed = await seedDealer("residual-open");
+    const keep = await vehicle(seed);
+    const dropped = await vehicle(seed);
+    const quoteId = await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+      vehicleId: keep,
+      vehicleItems: [
+        { vehicleId: keep, unitPrice: PRICE },
+        { vehicleId: dropped, unitPrice: PRICE },
+      ],
+      mode: "CASH" as const,
+      vehiclePrice: PRICE * 2,
+      downPayment: 0,
+      termMonths: 0,
+      totalFinancedAmount: 0,
+    });
+    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 4_000 });
+    await seed.asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId: seed.orgId,
+      quoteId,
+      allocations: [
+        { vehicleId: keep, amount: 2_000 },
+        { vehicleId: dropped, amount: 2_000 },
+      ],
+    });
+    await seed.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+      orgId: seed.orgId,
+      quoteId,
+      vehicleId: dropped,
+      reason: "customer dropped the second car",
+    });
+    const keepRootId = (await resolveRoot(seed, keep)).rootId as Id<"commitmentRoots">;
+    expect(keepRootId, "the kept car has a root before completion").toBeTruthy();
+
+    await seed.asUser.mutation(api.sales.completeFromQuote, { orgId: seed.orgId, quoteId });
+
+    // The CAR is gone — that half must still happen.
+    expect((await vehicleRow(seed, keep)).status).toBe("SOLD");
+    expect((await resolveRoot(seed, keep)).kind).not.toBe("OWNED");
+
+    // The DEAL is not finished: 2,000 is still awaiting a human decision.
+    const root = await rootRow(seed, keepRootId);
+    expect(
+      root?.status,
+      "a deal that still owes somebody an answer has not been consumed"
+    ).not.toBe("CONSUMED");
+
+    const awaiting = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("depositVehicleHolds").collect()).filter(
+        (h) => h.allocationStatus === "RELEASED_AWAITING_DECISION"
+      )
+    );
+    expect(awaiting, "and the released share is still there to be decided").toHaveLength(1);
+    expect(awaiting[0].allocatedAmountMinor).toBeGreaterThan(0);
+  });
+
+  test("15.2 CONTROL: an ordinary completion with nothing residual DOES consume the root", async () => {
+    // Without this, 15.1 could be satisfied by never marking any root terminal,
+    // which would leave every completed deal looking permanently open.
+    const seed = await seedDealer("residual-none");
+    const v = await vehicle(seed);
+    const { quoteId } = await heldByDeposit(seed, v, seed.customerA);
+    const rootId = (await resolveRoot(seed, v)).rootId as Id<"commitmentRoots">;
+
+    await seed.asUser.mutation(api.sales.completeFromQuote, { orgId: seed.orgId, quoteId });
+
+    const root = await rootRow(seed, rootId);
+    expect(root?.status, "a finished deal really is finished").toBe("CONSUMED");
+    expect((await vehicleRow(seed, v)).status).toBe("SOLD");
+  });
+});
+
 describe("14. root-wide money", () => {
   const Q1 = 30_000;
   const Q2 = 27_000;

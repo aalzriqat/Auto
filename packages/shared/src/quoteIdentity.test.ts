@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { stableQuoteIdempotencyKey } from "./quoteIdentity";
+import { canonicalRequestFingerprint, newQuoteOperationKey } from "./quoteIdentity";
 
 /**
  * The properties this key has to have, stated as tests rather than as comments,
@@ -7,7 +7,7 @@ import { stableQuoteIdempotencyKey } from "./quoteIdentity";
  * does not throw, it just quietly returns somebody else's quote or mints a
  * duplicate root.
  */
-describe("stableQuoteIdempotencyKey", () => {
+describe("canonicalRequestFingerprint", () => {
   const payload = {
     orgId: "org1",
     customerId: "cust1",
@@ -19,7 +19,7 @@ describe("stableQuoteIdempotencyKey", () => {
   };
 
   test("the same intention produces the same key", () => {
-    expect(stableQuoteIdempotencyKey(payload)).toBe(stableQuoteIdempotencyKey({ ...payload }));
+    expect(canonicalRequestFingerprint(payload)).toBe(canonicalRequestFingerprint({ ...payload }));
   });
 
   test("PROPERTY ORDER does not change the key", () => {
@@ -35,57 +35,64 @@ describe("stableQuoteIdempotencyKey", () => {
       mode: "CASH",
       vehicleId: "veh1",
     };
-    expect(stableQuoteIdempotencyKey(reordered)).toBe(stableQuoteIdempotencyKey(payload));
+    expect(canonicalRequestFingerprint(reordered)).toBe(canonicalRequestFingerprint(payload));
   });
 
   test("an omitted field and an explicitly undefined one are the same intention", () => {
-    expect(stableQuoteIdempotencyKey({ ...payload, leadId: undefined })).toBe(
-      stableQuoteIdempotencyKey(payload)
+    expect(canonicalRequestFingerprint({ ...payload, leadId: undefined })).toBe(
+      canonicalRequestFingerprint(payload)
     );
   });
 
-  test("a CHANGED PRICE is a different intention", () => {
-    // The property that keeps the server's conflict branch unreachable from
-    // these clients: edit and resubmit is a new revision, not a refusal.
-    expect(stableQuoteIdempotencyKey({ ...payload, vehiclePrice: 27_000 })).not.toBe(
-      stableQuoteIdempotencyKey(payload)
+  test("a CHANGED PRICE is a different request", () => {
+    // What this buys: a reused operation key carrying a changed price is a
+    // CONFLICT rather than a silent old answer.
+    //
+    // ⚠️ Not "a new revision" — an earlier version of this comment said that
+    // and it was wrong. The server only links a revision when
+    // `supersedesQuoteId` is supplied; an edited NEW submission is an
+    // independent lineage.
+    expect(canonicalRequestFingerprint({ ...payload, vehiclePrice: 27_000 })).not.toBe(
+      canonicalRequestFingerprint(payload)
     );
   });
 
   test("a different CUSTOMER or VEHICLE is a different intention", () => {
-    expect(stableQuoteIdempotencyKey({ ...payload, customerId: "cust2" })).not.toBe(
-      stableQuoteIdempotencyKey(payload)
+    expect(canonicalRequestFingerprint({ ...payload, customerId: "cust2" })).not.toBe(
+      canonicalRequestFingerprint(payload)
     );
-    expect(stableQuoteIdempotencyKey({ ...payload, vehicleId: "veh2" })).not.toBe(
-      stableQuoteIdempotencyKey(payload)
+    expect(canonicalRequestFingerprint({ ...payload, vehicleId: "veh2" })).not.toBe(
+      canonicalRequestFingerprint(payload)
     );
   });
 
   test("ARRAY ORDER is meaningful — two cars swapped is a different quote", () => {
     const a = { ...payload, vehicleItems: [{ vehicleId: "v1" }, { vehicleId: "v2" }] };
     const b = { ...payload, vehicleItems: [{ vehicleId: "v2" }, { vehicleId: "v1" }] };
-    expect(stableQuoteIdempotencyKey(a)).not.toBe(stableQuoteIdempotencyKey(b));
+    expect(canonicalRequestFingerprint(a)).not.toBe(canonicalRequestFingerprint(b));
   });
 
   test("values that stringify alike stay distinct", () => {
     // "1" and 1 both serialise to something containing 1; conflating them would
     // let a string id collide with a number field.
-    expect(stableQuoteIdempotencyKey({ v: "1" })).not.toBe(stableQuoteIdempotencyKey({ v: 1 }));
-    expect(stableQuoteIdempotencyKey({ v: null })).not.toBe(
-      stableQuoteIdempotencyKey({ v: "null" })
+    expect(canonicalRequestFingerprint({ v: "1" })).not.toBe(canonicalRequestFingerprint({ v: 1 }));
+    expect(canonicalRequestFingerprint({ v: null })).not.toBe(
+      canonicalRequestFingerprint({ v: "null" })
     );
   });
 
   test("nested differences are not lost", () => {
     const a = { ...payload, vehicleItems: [{ vehicleId: "v1", unitPrice: 10 }] };
     const b = { ...payload, vehicleItems: [{ vehicleId: "v1", unitPrice: 11 }] };
-    expect(stableQuoteIdempotencyKey(a)).not.toBe(stableQuoteIdempotencyKey(b));
+    expect(canonicalRequestFingerprint(a)).not.toBe(canonicalRequestFingerprint(b));
   });
 
-  test("the key is short, printable and prefixed", () => {
-    const key = stableQuoteIdempotencyKey(payload);
-    expect(key.startsWith("q_")).toBe(true);
-    expect(key).toMatch(/^q_[0-9a-z]+_[0-9a-z]+$/);
+  test("the fingerprint is short, printable and distinguishable from an operation key", () => {
+    const key = canonicalRequestFingerprint(payload);
+    // `f_` for fingerprint, `op_` for operation. The two are different kinds of
+    // thing and the prefixes make a mix-up visible in a log line.
+    expect(key.startsWith("f_")).toBe(true);
+    expect(key).toMatch(/^f_[0-9a-z]+_[0-9a-z]+$/);
     expect(key.length).toBeLessThan(40);
   });
 
@@ -94,8 +101,25 @@ describe("stableQuoteIdempotencyKey", () => {
     // comfortable, and a collision here returns another customer's quote id.
     const keys = new Set<string>();
     for (let price = 1_000; price < 6_000; price++) {
-      keys.add(stableQuoteIdempotencyKey({ ...payload, vehiclePrice: price }));
+      keys.add(canonicalRequestFingerprint({ ...payload, vehiclePrice: price }));
     }
     expect(keys.size).toBe(5_000);
+  });
+});
+
+describe("newQuoteOperationKey", () => {
+  test("every call is a NEW submission identity", () => {
+    // The property the payload-hash design got wrong: two identical intentions
+    // must be able to be two submissions.
+    const keys = new Set(Array.from({ length: 1_000 }, () => newQuoteOperationKey()));
+    expect(keys.size).toBe(1_000);
+  });
+
+  test("the key does NOT depend on any payload", () => {
+    expect(newQuoteOperationKey()).not.toBe(newQuoteOperationKey());
+  });
+
+  test("the key is printable and prefixed", () => {
+    expect(newQuoteOperationKey()).toMatch(/^op_[0-9a-z]+_[0-9a-z]+$/);
   });
 });

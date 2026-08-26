@@ -20,6 +20,7 @@ import {
   actingRootForQuoteOnVehicle,
   assertAcquirable,
   consumeClaimsForVehicle,
+  recomputeRootsForVehicle,
   COMMITMENT_MESSAGES,
 } from "../commitments";
 import { requireOrgMember } from "./tenancy";
@@ -1573,6 +1574,19 @@ async function applySaleCompletionSideEffects(
       // rule — posted into an open one, leaving Commission Payable negative.
       occurredAt: await commissionAccountingDate(ctx, args.orgId, saleId, args.saleDate),
     });
+  }
+
+  // SCRUM-195 / c14909. Asked AFTER the money has settled, not before.
+  //
+  // The claims were consumed at the top of this function, while every deposit
+  // still read HELD — so the root correctly declined to close, and nothing
+  // asked again. An ordinary finished deal would have stayed open forever.
+  // Now the deposits are resolved, so the root can answer honestly: CONSUMED
+  // when nothing is left undecided, still open when a released share is waiting
+  // on somebody's ruling.
+  await recomputeRootsForVehicle(ctx, args.orgId, args.vehicleId);
+  if (args.tradeInVehicleId) {
+    await recomputeRootsForVehicle(ctx, args.orgId, args.tradeInVehicleId);
   }
 
   const actorName = await getActorName(ctx);

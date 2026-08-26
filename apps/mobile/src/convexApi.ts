@@ -1933,8 +1933,17 @@ type QuoteSaveArgs = OrgScopedArgs & {
   // NOT cutover ready, and the server-side fallback cannot be removed while any
   // supported caller still omits them.
 
-  /** Stable per user intention, so a retry returns the same quote rather than a second deal. */
+  /**
+   * The id of ONE submission attempt — held across retries of that attempt,
+   * rotated once the save is acknowledged.
+   *
+   * ⚠️ Not derived from the payload. Deriving it made the quote's content its
+   * identity, so the same customer could never be quoted the same car on the
+   * same terms twice.
+   */
   idempotencyKey?: string;
+  /** NEW opens an independent lineage; REVISE continues one and needs supersedesQuoteId. */
+  intent?: "NEW" | "REVISE";
   /** REVISE: the current head this quote replaces. Checked as compare-and-swap. */
   supersedesQuoteId?: string;
   /** Explicit proof that this quote adopts a reservation's deal. Never inferred from the customer. */

@@ -2067,8 +2067,37 @@ export default defineSchema({
      */
     adoptedReservationId: v.optional(v.id("vehicleReservations")),
 
-    /** Retry key. An exact retry must return the SAME quote, never mint a second root. */
+    /**
+     * The id of ONE submission attempt, minted by the client and kept only
+     * while retrying that attempt.
+     *
+     * ⚠️ NOT derived from the payload. An earlier design hashed the quote
+     * content and used that as the key, which made the content the identity —
+     * so two legitimate intentions with identical terms could never both exist,
+     * collapsing onto the first quote forever. A quote is informational until
+     * evidence attaches; being quoted the same thing twice is allowed.
+     */
     idempotencyKey: v.optional(v.string()),
+
+    /**
+     * A fingerprint of the COMPLETE material request this quote was created
+     * from, so a returning operation key can be told apart from a contradiction.
+     *
+     * Stored rather than recomputed because the row is the only record of what
+     * was actually asked for; recomputing from the saved fields would compare
+     * against whatever the schema happens to persist today.
+     */
+    requestFingerprint: v.optional(v.string()),
+
+    /**
+     * What the caller meant: a new deal, or a revision of an existing one.
+     *
+     * Explicit because the two are not distinguishable from the payload. An
+     * edited resubmission with no `supersedesQuoteId` is an INDEPENDENT lineage,
+     * not a revision — a distinction worth making the caller state, since
+     * getting it wrong silently fragments a deal's history.
+     */
+    intent: v.optional(v.union(v.literal("NEW"), v.literal("REVISE"))),
   })
     .index("by_org", ["orgId"])
     .index("by_customer", ["customerId"])

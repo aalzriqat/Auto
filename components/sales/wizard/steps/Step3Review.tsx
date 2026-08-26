@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id, Doc } from "@/convex/_generated/dataModel";
@@ -18,7 +18,7 @@ import { ArrowLeft, CheckCircle2, Car, User, TrendingUp, FileText } from "lucide
 import  ReviewVehicleCard  from "../components/ReviewVehicleCard";
 import  ReviewVehicleListCard  from "../components/ReviewVehicleListCard";
 import  ReviewCustomerCard  from "../components/ReviewCustomerCard";
-import { stableQuoteIdempotencyKey } from "@autoflow/shared/quoteIdentity";
+import { newQuoteOperationKey } from "@autoflow/shared/quoteIdentity";
 import  ReviewFinanceSummary  from "../components/ReviewFinanceSummary";
 import { buildWizardQuotePayload } from "../quotePayload";
 
@@ -170,11 +170,20 @@ export function Step3Review({
   ]);
 
   const [recipientName, setRecipientName] = useState("");
+  const pendingOperationKey = useRef<string | null>(null);
 
   const handleGenerate = async () => {
     if (!activeOrgId || !selectedResult) return;
 
     setIsSubmitting(true);
+
+    // Kept in a ref, not state, so a re-render cannot mint a second identity
+    // mid-attempt. Reused if this save fails and the user tries again — that is
+    // the same intention, and the retry is the case idempotency exists for.
+    if (!pendingOperationKey.current) {
+      pendingOperationKey.current = newQuoteOperationKey();
+    }
+    const operationKey = pendingOperationKey.current;
 
     try {
       const quotePayload = buildWizardQuotePayload({
@@ -197,13 +206,18 @@ export function Step3Review({
         customerId: quotePayload.customerId as Id<"customers">,
         leadId: quotePayload.leadId as Id<"leads"> | undefined,
         companyId: quotePayload.companyId as Id<"financeCompanies"> | undefined,
-        // SCRUM-195. A saved quote can open a commitment root, and a root holds
-        // a physical car — so a double-submit here is a second claimant on the
-        // vehicle, not a duplicate row in a list. Derived from the payload, so
-        // an identical resubmission returns the same quote while an edited one
-        // is a genuinely new revision.
-        idempotencyKey: stableQuoteIdempotencyKey(quotePayload),
+        // SCRUM-195: this submission's own id, held across retries of THIS
+        // attempt and rotated once the save is acknowledged.
+        //
+        // ⚠️ Not derived from the payload. Doing that made the quote's content
+        // its identity, so the same customer could never be quoted the same car
+        // on the same terms twice — the second enquiry silently returned the
+        // first quote forever.
+        idempotencyKey: operationKey,
+        intent: "NEW" as const,
       });
+      // Acknowledged: the next submission is a new intention.
+      pendingOperationKey.current = null;
 
       toast.success(t("QuoteSavedSuccess"));
       onSuccess({

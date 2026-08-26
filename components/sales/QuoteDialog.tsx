@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -33,7 +33,7 @@ import { CheckCircle2 } from "lucide-react";
 
 import { quoteSchema, QuoteFormValues, QuoteDialogProps } from "./quote.schema";
 import { getErrorMessage } from "@/lib/errors";
-import { stableQuoteIdempotencyKey } from "@autoflow/shared/quoteIdentity";
+import { newQuoteOperationKey } from "@autoflow/shared/quoteIdentity";
 
 
 export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCustomerId }: QuoteDialogProps) {
@@ -54,6 +54,7 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
 
   const saveQuote = useMutation(api.quotes.saveQuote);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const pendingOperationKey = useRef<string | null>(null);
 
   const form = useForm<z.infer<typeof quoteSchema>>({
     resolver: zodResolver(quoteSchema as any),
@@ -161,6 +162,13 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
 
     if (!activeOrgId) return;
     setIsSubmitting(true);
+    // Held across retries of THIS attempt, rotated once the save is
+    // acknowledged. Not derived from the payload: two identical quote
+    // intentions are two quotes, not one.
+    if (!pendingOperationKey.current) {
+      pendingOperationKey.current = newQuoteOperationKey();
+    }
+    const operationKey = pendingOperationKey.current;
     try {
       const values = form.getValues();
       // This dialog has no explicit margin field: the quoted price is the
@@ -190,12 +198,10 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
       };
       await saveQuote({
         ...quotePayload,
-        // SCRUM-195. Same reasoning as the wizard: a duplicate quote is a
-        // second claimant on the car, not a duplicate row. The key is lifted
-        // from the payload so an identical resubmit is idempotent and an edited
-        // one is a new revision.
-        idempotencyKey: stableQuoteIdempotencyKey(quotePayload),
+        idempotencyKey: operationKey,
+        intent: "NEW" as const,
       });
+      pendingOperationKey.current = null;
       toast.success(t("QuoteSavedSuccess" as any));
       onOpenChange(false);
     } catch (error) {

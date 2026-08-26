@@ -1,41 +1,31 @@
 /**
- * SCRUM-195 — stable operation identity for `quotes.saveQuote`.
+ * SCRUM-195 — operation identity and payload fingerprinting for `saveQuote`.
  *
- * ## Why a quote needs an identity at all
+ * ## Two different questions, deliberately kept apart (owner ruling c14977)
  *
- * A saved quote can open a commitment root, and a root is what holds a physical
- * car. So a double-submitted quote is not a cosmetic duplicate in a list: it is
- * a second claimant on the same vehicle, created by one customer intention.
- * Retries happen for ordinary reasons — a tapped button on a slow connection, a
- * dropped response on mobile data — and none of them mean the customer asked
- * for two deals.
+ * An earlier version of this module answered both with one value: it hashed the
+ * quote payload and used that as the idempotency key. That conflates *content
+ * identity* with *operation identity*, and the consequence is not subtle — two
+ * legitimate quote intentions with identical terms, the same customer asking
+ * again next week for the same car at the same price, could never both exist.
+ * They collapsed onto the first quote id forever.
  *
- * ## Why the key is DERIVED rather than generated
+ * Idempotency answers **"is this the same submission attempt as the one whose
+ * response I lost?"** It is not a uniqueness constraint on business content,
+ * and a quote is informational until evidence attaches to it — nothing is held,
+ * nobody is committed, and there is no reason a customer may not be quoted the
+ * same thing twice.
  *
- * The obvious approach is a random id minted when the form opens. It is wrong
- * in a way that only shows up in use: the server treats *same key, materially
- * different payload* as a conflict, so a salesperson who goes back, changes the
- * price and resubmits would hit a refusal for doing something completely
- * legitimate.
+ * So:
  *
- * Deriving the key from the payload gets both halves right without any state:
- * an identical resubmission carries the same key and returns the same quote,
- * while an edited one carries a different key and is a new revision. It also
- * makes the conflict branch genuinely unreachable from these clients, which is
- * where you want it — as a guard against a caller that reuses a key wrongly,
- * not as something users meet.
+ *   - `newQuoteOperationKey()` mints an id for ONE submission attempt. The
+ *     client keeps it while retrying that attempt and rotates it once the save
+ *     is acknowledged. A new user intention gets a new key.
+ *   - `canonicalRequestFingerprint()` describes WHAT was asked for. The server
+ *     stores it and compares it when a key comes back, so a reused key carrying
+ *     different terms is a contradiction rather than a silent old answer.
  *
- * And when two truly identical quotes collapse into one, that is the correct
- * answer rather than a lost feature: two identical live deals for one customer
- * on one car is precisely the duplicate root this design exists to prevent.
- *
- * ## Why not JSON.stringify
- *
- * Property order is insertion order, so the same quote built through two code
- * paths can serialise differently and produce two keys. `undefined` is dropped
- * from objects but becomes `null` inside arrays. Both make the key unstable in
- * exactly the situations it is meant to survive, so the canonical form below
- * sorts keys and omits `undefined` explicitly.
+ * The fingerprint is still needed and still exact; it just is not the identity.
  */
 
 /** Deterministic serialisation: sorted keys, `undefined` omitted, arrays ordered. */
@@ -51,14 +41,25 @@ function canonicalise(value: unknown): string {
 }
 
 /**
- * A stable key for one quote intention.
+ * A fingerprint of everything that was asked for.
  *
- * Two hashes over the same text, combined with its length. A single 32-bit hash
- * collides often enough to matter at dealership volumes, and a collision here
- * does not merely mis-file something — it returns somebody else's quote id to
- * this caller.
+ * ⚠️ Feed this the WHOLE material request, not a chosen subset. The first
+ * server-side implementation compared seven remembered fields, so a reused key
+ * carrying a changed finance company, margin, financed amount, recipient or
+ * secondary vehicle line silently returned the earlier quote — a different
+ * promise to the customer, answered with an older one. A list of fields is a
+ * thing people forget to extend; a fingerprint over the whole object is not.
+ *
+ * Not `JSON.stringify`: property order is insertion order, so the same request
+ * built through two code paths serialises differently, and `undefined` is
+ * dropped from objects while becoming `null` inside arrays. Both would make a
+ * genuine retry look like a contradiction.
+ *
+ * Two hashes plus length, because one 32-bit hash collides often enough to
+ * matter over short, highly similar payloads — and a collision here would let a
+ * changed request pass as a retry.
  */
-export function stableQuoteIdempotencyKey(payload: unknown): string {
+export function canonicalRequestFingerprint(payload: unknown): string {
   const text = canonicalise(payload);
   let h1 = 0x811c9dc5;
   let h2 = 0x01000193;
@@ -69,5 +70,26 @@ export function stableQuoteIdempotencyKey(payload: unknown): string {
   }
   const a = (h1 >>> 0).toString(36);
   const b = (h2 >>> 0).toString(36);
-  return `q_${a}${b}_${text.length.toString(36)}`;
+  return `f_${a}${b}_${text.length.toString(36)}`;
+}
+
+/**
+ * A fresh id for ONE submission attempt.
+ *
+ * Deliberately unrelated to the payload: two identical submissions are two
+ * submissions. Keep it across retries of the same attempt so a lost response
+ * can be recovered, and rotate it once the save is acknowledged so the next
+ * thing the user does is a new intention.
+ *
+ * Built from time plus randomness rather than `crypto.randomUUID`, which is not
+ * available on every React Native runtime this ships to. Uniqueness only has to
+ * hold within one organisation's quote history, and the server treats a
+ * duplicate as a retry — which, for two genuinely different requests, surfaces
+ * as a loud conflict rather than a wrong answer.
+ */
+export function newQuoteOperationKey(): string {
+  const time = Date.now().toString(36);
+  const rand = Math.random().toString(36).slice(2, 10);
+  const more = Math.random().toString(36).slice(2, 10);
+  return `op_${time}_${rand}${more}`;
 }

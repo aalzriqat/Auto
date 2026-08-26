@@ -6,6 +6,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { advanceLeadStage } from "./utils/leadStageHelpers";
 import { notifyUser, getActorName } from "./utils/notifications";
 import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/profitApproval";
+import { canonicalRequestFingerprint } from "@autoflow/shared/quoteIdentity";
 import {
   COMMITMENT_MESSAGES,
   rootIdForReservation,
@@ -97,12 +98,26 @@ export const saveQuote = mutation({
     // caller remains.
 
     /**
-     * Stable operation identity. An exact retry must return the SAME quote
-     * rather than minting a second deal for one customer intention — a
-     * duplicate root is not a cosmetic problem, it is a second claimant on the
-     * same car.
+     * The id of ONE submission attempt — kept across retries of that attempt,
+     * rotated once the save is acknowledged.
+     *
+     * ⚠️ Deliberately NOT derived from the payload. Deriving it made the quote's
+     * content its identity, so two legitimate intentions with identical terms
+     * could never both exist. Idempotency answers "is this the same submission
+     * whose response I lost", not "may this content exist more than once".
      */
     idempotencyKey: v.optional(v.string()),
+
+    /**
+     * NEW opens an independent deal lineage; REVISE continues an existing one
+     * and requires `supersedesQuoteId`.
+     *
+     * Optional during the backend-first rollout, but the two are not
+     * distinguishable from the payload — an edited resubmission without
+     * `supersedesQuoteId` is an independent lineage, whatever it looks like to
+     * the person who typed it — so supported callers state which they mean.
+     */
+    intent: v.optional(v.union(v.literal("NEW"), v.literal("REVISE"))),
 
     /**
      * REVISE: the revision this quote replaces. Only the CURRENT head may be
@@ -206,6 +221,27 @@ export const saveQuote = mutation({
     // exact retry returns the SAME quote; a reused key carrying a materially
     // different payload is a conflict rather than a silent overwrite, because
     // the two callers disagree about what the deal is and only one can be right.
+    // The fingerprint covers the WHOLE material request, built by omitting the
+    // operation key rather than by listing what to include.
+    //
+    // ⚠️ That construction is the fix, not a tidier version of the old one. The
+    // first implementation compared seven remembered fields — customer, vehicle,
+    // price, down payment, term, mode, supersedes — so a reused key carrying a
+    // changed finance company, margin, financed amount, recipient, lead or
+    // secondary vehicle line silently returned the EARLIER quote. A different
+    // promise to the customer, answered with an older one. A list of fields is
+    // something people forget to extend; omitting one key is not.
+    //
+    // The resolved `vehicleId` and `vehiclePrice` are used rather than the raw
+    // arguments, because on a multi-vehicle quote the server derives both from
+    // the line items and the client's values are ignored.
+    const { idempotencyKey: _operationKey, ...materialRequest } = args;
+    const requestFingerprint = canonicalRequestFingerprint({
+      ...materialRequest,
+      vehicleId,
+      vehiclePrice,
+    });
+
     if (args.idempotencyKey) {
       const priorQuote = await ctx.db
         .query("quotes")
@@ -214,21 +250,27 @@ export const saveQuote = mutation({
         )
         .first();
       if (priorQuote) {
-        const samePayload =
-          priorQuote.customerId === args.customerId &&
-          priorQuote.vehicleId === vehicleId &&
-          priorQuote.vehiclePrice === vehiclePrice &&
-          priorQuote.downPayment === args.downPayment &&
-          priorQuote.termMonths === args.termMonths &&
-          (priorQuote.mode ?? null) === (args.mode ?? null) &&
-          (priorQuote.supersedesQuoteId ?? null) === (args.supersedesQuoteId ?? null);
-        if (!samePayload) {
+        if (priorQuote.requestFingerprint !== requestFingerprint) {
           throw new ConvexError(
-            "This request id was already used for a different quote. Start a new revision instead of reusing it."
+            "This save was already completed with different details. Reload the deal and submit the change as a new quote rather than reusing the same request."
           );
         }
         return priorQuote._id;
       }
+    }
+
+    // Intent is stated, not inferred. REVISE without a predecessor would open
+    // an independent lineage while the caller believed it was continuing one,
+    // which is precisely how a deal's history fragments silently.
+    if (args.intent === "REVISE" && !args.supersedesQuoteId) {
+      throw new ConvexError(
+        "A revision has to say which quote it replaces. Reload the deal and try again."
+      );
+    }
+    if (args.intent === "NEW" && args.supersedesQuoteId) {
+      throw new ConvexError(
+        "A new quote cannot also supersede an existing one. Send it as a revision instead."
+      );
     }
 
     let lineageRootId: Id<"commitmentRoots"> | undefined;
@@ -309,6 +351,7 @@ export const saveQuote = mutation({
       ...quoteArgs,
       vehicleId,
       vehiclePrice,
+      requestFingerprint,
       ...(lineageRootId ? { rootId: lineageRootId } : {}),
       ...(adoptReservationId ? { adoptedReservationId: adoptReservationId } : {}),
       // Always written, never left undefined: `applications.finalizeDeal` reads

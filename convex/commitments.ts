@@ -548,6 +548,23 @@ export async function recomputeRootStatus(
     if (root.status !== "OPEN") await ctx.db.patch(rootId, { status: "OPEN" });
     return;
   }
+  // ⚠️ c14909: no claim is holding the car, but a deal is not finished while it
+  // still owes somebody an answer about their money. A released share awaiting
+  // a refund-or-forfeit decision is exactly that, and closing the root around
+  // it strands the decision — nothing holds it open and nothing asks again.
+  //
+  // Staying OPEN does NOT re-hold the car: ownership is resolved from ACTIVE
+  // CLAIMS, and there are none. This is the ownership axis and the money axis
+  // coming apart in the direction they are supposed to — the car has left
+  // inventory, the deal has not ended.
+  const residualMinor = await residualUnsettledRootMoneyMinor(ctx, rootId);
+  if (residualMinor > 0) {
+    if (root.status !== "OPEN") {
+      await ctx.db.patch(rootId, { status: "OPEN", closedAt: undefined, closedReason: undefined });
+    }
+    return;
+  }
+
   const consumed = await ctx.db
     .query("vehicleCommitmentClaims")
     .withIndex("by_root_status", (q) => q.eq("rootId", rootId).eq("status", "CONSUMED"))
@@ -723,6 +740,42 @@ export async function reacquireForApplication(
     quoteId: args.quoteId,
   });
   return root._id;
+}
+
+/**
+ * Recompute every root that has a claim on this vehicle, of any status.
+ *
+ * ⚠️ Ordering, and it is not cosmetic. Sale completion consumes the claims
+ * BEFORE it resolves the deposits, so at consume time the money still reads
+ * HELD and the root correctly refuses to close. Nothing then asked again, and
+ * an ordinary finished deal stayed open forever — the mirror of the c14909
+ * defect, produced by fixing it.
+ *
+ * So the money settles, and then the root is asked one more time.
+ */
+export async function recomputeRootsForVehicle(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">
+): Promise<void> {
+  const rootIds = new Set<Id<"commitmentRoots">>();
+  for await (const claim of ctx.db
+    .query("vehicleCommitmentClaims")
+    .withIndex("by_org_vehicle_status", (q) =>
+      q.eq("orgId", orgId).eq("vehicleId", vehicleId).eq("status", "CONSUMED")
+    )) {
+    rootIds.add(claim.rootId);
+  }
+  for await (const claim of ctx.db
+    .query("vehicleCommitmentClaims")
+    .withIndex("by_org_vehicle_status", (q) =>
+      q.eq("orgId", orgId).eq("vehicleId", vehicleId).eq("status", "RELEASED")
+    )) {
+    rootIds.add(claim.rootId);
+  }
+  for (const rootId of rootIds) {
+    await recomputeRootStatus(ctx, rootId);
+  }
 }
 
 /** Every ACTIVE claim on a vehicle, whatever root or kind it belongs to. */
@@ -929,6 +982,62 @@ export async function depositsForQuoteLineage(
     return own;
   }
   return await depositsForRoot(ctx, quote.rootId);
+}
+
+/**
+ * How much of the customer's money still needs a DECISION from somebody.
+ *
+ * ⚠️ A different question from `unresolvedRootMoneyMinor`, and the difference is
+ * exactly APPLIED. That one asks "how much of their money is on this deal",
+ * which is the ceiling a further deposit is measured against, and applied money
+ * counts because it cannot be spent twice. This one asks "is this deal
+ * finished", and applied money is finished — it went to the sale it was for.
+ *
+ * What remains is money nobody has decided about: a released share awaiting a
+ * refund-or-forfeit ruling, an allocation never consumed, a reversal mid-flight,
+ * or a deposit sitting unallocated. A deal carrying any of it is not over,
+ * however sold the car is.
+ */
+export async function residualUnsettledRootMoneyMinor(
+  ctx: QueryCtx | MutationCtx,
+  rootId: Id<"commitmentRoots">
+): Promise<number> {
+  const deposits = await depositsForRoot(ctx, rootId);
+  let total = 0;
+
+  for (const deposit of deposits) {
+    if (deposit.isDeleted === true) continue;
+    if (deposit.status === "VOIDED") continue;
+    if (deposit.status === "REFUNDED" || deposit.status === "FORFEITED") continue;
+
+    const holds: Doc<"depositVehicleHolds">[] = [];
+    for await (const hold of ctx.db
+      .query("depositVehicleHolds")
+      .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))) {
+      holds.push(hold);
+    }
+
+    if (holds.length === 0) {
+      // No allocation rows: only money still HELD is undecided. APPLIED single
+      // vehicle deposits went to their sale and are done.
+      if (deposit.status !== "HELD") continue;
+      total += Math.max(0, (deposit.amountMinor ?? 0) - (deposit.releasedAmountMinor ?? 0));
+      continue;
+    }
+
+    for (const hold of holds) {
+      if (hold.allocationStatus === undefined) {
+        if (hold.active) total += hold.allocatedAmountMinor ?? 0;
+        continue;
+      }
+      if (hold.allocationStatus === "RESOLVED") continue;
+      // The one that matters most: APPLIED is settled, everything else is not.
+      if (hold.allocationStatus === "APPLIED") continue;
+      total += hold.allocatedAmountMinor ?? 0;
+    }
+  }
+
+  return total;
 }
 
 /** The same figure for whichever root a quote belongs to; zero when it has none. */
