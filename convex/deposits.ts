@@ -19,6 +19,7 @@ import {
   assertAcquirable,
   assertCurrentRevision,
   releaseDepositClaimsForVehicle,
+  unresolvedRootMoneyMinor,
 } from "./commitments";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
@@ -98,7 +99,27 @@ export const create = mutation({
           // again — the quote read as fully deposited when it was not.
           return sum + Math.max(0, rowMinor - (deposit.releasedAmountMinor ?? 0));
         }, 0);
-        if (existingActiveMinor + amountMinor > quoteAmountMinor) {
+        // SCRUM-195: the ceiling is measured ROOT-WIDE, not per quote.
+        //
+        // `existingActiveMinor` above only ever saw the deposits filed under
+        // THIS quote id, so money paid before a renegotiation vanished from the
+        // check: on a deal that took 5,000 against a 30,000 quote and then
+        // relinked to a 27,000 revision, a further 23,000 looked like the first
+        // deposit on a fresh quote and passed, leaving 28,000 held against a
+        // 27,000 car. The money did not move when the terms did.
+        //
+        // The head's amount is the ceiling; everything economically unresolved
+        // across the whole root is what it is measured against.
+        const rootIdForCeiling = await actingRootForQuoteOnVehicle(
+          ctx,
+          args.orgId,
+          args.quoteId,
+          quote.vehicleId
+        );
+        const alreadyOnDealMinor = rootIdForCeiling
+          ? await unresolvedRootMoneyMinor(ctx, rootIdForCeiling)
+          : existingActiveMinor;
+        if (alreadyOnDealMinor + amountMinor > quoteAmountMinor) {
           throw new ConvexError("Total deposits cannot exceed the quote amount.");
         }
 

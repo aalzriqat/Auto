@@ -3,6 +3,7 @@ import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 import { toMinorUnits } from "./money";
 import { liveApplicationsForDeposit } from "./depositApplications";
+import { depositsForQuoteLineage } from "../commitments";
 
 /**
  * How much of a quote's reservation deposit belongs to each car on it.
@@ -156,10 +157,18 @@ async function heldDepositsForQuote(
   ctx: QueryCtx | MutationCtx,
   quoteId: Id<"quotes">
 ): Promise<Doc<"deposits">[]> {
-  const deposits = await ctx.db
-    .query("deposits")
-    .withIndex("by_quote", (q) => q.eq("quoteId", quoteId))
-    .collect();
+  // SCRUM-195: the DEAL's money, not the quote id's.
+  //
+  // This is the gate the whole completion path hangs off — an empty result
+  // returns NO_DEPOSIT and short-circuits before any deposit is applied. Read
+  // per-quote, a deal that took a deposit on Q1 and completed on a linked Q2
+  // reported "no deposit", finished the sale, and left the customer's payment
+  // sitting on a superseded quote: never refunded, never credited against what
+  // they owed, and still counted as an outstanding deposit liability.
+  //
+  // `depositsForQuoteLineage` falls back to the single quote for rows with no
+  // root, so quotes predating SCRUM-195 behave exactly as before.
+  const deposits = await depositsForQuoteLineage(ctx, quoteId);
   return deposits.filter((d) => d.holdActive && d.isDeleted !== true);
 }
 

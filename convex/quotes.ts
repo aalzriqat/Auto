@@ -9,8 +9,11 @@ import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/pr
 import {
   COMMITMENT_MESSAGES,
   rootIdForReservation,
+  unresolvedRootMoneyMinor,
   validateReservationAdoption,
 } from "./commitments";
+import { getOrgCurrency } from "./accounting/workflowHooks";
+import { amountToMinorOrThrow, normalizeCurrency } from "./utils/depositRecording";
 import type { Id } from "./_generated/dataModel";
 
 const quoteModeValidator = v.optional(v.union(
@@ -253,6 +256,24 @@ export const saveQuote = mutation({
           throw new ConvexError(COMMITMENT_MESSAGES.notTheHead);
         }
         lineageRootId = predecessor.rootId;
+
+        // A requote may not price the deal BELOW what the customer has already
+        // paid into it. Refused HERE, before the head advances — otherwise the
+        // deal would be left pointing at a revision that was never allowed to
+        // exist, holding more money than the car is now worth, with no way to
+        // represent the difference.
+        //
+        // Deliberately not an automatic refund: handing money back is a
+        // decision about somebody's money and belongs to a person, not to a
+        // side effect of editing a price.
+        const unresolvedMinor = await unresolvedRootMoneyMinor(ctx, predecessor.rootId);
+        const orgCurrency = normalizeCurrency(await getOrgCurrency(ctx, args.orgId));
+        const newHeadMinor = amountToMinorOrThrow(vehiclePrice, orgCurrency, "Quote amount");
+        if (newHeadMinor < unresolvedMinor) {
+          throw new ConvexError(
+            "This deal already holds more of the customer's money than the new price. Resolve the deposit first — refund, forfeit or reallocate it — then requote."
+          );
+        }
       }
     }
 

@@ -808,6 +808,140 @@ export async function consumeClaimsForVehicle(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Root-wide money
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Every deposit that belongs to a root, across every revision of the deal.
+ *
+ * Gathered from the quotes in the lineage AND from the root's own claims,
+ * because those two sets are not the same: a claim can outlive the quote that
+ * created it, and a superseded quote still carries the money paid against it.
+ */
+async function depositsForRoot(
+  ctx: QueryCtx | MutationCtx,
+  rootId: Id<"commitmentRoots">
+): Promise<Doc<"deposits">[]> {
+  const byId = new Map<string, Doc<"deposits">>();
+
+  for await (const quote of ctx.db
+    .query("quotes")
+    .withIndex("by_root", (q) => q.eq("rootId", rootId))) {
+    for await (const deposit of ctx.db
+      .query("deposits")
+      .withIndex("by_quote", (q) => q.eq("quoteId", quote._id))) {
+      byId.set(deposit._id, deposit);
+    }
+  }
+
+  for await (const claim of ctx.db
+    .query("vehicleCommitmentClaims")
+    .withIndex("by_root", (q) => q.eq("rootId", rootId))) {
+    if (!claim.depositId) continue;
+    if (byId.has(claim.depositId as unknown as string)) continue;
+    const deposit = await ctx.db.get(claim.depositId);
+    if (deposit) byId.set(deposit._id, deposit);
+  }
+
+  return Array.from(byId.values());
+}
+
+/**
+ * How much of the customer's money this deal is still economically holding, in
+ * minor units.
+ *
+ * ⚠️ NOT `amountMinor - releasedAmountMinor`, and not the deposits filed under
+ * one quote id. The first counts a partially refunded row as though the
+ * remainder had never been paid; the second loses everything the customer paid
+ * before the last renegotiation, which is precisely the money a requote must
+ * not be allowed to strand.
+ *
+ * Counted (non-terminal): ALLOCATED · APPLIED while still economically live ·
+ * REVERSING · RELEASED_AWAITING_DECISION · and money carrying no allocation
+ * rows at all — the ordinary single-vehicle deposit, and the easiest to miss
+ * precisely because there is nothing in `depositVehicleHolds` to find.
+ *
+ * Excluded (terminal): refunded and forfeited slices, and VOIDED or deleted
+ * rows, which are not money the dealership still owes an answer for.
+ */
+export async function unresolvedRootMoneyMinor(
+  ctx: QueryCtx | MutationCtx,
+  rootId: Id<"commitmentRoots">
+): Promise<number> {
+  const deposits = await depositsForRoot(ctx, rootId);
+  let total = 0;
+
+  for (const deposit of deposits) {
+    if (deposit.isDeleted === true) continue;
+    if (deposit.status === "VOIDED") continue;
+    if (deposit.status === "REFUNDED" || deposit.status === "FORFEITED") continue;
+
+    const holds: Doc<"depositVehicleHolds">[] = [];
+    for await (const hold of ctx.db
+      .query("depositVehicleHolds")
+      .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))) {
+      holds.push(hold);
+    }
+
+    if (holds.length === 0) {
+      // Unallocated: the deposit row IS the bucket. Net of anything already
+      // handed back, since a partial refund really has left the deal.
+      total += Math.max(0, (deposit.amountMinor ?? 0) - (deposit.releasedAmountMinor ?? 0));
+      continue;
+    }
+
+    for (const hold of holds) {
+      // `active` with no allocationStatus is an unallocated slice — the shape
+      // RETURN_TO_UNALLOCATED writes when money comes back onto the deal.
+      if (hold.allocationStatus === undefined) {
+        if (hold.active) total += hold.allocatedAmountMinor ?? 0;
+        continue;
+      }
+      if (hold.allocationStatus === "RESOLVED") continue;
+      total += hold.allocatedAmountMinor ?? 0;
+    }
+  }
+
+  return total;
+}
+
+/**
+ * Every deposit on the DEAL this quote belongs to, across all its revisions.
+ *
+ * Completion has to resolve the customer's money, and money paid against an
+ * earlier revision is still theirs: a deal that took 5,000 on Q1 and completed
+ * on a linked Q2 would otherwise finish with that 5,000 stranded on a
+ * superseded quote — not refunded, not applied, just orphaned. Falls back to
+ * the single quote for rows that predate SCRUM-195 and carry no root.
+ */
+export async function depositsForQuoteLineage(
+  ctx: QueryCtx | MutationCtx,
+  quoteId: Id<"quotes">
+): Promise<Doc<"deposits">[]> {
+  const quote = await ctx.db.get(quoteId);
+  if (!quote?.rootId) {
+    const own: Doc<"deposits">[] = [];
+    for await (const deposit of ctx.db
+      .query("deposits")
+      .withIndex("by_quote", (q) => q.eq("quoteId", quoteId))) {
+      own.push(deposit);
+    }
+    return own;
+  }
+  return await depositsForRoot(ctx, quote.rootId);
+}
+
+/** The same figure for whichever root a quote belongs to; zero when it has none. */
+export async function unresolvedMoneyForQuoteMinor(
+  ctx: QueryCtx | MutationCtx,
+  quoteId: Id<"quotes">
+): Promise<number> {
+  const quote = await ctx.db.get(quoteId);
+  if (!quote?.rootId) return 0;
+  return await unresolvedRootMoneyMinor(ctx, quote.rootId);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Reservation adoption (c14659 / c14833, restated by c14865)
 // ─────────────────────────────────────────────────────────────────────────────
 

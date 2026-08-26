@@ -10,7 +10,11 @@ import { fromMinorUnits } from "./money";
 import { liveAppliedMinorForDeposit } from "./depositApplications";
 import { assertQuoteDepositConservation } from "./depositAllocation";
 import { createCanonicalPayment } from "../subledger";
-import { hasActiveFinanceClaim, releaseClaimsForReservation } from "../commitments";
+import {
+  depositsForQuoteLineage,
+  hasActiveFinanceClaim,
+  releaseClaimsForReservation,
+} from "../commitments";
 import {
   getOrgCurrency,
   hookDepositRefunded,
@@ -471,10 +475,15 @@ export async function resolveDepositsForQuote(
     saleId?: Id<"sales">;
   }
 ): Promise<ResolvedDepositsForQuoteResult> {
-  const deposits = await ctx.db
-    .query("deposits")
-    .withIndex("by_quote", (q) => q.eq("quoteId", args.quoteId))
-    .collect();
+  // SCRUM-195: gathered across the DEAL, not the quote id.
+  //
+  // A `by_quote` read finds only money paid against the revision being
+  // completed. On a deal that took a deposit on Q1 and completed on a linked
+  // Q2, that money was invisible here — so the sale finished with the
+  // customer's payment stranded on a superseded quote: not refunded, not
+  // applied to what they owed, just orphaned. The money belongs to the deal;
+  // the quote is only which version of it was current when they paid.
+  const deposits = await depositsForQuoteLineage(ctx, args.quoteId);
 
   let resolvedTotal = 0;
   const appliedDeposits: ResolvedDepositsForQuoteResult["appliedDeposits"] = [];

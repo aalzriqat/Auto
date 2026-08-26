@@ -1545,6 +1545,166 @@ describe("11. row-51 — a fixed page must not decide freeness", () => {
 // promise that fails silently at the boundary rather than loudly at the cap.
 // ═════════════════════════════════════════════════════════════════════════════
 
+// ═════════════════════════════════════════════════════════════════════════════
+// 14. MONEY BELONGS TO THE ROOT, NOT TO A QUOTE
+//
+// A renegotiation replaces the deal's terms; it does not replace the money the
+// customer has already handed over. So the ceiling on new money is the CURRENT
+// HEAD's amount, and what it is measured against is every economically
+// unresolved minor across the whole root — not the deposits filed under one
+// quote id, and not `amountMinor - releasedAmountMinor`, which counts a
+// partially refunded row as though the rest had never been paid.
+//
+// Unresolved means the non-terminal buckets: ALLOCATED, APPLIED while still
+// economically live, REVERSING, RELEASED_AWAITING_DECISION, and money with no
+// allocation rows at all — which is the ordinary single-vehicle deposit, and
+// the easiest to miss because it has nothing in `depositVehicleHolds` to find.
+// Terminal refunds and forfeits are excluded, as are VOIDED and deleted rows.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("14. root-wide money", () => {
+  const Q1 = 30_000;
+  const Q2 = 27_000;
+  const ON_ROOT = 5_000;
+
+  /** Q1 at 30,000 with 5,000 down, superseded by a linked Q2 at 27,000. */
+  async function q1DepositThenQ2(seed: Seed, v: Id<"vehicles">) {
+    const q1 = await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+      vehicleId: v,
+      mode: "CASH" as const,
+      vehiclePrice: Q1,
+      downPayment: 0,
+      termMonths: 0,
+      totalFinancedAmount: 0,
+    });
+    await seed.asUser.mutation(api.deposits.create, {
+      orgId: seed.orgId,
+      quoteId: q1,
+      amount: ON_ROOT,
+    });
+    const q2 = await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+      vehicleId: v,
+      mode: "CASH" as const,
+      vehiclePrice: Q2,
+      downPayment: 0,
+      termMonths: 0,
+      totalFinancedAmount: 0,
+      supersedesQuoteId: q1,
+    });
+    return { q1, q2 };
+  }
+
+  test("14.1 BOUNDARY: 5,000 on the root, head at 27,000 — a further 22,000 is permitted", async () => {
+    const seed = await seedDealer("money-boundary-ok");
+    const v = await vehicle(seed);
+    const { q2 } = await q1DepositThenQ2(seed, v);
+
+    const depositId = (await seed.asUser.mutation(api.deposits.create, {
+      orgId: seed.orgId,
+      quoteId: q2,
+      amount: 22_000,
+    })) as Id<"deposits">;
+
+    // Exactly to the line, and it lands on the CURRENT head.
+    const row = await seed.t.run((ctx) => ctx.db.get(depositId));
+    expect(row?.quoteId).toBe(q2);
+    expect(row?.holdActive).toBe(true);
+  });
+
+  test("14.2 BOUNDARY: the same root refuses 23,000, and leaves ZERO residue", async () => {
+    // 5,000 + 23,000 = 28,000 against a 27,000 head. One minor unit over the
+    // line has to fail exactly as hard as a thousand.
+    const seed = await seedDealer("money-boundary-refused");
+    const v = await vehicle(seed);
+    const { q2 } = await q1DepositThenQ2(seed, v);
+    const depositsBefore = await countIn(seed, "deposits");
+
+    await expectRefusal(
+      seed.asUser.mutation(api.deposits.create, {
+        orgId: seed.orgId,
+        quoteId: q2,
+        amount: 23_000,
+      })
+    , /exceed|more than|over the|remaining/i, "23,000 breaches the 27,000 head");
+
+    // Whole-operation zero residue: no deposit row, no hold, no partial write.
+    expect(await countIn(seed, "deposits"), "the refused deposit left nothing").toBe(
+      depositsBefore
+    );
+    const holds = await depositsHolding(seed, v);
+    expect(holds, "still exactly the original 5,000 deal").toHaveLength(1);
+  });
+
+  test("14.3 a linked requote BELOW unresolved root money refuses BEFORE advancing the head", async () => {
+    // The customer has paid 5,000. Renegotiating the car down to 4,000 would
+    // leave the deal owing them money it has no way to represent, so it is
+    // refused — and refused BEFORE the head moves, or the deal would be left
+    // pointing at a revision that was never allowed to exist.
+    const seed = await seedDealer("requote-below-money");
+    const v = await vehicle(seed);
+    const q1 = await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+      vehicleId: v,
+      mode: "CASH" as const,
+      vehiclePrice: Q1,
+      downPayment: 0,
+      termMonths: 0,
+      totalFinancedAmount: 0,
+    });
+    await seed.asUser.mutation(api.deposits.create, {
+      orgId: seed.orgId,
+      quoteId: q1,
+      amount: ON_ROOT,
+    });
+
+    await expectRefusal(
+      seed.asUser.mutation(api.quotes.saveQuote, {
+        orgId: seed.orgId,
+        customerId: seed.customerA,
+        vehicleId: v,
+        mode: "CASH" as const,
+        vehiclePrice: 4_000,
+        downPayment: 0,
+        termMonths: 0,
+        totalFinancedAmount: 0,
+        supersedesQuoteId: q1,
+      })
+    , /already (been )?(paid|received)|less than|below|unresolved|refund/i);
+
+    // The head did NOT move, and the predecessor was not marked superseded.
+    const q1Row = await seed.t.run((ctx) => ctx.db.get(q1));
+    expect(q1Row?.supersededByQuoteId ?? null, "the head must not have advanced").toBeNull();
+    const root = await resolveRoot(seed, v);
+    expect(root.headQuoteId, "the root still points at Q1").toEqual(q1);
+  });
+
+  test("14.4 money paid on Q1 is applied EXACTLY ONCE when the Q2 deal completes", async () => {
+    const seed = await seedDealer("q1-money-completes");
+    const v = await vehicle(seed);
+    const { q2 } = await q1DepositThenQ2(seed, v);
+    const depositId = await seed.t.run(async (ctx) => {
+      const rows = (await ctx.db.query("deposits").collect()).filter((d) => d.holdActive === true);
+      return rows[0]._id;
+    });
+
+    await seed.asUser.mutation(api.sales.completeFromQuote, { orgId: seed.orgId, quoteId: q2 });
+
+    // No orphan, no double-application, no silent reassignment.
+    const applications = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("depositApplications").collect()).filter(
+        (row) => row.depositId === depositId
+      )
+    );
+    expect(applications, "the Q1 money is applied exactly once, on the Q2 deal").toHaveLength(1);
+    expect((await vehicleRow(seed, v)).status).toBe("SOLD");
+  });
+});
+
 describe("13. lifecycle helpers release and consume EVERY claim", () => {
   /** N ACTIVE claims for one root — an instalment-heavy deal, exaggerated. */
   async function seedManyClaims(
