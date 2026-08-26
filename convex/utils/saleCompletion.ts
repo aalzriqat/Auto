@@ -16,6 +16,12 @@ import {
 } from "./depositHelpers";
 import type { DepositMethod } from "./depositRecording";
 import { throwAppError, AppErrorCode } from "./errors";
+import {
+  actingRootForQuoteOnVehicle,
+  assertAcquirable,
+  consumeClaimsForVehicle,
+  COMMITMENT_MESSAGES,
+} from "../commitments";
 import { requireOrgMember } from "./tenancy";
 import {
   hookSaleCompleted,
@@ -188,6 +194,32 @@ async function prepareSaleCompletion(
     throwAppError(AppErrorCode.VEHICLE_ARCHIVED, "Cannot sell an archived vehicle. Restore it first.");
   }
 
+  // SCRUM-195 / SCRUM-196. This is the door the originating incident came
+  // through: the checks above read only SOLD and ARCHIVED, so a car held by
+  // someone else's live deposit or reservation — RESERVED, and invisible here —
+  // could be sold out from under them, and the trade-in path checked nothing
+  // but the organization.
+  //
+  // ⚠️ Asked of the COMMITMENT AUTHORITY, never of `vehicle.status`. Status is
+  // an advisory projection: it can be stale, it can be patched directly, and it
+  // cannot say WHOSE hold it represents — which is the distinction between a
+  // rival sale and the completion the holding deal is entitled to make.
+  //
+  // The quote is the lineage proof. Omitting it, or presenting an unrelated
+  // one, both leave the caller on independent lineage and are refused; only the
+  // deal that actually holds the car may complete on it.
+  await assertAcquirable(ctx, {
+    orgId: args.orgId,
+    vehicleId: args.vehicleId,
+    actingRootId: await actingRootForQuoteOnVehicle(
+      ctx,
+      args.orgId,
+      args.quoteId,
+      args.vehicleId
+    ),
+    message: COMMITMENT_MESSAGES.heldByAnotherDealSale,
+  });
+
   const customer = await ctx.db.get(args.customerId);
   if (customer?.orgId !== args.orgId) {
     throwAppError(AppErrorCode.CUSTOMER_NOT_FOUND, "Customer not found in this organization.");
@@ -198,6 +230,17 @@ async function prepareSaleCompletion(
     if (tradeInVehicle?.orgId !== args.orgId) {
       throw new ConvexError("Trade-in vehicle not found in this organization.");
     }
+    // A car somebody else's deal is holding is not available to be taken in
+    // trade either. This path checked ownership of the ORGANIZATION and nothing
+    // else, so it was the quietest of the doors out of inventory. There is no
+    // lineage to present here — nobody trades a car in on behalf of the deal
+    // holding it — so any live commitment refuses.
+    await assertAcquirable(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.tradeInVehicleId,
+      actingRootId: null,
+      message: COMMITMENT_MESSAGES.heldByAnotherDealTradeIn,
+    });
   }
 
   let leadId: Id<"leads"> | undefined;
@@ -907,6 +950,21 @@ async function applySaleCompletionSideEffects(
   saleId: Id<"sales">
 ) {
   await markVehicleAsSold(ctx, args.vehicleId);
+
+  // SCRUM-195: the deal is finished, so its claims are CONSUMED rather than
+  // merely released. The distinction is load-bearing — a consumed root must not
+  // recompute its way back to holding a car that has already been sold.
+  await consumeClaimsForVehicle(ctx, args.orgId, args.vehicleId, `sold on sale ${saleId}`);
+  if (args.tradeInVehicleId) {
+    // The trade-in has changed hands too. Left ACTIVE, the customer's old car
+    // would go on holding itself against the deal that just took it in.
+    await consumeClaimsForVehicle(
+      ctx,
+      args.orgId,
+      args.tradeInVehicleId,
+      `taken in trade on sale ${saleId}`
+    );
+  }
 
   const isSourced = prepared.vehicle.sourceType === "SOURCED";
   const settlementRoute = consignedSettlementRoute(args);

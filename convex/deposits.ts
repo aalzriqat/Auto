@@ -13,6 +13,13 @@ import {
   payOutDepositSlice,
   syncVehicleHoldStatus,
 } from "./utils/depositHelpers";
+import {
+  acquireVehicleForQuote,
+  actingRootForQuoteOnVehicle,
+  assertAcquirable,
+  assertCurrentRevision,
+  releaseDepositClaimsForVehicle,
+} from "./commitments";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
 import { hookDepositVoided, getOrgCurrency } from "./accounting/workflowHooks";
@@ -95,10 +102,33 @@ export const create = mutation({
           throw new ConvexError("Total deposits cannot exceed the quote amount.");
         }
 
+        // SCRUM-195: the commitment authority decides whether this deal may take
+        // these cars, BEFORE any hold is written. A refusal must leave no
+        // deposit row, no hold and no status change behind, which it does
+        // because the whole mutation is one transaction.
+        //
+        // The quote is the lineage proof: a deposit on the deal that already
+        // holds the car is a further instalment and is fine, while a deposit
+        // from any other deal — including one for the SAME CUSTOMER on a second
+        // independent quote — is a rival and is refused.
+        await assertCurrentRevision(ctx, args.quoteId);
+
         // Throws if a vehicle is SOLD/ARCHIVED; otherwise patches AVAILABLE -> RESERVED
         // (no-op if already RESERVED — parallel deposits are allowed). A multi-vehicle
         // quote holds every vehicle on the deal, not just the first one.
         const depositVehicleItems = quote.vehicleItems ?? [{ vehicleId: quote.vehicleId }];
+        for (const item of depositVehicleItems) {
+          await assertAcquirable(ctx, {
+            orgId: args.orgId,
+            vehicleId: item.vehicleId,
+            actingRootId: await actingRootForQuoteOnVehicle(
+              ctx,
+              args.orgId,
+              args.quoteId,
+              item.vehicleId
+            ),
+          });
+        }
         for (const item of depositVehicleItems) {
           await holdVehicleForDeposit(ctx, item.vehicleId);
         }
@@ -133,6 +163,22 @@ export const create = mutation({
               createdAt: now,
             });
           }
+        }
+
+        // SCRUM-195: record WHOSE deal now holds each car. The acquirability
+        // check above already passed, so this either joins the deal's existing
+        // root — a further instalment — or opens the root this deal will be
+        // known by from here on.
+        for (const item of depositVehicleItems) {
+          await acquireVehicleForQuote(ctx, {
+            orgId: args.orgId,
+            vehicleId: item.vehicleId,
+            quoteId: args.quoteId,
+            customerId: quote.customerId,
+            createdBy: user._id,
+            kind: "DEPOSIT",
+            depositId,
+          });
         }
 
         const actorName = await getActorName(ctx);
@@ -1030,6 +1076,16 @@ export const releaseVehicleAllocation = mutation({
     if (releasedHolds === 0) {
       throw new ConvexError("That vehicle holds no active share of this quote's deposit.");
     }
+
+    // SCRUM-195: the deal has let this CAR go, so its commitment claim on that
+    // car is released too. The root itself stays open — the released share is
+    // money the dealership still owes an answer for — which is the ownership
+    // axis and the money axis moving independently, exactly as they should.
+    await releaseDepositClaimsForVehicle(
+      ctx,
+      args.vehicleId,
+      args.reason?.trim() ?? "vehicle released from the deal"
+    );
 
     await maybeReleaseVehicleHold(ctx, args.vehicleId);
 

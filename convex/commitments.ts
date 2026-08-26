@@ -166,21 +166,18 @@ export async function resolveOwnership(
 }
 
 /**
- * The single OPEN root holding this car — `null` when nothing holds it AND when
- * ownership is ambiguous.
+ * ⚠️ THERE IS DELIBERATELY NO `findOwningRoot(...) => Root | null` HERE.
  *
- * ⚠️ Never enforce with this. `null` conflates "free" with "cannot tell", and
- * those need opposite treatment: one permits, the other must refuse. Guards
- * call `assertAcquirable`, which keeps them apart.
+ * One existed, returning `null` for both FREE and AMBIGUOUS with a comment
+ * saying "never enforce with this". A convenience that collapses *permit* and
+ * *must refuse* into one value, kept next to the guards that must tell them
+ * apart, is a trap with a label on it — and the label is only load-bearing
+ * until somebody reaches for the obvious-looking helper. It had no callers, so
+ * it is gone rather than documented.
+ *
+ * Enforcement goes through `assertAcquirable`. Display goes through
+ * `resolveRootView`, which keeps all three states distinct on the wire.
  */
-export async function findOwningRoot(
-  ctx: QueryCtx | MutationCtx,
-  orgId: Id<"organizations">,
-  vehicleId: Id<"vehicles">
-): Promise<Doc<"commitmentRoots"> | null> {
-  const ownership = await resolveOwnership(ctx, orgId, vehicleId);
-  return ownership.kind === "OWNED" ? ownership.root : null;
-}
 
 export async function resolveRootView(
   ctx: QueryCtx | MutationCtx,
@@ -287,14 +284,141 @@ export async function assertAcquirable(
   throw new ConvexError(args.message ?? COMMITMENT_MESSAGES.heldByAnotherDeal);
 }
 
-/** The root a quote belongs to, or null when the quote predates SCRUM-195. */
-export async function rootIdForQuote(
+/**
+ * The root this QUOTE already holds THIS VEHICLE under, if any — the caller's
+ * lineage proof.
+ *
+ * Two ways a quote can prove lineage, and both are needed:
+ *
+ *   - `quote.rootId`, inherited when the quote superseded another revision or
+ *     adopted a reservation. Checked against the root's own `vehicleId`,
+ *     because a multi-vehicle quote spans several roots and the stamped one
+ *     only ever refers to the first;
+ *   - an ACTIVE claim this same quote already created on this same vehicle,
+ *     which is what carries lineage for every vehicle after the first.
+ *
+ * No quote means no proof. That is not an oversight — evidence written with no
+ * lineage is independent lineage, and independent lineage cannot take a car
+ * somebody else is holding.
+ */
+export async function actingRootForQuoteOnVehicle(
   ctx: QueryCtx | MutationCtx,
-  quoteId: Id<"quotes"> | undefined | null
+  orgId: Id<"organizations">,
+  quoteId: Id<"quotes"> | undefined | null,
+  vehicleId: Id<"vehicles">
 ): Promise<Id<"commitmentRoots"> | null> {
   if (!quoteId) return null;
+
   const quote = await ctx.db.get(quoteId);
-  return quote?.rootId ?? null;
+  if (quote?.rootId) {
+    const root = await ctx.db.get(quote.rootId);
+    if (root && root.orgId === orgId && root.vehicleId === vehicleId && root.status === "OPEN") {
+      return root._id;
+    }
+  }
+
+  for await (const claim of ctx.db
+    .query("vehicleCommitmentClaims")
+    .withIndex("by_org_vehicle_status", (q) =>
+      q.eq("orgId", orgId).eq("vehicleId", vehicleId).eq("status", "ACTIVE")
+    )) {
+    if (claim.quoteId === quoteId) return claim.rootId;
+  }
+  return null;
+}
+
+/**
+ * Take a car for a deal, or refuse — the one call every acquisition path makes.
+ *
+ * Creates the root when this is the deal's first claim on this car, joins the
+ * existing root when the quote proves lineage to it, and refuses otherwise.
+ * Because the check and the write happen here, in the caller's own mutation,
+ * they share a transaction: a refusal leaves no claim, no root, and no half-
+ * acquired car behind.
+ */
+export async function acquireVehicleForQuote(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    quoteId?: Id<"quotes"> | null;
+    customerId: Id<"customers">;
+    createdBy: Id<"users">;
+    kind: "DEPOSIT" | "FINANCE" | "RESERVATION";
+    depositId?: Id<"deposits">;
+    applicationId?: Id<"financeApplications">;
+    reservationId?: Id<"vehicleReservations">;
+    message?: string;
+  }
+): Promise<Id<"commitmentRoots">> {
+  const actingRootId = await actingRootForQuoteOnVehicle(
+    ctx,
+    args.orgId,
+    args.quoteId,
+    args.vehicleId
+  );
+
+  await assertAcquirable(ctx, {
+    orgId: args.orgId,
+    vehicleId: args.vehicleId,
+    actingRootId,
+    message: args.message,
+  });
+
+  let rootId = actingRootId;
+  if (!rootId) {
+    rootId = await openRoot(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      customerId: args.customerId,
+      createdBy: args.createdBy,
+      headQuoteId: args.quoteId ?? undefined,
+      originReservationId: args.kind === "RESERVATION" ? args.reservationId : undefined,
+    });
+    // Stamp the quote only if it has no root yet: on a multi-vehicle deal the
+    // first vehicle claims the field and the rest carry lineage through their
+    // own claims.
+    if (args.quoteId) {
+      const quote = await ctx.db.get(args.quoteId);
+      if (quote && !quote.rootId) await ctx.db.patch(args.quoteId, { rootId });
+    }
+  }
+
+  await attachClaim(ctx, {
+    orgId: args.orgId,
+    rootId,
+    vehicleId: args.vehicleId,
+    kind: args.kind,
+    createdBy: args.createdBy,
+    depositId: args.depositId,
+    applicationId: args.applicationId,
+    reservationId: args.reservationId,
+    quoteId: args.quoteId ?? undefined,
+  });
+
+  return rootId;
+}
+
+/**
+ * Refuse to take a car OUT of inventory while a live deal holds it.
+ *
+ * Removal has no lineage to offer — nobody soft-deletes a car "on behalf of"
+ * the deal holding it — so there is no acting root and any live commitment
+ * refuses. Ambiguity refuses too: a car with conflicting records is exactly the
+ * one that must not quietly vanish from the lot.
+ */
+export async function assertRemovableFromInventory(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">,
+  message?: string
+): Promise<void> {
+  await assertAcquirable(ctx, {
+    orgId,
+    vehicleId,
+    actingRootId: null,
+    message: message ?? COMMITMENT_MESSAGES.heldByAnotherDealRemoval,
+  });
 }
 
 /**
@@ -425,6 +549,45 @@ export async function recomputeRootStatus(
   const next = consumed ? "CONSUMED" : "RELEASED";
   if (root.status !== next) {
     await ctx.db.patch(rootId, { status: next, closedAt: Date.now() });
+  }
+}
+
+/**
+ * Release every ACTIVE DEPOSIT claim on this car.
+ *
+ * Called when a deal lets a CAR go while the deal itself continues — a released
+ * allocation on a multi-vehicle quote is the ordinary case. The root stays open
+ * if any other claim still stands, because `resolveClaim` recomputes rather
+ * than assuming; only when nothing holds the car does it become acquirable
+ * again.
+ */
+export async function releaseDepositClaimsForVehicle(
+  ctx: MutationCtx,
+  vehicleId: Id<"vehicles">,
+  reason: string
+): Promise<void> {
+  const vehicle = await ctx.db.get(vehicleId);
+  if (!vehicle) return;
+  const claims = await activeClaimsForVehicle(ctx, vehicle.orgId, vehicleId);
+  for (const claim of claims) {
+    if (claim.kind !== "DEPOSIT") continue;
+    await resolveClaim(ctx, claim._id, "RELEASED", reason);
+  }
+}
+
+/** Release every ACTIVE claim carried by one deposit, across every car it holds. */
+export async function releaseClaimsForDeposit(
+  ctx: MutationCtx,
+  depositId: Id<"deposits">,
+  reason: string
+): Promise<void> {
+  const claims = await ctx.db
+    .query("vehicleCommitmentClaims")
+    .withIndex("by_deposit", (q) => q.eq("depositId", depositId))
+    .take(50);
+  for (const claim of claims) {
+    if (claim.status !== "ACTIVE") continue;
+    await resolveClaim(ctx, claim._id, "RELEASED", reason);
   }
 }
 

@@ -160,7 +160,28 @@ describe("deposits.create", () => {
     });
   });
 
-  test("a second deposit from a different quote on the same vehicle does not error (soft warning, not a hard block)", async () => {
+  /**
+   * ⚠️ SUPERSEDED RULE, REWRITTEN IN PLACE (owner ruling c14860, carried out
+   * under c14865).
+   *
+   * This test used to assert that a second deposit from a DIFFERENT quote on
+   * the same vehicle merely warned — "soft warning, not a hard block" — and it
+   * passed, because that was the shipped behaviour.
+   *
+   * SCRUM-195 reverses it. One vehicle row is one physical unit, so once a hard
+   * commitment exists, a different deal cannot acquire it; the soft warning was
+   * how one car ended up with two customers' money against it. The rule is now
+   * enforced by the commitment authority rather than surfaced as advice.
+   *
+   * The rewrite is deliberately kept HERE, where the old rule lived, rather
+   * than deleted and re-stated somewhere else — a reader who comes looking for
+   * the soft-warning behaviour should find what replaced it and why.
+   *
+   * What did NOT change: a further instalment on the SAME deal. That is the
+   * second half below, and it is what stops this rule being implemented as a
+   * blunt one-deposit-per-vehicle cap.
+   */
+  test("a second deposit from a DIFFERENT deal on the same vehicle is refused", async () => {
     const { t, orgId, customerId, vehicleId, asUser } = await setup();
     const quoteId1 = await makeQuote(t, asUser, orgId, customerId, vehicleId);
     await asUser.mutation(api.deposits.create, { orgId, quoteId: quoteId1, amount: 1000 });
@@ -172,11 +193,33 @@ describe("deposits.create", () => {
 
     await expect(
       asUser.mutation(api.deposits.create, { orgId, quoteId: quoteId2, amount: 2000 })
-    ).resolves.toBeDefined();
+    ).rejects.toThrow(/committed|another deal|already held/i);
 
     await t.run(async (ctx) => {
+      // The first deal still holds it, and the rival left nothing behind.
       const vehicle = await ctx.db.get(vehicleId);
       expect(vehicle?.status).toBe("RESERVED");
+      const deposits = (await ctx.db.query("deposits").collect()).filter(
+        (d) => d.vehicleId === vehicleId
+      );
+      expect(deposits).toHaveLength(1);
+      expect(deposits[0].quoteId).toBe(quoteId1);
+    });
+  });
+
+  test("a further instalment on the SAME deal is still accepted", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
+    await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1000 });
+
+    await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 2000 });
+
+    await t.run(async (ctx) => {
+      const deposits = (await ctx.db.query("deposits").collect()).filter(
+        (d) => d.quoteId === quoteId
+      );
+      expect(deposits, "instalments on one deal are not rivals").toHaveLength(2);
+      expect(deposits.every((d) => d.holdActive === true)).toBe(true);
     });
   });
 
@@ -378,7 +421,28 @@ describe("deposits.release", () => {
     const secondCustomerId = await t.run((ctx) =>
       ctx.db.insert("customers", { orgId, firstName: "Omar", lastName: "Saleh" })
     );
-    const secondQuoteId = await makeQuote(t, asUser, orgId, secondCustomerId, vehicleId);
+    // A SECOND VEHICLE, deliberately. What this test verifies is that ledger
+    // enrichment attributes each row to its own deposit; two customers holding
+    // the SAME car was incidental to that, and under SCRUM-195 it is a rival
+    // commitment that `deposits.create` now refuses. Two cars keeps both
+    // deposits legal and keeps the two distinct customers and quotes that give
+    // the assertions below their meaning.
+    const secondVehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "LEDGERENRICH0002",
+        make: "Mazda",
+        model: "CX-5",
+        year: 2023,
+        mileage: 100,
+        color: "Blue",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        sellingPrice: 20000,
+        status: "AVAILABLE",
+      })
+    );
+    const secondQuoteId = await makeQuote(t, asUser, orgId, secondCustomerId, secondVehicleId);
     const secondDepositId = await asUser.mutation(api.deposits.create, {
       orgId,
       quoteId: secondQuoteId,
