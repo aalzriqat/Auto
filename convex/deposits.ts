@@ -19,6 +19,7 @@ import {
   assertAcquirable,
   assertCurrentRevision,
   recomputeRootsForVehicle,
+  releaseClaimsForDeposit,
   releaseDepositClaimsForVehicle,
   unresolvedRootMoneyMinor,
 } from "./commitments";
@@ -410,6 +411,11 @@ export const voidDeposit = mutation({
     }
 
     await releaseAllVehiclesForDeposit(ctx, deposit);
+    // SCRUM-195. A void says the payment never happened, so a hold created
+    // by money that was never taken has nothing left to stand on. Unlike a
+    // rejected application -- where the money is still held and the deal
+    // keeps its car -- there is no decision still outstanding here.
+    await releaseClaimsForDeposit(ctx, args.depositId, "deposit voided");
 
     return args.depositId;
   },

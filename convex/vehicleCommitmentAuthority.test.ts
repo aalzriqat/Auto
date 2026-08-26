@@ -3080,3 +3080,98 @@ describe("20. an expired reservation must let the car go", () => {
     expect(live, "with exactly one live reservation").toHaveLength(1);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 21. RESOLVING THE MONEY MUST LET THE CAR GO
+//
+// Section 20 was reservation expiry. This is the same rule at the deposit's own
+// endings, and they matter more because they are how an ordinary deal stops:
+// the manager refunds or forfeits the عربون, or voids a receipt entered in
+// error. Both end the hold on the car.
+//
+// The corpus reached `deposits.releaseVehicleAllocation` — the multi-vehicle
+// path — six times and `deposits.release` not once, so the single-vehicle
+// ending that every dealership actually uses had no contract at all.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("21. resolving the money lets the car go", () => {
+  /**
+   * Can somebody else genuinely take this car now?
+   *
+   * Asserted by consequence rather than by reading the resolver, because the
+   * status projection and the authority disagree in exactly the failure this
+   * section exists to catch: `holdActive` goes false, the car reads free, and
+   * an ACTIVE claim still refuses every acquisition.
+   */
+  async function rivalCanTake(seed: Seed, v: Id<"vehicles">) {
+    const rivalQuote = await cashQuote(seed, seed.customerB, v);
+    const depositId = (await seed.asUser.mutation(api.deposits.create, {
+      orgId: seed.orgId,
+      quoteId: rivalQuote,
+      amount: 1_000,
+    })) as Id<"deposits">;
+    const row = await seed.t.run((ctx) => ctx.db.get(depositId));
+    return row?.holdActive === true;
+  }
+
+  test("21.1 REFUNDING the deposit releases the car", async () => {
+    const seed = await seedDealer("dep-refund");
+    const v = await vehicle(seed);
+    const { depositId } = await heldByDeposit(seed, v, seed.customerA);
+    expect((await resolveRoot(seed, v)).kind, "the money holds the car").toBe("OWNED");
+
+    // Maker-checker: whoever took the deposit may not also rule on it.
+    await seed.asApprover.mutation(api.deposits.release, {
+      orgId: seed.orgId,
+      depositId,
+      resolution: "REFUNDED" as const,
+      refundMethod: "CASH" as const,
+    });
+
+    expect(
+      (await resolveRoot(seed, v)).kind,
+      "a refunded deposit no longer holds the car"
+    ).not.toBe("OWNED");
+    expect(await rivalCanTake(seed, v), "and somebody else can genuinely take it").toBe(true);
+  });
+
+  test("21.2 FORFEITING the deposit releases the car too", async () => {
+    const seed = await seedDealer("dep-forfeit");
+    const v = await vehicle(seed);
+    const { depositId } = await heldByDeposit(seed, v, seed.customerA);
+
+    // The money stays with the dealership; the CAR does not. Keeping the
+    // forfeited customer's hold would take the deposit AND the vehicle.
+    await seed.asApprover.mutation(api.deposits.release, {
+      orgId: seed.orgId,
+      depositId,
+      resolution: "FORFEITED" as const,
+    });
+
+    expect(
+      (await resolveRoot(seed, v)).kind,
+      "a forfeited deposit keeps the money, not the car"
+    ).not.toBe("OWNED");
+    expect(await rivalCanTake(seed, v), "the car is genuinely back on the lot").toBe(true);
+  });
+
+  test("21.3 VOIDING a mistaken receipt releases the car", async () => {
+    const seed = await seedDealer("dep-void");
+    const v = await vehicle(seed);
+    const { depositId } = await heldByDeposit(seed, v, seed.customerA);
+
+    // A void says the payment never happened. A hold created by money that was
+    // never taken has nothing left to stand on.
+    await seed.asApprover.mutation(api.deposits.voidDeposit, {
+      orgId: seed.orgId,
+      depositId,
+      reason: "entered in error",
+    });
+
+    expect(
+      (await resolveRoot(seed, v)).kind,
+      "a voided receipt cannot still hold a car"
+    ).not.toBe("OWNED");
+    expect(await rivalCanTake(seed, v), "and the car is acquirable again").toBe(true);
+  });
+});

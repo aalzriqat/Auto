@@ -13,6 +13,7 @@ import { createCanonicalPayment } from "../subledger";
 import {
   depositsForQuoteLineage,
   hasActiveFinanceClaim,
+  releaseClaimsForDeposit,
   releaseClaimsForReservation,
 } from "../commitments";
 import {
@@ -1063,6 +1064,21 @@ export async function releaseHeldDeposit(
     ...(args.saleId ? { resolutionSaleId: args.saleId } : {}),
   });
   if (closesTheRow) await releaseAllVehiclesForDeposit(ctx, deposit);
+  // SCRUM-195. Only when the row actually CLOSES. A partial release leaves
+  // the rest of the money still holding its cars, and a deposit whose
+  // remainder is carrying a live application or another vehicle's
+  // allocation has not finished holding anything.
+  //
+  // ⚠️ Deliberately NOT inside `releaseAllVehiclesForDeposit`, which is the
+  // tempting boundary and the wrong one. That helper also runs when an
+  // application is rejected, where the deposit stops counting toward
+  // RESERVED inventory but the MONEY IS STILL HELD and the deal still owns
+  // the car -- a manager has yet to refund or forfeit it. Releasing the
+  // claim there hands the car to a rival while the first customer's money
+  // is still sitting against it, which contract 8.3 refuses by name.
+  if (closesTheRow) {
+    await releaseClaimsForDeposit(ctx, args.depositId, `deposit ${args.resolution.toLowerCase()}`);
+  }
   const amountMajor = fromMinorUnits(amountMinor, currency);
 
   if (args.resolution === "REFUNDED") {
