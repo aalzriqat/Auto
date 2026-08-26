@@ -3178,21 +3178,27 @@ describe("21. resolving the money lets the car go", () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 22. A CUSTOMER STILL HOLDING A CAR CANNOT BE DELETED (owner ruling on c15221)
+// 22. A CUSTOMER WITH AN OPEN COMMITMENT CANNOT BE DELETED (ruling on c15221)
 //
 // `customers.softDelete` refused on live leads and live sales and nothing else.
-// Neither sees a car being held: a deposit needs no lead, and a deal that has
-// not completed has no sale. So a customer whose deal currently held a vehicle
-// could be soft-deleted out from under an OPEN root — and since that root is
-// now the authority deciding who may take the car, the result is a live holder
-// that no customer record backs.
+// Neither sees an unfinished commitment: a deposit needs no lead, and a deal
+// that has not completed has no sale. So a customer with a live deal could be
+// soft-deleted out from under an OPEN root — and since that root is now the
+// authority deciding who may take the car, the result is a live holder that no
+// customer record backs.
 //
 // Section 19 makes a root FOLLOW its customer through a merge. Deletion is the
 // other way a customer stops existing, and nothing followed it there.
 //
-// Scoped to OPEN roots deliberately. A RELEASED root is history — the car went
-// back on the lot — and refusing on it would make a customer undeletable
-// forever because of a deal that ended months ago.
+// ⚠️ OPEN is not the same as "holding a car". Section 7 split the two axes:
+// `RELEASED_AWAITING_DECISION` frees the vehicle while the root stays open
+// because the customer's money has not been ruled on. Both are reasons to
+// refuse, which is why the refusal names an unresolved COMMITMENT rather than a
+// held vehicle.
+//
+// Scoped to OPEN roots deliberately. A RELEASED or CONSUMED root is history,
+// and refusing on it would make a customer undeletable forever because of a
+// deal that ended months ago.
 // ═════════════════════════════════════════════════════════════════════════════
 
 describe("22. a customer holding a car cannot be deleted", () => {
@@ -3214,7 +3220,7 @@ describe("22. a customer holding a car cannot be deleted", () => {
         orgId: seed.orgId,
         customerId: seed.customerA,
       }),
-      /still holding a vehicle|release the deposit/i,
+      /active or financially unresolved commitment/i,
       "22.1"
     );
 
@@ -3267,7 +3273,7 @@ describe("22. a customer holding a car cannot be deleted", () => {
         orgId: seed.orgId,
         customerId: seed.customerA,
       }),
-      /still holding a vehicle/i,
+      /active or financially unresolved commitment/i,
       "22.3"
     );
     expect(await customerIsLive(seed, seed.customerA)).toBe(true);
@@ -3283,7 +3289,7 @@ describe("22. a customer holding a car cannot be deleted", () => {
         orgId: seed.orgId,
         customerId: seed.customerA,
       }),
-      /still holding a vehicle/i,
+      /active or financially unresolved commitment/i,
       "22.4"
     );
     expect(await customerIsLive(seed, seed.customerA)).toBe(true);

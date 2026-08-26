@@ -325,17 +325,34 @@ async function assertApproverSeat(page: Page): Promise<void> {
 
   const client = await authenticatedConvexClient(page);
   const membership = await client.query(api.memberships.getMyMembership, { orgId });
-  if (!membership?.permissions?.includes(APPROVAL_PERMISSION)) {
+  const missing = missingApproverPermissions(membership?.permissions);
+  if (missing.length > 0) {
     throw new Error(
       `The approver holds role "${membership?.roleName ?? "NONE"}" in ${orgId}, which ` +
-        `does not include ${APPROVAL_PERMISSION}. Provisioning attached the seat but ` +
+        `does not include ${missing.join(", ")}. Provisioning attached the seat but ` +
         `not the authority.`,
     );
   }
 }
 
-/** The permission the financed workflow's second seat actually has to hold. */
-const APPROVAL_PERMISSION = "approve:finance_application";
+/**
+ * What the second seat actually has to be able to do.
+ *
+ * BOTH, and stated as a set rather than one permission. The approval specs need
+ * `approve:finance_application`; the commitment contention harness needs
+ * `approve:requests`, because releasing a deposit is a maker-checker decision
+ * that `releaseHeldDeposit` refuses to let the depositor make. The default
+ * MANAGER template happens to carry both today — selecting on only one would
+ * make every one of those specs depend on that coincidence, and fail somewhere
+ * unrelated the day the template changes.
+ */
+const REQUIRED_APPROVER_PERMISSIONS = [
+  "approve:finance_application",
+  "approve:requests",
+] as const;
+
+const missingApproverPermissions = (held: string[] | undefined): string[] =>
+  REQUIRED_APPROVER_PERMISSIONS.filter((p) => !(held ?? []).includes(p));
 
 /**
  * Put the approver in the dealership the way a dealership would.
@@ -376,7 +393,8 @@ async function ensureApproverProvisioned(page: Page): Promise<void> {
   // template fails here, loudly, instead of provisioning a seat that cannot
   // approve anything and failing much later inside an unrelated spec.
   const roleWithApproval = (roles ?? []).find(
-    (role) => role.name !== "OWNER" && role.permissions?.includes(APPROVAL_PERMISSION),
+    (role) =>
+      role.name !== "OWNER" && missingApproverPermissions(role.permissions).length === 0,
   );
 
   // Rerun-safe: a named preview is REUSED across runs, so the second run finds
@@ -392,11 +410,12 @@ async function ensureApproverProvisioned(page: Page): Promise<void> {
 
   if (existing) {
     const heldRole = (roles ?? []).find((role) => role._id === existing.roleId);
-    if (!heldRole?.permissions?.includes(APPROVAL_PERMISSION)) {
+    const short = missingApproverPermissions(heldRole?.permissions);
+    if (short.length > 0) {
       throw new Error(
         `${approverEmail} is already in this organization but holds role ` +
           `"${heldRole?.name ?? "UNKNOWN"}", which does not include ` +
-          `${APPROVAL_PERMISSION}. Every approval spec would fail on a refusal that ` +
+          `${short.join(", ")}. Every approval spec would fail on a refusal that ` +
           `looks like a product bug. Fix the role rather than the test.`,
       );
     }
@@ -405,9 +424,10 @@ async function ensureApproverProvisioned(page: Page): Promise<void> {
 
   if (!roleWithApproval) {
     throw new Error(
-      `No non-OWNER role in this organization holds ${APPROVAL_PERMISSION}, so the ` +
-        `approver cannot be given a seat that can approve anything. The default ` +
-        `MANAGER template used to carry it — check whether it still does.`,
+      `No non-OWNER role in this organization holds all of ` +
+        `${REQUIRED_APPROVER_PERMISSIONS.join(", ")}, so the approver cannot be given a ` +
+        `seat that can approve anything. The default MANAGER template used to carry ` +
+        `them — check whether it still does.`,
     );
   }
 

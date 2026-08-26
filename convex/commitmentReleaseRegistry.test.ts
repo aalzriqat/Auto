@@ -19,7 +19,17 @@ import { describe, expect, test } from "vitest";
  * which works exactly like this: enumerate the real writers from the SOURCE,
  * and refuse any that is neither handled nor explicitly declared as deliberate.
  *
- * A behavioural test proves one path. This proves there are no others.
+ * ## What this is, exactly
+ *
+ * A SCOPED SENTINEL, not a proof. It watches the literal hold-ending sites in
+ * three named files and refuses one that is neither handled nor declared. That
+ * is narrow on purpose and it is not authority that the commitment lifecycle is
+ * correct — a behavioural test proves a path; this only proves nobody added a
+ * hold-ending write in these files without deciding what happens to the claim.
+ *
+ * It did not, for instance, cover customer deletion at all, because that is not
+ * a hold-ending write — and that was the sixth instance of the same class,
+ * found by hand immediately after this test was written.
  *
  * ## What counts as ending a hold
  *
@@ -33,7 +43,16 @@ import { describe, expect, test } from "vitest";
  * That a declared reason is TRUE. `keeps` entries are documentation with a
  * forced author, not verification; the behaviour behind them lives in the
  * corpus (8.3 is the one that matters most — money still held means the deal
- * keeps its car). What this catches is the case nobody thought about at all.
+ * keeps its car), and each one still owes its own behavioural contract there.
+ *
+ * That the three files are the only places such a write could appear. A new one
+ * in a fourth file is invisible here.
+ *
+ * That any rule OTHER than claim-release-on-hold-end is satisfied. Lifecycle,
+ * deletion and merge rules are out of its scope entirely.
+ *
+ * What it does catch is the case nobody thought about at all, in the files
+ * where these writes actually live.
  */
 
 type Site = {

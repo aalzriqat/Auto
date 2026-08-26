@@ -2,7 +2,12 @@ import { test, expect } from "@playwright/test";
 import type { ConvexHttpClient } from "convex/browser";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { authenticatedConvexClient, resolveOrgId, testDataSuffix } from "../utils";
+import {
+  APPROVER_AUTH_FILE,
+  authenticatedConvexClient,
+  resolveOrgId,
+  testDataSuffix,
+} from "../utils";
 
 /**
  * SCRUM-195 — the commitment authority under REAL concurrency.
@@ -255,7 +260,10 @@ test.describe("commitment authority under real concurrency", () => {
     ).toHaveLength(0);
   });
 
-  test("RACE B — release vs acquire: the winner is named, not merely counted", async ({ page }) => {
+  test("RACE B — release vs acquire: the winner is named, not merely counted", async ({
+    page,
+    browser,
+  }) => {
     await page.goto("/");
     const client = await authenticatedConvexClient(page);
     const orgId = (await resolveOrgId(page)) as Id<"organizations">;
@@ -271,60 +279,94 @@ test.describe("commitment authority under real concurrency", () => {
       amount: 1_000,
     })) as Id<"deposits">;
 
-    const rivalCustomer = await makeCustomer(ctx, "Briv");
-    const rivalQuote = await makeCashQuote(ctx, rivalCustomer, vehicleId);
-
-    // The holder lets go at the same moment a rival reaches for it. Both
-    // orderings are legitimate; what each one OBLIGES afterwards is not
-    // negotiable, and that is what this asserts.
-    const [releaseResult, rivalResult] = await Promise.allSettled([
-      client.mutation(api.deposits.release, {
-        orgId,
-        depositId,
-        resolution: "REFUNDED",
-        notes: "e2e release/acquire race",
-      }),
-      client.mutation(api.deposits.create, { orgId, quoteId: rivalQuote, amount: 1_000 }),
-    ]);
-
-    // A holder may always let go of their own car. Nothing a rival attempts
-    // concurrently may prevent it — if this ever fails, a customer can be
-    // trapped in a deal by a stranger's timing.
-    expect(
-      releaseResult.status,
-      `the holder's own release must succeed. Got: ${rejectionMessages([releaseResult]).join(" | ")}`
-    ).toBe("fulfilled");
-
-    const after = await finalState(ctx, vehicleId);
-    expect(
-      after.root.conflictingRootIds,
-      "no ordering may leave two live roots on one car"
-    ).toHaveLength(0);
-
-    if (rivalResult.status === "fulfilled") {
-      // The release landed first, so the rival took a genuinely free car. The
-      // car must now be THEIRS — not merely "owned by somebody".
-      expect(after.root.kind, "the rival acquired it, so it is owned").toBe("OWNED");
+    /**
+     * TWO IDENTITIES, because releasing money is a maker-checker decision.
+     *
+     * `releaseHeldDeposit` refuses the person who took the deposit from also
+     * resolving it, and refuses a REFUND with no explicit refund method. Both
+     * fire BEFORE the commitment authority is consulted, so a single-session
+     * race would fail on a financial control having never reached the
+     * release-versus-acquire window — proving the request was rejected, not
+     * that the authority works. Exactly the wrong-reason pass this whole suite
+     * is built to refuse, and it would have burned a Preview dispatch to learn.
+     *
+     * The approver is a REAL second operator, provisioned through the product's
+     * own Add Team Member path in auth.setup.ts. No impersonation, no backdoor.
+     */
+    const approverContext = await browser.newContext({ storageState: APPROVER_AUTH_FILE });
+    try {
+      const approverPage = await approverContext.newPage();
+      await approverPage.goto("/");
+      const approverClient = await authenticatedConvexClient(approverPage);
+      const approverOrgId = await resolveOrgId(approverPage);
+      // A second identity in a different dealership would make every assertion
+      // below meaningless: its release would target another org's world.
       expect(
-        after.root.customerId,
-        "and owned by the RIVAL — a race that hands the car to the wrong deal is the defect, not the pass"
-      ).toEqual(rivalCustomer);
+        approverOrgId,
+        "both identities must be racing inside the SAME dealership"
+      ).toEqual(orgId);
+
+      const rivalCustomer = await makeCustomer(ctx, "Briv");
+      const rivalQuote = await makeCashQuote(ctx, rivalCustomer, vehicleId);
+
+      // The holder's deal lets go at the same moment a rival reaches for the
+      // car. Both orderings are legitimate; what each one OBLIGES afterwards is
+      // not negotiable, and that is what this asserts.
+      const [releaseResult, rivalResult] = await Promise.allSettled([
+        approverClient.mutation(api.deposits.release, {
+          orgId,
+          depositId,
+          resolution: "REFUNDED",
+          // Required by `releaseHeldDeposit`: a refund moves real cash, and the
+          // GL entry must credit the account it actually left from.
+          refundMethod: "CASH",
+          notes: "e2e release/acquire race",
+        }),
+        client.mutation(api.deposits.create, { orgId, quoteId: rivalQuote, amount: 1_000 }),
+      ]);
+
+      // An authorised release must always succeed. Nothing a rival attempts
+      // concurrently may prevent a dealership from returning a customer's
+      // money — if this ever fails, somebody is trapped in a deal by a
+      // stranger's timing.
       expect(
-        after.liveDeposits.length,
-        "exactly one live hold: the rival's. The released one must not still be holding"
-      ).toBe(1);
-    } else {
-      // The rival was refused while the hold was still live, and the release
-      // then completed. Nobody holds the car.
-      expectCommitmentRefusals(rejectionMessages([rivalResult]));
+        releaseResult.status,
+        `the approver's release must succeed. Got: ${rejectionMessages([releaseResult]).join(" | ")}`
+      ).toBe("fulfilled");
+
+      const after = await finalState(ctx, vehicleId);
       expect(
-        after.root.kind,
-        "the rival lost and the holder let go, so the car is free"
-      ).toBe("FREE");
-      expect(
-        after.liveDeposits,
-        "and no money is still holding it — a FREE car with a live hold is the false-free"
+        after.root.conflictingRootIds,
+        "no ordering may leave two live roots on one car"
       ).toHaveLength(0);
+
+      if (rivalResult.status === "fulfilled") {
+        // The release landed first, so the rival took a genuinely free car. The
+        // car must now be THEIRS — not merely "owned by somebody".
+        expect(after.root.kind, "the rival acquired it, so it is owned").toBe("OWNED");
+        expect(
+          after.root.customerId,
+          "and owned by the RIVAL — a race that hands the car to the wrong deal is the defect, not the pass"
+        ).toEqual(rivalCustomer);
+        expect(
+          after.liveDeposits.length,
+          "exactly one live hold: the rival's. The refunded one must not still be holding"
+        ).toBe(1);
+      } else {
+        // The rival was refused while the hold was still live, and the release
+        // then completed. Nobody holds the car.
+        expectCommitmentRefusals(rejectionMessages([rivalResult]));
+        expect(
+          after.root.kind,
+          "the rival lost and the holder's money went back, so the car is free"
+        ).toBe("FREE");
+        expect(
+          after.liveDeposits,
+          "and no money is still holding it — a FREE car with a live hold is the false-free"
+        ).toHaveLength(0);
+      }
+    } finally {
+      await approverContext.close();
     }
   });
 

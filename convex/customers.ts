@@ -11,7 +11,7 @@ import { validateInput } from "./utils/validation";
 import { CreateCustomerSchema, UpdateCustomerSchema } from "./validations/customers";
 import { normalizePhone, namesSimilar } from "./utils/dedup";
 import { CUSTOMER_REFERENCING_TABLES } from "./utils/mergeHelpers";
-import { liveCommitmentRootForCustomer } from "./commitments";
+import { openCommitmentRootForCustomer } from "./commitments";
 
 const CUSTOMER_SELECTOR_LIMIT = 50;
 const RECENT_CUSTOMER_SEARCH_WINDOW = 200;
@@ -550,11 +550,16 @@ export const softDelete = mutation({
     }
 
     // SCRUM-195. The two checks above are the only things that ever blocked a
-    // deletion, and neither sees a car being held: a deposit needs no lead,
-    // and a deal that has not completed has no sale. So a customer whose
-    // deal currently holds a vehicle could be soft-deleted out from under an
-    // OPEN commitment root — leaving the authority that decides who may take
-    // that car pointing at a customer who no longer exists.
+    // deletion, and neither sees an unfinished commitment: a deposit needs no
+    // lead, and a deal that has not completed has no sale. So a customer with
+    // a live deal could be soft-deleted out from under an OPEN commitment root
+    // — leaving the authority that decides who may take that car pointing at a
+    // customer who no longer exists.
+    //
+    // "Open" is not the same as "holding a car". A root stays open while the
+    // customer's money is unresolved even after the vehicle has gone back on
+    // the lot (c14909), and that is equally a reason not to delete the person
+    // the money belongs to.
     //
     // Asked of the commitment authority rather than of deposits,
     // reservations and applications separately. Consulting the three tables
@@ -563,10 +568,10 @@ export const softDelete = mutation({
     //
     // Before the patch, so a refusal leaves the customer, the root, the
     // claim and the money exactly as they were.
-    const holding = await liveCommitmentRootForCustomer(ctx, args.orgId, args.customerId);
-    if (holding) {
+    const openCommitment = await openCommitmentRootForCustomer(ctx, args.orgId, args.customerId);
+    if (openCommitment) {
       throw new ConvexError(
-        "Cannot delete this customer — they are still holding a vehicle. Release the deposit, reservation or finance application first."
+        "Cannot delete this customer — they have an active or financially unresolved commitment. Release or resolve the deposit, reservation or finance application first."
       );
     }
 
