@@ -1248,13 +1248,13 @@ describe("8. finance claim lifecycle", () => {
     const root = await resolveRoot(seed, v);
     expect(root.kind, "the deposit claim still holds the car").toBe("OWNED");
     const rivalQuote = await cashQuote(seed, seed.customerB, v);
-    await expect(
+    await expectRefusal(
       seed.asUser.mutation(api.deposits.create, {
         orgId: seed.orgId,
         quoteId: rivalQuote,
         amount: 1_000,
       })
-    , REFUSED);
+    , REFUSED, "8.3");
   });
 
   test("8.4 completing the deal CONSUMES the root rather than leaving it open", async () => {
