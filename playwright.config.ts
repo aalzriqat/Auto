@@ -36,7 +36,18 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   workers: 1,
-  reporter: process.env.CI ? [["html", { open: "never" }], ["list"]] : "list",
+  // The JSON reporter is what makes SCRUM-195's contention gate falsifiable.
+  // `html` is for a human opening an artifact; neither it nor `list` can be
+  // asserted on, so a run where the races never executed is indistinguishable
+  // from one where they passed. The workflow reads this file and refuses that
+  // ambiguity.
+  reporter: process.env.CI
+    ? [
+        ["html", { open: "never" }],
+        ["list"],
+        ["json", { outputFile: "playwright-report/results.json" }],
+      ]
+    : "list",
   timeout: 60_000,
   expect: {
     timeout: 15_000,

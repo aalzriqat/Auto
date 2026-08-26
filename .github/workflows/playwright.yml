@@ -21,6 +21,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    env:
+      # ONE definition, shared by the deploy and the stamping step below.
+      # If those two could compute different names they would target
+      # different deployments -- deploy one preview, stamp another -- and
+      # the contention suite would read its safety facts off a backend that
+      # is not the one answering the races. Defining it once makes that
+      # impossible by construction.
+      #
+      # `head_ref || ref_name` keeps the pull_request path byte-identical
+      # to the name the CLI already derives there, and gives
+      # workflow_dispatch and push the same named preview instead of an
+      # anonymous one.
+      CONVEX_PREVIEW_NAME: ${{ github.head_ref || github.ref_name }}
+
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -43,34 +57,42 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
 
       - name: Prepare Convex E2E backend
-        # The four backend env vars this step used to write with `convex env
-        # set` now come from the Convex project's DEFAULT ENVIRONMENT VARIABLES
-        # (Project Settings -> Default Environment Variables, scoped to
-        # Preview): CLERK_JWT_ISSUER_DOMAIN, CLERK_DEV_JWT_ISSUER_DOMAIN,
-        # TURNSTILE_SECRET_KEY and NEXT_PUBLIC_APP_URL.
+        # The four backend env vars this step needs -- CLERK_JWT_ISSUER_DOMAIN,
+        # CLERK_DEV_JWT_ISSUER_DOMAIN, TURNSTILE_SECRET_KEY and
+        # NEXT_PUBLIC_APP_URL -- come from the Convex project's DEFAULT
+        # ENVIRONMENT VARIABLES (Project Settings -> Default Environment
+        # Variables, scoped to Preview). They have to be seeded at CREATION:
+        # a preview starts with no variables at all, so `auth.config.ts`'s
+        # own validation fails the very first deploy otherwise.
         #
-        # They have to be seeded at CREATION, not written afterwards. A preview
-        # deployment starts with no env vars at all, so `auth.config.ts`'s own
-        # validation failed the very first deploy -- which is why this step used
-        # to deploy, swallow that failure with `|| true`, set the four vars, and
-        # deploy a second time.
+        # `--preview-name` is load-bearing, and its absence is what SCRUM-95
+        # still was. Without it the CLI derives the name from GITHUB_HEAD_REF
+        # (cli/lib/envvars.js), which GitHub sets ONLY for `pull_request`
+        # events; on `workflow_dispatch` and `push` it is the EMPTY STRING,
+        # and `??` does not fall through on an empty string. The deployment
+        # was then claimed with an empty identifier -- it appears in the
+        # dashboard as `preview/` -- so `convex env set` had no deployment to
+        # resolve and returned "Not authorized".
         #
-        # That never worked. `convex env set` returned "Not authorized" on every
-        # attempt, so the second deploy never ran and the preview deployment sat
-        # at "Never deployed" while the job failed before a single browser test
-        # started. The key was not the problem -- "View allowed actions" shows it
-        # holds `deployment:env:write` -- it is that the preview was created
-        # without a name (it appears in the dashboard as `preview/`), so
-        # `env set` had no deployment to resolve to.
-        #
-        # Seeding defaults removes the two-pass dance entirely: the first deploy
-        # already has what it needs. SCRUM-95.
+        # That is why run 32986375959 (dispatch) failed five times on
+        # CLERK_JWT_ISSUER_DOMAIN while run 32785077157 (pull_request)
+        # deployed the same code fine and got as far as the browser tests:
+        # the PR path was named by accident, and nothing else ever was.
         #
         # The retry wrapper stays. Convex refuses requests transiently under
-        # load with "Try again later", and treating that as fatal is exactly the
-        # defect SCRUM-142 records against the release rollout.
+        # load with "Try again later", and treating that as fatal is exactly
+        # the defect SCRUM-142 records against the release rollout. It cannot
+        # help with a configuration error, though -- a missing variable fails
+        # identically on all five attempts, as that run shows.
         run: |
           set -euo pipefail
+
+          # An empty name is the defect itself. Fail here rather than claim
+          # an anonymous preview that nothing downstream can resolve.
+          if [ -z "${CONVEX_PREVIEW_NAME:-}" ]; then
+            echo "CONVEX_PREVIEW_NAME is empty; refusing to claim an anonymous preview deployment." >&2
+            exit 1
+          fi
 
           retry_convex() {
             local attempt delay
@@ -88,7 +110,7 @@ jobs:
             done
           }
 
-          retry_convex pnpm exec convex deploy             --typecheck enable             --cmd 'echo "NEXT_PUBLIC_CONVEX_URL=$NEXT_PUBLIC_CONVEX_URL" >> "$GITHUB_ENV"'             --cmd-url-env-var-name NEXT_PUBLIC_CONVEX_URL
+          retry_convex pnpm exec convex deploy             --preview-name "$CONVEX_PREVIEW_NAME"             --typecheck enable             --cmd 'echo "NEXT_PUBLIC_CONVEX_URL=$NEXT_PUBLIC_CONVEX_URL" >> "$GITHUB_ENV"'             --cmd-url-env-var-name NEXT_PUBLIC_CONVEX_URL
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
 
@@ -109,8 +131,8 @@ jobs:
         # unexecuted gate comes to read as a passing one.
         run: |
           set -euo pipefail
-          pnpm exec convex env set AUTOFLOW_DISPOSABLE_DEPLOYMENT true
-          pnpm exec convex env set DEPLOYMENT_GIT_SHA "$GITHUB_SHA"
+          pnpm exec convex env set --preview-name "$CONVEX_PREVIEW_NAME" AUTOFLOW_DISPOSABLE_DEPLOYMENT true
+          pnpm exec convex env set --preview-name "$CONVEX_PREVIEW_NAME" DEPLOYMENT_GIT_SHA "$GITHUB_SHA"
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
           GITHUB_SHA: ${{ github.sha }}
@@ -140,6 +162,23 @@ jobs:
           # actually answered it.
           GITHUB_SHA: ${{ github.sha }}
           CI: true
+
+      - name: Prove the commitment races actually ran
+        # SCRUM-195. Every other check here fails loudly; this one exists
+        # because the contention gate can fail QUIETLY. The races live in the
+        # `chromium` project, which `dependencies: ["setup"]` -- so if
+        # auth.setup.ts fails or skips, Playwright skips all of them and the
+        # run can still be summarised as though the concurrency question was
+        # answered. It was not asked.
+        #
+        # Absence of evidence is not evidence. A race that did not execute is
+        # UNAVAILABLE, never a pass, so this converts "skipped" and "not
+        # collected" into a hard failure -- the only direction that cannot
+        # overstate what was proved.
+        if: always()
+        run: |
+          set -euo pipefail
+          node .github/scripts/assert-contention-ran.mjs
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
