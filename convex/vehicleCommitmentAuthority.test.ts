@@ -1,7 +1,7 @@
 import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { anyApi, FunctionReference } from "convex/server";
 import { getActiveDepositHolds } from "./utils/depositHelpers";
@@ -2982,5 +2982,101 @@ describe("19. the root survives a customer merge", () => {
     // foreign key must not touch the ownership axis: same root, still holding.
     expect(after.kind, "the car is still held").toBe("OWNED");
     expect(after.rootId, "by the same root it always was").toEqual(before.rootId);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 20. AN EXPIRED RESERVATION MUST LET THE CAR GO
+//
+// Every other way a reservation ends calls `releaseClaimsForReservation`.
+// EXPIRY does not — and expiry is the one that happens by itself, on a cron, to
+// every reservation nobody acts on. Two sites expire reservations:
+// `expireReservations` (the cron) and the inline sweep inside
+// `createReservation`, which clears stale reservations before taking a new one.
+//
+// The claim therefore stays ACTIVE and the root stays OPEN, so the commitment
+// authority — the thing that now decides whether ANY deal may take the car —
+// keeps holding it for a reservation that expired. Meanwhile
+// `syncVehicleHoldStatus` moves the STATUS projection back to something free,
+// so the car reads as available while every attempt to sell it is refused.
+//
+// And there is no way out: `releaseReservation` is the only public path that
+// releases a reservation's claim, and it refuses anything whose status is not
+// ACTIVE. Once expired, the car is held permanently.
+//
+// The sweep inside `createReservation` is self-defeating for the same reason:
+// it expires the stale reservation, then `assertAcquirable` refuses because of
+// the claim it just failed to release — so the customer whose reservation
+// lapsed cannot re-reserve the very car the sweep exists to free.
+//
+// These are the SAME rule as sections 4 and 8, at the writers nobody wired.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("20. an expired reservation must let the car go", () => {
+  /**
+   * Time passing, without touching the clock.
+   *
+   * `convex-test` and `Date.now()` are entangled enough that moving the clock
+   * to age a row tends to move the scheduler with it. Moving the expiry into
+   * the past states the same fact and nothing else.
+   */
+  async function ageOut(seed: Seed, reservationId: Id<"vehicleReservations">) {
+    await seed.t.run((ctx) =>
+      ctx.db.patch(reservationId, { expiresAt: Date.now() - 60_000 })
+    );
+  }
+
+  test("20.1 the expiry CRON releases the claim, not merely the projection", async () => {
+    const seed = await seedDealer("res-expire-cron");
+    const v = await vehicle(seed);
+    const { reservationId } = await heldByReservation(seed, v, seed.customerA);
+    const held = await resolveRoot(seed, v);
+    expect(held.kind, "the reservation holds the car to begin with").toBe("OWNED");
+
+    await ageOut(seed, reservationId);
+    await seed.t.mutation(internal.vehicles.expireReservations, {});
+
+    const row = await seed.t.run((ctx) => ctx.db.get(reservationId));
+    expect(row?.status, "the reservation really did expire").toBe("EXPIRED");
+
+    const root = await resolveRoot(seed, v);
+    expect(root.kind, "an expired reservation must not still hold the car").not.toBe("OWNED");
+
+    // Asserted by CONSEQUENCE. "The root says FREE" would be satisfied by a
+    // resolver that reports freedom while `assertAcquirable` still refuses —
+    // which is exactly the failure mode here, since the projection already
+    // reads free while the claim holds.
+    const rivalQuote = await cashQuote(seed, seed.customerB, v);
+    const rivalDeposit = (await seed.asUser.mutation(api.deposits.create, {
+      orgId: seed.orgId,
+      quoteId: rivalQuote,
+      amount: 1_000,
+    })) as Id<"deposits">;
+    const rivalRow = await seed.t.run((ctx) => ctx.db.get(rivalDeposit));
+    expect(rivalRow?.holdActive, "and somebody else can genuinely take it").toBe(true);
+  });
+
+  test("20.2 the customer whose reservation lapsed can reserve the car again", async () => {
+    const seed = await seedDealer("res-expire-sweep");
+    const v = await vehicle(seed);
+    const { reservationId } = await heldByReservation(seed, v, seed.customerA);
+    await ageOut(seed, reservationId);
+
+    // `createReservation`'s own inline sweep expires the stale reservation
+    // before taking the new one. If that sweep does not release the claim, the
+    // acquisition immediately after it is refused by the row it just expired.
+    const second = await seed.asUser.mutation(api.vehicles.createReservation, {
+      orgId: seed.orgId,
+      vehicleId: v,
+      customerId: seed.customerA,
+    });
+    expect(second, "the lapsed reservation must not block its own replacement").toBeTruthy();
+
+    const root = await resolveRoot(seed, v);
+    expect(root.kind, "and the new reservation holds the car").toBe("OWNED");
+    expect(root.customerId, "for the customer who reserved it").toEqual(seed.customerA);
+
+    const live = await activeReservations(seed, v);
+    expect(live, "with exactly one live reservation").toHaveLength(1);
   });
 });

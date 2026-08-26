@@ -1611,6 +1611,12 @@ export const createReservation = mutation({
           status: "EXPIRED",
           expiredAt: now,
         });
+        // SCRUM-195. Without this the sweep defeats its own purpose: it
+        // expires the stale reservation and then `assertAcquirable` below
+        // refuses, because the claim it just failed to release is still
+        // holding the car. The customer whose reservation lapsed could not
+        // re-reserve the very vehicle this sweep exists to free.
+        await releaseClaimsForReservation(ctx, reservation._id, "reservation expired");
       }
     }
     await syncVehicleHoldStatus(ctx, args.vehicleId, user._id);
@@ -1878,6 +1884,19 @@ export const expireReservations = internalMutation({
         status: "EXPIRED",
         expiredAt: now,
       });
+      // SCRUM-195. Expiry is the ONE way a reservation ends by itself, and it
+      // was the one that never released its claim. Every other exit --
+      // release, adoption into a sale, an application letting go -- calls
+      // this; the cron did not.
+      //
+      // The consequence was the worst shape a hold can take. The claim stayed
+      // ACTIVE and the root stayed OPEN, so the authority kept the car for a
+      // reservation that had expired, while the sync on the next line moved
+      // the STATUS projection back to something free -- a car reading as
+      // available that no deal could be written against. And nothing could
+      // undo it: `releaseReservation` is the only public path that releases a
+      // reservation claim, and it refuses anything not ACTIVE.
+      await releaseClaimsForReservation(ctx, reservation._id, "reservation expired");
       await syncVehicleHoldStatus(ctx, reservation.vehicleId);
     }
 
