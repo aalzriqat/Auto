@@ -167,6 +167,7 @@ async function seedDealer(suffix: string) {
         "register:vehicle_handover",
         "register:expected_payment",
         "merge:customers",
+        "delete:customers",
       ],
     })
   );
@@ -3173,5 +3174,141 @@ describe("21. resolving the money lets the car go", () => {
       "a voided receipt cannot still hold a car"
     ).not.toBe("OWNED");
     expect(await rivalCanTake(seed, v), "and the car is acquirable again").toBe(true);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 22. A CUSTOMER STILL HOLDING A CAR CANNOT BE DELETED (owner ruling on c15221)
+//
+// `customers.softDelete` refused on live leads and live sales and nothing else.
+// Neither sees a car being held: a deposit needs no lead, and a deal that has
+// not completed has no sale. So a customer whose deal currently held a vehicle
+// could be soft-deleted out from under an OPEN root — and since that root is
+// now the authority deciding who may take the car, the result is a live holder
+// that no customer record backs.
+//
+// Section 19 makes a root FOLLOW its customer through a merge. Deletion is the
+// other way a customer stops existing, and nothing followed it there.
+//
+// Scoped to OPEN roots deliberately. A RELEASED root is history — the car went
+// back on the lot — and refusing on it would make a customer undeletable
+// forever because of a deal that ended months ago.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("22. a customer holding a car cannot be deleted", () => {
+  async function customerIsLive(seed: Seed, customerId: Id<"customers">) {
+    const row = await seed.t.run((ctx) => ctx.db.get(customerId));
+    return row !== null && row.isDeleted !== true;
+  }
+
+  test("22.1 a DEPOSIT-held customer is refused, and nothing moves", async () => {
+    const seed = await seedDealer("cust-del-dep");
+    const v = await vehicle(seed);
+    const { depositId } = await heldByDeposit(seed, v, seed.customerA);
+    const before = await resolveRoot(seed, v);
+    expect(before.kind).toBe("OWNED");
+    const claimsBefore = await activeClaimSnapshot(seed, v);
+
+    await expectRefusal(
+      seed.asUser.mutation(api.customers.softDelete, {
+        orgId: seed.orgId,
+        customerId: seed.customerA,
+      }),
+      /still holding a vehicle|release the deposit/i,
+      "22.1"
+    );
+
+    // Refused BEFORE the patch: the customer, the authority and the money are
+    // all exactly as they were.
+    expect(await customerIsLive(seed, seed.customerA), "the customer is untouched").toBe(true);
+    const after = await resolveRoot(seed, v);
+    expect(after.kind, "the car is still held").toBe("OWNED");
+    expect(after.rootId, "by the same root").toEqual(before.rootId);
+    expect(await activeClaimSnapshot(seed, v), "and the claims are unchanged").toEqual(
+      claimsBefore
+    );
+    const deposit = await seed.t.run((ctx) => ctx.db.get(depositId));
+    expect(deposit?.holdActive, "the money still holds it").toBe(true);
+  });
+
+  test("22.2 positive control — releasing the last commitment makes deletion legal", async () => {
+    const seed = await seedDealer("cust-del-ok");
+    const v = await vehicle(seed);
+    const { depositId } = await heldByDeposit(seed, v, seed.customerA);
+
+    // Maker-checker on the money, then the customer really can go.
+    await seed.asApprover.mutation(api.deposits.release, {
+      orgId: seed.orgId,
+      depositId,
+      resolution: "REFUNDED" as const,
+      refundMethod: "CASH" as const,
+    });
+
+    await seed.asUser.mutation(api.customers.softDelete, {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+    });
+
+    expect(
+      await customerIsLive(seed, seed.customerA),
+      "with nothing held, the deletion goes through"
+    ).toBe(false);
+  });
+
+  test("22.3 a RESERVATION-held customer is refused too", async () => {
+    const seed = await seedDealer("cust-del-res");
+    const v = await vehicle(seed);
+    await heldByReservation(seed, v, seed.customerA);
+
+    // The rule is asked of the canonical root, not of the deposits table, so
+    // every kind of evidence blocks without customers.ts knowing they exist.
+    await expectRefusal(
+      seed.asUser.mutation(api.customers.softDelete, {
+        orgId: seed.orgId,
+        customerId: seed.customerA,
+      }),
+      /still holding a vehicle/i,
+      "22.3"
+    );
+    expect(await customerIsLive(seed, seed.customerA)).toBe(true);
+  });
+
+  test("22.4 a FINANCE-held customer is refused too", async () => {
+    const seed = await seedDealer("cust-del-fin");
+    const v = await vehicle(seed);
+    await heldByFinance(seed, v, seed.customerA);
+
+    await expectRefusal(
+      seed.asUser.mutation(api.customers.softDelete, {
+        orgId: seed.orgId,
+        customerId: seed.customerA,
+      }),
+      /still holding a vehicle/i,
+      "22.4"
+    );
+    expect(await customerIsLive(seed, seed.customerA)).toBe(true);
+  });
+
+  test("22.5 a customer whose deal ENDED is still deletable", async () => {
+    const seed = await seedDealer("cust-del-hist");
+    const v = await vehicle(seed);
+    const { applicationId } = await heldByFinance(seed, v, seed.customerA);
+
+    // Rejected: the root RELEASED, the car went back on the lot. Refusing on
+    // history would make a customer undeletable forever over a dead deal.
+    await seed.asUser.mutation(api.applications.updateStatus, {
+      orgId: seed.orgId,
+      applicationId,
+      status: "REJECTED" as const,
+    });
+
+    await seed.asUser.mutation(api.customers.softDelete, {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+    });
+    expect(
+      await customerIsLive(seed, seed.customerA),
+      "a closed root is history, not a live hold"
+    ).toBe(false);
   });
 });

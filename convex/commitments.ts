@@ -414,6 +414,43 @@ export async function acquireVehicleForQuote(
 }
 
 /**
+ * Is this customer still holding a car, anywhere in the org?
+ *
+ * Asked before a customer can be REMOVED. `customers.remove` refused on live
+ * leads and live sales and nothing else, so a customer whose deal currently
+ * held a car could be soft-deleted out from under an OPEN root — and since the
+ * root is the authority that decides whether any deal may take that car, the
+ * result was a live holder that no customer record backs.
+ *
+ * ⚠️ Scoped to OPEN roots, deliberately. A RELEASED root is history: the car
+ * has already gone back on the lot, and refusing on it would make a customer
+ * undeletable forever because of a deal that ended months ago. What blocks is
+ * inventory-live authority only.
+ *
+ * ⚠️ Asked HERE rather than in `customers.ts`. Three tables can hold a car and
+ * a caller that consults deposits, reservations and applications separately is
+ * the exact shape of defect this module exists to end — it would go stale the
+ * moment a fourth kind of evidence appears. One indexed question, one answer.
+ *
+ * Streams rather than taking a page: a customer with more open deals than an
+ * arbitrary limit must not read as having none.
+ */
+export async function liveCommitmentRootForCustomer(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  customerId: Id<"customers">
+): Promise<Doc<"commitmentRoots"> | null> {
+  for await (const root of ctx.db
+    .query("commitmentRoots")
+    .withIndex("by_org_customer", (q) =>
+      q.eq("orgId", orgId).eq("customerId", customerId)
+    )) {
+    if (root.status === "OPEN") return root;
+  }
+  return null;
+}
+
+/**
  * Refuse to take a car OUT of inventory while a live deal holds it.
  *
  * Removal has no lineage to offer — nobody soft-deletes a car "on behalf of"
