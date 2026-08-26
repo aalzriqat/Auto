@@ -560,6 +560,29 @@ export async function recomputeRootStatus(
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ⚠️ NO FIXED PAGE ON THIS SIDE EITHER (c14908).
+//
+// Every read below is unbounded, and that is a correctness property rather than
+// a tuning choice. The ownership resolver was fixed first and these were left
+// capped at fifty rows, so helpers documented as releasing *every* claim
+// released a page of them.
+//
+// It is the row-51 defect moved to the write side, and it fails worse. A
+// false-free READ hands one car to a rival. A partial RELEASE leaves live
+// claims behind an operation that reported success, and a partial CONSUME
+// leaves ACTIVE claims on a car that has already been SOLD — a root still
+// holding inventory that no longer exists to hold. Contracts 13.1–13.3
+// reproduced exactly six survivors out of fifty-six, which is the cap and
+// nothing else.
+//
+// Where the index is keyed by the evidence id (`by_deposit`, `by_reservation`,
+// `by_application`) a status patch does not move the row, so collect-then-patch
+// is safe. `activeClaimsForVehicle` is keyed by status, so its rows DO leave
+// the range as they are resolved — it collects first and mutates afterwards,
+// never while iterating.
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
  * Release every ACTIVE DEPOSIT claim on this car.
  *
@@ -592,7 +615,7 @@ export async function releaseClaimsForDeposit(
   const claims = await ctx.db
     .query("vehicleCommitmentClaims")
     .withIndex("by_deposit", (q) => q.eq("depositId", depositId))
-    .take(50);
+    .collect();
   for (const claim of claims) {
     if (claim.status !== "ACTIVE") continue;
     await resolveClaim(ctx, claim._id, "RELEASED", reason);
@@ -608,7 +631,7 @@ export async function releaseClaimsForReservation(
   const claims = await ctx.db
     .query("vehicleCommitmentClaims")
     .withIndex("by_reservation", (q) => q.eq("reservationId", reservationId))
-    .take(50);
+    .collect();
   for (const claim of claims) {
     if (claim.status !== "ACTIVE") continue;
     await resolveClaim(ctx, claim._id, "RELEASED", reason);
@@ -624,7 +647,7 @@ export async function releaseClaimsForApplication(
   const claims = await ctx.db
     .query("vehicleCommitmentClaims")
     .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
-    .take(50);
+    .collect();
   for (const claim of claims) {
     if (claim.status !== "ACTIVE") continue;
     await resolveClaim(ctx, claim._id, "RELEASED", reason);
@@ -661,7 +684,7 @@ export async function reacquireForApplication(
   const priorClaims = await ctx.db
     .query("vehicleCommitmentClaims")
     .withIndex("by_application", (q) => q.eq("applicationId", args.applicationId))
-    .take(50);
+    .collect();
   const forVehicle = priorClaims.filter((c) => c.vehicleId === args.vehicleId);
   if (forVehicle.some((c) => c.status === "ACTIVE")) return forVehicle[0].rootId;
 
@@ -713,7 +736,7 @@ export async function activeClaimsForVehicle(
     .withIndex("by_org_vehicle_status", (q) =>
       q.eq("orgId", orgId).eq("vehicleId", vehicleId).eq("status", "ACTIVE")
     )
-    .take(50);
+    .collect();
 }
 
 /** The ACTIVE claim carrying a given piece of evidence, if there is one. */
@@ -724,7 +747,7 @@ export async function activeClaimForApplication(
   const claims = await ctx.db
     .query("vehicleCommitmentClaims")
     .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
-    .take(50);
+    .collect();
   return claims.find((c) => c.status === "ACTIVE") ?? null;
 }
 
@@ -735,7 +758,7 @@ export async function claimsForApplication(
   return await ctx.db
     .query("vehicleCommitmentClaims")
     .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
-    .take(50);
+    .collect();
 }
 
 export async function activeClaimForReservation(
@@ -745,7 +768,7 @@ export async function activeClaimForReservation(
   const claims = await ctx.db
     .query("vehicleCommitmentClaims")
     .withIndex("by_reservation", (q) => q.eq("reservationId", reservationId))
-    .take(50);
+    .collect();
   return claims.find((c) => c.status === "ACTIVE") ?? null;
 }
 
@@ -756,7 +779,7 @@ export async function activeClaimForDeposit(
   const claims = await ctx.db
     .query("vehicleCommitmentClaims")
     .withIndex("by_deposit", (q) => q.eq("depositId", depositId))
-    .take(50);
+    .collect();
   return claims.find((c) => c.status === "ACTIVE") ?? null;
 }
 

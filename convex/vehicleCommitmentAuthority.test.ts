@@ -1527,6 +1527,174 @@ describe("11. row-51 — a fixed page must not decide freeness", () => {
 // establish which one owns the car.
 // ═════════════════════════════════════════════════════════════════════════════
 
+// ═════════════════════════════════════════════════════════════════════════════
+// 13. "EVERY" MUST MEAN EVERY  (c14908)
+//
+// ⚠️ The owner read `a3a145ffe` and found what I had missed: I fixed the fixed
+// page in the ownership RESOLVER and left it in the lifecycle MUTATORS. Helpers
+// documented as releasing *every* claim took a page of fifty and released those.
+//
+// It is the row-51 defect on the write side, and it fails worse. A false-free
+// READ hands one car to a rival; a partial RELEASE leaves live claims scattered
+// behind an operation that reported success, and a partial CONSUME leaves ACTIVE
+// claims on a car that has already been SOLD — a root still holding inventory
+// that no longer exists to hold.
+//
+// Fifty-one instalments on one deal is unusual. That is not the point: the
+// helpers PROMISE "every", and a promise bounded by an arbitrary page is a
+// promise that fails silently at the boundary rather than loudly at the cap.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("13. lifecycle helpers release and consume EVERY claim", () => {
+  /** N ACTIVE claims for one root — an instalment-heavy deal, exaggerated. */
+  async function seedManyClaims(
+    seed: Seed,
+    vehicleId: Id<"vehicles">,
+    rootId: Id<"commitmentRoots">,
+    count: number,
+    extra: Partial<{
+      depositId: Id<"deposits">;
+      reservationId: Id<"vehicleReservations">;
+      applicationId: Id<"financeApplications">;
+      kind: "DEPOSIT" | "FINANCE" | "RESERVATION";
+    }> = {}
+  ) {
+    await seed.t.run(async (ctx) => {
+      for (let i = 0; i < count; i++) {
+        await ctx.db.insert("vehicleCommitmentClaims", {
+          orgId: seed.orgId,
+          rootId,
+          vehicleId,
+          kind: extra.kind ?? "DEPOSIT",
+          status: "ACTIVE" as const,
+          ...(extra.depositId ? { depositId: extra.depositId } : {}),
+          ...(extra.reservationId ? { reservationId: extra.reservationId } : {}),
+          ...(extra.applicationId ? { applicationId: extra.applicationId } : {}),
+          createdAt: Date.now() + i,
+          createdBy: seed.userId,
+        });
+      }
+    });
+  }
+
+  async function activeClaimCount(seed: Seed, vehicleId: Id<"vehicles">) {
+    return await seed.t.run(async (ctx) =>
+      (await ctx.db.query("vehicleCommitmentClaims").collect()).filter(
+        (c) => c.vehicleId === vehicleId && c.status === "ACTIVE"
+      ).length
+    );
+  }
+
+  test("13.1 completing a sale CONSUMES every claim, not the first page", async () => {
+    const seed = await seedDealer("consume-all");
+    const v = await vehicle(seed);
+    const { quoteId } = await heldByDeposit(seed, v, seed.customerA);
+    const root = await resolveRoot(seed, v);
+    await seedManyClaims(seed, v, root.rootId as Id<"commitmentRoots">, 55);
+    expect(await activeClaimCount(seed, v)).toBe(56);
+
+    await seed.asUser.mutation(
+      api.sales.create,
+      completedSale(seed, { vehicleId: v, customerId: seed.customerA, quoteId })
+    );
+
+    // A SOLD car with live claims left on it is a root still holding inventory
+    // that no longer exists to hold.
+    expect(await activeClaimCount(seed, v), "no claim may survive the sale").toBe(0);
+    expect((await vehicleRow(seed, v)).status).toBe("SOLD");
+    expect((await resolveRoot(seed, v)).kind).not.toBe("OWNED");
+  });
+
+  test("13.2 releasing a RESERVATION releases every claim it carries", async () => {
+    const seed = await seedDealer("release-res-all");
+    const v = await vehicle(seed);
+    const { reservationId } = await heldByReservation(seed, v, seed.customerB);
+    const root = await resolveRoot(seed, v);
+    await seedManyClaims(seed, v, root.rootId as Id<"commitmentRoots">, 55, {
+      reservationId,
+      kind: "RESERVATION",
+    });
+    expect(await activeClaimCount(seed, v)).toBe(56);
+
+    await seed.asUser.mutation(api.vehicles.releaseReservation, {
+      orgId: seed.orgId,
+      reservationId,
+    });
+
+    expect(await activeClaimCount(seed, v), "a released reservation holds nothing").toBe(0);
+    expect((await resolveRoot(seed, v)).kind).toBe("FREE");
+  });
+
+  test("13.3 rejecting an APPLICATION releases every claim it carries", async () => {
+    const seed = await seedDealer("release-app-all");
+    const v = await vehicle(seed);
+    const { applicationId } = await heldByFinance(seed, v, seed.customerA);
+    const root = await resolveRoot(seed, v);
+    await seedManyClaims(seed, v, root.rootId as Id<"commitmentRoots">, 55, {
+      applicationId,
+      kind: "FINANCE",
+    });
+    expect(await activeClaimCount(seed, v)).toBe(56);
+
+    await seed.asUser.mutation(api.applications.updateStatus, {
+      orgId: seed.orgId,
+      applicationId,
+      status: "REJECTED" as const,
+    });
+
+    expect(await activeClaimCount(seed, v), "a rejected application holds nothing").toBe(0);
+    expect((await resolveRoot(seed, v)).kind).toBe("FREE");
+  });
+
+  test("13.4 REOPEN finds its own root behind a long claim history", async () => {
+    // `reacquireForApplication` reads the application's claim history to
+    // recover the root it released. Behind a page of history the real
+    // predecessor is invisible, and the deal would either be refused or —
+    // worse — mint a fresh root and orphan its own money and revisions.
+    const seed = await seedDealer("reopen-long-history");
+    const v = await vehicle(seed);
+    const { applicationId } = await heldByFinance(seed, v, seed.customerA);
+    const live = await resolveRoot(seed, v);
+    // Historic, already-resolved claims for this application: noise the lookup
+    // must see past rather than stop at.
+    await seed.t.run(async (ctx) => {
+      for (let i = 0; i < 60; i++) {
+        await ctx.db.insert("vehicleCommitmentClaims", {
+          orgId: seed.orgId,
+          rootId: live.rootId as Id<"commitmentRoots">,
+          vehicleId: v,
+          kind: "FINANCE" as const,
+          status: "RELEASED" as const,
+          applicationId,
+          createdAt: Date.now() - 1_000_000 + i,
+          createdBy: seed.userId,
+          resolvedAt: Date.now(),
+        });
+      }
+    });
+
+    await seed.asUser.mutation(api.applications.updateStatus, {
+      orgId: seed.orgId,
+      applicationId,
+      status: "REJECTED" as const,
+    });
+    expect((await resolveRoot(seed, v)).kind).not.toBe("OWNED");
+
+    await seed.asUser.mutation(api.applications.updateStatus, {
+      orgId: seed.orgId,
+      applicationId,
+      status: "PENDING_DOCS" as const,
+    });
+
+    const afterReopen = await resolveRoot(seed, v);
+    expect(afterReopen.kind).toBe("OWNED");
+    expect(
+      afterReopen.rootId,
+      "the reopened deal continues its own lineage rather than minting a new root"
+    ).toEqual(live.rootId);
+  });
+});
+
 describe("12. legacy AMBIGUOUS / not cutover ready", () => {
   async function twoOpenRoots(seed: Seed, v: Id<"vehicles">) {
     const rootOne = await seedRoot(seed, v, "OPEN", seed.customerA);
