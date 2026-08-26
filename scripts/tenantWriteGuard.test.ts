@@ -464,10 +464,18 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // ⚠️ `analysed` stays at 315 across all four. That is the number that must
   // never drop silently — a new mutation landing in a skip bucket is only
   // acceptable when the reason is one of the two above, stated per mutation.
+  // Then 477→478 / 315→316 by `applications.registerVehicleReturn`
+  // (SCRUM-195), which records that a car handed over on a deal that was later
+  // cancelled has physically come back. It takes an `orgId` and a
+  // caller-supplied `applicationId` and patches by it — exactly the shape the
+  // two shipped Criticals had — so it lands in `analysed` and is held to the
+  // ownership rule, satisfied inline like its `financingEconomics` siblings.
+  // Both skip buckets are unchanged at 15 and 147, so `analysed` rose by
+  // exactly the one new mutation: nothing dropped out of inspection.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 477,
-      analysed: 315,
+      totalMutations: 478,
+      analysed: 316,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 147,
     });

@@ -25,12 +25,62 @@ export async function markVehicleAsSold(
  * the public marketplace (marketplaceBrowse only lists AVAILABLE/SOLD) even
  * though it is sitting there ready to sell.
  */
+/**
+ * The customer who physically has this car and has not been recorded returning
+ * it — or null when nobody does.
+ *
+ * ⚠️ Only a DEAD deal counts. A live handed-over deal is the ordinary state of
+ * every financed sale between handover and finalization, and the commitment
+ * authority is already holding the car for that customer; treating it as an
+ * outstanding custody question would refuse the deal its own completion.
+ * What this looks for is the case nothing else covers: the deal collapsed
+ * AFTER the car left, so there is no sale, no claim, and no record of it
+ * coming back.
+ *
+ * Streams rather than paging — a car with more applications than an arbitrary
+ * limit must not read as having none.
+ */
+export async function customerHoldingHandedOverVehicle(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">
+): Promise<Id<"customers"> | null> {
+  for await (const app of ctx.db
+    .query("financeApplications")
+    .withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicleId))) {
+    if (app.orgId !== orgId) continue;
+    if (!app.vehicleHandoverAt) continue;
+    if (app.vehicleReturnedAt) continue;
+    if (app.status !== "CANCELLED") continue;
+    return app.customerId;
+  }
+  return null;
+}
+
 export async function restoreVehicleFromSale(
   ctx: MutationCtx,
-  vehicleId: Id<"vehicles">
+  vehicleId: Id<"vehicles">,
+  opts?: {
+    /**
+     * The car left the lot on this deal. It is coming back out of a sale, not
+     * back from a hold — so it is not lot stock until somebody says it is.
+     */
+    wasHandedOver?: boolean;
+  }
 ): Promise<void> {
   const vehicle = await ctx.db.get(vehicleId);
   if (!vehicle || vehicle.status !== "SOLD") return;
+
+  // A car in a customer's driveway is not AVAILABLE, whatever the snapshot
+  // says. IN_INSPECTION is where it honestly is: back in the dealership's
+  // hands on paper, not yet checked. ⚠️ This is the PROJECTION only — the
+  // enforcement is `customerHoldingHandedOverVehicle` at the completion door,
+  // because `utils/depositHelpers` is explicit that IN_INSPECTION describes
+  // where a car is and never whether it is spoken for.
+  if (opts?.wasHandedOver) {
+    await ctx.db.patch(vehicleId, { status: "IN_INSPECTION", preHoldStatus: undefined });
+    return;
+  }
 
   // `preHoldStatus` is a snapshot, and two things can make it wrong by the time
   // a sale is cancelled:

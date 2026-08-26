@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -32,6 +32,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CheckCircle2 } from "lucide-react";
 
 import { quoteSchema, QuoteFormValues, QuoteDialogProps } from "./quote.schema";
+import {
+  DealContinuityNotice,
+  quoteLineageFor,
+  vehicleOptionSubLabel,
+} from "./DealContinuityNotice";
 import { getErrorMessage } from "@/lib/errors";
 import {
   resolveQuoteOperationKey,
@@ -48,9 +53,17 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
     activeOrgId ? { orgId: activeOrgId } : "skip",
     { initialNumItems: 100 }
   );
+  // SCRUM-195: `includeReserved` — a reserved car has to be selectable, or the
+  // customer who reserved it can never be quoted for it and the reservation is
+  // a dead end rather than the first step of a deal. Which of them THIS
+  // customer may actually be quoted for is answered below by the authority
+  // itself, not by the status. The sales wizard already asked for the list this
+  // way; this dialog was the one that did not.
   const availableVehicles = useQuery(
     api.vehicles.listAll,
-    activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE" } : "skip"
+    activeOrgId
+      ? { orgId: activeOrgId, status: "AVAILABLE", includeReserved: true }
+      : "skip"
   );
   const financeCompanies = useQuery(api.finance.listCompanies, activeOrgId ? { orgId: activeOrgId } : "skip");
   const documentRules = useQuery(api.documents.listRules, activeOrgId ? { orgId: activeOrgId } : "skip");
@@ -71,6 +84,38 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
   });
 
   const watchAll = form.watch();
+
+  const selectableVehicles = useMemo(
+    () => availableVehicles ?? [],
+    [availableVehicles]
+  );
+
+  /**
+   * What saving would actually DO — asked of the commitment authority rather
+   * than guessed from `vehicle.status`, which is only its shadow.
+   *
+   * ⚠️ Advisory only. `saveQuote` re-derives every one of these decisions
+   * inside its own transaction; this exists so the screen can say what it is
+   * about to do instead of leaving the salesperson to meet the rule as an
+   * unexplained refusal on the customer's deposit.
+   */
+  const continuation = useQuery(
+    api.commitments.dealContinuation,
+    activeOrgId && watchAll.vehicleId && watchAll.customerId
+      ? {
+          orgId: activeOrgId,
+          vehicleId: watchAll.vehicleId as Id<"vehicles">,
+          customerId: watchAll.customerId as Id<"customers">,
+        }
+      : "skip"
+  );
+
+  const blockedByAnotherDeal =
+    continuation?.kind === "HELD_BY_ANOTHER_DEAL" || continuation?.kind === "AMBIGUOUS";
+  const priceBelowPaid =
+    continuation?.kind === "REVISE_QUOTE" &&
+    Number(watchAll.vehiclePrice) > 0 &&
+    Number(watchAll.vehiclePrice) < continuation.unresolvedMoney;
 
   const valuations = useQuery(
     api.finance.listValuations,
@@ -171,7 +216,7 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
       // vehicle's list price with the user's markup already typed into it, so
       // the margin is the difference. The backend checks it against the
       // vehicle's minimum profit for financed quotes.
-      const quotedVehicle = (availableVehicles ?? []).find(
+      const quotedVehicle = selectableVehicles.find(
         (vehicle: Doc<"vehicles">) => vehicle._id === values.vehicleId
       );
       const desiredProfit = Number(values.vehiclePrice) - (quotedVehicle?.sellingPrice ?? 0);
@@ -192,18 +237,27 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
         profitRateApplied: companyResult.profitRateApplied,
         totalProfit: companyResult.totalProfit,
       };
+      // SCRUM-195: a quote either OPENS a deal or CARRIES ONE FORWARD, and
+      // this is where that is decided. Every client used to write
+      // `intent: "NEW"` as a literal here — after the spread, so nothing could
+      // override it — which made linked revision and reservation adoption
+      // unreachable by construction while the backend enforced both.
+      const lineage = quoteLineageFor(continuation);
+
       // Same request as the pending attempt reuses its key (lost-response
       // recovery); an edited one rotates it, because that is a new intention.
+      // The lineage is part of the request: revising a quote and opening a new
+      // one are different intentions and must not share a key.
       const attempt = resolveQuoteOperationKey(pendingAttempt.current, {
         ...quotePayload,
-        intent: "NEW",
+        ...lineage,
       });
       pendingAttempt.current = attempt;
 
       await saveQuote({
         ...quotePayload,
         idempotencyKey: attempt.key,
-        intent: "NEW" as const,
+        ...lineage,
       });
       pendingAttempt.current = null;
       toast.success(t("QuoteSavedSuccess" as any));
@@ -236,15 +290,17 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
                         value={field.value}
                         onValueChange={(val) => {
                           field.onChange(val);
-                          const v = availableVehicles?.find((v: Doc<"vehicles">) => v._id === val);
+                          const v = selectableVehicles.find((v: Doc<"vehicles">) => v._id === val);
                           if (v) form.setValue("vehiclePrice", v.sellingPrice);
                         }}
                         placeholder={t("SelectVehicle" as any)}
-                        options={availableVehicles?.map((v: Doc<"vehicles">) => ({
+                        options={selectableVehicles.map((v: Doc<"vehicles">) => ({
                           value: v._id,
                           label: `${v.year} ${v.make} ${v.model}`,
-                          subLabel: `${v.sellingPrice.toLocaleString()} JOD`,
-                        })) ?? []}
+                          // A reserved car says so in the list rather than
+                          // waiting to surprise the salesperson further down.
+                          subLabel: vehicleOptionSubLabel(v, (key) => t(key as any)),
+                        }))}
                       />
                     </FormControl>
                     <FormMessage />
@@ -309,6 +365,12 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
                 )}
               />
             </div>
+
+            <DealContinuityNotice
+              continuation={continuation}
+              priceBelowPaid={priceBelowPaid}
+              t={(key) => t(key as any)}
+            />
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pt-4">
               {comparisons.map((result) => (
@@ -382,10 +444,21 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
                       className="w-full mt-auto"
                       variant={result.isCash ? "outline" : result.exceedsValuation ? "destructive" : "default"}
                       onClick={() => onSelectQuote(result)}
-                      disabled={isSubmitting || result.exceedsValuation}
+                      disabled={
+                        isSubmitting ||
+                        result.exceedsValuation ||
+                        blockedByAnotherDeal ||
+                        priceBelowPaid
+                      }
                     >
                       <CheckCircle2 className="w-4 h-4 me-2" />
-                      {result.exceedsValuation ? (t("IncreaseDownPayment" as any)) : (t("SelectSave" as any))}
+                      {result.exceedsValuation
+                        ? t("IncreaseDownPayment" as any)
+                        : continuation?.kind === "REVISE_QUOTE"
+                          ? t("SaveAsNewVersion" as any)
+                          : continuation?.kind === "ADOPT_RESERVATION"
+                            ? t("SaveAndContinueReservation" as any)
+                            : t("SelectSave" as any)}
                     </Button>
                   </CardContent>
                 </Card>

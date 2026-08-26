@@ -8,6 +8,7 @@ import { notifyUser, getActorName } from "./utils/notifications";
 import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/profitApproval";
 import { canonicalRequestFingerprint } from "@autoflow/shared/quoteIdentity";
 import {
+  actingRootForQuoteOnVehicle,
   COMMITMENT_MESSAGES,
   rootIdForReservation,
   unresolvedRootMoneyMinor,
@@ -282,6 +283,8 @@ export const saveQuote = mutation({
     }
 
     let lineageRootId: Id<"commitmentRoots"> | undefined;
+    /** The cars the predecessor was a deal for — each has its own root. */
+    let predecessorVehicleItems: Array<{ vehicleId: Id<"vehicles"> }> | undefined;
 
     // REVISE. Compare-and-swap against the root's current head.
     if (args.supersedesQuoteId) {
@@ -300,6 +303,9 @@ export const saveQuote = mutation({
       if (predecessor.supersededByQuoteId) {
         throw new ConvexError(COMMITMENT_MESSAGES.notTheHead);
       }
+      predecessorVehicleItems = predecessor.vehicleItems ?? [
+        { vehicleId: predecessor.vehicleId },
+      ];
       if (predecessor.rootId) {
         const root = await ctx.db.get(predecessor.rootId);
         if (root && root.headQuoteId && root.headQuoteId !== predecessor._id) {
@@ -383,10 +389,35 @@ export const saveQuote = mutation({
     // wrong price.
     if (args.supersedesQuoteId) {
       await ctx.db.patch(args.supersedesQuoteId, { supersededByQuoteId: quoteId });
-      if (lineageRootId) {
-        const root = await ctx.db.get(lineageRootId);
+
+      // ⚠️ EVERY root on the deal, not just the primary vehicle's.
+      //
+      // `lineageRootId` is the predecessor's own `rootId`, which on a
+      // multi-vehicle deal belongs to the FIRST car only — the rest carry
+      // lineage through their own claims. Advancing that one alone left the
+      // second car's root headed by the superseded revision, and because
+      // heading a root is what proves lineage, the successor could then prove
+      // nothing about that car: the deal was refused its own second vehicle,
+      // with a message saying it was committed to another deal. It was, in a
+      // sense — to its own previous revision.
+      const predecessorItems = predecessorVehicleItems ?? [];
+      const rootIds = new Set<string>();
+      if (lineageRootId) rootIds.add(lineageRootId);
+      for (const item of predecessorItems) {
+        const itemRootId = await actingRootForQuoteOnVehicle(
+          ctx,
+          args.orgId,
+          args.supersedesQuoteId,
+          item.vehicleId
+        );
+        if (itemRootId) rootIds.add(itemRootId);
+      }
+
+      for (const id of rootIds) {
+        const rootId = id as Id<"commitmentRoots">;
+        const root = await ctx.db.get(rootId);
         if (root) {
-          await ctx.db.patch(lineageRootId, {
+          await ctx.db.patch(rootId, {
             headQuoteId: quoteId,
             revision: root.revision + 1,
           });

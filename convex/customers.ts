@@ -11,7 +11,7 @@ import { validateInput } from "./utils/validation";
 import { CreateCustomerSchema, UpdateCustomerSchema } from "./validations/customers";
 import { normalizePhone, namesSimilar } from "./utils/dedup";
 import { CUSTOMER_REFERENCING_TABLES } from "./utils/mergeHelpers";
-import { openCommitmentRootForCustomer } from "./commitments";
+import { unresolvedCommitmentForCustomer } from "./commitments";
 
 const CUSTOMER_SELECTOR_LIMIT = 50;
 const RECENT_CUSTOMER_SEARCH_WINDOW = 200;
@@ -568,7 +568,10 @@ export const softDelete = mutation({
     //
     // Before the patch, so a refusal leaves the customer, the root, the
     // claim and the money exactly as they were.
-    const openCommitment = await openCommitmentRootForCustomer(ctx, args.orgId, args.customerId);
+    // Ownership AND money: a released reservation closes the root while its
+    // deposit is still HELD, and only asking about OPEN roots let that customer
+    // be deleted with their money unresolved.
+    const openCommitment = await unresolvedCommitmentForCustomer(ctx, args.orgId, args.customerId);
     if (openCommitment) {
       throw new ConvexError(
         "Cannot delete this customer — they have an active or financially unresolved commitment. Release or resolve the deposit, reservation or finance application first."

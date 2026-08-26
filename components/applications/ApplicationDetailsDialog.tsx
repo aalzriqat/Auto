@@ -62,6 +62,8 @@ export function ApplicationDetailsDialog({
   const [isConfirmingDisbursement, setIsConfirmingDisbursement] = useState(false);
   const [isHandoverDialogOpen, setIsHandoverDialogOpen] = useState(false);
   const [isRegisteringHandover, setIsRegisteringHandover] = useState(false);
+  const [isRegisteringReturn, setIsRegisteringReturn] = useState(false);
+  const [isConfirmingReturn, setIsConfirmingReturn] = useState(false);
   const [isPaymentDialogOpen, setIsPaymentDialogOpen] = useState(false);
   const [isRegisteringPayment, setIsRegisteringPayment] = useState(false);
   const [resolvingDepositId, setResolvingDepositId] = useState<Id<"deposits"> | null>(null);
@@ -86,6 +88,7 @@ export function ApplicationDetailsDialog({
   const setSupplierSettlementRoute = useMutation(api.applications.setSupplierSettlementRoute);
   const registerVehicleHandover = useMutation(api.applications.registerVehicleHandover);
   const registerExpectedPayment = useMutation(api.applications.registerExpectedPayment);
+  const registerVehicleReturn = useMutation(api.applications.registerVehicleReturn);
   const releaseDeposit = useMutation(api.deposits.release);
   const updateDocStatus = useMutation(api.documents.updateDocumentStatus);
   const generateUploadUrl = useMutation(api.documents.generateUploadUrl);
@@ -254,6 +257,31 @@ export function ApplicationDetailsDialog({
       throw new Error(message);
     } finally {
       setIsRegisteringHandover(false);
+    }
+  };
+
+  /**
+   * Records that a car handed over on a now-cancelled deal is physically back.
+   *
+   * The refusal it clears lives at the sale-completion door, so this is the
+   * only way out of it — which is deliberate. The rule and the way through it
+   * shipped together, because a rule with no reachable remedy is the exact
+   * defect this same review round found elsewhere in this lane.
+   */
+  const handleRegisterVehicleReturn = async () => {
+    if (!activeOrgId) return;
+    setIsRegisteringReturn(true);
+    try {
+      await registerVehicleReturn({
+        orgId: activeOrgId,
+        applicationId,
+      });
+      toast.success(t("VehicleReturnRegisteredSuccess" as any));
+      setIsConfirmingReturn(false);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setIsRegisteringReturn(false);
     }
   };
 
@@ -823,6 +851,79 @@ export function ApplicationDetailsDialog({
                       )
                     )}
                   </>
+                )}
+
+                {/*
+                    SCRUM-195 — A CANCELLED DEAL DOES NOT BRING THE CAR BACK.
+
+                    Handover is a precondition of finalization, so by the time a
+                    deal can be reversed the car has already gone home with the
+                    buyer. Nothing recorded it returning, and the reversal put
+                    it back on the lot as stock — which is how a second customer
+                    could be sold a car the first one was driving.
+
+                    Deliberately a two-step confirmation rather than a plain
+                    button: this asserts a PHYSICAL fact, it cannot be undone
+                    from this screen, and confirming it is what makes the car
+                    sellable to somebody else. The consequence is stated at the
+                    moment of the decision, not in a toast afterwards.
+                */}
+                {app.status === "CANCELLED" && app.vehicleHandoverAt && !app.vehicleReturnedAt && (
+                  <div className="border-s-2 border-orange-500/60 bg-orange-500/5 ps-4 py-3">
+                    <p className="font-medium text-orange-600">
+                      {t("VehicleStillWithCustomer" as any)}
+                    </p>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      {t("VehicleStillWithCustomerDetail" as any)}
+                    </p>
+                    {canRegisterHandover &&
+                      (isConfirmingReturn ? (
+                        <>
+                          {/* The escalation from "here is the situation" to
+                              "you are about to do something you cannot undo"
+                              has to be VISIBLE. At the same weight as the
+                              explanation above it, the rendered check showed it
+                              reading as more description rather than as the
+                              moment of decision. */}
+                          <p className="text-sm font-medium mt-3 pt-3 border-t border-orange-500/20">
+                            {t("ConfirmVehicleReturnedConsequence" as any)}
+                          </p>
+                          <div className="flex gap-2 mt-3">
+                            <Button
+                              size="sm"
+                              disabled={isRegisteringReturn}
+                              onClick={handleRegisterVehicleReturn}
+                            >
+                              {t("ConfirmVehicleReturned" as any)}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              disabled={isRegisteringReturn}
+                              onClick={() => setIsConfirmingReturn(false)}
+                            >
+                              {t("Cancel" as any)}
+                            </Button>
+                          </div>
+                        </>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="mt-3 border-orange-500/40 text-orange-600 hover:bg-orange-500/10"
+                          onClick={() => setIsConfirmingReturn(true)}
+                        >
+                          <Truck className="h-4 w-4 me-2" />
+                          {t("ConfirmVehicleReturned" as any)}
+                        </Button>
+                      ))}
+                  </div>
+                )}
+
+                {app.vehicleReturnedAt && (
+                  <Badge variant="outline" className="justify-center py-2">
+                    {t("VehicleReturnRegistered" as any)}
+                  </Badge>
                 )}
 
                 {app.status === "APPROVED" && canFinalizeApplication && (

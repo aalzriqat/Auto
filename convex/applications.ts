@@ -2805,6 +2805,57 @@ export const registerVehicleHandover = mutation({
 });
 
 /**
+ * Records that a handed-over vehicle physically came back.
+ *
+ * ⚠️ The completion door refuses to sell a handed-over car to anyone else until
+ * this exists, so WITHOUT THIS MUTATION THE REFUSAL WOULD BE A DEAD END — the
+ * exact defect this same review round found elsewhere in this lane, where the
+ * backend enforced a capability no client could reach. The rule and the way out
+ * of it ship together.
+ *
+ * Deliberately reuses REGISTER_VEHICLE_HANDOVER: it is the same operational
+ * responsibility, seen from the other direction, and a brand-new permission
+ * would silently deny every existing role until somebody ran a backfill.
+ */
+export const registerVehicleReturn = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    notes: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.REGISTER_VEHICLE_HANDOVER,
+    ]);
+    const app = await ctx.db.get(args.applicationId);
+    if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
+    if (!app.vehicleHandoverAt) {
+      throw new ConvexError("This deal never handed the vehicle over, so there is nothing to return.");
+    }
+    if (app.vehicleReturnedAt) {
+      throw new ConvexError("The vehicle return has already been recorded.");
+    }
+    // A live deal's car is with the customer because the deal is still running.
+    // Recording a return there would say the deal gave the car back while it is
+    // still going.
+    if (app.status !== "CANCELLED") {
+      throw new ConvexError(
+        "This deal is still live. Cancel it first if the customer has given the vehicle back."
+      );
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(args.applicationId, {
+      vehicleReturnedAt: now,
+      vehicleReturnedBy: user._id,
+      vehicleReturnedNotes: args.notes,
+      updatedAt: now,
+    });
+    return now;
+  },
+});
+
+/**
  * Registers how and when the deal's payment is expected to arrive — cash,
  * in-house installment with the customer, a cheque (from the finance company
  * or the customer's bank), or a bank transfer — before finalizeDeal. For

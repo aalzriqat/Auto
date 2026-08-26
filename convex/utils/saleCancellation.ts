@@ -10,7 +10,11 @@ import {
 import { reverseAllocation, voidCanonicalPayment } from "../subledger";
 import { cancelSupplierReceivablesForSale } from "../supplierReceivables";
 import { restoreVehicleFromSale } from "./saleHelpers";
-import { acquireVehicleForQuote } from "../commitments";
+import {
+  acquireVehicleForQuote,
+  depositsForQuoteLineage,
+  reopenRootForReversal,
+} from "../commitments";
 import {
   reactivateAllVehiclesForDeposit,
   syncVehicleHoldStatus,
@@ -53,10 +57,13 @@ async function getSafelyReversiblePaymentKeys(
   // same payment — no longer looked safely reversible and the unwind stopped
   // half done. The key names a payment this system created from this deposit
   // either way, and an unexpected customer payment still has no matching key.
-  const deposits = await ctx.db
-    .query("deposits")
-    .withIndex("by_quote", (q) => q.eq("quoteId", sale.quoteId!))
-    .collect();
+  // ⚠️ THE DEAL, not the quote id. A deposit taken on Q1 and carried through a
+  // requote stays filed under Q1 while the sale completes from Q2, so a
+  // quote-keyed lookup found none of the deal's own deposits and every
+  // cancellation of a REVISED deal was refused — telling the dealership there
+  // were customer payments it could not reverse, about the customer's own
+  // deposit, with no supported way out of it.
+  const deposits = await depositsForQuoteLineage(ctx, sale.quoteId!);
   for (const deposit of deposits) {
     if (deposit.isDeleted === true) continue;
     keys.add(`deposit_received_${deposit._id}`);
@@ -348,10 +355,26 @@ async function reopenDepositAfterReversal(
   // and the commitment were separated at completion (claims CONSUMED, deposit
   // APPLIED) and they have to come back together.
   const restoreCommitment = async (row: Doc<"deposits">) => {
-    await acquireVehicleForQuote(ctx, {
+    // Reopen the root this sale consumed rather than opening a second one on
+    // the same physical car — see `reopenRootForReversal`.
+    const rootId = await reopenRootForReversal(ctx, {
       orgId: row.orgId,
       vehicleId: row.vehicleId,
       quoteId: row.quoteId ?? null,
+    });
+
+    // ⚠️ Re-acquire under the deal's CURRENT head, never the revision the
+    // deposit happens to be filed under. A deposit taken on Q1 and carried
+    // through a requote to Q2 would otherwise hand the reversal a superseded
+    // quote and make it the root's head again, so every later evidence check
+    // would be measured against a price the deal had already moved past.
+    const root = rootId ? await ctx.db.get(rootId) : null;
+    const quoteId = root?.headQuoteId ?? row.quoteId ?? null;
+
+    await acquireVehicleForQuote(ctx, {
+      orgId: row.orgId,
+      vehicleId: row.vehicleId,
+      quoteId,
       customerId: row.customerId,
       createdBy: row.createdBy,
       kind: "DEPOSIT",
@@ -638,7 +661,16 @@ export async function cancelCompletedSaleOperationalRecords(
     reason: args.reason,
     reversalDate: args.reversalDate,
   });
-  await restoreVehicleFromSale(ctx, args.sale.vehicleId);
+  // SCRUM-195 / c15247: a reversal of a deal whose car was physically handed
+  // over does not put lot stock back — it puts a car that is somewhere else
+  // back on the books.
+  const handedOverApp = args.sale.applicationId
+    ? await ctx.db.get(args.sale.applicationId)
+    : null;
+  await restoreVehicleFromSale(ctx, args.sale.vehicleId, {
+    wasHandedOver:
+      handedOverApp?.orgId === args.orgId && handedOverApp?.vehicleHandoverAt !== undefined,
+  });
   await reinstateAppliedDeposits(ctx, {
     orgId: args.orgId,
     saleId: args.sale._id,

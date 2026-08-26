@@ -1696,6 +1696,11 @@ export const createReservation = mutation({
       reservedAt: now,
     });
 
+    // SCRUM-195: declared out here because the CLAIM has to carry it. A
+    // reservation deposit is filed under no quote, so the only way it can ever
+    // reach the deal's root is `claim.depositId` — leaving it off made real
+    // HELD money invisible to every question the root answers.
+    let reservationDepositId: Id<"deposits"> | undefined;
     if (hasDeposit && amountMinor !== undefined && currency !== undefined) {
       const depositId = await recordHeldDeposit(ctx, {
         orgId: args.orgId,
@@ -1711,6 +1716,7 @@ export const createReservation = mutation({
         sourceLabel: `reservation ${reservationId}`,
       });
       await ctx.db.patch(reservationId, { depositId });
+      reservationDepositId = depositId;
     }
 
     // SCRUM-195: a standalone reservation opens its OWN server-owned root. The
@@ -1724,6 +1730,7 @@ export const createReservation = mutation({
       createdBy: user._id,
       kind: "RESERVATION",
       reservationId,
+      depositId: reservationDepositId,
     });
 
     await syncVehicleHoldStatus(ctx, args.vehicleId, user._id);

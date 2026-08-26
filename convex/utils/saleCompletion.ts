@@ -4,6 +4,7 @@ import { MutationCtx } from "../_generated/server";
 import { notifyManagers, getActorName } from "./notifications";
 import { calculateCommissionFromTiers, CommissionTier } from "./commission";
 import {
+  customerHoldingHandedOverVehicle,
   markVehicleAsSold,
   createSaleTransaction,
   closeLeadsAsWon,
@@ -193,6 +194,23 @@ async function prepareSaleCompletion(
   if (vehicle.status === "SOLD") {
     throwAppError(AppErrorCode.VEHICLE_ALREADY_SOLD, "This vehicle has already been sold.");
   }
+  // SCRUM-195 / c15247 — CUSTODY, before anything irreversible.
+  //
+  // A deal that collapsed after handover leaves the car with the customer and
+  // nothing recorded about it coming back. Selling it to SOMEBODY ELSE from
+  // that state hands a second person a car the first one is driving.
+  //
+  // Narrow on purpose: it refuses a sale to a different customer only. Selling
+  // it back to the person who already has it involves no return trip, and
+  // refusing that would strand the one deal that is certainly safe. Registering
+  // the return (`applications.registerVehicleReturn`) clears it.
+  const holder = await customerHoldingHandedOverVehicle(ctx, args.orgId, args.vehicleId);
+  if (holder && holder !== args.customerId) {
+    throw new ConvexError(
+      "This vehicle was handed over on a deal that was later cancelled, and nobody has recorded it coming back. Confirm the vehicle has been returned before selling it to another customer."
+    );
+  }
+
   if (vehicle.status === "ARCHIVED") {
     throwAppError(AppErrorCode.VEHICLE_ARCHIVED, "Cannot sell an archived vehicle. Restore it first.");
   }

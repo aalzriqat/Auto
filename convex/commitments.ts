@@ -3,6 +3,9 @@ import { query, type QueryCtx, type MutationCtx } from "./_generated/server";
 import { Doc, type Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { fromMinorUnits } from "./utils/money";
+import { normalizeCurrency } from "./utils/depositRecording";
+import { getOrgCurrency } from "./accounting/workflowHooks";
 
 /**
  * SCRUM-195 — THE CANONICAL VEHICLE COMMITMENT AUTHORITY.
@@ -257,6 +260,127 @@ export const resolveVehicleRoot = query({
   },
 });
 
+/**
+ * What quoting THIS customer for THIS car actually is: a new deal, a revision
+ * of the one they already have, or a reservation they are about to convert.
+ *
+ * ⚠️ THE REASON THIS EXISTS. The two backend capabilities that carry a deal
+ * forward — `intent: "REVISE"` with `supersedesQuoteId`, and
+ * `adoptReservationId` — shipped with no client able to reach them: every one
+ * of the four `saveQuote` call sites writes `intent: "NEW" as const` after
+ * spreading its payload, so the literal wins by construction. The backend
+ * enforced lineage the product never exposed, and the person on the shop floor
+ * met the enforcement as an unexplained refusal on the customer's deposit.
+ *
+ * Rather than adding two fields nobody can be expected to reason about, this
+ * answers the question in the salesperson's own terms and lets the screen say
+ * what it is about to do. Lineage is a property of the SITUATION, not a
+ * checkbox: the customer either already has this car spoken for or they do not.
+ *
+ * Read-only, and never a substitute for the mutation's own gate — `saveQuote`
+ * re-derives all of this inside its transaction. What this buys is a screen
+ * that explains itself before the refusal instead of after it.
+ */
+export type DealContinuation =
+  /** Nothing holds this car for anyone. An ordinary new deal. */
+  | { kind: "NEW" }
+  /** Someone else's live deal has it. Saving would be refused. */
+  | { kind: "HELD_BY_ANOTHER_DEAL" }
+  /** Conflicting records — never proceed quietly past this. */
+  | { kind: "AMBIGUOUS" }
+  /** They reserved it. The quote should adopt that reservation. */
+  | {
+      kind: "ADOPT_RESERVATION";
+      reservationId: Id<"vehicleReservations">;
+      reservedAt: number;
+      expiresAt: number | null;
+      depositAmount: number | null;
+    }
+  /** They already have a quote on it. The new one should supersede it. */
+  | {
+      kind: "REVISE_QUOTE";
+      quoteId: Id<"quotes">;
+      vehiclePrice: number;
+      createdAt: number;
+      revision: number;
+      /** Their money already on this deal — the floor the new price may not go under. */
+      unresolvedMoneyMinor: number;
+      /**
+       * The same figure in major units, converted HERE because this is where
+       * the org's currency is known. A client dividing by 100 gets JOD — three
+       * decimal places — wrong by a factor of ten.
+       */
+      unresolvedMoney: number;
+      currency: string;
+    };
+
+export const dealContinuation = query({
+  args: {
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    customerId: v.id("customers"),
+  },
+  handler: async (ctx, args): Promise<DealContinuation> => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+
+    const vehicle = await ctx.db.get(args.vehicleId);
+    if (!vehicle || vehicle.orgId !== args.orgId) {
+      throw new ConvexError("Vehicle not found in this organization.");
+    }
+
+    const ownership = await resolveOwnership(ctx, args.orgId, args.vehicleId);
+    if (ownership.kind === "AMBIGUOUS") return { kind: "AMBIGUOUS" };
+    if (ownership.kind === "FREE") return { kind: "NEW" };
+    if (ownership.root.customerId !== args.customerId) {
+      return { kind: "HELD_BY_ANOTHER_DEAL" };
+    }
+
+    // A reservation-origin root has no head quote until a quote adopts it, so
+    // this is checked first: it is the only state where adoption is the move.
+    const reservationId = ownership.root.originReservationId;
+    if (reservationId && !ownership.root.headQuoteId) {
+      const reservation = await ctx.db.get(reservationId);
+      const stillAdoptable =
+        reservation !== null &&
+        reservation.orgId === args.orgId &&
+        reservation.status === "ACTIVE" &&
+        (reservation.expiresAt === undefined || reservation.expiresAt > Date.now());
+      if (reservation && stillAdoptable) {
+        return {
+          kind: "ADOPT_RESERVATION",
+          reservationId,
+          reservedAt: reservation.reservedAt,
+          expiresAt: reservation.expiresAt ?? null,
+          depositAmount: reservation.depositAmount ?? null,
+        };
+      }
+    }
+
+    const headQuoteId = ownership.root.headQuoteId;
+    if (headQuoteId) {
+      const head = await ctx.db.get(headQuoteId);
+      if (head && head.orgId === args.orgId && !head.supersededByQuoteId) {
+        const currency = normalizeCurrency(await getOrgCurrency(ctx, args.orgId));
+        const unresolvedMinor = await unresolvedRootMoneyMinor(ctx, ownership.root._id);
+        return {
+          kind: "REVISE_QUOTE",
+          quoteId: headQuoteId,
+          vehiclePrice: head.vehiclePrice,
+          createdAt: head._creationTime,
+          revision: ownership.root.revision,
+          unresolvedMoneyMinor: unresolvedMinor,
+          unresolvedMoney: fromMinorUnits(unresolvedMinor, currency),
+          currency,
+        };
+      }
+    }
+
+    // Their own deal, but nothing to point a successor at. `saveQuote` will
+    // open an independent lineage, which is the honest answer here.
+    return { kind: "NEW" };
+  },
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Enforcing the authority
 // ─────────────────────────────────────────────────────────────────────────────
@@ -337,6 +461,14 @@ export async function actingRootForQuoteOnVehicle(
       q.eq("orgId", orgId).eq("vehicleId", vehicleId).eq("status", "ACTIVE")
     )) {
     if (claim.quoteId === quoteId) return claim.rootId;
+    // A deal is not its primary car. On a multi-vehicle deal every vehicle has
+    // its own root, and the claims on the SECOND car name the revision that
+    // took them — so after a requote the successor proved lineage to the
+    // primary root and to nothing else, and the deal was refused its own second
+    // vehicle. Heading a root is lineage: `saveQuote` advances every root on
+    // the deal to the successor precisely so this can be relied on.
+    const root = await ctx.db.get(claim.rootId);
+    if (root && root.status === "OPEN" && root.headQuoteId === quoteId) return claim.rootId;
   }
   return null;
 }
@@ -414,33 +546,34 @@ export async function acquireVehicleForQuote(
 }
 
 /**
- * Does this customer still have an OPEN commitment anywhere in the org?
+ * Is this customer still owed an answer about a car OR about money?
  *
  * Asked before a customer can be REMOVED. `customers.remove` refused on live
  * leads and live sales and nothing else, so a customer with an unfinished deal
- * could be soft-deleted out from under an OPEN root — and since the root is the
- * authority that decides whether any deal may take that car, the result was a
- * live holder that no customer record backs.
+ * could simply be deleted out from under it.
  *
- * ⚠️ An OPEN root does not necessarily mean a car is HELD. Under c14909 the two
- * axes come apart: `RELEASED_AWAITING_DECISION` frees the vehicle while the
- * root stays open because the customer's money has not been ruled on. Both are
- * reasons to refuse the deletion, and neither is "still holding a car" — so
- * this asks about an unfinished COMMITMENT, and says so.
+ * ⚠️ TWO AXES, and asking only the first one let a real customer be deleted.
+ * The OWNERSHIP axis is an OPEN root — someone still holds a car. The MONEY
+ * axis is unresolved funds, which outlive the ownership question: releasing a
+ * reservation frees the car and closes its root while the deposit taken with it
+ * stays HELD, refunded by nobody. c14909 drew that distinction for completion;
+ * the same distinction governs deletion, and a version of this that tested only
+ * for OPEN roots let a customer walk out of the system with 5,000 of their own
+ * money unaccounted for.
  *
- * ⚠️ Scoped to OPEN roots, deliberately. A RELEASED or CONSUMED root is
- * history, and refusing on it would make a customer undeletable forever because
- * of a deal that ended months ago.
+ * ⚠️ A closed root with no money left is HISTORY and must not refuse — that
+ * would make a customer permanently undeletable because of a deal that ended
+ * months ago.
  *
- * ⚠️ Asked HERE rather than in `customers.ts`. Three tables can hold a car and
+ * ⚠️ Asked HERE rather than in `customers.ts`. Three tables can hold a car, and
  * a caller that consults deposits, reservations and applications separately is
  * the exact shape of defect this module exists to end — it would go stale the
  * moment a fourth kind of evidence appears. One indexed question, one answer.
  *
- * Streams rather than taking a page: a customer with more open deals than an
+ * Streams rather than taking a page: a customer with more roots than an
  * arbitrary limit must not read as having none.
  */
-export async function openCommitmentRootForCustomer(
+export async function unresolvedCommitmentForCustomer(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   customerId: Id<"customers">
@@ -451,6 +584,7 @@ export async function openCommitmentRootForCustomer(
       q.eq("orgId", orgId).eq("customerId", customerId)
     )) {
     if (root.status === "OPEN") return root;
+    if ((await unresolvedRootMoneyMinor(ctx, root._id)) > 0) return root;
   }
   return null;
 }
@@ -475,6 +609,45 @@ export async function assertRemovableFromInventory(
     actingRootId: null,
     message: message ?? COMMITMENT_MESSAGES.heldByAnotherDealRemoval,
   });
+}
+
+/**
+ * Give a reversal back the root it is undoing, instead of minting a new one.
+ *
+ * ⚠️ Completion CONSUMES the root, so by the time a cancellation restores the
+ * deposit there is no OPEN root to join and `acquireVehicleForQuote` opened a
+ * second one. That left TWO roots on one physical vehicle — the founding
+ * invariant of this authority — with the quote still pointing at the dead first
+ * one, so the money question and the acquisition question read different roots
+ * for the same car.
+ *
+ * Refuses to reopen into a rival: if anything else legitimately holds the car
+ * now, this returns null and the ordinary acquisition path decides what
+ * happens, exactly as it did before. Reopening regardless is how one physical
+ * unit ends up with two live claimants.
+ */
+export async function reopenRootForReversal(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    quoteId: Id<"quotes"> | null;
+  }
+): Promise<Id<"commitmentRoots"> | null> {
+  if (!args.quoteId) return null;
+  const quote = await ctx.db.get(args.quoteId);
+  if (!quote?.rootId) return null;
+
+  const root = await ctx.db.get(quote.rootId);
+  if (!root || root.orgId !== args.orgId || root.vehicleId !== args.vehicleId) return null;
+  if (root.status === "OPEN") return root._id;
+  if (root.status !== "CONSUMED") return null;
+
+  const ownership = await resolveOwnership(ctx, args.orgId, args.vehicleId);
+  if (ownership.kind !== "FREE") return null;
+
+  await ctx.db.patch(root._id, { status: "OPEN" });
+  return root._id;
 }
 
 /**
@@ -965,6 +1138,43 @@ async function depositsForRoot(
  * Excluded (terminal): refunded and forfeited slices, and VOIDED or deleted
  * rows, which are not money the dealership still owes an answer for.
  */
+/**
+ * The part of a deposit row that has TERMINALLY left the deal, in minor units.
+ *
+ * ⚠️ Read the row DOWNWARD, never the holds upward. Summing allocation slices
+ * looks equivalent and is not: a multi-vehicle deposit writes a
+ * `depositVehicleHolds` row per car carrying `active: true` and NO
+ * `allocatedAmountMinor` and NO `allocationStatus` — nothing is allocated yet —
+ * so every slice contributed `?? 0` and a whole 20,000 deposit read as ZERO
+ * money on the deal. The ceiling then let a second 20,000 through against a
+ * 30,000 quote. The single-vehicle path was correct the whole time, because it
+ * has no holds to sum and fell back to the row.
+ *
+ * Only two things genuinely take money off a deal: paying it out at the row
+ * level, and a slice resolved to a terminal treatment. Everything else —
+ * allocated, applied, reversing, awaiting a decision, returned to the pool, or
+ * never allocated at all — is still the customer's money on this deal.
+ *
+ * The terminal-treatment filter mirrors the canonical one in
+ * `utils/depositHelpers.releaseHeldDeposit`; RETURN_TO_UNALLOCATED is
+ * deliberately absent from it, because that money came back onto the deal.
+ */
+function terminallyLeftTheDealMinor(
+  deposit: Doc<"deposits">,
+  holds: Doc<"depositVehicleHolds">[]
+): number {
+  const finalizedSlicesMinor = holds
+    .filter(
+      (h) =>
+        h.allocationStatus === "RESOLVED" &&
+        (h.resolutionTreatment === "REFUND_TO_CUSTOMER" ||
+          h.resolutionTreatment === "FORFEITED" ||
+          h.resolutionTreatment === "OTHER")
+    )
+    .reduce((sum, h) => sum + (h.allocatedAmountMinor ?? 0), 0);
+  return (deposit.releasedAmountMinor ?? 0) + finalizedSlicesMinor;
+}
+
 export async function unresolvedRootMoneyMinor(
   ctx: QueryCtx | MutationCtx,
   rootId: Id<"commitmentRoots">
@@ -984,23 +1194,8 @@ export async function unresolvedRootMoneyMinor(
       holds.push(hold);
     }
 
-    if (holds.length === 0) {
-      // Unallocated: the deposit row IS the bucket. Net of anything already
-      // handed back, since a partial refund really has left the deal.
-      total += Math.max(0, (deposit.amountMinor ?? 0) - (deposit.releasedAmountMinor ?? 0));
-      continue;
-    }
-
-    for (const hold of holds) {
-      // `active` with no allocationStatus is an unallocated slice — the shape
-      // RETURN_TO_UNALLOCATED writes when money comes back onto the deal.
-      if (hold.allocationStatus === undefined) {
-        if (hold.active) total += hold.allocatedAmountMinor ?? 0;
-        continue;
-      }
-      if (hold.allocationStatus === "RESOLVED") continue;
-      total += hold.allocatedAmountMinor ?? 0;
-    }
+    // The row is the bucket, whether or not it has been carved into slices.
+    total += Math.max(0, (deposit.amountMinor ?? 0) - terminallyLeftTheDealMinor(deposit, holds));
   }
 
   return total;
@@ -1073,16 +1268,17 @@ export async function residualUnsettledRootMoneyMinor(
       continue;
     }
 
-    for (const hold of holds) {
-      if (hold.allocationStatus === undefined) {
-        if (hold.active) total += hold.allocatedAmountMinor ?? 0;
-        continue;
-      }
-      if (hold.allocationStatus === "RESOLVED") continue;
-      // The one that matters most: APPLIED is settled, everything else is not.
-      if (hold.allocationStatus === "APPLIED") continue;
-      total += hold.allocatedAmountMinor ?? 0;
-    }
+    // Same row-down arithmetic as `unresolvedRootMoneyMinor` — an unallocated
+    // multi-vehicle deposit read as zero here too, so a deal still holding the
+    // customer's whole 20,000 answered "finished" — with APPLIED subtracted as
+    // well, because applied money went to the sale it was for and is decided.
+    const appliedMinor = holds
+      .filter((h) => h.allocationStatus === "APPLIED")
+      .reduce((sum, h) => sum + (h.allocatedAmountMinor ?? 0), 0);
+    total += Math.max(
+      0,
+      (deposit.amountMinor ?? 0) - terminallyLeftTheDealMinor(deposit, holds) - appliedMinor
+    );
   }
 
   return total;

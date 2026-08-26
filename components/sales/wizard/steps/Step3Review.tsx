@@ -24,6 +24,10 @@ import {
 } from "@autoflow/shared/quoteIdentity";
 import  ReviewFinanceSummary  from "../components/ReviewFinanceSummary";
 import { buildWizardQuotePayload } from "../quotePayload";
+import {
+  DealContinuityNotice,
+  quoteLineageFor,
+} from "@/components/sales/DealContinuityNotice";
 
 export function Step3Review({
   paymentType,
@@ -48,6 +52,26 @@ export function Step3Review({
   const { t } = useLanguage();
   const saveQuote = useMutation(api.quotes.saveQuote);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  /**
+   * SCRUM-195 — whether this save opens a deal or carries one forward.
+   *
+   * Keyed on the PRIMARY vehicle, which is the car the deal's root is stamped
+   * against; the other line items carry lineage through their own claims.
+   * Advisory only — `saveQuote` re-derives all of it in its own transaction.
+   */
+  const continuation = useQuery(
+    api.commitments.dealContinuation,
+    activeOrgId && wizardData?.vehicleId
+      ? {
+          orgId: activeOrgId,
+          vehicleId: wizardData.vehicleId as Id<"vehicles">,
+          customerId: selectedCustomer._id,
+        }
+      : "skip"
+  );
+  const blockedByAnotherDeal =
+    continuation?.kind === "HELD_BY_ANOTHER_DEAL" || continuation?.kind === "AMBIGUOUS";
 
   const availableVehicles = useQuery(
     api.vehicles.listAll,
@@ -191,13 +215,19 @@ export function Step3Review({
         manualProviderName: t("OtherFinanceOption" as any),
       });
 
+      // SCRUM-195: derived, never a literal. See `quoteLineageFor` — writing
+      // `intent: "NEW"` here is what made linked revision and reservation
+      // adoption unreachable from every shipped client at once.
+      const lineage = quoteLineageFor(continuation);
+
       // Retry or new intention? Same request as the pending attempt reuses its
       // key, so a lost response is recovered; anything edited rotates it,
       // because from the user's side an edit is a new intention and must not
-      // be refused as a contradiction.
+      // be refused as a contradiction. The lineage is part of the request:
+      // revising a deal and opening one are different intentions.
       const attempt = resolveQuoteOperationKey(pendingAttempt.current, {
         ...quotePayload,
-        intent: "NEW",
+        ...lineage,
       });
       pendingAttempt.current = attempt;
 
@@ -219,7 +249,7 @@ export function Step3Review({
         // on the same terms twice — the second enquiry silently returned the
         // first quote forever.
         idempotencyKey: attempt.key,
-        intent: "NEW" as const,
+        ...lineage,
       });
       // Acknowledged: the next submission is a new intention.
       pendingAttempt.current = null;
@@ -314,6 +344,12 @@ export function Step3Review({
         />
       </div>
 
+      <DealContinuityNotice
+        continuation={continuation}
+        priceBelowPaid={false}
+        t={(key) => t(key as any)}
+      />
+
       {/* ACTIONS */}
       <div className="flex flex-col-reverse sm:flex-row justify-between gap-3 pt-4 border-t">
         <Button variant="outline" onClick={onBack} disabled={isSubmitting} className="w-full sm:w-auto">
@@ -323,7 +359,7 @@ export function Step3Review({
 
         <Button
           onClick={handleGenerate}
-          disabled={isSubmitting || !selectedResult}
+          disabled={isSubmitting || !selectedResult || blockedByAnotherDeal}
           className={cn(
             "w-full sm:w-auto",
             paymentType === "CASH"

@@ -83,6 +83,30 @@ export const salesEn = {
   NoCustomersFoundWizard: "No customers found.",
   CreateNewCustomerBtn: "Create a new customer",
   QuoteSavedSuccess: "Quote generated and saved!",
+  // SCRUM-195 — the deal-continuity strip. A quote either starts a deal or
+  // carries one forward, and until now the screen never said which.
+  ContinuityReservedTitle: "This car is already reserved for this customer",
+  ContinuityReservedDetail:
+    "Saving continues that reservation instead of starting a second, rival deal on the same car.",
+  ContinuityReservedOn: "Reserved on",
+  ContinuityReservationHolds: "Held with",
+  ContinuityReviseTitle: "This customer already has a live quote on this car",
+  ContinuityReviseDetail:
+    "Saving replaces it as the current version of the same deal, and anything they have already paid moves across with it.",
+  ContinuityCurrentPrice: "Current price",
+  ContinuityAlreadyPaid: "Already paid on this deal",
+  ContinuityRevision: "Version",
+  ContinuityHeldTitle: "Another live deal is holding this car",
+  ContinuityHeldDetail:
+    "Release that commitment before quoting this customer for the same car — otherwise the deposit will be refused.",
+  ContinuityAmbiguousTitle: "This car has conflicting commitment records",
+  ContinuityAmbiguousDetail:
+    "It cannot be quoted until they are reconciled, because nothing can say for certain whose deal it belongs to.",
+  ContinuityPriceBelowPaid:
+    "This price is below what the customer has already paid into the deal. Refund, forfeit or reallocate the difference before requoting.",
+  ContinuityBlockedConsequence: "The finance options below stay disabled until it is resolved.",
+  SaveAsNewVersion: "Save as the new version",
+  SaveAndContinueReservation: "Save and continue the reservation",
   QuoteSaveFail: "Failed to save quote",
   QuoteGeneratedSuccess: "Quote Generated Successfully!",
   QuoteSavedLinkedTo: "The quote has been saved and is now linked to",
@@ -368,6 +392,17 @@ export const salesEn = {
   ConfirmHandover: "Confirm Handover",
   VehicleHandoverRegisteredSuccess: "Vehicle handover registered.",
   VehicleHandoverRegistered: "Handover registered",
+  // SCRUM-195 — the other half of the handover. Handover was proven and return
+  // was assumed, so a cancelled deal put a car that was still in somebody's
+  // driveway back on the lot as sellable stock.
+  VehicleStillWithCustomer: "This car has not been recorded coming back",
+  VehicleStillWithCustomerDetail:
+    "It was handed over on this deal, and the deal was cancelled. Until somebody confirms it is physically back, it cannot be sold to a different customer.",
+  ConfirmVehicleReturned: "Confirm the vehicle came back",
+  ConfirmVehicleReturnedConsequence:
+    "Only confirm this if the car is physically back with the dealership. It becomes sellable to anyone the moment you do.",
+  VehicleReturnRegistered: "Vehicle recorded as returned",
+  VehicleReturnRegisteredSuccess: "Recorded — the vehicle is back with the dealership",
   RegisterExpectedPayment: "Register Expected Payment",
   RegisterExpectedPaymentDesc: "Record how and when this deal's payment is expected to be received.",
   PaymentMethodCash: "Cash",
@@ -1075,6 +1110,28 @@ export const salesAr = {
   NoCustomersFoundWizard: "لم يتم العثور على عملاء.",
   CreateNewCustomerBtn: "إنشاء عميل جديد",
   QuoteSavedSuccess: "تم إنشاء وحفظ عرض السعر!",
+  ContinuityReservedTitle: "هذه السيارة محجوزة لهذا العميل بالفعل",
+  ContinuityReservedDetail:
+    "الحفظ يُكمل هذا الحجز بدل أن يفتح صفقة ثانية منافِسة على السيارة نفسها.",
+  ContinuityReservedOn: "تاريخ الحجز",
+  ContinuityReservationHolds: "محجوزة بمبلغ",
+  ContinuityReviseTitle: "لدى هذا العميل عرض سعر قائم على هذه السيارة",
+  ContinuityReviseDetail:
+    "الحفظ يجعله النسخة الحالية من الصفقة نفسها، وينتقل معه كل ما دفعه العميل حتى الآن.",
+  ContinuityCurrentPrice: "السعر الحالي",
+  ContinuityAlreadyPaid: "المدفوع على هذه الصفقة",
+  ContinuityRevision: "النسخة",
+  ContinuityHeldTitle: "صفقة أخرى قائمة تحجز هذه السيارة",
+  ContinuityHeldDetail:
+    "حرِّر ذلك الالتزام قبل تسعير السيارة نفسها لهذا العميل، وإلا سيُرفض العربون.",
+  ContinuityAmbiguousTitle: "سجلات الالتزام على هذه السيارة متعارضة",
+  ContinuityAmbiguousDetail:
+    "لا يمكن تسعيرها قبل تسوية السجلات، لأنه لا شيء يستطيع تحديد صاحب الصفقة بشكل قاطع.",
+  ContinuityPriceBelowPaid:
+    "هذا السعر أقل مما دفعه العميل على الصفقة. أعِد الفرق أو صادِرْه أو أعِد توزيعه قبل إعادة التسعير.",
+  ContinuityBlockedConsequence: "تبقى خيارات التمويل بالأسفل معطّلة إلى أن يُحلّ هذا.",
+  SaveAsNewVersion: "احفظ كنسخة جديدة",
+  SaveAndContinueReservation: "احفظ وأكمل الحجز",
   QuoteGeneratedSuccess: "تم إنشاء عرض السعر بنجاح!",
   QuoteSavedLinkedTo: "تم حفظ عرض السعر وربطه بـ",
   DownloadPDFQuote: "تحميل PDF لعرض السعر",
@@ -1356,6 +1413,14 @@ export const salesAr = {
   ConfirmHandover: "تأكيد التسليم",
   VehicleHandoverRegisteredSuccess: "تم تسجيل تسليم السيارة.",
   VehicleHandoverRegistered: "تم تسجيل التسليم",
+  VehicleStillWithCustomer: "لم يُسجَّل رجوع هذه السيارة",
+  VehicleStillWithCustomerDetail:
+    "سُلِّمت على هذه الصفقة ثم أُلغيت الصفقة. لا يمكن بيعها لعميل آخر قبل أن يؤكد أحد أنها عادت فعلياً.",
+  ConfirmVehicleReturned: "تأكيد رجوع السيارة",
+  ConfirmVehicleReturnedConsequence:
+    "أكِّد فقط إذا كانت السيارة موجودة فعلياً لدى المعرض. ستصبح قابلة للبيع لأي عميل فور التأكيد.",
+  VehicleReturnRegistered: "تم تسجيل رجوع السيارة",
+  VehicleReturnRegisteredSuccess: "تم التسجيل — السيارة عادت إلى المعرض",
   RegisterExpectedPayment: "تسجيل الدفعة المتوقعة",
   RegisterExpectedPaymentDesc: "تسجيل كيفية ووقت استلام دفعة هذه الصفقة.",
   PaymentMethodCash: "نقداً",

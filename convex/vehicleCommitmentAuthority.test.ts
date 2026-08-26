@@ -3482,3 +3482,463 @@ describe("23. a cancelled deal stops holding the car", () => {
     , REFUSED, "23.3");
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 24. THE ADVERSARIAL ROUND ON 684ee9ef — every finding I could REPRODUCE
+//
+// Codex xhigh returned six findings and could not execute a single test (its
+// vitest died with EPERM, which it disclosed rather than papering over). Owner
+// ruling c15247: execute all six before patching anything.
+//
+// I ran them. Five reproduced outright, one reproduced in code but is currently
+// unreachable, and a seventh — nobody's finding — fell out of a probe fixture.
+// Nothing was rejected; I went looking for the rejection each time.
+//
+// Each contract below FAILED FIRST against 684ee9ef/c7c9ddb0f and names the
+// consequence in the shop, not the shape of the patch.
+//
+// ⚠️ FOUR of these are ONE defect class, the same one that has recurred through
+// this entire lane: A RULE APPLIED TO SOME WRITERS OF A RECORD AND NOT ALL.
+// 24.1 multi-vehicle vs single · 24.2 reservation vs quote deposits · 24.4
+// primary vs secondary root · 24.5 quote-keyed vs lineage-keyed. Read them
+// together; fixing them one at a time is how this class keeps surviving.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("24. the adversarial round on 684ee9ef", () => {
+  async function rootIdOf(seed: Seed, v: Id<"vehicles">) {
+    return ((await resolveRoot(seed, v)).rootId ?? null) as Id<"commitmentRoots"> | null;
+  }
+  async function allRoots(seed: Seed) {
+    return await seed.t.run((ctx) => ctx.db.query("commitmentRoots").collect());
+  }
+  /** `completeFromQuote` returns one id PER LINE ITEM, so read the row instead. */
+  async function theSale(seed: Seed) {
+    const rows = await seed.t.run((ctx) => ctx.db.query("sales").collect());
+    return rows[0]._id;
+  }
+  /** Four-eyes: the salesperson may not cancel their own sale. */
+  async function cancelSale(seed: Seed, saleId: Id<"sales">) {
+    await seed.asApprover.mutation(api.sales.update, {
+      orgId: seed.orgId,
+      saleId,
+      status: "CANCELLED" as const,
+    });
+  }
+  async function twoCarQuote(seed: Seed, a: Id<"vehicles">, b: Id<"vehicles">, price: number) {
+    return await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+      vehicleId: a,
+      vehicleItems: [
+        { vehicleId: a, unitPrice: price / 2 },
+        { vehicleId: b, unitPrice: price / 2 },
+      ],
+      mode: "CASH" as const,
+      vehiclePrice: price,
+      downPayment: 0,
+      termMonths: 0,
+      totalFinancedAmount: 0,
+    });
+  }
+
+  // ── 24.1 — Codex CRITICAL #1 ───────────────────────────────────────────────
+  //
+  // A REGRESSION, not a gap. The per-quote ceiling this lane replaced counted
+  // deposit rows at face value and would have caught this; the root-wide one
+  // that replaced it reads a multi-vehicle hold — `active: true` with no
+  // `allocatedAmountMinor` and no `allocationStatus` — as ZERO. So the whole
+  // deposit vanishes from the check that exists to bound it.
+  //
+  // 24.1b is the control that makes 24.1 mean something: identical numbers on a
+  // single-vehicle quote were ALREADY refused. The difference is the hold shape.
+
+  test("24.1 a second deposit cannot take a MULTI-VEHICLE deal past the quote", async () => {
+    const seed = await seedDealer("ceiling-multi");
+    const a = await vehicle(seed);
+    const b = await vehicle(seed);
+    const quoteId = await twoCarQuote(seed, a, b, 30_000);
+    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 20_000 });
+
+    // 20,000 + 20,000 against a 30,000 deal. The customer is not owed a receipt
+    // for 40,000 on a car that costs 30,000.
+    await expectRefusal(
+      seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 20_000 }),
+      /exceed/i,
+      "24.1"
+    );
+  });
+
+  test("24.1b CONTROL the same breach on a single-vehicle deal was already refused", async () => {
+    const seed = await seedDealer("ceiling-single");
+    const a = await vehicle(seed);
+    const quoteId = await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+      vehicleId: a,
+      mode: "CASH" as const,
+      vehiclePrice: 30_000,
+      downPayment: 0,
+      termMonths: 0,
+      totalFinancedAmount: 0,
+    });
+    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 20_000 });
+    await expectRefusal(
+      seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 20_000 }),
+      /exceed/i,
+      "24.1b"
+    );
+  });
+
+  // ── 24.2 — Codex CRITICAL #2 ───────────────────────────────────────────────
+  //
+  // `createReservation` acquires the car WITHOUT passing `depositId`, so the
+  // RESERVATION claim carries none — and a non-quote deposit reaches the root
+  // only through `claim.depositId`. Real money the dealership holds is
+  // invisible to the authority that governs the deal it belongs to.
+  //
+  // Asserted by CONSEQUENCE: once the reservation is released the root is no
+  // longer OPEN, so the open-root guard cannot see the customer either, and
+  // somebody with 5,000 of their money still HELD can be deleted.
+
+  test("24.2 a customer with a live RESERVATION deposit cannot be deleted", async () => {
+    const seed = await seedDealer("resv-money");
+    const v = await vehicle(seed);
+    const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+      orgId: seed.orgId,
+      vehicleId: v,
+      customerId: seed.customerA,
+      depositAmount: 5_000,
+    });
+    await seed.asUser.mutation(api.vehicles.releaseReservation, {
+      orgId: seed.orgId,
+      reservationId,
+    });
+
+    const deposit = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("deposits").collect()).find((d) => d.reservationId === reservationId)
+    );
+    expect(deposit?.status, "the money is still HELD — nobody has ruled on it").toBe("HELD");
+
+    await expectRefusal(
+      seed.asUser.mutation(api.customers.softDelete, {
+        orgId: seed.orgId,
+        customerId: seed.customerA,
+      }),
+      /active or financially unresolved commitment/i,
+      "24.2"
+    );
+  });
+
+  // ── 24.3 — Codex HIGH #3 ───────────────────────────────────────────────────
+  //
+  // The founding invariant of this lane: one physical vehicle, at most one
+  // logical root. Cancelling a sale minted a SECOND one and left the quote
+  // pointing at the dead first — so the money view and the acquisition view
+  // read different roots for the same car.
+
+  test("24.3 cancelling a sale does not mint a second root for the same car", async () => {
+    const seed = await seedDealer("cancel-root");
+    const v = await vehicle(seed);
+    const { quoteId } = await heldByDeposit(seed, v, seed.customerA);
+    const before = await rootIdOf(seed, v);
+
+    await seed.asUser.mutation(api.sales.completeFromQuote, { orgId: seed.orgId, quoteId });
+    await cancelSale(seed, await theSale(seed));
+
+    const after = await rootIdOf(seed, v);
+    expect(String(after), "the deal keeps the identity it had").toBe(String(before));
+
+    const quoteRow = await seed.t.run((ctx) => ctx.db.get(quoteId as Id<"quotes">));
+    expect(String(quoteRow?.rootId), "and the quote still points at it").toBe(String(after));
+
+    const live = (await allRoots(seed)).filter((r) => r.status === "OPEN");
+    expect(live.length, "exactly one live root for one physical car").toBe(1);
+  });
+
+  // ── 24.4 — Codex HIGH #5 ───────────────────────────────────────────────────
+  //
+  // A revision advances `lineageRootId` — the PRIMARY vehicle's root — and
+  // nothing else. Every other car on the deal keeps a root whose head is the
+  // superseded quote, and the deal is then refused its own second car: the
+  // successor proves lineage to root A and vehicle B's claims name the
+  // predecessor.
+
+  test("24.4 revising a MULTI-VEHICLE deal keeps every car on the deal", async () => {
+    const seed = await seedDealer("revise-multi");
+    const a = await vehicle(seed);
+    const b = await vehicle(seed);
+    const q1 = await twoCarQuote(seed, a, b, 30_000);
+    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: q1, amount: 3_000 });
+
+    const q2 = await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+      vehicleId: a,
+      vehicleItems: [
+        { vehicleId: a, unitPrice: 14_000 },
+        { vehicleId: b, unitPrice: 14_000 },
+      ],
+      mode: "CASH" as const,
+      vehiclePrice: 28_000,
+      downPayment: 0,
+      termMonths: 0,
+      totalFinancedAmount: 0,
+      intent: "REVISE" as const,
+      supersedesQuoteId: q1 as Id<"quotes">,
+    });
+
+    // No root on this deal may still be headed by the revision it moved past.
+    for (const root of (await allRoots(seed)).filter((r) => r.status === "OPEN")) {
+      const head = root.headQuoteId ? await seed.t.run((ctx) => ctx.db.get(root.headQuoteId!)) : null;
+      expect(
+        head?.supersededByQuoteId,
+        `root ${root._id} is still headed by a superseded revision`
+      ).toBeUndefined();
+    }
+
+    // The consequence, and the reason this matters in the shop: the deal must
+    // still be able to take money on BOTH the cars it is a deal for.
+    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: q2, amount: 2_000 });
+  });
+
+  // ── 24.5 — MINE. Nobody reported this one ──────────────────────────────────
+  //
+  // Found by a probe fixture while reproducing Codex #4, not by looking for it.
+  //
+  // `getSafelyReversiblePaymentKeys` builds its safe set from deposits filed
+  // `by_quote` on `sale.quoteId`. On a revised deal the deposit stays on the
+  // PREDECESSOR while the sale completes from the SUCCESSOR, so the deposit's
+  // own payment is not recognised as safely reversible and the cancellation is
+  // refused — with a message about payments the dealership never took.
+  //
+  // Caused by this lane: revisions and lineage-wide deposit application are
+  // both new here. Before, a deposit and its sale always shared one quote id.
+  //
+  // ⚠️ This is also what makes Codex #4 unreachable today — the reversal path
+  // that skips `assertCurrentRevision` cannot be entered while this refuses
+  // first. Repairing this ALONE converts an unreachable defect into a live one,
+  // which is why 24.6 ships in the same commit.
+
+  test("24.5 a REVISED deal that completed can still be cancelled", async () => {
+    const seed = await seedDealer("revised-cancel");
+    const v = await vehicle(seed);
+    const q1 = await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+      vehicleId: v,
+      mode: "CASH" as const,
+      vehiclePrice: 30_000,
+      downPayment: 0,
+      termMonths: 0,
+      totalFinancedAmount: 0,
+    });
+    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: q1, amount: 3_000 });
+    const q2 = await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+      vehicleId: v,
+      mode: "CASH" as const,
+      vehiclePrice: 28_000,
+      downPayment: 0,
+      termMonths: 0,
+      totalFinancedAmount: 0,
+      intent: "REVISE" as const,
+      supersedesQuoteId: q1 as Id<"quotes">,
+    });
+    await seed.asUser.mutation(api.sales.completeFromQuote, { orgId: seed.orgId, quoteId: q2 });
+
+    // The deposit is filed under q1; the sale completed from q2. Same deal.
+    await cancelSale(seed, await theSale(seed));
+    expect((await vehicleRow(seed, v)).status, "the car came back out of the sale").not.toBe("SOLD");
+  });
+
+  // ── 24.6 — Codex HIGH #4 ───────────────────────────────────────────────────
+  //
+  // Reproduced in code, not reachable until 24.5 is fixed. `restoreCommitment`
+  // re-acquires under whatever quote the deposit row happens to carry, with no
+  // `assertCurrentRevision` — and 24.3 proves that call turns the quote it is
+  // handed into a root HEAD. On a revised deal that quote is superseded, so the
+  // reversal would leave the deal headed by a revision it had already moved on
+  // from, and every later evidence check would be measured against the wrong
+  // price.
+
+  test("24.6 reversing a REVISED deal leaves the head on the current revision", async () => {
+    const seed = await seedDealer("revised-head");
+    const v = await vehicle(seed);
+    const q1 = await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+      vehicleId: v,
+      mode: "CASH" as const,
+      vehiclePrice: 30_000,
+      downPayment: 0,
+      termMonths: 0,
+      totalFinancedAmount: 0,
+    });
+    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: q1, amount: 3_000 });
+    const q2 = await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+      vehicleId: v,
+      mode: "CASH" as const,
+      vehiclePrice: 28_000,
+      downPayment: 0,
+      termMonths: 0,
+      totalFinancedAmount: 0,
+      intent: "REVISE" as const,
+      supersedesQuoteId: q1 as Id<"quotes">,
+    });
+    await seed.asUser.mutation(api.sales.completeFromQuote, { orgId: seed.orgId, quoteId: q2 });
+    await cancelSale(seed, await theSale(seed));
+
+    for (const root of (await allRoots(seed)).filter((r) => r.status === "OPEN")) {
+      const head = root.headQuoteId ? await seed.t.run((ctx) => ctx.db.get(root.headQuoteId!)) : null;
+      expect(
+        head?.supersededByQuoteId,
+        "a reversal must not leave the deal headed by a revision it moved past"
+      ).toBeUndefined();
+      expect(String(root.headQuoteId), "the head is the CURRENT revision").toBe(String(q2));
+    }
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 25. A CAR THAT WENT HOME WITH SOMEBODY IS NOT BACK UNTIL SOMEBODY SAYS SO
+//
+// Owner ruling c15247, reclassifying the Sonnet MAX CRITICAL as
+// VALIDATED UNDERLYING BLOCKER — WRONG PROPOSED REMEDY.
+//
+// Sonnet's remedy — resurrect the FINANCE claim on cancellation — is wrong and
+// section 23 pins why: a cancelled deal is dead and must not hold inventory
+// forever. But the worry underneath it survived that rejection intact:
+//
+//   handover is PROVEN — `vehicleHandoverAt` is recorded, and finalization
+//   cannot happen without it — while RETURN is merely ASSUMED.
+//
+// `restoreVehicleFromSale` never reads handover at all. It patches the car
+// straight back to `preHoldStatus ?? AVAILABLE`, so a vehicle that is
+// physically sitting in a customer's driveway reappears on the lot as stock,
+// and the dealership can sell it to somebody else sight unseen.
+//
+// ⚠️ I first tried the option c15247 offered second — park the car in an
+// existing non-sellable state. It does not work, and the codebase says so out
+// loud: `utils/depositHelpers` states that "IN_INSPECTION / IN_REPAIR stay out
+// on purpose: those describe where the car IS, not whether it is spoken for",
+// and `prepareSaleCompletion` refuses only ARCHIVED. A status that gates
+// nothing is not a control. Same lesson as `vehicle.status` itself — the
+// projection is never the lock.
+//
+// So custody is EVIDENCE, recorded on the deal, and the lock is at the
+// irreversible door. The car still goes to IN_INSPECTION, because that is
+// where it honestly is; it just is not what enforces anything.
+//
+// The gate is deliberately narrow: it refuses a sale to SOMEBODY ELSE. Selling
+// the car back to the person who already has it needs no return trip, and
+// refusing that would strand the one deal that is certainly safe.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("25. a handed-over car is not sellable until it is back", () => {
+  /** A finalized financed deal, then cancelled — the car left and came back. */
+  async function handedOverThenCancelled(seed: Seed, v: Id<"vehicles">) {
+    const quoteId = await financedQuote(seed, seed.customerA, v);
+    const applicationId = (await seed.asUser.mutation(api.applications.createFromQuote, {
+      orgId: seed.orgId,
+      quoteId,
+    })) as Id<"financeApplications">;
+    await seed.asUser.mutation(api.applications.updateStatus, {
+      orgId: seed.orgId,
+      applicationId,
+      status: "UNDER_REVIEW" as const,
+    });
+    await seed.asApprover.mutation(api.applications.updateStatus, {
+      orgId: seed.orgId,
+      applicationId,
+      status: "APPROVED" as const,
+    });
+    // The car physically goes to the customer. finalizeDeal cannot run without
+    // this, which is exactly why a reversal always happens AFTER the car left.
+    await registerHandover(seed.asUser, api, seed.orgId, applicationId);
+    await seed.asUser.mutation(api.applications.registerExpectedPayment, {
+      orgId: seed.orgId,
+      applicationId,
+      method: "CASH" as const,
+      expectedDate: Date.now(),
+    });
+    await seed.asUser.mutation(api.applications.finalizeDeal, { orgId: seed.orgId, applicationId });
+    await seed.asUser.mutation(api.applications.cancelApplication, {
+      orgId: seed.orgId,
+      applicationId,
+      reason: "financing fell through after handover",
+    });
+    return { applicationId };
+  }
+
+  test("25.1 it cannot be sold to somebody else while its return is unproven", async () => {
+    const seed = await seedDealer("custody-rival");
+    const v = await vehicle(seed);
+    await handedOverThenCancelled(seed, v);
+
+    // The commitment is genuinely released — section 23 requires that, and a
+    // rival may absolutely start a deal on the car. What they may not do is
+    // COMPLETE one, because nobody has said the car is back.
+    const rivalQuote = await cashQuote(seed, seed.customerB, v);
+    await expectRefusal(
+      seed.asUser.mutation(api.sales.completeFromQuote, { orgId: seed.orgId, quoteId: rivalQuote }),
+      /handed over|came back|returned|custody|still with/i,
+      "25.1"
+    );
+  });
+
+  test("25.2 the car reads as being where it actually is", async () => {
+    const seed = await seedDealer("custody-status");
+    const v = await vehicle(seed);
+    await handedOverThenCancelled(seed, v);
+    expect(
+      (await vehicleRow(seed, v)).status,
+      "a car in somebody's driveway is not lot stock"
+    ).not.toBe("AVAILABLE");
+  });
+
+  test("25.3 POSITIVE CONTROL registering the return unblocks the sale", async () => {
+    const seed = await seedDealer("custody-returned");
+    const v = await vehicle(seed);
+    const { applicationId } = await handedOverThenCancelled(seed, v);
+
+    await seed.asUser.mutation(api.applications.registerVehicleReturn, {
+      orgId: seed.orgId,
+      applicationId,
+      notes: "inspected, back on the lot",
+    });
+
+    const rivalQuote = await cashQuote(seed, seed.customerB, v);
+    await seed.asUser.mutation(api.sales.completeFromQuote, {
+      orgId: seed.orgId,
+      quoteId: rivalQuote,
+    });
+    expect((await vehicleRow(seed, v)).status, "the sale went through").toBe("SOLD");
+  });
+
+  test("25.4 selling it back to the person who HAS it is never blocked", async () => {
+    const seed = await seedDealer("custody-same");
+    const v = await vehicle(seed);
+    await handedOverThenCancelled(seed, v);
+
+    // No return trip is involved: the car is already with this customer.
+    const againQuote = await cashQuote(seed, seed.customerA, v);
+    await seed.asUser.mutation(api.sales.completeFromQuote, {
+      orgId: seed.orgId,
+      quoteId: againQuote,
+    });
+    expect((await vehicleRow(seed, v)).status, "their own deal completes").toBe("SOLD");
+  });
+
+  test("25.5 a deal that never handed the car over is untouched", async () => {
+    const seed = await seedDealer("custody-nohandover");
+    const v = await vehicle(seed);
+    // No handover anywhere in this car's history — an ordinary cash sale to a
+    // new customer must not inherit a custody question it never had.
+    const quoteId = await cashQuote(seed, seed.customerB, v);
+    await seed.asUser.mutation(api.sales.completeFromQuote, { orgId: seed.orgId, quoteId });
+    expect((await vehicleRow(seed, v)).status, "nothing changed for ordinary sales").toBe("SOLD");
+  });
+});

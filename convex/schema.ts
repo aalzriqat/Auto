@@ -2265,6 +2265,17 @@ export default defineSchema({
     vehicleHandoverAt: v.optional(v.number()),
     vehicleHandoverBy: v.optional(v.id("users")),
     vehicleHandoverNotes: v.optional(v.string()),
+    // SCRUM-195 / c15247 — THE OTHER HALF OF THE HANDOVER.
+    //
+    // Handover was proven and return was assumed: a cancelled deal put the car
+    // back on the lot as sellable stock while it was physically still in the
+    // customer's driveway. `handoverStatus` cannot express this — its union is
+    // BLOCKED | READY | HANDED_OVER, and HANDED_OVER is terminal — so the
+    // evidence needs its own field rather than a fourth literal that would
+    // silently change the meaning of every existing row.
+    vehicleReturnedAt: v.optional(v.number()),
+    vehicleReturnedBy: v.optional(v.id("users")),
+    vehicleReturnedNotes: v.optional(v.string()),
     // How and when the deal's payment is expected to be received, registered
     // before finalizeDeal — generalizes the finance-company-only disbursement
     // flow to also cover cash/in-house-installment/cheque/bank deals.
