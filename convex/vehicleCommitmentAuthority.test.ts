@@ -4971,7 +4971,24 @@ describe("31. reversal restores exactly what the lifecycle says it should", () =
       "SCRUM-199 BASELINE: A must be settled BEFORE anything is cancelled. If this fails the defect is in COMPLETION, not reversal."
     ).toBe("CONSUMED");
 
+    // ⚠️ A reviewer noted "untouched" was only checking A's root and the absence
+    // of ACTIVE claims — so B's cancellation could DELETE or RELEASE A's
+    // consumed claims while leaving A's root document stale at CONSUMED, and
+    // every assertion still passed.
+    const aHistoryBefore = (await claimsOn(seed, a))
+      .filter((c) => c.status === "CONSUMED")
+      .map((c) => ({ id: String(c._id), sale: String(consumedBy(c)) }));
+    expect(aHistoryBefore.length, "A's sale consumed something").toBeGreaterThan(0);
+
     await cancelSaleFor(seed, b);
+
+    const aHistoryAfter = await claimsOn(seed, a);
+    for (const original of aHistoryBefore) {
+      const still = aHistoryAfter.find((c) => String(c._id) === original.id);
+      expect(still, `A's consumed claim ${original.id} survives B's cancellation`).toBeTruthy();
+      expect(still!.status, "still CONSUMED").toBe("CONSUMED");
+      expect(String(consumedBy(still)), "with its attribution intact").toBe(original.sale);
+    }
 
     expect((await vehicleRow(seed, a)).status, "A is still sold").toBe("SOLD");
     const rootsAAfter = await rootsOn(seed, a);
@@ -5272,6 +5289,28 @@ describe("31. reversal restores exactly what the lifecycle says it should", () =
         "and it names the sale that consumed it, exactly as a DEPOSIT claim must"
       ).toBe(String(sale!._id));
     }
+
+    // ⚠️ AND IT SURVIVES THE REVERSAL. A reviewer noted §31.10's
+    // post-cancellation check only required `status !== ACTIVE`, so cancelling
+    // could clear the attribution and flip the row to RELEASED with both
+    // contracts still green.
+    await seed.asUser.mutation(api.applications.cancelApplication, {
+      orgId: seed.orgId,
+      applicationId,
+      reason: "financing fell through",
+    });
+    const afterCancel = await claimsOn(seed, v);
+    for (const id of financeIds) {
+      const claim = afterCancel.find((c) => String(c._id) === id);
+      expect(claim, `the FINANCE claim ${id} still exists after cancellation`).toBeTruthy();
+      expect(claim!.status, "a dead application's claim stays CONSUMED, not released").toBe(
+        "CONSUMED"
+      );
+      expect(
+        String(consumedBy(claim)),
+        "and its attribution is not cleared by the reversal"
+      ).toBe(String(sale!._id));
+    }
   });
 
   test("31.12 a RESERVATION claim's consumption is durable as well", async () => {
@@ -5326,17 +5365,97 @@ describe("31. reversal restores exactly what the lifecycle says it should", () =
 
     await cancelSaleFor(seed, v);
 
-    // Either it stays consumed or it comes back — but it is the SAME ROW and it
-    // never disappears.
+    // ⚠️ TIGHTENED WITHOUT DECIDING REVIVAL. My first version checked only that
+    // the row existed and kept its attribution, which a reviewer showed lets
+    // BOTH prohibited implementations through: leave the original CONSUMED and
+    // insert a REPLACEMENT active reservation claim, or silently flip the
+    // original to RELEASED.
+    //
+    // I still do not derive whether it revives — c15266 makes that depend on
+    // the reservation's own lifecycle and I have not worked it out. But "I
+    // cannot decide the answer" does NOT mean "I cannot constrain it", which is
+    // the distinction I missed. Three things hold whichever way it falls.
     const afterCancel = await claimsOn(seed, v);
     for (const id of reservationIds) {
       const claim = afterCancel.find((c) => String(c._id) === id);
       expect(claim, `the reservation claim ${id} survives the reversal`).toBeTruthy();
+      // (1) it is either still consumed, or genuinely back — never quietly released
+      expect(
+        ["CONSUMED", "ACTIVE"],
+        `a consumed reservation claim must not be silently RELEASED. Got ${claim!.status}`
+      ).toContain(claim!.status);
+      // (2) attribution intact either way
       expect(
         String(consumedBy(claim)),
         "with its consumption history intact either way"
       ).toBe(String(sale!._id));
     }
+    // (3) no REPLACEMENT: any live reservation claim is one of the originals
+    const liveReservation = afterCancel
+      .filter((c) => c.kind === "RESERVATION" && c.status === "ACTIVE")
+      .map((c) => String(c._id))
+      .sort();
+    for (const id of liveReservation) {
+      expect(
+        reservationIds,
+        `live reservation claim ${id} is an ORIGINAL row, never a fresh replacement`
+      ).toContain(id);
+    }
+  });
+
+  test("31.14 deferred restoration brings back THOSE rows, not fresh ones", async () => {
+    // ⚠️ THE MATCHED SUCCESS CASE. §31.9 covers only the REFUSAL branch of
+    // RETURN_TO_UNALLOCATED, when a rival owns the car. A reviewer showed that
+    // with no rival, an implementation can preserve the consumed row through
+    // cancellation and then insert a FRESH hold and a FRESH claim — passing
+    // §31.9 (which refuses before insertion) and §31.3/§31.8 (which cover the
+    // different, immediate single-car path).
+    //
+    // This is the path where B's money comes BACK onto the deal, so B's
+    // lifecycle IS restored and its claims must return — and they must be the
+    // rows the sale consumed.
+    const seed = await seedDealer("rev-deferred-success");
+    const a = await vehicle(seed);
+    const b = await vehicle(seed);
+    const quoteId = await twoCarQuote(seed, a, b);
+    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 6_000 });
+    await seed.asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId: seed.orgId,
+      quoteId,
+      allocations: [
+        { vehicleId: a, amount: 3_000 },
+        { vehicleId: b, amount: 3_000 },
+      ],
+    });
+    const rootBBefore = (await rootsOn(seed, b))[0]?._id;
+    await seed.asUser.mutation(api.sales.completeFromQuote, { orgId: seed.orgId, quoteId });
+    const consumedB = await ids(seed, b, "CONSUMED");
+    expect(consumedB.length, "B's sale consumed claims").toBeGreaterThan(0);
+
+    await cancelSaleFor(seed, b);
+
+    const slice = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("depositVehicleHolds").collect()).find(
+        (h) => h.vehicleId === b && h.allocationStatus === "RELEASED_AWAITING_DECISION"
+      )
+    );
+    expect(slice, "B's released slice exists").toBeTruthy();
+
+    // The money goes back ON the deal. No rival anywhere.
+    await seed.asApprover.mutation(api.deposits.resolveReleasedAllocation, {
+      orgId: seed.orgId,
+      holdId: slice!._id,
+      treatment: "RETURN_TO_UNALLOCATED" as const,
+      reason: "customer wants it back on the deal",
+    });
+
+    expect(
+      await ids(seed, b, "ACTIVE"),
+      "exactly the rows B's sale consumed came back — not fresh replacements"
+    ).toEqual(consumedB);
+    const rootsBAfter = await rootsOn(seed, b);
+    expect(rootsBAfter.length, "still one root").toBe(1);
+    expect(String(rootsBAfter[0]._id), "and it is B's original root").toBe(String(rootBBefore));
   });
 
   test("31.13 a STALE consumed claim from an earlier sale must not revive", async () => {
@@ -5348,6 +5467,22 @@ describe("31. reversal restores exactly what the lifecycle says it should", () =
     // other fixture gives a car a consumed claim from an EARLIER, non-restored
     // sale. Here it does — and reversing the SECOND sale must revive only the
     // second sale's claims.
+    //
+    // ⚠️ AND THE OTHER DISCRIMINATORS ARE REMOVED, WHICH IS THE WHOLE POINT.
+    // A reviewer found that my first version handed reversal every fact it
+    // needed WITHOUT the structured field: different customers, different
+    // quotes, different chronology — and, decisively, `consumeClaimsForVehicle`
+    // already writes the sale id into the free-text `resolvedReason` as
+    // "sold on sale <id>". An implementation that PARSES that string passes.
+    //
+    // ⚠️ THAT ALSO SHARPENS THE ROOT CAUSE. The sale id is not ABSENT from the
+    // system — it is present as unstructured, unqueryable prose. So the missing
+    // thing is not "a record of which sale" but "a record you can SELECT ON and
+    // that cannot drift from the truth". I had the diagnosis slightly wrong and
+    // the spec now says so.
+    //
+    // Both sales therefore use the SAME customer, and B's `resolvedReason` is
+    // neutralised, leaving the structured field as the only usable answer.
     const seed = await seedDealer("rev-stale-claim");
     const v = await vehicle(seed);
 
@@ -5370,8 +5505,8 @@ describe("31. reversal restores exactly what the lifecycle says it should", () =
       refundMethod: "CASH" as const,
     });
 
-    // Sale B, to somebody else entirely.
-    const qB = await cashQuote(seed, seed.customerB, v);
+    // Sale B, to the SAME customer — so "whose deal is it" cannot discriminate.
+    const qB = await cashQuote(seed, seed.customerA, v);
     await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: qB, amount: 2_000 });
     await seed.asUser.mutation(api.sales.completeFromQuote, { orgId: seed.orgId, quoteId: qB });
     const saleB = await liveSaleFor(seed, v);
@@ -5379,6 +5514,17 @@ describe("31. reversal restores exactly what the lifecycle says it should", () =
       .filter((c) => String(consumedBy(c)) === String(saleB!._id))
       .map((c) => String(c._id))
       .sort();
+
+    // Neutralise the prose. `resolvedReason` is documented as being for audit
+    // and diagnosis, so nothing is entitled to rely on it for a decision — this
+    // makes that explicit rather than trusting it stays unused.
+    for (const claim of await claimsOn(seed, v)) {
+      if (claim.resolvedReason) {
+        await seed.t.run((ctx) =>
+          ctx.db.patch(claim._id, { resolvedReason: "sold" })
+        );
+      }
+    }
     expect(bIds.length, "sale B consumed its own claims").toBeGreaterThan(0);
     expect(staleIds.length, "and sale A left stale history behind").toBeGreaterThan(0);
 
@@ -5583,6 +5729,13 @@ describe("32. ceiling money and closure money are different questions", () => {
     // Deliberately NO SALE anywhere: the older sales-record guard would refuse
     // first and shadow the answer, which is exactly what happened to the
     // baseline sub-check in §30.
+    //
+    // ⚠️ DEPENDENCY, STATED. Today BOTH roots are still OPEN — B because OTHER
+    // is counted as closure money, A because it is not recomputed after B's
+    // decision (SCRUM-199). So deletion exits at the OPEN-root check BEFORE its
+    // money predicate can discriminate ceiling from closure, and this currently
+    // fails one step earlier than the thing it names. A reviewer pointed out I
+    // had stated that dependency for §31.5 and §31.9 and not for this one.
     const seed = await seedDealer("money-delete-closure");
     const { a, b, holds } = await twoCarDealWithReleasedSlices(seed);
     await rule(seed, holds.find((h) => h.vehicleId === a)!._id, "REFUND_TO_CUSTOMER");
