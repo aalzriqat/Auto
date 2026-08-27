@@ -9,6 +9,23 @@ import { QueryCtx } from "../_generated/server";
  */
 export const CUSTOMER_REFERENCING_TABLES = [
   {
+    // SCRUM-195: a commitment root records WHOSE deal holds a car. Merging two
+    // customer records must carry the surviving customer's deals with it —
+    // otherwise the merged-away customer keeps holding vehicles that the
+    // authority can still see and refuse on, and nobody can find the deal to
+    // release it.
+    //
+    // Claims are deliberately NOT listed: they carry no customerId. A claim's
+    // customer is its root's, which is exactly the single-source-of-truth this
+    // authority exists to have.
+    table: "commitmentRoots" as const,
+    find: (ctx: QueryCtx, orgId: Id<"organizations">, customerId: Id<"customers">) =>
+      ctx.db
+        .query("commitmentRoots")
+        .withIndex("by_org_customer", (q) => q.eq("orgId", orgId).eq("customerId", customerId))
+        .collect(),
+  },
+  {
     table: "journalLines" as const,
     find: (ctx: QueryCtx, orgId: Id<"organizations">, customerId: Id<"customers">) =>
       ctx.db

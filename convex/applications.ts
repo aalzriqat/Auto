@@ -1,3 +1,4 @@
+import { acquireVehicle, assertAcquirable } from "./commitments";
 import { v, ConvexError } from "convex/values";
 import { MutationCtx, QueryCtx, query } from "./_generated/server";
 import { mutation } from "./functions";
@@ -2148,6 +2149,22 @@ export const createFromQuote = mutation({
       if (versionRow) companyRuleVersionId = versionRow._id;
     }
 
+    // SCRUM-195: a live finance application is per-vehicle commitment evidence
+    // in its own right — no deposit required. So creating one is an
+    // ACQUISITION and goes through the same authority boundary as a deposit or
+    // a reservation, refusing before anything is written.
+    //
+    // The quote is the lineage: a financed deal that already took a deposit
+    // JOINS the root that deposit opened (the ordinary financed flow), while a
+    // quote that has proven nothing cannot take a car another deal holds.
+    for (const item of quoteVehicleItems) {
+      await assertAcquirable(ctx, {
+        orgId: args.orgId,
+        vehicleId: item.vehicleId,
+        lineage: { quoteId: quote._id },
+      });
+    }
+
     const appId = await ctx.db.insert("financeApplications", {
       orgId: args.orgId,
       quoteId: quote._id,
@@ -2173,6 +2190,20 @@ export const createFromQuote = mutation({
       ...(manualFinanceSnapshot ? { manualFinanceSnapshot } : {}),
       underwritingSnapshot,
     });
+
+    // ⚠️ TAGGED FINANCE, not DEPOSIT. The application is the defining evidence
+    // here even when a deposit exists on the same deal — they are two separate
+    // episodes on one root, and each must be able to end independently.
+    for (const item of quoteVehicleItems) {
+      await acquireVehicle(ctx, {
+        orgId: args.orgId,
+        vehicleId: item.vehicleId,
+        customerId: quote.customerId,
+        createdBy: auth.user._id,
+        evidence: { kind: "FINANCE", applicationId: appId },
+        lineage: { quoteId: quote._id },
+      });
+    }
 
     await ctx.db.insert("applicationStatusLog", {
       orgId: args.orgId,

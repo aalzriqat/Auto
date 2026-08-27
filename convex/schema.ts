@@ -2860,6 +2860,128 @@ export default defineSchema({
     .index("by_deposit_vehicle", ["depositId", "vehicleId"]),
 
   /**
+   * SCRUM-195 — WHO HOLDS A PHYSICAL CAR, AND ON THE STRENGTH OF WHAT.
+   *
+   * A commitment ROOT is one deal's claim on one physical vehicle. Root
+   * identity is SERVER-OWNED: it is never `(customerId, vehicleId)`, never a
+   * row count, and never inferred from two facts happening to share a
+   * customer. The same customer opening a second, independent deal on the same
+   * car is a DIFFERENT root and must be refused while the first one lives.
+   *
+   * `vehicle.status` is an advisory PROJECTION of this authority — useful to
+   * the UI and to legacy callers, never the lock.
+   *
+   * ⚠️ Exactly one OPEN root may exist per physical vehicle. Two is corrupt
+   * historical state, not a tie to be broken: it means one car was promised to
+   * two deals, which is the failure this table exists to make impossible.
+   */
+  commitmentRoots: defineTable({
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    customerId: v.id("customers"),
+    /**
+     * OPEN — a live deal holds the car.
+     * RELEASED — the deal let it go without a sale.
+     * CONSUMED — the deal completed into a sale. CONSUMED outranks RELEASED:
+     * a deal that became a sale is finished, not merely abandoned.
+     */
+    status: v.union(v.literal("OPEN"), v.literal("RELEASED"), v.literal("CONSUMED")),
+    /**
+     * The revision this deal is currently known by. Lineage PROOF, not
+     * identity — a quote proves which deal an operation belongs to; it never
+     * defines the deal.
+     */
+    headQuoteId: v.optional(v.id("quotes")),
+    /** Set when the deal began life as a reservation rather than a quote. */
+    originReservationId: v.optional(v.id("vehicleReservations")),
+    openedAt: v.number(),
+    openedBy: v.id("users"),
+    closedAt: v.optional(v.number()),
+    closedReason: v.optional(v.string()),
+  })
+    .index("by_org_vehicle_status", ["orgId", "vehicleId", "status"])
+    .index("by_org_customer", ["orgId", "customerId"]),
+
+  /**
+   * SCRUM-195 — ONE ACQUISITION EPISODE.
+   *
+   * A claim row is one episode of a deal holding a car on the strength of one
+   * piece of evidence — NOT the eternal identity of that evidence. Once
+   * CONSUMED or RELEASED the row is terminal FOREVER and may never become
+   * ACTIVE again. A legitimate reacquisition opens a NEW row on the SAME root
+   * and the SAME evidence, pointing back at its predecessor:
+   *
+   *   C1 ACTIVE → a sale consumes C1 → C1 stays CONSUMED forever
+   *   the sale is reversed and the evidence reinstated → C2 ACTIVE,
+   *     restoredFromClaimId = C1
+   *   a later sale consumes C2 → C2 stays CONSUMED forever → C3 from C2
+   *
+   * This mirrors the rule `depositVehicleHolds` already follows — a terminal
+   * row is never rewritten into a new life; RETURN_TO_UNALLOCATED and
+   * REALLOCATE_TO_VEHICLE both INSERT a fresh hold. The authority and the
+   * money now age the same way.
+   *
+   * ⚠️ EVIDENCE IS TAGGED AND CARRIED, NEVER RE-DERIVED. `evidenceKind` says
+   * which of the three references is the defining one, and a restoration
+   * carries its predecessor's tag forward rather than assuming a default.
+   * Assuming a default is how a reservation's own deposit became a
+   * DEPOSIT-kind claim on RESERVATION evidence.
+   */
+  vehicleCommitmentClaims: defineTable({
+    orgId: v.id("organizations"),
+    rootId: v.id("commitmentRoots"),
+    vehicleId: v.id("vehicles"),
+    /** Which reference below is the DEFINING evidence for this episode. */
+    evidenceKind: v.union(
+      v.literal("DEPOSIT"),
+      v.literal("FINANCE"),
+      v.literal("RESERVATION")
+    ),
+    /** ACTIVE holds the car; RELEASED let it go; CONSUMED completed into a sale. */
+    status: v.union(v.literal("ACTIVE"), v.literal("RELEASED"), v.literal("CONSUMED")),
+
+    /**
+     * The one matching `evidenceKind` is REQUIRED and defining. A row may
+     * legitimately carry a second reference for context — a reservation
+     * carries the deposit taken with it — which is exactly why the kind tag
+     * exists rather than "whichever id happens to be set".
+     */
+    depositId: v.optional(v.id("deposits")),
+    applicationId: v.optional(v.id("financeApplications")),
+    reservationId: v.optional(v.id("vehicleReservations")),
+
+    /** The revision this episode was opened under, for audit and stale-head diagnosis. */
+    quoteId: v.optional(v.id("quotes")),
+
+    /**
+     * The episode this one succeeds. Immutable. Present only on a row created
+     * by a legitimate reacquisition of evidence that was already consumed or
+     * released, and always on the SAME root, vehicle and evidence.
+     */
+    restoredFromClaimId: v.optional(v.id("vehicleCommitmentClaims")),
+    /**
+     * WRITE-ONCE, on ACTIVE → CONSUMED only. Each episode is consumed by at
+     * most one sale, which is what makes a scalar sufficient; durable history
+     * across repeated sale/reversal cycles is carried by the predecessor
+     * chain, not by rewriting this field.
+     */
+    consumedBySaleId: v.optional(v.id("sales")),
+
+    createdAt: v.number(),
+    createdBy: v.id("users"),
+    resolvedAt: v.optional(v.number()),
+    /** Audit and diagnosis only. Nothing may make a DECISION on this text. */
+    resolvedReason: v.optional(v.string()),
+  })
+    .index("by_org_vehicle_status", ["orgId", "vehicleId", "status"])
+    .index("by_root_status", ["rootId", "status"])
+    .index("by_consumed_sale", ["consumedBySaleId"])
+    .index("by_restored_from", ["restoredFromClaimId"])
+    .index("by_deposit", ["depositId"])
+    .index("by_application", ["applicationId"])
+    .index("by_reservation", ["reservationId"]),
+
+  /**
    * One immutable row per application of deposit money to a sale.
    *
    * ## Why an identity, and not a lookup

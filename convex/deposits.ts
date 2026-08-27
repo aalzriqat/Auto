@@ -1,3 +1,4 @@
+import { acquireVehicle, assertAcquirable } from "./commitments";
 import { ConvexError, v } from "convex/values";
 import { query, type QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
@@ -99,6 +100,23 @@ export const create = mutation({
         // (no-op if already RESERVED — parallel deposits are allowed). A multi-vehicle
         // quote holds every vehicle on the deal, not just the first one.
         const depositVehicleItems = quote.vehicleItems ?? [{ vehicleId: quote.vehicleId }];
+
+        // SCRUM-195: ask the AUTHORITY before moving a car's status. Vehicle
+        // status is an advisory projection (I4) — it says where a car IS, not
+        // whose deal it belongs to, and two deals can both see AVAILABLE. The
+        // commitment root is the lock, and it refuses BEFORE any side effect.
+        //
+        // The quote is the lineage PROOF, not the identity: presenting it says
+        // "I am acting for the deal this quote belongs to". A quote with no
+        // root has proven nothing, so a second independent quote for the same
+        // customer on the same car is refused here, exactly as a rival's is.
+        for (const item of depositVehicleItems) {
+          await assertAcquirable(ctx, {
+            orgId: args.orgId,
+            vehicleId: item.vehicleId,
+            lineage: { quoteId: args.quoteId },
+          });
+        }
         for (const item of depositVehicleItems) {
           await holdVehicleForDeposit(ctx, item.vehicleId);
         }
@@ -119,6 +137,21 @@ export const create = mutation({
           now,
           sourceLabel: `quote ${args.quoteId}`,
         });
+
+        // SCRUM-195: record WHOSE deal now holds each car, on the strength of
+        // THIS deposit. One episode per car per acquisition — a further
+        // instalment on the same deal joins the same root and opens its own
+        // episode, so the history says how the deal was built.
+        for (const item of depositVehicleItems) {
+          await acquireVehicle(ctx, {
+            orgId: args.orgId,
+            vehicleId: item.vehicleId,
+            customerId: quote.customerId,
+            createdBy: user._id,
+            evidence: { kind: "DEPOSIT", depositId },
+            lineage: { quoteId: args.quoteId },
+          });
+        }
 
         // Only multi-vehicle deposits need a join row per vehicle — a
         // single-vehicle deposit is already fully tracked by the deposit's
@@ -771,6 +804,20 @@ export const resolveReleasedAllocation = mutation({
       // row to point at the receiving car would erase the fact that the money
       // was ever against the first one — the audit question a re-allocation
       // exists to answer.
+      // SCRUM-195: moving money ONTO a car is a fresh acquisition of that car,
+      // and it goes through the same authority boundary as every other one.
+      // The receiving vehicle was already proven to be a line on this deposit's
+      // quote above, so the quote is the lineage this operation presents — and
+      // if something else has legitimately taken that car in the meantime, this
+      // REFUSES rather than opening a second root on it.
+      await acquireVehicle(ctx, {
+        orgId: args.orgId,
+        vehicleId: args.toVehicleId,
+        customerId: deposit.customerId,
+        createdBy: user._id,
+        evidence: { kind: "DEPOSIT", depositId: hold.depositId },
+        lineage: { quoteId: deposit.quoteId ?? null },
+      });
       await ctx.db.insert("depositVehicleHolds", {
         orgId: args.orgId,
         depositId: hold.depositId,
@@ -791,6 +838,24 @@ export const resolveReleasedAllocation = mutation({
       // permanently unsellable on this quote, because an allocation can only be
       // written onto an active hold row and every path out of RESOLVED is
       // terminal.
+      // SCRUM-195: putting the money back ON the deal is asking for the car
+      // again — a FRESH acquisition, not the undoing of a mistake. Between the
+      // release and this decision somebody else may legitimately have taken the
+      // vehicle, so this must refuse rather than re-hold it.
+      //
+      // ⚠️ AND THE LINEAGE MAY BE ABSENT. A deposit taken with a reservation
+      // carries no `quoteId`. Under the old design that arrived here as `null`
+      // and was silently read as "open a new root", which is how one physical
+      // car ended up with two. `acquireVehicle` has no such reading: no lineage
+      // against a held car REFUSES.
+      await acquireVehicle(ctx, {
+        orgId: args.orgId,
+        vehicleId: hold.vehicleId,
+        customerId: deposit.customerId,
+        createdBy: user._id,
+        evidence: { kind: "DEPOSIT", depositId: hold.depositId },
+        lineage: { quoteId: deposit.quoteId ?? null, reservationId: deposit.reservationId ?? null },
+      });
       await ctx.db.insert("depositVehicleHolds", {
         orgId: args.orgId,
         depositId: hold.depositId,

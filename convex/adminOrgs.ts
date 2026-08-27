@@ -100,6 +100,14 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // existed: on a FAILED run the surviving rows reference a deleted company,
   // which is the lesser of the two dangling directions.
   { kind: "orgRows", table: "financeCompanyRuleVersions", index: "by_org" },
+  // SCRUM-195. Before `deposits` and the vehicle/customer rows for the same
+  // reason as every other child step: a claim points at its evidence row and a
+  // root points at a vehicle and a customer, so the authority must not outlive
+  // what it references.
+  //
+  // Claims before roots: a claim names its root.
+  { kind: "orgRows", table: "vehicleCommitmentClaims", index: "by_org_vehicle_status" },
+  { kind: "orgRows", table: "commitmentRoots", index: "by_org_vehicle_status" },
   // Before `deposits`: an application is the record of money moving off a
   // deposit, so it must not outlive the row it points at.
   { kind: "orgRows", table: "depositApplications", index: "by_org" },

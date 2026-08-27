@@ -1,3 +1,4 @@
+import { acquireVehicle, assertAcquirable } from "./commitments";
 import { v, ConvexError } from "convex/values";
 import { MutationCtx, QueryCtx, query } from "./_generated/server";
 import { internalMutation, mutation } from "./functions";
@@ -1639,6 +1640,18 @@ export const createReservation = mutation({
       throw new ConvexError("Another customer's deposit is currently holding this vehicle.");
     }
 
+    // SCRUM-195: the AUTHORITY decides, and it decides before anything is
+    // written. The three checks above are real and stay — but each answers a
+    // different question (where the car IS, whether an older reservation
+    // stands, whether a deposit holds it) and none of them answers "whose deal
+    // is this car on". A reservation has no quote yet, so it presents no
+    // lineage: it may only take a car that is genuinely FREE.
+    await assertAcquirable(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      lineage: {},
+    });
+
     const reservationId = await ctx.db.insert("vehicleReservations", {
       orgId: args.orgId,
       vehicleId: args.vehicleId,
@@ -1653,6 +1666,7 @@ export const createReservation = mutation({
       reservedAt: now,
     });
 
+    let reservationDepositId: Id<"deposits"> | undefined;
     if (hasDeposit && amountMinor !== undefined && currency !== undefined) {
       const depositId = await recordHeldDeposit(ctx, {
         orgId: args.orgId,
@@ -1668,7 +1682,30 @@ export const createReservation = mutation({
         sourceLabel: `reservation ${reservationId}`,
       });
       await ctx.db.patch(reservationId, { depositId });
+      reservationDepositId = depositId;
     }
+
+    // SCRUM-195: a standalone reservation is a deal in its own right and opens
+    // its own root. A later quote joins that root only by adopting the
+    // reservation explicitly.
+    //
+    // ⚠️ THE EVIDENCE IS THE RESERVATION, NOT ITS DEPOSIT. The deposit taken
+    // alongside is carried as context and is deliberately NOT the defining
+    // reference: treating it as one is how a consumed reservation episode came
+    // back as a live DEPOSIT-kind claim on a second root, silently, with the
+    // reservation reference simply absent (SCRUM-200).
+    await acquireVehicle(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      customerId: args.customerId,
+      createdBy: user._id,
+      evidence: {
+        kind: "RESERVATION",
+        reservationId,
+        ...(reservationDepositId ? { depositId: reservationDepositId } : {}),
+      },
+      lineage: { reservationId },
+    });
 
     await syncVehicleHoldStatus(ctx, args.vehicleId, user._id);
 
