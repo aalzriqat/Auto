@@ -233,10 +233,13 @@ export type ActingRoot =
  * The rules, in order:
  *
  *   1. Ambiguous ownership REFUSES. Two OPEN roots is corrupt state.
- *   2. A FREE car OPENS a new root — the only circumstance in which that is
+ *   2. A NAMED ADOPTION IS VALIDATED BEFORE ANY OTHER PROOF, and an invalid one
+ *      REFUSES outright — never laundered by a different field that would have
+ *      joined on its own.
+ *   3. A FREE car OPENS a new root — the only circumstance in which that is
  *      correct.
- *   3. A car this deal already holds is JOINED, proven by lineage.
- *   4. Anything else REFUSES, including the SAME CUSTOMER opening a second
+ *   4. A car this deal already holds is JOINED, proven by lineage.
+ *   5. Anything else REFUSES, including the SAME CUSTOMER opening a second
  *      independent deal on the same car (I2, c14865: same customer never
  *      implies same deal).
  */
@@ -255,17 +258,53 @@ export async function resolveActingRoot(
   if (ownership.kind === "AMBIGUOUS") {
     return { decision: "REFUSE", message: COMMITMENT_MESSAGES.ambiguousOwnership };
   }
-  if (ownership.kind === "FREE") {
-    return { decision: "OPEN_NEW" };
-  }
 
-  const held = ownership.root;
+  const held = ownership.kind === "OWNED" ? ownership.root : null;
   const refuse: ActingRoot = {
     decision: "REFUSE",
     message: args.refusalMessage ?? COMMITMENT_MESSAGES.heldByAnotherDeal,
   };
 
-  // ── Lineage proof: does the presented evidence belong to THIS root? ────────
+  // ── THE ACTING PRINCIPAL — WHOSE DEAL IS ASKING ───────────────────────────
+  //
+  // Read from the QUOTE ROW, never from an argument. A caller-supplied customer
+  // id proves nothing, because supplying one is exactly what a rival would do.
+  //
+  // ⚠️ This is NOT the (customerId, vehicleId) inference I2 forbids, and the
+  // difference is the whole point. Identity is still established ONLY by
+  // explicitly named evidence; the principal is consulted afterwards, to decide
+  // whether this operation is ALLOWED to act on the deal that evidence points
+  // at. A matching customer never grants a join by itself — contract 1.2, the
+  // same customer's second independent deal on the same car, still refuses.
+  const actingQuote = args.lineage.quoteId ? await ctx.db.get(args.lineage.quoteId) : null;
+  const actingPrincipal =
+    actingQuote && actingQuote.orgId === args.orgId ? actingQuote.customerId : null;
+
+  // ── 1. A NAMED ADOPTION IS AN AFFIRMATIVE CLAIM, SO IT IS ALWAYS CHECKED ──
+  //
+  // Before ownership is even consulted for a FREE car, and before any other
+  // proof gets a chance to join. Supplying an adoption argument asserts
+  // something about the world; if the assertion is false the operation is
+  // wrong, whatever else it could have proven.
+  if (args.lineage.adoptReservationId) {
+    const adoption = await resolveAdoption(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      adoptReservationId: args.lineage.adoptReservationId,
+      held,
+      actingQuote,
+      actingPrincipal,
+      refuse,
+    });
+    // `null` means the claim is about a DIFFERENT car of the same deal, the one
+    // case where it does not decide this car. Every other outcome is a decision.
+    if (adoption) return adoption;
+  }
+
+  // ── 2. a FREE car opens a root — the only place that is ever correct ─────
+  if (!held) return { decision: "OPEN_NEW" };
+
+  // ── 3. Lineage proof: does the presented evidence belong to THIS root? ────
   //
   // ⚠️ Checked against the ROOT, never against the customer. Two deals for one
   // customer on one car are two deals, and the second must wait for the first.
@@ -277,42 +316,26 @@ export async function resolveActingRoot(
   // Presenting a deposit id says "the deal that holds this car is the one this
   // money is on". Verified against the root's own live episodes, never against
   // the customer.
+  //
+  // ⚠️ And where the operation also presents a quote, that quote must belong to
+  // the root's own customer. Naming another deal's deposit is the same hole as
+  // naming another deal's reservation, reached through a different field, and
+  // it closes the same way. A door presenting no quote — a bare reservation
+  // continuing on deposit proof alone — has no principal to check; said here
+  // rather than left to be discovered.
   if (args.lineage.depositId) {
     for await (const claim of ctx.db
       .query("vehicleCommitmentClaims")
       .withIndex("by_root_status", (q) => q.eq("rootId", held._id).eq("status", "ACTIVE"))) {
       if (claim.depositId && String(claim.depositId) === String(args.lineage.depositId)) {
+        if (actingPrincipal && String(actingPrincipal) !== String(held.customerId)) return refuse;
         return { decision: "JOIN", rootId: held._id };
       }
     }
   }
 
-  // ── adoption: a reservation's deal continues under a quote ───────────────
-  if (args.lineage.adoptReservationId) {
-    const reservation = await ctx.db.get(args.lineage.adoptReservationId);
-    const adoptable =
-      reservation &&
-      reservation.orgId === args.orgId &&
-      String(reservation.vehicleId) === String(args.vehicleId) &&
-      reservation.status === "ACTIVE" &&
-      held.originReservationId &&
-      String(held.originReservationId) === String(args.lineage.adoptReservationId);
-    if (adoptable) {
-      return {
-        decision: "ADOPT_RESERVATION",
-        rootId: held._id,
-        reservationId: args.lineage.adoptReservationId,
-      };
-    }
-    // A named-but-invalid adoption is a refusal, not a fallback. Falling
-    // through to "open a new root" is exactly the silent degradation this
-    // design removes.
-    return refuse;
-  }
-
   if (args.lineage.quoteId) {
-    const quote = await ctx.db.get(args.lineage.quoteId);
-    if (!quote || quote.orgId !== args.orgId) return refuse;
+    if (!actingQuote || actingQuote.orgId !== args.orgId) return refuse;
     // ⚠️ THE ROOT NAMES ITS QUOTE, NOT THE OTHER WAY ROUND, AND THE FIRST
     // VERSION OF THIS HAD IT BACKWARDS.
     //
@@ -329,6 +352,92 @@ export async function resolveActingRoot(
     }
   }
   return refuse;
+}
+
+/** Does this quote actually cover that car? Single- and multi-vehicle alike. */
+function quoteCoversVehicle(quote: Doc<"quotes"> | null, vehicleId: Id<"vehicles">): boolean {
+  if (!quote) return false;
+  const items = quote.vehicleItems ?? [{ vehicleId: quote.vehicleId }];
+  return items.some((item) => String(item.vehicleId) === String(vehicleId));
+}
+
+/**
+ * ⚠️ EXPLICIT EVIDENCE IDENTIFIES A DEAL. IT DOES NOT AUTHORIZE ONE DEAL TO
+ * TAKE ANOTHER.
+ *
+ * The first version of adoption checked that the named reservation was real,
+ * live, on this car and this root's origin — and then handed over the root.
+ * Every one of those is a check on the RESERVATION; none asked who was doing
+ * the adopting. So customer B could present B's own quote together with
+ * customer A's reservation and have A's root re-headed onto B's quote. One car,
+ * one root, `customerId` still reading A: every count a test might take stayed
+ * correct while the deal quietly changed hands.
+ *
+ * The rules, and each is fail-closed:
+ *
+ *   a. the reference must be REAL, in this org, and still ACTIVE;
+ *   b. the adopter's principal must be the reservation's own customer, read
+ *      from rows on the server;
+ *   c. on the car the reservation is FOR, it must be the reservation this car's
+ *      open root actually came from;
+ *   d. on any OTHER car, the claim is only coherent if the acting quote covers
+ *      the reservation's car too — one multi-vehicle deal continuing one
+ *      reservation. Then it does not decide this car, and ordinary lineage does.
+ *
+ * ⚠️ (d) IS THE ONE PATH THAT RETURNS `null`, and it is a deliberate narrowing
+ * of "an invalid adoption always refuses". A multi-vehicle deal that reserved
+ * one of its cars presents the same single `adoptReservationId` for every car on
+ * the quote; refusing on the others would break that deal outright. The claim is
+ * not ignored — (a) and (b) have already been enforced against it — it is
+ * applied to the car it names.
+ */
+async function resolveAdoption(
+  ctx: QueryCtx | MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    adoptReservationId: Id<"vehicleReservations">;
+    held: Doc<"commitmentRoots"> | null;
+    actingQuote: Doc<"quotes"> | null;
+    actingPrincipal: Id<"customers"> | null;
+    refuse: ActingRoot;
+  }
+): Promise<ActingRoot | null> {
+  const reservation = await ctx.db.get(args.adoptReservationId);
+
+  // (a) the reference itself
+  if (!reservation || reservation.orgId !== args.orgId) return args.refuse;
+  if (reservation.status !== "ACTIVE") return args.refuse;
+
+  // (b) the principal — the rival check
+  //
+  // ⚠️ The first line is deliberately redundant: the comparison below would
+  // also refuse, since `String(null)` never equals an id. That is an accident
+  // of coercion, not a guarantee, and "no principal REFUSES" is too important
+  // to leave resting on one. No shipped door can reach it — both doors that
+  // accept an adoption take a REQUIRED `quoteId` — so it is the fail-closed
+  // default for the next door, not live behaviour. Contract A.13 pins it.
+  if (!args.actingPrincipal) return args.refuse;
+  if (String(args.actingPrincipal) !== String(reservation.customerId)) return args.refuse;
+
+  // (c) the car the reservation is for
+  if (String(reservation.vehicleId) === String(args.vehicleId)) {
+    if (
+      args.held &&
+      args.held.originReservationId &&
+      String(args.held.originReservationId) === String(args.adoptReservationId)
+    ) {
+      return {
+        decision: "ADOPT_RESERVATION",
+        rootId: args.held._id,
+        reservationId: args.adoptReservationId,
+      };
+    }
+    return args.refuse;
+  }
+
+  // (d) another car — coherent only as part of the same multi-vehicle deal
+  return quoteCoversVehicle(args.actingQuote, reservation.vehicleId) ? null : args.refuse;
 }
 
 /**
