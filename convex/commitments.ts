@@ -249,6 +249,16 @@ export async function resolveActingRoot(
     orgId: Id<"organizations">;
     vehicleId: Id<"vehicles">;
     lineage: CommitmentLineage;
+    /**
+     * The customer this operation is being carried out for, where the door
+     * knows it independently of a quote.
+     *
+     * ⚠️ NOT PROOF, AND NEVER TREATED AS PROOF. It never selects a root and it
+     * can never widen what an operation may do — it can only narrow it. Where a
+     * quote is also presented, the QUOTE ROW wins and a disagreement between
+     * the two refuses outright.
+     */
+    actingCustomerId?: Id<"customers"> | null;
     /** Overrides the generic refusal wording at doors that need their own. */
     refusalMessage?: string;
   }
@@ -277,8 +287,18 @@ export async function resolveActingRoot(
   // at. A matching customer never grants a join by itself — contract 1.2, the
   // same customer's second independent deal on the same car, still refuses.
   const actingQuote = args.lineage.quoteId ? await ctx.db.get(args.lineage.quoteId) : null;
-  const actingPrincipal =
+  const quotePrincipal =
     actingQuote && actingQuote.orgId === args.orgId ? actingQuote.customerId : null;
+  // Two statements of who is acting that disagree are contradictory evidence,
+  // not a choice to be made. Refuse rather than pick the convenient one.
+  if (
+    quotePrincipal &&
+    args.actingCustomerId &&
+    String(quotePrincipal) !== String(args.actingCustomerId)
+  ) {
+    return refuse;
+  }
+  const actingPrincipal = quotePrincipal ?? args.actingCustomerId ?? null;
 
   // ── 1. A NAMED ADOPTION IS AN AFFIRMATIVE CLAIM, SO IT IS ALWAYS CHECKED ──
   //
@@ -304,7 +324,26 @@ export async function resolveActingRoot(
   // ── 2. a FREE car opens a root — the only place that is ever correct ─────
   if (!held) return { decision: "OPEN_NEW" };
 
-  // ── 3. Lineage proof: does the presented evidence belong to THIS root? ────
+  // ── 3. PARTICIPANT CONSISTENCY, CHECKED ONCE FOR EVERY PROOF BELOW ───────
+  //
+  // ⚠️ Explicit evidence SELECTS a root. It does not entitle whoever presents
+  // it to act on that root. Those are different questions, and answering only
+  // the first is what let one deal reuse another's proof: a quote, a deposit
+  // or a reservation belonging to somebody else is still a real row, and every
+  // check that asked "is this evidence genuine?" said yes.
+  //
+  // Checked HERE rather than inside each branch so a proof added later cannot
+  // quietly arrive without it.
+  //
+  // ⚠️ This does not weaken I2. It can only REFUSE — never select a root, never
+  // admit one. A second independent deal for the SAME customer on the same car
+  // passes this check and is still refused below, for want of lineage
+  // (contract 1.2). Same customer remains no evidence at all of the same deal.
+  if (actingPrincipal && String(actingPrincipal) !== String(held.customerId)) {
+    return refuse;
+  }
+
+  // ── 4. Lineage proof: does the presented evidence belong to THIS root? ────
   //
   // ⚠️ Checked against the ROOT, never against the customer. Two deals for one
   // customer on one car are two deals, and the second must wait for the first.
@@ -317,18 +356,13 @@ export async function resolveActingRoot(
   // money is on". Verified against the root's own live episodes, never against
   // the customer.
   //
-  // ⚠️ And where the operation also presents a quote, that quote must belong to
-  // the root's own customer. Naming another deal's deposit is the same hole as
-  // naming another deal's reservation, reached through a different field, and
-  // it closes the same way. A door presenting no quote — a bare reservation
-  // continuing on deposit proof alone — has no principal to check; said here
-  // rather than left to be discovered.
+  // Whose deposit it is has already been settled above, for this and every
+  // other proof alike.
   if (args.lineage.depositId) {
     for await (const claim of ctx.db
       .query("vehicleCommitmentClaims")
       .withIndex("by_root_status", (q) => q.eq("rootId", held._id).eq("status", "ACTIVE"))) {
       if (claim.depositId && String(claim.depositId) === String(args.lineage.depositId)) {
-        if (actingPrincipal && String(actingPrincipal) !== String(held.customerId)) return refuse;
         return { decision: "JOIN", rootId: held._id };
       }
     }
@@ -562,6 +596,9 @@ export async function acquireVehicle(
     orgId: args.orgId,
     vehicleId: args.vehicleId,
     lineage: args.lineage,
+    // The customer this acquisition is FOR is already known here, and is the
+    // same value the new root would be opened under.
+    actingCustomerId: args.customerId,
     refusalMessage: args.refusalMessage,
   });
   if (acting.decision === "REFUSE") throwRefusal(acting);
@@ -640,6 +677,7 @@ export async function assertAcquirable(
     orgId: Id<"organizations">;
     vehicleId: Id<"vehicles">;
     lineage: CommitmentLineage;
+    actingCustomerId?: Id<"customers"> | null;
     message?: string;
   }
 ): Promise<void> {
@@ -647,6 +685,7 @@ export async function assertAcquirable(
     orgId: args.orgId,
     vehicleId: args.vehicleId,
     lineage: args.lineage,
+    actingCustomerId: args.actingCustomerId,
     refusalMessage: args.message,
   });
   if (acting.decision === "REFUSE") throwRefusal(acting);

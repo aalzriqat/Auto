@@ -1297,6 +1297,125 @@ describe("P1-A continuation is proven, never inferred", () => {
     ).toBe("REFUSE");
   });
 
+  test("A.14 the AUTHORITY refuses a foreign customer reusing another deal's deposit proof", async () => {
+    // ⚠️ CALLS THE HELPER DIRECTLY, ON PURPOSE, AND THIS IS THE REASON.
+    //
+    // On the public path `createReservation` has an older guard — "another
+    // customer's deposit is currently holding this vehicle" — which fires
+    // FIRST. A.15 covers that path and proves the operation is refused with no
+    // residue. But a test that dies at an earlier validator proves nothing
+    // about the guard it is named for, so participant consistency is asserted
+    // here, at the authority, where the rule actually lives.
+    const seed = await seedDealer("a14");
+    const v = await vehicle(seed);
+    const quoteId = await cashQuote(seed, seed.customerA, v);
+    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
+    const depositId = await seed.t.run(async (ctx) => {
+      const rows = await ctx.db.query("deposits").collect();
+      return rows.find((d) => d.vehicleId === v)!._id;
+    });
+
+    // Customer A's own deposit, presented by customer A: this proof is real.
+    const owner = await seed.t.run((ctx) =>
+      resolveActingRoot(ctx, {
+        orgId: seed.orgId,
+        vehicleId: v,
+        lineage: { depositId },
+        actingCustomerId: seed.customerA,
+      })
+    );
+    expect(owner.decision, "the deal that owns the money may act on its own root").toBe("JOIN");
+
+    // The SAME real proof, presented by somebody else.
+    const rival = await seed.t.run((ctx) =>
+      resolveActingRoot(ctx, {
+        orgId: seed.orgId,
+        vehicleId: v,
+        lineage: { depositId },
+        actingCustomerId: seed.customerB,
+      })
+    );
+    expect(
+      rival.decision,
+      "genuine evidence does not entitle whoever happens to present it"
+    ).toBe("REFUSE");
+  });
+
+  test("A.15 and on the public path that attempt leaves no residue", async () => {
+    // ⚠️ WHICH GUARD FIRES IS NOT ASSERTED HERE, and that is deliberate: an
+    // older deposit-holder check in `createReservation` refuses this before the
+    // authority is consulted. Both refusals are correct and the older one is
+    // not being removed. What this contract owns is the OUTCOME — the rival
+    // gets nothing, and no reservation, root or episode is left behind.
+    const seed = await seedDealer("a15");
+    const v = await vehicle(seed);
+    const quoteId = await cashQuote(seed, seed.customerA, v);
+    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
+    const depositId = await seed.t.run(async (ctx) => {
+      const rows = await ctx.db.query("deposits").collect();
+      return rows.find((d) => d.vehicleId === v)!._id;
+    });
+
+    const before = await snapshot(seed, v);
+    let threw: unknown = null;
+    try {
+      await seed.asUser.mutation(api.vehicles.createReservation, {
+        orgId: seed.orgId,
+        vehicleId: v,
+        customerId: seed.customerB,
+        dealDepositId: depositId,
+      });
+    } catch (e) {
+      threw = e;
+    }
+    expect(threw, "A.15: the rival's reservation must be refused").not.toBeNull();
+
+    expect(await snapshot(seed, v), "and nothing of theirs survived it").toEqual(before);
+    const reservations = await seed.t.run((ctx) =>
+      ctx.db.query("vehicleReservations").collect()
+    );
+    expect(reservations.length, "no reservation was recorded for the rival").toBe(0);
+  });
+
+  test("A.16 a reservation for one customer citing ANOTHER customer's quote refuses", async () => {
+    // The contradiction case, and the authority IS the guard that fires: the
+    // car is held by a FINANCE episode with no deposit behind it, so the older
+    // deposit-holder check has nothing to say and stands aside.
+    //
+    // Two statements of who is acting that disagree — the quote says A, the
+    // operation says B — are contradictory evidence. Picking whichever is
+    // convenient is how a rival gets in.
+    const seed = await seedDealer("a16");
+    const v = await vehicle(seed);
+    const quoteId = await cashQuote(seed, seed.customerA, v);
+    await seed.asUser.mutation(api.applications.createFromQuote, { orgId: seed.orgId, quoteId });
+    const holds = await seed.t.run((ctx) => ctx.db.query("deposits").collect());
+    expect(holds.length, "the fixture really has no deposit holding this car").toBe(0);
+
+    const before = await snapshot(seed, v);
+    await expectRefusal(
+      seed.asUser.mutation(api.vehicles.createReservation, {
+        orgId: seed.orgId,
+        vehicleId: v,
+        customerId: seed.customerB,
+        dealQuoteId: quoteId,
+      }),
+      HELD,
+      "A.16"
+    );
+    expect(await snapshot(seed, v), "nothing moved").toEqual(before);
+
+    // THE CONTROL — the very same call for the quote's OWN customer is allowed,
+    // so the refusal above is about the mismatch and not about the door.
+    await seed.asUser.mutation(api.vehicles.createReservation, {
+      orgId: seed.orgId,
+      vehicleId: v,
+      customerId: seed.customerA,
+      dealQuoteId: quoteId,
+    });
+    expect((await rootsOn(seed, v)).length, "the deal's own reservation JOINED").toBe(1);
+  });
+
   test("A.11 a MULTI-VEHICLE deal continuing one reservation is not broken by it", async () => {
     // ⚠️ THE ONE DELIBERATE NARROWING of "a named adoption always decides", and
     // it is pinned here so it cannot drift into a hole.

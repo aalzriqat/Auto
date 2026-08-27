@@ -1659,6 +1659,11 @@ export const createReservation = mutation({
       orgId: args.orgId,
       vehicleId: args.vehicleId,
       lineage: { quoteId: args.dealQuoteId, depositId: args.dealDepositId },
+      // This door can present a deposit as its proof WITHOUT a quote, so the
+      // authority would otherwise have no one to check the proof against. The
+      // customer being reserved for is the operation's own participant — it
+      // proves nothing by itself, and is used only to refuse.
+      actingCustomerId: args.customerId,
     });
 
     const reservationId = await ctx.db.insert("vehicleReservations", {
