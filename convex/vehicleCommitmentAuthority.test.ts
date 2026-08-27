@@ -5,6 +5,7 @@ import { api, internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { anyApi, FunctionReference } from "convex/server";
 import { getActiveDepositHolds } from "./utils/depositHelpers";
+import { unresolvedRootMoneyMinor } from "./commitments";
 
 /**
  * SCRUM-195 — THE BLOCKING IMPLEMENTATION CORPUS (owner ruling c14865).
@@ -4044,5 +4045,402 @@ describe("26. what the screen is told about a deal", () => {
     // And the amount that exactly reaches the ceiling is accepted, so the
     // agreement is on the NUMBER and not merely on refusing generously.
     await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 18_000 });
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 28. THE SECOND ADVERSARIAL ROUND — AND TWO DEFECTS MY OWN FIXES CAUSED
+//
+// Codex xhigh returned BLOCK on 015a64a57 with eight findings and could not
+// execute a single test (vitest died on EPERM before collection), so it marked
+// every behavioural finding UNRESOLVED rather than implying coverage. I ran the
+// six that were reproducible. All six confirmed.
+//
+// ⚠️ TWO OF THEM WERE INTRODUCED BY LAST ROUND'S FIXES. That is the point of
+// this section. A fix does not merely add behaviour — it MOVES which lines are
+// load-bearing, and the lines it newly loads were never reviewed as such:
+//
+//   28.1 — I attached `depositId` to the RESERVATION claim so a reservation's
+//          money could reach its root. That made the claim findable by
+//          `releaseClaimsForDeposit`, which releases by deposit and never
+//          checked `kind`. Refunding the money then released the claim a LIVE
+//          reservation was holding the car with, and a rival took the car.
+//   28.4 — I added `reopenRootForReversal` so a cancellation would stop minting
+//          a second root. It reopens the root of `deposit.vehicleId` — the
+//          quote's PRIMARY car — whichever car's sale was actually cancelled.
+//
+// ⚠️ 28.2 is the one the two seats DISAGREED about, and the sale-side door is
+// named in `sales.update`'s own comment: "this is the other door into the same
+// reversal, and a lock bolted on only one of them is not a lock." The custody
+// gate was bolted onto one door.
+//
+// Every contract here failed first, by execution, before any fix existed.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("28. the second adversarial round", () => {
+  async function reservedWithDeposit(seed: Seed, v: Id<"vehicles">, amount = 5_000) {
+    const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+      orgId: seed.orgId,
+      vehicleId: v,
+      customerId: seed.customerA,
+      depositAmount: amount,
+    });
+    const deposit = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("deposits").collect()).find((d) => d.reservationId === reservationId)
+    );
+    expect(deposit, "the reservation took real money").toBeTruthy();
+    return { reservationId, depositId: deposit!._id };
+  }
+  async function twoCarQuote(seed: Seed, a: Id<"vehicles">, b: Id<"vehicles">, price: number) {
+    return await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+      vehicleId: a,
+      vehicleItems: [
+        { vehicleId: a, unitPrice: price / 2 },
+        { vehicleId: b, unitPrice: price / 2 },
+      ],
+      mode: "CASH" as const,
+      vehiclePrice: price,
+      downPayment: 0,
+      termMonths: 0,
+      totalFinancedAmount: 0,
+    });
+  }
+  async function financedHandedOverSale(seed: Seed, v: Id<"vehicles">) {
+    const quoteId = await financedQuote(seed, seed.customerA, v);
+    const applicationId = (await seed.asUser.mutation(api.applications.createFromQuote, {
+      orgId: seed.orgId,
+      quoteId,
+    })) as Id<"financeApplications">;
+    await seed.asUser.mutation(api.applications.updateStatus, {
+      orgId: seed.orgId,
+      applicationId,
+      status: "UNDER_REVIEW" as const,
+    });
+    await seed.asApprover.mutation(api.applications.updateStatus, {
+      orgId: seed.orgId,
+      applicationId,
+      status: "APPROVED" as const,
+    });
+    await registerHandover(seed.asUser, api, seed.orgId, applicationId);
+    await seed.asUser.mutation(api.applications.registerExpectedPayment, {
+      orgId: seed.orgId,
+      applicationId,
+      method: "CASH" as const,
+      expectedDate: Date.now(),
+    });
+    await seed.asUser.mutation(api.applications.finalizeDeal, { orgId: seed.orgId, applicationId });
+    const sale = (await seed.t.run((ctx) => ctx.db.query("sales").collect()))[0];
+    return { applicationId, saleId: sale._id };
+  }
+
+  // ── 28.1 — CODEX #2, CRITICAL, FIX-INDUCED ────────────────────────────────
+
+  test("28.1 refunding a reservation's deposit does not give its car away", async () => {
+    const seed = await seedDealer("resv-keeps-car");
+    const v = await vehicle(seed);
+    const { reservationId, depositId } = await reservedWithDeposit(seed, v);
+
+    // Only the MONEY is being resolved. The reservation itself is untouched.
+    await seed.asApprover.mutation(api.deposits.release, {
+      orgId: seed.orgId,
+      depositId,
+      resolution: "REFUNDED" as const,
+      refundMethod: "CASH" as const,
+    });
+
+    const reservation = await seed.t.run((ctx) => ctx.db.get(reservationId));
+    expect(reservation?.status, "the reservation is still live").toBe("ACTIVE");
+
+    // Asserted by CONSEQUENCE: a live reservation means the car is spoken for.
+    const rivalQuote = await cashQuote(seed, seed.customerB, v);
+    await expectRefusal(
+      seed.asUser.mutation(api.deposits.create, {
+        orgId: seed.orgId,
+        quoteId: rivalQuote,
+        amount: 1_000,
+      }),
+      REFUSED,
+      "28.1"
+    );
+  });
+
+  test("28.1b and releasing the reservation afterwards CLOSES the deal", async () => {
+    // The other half: once BOTH the money and the hold are resolved, nothing is
+    // outstanding and the customer must not be undeletable. This is also the
+    // Sonnet MAX finding — the two seats converged here.
+    const seed = await seedDealer("resv-then-closes");
+    const v = await vehicle(seed);
+    const { reservationId, depositId } = await reservedWithDeposit(seed, v);
+
+    await seed.asApprover.mutation(api.deposits.release, {
+      orgId: seed.orgId,
+      depositId,
+      resolution: "REFUNDED" as const,
+      refundMethod: "CASH" as const,
+    });
+    await seed.asUser.mutation(api.vehicles.releaseReservation, {
+      orgId: seed.orgId,
+      reservationId,
+    });
+
+    const root = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("commitmentRoots").collect()).find((r) => r.vehicleId === v)
+    );
+    expect(root?.status, "nothing holds the car and nobody is owed money").not.toBe("OPEN");
+    await seed.asUser.mutation(api.customers.softDelete, {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+    });
+  });
+
+  test("28.1c the REVERSE order closes it too — money last", async () => {
+    // Sonnet MAX's ordering. `releaseClaimsForDeposit` finds the claim already
+    // RELEASED and must still ask the root again; nothing else ever will.
+    const seed = await seedDealer("money-last");
+    const v = await vehicle(seed);
+    const { reservationId, depositId } = await reservedWithDeposit(seed, v);
+
+    await seed.asUser.mutation(api.vehicles.releaseReservation, {
+      orgId: seed.orgId,
+      reservationId,
+    });
+    const midway = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("commitmentRoots").collect()).find((r) => r.vehicleId === v)
+    );
+    expect(midway?.status, "money still undecided keeps it open — c14909").toBe("OPEN");
+
+    await seed.asApprover.mutation(api.deposits.release, {
+      orgId: seed.orgId,
+      depositId,
+      resolution: "REFUNDED" as const,
+      refundMethod: "CASH" as const,
+    });
+
+    const after = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("commitmentRoots").collect()).find((r) => r.vehicleId === v)
+    );
+    expect(after?.status, "the money was the last thing outstanding").not.toBe("OPEN");
+    await seed.asUser.mutation(api.customers.softDelete, {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+    });
+  });
+
+  // ── 28.2 — CODEX #3, CRITICAL — the other cancellation door ───────────────
+
+  test("28.2 the SALE-side cancellation guards custody too", async () => {
+    const seed = await seedDealer("custody-sale-door");
+    const v = await vehicle(seed);
+    const { saleId } = await financedHandedOverSale(seed, v);
+
+    // ⚠️ NOT applications.cancelApplication. The other door.
+    await seed.asApprover.mutation(api.sales.update, {
+      orgId: seed.orgId,
+      saleId,
+      status: "CANCELLED" as const,
+    });
+
+    const rivalQuote = await cashQuote(seed, seed.customerB, v);
+    await expectRefusal(
+      seed.asUser.mutation(api.sales.completeFromQuote, { orgId: seed.orgId, quoteId: rivalQuote }),
+      /handed over|came back|returned|custody|still with/i,
+      "28.2"
+    );
+  });
+
+  test("28.2b and that refusal has a way out on this door as well", async () => {
+    // A rule whose remedy is unreachable is the defect this lane already found
+    // once. `registerVehicleReturn` must accept the sale-cancelled shape too.
+    const seed = await seedDealer("custody-sale-remedy");
+    const v = await vehicle(seed);
+    const { applicationId, saleId } = await financedHandedOverSale(seed, v);
+    await seed.asApprover.mutation(api.sales.update, {
+      orgId: seed.orgId,
+      saleId,
+      status: "CANCELLED" as const,
+    });
+
+    await seed.asUser.mutation(api.applications.registerVehicleReturn, {
+      orgId: seed.orgId,
+      applicationId,
+      notes: "came back, inspected",
+    });
+
+    const rivalQuote = await cashQuote(seed, seed.customerB, v);
+    await seed.asUser.mutation(api.sales.completeFromQuote, {
+      orgId: seed.orgId,
+      quoteId: rivalQuote,
+    });
+    expect((await vehicleRow(seed, v)).status, "the car is genuinely sellable again").toBe("SOLD");
+  });
+
+  // ── 28.3 — CODEX #6, HIGH — money that never moved has not left ───────────
+
+  test("28.3 an OTHER ruling moves no money, so none of it leaves the deal", async () => {
+    const seed = await seedDealer("other-stays");
+    const a = await vehicle(seed);
+    const b = await vehicle(seed);
+    const quoteId = await twoCarQuote(seed, a, b, 30_000);
+    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 6_000 });
+    await seed.asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId: seed.orgId,
+      quoteId,
+      allocations: [
+        { vehicleId: a, amount: 3_000 },
+        { vehicleId: b, amount: 3_000 },
+      ],
+    });
+    await seed.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+      orgId: seed.orgId,
+      quoteId,
+      vehicleId: b,
+      reason: "customer dropped the second car",
+    });
+    const hold = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("depositVehicleHolds").collect()).find(
+        (h) => h.vehicleId === b && h.allocationStatus === "RELEASED_AWAITING_DECISION"
+      )
+    );
+    await seed.asApprover.mutation(api.deposits.resolveReleasedAllocation, {
+      orgId: seed.orgId,
+      holdId: hold!._id,
+      treatment: "OTHER" as const,
+      reason: "settled outside the system, manual journal to follow",
+    });
+
+    const deposit = await seed.t.run(async (ctx) => (await ctx.db.query("deposits").collect())[0]);
+    expect(deposit?.status, "the row still holds the money").toBe("HELD");
+    expect(deposit?.releasedAmountMinor ?? 0, "nothing was paid out").toBe(0);
+
+    const rootId = ((await resolveRoot(seed, a)).rootId ?? null) as Id<"commitmentRoots"> | null;
+    const minor = await seed.t.run((ctx) => unresolvedRootMoneyMinor(ctx, rootId!));
+    // ⚠️ FAIL CLOSED. OTHER means a human did something this system does not
+    // model. We cannot know the money left, so we must not assume it did — the
+    // only safe direction is to keep counting it against the deal.
+    expect(minor, "all 6,000 is still the customer's money on this deal").toBe(6_000_000);
+  });
+
+  // ── 28.4 — CODEX #5, HIGH, FIX-INDUCED ───────────────────────────────────
+
+  test("28.4 cancelling one car's sale leaves the other car sold", async () => {
+    const seed = await seedDealer("multi-cancel");
+    const a = await vehicle(seed);
+    const b = await vehicle(seed);
+    const quoteId = await twoCarQuote(seed, a, b, 30_000);
+    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 6_000 });
+    await seed.asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId: seed.orgId,
+      quoteId,
+      allocations: [
+        { vehicleId: a, amount: 3_000 },
+        { vehicleId: b, amount: 3_000 },
+      ],
+    });
+    await seed.asUser.mutation(api.sales.completeFromQuote, { orgId: seed.orgId, quoteId });
+
+    const sales = await seed.t.run((ctx) => ctx.db.query("sales").collect());
+    const saleB = sales.find((x) => x.vehicleId === b);
+    await seed.asApprover.mutation(api.sales.update, {
+      orgId: seed.orgId,
+      saleId: saleB!._id,
+      status: "CANCELLED" as const,
+    });
+
+    // Car A's sale still stands. Nothing may be holding it again.
+    expect((await resolveRoot(seed, a)).kind, "A is sold — nothing holds it").not.toBe("OWNED");
+    const activeOnA = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("vehicleCommitmentClaims").collect()).filter(
+        (c) => c.vehicleId === a && c.status === "ACTIVE"
+      )
+    );
+    expect(activeOnA.length, "and no live claim sits on a SOLD car").toBe(0);
+  });
+
+  // ── 28.5 — CODEX #4, HIGH — adoption must establish a head ───────────────
+
+  test("28.5 one reservation cannot become two live quotes", async () => {
+    const seed = await seedDealer("adopt-once");
+    const v = await vehicle(seed);
+    const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+      orgId: seed.orgId,
+      vehicleId: v,
+      customerId: seed.customerA,
+    });
+    const q1 = await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+      vehicleId: v,
+      mode: "CASH" as const,
+      vehiclePrice: 30_000,
+      downPayment: 0,
+      termMonths: 0,
+      totalFinancedAmount: 0,
+      intent: "NEW" as const,
+      adoptReservationId: reservationId,
+    });
+
+    const root = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("commitmentRoots").collect()).find((r) => r.vehicleId === v)
+    );
+    expect(
+      String(root?.headQuoteId),
+      "adopting establishes the deal's current head"
+    ).toBe(String(q1));
+
+    // A second adoption of the same reservation would fork the deal into two
+    // live heads at two different prices. It must not be possible.
+    await expectRefusal(
+      seed.asUser.mutation(api.quotes.saveQuote, {
+        orgId: seed.orgId,
+        customerId: seed.customerA,
+        vehicleId: v,
+        mode: "CASH" as const,
+        vehiclePrice: 25_000,
+        downPayment: 0,
+        termMonths: 0,
+        totalFinancedAmount: 0,
+        intent: "NEW" as const,
+        adoptReservationId: reservationId,
+      }),
+      BAD_PROOF,
+      "28.5"
+    );
+  });
+
+  // ── 28.6 — CODEX #8, LOW — tenancy on the advisory query ─────────────────
+
+  test("28.6 dealContinuation refuses a customer from another organization", async () => {
+    const seed = await seedDealer("cont-tenancy");
+    const v = await vehicle(seed);
+
+    // ⚠️ A SECOND ORG INSIDE THE SAME DATABASE. My first version of this
+    // contract built the other org with a second `seedDealer`, which spins up
+    // its own convex-test instance — and convex-test generates DETERMINISTIC
+    // ids, so the "foreign" customer id collided with a real customer in THIS
+    // org and the query answered about the wrong person entirely. The test
+    // failed for a fixture reason while the guard under test was already
+    // correct. A cross-tenant test has to put both tenants in one database.
+    const foreignOrgId = await seed.t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Rival Motors", createdAt: Date.now() })
+    );
+    const foreignCustomerId = await seed.t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId: foreignOrgId,
+        firstName: "Someone",
+        lastName: "Elsewhere",
+      })
+    );
+
+    await expectRefusal(
+      seed.asUser.query(api.commitments.dealContinuation, {
+        orgId: seed.orgId,
+        vehicleId: v,
+        customerId: foreignCustomerId,
+      }),
+      /not found|another organization|organization/i,
+      "28.6"
+    );
   });
 });

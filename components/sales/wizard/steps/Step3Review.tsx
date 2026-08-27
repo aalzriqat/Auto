@@ -72,6 +72,8 @@ export function Step3Review({
   );
   const blockedByAnotherDeal =
     continuation?.kind === "HELD_BY_ANOTHER_DEAL" || continuation?.kind === "AMBIGUOUS";
+  /** See the note in QuoteDialog: safe but confusing, so it waits. */
+  const continuationLoading = !!wizardData?.vehicleId && continuation === undefined;
 
   const availableVehicles = useQuery(
     api.vehicles.listAll,
@@ -359,7 +361,9 @@ export function Step3Review({
 
         <Button
           onClick={handleGenerate}
-          disabled={isSubmitting || !selectedResult || blockedByAnotherDeal}
+          disabled={
+            isSubmitting || !selectedResult || blockedByAnotherDeal || continuationLoading
+          }
           className={cn(
             "w-full sm:w-auto",
             paymentType === "CASH"

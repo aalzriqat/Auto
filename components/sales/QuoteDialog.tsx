@@ -112,6 +112,22 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
 
   const blockedByAnotherDeal =
     continuation?.kind === "HELD_BY_ANOTHER_DEAL" || continuation?.kind === "AMBIGUOUS";
+  /**
+   * Both reviewer seats found this independently.
+   *
+   * `quoteLineageFor(undefined)` deliberately answers `intent: "NEW"` — guessing
+   * REVISE on a slow connection would supersede somebody's live quote, and
+   * there is a contract pinning that. So a click during loading is SAFE; it is
+   * just wrong. It saves an independent quote on a car the customer already has
+   * a deal on, reports success, and the refusal arrives a screen later when
+   * they try to put money on it.
+   *
+   * ⚠️ This flag is defence in depth, not the safety property. The guarantee
+   * lives in `quoteLineageFor` and is contract-covered; this only stops the
+   * operator reaching a confusing dead end while the answer is in flight.
+   */
+  const continuationLoading =
+    !!watchAll.vehicleId && !!watchAll.customerId && continuation === undefined;
   const priceBelowPaid =
     continuation?.kind === "REVISE_QUOTE" &&
     Number(watchAll.vehiclePrice) > 0 &&
@@ -448,7 +464,8 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
                         isSubmitting ||
                         result.exceedsValuation ||
                         blockedByAnotherDeal ||
-                        priceBelowPaid
+                        priceBelowPaid ||
+                        continuationLoading
                       }
                     >
                       <CheckCircle2 className="w-4 h-4 me-2" />

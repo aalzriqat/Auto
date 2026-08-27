@@ -25,6 +25,7 @@ import {
 import { depositMethodValidator, type DepositMethod } from "./utils/depositRecording";
 import { completeSale } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
+import { handedOverDealIsDead } from "./utils/saleHelpers";
 import { runWithIdempotency } from "./utils/idempotency";
 import { registerChequeCore, markChequeClearedCore } from "./collections";
 import {
@@ -2838,7 +2839,12 @@ export const registerVehicleReturn = mutation({
     // A live deal's car is with the customer because the deal is still running.
     // Recording a return there would say the deal gave the car back while it is
     // still going.
-    if (app.status !== "CANCELLED") {
+    //
+    // ⚠️ Asked through the SAME predicate the completion gate uses. A sale
+    // cancelled via `sales.update` leaves the application CLOSED, and a remedy
+    // that recognised fewer cases than the rule would refuse exactly the deals
+    // the rule had just blocked — a dead end with no way out of it.
+    if (!(await handedOverDealIsDead(ctx, app))) {
       throw new ConvexError(
         "This deal is still live. Cancel it first if the customer has given the vehicle back."
       );

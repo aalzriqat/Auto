@@ -51,10 +51,37 @@ export async function customerHoldingHandedOverVehicle(
     if (app.orgId !== orgId) continue;
     if (!app.vehicleHandoverAt) continue;
     if (app.vehicleReturnedAt) continue;
-    if (app.status !== "CANCELLED") continue;
+    if (!(await handedOverDealIsDead(ctx, app))) continue;
     return app.customerId;
   }
   return null;
+}
+
+/**
+ * Did the deal this handover belongs to actually END?
+ *
+ * ⚠️ THERE ARE TWO DOORS INTO A REVERSAL AND ONLY ONE SETS THE APPLICATION TO
+ * CANCELLED. `applications.cancelApplication` does; `sales.update` with status
+ * CANCELLED reverses the sale and leaves the application CLOSED. `sales.update`
+ * says so itself: "this is the other door into the same reversal, and a lock
+ * bolted on only one of them is not a lock."
+ *
+ * The custody gate was bolted onto one door. Through the other, a car that had
+ * been handed over came back to the lot with no holder recorded, and a rival
+ * sale completed on a vehicle sitting in somebody's driveway.
+ *
+ * Exported because the gate and its REMEDY must agree exactly — a rule whose
+ * way out recognises fewer cases than the rule itself is a dead end, which is a
+ * defect this same lane has already produced once.
+ */
+export async function handedOverDealIsDead(
+  ctx: MutationCtx,
+  app: Doc<"financeApplications">
+): Promise<boolean> {
+  if (app.status === "CANCELLED") return true;
+  if (!app.finalizedSaleId) return false;
+  const sale = await ctx.db.get(app.finalizedSaleId);
+  return sale?.orgId === app.orgId && sale?.status === "CANCELLED";
 }
 
 export async function restoreVehicleFromSale(

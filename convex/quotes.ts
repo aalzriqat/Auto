@@ -283,6 +283,8 @@ export const saveQuote = mutation({
     }
 
     let lineageRootId: Id<"commitmentRoots"> | undefined;
+    /** Set when this quote ADOPTS a reservation, so it can become the head. */
+    let adoptedRootId: Id<"commitmentRoots"> | undefined;
     /** The cars the predecessor was a deal for — each has its own root. */
     let predecessorVehicleItems: Array<{ vehicleId: Id<"vehicles"> }> | undefined;
 
@@ -343,7 +345,16 @@ export const saveQuote = mutation({
         vehicleId,
       });
       const reservationRootId = await rootIdForReservation(ctx, args.adoptReservationId);
-      if (reservationRootId) lineageRootId = reservationRootId;
+      if (reservationRootId) {
+        lineageRootId = reservationRootId;
+        // ⚠️ Adopting ESTABLISHES the deal's head. A reservation-origin root has
+        // none until a quote takes it up, and without one nothing could refuse a
+        // second adoption: two quotes sat on the same root, neither superseding
+        // the other, both passing `assertCurrentRevision` because there was no
+        // head to compare against. Set here so `validateReservationAdoption` can
+        // refuse the next attempt, and so the deal has ONE current price.
+        adoptedRootId = reservationRootId;
+      }
     }
 
     const {
@@ -387,6 +398,12 @@ export const saveQuote = mutation({
     // would leave a window where the root points at a revision that is no
     // longer current, and evidence written in that window would attach to the
     // wrong price.
+    // An adopted reservation's root takes this quote as its head — see the note
+    // at the adoption branch. Revision advance is handled separately below.
+    if (adoptedRootId) {
+      await ctx.db.patch(adoptedRootId, { headQuoteId: quoteId });
+    }
+
     if (args.supersedesQuoteId) {
       await ctx.db.patch(args.supersedesQuoteId, { supersededByQuoteId: quoteId });
 

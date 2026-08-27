@@ -85,6 +85,13 @@ export const COMMITMENT_MESSAGES = {
   proofExpired: "That reservation has expired, so it can no longer be adopted.",
   proofReleased: "That reservation was already released, so it can no longer be adopted.",
   proofConsumed: "That reservation has already been taken up by another deal.",
+  /**
+   * Names the REMEDY, because the caller is not doing anything unreasonable —
+   * they are continuing a deal that already exists and should revise its quote
+   * rather than start a second one beside it.
+   */
+  proofAlreadyAdopted:
+    "That reservation has already been adopted by a quote on this deal. Revise that quote instead of adopting the reservation again.",
 } as const;
 
 export type RootView =
@@ -326,6 +333,15 @@ export const dealContinuation = query({
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.orgId !== args.orgId) {
       throw new ConvexError("Vehicle not found in this organization.");
+    }
+    // The CUSTOMER is caller-supplied too, and it was never checked. Answering
+    // for another organization's customer id leaks whether that person has a
+    // deal on this car — small, but it is still their information, and a query
+    // that authenticates the org and then trusts an id from outside it is the
+    // shape this codebase already has two Criticals from.
+    const customer = await ctx.db.get(args.customerId);
+    if (!customer || customer.orgId !== args.orgId) {
+      throw new ConvexError("Customer not found in this organization.");
     }
 
     const ownership = await resolveOwnership(ctx, args.orgId, args.vehicleId);
@@ -845,6 +861,58 @@ export async function releaseDepositClaimsForVehicle(
 }
 
 /** Release every ACTIVE claim carried by one deposit, across every car it holds. */
+/**
+ * Resolve the ACTIVE claims in a set, then ask EVERY root they touched again.
+ *
+ * ⚠️ THE SECOND LOOP IS NOT DECORATION, AND IT WAS MISSING.
+ *
+ * `resolveClaim` returns early unless a claim is ACTIVE, and it is the only
+ * caller of `recomputeRootStatus`, which is the only thing that ever CLOSES a
+ * root. So once a claim had already been released, the moment its MONEY was
+ * finally resolved nothing recomputed the root — and nothing else ever would.
+ * `deposits.resolveReleasedAllocation` already worked around this at its own
+ * call site; its two siblings did not.
+ *
+ * `recomputeRootStatus` is idempotent and consults the MONEY as well as the
+ * claims, so calling it when nothing changed is safe and a root whose money is
+ * still undecided correctly stays OPEN (c14909, pinned by 28.1c).
+ *
+ * `kinds` narrows WHICH claims this evidence is entitled to release — see
+ * `releaseClaimsForDeposit`.
+ */
+async function resolveClaimsAndRecomputeRoots(
+  ctx: MutationCtx,
+  claims: Doc<"vehicleCommitmentClaims">[],
+  reason: string,
+  kinds?: ReadonlyArray<"DEPOSIT" | "FINANCE" | "RESERVATION">
+): Promise<void> {
+  const touchedRootIds = new Set<string>();
+  for (const claim of claims) {
+    touchedRootIds.add(claim.rootId as unknown as string);
+    if (claim.status !== "ACTIVE") continue;
+    if (kinds && !kinds.includes(claim.kind)) continue;
+    await resolveClaim(ctx, claim._id, "RELEASED", reason);
+  }
+  for (const rootId of touchedRootIds) {
+    await recomputeRootStatus(ctx, rootId as unknown as Id<"commitmentRoots">);
+  }
+}
+
+/**
+ * Release the claims THIS DEPOSIT is the holding evidence for.
+ *
+ * ⚠️ SCOPED TO `kind: "DEPOSIT"`, and the scope is the whole point.
+ *
+ * A reservation's claim carries `depositId` too — it has to, or the
+ * reservation's money could never reach its root. But that claim's evidence is
+ * the RESERVATION, not the money: the customer reserved the car, and refunding
+ * their deposit does not un-reserve it. Releasing by deposit alone took the car
+ * away from a live, ACTIVE reservation and handed it to a rival — the exact
+ * failure this module exists to prevent, reached through the fix that attached
+ * `depositId` in the first place.
+ *
+ * A fix moves which lines are load-bearing. This is one of them.
+ */
 export async function releaseClaimsForDeposit(
   ctx: MutationCtx,
   depositId: Id<"deposits">,
@@ -854,10 +922,7 @@ export async function releaseClaimsForDeposit(
     .query("vehicleCommitmentClaims")
     .withIndex("by_deposit", (q) => q.eq("depositId", depositId))
     .collect();
-  for (const claim of claims) {
-    if (claim.status !== "ACTIVE") continue;
-    await resolveClaim(ctx, claim._id, "RELEASED", reason);
-  }
+  await resolveClaimsAndRecomputeRoots(ctx, claims, reason, ["DEPOSIT"]);
 }
 
 /** Release every ACTIVE claim carried by one reservation. */
@@ -1163,13 +1228,25 @@ function terminallyLeftTheDealMinor(
   deposit: Doc<"deposits">,
   holds: Doc<"depositVehicleHolds">[]
 ): number {
+  // ⚠️ `OTHER` IS DELIBERATELY ABSENT, and this filter is NOT the one in
+  // `releaseHeldDeposit` even though it once was a copy of it. That one answers
+  // "may this amount be disposed of again"; this one claims "did this money
+  // financially LEAVE the deal". They are different questions, and `OTHER` is
+  // exactly where they diverge: it posts no journal, moves no money and leaves
+  // the row HELD, awaiting a manual correction. Counting it as gone let 3,000
+  // of a customer's money vanish from the ceiling while the dealership still
+  // held it.
+  //
+  // FAIL CLOSED. `OTHER` means a person did something this system does not
+  // model, so we cannot know the money left — and the only safe assumption is
+  // that it did not. It keeps counting against the deal, which can only ever
+  // refuse more, never allow more.
   const finalizedSlicesMinor = holds
     .filter(
       (h) =>
         h.allocationStatus === "RESOLVED" &&
         (h.resolutionTreatment === "REFUND_TO_CUSTOMER" ||
-          h.resolutionTreatment === "FORFEITED" ||
-          h.resolutionTreatment === "OTHER")
+          h.resolutionTreatment === "FORFEITED")
     )
     .reduce((sum, h) => sum + (h.allocatedAmountMinor ?? 0), 0);
   return (deposit.releasedAmountMinor ?? 0) + finalizedSlicesMinor;
@@ -1406,6 +1483,19 @@ export async function validateReservationAdoption(
   }
   if (reservation.expiresAt !== undefined && reservation.expiresAt <= Date.now()) {
     throw new ConvexError(COMMITMENT_MESSAGES.proofExpired);
+  }
+  // ⚠️ ONCE. Adoption stamps the quote's `rootId` but nothing marked the
+  // reservation as taken up, so the same live reservation could be adopted
+  // twice — leaving two quotes on one root, neither superseding the other, both
+  // passing `assertCurrentRevision` because the root had no head, and both able
+  // to attach money at different prices. A deal with two live heads is not a
+  // deal. The head is what makes the second attempt refusable.
+  const adoptedRootId = await rootIdForReservation(ctx, args.reservationId);
+  if (adoptedRootId) {
+    const adoptedRoot = await ctx.db.get(adoptedRootId);
+    if (adoptedRoot?.headQuoteId) {
+      throw new ConvexError(COMMITMENT_MESSAGES.proofAlreadyAdopted);
+    }
   }
   return reservation;
 }

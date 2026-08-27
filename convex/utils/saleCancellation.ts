@@ -335,7 +335,16 @@ async function cancelPendingSupplierPayables(
  */
 async function reopenDepositAfterReversal(
   ctx: MutationCtx,
-  depositId: Id<"deposits">
+  depositId: Id<"deposits">,
+  /**
+   * The car whose sale is actually being reversed.
+   *
+   * ⚠️ NOT `deposit.vehicleId`. On a multi-vehicle deal that field is the
+   * quote's PRIMARY car, so cancelling the SECOND car's sale reopened the
+   * first car's consumed root and attached a live claim to a vehicle that is
+   * still legitimately SOLD.
+   */
+  reversedVehicleId: Id<"vehicles">
 ): Promise<Doc<"deposits"> | null> {
   const deposit = await ctx.db.get(depositId);
   if (!deposit) return null;
@@ -359,7 +368,7 @@ async function reopenDepositAfterReversal(
     // the same physical car — see `reopenRootForReversal`.
     const rootId = await reopenRootForReversal(ctx, {
       orgId: row.orgId,
-      vehicleId: row.vehicleId,
+      vehicleId: reversedVehicleId,
       quoteId: row.quoteId ?? null,
     });
 
@@ -373,7 +382,7 @@ async function reopenDepositAfterReversal(
 
     await acquireVehicleForQuote(ctx, {
       orgId: row.orgId,
-      vehicleId: row.vehicleId,
+      vehicleId: reversedVehicleId,
       quoteId,
       customerId: row.customerId,
       createdBy: row.createdBy,
@@ -433,6 +442,8 @@ async function reinstateAppliedDeposits(
     orgId: Id<"organizations">;
     saleId: Id<"sales">;
     quoteId: Id<"quotes"> | undefined;
+    /** The car whose sale is being reversed — one sale, one vehicle. */
+    reversedVehicleId: Id<"vehicles">;
     actorId: Id<"users">;
     reason: string;
     reversalDate: number;
@@ -449,7 +460,11 @@ async function reinstateAppliedDeposits(
   const touchedDeposits = new Set<string>();
   for (const application of reversed) {
     touchedDeposits.add(application.depositId.toString());
-    const deposit = await reopenDepositAfterReversal(ctx, application.depositId);
+    const deposit = await reopenDepositAfterReversal(
+      ctx,
+      application.depositId,
+      args.reversedVehicleId
+    );
     if (!deposit) continue;
 
     if (application.holdId) {
@@ -520,7 +535,7 @@ async function reinstateAppliedDeposits(
       // Not gated on which sale closed the row: a zero slice posts no journal
       // and so has no application row, so whichever car was sold LAST closed
       // it, and that is rarely the one being cancelled.
-      await reopenDepositAfterReversal(ctx, deposit._id);
+      await reopenDepositAfterReversal(ctx, deposit._id, hold.vehicleId);
       await syncVehicleHoldStatus(ctx, hold.vehicleId, args.actorId);
     }
   }
@@ -548,7 +563,7 @@ async function reinstateAppliedDeposits(
     // cross-car reversal this rewrite exists to stop.
     if (applications.length > 0) continue;
 
-    await reopenDepositAfterReversal(ctx, deposit._id);
+    await reopenDepositAfterReversal(ctx, deposit._id, args.reversedVehicleId);
     const reopened = await ctx.db.get(deposit._id);
     if (reopened) await reactivateAllVehiclesForDeposit(ctx, reopened);
     const reverse =
@@ -675,6 +690,7 @@ export async function cancelCompletedSaleOperationalRecords(
     orgId: args.orgId,
     saleId: args.sale._id,
     quoteId: args.sale.quoteId,
+    reversedVehicleId: args.sale.vehicleId,
     actorId: args.actorId,
     reason: args.reason,
     reversalDate: args.reversalDate,

@@ -10,6 +10,30 @@ on:
   workflow_dispatch:
 
 
+# ⚠️ ONE RUN PER BRANCH AT A TIME, AND THE PREVIEW NAME IS WHY.
+#
+# `CONVEX_PREVIEW_NAME` below is derived from the branch, so every run for a
+# branch targets the SAME named Convex preview. Deploying and stamping
+# `DEPLOYMENT_GIT_SHA` are separate commands, so two runs in flight together can
+# interleave: run B deploys code B, an older rerun A redeploys code A over it,
+# then B stamps SHA B — and B's contention suite reads its safety facts off A's
+# backend while the environment claims to be B. The identity assertion passes
+# and a green check gets attached to a commit whose code was never exercised.
+#
+# The suite cannot catch this: it verifies the stamp, and the stamp is the thing
+# that lied. Serialising the runs removes the interleaving rather than trying to
+# detect it. An older run for the same branch is superseded anyway, so cancelling
+# it costs nothing and leaving it alive is precisely the hazard.
+#
+# Raised as CRITICAL by the Codex xhigh seat on 015a64a57. I could not stage a
+# real GitHub/Convex interleaving to reproduce it, so this closes it by
+# construction instead of by evidence — and that boundary is stated rather than
+# blurred.
+concurrency:
+  group: e2e-preview-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+
 # Least-privilege default for every job here: this workflow only reads the
 # repository. Without an explicit block, jobs inherit the repository-wide
 # default token scope, which is broader than anything below needs.
