@@ -4905,6 +4905,9 @@ describe("31. reversal restores exactly what the lifecycle says it should", () =
       ],
     });
     await seed.asUser.mutation(api.sales.completeFromQuote, { orgId: seed.orgId, quoteId });
+    const consumedBefore = (await claimsOn(seed, b))
+      .filter((c) => c.status === "CONSUMED")
+      .map((c) => ({ id: String(c._id), sale: String(consumedBy(c)) }));
     await cancelSaleFor(seed, b);
 
     const slice = await seed.t.run(async (ctx) =>
@@ -4917,6 +4920,23 @@ describe("31. reversal restores exactly what the lifecycle says it should", () =
 
     expect(await ids(seed, b, "ACTIVE"), "so nothing holds car B").toEqual([]);
     expect((await resolveRoot(seed, b)).kind, "and the authority agrees it is free").toBe("FREE");
+
+    // ⚠️ NOT REVIVING IS NOT THE SAME AS NOT EXISTING. A reviewer pointed out
+    // that an implementation which DELETES B's consumed claim during the
+    // cancellation satisfies every other assertion here while destroying the
+    // durable history the whole redesign rests on. The row must still be there,
+    // still CONSUMED, still naming the sale that consumed it.
+    const afterRows = await claimsOn(seed, b);
+    expect(consumedBefore.length, "B's sale consumed something to begin with").toBeGreaterThan(0);
+    for (const original of consumedBefore) {
+      const still = afterRows.find((c) => String(c._id) === original.id);
+      expect(still, `B's consumed claim ${original.id} still exists`).toBeTruthy();
+      expect(still!.status, "and is still CONSUMED, not deleted or rewritten").toBe("CONSUMED");
+      expect(
+        String(consumedBy(still)),
+        "still naming the sale that consumed it"
+      ).toBe(original.sale);
+    }
 
     // Asserted by consequence: a genuinely free car can be sold to anybody.
     const rival = await cashQuote(seed, seed.customerB, b);
@@ -5053,10 +5073,22 @@ describe("31. reversal restores exactly what the lifecycle says it should", () =
       supersedesQuoteId: q1 as Id<"quotes">,
     });
     await seed.asUser.mutation(api.sales.completeFromQuote, { orgId: seed.orgId, quoteId: q2 });
+    // ⚠️ BOTH PROPERTIES IN ONE FIXTURE. A reviewer showed that proving exact
+    // identity on an UNREVISED deal (§31.3) and current-head filing on a
+    // REVISED one (here) in SEPARATE fixtures lets an implementation reactivate
+    // the original row for unrevised deals while inserting a REPLACEMENT row
+    // under Q2 for revised ones — passing both while violating "restore those
+    // exact claims".
+    const consumedIds = await ids(seed, v, "CONSUMED");
+    expect(consumedIds.length, "the sale consumed a claim").toBeGreaterThan(0);
     await cancelSaleFor(seed, v);
 
     const live = (await claimsOn(seed, v)).filter((c) => c.status === "ACTIVE");
     expect(live.length, "the reversal restored a claim").toBeGreaterThan(0);
+    expect(
+      live.map((c) => String(c._id)).sort(),
+      "and they are the SAME ROWS the sale consumed, not replacements under the new head"
+    ).toEqual(consumedIds);
     for (const claim of live) {
       expect(
         String(claim.quoteId),
@@ -5102,26 +5134,44 @@ describe("31. reversal restores exactly what the lifecycle says it should", () =
     const rivalRoot = await resolveRoot(seed, b);
     expect(rivalRoot.customerId, "the rival owns car B now").toEqual(seed.customerB);
 
-    // Now the original deal's leftover money is ruled on. Whatever that does to
-    // the ORIGINAL deal, it must not reach across and take B back.
+    // ⚠️ THE TREATMENT MATTERS, AND MY FIRST VERSION CHOSE THE WRONG ONE.
+    // `REFUND_TO_CUSTOMER` is TERMINAL — it never attempts to reacquire the
+    // car, so it proved only that refunding old money leaves a rival alone.
+    // `RETURN_TO_UNALLOCATED` puts the money back on the DEAL, which is the
+    // treatment that would try to re-hold the vehicle. That is the one the
+    // acquirability clause governs.
+    //
+    // ⚠️ And the slice is REQUIRED, not optional. `if (slice)` let a wrong
+    // implementation skip the subject mutation entirely and pass.
     const slice = await seed.t.run(async (ctx) =>
       (await ctx.db.query("depositVehicleHolds").collect()).find(
         (h) => h.vehicleId === b && h.allocationStatus === "RELEASED_AWAITING_DECISION"
       )
     );
-    if (slice) {
-      await seed.asApprover.mutation(api.deposits.resolveReleasedAllocation, {
+    expect(slice, "B's released slice exists and is the subject of this contract").toBeTruthy();
+
+    await expectRefusal(
+      seed.asApprover.mutation(api.deposits.resolveReleasedAllocation, {
         orgId: seed.orgId,
-        holdId: slice._id,
-        treatment: "REFUND_TO_CUSTOMER" as const,
-        refundMethod: "CASH" as const,
-        reason: "refunded to the original customer",
-      });
-    }
+        holdId: slice!._id,
+        treatment: "RETURN_TO_UNALLOCATED" as const,
+        reason: "putting it back on the deal",
+      }),
+      REFUSED,
+      "31.9"
+    );
+
+    // Refused BEFORE any side effect: the rival still owns the car and the
+    // slice is exactly where it was.
     const afterRoot = await resolveRoot(seed, b);
     expect(afterRoot.customerId, "car B still belongs to the rival who acquired it").toEqual(
       seed.customerB
     );
+    const sliceAfter = await seed.t.run((ctx) => ctx.db.get(slice!._id));
+    expect(
+      sliceAfter?.allocationStatus,
+      "and the money is still awaiting its decision, untouched"
+    ).toBe("RELEASED_AWAITING_DECISION");
   });
 
   test("31.10 a dead FINANCE claim was ACTIVE, and stays dead", async () => {
@@ -5172,6 +5222,174 @@ describe("31. reversal restores exactly what the lifecycle says it should", () =
       expect(claim, `the finance claim ${id} still exists`).toBeTruthy();
       expect(claim!.status, "a cancelled application never holds the car again").not.toBe("ACTIVE");
     }
+  });
+
+  test("31.11 durable consumption is recorded for FINANCE too, not only DEPOSIT", async () => {
+    // ⚠️ A reviewer noted every §31 fixture that exercises `consumedBySaleId`
+    // uses DEPOSIT claims, so a DEPOSIT-ONLY implementation of the field
+    // satisfies the whole section. The ruling says "the exact per-vehicle claim
+    // or claimS consumed by that sale" — it does not say deposits.
+    const seed = await seedDealer("rev-finance-record");
+    const v = await vehicle(seed);
+    const quoteId = await financedQuote(seed, seed.customerA, v);
+    const applicationId = (await seed.asUser.mutation(api.applications.createFromQuote, {
+      orgId: seed.orgId,
+      quoteId,
+    })) as Id<"financeApplications">;
+    const activeFinance = (await claimsOn(seed, v)).filter(
+      (c) => c.kind === "FINANCE" && c.status === "ACTIVE"
+    );
+    expect(activeFinance.length, "a FINANCE claim was ACTIVE").toBeGreaterThan(0);
+    const financeIds = activeFinance.map((c) => String(c._id)).sort();
+
+    await seed.asUser.mutation(api.applications.updateStatus, {
+      orgId: seed.orgId,
+      applicationId,
+      status: "UNDER_REVIEW" as const,
+    });
+    await seed.asApprover.mutation(api.applications.updateStatus, {
+      orgId: seed.orgId,
+      applicationId,
+      status: "APPROVED" as const,
+    });
+    await registerHandover(seed.asUser, api, seed.orgId, applicationId);
+    await seed.asUser.mutation(api.applications.registerExpectedPayment, {
+      orgId: seed.orgId,
+      applicationId,
+      method: "CASH" as const,
+      expectedDate: Date.now(),
+    });
+    await seed.asUser.mutation(api.applications.finalizeDeal, { orgId: seed.orgId, applicationId });
+
+    const sale = await liveSaleFor(seed, v);
+    expect(sale, "the financed deal produced a sale").toBeTruthy();
+    const after = await claimsOn(seed, v);
+    for (const id of financeIds) {
+      const claim = after.find((c) => String(c._id) === id)!;
+      expect(claim.status, "the FINANCE claim was CONSUMED by the sale").toBe("CONSUMED");
+      expect(
+        String(consumedBy(claim)),
+        "and it names the sale that consumed it, exactly as a DEPOSIT claim must"
+      ).toBe(String(sale!._id));
+    }
+  });
+
+  test("31.12 a RESERVATION claim's consumption is durable as well", async () => {
+    // ⚠️ The third evidence kind, and the one no fixture touched. I am NOT
+    // asserting whether it revives — c15266 makes that depend on the
+    // reservation's own lifecycle, and guessing an outcome I have not derived
+    // is precisely the mistake that produced three bad contracts already.
+    //
+    // What IS derivable from "restore only those exact claims" plus durability,
+    // regardless of which way the lifecycle falls: the row must still be there,
+    // it must name its consuming sale, and if it comes back it must be THAT row
+    // rather than a replacement.
+    const seed = await seedDealer("rev-reservation-record");
+    const v = await vehicle(seed);
+    const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+      orgId: seed.orgId,
+      vehicleId: v,
+      customerId: seed.customerA,
+      depositAmount: 2_000,
+    });
+    const reservationClaims = (await claimsOn(seed, v)).filter(
+      (c) => c.kind === "RESERVATION" && c.status === "ACTIVE"
+    );
+    expect(reservationClaims.length, "the reservation holds the car").toBeGreaterThan(0);
+    const reservationIds = reservationClaims.map((c) => String(c._id)).sort();
+
+    const quoteId = await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+      vehicleId: v,
+      mode: "CASH" as const,
+      vehiclePrice: PRICE,
+      downPayment: 0,
+      termMonths: 0,
+      totalFinancedAmount: 0,
+      intent: "NEW" as const,
+      adoptReservationId: reservationId,
+    });
+    await seed.asUser.mutation(api.sales.completeFromQuote, { orgId: seed.orgId, quoteId });
+    const sale = await liveSaleFor(seed, v);
+
+    const consumed = await claimsOn(seed, v);
+    for (const id of reservationIds) {
+      const claim = consumed.find((c) => String(c._id) === id);
+      expect(claim, `the reservation claim ${id} still exists`).toBeTruthy();
+      expect(claim!.status, "the sale consumed it").toBe("CONSUMED");
+      expect(
+        String(consumedBy(claim)),
+        "and it names the sale that consumed it"
+      ).toBe(String(sale!._id));
+    }
+
+    await cancelSaleFor(seed, v);
+
+    // Either it stays consumed or it comes back — but it is the SAME ROW and it
+    // never disappears.
+    const afterCancel = await claimsOn(seed, v);
+    for (const id of reservationIds) {
+      const claim = afterCancel.find((c) => String(c._id) === id);
+      expect(claim, `the reservation claim ${id} survives the reversal`).toBeTruthy();
+      expect(
+        String(consumedBy(claim)),
+        "with its consumption history intact either way"
+      ).toBe(String(sale!._id));
+    }
+  });
+
+  test("31.13 a STALE consumed claim from an earlier sale must not revive", async () => {
+    // ⚠️ THE WRONG IMPLEMENTATION A REVIEWER CONSTRUCTED, MADE INTO A CONTRACT.
+    //
+    // Write `consumedBySaleId` correctly on completion, then IGNORE it on
+    // reversal and simply reactivate every CONSUMED deposit claim found BY
+    // VEHICLE. That passed every other fixture in this section, because no
+    // other fixture gives a car a consumed claim from an EARLIER, non-restored
+    // sale. Here it does — and reversing the SECOND sale must revive only the
+    // second sale's claims.
+    const seed = await seedDealer("rev-stale-claim");
+    const v = await vehicle(seed);
+
+    // Sale A. Cancelled, then its money resolved terminally, so nothing of it
+    // is restored and its consumed claim becomes stale history.
+    const qA = await cashQuote(seed, seed.customerA, v);
+    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: qA, amount: 2_000 });
+    await seed.asUser.mutation(api.sales.completeFromQuote, { orgId: seed.orgId, quoteId: qA });
+    const saleA = await liveSaleFor(seed, v);
+    const staleIds = (await claimsOn(seed, v))
+      .filter((c) => String(consumedBy(c)) === String(saleA!._id))
+      .map((c) => String(c._id))
+      .sort();
+    await cancelSaleFor(seed, v);
+    const depositA = await seed.t.run(async (ctx) => (await ctx.db.query("deposits").collect())[0]);
+    await seed.asApprover.mutation(api.deposits.release, {
+      orgId: seed.orgId,
+      depositId: depositA._id,
+      resolution: "REFUNDED" as const,
+      refundMethod: "CASH" as const,
+    });
+
+    // Sale B, to somebody else entirely.
+    const qB = await cashQuote(seed, seed.customerB, v);
+    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: qB, amount: 2_000 });
+    await seed.asUser.mutation(api.sales.completeFromQuote, { orgId: seed.orgId, quoteId: qB });
+    const saleB = await liveSaleFor(seed, v);
+    const bIds = (await claimsOn(seed, v))
+      .filter((c) => String(consumedBy(c)) === String(saleB!._id))
+      .map((c) => String(c._id))
+      .sort();
+    expect(bIds.length, "sale B consumed its own claims").toBeGreaterThan(0);
+    expect(staleIds.length, "and sale A left stale history behind").toBeGreaterThan(0);
+
+    await cancelSaleFor(seed, v);
+
+    // ⚠️ EXACTLY sale B's claims. A by-vehicle reactivation revives sale A's
+    // too and fails here — which is the entire point of recording WHICH sale.
+    expect(
+      await ids(seed, v, "ACTIVE"),
+      "only the claims THIS sale consumed revive — never an earlier sale's"
+    ).toEqual(bIds);
   });
 });
 
