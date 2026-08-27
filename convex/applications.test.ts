@@ -740,7 +740,15 @@ describe("applications hold release and deposit resolution", () => {
       downPayment: 3000,
       termMonths: 48,
     });
-    const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
+    const applicationId = await asUser.mutation(api.applications.createFromQuote, {
+      orgId,
+      quoteId,
+      // SCRUM-195: this financed deal CONTINUES the reservation that is holding
+      // the car. The reservation is NAMED; the authority verifies it is the one
+      // the holding root actually came from. It is never inferred from the
+      // customer and the vehicle happening to match.
+      adoptReservationId: reservationId,
+    });
 
     await asUser.mutation(api.applications.cancelApplication, {
       orgId,
@@ -783,7 +791,15 @@ describe("applications hold release and deposit resolution", () => {
       downPayment: 3000,
       termMonths: 48,
     });
-    const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
+    const applicationId = await asUser.mutation(api.applications.createFromQuote, {
+      orgId,
+      quoteId,
+      // SCRUM-195: this financed deal CONTINUES the reservation that is holding
+      // the car. The reservation is NAMED; the authority verifies it is the one
+      // the holding root actually came from. It is never inferred from the
+      // customer and the vehicle happening to match.
+      adoptReservationId: reservationId,
+    });
 
     await asUser.mutation(api.applications.cancelApplication, {
       orgId,
@@ -822,7 +838,15 @@ describe("applications hold release and deposit resolution", () => {
       downPayment: 3000,
       termMonths: 48,
     });
-    const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
+    const applicationId = await asUser.mutation(api.applications.createFromQuote, {
+      orgId,
+      quoteId,
+      // SCRUM-195: this financed deal CONTINUES the reservation that is holding
+      // the car. The reservation is NAMED; the authority verifies it is the one
+      // the holding root actually came from. It is never inferred from the
+      // customer and the vehicle happening to match.
+      adoptReservationId: reservationId,
+    });
 
     await t.run((ctx) => ctx.db.patch(applicationId, { status: "CANCELLED" }));
 

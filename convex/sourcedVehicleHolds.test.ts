@@ -235,7 +235,16 @@ describe("createReservation on a sourced vehicle", () => {
     // status, so the deposit hold promotes the car to RESERVED first. Rejecting
     // RESERVED threw and rolled the promotion back with it, leaving the vehicle
     // exactly as it started — the case this flow exists for could never pass.
-    await asUser.mutation(api.vehicles.createReservation, { orgId, vehicleId, customerId });
+    // SCRUM-195: this reservation belongs to the deal whose deposit is already
+    // holding the car, and it says so by NAMING that deal. Reserving a car your
+    // own customer's deposit holds is ordinary work; reserving one somebody
+    // else's deal holds is not, and only explicit proof separates them.
+    await asUser.mutation(api.vehicles.createReservation, {
+      orgId,
+      vehicleId,
+      customerId,
+      dealQuoteId: quoteId,
+    });
 
     const vehicle = await getVehicle(t, vehicleId);
     expect(vehicle.status).toBe("RESERVED");

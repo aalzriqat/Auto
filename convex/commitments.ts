@@ -185,12 +185,38 @@ export async function resolveOwnership(
  * that began life as a reservation, before any quote exists.
  */
 export type CommitmentLineage = {
+  /** "I am acting for the deal this quote belongs to." */
   quoteId?: Id<"quotes"> | null;
+  /** "I am acting for the deal this reservation IS." */
   reservationId?: Id<"vehicleReservations"> | null;
+  /**
+   * "I am acting for the deal this deposit belongs to."
+   *
+   * The proof a door presents when it has money on the deal but no quote to
+   * show — reserving a car the same deal's deposit already holds, for one.
+   */
+  depositId?: Id<"deposits"> | null;
+  /**
+   * "This operation converts that reservation's deal into mine."
+   *
+   * ⚠️ EXPLICIT, AND THE ONLY WAY A RESERVATION-ORIGIN DEAL CONTINUES. The
+   * caller names the exact reservation; the authority checks it is the one the
+   * holding root actually came from. Matching on customer + vehicle instead
+   * would be the inference I2 forbids by name — the same customer opening a
+   * second deal on the same car is a DIFFERENT deal, and no amount of
+   * coincidence makes it a continuation.
+   */
+  adoptReservationId?: Id<"vehicleReservations"> | null;
 };
 
 export type ActingRoot =
   | { decision: "JOIN"; rootId: Id<"commitmentRoots"> }
+  /** A reservation's deal, formally continued under a quote. */
+  | {
+      decision: "ADOPT_RESERVATION";
+      rootId: Id<"commitmentRoots">;
+      reservationId: Id<"vehicleReservations">;
+    }
   | { decision: "OPEN_NEW" }
   | { decision: "REFUSE"; message: string };
 
@@ -246,6 +272,44 @@ export async function resolveActingRoot(
   if (args.lineage.reservationId && held.originReservationId === args.lineage.reservationId) {
     return { decision: "JOIN", rootId: held._id };
   }
+  // ── deposit proof: an episode of THIS root rests on that very deposit ────
+  //
+  // Presenting a deposit id says "the deal that holds this car is the one this
+  // money is on". Verified against the root's own live episodes, never against
+  // the customer.
+  if (args.lineage.depositId) {
+    for await (const claim of ctx.db
+      .query("vehicleCommitmentClaims")
+      .withIndex("by_root_status", (q) => q.eq("rootId", held._id).eq("status", "ACTIVE"))) {
+      if (claim.depositId && String(claim.depositId) === String(args.lineage.depositId)) {
+        return { decision: "JOIN", rootId: held._id };
+      }
+    }
+  }
+
+  // ── adoption: a reservation's deal continues under a quote ───────────────
+  if (args.lineage.adoptReservationId) {
+    const reservation = await ctx.db.get(args.lineage.adoptReservationId);
+    const adoptable =
+      reservation &&
+      reservation.orgId === args.orgId &&
+      String(reservation.vehicleId) === String(args.vehicleId) &&
+      reservation.status === "ACTIVE" &&
+      held.originReservationId &&
+      String(held.originReservationId) === String(args.lineage.adoptReservationId);
+    if (adoptable) {
+      return {
+        decision: "ADOPT_RESERVATION",
+        rootId: held._id,
+        reservationId: args.lineage.adoptReservationId,
+      };
+    }
+    // A named-but-invalid adoption is a refusal, not a fallback. Falling
+    // through to "open a new root" is exactly the silent degradation this
+    // design removes.
+    return refuse;
+  }
+
   if (args.lineage.quoteId) {
     const quote = await ctx.db.get(args.lineage.quoteId);
     if (!quote || quote.orgId !== args.orgId) return refuse;
@@ -394,7 +458,7 @@ export async function acquireVehicle(
   if (acting.decision === "REFUSE") throwRefusal(acting);
 
   const rootId =
-    acting.decision === "JOIN"
+    acting.decision === "JOIN" || acting.decision === "ADOPT_RESERVATION"
       ? acting.rootId
       : await openRoot(ctx, {
           orgId: args.orgId,
@@ -403,6 +467,15 @@ export async function acquireVehicle(
           createdBy: args.createdBy,
           lineage: args.lineage,
         });
+
+  // ⚠️ ADOPTION RE-HEADS THE DEAL, IN ONE PLACE. Once a reservation's deal is
+  // continued under a quote, that quote becomes the revision the root is known
+  // by — so every later door (a further deposit, a finance application) proves
+  // lineage by quote in the ordinary way instead of re-adopting. The
+  // conversion happens exactly once, here, and is auditable.
+  if (acting.decision === "ADOPT_RESERVATION" && args.lineage.quoteId) {
+    await ctx.db.patch(acting.rootId, { headQuoteId: args.lineage.quoteId });
+  }
 
   await attachEpisode(ctx, {
     orgId: args.orgId,
@@ -418,11 +491,39 @@ export async function acquireVehicle(
 }
 
 /**
+ * The evidence a released deposit slice should be re-acquired under.
+ *
+ * CARRIED FROM THE SOURCE EPISODE, NOT ASSUMED FROM THE ROW. A deposit taken
+ * with a reservation is RESERVATION evidence that happens to have a deposit
+ * attached. Re-acquiring it as `{ kind: "DEPOSIT" }` because the surrounding
+ * row is a `depositVehicleHolds` is precisely the inference this replacement
+ * removes: it is what turned a consumed reservation episode into a live
+ * DEPOSIT-kind claim on a second root.
+ *
+ * Falls back to DEPOSIT only when no episode rests on this deposit at all,
+ * which is the genuinely deposit-only case.
+ */
+export async function evidenceForDepositHold(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  hold: Doc<"depositVehicleHolds">
+): Promise<CommitmentEvidence> {
+  for await (const claim of ctx.db
+    .query("vehicleCommitmentClaims")
+    .withIndex("by_deposit", (q) => q.eq("depositId", hold.depositId))) {
+    if (claim.orgId !== orgId) continue;
+    return evidenceOf(claim);
+  }
+  return { kind: "DEPOSIT", depositId: hold.depositId };
+}
+
+/**
  * Refuse to take a car out from under a live deal.
  *
  * The door version of `resolveActingRoot` for operations that are not
  * acquiring — a sale, a trade-in, an inventory removal — where the only
- * question is whether this deal is allowed to act on the car at all.
+ * question is whether this deal is allowed to act on the car at all. Every
+ * non-REFUSE decision passes, adoption included.
  */
 export async function assertAcquirable(
   ctx: QueryCtx | MutationCtx,

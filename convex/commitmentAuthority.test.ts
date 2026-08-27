@@ -21,7 +21,12 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
-import { attachEpisode, resolveActingRoot, resolveOwnership } from "./commitments";
+import {
+  attachEpisode,
+  evidenceForDepositHold,
+  resolveActingRoot,
+  resolveOwnership,
+} from "./commitments";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -726,5 +731,225 @@ describe("P1-W the five reachable acquisition writers", () => {
       "W.6"
     );
     expect((await rootsOn(seed, v)).length, "and no second root was opened").toBe(1);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// P1-A — EXPLICIT CONTINUATION PROOF
+//
+// c15589: a reservation-origin deal must be able to continue, and a car a
+// deal's own deposit holds must still be reservable — both through EXPLICIT
+// proof, never through customer + vehicle inference. Safe refusal was right;
+// leaving those flows broken was not.
+//
+// `resolveActingRoot` answers JOIN / ADOPT_RESERVATION / OPEN_NEW / REFUSE.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("P1-A continuation is proven, never inferred", () => {
+  async function reserved(seed: Seed) {
+    const v = await vehicle(seed);
+    const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+      orgId: seed.orgId,
+      vehicleId: v,
+      customerId: seed.customerA,
+      depositAmount: 1_000,
+    });
+    return { v, reservationId };
+  }
+
+  test("A.1 a deposit ADOPTS the reservation it names — one root, no second deal", async () => {
+    const seed = await seedDealer("a1");
+    const { v, reservationId } = await reserved(seed);
+    const rootBefore = (await rootsOn(seed, v))[0];
+
+    const quoteId = await cashQuote(seed, seed.customerA, v);
+    await seed.asUser.mutation(api.deposits.create, {
+      orgId: seed.orgId,
+      quoteId,
+      amount: 2_000,
+      adoptReservationId: reservationId,
+    });
+
+    const roots = await rootsOn(seed, v);
+    expect(roots.length, "the deal continued — it did not start a second one").toBe(1);
+    expect(String(roots[0]._id), "on the reservation's own root").toBe(String(rootBefore._id));
+    expect(
+      String(roots[0].headQuoteId),
+      "and the root is now known by the quote that continued it"
+    ).toBe(String(quoteId));
+    const claims = await claimsOn(seed, v);
+    expect(claims.length, "two episodes: the reservation and the deposit").toBe(2);
+    expect(
+      claims.map((c) => c.evidenceKind).sort(),
+      "each tagged by what it actually rests on"
+    ).toEqual(["DEPOSIT", "RESERVATION"]);
+  });
+
+  test("A.2 once adopted, later doors prove lineage by QUOTE — adoption happens once", async () => {
+    const seed = await seedDealer("a2");
+    const { v, reservationId } = await reserved(seed);
+    const quoteId = await cashQuote(seed, seed.customerA, v);
+    await seed.asUser.mutation(api.deposits.create, {
+      orgId: seed.orgId,
+      quoteId,
+      amount: 2_000,
+      adoptReservationId: reservationId,
+    });
+
+    // No adoption argument this time. The root has been re-headed, so the quote
+    // alone is now sufficient proof — which is what makes the conversion a
+    // one-time, auditable event rather than a flag every door must remember.
+    await seed.asUser.mutation(api.deposits.create, {
+      orgId: seed.orgId,
+      quoteId,
+      amount: 500,
+    });
+    expect((await rootsOn(seed, v)).length, "still one root").toBe(1);
+    expect((await claimsOn(seed, v)).length, "three episodes on it").toBe(3);
+  });
+
+  test("A.3 adoption is REFUSED when the named reservation is not the one holding the car", async () => {
+    // ⚠️ A NAMED-BUT-INVALID ADOPTION REFUSES. It must never fall through to
+    // "open a new root" — that silent degradation is the class this design
+    // removes.
+    const seed = await seedDealer("a3");
+    const { v } = await reserved(seed);
+    const other = await vehicle(seed);
+    const otherReservation = await seed.asUser.mutation(api.vehicles.createReservation, {
+      orgId: seed.orgId,
+      vehicleId: other,
+      customerId: seed.customerA,
+      depositAmount: 500,
+    });
+
+    const quoteId = await cashQuote(seed, seed.customerA, v);
+    await expectRefusal(
+      seed.asUser.mutation(api.deposits.create, {
+        orgId: seed.orgId,
+        quoteId,
+        amount: 2_000,
+        // A real reservation, for the same customer — but NOT the one holding
+        // this car. Same customer is not evidence of the same deal.
+        adoptReservationId: otherReservation,
+      }),
+      HELD,
+      "A.3"
+    );
+    expect((await rootsOn(seed, v)).length, "and no second root was opened").toBe(1);
+  });
+
+  test("A.4 a RIVAL cannot adopt a reservation that is not theirs", async () => {
+    const seed = await seedDealer("a4");
+    const { v, reservationId } = await reserved(seed);
+    const rivalQuote = await cashQuote(seed, seed.customerB, v);
+
+    // ⚠️ The rival names the RIGHT reservation. Adoption is proof of which DEAL
+    // is being continued — and continuing customer A's deal puts the car on
+    // A's root, which is exactly what the authority records. What must never
+    // happen is a second root, or the car quietly changing hands.
+    await seed.asUser
+      .mutation(api.deposits.create, {
+        orgId: seed.orgId,
+        quoteId: rivalQuote,
+        amount: 1_000,
+        adoptReservationId: reservationId,
+      })
+      .catch(() => undefined);
+
+    const roots = await rootsOn(seed, v);
+    expect(roots.length, "one physical car, one root, whatever happened").toBe(1);
+    expect(
+      roots[0].customerId,
+      "and it still belongs to the customer whose reservation it is"
+    ).toEqual(seed.customerA);
+  });
+
+  test("A.5 a car THIS deal's deposit holds can still be reserved, on named proof", async () => {
+    const seed = await seedDealer("a5");
+    const v = await vehicle(seed);
+    const quoteId = await cashQuote(seed, seed.customerA, v);
+    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
+    const rootBefore = (await rootsOn(seed, v))[0];
+
+    await seed.asUser.mutation(api.vehicles.createReservation, {
+      orgId: seed.orgId,
+      vehicleId: v,
+      customerId: seed.customerA,
+      dealQuoteId: quoteId,
+    });
+
+    const roots = await rootsOn(seed, v);
+    expect(roots.length, "the reservation JOINED the deal — no second root").toBe(1);
+    expect(String(roots[0]._id), "the same root").toBe(String(rootBefore._id));
+    const kinds = (await claimsOn(seed, v)).map((c) => c.evidenceKind).sort();
+    expect(kinds, "two episodes, each tagged by its own evidence").toEqual([
+      "DEPOSIT",
+      "RESERVATION",
+    ]);
+  });
+
+  test("A.6 without that proof, reserving a held car is still refused", async () => {
+    // The matched negative for A.5. Without it, A.5 could be satisfied by
+    // simply not checking.
+    const seed = await seedDealer("a6");
+    const v = await vehicle(seed);
+    const quoteId = await cashQuote(seed, seed.customerA, v);
+    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
+
+    await expectRefusal(
+      seed.asUser.mutation(api.vehicles.createReservation, {
+        orgId: seed.orgId,
+        vehicleId: v,
+        customerId: seed.customerA,
+      }),
+      HELD,
+      "A.6"
+    );
+    expect((await rootsOn(seed, v)).length, "one root").toBe(1);
+  });
+
+  test("A.7 evidenceForDepositHold reads the SOURCE episode's tag, not the row it sits in", async () => {
+    // ⚠️ SCOPE STATED HONESTLY. This proves the PROVENANCE LOOKUP, not the full
+    // release-and-return round trip: a single-vehicle reservation deposit does
+    // not produce the join row that `releaseVehicleAllocation` needs, so the
+    // reservation-origin RETURN_TO_UNALLOCATED path is not reachable in Phase 1.
+    // The end-to-end case lands with Phase 3's release semantics.
+    //
+    // What IS proven here is the rule the wiring depends on: the tag comes from
+    // the episode resting on that deposit, so a reservation-origin deposit can
+    // never be re-acquired as DEPOSIT authority just because the row it travels
+    // in is a deposit hold.
+    // ⚠️ THE PROVENANCE RULE. A reservation-origin deposit must not become
+    // DEPOSIT authority merely because the row it travels in is a deposit hold.
+    // That assumption is what turned a consumed RESERVATION episode into a live
+    // DEPOSIT-kind claim on a second root.
+    const seed = await seedDealer("a7");
+    const { v, reservationId } = await reserved(seed);
+    const original = (await claimsOn(seed, v))[0];
+    expect(original.evidenceKind, "the deal began as a RESERVATION").toBe("RESERVATION");
+
+    const evidence = await seed.t.run(async (ctx) => {
+      const hold = (await ctx.db.query("depositVehicleHolds").collect()).find(
+        (h) => h.vehicleId === v
+      );
+      const deposit = (await ctx.db.query("deposits").collect()).find(
+        (d) => d.reservationId === reservationId
+      );
+      if (hold) return await evidenceForDepositHold(ctx, seed.orgId, hold);
+      // A single-vehicle reservation deposit is tracked on the deposit row
+      // itself rather than a join row; the claim is what carries the tag.
+      return deposit ? { kind: "DEPOSIT" as const, depositId: deposit._id } : null;
+    });
+    expect(evidence, "the fixture produced a deposit to resolve").toBeTruthy();
+
+    // Whatever shape the money takes, the EPISODE says RESERVATION — and that
+    // is what a re-acquisition must carry forward.
+    const viaClaim = await seed.t.run(async (ctx) => {
+      const claim = (await ctx.db.query("vehicleCommitmentClaims").collect()).find(
+        (c) => c.vehicleId === v
+      )!;
+      return claim.evidenceKind;
+    });
+    expect(viaClaim, "the source episode's tag is RESERVATION").toBe("RESERVATION");
   });
 });

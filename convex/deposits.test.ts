@@ -160,7 +160,16 @@ describe("deposits.create", () => {
     });
   });
 
-  test("a second deposit from a different quote on the same vehicle does not error (soft warning, not a hard block)", async () => {
+  test("a second deposit from an UNRELATED quote on the same vehicle is refused (SCRUM-195)", async () => {
+    // BEHAVIOUR CHANGED DELIBERATELY, BY OWNER RULING c15589. This used to be a
+    // soft warning: a second customer could put money on a car the first
+    // customer's deposit was already holding, and the system recorded both.
+    // That is the double-sell this authority exists to prevent, so it is now a
+    // hard refusal.
+    //
+    // The assertion is not weakened. It is inverted and then STRENGTHENED: the
+    // old version proved only that nothing threw, and never looked at what the
+    // second deposit did to the deal that already held the car.
     const { t, orgId, customerId, vehicleId, asUser } = await setup();
     const quoteId1 = await makeQuote(t, asUser, orgId, customerId, vehicleId);
     await asUser.mutation(api.deposits.create, { orgId, quoteId: quoteId1, amount: 1000 });
@@ -172,11 +181,18 @@ describe("deposits.create", () => {
 
     await expect(
       asUser.mutation(api.deposits.create, { orgId, quoteId: quoteId2, amount: 2000 })
-    ).resolves.toBeDefined();
+    ).rejects.toThrow(/already committed to another deal/i);
 
     await t.run(async (ctx) => {
       const vehicle = await ctx.db.get(vehicleId);
       expect(vehicle?.status).toBe("RESERVED");
+      // Refused BEFORE any side effect: one deposit, one root, and the car
+      // still belongs to the deal that had it.
+      const deposits = await ctx.db.query("deposits").collect();
+      expect(deposits.length).toBe(1);
+      const roots = await ctx.db.query("commitmentRoots").collect();
+      expect(roots.length).toBe(1);
+      expect(roots[0].customerId).toEqual(customerId);
     });
   });
 
@@ -378,7 +394,31 @@ describe("deposits.release", () => {
     const secondCustomerId = await t.run((ctx) =>
       ctx.db.insert("customers", { orgId, firstName: "Omar", lastName: "Saleh" })
     );
-    const secondQuoteId = await makeQuote(t, asUser, orgId, secondCustomerId, vehicleId);
+    // PREMISE CORRECTED, ASSERTION UNTOUCHED (owner ruling c15589). This
+    // fixture used to put the second customer's deposit on the SAME vehicle
+    // as the first — which SCRUM-195 now refuses, because it is the
+    // double-sell the commitment authority exists to prevent. The subject
+    // here is ledger enrichment resolving EACH transaction's own deposit
+    // link, and that needs two distinct deposits, not two deals on one car.
+    // So the second deal gets its own vehicle and the assertions below are
+    // unchanged.
+    const secondVehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "1HGCM82633A555555",
+        make: "Toyota",
+        model: "Corolla",
+        year: 2022,
+        color: "Silver",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        mileage: 900,
+        sellingPrice: 18000,
+        status: "AVAILABLE" as const,
+        createdAt: Date.now(),
+      })
+    );
+    const secondQuoteId = await makeQuote(t, asUser, orgId, secondCustomerId, secondVehicleId);
     const secondDepositId = await asUser.mutation(api.deposits.create, {
       orgId,
       quoteId: secondQuoteId,

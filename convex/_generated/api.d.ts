@@ -43,6 +43,7 @@ import type * as chartOfAccounts from "../chartOfAccounts.js";
 import type * as claims from "../claims.js";
 import type * as collectionReminderActions from "../collectionReminderActions.js";
 import type * as collections from "../collections.js";
+import type * as commitments from "../commitments.js";
 import type * as constants from "../constants.js";
 import type * as crons from "../crons.js";
 import type * as customers from "../customers.js";
@@ -256,6 +257,7 @@ declare const fullApi: ApiFromModules<{
   claims: typeof claims;
   collectionReminderActions: typeof collectionReminderActions;
   collections: typeof collections;
+  commitments: typeof commitments;
   constants: typeof constants;
   crons: typeof crons;
   customers: typeof customers;

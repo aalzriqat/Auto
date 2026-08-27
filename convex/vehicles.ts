@@ -1529,6 +1529,15 @@ export const createReservation = mutation({
     depositAmount: v.optional(v.number()),
     depositMethod: v.optional(depositMethodValidator),
     expiresAt: v.optional(v.number()),
+    /**
+     * SCRUM-195: EXPLICIT proof that this reservation belongs to the deal
+     * already holding the car — reserving a vehicle the same deal's own
+     * deposit is holding is ordinary dealership work. Naming the deal is the
+     * only way it is recognised; the authority never infers it from the
+     * customer and the vehicle matching.
+     */
+    dealQuoteId: v.optional(v.id("quotes")),
+    dealDepositId: v.optional(v.id("deposits")),
   },
   handler: async (ctx, args) => {
     const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
@@ -1649,7 +1658,7 @@ export const createReservation = mutation({
     await assertAcquirable(ctx, {
       orgId: args.orgId,
       vehicleId: args.vehicleId,
-      lineage: {},
+      lineage: { quoteId: args.dealQuoteId, depositId: args.dealDepositId },
     });
 
     const reservationId = await ctx.db.insert("vehicleReservations", {
@@ -1704,7 +1713,14 @@ export const createReservation = mutation({
         reservationId,
         ...(reservationDepositId ? { depositId: reservationDepositId } : {}),
       },
-      lineage: { reservationId },
+      // A reservation on a car this deal already holds JOINS that deal on the
+      // proof presented; a reservation on a FREE car opens the deal's root and
+      // is known by this reservation from then on.
+      lineage: {
+        reservationId,
+        quoteId: args.dealQuoteId,
+        depositId: args.dealDepositId,
+      },
     });
 
     await syncVehicleHoldStatus(ctx, args.vehicleId, user._id);

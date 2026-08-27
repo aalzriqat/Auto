@@ -1,4 +1,4 @@
-import { acquireVehicle, assertAcquirable } from "./commitments";
+import { acquireVehicle, assertAcquirable, evidenceForDepositHold } from "./commitments";
 import { ConvexError, v } from "convex/values";
 import { query, type QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
@@ -42,6 +42,13 @@ export const create = mutation({
     method: v.optional(depositMethodValidator),
     notes: v.optional(v.string()),
     idempotencyKey: v.optional(v.string()),
+    /**
+     * SCRUM-195: EXPLICIT proof that this deal continues the reservation
+     * already holding the car. Naming the reservation is the only way that
+     * continuation is recognised — the authority never infers it from the
+     * customer and the vehicle matching.
+     */
+    adoptReservationId: v.optional(v.id("vehicleReservations")),
   },
   handler: async (ctx, args) => {
     // Recording a deposit while working a deal in the wizard is normal
@@ -114,7 +121,7 @@ export const create = mutation({
           await assertAcquirable(ctx, {
             orgId: args.orgId,
             vehicleId: item.vehicleId,
-            lineage: { quoteId: args.quoteId },
+            lineage: { quoteId: args.quoteId, adoptReservationId: args.adoptReservationId },
           });
         }
         for (const item of depositVehicleItems) {
@@ -149,7 +156,7 @@ export const create = mutation({
             customerId: quote.customerId,
             createdBy: user._id,
             evidence: { kind: "DEPOSIT", depositId },
-            lineage: { quoteId: args.quoteId },
+            lineage: { quoteId: args.quoteId, adoptReservationId: args.adoptReservationId },
           });
         }
 
@@ -757,6 +764,16 @@ export const resolveReleasedAllocation = mutation({
     const amountMinor = hold.allocatedAmountMinor ?? 0;
     const now = Date.now();
 
+    // SCRUM-195: whatever this decision does with the money, it acts for the
+    // deal the money is already on. The deposit is the proof — it works for a
+    // reservation-origin deposit that has no quote as well as for one that
+    // does, without inferring anything from the customer.
+    const sourceLineage = {
+      quoteId: deposit.quoteId ?? null,
+      reservationId: deposit.reservationId ?? null,
+      depositId: hold.depositId,
+    };
+
     if (args.treatment === "REALLOCATE_TO_VEHICLE") {
       if (!args.toVehicleId) {
         throw new ConvexError("Name the vehicle that is to receive the released amount.");
@@ -805,18 +822,21 @@ export const resolveReleasedAllocation = mutation({
       // was ever against the first one — the audit question a re-allocation
       // exists to answer.
       // SCRUM-195: moving money ONTO a car is a fresh acquisition of that car,
-      // and it goes through the same authority boundary as every other one.
-      // The receiving vehicle was already proven to be a line on this deposit's
-      // quote above, so the quote is the lineage this operation presents — and
-      // if something else has legitimately taken that car in the meantime, this
+      // and it goes through the same authority boundary as every other one. If
+      // something else has legitimately taken that car in the meantime, this
       // REFUSES rather than opening a second root on it.
+      //
+      // ⚠️ THE EVIDENCE IS CARRIED FROM THE SOURCE, NOT ASSUMED FROM THE ROW.
+      // A reservation-origin deposit must not become DEPOSIT authority merely
+      // because the surrounding row is a deposit — that is one of the exact
+      // inference classes this replacement exists to remove.
       await acquireVehicle(ctx, {
         orgId: args.orgId,
         vehicleId: args.toVehicleId,
         customerId: deposit.customerId,
         createdBy: user._id,
-        evidence: { kind: "DEPOSIT", depositId: hold.depositId },
-        lineage: { quoteId: deposit.quoteId ?? null },
+        evidence: await evidenceForDepositHold(ctx, args.orgId, hold),
+        lineage: sourceLineage,
       });
       await ctx.db.insert("depositVehicleHolds", {
         orgId: args.orgId,
@@ -843,18 +863,18 @@ export const resolveReleasedAllocation = mutation({
       // release and this decision somebody else may legitimately have taken the
       // vehicle, so this must refuse rather than re-hold it.
       //
-      // ⚠️ AND THE LINEAGE MAY BE ABSENT. A deposit taken with a reservation
-      // carries no `quoteId`. Under the old design that arrived here as `null`
-      // and was silently read as "open a new root", which is how one physical
-      // car ended up with two. `acquireVehicle` has no such reading: no lineage
-      // against a held car REFUSES.
+      // ⚠️ AND THE LINEAGE COMES FROM THE SOURCE EPISODE. A deposit taken with a
+      // reservation carries no `quoteId`. Under the old design that arrived
+      // here as `null` and was silently read as "open a new root", which is how
+      // one physical car ended up with two. The deposit itself is now the
+      // proof, and the evidence tag is carried rather than assumed.
       await acquireVehicle(ctx, {
         orgId: args.orgId,
         vehicleId: hold.vehicleId,
         customerId: deposit.customerId,
         createdBy: user._id,
-        evidence: { kind: "DEPOSIT", depositId: hold.depositId },
-        lineage: { quoteId: deposit.quoteId ?? null, reservationId: deposit.reservationId ?? null },
+        evidence: await evidenceForDepositHold(ctx, args.orgId, hold),
+        lineage: sourceLineage,
       });
       await ctx.db.insert("depositVehicleHolds", {
         orgId: args.orgId,

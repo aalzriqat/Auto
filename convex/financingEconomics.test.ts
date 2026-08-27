@@ -536,6 +536,16 @@ describe("appraisal integrity", () => {
   });
 
   test("a later application on the same vehicle keeps its own appraisal history", async () => {
+    // ⚠️ RED UNTIL PHASE 3, BY OWNER RULING c15589 — not a regression.
+    //
+    // This fixture starts a SECOND deal on a car whose FIRST deal has ended.
+    // SCRUM-195 Phase 1 installs the acquisition boundary but not the release
+    // side: a claim is not released when its deal finishes, so the car still
+    // reads as held and the second acquisition is correctly refused.
+    //
+    // Phase 3 (release / finalization semantics) must turn this green by
+    // releasing the ended deal's claim. It must NOT be fixed by loosening the
+    // acquisition boundary, which is what this authority exists to enforce.
     const seed = await seedDealer();
     const firstApplicationId = await createApplication(seed);
     await recordBaselineQuotation(seed, firstApplicationId);

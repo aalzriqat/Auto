@@ -1987,6 +1987,11 @@ export const createFromQuote = mutation({
   args: {
     orgId: v.id("organizations"),
     quoteId: v.id("quotes"),
+    /**
+     * SCRUM-195: EXPLICIT proof that this financed deal continues the
+     * reservation already holding the car. Never inferred.
+     */
+    adoptReservationId: v.optional(v.id("vehicleReservations")),
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -2161,7 +2166,7 @@ export const createFromQuote = mutation({
       await assertAcquirable(ctx, {
         orgId: args.orgId,
         vehicleId: item.vehicleId,
-        lineage: { quoteId: quote._id },
+        lineage: { quoteId: quote._id, adoptReservationId: args.adoptReservationId },
       });
     }
 
@@ -2201,7 +2206,7 @@ export const createFromQuote = mutation({
         customerId: quote.customerId,
         createdBy: auth.user._id,
         evidence: { kind: "FINANCE", applicationId: appId },
-        lineage: { quoteId: quote._id },
+        lineage: { quoteId: quote._id, adoptReservationId: args.adoptReservationId },
       });
     }
 
