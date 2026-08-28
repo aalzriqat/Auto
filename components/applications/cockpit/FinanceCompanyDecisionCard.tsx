@@ -100,6 +100,30 @@ type FinanceCompanyDecisionCardProps = {
   onRecordApproved: () => void;
   /** Reopens a recorded amount for correction — see `correctionAvailable`. */
   onCorrectApproved: () => void;
+  /**
+   * WHICH writer owns the approved purchase amount, decided by the SERVER.
+   *
+   * Not inferred here. The screen cannot see the frozen quote mode, the
+   * application's company or the settlement route, and a client that guessed
+   * would be a second opinion about which mutation applies.
+   */
+  approvedPurchaseWriter: "CONFIGURED_APPROVAL" | "MANUAL_DIRECT_SUPPLIER_AMOUNT" | "NONE";
+  /**
+   * Whether the manual supplier-amount action can be taken, and why not —
+   * decided by the SERVER, not composed here.
+   *
+   * This card used to gate on `canRecordApproval` alone. The mutation requires
+   * the money permission as well, and a default MANAGER holds the first without
+   * the second — so the manager was shown a button the server would refuse.
+   * Lifecycle, own-deal and BOTH permissions now arrive already resolved.
+   */
+  directSupplierAmount: {
+    applicable: boolean;
+    available: boolean;
+    reasonKey: string | null;
+  };
+  /** Opens the manual provider's supplier-amount dialog. */
+  onRecordDirectSupplierAmount: () => void;
 };
 
 /** One recorded-or-not row, with whatever action belongs to it. */
@@ -149,6 +173,9 @@ export function FinanceCompanyDecisionCard({
   onRecordAppraisal,
   onRecordApproved,
   onCorrectApproved,
+  approvedPurchaseWriter,
+  directSupplierAmount,
+  onRecordDirectSupplierAmount,
 }: Readonly<FinanceCompanyDecisionCardProps>) {
   const quotationRecorded = facts.submittedQuotationMinor !== null;
 
@@ -181,6 +208,21 @@ export function FinanceCompanyDecisionCard({
   // already handles the consequence: a replacement appraisal supersedes its
   // predecessor and clears the approval that was based on it, on the record.
   const appraisalActionAvailable = canRecordAppraisal && !facts.closed && !facts.handedOver;
+
+  /**
+   * The manual provider's supplier amount — offered, or EXPLAINED.
+   *
+   * Both come straight from the server verdict. An earlier version recomposed
+   * lifecycle and permission here, and got the permission half wrong: it checked
+   * the approval permission only, while the mutation also requires the money
+   * one. Recomposing a server rule on the client is how a screen ends up
+   * offering an action the server refuses.
+   */
+  const directSupplierActionAvailable = directSupplierAmount.available;
+  const directSupplierNote =
+    directSupplierAmount.applicable && directSupplierAmount.reasonKey
+      ? t(directSupplierAmount.reasonKey)
+      : undefined;
 
   const derived: Array<{ key: string; label: string; value: string }> = [];
   if (facts.financeCompanyFundedPortionMinor !== null) {
@@ -300,6 +342,46 @@ export function FinanceCompanyDecisionCard({
             ) : undefined
           }
         />
+
+        {/*
+          The manual provider's own step.
+
+          This deal has no configured finance company, so there is no quotation
+          to send and no approval to mirror — the two rows above never apply to
+          it. What it does have is a provider paying the supplier directly, and
+          `finalizeDeal` requires that figure. Before this row the cockpit said
+          the amount was missing and offered nothing that could record it: the
+          approval action is gated on a quotation a MANUAL deal structurally
+          never has.
+
+          Rendered only for the shape the SERVER classified, so it can never
+          appear beside the configured rows or on a deal where the figure has no
+          meaning.
+        */}
+        {approvedPurchaseWriter === "MANUAL_DIRECT_SUPPLIER_AMOUNT" && (
+          <DecisionRow
+            label={t("DirectSupplierAmountRowLabel")}
+            value={
+              facts.approvedPurchaseAmountMinor !== null ? (
+                <bdi className="tabular-nums">{money(facts.approvedPurchaseAmountMinor)}</bdi>
+              ) : (
+                <span className="text-muted-foreground">{t("NotRecordedYet")}</span>
+              )
+            }
+            note={directSupplierNote}
+            action={
+              directSupplierActionAvailable ? (
+                <Button
+                  size="sm"
+                  variant={facts.approvedPurchaseAmountMinor !== null ? "outline" : "default"}
+                  onClick={onRecordDirectSupplierAmount}
+                >
+                  {t("DirectSupplierAmountAction")}
+                </Button>
+              ) : undefined
+            }
+          />
+        )}
 
         {/* Between the two, because that is the order the deal moves in: we
             send a quotation, they value the car, they answer with an amount.

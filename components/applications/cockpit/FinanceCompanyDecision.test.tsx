@@ -53,6 +53,7 @@ vi.mock("@/components/ui/sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
+import { salesEn, salesAr } from "@/lib/i18n/domains/sales";
 import { DealCockpitView } from "./DealCockpit";
 import { RecordSubmittedQuotationDialog } from "./RecordSubmittedQuotationDialog";
 
@@ -1642,4 +1643,150 @@ describe("a flagged amount does not look ordinary at the one-way door", () => {
     expect(within(dialog).queryByText("HandoverAmountLooksUnusual")).toBeNull();
     expect(within(dialog).getByText("HandoverSealsApprovedAmount")).toBeTruthy();
   });
+});
+
+/**
+ * SCRUM-61 — the operator can take the step the cockpit names.
+ *
+ * A backend mutation alone does not close a cockpit dead end. Before these, a
+ * legitimate MANUAL direct-to-supplier deal was told its supplier receipt amount
+ * was missing and offered nothing that could record it: the approval action is
+ * gated on a submitted quotation, and a MANUAL deal structurally never has one.
+ *
+ * These pin the VISIBLE control and WHICH WRITER it reaches, because "the
+ * mutation exists" and "the operator can call it" are different facts and only
+ * the second one closes the workflow.
+ */
+describe("SCRUM-61: the manual provider's supplier amount is reachable from the cockpit", () => {
+  // Reuses the file's own `wiring()` builder rather than hand-rolling a fixture:
+  // it merges `facts` instead of replacing them, and supplies the `calculation`
+  // the quotation dialog needs. My first version rebuilt the object by hand and
+  // rendered a card the case did not mean to assert about.
+  function manualWiring(overrides: WiringOverrides = {}) {
+    return wiring({ onRecordDirectSupplierAmount: noopAsync, ...overrides });
+  }
+
+  /**
+   * The deal as the SERVER describes it.
+   *
+   * Eligibility and its reason are the server's verdict now, not something this
+   * card recomposes from permissions and facts — that recomposition is what let
+   * the screen offer a default MANAGER an action the mutation refuses. So these
+   * cases vary the VERDICT, and `configuredDealEconomicsGuard.test.ts` proves the
+   * verdict itself is right for real role templates and real lifecycle states.
+   */
+  const manualDeal = (
+    verdict: { applicable: boolean; available: boolean; reasonKey: string | null } = {
+      applicable: true,
+      available: true,
+      reasonKey: null,
+    }
+  ) =>
+    dealFixture({
+      approvedPurchaseWriter: "MANUAL_DIRECT_SUPPLIER_AMOUNT",
+      directSupplierAmount: verdict,
+    });
+
+  test("the action is offered, and it calls the MANUAL writer — not the configured approval", async () => {
+    const calls: Array<{ approvedAmountMinor: number; source: string }> = [];
+    const configuredApproval = vi.fn();
+
+    renderCockpit(
+      manualWiring({
+        onRecordApproved: configuredApproval,
+        onRecordDirectSupplierAmount: async (values: {
+          approvedAmountMinor: number;
+          source: string;
+        }) => {
+          calls.push(values);
+        },
+      }),
+      manualDeal()
+    );
+
+    const action = cardButton("DirectSupplierAmountAction");
+    expect(action).toBeDefined();
+    fireEvent.click(action!);
+
+    // 17,000 in a scale-3 currency. Typed, never prefilled.
+    fireEvent.change(screen.getByLabelText("DirectSupplierAmountLabel"), {
+      target: { value: "17000" },
+    });
+    fireEvent.change(screen.getByLabelText("DirectSupplierAmountSourceLabel"), {
+      target: { value: "Signed purchase agreement" },
+    });
+
+    const submit = screen
+      .queryAllByRole("button", { name: "DirectSupplierAmountAction" })
+      .find((button) => button.closest('[role="dialog"]') !== null);
+    expect(submit).toBeDefined();
+    fireEvent.click(submit!);
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0].approvedAmountMinor).toBe(17_000_000);
+    expect(calls[0].source).toBe("Signed purchase agreement");
+    // The whole point: it must NOT reach the configured approval mutation, which
+    // needs the quotation and company-rule workflow this deal cannot satisfy.
+    expect(configuredApproval).not.toHaveBeenCalled();
+  });
+
+  test("without the amount typed, the dialog cannot be submitted", () => {
+    renderCockpit(
+      manualWiring({ onRecordDirectSupplierAmount: async () => {} }),
+      manualDeal()
+    );
+    fireEvent.click(cardButton("DirectSupplierAmountAction")!);
+
+    const submit = screen
+      .queryAllByRole("button", { name: "DirectSupplierAmountAction" })
+      .find((button) => button.closest('[role="dialog"]') !== null);
+    expect(submit).toBeDefined();
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+
+    // A source alone is not enough either — both halves are required, and the
+    // server refuses each independently.
+    fireEvent.change(screen.getByLabelText("DirectSupplierAmountSourceLabel"), {
+      target: { value: "Signed purchase agreement" },
+    });
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  test("a CONFIGURED deal is not offered the manual action at all", () => {
+    renderCockpit(
+      manualWiring({ onRecordDirectSupplierAmount: async () => {} }),
+      dealFixture({ approvedPurchaseWriter: "CONFIGURED_APPROVAL" })
+    );
+    expect(cardButton("DirectSupplierAmountAction")).toBeUndefined();
+  });
+
+  // Withheld, EXPLAINED — never silently absent. Each reason is one the SERVER
+  // returned; this proves the card renders it beside the row instead of leaving
+  // the operator to conclude the screen is broken.
+  for (const reasonKey of [
+    "DirectSupplierAmountNeedsPermission",
+    "DirectSupplierAmountOwnDeal",
+    "DirectSupplierAmountSealed",
+    "DirectSupplierAmountClosed",
+    "DirectSupplierAmountNeedsApproval",
+  ] as const) {
+    test(`when the server withholds it as ${reasonKey}, the action is gone and the reason is shown`, () => {
+      renderCockpit(
+        manualWiring(),
+        manualDeal({ applicable: true, available: false, reasonKey })
+      );
+      expect(cardButton("DirectSupplierAmountAction")).toBeUndefined();
+      expect(screen.getByText(reasonKey)).toBeTruthy();
+      // CodeRabbit, ACCEPTED. The harness translator is identity, so the
+      // assertion above proves only that the card ASKED for a translation, never
+      // that the string exists. A reason key added to the card and forgotten in
+      // the dictionary keeps this test green and shows a raw key to the operator.
+      expect(salesEn[reasonKey]).toBeTruthy();
+      expect(salesAr[reasonKey]).toBeTruthy();
+      // Not the key echoed back, and genuinely translated rather than the
+      // English copied across.
+      expect(salesEn[reasonKey]).not.toBe(reasonKey);
+      expect(salesAr[reasonKey]).not.toBe(reasonKey);
+      expect(salesAr[reasonKey]).not.toBe(salesEn[reasonKey]);
+    });
+  }
 });

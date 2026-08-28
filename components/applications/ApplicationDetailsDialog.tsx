@@ -685,6 +685,10 @@ export function ApplicationDetailsDialog({
                     // answers nothing.
                     const unavailable =
                       route === "DIRECT_TO_SUPPLIER" && !app.canSettleDirectToSupplier;
+                    // Every key the server can return. The fall-through used to be
+                    // "no external financier", so the two reasons added with the
+                    // shared transition classifier would have explained a money
+                    // problem by denying the financier exists.
                     const reasonKey =
                       app.directRouteRefusal === "LEASE"
                         ? "RouteDirectUnavailableLease"
@@ -692,7 +696,11 @@ export function ApplicationDetailsDialog({
                           ? "RouteDirectUnavailableUnnamedProvider"
                           : app.directRouteRefusal === "HeldDeposit"
                             ? "RouteDirectUnavailableHeldDeposit"
-                            : "RouteDirectUnavailableNoExternalFinancier";
+                            : app.directRouteRefusal === "BelowSupplierEntitlement"
+                              ? "RouteDirectUnavailableBelowEntitlement"
+                              : app.directRouteRefusal === "VehicleHandedOver"
+                                ? "RouteDirectUnavailableVehicleHandedOver"
+                                : "RouteDirectUnavailableNoExternalFinancier";
                     return (
                       <button
                         key={route}

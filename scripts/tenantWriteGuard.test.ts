@@ -464,10 +464,39 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // ⚠️ `analysed` stays at 315 across all four. That is the number that must
   // never drop silently — a new mutation landing in a skip bucket is only
   // acceptable when the reason is one of the two above, stated per mutation.
+  //
+  // SCRUM-61 adds one: `applications.recordDirectSupplierReceiptAmount`, the
+  // manual provider's path to the supplier receipt amount. Same shape as its
+  // neighbours — `orgId` plus a caller-supplied `applicationId` — so it lands in
+  // `analysed`, and it proves ownership through `requireOwnedRow` rather than an
+  // inline compare.
+  //
+  // ⚠️ RECOMPUTED ON THE MERGED TREE, not resolved by taking a side. This
+  // file's own rule, and it has now been applied twice on this branch.
+  //
+  // At the post-#249/#250 integration the two sides were:
+  //   origin/main   477 / 315 / 15 / 147
+  //   this branch   477 / 316 / 15 / 146
+  //   MEASURED      478 / 316 / 15 / 147
+  //
+  // Each side was self-consistent and each was wrong, because neither tree
+  // contained the other's mutation. #249 put `reconcileExpiredSubscriptions`
+  // into the no-orgId bucket (146 → 147); SCRUM-61 puts
+  // `recordDirectSupplierReceiptAmount` into `analysed` (315 → 316). Both land,
+  // so the total gains both: 316 + 15 + 147 = 478.
+  //
+  // ⚠️⚠️ THE TRAP IS THE LINE THAT DID *NOT* CONFLICT. Both sides read
+  // `totalMutations: 477`, so git merged it silently — and 477 is wrong for the
+  // merged tree. Only `analysed` produced a conflict marker. Resolving nothing
+  // but the marked line is exactly how a coverage pin gets quietly understated:
+  // git flags where two edits disagree, never where two edits agree and are
+  // both stale. Re-run `summarizeCoverage` against the merged tree and take ITS
+  // numbers; do not reason from either branch's arithmetic, and do not assume an
+  // unconflicted line survived the merge correctly.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 477,
-      analysed: 315,
+      totalMutations: 478,
+      analysed: 316,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 147,
     });

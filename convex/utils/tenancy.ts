@@ -470,10 +470,60 @@ function canSeeApprovedPurchaseAmount(role: Doc<"roles">): boolean {
   );
 }
 
+/**
+ * The witness as a CALLER may see it — every field optional, because two
+ * different permissions unlock two different halves of it.
+ *
+ * ⚠️ The optionality is the point, not laxity. A cost-only caller receives the
+ * entitlement AMOUNT and nothing else, so any consumer reaching for `status`,
+ * `via`, `validatedAt` or `validatedBy` is forced by the type to handle their
+ * absence rather than assuming a shape it may not have been served.
+ */
+export type RedactedSupplierEntitlementWitness = Partial<
+  NonNullable<Doc<"financeApplications">["supplierEntitlementWitness"]>
+>;
+
+/**
+ * The supplier's entitlement figure, stripped of the finance PROVENANCE around it.
+ *
+ * ⚠️ THIS FUNCTION EXISTS BECAUSE THE FIELD CHANGED SHAPE UNDER ITS OWN GATE.
+ * The permission check was written when the witness was a bare number, where
+ * `finance || cost_price` was exactly right. The field then became an object
+ * carrying who validated the entitlement, when, and through which act — and the
+ * gate kept passing the WHOLE object, so a VIEW_COST_PRICE holder silently
+ * started receiving finance provenance it had never been granted. The gate did
+ * not change; what it was guarding did.
+ *
+ * The regression that was supposed to cover this asserted the amount was
+ * VISIBLE and never asserted the new fields were ABSENT, so it went on passing
+ * while the exposure grew underneath it. A test that only pins what a caller MAY
+ * see cannot notice a caller starting to see more.
+ */
+function entitlementAmountOnly(
+  witness: Doc<"financeApplications">["supplierEntitlementWitness"]
+): RedactedSupplierEntitlementWitness | undefined {
+  // NO AMOUNT MEANS NO KEY, not an empty object.
+  //
+  // Returning `{}` for a NOT_VALIDATED witness would disclose the very field
+  // this projection withholds: a cost-only caller receiving an empty object
+  // learns the deal holds a witness carrying no amount, which is exactly
+  // `status: NOT_VALIDATED` spelled by shape instead of by name. Collapsing both
+  // cases to absence is the non-disclosing answer, and it costs this caller
+  // nothing they are entitled to — either way there is no entitlement amount
+  // for them to read.
+  if (witness?.amountMinor === undefined) return undefined;
+  // Rebuilt field by field, never spread-and-delete. A spread would re-acquire
+  // every field a future schema change adds to this object, which is the exact
+  // mechanism that produced this leak in the first place.
+  return { amountMinor: witness.amountMinor };
+}
+
 export function redactSettlementEvidence<T extends Doc<"financeApplications">>(
   app: T,
   role: Doc<"roles">
-): T {
+): Omit<T, "supplierEntitlementWitness"> & {
+  supplierEntitlementWitness?: RedactedSupplierEntitlementWitness;
+} {
   const has = (permission: Permission) =>
     isSystemOwnerRole(role) || role.permissions.includes(permission);
   const canSeeFinance = has(PERMISSIONS.VIEW_FINANCE);
@@ -489,6 +539,45 @@ export function redactSettlementEvidence<T extends Doc<"financeApplications">>(
     supplierDisbursementApprovedAtRecordingMinor: canSeeFinance
       ? app.supplierDisbursementApprovedAtRecordingMinor
       : undefined,
+
+    // Tier 1 as well — the supplier's COST, and the paperwork it was read off.
+    //
+    // `supplierEntitlementAtApprovalMinor` is the vehicle's capitalized cost at
+    // the moment the purchase amount was agreed. `vehicles.list` already blanks
+    // `sourceCost` for a caller without VIEW_COST_PRICE, so publishing the same
+    // figure here — through a query that authorizes on VIEW_SALES alone — would
+    // have handed the default SALES template the supplier's cost by a second
+    // door, on a field that appears nowhere in `origin/main`. This release added
+    // the exposure, so this release closes it.
+    //
+    // `directSupplierReceipt` goes with it as a WHOLE OBJECT rather than
+    // field-by-field: `notes` is free text an operator types beside the figure,
+    // and `source` names the purchase agreement. Gating the number and
+    // publishing the sentence written next to it is the shape of leak this file
+    // already documents at tier 2.
+    //
+    // TWO GATES, not one. The first version put both behind
+    // `finance || cost_price`, which over-granted the second half: a
+    // VIEW_COST_PRICE holder is entitled to the supplier's COST, and that is all
+    // — `directSupplierReceipt` additionally carries the document the figure was
+    // read off and free-text notes typed beside it, which are settlement
+    // evidence rather than cost data, and in practice record amounts (the tier-2
+    // note below documents `approvedPurchaseNotes` doing exactly that).
+    //
+    // So: the number follows cost visibility, the paperwork follows finance
+    // visibility. Neither is held by the default SALES template.
+    //
+    // THREE OUTCOMES, NOT TWO. `cost_price` unlocks the supplier's entitlement
+    // AMOUNT — which is cost data, and what that permission is for. The
+    // PROVENANCE around it — whether the comparison was made at all, through
+    // which act, when, and by whom — is settlement evidence about a finance
+    // decision, and follows `view:finance` with the rest of the paperwork.
+    supplierEntitlementWitness: canSeeFinance
+      ? app.supplierEntitlementWitness
+      : has(PERMISSIONS.VIEW_COST_PRICE)
+        ? entitlementAmountOnly(app.supplierEntitlementWitness)
+        : undefined,
+    directSupplierReceipt: canSeeFinance ? app.directSupplierReceipt : undefined,
 
     // Tier 2 — the one figure the confirmation SCREEN needs to prefill. Without
     // it the amount field opens blank and gets typed from memory, and a typo

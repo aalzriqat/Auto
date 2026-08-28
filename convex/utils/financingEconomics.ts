@@ -1,5 +1,5 @@
 import { ConvexError, v } from "convex/values";
-import { Doc } from "../_generated/dataModel";
+import { Doc, Id } from "../_generated/dataModel";
 import { toMinorSameCurrencyOrUndefined } from "./money";
 import {
   PERCENT_DECIMAL_PLACES,
@@ -1124,6 +1124,11 @@ export type ManagementProfit =
       available: false;
       reason:
         | "NoApprovedPurchaseAmount"
+        /**
+         * The figure does not exist for this kind of deal, and no screen will
+         * ever accept it — as distinct from nobody having recorded it yet.
+         */
+        | "NotApplicableForFinancingMode"
         | "NoSupplierSettlement"
         | "NoDealerContribution"
         | "CorruptInput"
@@ -1271,14 +1276,39 @@ export function deriveManagementProfit(args: {
   actualExpensesMinor: number;
   currency: string;
   fullySettled: boolean;
+  /**
+   * Whether a finance company's approved purchase amount is something this
+   * deal's financing mode produces at all.
+   *
+   * `false` for MANUAL_FINANCE_COMPANY, LEASE and INTERNAL_INSTALLMENT — a
+   * dealership financing its own customer has no external company to approve a
+   * purchase, and there is nothing anyone can go and record. Saying "not
+   * recorded" about those deals describes a step that does not exist and sends
+   * the operator looking for a screen that will never accept the figure. That
+   * is the same dead end SCRUM-61 is about, reached through the copy instead of
+   * through the guard.
+   *
+   * Defaults to `true` so a caller that has not been taught the distinction
+   * keeps today's wording rather than silently claiming inapplicability.
+   */
+  financierEconomicsApplicable?: boolean;
 }): ManagementProfit {
   // Checked first. A cancelled sale still carries its approval, its recorded
   // margin and its disbursement, so every input below remains computable — and
   // the figure they produce describes a deal whose journal has been reversed.
   // Reporting a profit for it is not a smaller error than reporting none.
   if (args.dealCancelled) return { available: false, reason: "DealCancelled" };
-  if (args.approvedDealerPurchaseAmountMinor === undefined)
-    return { available: false, reason: "NoApprovedPurchaseAmount" };
+  if (args.approvedDealerPurchaseAmountMinor === undefined) {
+    // "Nobody has recorded it" and "this kind of deal never has one" are
+    // different facts, and only the first names an action.
+    return {
+      available: false,
+      reason:
+        args.financierEconomicsApplicable === false
+          ? "NotApplicableForFinancingMode"
+          : "NoApprovedPurchaseAmount",
+    };
+  }
   if (args.supplierSettlementMinor === undefined)
     return { available: false, reason: "NoSupplierSettlement" };
   // Defaulting this to zero would be the very error H-7 corrects, just reached
@@ -1469,4 +1499,138 @@ export function deriveAccountingProfit(args: {
     lines: reconciles ? lines : [],
     reconcilesToLedger: true,
   };
+}
+
+/**
+ * The supplier-entitlement WITNESS.
+ *
+ * Shared because three writers establish it — the configured approval, the
+ * manual receipt and the route selection — and they live in two modules that
+ * already import in one direction only. Putting the decision here keeps
+ * `financingEconomics.ts` from having to import from `applications.ts`, which
+ * imports from it.
+ */
+/**
+ * The witness serialized for an audit row — provenance included, `null` when absent.
+ *
+ * ⚠️ `validatedBy` IS PART OF THE PROVENANCE. The first version omitted it while
+ * the surrounding comments claimed the history showed "who had established" a
+ * witness, and the regression asserting that claim accepted an object with no
+ * actor in it. A serialized record that drops the person is not a provenance
+ * record; it is a timestamp with a label.
+ */
+export function describeWitness(
+  witness: Doc<"financeApplications">["supplierEntitlementWitness"]
+): {
+  status: string;
+  supplierEntitlementMinor: number | null;
+  via: string;
+  validatedAt: number;
+  validatedBy: Id<"users">;
+} | null {
+  return witness === undefined
+    ? null
+    : {
+        status: witness.status,
+        supplierEntitlementMinor: witness.amountMinor ?? null,
+        via: witness.via,
+        validatedAt: witness.validatedAt,
+        validatedBy: witness.validatedBy,
+      };
+}
+
+/**
+ * The witness to STORE, given the entitlement just measured.
+ *
+ * ⚠️ AN UNCHANGED FACT IS NOT A NEW OBSERVATION. Every writer stamped its own
+ * `via`, actor and timestamp unconditionally, so a configured re-approval of an
+ * identical amount silently rewrote a ROUTE_SELECTION witness into a fresh
+ * CONFIGURED_APPROVAL one — new actor, new time — while the audit trail said
+ * nothing had changed, because nothing about the AMOUNT had. The provenance is
+ * evidence in its own right: it moves when the fact it describes moves, not
+ * because some other mutation happened to run.
+ */
+export function witnessToStore(
+  existing: Doc<"financeApplications">["supplierEntitlementWitness"],
+  /**
+   * What THIS act actually established. `VALIDATED` means the writer compared
+   * the supplier's entitlement against the amount and an actor stood behind it;
+   * `NOT_VALIDATED` means the writer re-agreed an amount without comparing
+   * anything, which is the honest description of an approval taken while the
+   * deal settles through the dealership.
+   */
+  measurement: { validated: true; entitlementMinor: number } | { validated: false },
+  provenance: {
+    validatedAt: number;
+    validatedBy: Id<"users">;
+    via: "CONFIGURED_APPROVAL" | "MANUAL_RECEIPT";
+  },
+  /**
+   * WHETHER THE APPROVED AMOUNT THIS WITNESS ATTESTS TO ACTUALLY MOVED.
+   *
+   * ⚠️ NOT a general "something changed" flag, and deliberately not the
+   * caller's `approvalMateriallyChanged`: that one is broader by design and also
+   * turns true for a basis, LTV, appraisal, approver or notes edit, none of
+   * which touch the figure the supplier's entitlement was compared against.
+   * Passing it here would let somebody fixing a typo in the notes disturb the
+   * evidence a supplier's payment stands on.
+   *
+   * Required, with no default. A defaulted version of this parameter is exactly
+   * how the hole below stayed open for a round: the permissive answer was the
+   * one a caller got for free.
+   */
+  approvedAmountChanged: boolean
+): { witness: Doc<"financeApplications">["supplierEntitlementWitness"]; changed: boolean } {
+  /**
+   * THE GOVERNING RULE: a witness may never survive a change to the approved
+   * amount it attests to without that new amount being explicitly re-evaluated.
+   *
+   * ⚠️ This is where a CONFIRMED HIGH lived. The old code consulted the
+   * amount-changed flag ONLY on the not-validated path, so the validated path
+   * returned the existing witness whenever the supplier's entitlement number
+   * matched — regardless of what the approved amount had just done. An approval
+   * moving 18,000,000 → 19,000,000 therefore INHERITED evidence created for the
+   * 18,000,000 decision, purely because the supplier's 17,000,000 had not moved.
+   *
+   * The entitlement is only HALF of what this evidence attests to. A witness
+   * records a COMPARISON between the supplier's entitlement and an approved
+   * amount, so either side moving invalidates it.
+   */
+  if (approvedAmountChanged) {
+    if (measurement.validated) {
+      // Applicable and provable: fresh evidence with fresh provenance, even
+      // where the entitlement number itself is unchanged. Somebody re-agreed
+      // THIS amount against it, and that act has its own actor and moment.
+      return {
+        witness: { status: "VALIDATED", amountMinor: measurement.entitlementMinor, ...provenance },
+        changed: true,
+      };
+    }
+    // Not applicable, or applicable but unprovable. Both fail closed to the same
+    // explicit state, and the old VALIDATED record is REPLACED rather than kept.
+    // Keeping it is what let a deal pass through a window where nothing was
+    // compared and come out the other side still carrying proof.
+    return { witness: { status: "NOT_VALIDATED", ...provenance }, changed: true };
+  }
+
+  // The amount has not moved. Byte-for-byte identity is preserved unless a
+  // genuine revalidation happened: an unchanged fact is not a new observation,
+  // and re-badging it would move the actor and timestamp onto evidence nobody
+  // re-examined.
+  if (measurement.validated) {
+    if (existing?.status === "VALIDATED" && existing.amountMinor === measurement.entitlementMinor) {
+      return { witness: existing, changed: false };
+    }
+    // Either there was nothing, or the entitlement itself moved, or the deal
+    // held an explicit NOT_VALIDATED which this act has now upgraded. All three
+    // are real observations about the same unchanged amount.
+    return {
+      witness: { status: "VALIDATED", amountMinor: measurement.entitlementMinor, ...provenance },
+      changed: true,
+    };
+  }
+  // Nothing was compared and nothing moved: the existing record, whatever it
+  // says, still describes the current amount truthfully.
+  if (existing !== undefined) return { witness: existing, changed: false };
+  return { witness: { status: "NOT_VALIDATED", ...provenance }, changed: true };
 }
