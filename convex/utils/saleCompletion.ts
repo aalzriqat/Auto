@@ -27,6 +27,7 @@ import {
 import { computeResoldProductMargin } from "../accounting/postingRules";
 import { toMinorUnits, fromMinorUnits } from "./money";
 import { computeVehicleCapitalizedCost, vehicleHasCostBasis } from "./vehicleCost";
+import { assertFinancedDealCommitsThroughApplication } from "./financedCompletionBoundary";
 import { computeConsignedSupplierPosition } from "../../lib/financingEconomics";
 import { openSupplierReceivable } from "../supplierReceivables";
 import {
@@ -201,8 +202,12 @@ async function prepareSaleCompletion(
   }
 
   let leadId: Id<"leads"> | undefined;
+  // Hoisted out of the block below so the completion boundary can read it. The
+  // boundary must run whether or not a quote was supplied — omitting one is the
+  // shape it exists to refuse — so it cannot live inside `if (args.quoteId)`.
+  let quote: Doc<"quotes"> | null = null;
   if (args.quoteId) {
-    const quote = await ctx.db.get(args.quoteId);
+    quote = await ctx.db.get(args.quoteId);
     if (quote?.orgId !== args.orgId) {
       throwAppError(AppErrorCode.QUOTE_NOT_FOUND, "Quote not found in this organization.");
     }
@@ -230,6 +235,18 @@ async function prepareSaleCompletion(
       throw new ConvexError("Finance application does not match the sale source records.");
     }
   }
+
+  // A financed deal commits through its finance application, and only through
+  // it. Placed after the identity checks above so the boundary can treat a
+  // supplied application as genuinely this deal's, and before every write below
+  // so a refusal leaves no sale row, no SOLD vehicle and no accounting behind.
+  await assertFinancedDealCommitsThroughApplication(ctx, {
+    orgId: args.orgId,
+    vehicleId: args.vehicleId,
+    customerId: args.customerId,
+    quote,
+    applicationId: args.applicationId,
+  });
 
   const membership = await requireOrgMember(ctx, args.orgId, args.salespersonId);
 
