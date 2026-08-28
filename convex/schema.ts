@@ -2978,6 +2978,12 @@ export default defineSchema({
     .index("by_consumed_sale", ["consumedBySaleId"])
     .index("by_restored_from", ["restoredFromClaimId"])
     .index("by_deposit", ["depositId"])
+    // ⚠️ PROVENANCE NEEDS BOTH HALVES. One deposit can rest under episodes on
+    // SEVERAL vehicles, so "the claims for this deposit" cannot say which
+    // evidence a particular vehicle's hold came from. Asking by deposit AND
+    // vehicle is what makes that answer deterministic instead of dependent on
+    // which row an index happens to return first.
+    .index("by_deposit_vehicle", ["depositId", "vehicleId"])
     .index("by_application", ["applicationId"])
     .index("by_reservation", ["reservationId"]),
 

@@ -62,6 +62,13 @@ export const COMMITMENT_MESSAGES = {
    */
   ambiguousOwnership:
     "This vehicle has conflicting commitment records and cannot be acted on until they are resolved. Please contact support.",
+  /**
+   * Two episodes resting on one deposit that disagree about what that money is
+   * evidence OF. Like ambiguous ownership, this is corrupt state rather than a
+   * tie to be broken: choosing either one would be choosing by query order.
+   */
+  conflictingProvenance:
+    "This deposit has conflicting commitment records and cannot be re-applied until they are resolved. Please contact support.",
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -324,7 +331,26 @@ export async function resolveActingRoot(
   // ── 2. a FREE car opens a root — the only place that is ever correct ─────
   if (!held) return { decision: "OPEN_NEW" };
 
-  // ── 3. PARTICIPANT CONSISTENCY, CHECKED ONCE FOR EVERY PROOF BELOW ───────
+  // ── 3. AN UNATTRIBUTED OPERATION MAY NOT ACT ON A HELD CAR ───────────────
+  //
+  // ⚠️ ABSENCE IS NOT "NO CONTRADICTION". ABSENCE IS A REFUSAL.
+  //
+  // The participant check below can only compare two things it has. Written as
+  // `if (actingPrincipal && …)` it therefore passed silently whenever nobody
+  // had been established at all, and the lineage branches under it went on to
+  // JOIN a held root for an operation with no attributable deal behind it.
+  // Genuine evidence, no one accountable for presenting it.
+  //
+  // No shipped caller could reach that — all five supply a principal — but this
+  // is the exported authority contract, and Phase 2 and Phase 3 add callers.
+  // A guard that is safe only because of who happens to call it today is not a
+  // guard.
+  //
+  // A FREE car is deliberately NOT affected: it is decided above, and opening a
+  // root remains the one place that is correct without lineage.
+  if (!actingPrincipal) return refuse;
+
+  // ── 4. PARTICIPANT CONSISTENCY, CHECKED ONCE FOR EVERY PROOF BELOW ───────
   //
   // ⚠️ Explicit evidence SELECTS a root. It does not entitle whoever presents
   // it to act on that root. Those are different questions, and answering only
@@ -339,11 +365,11 @@ export async function resolveActingRoot(
   // admit one. A second independent deal for the SAME customer on the same car
   // passes this check and is still refused below, for want of lineage
   // (contract 1.2). Same customer remains no evidence at all of the same deal.
-  if (actingPrincipal && String(actingPrincipal) !== String(held.customerId)) {
+  if (String(actingPrincipal) !== String(held.customerId)) {
     return refuse;
   }
 
-  // ── 4. Lineage proof: does the presented evidence belong to THIS root? ────
+  // ── 5. Lineage proof: does the presented evidence belong to THIS root? ────
   //
   // ⚠️ Checked against the ROOT, never against the customer. Two deals for one
   // customer on one car are two deals, and the second must wait for the first.
@@ -654,11 +680,46 @@ export async function evidenceForDepositHold(
   orgId: Id<"organizations">,
   hold: Doc<"depositVehicleHolds">
 ): Promise<CommitmentEvidence> {
+  // ── the episodes resting on THIS money, for THIS car ─────────────────────
+  //
+  // ⚠️ BOTH HALVES, AND NOT THE FIRST ROW THAT COMES BACK. One deposit can sit
+  // under episodes on several vehicles, so "the claims for this deposit" does
+  // not identify which evidence a particular hold came from — and returning
+  // whichever the index yielded first made the answer depend on query order.
+  const candidates: CommitmentEvidence[] = [];
+  for await (const claim of ctx.db
+    .query("vehicleCommitmentClaims")
+    .withIndex("by_deposit_vehicle", (q) =>
+      q.eq("depositId", hold.depositId).eq("vehicleId", hold.vehicleId)
+    )) {
+    if (claim.orgId !== orgId) continue;
+    candidates.push(evidenceOf(claim));
+  }
+
+  // Several episodes may legitimately rest on one deposit for one car — a
+  // reacquisition carries its predecessor's evidence forward, so history
+  // AGREEING is the normal case and is not a conflict.
+  const distinct = new Map<string, CommitmentEvidence>();
+  for (const evidence of candidates) {
+    distinct.set(`${evidence.kind}:${evidenceRef(evidence)}`, evidence);
+  }
+  if (distinct.size === 1) return [...distinct.values()][0];
+  // ⚠️ DISAGREEMENT FAILS CLOSED. Picking one would be picking by query order,
+  // and the whole reason this function exists is that a wrong pick becomes a
+  // live claim of the wrong KIND on a real car.
+  if (distinct.size > 1) throw new ConvexError(COMMITMENT_MESSAGES.conflictingProvenance);
+
+  // ── nothing for this car: is the deposit unclaimed, or claimed elsewhere? ──
+  //
+  // Unclaimed anywhere is the genuinely deposit-only case, and DEPOSIT is then
+  // a fact rather than an assumption. But evidence belonging to ANOTHER car is
+  // never borrowed for this one — that is the exact inference this replacement
+  // removes, arriving through a different door.
   for await (const claim of ctx.db
     .query("vehicleCommitmentClaims")
     .withIndex("by_deposit", (q) => q.eq("depositId", hold.depositId))) {
     if (claim.orgId !== orgId) continue;
-    return evidenceOf(claim);
+    throw new ConvexError(COMMITMENT_MESSAGES.conflictingProvenance);
   }
   return { kind: "DEPOSIT", depositId: hold.depositId };
 }
