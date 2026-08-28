@@ -88,9 +88,9 @@ export function PrestigeTheme(props: ThemeProps) {
                 {lang === "en" ? "عربي" : "EN"}
               </button>
             )}
-            <a href="/contact" className="pt-btn-primary" style={{ padding: "8px 20px", fontSize: 11 }}>
+            <Link href="/contact" className="pt-btn-primary" style={{ padding: "8px 20px", fontSize: 11 }}>
               {t.nav.contact}
-            </a>
+            </Link>
             <button
               onClick={() => setMobileNavOpen(!mobileNavOpen)}
               style={{ display: "none", background: "none", border: "none", cursor: "pointer", color: "#ccc", padding: 4 }}
@@ -146,11 +146,11 @@ export function PrestigeTheme(props: ThemeProps) {
                 {profile.heroSubtitle ?? "Discover our curated collection of premium vehicles."}
               </p>
               <div className="pt-hero-cta" style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
-                <a href="/inventory" className="pt-btn-primary">
+                <Link href="/inventory" className="pt-btn-primary">
                   {t.browseInventory}
                   <ArrowRight size={14} style={isArabic ? { transform: "rotate(180deg)" } : {}} />
-                </a>
-                <a href="/contact" className="pt-btn-outline">{t.contactSales}</a>
+                </Link>
+                <Link href="/contact" className="pt-btn-outline">{t.contactSales}</Link>
               </div>
             </div>
             <div style={{ position: "absolute", bottom: 32, left: "50%", transform: "translateX(-50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, opacity: 0.3 }}>
@@ -165,9 +165,9 @@ export function PrestigeTheme(props: ThemeProps) {
                 <p className="pt-label" style={{ marginBottom: 10 }}>{t.featuredVehicles}</p>
                 <h2 style={{ fontSize: "clamp(28px, 3.5vw, 42px)", fontWeight: 900, color: "#fff", lineHeight: 1.1 }}>{t.featuredVehicles}</h2>
               </div>
-              <a href="/inventory" className="pt-label" style={{ textDecoration: "none", display: "flex", alignItems: "center", gap: 6 }}>
+              <Link href="/inventory" className="pt-label" style={{ textDecoration: "none", display: "flex", alignItems: "center", gap: 6 }}>
                 {t.viewAll} <ArrowRight size={11} style={isArabic ? { transform: "rotate(180deg)" } : {}} />
-              </a>
+              </Link>
             </div>
             <PrestigeVehicleGrid vehicles={featuredVehicles} primary={primary} formatPrice={formatPrice} noVehiclesLabel={t.noVehicles} />
           </section>
@@ -203,7 +203,7 @@ export function PrestigeTheme(props: ThemeProps) {
                 </div>
                 <div>
                   <p className="pt-label" style={{ marginBottom: 4 }}>Get in touch</p>
-                  <a href="/contact" style={{ color: "#fff", fontWeight: 600, fontSize: 14, textDecoration: "none" }}>{t.nav.contact}</a>
+                  <Link href="/contact" style={{ color: "#fff", fontWeight: 600, fontSize: 14, textDecoration: "none" }}>{t.nav.contact}</Link>
                 </div>
               </div>
             </div>
