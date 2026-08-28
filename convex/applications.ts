@@ -1,4 +1,11 @@
-import { acquireVehicle, assertAcquirable } from "./commitments";
+import {
+  acquireVehicle,
+  assertAcquirable,
+  assertSaleMayCompleteForVehicle,
+  consumeRootForSale,
+  IN_FLIGHT_FINANCE_STATUSES,
+  releaseRootIfNoLiveBasis,
+} from "./commitments";
 import { v, ConvexError } from "convex/values";
 import { MutationCtx, QueryCtx, query } from "./_generated/server";
 import { mutation } from "./functions";
@@ -2249,6 +2256,32 @@ export const createFromQuote = mutation({
   },
 });
 
+/**
+ * SCRUM-195 M3. Release every car this application's quote was holding, if
+ * nothing else still holds it.
+ *
+ * Called AFTER `releaseHoldForApplicationQuote`, never before. That helper ends
+ * TWO bases in one call — the quote's deposit holds and any same-customer
+ * reservation — so a liveness check run first would read a basis this very
+ * mutation is about to retire and leave the root open forever.
+ */
+async function releaseRootsForApplicationQuote(
+  ctx: MutationCtx,
+  args: { orgId: Id<"organizations">; quoteId: Id<"quotes">; decisionNow: number; reason: string }
+): Promise<void> {
+  const quote = await ctx.db.get(args.quoteId);
+  if (!quote || quote.orgId !== args.orgId) return;
+  const items = quote.vehicleItems ?? [{ vehicleId: quote.vehicleId }];
+  for (const item of items) {
+    await releaseRootIfNoLiveBasis(ctx, {
+      orgId: args.orgId,
+      vehicleId: item.vehicleId,
+      reason: args.reason,
+      decisionNow: args.decisionNow,
+    });
+  }
+}
+
 export const updateStatus = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -2346,6 +2379,14 @@ export const updateStatus = mutation({
 
     if (args.status === "REJECTED" && app.status !== "REJECTED") {
       await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId, actorId: auth.user._id });
+      // The application has left the in-flight set and its quote's holds are
+      // released, so this is the first moment the canonical answer can change.
+      await releaseRootsForApplicationQuote(ctx, {
+        orgId: args.orgId,
+        quoteId: app.quoteId,
+        decisionNow: patchedAt,
+        reason: "finance application rejected",
+      });
     }
   },
 });
@@ -2386,6 +2427,12 @@ export const cancelApplication = mutation({
 
         if (app.status === "CANCELLED") {
           await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId, actorId: auth.user._id });
+          await releaseRootsForApplicationQuote(ctx, {
+            orgId: args.orgId,
+            quoteId: app.quoteId,
+            decisionNow: Date.now(),
+            reason: "finance application cancelled",
+          });
           return;
         }
 
@@ -2552,6 +2599,17 @@ export const cancelApplication = mutation({
           ...(app.gapResolution === "PENDING_NEGOTIATION"
             ? { gapResolution: "FAILED" as const }
             : {}),
+        });
+
+        // SCRUM-195 M3. AFTER the application row itself is CANCELLED, so the
+        // FINANCE basis is genuinely gone when the predicate runs. Before this
+        // patch the application is still in the in-flight set and the root
+        // would correctly refuse to release.
+        await releaseRootsForApplicationQuote(ctx, {
+          orgId: args.orgId,
+          quoteId: app.quoteId,
+          decisionNow: now,
+          reason: "finance application cancelled",
         });
 
         await ctx.db.insert("applicationStatusLog", {
@@ -3008,6 +3066,7 @@ export const finalizeDeal = mutation({
         // reappraisal leaves status APPROVED, so this is the only thing
         // stopping a sale being completed on economics nothing supports.
         assertDealerEconomicsRecorded(app, "finalizing");
+
         // The last step in the ordering Codex traced, and the one that creates
         // a SALE. A deal whose denomination cannot be established must not be
         // turned into money here either — otherwise every guard upstream is
@@ -3103,6 +3162,28 @@ export const finalizeDeal = mutation({
         }
         await assertRequiredApplicationDocumentsComplete(ctx, app, quote);
 
+        // SCRUM-195 M3. COMPLETION-TIME OWNERSHIP, AND IT IS NOT REDUNDANT.
+        //
+        // An APPROVED application is not proof that its car is still this
+        // deal's. The deal can be closed through a different door and then
+        // cancelled: the root goes CONSUMED and STAYS CONSUMED, while nothing
+        // touches `financeApplications`, so the application stays APPROVED with
+        // every finalizeDeal precondition satisfied. Another customer then
+        // legitimately acquires the car, and only this check stops the stale
+        // application selling it out from under them.
+        //
+        // ⚠️ ORDER MATTERS, AND NOT ONLY FOR SAFETY. This sits AFTER the quote
+        // existence, ownership and mismatch checks above and BEFORE the first
+        // irreversible write below. Placed any earlier it answered "committed
+        // to another deal" for a deal whose quote simply did not match, which
+        // is a worse message and hid a real validation failure.
+        await assertSaleMayCompleteForVehicle(ctx, {
+          orgId: args.orgId,
+          vehicleId: app.vehicleId,
+          lineage: { quoteId: app.quoteId },
+          actingCustomerId: app.customerId,
+        });
+
         // Re-verify at the commit point, not just at quote time: the approval
         // could have been rejected or the vehicle's minimum raised in between.
         // Quotes written before `desiredProfit` existed carry no margin to check
@@ -3182,6 +3263,15 @@ export const finalizeDeal = mutation({
             | undefined,
           idempotencyKey: args.idempotencyKey,
           actorId: auth.user._id,
+        });
+
+        // The deal completed into THIS sale. Write-once root provenance.
+        await consumeRootForSale(ctx, {
+          orgId: args.orgId,
+          vehicleId: app.vehicleId,
+          saleId,
+          reason: "financed deal finalized",
+          decisionNow: Date.now(),
         });
 
         const now = Date.now();

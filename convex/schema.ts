@@ -2921,9 +2921,28 @@ export default defineSchema({
     openedBy: v.id("users"),
     closedAt: v.optional(v.number()),
     closedReason: v.optional(v.string()),
+    /**
+     * SCRUM-195 M3 — WRITE-ONCE, on OPEN -> CONSUMED only.
+     *
+     * The exact sale that ended this deal. Root-level rather than claim-level
+     * because a root legitimately carries several live episodes at once, so
+     * "which claims did this sale consume" has no defensible answer while
+     * "which sale consumed this root" has exactly one.
+     *
+     * It exists so Phase 3 can go from a cancelled sale back to its root by
+     * index instead of reconstructing it from history. Nothing may rewrite it:
+     * a deal becomes a sale once.
+     */
+    consumedBySaleId: v.optional(v.id("sales")),
   })
     .index("by_org_vehicle_status", ["orgId", "vehicleId", "status"])
-    .index("by_org_customer", ["orgId", "customerId"]),
+    .index("by_org_customer", ["orgId", "customerId"])
+    // TENANT-SCOPED ON PURPOSE. A bare ["consumedBySaleId"] index would answer
+    // "which root did this sale consume" across every organization at once, and
+    // the answer is only ever wanted within one. Leading with orgId makes the
+    // tenant boundary part of the access path rather than a filter somebody has
+    // to remember to apply.
+    .index("by_org_consumed_sale", ["orgId", "consumedBySaleId"]),
 
   /**
    * SCRUM-195 — ONE ACQUISITION EPISODE.

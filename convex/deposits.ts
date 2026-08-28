@@ -1,6 +1,13 @@
-import { acquireVehicle, assertAcquirable, evidenceForDepositHold } from "./commitments";
+import {
+  acquireVehicle,
+  assertAcquirable,
+  assertNoLiveBasisHolds,
+  COMMITMENT_MESSAGES,
+  evidenceForDepositHold,
+  releaseRootIfNoLiveBasis,
+} from "./commitments";
 import { ConvexError, v } from "convex/values";
-import { query, type QueryCtx } from "./_generated/server";
+import { query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, type Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -210,6 +217,28 @@ export const create = mutation({
   },
 });
 
+/**
+ * Every car this deposit could have been holding.
+ *
+ * A single-vehicle deposit holds its own `vehicleId` and writes no join rows at
+ * all (see the guard in `create`), so reading only `depositVehicleHolds` would
+ * find nothing for the commonest walk-in case. A multi-vehicle deposit holds
+ * whatever its hold rows name. Both are needed.
+ */
+async function vehiclesHeldByDeposit(
+  ctx: MutationCtx,
+  deposit: Doc<"deposits">
+): Promise<Array<Id<"vehicles">>> {
+  const seen = new Map<string, Id<"vehicles">>();
+  seen.set(String(deposit.vehicleId), deposit.vehicleId);
+  for await (const hold of ctx.db
+    .query("depositVehicleHolds")
+    .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))) {
+    seen.set(String(hold.vehicleId), hold.vehicleId);
+  }
+  return [...seen.values()];
+}
+
 export const release = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -263,6 +292,20 @@ export const release = mutation({
           notes: args.notes,
           idempotencyKey: args.idempotencyKey,
         });
+
+        // SCRUM-195 M3. The money decision is made; now ask the canonical
+        // authority whether anything still holds each car. Deliberately AFTER
+        // `releaseHeldDeposit`, so the deposit basis this door just ended is
+        // already gone when the predicate runs.
+        const releasedAt = Date.now();
+        for (const vehicleId of await vehiclesHeldByDeposit(ctx, deposit)) {
+          await releaseRootIfNoLiveBasis(ctx, {
+            orgId: args.orgId,
+            vehicleId,
+            reason: `deposit ${args.resolution.toLowerCase()}`,
+            decisionNow: releasedAt,
+          });
+        }
 
         const actorName = await getActorName(ctx);
         await notifyManagers(
@@ -329,6 +372,17 @@ export const voidDeposit = mutation({
       resolvedAt: now,
       notes: args.reason !== undefined ? args.reason : deposit.notes,
     });
+
+    // SCRUM-195 M3. The row is voided and its hold cleared above, so the
+    // deposit basis is gone by the time this asks what still holds each car.
+    for (const vehicleId of await vehiclesHeldByDeposit(ctx, deposit)) {
+      await releaseRootIfNoLiveBasis(ctx, {
+        orgId: args.orgId,
+        vehicleId,
+        reason: "deposit voided as recorded in error",
+        decisionNow: now,
+      });
+    }
 
     // Voiding means "recorded in error" — every artifact written when the
     // deposit was recorded must be unwound, not just the operational row:
@@ -1097,6 +1151,27 @@ export const releaseVehicleAllocation = mutation({
       throwAppError(AppErrorCode.QUOTE_NOT_FOUND, "Quote not found in this organization.");
     }
 
+    // SCRUM-195 M3. EXPLICIT VEHICLE RELEASE IS STRICTER THAN EVIDENCE RELEASE.
+    //
+    // This operation's actual meaning is "take this car out of this deal", and
+    // it does not get to end a reservation or a finance application because
+    // somebody clicked a button about the vehicle. The operator ends that
+    // workflow explicitly first (owner ruling c15683).
+    //
+    // DEPOSIT is excluded because this door IS the deposit's own release — its
+    // hold is obviously still live at this point, and including it would make
+    // the guard fire every time.
+    //
+    // Before any write, so a refusal leaves no hold in limbo.
+    const decisionNow = Date.now();
+    await assertNoLiveBasisHolds(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      decisionNow,
+      excludeKinds: ["DEPOSIT"],
+      message: COMMITMENT_MESSAGES.vehicleStillHeldByAnotherBasis,
+    });
+
     const deposits = await ctx.db
       .query("deposits")
       .withIndex("by_quote", (q) => q.eq("quoteId", args.quoteId))
@@ -1144,6 +1219,16 @@ export const releaseVehicleAllocation = mutation({
     }
 
     await maybeReleaseVehicleHold(ctx, args.vehicleId);
+
+    // SCRUM-199: the car is free the moment it leaves the deal, even though its
+    // money is still sitting in RELEASED_AWAITING_DECISION. The root locks the
+    // car; it does not lock the cash.
+    await releaseRootIfNoLiveBasis(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      reason: "vehicle removed from the deal",
+      decisionNow,
+    });
 
     await auditLog(ctx, {
       orgId: args.orgId,

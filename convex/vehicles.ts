@@ -1,4 +1,10 @@
-import { acquireVehicle, assertAcquirable } from "./commitments";
+import {
+  acquireVehicle,
+  assertAcquirable,
+  assertVehicleNotCommitted,
+  COMMITMENT_MESSAGES,
+  releaseRootIfNoLiveBasis,
+} from "./commitments";
 import { v, ConvexError } from "convex/values";
 import { MutationCtx, QueryCtx, query } from "./_generated/server";
 import { internalMutation, mutation } from "./functions";
@@ -1600,6 +1606,15 @@ export const createReservation = mutation({
           status: "EXPIRED",
           expiredAt: now,
         });
+        // Same reasoning as the cron sweep: this is the last door that can
+        // close the expired deal's root. It runs BEFORE the acquisition below,
+        // so the next customer is not refused a car nobody holds any more.
+        await releaseRootIfNoLiveBasis(ctx, {
+          orgId: args.orgId,
+          vehicleId: reservation.vehicleId,
+          reason: "reservation expired",
+          decisionNow: now,
+        });
       }
     }
     await syncVehicleHoldStatus(ctx, args.vehicleId, user._id);
@@ -1831,6 +1846,17 @@ export const releaseReservation = mutation({
       releasedBy: user._id,
     });
     await syncVehicleHoldStatus(ctx, reservation.vehicleId, user._id);
+
+    // SCRUM-195 M3. The reservation basis is gone; the root follows only if
+    // nothing else holds the car. A finance application on the same deal
+    // legitimately keeps it OPEN — releasing a reservation is not a decision to
+    // abandon the deal.
+    await releaseRootIfNoLiveBasis(ctx, {
+      orgId: args.orgId,
+      vehicleId: reservation.vehicleId,
+      reason: "reservation released",
+      decisionNow: now,
+    });
   },
 });
 
@@ -1882,6 +1908,17 @@ export const expireReservations = internalMutation({
         expiredAt: now,
       });
       await syncVehicleHoldStatus(ctx, reservation.vehicleId);
+
+      // SCRUM-195 M3. WITHOUT THIS THE ROOT IS LOCKED FOREVER. Once a
+      // reservation is EXPIRED, `releaseReservation` refuses it (it requires
+      // ACTIVE), so no operator door can ever release the root it opened. The
+      // sweep that ends the basis is the only place left that can close it.
+      await releaseRootIfNoLiveBasis(ctx, {
+        orgId: reservation.orgId,
+        vehicleId: reservation.vehicleId,
+        reason: "reservation expired",
+        decisionNow: now,
+      });
     }
 
     return { expired: reservations.length };
@@ -2072,6 +2109,19 @@ export const softDelete = mutation({
         `Cannot delete a vehicle with status "${vehicle.status}". Archive it first.`
       );
     }
+
+    // SCRUM-195 M3. THE STATUS CHECK ABOVE IS NOT ENOUGH.
+    //
+    // A finance-only commitment leaves the vehicle AVAILABLE — `hasHold` counts
+    // deposits and reservations, not applications — so a car with a live
+    // in-flight application sails past that guard. Deleting it strands the root
+    // where no door can reach it: the car is gone from every listing, so nobody
+    // can navigate to the deal to end it properly.
+    await assertVehicleNotCommitted(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      message: COMMITMENT_MESSAGES.vehicleStillHeldByAnotherBasis,
+    });
 
     // We no longer delete associated images, we just soft-delete the record
     await ctx.db.patch(args.vehicleId, {

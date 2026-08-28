@@ -40,6 +40,7 @@
  */
 
 import { ConvexError } from "convex/values";
+import { hasActiveDepositHold } from "./utils/depositHelpers";
 import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 
@@ -79,6 +80,23 @@ export const COMMITMENT_MESSAGES = {
    */
   unprovenProvenance:
     "This vehicle's share of the deposit is missing its commitment record and cannot be re-applied until it is restored. Please contact support.",
+  /**
+   * M3. A sale offered as the provenance for closing a deal that is not this
+   * dealership's, or is not about this car. The root's `consumedBySaleId` is the
+   * entry point Phase 3 uses to get from a cancelled sale back to its deal, so a
+   * stamp naming the wrong sale is worse than no stamp at all — it would send a
+   * later reversal at somebody else's deal with full confidence.
+   */
+  saleProvenanceMismatch:
+    "This sale does not belong to this vehicle's dealership record and cannot be recorded as the sale that closed its deal. Please contact support.",
+  /**
+   * M3. An operation whose meaning is "take this car out of the deal" —
+   * removing a vehicle's allocation, or deleting it from inventory — while
+   * another independent basis still legitimately holds it. Ending that other
+   * workflow is a decision for an operator, not a side effect of this one.
+   */
+  vehicleStillHeldByAnotherBasis:
+    "This vehicle is still held by another part of this deal. End that first — release the reservation, or reject or cancel the finance application — then remove the vehicle.",
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -975,4 +993,318 @@ export async function assertAcquirable(
     refusalMessage: args.message,
   });
   if (acting.decision === "REFUSE") throwRefusal(acting);
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// M3 — FINALIZATION. The two terminal transitions, and the one predicate that
+// decides whether a car is still held.
+//
+// Phase 2 writes EXACTLY these root fields and NOTHING on the claims:
+//
+//     a sale completes for a committed car  ->  OPEN -> CONSUMED
+//                                               consumedBySaleId, closedAt, closedReason
+//     the last live basis lets the car go   ->  OPEN -> RELEASED
+//                                               closedAt, closedReason
+//
+// Claim lifecycle is Phase 3's entirely. A claim on a CONSUMED root stays
+// ACTIVE, which is exactly why claim status is NOT a liveness signal below.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * THE finance statuses that hold a vehicle. ONE LIST.
+ *
+ * Hoisted out of `applications.createFromQuote`'s handler, where it was a local
+ * `const` that only the acquisition guard could see. The release side needs the
+ * same answer, and two independently-maintained copies of "which finance
+ * statuses hold a car" is precisely the distributed inference SCRUM-195 exists
+ * to remove — the same shape as the six acquisition writers that each decided
+ * evidence kind for themselves.
+ *
+ * It lives here rather than in `applications.ts` because `applications.ts`
+ * already imports this module; the reverse would be an import cycle, and a
+ * cycle around a `const` array is a real hazard rather than a style point.
+ *
+ * DRAFT is unreachable through any product door (`createFromQuote` writes
+ * PENDING_DOCS) and is retained because the existing guard retained it: a DRAFT
+ * row from before this model is conservatively treated as holding the car.
+ */
+export const IN_FLIGHT_FINANCE_STATUSES: readonly string[] = [
+  "DRAFT",
+  "PENDING_DOCS",
+  "UNDER_REVIEW",
+  "APPROVED",
+];
+
+/**
+ * IS ANY INDEPENDENT BASIS STILL HOLDING THIS CAR?
+ *
+ * The owner's rule (c15683): releasing one piece of evidence removes THAT
+ * evidence and nothing else. The root stays OPEN while another independent live
+ * basis legitimately holds the vehicle, so the money operation can succeed
+ * without pretending the deal ended.
+ *
+ * ⚠️ DO NOT REPLACE THIS WITH `syncVehicleHoldStatus`'s `hasHold`. That
+ * function answers a DIFFERENT question — "should the vehicle row read
+ * RESERVED" — and FINANCE IS NOT IN IT. Reusing it would release a root while
+ * an APPROVED application still held the car.
+ *
+ * ⚠️ AND IT IS NOT READ OFF THE CLAIMS. Under B+ claims stay ACTIVE forever,
+ * including on a CONSUMED root, so `claim.status === "ACTIVE"` is not evidence
+ * that anything still holds the car. Every basis below is read from the source
+ * record that actually confers the hold.
+ */
+export async function hasLiveCommitmentBasis(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    /** The ONE clock reading for this decision. See `resolveActingRoot`. */
+    decisionNow: number;
+    /**
+     * Kinds to treat as already gone.
+     *
+     * For an operation that is ITSELF about to end a basis and needs to know
+     * whether anything ELSE holds the car — `deposits.releaseVehicleAllocation`
+     * asking "may I take this car out of the deal?" while its own deposit
+     * obviously still holds it. Without this the answer is always yes and the
+     * guard never fires.
+     */
+    excludeKinds?: ReadonlyArray<"DEPOSIT" | "RESERVATION" | "FINANCE">;
+  }
+): Promise<boolean> {
+  const skip = (kind: "DEPOSIT" | "RESERVATION" | "FINANCE") =>
+    args.excludeKinds !== undefined && args.excludeKinds.includes(kind);
+
+  // DEPOSIT — the product's own definition of a deposit hold, not a second
+  // opinion about it. On a multi-vehicle quote a row holds a car only while
+  // that car's own share is live, which `getActiveDepositHolds` already knows.
+  if (!skip("DEPOSIT") && (await hasActiveDepositHold(ctx, args.vehicleId))) return true;
+
+  // RESERVATION — the certified predicate, with the decision's own clock. An
+  // ACTIVE row past its expiry is NOT live, merely unswept: the sweep's own
+  // query is the spec, and `.take(100)` means a backlog can stretch that window
+  // well past the cron.
+  if (!skip("RESERVATION")) {
+    for await (const reservation of ctx.db
+      .query("vehicleReservations")
+      .withIndex("by_org_vehicle_status", (q) =>
+        q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId).eq("status", "ACTIVE")
+      )) {
+      if (reservationIsLive(reservation, args.decisionNow)) return true;
+    }
+  }
+
+  // FINANCE — an application still able to progress toward finalization.
+  if (!skip("FINANCE")) {
+    for await (const application of ctx.db
+      .query("financeApplications")
+      .withIndex("by_vehicle", (q) => q.eq("vehicleId", args.vehicleId))) {
+      if (application.orgId !== args.orgId) continue;
+      if (IN_FLIGHT_FINANCE_STATUSES.includes(application.status)) return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * The one OPEN root this org holds on this car, with the tenant boundary IN THE
+ * ACCESS PATH rather than checked afterwards.
+ *
+ * Returns null when the car is free — Phase 2 must never invent a root merely
+ * to have something to close. Refuses when two OPEN roots exist, because that
+ * is one car promised to two deals and picking one would launder the corruption
+ * into a terminal state.
+ */
+async function openRootForFinalization(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">
+): Promise<Doc<"commitmentRoots"> | null> {
+  const ownership = await resolveOwnership(ctx, orgId, vehicleId);
+  if (ownership.kind === "FREE") return null;
+  if (ownership.kind === "AMBIGUOUS") {
+    throw new ConvexError(COMMITMENT_MESSAGES.ambiguousOwnership);
+  }
+  const root = ownership.root;
+  // Belt and braces. `resolveOwnership` already scopes by orgId through the
+  // index, so this can only fire if that ever stops being true — which is
+  // exactly when a silent cross-tenant write would otherwise happen.
+  if (root.orgId !== orgId || String(root.vehicleId) !== String(vehicleId)) {
+    throw new ConvexError(COMMITMENT_MESSAGES.ambiguousOwnership);
+  }
+  return root;
+}
+
+/**
+ * OPEN -> CONSUMED. The deal completed into a sale.
+ *
+ * Write-once and monotonic: only an OPEN root is ever transitioned, and a
+ * terminal root is invisible to `resolveOwnership`, so a replay is a no-op
+ * rather than a rewrite. Nothing here may overwrite an existing `closedAt`,
+ * `closedReason` or `consumedBySaleId` — a deal becomes a sale once.
+ *
+ * FREE VEHICLE: nothing happens, deliberately. A genuine walk-in sale must not
+ * cause a root to be invented so finalization has something to close.
+ */
+export async function consumeRootForSale(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    saleId: Id<"sales">;
+    reason: string;
+    decisionNow: number;
+  }
+): Promise<void> {
+  const root = await openRootForFinalization(ctx, args.orgId, args.vehicleId);
+  if (!root) return;
+
+  // THE SALE MUST BE THIS ORG'S, AND ABOUT THIS CAR. Root provenance is the
+  // entry point Phase 3 will use to go from a cancelled sale back to its deal,
+  // so a stamp naming another tenant's sale would be worse than no stamp.
+  const sale = await ctx.db.get(args.saleId);
+  if (!sale || sale.orgId !== args.orgId || String(sale.vehicleId) !== String(args.vehicleId)) {
+    throw new ConvexError(COMMITMENT_MESSAGES.saleProvenanceMismatch);
+  }
+
+  await ctx.db.patch(root._id, {
+    status: "CONSUMED" as const,
+    consumedBySaleId: args.saleId,
+    closedAt: args.decisionNow,
+    closedReason: args.reason,
+  });
+}
+
+/**
+ * OPEN -> RELEASED, but ONLY when nothing else still holds the car.
+ *
+ * Call this at the END of a door's handler, after that door's own writes have
+ * ended its own basis. Evaluated any earlier it would read a basis the same
+ * mutation is about to retire and leave the root open forever — which is the
+ * compound case `releaseHoldForApplicationQuote` produces, ending a FINANCE and
+ * a RESERVATION basis in one call.
+ *
+ * A release is not a sale: `consumedBySaleId` is never written here.
+ */
+export async function releaseRootIfNoLiveBasis(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    reason: string;
+    decisionNow: number;
+  }
+): Promise<void> {
+  const root = await openRootForFinalization(ctx, args.orgId, args.vehicleId);
+  if (!root) return;
+
+  if (
+    await hasLiveCommitmentBasis(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      decisionNow: args.decisionNow,
+    })
+  ) {
+    return;
+  }
+
+  await ctx.db.patch(root._id, {
+    status: "RELEASED" as const,
+    closedAt: args.decisionNow,
+    closedReason: args.reason,
+  });
+}
+
+/**
+ * REFUSE TO TAKE A CAR OUT FROM UNDER A LIVE DEAL, at an operation whose actual
+ * meaning is "remove this car" rather than "end this evidence".
+ *
+ * `deposits.releaseVehicleAllocation` and `vehicles.softDelete` do not get to
+ * end a finance application or a reservation because somebody clicked a button
+ * about the car. The operator ends that workflow explicitly first.
+ */
+export async function assertNoLiveBasisHolds(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    decisionNow: number;
+    message: string;
+    /**
+     * The basis this operation is itself ending. Excluded so the question is
+     * "does anything ELSE hold this car", which is the one being asked.
+     */
+    excludeKinds?: ReadonlyArray<"DEPOSIT" | "RESERVATION" | "FINANCE">;
+  }
+): Promise<void> {
+  const root = await openRootForFinalization(ctx, args.orgId, args.vehicleId);
+  if (!root) return;
+  if (
+    await hasLiveCommitmentBasis(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      decisionNow: args.decisionNow,
+      excludeKinds: args.excludeKinds,
+    })
+  ) {
+    throw new ConvexError(args.message);
+  }
+}
+
+/**
+ * REFUSE TO REMOVE A CAR THAT IS STILL COMMITTED, at all.
+ *
+ * Deliberately stronger than `assertNoLiveBasisHolds`: this asks the canonical
+ * authority whether ANY open commitment exists, not whether a basis is live.
+ * Taking a car out of inventory while a deal holds it strands that root where
+ * no door can reach it — the car is gone from every listing, so the operator
+ * cannot navigate to the deal to end it properly.
+ */
+export async function assertVehicleNotCommitted(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    message: string;
+  }
+): Promise<void> {
+  const root = await openRootForFinalization(ctx, args.orgId, args.vehicleId);
+  if (root) throw new ConvexError(args.message);
+}
+
+/**
+ * MAY THIS SALE COMPLETE ON THIS CAR? The completion-time authority.
+ *
+ * ⚠️ ACQUISITION-TIME AUTHORITY IS NOT SUFFICIENT, and this is not
+ * belt-and-braces. A deal can be approved, closed through a different door, and
+ * cancelled — leaving the root CONSUMED and the application still APPROVED,
+ * because sale cancellation never touches `financeApplications`. Another
+ * customer then legitimately acquires the car, and the stale application still
+ * satisfies every `finalizeDeal` precondition. Only a check HERE stops it
+ * selling that customer's car out from under them.
+ *
+ * It is also what makes CONSUME well defined at all: if a rival may complete a
+ * sale on a car whose root belongs to somebody else, then "the sale consumes
+ * the root" would stamp the HELD customer's root with the RIVAL's sale.
+ *
+ * A FREE vehicle passes — a walk-in sale is ordinary business.
+ */
+export async function assertSaleMayCompleteForVehicle(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    lineage: CommitmentLineage;
+    actingCustomerId?: Id<"customers"> | null;
+  }
+): Promise<void> {
+  await assertAcquirable(ctx, {
+    orgId: args.orgId,
+    vehicleId: args.vehicleId,
+    lineage: args.lineage,
+    actingCustomerId: args.actingCustomerId,
+    message: COMMITMENT_MESSAGES.heldByAnotherDealSale,
+  });
 }

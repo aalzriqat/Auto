@@ -222,9 +222,12 @@
  *   built on sand. In round 2 this caught three fixture errors before they
  *   could be misread as missing behaviour.
  *
- *   PART X (also G.*, in its own block) — what is TRUE TODAY AND MUST BECOME
- *   FALSE. FIVE contracts, green today by design, every one of them DELETED by
- *   the M3 commit. The block header carries the rule for what belongs there.
+ *   PART X held five contracts pinning the gap as it existed BEFORE M3 — a
+ *   completed sale leaving the root OPEN, a release doing the same, a
+ *   cancellation not freeing the car, a committed car being soft-deletable, and
+ *   an expired reservation locking the car forever. M3 makes all five false, so
+ *   the M3 commit DELETED them. They are named here rather than kept, because a
+ *   contract asserting behaviour the system no longer has is not evidence.
  *
  *   PART B (F.*) — what M3 must do. Red now, each failing at its OWN
  *   finalization assertion and never in setup.
@@ -1031,140 +1034,6 @@ describe("P2-G ground truth the M3 spec is built on", () => {
   });
 });
 
-// ══════════════════════════════════════════════════════════════════════════════
-// PART X — THE GAP AS IT EXISTS TODAY.
-//
-// ⚠️⚠️ DELETE THIS ENTIRE BLOCK IN THE M3 COMMIT. Every contract in it asserts
-// behaviour that a CORRECT M3 makes false. They are here as evidence that the
-// gap is real and reachable, not as invariants.
-//
-// THE RULE THAT PUTS A CONTRACT HERE, so the next author does not have to
-// rediscover it:
-//
-//     A Part-A contract that pins today's BROKEN behaviour, whose Part-B
-//     counterpart REQUIRES that behaviour to change, is BY CONSTRUCTION a
-//     demolition marker. It belongs in PART X, not in PART G.
-//
-// This grouping exists because per-test markers did not survive contact with
-// the next round. One seat found G.4/G.5 unmarked; the remediation marked them
-// and then added THREE more unmarked ones (G.9b, G.12b, G.12c) in the same
-// commit, because the fix addressed the instances and not the class. A block
-// name cannot be forgotten the way a comment can.
-//
-//     G.4   completion leaves the root OPEN        -> falsified by F.1
-//     G.5   release leaves the root OPEN           -> falsified by F.14-F.19
-//     G.9b  ending the application leaves it locked-> falsified by F.34
-//     G.12b a committed car can be soft-deleted    -> falsified by F.31
-//     G.12c an expired reservation locks the car   -> falsified by F.28
-// ══════════════════════════════════════════════════════════════════════════════
-
-describe("P2-X the gap as it exists today — DELETE WITH THE M3 COMMIT", () => {
-
-  test("G.4 a completed sale leaves the root OPEN and unstamped", async () => {
-    const seed = await seedDealer("g4");
-    const v = await vehicle(seed);
-    const quoteId = await quoteFor(seed, seed.customerA, [v]);
-    await depositOn(seed, quoteId, 5_000);
-    await completeQuote(seed, quoteId);
-
-    const roots = await rootsOn(seed, v);
-    expect(roots).toHaveLength(1);
-    expect(roots[0].status, "THE GAP: the sale happened and the canonical root never noticed").toBe("OPEN");
-    expect(rootSaleStamp(roots[0]), "and nothing records which sale consumed it").toBeUndefined();
-  });
-
-  test("G.5 and NEITHER does a release: nothing has ever written a terminal root", async () => {
-    const seed = await seedDealer("g5");
-    const v1 = await vehicle(seed);
-    const v2 = await vehicle(seed);
-    const q1 = await quoteFor(seed, seed.customerA, [v1]);
-    const q2 = await quoteFor(seed, seed.customerB, [v2]);
-    await depositOn(seed, q1, 5_000);
-    await depositOn(seed, q2, 5_000);
-    await completeQuote(seed, q1);
-    const dep2 = await seed.t.run(async (ctx) =>
-      (await ctx.db.query("deposits").collect()).find((d) => d.quoteId === q2)
-    );
-    await releaseDeposit(seed, dep2!._id, "FORFEITED");
-
-    const all = await seed.t.run((ctx) => ctx.db.query("commitmentRoots").collect());
-    expect(all.length, "a sale on one car and a forfeit on another").toBeGreaterThanOrEqual(2);
-    expect(
-      all.map((r) => r.status),
-      "the terminal states are representable in the schema and NOTHING writes them"
-    ).toEqual(all.map(() => "OPEN"));
-  });
-
-  test("G.9b TODAY ending the application does NOT free the car — the finance guard yields but the root does not", async () => {
-    const seed = await seedDealer("g9b");
-    const v = await vehicle(seed);
-    const q1 = await quoteFor(seed, seed.customerA, [v]);
-    const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
-      orgId: seed.orgId,
-      quoteId: q1,
-    });
-
-    await cancelApplication(seed, applicationId);
-    expect((await seed.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CANCELLED");
-
-    const q2 = await quoteFor(seed, seed.customerB, [v]);
-    await expect(
-      seed.asUser.mutation(api.applications.createFromQuote, { orgId: seed.orgId, quoteId: q2 }),
-      "the CANCELLED row has left the in-flight set, so this refusal is the COMMITMENT authority's, " +
-        "not the finance guard's — the car is still locked because nothing releases the root. " +
-        "F.34 is the same scenario after M3"
-    ).rejects.toThrow(/already committed to another deal/i);
-  });
-
-  test("G.12b TODAY a committed car can be SOFT-DELETED out of inventory", async () => {
-    const seed = await seedDealer("g12b");
-    const v = await vehicle(seed);
-    const quoteId = await quoteFor(seed, seed.customerA, [v]);
-    await seed.asUser.mutation(api.applications.createFromQuote, { orgId: seed.orgId, quoteId });
-    expect(
-      (await seed.t.run((ctx) => ctx.db.get(v)))?.status,
-      "precondition (G.10): a FINANCE-only commitment leaves the car AVAILABLE"
-    ).toBe("AVAILABLE");
-
-    await seed.asUser.mutation(api.vehicles.softDelete, { orgId: seed.orgId, vehicleId: v });
-
-    expect(
-      (await seed.t.run((ctx) => ctx.db.get(v)))?.isDeleted,
-      "vehicles.ts:2070 refuses only SOLD and RESERVED, so a finance-held car sails through"
-    ).toBe(true);
-    expect(
-      (await rootsOn(seed, v))[0].status,
-      "leaving an OPEN root and a live application pointing at deleted inventory, " +
-        "and the vehicle-centric workflow that would reach D1-D7 is gone with it. " +
-        "The application-side doors stay callable by id, so this is a workflow dead-end " +
-        "rather than an API-level one — which is enough to strand the car in practice"
-    ).toBe("OPEN");
-  });
-
-  test("G.12c TODAY an EXPIRED reservation leaves its root OPEN with no door left to close it", async () => {
-    const seed = await seedDealer("g12c");
-    const v = await vehicle(seed);
-    const reservationId = await reserve(seed, v, seed.customerA, { depositAmount: 1_000 });
-    // Only the CLOCK is simulated — the row was written by the real door, and
-    // expiry is the one thing a test cannot wait for. createReservation refuses
-    // a past expiresAt, so it cannot be seeded this way in the first place.
-    await seed.t.run((ctx) => ctx.db.patch(reservationId, { expiresAt: Date.now() - 60_000 }));
-
-    await seed.t.mutation(internal.vehicles.expireReservations, {});
-
-    expect(
-      (await seed.t.run((ctx) => ctx.db.get(reservationId)))?.status,
-      "the sweep expires it"
-    ).toBe("EXPIRED");
-    expect(
-      (await rootsOn(seed, v))[0].status,
-      "but the root stays OPEN — and releaseReservation requires status ACTIVE (vehicles.ts:1813), " +
-        "so NO door can ever release this root. That is a permanent lock, which is why D8/D9 " +
-        "could not remain a declared gap"
-    ).toBe("OPEN");
-  });
-
-});
 
 // ══════════════════════════════════════════════════════════════════════════════
 // PART B — WHAT M3 MUST DO. RED UNTIL IT EXISTS.
