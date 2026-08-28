@@ -378,9 +378,13 @@ export function AvantTheme(props: ThemeProps) {
           <div style={{ borderTop: "1px solid #2d2d3f", paddingTop: 24, display: "flex", flexWrap: "wrap", gap: 16, justifyContent: "space-between", alignItems: "center", fontSize: 12, color: "#4a5568" }}>
             <p>© {new Date().getFullYear()} {profile.dealershipName}</p>
             <div style={{ display: "flex", gap: 20 }}>
-              <Link href="/privacy" style={{ color: "#4a5568", textDecoration: "none" }}>{t.footerPrivacy}</Link>
-              <Link href="/terms" style={{ color: "#4a5568", textDecoration: "none" }}>{t.footerTerms}</Link>
-              <Link href="/data-deletion" style={{ color: "#4a5568", textDecoration: "none" }}>{t.footerDataDeletion}</Link>
+              {[
+                ["/privacy", t.footerPrivacy],
+                ["/terms", t.footerTerms],
+                ["/data-deletion", t.footerDataDeletion],
+              ].map(([href, label]) => (
+                <Link key={href} href={href} style={{ color: "#4a5568", textDecoration: "none" }}>{label}</Link>
+              ))}
             </div>
           </div>
         </div>
