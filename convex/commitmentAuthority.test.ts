@@ -196,6 +196,19 @@ async function rootsOn(seed: Seed, v: Id<"vehicles">) {
     (await ctx.db.query("commitmentRoots").collect()).filter((r) => r.vehicleId === v)
   );
 }
+/**
+ * The car's LIVE root, if it has one.
+ *
+ * ⚠️ NOT a replacement for `rootsOn`, which stays as it is. Total-root counts
+ * are how several contracts here prove that an unauthorized operation wrote no
+ * extra history, and that question is about ALL roots. This one answers a
+ * different question — who holds the car NOW — and after SCRUM-195 M3 those
+ * two genuinely differ: a released or consumed root stays on the vehicle
+ * forever as history while a later legitimate acquisition opens a fresh one.
+ */
+async function openRootsOn(seed: Seed, v: Id<"vehicles">) {
+  return (await rootsOn(seed, v)).filter((r) => r.status === "OPEN");
+}
 async function claimsOn(seed: Seed, v: Id<"vehicles">) {
   return await seed.t.run(async (ctx) =>
     (await ctx.db.query("vehicleCommitmentClaims").collect()).filter((c) => c.vehicleId === v)
@@ -675,12 +688,35 @@ describe("P1-W the five reachable acquisition writers", () => {
 
   test("W.1 RETURN_TO_UNALLOCATED re-acquires through the authority", async () => {
     // Putting money back ON the deal is asking for the car again. It must go
-    // through the boundary, and it must land on the deal's OWN root.
+    // through the boundary, and the slice that comes back must NAME the
+    // episode that re-acquired the car — on the root that is live now.
+    //
+    // ⚠️ REWRITTEN UNDER OWNER RULING c15695 §1. This contract used to demand
+    // that the car still had exactly ONE root and that every ACTIVE claim sat
+    // on it. Both were true only because the pre-M3 world had no release side
+    // at all: the root stayed OPEN through the release, so a re-acquisition
+    // had nothing to do but join it. M3 terminalizes, and under B+ a claim is
+    // never re-statused — so the honest post-M3 shape is
+    //
+    //     RELEASED historical root   (immutable, its ACTIVE claim now stale)
+    //          + RETURN_TO_UNALLOCATED
+    //     -> a FRESH OPEN root       (the acquisition that actually holds it)
+    //
+    // Ownership comes from the OPEN root, never from `claim.status`. Counting
+    // roots and filtering claims by ACTIVE are both pre-M3 bookkeeping, and
+    // the assertions below replace them with the stronger claim: exactly one
+    // live root, the old one untouched, and the reopened slice pointing at an
+    // acquisition ON the live one.
     const seed = await seedDealer("w1");
     const a = await vehicle(seed);
     const b = await vehicle(seed);
     const { holdId } = await releasedSlice(seed, a, b);
+
     const rootsBefore = await rootsOn(seed, b);
+    expect(rootsBefore.length, "the released slice left exactly one root behind").toBe(1);
+    const historical = rootsBefore[0];
+    expect(historical.status, "and the release really did terminalize it").toBe("RELEASED");
+    expect(await openRootsOn(seed, b), "so nothing holds the car right now").toEqual([]);
 
     await seed.asUser.mutation(api.deposits.resolveReleasedAllocation, {
       orgId: seed.orgId,
@@ -689,17 +725,20 @@ describe("P1-W the five reachable acquisition writers", () => {
       reason: "back on the deal",
     });
 
-    const rootsAfter = await rootsOn(seed, b);
-    expect(rootsAfter.length, "one physical car, one root — never a second").toBe(
-      rootsBefore.length
-    );
-    const live = (await claimsOn(seed, b)).filter((c) => c.status === "ACTIVE");
-    expect(live.length, "and the car is held again").toBeGreaterThan(0);
+    // THE HISTORICAL ROOT IS IMMUTABLE. Re-acquiring a car may not reach back
+    // and reopen the episode that ended — a terminal root is a closed fact,
+    // and rewriting it would destroy the provenance Phase 3 reads.
     expect(
-      new Set(live.map((c) => String(c.rootId))).size,
-      "every live episode on the same root"
-    ).toBe(1);
-    expect(live.every((c) => c.evidenceKind === "DEPOSIT"), "tagged by its evidence").toBe(true);
+      await seed.t.run((ctx) => ctx.db.get(historical._id)),
+      "the released root is a closed fact and nothing rewrote it"
+    ).toEqual(historical);
+
+    // ONE live root, and it is a NEW one.
+    const liveRoots = await openRootsOn(seed, b);
+    expect(liveRoots.length, "the car is held again, on exactly one live root").toBe(1);
+    expect(String(liveRoots[0]._id), "and it is a fresh root, not the released one").not.toBe(
+      String(historical._id)
+    );
 
     // SCRUM-195: the re-opened slice NAMES the episode that re-acquired the
     // car. Without it, the next decision on this money has nothing to read but
@@ -710,6 +749,18 @@ describe("P1-W the five reachable acquisition writers", () => {
       )
     );
     expect(reopened?.sourceCommitmentClaimId, "the re-opened slice names its episode").toBeTruthy();
+
+    // AND THAT EPISODE IS ON THE LIVE ROOT. This is the assertion that
+    // replaces the old root count, and it is strictly stronger: a pointer at
+    // the stale claim on the RELEASED root would satisfy "names its episode"
+    // and still leave the money pointing at a deal that has ended.
+    const acquiring = await seed.t.run((ctx) => ctx.db.get(reopened!.sourceCommitmentClaimId!));
+    expect(acquiring, "the named episode exists").toBeTruthy();
+    expect(
+      String(acquiring!.rootId),
+      "and it is an acquisition on the LIVE root, not the released one"
+    ).toBe(String(liveRoots[0]._id));
+    expect(acquiring!.evidenceKind, "tagged by its evidence").toBe("DEPOSIT");
     expect(
       await seed.t.run(async (ctx) =>
         evidenceForDepositHold(ctx, seed.orgId, (await ctx.db.get(reopened!._id))!)
@@ -1521,10 +1572,29 @@ describe("P1-A continuation is proven, never inferred", () => {
     );
     expect(await snapshot(seed, v), "nothing moved").toEqual(before);
 
-    // THE CONTROL — the root is genuinely joinable by this quote, which is what
-    // makes the refusal above about the dead adoption argument.
+    // THE CONTROL — the identical call WITHOUT the dead adoption is admitted,
+    // which is what makes the refusal above about the adoption argument and
+    // nothing else.
+    //
+    // ⚠️ REWRITTEN UNDER OWNER RULING c15695 §1. It used to say "the quote
+    // alone really would have JOINED" and check for a single root. That was
+    // true only before M3: the cancellation above ends the deal, and the
+    // release side did not exist, so the terminal deal's root stayed OPEN and
+    // there was something left to join. Now the cancellation genuinely frees
+    // the car, so the correct outcome is an admitted acquisition on a FRESH
+    // live root — a car with no live holder is acquirable, which is the exact
+    // property this control needs to establish.
+    const rootsBeforeControl = await rootsOn(seed, v);
+    expect(await openRootsOn(seed, v), "the cancellation really did free the car").toEqual([]);
+
     await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
-    expect((await rootsOn(seed, v)).length, "the quote alone really would have joined").toBe(1);
+
+    const liveAfterControl = await openRootsOn(seed, v);
+    expect(liveAfterControl.length, "the quote alone really was admitted").toBe(1);
+    expect(
+      rootsBeforeControl.some((r) => String(r._id) === String(liveAfterControl[0]._id)),
+      "on a fresh root — a terminal root is never reopened to receive it"
+    ).toBe(false);
   });
 
   test("A.10 a reservation for a car this quote does NOT cover refuses", async () => {

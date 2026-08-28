@@ -1,10 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { query, MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
-import {
-  assertSaleMayCompleteForVehicle,
-  consumeRootForSale,
-} from "./commitments";
 import { Doc, Id, TableNames } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -380,42 +376,11 @@ export const create = mutation({
         // on a committed vehicle proves nothing, which is the authority's
         // existing rule. A genuinely free car passes, as a walk-in should.
         //
-        // Before completeSale, the first irreversible business write.
-        //
-        // ⚠️ A SUPPLIED QUOTE THAT DOES NOT RESOLVE IS NOT THIS GUARD'S
-        // BUSINESS. `completeSale` already refuses a missing or foreign quote
-        // with a message that says exactly that, and answering "committed to
-        // another deal" instead would replace a precise validation failure with
-        // a misleading one. The sale is refused either way; only the diagnosis
-        // differs, and the specific one is worth more.
-        //
-        // A quote that is ABSENT still goes through the authority: no lineage
-        // on a committed car proves nothing, which is the whole point of the
-        // unlineaged direct-sale case.
-        const lineageQuote =
-          args.quoteId === undefined ? undefined : await ctx.db.get(args.quoteId);
-        const lineageResolves =
-          args.quoteId === undefined ||
-          (lineageQuote !== null && lineageQuote !== undefined && lineageQuote.orgId === args.orgId);
-        if (lineageResolves) {
-          await assertSaleMayCompleteForVehicle(ctx, {
-            orgId: args.orgId,
-            vehicleId: args.vehicleId,
-            lineage: { quoteId: args.quoteId },
-            actingCustomerId: args.customerId,
-          });
-        }
-
-        const saleId = await completeSale(ctx, { ...args, actorId: user._id });
-
-        await consumeRootForSale(ctx, {
-          orgId: args.orgId,
-          vehicleId: args.vehicleId,
-          saleId,
-          reason: "direct sale completed",
-          decisionNow: Date.now(),
-        });
-        return saleId;
+        // Both that check and the root's consumption live inside
+        // `completeSale`'s shared boundary — see utils/saleCompletion.ts.
+        // This door adds nothing of its own, so there is nothing here to
+        // drift from the other three.
+        return await completeSale(ctx, { ...args, actorId: user._id });
       }
     );
   },
@@ -465,20 +430,12 @@ export const completeFromQuote = mutation({
 
         const vehicleItems = quote.vehicleItems ?? [{ vehicleId: quote.vehicleId, unitPrice: quote.vehiclePrice }];
 
-        // SCRUM-195 M3, DOOR 2. EVERY car on the deal is checked BEFORE any of
-        // them is sold. Checking inside the per-vehicle loop would let the
-        // first car complete and the second refuse, and a multi-line
-        // completion is one transaction precisely so that cannot happen.
-        for (const item of vehicleItems) {
-          await assertSaleMayCompleteForVehicle(ctx, {
-            orgId: args.orgId,
-            vehicleId: item.vehicleId,
-            lineage: { quoteId: quote._id },
-            actingCustomerId: quote.customerId,
-          });
-        }
-
-        const saleIds = await completeSalesForLineItems(ctx, {
+        // SCRUM-195 M3, DOOR 2. Each line item completes through
+        // `completeSale`, so every car on the deal passes the same shared
+        // check and stamps its OWN root with its OWN sale. A car that refuses
+        // rolls the whole mutation back — a multi-line completion is one
+        // transaction precisely so a partial deal cannot exist.
+        return await completeSalesForLineItems(ctx, {
           orgId: args.orgId,
           quoteId: quote._id,
           vehicleItems,
@@ -492,27 +449,6 @@ export const completeFromQuote = mutation({
           idempotencyKey: args.idempotencyKey,
           actorId: user._id,
         });
-
-        // Each car's root is stamped with the sale for THAT car. The ids come
-        // back in line-item order, and the length check makes that dependence
-        // an assertion rather than an assumption — a cross-stamped root would
-        // send a later reversal at the wrong vehicle.
-        if (saleIds.length !== vehicleItems.length) {
-          throw new ConvexError(
-            "Sale completion returned a different number of sales than the deal has vehicles."
-          );
-        }
-        const completedAt = Date.now();
-        for (let i = 0; i < vehicleItems.length; i += 1) {
-          await consumeRootForSale(ctx, {
-            orgId: args.orgId,
-            vehicleId: vehicleItems[i].vehicleId,
-            saleId: saleIds[i],
-            reason: "quote completed into a sale",
-            decisionNow: completedAt,
-          });
-        }
-        return saleIds;
       }
     );
   },
@@ -601,36 +537,17 @@ export const completeDraft = mutation({
         actorId: user._id,
       },
       async () => {
-        // SCRUM-195 M3, DOOR 3. A draft commits nothing, so the barrier belongs
-        // no later than completion — which is here. The draft row carries the
-        // vehicle and the lineage.
-        const draft = await ctx.db.get(args.saleId);
-        if (!draft || draft.orgId !== args.orgId) {
-          throw new ConvexError("Sale not found in this organization.");
-        }
-        await assertSaleMayCompleteForVehicle(ctx, {
-          orgId: args.orgId,
-          vehicleId: draft.vehicleId,
-          lineage: { quoteId: draft.quoteId },
-          actingCustomerId: draft.customerId,
-        });
-
-        const completed = await completeExistingSale(ctx, {
+        // SCRUM-195 M3, DOOR 3. A draft commits nothing, so the barrier
+        // belongs at completion — and `completeExistingSale` rebuilds the
+        // completion args from the draft row and passes them through the same
+        // shared boundary. Nothing door-specific is needed here.
+        return await completeExistingSale(ctx, {
           orgId: args.orgId,
           saleId: args.saleId,
           actorId: user._id,
           depositResolution: args.depositResolution,
           idempotencyKey: args.idempotencyKey,
         });
-
-        await consumeRootForSale(ctx, {
-          orgId: args.orgId,
-          vehicleId: draft.vehicleId,
-          saleId: args.saleId,
-          reason: "draft sale completed",
-          decisionNow: Date.now(),
-        });
-        return completed;
       }
     );
   },

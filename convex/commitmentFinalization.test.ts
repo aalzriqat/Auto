@@ -279,6 +279,11 @@ import { convexTestWithComponents, registerHandover } from "../test-utils/convex
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
+import {
+  COMMITMENT_MESSAGES,
+  consumeRootForSale,
+  releaseRootIfNoLiveBasis,
+} from "./commitments";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -714,6 +719,72 @@ async function claimSnapshot(seed: Seed, v: Id<"vehicles">): Promise<string> {
       })
       .sort((a, b) => (String(a._id) < String(b._id) ? -1 : 1))
   );
+}
+
+/**
+ * A SECOND DEALERSHIP IN THE SAME DATABASE, with its own user, customer and
+ * car.
+ *
+ * `seedDealer` builds its own convex instance, so two calls of it cannot see
+ * each other and a cross-tenant contract needs both tenants in ONE database.
+ * Everything below is ordinary seed scaffolding — organization, subscription,
+ * role, membership, customer, vehicle. No commitment state is fabricated here;
+ * every root and claim in these contracts is opened by a real product writer
+ * acting as a real authenticated identity.
+ */
+async function secondTenant(seed: Seed, suffix: string) {
+  const orgId = await seed.t.run((ctx) =>
+    ctx.db.insert("organizations", { name: `Other Dealer ${suffix}`, createdAt: Date.now() })
+  );
+  await seed.t.run((ctx) =>
+    ctx.db.insert("subscriptions", {
+      orgId,
+      plan: "professional",
+      status: "active",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+  );
+  const roleId = await seed.t.run((ctx) =>
+    ctx.db.insert("roles", { orgId, name: "Admin", permissions: PERMISSIONS })
+  );
+  const userId = await seed.t.run((ctx) =>
+    ctx.db.insert("users", {
+      clerkId: `other_${suffix}`,
+      email: `other-${suffix}@test.com`,
+      name: "Other User",
+    })
+  );
+  await seed.t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+  const customerId = await seed.t.run((ctx) =>
+    ctx.db.insert("customers", {
+      orgId,
+      firstName: "Customer",
+      lastName: "C",
+      phone: `+9627900${String(vinCounter).padStart(5, "0")}`,
+      createdAt: Date.now(),
+    })
+  );
+  vinCounter += 1;
+  const vehicleId = await seed.t.run((ctx) =>
+    ctx.db.insert("vehicles", {
+      orgId,
+      vin: `2HGCM82633A${String(600000 + vinCounter).slice(0, 6)}`,
+      make: "Mazda",
+      model: "CX-5",
+      year: 2023,
+      color: "Blue",
+      fuelType: "Gasoline",
+      transmission: "Automatic",
+      mileage: 100,
+      purchasePrice: 20_000,
+      sellingPrice: PRICE,
+      status: "AVAILABLE" as const,
+      createdAt: Date.now(),
+    })
+  );
+  const asUser = seed.t.withIdentity({ subject: `other_${suffix}`, clerkId: `other_${suffix}` });
+  return { orgId, userId, asUser, customerId, vehicleId };
 }
 
 /** Nothing at all was written for this vehicle. Used after every refusal. */
@@ -2041,6 +2112,223 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
     ).toBe("RELEASED");
   });
 
+  test("F.37 voiding a MULTI-VEHICLE deposit frees EVERY car it held", async () => {
+    // WRITTEN BECAUSE A MUTANT SURVIVED. Dropping the `depositVehicleHolds`
+    // scan from `vehiclesHeldByDeposit` — leaving only the deposit row's own
+    // `vehicleId` — passed the whole suite, so nothing here exercised the
+    // release door with more than one car behind it.
+    //
+    // It is the same shape as the defect that once counted a multi-vehicle
+    // deposit as 0 against its ceiling: the single-car path stays correct
+    // while every additional car is silently invisible. Here the cost is a
+    // root left OPEN forever on a car no door will revisit.
+    const seed = await seedDealer("f37");
+    const v1 = await vehicle(seed);
+    const v2 = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [v1, v2]);
+    const depositId = await depositOn(seed, quoteId, 6_000);
+    await allocate(seed, quoteId, [
+      { vehicleId: v1, amount: 3_000 },
+      { vehicleId: v2, amount: 3_000 },
+    ]);
+    expect(
+      [(await rootsOn(seed, v1))[0].status, (await rootsOn(seed, v2))[0].status],
+      "precondition: both cars are held"
+    ).toEqual(["OPEN", "OPEN"]);
+
+    // D3 rather than D1: a FULLY ALLOCATED deposit cannot be refunded at all
+    // ("allocated to a vehicle still on the deal"), so the refund door cannot
+    // reach a multi-car deposit and only voiding can.
+    await voidDeposit(seed, depositId as Id<"deposits">);
+
+    expectTerminalRoot((await rootsOn(seed, v1))[0], {
+      status: "RELEASED",
+      door: "D3 void, first car",
+    });
+    expectTerminalRoot((await rootsOn(seed, v2))[0], {
+      status: "RELEASED",
+      door: "D3 void, SECOND car — the one a deposit-row-only reading misses",
+    });
+  });
+
+  test("F.38 two OPEN roots on one car REFUSE finalization rather than picking one", async () => {
+    // WRITTEN BECAUSE A MUTANT SURVIVED. Replacing the AMBIGUOUS refusal with
+    // `return ownership.roots[0]` passed the whole suite.
+    //
+    // Two OPEN roots is one car promised to two deals. Choosing between them
+    // would hand the car to whichever sorted first AND launder the corruption
+    // into a terminal state, destroying the evidence that anything was ever
+    // wrong. Refusing loudly is the only safe answer, and it must fail CLOSED:
+    // the money operation that triggered it does not proceed either.
+    //
+    // The state is corrupt by construction — no writer produces it, which is
+    // the whole reason the branch exists. Same idiom as Phase 1's foreign-root
+    // contract.
+    const seed = await seedDealer("f38");
+    const v = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [v]);
+    const depositId = await depositOn(seed, quoteId, 5_000);
+    const real = (await rootsOn(seed, v))[0];
+
+    await seed.t.run((ctx) =>
+      ctx.db.insert("commitmentRoots", {
+        orgId: seed.orgId,
+        vehicleId: v,
+        customerId: seed.customerB,
+        status: "OPEN" as const,
+        openedAt: Date.now(),
+        openedBy: seed.userId,
+      })
+    );
+
+    await expect(
+      releaseDeposit(seed, depositId as Id<"deposits">, "REFUNDED"),
+      "finalization refuses to choose between two open deals"
+    ).rejects.toThrow(COMMITMENT_MESSAGES.ambiguousOwnership);
+
+    expect(
+      (await rootsOn(seed, v)).map((r) => r.status).sort(),
+      "and NEITHER root was terminalized — the corruption is preserved for a human"
+    ).toEqual(["OPEN", "OPEN"]);
+    expect(
+      await seed.t.run((ctx) => ctx.db.get(real._id)),
+      "the real deal's root is byte-identical"
+    ).toEqual(real);
+  });
+
+  test("F.35 an ACTIVE reservation PAST ITS EXPIRY does not hold the car", async () => {
+    // WRITTEN BECAUSE A MUTANT SURVIVED. Replacing `reservationIsLive(...)`
+    // with `reservation.status === "ACTIVE"` inside `hasLiveCommitmentBasis`
+    // passed the entire suite, so nothing here distinguished "live" from
+    // "not yet swept".
+    //
+    // It is the same defect the acquisition side already refuses by name: an
+    // ACTIVE row past `expiresAt` is merely UNSWEPT. The sweep runs on a cron
+    // and takes a bounded page, so a backlog stretches that window well past
+    // the schedule — and for the whole of it, a status-only reading would keep
+    // a car locked to a deal that has expired.
+    //
+    // A DEPOSIT adopts the reservation, so both bases sit on ONE root and
+    // ending the deposit leaves exactly the question this contract is about.
+    //
+    // NOT the F.24 shape: `cancelApplication` runs the COMPOUND release, which
+    // retires the adopted reservation as well — the fixture would then prove
+    // only that a RELEASED reservation does not hold a car, which is trivially
+    // true and says nothing whatever about expiry.
+    const seed = await seedDealer("f35");
+    const v = await vehicle(seed);
+
+    const realNow = Date.now();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(realNow);
+    try {
+      const reservationId = await reserve(seed, v, seed.customerA, {
+        expiresAt: realNow + 60_000,
+      });
+      const quoteId = await quoteFor(seed, seed.customerA, [v]);
+      const depositId = await seed.asUser.mutation(api.deposits.create, {
+        orgId: seed.orgId,
+        quoteId,
+        amount: 5_000,
+        adoptReservationId: reservationId,
+      });
+      expect((await rootsOn(seed, v))[0].status, "precondition: one OPEN root").toBe("OPEN");
+
+      // The reservation lapses. NOTHING sweeps it — no cron runs in this test.
+      vi.setSystemTime(realNow + 5 * 60_000);
+
+      // The deposit basis ends. The only question left is whether the lapsed
+      // reservation still holds the car.
+      await releaseDeposit(seed, depositId as Id<"deposits">, "REFUNDED");
+
+      expect(
+        (await seed.t.run((ctx) => ctx.db.get(reservationId)))?.status,
+        "precondition: the row was never swept — it is still literally ACTIVE"
+      ).toBe("ACTIVE");
+
+      expect(
+        (await rootsOn(seed, v))[0].status,
+        "an expired-but-unswept reservation is not a live basis, so the car is free"
+      ).toBe("RELEASED");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("F.36 a release door running AFTER the sale does not rewrite the CONSUMED root", async () => {
+    // WRITTEN BECAUSE A MUTANT SURVIVED, and this is the reachable form of
+    // "terminal replay rewrites metadata".
+    //
+    // Terminal roots are invisible to `resolveOwnership`, so every finalization
+    // door is a no-op once the deal has ended. That is the ONLY thing standing
+    // between a post-sale release — a reservation tidied up after the car was
+    // sold — and a CONSUMED root being overwritten as RELEASED with its
+    // `consumedBySaleId` destroyed. Phase 3 navigates from a cancelled sale
+    // back to its deal through exactly that stamp.
+    const seed = await seedDealer("f36");
+    const v = await vehicle(seed);
+    const reservationId = await reserve(seed, v, seed.customerA);
+    const quoteId = await quoteFor(seed, seed.customerA, [v]);
+    // The deal adopts the reservation, so the quote genuinely owns the root it
+    // is about to complete against. Without this the sale is refused by the
+    // ACQUISITION boundary and the contract never reaches its subject.
+    await seed.asUser.mutation(api.deposits.create, {
+      orgId: seed.orgId,
+      quoteId,
+      amount: 5_000,
+      adoptReservationId: reservationId,
+    });
+    const saleId = await completeQuoteOne(seed, quoteId);
+
+    const consumed = (await rootsOn(seed, v))[0];
+    expectTerminalRoot(consumed, {
+      status: "CONSUMED",
+      saleId: String(saleId),
+      door: "precondition",
+    });
+
+    // The reservation is tidied up afterwards, which every dealership does.
+    // If sale completion already retired it, the door refuses and the contract
+    // is about the state the root is in either way — so the refusal is
+    // tolerated and the root is what is asserted.
+    await releaseReservation(seed, reservationId).catch(() => undefined);
+
+    expect(
+      await seed.t.run((ctx) => ctx.db.get(consumed._id)),
+      "the sold deal is a closed fact — a later release changes NOTHING about it"
+    ).toEqual(consumed);
+  });
+
+  test("F.39 a DRAFT on a rival-held car is allowed; COMPLETING it is not", async () => {
+    // WRITTEN BECAUSE A MUTANT SURVIVED. Passing "COMPLETION" instead of
+    // "DRAFT" from `createDraftSale` passed the whole suite, so nothing here
+    // pinned the one distinction the new intent parameter exists to make.
+    //
+    // The product decision, stated so it cannot be quietly reversed: a draft
+    // commits nothing and reserves nothing, so preparing paperwork for a car
+    // somebody else currently holds is ordinary business — the salesperson
+    // cannot know when the other deal will end. The barrier belongs at the
+    // moment the sale actually completes, and not one step earlier.
+    const seed = await seedDealer("f39");
+    const v = await vehicle(seed);
+    const heldBy = await quoteFor(seed, seed.customerA, [v]);
+    await depositOn(seed, heldBy, 5_000);
+
+    const rivalQuote = await quoteFor(seed, seed.customerB, [v]);
+    const draftId = await createDraftFor(seed, rivalQuote, v, seed.customerB);
+    expect(draftId, "a draft is NOT gated on the commitment authority").toBeTruthy();
+
+    await expect(
+      seed.asUser.mutation(api.sales.completeDraft, { orgId: seed.orgId, saleId: draftId }),
+      "but completing it is"
+    ).rejects.toThrow(COMMITMENT_MESSAGES.heldByAnotherDealSale);
+
+    expect(
+      (await rootsOn(seed, v))[0].status,
+      "and the deal that really holds the car is untouched"
+    ).toBe("OPEN");
+  });
+
   test("F.27 cancelling a completed sale changes nothing — the root stays CONSUMED and stamped", async () => {
     const seed = await seedDealer("f27");
     const v = await vehicle(seed);
@@ -2058,6 +2346,249 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
     ).toBe("CONSUMED");
     expect(rootSaleStamp(root), "and the provenance stamp survives for Phase 3 to use").toBe(String(saleId));
     expect(await claimSnapshot(seed, v)).toBe(before);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PART T — THE TENANT BOUNDARY
+//
+// Required by owner ruling 3. Everything else in this file happens inside one
+// dealership, and a single-tenant suite cannot tell a correctly scoped query
+// from an unscoped one: both answer identically when there is only one tenant
+// in the database.
+//
+// M3 adds two associations that did not exist before and that a wrong answer
+// makes actively dangerous rather than merely wrong:
+//
+//   root  -> sale     `consumedBySaleId`, the entry point Phase 3 uses to get
+//                     from a cancelled sale back to the deal it closed. A
+//                     stamp naming the wrong sale sends a later reversal at
+//                     somebody else's deal WITH FULL CONFIDENCE — strictly
+//                     worse than no stamp at all.
+//   org   -> root     the finalization access path re-verifies both `orgId`
+//                     and `vehicleId` before terminalizing anything, so one
+//                     dealership's door can never close another's deal.
+//
+// Three of these four call the authority DIRECTLY. That is the point: the
+// mismatch branches are unreachable from today's public doors precisely
+// because the doors pass a single consistent (orgId, vehicleId) pair — so a
+// public-only test would prove the doors are consistent today and nothing at
+// all about the boundary that has to stay safe when a fifth door is added.
+// F.T4 supplies the public consequence.
+// ══════════════════════════════════════════════════════════════════════════════
+
+describe("P2-T the tenant boundary", () => {
+  test("T.1 a sale from ANOTHER DEALERSHIP never becomes this root's provenance", async () => {
+    const seed = await seedDealer("t1");
+    const car = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [car]);
+    await depositOn(seed, quoteId, 5_000);
+
+    // A real, completed sale — in the other dealership, about the other
+    // dealership's car. Everything about it is legitimate except its tenant.
+    const other = await secondTenant(seed, "t1");
+    const foreignSale = await other.asUser.mutation(api.sales.create, {
+      orgId: other.orgId,
+      vehicleId: other.vehicleId,
+      customerId: other.customerId,
+      salespersonId: other.userId,
+      salePrice: PRICE,
+      saleDate: Date.now(),
+      status: "COMPLETED" as const,
+    });
+
+    const before = (await rootsOn(seed, car))[0];
+    expect(before.status, "precondition: this tenant's car is held on an OPEN root").toBe("OPEN");
+
+    await expect(
+      seed.t.run((ctx) =>
+        consumeRootForSale(ctx, {
+          orgId: seed.orgId,
+          vehicleId: car,
+          saleId: foreignSale as Id<"sales">,
+          reason: "cross-tenant provenance",
+          decisionNow: Date.now(),
+        })
+      ),
+      "a foreign sale is refused as provenance, not silently ignored"
+    ).rejects.toThrow(COMMITMENT_MESSAGES.saleProvenanceMismatch);
+
+    expect(
+      await seed.t.run((ctx) => ctx.db.get(before._id)),
+      "and the root is exactly as it was — still OPEN, unstamped, unclosed"
+    ).toEqual(before);
+  });
+
+  test("T.2 a sale about ANOTHER CAR never becomes this root's provenance", async () => {
+    // Same dealership, so no tenancy check can catch this one. The association
+    // that must hold is root -> sale ABOUT THIS VEHICLE, and it is the half a
+    // reviewer is most likely to assume the org check already covers.
+    const seed = await seedDealer("t2");
+    const held = await vehicle(seed);
+    const sold = await vehicle(seed);
+
+    const heldQuote = await quoteFor(seed, seed.customerA, [held]);
+    await depositOn(seed, heldQuote, 5_000);
+
+    const soldQuote = await quoteFor(seed, seed.customerB, [sold]);
+    const otherCarsSale = await completeQuoteOne(seed, soldQuote);
+
+    const before = (await rootsOn(seed, held))[0];
+    expect(before.status, "precondition: the held car is on an OPEN root").toBe("OPEN");
+
+    await expect(
+      seed.t.run((ctx) =>
+        consumeRootForSale(ctx, {
+          orgId: seed.orgId,
+          vehicleId: held,
+          saleId: otherCarsSale,
+          reason: "cross-vehicle provenance",
+          decisionNow: Date.now(),
+        })
+      ),
+      "a sale about a different car is refused as provenance"
+    ).rejects.toThrow(COMMITMENT_MESSAGES.saleProvenanceMismatch);
+
+    expect(
+      await seed.t.run((ctx) => ctx.db.get(before._id)),
+      "and the held car's root is untouched"
+    ).toEqual(before);
+  });
+
+  test("T.3 one dealership's release cannot terminalize another's root", async () => {
+    // RELEASE is the door with no provenance to check — it writes no sale id,
+    // so `saleProvenanceMismatch` cannot protect it. Its ONLY tenant defence is
+    // that the finalization access path re-verifies the root's own `orgId`.
+    const seed = await seedDealer("t3");
+    const car = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [car]);
+    await depositOn(seed, quoteId, 5_000);
+    const other = await secondTenant(seed, "t3");
+
+    const before = (await rootsOn(seed, car))[0];
+    expect(before.status, "precondition: held on an OPEN root").toBe("OPEN");
+
+    // Not a refusal — a NO-OP. The foreign tenant simply has no root on this
+    // car, and inventing an error for a question about a car it cannot see
+    // would leak that the car exists.
+    await seed.t.run((ctx) =>
+      releaseRootIfNoLiveBasis(ctx, {
+        orgId: other.orgId,
+        vehicleId: car,
+        reason: "foreign release attempt",
+        decisionNow: Date.now(),
+      })
+    );
+
+    expect(
+      await seed.t.run((ctx) => ctx.db.get(before._id)),
+      "the other dealership's deal is still open and unclosed"
+    ).toEqual(before);
+  });
+
+  test("T.5 a sale naming THIS car but owned by ANOTHER DEALERSHIP is refused", async () => {
+    // WRITTEN BECAUSE A MUTANT SURVIVED. T.1 removes the org half of the
+    // provenance conjunct and still passes, because its foreign sale is also
+    // about a foreign CAR — so the vehicle half catches it and the org half is
+    // never the reason. Each conjunct has to be mutated separately, and each
+    // one needs a fixture that ONLY it refuses.
+    //
+    // The state below is corrupt by construction: no product writer creates a
+    // sale in one dealership about another dealership's vehicle, which is
+    // precisely why the guard exists and why the fixture has to be built
+    // directly. The same reasoning Phase 1 uses for its foreign-root contract.
+    const seed = await seedDealer("t5");
+    const car = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [car]);
+    await depositOn(seed, quoteId, 5_000);
+    const other = await secondTenant(seed, "t5");
+
+    const corruptSale = await seed.t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: other.orgId,
+        vehicleId: car,
+        customerId: other.customerId,
+        salespersonId: other.userId,
+        salePrice: PRICE,
+        saleDate: Date.now(),
+        status: "COMPLETED" as const,
+      })
+    );
+
+    const before = (await rootsOn(seed, car))[0];
+    expect(before.status, "precondition: held on an OPEN root").toBe("OPEN");
+
+    await expect(
+      seed.t.run((ctx) =>
+        consumeRootForSale(ctx, {
+          orgId: seed.orgId,
+          vehicleId: car,
+          saleId: corruptSale,
+          reason: "right car, wrong dealership",
+          decisionNow: Date.now(),
+        })
+      ),
+      "the vehicle matches, so ONLY the org check can refuse this"
+    ).rejects.toThrow(COMMITMENT_MESSAGES.saleProvenanceMismatch);
+
+    expect(
+      await seed.t.run((ctx) => ctx.db.get(before._id)),
+      "and the root is untouched"
+    ).toEqual(before);
+  });
+
+  test("T.4 PUBLIC PATH — a foreign completion refuses and closes nothing", async () => {
+    // The consequence path. A refused sale must leave the commitment exactly
+    // as it found it: a door that terminalized a root and THEN refused would
+    // free somebody else's car as a side effect of an error.
+    const seed = await seedDealer("t4");
+    const car = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [car]);
+    await depositOn(seed, quoteId, 5_000);
+    const other = await secondTenant(seed, "t4");
+
+    const before = (await rootsOn(seed, car))[0];
+    const claimsBefore = await claimSnapshot(seed, car);
+
+    // (a) A fully authorized user of the OTHER dealership, naming this
+    //     dealership's car on their own org. This is the dangerous shape: the
+    //     actor is legitimate and only the vehicle is not theirs.
+    await expect(
+      other.asUser.mutation(api.sales.create, {
+        orgId: other.orgId,
+        vehicleId: car,
+        customerId: other.customerId,
+        salespersonId: other.userId,
+        salePrice: PRICE,
+        saleDate: Date.now(),
+        status: "COMPLETED" as const,
+      }),
+      "another dealership cannot sell this dealership's car"
+    ).rejects.toThrow();
+
+    // (b) The same actor reaching into THIS org directly.
+    await expect(
+      other.asUser.mutation(api.sales.create, {
+        orgId: seed.orgId,
+        vehicleId: car,
+        customerId: seed.customerA,
+        salespersonId: seed.userId,
+        salePrice: PRICE,
+        saleDate: Date.now(),
+        status: "COMPLETED" as const,
+      }),
+      "and cannot act inside this dealership either"
+    ).rejects.toThrow();
+
+    expect(
+      await seed.t.run((ctx) => ctx.db.get(before._id)),
+      "the root is untouched by either refusal — not consumed, not stamped, not closed"
+    ).toEqual(before);
+    expect(await claimSnapshot(seed, car), "and no claim was written").toBe(claimsBefore);
+    expect(
+      Object.prototype.hasOwnProperty.call(await salesByVehicle(seed), String(car)),
+      "and no sale exists for the car"
+    ).toBe(false);
   });
 });
 
@@ -2088,10 +2619,30 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
  *                                                   remedy is reachable
  *   REJECTED / CANCELLED stop holding the car    -> G.9, F.18, F.19
  *
+ * Written because a MUTANT SURVIVED (each names the function it covers)
+ *   hasLiveCommitmentBasis, RESERVATION arm      -> F.35 expiry vs status
+ *   releaseRootIfNoLiveBasis, root lookup        -> F.36 terminal replay
+ *   vehiclesHeldByDeposit                        -> F.37 multi-car release
+ *   openRootForFinalization, AMBIGUOUS arm       -> F.38 refuse, fail closed
+ *   prepareSaleCompletion intent, DRAFT side     -> F.39
+ *   consumeRootForSale, ORG conjunct             -> T.5
+ *
+ * Owner ruling 3 -> contract
+ *   wrong-ORG sale as root provenance            -> T.1
+ *   wrong-VEHICLE sale as root provenance        -> T.2 (the half an org check
+ *                                                   does not cover)
+ *   wrong-org root association on RELEASE        -> T.3 (release writes no sale
+ *                                                   id, so provenance cannot
+ *                                                   defend it)
+ *   one public consequence path                  -> T.4
+ *   wrong-ORG sale about THIS car                -> T.5 (isolates the org
+ *                                                   conjunct, which T.1
+ *                                                   cannot)
+ *
  * DECLARED GAPS, so their absence is a decision and not an oversight:
- *   - Concurrency and cross-tenant isolation are unspecified. Convex mutations
- *     are serializable and `resolveOwnership` is already orgId-scoped, so these
- *     are low by construction rather than merely unexamined.
+ *   - Concurrency is unspecified. Convex mutations are serializable, so it is
+ *     low by construction rather than merely unexamined. CROSS-TENANT
+ *     isolation is no longer a gap — see PART T, added under owner ruling 3.
  *   - Trade-in origins are unspecified; they create no commitment evidence.
  *   - PRE-EXISTING OPEN ROOTS. Phase-1 acquisition is already live on this
  *     branch, so any deal that completed or was abandoned BEFORE M3's write

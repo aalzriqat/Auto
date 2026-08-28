@@ -1,8 +1,6 @@
 import {
   acquireVehicle,
   assertAcquirable,
-  assertSaleMayCompleteForVehicle,
-  consumeRootForSale,
   IN_FLIGHT_FINANCE_STATUSES,
   releaseRootIfNoLiveBasis,
 } from "./commitments";
@@ -3162,27 +3160,20 @@ export const finalizeDeal = mutation({
         }
         await assertRequiredApplicationDocumentsComplete(ctx, app, quote);
 
-        // SCRUM-195 M3. COMPLETION-TIME OWNERSHIP, AND IT IS NOT REDUNDANT.
+        // SCRUM-195 M3, DOOR 4. COMPLETION-TIME OWNERSHIP IS NOT REDUNDANT
+        // HERE, AND IT IS NOT THIS FUNCTION'S TO IMPLEMENT.
         //
         // An APPROVED application is not proof that its car is still this
         // deal's. The deal can be closed through a different door and then
         // cancelled: the root goes CONSUMED and STAYS CONSUMED, while nothing
-        // touches `financeApplications`, so the application stays APPROVED with
-        // every finalizeDeal precondition satisfied. Another customer then
-        // legitimately acquires the car, and only this check stops the stale
-        // application selling it out from under them.
+        // touches `financeApplications`, so the application stays APPROVED
+        // with every finalizeDeal precondition satisfied. Another customer
+        // then legitimately acquires the car, and only a completion-time check
+        // stops the stale application selling it out from under them.
         //
-        // ⚠️ ORDER MATTERS, AND NOT ONLY FOR SAFETY. This sits AFTER the quote
-        // existence, ownership and mismatch checks above and BEFORE the first
-        // irreversible write below. Placed any earlier it answered "committed
-        // to another deal" for a deal whose quote simply did not match, which
-        // is a worse message and hid a real validation failure.
-        await assertSaleMayCompleteForVehicle(ctx, {
-          orgId: args.orgId,
-          vehicleId: app.vehicleId,
-          lineage: { quoteId: app.quoteId },
-          actingCustomerId: app.customerId,
-        });
+        // That check — and the root's consumption — live in `completeSale`'s
+        // shared boundary in utils/saleCompletion.ts, which this door reaches
+        // below. Four doors, one guard.
 
         // Re-verify at the commit point, not just at quote time: the approval
         // could have been rejected or the vehicle's minimum raised in between.
@@ -3263,15 +3254,6 @@ export const finalizeDeal = mutation({
             | undefined,
           idempotencyKey: args.idempotencyKey,
           actorId: auth.user._id,
-        });
-
-        // The deal completed into THIS sale. Write-once root provenance.
-        await consumeRootForSale(ctx, {
-          orgId: args.orgId,
-          vehicleId: app.vehicleId,
-          saleId,
-          reason: "financed deal finalized",
-          decisionNow: Date.now(),
         });
 
         const now = Date.now();

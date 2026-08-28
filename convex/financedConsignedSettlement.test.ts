@@ -2247,16 +2247,24 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
    * door.
    */
   test("a vehicle re-sold after a cancellation is judged on the live sale only", async () => {
-    // ⚠️ RED UNTIL PHASE 3, BY OWNER RULING c15589 — not a regression.
+    // GREEN SINCE SCRUM-195 M3, AND FOR THE RIGHT REASON — RECLASSIFIED BY
+    // OWNER RULING c15695 §2. Assertions unchanged.
     //
     // This fixture starts a SECOND deal on a car whose FIRST deal has ended.
-    // SCRUM-195 Phase 1 installs the acquisition boundary but not the release
-    // side: a claim is not released when its deal finishes, so the car still
-    // reads as held and the second acquisition is correctly refused.
+    // It was deliberately red while Phase 1 had an acquisition boundary and no
+    // release side at all: nothing ended the first deal's hold, so the car
+    // still read as held and the second acquisition was correctly refused. M3
+    // supplies exactly the missing piece — the ended deal's ROOT becomes
+    // terminal, so the car has no live holder and is acquirable again. The
+    // acquisition boundary was never loosened to achieve it.
     //
-    // Phase 3 (release / finalization semantics) must turn this green by
-    // releasing the ended deal's claim. It must NOT be fixed by loosening the
-    // acquisition boundary, which is what this authority exists to enforce.
+    // ⚠️ THIS TEST IS ZERO EVIDENCE FOR SUCCESSOR OR RESTORATION SEMANTICS.
+    // Under B+ the first deal's claim rows are not re-statused: they stay
+    // ACTIVE as stale bookkeeping on a non-OPEN root, and ownership is read
+    // from the root alone. Nothing here exercises reversal, predecessor
+    // linkage, `restoredFromClaimId`, or canonical re-acquisition of a
+    // consumed episode. Phase 3 owes dedicated contracts for all of that; do
+    // not read this passing test as coverage of any of it.
     const s = await seedDealership("resaleAfterCancel");
     const first = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
 
