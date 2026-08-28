@@ -2049,17 +2049,23 @@ export const createFromQuote = mutation({
     }
 
     // Every vehicle on the quote should only have one in-flight application at
-    // a time. Use an explicit allowlist of blocking statuses so REJECTED and
-    // CLOSED applications (which are effectively terminal) don't strand the
-    // vehicle indefinitely and allow a fresh deal to begin without cancellation.
-    const IN_FLIGHT_STATUSES: string[] = ["DRAFT", "PENDING_DOCS", "UNDER_REVIEW", "APPROVED"];
+    // a time. REJECTED and CLOSED applications are effectively terminal, so they
+    // must not strand the vehicle — a fresh deal may begin without cancellation.
+    //
+    // ⚠️ THE LIST IS `IN_FLIGHT_FINANCE_STATUSES`, IMPORTED. It used to be a
+    // local copy here, and M3's commit message claimed to have removed it while
+    // in fact only ADDING the shared one — so two hand-maintained lists shipped,
+    // which is the exact distributed inference this program exists to delete.
+    // Both reviewer seats caught it. "Which statuses hold a car" is now answered
+    // in one place, and the release side (`hasLiveCommitmentBasis`) reads the
+    // same array, so acquisition and release cannot drift apart.
     for (const item of quoteVehicleItems) {
       const activeForVehicle = await ctx.db
         .query("financeApplications")
         .withIndex("by_vehicle", (q) => q.eq("vehicleId", item.vehicleId))
         .filter((q) => q.eq(q.field("orgId"), args.orgId))
         .collect()
-        .then((rows) => rows.find((r) => IN_FLIGHT_STATUSES.includes(r.status)));
+        .then((rows) => rows.find((r) => IN_FLIGHT_FINANCE_STATUSES.includes(r.status)));
       if (activeForVehicle) {
         throw new ConvexError(
           "This vehicle already has an active finance application. Cancel it before starting a new one."
@@ -2263,6 +2269,57 @@ export const createFromQuote = mutation({
  * reservation — so a liveness check run first would read a basis this very
  * mutation is about to retire and leave the root open forever.
  */
+/**
+ * RE-ENTERING the in-flight set reacquires the car, exactly as leaving it
+ * releases the car. The mirror of `releaseRootsForApplicationQuote`, over the
+ * identical vehicle enumeration so the two sides cannot cover different sets.
+ *
+ * ⚠️ WHY THIS EXISTS. `REJECTED -> PENDING_DOCS` is an allowed transition with
+ * its own certified test, and M3 made rejection terminalize the root. Without
+ * this, a resubmitted application was finance-LIVE again while nothing held its
+ * car: `hasLiveCommitmentBasis` said held, `resolveOwnership` said FREE, and the
+ * two halves of the authority contradicted each other.
+ *
+ * The damage was not the obvious one. A RIVAL is independently refused at
+ * completion, so nobody's car gets stolen. The damage is the case with NO rival
+ * at all — the car really is free, the completion barrier correctly passes, and
+ * `consumeRootForSale` then finds no OPEN root and returns silently BY DESIGN.
+ * The financed sale completed carrying no `consumedBySaleId`, which is the one
+ * stamp Phase 3 uses to walk a cancelled sale back to the deal that made it.
+ * Reproduced: one RELEASED root, no stamp, sale untraceable.
+ *
+ * A refusal here is correct and wanted: a car another deal has since taken
+ * cannot be resubmitted onto this one, and the operator is told exactly that.
+ * Convex mutation atomicity means the refusal also rolls back the status patch,
+ * so the application does not silently re-enter the in-flight set on a car it
+ * does not own.
+ */
+async function reacquireRootsForApplicationQuote(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    quoteId: Id<"quotes">;
+    applicationId: Id<"financeApplications">;
+    actorId: Id<"users">;
+  }
+): Promise<void> {
+  const quote = await ctx.db.get(args.quoteId);
+  if (!quote || quote.orgId !== args.orgId) return;
+  const items = quote.vehicleItems ?? [{ vehicleId: quote.vehicleId }];
+  for (const item of items) {
+    await acquireVehicle(ctx, {
+      orgId: args.orgId,
+      vehicleId: item.vehicleId,
+      customerId: quote.customerId,
+      createdBy: args.actorId,
+      // TAGGED FINANCE, same as the original acquisition in `createFromQuote`.
+      // The application is the defining evidence for this episode.
+      evidence: { kind: "FINANCE", applicationId: args.applicationId },
+      lineage: { quoteId: quote._id },
+    });
+  }
+}
+
 async function releaseRootsForApplicationQuote(
   ctx: MutationCtx,
   args: { orgId: Id<"organizations">; quoteId: Id<"quotes">; decisionNow: number; reason: string }
@@ -2374,6 +2431,26 @@ export const updateStatus = mutation({
       changedBy: auth.user._id,
       changedAt: patchedAt,
     });
+
+    // SCRUM-195. THE TWO SIDES OF THE IN-FLIGHT SET, and both are doors.
+    //
+    // Derived from the status list rather than from the transition map, so a
+    // future edit to `VALID_STATUS_TRANSITIONS` cannot open a third door that
+    // this check does not cover. Today only `REJECTED -> PENDING_DOCS` re-enters
+    // the set, but that is an outcome of the data, not an assumption in here.
+    const wasInFlight = IN_FLIGHT_FINANCE_STATUSES.includes(app.status);
+    const isInFlight = IN_FLIGHT_FINANCE_STATUSES.includes(args.status);
+    if (!wasInFlight && isInFlight) {
+      // AFTER the patch, so the application is already in the in-flight set
+      // when the canonical authority evaluates the deal — the same ordering
+      // rule the release branch below follows, for the same reason.
+      await reacquireRootsForApplicationQuote(ctx, {
+        orgId: args.orgId,
+        quoteId: app.quoteId,
+        applicationId: args.applicationId,
+        actorId: auth.user._id,
+      });
+    }
 
     if (args.status === "REJECTED" && app.status !== "REJECTED") {
       await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId, actorId: auth.user._id });

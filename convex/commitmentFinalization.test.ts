@@ -1598,6 +1598,83 @@ describe("P2-F M3 finalization barrier — CONSUME", () => {
   });
 });
 
+test("F.40 a REJECTED-then-RESUBMITTED application still owns its car at completion", async () => {
+  // ADJUDICATES A SPLIT REVIEWER VERDICT, and it is about the door NOBODY
+  // enumerated: the one that puts an application BACK into the in-flight set.
+  //
+  // M3 made rejection release the root. `REJECTED -> PENDING_DOCS` is an
+  // explicitly allowed transition with its own certified test
+  // (financeLifecyclePhase4.test.ts "REJECTED to PENDING_DOCS resubmission is
+  // allowed"), and `updateStatus` performs commitment work on the REJECTED
+  // branch ONLY. So a resubmitted application is finance-LIVE again while no
+  // root holds its car:
+  //
+  //     hasLiveCommitmentBasis  -> held      (FINANCE arm reads the status)
+  //     resolveOwnership        -> FREE      (the root is terminal forever)
+  //
+  // The two halves of the authority contradict each other, and the damage is
+  // NOT the cross-customer theft case — a rival is independently refused at
+  // completion. It is this one, which needs no rival at all: the car really is
+  // free, so the completion barrier correctly passes, and `consumeRootForSale`
+  // then finds no OPEN root and returns silently BY DESIGN. The financed sale
+  // completes with no `consumedBySaleId` — the exact stamp Phase 3 uses to walk
+  // from a cancelled sale back to the deal that created it.
+  const seed = await seedDealer("f40");
+  const v = await vehicle(seed);
+  const quoteId = await quoteFor(seed, seed.customerA, [v]);
+
+  const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
+    orgId: seed.orgId,
+    quoteId,
+  });
+  expect((await rootsOn(seed, v))[0].status, "precondition: the deal holds the car").toBe("OPEN");
+
+  await seed.asUser.mutation(api.applications.updateStatus, {
+    orgId: seed.orgId,
+    applicationId,
+    status: "REJECTED" as const,
+  });
+  expect(
+    (await rootsOn(seed, v))[0].status,
+    "precondition: rejection terminalizes the root \u2014 this is M3's own new behaviour"
+  ).toBe("RELEASED");
+
+  // THE RESUBMISSION. A real, supported, already-certified product path.
+  await seed.asUser.mutation(api.applications.updateStatus, {
+    orgId: seed.orgId,
+    applicationId,
+    status: "PENDING_DOCS" as const,
+  });
+
+  // THE CONTRACT. Re-entering the in-flight set must reacquire, exactly as
+  // leaving it releases. A live application that owns nothing is not a
+  // conservative reading; it is an application whose sale cannot be traced.
+  expect(
+    (await rootsOn(seed, v)).filter((r) => r.status === "OPEN").length,
+    "a resubmitted application holds its car again, on a fresh root"
+  ).toBe(1);
+
+  // AND THE CONSEQUENCE, proved rather than argued: drive the resubmitted
+  // application all the way to a completed financed sale and demand that the
+  // sale is traceable back to a deal.
+  await seed.asUser.mutation(api.applications.updateStatus, {
+    orgId: seed.orgId,
+    applicationId,
+    status: "UNDER_REVIEW" as const,
+  });
+  await seed.asManager.mutation(api.applications.updateStatus, {
+    orgId: seed.orgId,
+    applicationId,
+    status: "APPROVED" as const,
+  });
+  const saleId = await financedSale(seed, applicationId);
+
+  expect(
+    (await rootsOn(seed, v)).map((r) => rootSaleStamp(r)),
+    "the completed sale stamps a root \u2014 without this Phase 3 cannot reverse it"
+  ).toContain(String(saleId));
+});
+
 describe("P2-F M3 finalization barrier — RELEASE", () => {
   /**
    * The shared shape of D1-D7 when the released basis is the ONLY one holding

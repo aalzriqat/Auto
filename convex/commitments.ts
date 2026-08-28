@@ -968,12 +968,17 @@ export async function evidenceForDepositHold(
  * MAY act on the car before it starts writing, but is not yet opening the
  * episode itself. Every non-REFUSE decision passes, adoption included.
  *
- * ⚠️ WHAT ACTUALLY ROUTES THROUGH HERE, as of Phase 1: `deposits.create`,
+ * ⚠️ WHAT ACTUALLY ROUTES THROUGH HERE. Acquisition: `deposits.create`,
  * `applications.createFromQuote` and `vehicles.createReservation` — each
  * checking every car on the deal before any side effect, and each following up
- * with `acquireVehicle` once its own row exists. Sale completion, trade-ins and
- * inventory removal do NOT come through here yet; wiring them is later-phase
- * work, and this comment describes the code rather than the plan.
+ * with `acquireVehicle` once its own row exists. SALE COMPLETION also routes
+ * here as of M3, through `assertSaleMayCompleteForVehicle`, which all four
+ * completion doors reach via the shared boundary in `utils/saleCompletion.ts`.
+ *
+ * Still NOT here: trade-ins, and inventory removal — `vehicles.softDelete` uses
+ * the stricter `assertVehicleNotCommitted` instead. This comment describes the
+ * code rather than the plan, so it is corrected whenever the code moves; it
+ * said sale completion was unwired for one commit after M3 wired it.
  */
 export async function assertAcquirable(
   ctx: QueryCtx | MutationCtx,
