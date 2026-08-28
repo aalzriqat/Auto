@@ -35,10 +35,14 @@ jobs:
     - name: Install dependencies
       run: pnpm install --frozen-lockfile --ignore-scripts
 
+    # Only the repo-wide report, which is what the artifact below uploads.
+    # `test:coverage:sonar` used to run here too, back when it wrote to the same
+    # coverage/ directory and so changed what got uploaded. It writes to
+    # coverage-sonar/ now, and nothing in this job reads that — it was ~2 minutes
+    # of dead work on every PR, in a required check. The sonarcloud job below
+    # generates its own reports.
     - name: Run unit + integration tests with coverage
-      run: |
-        pnpm test:coverage
-        pnpm test:coverage:sonar
+      run: pnpm test:coverage
       env:
         NODE_ENV: test
 
@@ -74,16 +78,22 @@ jobs:
   # and why `sonar.javascript.lcov.reportPaths` has never actually delivered a
   # coverage report.
   #
-  # This job runs the scanner from CI, which makes that file authoritative. It
-  # activates the moment a SONAR_TOKEN repo secret exists and is skipped
-  # otherwise, so merging it changes nothing until the token is added.
+  # This job runs the scanner from CI, which makes that file authoritative.
+  #
+  # ⚠️ It is LIVE and it GATES. This comment used to say the job "activates the
+  # moment a SONAR_TOKEN repo secret exists", implying it had not yet, and that
+  # it "is not a required check, so it will not block a merge either way". Both
+  # halves are false and were false before this PR was opened (SCRUM-185 review,
+  # corrected in passing): SONAR_TOKEN was created 2026-08-21, and
+  # `SonarCloud Code Analysis` is listed in main's branch-protection
+  # required_status_checks.contexts. Anything wrong in this job blocks merges to
+  # main today — it is not dormant, and it should not be read as low-stakes.
   #
   # ORDERING IS MANDATORY, not advisory: SonarCloud REJECTS a CI submission while
   # Automatic Analysis is enabled ("You are running CI analysis while Automatic
   # Analysis is enabled") and the scanner exits non-zero. So switch Automatic
   # Analysis off in the SonarCloud UI in the same sitting as adding the token, or
-  # this job goes red on every push in between. It is not a required check, so it
-  # will not block a merge either way.
+  # this job goes red on every push in between.
   sonarcloud:
     runs-on: ubuntu-latest
     # Forked PRs get no secrets, so the scan would always be a no-op there.
@@ -113,18 +123,101 @@ jobs:
     - name: Install dependencies
       run: pnpm install --frozen-lockfile --ignore-scripts
 
-    # Produces coverage/lcov.info, which sonar-project.properties points at.
+    # Two coverage reports feed Sonar (SCRUM-185):
     #
-    # NOTE: `test:coverage:sonar` restricts --coverage.include to 7 convex
-    # modules, so everything else reports 0%. Against a gate with a
-    # coverage-on-new-code condition that will read as a regression the first
-    # time it runs. Widen the include list (or scope the gate) before treating
-    # Sonar's coverage number as meaningful — the security rating, which is what
-    # this PR is about, is unaffected.
-    - name: Generate coverage for Sonar
-      run: pnpm test:coverage:sonar
+    #   coverage-sonar/lcov.info             every production module under convex/
+    #   apps/mobile/coverage-sonar/lcov.info  every production module in the mobile app
+    #
+    # Both are generated here, in this job, so they are guaranteed to describe the
+    # same commit the scanner analyses. The mobile suite costs about 50s, which is
+    # not worth an artifact handoff between jobs and the skew risk that carries.
+    #
+    # Retried once from a clean state. `rm -rf` before EVERY attempt is the
+    # load-bearing part, and it is not belt-and-braces.
+    #
+    # ⚠️ An earlier revision of this comment claimed a failed vitest run writes no
+    # LCOV at all. That is FALSE, and the correction is worth stating because the
+    # failure shape is nastier than the claim: when the v8 provider lost one
+    # worker's temp shard to an ENOENT, the run exited non-zero and still wrote a
+    # report with the COMPLETE file list, correct `LF:` for every file, and
+    # UNDER-COUNTED `LH:` — postingRules.ts 294 hits reported as 281,
+    # subledger.ts 126 as 107. Structurally perfect, every path resolving, and
+    # wrong by ~7%. `assertCoverageReports.mjs` cannot detect that; nothing can,
+    # from the report alone. The only thing standing between it and Sonar is that
+    # the exit code is respected and the directory is wiped before the retry.
+    #
+    # The error direction is under-reporting, so it fails a gate rather than
+    # passing one — but a required check going red on a lie is still a lie.
+    #
+    # The retry itself is for availability: `convex/collections.test.ts` has a
+    # known parallel-load flake (SCRUM-186 owns the root cause), and when it
+    # trips this step fails, the scan never runs, and the REQUIRED Sonar context
+    # goes ABSENT rather than red. Two failures still hard-fail the job and the
+    # scanner still does not run.
+    #
+    # Deliberately not `continue-on-error`, not `if: always()`, and not an
+    # exception for a named test. The ordinary enforcement run in
+    # unit-and-integration gets no retry and no tolerance from this — it is a
+    # different job with a different purpose.
+    - name: Generate Convex coverage for Sonar
+      run: |
+        rm -rf coverage-sonar
+        if pnpm test:coverage:sonar; then
+          exit 0
+        fi
+        echo "::warning::convex coverage run failed - discarding its output and retrying once so a known flake cannot make the required Sonar context disappear"
+        rm -rf coverage-sonar
+        pnpm test:coverage:sonar
       env:
         NODE_ENV: test
+
+    # Only a SUCCESSFUL run produces a report Sonar is allowed to read.
+    #
+    # An earlier version of this step carried `continue-on-error`, on the argument
+    # that a partial report can only understate coverage and so only pushes the
+    # gate toward red. That argument is wrong, because it quietly assumes the
+    # leftover report is merely incomplete rather than misshapen: a jest run that
+    # died partway leaves a file that still parses, still lists source records,
+    # and still passes every structural check below, while describing a run that
+    # never finished. "It looks valid" is not "it is a successful measurement".
+    #
+    # So a failure discards its own output and is retried exactly once — which
+    # covers the flake this is actually exposed to — and a second failure stops
+    # the job before the scan. That does mean the required Sonar context goes
+    # ABSENT rather than red in that case (SCRUM-186); an absent gate that blocks
+    # the merge is the correct outcome when the evidence could not be produced.
+    #
+    # The mobile suite's real test gate is `pnpm mobile:test` in the
+    # mobile-and-shared job, a required check enforcing 100% over its curated set.
+    # Nothing here weakens or substitutes for it.
+    - name: Generate mobile coverage for Sonar
+      run: |
+        rm -rf apps/mobile/coverage-sonar
+        if pnpm mobile:test:coverage:sonar; then
+          exit 0
+        fi
+        echo "::warning::mobile coverage run failed — discarding its output and retrying once so a half-written report cannot be scanned"
+        rm -rf apps/mobile/coverage-sonar
+        pnpm mobile:test:coverage:sonar
+      env:
+        NODE_ENV: test
+
+    # Rebase the mobile report's paths onto the repository root, then refuse to
+    # scan unless both reports are real evidence. One step, because the ordering
+    # between them is load-bearing — verification has to run AFTER the rebase or
+    # every mobile path fails to resolve — and it used to be implied by step
+    # order alone.
+    #
+    # The logic lives in scripts/, not here, and is unit-tested. Both halves were
+    # defeated in review while they were inline bash (SCRUM-185): the verifier
+    # accepted a report that named a real file and measured nothing, and accepted
+    # one truncated mid-write with no `end_of_record`; the rebase was a `sed`
+    # that doubled its own prefix if applied twice. This repository already keeps
+    # release-gating logic in tested modules (`releaseChecks.mjs`,
+    # `releaseGuard.ts`) — untested YAML bash on a required check was the one
+    # place that convention was not followed, and it is where the defects were.
+    - name: Rebase mobile coverage paths and verify both reports are real
+      run: node scripts/assertCoverageReports.mjs
 
     - name: SonarCloud scan
       if: ${{ env.SONAR_TOKEN != '' }}
