@@ -289,6 +289,18 @@ export async function resolveActingRoot(
     refusalMessage?: string;
   }
 ): Promise<ActingRoot> {
+  // ⚠️ ONE CLOCK READING FOR THE WHOLE DECISION, taken before anything is
+  // consulted. Adoption and generic lineage can both weigh the same
+  // reservation, and reading the clock separately in each would let one branch
+  // call a proof live and the next call it expired a millisecond later — a
+  // decision that contradicts itself inside a single call.
+  //
+  // It is a `Date.now()` in a function typed for `QueryCtx` too, which would
+  // bound a Convex query's cache lifetime. Every production caller is a
+  // mutation (`deposits.create`, `applications.createFromQuote`,
+  // `vehicles.createReservation`), where there is no cache to bound; the query
+  // context exists for tests and read-only callers.
+  const decisionNow = Date.now();
   const ownership = await resolveOwnership(ctx, args.orgId, args.vehicleId);
 
   if (ownership.kind === "AMBIGUOUS") {
@@ -348,6 +360,7 @@ export async function resolveActingRoot(
       held,
       actingQuote,
       actingPrincipal,
+      decisionNow,
       refuse,
     });
     // `null` means the claim is about a DIFFERENT car of the same deal, the one
@@ -367,6 +380,7 @@ export async function resolveActingRoot(
       lineage: args.lineage,
       actingQuote,
       actingPrincipal,
+      decisionNow,
     });
     if (unprovable) return unprovable;
     return { decision: "OPEN_NEW" };
@@ -455,6 +469,45 @@ export async function resolveActingRoot(
   return refuse;
 }
 
+/**
+ * ⚠️ A RESERVATION'S STORED STATUS IS A CACHE OF ITS LIFETIME, NOT THE LIFETIME.
+ *
+ * `expiresAt` is when the reservation actually stops holding the car.
+ * `status` only catches up when the 15-minute `expire-vehicle-reservations`
+ * cron next runs, so an expired reservation reads `ACTIVE` for a window — and
+ * longer than the interval suggests, because that sweep takes at most 100 rows
+ * per pass and a backlog carries over.
+ *
+ * The authority used to test the enum alone, which made it the ONE place that
+ * believed a stale cache. Its neighbours never did: the duplicate-reservation
+ * guard in `vehicles.createReservation` admits only
+ * `expiresAt === undefined || expiresAt > now`, and the sweep's own query is
+ * `status === "ACTIVE" AND expiresAt <= now` — a written admission that ACTIVE
+ * rows can be expired. So an expired reservation was adoptable, and re-headed a
+ * live commitment root onto a new quote.
+ *
+ * ⚠️ THE BOUNDARY IS DELIBERATE AND IS `>`, NOT `>=`. A reservation whose
+ * expiry is exactly the decision instant has expired: at that moment the sweep
+ * would already select it. Ties go to refusal, like every other rule here.
+ *
+ * A row with NO `expiresAt` stays live while ACTIVE, matching the neighbouring
+ * guard exactly. That is deliberate compatibility with rows written before
+ * expiry was mandatory, not an invented migration.
+ *
+ * ⚠️ IT ANSWERS, IT DOES NOT CLEAN UP. Nothing here patches `status` or
+ * releases anything: the authority decides whether a proof is live, and the
+ * existing sweeper owns materialising that into the row. Mutating lifecycle
+ * inside a decision a query context may also call would race the cron that
+ * owns it.
+ */
+export function reservationIsLive(
+  reservation: Doc<"vehicleReservations">,
+  decisionNow: number
+): boolean {
+  if (reservation.status !== "ACTIVE") return false;
+  return reservation.expiresAt === undefined || reservation.expiresAt > decisionNow;
+}
+
 /** Does this quote actually cover that car? Single- and multi-vehicle alike. */
 function quoteCoversVehicle(quote: Doc<"quotes"> | null, vehicleId: Id<"vehicles">): boolean {
   if (!quote) return false;
@@ -506,6 +559,8 @@ async function validateLineageProofs(
     lineage: CommitmentLineage;
     actingQuote: Doc<"quotes"> | null;
     actingPrincipal: Id<"customers"> | null;
+    /** The single clock reading for this decision. See `resolveActingRoot`. */
+    decisionNow: number;
   }
 ): Promise<ActingRoot | null> {
   const refuse: ActingRoot = {
@@ -524,14 +579,18 @@ async function validateLineageProofs(
 
   // ── the reservation ─────────────────────────────────────────────────────
   //
-  // Real, ours, still live, FOR this car, and this deal's. A released, expired
-  // or converted reservation is no longer a deal anyone can act for — a
-  // converted one continues through the quote it was adopted onto, which is
-  // what re-heading exists for, never through the spent reservation.
+  // Real, ours, still live, FOR this car, and this deal's. A released or
+  // converted reservation is no longer a deal anyone can act for — a converted
+  // one continues through the quote it was adopted onto, which is what
+  // re-heading exists for, never through the spent reservation.
+  //
+  // ⚠️ AND "LIVE" IS TIME-BASED, NOT STATUS-ONLY. `reservationIsLive` is the
+  // one place that rule is written; testing `status` here alone is what let an
+  // expired reservation open a root during the sweep's window.
   if (args.lineage.reservationId) {
     const reservation = await ctx.db.get(args.lineage.reservationId);
     if (!reservation || reservation.orgId !== args.orgId) return refuse;
-    if (reservation.status !== "ACTIVE") return refuse;
+    if (!reservationIsLive(reservation, args.decisionNow)) return refuse;
     if (String(reservation.vehicleId) !== String(args.vehicleId)) return refuse;
     if (args.actingPrincipal && String(reservation.customerId) !== String(args.actingPrincipal)) {
       return refuse;
@@ -581,7 +640,9 @@ async function validateLineageProofs(
  *
  * The rules, and each is fail-closed:
  *
- *   a. the reference must be REAL, in this org, and still ACTIVE;
+ *   a. the reference must be REAL, in this org, and still LIVE — which is
+ *      ACTIVE *and* not past its `expiresAt`, because the sweep that
+ *      materialises expiry runs on a cron and lags the truth;
  *   b. the adopter's principal must be the reservation's own customer, read
  *      from rows on the server;
  *   c. on the car the reservation is FOR, it must be the reservation this car's
@@ -606,14 +667,20 @@ async function resolveAdoption(
     held: Doc<"commitmentRoots"> | null;
     actingQuote: Doc<"quotes"> | null;
     actingPrincipal: Id<"customers"> | null;
+    /** The same clock reading the rest of this decision used. */
+    decisionNow: number;
     refuse: ActingRoot;
   }
 ): Promise<ActingRoot | null> {
   const reservation = await ctx.db.get(args.adoptReservationId);
 
-  // (a) the reference itself
+  // (a) the reference itself — real, ours, and STILL LIVE
+  //
+  // ⚠️ The same `reservationIsLive` rule as the generic proof, deliberately
+  // not a second copy of it. Two subtly different expiry tests in one authority
+  // is how the adoption door and the lineage door would drift apart.
   if (!reservation || reservation.orgId !== args.orgId) return args.refuse;
-  if (reservation.status !== "ACTIVE") return args.refuse;
+  if (!reservationIsLive(reservation, args.decisionNow)) return args.refuse;
 
   // (b) the principal — the rival check
   //

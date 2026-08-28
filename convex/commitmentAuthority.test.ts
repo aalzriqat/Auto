@@ -24,6 +24,7 @@ import { Id } from "./_generated/dataModel";
 import {
   attachEpisode,
   evidenceForDepositHold,
+  reservationIsLive,
   resolveActingRoot,
   resolveOwnership,
 } from "./commitments";
@@ -2532,5 +2533,235 @@ describe("P1-S the multi-vehicle narrowing refuses what it must", () => {
       amount: 2_000,
     });
     expect((await rootsOn(seed, free)).length, "the same deal opens it cleanly").toBe(1);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// C2E — A RESERVATION'S LIVENESS IS TIME-BASED, NOT STATUS-ONLY
+//
+// ⚠️ THE STORED STATUS IS A CACHE OF THE TRUTH, NOT THE TRUTH. `expiresAt` is
+// the reservation's actual business lifetime; `status` only catches up when the
+// 15-minute `expire-vehicle-reservations` cron next runs. So an expired
+// reservation reads `ACTIVE` for a window — and the authority tested nothing but
+// that status, which made an expired reservation adoptable and let it re-head a
+// commitment root. Reproduced: `headQuoteId` undefined before the call, the
+// quote after.
+//
+// The authority was the ONE place that believed the enum. Its neighbours never
+// did: the duplicate-reservation guard admits only
+// `expiresAt === undefined || expiresAt > now`, and the sweep's own query is
+// `status === "ACTIVE" AND expiresAt <= now` — a written admission that ACTIVE
+// rows can be expired. The sweep MATERIALISES the expiry; it does not grant
+// extra life.
+//
+// Binding rule (owner c15657), and the boundary is deliberate:
+//   live  ⇔  status === "ACTIVE" && (expiresAt === undefined || expiresAt > decisionNow)
+// so `expiresAt === decisionNow` is EXPIRED, not live.
+// ══════════════════════════════════════════════════════════════════════════════
+describe("P1-C2E a reservation proof must still be LIVE, not merely ACTIVE", () => {
+  /** A reservation row with an explicit lifetime, written directly. */
+  async function reservationRow(
+    seed: Seed,
+    vehicleId: Id<"vehicles">,
+    expiresAt: number | undefined,
+    status: "ACTIVE" | "EXPIRED" = "ACTIVE"
+  ) {
+    return await seed.t.run((ctx) =>
+      ctx.db.insert("vehicleReservations", {
+        orgId: seed.orgId,
+        vehicleId,
+        customerId: seed.customerA,
+        status,
+        ...(expiresAt === undefined ? {} : { expiresAt }),
+        reservedBy: seed.userId,
+        reservedAt: Date.now() - 60_000,
+      })
+    );
+  }
+
+  // ── the predicate itself, where the BOUNDARY can be stated exactly ───────
+  //
+  // ⚠️ CALLED DIRECTLY, AND THIS IS THE REASON. `resolveActingRoot` reads its own
+  // clock, so no fixture can make `expiresAt` exactly equal the decision instant
+  // through a door. Pinning the comparison here is what kills a `>=` mutant;
+  // the contracts below prove the same rule is REACHED in production.
+  test("C2E.1 the liveness rule, at the exact boundary", () => {
+    const T = 1_700_000_000_000;
+    const row = (over: Record<string, unknown>) =>
+      ({
+        status: "ACTIVE",
+        expiresAt: T + 1,
+        ...over,
+      }) as unknown as Parameters<typeof reservationIsLive>[0];
+
+    expect(reservationIsLive(row({}), T), "expiry in the future is live").toBe(true);
+    expect(
+      reservationIsLive(row({ expiresAt: T }), T),
+      "expiry EXACTLY at the decision instant is EXPIRED, not live"
+    ).toBe(false);
+    expect(reservationIsLive(row({ expiresAt: T - 1 }), T), "past expiry is expired").toBe(false);
+    expect(
+      reservationIsLive(row({ expiresAt: undefined }), T),
+      "a legacy row with no expiry stays live while ACTIVE"
+    ).toBe(true);
+    expect(
+      reservationIsLive(row({ status: "RELEASED" }), T),
+      "and status still refuses on its own"
+    ).toBe(false);
+  });
+
+  // ── the generic lineage proof ─────────────────────────────────
+  test("C2E.2 a FREE car refuses an ACTIVE-but-EXPIRED reservation proof", async () => {
+    const seed = await seedDealer("c2e2");
+    const free = await vehicle(seed);
+    const expired = await reservationRow(seed, free, Date.now() - 60_000);
+
+    const decision = await seed.t.run((ctx) =>
+      resolveActingRoot(ctx, {
+        orgId: seed.orgId,
+        vehicleId: free,
+        lineage: { reservationId: expired },
+        actingCustomerId: seed.customerA,
+      })
+    );
+    expect(decision.decision, "an expired reservation proves nothing").toBe("REFUSE");
+    expect((await rootsOn(seed, free)).length, "and opens no root").toBe(0);
+    expect((await claimsOn(seed, free)).length, "and attaches no episode").toBe(0);
+  });
+
+  test("C2E.3 the matched POSITIVES — an unexpired one, and a legacy row with no expiry", async () => {
+    // ⚠️ WITHOUT THESE, C2E.2 IS SATISFIED BY REFUSING EVERY RESERVATION.
+    const seed = await seedDealer("c2e3");
+
+    const liveCar = await vehicle(seed);
+    const live = await reservationRow(seed, liveCar, Date.now() + 60 * 60 * 1000);
+    const liveDecision = await seed.t.run((ctx) =>
+      resolveActingRoot(ctx, {
+        orgId: seed.orgId,
+        vehicleId: liveCar,
+        lineage: { reservationId: live },
+        actingCustomerId: seed.customerA,
+      })
+    );
+    expect(liveDecision.decision, "an unexpired reservation still opens the root").toBe("OPEN_NEW");
+
+    const legacyCar = await vehicle(seed);
+    const legacy = await reservationRow(seed, legacyCar, undefined);
+    const legacyDecision = await seed.t.run((ctx) =>
+      resolveActingRoot(ctx, {
+        orgId: seed.orgId,
+        vehicleId: legacyCar,
+        lineage: { reservationId: legacy },
+        actingCustomerId: seed.customerA,
+      })
+    );
+    expect(
+      legacyDecision.decision,
+      "and a row with no expiry at all is unchanged — no migration is invented here"
+    ).toBe("OPEN_NEW");
+  });
+
+  // ── adoption ─────────────────────────────────────────────
+  //
+  // ⚠️ EVERY OTHER AXIS IS DELIBERATELY VALID: the quote is this org's, this
+  // customer's, and covers this very car; the reservation IS the root's origin
+  // and belongs to the same customer. Expiry is the only thing wrong, so no
+  // earlier guard can be what refuses.
+  async function adoptableButExpiring(seed: Seed) {
+    const v = await vehicle(seed);
+    const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+      orgId: seed.orgId,
+      vehicleId: v,
+      customerId: seed.customerA,
+      depositAmount: 1_000,
+    });
+    const quoteId = await cashQuote(seed, seed.customerA, v);
+    return { v, reservationId, quoteId };
+  }
+
+  test("C2E.4 an ACTIVE-but-EXPIRED reservation cannot be ADOPTED, and re-heads nothing", async () => {
+    const seed = await seedDealer("c2e4");
+    const { v, reservationId, quoteId } = await adoptableButExpiring(seed);
+
+    // The control first: while it is live, this exact call adopts. So the
+    // refusal below is the expiry and nothing else about the fixture.
+    const live = await seed.t.run((ctx) =>
+      resolveActingRoot(ctx, {
+        orgId: seed.orgId,
+        vehicleId: v,
+        lineage: { quoteId, adoptReservationId: reservationId },
+        actingCustomerId: seed.customerA,
+      })
+    );
+    expect(live.decision, "control: the live reservation is adoptable").toBe("ADOPT_RESERVATION");
+
+    await seed.t.run((ctx) => ctx.db.patch(reservationId, { expiresAt: Date.now() - 60_000 }));
+    const still = await seed.t.run((ctx) => ctx.db.get(reservationId));
+    expect(still?.status, "the sweep has NOT run — the row still reads ACTIVE").toBe("ACTIVE");
+
+    const before = await snapshot(seed, v);
+    const expired = await seed.t.run((ctx) =>
+      resolveActingRoot(ctx, {
+        orgId: seed.orgId,
+        vehicleId: v,
+        lineage: { quoteId, adoptReservationId: reservationId },
+        actingCustomerId: seed.customerA,
+      })
+    );
+    expect(expired.decision, "an expired reservation cannot continue a deal").toBe("REFUSE");
+    expect(await snapshot(seed, v), "and the decision alone changed nothing").toEqual(before);
+  });
+
+  test("C2E.5 and the PUBLIC adoption door refuses it, leaving no residue", async () => {
+    // The reachability contract. C2E.4 pins the rule at the authority; this
+    // proves a real caller reaches it — `deposits.create` is the door that
+    // accepts `adoptReservationId` from a client.
+    const seed = await seedDealer("c2e5");
+    const { v, reservationId, quoteId } = await adoptableButExpiring(seed);
+    await seed.t.run((ctx) => ctx.db.patch(reservationId, { expiresAt: Date.now() - 60_000 }));
+
+    const before = await snapshot(seed, v);
+    const depositsBefore = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("deposits").collect()).length
+    );
+
+    await expectRefusal(
+      seed.asUser.mutation(api.deposits.create, {
+        orgId: seed.orgId,
+        quoteId,
+        amount: 2_000,
+        adoptReservationId: reservationId,
+      }),
+      HELD,
+      "C2E.5"
+    );
+
+    expect(await snapshot(seed, v), "no root re-headed, no episode attached").toEqual(before);
+    expect(
+      await seed.t.run(async (ctx) => (await ctx.db.query("deposits").collect()).length),
+      "and no deposit was taken"
+    ).toBe(depositsBefore);
+  });
+
+  test("C2E.6 the authority does NOT clean up — it only refuses", async () => {
+    // ⚠️ THE AUTHORITY ANSWERS A QUESTION; THE SWEEP OWNS THE ROW. Patching
+    // `status` here would put lifecycle mutation inside a decision function that
+    // a query context may also call, and would race the cron that owns it.
+    const seed = await seedDealer("c2e6");
+    const free = await vehicle(seed);
+    const expired = await reservationRow(seed, free, Date.now() - 60_000);
+
+    await seed.t.run((ctx) =>
+      resolveActingRoot(ctx, {
+        orgId: seed.orgId,
+        vehicleId: free,
+        lineage: { reservationId: expired },
+        actingCustomerId: seed.customerA,
+      })
+    );
+
+    const after = await seed.t.run((ctx) => ctx.db.get(expired));
+    expect(after?.status, "the row is left exactly as the sweep will find it").toBe("ACTIVE");
+    expect(after?.expiresAt, "and its expiry is untouched").toBeDefined();
   });
 });
