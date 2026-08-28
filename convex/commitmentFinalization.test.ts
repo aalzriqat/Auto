@@ -1,122 +1,106 @@
 /**
- * SCRUM-195 PHASE 2 (M3) — THE FINALIZATION BARRIER, SPECIFIED BEFORE IT EXISTS.
+ * SCRUM-195 PHASE 2 (M3) — ROOT-LOCAL FINALIZATION, SPECIFIED BEFORE IT EXISTS.
+ *
+ * REBUILT. The previous specification at `b3a8cb1d9` was BLOCKED by both review
+ * seats and is frozen as rejected evidence. This is not a patch of it — the
+ * defect was in its premise, and a patch would have carried the premise forward.
  *
  * ══════════════════════════════════════════════════════════════════════════════
- * WHY THIS FILE IS SPLIT IN TWO, AND WHY THAT IS THE WHOLE POINT
+ * WHAT THE LAST SPECIFICATION GOT WRONG, SO IT IS NOT REPEATED HERE
  * ══════════════════════════════════════════════════════════════════════════════
  *
- * PR #259 is the reason this file has a PART A. That attempt produced a large,
- * confident, entirely test-first specification — and the specification itself
- * was wrong. A red suite proves nothing about whether the thing it demands is
- * the right thing; it only proves the thing is absent. Absence is easy to
- * demonstrate and worthless to be confident about.
+ * 1. IT ASSUMED ONE LIVE CLAIM PER ROOT. Every contract indexed `claims[0]` or
+ *    asserted `claims.length === 1`. Phase 1's own certified suite disproves it:
+ *    `commitmentAuthority.test.ts:337` — "the SAME deal taking a further
+ *    instalment JOINS its root (I3)" — two instalments on a SINGLE-CAR quote,
+ *    "each acquisition is its own episode… and both are live". A finance
+ *    application adds a third kind alongside them. G.2 and G.3 below pin that
+ *    fact FIRST, in this file, so nothing downstream can quietly assume away.
  *
- * So this file separates two claims that a single red suite silently merges:
+ * 2. IT REACHED A "NO SALE" STATE BY COMPLETING A SALE AND CANCELLING IT.
+ *    Complete-then-cancel is a REVERSAL — Phase 3's mechanism. Four contracts
+ *    became unsatisfiable because the reversal had already made rows terminal.
+ *    The genuine never-sold door is `deposits.releaseVehicleAllocation`, whose
+ *    own guard refuses when a slice is already APPLIED, so it can only run when
+ *    no sale ever consumed it.
  *
- *   PART A — WHAT IS TRUE TODAY.  Green now, and green after M3 ships.
- *            These pin the existing system: the doors, the deposit lifecycle,
- *            the sequential completion loop, the provenance pointer. If any of
- *            them is red, MY MODEL OF THE SYSTEM IS WRONG and every contract in
- *            Part B is suspect — because Part B is built on this model.
+ * 3. IT MADE THE ROOT WAIT ON THE MONEY. It required a deal to stay OPEN while
+ *    its cash sat in `RELEASED_AWAITING_DECISION`. Owner ruling c15676 corrects
+ *    this, and the correction is the load-bearing idea of this file:
  *
- *   PART B — WHAT M3 MUST DO.  Red now, green when M3 lands.
- *            Nothing in the branch terminalizes a root or a claim today, so
- *            these fail. They must fail *at their finalization assertion*, not
- *            in their setup — Part A is what buys the right to say that.
+ *        THE ROOT LOCKS THE CAR. IT DOES NOT LOCK THE CASH.
  *
- * A Part A failure is a louder signal than any Part B failure. It says the spec
- * is describing a system that does not exist.
- *
- * ══════════════════════════════════════════════════════════════════════════════
- * THE GAP, ESTABLISHED BY READING THE BRANCH RATHER THAN ASSUMING IT
- * ══════════════════════════════════════════════════════════════════════════════
- *
- * Phase 1 shipped acquisition authority and NO finalization. Verified:
- *
- *   - `convex/utils/saleCompletion.ts` contains ZERO references to commitments,
- *     roots or claims. Selling a car does not touch the model that says who
- *     holds it.
- *   - `convex/commitments.ts` performs exactly three writes: insert a root
- *     (always OPEN), insert a claim (always ACTIVE), and patch `headQuoteId`.
- *     There is no status transition anywhere in the branch. Nothing ever writes
- *     RELEASED or CONSUMED.
- *   - `completeSalesForLineItems` loops the quote's vehicles and calls
- *     `completeSale` once per car, passing the SAME `depositResolution` to every
- *     one of them — while the deposit state they share spans the whole deal.
+ *    A released car is free immediately; its money can still be undecided. If
+ *    the root stayed OPEN, no rival could ever take the car — which would make
+ *    `resolveReleasedAllocation`'s own "somebody else may legitimately have
+ *    taken the vehicle in the meantime" guard permanently unreachable. F.8
+ *    proves the rival CAN take it; F.9 proves the return then refuses.
  *
  * ══════════════════════════════════════════════════════════════════════════════
- * THE ARCHITECTURAL DECISION — OPTION A, AND WHY THE ARTIFACT DECIDES IT
+ * THE MODEL — B+, ROOT-ONLY FINALIZATION (owner ruling c15676)
  * ══════════════════════════════════════════════════════════════════════════════
  *
- * The owner required an explicit choice, with no accidental hybrid:
+ * Phase 2 writes EXACTLY TWO THINGS, both on `commitmentRoots`:
  *
- *   A. Phase 2 consumes the forward-sale claim episodes, ACTIVE → CONSUMED,
- *      stamping the exact `consumedBySaleId`.
- *   B. Phase 2 terminalizes roots only and leaves claim consumption to Phase 3.
+ *      sale completes for a committed car   ->  status OPEN -> CONSUMED
+ *                                               consumedBySaleId = that sale
+ *      never-sold car leaves the deal       ->  status OPEN -> RELEASED
  *
- * THIS FILE SPECIFIES A. The case is not preference; it is three facts about the
- * schema as committed:
+ * Phase 2 NEVER writes: `vehicleCommitmentClaims.status`,
+ * `vehicleCommitmentClaims.consumedBySaleId`, or `restoredFromClaimId`. Claim
+ * lifecycle is Phase 3's entirely. F.1, F.12 and F.10 each assert the claims are
+ * left untouched, from three different directions.
  *
- *   1. `consumedBySaleId` is declared WRITE-ONCE, on ACTIVE → CONSUMED only.
- *      The field exists for exactly one transition, and B never performs it.
+ * WHY NOT CONSUME THE CLAIMS (the rejected option A): a root can legitimately
+ * carry several live episodes at once, so "consume the live claims" has no
+ * structural cardinality bound, and "consume the right subset" has no defensible
+ * definition when a root holds two deposit instalments plus a FINANCE episode.
+ * Root-only finalization has exactly one row to write per car, always.
  *
- *   2. `by_consumed_sale` is declared and has ZERO uses anywhere in the
- *      repository — production or test. So is `by_restored_from`. These are not
- *      dead weight; they are the two halves of a plan. Phase 2 writes
- *      `consumedBySaleId`, which makes `by_consumed_sale` answer "what did this
- *      sale consume?" in one bounded read. Phase 3 reads that and writes
- *      `restoredFromClaimId`. Under B, `by_consumed_sale` stays permanently
- *      dead and Phase 3 has NOTHING to read.
+ * WHY THE ROOT STILL NEEDS `consumedBySaleId`: without it, Phase 3 would have to
+ * GUESS which root a cancelled sale belonged to. This gives it an exact
+ * `sale -> root` entry point without pretending the individual episodes were
+ * consumed. It is write-once, on OPEN -> CONSUMED only.
  *
- *   3. Reversal is the whole reason the model exists, and B makes reversal
- *      reconstruct history. With no sale↔claim link recorded, Phase 3 would have
- *      to infer which episode a cancelled sale had consumed by searching the
- *      episodes that share a deposit — the exact unbounded search that the
- *      `sourceCommitmentClaimId` pointer was introduced to abolish, re-entering
- *      through the reversal door.
- *
- * And A is affordable, which is the part the owner asked to see proved rather
- * than asserted. Two bounded index reads per car sold:
- *
- *      root   :  by_org_vehicle_status (orgId, vehicleId, "OPEN")   -> at most 1 by I1
- *      claims :  by_root_status        (rootId, "ACTIVE")           -> live episodes only
- *
- * The second is the load-bearing one. CONSUMED and RELEASED rows are excluded by
- * the INDEX KEY, not filtered out after reading them — so a root with sixty
- * episodes of history costs exactly what a fresh one costs. G.9 measures that
- * on today's schema, and F.13 requires the barrier to leave that history alone.
- *
- * For deposit-backed evidence there is not even a query: Phase 1 stamped
- * `depositVehicleHolds.sourceCommitmentClaimId`, so the hold a sale consumes
- * already names its episode. `markAllocationApplied` is handed the hold; the
- * claim is one `ctx.db.get` away. The sale→claim bridge was built in Phase 1;
- * Phase 2 is what walks across it.
- *
- * ⚠️ NO HYBRID. A root may not be terminalized while an ACTIVE claim still hangs
- * off it, and a claim may not be consumed without its root being terminalized in
- * the same decision. F.12 pins both directions, because "roots only, mostly" is
- * precisely the half-migrated state the owner forbade.
+ * ⚠️ THAT FIELD DOES NOT EXIST IN THE SCHEMA YET. This commit is tests-only, so
+ * it cannot add it. The contracts below read it through a narrow cast so the
+ * file typechecks against today's schema while still specifying tomorrow's
+ * behaviour. Adding the field is Phase-2 implementation work.
  *
  * ══════════════════════════════════════════════════════════════════════════════
- * SCOPE — THIS COMMIT IS TESTS ONLY
+ * PART A / PART B, AND WHY THE SPLIT SURVIVES THE REBUILD
  * ══════════════════════════════════════════════════════════════════════════════
  *
- * No production file changes. Part B is expected to be RED and its redness is
- * the deliverable: it is the specification the M3 implementation will be written
- * against, and the reviewers are being asked whether the SPECIFICATION is right
- * — not whether the code passes it.
+ *   PART A (G.*) — what is TRUE TODAY. Green now, green after M3. If one of
+ *   these is red, my model of the system is wrong and Part B is built on sand.
+ *   Last round this caught three fixture errors before they could be misread as
+ *   missing behaviour. It earned its place; it is bigger here, not smaller.
  *
- * The two Phase-3 reds in `financedConsignedSettlement.test.ts` and
- * `financingEconomics.test.ts` stay red and stay put. They mark reversal and
- * re-acquisition semantics that Phase 3 owns, and G.8 keeps their precondition
- * honest: nothing here may quietly implement the restoration path they wait for.
+ *   PART B (F.*) — what M3 must do. Red now, each failing at its own
+ *   finalization assertion and never in setup.
+ *
+ * No contract imports a finalization function: importing something unwritten is
+ * a compile error that would turn the whole file red, Part A included, and
+ * destroy the only signal the split provides. Every contract asserts observable
+ * state after a real product door runs.
+ *
+ * THE COMPLETION DOORS ARE ENUMERATED FROM CALL SITES, not guessed. Walking
+ * upward from every call of `completeSale` / `completeSalesForLineItems` /
+ * `completeExistingSale` gives exactly four:
+ *
+ *      sales.ts:372   -> api.sales.create
+ *      sales.ts:421   -> api.sales.completeFromQuote
+ *      sales.ts:523   -> api.sales.completeDraft
+ *      applications.ts:3130 -> api.applications.finalizeDeal
+ *
+ * The previous spec exercised only the second. F.13 covers all four.
  */
 
 import { describe, expect, test, vi } from "vitest";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import schema from "./schema";
 import { api } from "./_generated/api";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -138,12 +122,22 @@ const PERMISSIONS = [
 
 const PRICE = 30_000;
 
+/**
+ * `commitmentRoots.consumedBySaleId` is Phase-2 implementation work and is not
+ * in the schema yet. Reading it through this cast lets a tests-only commit
+ * specify the behaviour without the file failing to typecheck today.
+ */
+function rootSaleStamp(root: Doc<"commitmentRoots">): string | undefined {
+  const stamped = (root as unknown as { consumedBySaleId?: Id<"sales"> }).consumedBySaleId;
+  return stamped === undefined ? undefined : String(stamped);
+}
+
 // ── fixtures ────────────────────────────────────────────────────────────────
 //
-// Seeding uses `ctx.db` for the org/user/vehicle scaffolding, exactly as the
-// Phase 1 suite does. Every ACT under test goes through a real product door
-// under a real authenticated identity — there is no write-capable backdoor into
-// deposits, quotes, sales or the authority.
+// `ctx.db` seeds the org/user/vehicle scaffolding, as Phase 1's suite does.
+// Every ACT under test goes through a real product door under a real
+// authenticated identity — no write-capable backdoor into quotes, deposits,
+// sales, applications or the authority.
 
 async function seedDealer(suffix: string) {
   const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
@@ -172,13 +166,10 @@ async function seedDealer(suffix: string) {
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
   const asUser = t.withIdentity({ subject: `user_${suffix}`, clerkId: `user_${suffix}` });
 
-  // ⚠️ A SECOND REAL IDENTITY, BECAUSE CANCELLATION IS A TWO-PARTY ACT.
-  // `sales.update` to CANCELLED calls `assertDifferentActors(user, salespersonId)`
-  // — a salesperson may not approve the cancellation of their own sale. Part A
-  // caught this: the first draft of these fixtures cancelled as the seller and
-  // every cancellation contract died in setup with a separation-of-duties error
-  // that has nothing to do with commitments. That is precisely the failure a
-  // blind red spec would have mis-read as "M3 is missing".
+  // A SECOND REAL IDENTITY. Cancelling a completed sale calls
+  // `assertDifferentActors` (`sales.ts:641`) and refunds/forfeits refuse the
+  // deposit's own creator — two separation-of-duties controls that killed
+  // contracts in SETUP last round.
   const managerId = await t.run((ctx) =>
     ctx.db.insert("users", {
       clerkId: `mgr_${suffix}`,
@@ -194,7 +185,7 @@ async function seedDealer(suffix: string) {
       orgId,
       firstName: "Customer",
       lastName: "A",
-      phone: `+9627911${suffix.length}01`,
+      phone: `+9627922${suffix.length}01`,
       createdAt: Date.now(),
     })
   );
@@ -203,7 +194,7 @@ async function seedDealer(suffix: string) {
       orgId,
       firstName: "Customer",
       lastName: "B",
-      phone: `+9627911${suffix.length}02`,
+      phone: `+9627922${suffix.length}02`,
       createdAt: Date.now(),
     })
   );
@@ -215,18 +206,18 @@ type Seed = Awaited<ReturnType<typeof seedDealer>>;
 let vinCounter = 0;
 async function vehicle(seed: Seed) {
   vinCounter += 1;
-  const vin = `2FMDK3GC${String(400000 + vinCounter).slice(0, 6)}XX`;
+  const vin = `3VWFA7AT${String(700000 + vinCounter).slice(0, 6)}ZZ`;
   return await seed.t.run((ctx) =>
     ctx.db.insert("vehicles", {
       orgId: seed.orgId,
       vin,
-      make: "Ford",
-      model: "Edge",
+      make: "Toyota",
+      model: "RAV4",
       year: 2023,
-      color: "Blue",
+      color: "White",
       fuelType: "Gasoline",
       transmission: "Automatic",
-      mileage: 120,
+      mileage: 90,
       purchasePrice: 20_000,
       sellingPrice: PRICE,
       status: "AVAILABLE" as const,
@@ -235,18 +226,16 @@ async function vehicle(seed: Seed) {
   );
 }
 
-/** A cash quote over one or more cars, through the real quote door. */
 async function quoteFor(
   seed: Seed,
   customerId: Id<"customers">,
   vehicles: Array<Id<"vehicles">>
 ) {
-  const vehicleItems = vehicles.map((vehicleId) => ({ vehicleId, unitPrice: PRICE }));
   return await seed.asUser.mutation(api.quotes.saveQuote, {
     orgId: seed.orgId,
     customerId,
     vehicleId: vehicles[0],
-    vehicleItems,
+    vehicleItems: vehicles.map((vehicleId) => ({ vehicleId, unitPrice: PRICE })),
     mode: "CASH" as const,
     vehiclePrice: PRICE * vehicles.length,
     downPayment: 0,
@@ -281,6 +270,16 @@ async function completeQuote(seed: Seed, quoteId: Id<"quotes">) {
   });
 }
 
+/** The never-sold door: this car leaves the deal, no sale ever existed. */
+async function releaseVehicle(seed: Seed, quoteId: Id<"quotes">, vehicleId: Id<"vehicles">) {
+  return await seed.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+    orgId: seed.orgId,
+    quoteId,
+    vehicleId,
+    reason: "customer dropped this car from the deal",
+  });
+}
+
 /** Cancellation goes through the MANAGER — the seller may not cancel their own sale. */
 async function cancelSale(seed: Seed, saleId: Id<"sales">) {
   return await seed.asManager.mutation(api.sales.update, {
@@ -308,15 +307,35 @@ async function holdsOn(seed: Seed, v: Id<"vehicles">) {
   );
 }
 
+/** Every claim fact Phase 2 is forbidden to change, as a comparable census. */
+async function claimCensus(seed: Seed, v: Id<"vehicles">) {
+  return (await claimsOn(seed, v))
+    .map((c) =>
+      [
+        String(c._id),
+        c.status,
+        c.evidenceKind,
+        String(c.consumedBySaleId ?? "-"),
+        String(c.restoredFromClaimId ?? "-"),
+        String(c.resolvedAt ?? "-"),
+      ].join("|")
+    )
+    .sort();
+}
+
+async function salesByVehicle(seed: Seed): Promise<Record<string, string>> {
+  return await seed.t.run(async (ctx) => {
+    const rows = await ctx.db.query("sales").collect();
+    return Object.fromEntries(rows.map((s) => [String(s.vehicleId), String(s._id)]));
+  });
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // PART A — THE SYSTEM AS IT ACTUALLY IS
-//
-// Green today. Green after M3. If one of these goes red, the spec below is
-// describing a system that does not exist and must be re-derived, not patched.
 // ══════════════════════════════════════════════════════════════════════════════
 
 describe("P2-G ground truth the M3 spec is built on", () => {
-  test("G.1 a deposit on a one-car quote opens exactly one OPEN root with one ACTIVE claim", async () => {
+  test("G.1 a deposit opens exactly one OPEN root", async () => {
     const seed = await seedDealer("g1");
     const car = await vehicle(seed);
     const quoteId = await quoteFor(seed, seed.customerA, [car]);
@@ -325,117 +344,81 @@ describe("P2-G ground truth the M3 spec is built on", () => {
     const roots = await rootsOn(seed, car);
     expect(roots.length, "one physical car, one root").toBe(1);
     expect(roots[0].status, "acquisition opens it").toBe("OPEN");
-
-    const claims = await claimsOn(seed, car);
-    expect(claims.length, "one episode").toBe(1);
-    expect(claims[0].status, "and it is live").toBe("ACTIVE");
-    expect(claims[0].evidenceKind, "on deposit evidence").toBe("DEPOSIT");
   });
 
-  test("G.2 the hold carries its episode pointer — the sale-to-claim bridge exists", async () => {
-    // ⚠️ THIS IS WHAT MAKES OPTION A CHEAP. `markAllocationApplied` is handed a
-    // hold; the hold names the exact claim. No search, no inference, no history.
+  test("G.2 ONE root can carry SEVERAL live episodes — two instalments", async () => {
+    // ⚠️ THE FACT THAT KILLED THE PREVIOUS SPECIFICATION. It assumed one live
+    // claim per root throughout. Phase 1's own certified contract 1.4 already
+    // disproved that, on a SINGLE-CAR quote, and I did not read it. Pinning it
+    // here, first, so nothing below can quietly assume it away again.
     const seed = await seedDealer("g2");
     const car = await vehicle(seed);
-    const other = await vehicle(seed);
-    const quoteId = await quoteFor(seed, seed.customerA, [car, other]);
-    await depositOn(seed, quoteId, 4_000);
-    await allocate(seed, quoteId, [
-      { vehicleId: car, amount: 3_000 },
-      { vehicleId: other, amount: 1_000 },
-    ]);
+    const quoteId = await quoteFor(seed, seed.customerA, [car]);
+    await depositOn(seed, quoteId, 2_000);
+    await depositOn(seed, quoteId, 1_000);
 
-    const holds = await holdsOn(seed, car);
-    const live = holds.filter((h) => h.active);
-    expect(live.length, "one live slice on this car").toBe(1);
+    expect((await rootsOn(seed, car)).length, "one deal, one root").toBe(1);
+    const claims = await claimsOn(seed, car);
+    expect(claims.length, "each instalment is its own episode").toBe(2);
     expect(
-      live[0].sourceCommitmentClaimId,
-      "the slice names the episode that acquired the car"
-    ).toBeTruthy();
+      claims.every((c) => c.status === "ACTIVE"),
+      "and BOTH are live at once"
+    ).toBe(true);
+    expect(
+      new Set(claims.map((c) => String(c.rootId))).size,
+      "on the SAME root"
+    ).toBe(1);
+  });
 
+  test("G.3 and it can carry DIFFERENT EVIDENCE KINDS at once — DEPOSIT + FINANCE", async () => {
+    // The second half of the cardinality fact. `applications.ts:2199` is
+    // explicit: the application is "a separate episode" from any co-existing
+    // deposit episode on the same root, and "each must be able to end
+    // independently". So a root can hold two KINDS of live evidence, not just
+    // two of one kind.
+    const seed = await seedDealer("g3");
+    const car = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [car]);
+    await depositOn(seed, quoteId, 2_000);
+    await seed.asUser.mutation(api.applications.createFromQuote, {
+      orgId: seed.orgId,
+      quoteId,
+    });
+
+    expect((await rootsOn(seed, car)).length, "still one deal, one root").toBe(1);
     const claims = await claimsOn(seed, car);
     expect(
-      claims.map((c) => String(c._id)),
-      "and it names one of THIS car's episodes, not any episode"
-    ).toContain(String(live[0].sourceCommitmentClaimId));
-  });
-
-  test("G.3 completing a 2-car quote writes ONE sale per car, sequentially", async () => {
-    const seed = await seedDealer("g3");
-    const a = await vehicle(seed);
-    const b = await vehicle(seed);
-    const quoteId = await quoteFor(seed, seed.customerA, [a, b]);
-
-    const saleIds = await completeQuote(seed, quoteId);
-    expect(saleIds.length, "one sale per car, not one sale per deal").toBe(2);
-
-    const sales = await seed.t.run(async (ctx) => await ctx.db.query("sales").collect());
-    expect(sales.length).toBe(2);
+      claims.map((c) => c.evidenceKind).sort(),
+      "two live episodes of DIFFERENT kinds"
+    ).toEqual(["DEPOSIT", "FINANCE"]);
     expect(
-      sales.map((s) => String(s.vehicleId)).sort(),
-      "each sale is against its own car"
-    ).toEqual([String(a), String(b)].sort());
+      claims.every((c) => c.status === "ACTIVE"),
+      "both live"
+    ).toBe(true);
   });
 
-  test("G.4 a completed sale marks that car's slice APPLIED and names the sale", async () => {
+  test("G.4 THE GAP: a completed sale leaves the root OPEN and unstamped", async () => {
+    // ⚠️ MUST BE DELETED WHEN M3 LANDS, not fixed. F.1 is its inversion. It is
+    // named GAP so that is unmissable. Its job is to make a Part B failure
+    // readable as "finalization is missing" rather than "the fixture never sold
+    // anything".
     const seed = await seedDealer("g4");
-    const a = await vehicle(seed);
-    const b = await vehicle(seed);
-    const quoteId = await quoteFor(seed, seed.customerA, [a, b]);
-    await depositOn(seed, quoteId, 4_000);
-    await allocate(seed, quoteId, [
-      { vehicleId: a, amount: 2_500 },
-      { vehicleId: b, amount: 1_500 },
-    ]);
-
-    const saleIds = await completeQuote(seed, quoteId);
-
-    const holdsA = await holdsOn(seed, a);
-    const applied = holdsA.filter((h) => h.allocationStatus === "APPLIED");
-    expect(applied.length, "car A's slice was consumed by its sale").toBe(1);
-    expect(
-      saleIds.map(String),
-      "and it names one of the sales this completion produced"
-    ).toContain(String(applied[0].appliedSaleId));
-  });
-
-  test("G.5 THE GAP: a completed sale leaves the root OPEN and the claim ACTIVE", async () => {
-    // ⚠️ THE ONE PART-A CONTRACT THAT M3 WILL INVERT, AND IT IS HERE ON PURPOSE.
-    // Part B is red, and a red test proves only absence. This proves the absence
-    // is the ABSENCE OF FINALIZATION specifically — the sale really completed,
-    // the money really applied, and the commitment model simply did not move.
-    // Without this, a Part B failure could equally mean my fixture never sold
-    // anything.
-    //
-    // WHEN M3 LANDS THIS CONTRACT MUST BE DELETED, not "fixed". F.1 is its
-    // inversion and replaces it. It is named GAP so that is unmissable.
-    const seed = await seedDealer("g5");
     const car = await vehicle(seed);
     const quoteId = await quoteFor(seed, seed.customerA, [car]);
     await depositOn(seed, quoteId, 2_000);
 
     const saleIds = await completeQuote(seed, quoteId);
-    expect(saleIds.length, "precondition: the sale really did complete").toBe(1);
-
+    expect(saleIds.length, "precondition: the sale really completed").toBe(1);
     const sale = await seed.t.run((ctx) => ctx.db.get(saleIds[0]));
     expect(sale?.status, "precondition: and it is COMPLETED").toBe("COMPLETED");
 
-    const roots = await rootsOn(seed, car);
-    expect(roots[0].status, "the deal that sold the car still holds it").toBe("OPEN");
-
-    const claims = await claimsOn(seed, car);
-    expect(claims[0].status, "and its episode never ended").toBe("ACTIVE");
-    expect(
-      claims[0].consumedBySaleId,
-      "nothing recorded which sale consumed it, because nothing consumed it"
-    ).toBeUndefined();
+    const root = (await rootsOn(seed, car))[0];
+    expect(root.status, "the deal that sold the car still holds it").toBe("OPEN");
+    expect(rootSaleStamp(root), "and nothing recorded which sale ended it").toBeUndefined();
   });
 
-  test("G.6 and nothing anywhere in the branch has ever written a terminal status", async () => {
-    // The census form of G.5. A single completed deal could look untouched by
-    // coincidence; this asserts the transition is absent from the SYSTEM, which
-    // is what makes "Phase 1 shipped no finalization" a fact rather than a claim.
-    const seed = await seedDealer("g6");
+  test("G.5 nothing anywhere in the branch has ever written a terminal root", async () => {
+    const seed = await seedDealer("g5");
     const a = await vehicle(seed);
     const b = await vehicle(seed);
     const quoteId = await quoteFor(seed, seed.customerA, [a, b]);
@@ -446,27 +429,47 @@ describe("P2-G ground truth the M3 spec is built on", () => {
     ]);
     await completeQuote(seed, quoteId);
 
-    const { roots, claims } = await seed.t.run(async (ctx) => ({
-      roots: await ctx.db.query("commitmentRoots").collect(),
-      claims: await ctx.db.query("vehicleCommitmentClaims").collect(),
-    }));
-
+    const roots = await seed.t.run(async (ctx) => await ctx.db.query("commitmentRoots").collect());
     expect(roots.length, "precondition: there are roots to have terminalized").toBeGreaterThan(0);
-    expect(claims.length, "precondition: and episodes to have consumed").toBeGreaterThan(0);
     expect(
       roots.map((r) => r.status),
       "every root in the database is still OPEN"
     ).toEqual(roots.map(() => "OPEN"));
-    expect(
-      claims.map((c) => c.status),
-      "every episode in the database is still ACTIVE"
-    ).toEqual(claims.map(() => "ACTIVE"));
   });
 
-  test("G.7 a cancelled multi-car sale leaves its slice awaiting a decision, not back in the pool", async () => {
-    // The precondition F.6 rests on. Money does not silently return to the deal
-    // when a sale is cancelled — somebody must decide — and M3 must not treat a
-    // slice in that limbo as evidence the car is free.
+  test("G.6 the NEVER-SOLD door releases a car's money without any sale existing", async () => {
+    // ⚠️ THIS IS THE DOOR THE PREVIOUS SPEC SHOULD HAVE USED. It reached the
+    // same money-state by completing a sale and cancelling it — a REVERSAL,
+    // which is Phase 3 — and four contracts became unsatisfiable as a result.
+    // `releaseVehicleAllocation` refuses when a slice is already APPLIED
+    // ("Cancel the sale before removing the vehicle from the deal"), so it can
+    // only ever run when no sale consumed it.
+    const seed = await seedDealer("g6");
+    const a = await vehicle(seed);
+    const b = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [a, b]);
+    await depositOn(seed, quoteId, 4_000);
+    await allocate(seed, quoteId, [
+      { vehicleId: a, amount: 2_500 },
+      { vehicleId: b, amount: 1_500 },
+    ]);
+
+    await releaseVehicle(seed, quoteId, a);
+
+    const sales = await seed.t.run(async (ctx) => await ctx.db.query("sales").collect());
+    expect(sales.length, "no sale was ever created — this is the never-sold path").toBe(0);
+
+    const limbo = (await holdsOn(seed, a)).filter(
+      (h) => h.allocationStatus === "RELEASED_AWAITING_DECISION"
+    );
+    expect(limbo.length, "car A's money is off the car and awaiting a decision").toBe(1);
+  });
+
+  test("G.7 a cancelled sale leaves the canonical commitment history untouched", async () => {
+    // The Phase-3 sentinel, in its strongest form. Owner ruling c15676:
+    // "Cancellation performs zero canonical commitment lifecycle work in Phase
+    // 2." True today because nothing writes lifecycle at all; F.10 requires it
+    // to STAY true once M3 ships.
     const seed = await seedDealer("g7");
     const a = await vehicle(seed);
     const b = await vehicle(seed);
@@ -478,6 +481,7 @@ describe("P2-G ground truth the M3 spec is built on", () => {
     ]);
     const saleIds = await completeQuote(seed, quoteId);
 
+    const before = await claimCensus(seed, a);
     const saleA = await seed.t.run(async (ctx) => {
       const rows = await ctx.db.query("sales").collect();
       return rows.find((s) => String(s.vehicleId) === String(a))!;
@@ -486,68 +490,23 @@ describe("P2-G ground truth the M3 spec is built on", () => {
 
     await cancelSale(seed, saleA._id);
 
-    const holdsA = await holdsOn(seed, a);
-    const limbo = holdsA.filter(
-      (h) =>
-        h.allocationStatus === "RELEASED_AWAITING_DECISION" || h.allocationStatus === "REVERSING"
-    );
+    expect(await claimCensus(seed, a), "not one claim fact changed").toEqual(before);
     expect(
-      limbo.length,
-      "the slice came off its sale and is waiting for an explicit decision"
-    ).toBe(1);
-    expect(limbo[0].appliedSaleId, "and no longer claims to be applied to it").toBeUndefined();
+      (await claimsOn(seed, a)).filter((c) => c.restoredFromClaimId !== undefined).length,
+      "and no successor episode was invented — restoration is Phase 3"
+    ).toBe(0);
   });
 
-  test("G.8 Phase 3's restoration path does not exist yet — the two Phase-3 reds stay red", async () => {
-    // ⚠️ SENTINEL. The owner requires the two intentional Phase-3 failures to be
-    // RETAINED. They encode reversal/re-acquisition semantics, and the field
-    // that carries them is `restoredFromClaimId`. If anything in Phase 2 starts
-    // writing it, Phase 2 has silently absorbed Phase 3 and those reds would go
-    // green for the wrong reason — the exact accidental scope creep this
-    // sentinel exists to catch.
+  test("G.8 a root can carry 60+ live episodes at once", async () => {
+    // The cardinality fact at scale, and the reason option A was rejected:
+    // "consume the live claims" has no structural bound. F.11 requires root
+    // finalization to be indifferent to this number.
     const seed = await seedDealer("g8");
     const car = await vehicle(seed);
     const quoteId = await quoteFor(seed, seed.customerA, [car]);
     await depositOn(seed, quoteId, 2_000);
-    const saleIds = await completeQuote(seed, quoteId);
-    await cancelSale(seed, saleIds[0]);
-
-    const claims = await claimsOn(seed, car);
-    expect(claims.length, "precondition: episodes exist").toBeGreaterThan(0);
-    expect(
-      claims.filter((c) => c.restoredFromClaimId !== undefined).length,
-      "no episode claims a predecessor: reacquisition is Phase 3, not Phase 2"
-    ).toBe(0);
-  });
-
-  test("G.9 THE AFFORDABILITY PROOF FOR OPTION A: history does not enter the live read", async () => {
-    // ⚠️ THE OWNER ASKED FOR PROOF THAT A CAN BE DONE WITHOUT RECONSTRUCTING
-    // HISTORY. This is it, and it is a fact about the schema that holds TODAY —
-    // which is why it is evidence rather than a promise.
-    //
-    // `by_root_status` is keyed (rootId, status). Terminal episodes are excluded
-    // by the INDEX KEY, not filtered out after being read. So the read that M3
-    // needs — "which episodes on this root are still live?" — costs the same on
-    // a root with sixty episodes behind it as on a fresh one.
-    //
-    // If this were false, option A would require scanning a root's whole history
-    // on every sale and B would be the honest choice. It is not false.
-    const seed = await seedDealer("g9");
-    const car = await vehicle(seed);
-    const quoteId = await quoteFor(seed, seed.customerA, [car]);
-    await depositOn(seed, quoteId, 2_000);
-
     const root = (await rootsOn(seed, car))[0];
 
-    const liveBefore = await seed.t.run(async (ctx) =>
-      await ctx.db
-        .query("vehicleCommitmentClaims")
-        .withIndex("by_root_status", (q) => q.eq("rootId", root._id).eq("status", "ACTIVE"))
-        .collect()
-    );
-    expect(liveBefore.length, "one live episode on a fresh deal").toBe(1);
-
-    // Sixty episodes of ordinary terminal history on the SAME root.
     await seed.t.run(async (ctx) => {
       for (let n = 0; n < 60; n += 1) {
         await ctx.db.insert("vehicleCommitmentClaims", {
@@ -555,139 +514,144 @@ describe("P2-G ground truth the M3 spec is built on", () => {
           rootId: root._id,
           vehicleId: car,
           evidenceKind: "DEPOSIT" as const,
-          status: n % 2 === 0 ? ("CONSUMED" as const) : ("RELEASED" as const),
+          status: "ACTIVE" as const,
           createdAt: Date.now(),
           createdBy: seed.userId,
         });
       }
     });
 
-    const allOnRoot = await seed.t.run(async (ctx) =>
-      await ctx.db
-        .query("vehicleCommitmentClaims")
-        .withIndex("by_root_status", (q) => q.eq("rootId", root._id))
-        .collect()
-    );
-    expect(allOnRoot.length, "precondition: the history is really there").toBe(61);
-
-    const liveAfter = await seed.t.run(async (ctx) =>
+    const live = await seed.t.run(async (ctx) =>
       await ctx.db
         .query("vehicleCommitmentClaims")
         .withIndex("by_root_status", (q) => q.eq("rootId", root._id).eq("status", "ACTIVE"))
         .collect()
     );
-    expect(
-      liveAfter.length,
-      "the live read returns ONE, not sixty-one: terminal rows never enter it"
-    ).toBe(1);
-    expect(String(liveAfter[0]._id), "and it is the same live episode as before").toBe(
-      String(liveBefore[0]._id)
-    );
+    expect(live.length, "sixty-one live episodes on ONE root, and all legitimate").toBe(61);
+    expect((await rootsOn(seed, car)).length, "still exactly one root").toBe(1);
   });
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// PART B — THE M3 SPECIFICATION
+// PART B — THE M3 SPECIFICATION (B+, root-only)
 //
-// RED until M3 ships, and the redness is the deliverable. Part A is what earns
-// the right to read a failure here as "finalization is missing" rather than
-// "the fixture never sold anything".
-//
-// ⚠️ EVERY CONTRACT ASSERTS OBSERVABLE STATE AFTER A REAL DOOR RUNS. None
-// imports a finalization function, deliberately: importing something unwritten
-// would be a compile error that turns the WHOLE FILE red, Part A included, and
-// destroy the one signal this split exists to give. It also keeps the spec a
-// statement about behaviour rather than about a function signature I invented —
-// M3 may be built any shape that satisfies these.
+// RED until M3 ships. Each must fail at its own finalization assertion, never in
+// setup — Part A is what buys the right to read a failure that way.
 // ══════════════════════════════════════════════════════════════════════════════
 
-describe("P2-F the finalization barrier (M3)", () => {
-  test("F.1 a completed sale CONSUMES the deal that held the car, naming the exact sale", async () => {
-    // The inversion of G.5. When this passes, G.5 must be deleted.
+describe("P2-F root-local finalization (M3)", () => {
+  test("F.1 a completed sale CONSUMES the root, stamps the sale, and touches NO claim", async () => {
+    // The inversion of G.4, and the whole of B+ in one contract. Note what is
+    // asserted about the episodes: NOTHING CHANGED. Under B+ the claim lifecycle
+    // is Phase 3's entirely, so "the claims are untouched" is not an omission —
+    // it is the specification.
     const seed = await seedDealer("f1");
     const car = await vehicle(seed);
     const quoteId = await quoteFor(seed, seed.customerA, [car]);
     await depositOn(seed, quoteId, 2_000);
 
+    const before = await claimCensus(seed, car);
     const saleIds = await completeQuote(seed, quoteId);
     expect(saleIds.length, "precondition: one car, one sale").toBe(1);
 
     const root = (await rootsOn(seed, car))[0];
     expect(root.status, "the deal became a sale — CONSUMED, not RELEASED").toBe("CONSUMED");
     expect(root.closedAt, "and it records when").toBeTruthy();
-
-    const claims = await claimsOn(seed, car);
-    expect(claims.length, "still one episode — finalization ENDS episodes, never adds").toBe(1);
-    expect(claims[0].status, "the episode was consumed").toBe("CONSUMED");
     expect(
-      String(claims[0].consumedBySaleId),
-      "by THIS sale, exactly — the provenance Phase 3 reversal will read back"
+      rootSaleStamp(root),
+      "stamped with THIS sale — Phase 3's exact sale->root entry point"
     ).toBe(String(saleIds[0]));
+
+    expect(
+      await claimCensus(seed, car),
+      "and not one episode was touched: claim lifecycle is Phase 3, not Phase 2"
+    ).toEqual(before);
   });
 
-  test("F.2 a genuinely FREE walk-in car sells without inventing a deal to consume", async () => {
-    // The control for F.1. If finalization only ever "closes whatever root it
-    // finds", a car nobody ever committed to would expose it — either by
-    // throwing, or by conjuring a root so the closing code has something to act
-    // on. A cash walk-in is an ordinary sale and must stay one.
+  test("F.2 a genuinely FREE walk-in car sells without inventing a deal to close", async () => {
     const seed = await seedDealer("f2");
     const car = await vehicle(seed);
     const quoteId = await quoteFor(seed, seed.customerA, [car]);
-
-    const rootsBefore = await rootsOn(seed, car);
-    expect(rootsBefore.length, "precondition: nobody has committed to this car").toBe(0);
+    expect((await rootsOn(seed, car)).length, "precondition: nobody committed").toBe(0);
 
     const saleIds = await completeQuote(seed, quoteId);
     expect(saleIds.length, "the walk-in sale completes").toBe(1);
-
-    const sale = await seed.t.run((ctx) => ctx.db.get(saleIds[0]));
-    expect(sale?.status, "and it is COMPLETED").toBe("COMPLETED");
-
     expect(
       (await rootsOn(seed, car)).length,
-      "and no commitment root was invented to give finalization something to close"
+      "and no root was invented to give finalization something to close"
     ).toBe(0);
-    expect((await claimsOn(seed, car)).length, "nor any episode").toBe(0);
   });
 
-  test("F.3 a sale for a deal that does NOT hold the car is REFUSED, with zero residue", async () => {
-    // ⚠️ THE BARRIER'S REASON FOR EXISTING. Customer B's deposit holds the car.
-    // Customer A must not be able to sell it out from under them — and a refusal
-    // that leaves a half-written sale behind is not a refusal.
+  test("F.3 a RIVAL customer's sale on a held car is REFUSED, with zero residue", async () => {
     const seed = await seedDealer("f3");
     const car = await vehicle(seed);
 
     const bQuote = await quoteFor(seed, seed.customerB, [car]);
     await depositOn(seed, bQuote, 2_000);
-    const rivalRoot = (await rootsOn(seed, car))[0];
-    expect(rivalRoot.customerId, "precondition: B's deal holds the car").toBe(seed.customerB);
+    const rival = (await rootsOn(seed, car))[0];
 
     const aQuote = await quoteFor(seed, seed.customerA, [car]);
-
     let threw: unknown = null;
     try {
       await completeQuote(seed, aQuote);
     } catch (e) {
       threw = e;
     }
-    expect(threw, "A may not complete a sale on a car B's deal holds").toBeTruthy();
+    expect(threw, "A may not sell a car B's deal holds").toBeTruthy();
 
-    const sales = await seed.t.run(async (ctx) => await ctx.db.query("sales").collect());
-    expect(sales.length, "and no sale row survives the refusal").toBe(0);
-
-    const rootsAfter = await rootsOn(seed, car);
-    expect(rootsAfter.length, "B's deal is still the only one").toBe(1);
-    expect(rootsAfter[0].status, "and it was not touched").toBe("OPEN");
-    expect(String(rootsAfter[0]._id), "the same root, not a replacement").toBe(
-      String(rivalRoot._id)
-    );
+    expect(
+      (await seed.t.run(async (ctx) => await ctx.db.query("sales").collect())).length,
+      "and no sale row survives the refusal"
+    ).toBe(0);
+    const after = (await rootsOn(seed, car))[0];
+    expect(String(after._id), "B's root, not a replacement").toBe(String(rival._id));
+    expect(after.status, "untouched").toBe("OPEN");
   });
 
-  test("F.4 a 2-car shared-deposit deal consumes BOTH deals, each by its own sale", async () => {
-    // One deposit, two cars, two roots, two sales. The failure this guards is a
-    // barrier that terminalizes "the deal" as if a multi-car quote were one
-    // commitment — it is not; the car is the unit of ownership.
+  test("F.4 the SAME customer on a DIFFERENT deal is refused too — identity is the root, not the person", async () => {
+    // ⚠️ I2. A root's identity is server-owned and is never `(customerId,
+    // vehicleId)`. An implementation that reads "same customer" as sufficient
+    // lineage would pass F.3 and fail here — which is exactly why F.3 alone is
+    // not enough, and why the previous specification's rival test was weak.
     const seed = await seedDealer("f4");
+    const car = await vehicle(seed);
+
+    const dealOne = await quoteFor(seed, seed.customerA, [car]);
+    await depositOn(seed, dealOne, 2_000);
+    const held = (await rootsOn(seed, car))[0];
+
+    // A SECOND, UNRELATED quote for the same customer and the same car, proving
+    // nothing about the first deal.
+    const dealTwo = await quoteFor(seed, seed.customerA, [car]);
+
+    let threw: unknown = null;
+    try {
+      await completeQuote(seed, dealTwo);
+    } catch (e) {
+      threw = e;
+    }
+    expect(
+      threw,
+      "a second deal cannot sell the car merely because it names the same customer"
+    ).toBeTruthy();
+
+    const after = (await rootsOn(seed, car))[0];
+    expect(String(after._id), "the FIRST deal's root, not a replacement").toBe(String(held._id));
+    expect(after.customerId, "still owned by the deal that proved itself").toBe(held.customerId);
+    expect(after.status, "the first deal still holds it").toBe("OPEN");
+    expect(rootSaleStamp(after), "and nothing was stamped on it").toBeUndefined();
+    expect(
+      (await rootsOn(seed, car)).length,
+      "and the second deal did not open a rival root on the same car"
+    ).toBe(1);
+    expect(
+      (await seed.t.run(async (ctx) => await ctx.db.query("sales").collect())).length,
+      "no sale row"
+    ).toBe(0);
+  });
+
+  test("F.5 a 2-car deal terminalizes each root against ITS OWN sale", async () => {
+    const seed = await seedDealer("f5");
     const a = await vehicle(seed);
     const b = await vehicle(seed);
     const quoteId = await quoteFor(seed, seed.customerA, [a, b]);
@@ -699,30 +663,23 @@ describe("P2-F the finalization barrier (M3)", () => {
 
     const saleIds = await completeQuote(seed, quoteId);
     expect(saleIds.length, "precondition: two cars, two sales").toBe(2);
+    const byVehicle = await salesByVehicle(seed);
 
-    // A plain record, not a Map: `t.run` serializes its return value and a Map
-    // does not survive the crossing.
-    const salesByVehicle: Record<string, string> = await seed.t.run(async (ctx) => {
-      const rows = await ctx.db.query("sales").collect();
-      return Object.fromEntries(rows.map((s) => [String(s.vehicleId), String(s._id)]));
-    });
-
+    const stamps = new Set<string>();
     for (const car of [a, b]) {
       const root = (await rootsOn(seed, car))[0];
-      expect(root.status, `car ${String(car)}: its deal was consumed`).toBe("CONSUMED");
-
-      const claims = await claimsOn(seed, car);
-      expect(claims.length, "one episode per car").toBe(1);
-      expect(claims[0].status, "consumed").toBe("CONSUMED");
+      expect(root.status, `car ${String(car)} consumed`).toBe("CONSUMED");
       expect(
-        String(claims[0].consumedBySaleId),
-        "and by THAT CAR'S sale — not whichever sale happened to run last"
-      ).toBe(salesByVehicle[String(car)]);
+        rootSaleStamp(root),
+        "stamped with THAT CAR'S sale, not whichever ran last"
+      ).toBe(byVehicle[String(car)]);
+      stamps.add(String(rootSaleStamp(root)));
     }
+    expect(stamps.size, "two DISTINCT stamps").toBe(2);
   });
 
-  test("F.5 a 3-car shared-deposit deal terminalizes all three, none by another's sale", async () => {
-    const seed = await seedDealer("f5");
+  test("F.6 a 3-car deal does the same, with three distinct stamps", async () => {
+    const seed = await seedDealer("f6");
     const a = await vehicle(seed);
     const b = await vehicle(seed);
     const c = await vehicle(seed);
@@ -734,153 +691,63 @@ describe("P2-F the finalization barrier (M3)", () => {
       { vehicleId: c, amount: 1_000 },
     ]);
 
-    const saleIds = await completeQuote(seed, quoteId);
-    expect(saleIds.length, "precondition: three cars, three sales").toBe(3);
+    expect((await completeQuote(seed, quoteId)).length, "three sales").toBe(3);
+    const byVehicle = await salesByVehicle(seed);
 
-    // A plain record, not a Map: `t.run` serializes its return value and a Map
-    // does not survive the crossing.
-    const salesByVehicle: Record<string, string> = await seed.t.run(async (ctx) => {
-      const rows = await ctx.db.query("sales").collect();
-      return Object.fromEntries(rows.map((s) => [String(s.vehicleId), String(s._id)]));
-    });
-
-    const stamped = new Set<string>();
+    const stamps = new Set<string>();
     for (const car of [a, b, c]) {
       const root = (await rootsOn(seed, car))[0];
       expect(root.status, `car ${String(car)} consumed`).toBe("CONSUMED");
-      const claim = (await claimsOn(seed, car))[0];
-      expect(String(claim.consumedBySaleId), "stamped with its own car's sale").toBe(
-        salesByVehicle[String(car)]
-      );
-      stamped.add(String(claim.consumedBySaleId));
+      expect(rootSaleStamp(root), "its own sale").toBe(byVehicle[String(car)]);
+      stamps.add(String(rootSaleStamp(root)));
     }
-    expect(
-      stamped.size,
-      "three DISTINCT sales — one shared stamp would mean the loop leaked state between cars"
-    ).toBe(3);
+    expect(stamps.size, "three DISTINCT stamps — no state leaked between cars").toBe(3);
   });
 
-  test("F.6 the outcome does not depend on the order the cars are completed in", async () => {
-    // `completeSalesForLineItems` walks `quote.vehicleItems` in order while the
-    // deposit state is shared across the whole deal. Order dependence there is a
-    // real hazard, and it is invisible in a one-car test.
-    async function runWithOrder(suffix: string, reverse: boolean) {
+  test("F.7 completion order does not change any car's outcome — including WHICH sale stamped it", async () => {
+    // ⚠️ THE PREVIOUS VERSION OF THIS CONTRACT RECORDED ONLY *WHETHER* A STAMP
+    // EXISTED, so a reverse-order bug that stamped each car with the other's
+    // sale would have passed it. This compares the stamp to the car's own sale
+    // in BOTH orders.
+    async function run(suffix: string, reverse: boolean) {
       const seed = await seedDealer(suffix);
       const a = await vehicle(seed);
       const b = await vehicle(seed);
-      const order = reverse ? [b, a] : [a, b];
-      const quoteId = await quoteFor(seed, seed.customerA, order);
+      const quoteId = await quoteFor(seed, seed.customerA, reverse ? [b, a] : [a, b]);
       await depositOn(seed, quoteId, 4_000);
       await allocate(seed, quoteId, [
         { vehicleId: a, amount: 2_500 },
         { vehicleId: b, amount: 1_500 },
       ]);
       await completeQuote(seed, quoteId);
+      const byVehicle = await salesByVehicle(seed);
 
-      const summarise = async (car: Id<"vehicles">) => {
+      const describeCar = async (car: Id<"vehicles">) => {
         const root = (await rootsOn(seed, car))[0];
-        const claim = (await claimsOn(seed, car))[0];
         return {
-          rootStatus: root?.status ?? null,
-          claimStatus: claim?.status ?? null,
-          stamped: claim?.consumedBySaleId !== undefined,
+          status: root?.status ?? null,
+          stampedWithOwnSale: rootSaleStamp(root) === byVehicle[String(car)],
         };
       };
-      return { a: await summarise(a), b: await summarise(b) };
+      return { a: await describeCar(a), b: await describeCar(b) };
     }
 
-    const forward = await runWithOrder("f6f", false);
-    const backward = await runWithOrder("f6b", true);
+    const forward = await run("f7f", false);
+    const backward = await run("f7b", true);
 
-    expect(forward.a, "car A ends the same way whichever car was completed first").toEqual(
-      backward.a
+    expect(forward, "the same outcome whichever car completed first").toEqual(backward);
+    expect(forward.a.status, "and it is the RIGHT outcome, not merely a stable wrong one").toBe(
+      "CONSUMED"
     );
-    expect(forward.b, "and so does car B").toEqual(backward.b);
-    expect(forward.a.rootStatus, "both consumed, not merely equal-and-wrong").toBe("CONSUMED");
-    expect(forward.b.rootStatus).toBe("CONSUMED");
+    expect(forward.a.stampedWithOwnSale, "car A stamped with car A's sale").toBe(true);
+    expect(forward.b.stampedWithOwnSale, "car B stamped with car B's sale").toBe(true);
   });
 
-  test("F.7 SCRUM-199: a deal that ends WITHOUT a sale RELEASES the car", async () => {
-    // ⚠️ THE CASE THAT STARTED THIS PROGRAM: the money leaves and NOTHING holds
-    // the car. If the root stays OPEN, the car is held by a deal that no longer
-    // exists and nobody can ever acquire it again.
-    //
-    // ⚠️ THE TREATMENT HERE IS FORFEITED, AND THE FIRST DRAFT OF THIS CONTRACT
-    // HAD IT WRONG. It used RETURN_TO_UNALLOCATED, which reads like "the deal
-    // ended" but is the one case where it did not: that branch calls
-    // `acquireVehicle` and RE-ACQUIRES the same car, so the deal still holds it
-    // afterwards (F.10 is where that belongs). REFUND_TO_CUSTOMER and FORFEITED
-    // call `payOutDepositSlice` and re-acquire nothing — the money is gone and
-    // the car is genuinely free. Specifying the release against a treatment that
-    // does not release is exactly the confident-but-wrong specification this
-    // file's structure exists to catch.
-    const seed = await seedDealer("f7");
-    const a = await vehicle(seed);
-    const b = await vehicle(seed);
-    const quoteId = await quoteFor(seed, seed.customerA, [a, b]);
-    await depositOn(seed, quoteId, 4_000);
-    await allocate(seed, quoteId, [
-      { vehicleId: a, amount: 2_500 },
-      { vehicleId: b, amount: 1_500 },
-    ]);
-    const saleIds = await completeQuote(seed, quoteId);
-
-    const saleA = await seed.t.run(async (ctx) => {
-      const rows = await ctx.db.query("sales").collect();
-      return rows.find((s) => String(s.vehicleId) === String(a))!;
-    });
-    expect(saleIds.map(String), "precondition").toContain(String(saleA._id));
-    await cancelSale(seed, saleA._id);
-
-    const limbo = (await holdsOn(seed, a)).find(
-      (h) =>
-        h.allocationStatus === "RELEASED_AWAITING_DECISION" || h.allocationStatus === "REVERSING"
-    )!;
-    expect(limbo, "precondition: the slice is awaiting a decision").toBeTruthy();
-
-    // ⚠️ AS THE MANAGER, NOT THE SELLER. Forfeiture and refund move real money,
-    // so `payOutDepositSlice` refuses the deposit's own creator — "Deposit
-    // creator cannot resolve their own deposit refund or forfeiture." The first
-    // draft resolved as the seller and died there, in SETUP, which would have
-    // read as "M3 is missing" rather than "the fixture is wrong". OTHER does not
-    // move money and so is not subject to this guard, which is why F.9 needs no
-    // second actor.
-    await seed.asManager.mutation(api.deposits.resolveReleasedAllocation, {
-      orgId: seed.orgId,
-      holdId: limbo._id,
-      treatment: "FORFEITED" as const,
-      reason: "customer walked away; deposit forfeited per the signed terms",
-    });
-
-    const claims = await claimsOn(seed, a);
-    const original = claims.find((c) => String(c._id) === String(limbo.sourceCommitmentClaimId));
-    expect(original, "precondition: the released slice named its episode").toBeTruthy();
-    expect(
-      original!.status,
-      "the episode that held the car ended without a sale — RELEASED, never CONSUMED"
-    ).toBe("RELEASED");
-    expect(
-      original!.consumedBySaleId,
-      "and no sale is recorded against it, because none happened"
-    ).toBeUndefined();
-
-    // The point of SCRUM-199: the CAR must be free, not merely the episode over.
-    expect(
-      claims.filter((c) => c.status === "ACTIVE").length,
-      "nothing re-acquired the car — a forfeit re-acquires nothing"
-    ).toBe(0);
-    expect(
-      (await rootsOn(seed, a))[0].status,
-      "so the deal itself is RELEASED and the car can be acquired again"
-    ).toBe("RELEASED");
-  });
-
-  test("F.8 a slice still REVERSING or AWAITING a decision does NOT close the deal", async () => {
-    // ⚠️ PREMATURE CLOSURE IS THE DANGEROUS DIRECTION. A cancelled sale whose
-    // journal has not been reversed leaves money the ledger still shows credited
-    // against a live invoice. Treating that as "the deal is over" would release
-    // the car while its money is unresolved — and the car could then be sold to
-    // somebody else while the first customer's cash is still on it.
+  test("F.8 SCRUM-199: a never-sold car leaving the deal RELEASES its root — while the money stays undecided", async () => {
+    // ⚠️ THE SEMANTIC CORRECTION AT THE HEART OF THIS REBUILD (owner c15676):
+    // THE ROOT LOCKS THE CAR, IT DOES NOT LOCK THE CASH. The previous spec had
+    // the deal stay OPEN until the money was resolved. These two states coexist
+    // legitimately: the car is free, the cash still needs a decision.
     const seed = await seedDealer("f8");
     const a = await vehicle(seed);
     const b = await vehicle(seed);
@@ -890,55 +757,34 @@ describe("P2-F the finalization barrier (M3)", () => {
       { vehicleId: a, amount: 2_500 },
       { vehicleId: b, amount: 1_500 },
     ]);
-    const saleIds = await completeQuote(seed, quoteId);
 
-    const saleA = await seed.t.run(async (ctx) => {
-      const rows = await ctx.db.query("sales").collect();
-      return rows.find((s) => String(s.vehicleId) === String(a))!;
-    });
-    expect(saleIds.map(String), "precondition").toContain(String(saleA._id));
-    await cancelSale(seed, saleA._id);
-
-    const limbo = (await holdsOn(seed, a)).find(
-      (h) =>
-        h.allocationStatus === "RELEASED_AWAITING_DECISION" || h.allocationStatus === "REVERSING"
-    );
-    expect(limbo, "precondition: the slice is in limbo, undecided").toBeTruthy();
-
-    // ⚠️ THIS CONTRACT IS DELIBERATELY DIFFERENTIAL, AND THE FIRST DRAFT WAS NOT.
-    // Asserting only "car A's root is still OPEN" passes TODAY for free, because
-    // nothing terminalizes anything — it would go green against an M3 that does
-    // nothing at all, and stay green against one that closes deals at random as
-    // long as it missed this one. So car B, whose sale still stands, is asserted
-    // in the SAME test: the barrier must close B and leave A alone. That is a
-    // discrimination, and only a working M3 can satisfy it.
-    const rootB = (await rootsOn(seed, b))[0];
-    expect(
-      rootB.status,
-      "car B's sale stands, so B's deal IS consumed — the barrier is doing something"
-    ).toBe("CONSUMED");
+    await releaseVehicle(seed, quoteId, a);
 
     const rootA = (await rootsOn(seed, a))[0];
+    expect(rootA.status, "the deal let the car go without selling it").toBe("RELEASED");
     expect(
-      rootA.status,
-      "but car A's deal is NOT closed while its money is still awaiting a decision"
-    ).toBe("OPEN");
-
-    const claim = (await claimsOn(seed, a)).find(
-      (c) => String(c._id) === String(limbo!.sourceCommitmentClaimId)
-    )!;
-    expect(claim.status, "and A's episode is neither consumed nor released yet").toBe("ACTIVE");
-    expect(
-      claim.consumedBySaleId,
-      "the cancelled sale must not be left stamped on it"
+      rootSaleStamp(rootA),
+      "and no sale is stamped on it, because none happened"
     ).toBeUndefined();
+
+    expect(
+      (await holdsOn(seed, a)).filter(
+        (h) => h.allocationStatus === "RELEASED_AWAITING_DECISION"
+      ).length,
+      "the money is STILL undecided — and that does not keep the car"
+    ).toBe(1);
+
+    expect(
+      (await rootsOn(seed, b))[0].status,
+      "car B, still on the deal, is untouched"
+    ).toBe("OPEN");
   });
 
-  test("F.9 a terminal OTHER resolution CLOSES the deal — it does not linger as pending", async () => {
-    // The mirror of F.8. OTHER is a real, terminal decision. A barrier that only
-    // recognises REFUND and FORFEIT would leave these deals pending forever, and
-    // their cars permanently unsellable — the same dead-end as SCRUM-199,
-    // reached through the door meant to resolve it.
+  test("F.9 and a RIVAL can then genuinely acquire that released car", async () => {
+    // The proof that F.8's release is real rather than cosmetic. If the root had
+    // stayed OPEN, this acquisition could never succeed — and
+    // `resolveReleasedAllocation`'s own "somebody else may legitimately have
+    // taken the vehicle in the meantime" guard would be unreachable code.
     const seed = await seedDealer("f9");
     const a = await vehicle(seed);
     const b = await vehicle(seed);
@@ -948,44 +794,42 @@ describe("P2-F the finalization barrier (M3)", () => {
       { vehicleId: a, amount: 2_500 },
       { vehicleId: b, amount: 1_500 },
     ]);
-    const saleIds = await completeQuote(seed, quoteId);
+    await releaseVehicle(seed, quoteId, a);
+    const releasedRootId = String((await rootsOn(seed, a))[0]._id);
 
-    const saleA = await seed.t.run(async (ctx) => {
-      const rows = await ctx.db.query("sales").collect();
-      return rows.find((s) => String(s.vehicleId) === String(a))!;
-    });
-    expect(saleIds.map(String), "precondition").toContain(String(saleA._id));
-    await cancelSale(seed, saleA._id);
-
-    const limbo = (await holdsOn(seed, a)).find(
-      (h) =>
-        h.allocationStatus === "RELEASED_AWAITING_DECISION" || h.allocationStatus === "REVERSING"
-    )!;
-    expect(limbo, "precondition").toBeTruthy();
-
-    await seed.asUser.mutation(api.deposits.resolveReleasedAllocation, {
-      orgId: seed.orgId,
-      holdId: limbo._id,
-      treatment: "OTHER" as const,
-      reason: "written off against a goodwill credit note",
-    });
-
-    const claim = (await claimsOn(seed, a)).find(
-      (c) => String(c._id) === String(limbo.sourceCommitmentClaimId)
-    )!;
+    // ⚠️ THE ACQUISITION IS AN ASSERTED STEP, NOT BARE SETUP. Until M3 releases
+    // the root the authority refuses this with "already committed to another
+    // deal" — which is the very behaviour under test. Left as a plain fixture
+    // line it would throw, and the failure would read as a broken fixture
+    // rather than as the missing release. Naming it makes the red legible.
+    const rivalQuote = await quoteFor(seed, seed.customerB, [a]);
+    let refusal: unknown = null;
+    try {
+      await depositOn(seed, rivalQuote, 1_000);
+    } catch (e) {
+      refusal = e;
+    }
     expect(
-      claim.status,
-      "OTHER is a decision, so the episode is over — not left ACTIVE forever"
+      refusal,
+      "a RELEASED car must be acquirable by a rival — if this refuses, the release was cosmetic"
+    ).toBeNull();
+
+    const roots = await rootsOn(seed, a);
+    const rivalRoots = roots.filter((r) => String(r._id) !== releasedRootId);
+    expect(rivalRoots.length, "the rival opened its OWN root on the freed car").toBe(1);
+    expect(rivalRoots[0].status, "which is live").toBe("OPEN");
+    expect(rivalRoots[0].customerId, "and belongs to the rival").toBe(seed.customerB);
+    expect(
+      roots.find((r) => String(r._id) === releasedRootId)!.status,
+      "the released deal stays RELEASED — the rival did not reopen it"
     ).toBe("RELEASED");
-    expect(claim.consumedBySaleId, "and it never became a sale").toBeUndefined();
   });
 
-  test("F.10 REALLOCATE and RETURN_TO_UNALLOCATED keep the FRESH acquisition they made", async () => {
-    // ⚠️ THE INTERACTION WITH PHASE 1 THAT IS EASIEST TO BREAK. Both treatments
-    // INSERT a new hold and, through `acquireVehicle`, a NEW episode. A barrier
-    // that terminalizes "this deal's episodes" without distinguishing the ended
-    // one from the one just created would close the acquisition it is standing
-    // on, and the money would be on a car nothing holds.
+  test("F.10 a RETURN of that money then REFUSES, because the car is no longer free", async () => {
+    // The other half of F.9, and the reason the release must be real.
+    // `resolveReleasedAllocation` treats RETURN/REALLOCATE as a FRESH
+    // acquisition; a fresh acquisition of a car somebody else now holds must
+    // refuse rather than silently re-take it.
     const seed = await seedDealer("f10");
     const a = await vehicle(seed);
     const b = await vehicle(seed);
@@ -995,205 +839,256 @@ describe("P2-F the finalization barrier (M3)", () => {
       { vehicleId: a, amount: 2_500 },
       { vehicleId: b, amount: 1_500 },
     ]);
-    const saleIds = await completeQuote(seed, quoteId);
-
-    const saleA = await seed.t.run(async (ctx) => {
-      const rows = await ctx.db.query("sales").collect();
-      return rows.find((s) => String(s.vehicleId) === String(a))!;
-    });
-    expect(saleIds.map(String), "precondition").toContain(String(saleA._id));
-    await cancelSale(seed, saleA._id);
+    await releaseVehicle(seed, quoteId, a);
 
     const limbo = (await holdsOn(seed, a)).find(
-      (h) =>
-        h.allocationStatus === "RELEASED_AWAITING_DECISION" || h.allocationStatus === "REVERSING"
+      (h) => h.allocationStatus === "RELEASED_AWAITING_DECISION"
     )!;
-    expect(limbo, "precondition").toBeTruthy();
-    const endedClaimId = String(limbo.sourceCommitmentClaimId);
+    expect(limbo, "precondition: money awaiting a decision").toBeTruthy();
 
-    await seed.asUser.mutation(api.deposits.resolveReleasedAllocation, {
-      orgId: seed.orgId,
-      holdId: limbo._id,
-      treatment: "RETURN_TO_UNALLOCATED" as const,
-      reason: "back on the deal",
-    });
-
-    const claims = await claimsOn(seed, a);
-    const ended = claims.find((c) => String(c._id) === endedClaimId)!;
-    const fresh = claims.filter((c) => String(c._id) !== endedClaimId);
-
-    expect(ended.status, "the episode that ended is terminal").toBe("RELEASED");
-    expect(fresh.length, "and the resolution made a NEW one").toBe(1);
+    // The rival takes the freed car first — asserted, not assumed, for the same
+    // reason as F.9: today this refuses because the root was never released,
+    // and that must read as the missing release rather than a broken fixture.
+    const rivalQuote = await quoteFor(seed, seed.customerB, [a]);
+    let rivalRefusal: unknown = null;
+    try {
+      await depositOn(seed, rivalQuote, 1_000);
+    } catch (e) {
+      rivalRefusal = e;
+    }
     expect(
-      fresh[0].status,
-      "which is LIVE — the money is back on the deal and something holds the car"
-    ).toBe("ACTIVE");
+      rivalRefusal,
+      "precondition: the rival can take the released car (F.9's contract)"
+    ).toBeNull();
+
+    let threw: unknown = null;
+    try {
+      await seed.asUser.mutation(api.deposits.resolveReleasedAllocation, {
+        orgId: seed.orgId,
+        holdId: limbo._id,
+        treatment: "RETURN_TO_UNALLOCATED" as const,
+        reason: "customer wants this car back",
+      });
+    } catch (e) {
+      threw = e;
+    }
     expect(
-      fresh[0].consumedBySaleId,
-      "a fresh acquisition was never consumed by the cancelled sale"
-    ).toBeUndefined();
+      threw,
+      "the money cannot be put back onto a car another deal now holds"
+    ).toBeTruthy();
+
+    const rivalRoot = (await rootsOn(seed, a)).find((r) => r.customerId === seed.customerB)!;
+    expect(rivalRoot.status, "and the rival's hold is undisturbed").toBe("OPEN");
   });
 
-  test("F.11 a rival's new deal on the same car is isolated from the finalized one", async () => {
-    // After A's deal is consumed by a sale, the car's history holds a terminal
-    // root. If B later acquires the same physical car, the barrier must not
-    // reach back into A's finished deal, and A's terminal rows must not make B's
-    // acquisition look already-closed.
+  test("F.11 cancelling a sale changes NOTHING in canonical commitment history", async () => {
+    // ⚠️ THE PHASE BOUNDARY, AS A CONTRACT (owner c15676): "Cancellation
+    // performs zero canonical commitment lifecycle work in Phase 2." The root
+    // stays CONSUMED and stamped; no episode moves; no successor appears.
+    // Restoration — deciding which evidence returns and on which root — is
+    // Phase 3's, and doing any of it here would pre-empt that design.
     const seed = await seedDealer("f11");
-    const car = await vehicle(seed);
+    const a = await vehicle(seed);
+    const b = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [a, b]);
+    await depositOn(seed, quoteId, 4_000);
+    await allocate(seed, quoteId, [
+      { vehicleId: a, amount: 2_500 },
+      { vehicleId: b, amount: 1_500 },
+    ]);
+    const saleIds = await completeQuote(seed, quoteId);
+    const byVehicle = await salesByVehicle(seed);
 
-    const aQuote = await quoteFor(seed, seed.customerA, [car]);
-    await depositOn(seed, aQuote, 2_000);
-    const aRootId = String((await rootsOn(seed, car))[0]._id);
-    const saleIds = await completeQuote(seed, aQuote);
-    expect(saleIds.length, "precondition: A's deal completed").toBe(1);
+    const rootBefore = (await rootsOn(seed, a))[0];
+    expect(rootBefore.status, "precondition: the sale consumed the root").toBe("CONSUMED");
+    const claimsBefore = await claimCensus(seed, a);
 
-    const aRootAfter = (await rootsOn(seed, car)).find((r) => String(r._id) === aRootId)!;
-    expect(aRootAfter.status, "A's deal is finished").toBe("CONSUMED");
+    const saleA = byVehicle[String(a)];
+    expect(saleIds.map(String), "precondition").toContain(saleA);
+    await cancelSale(seed, saleA as Id<"sales">);
 
-    // B now acquires the same physical car — a trade-back, a returned unit.
-    const bQuote = await quoteFor(seed, seed.customerB, [car]);
-    await depositOn(seed, bQuote, 1_000);
-
-    const roots = await rootsOn(seed, car);
-    const bRoots = roots.filter((r) => String(r._id) !== aRootId);
-    expect(bRoots.length, "B's acquisition opened its OWN root").toBe(1);
-    expect(bRoots[0].status, "which is live").toBe("OPEN");
-    expect(bRoots[0].customerId, "and belongs to B").toBe(seed.customerB);
-
+    const rootAfter = (await rootsOn(seed, a))[0];
+    expect(rootAfter.status, "the root stays CONSUMED — reversal is Phase 3").toBe("CONSUMED");
     expect(
-      String(roots.find((r) => String(r._id) === aRootId)!.status),
-      "A's finished deal was not reopened or rewritten by B's acquisition"
-    ).toBe("CONSUMED");
+      rootSaleStamp(rootAfter),
+      "and its write-once sale stamp is NOT erased"
+    ).toBe(saleA);
+    expect(await claimCensus(seed, a), "no episode moved").toEqual(claimsBefore);
+    expect(
+      (await claimsOn(seed, a)).filter((c) => c.restoredFromClaimId !== undefined).length,
+      "and no successor episode was created"
+    ).toBe(0);
   });
 
-  test("F.12 terminalization is monotonic and idempotent — and never partial", async () => {
-    // ⚠️ THE NO-HYBRID CONTRACT. The owner forbade an accidental half-state, so
-    // this asserts BOTH directions of the pairing rather than only the one the
-    // implementation happens to do first:
-    //   - no root is CONSUMED while an episode on it is still ACTIVE;
-    //   - no episode is CONSUMED while its root is still OPEN.
-    // Plus: repeating the completion must not move anything, and CONSUMED must
-    // never decay to RELEASED.
+  test("F.12 root finalization is indifferent to 61 live episodes — it neither scans nor patches them", async () => {
+    // ⚠️ WHY B+ WAS CHOSEN OVER A. "Consume the live claims" has no structural
+    // bound: G.8 shows a root can carry any number. Root-only finalization
+    // writes exactly ONE row per car regardless. This asserts the property that
+    // makes that true — every episode is byte-for-byte unchanged.
     const seed = await seedDealer("f12");
     const car = await vehicle(seed);
     const quoteId = await quoteFor(seed, seed.customerA, [car]);
     await depositOn(seed, quoteId, 2_000);
-    const saleIds = await completeQuote(seed, quoteId);
-
-    const census = async () => {
-      const roots = await rootsOn(seed, car);
-      const claims = await claimsOn(seed, car);
-      return {
-        roots: roots
-          .map((r) => `${String(r._id)}:${r.status}`)
-          .sort(),
-        claims: claims
-          .map((c) => `${String(c._id)}:${c.status}:${String(c.consumedBySaleId ?? "-")}`)
-          .sort(),
-      };
-    };
-
-    const after = await census();
     const root = (await rootsOn(seed, car))[0];
-    const claims = await claimsOn(seed, car);
 
-    // No hybrid, in both directions.
-    const liveClaims = claims.filter((c) => c.status === "ACTIVE");
-    if (root.status === "CONSUMED") {
-      expect(
-        liveClaims.length,
-        "a CONSUMED root may not have a live episode hanging off it"
-      ).toBe(0);
-    }
-    for (const c of claims.filter((x) => x.status === "CONSUMED")) {
-      expect(
-        root.status,
-        `episode ${String(c._id)} is CONSUMED, so its root must be terminal too`
-      ).toBe("CONSUMED");
-    }
-
-    // Idempotent: completing the same quote again changes nothing. The door is
-    // idempotency-keyed, so a repeat is a real production event, not a contrivance.
-    await completeQuote(seed, quoteId).catch(() => undefined);
-    expect(await census(), "a repeated completion moves nothing").toEqual(after);
-
-    // Monotonic: CONSUMED outranks RELEASED and never decays into it.
-    expect(
-      (await rootsOn(seed, car))[0].status,
-      "CONSUMED is terminal and outranks RELEASED"
-    ).toBe("CONSUMED");
-    expect(saleIds.length, "precondition held throughout").toBe(1);
-  });
-
-  test("F.13 finalization does not rewrite history, and Phase 3 can find what a sale consumed in ONE read", async () => {
-    // ⚠️ THE OPTION-A CONTRACT ITSELF, and the reason the decision is A.
-    //
-    // Two claims, and they are the whole argument:
-    //   1. sixty terminal episodes on the root are left byte-for-byte alone —
-    //      the barrier touches the LIVE set only (G.9 is why that is cheap);
-    //   2. `by_consumed_sale` answers "what did this sale consume?" in one
-    //      bounded index read. Under option B this index stays empty forever and
-    //      Phase 3 reversal has to reconstruct the answer from history — the
-    //      exact unbounded search the provenance pointer abolished, coming back
-    //      through the reversal door.
-    const seed = await seedDealer("f13");
-    const car = await vehicle(seed);
-    const quoteId = await quoteFor(seed, seed.customerA, [car]);
-    await depositOn(seed, quoteId, 2_000);
-
-    const root = (await rootsOn(seed, car))[0];
-    const liveClaimId = String((await claimsOn(seed, car))[0]._id);
-
-    // Sixty episodes of terminal history, recorded before the sale.
-    const historyIds = await seed.t.run(async (ctx) => {
-      const ids: string[] = [];
+    await seed.t.run(async (ctx) => {
       for (let n = 0; n < 60; n += 1) {
-        ids.push(
-          String(
-            await ctx.db.insert("vehicleCommitmentClaims", {
-              orgId: seed.orgId,
-              rootId: root._id,
-              vehicleId: car,
-              evidenceKind: "DEPOSIT" as const,
-              status: n % 2 === 0 ? ("CONSUMED" as const) : ("RELEASED" as const),
-              createdAt: Date.now(),
-              createdBy: seed.userId,
-            })
-          )
-        );
+        await ctx.db.insert("vehicleCommitmentClaims", {
+          orgId: seed.orgId,
+          rootId: root._id,
+          vehicleId: car,
+          evidenceKind: "DEPOSIT" as const,
+          status: "ACTIVE" as const,
+          createdAt: Date.now(),
+          createdBy: seed.userId,
+        });
       }
-      return ids;
     });
 
-    const historyBefore = await seed.t.run(async (ctx) =>
-      Promise.all(historyIds.map(async (id) => JSON.stringify(await ctx.db.get(id as Id<"vehicleCommitmentClaims">))))
-    );
+    const before = await claimCensus(seed, car);
+    expect(before.length, "precondition: sixty-one live episodes").toBe(61);
 
     const saleIds = await completeQuote(seed, quoteId);
     expect(saleIds.length, "precondition: the sale completed").toBe(1);
 
-    const historyAfter = await seed.t.run(async (ctx) =>
-      Promise.all(historyIds.map(async (id) => JSON.stringify(await ctx.db.get(id as Id<"vehicleCommitmentClaims">))))
-    );
+    expect((await rootsOn(seed, car))[0].status, "the ONE root is consumed").toBe("CONSUMED");
     expect(
-      historyAfter,
-      "sixty terminal episodes are left exactly as they were — finalization touches the live set only"
-    ).toEqual(historyBefore);
+      await claimCensus(seed, car),
+      "and all sixty-one episodes are exactly as they were"
+    ).toEqual(before);
+  });
 
-    // Phase 3's question, answered in one bounded index read.
-    const consumed = await seed.t.run(async (ctx) =>
-      await ctx.db
-        .query("vehicleCommitmentClaims")
-        .withIndex("by_consumed_sale", (q) => q.eq("consumedBySaleId", saleIds[0]))
-        .collect()
-    );
+  test("F.13 a root holding DEPOSIT and FINANCE episodes is consumed once, and neither episode moves", async () => {
+    // The mixed-evidence case. Under A this was the ambiguity with no
+    // defensible answer — consume the deposit episode, the finance one, or
+    // both? Under B+ the question does not arise: the ROOT is the unit.
+    const seed = await seedDealer("f13");
+    const car = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [car]);
+    await depositOn(seed, quoteId, 2_000);
+    await seed.asUser.mutation(api.applications.createFromQuote, {
+      orgId: seed.orgId,
+      quoteId,
+    });
+
+    const before = await claimCensus(seed, car);
+    expect(before.length, "precondition: two live episodes of two kinds").toBe(2);
+
+    const saleIds = await completeQuote(seed, quoteId);
+    expect(saleIds.length, "precondition: the sale completed").toBe(1);
+
+    const roots = await rootsOn(seed, car);
+    expect(roots.length, "still ONE root").toBe(1);
+    expect(roots[0].status, "consumed once").toBe("CONSUMED");
+    expect(rootSaleStamp(roots[0]), "stamped once").toBe(String(saleIds[0]));
     expect(
-      consumed.length,
-      "exactly the episode this sale consumed — not sixty-one rows to sift"
+      await claimCensus(seed, car),
+      "and NEITHER episode moved — not the deposit one, not the finance one"
+    ).toEqual(before);
+  });
+
+  test("F.14 EVERY production completion door terminalizes the root, not just the quote wizard", async () => {
+    // ⚠️ THE PREVIOUS SPEC EXERCISED ONE DOOR OF FOUR. An implementation wired
+    // only into `completeFromQuote` would have satisfied all of it while
+    // leaving three production paths writing sales that never close a deal.
+    // The four are enumerated from CALL SITES of `completeSale` /
+    // `completeSalesForLineItems` / `completeExistingSale`, not guessed.
+
+    // (a) api.sales.create — a direct completed sale.
+    const s1 = await seedDealer("f14a");
+    const car1 = await vehicle(s1);
+    const q1 = await quoteFor(s1, s1.customerA, [car1]);
+    await depositOn(s1, q1, 2_000);
+    const sale1 = await s1.asUser.mutation(api.sales.create, {
+      orgId: s1.orgId,
+      vehicleId: car1,
+      customerId: s1.customerA,
+      salespersonId: s1.userId,
+      salePrice: PRICE,
+      saleDate: Date.now(),
+      status: "COMPLETED" as const,
+      quoteId: q1,
+    });
+    const r1 = (await rootsOn(s1, car1))[0];
+    expect(r1.status, "sales.create consumes the root").toBe("CONSUMED");
+    expect(rootSaleStamp(r1), "and stamps its sale").toBe(String(sale1));
+
+    // (b) api.sales.completeDraft — a PENDING sale finished later.
+    const s2 = await seedDealer("f14b");
+    const car2 = await vehicle(s2);
+    const q2 = await quoteFor(s2, s2.customerA, [car2]);
+    await depositOn(s2, q2, 2_000);
+    const draftId = await s2.asUser.mutation(api.sales.createDraft, {
+      orgId: s2.orgId,
+      vehicleId: car2,
+      customerId: s2.customerA,
+      salespersonId: s2.userId,
+      salePrice: PRICE,
+      saleDate: Date.now(),
+      quoteId: q2,
+    });
+    await s2.asUser.mutation(api.sales.completeDraft, { orgId: s2.orgId, saleId: draftId });
+    const r2 = (await rootsOn(s2, car2))[0];
+    expect(r2.status, "sales.completeDraft consumes the root").toBe("CONSUMED");
+    expect(rootSaleStamp(r2), "and stamps its sale").toBe(String(draftId));
+
+    // (c) api.sales.completeFromQuote — the wizard path, already covered by F.1.
+    const s3 = await seedDealer("f14c");
+    const car3 = await vehicle(s3);
+    const q3 = await quoteFor(s3, s3.customerA, [car3]);
+    await depositOn(s3, q3, 2_000);
+    const sale3 = (await completeQuote(s3, q3))[0];
+    const r3 = (await rootsOn(s3, car3))[0];
+    expect(r3.status, "sales.completeFromQuote consumes the root").toBe("CONSUMED");
+    expect(rootSaleStamp(r3), "and stamps its sale").toBe(String(sale3));
+
+    // ⚠️⚠️ THE FOURTH DOOR IS NOT EXERCISED HERE, AND THAT IS A DECLARED GAP.
+    //
+    // `api.applications.finalizeDeal` (`applications.ts:2963`, reaching
+    // `completeSale` at `:3130`) is the financed completion path. Its
+    // preconditions are a real lifecycle, not a flag:
+    //
+    //   status APPROVED            -> api.applications.updateStatus
+    //   vehicleHandoverAt          -> api.applications.registerVehicleHandover,
+    //                                 which "demands unconditionally" an
+    //                                 `economicsStamp` the server issues from
+    //                                 the deal cockpit
+    //   expectedPaymentMethod/Date -> api.applications.registerExpectedPayment
+    //
+    // Reaching it honestly means driving the financed-deal cockpit. Reaching it
+    // DISHONESTLY — patching those fields with `ctx.db` — would build a fixture
+    // that does not reflect production, which is precisely the class of error
+    // this rebuild exists to eliminate, so it is not done.
+    //
+    // This is recorded as an OPEN ITEM against the owner's requirement to cover
+    // every completion door. M3 must not be considered specified until a
+    // financed-completion contract exists here; three of four doors is a
+    // narrower guarantee than it looks, because the financed path is the one
+    // that can carry FINANCE and DEPOSIT evidence on the same root (F.13).
+  });
+
+  test("F.15 terminalization is monotonic — a consumed root is never reopened or re-stamped", async () => {
+    const seed = await seedDealer("f15");
+    const car = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [car]);
+    await depositOn(seed, quoteId, 2_000);
+    const saleIds = await completeQuote(seed, quoteId);
+
+    const first = (await rootsOn(seed, car))[0];
+    expect(first.status, "precondition: consumed").toBe("CONSUMED");
+    const firstStamp = rootSaleStamp(first);
+    expect(firstStamp, "precondition: stamped").toBe(String(saleIds[0]));
+
+    // A second completion attempt on the same quote. Whatever it does — succeed
+    // idempotently or refuse — it must not move a terminal root.
+    await completeQuote(seed, quoteId).catch(() => undefined);
+
+    const second = (await rootsOn(seed, car))[0];
+    expect(second.status, "still CONSUMED — terminal is terminal").toBe("CONSUMED");
+    expect(rootSaleStamp(second), "and the write-once stamp is unchanged").toBe(firstStamp);
+    expect(
+      (await rootsOn(seed, car)).length,
+      "and no second root appeared for the same car"
     ).toBe(1);
-    expect(String(consumed[0]._id), "and it is the LIVE episode, not one of the historical ones").toBe(
-      liveClaimId
-    );
   });
 });
