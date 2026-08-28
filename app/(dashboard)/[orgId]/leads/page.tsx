@@ -51,36 +51,29 @@ import { PERMISSIONS } from "@/convex/utils/permissions";
 
 import { LEAD_STAGES } from "@/convex/constants";
 import { getErrorMessage } from "@/lib/errors";
-
-const STAGE_LABELS: Record<string, string> = {
-  NEW: "New",
-  CONTACTED: "Contacted",
-  INTERESTED: "Interested",
-  TEST_DRIVE: "Test Drive",
-  NEGOTIATION: "Negotiation",
-  RESERVED: "Reserved",
-  WON: "Won",
-  LOST: "Lost",
-};
+import { interpolate } from "@/lib/i18n/interpolate";
+import type { TranslationKey } from "@/lib/i18n/dictionaries";
+import { translateLeadSourceLabel } from "@/lib/i18n/defaultLabels";
+import { translateLeadStage } from "@/lib/i18n/statusLabels";
 
 const LEAD_VIEW_OPTIONS = ["table", "kanban"] as const;
 type LeadView = typeof LEAD_VIEW_OPTIONS[number];
 type LeadStage = typeof LEAD_STAGES[number];
 
-const NEXT_ACTION_BY_STAGE: Record<LeadStage, string> = {
-  NEW: "Make first contact",
-  CONTACTED: "Confirm vehicle interest",
-  INTERESTED: "Schedule a test drive",
-  TEST_DRIVE: "Capture test-drive outcome",
-  NEGOTIATION: "Prepare or follow up quote",
-  RESERVED: "Confirm deal completion",
-  WON: "Complete handover",
-  LOST: "Record loss reason",
+const NEXT_ACTION_TRANSLATION_KEYS: Record<LeadStage, TranslationKey> = {
+  NEW: "NextActionMakeFirstContact",
+  CONTACTED: "NextActionConfirmInterest",
+  INTERESTED: "NextActionScheduleTestDrive",
+  TEST_DRIVE: "NextActionCaptureTestDrive",
+  NEGOTIATION: "NextActionFollowUpQuote",
+  RESERVED: "NextActionConfirmDeal",
+  WON: "NextActionCompleteHandover",
+  LOST: "NextActionRecordLoss",
 };
 
 export default function LeadsPage() {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const router = useRouter();
   const searchParams = useSearchParams();
   const prefillCustomerId = searchParams.get("customerId");
@@ -233,7 +226,7 @@ export default function LeadsPage() {
     if (!activeOrgId) return;
     try {
       await updateLead({ orgId: activeOrgId, leadId, stage });
-      toast.success("Lead moved");
+      toast.success(t("LeadMoved"));
     } catch (error) {
       toast.error(getErrorMessage(error));
     }
@@ -261,7 +254,9 @@ export default function LeadsPage() {
     setIsBulkUpdating(true);
     const settledUpdates = await Promise.allSettled(updates);
     const failureCount = settledUpdates.filter((update) => update.status === "rejected").length;
-    if (failureCount > 0) toast.error(`${failureCount} lead${failureCount === 1 ? "" : "s"} could not be updated. Please try again.`);
+    if (failureCount > 0) {
+      toast.error(interpolate(t(failureCount === 1 ? "LeadBulkUpdateFailedOne" : "LeadBulkUpdateFailedMany"), { count: failureCount }));
+    }
     else {
       toast.success(successMessage);
       setSelectedLeadIds(new Set());
@@ -273,7 +268,7 @@ export default function LeadsPage() {
     if (!activeOrgId) return;
     void runBulkLeadUpdate(
       selectedLeads.map((lead) => updateLead({ orgId: activeOrgId, leadId: lead._id, stage })),
-      "Lead stages updated"
+      t("LeadStagesUpdated")
     );
   };
 
@@ -281,7 +276,7 @@ export default function LeadsPage() {
     if (!activeOrgId) return;
     void runBulkLeadUpdate(
       selectedLeads.map((lead) => updateLead({ orgId: activeOrgId, leadId: lead._id, assignedUserId })),
-      "Leads assigned"
+      t("LeadsAssigned")
     );
   };
 
@@ -318,14 +313,8 @@ export default function LeadsPage() {
     }
   };
 
-  const translateStage = (stage: string) => {
-    const keyMap: Record<string, string> = {
-      NEW: "StageNew", CONTACTED: "StageContacted", INTERESTED: "Interested",
-      TEST_DRIVE: "StageTestDrive", NEGOTIATION: "StageNegotiation",
-      RESERVED: "Reserved", WON: "StageWon", LOST: "Lost",
-    };
-    return t(keyMap[stage] as any) || STAGE_LABELS[stage] || stage;
-  };
+  const translateStage = (stage: LeadStage) => translateLeadStage(stage, t);
+  const nextAction = (stage: LeadStage) => t(NEXT_ACTION_TRANSLATION_KEYS[stage]);
 
   return (
     <RoleGuard permissions={["view:leads"]}>
@@ -337,13 +326,13 @@ export default function LeadsPage() {
               onClick={() => setView("table")}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${view === "table" ? "bg-white shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
             >
-              <LayoutList className="h-3.5 w-3.5" /> List
+              <LayoutList className="h-3.5 w-3.5" /> {t("LeadListView")}
             </button>
             <button
               onClick={() => setView("kanban")}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${view === "kanban" ? "bg-white shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
             >
-              <Kanban className="h-3.5 w-3.5" /> Board
+              <Kanban className="h-3.5 w-3.5" /> {t("LeadBoardView")}
             </button>
           </div>
           <Button onClick={handleAddNew}>
@@ -378,43 +367,45 @@ export default function LeadsPage() {
             />
           </div>
           <Select value={stageFilter} onValueChange={(stage) => setStageFilter(stage as "ALL" | LeadStage)}>
-            <SelectTrigger className="w-full lg:w-[180px]"><SelectValue placeholder="All stages" /></SelectTrigger>
+            <SelectTrigger className="w-full lg:w-[180px]"><SelectValue placeholder={t("AllStages")} /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="ALL">All stages</SelectItem>
+              <SelectItem value="ALL">{t("AllStages")}</SelectItem>
               {LEAD_STAGES.map((stage) => <SelectItem key={stage} value={stage}>{translateStage(stage)}</SelectItem>)}
             </SelectContent>
           </Select>
           <Select value={sourceFilter} onValueChange={setSourceFilter}>
-            <SelectTrigger className="w-full lg:w-[180px]"><SelectValue placeholder="All sources" /></SelectTrigger>
+            <SelectTrigger className="w-full lg:w-[180px]"><SelectValue placeholder={t("AllSources")} /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="ALL">All sources</SelectItem>
-              {sourceOptions.map((source) => <SelectItem key={source} value={source}>{source}</SelectItem>)}
+              <SelectItem value="ALL">{t("AllSources")}</SelectItem>
+              {sourceOptions.map((source) => <SelectItem key={source} value={source}>{translateLeadSourceLabel(source, locale)}</SelectItem>)}
             </SelectContent>
           </Select>
           <div className="flex flex-wrap items-center gap-2 lg:ms-auto">
-            {(searchQuery || stageFilter !== "ALL" || sourceFilter !== "ALL") && <Button variant="ghost" size="sm" onClick={() => { setSearchQuery(""); setStageFilter("ALL"); setSourceFilter("ALL"); }}>Clear filters</Button>}
-            <span className="text-sm text-muted-foreground">{filteredLeads?.length ?? 0} {leadsStatus === "Exhausted" ? "results" : "loaded results"}</span>
+            {(searchQuery || stageFilter !== "ALL" || sourceFilter !== "ALL") && <Button variant="ghost" size="sm" onClick={() => { setSearchQuery(""); setStageFilter("ALL"); setSourceFilter("ALL"); }}>{t("ClearFilters")}</Button>}
+            <span className="text-sm text-muted-foreground">
+              {interpolate(t(leadsStatus === "Exhausted" ? "ResultsCount" : "LoadedResultsCount"), { count: filteredLeads?.length ?? 0 })}
+            </span>
           </div>
         </div>
 
         {selectedLeadIds.size > 0 && (
           <div className="sticky top-2 z-20 flex flex-wrap items-center gap-2 rounded-lg border bg-background p-3 shadow-lg">
-            <span className="text-sm font-medium">{selectedLeadIds.size} selected</span>
+            <span className="text-sm font-medium">{interpolate(t("SelectedCount"), { count: selectedLeadIds.size })}</span>
             {canEditLeads && (
               <>
                 <Select onValueChange={(stage) => handleBulkStageChange(stage as LeadStage)} disabled={isBulkUpdating}>
-                  <SelectTrigger className="h-9 w-[170px]"><SelectValue placeholder="Move to stage" /></SelectTrigger>
+                  <SelectTrigger className="h-9 w-[170px]"><SelectValue placeholder={t("MoveToStage")} /></SelectTrigger>
                   <SelectContent>{LEAD_STAGES.map((stage) => <SelectItem key={stage} value={stage}>{translateStage(stage)}</SelectItem>)}</SelectContent>
                 </Select>
                 {canViewUsers && (
                   <Select onValueChange={(userId) => handleBulkAssignment(userId as Id<"users">)} disabled={isBulkUpdating}>
-                    <SelectTrigger className="h-9 w-[190px]"><SelectValue placeholder="Assign salesperson" /></SelectTrigger>
+                    <SelectTrigger className="h-9 w-[190px]"><SelectValue placeholder={t("AssignSalesperson")} /></SelectTrigger>
                     <SelectContent>{memberships?.map((membership) => <SelectItem key={membership.userId} value={membership.userId}>{membership.userName}</SelectItem>)}</SelectContent>
                   </Select>
                 )}
               </>
             )}
-            <Button variant="ghost" size="sm" onClick={() => setSelectedLeadIds(new Set())}>Clear selection</Button>
+            <Button variant="ghost" size="sm" onClick={() => setSelectedLeadIds(new Set())}>{t("ClearSelection")}</Button>
           </div>
         )}
 
@@ -424,7 +415,7 @@ export default function LeadsPage() {
           {/* Mobile card list */}
           <div className="flex flex-col gap-3 md:hidden">
             {!filteredLeads || filteredLeads.length === 0 ? (
-              <p className="text-center py-12 text-muted-foreground">{t("Empty" as any) || "No leads found."}</p>
+              <p className="text-center py-12 text-muted-foreground">{t("NoLeadsFound")}</p>
             ) : filteredLeads.map((lead) => (
               <div
                 key={lead._id}
@@ -435,27 +426,27 @@ export default function LeadsPage() {
                   type="button"
                   className="absolute inset-0 z-0 cursor-pointer rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
                   onClick={() => openLeadWorkspace(lead._id)}
-                  aria-label={`Open ${lead.customerName || "lead"}`}
+                  aria-label={interpolate(t("OpenLeadAria"), { customer: lead.customerName || t("UnknownCustomer") })}
                 />
                 <div className="relative z-10 pointer-events-none space-y-3">
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex min-w-0 items-center gap-3">
-                      <div className="pointer-events-auto"><Checkbox checked={selectedLeadIds.has(lead._id)} onCheckedChange={() => toggleLeadSelection(lead._id)} aria-label={`Select ${lead.customerName}`} /></div>
+                      <div className="pointer-events-auto"><Checkbox checked={selectedLeadIds.has(lead._id)} onCheckedChange={() => toggleLeadSelection(lead._id)} aria-label={interpolate(t("SelectLeadAria"), { customer: lead.customerName || t("UnknownCustomer") })} /></div>
                       <span className="w-9 h-9 rounded-full bg-slate-100 dark:bg-zinc-800 flex items-center justify-center text-slate-500 font-bold text-xs shrink-0">{lead.customerName?.charAt(0).toUpperCase() ?? "?"}</span>
-                      <div className="min-w-0"><p className="font-semibold text-sm truncate">{lead.customerName}</p><p className="text-xs text-muted-foreground truncate">{lead.source}</p></div>
+                      <div className="min-w-0"><p className="font-semibold text-sm truncate">{lead.customerName}</p><p className="text-xs text-muted-foreground truncate">{translateLeadSourceLabel(lead.source, locale)}</p></div>
                     </div>
                     <Badge variant="outline" className={`text-[10px] uppercase border-transparent ${getStageColor(lead.stage)}`}>{translateStage(lead.stage)}</Badge>
                   </div>
-                  {isStaleLead(lead) && <Badge variant="outline" className="border-amber-300 text-amber-700"><AlertTriangle className="h-3 w-3 me-1" />Stale · {getDaysSinceActivity(lead)} days</Badge>}
+                  {isStaleLead(lead) && <Badge variant="outline" className="border-amber-300 text-amber-700"><AlertTriangle className="h-3 w-3 me-1" />{interpolate(t("LeadStaleDays"), { count: getDaysSinceActivity(lead) })}</Badge>}
                   <div className="grid grid-cols-2 gap-3 text-xs">
-                    <div><p className="text-muted-foreground">Interest</p><p className="truncate">{lead.vehicleSummary || "Any vehicle"}</p></div>
-                    <div><p className="text-muted-foreground">Owner</p><p className="truncate">{lead.assignedUserName || "Unassigned"}</p></div>
-                    <div><p className="text-muted-foreground">Age</p><p>{getLeadAgeDays(lead)} days</p></div>
-                    <div><p className="text-muted-foreground">Last activity</p><p>{getDaysSinceActivity(lead)} days ago</p></div>
+                    <div><p className="text-muted-foreground">{t("LeadInterest")}</p><p className="truncate">{lead.vehicleSummary || t("AnyVehicle")}</p></div>
+                    <div><p className="text-muted-foreground">{t("LeadOwner")}</p><p className="truncate">{lead.assignedUserName || t("NoAssigned")}</p></div>
+                    <div><p className="text-muted-foreground">{t("LeadAge")}</p><p>{interpolate(t("DaysCount"), { count: getLeadAgeDays(lead) })}</p></div>
+                    <div><p className="text-muted-foreground">{t("LeadLastActivity")}</p><p>{interpolate(t("LeadDaysAgo"), { count: getDaysSinceActivity(lead) })}</p></div>
                   </div>
-                  <div className="rounded-md bg-muted/40 p-2 text-xs"><span className="text-muted-foreground">Next: </span>{NEXT_ACTION_BY_STAGE[lead.stage]}</div>
+                  <div className="rounded-md bg-muted/40 p-2 text-xs"><span className="text-muted-foreground">{t("LeadNextAction")}</span>{nextAction(lead.stage)}</div>
                   <div className="pointer-events-auto flex items-center justify-end border-t pt-2">
-                    {canEditLeads && <Button variant="ghost" size="sm" onClick={() => handleEdit(lead)}><Pencil className="h-4 w-4 me-2" />Edit</Button>}
+                    {canEditLeads && <Button variant="ghost" size="sm" onClick={() => handleEdit(lead)}><Pencil className="h-4 w-4 me-2" />{t("Edit")}</Button>}
                     {(lead.source?.startsWith("Instagram") || lead.source?.startsWith("Facebook")) && (
                       <button
                         type="button"
@@ -471,7 +462,7 @@ export default function LeadsPage() {
                         type="button"
                         onClick={() => setLeadToDelete(lead)}
                         className="p-3 rounded-md text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
-                        aria-label={`Delete ${lead.customerName || "lead"}`}
+                        aria-label={interpolate(t("DeleteLeadAria"), { customer: lead.customerName || t("UnknownCustomer") })}
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -492,13 +483,13 @@ export default function LeadsPage() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-slate-50/50 dark:bg-zinc-900/50 hover:bg-slate-50/50 dark:hover:bg-zinc-900/50">
-                  <TableHead className="w-10 px-4"><Checkbox checked={allFilteredSelected} onCheckedChange={toggleAllFilteredLeads} aria-label="Select all filtered leads" /></TableHead>
+                  <TableHead className="w-10 px-4"><Checkbox checked={allFilteredSelected} onCheckedChange={toggleAllFilteredLeads} aria-label={t("SelectAllFilteredLeads")} /></TableHead>
                   <SortableColumnHeader className="py-4 px-6 font-medium" label={t("Customer" as any) || "Customer"} sortKey="customer" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <TableHead className="py-4 px-6 font-medium">{t("Vehicle" as any) || "Vehicle"}</TableHead>
                   <SortableColumnHeader className="py-4 px-6 font-medium" label={t("Stage" as any) || "Stage"} sortKey="stage" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <TableHead className="py-4 px-6 font-medium">{t("AssignedTo" as any) || "Assigned To"}</TableHead>
-                  <TableHead className="py-4 px-6 font-medium">Next action</TableHead>
-                  <SortableColumnHeader className="py-4 px-6 font-medium" label="Activity / age" sortKey="updatedAt" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <TableHead className="py-4 px-6 font-medium">{t("LeadNextActionColumn")}</TableHead>
+                  <SortableColumnHeader className="py-4 px-6 font-medium" label={t("LeadActivityAgeColumn")} sortKey="updatedAt" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <TableHead className="py-4 px-6 font-medium text-end">{t("Actions" as any) || "Actions"}</TableHead>
                 </TableRow>
               </TableHeader>
@@ -506,7 +497,7 @@ export default function LeadsPage() {
                 {filteredLeads?.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={8} className="text-center py-12 text-muted-foreground">
-                      {t("Empty" as any) || "No leads found. Add a new lead to get started."}
+                      {t("NoLeadsFoundDescription")}
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -517,13 +508,13 @@ export default function LeadsPage() {
                       className={`cursor-pointer group hover:bg-slate-50/50 dark:hover:bg-zinc-900/50 transition-colors ${highlightedLeadId === lead._id ? "ring-2 ring-inset ring-amber-400" : ""}`}
                       onClick={() => openLeadWorkspace(lead._id)}
                     >
-                      <TableCell className="px-4" onClick={(event) => event.stopPropagation()}><Checkbox checked={selectedLeadIds.has(lead._id)} onCheckedChange={() => toggleLeadSelection(lead._id)} aria-label={`Select ${lead.customerName}`} /></TableCell>
+                      <TableCell className="px-4" onClick={(event) => event.stopPropagation()}><Checkbox checked={selectedLeadIds.has(lead._id)} onCheckedChange={() => toggleLeadSelection(lead._id)} aria-label={interpolate(t("SelectLeadAria"), { customer: lead.customerName || t("UnknownCustomer") })} /></TableCell>
                       <TableCell className="py-4 px-6 font-medium">
                         <div className="flex items-center gap-3">
                           <div className="w-8 h-8 rounded-full bg-slate-100 dark:bg-zinc-800 flex items-center justify-center text-slate-500 font-medium text-xs flex-shrink-0">
                             {lead.customerName ? lead.customerName.charAt(0).toUpperCase() : "?"}
                           </div>
-                          <div className="min-w-0"><span className="truncate max-w-[200px] block">{lead.customerName}</span>{isStaleLead(lead) && <span className="mt-1 flex items-center gap-1 text-[11px] text-amber-700"><AlertTriangle className="h-3 w-3" />Stale {getDaysSinceActivity(lead)}d</span>}</div>
+                          <div className="min-w-0"><span className="truncate max-w-[200px] block">{lead.customerName}</span>{isStaleLead(lead) && <span className="mt-1 flex items-center gap-1 text-[11px] text-amber-700"><AlertTriangle className="h-3 w-3" />{interpolate(t("LeadStaleDays"), { count: getDaysSinceActivity(lead) })}</span>}</div>
                         </div>
                       </TableCell>
                       <TableCell className="py-4 px-6">
@@ -552,11 +543,11 @@ export default function LeadsPage() {
                         )}
                       </TableCell>
                       <TableCell className="py-4 px-6 text-sm max-w-[220px]">
-                        {NEXT_ACTION_BY_STAGE[lead.stage]}
+                        {nextAction(lead.stage)}
                       </TableCell>
                       <TableCell className="py-4 px-6 text-muted-foreground whitespace-nowrap">
-                        <p>{getDaysSinceActivity(lead)}d since activity</p>
-                        <p className="text-xs">{getLeadAgeDays(lead)}d old</p>
+                        <p>{interpolate(t("LeadDaysSinceActivity"), { count: getDaysSinceActivity(lead) })}</p>
+                        <p className="text-xs">{interpolate(t("LeadDaysOld"), { count: getLeadAgeDays(lead) })}</p>
                       </TableCell>
                       <TableCell className="py-4 px-6 text-end">
                         <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -575,6 +566,7 @@ export default function LeadsPage() {
                             type="button"
                             onClick={(e) => { e.stopPropagation(); handleDownloadLeadQuote(lead); }}
                             className="p-2 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-md text-muted-foreground hover:text-blue-600 transition-colors"
+                            aria-label={t("DownloadPDF")}
                           >
                             <FileText className="w-4 h-4" />
                           </button>
@@ -583,6 +575,7 @@ export default function LeadsPage() {
                               type="button"
                               onClick={(event) => { event.stopPropagation(); setLeadToDelete(lead); }}
                               className="p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md text-muted-foreground hover:text-red-600 transition-colors"
+                              aria-label={interpolate(t("DeleteLeadAria"), { customer: lead.customerName || t("UnknownCustomer") })}
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
@@ -624,7 +617,7 @@ export default function LeadsPage() {
                     {/* Cards */}
                     <div className="flex-1 overflow-y-auto px-2 pb-2 space-y-2 min-h-[120px]">
                       {stageLeads.length === 0 ? (
-                        <div className="text-center py-6 text-xs text-muted-foreground/50">Empty</div>
+                        <div className="text-center py-6 text-xs text-muted-foreground/50">{t("EmptyStage")}</div>
                       ) : (
                         stageLeads.map((lead) => (
                           <div
@@ -635,11 +628,11 @@ export default function LeadsPage() {
                               type="button"
                               className="absolute inset-0 z-0 cursor-pointer rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
                               onClick={() => openLeadWorkspace(lead._id)}
-                              aria-label={`Open ${lead.customerName || "lead"}`}
+                              aria-label={interpolate(t("OpenLeadAria"), { customer: lead.customerName || t("UnknownCustomer") })}
                             />
                             <div className="relative z-10 pointer-events-none space-y-3">
                               <div className="flex items-center gap-2">
-                                <div className="pointer-events-auto"><Checkbox checked={selectedLeadIds.has(lead._id)} onCheckedChange={() => toggleLeadSelection(lead._id)} aria-label={`Select ${lead.customerName}`} /></div>
+                                <div className="pointer-events-auto"><Checkbox checked={selectedLeadIds.has(lead._id)} onCheckedChange={() => toggleLeadSelection(lead._id)} aria-label={interpolate(t("SelectLeadAria"), { customer: lead.customerName || t("UnknownCustomer") })} /></div>
                                 <div className="min-w-0 flex flex-1 items-center gap-2 text-start">
                                   <span className="w-6 h-6 rounded-full bg-slate-100 dark:bg-zinc-700 flex items-center justify-center text-[10px] font-medium flex-shrink-0">
                                     {lead.customerName?.charAt(0)?.toUpperCase() ?? "?"}
@@ -657,13 +650,13 @@ export default function LeadsPage() {
                                   </button>
                                 )}
                               </div>
-                              {isStaleLead(lead) && <Badge variant="outline" className="border-amber-300 text-amber-700"><AlertTriangle className="h-3 w-3 me-1" />Stale {getDaysSinceActivity(lead)}d</Badge>}
+                              {isStaleLead(lead) && <Badge variant="outline" className="border-amber-300 text-amber-700"><AlertTriangle className="h-3 w-3 me-1" />{interpolate(t("LeadStaleDays"), { count: getDaysSinceActivity(lead) })}</Badge>}
                               <div className="space-y-1 text-[11px] text-muted-foreground">
-                                <p className="flex items-center gap-1"><Car className="w-3 h-3 shrink-0" /><span className="truncate">{lead.vehicleSummary || "Any vehicle"}</span></p>
-                                <p className="flex items-center gap-1"><User className="w-3 h-3 shrink-0" /><span className="truncate">{lead.assignedUserName || "Unassigned"}</span></p>
-                                <p className="flex items-center gap-1"><Clock className="w-3 h-3 shrink-0" />{getDaysSinceActivity(lead)}d since activity · {getLeadAgeDays(lead)}d old</p>
+                                <p className="flex items-center gap-1"><Car className="w-3 h-3 shrink-0" /><span className="truncate">{lead.vehicleSummary || t("AnyVehicle")}</span></p>
+                                <p className="flex items-center gap-1"><User className="w-3 h-3 shrink-0" /><span className="truncate">{lead.assignedUserName || t("NoAssigned")}</span></p>
+                                <p className="flex items-center gap-1"><Clock className="w-3 h-3 shrink-0" />{interpolate(t("LeadDaysSinceActivity"), { count: getDaysSinceActivity(lead) })} · {interpolate(t("LeadDaysOld"), { count: getLeadAgeDays(lead) })}</p>
                               </div>
-                              <div className="rounded-md bg-muted/50 p-2 text-[11px]"><span className="text-muted-foreground">Next: </span>{NEXT_ACTION_BY_STAGE[lead.stage]}</div>
+                              <div className="rounded-md bg-muted/50 p-2 text-[11px]"><span className="text-muted-foreground">{t("LeadNextAction")}</span>{nextAction(lead.stage)}</div>
                               {canEditLeads && (
                                 <div className="pointer-events-auto">
                                   <Select value={lead.stage} onValueChange={(nextStage) => void updateLeadStage(lead._id, nextStage as LeadStage)}>
@@ -718,7 +711,7 @@ export default function LeadsPage() {
             customerName={printingLead.customerName}
             vehicleSummary={printingLead.vehicleSummary || t("UnknownVehicle" as any) || "Unknown Vehicle"}
             estimatedPrice={printingLead.vehiclePrice ?? 0}
-            dateStr={new Date().toLocaleDateString()}
+            dateStr={new Date().toLocaleDateString(locale === "ar" ? "ar-JO" : "en-US")}
             orgBranding={{
               name: orgSettings?.dealershipName,
               legalName: orgSettings?.legalCompanyName,

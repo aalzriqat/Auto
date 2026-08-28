@@ -1,3 +1,33 @@
+import { defineBilingualMessages } from "../defineBilingualMessages";
+
+const workspaceMessages = defineBilingualMessages({
+  ContactSegment: ["Contact segment", "شريحة التواصل"],
+  AllContactSegments: ["All contact segments", "كل شرائح التواصل"],
+  WhatsAppAvailable: ["WhatsApp available", "يتوفر واتساب"],
+  EmailAvailable: ["Email available", "يتوفر بريد إلكتروني"],
+  PhoneAvailable: ["Phone available", "يتوفر هاتف"],
+  MissingContactDetails: ["Missing contact details", "بيانات التواصل ناقصة"],
+  CustomerActivity: ["Activity", "النشاط"],
+  CustomerDeals: ["Deals", "الصفقات"],
+  CustomerSince: ["Customer since", "عميل منذ"],
+  DirectSource: ["Direct", "مباشر"],
+  NoCustomerActivity: ["No customer activity yet.", "لا يوجد نشاط لهذا العميل بعد."],
+  CustomerActivityLeadTitle: ["Lead · {vehicle}", "عميل محتمل · {vehicle}"],
+  CustomerActivityLeadDetail: ["{source} · {assignee}", "{source} · {assignee}"],
+  CustomerActivitySaleTitle: ["Sale · {vehicle}", "عملية بيع · {vehicle}"],
+  CustomerActivitySaleDetail: ["{amount} {currency} · {salesperson}", "{amount} {currency} · {salesperson}"],
+  CustomerActivityQuoteTitle: ["Quote · {vehicle}", "عرض سعر · {vehicle}"],
+  CustomerActivityQuoteDetail: ["{amount} {currency}", "{amount} {currency}"],
+  CustomerActivityTaskTitle: ["Task · {task}", "مهمة · {task}"],
+  CustomerActivityTaskDetail: ["{assignee} · due {date}", "{assignee} · تستحق في {date}"],
+  CustomerWhatsAppGreeting: ["Hello {name}", "مرحباً {name}"],
+  MergeBeforeTitle: ["Before you merge", "قبل الدمج"],
+  MergeSurvivorConsequence: ["{customer} remains the customer record used everywhere.", "سيبقى {customer} سجل العميل المستخدم في جميع الأقسام."],
+  MergeArchivedConsequence: ["{customer} is archived after its linked history is moved.", "ستتم أرشفة {customer} بعد نقل السجل المرتبط به."],
+  MergeSelectedFieldsConsequence: ["Only the field values selected above are kept; unselected conflicting values are not copied.", "سيتم الاحتفاظ بقيم الحقول المحددة أعلاه فقط، ولن تُنسخ القيم المتعارضة غير المحددة."],
+  MergeAuditConsequence: ["The merge is audited and the archived source record remains recoverable by an administrator.", "يُسجل الدمج في سجل التدقيق، ويبقى سجل المصدر المؤرشف قابلاً للاستعادة بواسطة المسؤول."],
+});
+
 export const customersEn = {
   CustomersDesc: "Manage your dealership's customers and their contact information.",
   AddCustomer: "Add Customer",
@@ -130,6 +160,9 @@ export const customersEn = {
   NoLinkedRecords: "No linked records to reassign — this customer has no leads, sales, or other history.",
   ConfirmMerge: "Confirm Merge",
   CustomersMergedSuccess: "Customers merged successfully.",
+
+  // Customer workspace and segmentation
+  ...workspaceMessages.en,
 };
 
 export const customersAr = {
@@ -264,4 +297,7 @@ export const customersAr = {
   NoLinkedRecords: "لا توجد سجلات مرتبطة لنقلها — هذا العميل ليس له عملاء محتملون أو مبيعات أو سجل آخر.",
   ConfirmMerge: "تأكيد الدمج",
   CustomersMergedSuccess: "تم دمج العملاء بنجاح.",
+
+  // مساحة عمل العميل وتقسيمه
+  ...workspaceMessages.ar,
 };
