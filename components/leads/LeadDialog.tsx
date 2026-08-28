@@ -181,7 +181,8 @@ function useLeadDropdownOptions({
   lead,
   defaultCustomerId,
 }: Readonly<LeadDropdownOptions>) {
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
+  const localeCode = locale === "ar" ? "ar-JO" : "en-US";
   const [customerSearch, setCustomerSearch] = useState("");
   const customerSelectorOptions = useQuery(
     api.customers.selectorOptions,
@@ -211,11 +212,14 @@ function useLeadDropdownOptions({
   const vehicleOptions = useMemo(
     () =>
       withCurrentOption(
-        vehicles?.map((vehicle: Doc<"vehicles">) => ({
-          value: vehicle._id as string,
-          label: `${vehicle.year} ${vehicle.make} ${vehicle.model}`,
-          subLabel: `${vehicle.vin} · ${vehicle.sellingPrice.toLocaleString()} JOD${vehicle.status === "RESERVED" ? " · Reserved (pending deal)" : ""}`,
-        })) ?? [],
+        vehicles?.map((vehicle: Doc<"vehicles">) => {
+          const reservationSuffix = vehicle.status === "RESERVED" ? ` · ${t("ReservedPendingDeal")}` : "";
+          return {
+            value: vehicle._id as string,
+            label: `${vehicle.year} ${vehicle.make} ${vehicle.model}`,
+            subLabel: `${vehicle.vin} · ${vehicle.sellingPrice.toLocaleString(localeCode)} ${t("JOD")}${reservationSuffix}`,
+          };
+        }) ?? [],
         lead?.vehicleId
           ? {
               value: lead.vehicleId as string,
@@ -226,7 +230,7 @@ function useLeadDropdownOptions({
             }
           : null
       ),
-    [vehicles, lead, t]
+    [vehicles, lead, localeCode, t]
   );
 
   const assigneeOptions = useMemo(

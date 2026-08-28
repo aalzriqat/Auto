@@ -54,6 +54,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useStoredViewPreference } from "@/hooks/useStoredViewPreference";
+import { interpolate } from "@/lib/i18n/interpolate";
+import { translateVehicleStatus, type Translate } from "@/lib/i18n/statusLabels";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 type AgingFilter = "ALL" | "0-30" | "31-60" | "61-90" | "90+";
@@ -99,29 +101,31 @@ function isRequestableVehicleStatus(status: VehicleStatus): status is Requestabl
   return status !== "SOURCING";
 }
 
-function StatusBadge({ status, t }: { status: string; t: any }) {
+function StatusBadge({ status, t }: Readonly<{ status: string; t: Translate }>) {
+  const label = translateVehicleStatus(status, t);
   switch (status) {
     case "AVAILABLE":
-      return <Badge variant="default" className="bg-green-600">{t("AvailableLC" as any) || "Available"}</Badge>;
+      return <Badge variant="default" className="bg-green-600">{label}</Badge>;
     case "RESERVED":
-      return <Badge variant="secondary" className="bg-yellow-500 text-white">{t("Reserved" as any) || "Reserved"}</Badge>;
+      return <Badge variant="secondary" className="bg-yellow-500 text-white">{label}</Badge>;
     case "SOLD":
-      return <Badge variant="secondary" className="bg-blue-600 text-white">{t("Sold" as any) || "Sold"}</Badge>;
+      return <Badge variant="secondary" className="bg-blue-600 text-white">{label}</Badge>;
     case "IN_INSPECTION":
-      return <Badge variant="outline" className="text-orange-500 border-orange-500">{t("InInspection" as any) || "Inspection"}</Badge>;
+      return <Badge variant="outline" className="text-orange-500 border-orange-500">{label}</Badge>;
     case "IN_REPAIR":
-      return <Badge variant="outline" className="text-red-500 border-red-500">{t("InRepair" as any) || "Repair"}</Badge>;
+      return <Badge variant="outline" className="text-red-500 border-red-500">{label}</Badge>;
     case "SOURCING":
-      return <Badge variant="outline" className="text-purple-600 border-purple-600">{t("StatusSourcing" as any) || "Sourcing"}</Badge>;
+      return <Badge variant="outline" className="text-purple-600 border-purple-600">{label}</Badge>;
     case "ARCHIVED":
-      return <Badge variant="secondary">{t("Archived" as any) || "Archived"}</Badge>;
+      return <Badge variant="secondary">{label}</Badge>;
     default:
-      return <Badge variant="outline">{status}</Badge>;
+      return <Badge variant="outline">{label}</Badge>;
   }
 }
 
 export default function VehiclesPage() {
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
+  const localeCode = locale === "ar" ? "ar-JO" : "en-US";
 
   const { activeOrgId } = useOrg();
   const { results: vehicles, status: vehiclesStatus, loadMore: loadMoreVehicles } = usePaginatedQuery(
@@ -239,7 +243,7 @@ export default function VehiclesPage() {
       } else {
         // Sales/Reception requests it
         if (!isRequestableVehicleStatus(selectedStatus)) {
-          toast.error("Only a manager can move a vehicle back to sourcing.");
+          toast.error(t("VehicleManagerOnlySourcing"));
           return;
         }
         await createStatusRequest({
@@ -293,9 +297,9 @@ export default function VehiclesPage() {
 
   const getVehicleWarnings = (vehicle: VehicleListItem) => {
     const warnings: string[] = [];
-    if (!vehicle.vin) warnings.push("VIN missing");
-    if (!vehicle.imageUrls?.some(Boolean)) warnings.push("Photos missing");
-    if (isMissingCost(vehicle)) warnings.push("Acquisition cost missing");
+    if (!vehicle.vin) warnings.push(t("VehicleVinMissing"));
+    if (!vehicle.imageUrls?.some(Boolean)) warnings.push(t("VehiclePhotosMissing"));
+    if (isMissingCost(vehicle)) warnings.push(t("VehicleAcquisitionCostMissing"));
     return warnings;
   };
 
@@ -337,7 +341,7 @@ export default function VehiclesPage() {
       setSavedViews(nextViews);
       return true;
     } catch {
-      toast.error("Saved views are unavailable in this browser session.");
+      toast.error(t("SavedViewsUnavailable"));
       return false;
     }
   };
@@ -365,7 +369,7 @@ export default function VehiclesPage() {
     setActiveSavedViewId(nextView.id);
     setSavedViewName("");
     setIsSaveViewDialogOpen(false);
-    toast.success("View saved");
+    toast.success(t("SavedViewSaved"));
   };
 
   const applySavedView = (savedView: VehicleSavedView) => {
@@ -381,7 +385,7 @@ export default function VehiclesPage() {
     if (!activeSavedViewId) return;
     if (!persistSavedViews(savedViews.filter((savedView) => savedView.id !== activeSavedViewId))) return;
     setActiveSavedViewId("");
-    toast.success("Saved view removed");
+    toast.success(t("SavedViewRemoved"));
   };
 
   const clearFilters = () => {
@@ -421,12 +425,12 @@ export default function VehiclesPage() {
       vehicle.make,
       vehicle.model,
       vehicle.trim ?? "",
-      vehicle.status,
+      translateVehicleStatus(vehicle.status, t),
       vehicle.sellingPrice,
       getVehicleAgeDays(vehicle),
     ]);
     const csv = [
-      ["VIN", "Year", "Make", "Model", "Trim", "Status", "Price (JOD)", "Inventory age (days)"],
+      [t("VIN"), t("Year"), t("Make"), t("Model"), t("Trim"), t("Status"), t("VehicleCsvPriceJod"), t("VehicleCsvInventoryAgeDays")],
       ...rows,
     ].map((row) => row.map(escapeCell).join(",")).join("\n");
     const downloadUrl = URL.createObjectURL(new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" }));
@@ -449,7 +453,7 @@ export default function VehiclesPage() {
       );
     } else {
       if (!isRequestableVehicleStatus(nextStatus)) {
-        toast.error("Only a manager can move vehicles back to sourcing.");
+        toast.error(t("VehicleManagerOnlySourcing"));
         setIsBulkUpdating(false);
         return;
       }
@@ -466,9 +470,9 @@ export default function VehiclesPage() {
     }
     const failures = updates.filter((update) => update.status === "rejected").length;
     if (failures > 0) {
-      toast.error(`${failures} vehicle${failures === 1 ? "" : "s"} could not be updated. Please try again.`);
+      toast.error(interpolate(t(failures === 1 ? "VehicleBulkUpdateFailedOne" : "VehicleBulkUpdateFailedMany"), { count: failures }));
     } else {
-      toast.success(canEdit ? "Vehicle statuses updated" : "Status requests submitted");
+      toast.success(t(canEdit ? "VehicleStatusesUpdated" : "VehicleStatusRequestsSubmitted"));
       setSelectedVehicleIds(new Set());
     }
     setIsBulkUpdating(false);
@@ -542,7 +546,7 @@ export default function VehiclesPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">{t("Vehicles")}</h1>
-          <p className="text-sm text-muted-foreground">Manage inventory, availability, and vehicle readiness.</p>
+          <p className="text-sm text-muted-foreground">{t("VehiclesManageReadiness")}</p>
         </div>
         <div className="flex flex-wrap gap-2">
           {canEdit && (
@@ -575,7 +579,7 @@ export default function VehiclesPage() {
           <div className="flex items-center w-full xl:max-w-md relative">
             <Search className="h-4 w-4 text-muted-foreground absolute start-3" />
             <Input
-              placeholder="Search VIN, make, model, trim, or notes"
+              placeholder={t("VehicleSearchPlaceholder")}
               value={searchQuery}
               onChange={(event) => { setSearchQuery(event.target.value); setActiveSavedViewId(""); }}
               className="ps-9"
@@ -584,17 +588,13 @@ export default function VehiclesPage() {
           <div className="flex flex-wrap gap-2 flex-1">
             <Select value={statusFilter} onValueChange={(nextStatus) => { setStatusFilter(nextStatus as VehicleStatusFilter); setActiveSavedViewId(""); }}>
               <SelectTrigger className="w-[170px]">
-                <SelectValue placeholder="All statuses" />
+                <SelectValue placeholder={t("AllVehicleStatuses")} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="ALL">All statuses</SelectItem>
-                <SelectItem value="AVAILABLE">Available</SelectItem>
-                <SelectItem value="SOURCING">Sourcing</SelectItem>
-                <SelectItem value="RESERVED">Reserved</SelectItem>
-                <SelectItem value="SOLD">Sold</SelectItem>
-                <SelectItem value="IN_INSPECTION">In inspection</SelectItem>
-                <SelectItem value="IN_REPAIR">In repair</SelectItem>
-                <SelectItem value="ARCHIVED">Archived</SelectItem>
+                <SelectItem value="ALL">{t("AllVehicleStatuses")}</SelectItem>
+                {(Array.from(VEHICLE_STATUS_FILTERS).filter((status): status is VehicleStatus => status !== "ALL")).map((status) => (
+                  <SelectItem key={status} value={status}>{translateVehicleStatus(status, t)}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
             <Select value={agingFilter} onValueChange={(nextAge) => { setAgingFilter(nextAge as AgingFilter); setActiveSavedViewId(""); }}>
@@ -619,14 +619,14 @@ export default function VehiclesPage() {
               }}
             >
               <SelectTrigger className="w-[190px]">
-                <SelectValue placeholder="Sort vehicles" />
+                <SelectValue placeholder={t("SortVehicles")} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="addedDate:desc">Newest inventory</SelectItem>
-                <SelectItem value="addedDate:asc">Oldest inventory</SelectItem>
-                <SelectItem value="price:desc">Price: high to low</SelectItem>
-                <SelectItem value="price:asc">Price: low to high</SelectItem>
-                <SelectItem value="model:asc">Model: A to Z</SelectItem>
+                <SelectItem value="addedDate:desc">{t("NewestInventory")}</SelectItem>
+                <SelectItem value="addedDate:asc">{t("OldestInventory")}</SelectItem>
+                <SelectItem value="price:desc">{t("PriceHighToLow")}</SelectItem>
+                <SelectItem value="price:asc">{t("PriceLowToHigh")}</SelectItem>
+                <SelectItem value="model:asc">{t("ModelAToZ")}</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -644,26 +644,26 @@ export default function VehiclesPage() {
             >
               <SelectTrigger className="w-[170px]">
                 <Bookmark className="h-4 w-4 me-2" />
-                <SelectValue placeholder="Saved views" />
+                <SelectValue placeholder={t("SavedViews")} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="none">Saved views</SelectItem>
+                <SelectItem value="none">{t("SavedViews")}</SelectItem>
                 {savedViews.map((savedView) => (
                   <SelectItem key={savedView.id} value={savedView.id}>{savedView.name}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            <Button variant="outline" size="sm" onClick={() => setIsSaveViewDialogOpen(true)}>Save view</Button>
+            <Button variant="outline" size="sm" onClick={() => setIsSaveViewDialogOpen(true)}>{t("SaveView")}</Button>
             {activeSavedViewId && (
-              <Button variant="ghost" size="icon" onClick={deleteActiveSavedView} title="Delete saved view">
+              <Button variant="ghost" size="icon" onClick={deleteActiveSavedView} title={t("DeleteSavedView")}>
                 <X className="h-4 w-4" />
               </Button>
             )}
             <div className="flex items-center rounded-md border p-1">
-              <Button variant={view === "table" ? "secondary" : "ghost"} size="icon" className="h-7 w-7" onClick={() => setView("table")} title="Table view">
+              <Button variant={view === "table" ? "secondary" : "ghost"} size="icon" className="h-7 w-7" onClick={() => setView("table")} title={t("TableView")}>
                 <List className="h-4 w-4" />
               </Button>
-              <Button variant={view === "cards" ? "secondary" : "ghost"} size="icon" className="h-7 w-7" onClick={() => setView("cards")} title="Card view">
+              <Button variant={view === "cards" ? "secondary" : "ghost"} size="icon" className="h-7 w-7" onClick={() => setView("cards")} title={t("CardView")}>
                 <LayoutGrid className="h-4 w-4" />
               </Button>
             </div>
@@ -673,45 +673,45 @@ export default function VehiclesPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
             {searchQuery && (
-              <Badge variant="secondary" className="gap-1">Search: {searchQuery}<button type="button" onClick={() => setSearchQuery("")} aria-label="Clear search"><X className="h-3 w-3" /></button></Badge>
+              <Badge variant="secondary" className="gap-1">{interpolate(t("SearchFilterChip"), { value: searchQuery })}<button type="button" onClick={() => setSearchQuery("")} aria-label={t("ClearSearch")}><X className="h-3 w-3" /></button></Badge>
             )}
             {statusFilter !== "ALL" && (
-              <Badge variant="secondary" className="gap-1">Status: {statusFilter.replaceAll("_", " ")}<button type="button" onClick={() => setStatusFilter("ALL")} aria-label="Clear status filter"><X className="h-3 w-3" /></button></Badge>
+              <Badge variant="secondary" className="gap-1">{interpolate(t("StatusFilterChip"), { value: translateVehicleStatus(statusFilter, t) })}<button type="button" onClick={() => setStatusFilter("ALL")} aria-label={t("ClearStatusFilter")}><X className="h-3 w-3" /></button></Badge>
             )}
             {agingFilter !== "ALL" && (
-              <Badge variant="secondary" className="gap-1">Age: {agingFilter} days<button type="button" onClick={() => setAgingFilter("ALL")} aria-label="Clear age filter"><X className="h-3 w-3" /></button></Badge>
+              <Badge variant="secondary" className="gap-1">{interpolate(t("AgeFilterChip"), { value: interpolate(t("DaysCount"), { count: agingFilter }) })}<button type="button" onClick={() => setAgingFilter("ALL")} aria-label={t("ClearAgeFilter")}><X className="h-3 w-3" /></button></Badge>
             )}
             {(searchQuery || statusFilter !== "ALL" || agingFilter !== "ALL") && (
-              <Button variant="ghost" size="sm" onClick={clearFilters}>Clear all</Button>
+              <Button variant="ghost" size="sm" onClick={clearFilters}>{t("ClearAll")}</Button>
             )}
           </div>
           <p className="text-sm text-muted-foreground">
-            {filteredVehicles?.length ?? 0} {vehiclesStatus === "Exhausted" ? "results" : "loaded results"}
+            {interpolate(t(vehiclesStatus === "Exhausted" ? "ResultsCount" : "LoadedResultsCount"), { count: filteredVehicles?.length ?? 0 })}
           </p>
         </div>
       </div>
 
       {selectedVehicleIds.size > 0 && (
         <div className="sticky top-2 z-20 flex flex-wrap items-center gap-2 rounded-lg border bg-background p-3 shadow-lg">
-          <span className="text-sm font-medium">{selectedVehicleIds.size} selected</span>
+          <span className="text-sm font-medium">{interpolate(t("SelectedCount"), { count: selectedVehicleIds.size })}</span>
           <Button variant="outline" size="sm" onClick={exportSelectedVehicles}>
-            <Download className="h-4 w-4 me-2" /> Export selected
+            <Download className="h-4 w-4 me-2" /> {t("ExportSelected")}
           </Button>
           {canEditOrRequest && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" disabled={isBulkUpdating}>Change status</Button>
+                <Button variant="outline" size="sm" disabled={isBulkUpdating}>{t("ChangeStatus")}</Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start">
                 {(["AVAILABLE", ...(canEdit ? ["SOURCING" as const] : []), "RESERVED", "SOLD", "IN_INSPECTION", "IN_REPAIR"] as VehicleStatus[]).map((status) => (
                   <DropdownMenuItem key={status} onSelect={() => void handleBulkStatusChange(status)}>
-                    {status.replaceAll("_", " ")}
+                    {translateVehicleStatus(status, t)}
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuContent>
             </DropdownMenu>
           )}
-          <Button variant="ghost" size="sm" onClick={() => setSelectedVehicleIds(new Set())}>Clear selection</Button>
+          <Button variant="ghost" size="sm" onClick={() => setSelectedVehicleIds(new Set())}>{t("ClearSelection")}</Button>
         </div>
       )}
 
@@ -733,7 +733,7 @@ export default function VehiclesPage() {
                 type="button"
                 className="absolute inset-0 z-0 cursor-pointer rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
                 onClick={() => setDetailsVehicle(vehicle)}
-                aria-label={`Open ${vehicle.year} ${vehicle.make} ${vehicle.model}`}
+                aria-label={interpolate(t("OpenVehicleAria"), { vehicle: `${vehicle.year} ${vehicle.make} ${vehicle.model}` })}
               />
               <div className="relative z-10 pointer-events-none">
                 <div className="aspect-[16/7] bg-muted relative">
@@ -742,7 +742,7 @@ export default function VehiclesPage() {
                     <img src={thumbnail} alt="" className="h-full w-full object-cover" />
                   ) : <ImageIcon className="absolute inset-0 m-auto h-10 w-10 text-muted-foreground/40" />}
                   <div className="pointer-events-auto absolute start-3 top-3">
-                    <Checkbox checked={selectedVehicleIds.has(vehicle._id)} onCheckedChange={() => toggleVehicleSelection(vehicle._id)} aria-label={`Select ${vehicle.make} ${vehicle.model}`} />
+                    <Checkbox checked={selectedVehicleIds.has(vehicle._id)} onCheckedChange={() => toggleVehicleSelection(vehicle._id)} aria-label={interpolate(t("SelectVehicleAria"), { vehicle: `${vehicle.make} ${vehicle.model}` })} />
                   </div>
                   <div className="absolute end-3 top-3"><StatusBadge status={vehicle.status} t={t} /></div>
                 </div>
@@ -750,13 +750,13 @@ export default function VehiclesPage() {
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="font-semibold truncate">{vehicle.year} {vehicle.make} {vehicle.model} {vehicle.trim}</p>
-                      <p className="text-xs text-muted-foreground font-mono truncate">{vehicle.vin ?? "VIN pending"}</p>
+                      <p className="text-xs text-muted-foreground font-mono truncate">{vehicle.vin ?? t("VinPending")}</p>
                     </div>
-                    <p className="font-semibold whitespace-nowrap">{vehicle.sellingPrice.toLocaleString()} JOD</p>
+                    <p className="font-semibold whitespace-nowrap">{vehicle.sellingPrice.toLocaleString(localeCode)} {t("JOD")}</p>
                   </div>
                   <div className="grid grid-cols-2 gap-3 text-sm">
-                    <div><p className="text-xs text-muted-foreground">Inventory age</p><p>{getVehicleAgeDays(vehicle)} days</p></div>
-                    <div><p className="text-xs text-muted-foreground">Mileage</p><p>{vehicle.mileage.toLocaleString()} km</p></div>
+                    <div><p className="text-xs text-muted-foreground">{t("InventoryAge")}</p><p>{interpolate(t("DaysCount"), { count: getVehicleAgeDays(vehicle) })}</p></div>
+                    <div><p className="text-xs text-muted-foreground">{t("Mileage")}</p><p>{vehicle.mileage.toLocaleString(localeCode)} {t("KilometersShort")}</p></div>
                   </div>
                   {warnings.length > 0 && (
                     <div className="flex flex-wrap gap-1.5">
@@ -764,13 +764,13 @@ export default function VehiclesPage() {
                     </div>
                   )}
                   <div className="pointer-events-auto flex items-center justify-end gap-1 border-t pt-2">
-                    <Button variant="ghost" size="sm" onClick={() => setGalleryVehicle(vehicle)}><ImageIcon className="h-4 w-4 me-2" />Photos</Button>
-                    {canEditOrRequest && <Button variant="ghost" size="sm" onClick={() => handleEdit(vehicle)}><Pencil className="h-4 w-4 me-2" />Edit</Button>}
+                    <Button variant="ghost" size="sm" onClick={() => setGalleryVehicle(vehicle)}><ImageIcon className="h-4 w-4 me-2" />{t("Photos")}</Button>
+                    {canEditOrRequest && <Button variant="ghost" size="sm" onClick={() => handleEdit(vehicle)}><Pencil className="h-4 w-4 me-2" />{t("Edit")}</Button>}
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild><Button variant="ghost" size="icon"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        <DropdownMenuItem onSelect={() => setHistoryVehicle(vehicle)}><History className="h-4 w-4 me-2" />Audit history</DropdownMenuItem>
-                        {canDelete && <><DropdownMenuSeparator /><DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => setVehicleToDelete(vehicle)}><Archive className="h-4 w-4 me-2" />Archive vehicle</DropdownMenuItem></>}
+                        <DropdownMenuItem onSelect={() => setHistoryVehicle(vehicle)}><History className="h-4 w-4 me-2" />{t("AuditHistory")}</DropdownMenuItem>
+                        {canDelete && <><DropdownMenuSeparator /><DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => setVehicleToDelete(vehicle)}><Archive className="h-4 w-4 me-2" />{t("ArchiveVehicle")}</DropdownMenuItem></>}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
@@ -785,13 +785,13 @@ export default function VehiclesPage() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-10"><Checkbox checked={allFilteredSelected} onCheckedChange={toggleAllFilteredVehicles} aria-label="Select all filtered vehicles" /></TableHead>
-              <TableHead className="w-16">Photo</TableHead>
+              <TableHead className="w-10"><Checkbox checked={allFilteredSelected} onCheckedChange={toggleAllFilteredVehicles} aria-label={t("SelectAllFilteredVehicles")} /></TableHead>
+              <TableHead className="w-16">{t("Photo")}</TableHead>
               <SortableColumnHeader label={t("Vehicle")} sortKey="model" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               <TableHead>{t("Status" as any)}</TableHead>
               <SortableColumnHeader label={t("Price")} sortKey="price" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-              <SortableColumnHeader label="Inventory age" sortKey="addedDate" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-              <TableHead>Readiness</TableHead>
+              <SortableColumnHeader label={t("InventoryAge")} sortKey="addedDate" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <TableHead>{t("Readiness")}</TableHead>
               <TableHead className="text-end">{t("Actions" as any)}</TableHead>
             </TableRow>
           </TableHeader>
@@ -819,7 +819,7 @@ export default function VehiclesPage() {
                   className={`cursor-pointer ${highlightedId === vehicle._id ? "bg-primary/20 transition-all duration-1000" : ""}`}
                   onClick={() => setDetailsVehicle(vehicle)}
                 >
-                  <TableCell onClick={(event) => event.stopPropagation()}><Checkbox checked={selectedVehicleIds.has(vehicle._id)} onCheckedChange={() => toggleVehicleSelection(vehicle._id)} aria-label={`Select ${vehicle.make} ${vehicle.model}`} /></TableCell>
+                  <TableCell onClick={(event) => event.stopPropagation()}><Checkbox checked={selectedVehicleIds.has(vehicle._id)} onCheckedChange={() => toggleVehicleSelection(vehicle._id)} aria-label={interpolate(t("SelectVehicleAria"), { vehicle: `${vehicle.make} ${vehicle.model}` })} /></TableCell>
                   <TableCell>
                     <div className="h-10 w-14 rounded bg-muted overflow-hidden flex items-center justify-center">
                       {thumbnail ? (
@@ -830,7 +830,7 @@ export default function VehiclesPage() {
                   </TableCell>
                   <TableCell className="font-medium">
                     <p>{vehicle.year} {vehicle.make} {vehicle.model} {vehicle.trim}</p>
-                    <p className="font-mono text-xs text-muted-foreground">{vehicle.vin ?? "VIN pending"}</p>
+                    <p className="font-mono text-xs text-muted-foreground">{vehicle.vin ?? t("VinPending")}</p>
                   </TableCell>
                   <TableCell>
                     {canEditOrRequest ? (
@@ -862,10 +862,10 @@ export default function VehiclesPage() {
                       </div>
                     )}
                   </TableCell>
-                  <TableCell className="font-medium">{vehicle.sellingPrice.toLocaleString()} JOD</TableCell>
-                  <TableCell><p>{getVehicleAgeDays(vehicle)} days</p><p className="text-xs text-muted-foreground">Added {new Date(vehicle.createdAt ?? vehicle._creationTime).toLocaleDateString()}</p></TableCell>
+                  <TableCell className="font-medium">{vehicle.sellingPrice.toLocaleString(localeCode)} {t("JOD")}</TableCell>
+                  <TableCell><p>{interpolate(t("DaysCount"), { count: getVehicleAgeDays(vehicle) })}</p><p className="text-xs text-muted-foreground">{interpolate(t("AddedOn"), { date: new Date(vehicle.createdAt ?? vehicle._creationTime).toLocaleDateString(localeCode) })}</p></TableCell>
                   <TableCell>
-                    {warnings.length === 0 ? <Badge variant="outline" className="border-green-300 text-green-700"><Check className="h-3 w-3 me-1" />Ready</Badge> : <div className="flex items-center gap-1 text-xs text-amber-700" title={warnings.join(", ")}><AlertTriangle className="h-4 w-4" />{warnings.length} warning{warnings.length === 1 ? "" : "s"}</div>}
+                    {warnings.length === 0 ? <Badge variant="outline" className="border-green-300 text-green-700"><Check className="h-3 w-3 me-1" />{t("Ready")}</Badge> : <div className="flex items-center gap-1 text-xs text-amber-700" title={warnings.join(", ")}><AlertTriangle className="h-4 w-4" />{interpolate(t(warnings.length === 1 ? "WarningCountOne" : "WarningCountMany"), { count: warnings.length })}</div>}
                   </TableCell>
                   <TableCell className="text-end space-x-1" onClick={(event) => event.stopPropagation()}>
                     <Button variant="ghost" size="icon" onClick={() => setGalleryVehicle(vehicle)} title={t("ViewGallery" as any)}>
@@ -882,7 +882,7 @@ export default function VehiclesPage() {
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild><Button variant="ghost" size="icon"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        {canDelete && <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => setVehicleToDelete(vehicle)}><Archive className="h-4 w-4 me-2" />Archive vehicle</DropdownMenuItem>}
+                        {canDelete && <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => setVehicleToDelete(vehicle)}><Archive className="h-4 w-4 me-2" />{t("ArchiveVehicle")}</DropdownMenuItem>}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </TableCell>
@@ -905,16 +905,16 @@ export default function VehiclesPage() {
       <Dialog open={isSaveViewDialogOpen} onOpenChange={setIsSaveViewDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Save current view</DialogTitle>
-            <DialogDescription>Save the current search, filters, sorting, and layout for quick access later.</DialogDescription>
+            <DialogTitle>{t("SaveCurrentView")}</DialogTitle>
+            <DialogDescription>{t("SaveCurrentViewDescription")}</DialogDescription>
           </DialogHeader>
           <div className="space-y-2 py-2">
-            <Label htmlFor="vehicle-view-name">View name</Label>
-            <Input id="vehicle-view-name" value={savedViewName} onChange={(event) => setSavedViewName(event.target.value)} placeholder="Example: Available over 60 days" autoFocus />
+            <Label htmlFor="vehicle-view-name">{t("ViewName")}</Label>
+            <Input id="vehicle-view-name" value={savedViewName} onChange={(event) => setSavedViewName(event.target.value)} placeholder={t("SavedViewExample")} autoFocus />
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsSaveViewDialogOpen(false)}>Cancel</Button>
-            <Button onClick={handleSaveCurrentView} disabled={!savedViewName.trim()}>Save view</Button>
+            <Button variant="outline" onClick={() => setIsSaveViewDialogOpen(false)}>{t("Cancel")}</Button>
+            <Button onClick={handleSaveCurrentView} disabled={!savedViewName.trim()}>{t("SaveView")}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -944,14 +944,16 @@ export default function VehiclesPage() {
       <Dialog open={!!vehicleToDelete} onOpenChange={(open) => !open && setVehicleToDelete(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Archive vehicle</DialogTitle>
+            <DialogTitle>{t("ArchiveVehicle")}</DialogTitle>
             <DialogDescription>
-              Archive {vehicleToDelete?.year} {vehicleToDelete?.make} {vehicleToDelete?.model}? It will leave active inventory and can be restored by an administrator.
+              {interpolate(t("ArchiveVehicleDescription"), {
+                vehicle: `${vehicleToDelete?.year ?? ""} ${vehicleToDelete?.make ?? ""} ${vehicleToDelete?.model ?? ""}`.trim(),
+              })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setVehicleToDelete(null)}>{t("Cancel")}</Button>
-            <Button variant="destructive" onClick={handleDelete}><Archive className="h-4 w-4 me-2" />Archive vehicle</Button>
+            <Button variant="destructive" onClick={handleDelete}><Archive className="h-4 w-4 me-2" />{t("ArchiveVehicle")}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -973,7 +975,7 @@ export default function VehiclesPage() {
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={url}
-                      alt={`Vehicle image ${index + 1}`}
+                      alt={interpolate(t("VehicleImageAlt"), { index: index + 1 })}
                       className="object-cover w-full h-full"
                     />
                     <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">

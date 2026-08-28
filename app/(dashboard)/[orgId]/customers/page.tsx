@@ -44,6 +44,7 @@ import { useTableControls } from "@/hooks/useTableControls";
 import { useHighlightRow } from "@/hooks/useHighlightRow";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 import { getErrorMessage } from "@/lib/errors";
+import { interpolate } from "@/lib/i18n/interpolate";
 
 type ContactSegment = "ALL" | "WHATSAPP" | "EMAIL" | "PHONE" | "MISSING";
 
@@ -51,6 +52,13 @@ export default function CustomersPage() {
 
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  const contactSegmentLabels: Record<ContactSegment, string> = {
+    ALL: t("AllContactSegments"),
+    WHATSAPP: t("WhatsAppAvailable"),
+    EMAIL: t("EmailAvailable"),
+    PHONE: t("PhoneAvailable"),
+    MISSING: t("MissingContactDetails"),
+  };
   const { results: customers, status: customersStatus, loadMore: loadMoreCustomers } = usePaginatedQuery(
     api.customers.list,
     activeOrgId ? { orgId: activeOrgId } : "skip",
@@ -148,7 +156,7 @@ export default function CustomersPage() {
           </Button>
         )}
         <Button variant="outline" onClick={() => setIsImportDialogOpen(true)}>
-          <FileSpreadsheet className="me-2 h-4 w-4" /> Import
+          <FileSpreadsheet className="me-2 h-4 w-4" /> {t("Import")}
         </Button>
         <Button onClick={handleAddNew}>
           <Plus className="me-2 h-4 w-4" /> {t("AddCustomer" as any)}
@@ -180,27 +188,27 @@ export default function CustomersPage() {
         )}
         <Select value={contactSegment} onValueChange={(segment) => setContactSegment(segment as ContactSegment)}>
           <SelectTrigger className="w-full sm:w-[190px]">
-            <SelectValue placeholder="Contact segment" />
+            <SelectValue placeholder={t("ContactSegment")} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="ALL">All contact segments</SelectItem>
-            <SelectItem value="WHATSAPP">WhatsApp available</SelectItem>
-            <SelectItem value="EMAIL">Email available</SelectItem>
-            <SelectItem value="PHONE">Phone available</SelectItem>
-            <SelectItem value="MISSING">Missing contact details</SelectItem>
+            {(Object.entries(contactSegmentLabels) as [ContactSegment, string][]).map(([segment, label]) => (
+              <SelectItem key={segment} value={segment}>{label}</SelectItem>
+            ))}
           </SelectContent>
         </Select>
         <p className="self-center text-sm text-muted-foreground sm:ms-auto">
-          {filteredCustomers?.length ?? 0} {customersStatus === "Exhausted" ? "results" : "loaded results"}
+          {interpolate(t(customersStatus === "Exhausted" ? "ResultsCount" : "LoadedResultsCount"), {
+            count: filteredCustomers?.length ?? 0,
+          })}
         </p>
       </div>
 
       {(searchQuery || sourceFilter !== "ALL" || contactSegment !== "ALL") && (
         <div className="flex flex-wrap items-center gap-2">
-          {searchQuery && <span className="rounded-full bg-muted px-3 py-1 text-xs">Search: {searchQuery}</span>}
-          {sourceFilter !== "ALL" && <span className="rounded-full bg-muted px-3 py-1 text-xs">Source: {sourceFilter}</span>}
-          {contactSegment !== "ALL" && <span className="rounded-full bg-muted px-3 py-1 text-xs">Segment: {contactSegment.toLowerCase()}</span>}
-          <Button variant="ghost" size="sm" onClick={() => { setSearchQuery(""); setSourceFilter("ALL"); setContactSegment("ALL"); }}>Clear all</Button>
+          {searchQuery && <span className="rounded-full bg-muted px-3 py-1 text-xs">{interpolate(t("SearchFilterChip"), { value: searchQuery })}</span>}
+          {sourceFilter !== "ALL" && <span className="rounded-full bg-muted px-3 py-1 text-xs">{interpolate(t("SourceFilterChip"), { value: sourceFilter })}</span>}
+          {contactSegment !== "ALL" && <span className="rounded-full bg-muted px-3 py-1 text-xs">{interpolate(t("SegmentFilterChip"), { value: contactSegmentLabels[contactSegment] })}</span>}
+          <Button variant="ghost" size="sm" onClick={() => { setSearchQuery(""); setSourceFilter("ALL"); setContactSegment("ALL"); }}>{t("ClearAll")}</Button>
         </div>
       )}
 

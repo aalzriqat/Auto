@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Loader2, Users, ArrowRight } from "lucide-react";
 import { getErrorMessage } from "@/lib/errors";
+import { interpolate } from "@/lib/i18n/interpolate";
 
 interface MergeCustomersDialogProps {
   open: boolean;
@@ -237,12 +238,12 @@ export function MergeCustomersDialog({ open, onOpenChange }: MergeCustomersDialo
             </div>
 
             <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
-              <p className="font-semibold">Before you merge</p>
+              <p className="font-semibold">{t("MergeBeforeTitle")}</p>
               <ul className="mt-1 mb-3 list-disc space-y-1 ps-5">
-                <li>{survivor!.firstName} {survivor!.lastName} remains the customer record used everywhere.</li>
-                <li>{loser!.firstName} {loser!.lastName} is archived after its linked history is moved.</li>
-                <li>Only the field values selected above are kept; unselected conflicting values are not copied.</li>
-                <li>The merge is audited and the archived source record remains recoverable by an administrator.</li>
+                <li>{interpolate(t("MergeSurvivorConsequence"), { customer: `${survivor!.firstName} ${survivor!.lastName}` })}</li>
+                <li>{interpolate(t("MergeArchivedConsequence"), { customer: `${loser!.firstName} ${loser!.lastName}` })}</li>
+                <li>{t("MergeSelectedFieldsConsequence")}</li>
+                <li>{t("MergeAuditConsequence")}</li>
               </ul>
               {totalReassigned > 0 ? (
                 <>

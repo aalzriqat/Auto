@@ -287,7 +287,7 @@ export function VehicleDetailsDialog({
 
         <div className="flex-1 flex flex-col min-h-0">
           <div className="px-6 border-b overflow-x-auto shrink-0">
-            <nav aria-label="Vehicle details sections" className="bg-transparent h-12 p-0 -mb-px flex w-max min-w-full justify-start">
+            <nav aria-label={t("VehicleDetailsSections")} className="bg-transparent h-12 p-0 -mb-px flex w-max min-w-full justify-start">
               {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_INFO)) && (
                 <button
                   type="button"
@@ -305,7 +305,7 @@ export function VehicleDetailsDialog({
                   onClick={() => setActiveGroup("sales_activity")}
                   className={`h-12 rounded-none px-6 ${activeGroup === "sales_activity" ? "border-b-2 border-primary font-medium" : "text-muted-foreground hover:text-foreground"}`}
                 >
-                  Sales Activity
+                  {t("SalesActivity")}
                   {relations && (relations.leads.length > 0 || relations.sales.length > 0) && (
                     <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.leads.length + relations.sales.length}</Badge>
                   )}
@@ -318,7 +318,7 @@ export function VehicleDetailsDialog({
                   onClick={() => setActiveGroup("operations")}
                   className={`h-12 rounded-none px-6 ${activeGroup === "operations" ? "border-b-2 border-primary font-medium" : "text-muted-foreground hover:text-foreground"}`}
                 >
-                  Operations
+                  {t("Operations")}
                 </button>
               )}
               {(!permissionsLoading && (hasPermission(PERMISSIONS.VIEW_VEHICLE_EXPENSES) || hasPermission(PERMISSIONS.VIEW_VEHICLE_VALUATIONS) || hasPermission(PERMISSIONS.VIEW_VEHICLE_INFO))) && (
@@ -505,7 +505,7 @@ export function VehicleDetailsDialog({
             </section>
 
             <section hidden={activeGroup !== "sales_activity"} className="m-0 mb-4 rounded-lg border p-4 focus-visible:outline-none space-y-6">
-              <h2 className="text-base font-semibold">Leads, deposits & sales</h2>
+              <h2 className="text-base font-semibold">{t("LeadsDepositsSales")}</h2>
               <div>
                 <h3 className="font-semibold text-sm mb-3">{t("SalesRecord" as any) || "Sales Record"}</h3>
                 {!relations ? (
