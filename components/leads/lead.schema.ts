@@ -1,5 +1,5 @@
 import * as z from "zod";
-import { Doc } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 import { LEAD_STAGES } from "@/convex/constants";
 
 export const leadSchema = z.object({
@@ -32,6 +32,7 @@ export type LeadFormValues = z.infer<typeof leadSchema>;
 export interface LeadDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  defaultCustomerId?: Id<"customers"> | null;
   lead?:
     | (Doc<"leads"> & {
         customer?: Doc<"customers"> | null;

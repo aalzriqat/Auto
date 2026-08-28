@@ -190,3 +190,21 @@ describe("useTableControls auto-continuation", () => {
     expect(result.current.rows).toEqual([{ id: 1, name: "Alpha" }]);
   });
 });
+
+describe("useTableControls saved sorting", () => {
+  test("programmatic sort restores both the saved column and direction", () => {
+    const data = [{ id: 1, name: "Alpha" }, { id: 2, name: "Zulu" }];
+    const { result } = renderHook(() =>
+      useTableControls<Row>({
+        data,
+        sortAccessors: { name: (row) => row.name },
+      })
+    );
+
+    act(() => result.current.setSort("name", "desc"));
+
+    expect(result.current.sortKey).toBe("name");
+    expect(result.current.sortDir).toBe("desc");
+    expect(result.current.rows?.map((row) => row.name)).toEqual(["Zulu", "Alpha"]);
+  });
+});

@@ -89,9 +89,9 @@ export function VelocityTheme(props: ThemeProps) {
                 {lang === "en" ? "العربية" : "English"}
               </button>
             )}
-            <a href="/contact" className="vl-btn vl-btn-primary" style={{ padding: "8px 20px", fontSize: 13 }}>
+            <Link href="/contact" className="vl-btn vl-btn-primary" style={{ padding: "8px 20px", fontSize: 13 }}>
               {t.nav.contact}
-            </a>
+            </Link>
             <button onClick={() => setMobileNavOpen(!mobileNavOpen)} className="vl-mobile-toggle" style={{ display: "none", background: "none", border: "1px solid #e2e8f0", borderRadius: 6, padding: "7px 9px", cursor: "pointer", color: "#475569" }}>
               {mobileNavOpen ? <X size={18} /> : <Menu size={18} />}
             </button>
@@ -132,10 +132,10 @@ export function VelocityTheme(props: ThemeProps) {
                   {profile.heroSubtitle ?? "Browse our curated inventory and connect with our sales team."}
                 </p>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
-                  <a href="/inventory" className="vl-btn vl-btn-primary">
+                  <Link href="/inventory" className="vl-btn vl-btn-primary">
                     {t.browseInventory} <ArrowRight size={15} style={isArabic ? { transform: "rotate(180deg)" } : {}} />
-                  </a>
-                  <a href="/contact" className="vl-btn vl-btn-secondary">{t.contactSales}</a>
+                  </Link>
+                  <Link href="/contact" className="vl-btn vl-btn-secondary">{t.contactSales}</Link>
                 </div>
               </div>
               <div className="vl-hero-panel" style={{ overflow: "hidden", minHeight: 360, background: "#e2e8f0", position: "relative" }}>
@@ -177,9 +177,9 @@ export function VelocityTheme(props: ThemeProps) {
                 <h2 style={{ fontSize: "clamp(26px, 3.5vw, 38px)", fontWeight: 800, color: "#0f172a" }}>{t.featuredVehicles}</h2>
                 <p style={{ fontSize: 14, color: "#64748b", marginTop: 6 }}>{t.featuredSub}</p>
               </div>
-              <a href="/inventory" style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, color: primary, textDecoration: "none" }}>
+              <Link href="/inventory" style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, color: primary, textDecoration: "none" }}>
                 {t.viewAll} <ArrowRight size={14} style={isArabic ? { transform: "rotate(180deg)" } : {}} />
-              </a>
+              </Link>
             </div>
             <VelocityVehicleGrid vehicles={featuredVehicles} primary={primary} secondary={secondary} formatPrice={formatPrice} noVehiclesLabel={t.noVehicles} />
           </section>
@@ -193,9 +193,9 @@ export function VelocityTheme(props: ThemeProps) {
               <p style={{ fontSize: 16, color: "rgba(255,255,255,0.8)", marginBottom: 32 }}>
                 Our team is ready to help you find the perfect match.
               </p>
-              <a href="/contact" className="vl-btn" style={{ background: "#fff", color: primary, padding: "14px 36px", fontSize: 15, margin: "0 auto" }}>
+              <Link href="/contact" className="vl-btn" style={{ background: "#fff", color: primary, padding: "14px 36px", fontSize: 15, margin: "0 auto" }}>
                 {t.nav.contact} <ArrowRight size={15} style={isArabic ? { transform: "rotate(180deg)" } : {}} />
-              </a>
+              </Link>
             </div>
           </section>
         </>
@@ -394,9 +394,9 @@ export function VelocityTheme(props: ThemeProps) {
           <div style={{ borderTop: "1px solid #1e293b", paddingTop: 24, display: "flex", flexWrap: "wrap", gap: 16, justifyContent: "space-between", alignItems: "center", fontSize: 12, color: "#475569" }}>
             <p>© {new Date().getFullYear()} {profile.dealershipName}</p>
             <div style={{ display: "flex", gap: 20 }}>
-              <a href="/privacy" style={{ color: "#475569", textDecoration: "none" }}>{t.footerPrivacy}</a>
-              <a href="/terms" style={{ color: "#475569", textDecoration: "none" }}>{t.footerTerms}</a>
-              <a href="/data-deletion" style={{ color: "#475569", textDecoration: "none" }}>{t.footerDataDeletion}</a>
+              <Link href="/privacy" style={{ color: "#475569", textDecoration: "none" }}>{t.footerPrivacy}</Link>
+              <Link href="/terms" style={{ color: "#475569", textDecoration: "none" }}>{t.footerTerms}</Link>
+              <Link href="/data-deletion" style={{ color: "#475569", textDecoration: "none" }}>{t.footerDataDeletion}</Link>
             </div>
           </div>
         </div>

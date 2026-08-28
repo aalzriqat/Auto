@@ -585,13 +585,13 @@ export default function DealerSitePage() {
                 <span className="hidden sm:inline">{lang === "en" ? "العربية" : "English"}</span>
               </button>
             )}
-            <a
+            <Link
               href="/contact"
               className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-semibold text-white"
               style={{ backgroundColor: secondary }}
             >
               {t.nav.contact}
-            </a>
+            </Link>
             {/* Mobile hamburger */}
             <button
               className="lg:hidden rounded-md p-2 text-slate-700 hover:bg-slate-100 transition-colors"
@@ -632,16 +632,16 @@ export default function DealerSitePage() {
                 <h1 className="text-3xl font-black tracking-tight sm:text-4xl md:text-5xl lg:text-6xl">{profile.heroTitle}</h1>
                 <p className="mt-4 text-base text-slate-600 sm:text-lg">{profile.heroSubtitle}</p>
                 <div className="mt-6 flex flex-wrap gap-3">
-                  <a
+                  <Link
                     href="/inventory"
                     className="inline-flex items-center gap-2 rounded-md px-5 py-3 text-sm font-semibold text-white sm:text-base"
                     style={{ backgroundColor: primary }}
                   >
                     {t.browseInventory} <ArrowRight className={`h-4 w-4 ${isArabic ? "rotate-180" : ""}`} />
-                  </a>
-                  <a href="/contact" className="inline-flex items-center gap-2 rounded-md border px-5 py-3 text-sm font-semibold sm:text-base">
+                  </Link>
+                  <Link href="/contact" className="inline-flex items-center gap-2 rounded-md border px-5 py-3 text-sm font-semibold sm:text-base">
                     {t.contactSales}
-                  </a>
+                  </Link>
                 </div>
               </div>
               <div className="order-first overflow-hidden rounded-md border bg-slate-100 lg:order-last">
@@ -662,7 +662,7 @@ export default function DealerSitePage() {
                 <h2 className="text-xl font-bold sm:text-2xl">{t.featuredVehicles}</h2>
                 <p className="text-sm text-slate-600">{t.featuredSub}</p>
               </div>
-              <a href="/inventory" className="text-sm font-semibold" style={{ color: primary }}>{t.viewAll}</a>
+              <Link href="/inventory" className="text-sm font-semibold" style={{ color: primary }}>{t.viewAll}</Link>
             </div>
             <VehicleGrid vehicles={featuredVehicles} primary={primary} formatPrice={formatPrice} noVehiclesLabel={t.noVehicles} />
           </section>
@@ -857,9 +857,9 @@ export default function DealerSitePage() {
         <div className="mx-auto flex max-w-7xl flex-col gap-3 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between">
           <p>{profile.dealershipName}</p>
           <div className="flex gap-4">
-            <a href="/privacy" className="hover:text-slate-700">{t.footerPrivacy}</a>
-            <a href="/terms" className="hover:text-slate-700">{t.footerTerms}</a>
-            <a href="/data-deletion" className="hover:text-slate-700">{t.footerDataDeletion}</a>
+            <Link href="/privacy" className="hover:text-slate-700">{t.footerPrivacy}</Link>
+            <Link href="/terms" className="hover:text-slate-700">{t.footerTerms}</Link>
+            <Link href="/data-deletion" className="hover:text-slate-700">{t.footerDataDeletion}</Link>
           </div>
         </div>
       </footer>
