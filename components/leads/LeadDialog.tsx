@@ -4,7 +4,6 @@ import { useMemo, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import * as z from "zod";
 import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 
 import { api } from "@/convex/_generated/api";
@@ -67,16 +66,132 @@ function withCurrentOption(
   return [current, ...options];
 }
 
-export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
-  const { activeOrgId } = useOrg();
-  const { t, locale } = useLanguage();
-  const router = useRouter();
-  const [customerSearch, setCustomerSearch] = useState("");
+function getCurrentCustomerOption(
+  lead: LeadDialogProps["lead"],
+  defaultCustomer: Doc<"customers"> | null | undefined,
+  unknownLabel: string,
+): SearchableSelectOption | null {
+  if (lead) {
+    return {
+      value: lead.customerId as string,
+      label:
+        lead.customerName ||
+        (lead.customer ? `${lead.customer.firstName} ${lead.customer.lastName}` : "") ||
+        unknownLabel,
+      subLabel: lead.phone || lead.customer?.phone || lead.email || lead.customer?.email || undefined,
+    };
+  }
 
-  // Data for dropdowns
+  if (defaultCustomer) {
+    return {
+      value: defaultCustomer._id as string,
+      label: `${defaultCustomer.firstName} ${defaultCustomer.lastName}`,
+      subLabel: defaultCustomer.phone || defaultCustomer.email || undefined,
+    };
+  }
+
+  return null;
+}
+
+function getLeadFormDefaults(
+  lead: LeadDialogProps["lead"],
+  defaultCustomerId: Id<"customers"> | null | undefined,
+): LeadFormValues {
+  if (lead) {
+    return {
+      customerId: lead.customerId,
+      vehicleId: lead.vehicleId || "",
+      assignedUserId: lead.assignedUserId || "",
+      source: lead.source,
+      stage: lead.stage,
+      notes: lead.notes || "",
+    };
+  }
+
+  return {
+    customerId: defaultCustomerId ?? "",
+    vehicleId: "",
+    assignedUserId: "",
+    source: "Walk-in",
+    stage: "NEW",
+    notes: "",
+  };
+}
+
+interface LeadSubmissionOptions {
+  activeOrgId: Id<"organizations"> | null;
+  lead: LeadDialogProps["lead"];
+  customFieldValues: Record<string, string>;
+  onOpenChange: (open: boolean) => void;
+}
+
+function useLeadSubmission({
+  activeOrgId,
+  lead,
+  customFieldValues,
+  onOpenChange,
+}: Readonly<LeadSubmissionOptions>) {
+  const { t } = useLanguage();
+  const createLead = useMutation(api.leads.create);
+  const updateLead = useMutation(api.leads.update);
+  const saveCustomFields = useSaveCustomFieldValues();
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const onSubmit = async (values: LeadFormValues) => {
+    if (!activeOrgId) return;
+    setIsSubmitting(true);
+    try {
+      const payload = {
+        customerId: values.customerId as Id<"customers">,
+        vehicleId: values.vehicleId && values.vehicleId !== "none" ? values.vehicleId as Id<"vehicles"> : undefined,
+        assignedUserId: values.assignedUserId && values.assignedUserId !== "none" ? values.assignedUserId as Id<"users"> : undefined,
+        source: values.source,
+        stage: values.stage as any,
+        notes: values.notes || undefined,
+      };
+
+      if (lead) {
+        await updateLead({ orgId: activeOrgId, leadId: lead._id, ...payload });
+        await saveCustomFields(activeOrgId, "lead", lead._id, customFieldValues);
+        toast.success(t("LeadUpdatedSuccess" as any) || "Lead updated successfully");
+      } else {
+        const newId = await createLead({ orgId: activeOrgId, ...payload });
+        if (newId) await saveCustomFields(activeOrgId, "lead", newId, customFieldValues);
+        toast.success(t("LeadAddedSuccess" as any) || "Lead created successfully");
+      }
+      onOpenChange(false);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return { isSubmitting, onSubmit };
+}
+
+interface LeadDropdownOptions {
+  activeOrgId: Id<"organizations"> | null;
+  lead: LeadDialogProps["lead"];
+  defaultCustomerId: Id<"customers"> | null | undefined;
+}
+
+function useLeadDropdownOptions({
+  activeOrgId,
+  lead,
+  defaultCustomerId,
+}: Readonly<LeadDropdownOptions>) {
+  const { t } = useLanguage();
+  const [customerSearch, setCustomerSearch] = useState("");
   const customerSelectorOptions = useQuery(
     api.customers.selectorOptions,
     activeOrgId ? { orgId: activeOrgId, search: customerSearch } : "skip"
+  );
+  const defaultCustomer = useQuery(
+    api.customers.get,
+    activeOrgId && defaultCustomerId && !lead
+      ? { orgId: activeOrgId, customerId: defaultCustomerId }
+      : "skip"
   );
   const vehicles = useQuery(api.vehicles.listAll, activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE", includeReserved: true } : "skip");
   const dynamicLeadSources = useQuery(
@@ -96,10 +211,10 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
   const vehicleOptions = useMemo(
     () =>
       withCurrentOption(
-        vehicles?.map((v: Doc<"vehicles">) => ({
-          value: v._id as string,
-          label: `${v.year} ${v.make} ${v.model}`,
-          subLabel: `${v.vin} · ${v.sellingPrice.toLocaleString()} JOD${v.status === "RESERVED" ? " · Reserved (pending deal)" : ""}`,
+        vehicles?.map((vehicle: Doc<"vehicles">) => ({
+          value: vehicle._id as string,
+          label: `${vehicle.year} ${vehicle.make} ${vehicle.model}`,
+          subLabel: `${vehicle.vin} · ${vehicle.sellingPrice.toLocaleString()} JOD${vehicle.status === "RESERVED" ? " · Reserved (pending deal)" : ""}`,
         })) ?? [],
         lead?.vehicleId
           ? {
@@ -117,10 +232,10 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
   const assigneeOptions = useMemo(
     () =>
       withCurrentOption(
-        memberships?.map((m) => ({
-          value: m.userId as string,
-          label: m.userName,
-          subLabel: m.roleName || undefined,
+        memberships?.map((membership) => ({
+          value: membership.userId as string,
+          label: membership.userName,
+          subLabel: membership.roleName || undefined,
         })) ?? [],
         lead?.assignedUserId
           ? {
@@ -136,15 +251,12 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
     [memberships, lead, t]
   );
 
-  // Source is a free-text column, not an FK, so the same pinning applies to its
-  // raw string: an automation-written "Facebook DM" is a valid source that no
-  // org has in its configured list.
   const sourceOptions = useMemo(() => {
     const configured =
       dynamicLeadSources && dynamicLeadSources.length > 0
         ? dynamicLeadSources
-            .filter((s: Doc<"orgLeadSources">) => s.isActive)
-            .map((s: Doc<"orgLeadSources">) => s.label)
+            .filter((source: Doc<"orgLeadSources">) => source.isActive)
+            .map((source: Doc<"orgLeadSources">) => source.label)
         : ["Walk-in", "Website", "Facebook", "Instagram", "Referral", "Phone", "Other"];
 
     return lead?.source && !configured.includes(lead.source)
@@ -152,13 +264,6 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
       : configured;
   }, [dynamicLeadSources, lead]);
 
-  const createLead = useMutation(api.leads.create);
-  const updateLead = useMutation(api.leads.update);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [customFieldValues, setCustomFieldValues] = useState<Record<string, string>>({});
-  const saveCustomFields = useSaveCustomFieldValues();
-  // `customers.selectorOptions` searches server-side but still returns a
-  // capped window, so a lead's own customer can fall outside it — pin it in.
   const customerOptions = useMemo(
     () =>
       withCurrentOption(
@@ -167,20 +272,29 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
           label: `${customer.firstName} ${customer.lastName}`,
           subLabel: customer.phone || customer.email || undefined,
         })) ?? [],
-        lead
-          ? {
-              value: lead.customerId as string,
-              label:
-                lead.customerName ||
-                (lead.customer ? `${lead.customer.firstName} ${lead.customer.lastName}` : "") ||
-                (t("Unknown" as any) || "Unknown customer"),
-              subLabel:
-                lead.phone || lead.customer?.phone || lead.email || lead.customer?.email || undefined,
-            }
-          : null
+        getCurrentCustomerOption(lead, defaultCustomer, t("Unknown" as any) || "Unknown customer")
       ),
-    [customerSelectorOptions, lead, t],
+    [customerSelectorOptions, defaultCustomer, lead, t],
   );
+
+  return {
+    assigneeOptions,
+    customerOptions,
+    pipelineStages,
+    setCustomerSearch,
+    sourceOptions,
+    vehicleOptions,
+  };
+}
+
+export function LeadDialog({ open, onOpenChange, lead, defaultCustomerId }: Readonly<LeadDialogProps>) {
+  const { activeOrgId } = useOrg();
+  const { t, locale } = useLanguage();
+  const router = useRouter();
+  const { assigneeOptions, customerOptions, pipelineStages, setCustomerSearch, sourceOptions, vehicleOptions } =
+    useLeadDropdownOptions({ activeOrgId, lead, defaultCustomerId });
+  const [customFieldValues, setCustomFieldValues] = useState<Record<string, string>>({});
+  const { isSubmitting, onSubmit } = useLeadSubmission({ activeOrgId, lead, customFieldValues, onOpenChange });
 
   const form = useForm<LeadFormValues>({
     resolver: zodResolver(leadSchema as any),
@@ -195,26 +309,9 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
   });
 
   useEffect(() => {
-    if (lead && open) {
-      form.reset({
-        customerId: lead.customerId,
-        vehicleId: lead.vehicleId || "",
-        assignedUserId: lead.assignedUserId || "",
-        source: lead.source,
-        stage: lead.stage,
-        notes: lead.notes || "",
-      });
-    } else if (open && !lead) {
-      form.reset({
-        customerId: "",
-        vehicleId: "",
-        assignedUserId: "",
-        source: "Walk-in",
-        stage: "NEW",
-        notes: "",
-      });
-    }
-  }, [lead, open, form]);
+    if (!open) return;
+    form.reset(getLeadFormDefaults(lead, defaultCustomerId));
+  }, [defaultCustomerId, lead, open, form]);
 
   // Non-blocking nudge: warn if this customer already has an open lead
   // (optionally for the same vehicle) before the user creates a duplicate.
@@ -237,43 +334,6 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
     api.leads.getLinkedSale,
     activeOrgId && lead && lead.stage === "WON" ? { orgId: activeOrgId, leadId: lead._id } : "skip"
   );
-
-  const onSubmit = async (values: LeadFormValues) => {
-    if (!activeOrgId) return;
-    setIsSubmitting(true);
-    try {
-      const payload = {
-        customerId: values.customerId as Id<"customers">,
-        vehicleId: values.vehicleId && values.vehicleId !== "none" ? values.vehicleId as Id<"vehicles"> : undefined,
-        assignedUserId: values.assignedUserId && values.assignedUserId !== "none" ? values.assignedUserId as Id<"users"> : undefined,
-        source: values.source,
-        stage: values.stage as any,
-        notes: values.notes || undefined,
-      };
-
-      if (lead) {
-        await updateLead({
-          orgId: activeOrgId,
-          leadId: lead._id,
-          ...payload,
-        });
-        await saveCustomFields(activeOrgId, "lead", lead._id, customFieldValues);
-        toast.success(t("LeadUpdatedSuccess" as any) || "Lead updated successfully");
-      } else {
-        const newId = await createLead({
-          orgId: activeOrgId,
-          ...payload,
-        });
-        if (newId) await saveCustomFields(activeOrgId, "lead", newId, customFieldValues);
-        toast.success(t("LeadAddedSuccess" as any) || "Lead created successfully");
-      }
-      onOpenChange(false);
-    } catch (error) {
-      toast.error(getErrorMessage(error));
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
 
   const handleCreateQuote = () => {
     if (!activeOrgId || !lead || !lead.vehicleId) return;
