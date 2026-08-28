@@ -2749,7 +2749,18 @@ describe("P1-C2E a reservation proof must still be LIVE, not merely ACTIVE", () 
     // a query context may also call, and would race the cron that owns it.
     const seed = await seedDealer("c2e6");
     const free = await vehicle(seed);
-    const expired = await reservationRow(seed, free, Date.now() - 60_000);
+    const expiresAt = Date.now() - 60_000;
+    const expired = await reservationRow(seed, free, expiresAt);
+
+    // ⚠️ THE BEFORE VALUE IS READ BACK, NOT ASSUMED. An earlier version asserted
+    // only `toBeDefined()` under the words "its expiry is untouched" — which any
+    // rewrite to another number, `0` included, would have satisfied. The claim
+    // was stronger than the assertion; this is the assertion catching up.
+    const before = await seed.t.run((ctx) => ctx.db.get(expired));
+    expect(
+      before?.expiresAt,
+      "precondition: the row really carries the expiry we wrote, so the comparison below cannot pass undefined-to-undefined"
+    ).toBe(expiresAt);
 
     await seed.t.run((ctx) =>
       resolveActingRoot(ctx, {
@@ -2762,6 +2773,63 @@ describe("P1-C2E a reservation proof must still be LIVE, not merely ACTIVE", () 
 
     const after = await seed.t.run((ctx) => ctx.db.get(expired));
     expect(after?.status, "the row is left exactly as the sweep will find it").toBe("ACTIVE");
-    expect(after?.expiresAt, "and its expiry is untouched").toBeDefined();
+    expect(
+      after?.expiresAt,
+      "and its expiry is the EXACT value it had before — not merely still defined"
+    ).toBe(before?.expiresAt);
+  });
+
+  // ── ONE CLOCK READING, PROVED BEHAVIOURALLY ──────────────────────────────
+  //
+  // ⚠️ THIS EXISTS BECAUSE I ARGUED IT COULDN'T. I disclosed a surviving mutant
+  // — swapping the shared `decisionNow` inside `resolveAdoption` for its own
+  // `Date.now()` — and claimed any test killing it would be written for the
+  // mutant rather than for behaviour. Both reviewer seats disagreed, and they
+  // were right: the property is not "how many times is the clock read", it is
+  // A RESERVATION LIVE WHEN THE DECISION BEGAN STAYS LIVE FOR THAT DECISION.
+  // That is the invariant the comment at `commitments.ts:292-296` claims, and
+  // an authority that contradicts itself mid-call is a real defect, not a
+  // stylistic one.
+  test("C2E.7 the FIRST clock reading governs the WHOLE decision", async () => {
+    const seed = await seedDealer("c2e7");
+    const { v, reservationId, quoteId } = await adoptableButExpiring(seed);
+
+    // Alive by exactly one millisecond at the decision instant. Any later
+    // reading of the clock inside the decision sees it expired.
+    const T = Date.now();
+    await seed.t.run((ctx) => ctx.db.patch(reservationId, { expiresAt: T + 1 }));
+
+    const decision = await seed.t.run(async (ctx) => {
+      // ⚠️ THE SPY IS INSTALLED HERE — INSIDE `t.run`, IMMEDIATELY BEFORE THE
+      // CALL — AND THE PLACEMENT IS THE POINT. `mockReturnValueOnce` binds to
+      // whichever `Date.now()` fires first, so installing it outside would
+      // couple this test to the harness's setup reads: if `convex-test` read
+      // the clock first it would consume `T`, the authority would start at
+      // `T + 2`, and a CORRECT implementation would fail. Installed here, every
+      // setup read has already happened, so the first reading is the
+      // authority's own. The test is then coupled to the invariant, not to
+      // call order.
+      const spy = vi.spyOn(Date, "now");
+      spy.mockReturnValueOnce(T).mockReturnValue(T + 2);
+      try {
+        return await resolveActingRoot(ctx, {
+          orgId: seed.orgId,
+          vehicleId: v,
+          lineage: { quoteId, adoptReservationId: reservationId },
+          actingCustomerId: seed.customerA,
+        });
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    // Shared reading: the decision weighs the reservation at T, where T + 1 is
+    // still ahead, and adopts. A second reading inside the adoption door would
+    // see T + 2, call the same reservation expired, and REFUSE — the authority
+    // disagreeing with itself about one row inside one call.
+    expect(
+      decision.decision,
+      "a reservation live when the decision began must stay live for that whole decision"
+    ).toBe("ADOPT_RESERVATION");
   });
 });
