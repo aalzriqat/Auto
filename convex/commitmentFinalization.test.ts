@@ -62,13 +62,13 @@
  *
  * ⚠️ `commitmentRoots.consumedBySaleId` DOES NOT EXIST IN THE SCHEMA YET, and
  * neither does a root-level `by_consumed_sale` index — today that index exists
- * only on `vehicleCommitmentClaims` (`schema.ts:3002`). This commit is
+ * only on `vehicleCommitmentClaims` (`schema.ts:3001`). This commit is
  * tests-only and cannot add either. The contracts read the field through one
  * narrow cast (`rootSaleStamp`) so the file typechecks against today's schema
  * while still specifying tomorrow's behaviour.
  *
  * `commitmentRoots.status` ALREADY admits OPEN | RELEASED | CONSUMED
- * (`schema.ts:2907`), and the table already carries `closedAt` / `closedReason`.
+ * (`schema.ts:2911`), and the table already carries `closedAt` / `closedReason`.
  * The terminal states are representable today; nothing has ever written one.
  * G.5 proves that.
  *
@@ -84,14 +84,15 @@
  *      sales.ts:523          ->  api.sales.completeDraft
  *      applications.ts:3130  ->  api.applications.finalizeDeal
  *
- * F.8 exercises ALL FOUR, `finalizeDeal` included, through a real financed
- * lifecycle. F.9 gives each of the four a negative ownership case.
+ * F.8a-F.8d exercise ALL FOUR, `finalizeDeal` included, through a real
+ * financed lifecycle. F.9a-F.9e give each a negative ownership case — one test
+ * per door, so an early failure cannot mask a later door.
  *
  * ⚠️ AND THE COMPLETION DOORS ARE NOT WIRED TO THE AUTHORITY YET. Phase 1 routes
  * only `deposits.create`, `applications.createFromQuote` and
  * `vehicles.createReservation` through `assertAcquirable` — `commitments.ts:958`
  * says so in terms: "Sale completion, trade-ins and inventory removal do NOT
- * come through here yet." F.3, F.4 and F.9 verify that today a RIVAL's
+ * come through here yet." F.3, F.4 and F.9a-F.9e verify that today a RIVAL's
  * `sales.completeFromQuote` on a held car SUCCEEDS.
  *
  * That refusal is Phase-2 scope, not a widening of it, because CONSUME is
@@ -208,7 +209,7 @@
  * Owner ruling on finance states: REJECTED and CANCELLED no longer hold the car.
  * That already matches the product — both call `releaseHoldForApplicationQuote`.
  * DRAFT is unreachable through `createFromQuote` (it writes PENDING_DOCS,
- * `applications.ts:2182`) but is retained in the set because the existing guard
+ * `applications.ts:2181`) but is retained in the set because the existing guard
  * retains it, and a DRAFT row from legacy data holding the car is the
  * conservative reading.
  *
