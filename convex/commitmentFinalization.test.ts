@@ -228,22 +228,17 @@
  *   PART B (F.*) — what M3 must do. Red now, each failing at its OWN
  *   finalization assertion and never in setup.
  *
- *   ⚠️ G.4 AND G.5 ARE DEMOLITION MARKERS — the two halves of the gap itself.
- *   G.4 asserts a completed sale leaves the root OPEN and unstamped; G.5
- *   asserts a RELEASE leaves it OPEN too. Both are TRUE TODAY and both MUST BE
- *   DELETED BY THE M3 COMMIT, which makes F.1 and F.14-F.19 true and these two
- *   false. They are the ONLY Part A contracts that do not survive.
+ *   ⚠️ WHICH CONTRACTS DO NOT SURVIVE M3 IS ANSWERED IN ONE PLACE ONLY: the
+ *   PART X block header, further down. It lists them, names the Part-B contract
+ *   that falsifies each, and states the rule for what belongs there.
  *
- *   Marking G.5 matters as much as marking G.4. Its body completes a real sale
- *   AND forfeits a real sole-basis deposit, then asserts every root is still
- *   OPEN — so a correct M3 turns it red. Unmarked, an implementer running Part
- *   A as the header instructs would read that red as "my model is wrong", and
- *   the worst available response is to special-case M3 so this fixture keeps
- *   its roots OPEN — reintroducing precisely the SCRUM-199 class this rebuild
- *   exists to close.
+ *   Deliberately not restated here. An earlier revision described the set in
+ *   both places, the set grew from two to five, and only one copy was updated —
+ *   so the file contradicted itself for two review rounds. A count kept in two
+ *   places is a count that will disagree with itself.
  *
  * No contract imports a finalization function. Importing something unwritten is
- * a compile error that would turn the whole file red, Part A included, and
+ * a compile error that would turn the whole file red, PARTS G and X included,
  * destroy the only signal the split provides. Every contract asserts observable
  * state after a real product door has run.
  *
