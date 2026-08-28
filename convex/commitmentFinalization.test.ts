@@ -216,10 +216,14 @@
  * PART A / PART B
  * ══════════════════════════════════════════════════════════════════════════════
  *
- *   PART A (G.*) — what is TRUE TODAY. Green now, green after M3, with TWO
- *   marked exceptions. If any of these is red, the model behind Part B is wrong
- *   and Part B is built on sand. In round 2 Part A caught three fixture errors
- *   before they could be misread as missing behaviour.
+ *   PART G (G.*) — what is TRUE TODAY AND STAYS TRUE. Green now, green after
+ *   M3. If any of these is red, the model behind Part B is wrong and Part B is
+ *   built on sand. In round 2 this caught three fixture errors before they
+ *   could be misread as missing behaviour.
+ *
+ *   PART X (also G.*, in its own block) — what is TRUE TODAY AND MUST BECOME
+ *   FALSE. FIVE contracts, green today by design, every one of them DELETED by
+ *   the M3 commit. The block header carries the rule for what belongs there.
  *
  *   PART B (F.*) — what M3 must do. Red now, each failing at its OWN
  *   finalization assertion and never in setup.
@@ -1475,16 +1479,18 @@ describe("P2-F M3 finalization barrier — CONSUME", () => {
 
     // ⚠️ THIS IS A CONTROL, NOT AN M3 CONTRACT, AND IT IS GREEN TODAY.
     //
-    // A rival cannot reach finalizeDeal at all: createFromQuote acquires, and
-    // the Phase-1 authority refuses there. Under the invariant this file
-    // specifies, "an APPROVED application whose car belongs to another root" is
-    // UNREACHABLE — an APPROVED application IS a live FINANCE basis, so that
-    // root cannot have been released to anyone else. A contract that drove
-    // finalizeDeal into that state would have to fabricate it, which is exactly
-    // the fixture dishonesty round 2 was blocked for.
+    // On the ORDINARY rival path a competitor never reaches finalizeDeal at
+    // all: `createFromQuote` acquires, and the Phase-1 authority refuses there.
+    // This contract pins that, and that the refusal leaves nothing behind.
     //
-    // What is testable, and what this asserts, is that the refusal happens at
-    // the acquiring door and leaves nothing behind.
+    // ⚠️ IT IS NOT A CLAIM THAT COMPLETION-TIME OWNERSHIP CANNOT BREAK. An
+    // earlier round argued exactly that — "an APPROVED application IS a live
+    // FINANCE basis, so its car cannot belong to another root" — and it was
+    // WRONG. A sale through a different door followed by a cancellation leaves
+    // the root CONSUMED and the application still APPROVED, so the two fall out
+    // of correspondence. F.9e drives that sequence and requires finalizeDeal to
+    // refuse. Read the two together: F.9d is the ordinary path, F.9e is the
+    // exception that disproves the tempting invariant.
     await expect(
       seed.asUser.mutation(api.applications.createFromQuote, { orgId: seed.orgId, quoteId: rival })
     ).rejects.toThrow();
@@ -1741,8 +1747,13 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
 
     await releaseVehicle(seed, quoteId, v1);
 
-    const released = (await rootsOn(seed, v1))[0];
-    expect(released.status, "the car is free the moment it leaves the deal").toBe("RELEASED");
+    // D4 is the ONE door outside the shared release helper, because it needs a
+    // multi-car fixture — which is exactly how it slipped the audit contract
+    // every other door gets. It asserts through the same helper here.
+    expectTerminalRoot((await rootsOn(seed, v1))[0], {
+      status: "RELEASED",
+      door: "releaseVehicleAllocation — the car is free the moment it leaves the deal",
+    });
     expect(
       (await rootsOn(seed, v2))[0].status,
       "and the car still on the deal is untouched — release is per-car, not per-quote"
