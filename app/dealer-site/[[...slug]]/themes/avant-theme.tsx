@@ -92,9 +92,9 @@ export function AvantTheme(props: ThemeProps) {
                 {lang === "en" ? "العربية" : "English"}
               </button>
             )}
-            <a href="/contact" style={{ background: "#fff", color: primary, borderRadius: 8, padding: "8px 18px", fontSize: 13, fontWeight: 700, textDecoration: "none" }}>
+            <Link href="/contact" style={{ background: "#fff", color: primary, borderRadius: 8, padding: "8px 18px", fontSize: 13, fontWeight: 700, textDecoration: "none" }}>
               {t.nav.contact}
-            </a>
+            </Link>
             <button onClick={() => setMobileNavOpen(!mobileNavOpen)} className="av-mobile-toggle" style={{ display: "none", background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 6, padding: "7px 9px", cursor: "pointer", color: "#fff" }}>
               {mobileNavOpen ? <X size={18} /> : <Menu size={18} />}
             </button>
@@ -134,10 +134,10 @@ export function AvantTheme(props: ThemeProps) {
                   {profile.heroSubtitle ?? "Discover vehicles built for those who value performance, comfort, and innovation."}
                 </p>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
-                  <a href="/inventory" className="av-btn-white">
+                  <Link href="/inventory" className="av-btn-white">
                     {t.browseInventory} <ArrowRight size={15} style={isArabic ? { transform: "rotate(180deg)" } : {}} />
-                  </a>
-                  <a href="/contact" className="av-btn-outline-white">{t.contactSales}</a>
+                  </Link>
+                  <Link href="/contact" className="av-btn-outline-white">{t.contactSales}</Link>
                 </div>
               </div>
               <div style={{ position: "relative" }}>
@@ -166,9 +166,9 @@ export function AvantTheme(props: ThemeProps) {
             </div>
             <AvantVehicleGrid vehicles={featuredVehicles} primary={primary} secondary={secondary} formatPrice={formatPrice} noVehiclesLabel={t.noVehicles} featured />
             <div style={{ textAlign: "center", marginTop: 40 }}>
-              <a href="/inventory" className="av-btn-primary">
+              <Link href="/inventory" className="av-btn-primary">
                 {t.viewAll} <ArrowRight size={14} style={isArabic ? { transform: "rotate(180deg)" } : {}} />
-              </a>
+              </Link>
             </div>
           </section>
 
@@ -180,8 +180,8 @@ export function AvantTheme(props: ThemeProps) {
                 Speak with our team today and let us help you drive home your perfect match.
               </p>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "center" }}>
-                <a href="/contact" className="av-btn-white">{t.nav.contact}</a>
-                <a href="/inventory" className="av-btn-outline-white">{t.browseInventory}</a>
+                <Link href="/contact" className="av-btn-white">{t.nav.contact}</Link>
+                <Link href="/inventory" className="av-btn-outline-white">{t.browseInventory}</Link>
               </div>
             </div>
           </section>
@@ -378,9 +378,9 @@ export function AvantTheme(props: ThemeProps) {
           <div style={{ borderTop: "1px solid #2d2d3f", paddingTop: 24, display: "flex", flexWrap: "wrap", gap: 16, justifyContent: "space-between", alignItems: "center", fontSize: 12, color: "#4a5568" }}>
             <p>© {new Date().getFullYear()} {profile.dealershipName}</p>
             <div style={{ display: "flex", gap: 20 }}>
-              <a href="/privacy" style={{ color: "#4a5568", textDecoration: "none" }}>{t.footerPrivacy}</a>
-              <a href="/terms" style={{ color: "#4a5568", textDecoration: "none" }}>{t.footerTerms}</a>
-              <a href="/data-deletion" style={{ color: "#4a5568", textDecoration: "none" }}>{t.footerDataDeletion}</a>
+              <Link href="/privacy" style={{ color: "#4a5568", textDecoration: "none" }}>{t.footerPrivacy}</Link>
+              <Link href="/terms" style={{ color: "#4a5568", textDecoration: "none" }}>{t.footerTerms}</Link>
+              <Link href="/data-deletion" style={{ color: "#4a5568", textDecoration: "none" }}>{t.footerDataDeletion}</Link>
             </div>
           </div>
         </div>

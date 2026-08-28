@@ -829,9 +829,9 @@ function ShowcaseHeader({
               <span>{props.lang === "en" ? "العربية" : "English"}</span>
             </button>
           )}
-          <a href="/contact" className="wf-primary-action">
+          <Link href="/contact" className="wf-primary-action">
             {design.id === "concierge" ? copy.askConcierge : props.t.nav.contact}
-          </a>
+          </Link>
           <button
             type="button"
             className="wf-menu-button"
@@ -890,11 +890,11 @@ function ObsidianHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }
           <h1 className="wf-hero-title wf-motion-two">{profile.heroTitle ?? profile.dealershipName}</h1>
           <p className="wf-hero-copy wf-motion-three">{profile.heroSubtitle}</p>
           <div className="wf-hero-buttons wf-motion-four">
-            <a href="/inventory" className="wf-button wf-button--primary">
+            <Link href="/inventory" className="wf-button wf-button--primary">
               {props.t.browseInventory}
               <ArrowIcon />
-            </a>
-            <a href="/contact" className="wf-button wf-button--ghost">{copy.privateViewing}</a>
+            </Link>
+            <Link href="/contact" className="wf-button wf-button--ghost">{copy.privateViewing}</Link>
           </div>
         </div>
         <div className="wf-atelier-panel">
@@ -929,11 +929,11 @@ function DesertHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) 
               <span>{copy.deliveryReady}</span>
             </div>
             <div className="wf-hero-buttons wf-motion-five">
-              <a href="/inventory" className="wf-button wf-button--primary">
+              <Link href="/inventory" className="wf-button wf-button--primary">
                 {props.t.browseInventory}
                 <ArrowIcon />
-              </a>
-              <a href="/branches" className="wf-button wf-button--ghost">{props.t.branchesTitle}</a>
+              </Link>
+              <Link href="/branches" className="wf-button wf-button--ghost">{props.t.branchesTitle}</Link>
             </div>
           </div>
           <div className="wf-desert-stage">
@@ -972,11 +972,11 @@ function CommandHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy })
               <Metric icon={<ShieldCheck size={17} />} label={copy.verifiedInventory} value={copy.availableNow} />
             </div>
             <div className="wf-hero-buttons wf-motion-five">
-              <a href="/inventory" className="wf-button wf-button--primary">
+              <Link href="/inventory" className="wf-button wf-button--primary">
                 {props.t.browseInventory}
                 <ArrowIcon />
-              </a>
-              <a href="/finance" className="wf-button wf-button--ghost">{copy.financeOptions}</a>
+              </Link>
+              <Link href="/finance" className="wf-button wf-button--ghost">{copy.financeOptions}</Link>
             </div>
           </div>
           <div className="wf-command-visual">
@@ -1010,11 +1010,11 @@ function LucentHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) 
             <h1 className="wf-hero-title wf-motion-two">{profile.heroTitle ?? profile.dealershipName}</h1>
             <p className="wf-hero-copy wf-motion-three">{profile.heroSubtitle}</p>
             <div className="wf-hero-buttons wf-motion-four">
-              <a href="/inventory" className="wf-button wf-button--primary">
+              <Link href="/inventory" className="wf-button wf-button--primary">
                 {props.t.browseInventory}
                 <ArrowIcon />
-              </a>
-              <a href="/finance" className="wf-button wf-button--ghost">{props.t.financeTitle}</a>
+              </Link>
+              <Link href="/finance" className="wf-button wf-button--ghost">{props.t.financeTitle}</Link>
             </div>
           </div>
           <div className="wf-lucent-stage">
@@ -1023,7 +1023,7 @@ function LucentHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) 
             <div className="wf-studio-card">
               <span>{copy.financeOptions}</span>
               <strong>{vehicle ? props.formatPrice(vehicle.price) : props.t.contactForPrice}</strong>
-              <a href="/finance">{props.t.requestFinancing}</a>
+              <Link href="/finance">{props.t.requestFinancing}</Link>
             </div>
           </div>
         </div>
@@ -1049,11 +1049,11 @@ function ConciergeHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy 
             <p className="wf-hero-copy wf-motion-three">{profile.heroSubtitle}</p>
             <EditorialIndex vehicles={props.featuredVehicles} copy={copy} />
             <div className="wf-hero-buttons wf-motion-four">
-              <a href="/contact" className="wf-button wf-button--primary">
+              <Link href="/contact" className="wf-button wf-button--primary">
                 {copy.askConcierge}
                 <ArrowIcon />
-              </a>
-              <a href="/inventory" className="wf-button wf-button--ghost">{props.t.browseInventory}</a>
+              </Link>
+              <Link href="/inventory" className="wf-button wf-button--ghost">{props.t.browseInventory}</Link>
             </div>
           </div>
           <div className="wf-editorial-cover">
@@ -1087,8 +1087,8 @@ function NeonGridHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }
               <Metric icon={<ShieldCheck size={17} />} label={copy.verifiedInventory} value={copy.readyToday} />
             </div>
             <div className="wf-hero-buttons wf-motion-five">
-              <a href="/inventory" className="wf-button wf-button--primary">{props.t.browseInventory}<ArrowIcon /></a>
-              <a href="/contact" className="wf-button wf-button--ghost">{copy.instantReply}</a>
+              <Link href="/inventory" className="wf-button wf-button--primary">{props.t.browseInventory}<ArrowIcon /></Link>
+              <Link href="/contact" className="wf-button wf-button--ghost">{copy.instantReply}</Link>
             </div>
           </div>
           <div className="wf-neon-stage">
@@ -1124,8 +1124,8 @@ function CinemaNoirHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy
             <h1 className="wf-hero-title wf-motion-two">{profile.heroTitle ?? profile.dealershipName}</h1>
             <p className="wf-hero-copy wf-motion-three">{profile.heroSubtitle}</p>
             <div className="wf-hero-buttons wf-motion-four">
-              <a href="/contact" className="wf-button wf-button--primary">{copy.bookViewing}<ArrowIcon /></a>
-              <a href="/inventory" className="wf-button wf-button--ghost">{props.t.browseInventory}</a>
+              <Link href="/contact" className="wf-button wf-button--primary">{copy.bookViewing}<ArrowIcon /></Link>
+              <Link href="/inventory" className="wf-button wf-button--ghost">{props.t.browseInventory}</Link>
             </div>
           </div>
           <div className="wf-cinema-screen">
@@ -1159,8 +1159,8 @@ function AtlasRallyHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy
             <h1 className="wf-hero-title wf-motion-two">{profile.heroTitle ?? profile.dealershipName}</h1>
             <p className="wf-hero-copy wf-motion-three">{profile.heroSubtitle}</p>
             <div className="wf-atlas-actions wf-motion-four">
-              <a href="/inventory" className="wf-button wf-button--primary">{props.t.browseInventory}<ArrowIcon /></a>
-              <a href="/branches" className="wf-button wf-button--ghost">{props.t.branchesTitle}</a>
+              <Link href="/inventory" className="wf-button wf-button--primary">{props.t.browseInventory}<ArrowIcon /></Link>
+              <Link href="/branches" className="wf-button wf-button--ghost">{props.t.branchesTitle}</Link>
             </div>
           </div>
           <div className="wf-atlas-card">
@@ -1200,7 +1200,7 @@ function GlassHorizonHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCo
             <div className="wf-glass-floating">
               <span>{copy.availableNow}</span>
               <strong>{vehicle ? props.formatPrice(vehicle.price) : props.t.contactForPrice}</strong>
-              <a href="/inventory">{copy.viewDetails}</a>
+              <Link href="/inventory">{copy.viewDetails}</Link>
             </div>
           </div>
         </div>
@@ -1229,8 +1229,8 @@ function TorqueLabHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy 
             <h1 className="wf-hero-title wf-motion-two">{profile.heroTitle ?? profile.dealershipName}</h1>
             <p className="wf-hero-copy wf-motion-three">{profile.heroSubtitle}</p>
             <div className="wf-hero-buttons wf-motion-four">
-              <a href="/inventory" className="wf-button wf-button--primary">{props.t.browseInventory}<ArrowIcon /></a>
-              <a href="/finance" className="wf-button wf-button--ghost">{props.t.financeTitle}</a>
+              <Link href="/inventory" className="wf-button wf-button--primary">{props.t.browseInventory}<ArrowIcon /></Link>
+              <Link href="/finance" className="wf-button wf-button--ghost">{props.t.financeTitle}</Link>
             </div>
           </div>
         </div>
@@ -1252,8 +1252,8 @@ function PearlMajlisHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCop
             <h1 className="wf-hero-title wf-motion-two">{profile.heroTitle ?? profile.dealershipName}</h1>
             <p className="wf-hero-copy wf-motion-three">{profile.heroSubtitle}</p>
             <div className="wf-hero-buttons wf-motion-four">
-              <a href="/contact" className="wf-button wf-button--primary">{copy.askConcierge}<ArrowIcon /></a>
-              <a href="/inventory" className="wf-button wf-button--ghost">{props.t.browseInventory}</a>
+              <Link href="/contact" className="wf-button wf-button--primary">{copy.askConcierge}<ArrowIcon /></Link>
+              <Link href="/inventory" className="wf-button wf-button--ghost">{props.t.browseInventory}</Link>
             </div>
           </div>
           <div className="wf-pearl-window">
@@ -1282,8 +1282,8 @@ function PrismMotionHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCop
             <h1 className="wf-hero-title wf-motion-two">{profile.heroTitle ?? profile.dealershipName}</h1>
             <p className="wf-hero-copy wf-motion-three">{profile.heroSubtitle}</p>
             <div className="wf-hero-buttons wf-motion-four">
-              <a href="/inventory" className="wf-button wf-button--primary">{props.t.browseInventory}<ArrowIcon /></a>
-              <a href="/contact" className="wf-button wf-button--ghost">{props.t.contactTitle}</a>
+              <Link href="/inventory" className="wf-button wf-button--primary">{props.t.browseInventory}<ArrowIcon /></Link>
+              <Link href="/contact" className="wf-button wf-button--ghost">{props.t.contactTitle}</Link>
             </div>
           </div>
           <div className="wf-prism-mosaic">
@@ -1316,8 +1316,8 @@ function CarbonTrackHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCop
               <strong dir="ltr">00:{String(props.vehicles.length).padStart(2, "0")}</strong>
             </div>
             <div className="wf-hero-buttons wf-motion-five">
-              <a href="/inventory" className="wf-button wf-button--primary">{props.t.browseInventory}<ArrowIcon /></a>
-              <a href="/finance" className="wf-button wf-button--ghost">{copy.requestFinance}</a>
+              <Link href="/inventory" className="wf-button wf-button--primary">{props.t.browseInventory}<ArrowIcon /></Link>
+              <Link href="/finance" className="wf-button wf-button--ghost">{copy.requestFinance}</Link>
             </div>
           </div>
           <div className="wf-carbon-image"><HeroImage vehicle={vehicle} copy={copy} /></div>
@@ -1344,8 +1344,8 @@ function SolarisBayHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy
             <h1 className="wf-hero-title wf-motion-two">{profile.heroTitle ?? profile.dealershipName}</h1>
             <p className="wf-hero-copy wf-motion-three">{profile.heroSubtitle}</p>
             <div className="wf-hero-buttons wf-motion-four">
-              <a href="/inventory" className="wf-button wf-button--primary">{props.t.browseInventory}<ArrowIcon /></a>
-              <a href="/branches" className="wf-button wf-button--ghost">{copy.visit}</a>
+              <Link href="/inventory" className="wf-button wf-button--primary">{props.t.browseInventory}<ArrowIcon /></Link>
+              <Link href="/branches" className="wf-button wf-button--ghost">{copy.visit}</Link>
             </div>
           </div>
           <div className="wf-solaris-image">
@@ -1377,8 +1377,8 @@ function PixelShowroomHome({ props, copy }: { props: ThemeProps; copy: ShowcaseC
             <h1 className="wf-hero-title wf-motion-two">{profile.heroTitle ?? profile.dealershipName}</h1>
             <p className="wf-hero-copy wf-motion-three">{profile.heroSubtitle}</p>
             <div className="wf-hero-buttons wf-motion-four">
-              <a href="/inventory" className="wf-button wf-button--primary">{props.t.browseInventory}<ArrowIcon /></a>
-              <a href="/contact" className="wf-button wf-button--ghost">{copy.instantReply}</a>
+              <Link href="/inventory" className="wf-button wf-button--primary">{props.t.browseInventory}<ArrowIcon /></Link>
+              <Link href="/contact" className="wf-button wf-button--ghost">{copy.instantReply}</Link>
             </div>
           </div>
           <div className="wf-pixel-preview">
@@ -1415,10 +1415,10 @@ function ShowcaseFeatured({
             <h2>{props.t.featuredVehicles}</h2>
             <p>{props.t.featuredSub}</p>
           </div>
-          <a href="/inventory" className="wf-inline-link">
+          <Link href="/inventory" className="wf-inline-link">
             {props.t.viewAll}
             <ArrowIcon />
-          </a>
+          </Link>
         </div>
         <VehicleGrid vehicles={vehicles} props={props} copy={copy} variant={variant} />
       </div>
@@ -1440,10 +1440,10 @@ function AtelierInventoryWall({ props, copy }: { props: ThemeProps; copy: Showca
             <span>{copy.availableNow}<strong>{props.vehicles.length}</strong></span>
             <span>{copy.instantReply}<strong>{copy.readyToday}</strong></span>
           </div>
-          <a href="/inventory" className="wf-inline-link">
+          <Link href="/inventory" className="wf-inline-link">
             {props.t.viewAll}
             <ArrowIcon />
-          </a>
+          </Link>
         </div>
         <div className="wf-atelier-showroom-track">
           {vehicles.slice(0, 4).map((vehicle, index) => (
@@ -1466,10 +1466,10 @@ function RouteInventoryJourney({ props, copy }: { props: ThemeProps; copy: Showc
             <p className="wf-section-kicker">{copy.routeReady}</p>
             <h2>{props.t.featuredVehicles}</h2>
           </div>
-          <a href="/inventory" className="wf-inline-link">
+          <Link href="/inventory" className="wf-inline-link">
             {props.t.viewAll}
             <ArrowIcon />
-          </a>
+          </Link>
         </div>
         <div className="wf-route-lanes">
           {vehicles.slice(0, 5).map((vehicle, index) => (
@@ -1502,7 +1502,7 @@ function CommandInventoryBoard({ props, copy }: { props: ThemeProps; copy: Showc
         <div className="wf-command-board-results">
           <div className="wf-command-board-bar">
             <span>{copy.availableNow}</span>
-            <a href="/inventory">{props.t.viewAll}</a>
+            <Link href="/inventory">{props.t.viewAll}</Link>
           </div>
           <VehicleGrid vehicles={vehicles.slice(0, 6)} props={props} copy={copy} variant="command" />
         </div>
@@ -1549,10 +1549,10 @@ function EditorialInventoryIssue({ props, copy }: { props: ThemeProps; copy: Sho
           <p className="wf-section-kicker">{copy.editorsPick}</p>
           <h2>{props.t.featuredVehicles}</h2>
           <p>{copy.updatedFromShowroom}</p>
-          <a href="/inventory" className="wf-inline-link">
+          <Link href="/inventory" className="wf-inline-link">
             {props.t.viewAll}
             <ArrowIcon />
-          </a>
+          </Link>
         </div>
         <div className="wf-editorial-issue-list">
           {vehicles.slice(0, 5).map((vehicle, index) => (
@@ -1957,9 +1957,9 @@ function VehicleCardActions({
           </a>
         </>
       ) : (
-        <a href="/contact" className="wf-card-action">
+        <Link href="/contact" className="wf-card-action">
           {copy.contactDealer}
-        </a>
+        </Link>
       )}
     </div>
   );
@@ -2067,10 +2067,10 @@ function SimilarVehiclesSection({
             <p className="wf-section-kicker">{copy.updatedFromShowroom}</p>
             <h2>{copy.similarCars}</h2>
           </div>
-          <a href="/inventory" className="wf-inline-link">
+          <Link href="/inventory" className="wf-inline-link">
             {props.t.viewAll}
             <ArrowIcon />
-          </a>
+          </Link>
         </div>
         <VehicleGrid vehicles={vehicles} props={props} copy={copy} variant={variant} />
       </div>
@@ -2139,10 +2139,10 @@ function DetailActionButtons({
           {copy.contactDealer}
         </a>
       )}
-      <a href="/finance" className="wf-detail-action">
+      <Link href="/finance" className="wf-detail-action">
         <Sparkles size={16} />
         {copy.requestFinance}
-      </a>
+      </Link>
       <a
         href={`https://wa.me/?text=${encodeURIComponent(shareMessage)}`}
         className="wf-detail-action"
@@ -2518,9 +2518,9 @@ function ShowcaseFooter({
           ))}
         </nav>
         <div className="wf-footer-legal">
-          <a href="/privacy">{t.footerPrivacy}</a>
-          <a href="/terms">{t.footerTerms}</a>
-          <a href="/data-deletion">{t.footerDataDeletion}</a>
+          <Link href="/privacy">{t.footerPrivacy}</Link>
+          <Link href="/terms">{t.footerTerms}</Link>
+          <Link href="/data-deletion">{t.footerDataDeletion}</Link>
           <span>{copy.verifiedInventory}</span>
         </div>
       </div>
