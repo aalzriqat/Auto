@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { RoleGuard } from "@/components/auth/RoleGuard";
 import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -9,8 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { LeadDialog } from "@/components/leads/LeadDialog";
 import { SocialConversationDialog } from "@/components/leads/SocialConversationDialog";
-import { Doc, Id } from "@/convex/_generated/dataModel";
-import { Plus, User, Car, Trash2, FileText, LayoutList, Kanban, MessageCircle, Search } from "lucide-react";
+import { Id } from "@/convex/_generated/dataModel";
+import { Plus, User, Car, Trash2, FileText, LayoutList, Kanban, MessageCircle, Search, AlertTriangle, Clock, Pencil } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { toast } from "@/components/ui/sonner";
@@ -36,6 +37,17 @@ import {
 import { useTableControls } from "@/hooks/useTableControls";
 import { useHighlightRow } from "@/hooks/useHighlightRow";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useStoredViewPreference } from "@/hooks/useStoredViewPreference";
+import { usePermissions } from "@/hooks/use-permissions";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 
 import { LEAD_STAGES } from "@/convex/constants";
 import { getErrorMessage } from "@/lib/errors";
@@ -51,26 +63,66 @@ const STAGE_LABELS: Record<string, string> = {
   LOST: "Lost",
 };
 
+const LEAD_VIEW_OPTIONS = ["table", "kanban"] as const;
+type LeadView = typeof LEAD_VIEW_OPTIONS[number];
+type LeadStage = typeof LEAD_STAGES[number];
+
+const NEXT_ACTION_BY_STAGE: Record<LeadStage, string> = {
+  NEW: "Make first contact",
+  CONTACTED: "Confirm vehicle interest",
+  INTERESTED: "Schedule a test drive",
+  TEST_DRIVE: "Capture test-drive outcome",
+  NEGOTIATION: "Prepare or follow up quote",
+  RESERVED: "Confirm deal completion",
+  WON: "Complete handover",
+  LOST: "Record loss reason",
+};
+
 export default function LeadsPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const prefillCustomerId = searchParams.get("customerId");
+  const { hasPermission } = usePermissions();
+  const canEditLeads = hasPermission(PERMISSIONS.EDIT_LEADS);
+  const canDeleteLeads = hasPermission(PERMISSIONS.DELETE_LEADS);
+  const canViewUsers = hasPermission(PERMISSIONS.VIEW_USERS);
   const { results: leads, status: leadsStatus, loadMore: loadMoreLeads } = usePaginatedQuery(
     api.leads.list,
     activeOrgId ? { orgId: activeOrgId } : "skip",
     { initialNumItems: 25 }
   );
   const removeLead = useMutation(api.leads.softDelete);
+  const updateLead = useMutation(api.leads.update);
+  const { results: memberships } = usePaginatedQuery(
+    api.memberships.list,
+    activeOrgId && canViewUsers ? { orgId: activeOrgId } : "skip",
+    { initialNumItems: 100 }
+  );
   const orgSettings = useOrgSettings();
   const logoUrl = useQuery(
     api.orgSettings.getLogoUrl,
     activeOrgId ? { orgId: activeOrgId } : "skip"
   );
 
-  const [isLeadDialogOpen, setIsLeadDialogOpen] = useState(false);
-  const [editingLead, setEditingLead] = useState<any>(null);
-  const [leadToDelete, setLeadToDelete] = useState<any>(null);
-  const [printingLead, setPrintingLead] = useState<any>(null);
-  const [view, setView] = useState<"table" | "kanban">("table");
+  const [isLeadDialogOpen, setIsLeadDialogOpen] = useState(Boolean(prefillCustomerId));
+  type LeadListItem = NonNullable<typeof leads>[number];
+  const [editingLead, setEditingLead] = useState<LeadListItem | null>(null);
+  const [leadToDelete, setLeadToDelete] = useState<LeadListItem | null>(null);
+  const [printingLead, setPrintingLead] = useState<LeadListItem | null>(null);
+  const [view, setView] = useStoredViewPreference<LeadView>(
+    `autoflow:${activeOrgId ?? "default"}:lead-view`,
+    "table",
+    LEAD_VIEW_OPTIONS
+  );
+  const [stageFilter, setStageFilter] = useState<"ALL" | LeadStage>("ALL");
+  const [sourceFilter, setSourceFilter] = useState("ALL");
+  const [selectedLeadIds, setSelectedLeadIds] = useState<Set<Id<"leads">>>(new Set());
+  const [isBulkUpdating, setIsBulkUpdating] = useState(false);
+  const [defaultCustomerId, setDefaultCustomerId] = useState<Id<"customers"> | null>(
+    () => prefillCustomerId as Id<"customers"> | null
+  );
   const [conversationCustomerId, setConversationCustomerId] = useState<Id<"customers"> | null>(null);
 
   const {
@@ -79,7 +131,7 @@ export default function LeadsPage() {
     sortKey,
     sortDir,
     toggleSort,
-    rows: filteredLeads,
+    rows: searchedLeads,
   } = useTableControls({
     data: leads,
     searchFields: (l) => [l.customerName, l.vehicleSummary, l.assignedUserName],
@@ -99,6 +151,25 @@ export default function LeadsPage() {
     pagination: { status: leadsStatus, loadMore: loadMoreLeads, batchSize: 25 },
   });
 
+  const sourceOptions = useMemo(
+    () => Array.from(new Set((leads ?? []).map((lead) => lead.source))).sort(),
+    [leads]
+  );
+  const filteredLeads = searchedLeads?.filter((lead) =>
+    (stageFilter === "ALL" || lead.stage === stageFilter) &&
+    (sourceFilter === "ALL" || lead.source === sourceFilter)
+  );
+  const selectedLeads = useMemo(
+    () => (leads ?? []).filter((lead) => selectedLeadIds.has(lead._id)),
+    [leads, selectedLeadIds]
+  );
+  const allFilteredSelected = !!filteredLeads?.length && filteredLeads.every((lead) => selectedLeadIds.has(lead._id));
+
+  useEffect(() => {
+    if (!prefillCustomerId || !activeOrgId) return;
+    router.replace(`/${activeOrgId}/leads`, { scroll: false });
+  }, [activeOrgId, prefillCustomerId, router]);
+
   const highlightedLeadId = useHighlightRow({
     // Fed the *rendered* rows: a row hidden by the active search or filter has
     // no element to scroll to, and the hook must not report it as found.
@@ -107,13 +178,19 @@ export default function LeadsPage() {
     pagination: { status: leadsStatus, loadMore: loadMoreLeads, batchSize: 25 },
   });
 
-  const handleEdit = (lead: any) => {
+  const handleEdit = (lead: LeadListItem) => {
     setEditingLead(lead);
+    setDefaultCustomerId(null);
     setIsLeadDialogOpen(true);
+  };
+
+  const openLeadWorkspace = (leadId: Id<"leads">) => {
+    router.push(`/${activeOrgId}/leads/${leadId}`);
   };
 
   const handleAddNew = () => {
     setEditingLead(null);
+    setDefaultCustomerId(null);
     setIsLeadDialogOpen(true);
   };
 
@@ -128,7 +205,7 @@ export default function LeadsPage() {
     }
   };
 
-  const handleDownloadLeadQuote = async (lead: any) => {
+  const handleDownloadLeadQuote = async (lead: LeadListItem) => {
     setPrintingLead(lead);
     // Wait for the (now-mounted) print template to actually paint before capturing it.
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -141,10 +218,77 @@ export default function LeadsPage() {
     setPrintingLead(null);
   };
 
+  // eslint-disable-next-line react-hooks/purity -- Keep every age indicator consistent within this render.
+  const currentTime = Date.now();
+  const getLeadAgeDays = (lead: LeadListItem) =>
+    Math.max(0, Math.floor((currentTime - lead._creationTime) / (24 * 60 * 60 * 1000)));
+
+  const getDaysSinceActivity = (lead: LeadListItem) =>
+    Math.max(0, Math.floor((currentTime - (lead.updatedAt ?? lead._creationTime)) / (24 * 60 * 60 * 1000)));
+
+  const isStaleLead = (lead: LeadListItem) =>
+    lead.stage !== "WON" && lead.stage !== "LOST" && getDaysSinceActivity(lead) >= 7;
+
+  const updateLeadStage = async (leadId: Id<"leads">, stage: LeadStage) => {
+    if (!activeOrgId) return;
+    try {
+      await updateLead({ orgId: activeOrgId, leadId, stage });
+      toast.success("Lead moved");
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    }
+  };
+
+  const toggleLeadSelection = (leadId: Id<"leads">) => {
+    setSelectedLeadIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      if (nextIds.has(leadId)) nextIds.delete(leadId);
+      else nextIds.add(leadId);
+      return nextIds;
+    });
+  };
+
+  const toggleAllFilteredLeads = () => {
+    setSelectedLeadIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      if (allFilteredSelected) filteredLeads?.forEach((lead) => nextIds.delete(lead._id));
+      else filteredLeads?.forEach((lead) => nextIds.add(lead._id));
+      return nextIds;
+    });
+  };
+
+  const runBulkLeadUpdate = async (updates: Array<Promise<unknown>>, successMessage: string) => {
+    setIsBulkUpdating(true);
+    const settledUpdates = await Promise.allSettled(updates);
+    const failureCount = settledUpdates.filter((update) => update.status === "rejected").length;
+    if (failureCount > 0) toast.error(`${failureCount} lead${failureCount === 1 ? "" : "s"} could not be updated. Please try again.`);
+    else {
+      toast.success(successMessage);
+      setSelectedLeadIds(new Set());
+    }
+    setIsBulkUpdating(false);
+  };
+
+  const handleBulkStageChange = (stage: LeadStage) => {
+    if (!activeOrgId) return;
+    void runBulkLeadUpdate(
+      selectedLeads.map((lead) => updateLead({ orgId: activeOrgId, leadId: lead._id, stage })),
+      "Lead stages updated"
+    );
+  };
+
+  const handleBulkAssignment = (assignedUserId: Id<"users">) => {
+    if (!activeOrgId) return;
+    void runBulkLeadUpdate(
+      selectedLeads.map((lead) => updateLead({ orgId: activeOrgId, leadId: lead._id, assignedUserId })),
+      "Leads assigned"
+    );
+  };
+
   const leadsByStage = LEAD_STAGES.reduce((acc, stage) => {
-    acc[stage] = leads?.filter((l) => l.stage === stage) || [];
+    acc[stage] = filteredLeads?.filter((lead) => lead.stage === stage) || [];
     return acc;
-  }, {} as Record<string, any[]>);
+  }, {} as Record<LeadStage, LeadListItem[]>);
 
   const getStageColor = (stage: string) => {
     switch (stage) {
@@ -223,19 +367,60 @@ export default function LeadsPage() {
           </div>
         </div>
 
-        {/* TABLE VIEW */}
-        {view === "table" && (
-          <>
-          <div className="flex items-center w-full max-w-sm space-x-2 relative">
-            <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
+        <div className="flex flex-col gap-3 rounded-xl border bg-card p-4 lg:flex-row lg:items-center">
+          <div className="flex items-center w-full lg:max-w-md relative">
+            <Search className="h-4 w-4 text-muted-foreground absolute start-3" />
             <Input
               placeholder={t("SearchLeads" as any) || "Search leads..."}
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(event) => setSearchQuery(event.target.value)}
               className="ps-9"
             />
           </div>
+          <Select value={stageFilter} onValueChange={(stage) => setStageFilter(stage as "ALL" | LeadStage)}>
+            <SelectTrigger className="w-full lg:w-[180px]"><SelectValue placeholder="All stages" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">All stages</SelectItem>
+              {LEAD_STAGES.map((stage) => <SelectItem key={stage} value={stage}>{translateStage(stage)}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select value={sourceFilter} onValueChange={setSourceFilter}>
+            <SelectTrigger className="w-full lg:w-[180px]"><SelectValue placeholder="All sources" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">All sources</SelectItem>
+              {sourceOptions.map((source) => <SelectItem key={source} value={source}>{source}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <div className="flex flex-wrap items-center gap-2 lg:ms-auto">
+            {(searchQuery || stageFilter !== "ALL" || sourceFilter !== "ALL") && <Button variant="ghost" size="sm" onClick={() => { setSearchQuery(""); setStageFilter("ALL"); setSourceFilter("ALL"); }}>Clear filters</Button>}
+            <span className="text-sm text-muted-foreground">{filteredLeads?.length ?? 0} {leadsStatus === "Exhausted" ? "results" : "loaded results"}</span>
+          </div>
+        </div>
 
+        {selectedLeadIds.size > 0 && (
+          <div className="sticky top-2 z-20 flex flex-wrap items-center gap-2 rounded-lg border bg-background p-3 shadow-lg">
+            <span className="text-sm font-medium">{selectedLeadIds.size} selected</span>
+            {canEditLeads && (
+              <>
+                <Select onValueChange={(stage) => handleBulkStageChange(stage as LeadStage)} disabled={isBulkUpdating}>
+                  <SelectTrigger className="h-9 w-[170px]"><SelectValue placeholder="Move to stage" /></SelectTrigger>
+                  <SelectContent>{LEAD_STAGES.map((stage) => <SelectItem key={stage} value={stage}>{translateStage(stage)}</SelectItem>)}</SelectContent>
+                </Select>
+                {canViewUsers && (
+                  <Select onValueChange={(userId) => handleBulkAssignment(userId as Id<"users">)} disabled={isBulkUpdating}>
+                    <SelectTrigger className="h-9 w-[190px]"><SelectValue placeholder="Assign salesperson" /></SelectTrigger>
+                    <SelectContent>{memberships?.map((membership) => <SelectItem key={membership.userId} value={membership.userId}>{membership.userName}</SelectItem>)}</SelectContent>
+                  </Select>
+                )}
+              </>
+            )}
+            <Button variant="ghost" size="sm" onClick={() => setSelectedLeadIds(new Set())}>Clear selection</Button>
+          </div>
+        )}
+
+        {/* TABLE VIEW */}
+        {view === "table" && (
+          <>
           {/* Mobile card list */}
           <div className="flex flex-col gap-3 md:hidden">
             {!filteredLeads || filteredLeads.length === 0 ? (
@@ -244,39 +429,30 @@ export default function LeadsPage() {
               <div
                 key={lead._id}
                 id={`row-${lead._id}`}
-                className={`rounded-xl border bg-card p-4 space-y-3 active:bg-muted/30 transition-shadow ${highlightedLeadId === lead._id ? "ring-2 ring-amber-400" : ""}`}
+                role="button"
+                tabIndex={0}
+                onClick={() => openLeadWorkspace(lead._id)}
+                onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openLeadWorkspace(lead._id); }}
+                className={`rounded-xl border bg-card p-4 space-y-3 active:bg-muted/30 transition-shadow cursor-pointer ${highlightedLeadId === lead._id ? "ring-2 ring-amber-400" : ""}`}
               >
-                <button type="button" onClick={() => handleEdit(lead)} className="w-full text-start">
-                  <span className="flex items-start justify-between gap-2">
-                    <span className="flex items-center gap-3 min-w-0">
-                      <span className="w-9 h-9 rounded-full bg-slate-100 dark:bg-zinc-800 flex items-center justify-center text-slate-500 font-bold text-xs shrink-0">
-                        {lead.customerName ? lead.customerName.charAt(0).toUpperCase() : "?"}
-                      </span>
-                      <span className="min-w-0">
-                        <span className="font-semibold text-sm truncate block">{lead.customerName}</span>
-                        {lead.vehicleSummary && (
-                          <span className="text-xs text-muted-foreground truncate flex items-center gap-1">
-                            <Car className="h-3 w-3 shrink-0" />{lead.vehicleSummary}
-                          </span>
-                        )}
-                      </span>
-                    </span>
-                    <span className={`text-[10px] uppercase font-semibold px-2 py-0.5 rounded-full shrink-0 ${getStageColor(lead.stage)}`}>
-                      {translateStage(lead.stage)}
-                    </span>
-                  </span>
-                </button>
-                <div className="flex items-center justify-between">
-                  {lead.assignedUserName ? (
-                    <button
-                      type="button"
-                      onClick={() => handleEdit(lead)}
-                      className="text-xs text-muted-foreground flex items-center gap-1 text-start"
-                    >
-                      <User className="h-3 w-3" />{lead.assignedUserName}
-                    </button>
-                  ) : <span />}
-                  <div className="flex items-center">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div onClick={(event) => event.stopPropagation()}><Checkbox checked={selectedLeadIds.has(lead._id)} onCheckedChange={() => toggleLeadSelection(lead._id)} aria-label={`Select ${lead.customerName}`} /></div>
+                    <span className="w-9 h-9 rounded-full bg-slate-100 dark:bg-zinc-800 flex items-center justify-center text-slate-500 font-bold text-xs shrink-0">{lead.customerName?.charAt(0).toUpperCase() ?? "?"}</span>
+                    <div className="min-w-0"><p className="font-semibold text-sm truncate">{lead.customerName}</p><p className="text-xs text-muted-foreground truncate">{lead.source}</p></div>
+                  </div>
+                  <Badge variant="outline" className={`text-[10px] uppercase border-transparent ${getStageColor(lead.stage)}`}>{translateStage(lead.stage)}</Badge>
+                </div>
+                {isStaleLead(lead) && <Badge variant="outline" className="border-amber-300 text-amber-700"><AlertTriangle className="h-3 w-3 me-1" />Stale · {getDaysSinceActivity(lead)} days</Badge>}
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div><p className="text-muted-foreground">Interest</p><p className="truncate">{lead.vehicleSummary || "Any vehicle"}</p></div>
+                  <div><p className="text-muted-foreground">Owner</p><p className="truncate">{lead.assignedUserName || "Unassigned"}</p></div>
+                  <div><p className="text-muted-foreground">Age</p><p>{getLeadAgeDays(lead)} days</p></div>
+                  <div><p className="text-muted-foreground">Last activity</p><p>{getDaysSinceActivity(lead)} days ago</p></div>
+                </div>
+                <div className="rounded-md bg-muted/40 p-2 text-xs"><span className="text-muted-foreground">Next: </span>{NEXT_ACTION_BY_STAGE[lead.stage]}</div>
+                <div className="flex items-center justify-end border-t pt-2" onClick={(event) => event.stopPropagation()}>
+                    {canEditLeads && <Button variant="ghost" size="sm" onClick={() => handleEdit(lead)}><Pencil className="h-4 w-4 me-2" />Edit</Button>}
                     {(lead.source?.startsWith("Instagram") || lead.source?.startsWith("Facebook")) && (
                       <button
                         type="button"
@@ -287,14 +463,15 @@ export default function LeadsPage() {
                         <MessageCircle className="w-4 h-4" />
                       </button>
                     )}
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); setLeadToDelete(lead); }}
-                      className="p-3 rounded-md text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
+                    {canDeleteLeads && (
+                      <button
+                        type="button"
+                        onClick={(event) => { event.stopPropagation(); setLeadToDelete(lead); }}
+                        className="p-3 rounded-md text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
                 </div>
               </div>
             ))}
@@ -310,21 +487,20 @@ export default function LeadsPage() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-slate-50/50 dark:bg-zinc-900/50 hover:bg-slate-50/50 dark:hover:bg-zinc-900/50">
+                  <TableHead className="w-10 px-4"><Checkbox checked={allFilteredSelected} onCheckedChange={toggleAllFilteredLeads} aria-label="Select all filtered leads" /></TableHead>
                   <SortableColumnHeader className="py-4 px-6 font-medium" label={t("Customer" as any) || "Customer"} sortKey="customer" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <TableHead className="py-4 px-6 font-medium">{t("Vehicle" as any) || "Vehicle"}</TableHead>
                   <SortableColumnHeader className="py-4 px-6 font-medium" label={t("Stage" as any) || "Stage"} sortKey="stage" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <TableHead className="py-4 px-6 font-medium">{t("AssignedTo" as any) || "Assigned To"}</TableHead>
-                  <SortableColumnHeader className="py-4 px-6 font-medium" label={t("CreatedAt" as any) || "Created At"} sortKey="createdAt" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                  <SortableColumnHeader className="py-4 px-6 font-medium" label={t("LastUpdated" as any) || "Last Updated"} sortKey="updatedAt" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                  <TableHead className="py-4 px-6 font-medium">{t("CreatedBy" as any) || "Created By"}</TableHead>
-                  <TableHead className="py-4 px-6 font-medium">{t("LastUpdatedBy" as any) || "Last Updated By"}</TableHead>
+                  <TableHead className="py-4 px-6 font-medium">Next action</TableHead>
+                  <SortableColumnHeader className="py-4 px-6 font-medium" label="Activity / age" sortKey="updatedAt" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <TableHead className="py-4 px-6 font-medium text-end">{t("Actions" as any) || "Actions"}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredLeads?.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={9} className="text-center py-12 text-muted-foreground">
+                    <TableCell colSpan={8} className="text-center py-12 text-muted-foreground">
                       {t("Empty" as any) || "No leads found. Add a new lead to get started."}
                     </TableCell>
                   </TableRow>
@@ -334,14 +510,15 @@ export default function LeadsPage() {
                       key={lead._id}
                       id={`row-${lead._id}`}
                       className={`cursor-pointer group hover:bg-slate-50/50 dark:hover:bg-zinc-900/50 transition-colors ${highlightedLeadId === lead._id ? "ring-2 ring-inset ring-amber-400" : ""}`}
-                      onClick={() => handleEdit(lead)}
+                      onClick={() => openLeadWorkspace(lead._id)}
                     >
+                      <TableCell className="px-4" onClick={(event) => event.stopPropagation()}><Checkbox checked={selectedLeadIds.has(lead._id)} onCheckedChange={() => toggleLeadSelection(lead._id)} aria-label={`Select ${lead.customerName}`} /></TableCell>
                       <TableCell className="py-4 px-6 font-medium">
                         <div className="flex items-center gap-3">
                           <div className="w-8 h-8 rounded-full bg-slate-100 dark:bg-zinc-800 flex items-center justify-center text-slate-500 font-medium text-xs flex-shrink-0">
                             {lead.customerName ? lead.customerName.charAt(0).toUpperCase() : "?"}
                           </div>
-                          <span className="truncate max-w-[200px]">{lead.customerName}</span>
+                          <div className="min-w-0"><span className="truncate max-w-[200px] block">{lead.customerName}</span>{isStaleLead(lead) && <span className="mt-1 flex items-center gap-1 text-[11px] text-amber-700"><AlertTriangle className="h-3 w-3" />Stale {getDaysSinceActivity(lead)}d</span>}</div>
                         </div>
                       </TableCell>
                       <TableCell className="py-4 px-6">
@@ -369,26 +546,16 @@ export default function LeadsPage() {
                           <span className="text-muted-foreground/50">-</span>
                         )}
                       </TableCell>
-                      <TableCell className="py-4 px-6 text-muted-foreground whitespace-nowrap">
-                        {new Date(lead._creationTime).toLocaleDateString()}
+                      <TableCell className="py-4 px-6 text-sm max-w-[220px]">
+                        {NEXT_ACTION_BY_STAGE[lead.stage]}
                       </TableCell>
                       <TableCell className="py-4 px-6 text-muted-foreground whitespace-nowrap">
-                        {lead.updatedAt ? new Date(lead.updatedAt).toLocaleDateString() : "-"}
-                      </TableCell>
-                      <TableCell className="py-4 px-6">
-                        <span className="truncate max-w-[150px] block">
-                          {lead.createdByName || lead.source || (t("System" as any) || "System")}
-                        </span>
-                      </TableCell>
-                      <TableCell className="py-4 px-6">
-                        {lead.updatedByName ? (
-                          <span className="truncate max-w-[150px] block">{lead.updatedByName}</span>
-                        ) : (
-                          <span className="text-muted-foreground/50">-</span>
-                        )}
+                        <p>{getDaysSinceActivity(lead)}d since activity</p>
+                        <p className="text-xs">{getLeadAgeDays(lead)}d old</p>
                       </TableCell>
                       <TableCell className="py-4 px-6 text-end">
                         <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          {canEditLeads && <button onClick={(event) => { event.stopPropagation(); handleEdit(lead); }} className="p-2 hover:bg-muted rounded-md text-muted-foreground"><Pencil className="h-4 w-4" /></button>}
                           {(lead.source?.startsWith("Instagram") || lead.source?.startsWith("Facebook")) && (
                             <button
                               onClick={(e) => { e.stopPropagation(); setConversationCustomerId(lead.customerId); }}
@@ -404,12 +571,14 @@ export default function LeadsPage() {
                           >
                             <FileText className="w-4 h-4" />
                           </button>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); setLeadToDelete(lead); }}
-                            className="p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md text-muted-foreground hover:text-red-600 transition-colors"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          {canDeleteLeads && (
+                            <button
+                              onClick={(event) => { event.stopPropagation(); setLeadToDelete(lead); }}
+                              className="p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md text-muted-foreground hover:text-red-600 transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -433,7 +602,7 @@ export default function LeadsPage() {
               {LEAD_STAGES.map((stage) => {
                 const stageLeads = leadsByStage[stage] || [];
                 return (
-                  <div key={stage} className={`flex flex-col w-60 flex-shrink-0 bg-slate-50 dark:bg-zinc-900/40 rounded-xl border border-t-4 ${getStageBorderColor(stage)}`}>
+                  <div key={stage} className={`flex flex-col w-72 flex-shrink-0 bg-slate-50 dark:bg-zinc-900/40 rounded-xl border border-t-4 ${getStageBorderColor(stage)}`}>
                     {/* Column header */}
                     <div className="px-3 py-3 flex items-center justify-between">
                       <span className="text-xs font-semibold text-slate-600 uppercase tracking-wide">
@@ -452,19 +621,20 @@ export default function LeadsPage() {
                         stageLeads.map((lead) => (
                           <div
                             key={lead._id}
-                            className="bg-white dark:bg-zinc-800 rounded-lg p-3 shadow-sm border border-slate-100 dark:border-zinc-700 hover:shadow-md transition-shadow group"
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => openLeadWorkspace(lead._id)}
+                            onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openLeadWorkspace(lead._id); }}
+                            className="bg-white dark:bg-zinc-800 rounded-lg p-3 shadow-sm border border-slate-100 dark:border-zinc-700 hover:shadow-md transition-shadow group cursor-pointer space-y-3"
                           >
-                            <div className="flex items-center gap-2 mb-2">
-                              <button
-                                type="button"
-                                onClick={() => handleEdit(lead)}
-                                className="min-w-0 flex flex-1 items-center gap-2 text-start"
-                              >
+                            <div className="flex items-center gap-2">
+                              <div onClick={(event) => event.stopPropagation()}><Checkbox checked={selectedLeadIds.has(lead._id)} onCheckedChange={() => toggleLeadSelection(lead._id)} aria-label={`Select ${lead.customerName}`} /></div>
+                              <div className="min-w-0 flex flex-1 items-center gap-2 text-start">
                                 <span className="w-6 h-6 rounded-full bg-slate-100 dark:bg-zinc-700 flex items-center justify-center text-[10px] font-medium flex-shrink-0">
                                   {lead.customerName?.charAt(0)?.toUpperCase() ?? "?"}
                                 </span>
                                 <span className="text-sm font-medium truncate flex-1">{lead.customerName}</span>
-                              </button>
+                              </div>
                               {(lead.source?.startsWith("Instagram") || lead.source?.startsWith("Facebook")) && (
                                 <button
                                   type="button"
@@ -476,25 +646,20 @@ export default function LeadsPage() {
                                 </button>
                               )}
                             </div>
-                            {lead.vehicleSummary && (
-                              <button
-                                type="button"
-                                onClick={() => handleEdit(lead)}
-                                className="w-full flex items-center gap-1 text-[11px] text-muted-foreground truncate text-start"
-                              >
-                                <Car className="w-3 h-3 flex-shrink-0" />
-                                <span className="truncate">{lead.vehicleSummary}</span>
-                              </button>
-                            )}
-                            {lead.assignedUserName && (
-                              <button
-                                type="button"
-                                onClick={() => handleEdit(lead)}
-                                className="w-full flex items-center gap-1 text-[11px] text-muted-foreground mt-1 truncate text-start"
-                              >
-                                <User className="w-3 h-3 flex-shrink-0" />
-                                <span className="truncate">{lead.assignedUserName}</span>
-                              </button>
+                            {isStaleLead(lead) && <Badge variant="outline" className="border-amber-300 text-amber-700"><AlertTriangle className="h-3 w-3 me-1" />Stale {getDaysSinceActivity(lead)}d</Badge>}
+                            <div className="space-y-1 text-[11px] text-muted-foreground">
+                              <p className="flex items-center gap-1"><Car className="w-3 h-3 shrink-0" /><span className="truncate">{lead.vehicleSummary || "Any vehicle"}</span></p>
+                              <p className="flex items-center gap-1"><User className="w-3 h-3 shrink-0" /><span className="truncate">{lead.assignedUserName || "Unassigned"}</span></p>
+                              <p className="flex items-center gap-1"><Clock className="w-3 h-3 shrink-0" />{getDaysSinceActivity(lead)}d since activity · {getLeadAgeDays(lead)}d old</p>
+                            </div>
+                            <div className="rounded-md bg-muted/50 p-2 text-[11px]"><span className="text-muted-foreground">Next: </span>{NEXT_ACTION_BY_STAGE[lead.stage]}</div>
+                            {canEditLeads && (
+                              <div onClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
+                                <Select value={lead.stage} onValueChange={(nextStage) => void updateLeadStage(lead._id, nextStage as LeadStage)}>
+                                  <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                                  <SelectContent>{LEAD_STAGES.map((nextStage) => <SelectItem key={nextStage} value={nextStage}>{translateStage(nextStage)}</SelectItem>)}</SelectContent>
+                                </Select>
+                              </div>
                             )}
                           </div>
                         ))
@@ -511,6 +676,7 @@ export default function LeadsPage() {
           open={isLeadDialogOpen}
           onOpenChange={setIsLeadDialogOpen}
           lead={editingLead}
+          defaultCustomerId={defaultCustomerId}
         />
 
         <SocialConversationDialog

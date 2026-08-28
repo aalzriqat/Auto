@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { RoleGuard } from "@/components/auth/RoleGuard";
-import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
+import { useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -45,6 +45,8 @@ import { useHighlightRow } from "@/hooks/useHighlightRow";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 import { getErrorMessage } from "@/lib/errors";
 
+type ContactSegment = "ALL" | "WHATSAPP" | "EMAIL" | "PHONE" | "MISSING";
+
 export default function CustomersPage() {
 
   const { activeOrgId } = useOrg();
@@ -65,6 +67,7 @@ export default function CustomersPage() {
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
   const [isMergeDialogOpen, setIsMergeDialogOpen] = useState(false);
   const [sourceFilter, setSourceFilter] = useState("ALL");
+  const [contactSegment, setContactSegment] = useState<ContactSegment>("ALL");
   const { hasPermission } = usePermissions();
 
   const {
@@ -85,12 +88,19 @@ export default function CustomersPage() {
   });
 
   const sourceOptions = Array.from(
-    new Set((customers ?? []).map((c) => (c as any).source).filter(Boolean))
+    new Set((customers ?? []).map((customer) => customer.source).filter((source): source is string => Boolean(source)))
   ) as string[];
 
-  const filteredCustomers = sortedCustomers?.filter((c) =>
-    sourceFilter === "ALL" || (c as any).source === sourceFilter
-  );
+  const filteredCustomers = sortedCustomers?.filter((customer) => {
+    const matchesSource = sourceFilter === "ALL" || customer.source === sourceFilter;
+    const matchesContact =
+      contactSegment === "ALL" ||
+      (contactSegment === "WHATSAPP" && Boolean(customer.whatsapp)) ||
+      (contactSegment === "EMAIL" && Boolean(customer.email)) ||
+      (contactSegment === "PHONE" && Boolean(customer.phone)) ||
+      (contactSegment === "MISSING" && !customer.phone && !customer.whatsapp && !customer.email);
+    return matchesSource && matchesContact;
+  });
 
   const highlightedId = useHighlightRow({
     // Fed the *rendered* rows: a row hidden by the active search or filter has
@@ -168,7 +178,31 @@ export default function CustomersPage() {
             </SelectContent>
           </Select>
         )}
+        <Select value={contactSegment} onValueChange={(segment) => setContactSegment(segment as ContactSegment)}>
+          <SelectTrigger className="w-full sm:w-[190px]">
+            <SelectValue placeholder="Contact segment" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="ALL">All contact segments</SelectItem>
+            <SelectItem value="WHATSAPP">WhatsApp available</SelectItem>
+            <SelectItem value="EMAIL">Email available</SelectItem>
+            <SelectItem value="PHONE">Phone available</SelectItem>
+            <SelectItem value="MISSING">Missing contact details</SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="self-center text-sm text-muted-foreground sm:ms-auto">
+          {filteredCustomers?.length ?? 0} {customersStatus === "Exhausted" ? "results" : "loaded results"}
+        </p>
       </div>
+
+      {(searchQuery || sourceFilter !== "ALL" || contactSegment !== "ALL") && (
+        <div className="flex flex-wrap items-center gap-2">
+          {searchQuery && <span className="rounded-full bg-muted px-3 py-1 text-xs">Search: {searchQuery}</span>}
+          {sourceFilter !== "ALL" && <span className="rounded-full bg-muted px-3 py-1 text-xs">Source: {sourceFilter}</span>}
+          {contactSegment !== "ALL" && <span className="rounded-full bg-muted px-3 py-1 text-xs">Segment: {contactSegment.toLowerCase()}</span>}
+          <Button variant="ghost" size="sm" onClick={() => { setSearchQuery(""); setSourceFilter("ALL"); setContactSegment("ALL"); }}>Clear all</Button>
+        </div>
+      )}
 
       {/* Mobile card list */}
       <div className="flex flex-col gap-3 md:hidden">

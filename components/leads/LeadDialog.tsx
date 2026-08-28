@@ -4,7 +4,6 @@ import { useMemo, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import * as z from "zod";
 import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 
 import { api } from "@/convex/_generated/api";
@@ -67,7 +66,7 @@ function withCurrentOption(
   return [current, ...options];
 }
 
-export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
+export function LeadDialog({ open, onOpenChange, lead, defaultCustomerId }: LeadDialogProps) {
   const { activeOrgId } = useOrg();
   const { t, locale } = useLanguage();
   const router = useRouter();
@@ -77,6 +76,12 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
   const customerSelectorOptions = useQuery(
     api.customers.selectorOptions,
     activeOrgId ? { orgId: activeOrgId, search: customerSearch } : "skip"
+  );
+  const defaultCustomer = useQuery(
+    api.customers.get,
+    activeOrgId && defaultCustomerId && !lead
+      ? { orgId: activeOrgId, customerId: defaultCustomerId }
+      : "skip"
   );
   const vehicles = useQuery(api.vehicles.listAll, activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE", includeReserved: true } : "skip");
   const dynamicLeadSources = useQuery(
@@ -177,9 +182,15 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
               subLabel:
                 lead.phone || lead.customer?.phone || lead.email || lead.customer?.email || undefined,
             }
-          : null
+          : defaultCustomer
+            ? {
+                value: defaultCustomer._id as string,
+                label: `${defaultCustomer.firstName} ${defaultCustomer.lastName}`,
+                subLabel: defaultCustomer.phone || defaultCustomer.email || undefined,
+              }
+            : null
       ),
-    [customerSelectorOptions, lead, t],
+    [customerSelectorOptions, defaultCustomer, lead, t],
   );
 
   const form = useForm<LeadFormValues>({
@@ -206,7 +217,7 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
       });
     } else if (open && !lead) {
       form.reset({
-        customerId: "",
+        customerId: defaultCustomerId ?? "",
         vehicleId: "",
         assignedUserId: "",
         source: "Walk-in",
@@ -214,7 +225,7 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
         notes: "",
       });
     }
-  }, [lead, open, form]);
+  }, [defaultCustomerId, lead, open, form]);
 
   // Non-blocking nudge: warn if this customer already has an open lead
   // (optionally for the same vehicle) before the user creates a duplicate.

@@ -1,14 +1,12 @@
 import { useQuery, useMutation } from "convex/react";
 import { useRouter } from "next/navigation";
 import {
-  ExternalLink,
   Printer,
   Banknote,
   CheckSquare,
   Wrench,
   Users,
   Car,
-  Camera,
   HandCoins,
   Plus,
   Save,
@@ -30,12 +28,6 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -65,6 +57,8 @@ interface VehicleDetailsDialogProps {
   onOpenChange: (open: boolean) => void;
   canViewPurchasePrice: boolean;
 }
+
+type VehicleDetailsGroup = "overview" | "sales_activity" | "operations" | "financials" | "marketing";
 
 export function VehicleDetailsDialog({
   vehicle,
@@ -122,6 +116,7 @@ export function VehicleDetailsDialog({
   const [reservationDeposit, setReservationDeposit] = useState("");
   const [reservationExpiresAt, setReservationExpiresAt] = useState("");
   const [savingReservation, setSavingReservation] = useState(false);
+  const [activeGroup, setActiveGroup] = useState<VehicleDetailsGroup>("overview");
 
   // Prefill the expiry field from the org's configured hold period (falls
   // back to 3 days) — still editable, so a specific reservation can override it.
@@ -129,14 +124,16 @@ export function VehicleDetailsDialog({
     if (!open || !vehicle || reservationExpiresAt) return;
     const holdDays = orgSettings?.reservationHoldDays ?? 3;
     const defaultExpiry = new Date(Date.now() + holdDays * 24 * 60 * 60 * 1000);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Initialize editable form state from organization settings when the dialog opens.
     setReservationExpiresAt(format(defaultExpiry, "yyyy-MM-dd'T'HH:mm"));
-  }, [open, vehicle?._id, orgSettings, reservationExpiresAt]);
+  }, [open, vehicle, orgSettings, reservationExpiresAt]);
 
   useEffect(() => {
     if (landedCosts) {
       // Rows saved before per-item payment methods existed have none —
       // display them as CASH (the same default upsertLandedCosts used to
       // apply for the whole edit) rather than leaving the picker empty.
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Hydrate editable form rows from the loaded server record.
       setLandedCostItems(
         landedCosts.items.map((item) => ({
           ...item,
@@ -288,117 +285,70 @@ export function VehicleDetailsDialog({
           )}
         </div>
 
-        <Tabs defaultValue="overview" className="flex-1 flex flex-col min-h-0">
+        <div className="flex-1 flex flex-col min-h-0">
           <div className="px-6 border-b overflow-x-auto shrink-0">
-            <TabsList className="bg-transparent h-12 p-0 -mb-px flex w-max min-w-full justify-start">
+            <nav aria-label="Vehicle details sections" className="bg-transparent h-12 p-0 -mb-px flex w-max min-w-full justify-start">
               {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_INFO)) && (
-                <TabsTrigger
-                  value="overview"
-                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
+                <button
+                  type="button"
+                  aria-current={activeGroup === "overview" ? "page" : undefined}
+                  onClick={() => setActiveGroup("overview")}
+                  className={`h-12 rounded-none px-6 ${activeGroup === "overview" ? "border-b-2 border-primary font-medium" : "text-muted-foreground hover:text-foreground"}`}
                 >
                   {t("Overview" as any)}
-                </TabsTrigger>
+                </button>
               )}
-              {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_LEADS)) && (
-                <TabsTrigger
-                  value="leads_sales"
-                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
+              {(!permissionsLoading && (hasPermission(PERMISSIONS.VIEW_VEHICLE_LEADS) || hasPermission(PERMISSIONS.VIEW_VEHICLE_TEST_DRIVES) || hasPermission(PERMISSIONS.VIEW_VEHICLE_INFO))) && (
+                <button
+                  type="button"
+                  aria-current={activeGroup === "sales_activity" ? "page" : undefined}
+                  onClick={() => setActiveGroup("sales_activity")}
+                  className={`h-12 rounded-none px-6 ${activeGroup === "sales_activity" ? "border-b-2 border-primary font-medium" : "text-muted-foreground hover:text-foreground"}`}
                 >
-                  {t("LeadsSales" as any) || "Leads & Sales"}
+                  Sales Activity
                   {relations && (relations.leads.length > 0 || relations.sales.length > 0) && (
                     <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.leads.length + relations.sales.length}</Badge>
                   )}
-                </TabsTrigger>
+                </button>
               )}
-              {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_EXPENSES)) && (
-                <TabsTrigger
-                  value="expenses"
-                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
+              {(!permissionsLoading && (hasPermission(PERMISSIONS.VIEW_VEHICLE_TASKS) || hasPermission(PERMISSIONS.VIEW_VEHICLE_WORK_ORDERS))) && (
+                <button
+                  type="button"
+                  aria-current={activeGroup === "operations" ? "page" : undefined}
+                  onClick={() => setActiveGroup("operations")}
+                  className={`h-12 rounded-none px-6 ${activeGroup === "operations" ? "border-b-2 border-primary font-medium" : "text-muted-foreground hover:text-foreground"}`}
                 >
-                  {t("Expenses" as any)}
+                  Operations
+                </button>
+              )}
+              {(!permissionsLoading && (hasPermission(PERMISSIONS.VIEW_VEHICLE_EXPENSES) || hasPermission(PERMISSIONS.VIEW_VEHICLE_VALUATIONS) || hasPermission(PERMISSIONS.VIEW_VEHICLE_INFO))) && (
+                <button
+                  type="button"
+                  aria-current={activeGroup === "financials" ? "page" : undefined}
+                  onClick={() => setActiveGroup("financials")}
+                  className={`h-12 rounded-none px-6 ${activeGroup === "financials" ? "border-b-2 border-primary font-medium" : "text-muted-foreground hover:text-foreground"}`}
+                >
+                  {t("Financials")}
                   {relations?.expenses && relations.expenses.length > 0 && (
                     <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.expenses.length}</Badge>
                   )}
-                </TabsTrigger>
-              )}
-              {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_TASKS)) && (
-                <TabsTrigger
-                  value="tasks"
-                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
-                >
-                  {t("Tasks" as any)}
-                  {relations?.tasks && relations.tasks.length > 0 && (
-                    <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.tasks.length}</Badge>
-                  )}
-                </TabsTrigger>
-              )}
-              {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_TEST_DRIVES)) && (
-                <TabsTrigger
-                  value="test_drives"
-                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
-                >
-                  {t("TestDrives" as any)}
-                  {relations?.testDrives && relations.testDrives.length > 0 && (
-                    <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.testDrives.length}</Badge>
-                  )}
-                </TabsTrigger>
-              )}
-              {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_WORK_ORDERS)) && (
-                <TabsTrigger
-                  value="work_orders"
-                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
-                >
-                  {t("WorkOrders" as any)}
-                  {relations?.workOrders && relations.workOrders.length > 0 && (
-                    <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.workOrders.length}</Badge>
-                  )}
-                </TabsTrigger>
-              )}
-              {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_VALUATIONS)) && (
-                <TabsTrigger
-                  value="valuations"
-                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
-                >
-                  {t("Valuations" as any)}
-                </TabsTrigger>
+                </button>
               )}
               {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_INFO)) && (
-                <TabsTrigger
-                  value="landed_cost"
-                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
-                >
-                  {t("LandedCost" as any)}
-                </TabsTrigger>
-              )}
-              {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_INFO)) && (
-                <TabsTrigger
-                  value="pricing_history"
-                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
-                >
-                  {t("PricingHistory" as any)}
-                </TabsTrigger>
-              )}
-              {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_INFO)) && (
-                <TabsTrigger
-                  value="reservations"
-                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
-                >
-                  {t("Reservations" as any)}
-                </TabsTrigger>
-              )}
-              {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_INFO)) && (
-                <TabsTrigger
-                  value="marketing"
-                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
+                <button
+                  type="button"
+                  aria-current={activeGroup === "marketing" ? "page" : undefined}
+                  onClick={() => setActiveGroup("marketing")}
+                  className={`h-12 rounded-none px-6 ${activeGroup === "marketing" ? "border-b-2 border-primary font-medium" : "text-muted-foreground hover:text-foreground"}`}
                 >
                   {t("Marketing" as any) || "Marketing"}
-                </TabsTrigger>
+                </button>
               )}
-            </TabsList>
+            </nav>
           </div>
 
           <div className="flex-1 overflow-y-auto min-h-0 p-6">
-            <TabsContent value="overview" className="m-0 focus-visible:outline-none">
+            <section hidden={activeGroup !== "overview"} className="m-0 focus-visible:outline-none">
               <div className="grid grid-cols-2 gap-x-6 gap-y-4">
                 <div className="space-y-1">
                   <span className="text-sm font-medium text-muted-foreground">{t("VIN" as any)}</span>
@@ -512,7 +462,7 @@ export function VehicleDetailsDialog({
                                 {t("DepositAlreadyReleased" as any)}
                               </p>
                             )}
-                            {deposit.notes && <p className="text-xs text-muted-foreground mt-0.5 italic">"{deposit.notes}"</p>}
+                            {deposit.notes && <p className="text-xs text-muted-foreground mt-0.5 italic">&ldquo;{deposit.notes}&rdquo;</p>}
                           </div>
                           {deposit.status === "HELD" && !permissionsLoading && hasPermission(PERMISSIONS.APPROVE_REQUESTS) && (
                             <div className="flex gap-2 shrink-0 items-center">
@@ -552,9 +502,10 @@ export function VehicleDetailsDialog({
                   </div>
                 )}
               </div>
-            </TabsContent>
+            </section>
 
-            <TabsContent value="leads_sales" className="m-0 focus-visible:outline-none space-y-6">
+            <section hidden={activeGroup !== "sales_activity"} className="m-0 mb-4 rounded-lg border p-4 focus-visible:outline-none space-y-6">
+              <h2 className="text-base font-semibold">Leads, deposits & sales</h2>
               <div>
                 <h3 className="font-semibold text-sm mb-3">{t("SalesRecord" as any) || "Sales Record"}</h3>
                 {!relations ? (
@@ -608,15 +559,16 @@ export function VehicleDetailsDialog({
                           <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded">{lead.stage}</span>
                         </div>
                         <p className="text-xs text-muted-foreground mb-2">Source: {lead.source} • Assigned: {lead.assignedUserName}</p>
-                        {lead.notes && <p className="text-xs italic">"{lead.notes}"</p>}
+                        {lead.notes && <p className="text-xs italic">&ldquo;{lead.notes}&rdquo;</p>}
                       </div>
                     ))}
                   </div>
                 )}
               </div>
-            </TabsContent>
+            </section>
 
-            <TabsContent value="expenses" className="m-0 focus-visible:outline-none">
+            <section hidden={activeGroup !== "financials"} className="m-0 mb-4 rounded-lg border p-4 focus-visible:outline-none">
+              <h2 className="text-base font-semibold mb-4">{t("Expenses")}</h2>
               <h3 className="font-semibold text-sm mb-3">{t("VehicleExpenses" as any) || "Vehicle Expenses"}</h3>
               {!relations ? (
                 <div className="space-y-3">
@@ -657,9 +609,10 @@ export function VehicleDetailsDialog({
                   </div>
                 </div>
               )}
-            </TabsContent>
+            </section>
 
-            <TabsContent value="tasks" className="m-0 focus-visible:outline-none">
+            <section hidden={activeGroup !== "operations"} className="m-0 mb-4 rounded-lg border p-4 focus-visible:outline-none">
+              <h2 className="text-base font-semibold mb-4">{t("Tasks")}</h2>
               <h3 className="font-semibold text-sm mb-3">{t("AssociatedTasks" as any) || "Associated Tasks"}</h3>
               {!relations ? (
                 <div className="space-y-3">
@@ -685,13 +638,14 @@ export function VehicleDetailsDialog({
                         <p>Due: {format(task.dueDate, "PP p")}</p>
                         <p>Assignee: {task.assignedUserName}</p>
                       </div>
-                      {task.description && <p className="text-xs italic">"{task.description}"</p>}
+                      {task.description && <p className="text-xs italic">&ldquo;{task.description}&rdquo;</p>}
                     </div>
                   ))}
                 </div>
               )}
-            </TabsContent>
-            <TabsContent value="test_drives" className="m-0 focus-visible:outline-none">
+            </section>
+            <section hidden={activeGroup !== "sales_activity"} className="m-0 mb-4 rounded-lg border p-4 focus-visible:outline-none">
+              <h2 className="text-base font-semibold mb-4">{t("TestDrives")}</h2>
               <div className="flex justify-between items-center mb-4">
                 <h3 className="font-semibold text-sm">{t("TestDrivesRecord" as any) || "Test Drives Record"}</h3>
                 <Button size="sm" onClick={() => { setSelectedTestDrive(null); setTestDriveOpen(true); }}>{t("LogTestDrive" as any) || "Log Test Drive"}</Button>
@@ -720,7 +674,7 @@ export function VehicleDetailsDialog({
                         {td.endTime && <p>Ended: {format(td.endTime, "PP p")}</p>}
                       </div>
                       {td.notes && (
-                        <p className="text-xs mt-2 italic border-t pt-2 border-border/50">"{td.notes}"</p>
+                        <p className="text-xs mt-2 italic border-t pt-2 border-border/50">&ldquo;{td.notes}&rdquo;</p>
                       )}
                       {!td.endTime && (
                         <div className="mt-3 flex justify-end">
@@ -733,8 +687,9 @@ export function VehicleDetailsDialog({
                   ))}
                 </div>
               )}
-            </TabsContent>
-            <TabsContent value="work_orders" className="m-0 focus-visible:outline-none">
+            </section>
+            <section hidden={activeGroup !== "operations"} className="m-0 mb-4 rounded-lg border p-4 focus-visible:outline-none">
+              <h2 className="text-base font-semibold mb-4">{t("WorkOrders")}</h2>
               <div className="flex justify-between items-center mb-4">
                 <h3 className="font-semibold text-sm">{t("ServiceWorkOrders" as any) || "Service & Work Orders"}</h3>
                 <Button size="sm" onClick={() => { setSelectedWorkOrder(null); setWorkOrderOpen(true); }}>{t("NewWorkOrder" as any) || "New Work Order"}</Button>
@@ -773,11 +728,13 @@ export function VehicleDetailsDialog({
                   ))}
                 </div>
               )}
-            </TabsContent>
-            <TabsContent value="valuations" className="m-0 focus-visible:outline-none p-4">
+            </section>
+            <section hidden={activeGroup !== "financials"} className="m-0 mb-4 rounded-lg border p-4 focus-visible:outline-none">
+              <h2 className="text-base font-semibold mb-4">{t("Valuations")}</h2>
               <VehicleValuationsTab vehicleId={vehicle._id} />
-            </TabsContent>
-            <TabsContent value="landed_cost" className="m-0 focus-visible:outline-none space-y-4">
+            </section>
+            <section hidden={activeGroup !== "financials"} className="m-0 mb-4 rounded-lg border p-4 focus-visible:outline-none space-y-4">
+              <h2 className="text-base font-semibold">{t("LandedCost")}</h2>
               <div className="flex items-center justify-between gap-3">
                 <h3 className="font-semibold text-sm">{t("LandedCostBreakdown" as any)}</h3>
                 {canEditVehicles && (
@@ -857,8 +814,9 @@ export function VehicleDetailsDialog({
                   )}
                 </div>
               )}
-            </TabsContent>
-            <TabsContent value="pricing_history" className="m-0 focus-visible:outline-none">
+            </section>
+            <section hidden={activeGroup !== "financials"} className="m-0 mb-4 rounded-lg border p-4 focus-visible:outline-none">
+              <h2 className="text-base font-semibold mb-4">{t("PricingHistory")}</h2>
               <h3 className="font-semibold text-sm mb-3">{t("PricingHistory" as any)}</h3>
               {pricingHistory === undefined ? (
                 <Skeleton className="h-[120px] w-full rounded-lg" />
@@ -884,8 +842,9 @@ export function VehicleDetailsDialog({
                   ))}
                 </div>
               )}
-            </TabsContent>
-            <TabsContent value="reservations" className="m-0 focus-visible:outline-none space-y-5">
+            </section>
+            <section hidden={activeGroup !== "sales_activity"} className="m-0 mb-4 rounded-lg border p-4 focus-visible:outline-none space-y-5">
+              <h2 className="text-base font-semibold">{t("Reservations")}</h2>
               {/* SOURCING belongs here as much as AVAILABLE — a special-order
                   car is located for a specific customer, so reserving one is
                   the whole point. Gating the form on AVAILABLE alone left the
@@ -1023,12 +982,13 @@ export function VehicleDetailsDialog({
                   </div>
                 )}
               </div>
-            </TabsContent>
-            <TabsContent value="marketing" className="m-0 focus-visible:outline-none">
+            </section>
+            <section hidden={activeGroup !== "marketing"} className="m-0 rounded-lg border p-4 focus-visible:outline-none">
+              <h2 className="text-base font-semibold mb-4">{t("Marketing")}</h2>
               <VehicleMarketingTab vehicleId={vehicle._id} />
-            </TabsContent>
+            </section>
           </div>
-        </Tabs>
+        </div>
       </DialogContent>
       {vehicle && (
         <>

@@ -6,7 +6,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { Id, Doc } from "@/convex/_generated/dataModel";
+import { Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { toast } from "@/components/ui/sonner";
 import {
@@ -28,7 +28,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
-import { Upload, X, Search, Loader2 } from "lucide-react";
+import { Upload, X, Search, Loader2, ArrowLeft, ArrowRight, Check } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -42,6 +42,8 @@ import { vehicleSchema, VehicleFormValues, VehicleDialogProps } from "./vehicle.
 import { CustomFieldsSection, useSaveCustomFieldValues } from "@/components/custom-fields/CustomFieldsSection";
 import { decodeVinYear, toCarBrand, cleanMfrName, validateVinChecksum } from "@/lib/vinHelpers";
 import { getErrorMessage } from "@/lib/errors";
+
+const VEHICLE_WIZARD_STEPS = ["VIN", "Vehicle details", "Acquisition & cost", "Photos", "Availability"] as const;
 
 export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, canEdit = false }: VehicleDialogProps) {
   const { activeOrgId } = useOrg();
@@ -59,6 +61,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [imageIds, setImageIds] = useState<string[]>([]);
   const [imageUrls, setImageUrls] = useState<string[]>([]);
+  const [wizardStep, setWizardStep] = useState(0);
   const [customFieldValues, setCustomFieldValues] = useState<Record<string, string>>({});
   const saveCustomFields = useSaveCustomFieldValues();
 
@@ -92,6 +95,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
   });
 
   useEffect(() => {
+    if (open) setWizardStep(0);
     if (vehicle && open) {
       form.reset({
         vin: vehicle.vin,
@@ -186,7 +190,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
       setImageIds(newImageIds);
       setImageUrls(newImageUrls);
       form.setValue("imageIds", newImageIds);
-    } catch (error) {
+    } catch {
       toast.error(t("FailedToUploadImage" as any));
     } finally {
       setIsUploading(false);
@@ -348,9 +352,35 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
     }
   };
 
+  const handleNextStep = async () => {
+    const fieldsByStep: Array<Array<keyof VehicleFormValues>> = [
+      ["vin"],
+      ["make", "model", "year", "trim", "mileage", "color", "fuelType", "transmission"],
+      ["sourceType", "sourcedFromName", "sourceCost", "purchasePrice", "purchasePaymentMethod", "minimumProfit", "sellingPrice"],
+      ["imageIds"],
+    ];
+    const fields = fieldsByStep[wizardStep] ?? [];
+    const stepIsValid = await form.trigger(fields);
+    if (!stepIsValid) return;
+
+    if (wizardStep === 2) {
+      const values = form.getValues();
+      if (values.sourceType === "SOURCED" && !values.sourcedFromName?.trim()) {
+        form.setError("sourcedFromName", { message: "Source dealer is required" });
+        return;
+      }
+      if (values.sourceType !== "SOURCED" && (values.purchasePrice ?? 0) > 0 && !values.purchasePaymentMethod) {
+        form.setError("purchasePaymentMethod", { message: "Payment method is required when a purchase price is entered" });
+        return;
+      }
+    }
+
+    setWizardStep((currentStep) => Math.min(currentStep + 1, VEHICLE_WIZARD_STEPS.length - 1));
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[90dvh] overflow-y-auto">
+      <DialogContent className="max-w-4xl max-h-[90dvh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{vehicle ? t("EditVehicle" as any) : t("AddVehicle")}</DialogTitle>
           <DialogDescription>
@@ -358,9 +388,38 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
           </DialogDescription>
         </DialogHeader>
 
+        {!vehicle && (
+          <div className="space-y-2" aria-label="Add vehicle progress">
+            <div className="flex items-center justify-between gap-2">
+              {VEHICLE_WIZARD_STEPS.map((step, index) => (
+                <button
+                  key={step}
+                  type="button"
+                  onClick={() => index < wizardStep && setWizardStep(index)}
+                  disabled={index > wizardStep}
+                  className="flex min-w-0 flex-1 items-center gap-2 text-start disabled:cursor-default"
+                >
+                  <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${index < wizardStep ? "border-primary bg-primary text-primary-foreground" : index === wizardStep ? "border-primary text-primary" : "border-muted text-muted-foreground"}`}>
+                    {index < wizardStep ? <Check className="h-3.5 w-3.5" /> : index + 1}
+                  </span>
+                  <span className={`hidden truncate text-xs lg:block ${index === wizardStep ? "font-medium text-foreground" : "text-muted-foreground"}`}>{step}</span>
+                </button>
+              ))}
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+              <div className="h-full bg-primary transition-all" style={{ width: `${((wizardStep + 1) / VEHICLE_WIZARD_STEPS.length) * 100}%` }} />
+            </div>
+            <div>
+              <p className="text-sm font-semibold">{VEHICLE_WIZARD_STEPS[wizardStep]}</p>
+              <p className="text-xs text-muted-foreground">Step {wizardStep + 1} of {VEHICLE_WIZARD_STEPS.length}</p>
+            </div>
+          </div>
+        )}
+
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
 
+            <div className={vehicle || wizardStep === 2 ? "space-y-6" : "hidden"}>
             {/* Vehicle Source toggle — shown at the top so all conditional fields render correctly */}
             <FormField
               control={form.control}
@@ -433,8 +492,10 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 />
               </div>
             )}
+            </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className={vehicle || wizardStep === 0 ? "contents" : "hidden"}>
               <FormField
                 control={form.control}
                 name="vin"
@@ -467,6 +528,8 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                   </FormItem>
                 )}
               />
+              </div>
+              <div className={vehicle || wizardStep === 4 ? "contents" : "hidden"}>
               <FormField
                 control={form.control}
                 name="status"
@@ -493,6 +556,8 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                   </FormItem>
                 )}
               />
+              </div>
+              <div className={vehicle || wizardStep === 1 ? "contents" : "hidden"}>
               <FormField
                 control={form.control}
                 name="make"
@@ -615,6 +680,8 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                   </FormItem>
                 )}
               />
+              </div>
+              <div className={vehicle || wizardStep === 2 ? "contents" : "hidden"}>
               {/* For owned vehicles, show purchasePrice directly; for sourced, sourceCost is used (shown in the sourcing section above). */}
               {!isSourced && (
                 <FormField
@@ -679,6 +746,8 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                   </FormItem>
                 )}
               />
+              </div>
+              <div className={vehicle || wizardStep === 4 ? "contents" : "hidden"}>
               <FormField
                 control={form.control}
                 name="notes"
@@ -692,9 +761,10 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                   </FormItem>
                 )}
               />
+              </div>
             </div>
 
-            <div className="space-y-4 rounded-lg border p-4">
+            <div className={`${vehicle || wizardStep === 4 ? "space-y-4" : "hidden"} rounded-lg border p-4`}>
               <div>
                 <h4 className="text-sm font-medium">{t("TrustPassport" as any) || "Trust Passport"}</h4>
                 <p className="text-xs text-muted-foreground">
@@ -802,7 +872,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
               </div>
             </div>
 
-            {activeOrgId && (
+            {activeOrgId && (vehicle || wizardStep === 4) && (
               <CustomFieldsSection
                 orgId={activeOrgId}
                 entityType="vehicle"
@@ -811,7 +881,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
               />
             )}
 
-            <div className="space-y-4">
+            <div className={vehicle || wizardStep === 3 ? "space-y-4" : "hidden"}>
               <div className="flex items-center justify-between">
                 <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">{t("VehicleImages" as any) || "Vehicle Images"}</label>
                 <div>
@@ -840,6 +910,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-2">
                   {imageUrls.map((url, index) => (
                     <div key={index} className="relative group aspect-video bg-muted rounded-md overflow-hidden border">
+                      {/* eslint-disable-next-line @next/next/no-img-element -- Local previews and Convex storage URLs do not have stable dimensions. */}
                       <img src={url} alt={`Vehicle ${index + 1}`} className="object-cover w-full h-full" />
                       <button
                         type="button"
@@ -859,17 +930,32 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
               )}
             </div>
 
-            <div className="flex justify-end gap-2 pt-4">
-              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-                {t("Cancel")}
-              </Button>
-              <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting
-                  ? t("Saving" as any) || "Saving..."
-                  : vehicle
-                    ? (canEdit ? t("SaveChanges" as any) || "Save Changes" : t("SubmitForApproval" as any) || "Submit for Approval")
-                    : (canCreate ? t("AddVehicle" as any) : t("SubmitForApproval" as any) || "Submit for Approval")}
-              </Button>
+            <div className="flex items-center justify-between gap-2 border-t pt-4">
+              <div>
+                {!vehicle && wizardStep > 0 && (
+                  <Button type="button" variant="ghost" onClick={() => setWizardStep((currentStep) => Math.max(0, currentStep - 1))}>
+                    <ArrowLeft className="h-4 w-4 me-2 rtl:rotate-180" />Back
+                  </Button>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                  {t("Cancel")}
+                </Button>
+                {!vehicle && wizardStep < VEHICLE_WIZARD_STEPS.length - 1 ? (
+                  <Button type="button" onClick={() => void handleNextStep()}>
+                    Continue<ArrowRight className="h-4 w-4 ms-2 rtl:rotate-180" />
+                  </Button>
+                ) : (
+                  <Button type="submit" disabled={isSubmitting}>
+                    {isSubmitting
+                      ? t("Saving") || "Saving..."
+                      : vehicle
+                        ? (canEdit ? t("SaveChanges") || "Save Changes" : t("SubmitForApproval") || "Submit for Approval")
+                        : (canCreate ? t("AddVehicle") : t("SubmitForApproval") || "Submit for Approval")}
+                  </Button>
+                )}
+              </div>
             </div>
 
             {vehicle && (vehicle.addedBy || vehicle.updatedBy) && (

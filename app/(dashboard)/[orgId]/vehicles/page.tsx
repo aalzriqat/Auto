@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { RoleGuard } from "@/components/auth/RoleGuard";
 import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -24,7 +24,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Search, Pencil, Trash2, ImageIcon, Download, ClipboardList, Check, X, Hourglass, History, Eye, FileSpreadsheet, AlertTriangle } from "lucide-react";
+import { Plus, Search, Pencil, ImageIcon, Download, ClipboardList, Check, X, Hourglass, History, FileSpreadsheet, AlertTriangle, LayoutGrid, List, Bookmark, MoreHorizontal, Archive } from "lucide-react";
 import { VehicleImportDialog } from "@/components/vehicles/VehicleImportDialog";
 import { VehicleExportButton } from "@/components/vehicles/VehicleExportButton";
 import { toast } from "@/components/ui/sonner";
@@ -45,9 +45,59 @@ import {
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { getErrorMessage } from "@/lib/errors";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useStoredViewPreference } from "@/hooks/useStoredViewPreference";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 type AgingFilter = "ALL" | "0-30" | "31-60" | "61-90" | "90+";
+type VehicleStatus = Doc<"vehicles">["status"];
+type RequestableVehicleStatus = Exclude<VehicleStatus, "SOURCING">;
+type VehicleStatusFilter = "ALL" | VehicleStatus;
+type VehicleView = "table" | "cards";
+
+const VEHICLE_VIEW_OPTIONS = ["table", "cards"] as const;
+const VEHICLE_STATUS_FILTERS: readonly VehicleStatusFilter[] = [
+  "ALL", "AVAILABLE", "SOURCING", "RESERVED", "SOLD", "IN_INSPECTION", "IN_REPAIR", "ARCHIVED",
+];
+const VEHICLE_AGING_FILTERS: readonly AgingFilter[] = ["ALL", "0-30", "31-60", "61-90", "90+"];
+const VEHICLE_SORT_KEYS = ["model", "price", "year", "addedDate"] as const;
+
+interface VehicleSavedView {
+  id: string;
+  name: string;
+  search: string;
+  status: VehicleStatusFilter;
+  aging: AgingFilter;
+  view: VehicleView;
+  sortKey?: string;
+  sortDir: "asc" | "desc";
+}
+
+function isVehicleSavedView(value: unknown): value is VehicleSavedView {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<VehicleSavedView>;
+  return (
+    typeof candidate.id === "string" &&
+    typeof candidate.name === "string" &&
+    typeof candidate.search === "string" &&
+    !!candidate.status && VEHICLE_STATUS_FILTERS.includes(candidate.status) &&
+    !!candidate.aging && VEHICLE_AGING_FILTERS.includes(candidate.aging) &&
+    (candidate.view === "table" || candidate.view === "cards") &&
+    (candidate.sortKey === undefined || VEHICLE_SORT_KEYS.some((sortKey) => sortKey === candidate.sortKey)) &&
+    (candidate.sortDir === "asc" || candidate.sortDir === "desc")
+  );
+}
+
+function isRequestableVehicleStatus(status: VehicleStatus): status is RequestableVehicleStatus {
+  return status !== "SOURCING";
+}
 
 function StatusBadge({ status, t }: { status: string; t: any }) {
   switch (status) {
@@ -87,30 +137,63 @@ export default function VehiclesPage() {
     sortKey,
     sortDir,
     toggleSort,
+    setSort,
     rows: sortedVehicles,
   } = useTableControls({
     data: vehicles,
-    searchFields: (v) => [v.vin, v.make, v.model],
+    searchFields: (v) => [v.vin, v.make, v.model, v.trim, v.notes],
     sortAccessors: {
+      model: (v) => `${v.make} ${v.model}`.toLowerCase(),
       price: (v) => v.sellingPrice,
       year: (v) => v.year,
       addedDate: (v) => v.createdAt ?? v._creationTime,
     },
+    defaultSortKey: "addedDate",
+    defaultSortDir: "desc",
     pagination: { status: vehiclesStatus, loadMore: loadMoreVehicles, batchSize: 20 },
   });
+  type VehicleListItem = NonNullable<typeof vehicles>[number];
   const [agingFilter, setAgingFilter] = useState<AgingFilter>("ALL");
+  const [statusFilter, setStatusFilter] = useState<VehicleStatusFilter>("ALL");
+  const [view, setView] = useStoredViewPreference<VehicleView>(
+    `autoflow:${activeOrgId ?? "default"}:vehicle-view`,
+    "table",
+    VEHICLE_VIEW_OPTIONS
+  );
+  const [selectedVehicleIds, setSelectedVehicleIds] = useState<Set<Id<"vehicles">>>(new Set());
+  const [savedViews, setSavedViews] = useState<VehicleSavedView[]>([]);
+  const [activeSavedViewId, setActiveSavedViewId] = useState("");
+  const [isSaveViewDialogOpen, setIsSaveViewDialogOpen] = useState(false);
+  const [savedViewName, setSavedViewName] = useState("");
+  const [isBulkUpdating, setIsBulkUpdating] = useState(false);
   const [isVehicleDialogOpen, setIsVehicleDialogOpen] = useState(false);
   const [editingVehicle, setEditingVehicle] = useState<Doc<"vehicles"> | null>(null);
 
   const [vehicleToDelete, setVehicleToDelete] = useState<Doc<"vehicles"> | null>(null);
-  const [galleryVehicle, setGalleryVehicle] = useState<any | null>(null);
+  const [galleryVehicle, setGalleryVehicle] = useState<VehicleListItem | null>(null);
   const [historyVehicle, setHistoryVehicle] = useState<Doc<"vehicles"> | null>(null);
   const [detailsVehicle, setDetailsVehicle] = useState<Doc<"vehicles"> | null>(null);
   const [statusRequestVehicle, setStatusRequestVehicle] = useState<Doc<"vehicles"> | null>(null);
   const [isApprovalsDialogOpen, setIsApprovalsDialogOpen] = useState(false);
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
   const [statusRequestNotes, setStatusRequestNotes] = useState("");
-  const [selectedStatus, setSelectedStatus] = useState<any>("");
+  const [selectedStatus, setSelectedStatus] = useState<VehicleStatus | "">("");
+
+  const savedViewsStorageKey = `autoflow:${activeOrgId ?? "default"}:vehicle-saved-views`;
+  useEffect(() => {
+    try {
+      const storedViews = window.localStorage.getItem(savedViewsStorageKey);
+      if (!storedViews) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- Refresh client-only saved views when the organization changes.
+        setSavedViews([]);
+        return;
+      }
+      const parsedViews: unknown = JSON.parse(storedViews);
+      setSavedViews(Array.isArray(parsedViews) ? parsedViews.filter(isVehicleSavedView) : []);
+    } catch {
+      setSavedViews([]);
+    }
+  }, [savedViewsStorageKey]);
 
   const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
   const permissions = myMembership?.permissions || [];
@@ -155,6 +238,10 @@ export default function VehiclesPage() {
         toast.success(t("VehicleStatusUpdated" as any));
       } else {
         // Sales/Reception requests it
+        if (!isRequestableVehicleStatus(selectedStatus)) {
+          toast.error("Only a manager can move a vehicle back to sourcing.");
+          return;
+        }
         await createStatusRequest({
           orgId: activeOrgId,
           vehicleId: statusRequestVehicle._id,
@@ -191,12 +278,25 @@ export default function VehiclesPage() {
     }
   };
 
+  // eslint-disable-next-line react-hooks/purity -- Keep every inventory-age value consistent within this render.
+  const currentTime = Date.now();
   const getVehicleAgeBucket = (createdAt: number): AgingFilter => {
-    const ageDays = Math.max(0, Math.floor((Date.now() - createdAt) / DAY_MS));
+    const ageDays = Math.max(0, Math.floor((currentTime - createdAt) / DAY_MS));
     if (ageDays <= 30) return "0-30";
     if (ageDays <= 60) return "31-60";
     if (ageDays <= 90) return "61-90";
     return "90+";
+  };
+
+  const getVehicleAgeDays = (vehicle: VehicleListItem) =>
+    Math.max(0, Math.floor((currentTime - (vehicle.createdAt ?? vehicle._creationTime)) / DAY_MS));
+
+  const getVehicleWarnings = (vehicle: VehicleListItem) => {
+    const warnings: string[] = [];
+    if (!vehicle.vin) warnings.push("VIN missing");
+    if (!vehicle.imageUrls?.some(Boolean)) warnings.push("Photos missing");
+    if (isMissingCost(vehicle)) warnings.push("Acquisition cost missing");
+    return warnings;
   };
 
   const agingFilterOptions: { value: AgingFilter; label: string }[] = [
@@ -209,10 +309,19 @@ export default function VehiclesPage() {
 
   const filteredVehicles = sortedVehicles?.filter((v) => {
     // Sourced vehicles are excluded from the aging filter since they were never owned stock.
-    return agingFilter === "ALL" || (
-      (v as any).sourceType !== "SOURCED" && getVehicleAgeBucket(v.createdAt ?? v._creationTime) === agingFilter
+    const matchesStatus = statusFilter === "ALL" || v.status === statusFilter;
+    const matchesAge = agingFilter === "ALL" || (
+      v.sourceType !== "SOURCED" && getVehicleAgeBucket(v.createdAt ?? v._creationTime) === agingFilter
     );
+    return matchesStatus && matchesAge;
   });
+
+  const selectedVehicles = useMemo(
+    () => (vehicles ?? []).filter((vehicle) => selectedVehicleIds.has(vehicle._id)),
+    [selectedVehicleIds, vehicles]
+  );
+  const allFilteredSelected =
+    !!filteredVehicles?.length && filteredVehicles.every((vehicle) => selectedVehicleIds.has(vehicle._id));
 
   const highlightedId = useHighlightRow({
     // Fed the *rendered* rows: a row hidden by the active search or filter has
@@ -221,6 +330,149 @@ export default function VehiclesPage() {
     getId: (v) => v._id,
     pagination: { status: vehiclesStatus, loadMore: loadMoreVehicles, batchSize: 20 },
   });
+
+  const persistSavedViews = (nextViews: VehicleSavedView[]) => {
+    try {
+      window.localStorage.setItem(savedViewsStorageKey, JSON.stringify(nextViews));
+      setSavedViews(nextViews);
+      return true;
+    } catch {
+      toast.error("Saved views are unavailable in this browser session.");
+      return false;
+    }
+  };
+
+  const handleSaveCurrentView = () => {
+    const name = savedViewName.trim();
+    if (!name) return;
+
+    const existing = savedViews.find((savedView) => savedView.name.toLowerCase() === name.toLowerCase());
+    const nextView: VehicleSavedView = {
+      id: existing?.id ?? crypto.randomUUID(),
+      name,
+      search: searchQuery,
+      status: statusFilter,
+      aging: agingFilter,
+      view,
+      sortKey,
+      sortDir,
+    };
+    const nextViews = existing
+      ? savedViews.map((savedView) => savedView.id === existing.id ? nextView : savedView)
+      : [...savedViews, nextView];
+
+    if (!persistSavedViews(nextViews)) return;
+    setActiveSavedViewId(nextView.id);
+    setSavedViewName("");
+    setIsSaveViewDialogOpen(false);
+    toast.success("View saved");
+  };
+
+  const applySavedView = (savedView: VehicleSavedView) => {
+    setSearchQuery(savedView.search);
+    setStatusFilter(savedView.status);
+    setAgingFilter(savedView.aging);
+    setView(savedView.view);
+    setSort(savedView.sortKey, savedView.sortDir);
+    setActiveSavedViewId(savedView.id);
+  };
+
+  const deleteActiveSavedView = () => {
+    if (!activeSavedViewId) return;
+    if (!persistSavedViews(savedViews.filter((savedView) => savedView.id !== activeSavedViewId))) return;
+    setActiveSavedViewId("");
+    toast.success("Saved view removed");
+  };
+
+  const clearFilters = () => {
+    setSearchQuery("");
+    setStatusFilter("ALL");
+    setAgingFilter("ALL");
+    setActiveSavedViewId("");
+  };
+
+  const toggleVehicleSelection = (vehicleId: Id<"vehicles">) => {
+    setSelectedVehicleIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      if (nextIds.has(vehicleId)) nextIds.delete(vehicleId);
+      else nextIds.add(vehicleId);
+      return nextIds;
+    });
+  };
+
+  const toggleAllFilteredVehicles = () => {
+    setSelectedVehicleIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      if (allFilteredSelected) {
+        filteredVehicles?.forEach((vehicle) => nextIds.delete(vehicle._id));
+      } else {
+        filteredVehicles?.forEach((vehicle) => nextIds.add(vehicle._id));
+      }
+      return nextIds;
+    });
+  };
+
+  const exportSelectedVehicles = () => {
+    if (selectedVehicles.length === 0) return;
+    const escapeCell = (cell: string | number) => `"${String(cell).replaceAll('"', '""')}"`;
+    const rows = selectedVehicles.map((vehicle) => [
+      vehicle.vin ?? "",
+      vehicle.year,
+      vehicle.make,
+      vehicle.model,
+      vehicle.trim ?? "",
+      vehicle.status,
+      vehicle.sellingPrice,
+      getVehicleAgeDays(vehicle),
+    ]);
+    const csv = [
+      ["VIN", "Year", "Make", "Model", "Trim", "Status", "Price (JOD)", "Inventory age (days)"],
+      ...rows,
+    ].map((row) => row.map(escapeCell).join(",")).join("\n");
+    const downloadUrl = URL.createObjectURL(new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.download = `vehicles_selected_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(downloadUrl);
+  };
+
+  const handleBulkStatusChange = async (nextStatus: VehicleStatus) => {
+    if (!activeOrgId || selectedVehicles.length === 0) return;
+    setIsBulkUpdating(true);
+    let updates: PromiseSettledResult<unknown>[];
+    if (canEdit) {
+      updates = await Promise.allSettled(
+        selectedVehicles.map((vehicle) =>
+          updateVehicle({ orgId: activeOrgId, vehicleId: vehicle._id, status: nextStatus })
+        )
+      );
+    } else {
+      if (!isRequestableVehicleStatus(nextStatus)) {
+        toast.error("Only a manager can move vehicles back to sourcing.");
+        setIsBulkUpdating(false);
+        return;
+      }
+      updates = await Promise.allSettled(
+        selectedVehicles.map((vehicle) =>
+          createStatusRequest({
+            orgId: activeOrgId,
+            vehicleId: vehicle._id,
+            requestedStatus: nextStatus,
+            notes: "Bulk status change",
+          })
+        )
+      );
+    }
+    const failures = updates.filter((update) => update.status === "rejected").length;
+    if (failures > 0) {
+      toast.error(`${failures} vehicle${failures === 1 ? "" : "s"} could not be updated. Please try again.`);
+    } else {
+      toast.success(canEdit ? "Vehicle statuses updated" : "Status requests submitted");
+      setSelectedVehicleIds(new Set());
+    }
+    setIsBulkUpdating(false);
+  };
 
   const handleEdit = (vehicle: Doc<"vehicles">) => {
     setEditingVehicle(vehicle);
@@ -271,8 +523,9 @@ export default function VehiclesPage() {
 
     try {
       const toastId = toast.loading(t("DownloadingImages" as any));
-      for (let i = 0; i < galleryVehicle.imageUrls.length; i++) {
-        await handleDownloadSingle(galleryVehicle.imageUrls[i], i);
+      const imageUrls = galleryVehicle.imageUrls.filter((url): url is string => Boolean(url));
+      for (let i = 0; i < imageUrls.length; i++) {
+        await handleDownloadSingle(imageUrls[i], i);
         // Small delay to prevent browser from blocking multiple rapid downloads
         await new Promise(resolve => setTimeout(resolve, 200));
       }
@@ -286,7 +539,11 @@ export default function VehiclesPage() {
   return (
     <RoleGuard permissions={["view:vehicles"]}>
       <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">{t("Vehicles")}</h1>
+          <p className="text-sm text-muted-foreground">Manage inventory, availability, and vehicle readiness.</p>
+        </div>
         <div className="flex flex-wrap gap-2">
           {canEdit && (
             <Button variant="outline" onClick={() => setIsApprovalsDialogOpen(true)}>
@@ -313,166 +570,269 @@ export default function VehiclesPage() {
         </div>
       </div>
 
-      <div className="flex items-center w-full max-w-sm space-x-2">
-        <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
-        <Input
-          placeholder={t("Search" as any) || "Search vehicles..."}
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="ps-9"
-        />
+      <div className="rounded-xl border bg-card p-4 space-y-4 shadow-sm">
+        <div className="flex flex-col xl:flex-row gap-3 xl:items-center">
+          <div className="flex items-center w-full xl:max-w-md relative">
+            <Search className="h-4 w-4 text-muted-foreground absolute start-3" />
+            <Input
+              placeholder="Search VIN, make, model, trim, or notes"
+              value={searchQuery}
+              onChange={(event) => { setSearchQuery(event.target.value); setActiveSavedViewId(""); }}
+              className="ps-9"
+            />
+          </div>
+          <div className="flex flex-wrap gap-2 flex-1">
+            <Select value={statusFilter} onValueChange={(nextStatus) => { setStatusFilter(nextStatus as VehicleStatusFilter); setActiveSavedViewId(""); }}>
+              <SelectTrigger className="w-[170px]">
+                <SelectValue placeholder="All statuses" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="ALL">All statuses</SelectItem>
+                <SelectItem value="AVAILABLE">Available</SelectItem>
+                <SelectItem value="SOURCING">Sourcing</SelectItem>
+                <SelectItem value="RESERVED">Reserved</SelectItem>
+                <SelectItem value="SOLD">Sold</SelectItem>
+                <SelectItem value="IN_INSPECTION">In inspection</SelectItem>
+                <SelectItem value="IN_REPAIR">In repair</SelectItem>
+                <SelectItem value="ARCHIVED">Archived</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={agingFilter} onValueChange={(nextAge) => { setAgingFilter(nextAge as AgingFilter); setActiveSavedViewId(""); }}>
+              <SelectTrigger className="w-[170px]">
+                <SelectValue placeholder={t("InventoryAging")} />
+              </SelectTrigger>
+              <SelectContent>
+                {agingFilterOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select
+              value={sortKey ? `${sortKey}:${sortDir}` : "none"}
+              onValueChange={(nextSort) => {
+                if (nextSort === "none") setSort(undefined);
+                else {
+                  const [nextKey, nextDirection] = nextSort.split(":");
+                  setSort(nextKey, nextDirection as "asc" | "desc");
+                }
+                setActiveSavedViewId("");
+              }}
+            >
+              <SelectTrigger className="w-[190px]">
+                <SelectValue placeholder="Sort vehicles" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="addedDate:desc">Newest inventory</SelectItem>
+                <SelectItem value="addedDate:asc">Oldest inventory</SelectItem>
+                <SelectItem value="price:desc">Price: high to low</SelectItem>
+                <SelectItem value="price:asc">Price: low to high</SelectItem>
+                <SelectItem value="model:asc">Model: A to Z</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex items-center gap-2">
+            <Select
+              value={activeSavedViewId || "none"}
+              onValueChange={(savedViewId) => {
+                if (savedViewId === "none") {
+                  setActiveSavedViewId("");
+                  return;
+                }
+                const savedView = savedViews.find((candidate) => candidate.id === savedViewId);
+                if (savedView) applySavedView(savedView);
+              }}
+            >
+              <SelectTrigger className="w-[170px]">
+                <Bookmark className="h-4 w-4 me-2" />
+                <SelectValue placeholder="Saved views" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Saved views</SelectItem>
+                {savedViews.map((savedView) => (
+                  <SelectItem key={savedView.id} value={savedView.id}>{savedView.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button variant="outline" size="sm" onClick={() => setIsSaveViewDialogOpen(true)}>Save view</Button>
+            {activeSavedViewId && (
+              <Button variant="ghost" size="icon" onClick={deleteActiveSavedView} title="Delete saved view">
+                <X className="h-4 w-4" />
+              </Button>
+            )}
+            <div className="flex items-center rounded-md border p-1">
+              <Button variant={view === "table" ? "secondary" : "ghost"} size="icon" className="h-7 w-7" onClick={() => setView("table")} title="Table view">
+                <List className="h-4 w-4" />
+              </Button>
+              <Button variant={view === "cards" ? "secondary" : "ghost"} size="icon" className="h-7 w-7" onClick={() => setView("cards")} title="Card view">
+                <LayoutGrid className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            {searchQuery && (
+              <Badge variant="secondary" className="gap-1">Search: {searchQuery}<button type="button" onClick={() => setSearchQuery("")} aria-label="Clear search"><X className="h-3 w-3" /></button></Badge>
+            )}
+            {statusFilter !== "ALL" && (
+              <Badge variant="secondary" className="gap-1">Status: {statusFilter.replaceAll("_", " ")}<button type="button" onClick={() => setStatusFilter("ALL")} aria-label="Clear status filter"><X className="h-3 w-3" /></button></Badge>
+            )}
+            {agingFilter !== "ALL" && (
+              <Badge variant="secondary" className="gap-1">Age: {agingFilter} days<button type="button" onClick={() => setAgingFilter("ALL")} aria-label="Clear age filter"><X className="h-3 w-3" /></button></Badge>
+            )}
+            {(searchQuery || statusFilter !== "ALL" || agingFilter !== "ALL") && (
+              <Button variant="ghost" size="sm" onClick={clearFilters}>Clear all</Button>
+            )}
+          </div>
+          <p className="text-sm text-muted-foreground">
+            {filteredVehicles?.length ?? 0} {vehiclesStatus === "Exhausted" ? "results" : "loaded results"}
+          </p>
+        </div>
       </div>
 
-      <div className="flex flex-wrap gap-2" aria-label={t("InventoryAging" as any)}>
-        {agingFilterOptions.map((option) => (
-          <Button
-            key={option.value}
-            type="button"
-            variant={agingFilter === option.value ? "default" : "outline"}
-            size="sm"
-            onClick={() => setAgingFilter(option.value)}
-          >
-            {option.label}
+      {selectedVehicleIds.size > 0 && (
+        <div className="sticky top-2 z-20 flex flex-wrap items-center gap-2 rounded-lg border bg-background p-3 shadow-lg">
+          <span className="text-sm font-medium">{selectedVehicleIds.size} selected</span>
+          <Button variant="outline" size="sm" onClick={exportSelectedVehicles}>
+            <Download className="h-4 w-4 me-2" /> Export selected
           </Button>
-        ))}
-      </div>
+          {canEditOrRequest && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" disabled={isBulkUpdating}>Change status</Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                {(["AVAILABLE", ...(canEdit ? ["SOURCING" as const] : []), "RESERVED", "SOLD", "IN_INSPECTION", "IN_REPAIR"] as VehicleStatus[]).map((status) => (
+                  <DropdownMenuItem key={status} onSelect={() => void handleBulkStatusChange(status)}>
+                    {status.replaceAll("_", " ")}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+          <Button variant="ghost" size="sm" onClick={() => setSelectedVehicleIds(new Set())}>Clear selection</Button>
+        </div>
+      )}
 
-      {/* Mobile card list */}
-      <div className="flex flex-col gap-3 md:hidden">
+      {view === "cards" && <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-4">
         {filteredVehicles === undefined ? (
           <p className="text-center py-8 text-muted-foreground">{t("LoadingInventory" as any)}</p>
         ) : filteredVehicles.length === 0 ? (
           <p className="text-center py-8 text-muted-foreground">{t("NoVehiclesFound" as any)}</p>
-        ) : filteredVehicles.map((vehicle) => (
-          <div
-            key={vehicle._id}
-            id={`row-${vehicle._id}`}
-            className={`rounded-xl border bg-card p-4 space-y-3 ${highlightedId === vehicle._id ? "ring-2 ring-primary" : ""}`}
-          >
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <p className="font-semibold text-sm">
-                  {vehicle.year} {vehicle.make} {vehicle.model}
-                  {vehicle.trim && <span className="text-muted-foreground text-xs ms-1">{vehicle.trim}</span>}
-                </p>
-                <p className="text-xs text-muted-foreground font-mono mt-0.5 truncate">{vehicle.vin ?? t("VinPending" as any)}</p>
+        ) : filteredVehicles.map((vehicle) => {
+          const thumbnail = vehicle.imageUrls?.find((url): url is string => Boolean(url));
+          const warnings = getVehicleWarnings(vehicle);
+          return (
+            <div
+              key={vehicle._id}
+              id={`row-${vehicle._id}`}
+              role="button"
+              tabIndex={0}
+              onClick={() => setDetailsVehicle(vehicle)}
+              onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setDetailsVehicle(vehicle); }}
+              className={`rounded-xl border bg-card overflow-hidden cursor-pointer transition-shadow hover:shadow-md ${highlightedId === vehicle._id ? "ring-2 ring-primary" : ""}`}
+            >
+              <div className="aspect-[16/7] bg-muted relative">
+                {thumbnail ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- Convex storage URLs are dynamic and already used throughout the vehicle gallery.
+                  <img src={thumbnail} alt="" className="h-full w-full object-cover" />
+                ) : <ImageIcon className="absolute inset-0 m-auto h-10 w-10 text-muted-foreground/40" />}
+                <div className="absolute start-3 top-3" onClick={(event) => event.stopPropagation()}>
+                  <Checkbox checked={selectedVehicleIds.has(vehicle._id)} onCheckedChange={() => toggleVehicleSelection(vehicle._id)} aria-label={`Select ${vehicle.make} ${vehicle.model}`} />
+                </div>
+                <div className="absolute end-3 top-3"><StatusBadge status={vehicle.status} t={t} /></div>
               </div>
-              <div className="flex flex-col items-end gap-1">
-                <StatusBadge status={vehicle.status} t={t} />
-                {(vehicle as any).sourceType === "SOURCED" && (
-                  <Badge variant="outline" className="text-orange-600 border-orange-400 text-[10px] px-1.5 py-0">{t("SourcedVehicle" as any)}</Badge>
+              <div className="p-4 space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-semibold truncate">{vehicle.year} {vehicle.make} {vehicle.model} {vehicle.trim}</p>
+                    <p className="text-xs text-muted-foreground font-mono truncate">{vehicle.vin ?? "VIN pending"}</p>
+                  </div>
+                  <p className="font-semibold whitespace-nowrap">{vehicle.sellingPrice.toLocaleString()} JOD</p>
+                </div>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div><p className="text-xs text-muted-foreground">Inventory age</p><p>{getVehicleAgeDays(vehicle)} days</p></div>
+                  <div><p className="text-xs text-muted-foreground">Mileage</p><p>{vehicle.mileage.toLocaleString()} km</p></div>
+                </div>
+                {warnings.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {warnings.map((warning) => <Badge key={warning} variant="outline" className="border-amber-300 text-amber-700"><AlertTriangle className="h-3 w-3 me-1" />{warning}</Badge>)}
+                  </div>
                 )}
-                {isMissingCost(vehicle) && (
-                  <Badge
-                    variant="outline"
-                    className="text-amber-700 dark:text-amber-300 border-amber-400 bg-amber-50 dark:bg-amber-950/30 text-[10px] px-1.5 py-0 inline-flex items-center gap-1"
-                    title={t("MissingPurchaseCostHint" as any)}
-                  >
-                    <AlertTriangle className="h-2.5 w-2.5" />
-                    {t("MissingPurchaseCost" as any)}
-                  </Badge>
-                )}
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-              {vehicle.mileage != null && <span>{vehicle.mileage.toLocaleString()} km</span>}
-              {vehicle.transmission && <span>{vehicle.transmission.charAt(0) + vehicle.transmission.slice(1).toLowerCase()}</span>}
-              {vehicle.notes && <span className="truncate max-w-[200px]">{vehicle.notes}</span>}
-            </div>
-            <div className="flex items-center justify-between">
-              <p className="font-bold text-sm">{vehicle.sellingPrice.toLocaleString()} JOD</p>
-              <div className="flex gap-0.5">
-                <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => setDetailsVehicle(vehicle)}>
-                  <Eye className="h-4 w-4 text-muted-foreground" />
-                </Button>
-                <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => setGalleryVehicle(vehicle)}>
-                  <ImageIcon className="h-4 w-4 text-muted-foreground" />
-                </Button>
-                {canEditOrRequest && (
-                  <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => handleEdit(vehicle)}>
-                    <Pencil className="h-4 w-4 text-muted-foreground" />
-                  </Button>
-                )}
-                {canDelete && (
-                  <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => setVehicleToDelete(vehicle)}>
-                    <Trash2 className="h-4 w-4 text-red-500" />
-                  </Button>
-                )}
+                <div className="flex items-center justify-end gap-1 border-t pt-2" onClick={(event) => event.stopPropagation()}>
+                  <Button variant="ghost" size="sm" onClick={() => setGalleryVehicle(vehicle)}><ImageIcon className="h-4 w-4 me-2" />Photos</Button>
+                  {canEditOrRequest && <Button variant="ghost" size="sm" onClick={() => handleEdit(vehicle)}><Pencil className="h-4 w-4 me-2" />Edit</Button>}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild><Button variant="ghost" size="icon"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onSelect={() => setHistoryVehicle(vehicle)}><History className="h-4 w-4 me-2" />Audit history</DropdownMenuItem>
+                      {canDelete && <><DropdownMenuSeparator /><DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => setVehicleToDelete(vehicle)}><Archive className="h-4 w-4 me-2" />Archive vehicle</DropdownMenuItem></>}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
               </div>
             </div>
-          </div>
-        ))}
-      </div>
+          );
+        })}
+      </div>}
 
-      {/* Desktop table */}
-      <div className="hidden md:block rounded-md border overflow-x-auto">
+      {view === "table" && <div className="rounded-xl border overflow-x-auto bg-card">
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>{t("Vehicle")}</TableHead>
-              <TableHead>{t("VIN" as any)}</TableHead>
-              <SortableColumnHeader label={t("Year" as any)} sortKey="year" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-              <TableHead>{t("Mileage" as any)}</TableHead>
-              <TableHead>{t("Transmission" as any)}</TableHead>
-              <SortableColumnHeader label={t("Price" as any)} sortKey="price" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <TableHead className="w-10"><Checkbox checked={allFilteredSelected} onCheckedChange={toggleAllFilteredVehicles} aria-label="Select all filtered vehicles" /></TableHead>
+              <TableHead className="w-16">Photo</TableHead>
+              <SortableColumnHeader label={t("Vehicle")} sortKey="model" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               <TableHead>{t("Status" as any)}</TableHead>
-              <SortableColumnHeader label={t("AddedDate" as any)} sortKey="addedDate" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-              <TableHead>{t("AddedByColumn" as any)}</TableHead>
-              <TableHead>{t("Notes" as any)}</TableHead>
+              <SortableColumnHeader label={t("Price")} sortKey="price" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortableColumnHeader label="Inventory age" sortKey="addedDate" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <TableHead>Readiness</TableHead>
               <TableHead className="text-end">{t("Actions" as any)}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {filteredVehicles === undefined ? (
               <TableRow>
-                <TableCell colSpan={11} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
                   {t("LoadingInventory" as any)}
                 </TableCell>
               </TableRow>
             ) : filteredVehicles.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={11} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
                   {t("NoVehiclesFound" as any)}
                 </TableCell>
               </TableRow>
             ) : (
-              filteredVehicles.map((vehicle) => (
+              filteredVehicles.map((vehicle) => {
+                const thumbnail = vehicle.imageUrls?.find((url): url is string => Boolean(url));
+                const warnings = getVehicleWarnings(vehicle);
+                return (
                 <TableRow
                   key={vehicle._id}
                   id={`row-${vehicle._id}`}
-                  className={highlightedId === vehicle._id ? "bg-primary/20 transition-all duration-1000" : ""}
+                  className={`cursor-pointer ${highlightedId === vehicle._id ? "bg-primary/20 transition-all duration-1000" : ""}`}
+                  onClick={() => setDetailsVehicle(vehicle)}
                 >
+                  <TableCell onClick={(event) => event.stopPropagation()}><Checkbox checked={selectedVehicleIds.has(vehicle._id)} onCheckedChange={() => toggleVehicleSelection(vehicle._id)} aria-label={`Select ${vehicle.make} ${vehicle.model}`} /></TableCell>
+                  <TableCell>
+                    <div className="h-10 w-14 rounded bg-muted overflow-hidden flex items-center justify-center">
+                      {thumbnail ? (
+                        // eslint-disable-next-line @next/next/no-img-element -- Convex storage URLs are dynamic and already used throughout the vehicle gallery.
+                        <img src={thumbnail} alt="" className="h-full w-full object-cover" />
+                      ) : <ImageIcon className="h-4 w-4 text-muted-foreground/50" />}
+                    </div>
+                  </TableCell>
                   <TableCell className="font-medium">
-                    {vehicle.make} {vehicle.model} {vehicle.trim && <span className="text-muted-foreground text-xs ms-1">{vehicle.trim}</span>}
+                    <p>{vehicle.year} {vehicle.make} {vehicle.model} {vehicle.trim}</p>
+                    <p className="font-mono text-xs text-muted-foreground">{vehicle.vin ?? "VIN pending"}</p>
                   </TableCell>
-                  <TableCell className="font-mono text-xs">
-                    {vehicle.vin ?? <span className="text-muted-foreground italic">{t("VinPending" as any)}</span>}
-                    {(vehicle as any).sourceType === "SOURCED" && (
-                      <Badge variant="outline" className="ms-1 text-orange-600 border-orange-400 text-[10px] px-1.5 py-0">{t("SourcedVehicle" as any)}</Badge>
-                    )}
-                    {isMissingCost(vehicle) && (
-                      <Badge
-                        variant="outline"
-                        className="ms-1 text-amber-700 dark:text-amber-300 border-amber-400 bg-amber-50 dark:bg-amber-950/30 text-[10px] px-1.5 py-0 inline-flex items-center gap-1"
-                        title={t("MissingPurchaseCostHint" as any)}
-                      >
-                        <AlertTriangle className="h-2.5 w-2.5" />
-                        {t("MissingPurchaseCost" as any)}
-                      </Badge>
-                    )}
-                  </TableCell>
-                  <TableCell>{vehicle.year}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {vehicle.mileage != null ? vehicle.mileage.toLocaleString() : "-"} km
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {vehicle.transmission ? vehicle.transmission.charAt(0) + vehicle.transmission.slice(1).toLowerCase() : "-"}
-                  </TableCell>
-                  <TableCell>{vehicle.sellingPrice.toLocaleString()} JOD</TableCell>
                   <TableCell>
                     {canEditOrRequest ? (
                       <button
-                        onClick={() => {
+                        onClick={(event) => {
+                          event.stopPropagation();
                           setStatusRequestVehicle(vehicle);
                           setSelectedStatus(vehicle.status);
                         }}
@@ -498,19 +858,12 @@ export default function VehiclesPage() {
                       </div>
                     )}
                   </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {new Date(vehicle.createdAt ?? vehicle._creationTime).toLocaleDateString()}
+                  <TableCell className="font-medium">{vehicle.sellingPrice.toLocaleString()} JOD</TableCell>
+                  <TableCell><p>{getVehicleAgeDays(vehicle)} days</p><p className="text-xs text-muted-foreground">Added {new Date(vehicle.createdAt ?? vehicle._creationTime).toLocaleDateString()}</p></TableCell>
+                  <TableCell>
+                    {warnings.length === 0 ? <Badge variant="outline" className="border-green-300 text-green-700"><Check className="h-3 w-3 me-1" />Ready</Badge> : <div className="flex items-center gap-1 text-xs text-amber-700" title={warnings.join(", ")}><AlertTriangle className="h-4 w-4" />{warnings.length} warning{warnings.length === 1 ? "" : "s"}</div>}
                   </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {(vehicle as any).addedByName ?? "—"}
-                  </TableCell>
-                  <TableCell className="max-w-[200px] truncate" title={vehicle.notes}>
-                    {vehicle.notes ? vehicle.notes : <span className="text-muted-foreground italic text-xs">{t("NoNotes" as any)}</span>}
-                  </TableCell>
-                  <TableCell className="text-end space-x-1">
-                    <Button variant="ghost" size="icon" onClick={() => setDetailsVehicle(vehicle)} title={t("ViewDetails" as any)}>
-                      <Eye className="h-4 w-4 text-muted-foreground" />
-                    </Button>
+                  <TableCell className="text-end space-x-1" onClick={(event) => event.stopPropagation()}>
                     <Button variant="ghost" size="icon" onClick={() => setGalleryVehicle(vehicle)} title={t("ViewGallery" as any)}>
                       <ImageIcon className="h-4 w-4 text-muted-foreground" />
                     </Button>
@@ -522,18 +875,20 @@ export default function VehiclesPage() {
                         <Pencil className="h-4 w-4 text-muted-foreground" />
                       </Button>
                     )}
-                    {canDelete && (
-                      <Button variant="ghost" size="icon" onClick={() => setVehicleToDelete(vehicle)} title={t("DeleteVehicle" as any)}>
-                        <Trash2 className="h-4 w-4 text-red-500" />
-                      </Button>
-                    )}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild><Button variant="ghost" size="icon"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        {canDelete && <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => setVehicleToDelete(vehicle)}><Archive className="h-4 w-4 me-2" />Archive vehicle</DropdownMenuItem>}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </TableCell>
                 </TableRow>
-              ))
+                );
+              })
             )}
           </TableBody>
         </Table>
-      </div>
+      </div>}
 
       {vehiclesStatus === "CanLoadMore" && (
         <div className="flex justify-center mt-4">
@@ -542,6 +897,23 @@ export default function VehiclesPage() {
           </Button>
         </div>
       )}
+
+      <Dialog open={isSaveViewDialogOpen} onOpenChange={setIsSaveViewDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Save current view</DialogTitle>
+            <DialogDescription>Save the current search, filters, sorting, and layout for quick access later.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <Label htmlFor="vehicle-view-name">View name</Label>
+            <Input id="vehicle-view-name" value={savedViewName} onChange={(event) => setSavedViewName(event.target.value)} placeholder="Example: Available over 60 days" autoFocus />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsSaveViewDialogOpen(false)}>Cancel</Button>
+            <Button onClick={handleSaveCurrentView} disabled={!savedViewName.trim()}>Save view</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <VehicleDialog
         open={isVehicleDialogOpen}
@@ -564,19 +936,18 @@ export default function VehiclesPage() {
         canViewPurchasePrice={canEdit}
       />
 
-      {/* Delete Confirmation Dialog */}
+      {/* Archive is deliberately separated from routine edit actions. */}
       <Dialog open={!!vehicleToDelete} onOpenChange={(open) => !open && setVehicleToDelete(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{t("RemoveVehicle" as any)}</DialogTitle>
+            <DialogTitle>Archive vehicle</DialogTitle>
             <DialogDescription>
-              {t("RemoveVehicleConfirm" as any)} {vehicleToDelete?.year} {vehicleToDelete?.make} {vehicleToDelete?.model}?
-              {t("RemoveVehicleWarning" as any)}
+              Archive {vehicleToDelete?.year} {vehicleToDelete?.make} {vehicleToDelete?.model}? It will leave active inventory and can be restored by an administrator.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setVehicleToDelete(null)}>{t("Cancel")}</Button>
-            <Button variant="destructive" onClick={handleDelete}>{t("Remove" as any)}</Button>
+            <Button variant="destructive" onClick={handleDelete}><Archive className="h-4 w-4 me-2" />Archive vehicle</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -593,7 +964,7 @@ export default function VehiclesPage() {
           <div className="py-4">
             {galleryVehicle?.imageUrls && galleryVehicle.imageUrls.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-h-[60vh] overflow-y-auto pe-2">
-                {galleryVehicle.imageUrls.map((url: string, index: number) => (
+                {galleryVehicle.imageUrls.filter((url): url is string => Boolean(url)).map((url, index) => (
                   <div key={index} className="relative aspect-video rounded-md overflow-hidden bg-muted group">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
@@ -645,18 +1016,17 @@ export default function VehiclesPage() {
           <div className="space-y-4 py-4">
             <div className="space-y-2">
               <Label>{t("NewStatus" as any)}</Label>
-              <Select value={selectedStatus} onValueChange={setSelectedStatus}>
+              <Select value={selectedStatus} onValueChange={(status) => setSelectedStatus(status as VehicleStatus)}>
                 <SelectTrigger>
                   <SelectValue placeholder={t("SelectStatus" as any)} />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="AVAILABLE">{t("StatusAvailable" as any)}</SelectItem>
-                  <SelectItem value="SOURCING">{t("StatusSourcing" as any)}</SelectItem>
+                  {canEdit && <SelectItem value="SOURCING">{t("StatusSourcing")}</SelectItem>}
                   <SelectItem value="RESERVED">{t("StatusReserved" as any)}</SelectItem>
                   <SelectItem value="SOLD">{t("StatusSold" as any)}</SelectItem>
                   <SelectItem value="IN_INSPECTION">{t("StatusInInspection" as any)}</SelectItem>
                   <SelectItem value="IN_REPAIR">{t("StatusInRepair" as any)}</SelectItem>
-                  <SelectItem value="ARCHIVED">{t("StatusArchived" as any)}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -744,7 +1114,7 @@ export default function VehiclesPage() {
                         <StatusBadge status={req.requestedStatus} t={t} />
                       </div>
                       {req.notes && (
-                        <p className="text-xs text-muted-foreground italic mt-2">"{req.notes}"</p>
+                        <p className="text-xs text-muted-foreground italic mt-2">&ldquo;{req.notes}&rdquo;</p>
                       )}
                     </div>
                     <div className="flex items-center gap-2">

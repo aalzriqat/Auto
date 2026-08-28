@@ -5,7 +5,8 @@ import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Id } from "@/convex/_generated/dataModel";
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { format } from "date-fns";
 import {
   Dialog,
@@ -23,7 +24,7 @@ import {
 } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Send, FileText, CheckCircle } from "lucide-react";
+import { Send, FileText, Phone, MessageCircle, Mail, Plus, ReceiptText, Car, CheckSquare, CircleDollarSign } from "lucide-react";
 import { CustomerFinancialsTab } from "@/components/customers/CustomerFinancialsTab";
 import { QuotePrintTemplate } from "@/components/sales/QuotePrintTemplate";
 import { useOrgSettings } from "@/hooks/useOrgSettings";
@@ -32,6 +33,17 @@ import { downloadElementAsPdf } from "@/lib/htmlToPdf";
 import { QuoteDepositManager } from "@/components/deposits/QuoteDepositManager";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
+import { getErrorMessage } from "@/lib/errors";
+import { buildWhatsAppDeepLink } from "@/lib/whatsappDeepLink";
+
+interface CustomerActivityItem {
+  id: string;
+  kind: "lead" | "sale" | "quote" | "task";
+  title: string;
+  detail: string;
+  status: string;
+  timestamp: number;
+}
 
 interface CustomerDetailsDialogProps {
   customerId: Id<"customers"> | null;
@@ -46,6 +58,7 @@ export function CustomerDetailsDialog({
 }: CustomerDetailsDialogProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  const router = useRouter();
   // This dialog is reachable with VIEW_CUSTOMERS alone — RECEPTION has that and
   // not VIEW_SALES. `deposits.quoteAllocation` requires VIEW_SALES and throws,
   // and convex/react rethrows a query error during render, so mounting it
@@ -53,7 +66,10 @@ export function CustomerDetailsDialog({
   // role. The server guard stays strict; the surface just stops asking.
   const { hasPermission } = usePermissions();
   const canViewSales = hasPermission(PERMISSIONS.VIEW_SALES);
-  const [activeTab, setActiveTab] = useState("overview");
+  const canCreateLead = hasPermission(PERMISSIONS.CREATE_LEADS) || hasPermission(PERMISSIONS.CREATE_LEADS_REQUEST);
+  const canCreateQuote = canViewSales && (
+    hasPermission(PERMISSIONS.CREATE_SALES) || hasPermission(PERMISSIONS.CREATE_SALES_REQUEST)
+  );
   const [printingQuoteId, setPrintingQuoteId] = useState<Id<"quotes"> | null>(null);
 
   const orgSettings = useOrgSettings();
@@ -102,10 +118,51 @@ export function CustomerDetailsDialog({
   }
 
   const printingQuote = relations?.quotes?.find((q: any) => q._id === printingQuoteId);
+  const activityItems = useMemo<CustomerActivityItem[]>(() => {
+    if (!relations) return [];
+    return [
+      ...relations.leads.map((lead) => ({
+        id: `lead-${lead._id}`,
+        kind: "lead" as const,
+        title: `Lead · ${lead.vehicleDesc}`,
+        detail: `${lead.source} · ${lead.assignedUserName}`,
+        status: lead.stage,
+        timestamp: lead.updatedAt ?? lead._creationTime,
+      })),
+      ...relations.sales.map((sale) => ({
+        id: `sale-${sale._id}`,
+        kind: "sale" as const,
+        title: `Sale · ${sale.vehicleDesc}`,
+        detail: `${sale.salePrice.toLocaleString()} JOD · ${sale.salespersonName}`,
+        status: sale.status,
+        timestamp: sale.saleDate,
+      })),
+      ...relations.quotes.map((quote) => ({
+        id: `quote-${quote._id}`,
+        kind: "quote" as const,
+        title: `Quote · ${quote.vehicleDesc}`,
+        detail: `${quote.totalFinancedAmount?.toLocaleString() ?? quote.vehiclePrice?.toLocaleString() ?? "—"} JOD`,
+        status: quote.status,
+        timestamp: quote.createdAt,
+      })),
+      ...relations.tasks.map((task) => ({
+        id: `task-${task._id}`,
+        kind: "task" as const,
+        title: `Task · ${task.title}`,
+        detail: `${task.assignedUserName} · due ${format(task.dueDate, "PP p")}`,
+        status: task.status,
+        timestamp: task._creationTime,
+      })),
+    ].sort((first, second) => second.timestamp - first.timestamp);
+  }, [relations]);
+
+  const whatsAppUrl = customer
+    ? buildWhatsAppDeepLink(customer.whatsapp || customer.phone || "", `Hello ${customer.firstName}`)
+    : null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col p-0">
+      <DialogContent className="max-w-4xl max-h-[90vh] flex flex-col p-0">
         <div className="p-6 pb-2 shrink-0">
           <DialogHeader>
             <DialogTitle className="text-xl">
@@ -115,6 +172,15 @@ export function CustomerDetailsDialog({
               {t("CustomerDetailsDialogDesc" as any)}
             </DialogDescription>
           </DialogHeader>
+          {customer && (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {customer.phone && <Button asChild variant="outline" size="sm"><a href={`tel:${customer.phone}`}><Phone className="h-4 w-4 me-2" />Call</a></Button>}
+              {whatsAppUrl && <Button asChild variant="outline" size="sm"><a href={whatsAppUrl} target="_blank" rel="noreferrer"><MessageCircle className="h-4 w-4 me-2" />WhatsApp</a></Button>}
+              {customer.email && <Button asChild variant="outline" size="sm"><a href={`mailto:${customer.email}`}><Mail className="h-4 w-4 me-2" />Email</a></Button>}
+              {canCreateLead && <Button size="sm" onClick={() => { onOpenChange(false); router.push(`/${activeOrgId}/leads?customerId=${customer._id}`); }}><Plus className="h-4 w-4 me-2" />New lead</Button>}
+              {canCreateQuote && <Button variant="secondary" size="sm" onClick={() => { onOpenChange(false); router.push(`/${activeOrgId}/sales?customerId=${customer._id}`); }}><ReceiptText className="h-4 w-4 me-2" />New quote</Button>}
+            </div>
+          )}
         </div>
 
         {customer === undefined ? (
@@ -122,40 +188,23 @@ export function CustomerDetailsDialog({
         ) : customer === null ? (
           <div className="py-8 text-center text-muted-foreground p-6">{t("NoCustomers" as any)}</div>
         ) : (
-          <Tabs defaultValue="overview" className="flex-1 flex flex-col min-h-0">
+          <Tabs defaultValue="activity" className="flex-1 flex flex-col min-h-0">
             <div className="px-6 border-b overflow-x-auto [&::-webkit-scrollbar]:hidden shrink-0">
               <TabsList className="bg-transparent h-12 p-0 -mb-px flex w-max min-w-full justify-start">
                 <TabsTrigger
-                  value="overview"
+                  value="activity"
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
-                  {t("Overview" as any)}
+                  Activity
+                  {activityItems.length > 0 && <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{activityItems.length}</Badge>}
                 </TabsTrigger>
                 <TabsTrigger
-                  value="leads_sales"
+                  value="deals"
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
-                  {t("LeadsSales" as any)}
-                  {relations && (relations.leads.length > 0 || relations.sales.length > 0) && (
-                    <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.leads.length + relations.sales.length}</Badge>
-                  )}
-                </TabsTrigger>
-                <TabsTrigger
-                  value="quotes"
-                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
-                >
-                  {t("Quotes" as any)}
-                  {relations && relations.quotes?.length > 0 && (
-                    <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.quotes.length}</Badge>
-                  )}
-                </TabsTrigger>
-                <TabsTrigger
-                  value="tasks"
-                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
-                >
-                  {t("Tasks" as any)}
-                  {relations?.tasks && relations.tasks.length > 0 && (
-                    <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.tasks.length}</Badge>
+                  Deals
+                  {relations && (relations.leads.length > 0 || relations.sales.length > 0 || relations.quotes.length > 0) && (
+                    <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.leads.length + relations.sales.length + relations.quotes.length}</Badge>
                   )}
                 </TabsTrigger>
                 <TabsTrigger
@@ -168,52 +217,39 @@ export function CustomerDetailsDialog({
             </div>
 
             <div className="flex-1 overflow-y-auto min-h-0 p-6">
-              <TabsContent value="overview" className="m-0 focus-visible:outline-none">
-                <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1">
-                      <span className="text-sm font-medium text-muted-foreground">{t("FirstName" as any)}</span>
-                      <p className="text-sm font-semibold">{customer.firstName}</p>
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-sm font-medium text-muted-foreground">{t("LastName" as any)}</span>
-                      <p className="text-sm font-semibold">{customer.lastName}</p>
-                    </div>
-                  </div>
-
-                  <Separator />
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1">
-                      <span className="text-sm font-medium text-muted-foreground">{t("Phone" as any)}</span>
-                      <p className="text-sm">{customer.phone || (t("NA" as any))}</p>
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-sm font-medium text-muted-foreground">{t("WhatsApp" as any)}</span>
-                      <p className="text-sm">{customer.whatsapp || (t("NA" as any))}</p>
-                    </div>
-                  </div>
-
-                  <div className="space-y-1">
-                    <span className="text-sm font-medium text-muted-foreground">{t("Email" as any)}</span>
-                    <p className="text-sm">{customer.email || (t("NA" as any))}</p>
-                  </div>
-
-                  <Separator />
-
-                  <div className="space-y-1">
-                    <span className="text-sm font-medium text-muted-foreground">{t("NationalIDPassport" as any)}</span>
-                    <p className="text-sm">{customer.nationalId || (t("NA" as any))}</p>
-                  </div>
-
-                  <div className="space-y-1">
-                    <span className="text-sm font-medium text-muted-foreground">{t("Address" as any)}</span>
-                    <p className="text-sm">{customer.address || (t("NA" as any))}</p>
-                  </div>
+              <TabsContent value="activity" className="m-0 focus-visible:outline-none space-y-5">
+                <div className="grid grid-cols-1 gap-3 rounded-lg border bg-muted/20 p-4 sm:grid-cols-2 lg:grid-cols-4">
+                  <div><p className="text-xs text-muted-foreground">Phone</p><p className="text-sm font-medium">{customer.phone || "—"}</p></div>
+                  <div><p className="text-xs text-muted-foreground">Email</p><p className="text-sm font-medium truncate">{customer.email || "—"}</p></div>
+                  <div><p className="text-xs text-muted-foreground">Source</p><p className="text-sm font-medium">{customer.source || "Direct"}</p></div>
+                  <div><p className="text-xs text-muted-foreground">Customer since</p><p className="text-sm font-medium">{format(customer.createdAt ?? customer._creationTime, "PP")}</p></div>
                 </div>
+
+                {!relations ? (
+                  <p className="text-sm text-muted-foreground">{t("Loading")}</p>
+                ) : activityItems.length === 0 ? (
+                  <p className="rounded-lg border border-dashed py-10 text-center text-sm text-muted-foreground">No customer activity yet.</p>
+                ) : (
+                  <div className="relative space-y-0 before:absolute before:bottom-4 before:start-[17px] before:top-4 before:w-px before:bg-border">
+                    {activityItems.map((activity) => (
+                      <div key={activity.id} className="relative flex gap-3 py-3">
+                        <span className="z-10 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border bg-background">
+                          {activity.kind === "sale" ? <CircleDollarSign className="h-4 w-4" /> : activity.kind === "lead" ? <Car className="h-4 w-4" /> : activity.kind === "quote" ? <FileText className="h-4 w-4" /> : <CheckSquare className="h-4 w-4" />}
+                        </span>
+                        <div className="min-w-0 flex-1 rounded-lg border bg-card p-3">
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div><p className="text-sm font-medium">{activity.title}</p><p className="text-xs text-muted-foreground">{activity.detail}</p></div>
+                            <Badge variant="outline">{activity.status}</Badge>
+                          </div>
+                          <p className="mt-2 text-xs text-muted-foreground">{format(activity.timestamp, "PP p")}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </TabsContent>
 
-              <TabsContent value="leads_sales" className="m-0 focus-visible:outline-none space-y-6">
+              <TabsContent value="deals" className="m-0 rounded-lg border p-4 focus-visible:outline-none space-y-6">
                 <div>
                   <h3 className="font-semibold text-sm mb-3">{t("PastPurchases" as any)}</h3>
                   {!relations ? (
@@ -256,16 +292,14 @@ export function CustomerDetailsDialog({
                             <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded">{lead.stage}</span>
                           </div>
                           <p className="text-xs text-muted-foreground mb-2">{t("Source" as any)}: {lead.source} • {t("Assigned" as any)}: {lead.assignedUserName}</p>
-                          {lead.notes && <p className="text-xs italic">"{lead.notes}"</p>}
+                          {lead.notes && <p className="text-xs italic">&ldquo;{lead.notes}&rdquo;</p>}
                         </div>
                       ))}
                     </div>
                   )}
                 </div>
 
-              </TabsContent>
-
-              <TabsContent value="quotes" className="m-0 focus-visible:outline-none">
+                <Separator />
                 <h3 className="font-semibold text-sm mb-3">{t("GeneratedQuotes" as any)}</h3>
                 {!relations ? (
                   <p className="text-sm text-muted-foreground">{t("Loading" as any)}</p>
@@ -371,13 +405,13 @@ export function CustomerDetailsDialog({
                             onClick={async (e) => {
                               e.stopPropagation();
                               try {
-                                const appId = await createApplication({
+                                await createApplication({
                                   orgId: activeOrgId!,
                                   quoteId: quote._id,
                                 });
                                 toast.success(t("ApplicationCreatedSuccess" as any));
-                              } catch (err: any) {
-                                toast.error(err);
+                              } catch (error) {
+                                toast.error(getErrorMessage(error));
                               }
                             }}
                           >
@@ -386,36 +420,6 @@ export function CustomerDetailsDialog({
                           </Button>
                           </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </TabsContent>
-
-              <TabsContent value="tasks" className="m-0 focus-visible:outline-none">
-                <h3 className="font-semibold text-sm mb-3">{t("AssociatedTasksComm" as any)}</h3>
-                {!relations ? (
-                  <p className="text-sm text-muted-foreground">{t("Loading" as any)}</p>
-                ) : relations.tasks.length === 0 ? (
-                  <p className="text-sm text-muted-foreground italic">{t("NoTasksCustomer" as any)}</p>
-                ) : (
-                  <div className="space-y-3">
-                    {relations.tasks.map((task) => (
-                      <div key={task._id} className="bg-muted/30 p-3 rounded-lg border text-sm">
-                        <div className="flex justify-between items-start mb-1">
-                          <span className="font-medium">{task.title}</span>
-                          <span className={`text-xs px-2 py-0.5 rounded ${task.status === "COMPLETED" ? "bg-green-100 text-green-800" :
-                            task.status === "CANCELLED" ? "bg-red-100 text-red-800" :
-                              "bg-yellow-100 text-yellow-800"
-                            }`}>
-                            {task.status}
-                          </span>
-                        </div>
-                        <div className="grid grid-cols-2 gap-1 text-xs text-muted-foreground mb-2">
-                          <p>{t("Due" as any)}: {format(task.dueDate, "PP p")}</p>
-                          <p>{t("Assignee" as any)}: {task.assignedUserName}</p>
-                        </div>
-                        {task.description && <p className="text-xs italic">"{task.description}"</p>}
                       </div>
                     ))}
                   </div>

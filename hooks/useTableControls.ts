@@ -104,6 +104,11 @@ export function useTableControls<T>({
     }
   }
 
+  function setSort(key: string | undefined, direction: SortDir = "asc") {
+    setSortKey(key);
+    setSortDir(direction);
+  }
+
   const rows = useMemo(() => {
     if (data === undefined) return undefined;
     let result = data;
@@ -145,5 +150,5 @@ export function useTableControls<T>({
   const isAutoLoading =
     pagination !== undefined && shouldExhaust && paginationStatus !== "Exhausted";
 
-  return { search, setSearch, sortKey, sortDir, toggleSort, rows, isAutoLoading };
+  return { search, setSearch, sortKey, sortDir, toggleSort, setSort, rows, isAutoLoading };
 }
