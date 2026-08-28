@@ -22,7 +22,7 @@ interface LeadWorkspaceProps {
   leadId: Id<"leads">;
 }
 
-export function LeadWorkspace({ leadId }: LeadWorkspaceProps) {
+export function LeadWorkspace({ leadId }: Readonly<LeadWorkspaceProps>) {
   const router = useRouter();
   const { activeOrgId } = useOrg();
   const { hasPermission } = usePermissions();

@@ -43,7 +43,7 @@ export function useStoredViewPreference<T extends string>(
         // The default keeps the control usable when browser storage is unavailable.
       }
     }
-    return storedValue && allowedValues.some((allowedValue) => allowedValue === storedValue)
+    return storedValue && allowedValues.includes(storedValue as T)
       ? (storedValue as T)
       : defaultValue;
   }, [allowedValues, defaultValue, storageKey]);

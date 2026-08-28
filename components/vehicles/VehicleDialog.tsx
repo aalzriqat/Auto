@@ -45,6 +45,12 @@ import { getErrorMessage } from "@/lib/errors";
 
 const VEHICLE_WIZARD_STEPS = ["VIN", "Vehicle details", "Acquisition & cost", "Photos", "Availability"] as const;
 
+function getWizardStepIndicatorClass(stepIndex: number, currentStep: number): string {
+  if (stepIndex < currentStep) return "border-primary bg-primary text-primary-foreground";
+  if (stepIndex === currentStep) return "border-primary text-primary";
+  return "border-muted text-muted-foreground";
+}
+
 export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, canEdit = false }: VehicleDialogProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
@@ -378,6 +384,13 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
     setWizardStep((currentStep) => Math.min(currentStep + 1, VEHICLE_WIZARD_STEPS.length - 1));
   };
 
+  let submitLabel = canCreate ? t("AddVehicle") : t("SubmitForApproval") || "Submit for Approval";
+  if (isSubmitting) {
+    submitLabel = t("Saving") || "Saving...";
+  } else if (vehicle) {
+    submitLabel = canEdit ? t("SaveChanges") || "Save Changes" : t("SubmitForApproval") || "Submit for Approval";
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl max-h-[90dvh] overflow-y-auto">
@@ -399,7 +412,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                   disabled={index > wizardStep}
                   className="flex min-w-0 flex-1 items-center gap-2 text-start disabled:cursor-default"
                 >
-                  <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${index < wizardStep ? "border-primary bg-primary text-primary-foreground" : index === wizardStep ? "border-primary text-primary" : "border-muted text-muted-foreground"}`}>
+                  <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${getWizardStepIndicatorClass(index, wizardStep)}`}>
                     {index < wizardStep ? <Check className="h-3.5 w-3.5" /> : index + 1}
                   </span>
                   <span className={`hidden truncate text-xs lg:block ${index === wizardStep ? "font-medium text-foreground" : "text-muted-foreground"}`}>{step}</span>
@@ -948,11 +961,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                   </Button>
                 ) : (
                   <Button type="submit" disabled={isSubmitting}>
-                    {isSubmitting
-                      ? t("Saving") || "Saving..."
-                      : vehicle
-                        ? (canEdit ? t("SaveChanges") || "Save Changes" : t("SubmitForApproval") || "Submit for Approval")
-                        : (canCreate ? t("AddVehicle") : t("SubmitForApproval") || "Submit for Approval")}
+                    {submitLabel}
                   </Button>
                 )}
               </div>

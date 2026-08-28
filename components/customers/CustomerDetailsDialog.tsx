@@ -51,6 +51,53 @@ interface CustomerDetailsDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
+function CustomerActivityIcon({ kind }: Readonly<Pick<CustomerActivityItem, "kind">>) {
+  switch (kind) {
+    case "sale":
+      return <CircleDollarSign className="h-4 w-4" />;
+    case "lead":
+      return <Car className="h-4 w-4" />;
+    case "quote":
+      return <FileText className="h-4 w-4" />;
+    default:
+      return <CheckSquare className="h-4 w-4" />;
+  }
+}
+
+function CustomerActivityTimeline({
+  items,
+  isLoading,
+  loadingLabel,
+}: Readonly<{
+  items: CustomerActivityItem[];
+  isLoading: boolean;
+  loadingLabel: string;
+}>) {
+  if (isLoading) return <p className="text-sm text-muted-foreground">{loadingLabel}</p>;
+  if (items.length === 0) {
+    return <p className="rounded-lg border border-dashed py-10 text-center text-sm text-muted-foreground">No customer activity yet.</p>;
+  }
+
+  return (
+    <div className="relative space-y-0 before:absolute before:bottom-4 before:start-[17px] before:top-4 before:w-px before:bg-border">
+      {items.map((activity) => (
+        <div key={activity.id} className="relative flex gap-3 py-3">
+          <span className="z-10 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border bg-background">
+            <CustomerActivityIcon kind={activity.kind} />
+          </span>
+          <div className="min-w-0 flex-1 rounded-lg border bg-card p-3">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div><p className="text-sm font-medium">{activity.title}</p><p className="text-xs text-muted-foreground">{activity.detail}</p></div>
+              <Badge variant="outline">{activity.status}</Badge>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">{format(activity.timestamp, "PP p")}</p>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function CustomerDetailsDialog({
   customerId,
   open,
@@ -225,28 +272,7 @@ export function CustomerDetailsDialog({
                   <div><p className="text-xs text-muted-foreground">Customer since</p><p className="text-sm font-medium">{format(customer.createdAt ?? customer._creationTime, "PP")}</p></div>
                 </div>
 
-                {!relations ? (
-                  <p className="text-sm text-muted-foreground">{t("Loading")}</p>
-                ) : activityItems.length === 0 ? (
-                  <p className="rounded-lg border border-dashed py-10 text-center text-sm text-muted-foreground">No customer activity yet.</p>
-                ) : (
-                  <div className="relative space-y-0 before:absolute before:bottom-4 before:start-[17px] before:top-4 before:w-px before:bg-border">
-                    {activityItems.map((activity) => (
-                      <div key={activity.id} className="relative flex gap-3 py-3">
-                        <span className="z-10 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border bg-background">
-                          {activity.kind === "sale" ? <CircleDollarSign className="h-4 w-4" /> : activity.kind === "lead" ? <Car className="h-4 w-4" /> : activity.kind === "quote" ? <FileText className="h-4 w-4" /> : <CheckSquare className="h-4 w-4" />}
-                        </span>
-                        <div className="min-w-0 flex-1 rounded-lg border bg-card p-3">
-                          <div className="flex flex-wrap items-start justify-between gap-2">
-                            <div><p className="text-sm font-medium">{activity.title}</p><p className="text-xs text-muted-foreground">{activity.detail}</p></div>
-                            <Badge variant="outline">{activity.status}</Badge>
-                          </div>
-                          <p className="mt-2 text-xs text-muted-foreground">{format(activity.timestamp, "PP p")}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                <CustomerActivityTimeline items={activityItems} isLoading={!relations} loadingLabel={t("Loading")} />
               </TabsContent>
 
               <TabsContent value="deals" className="m-0 rounded-lg border p-4 focus-visible:outline-none space-y-6">

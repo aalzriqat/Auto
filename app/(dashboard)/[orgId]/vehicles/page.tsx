@@ -63,11 +63,11 @@ type VehicleStatusFilter = "ALL" | VehicleStatus;
 type VehicleView = "table" | "cards";
 
 const VEHICLE_VIEW_OPTIONS = ["table", "cards"] as const;
-const VEHICLE_STATUS_FILTERS: readonly VehicleStatusFilter[] = [
+const VEHICLE_STATUS_FILTERS = new Set<VehicleStatusFilter>([
   "ALL", "AVAILABLE", "SOURCING", "RESERVED", "SOLD", "IN_INSPECTION", "IN_REPAIR", "ARCHIVED",
-];
-const VEHICLE_AGING_FILTERS: readonly AgingFilter[] = ["ALL", "0-30", "31-60", "61-90", "90+"];
-const VEHICLE_SORT_KEYS = ["model", "price", "year", "addedDate"] as const;
+]);
+const VEHICLE_AGING_FILTERS = new Set<AgingFilter>(["ALL", "0-30", "31-60", "61-90", "90+"]);
+const VEHICLE_SORT_KEYS = new Set(["model", "price", "year", "addedDate"]);
 
 interface VehicleSavedView {
   id: string;
@@ -87,10 +87,10 @@ function isVehicleSavedView(value: unknown): value is VehicleSavedView {
     typeof candidate.id === "string" &&
     typeof candidate.name === "string" &&
     typeof candidate.search === "string" &&
-    !!candidate.status && VEHICLE_STATUS_FILTERS.includes(candidate.status) &&
-    !!candidate.aging && VEHICLE_AGING_FILTERS.includes(candidate.aging) &&
+    !!candidate.status && VEHICLE_STATUS_FILTERS.has(candidate.status) &&
+    !!candidate.aging && VEHICLE_AGING_FILTERS.has(candidate.aging) &&
     (candidate.view === "table" || candidate.view === "cards") &&
-    (candidate.sortKey === undefined || VEHICLE_SORT_KEYS.some((sortKey) => sortKey === candidate.sortKey)) &&
+    (candidate.sortKey === undefined || VEHICLE_SORT_KEYS.has(candidate.sortKey)) &&
     (candidate.sortDir === "asc" || candidate.sortDir === "desc")
   );
 }
@@ -727,49 +727,53 @@ export default function VehiclesPage() {
             <div
               key={vehicle._id}
               id={`row-${vehicle._id}`}
-              role="button"
-              tabIndex={0}
-              onClick={() => setDetailsVehicle(vehicle)}
-              onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setDetailsVehicle(vehicle); }}
-              className={`rounded-xl border bg-card overflow-hidden cursor-pointer transition-shadow hover:shadow-md ${highlightedId === vehicle._id ? "ring-2 ring-primary" : ""}`}
+              className={`relative rounded-xl border bg-card overflow-hidden transition-shadow hover:shadow-md ${highlightedId === vehicle._id ? "ring-2 ring-primary" : ""}`}
             >
-              <div className="aspect-[16/7] bg-muted relative">
-                {thumbnail ? (
-                  // eslint-disable-next-line @next/next/no-img-element -- Convex storage URLs are dynamic and already used throughout the vehicle gallery.
-                  <img src={thumbnail} alt="" className="h-full w-full object-cover" />
-                ) : <ImageIcon className="absolute inset-0 m-auto h-10 w-10 text-muted-foreground/40" />}
-                <div className="absolute start-3 top-3" onClick={(event) => event.stopPropagation()}>
-                  <Checkbox checked={selectedVehicleIds.has(vehicle._id)} onCheckedChange={() => toggleVehicleSelection(vehicle._id)} aria-label={`Select ${vehicle.make} ${vehicle.model}`} />
-                </div>
-                <div className="absolute end-3 top-3"><StatusBadge status={vehicle.status} t={t} /></div>
-              </div>
-              <div className="p-4 space-y-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="font-semibold truncate">{vehicle.year} {vehicle.make} {vehicle.model} {vehicle.trim}</p>
-                    <p className="text-xs text-muted-foreground font-mono truncate">{vehicle.vin ?? "VIN pending"}</p>
+              <button
+                type="button"
+                className="absolute inset-0 z-0 cursor-pointer rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+                onClick={() => setDetailsVehicle(vehicle)}
+                aria-label={`Open ${vehicle.year} ${vehicle.make} ${vehicle.model}`}
+              />
+              <div className="relative z-10 pointer-events-none">
+                <div className="aspect-[16/7] bg-muted relative">
+                  {thumbnail ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- Convex storage URLs are dynamic and already used throughout the vehicle gallery.
+                    <img src={thumbnail} alt="" className="h-full w-full object-cover" />
+                  ) : <ImageIcon className="absolute inset-0 m-auto h-10 w-10 text-muted-foreground/40" />}
+                  <div className="pointer-events-auto absolute start-3 top-3">
+                    <Checkbox checked={selectedVehicleIds.has(vehicle._id)} onCheckedChange={() => toggleVehicleSelection(vehicle._id)} aria-label={`Select ${vehicle.make} ${vehicle.model}`} />
                   </div>
-                  <p className="font-semibold whitespace-nowrap">{vehicle.sellingPrice.toLocaleString()} JOD</p>
+                  <div className="absolute end-3 top-3"><StatusBadge status={vehicle.status} t={t} /></div>
                 </div>
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div><p className="text-xs text-muted-foreground">Inventory age</p><p>{getVehicleAgeDays(vehicle)} days</p></div>
-                  <div><p className="text-xs text-muted-foreground">Mileage</p><p>{vehicle.mileage.toLocaleString()} km</p></div>
-                </div>
-                {warnings.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5">
-                    {warnings.map((warning) => <Badge key={warning} variant="outline" className="border-amber-300 text-amber-700"><AlertTriangle className="h-3 w-3 me-1" />{warning}</Badge>)}
+                <div className="p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-semibold truncate">{vehicle.year} {vehicle.make} {vehicle.model} {vehicle.trim}</p>
+                      <p className="text-xs text-muted-foreground font-mono truncate">{vehicle.vin ?? "VIN pending"}</p>
+                    </div>
+                    <p className="font-semibold whitespace-nowrap">{vehicle.sellingPrice.toLocaleString()} JOD</p>
                   </div>
-                )}
-                <div className="flex items-center justify-end gap-1 border-t pt-2" onClick={(event) => event.stopPropagation()}>
-                  <Button variant="ghost" size="sm" onClick={() => setGalleryVehicle(vehicle)}><ImageIcon className="h-4 w-4 me-2" />Photos</Button>
-                  {canEditOrRequest && <Button variant="ghost" size="sm" onClick={() => handleEdit(vehicle)}><Pencil className="h-4 w-4 me-2" />Edit</Button>}
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild><Button variant="ghost" size="icon"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onSelect={() => setHistoryVehicle(vehicle)}><History className="h-4 w-4 me-2" />Audit history</DropdownMenuItem>
-                      {canDelete && <><DropdownMenuSeparator /><DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => setVehicleToDelete(vehicle)}><Archive className="h-4 w-4 me-2" />Archive vehicle</DropdownMenuItem></>}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div><p className="text-xs text-muted-foreground">Inventory age</p><p>{getVehicleAgeDays(vehicle)} days</p></div>
+                    <div><p className="text-xs text-muted-foreground">Mileage</p><p>{vehicle.mileage.toLocaleString()} km</p></div>
+                  </div>
+                  {warnings.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {warnings.map((warning) => <Badge key={warning} variant="outline" className="border-amber-300 text-amber-700"><AlertTriangle className="h-3 w-3 me-1" />{warning}</Badge>)}
+                    </div>
+                  )}
+                  <div className="pointer-events-auto flex items-center justify-end gap-1 border-t pt-2">
+                    <Button variant="ghost" size="sm" onClick={() => setGalleryVehicle(vehicle)}><ImageIcon className="h-4 w-4 me-2" />Photos</Button>
+                    {canEditOrRequest && <Button variant="ghost" size="sm" onClick={() => handleEdit(vehicle)}><Pencil className="h-4 w-4 me-2" />Edit</Button>}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild><Button variant="ghost" size="icon"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onSelect={() => setHistoryVehicle(vehicle)}><History className="h-4 w-4 me-2" />Audit history</DropdownMenuItem>
+                        {canDelete && <><DropdownMenuSeparator /><DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => setVehicleToDelete(vehicle)}><Archive className="h-4 w-4 me-2" />Archive vehicle</DropdownMenuItem></>}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
                 </div>
               </div>
             </div>

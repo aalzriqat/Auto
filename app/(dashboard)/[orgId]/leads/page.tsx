@@ -152,7 +152,7 @@ export default function LeadsPage() {
   });
 
   const sourceOptions = useMemo(
-    () => Array.from(new Set((leads ?? []).map((lead) => lead.source))).sort(),
+    () => Array.from(new Set((leads ?? []).map((lead) => lead.source))).sort((first, second) => first.localeCompare(second)),
     [leads]
   );
   const filteredLeads = searchedLeads?.filter((lead) =>
@@ -429,34 +429,37 @@ export default function LeadsPage() {
               <div
                 key={lead._id}
                 id={`row-${lead._id}`}
-                role="button"
-                tabIndex={0}
-                onClick={() => openLeadWorkspace(lead._id)}
-                onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openLeadWorkspace(lead._id); }}
-                className={`rounded-xl border bg-card p-4 space-y-3 active:bg-muted/30 transition-shadow cursor-pointer ${highlightedLeadId === lead._id ? "ring-2 ring-amber-400" : ""}`}
+                className={`relative rounded-xl border bg-card p-4 active:bg-muted/30 transition-shadow ${highlightedLeadId === lead._id ? "ring-2 ring-amber-400" : ""}`}
               >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <div onClick={(event) => event.stopPropagation()}><Checkbox checked={selectedLeadIds.has(lead._id)} onCheckedChange={() => toggleLeadSelection(lead._id)} aria-label={`Select ${lead.customerName}`} /></div>
-                    <span className="w-9 h-9 rounded-full bg-slate-100 dark:bg-zinc-800 flex items-center justify-center text-slate-500 font-bold text-xs shrink-0">{lead.customerName?.charAt(0).toUpperCase() ?? "?"}</span>
-                    <div className="min-w-0"><p className="font-semibold text-sm truncate">{lead.customerName}</p><p className="text-xs text-muted-foreground truncate">{lead.source}</p></div>
+                <button
+                  type="button"
+                  className="absolute inset-0 z-0 cursor-pointer rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+                  onClick={() => openLeadWorkspace(lead._id)}
+                  aria-label={`Open ${lead.customerName || "lead"}`}
+                />
+                <div className="relative z-10 pointer-events-none space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="pointer-events-auto"><Checkbox checked={selectedLeadIds.has(lead._id)} onCheckedChange={() => toggleLeadSelection(lead._id)} aria-label={`Select ${lead.customerName}`} /></div>
+                      <span className="w-9 h-9 rounded-full bg-slate-100 dark:bg-zinc-800 flex items-center justify-center text-slate-500 font-bold text-xs shrink-0">{lead.customerName?.charAt(0).toUpperCase() ?? "?"}</span>
+                      <div className="min-w-0"><p className="font-semibold text-sm truncate">{lead.customerName}</p><p className="text-xs text-muted-foreground truncate">{lead.source}</p></div>
+                    </div>
+                    <Badge variant="outline" className={`text-[10px] uppercase border-transparent ${getStageColor(lead.stage)}`}>{translateStage(lead.stage)}</Badge>
                   </div>
-                  <Badge variant="outline" className={`text-[10px] uppercase border-transparent ${getStageColor(lead.stage)}`}>{translateStage(lead.stage)}</Badge>
-                </div>
-                {isStaleLead(lead) && <Badge variant="outline" className="border-amber-300 text-amber-700"><AlertTriangle className="h-3 w-3 me-1" />Stale · {getDaysSinceActivity(lead)} days</Badge>}
-                <div className="grid grid-cols-2 gap-3 text-xs">
-                  <div><p className="text-muted-foreground">Interest</p><p className="truncate">{lead.vehicleSummary || "Any vehicle"}</p></div>
-                  <div><p className="text-muted-foreground">Owner</p><p className="truncate">{lead.assignedUserName || "Unassigned"}</p></div>
-                  <div><p className="text-muted-foreground">Age</p><p>{getLeadAgeDays(lead)} days</p></div>
-                  <div><p className="text-muted-foreground">Last activity</p><p>{getDaysSinceActivity(lead)} days ago</p></div>
-                </div>
-                <div className="rounded-md bg-muted/40 p-2 text-xs"><span className="text-muted-foreground">Next: </span>{NEXT_ACTION_BY_STAGE[lead.stage]}</div>
-                <div className="flex items-center justify-end border-t pt-2" onClick={(event) => event.stopPropagation()}>
+                  {isStaleLead(lead) && <Badge variant="outline" className="border-amber-300 text-amber-700"><AlertTriangle className="h-3 w-3 me-1" />Stale · {getDaysSinceActivity(lead)} days</Badge>}
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div><p className="text-muted-foreground">Interest</p><p className="truncate">{lead.vehicleSummary || "Any vehicle"}</p></div>
+                    <div><p className="text-muted-foreground">Owner</p><p className="truncate">{lead.assignedUserName || "Unassigned"}</p></div>
+                    <div><p className="text-muted-foreground">Age</p><p>{getLeadAgeDays(lead)} days</p></div>
+                    <div><p className="text-muted-foreground">Last activity</p><p>{getDaysSinceActivity(lead)} days ago</p></div>
+                  </div>
+                  <div className="rounded-md bg-muted/40 p-2 text-xs"><span className="text-muted-foreground">Next: </span>{NEXT_ACTION_BY_STAGE[lead.stage]}</div>
+                  <div className="pointer-events-auto flex items-center justify-end border-t pt-2">
                     {canEditLeads && <Button variant="ghost" size="sm" onClick={() => handleEdit(lead)}><Pencil className="h-4 w-4 me-2" />Edit</Button>}
                     {(lead.source?.startsWith("Instagram") || lead.source?.startsWith("Facebook")) && (
                       <button
                         type="button"
-                        onClick={(e) => { e.stopPropagation(); setConversationCustomerId(lead.customerId); }}
+                        onClick={() => setConversationCustomerId(lead.customerId)}
                         className="p-3 rounded-md text-muted-foreground hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
                         title={t("ViewConversation" as any)}
                       >
@@ -466,12 +469,14 @@ export default function LeadsPage() {
                     {canDeleteLeads && (
                       <button
                         type="button"
-                        onClick={(event) => { event.stopPropagation(); setLeadToDelete(lead); }}
+                        onClick={() => setLeadToDelete(lead)}
                         className="p-3 rounded-md text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                        aria-label={`Delete ${lead.customerName || "lead"}`}
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
                     )}
+                  </div>
                 </div>
               </div>
             ))}
@@ -555,9 +560,10 @@ export default function LeadsPage() {
                       </TableCell>
                       <TableCell className="py-4 px-6 text-end">
                         <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          {canEditLeads && <button onClick={(event) => { event.stopPropagation(); handleEdit(lead); }} className="p-2 hover:bg-muted rounded-md text-muted-foreground"><Pencil className="h-4 w-4" /></button>}
+                          {canEditLeads && <button type="button" onClick={(event) => { event.stopPropagation(); handleEdit(lead); }} className="p-2 hover:bg-muted rounded-md text-muted-foreground"><Pencil className="h-4 w-4" /></button>}
                           {(lead.source?.startsWith("Instagram") || lead.source?.startsWith("Facebook")) && (
                             <button
+                              type="button"
                               onClick={(e) => { e.stopPropagation(); setConversationCustomerId(lead.customerId); }}
                               className="p-2 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-md text-muted-foreground hover:text-blue-600 transition-colors"
                               title={t("ViewConversation" as any)}
@@ -566,6 +572,7 @@ export default function LeadsPage() {
                             </button>
                           )}
                           <button
+                            type="button"
                             onClick={(e) => { e.stopPropagation(); handleDownloadLeadQuote(lead); }}
                             className="p-2 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-md text-muted-foreground hover:text-blue-600 transition-colors"
                           >
@@ -573,6 +580,7 @@ export default function LeadsPage() {
                           </button>
                           {canDeleteLeads && (
                             <button
+                              type="button"
                               onClick={(event) => { event.stopPropagation(); setLeadToDelete(lead); }}
                               className="p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md text-muted-foreground hover:text-red-600 transition-colors"
                             >
@@ -621,46 +629,50 @@ export default function LeadsPage() {
                         stageLeads.map((lead) => (
                           <div
                             key={lead._id}
-                            role="button"
-                            tabIndex={0}
-                            onClick={() => openLeadWorkspace(lead._id)}
-                            onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openLeadWorkspace(lead._id); }}
-                            className="bg-white dark:bg-zinc-800 rounded-lg p-3 shadow-sm border border-slate-100 dark:border-zinc-700 hover:shadow-md transition-shadow group cursor-pointer space-y-3"
+                            className="relative bg-white dark:bg-zinc-800 rounded-lg p-3 shadow-sm border border-slate-100 dark:border-zinc-700 hover:shadow-md transition-shadow group"
                           >
-                            <div className="flex items-center gap-2">
-                              <div onClick={(event) => event.stopPropagation()}><Checkbox checked={selectedLeadIds.has(lead._id)} onCheckedChange={() => toggleLeadSelection(lead._id)} aria-label={`Select ${lead.customerName}`} /></div>
-                              <div className="min-w-0 flex flex-1 items-center gap-2 text-start">
-                                <span className="w-6 h-6 rounded-full bg-slate-100 dark:bg-zinc-700 flex items-center justify-center text-[10px] font-medium flex-shrink-0">
-                                  {lead.customerName?.charAt(0)?.toUpperCase() ?? "?"}
-                                </span>
-                                <span className="text-sm font-medium truncate flex-1">{lead.customerName}</span>
+                            <button
+                              type="button"
+                              className="absolute inset-0 z-0 cursor-pointer rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+                              onClick={() => openLeadWorkspace(lead._id)}
+                              aria-label={`Open ${lead.customerName || "lead"}`}
+                            />
+                            <div className="relative z-10 pointer-events-none space-y-3">
+                              <div className="flex items-center gap-2">
+                                <div className="pointer-events-auto"><Checkbox checked={selectedLeadIds.has(lead._id)} onCheckedChange={() => toggleLeadSelection(lead._id)} aria-label={`Select ${lead.customerName}`} /></div>
+                                <div className="min-w-0 flex flex-1 items-center gap-2 text-start">
+                                  <span className="w-6 h-6 rounded-full bg-slate-100 dark:bg-zinc-700 flex items-center justify-center text-[10px] font-medium flex-shrink-0">
+                                    {lead.customerName?.charAt(0)?.toUpperCase() ?? "?"}
+                                  </span>
+                                  <span className="text-sm font-medium truncate flex-1">{lead.customerName}</span>
+                                </div>
+                                {(lead.source?.startsWith("Instagram") || lead.source?.startsWith("Facebook")) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setConversationCustomerId(lead.customerId)}
+                                    className="pointer-events-auto p-1 rounded text-muted-foreground hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors shrink-0"
+                                    title={t("ViewConversation" as any)}
+                                  >
+                                    <MessageCircle className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
                               </div>
-                              {(lead.source?.startsWith("Instagram") || lead.source?.startsWith("Facebook")) && (
-                                <button
-                                  type="button"
-                                  onClick={(e) => { e.stopPropagation(); setConversationCustomerId(lead.customerId); }}
-                                  className="p-1 rounded text-muted-foreground hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors shrink-0"
-                                  title={t("ViewConversation" as any)}
-                                >
-                                  <MessageCircle className="w-3.5 h-3.5" />
-                                </button>
+                              {isStaleLead(lead) && <Badge variant="outline" className="border-amber-300 text-amber-700"><AlertTriangle className="h-3 w-3 me-1" />Stale {getDaysSinceActivity(lead)}d</Badge>}
+                              <div className="space-y-1 text-[11px] text-muted-foreground">
+                                <p className="flex items-center gap-1"><Car className="w-3 h-3 shrink-0" /><span className="truncate">{lead.vehicleSummary || "Any vehicle"}</span></p>
+                                <p className="flex items-center gap-1"><User className="w-3 h-3 shrink-0" /><span className="truncate">{lead.assignedUserName || "Unassigned"}</span></p>
+                                <p className="flex items-center gap-1"><Clock className="w-3 h-3 shrink-0" />{getDaysSinceActivity(lead)}d since activity · {getLeadAgeDays(lead)}d old</p>
+                              </div>
+                              <div className="rounded-md bg-muted/50 p-2 text-[11px]"><span className="text-muted-foreground">Next: </span>{NEXT_ACTION_BY_STAGE[lead.stage]}</div>
+                              {canEditLeads && (
+                                <div className="pointer-events-auto">
+                                  <Select value={lead.stage} onValueChange={(nextStage) => void updateLeadStage(lead._id, nextStage as LeadStage)}>
+                                    <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                                    <SelectContent>{LEAD_STAGES.map((nextStage) => <SelectItem key={nextStage} value={nextStage}>{translateStage(nextStage)}</SelectItem>)}</SelectContent>
+                                  </Select>
+                                </div>
                               )}
                             </div>
-                            {isStaleLead(lead) && <Badge variant="outline" className="border-amber-300 text-amber-700"><AlertTriangle className="h-3 w-3 me-1" />Stale {getDaysSinceActivity(lead)}d</Badge>}
-                            <div className="space-y-1 text-[11px] text-muted-foreground">
-                              <p className="flex items-center gap-1"><Car className="w-3 h-3 shrink-0" /><span className="truncate">{lead.vehicleSummary || "Any vehicle"}</span></p>
-                              <p className="flex items-center gap-1"><User className="w-3 h-3 shrink-0" /><span className="truncate">{lead.assignedUserName || "Unassigned"}</span></p>
-                              <p className="flex items-center gap-1"><Clock className="w-3 h-3 shrink-0" />{getDaysSinceActivity(lead)}d since activity · {getLeadAgeDays(lead)}d old</p>
-                            </div>
-                            <div className="rounded-md bg-muted/50 p-2 text-[11px]"><span className="text-muted-foreground">Next: </span>{NEXT_ACTION_BY_STAGE[lead.stage]}</div>
-                            {canEditLeads && (
-                              <div onClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
-                                <Select value={lead.stage} onValueChange={(nextStage) => void updateLeadStage(lead._id, nextStage as LeadStage)}>
-                                  <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-                                  <SelectContent>{LEAD_STAGES.map((nextStage) => <SelectItem key={nextStage} value={nextStage}>{translateStage(nextStage)}</SelectItem>)}</SelectContent>
-                                </Select>
-                              </div>
-                            )}
                           </div>
                         ))
                       )}
