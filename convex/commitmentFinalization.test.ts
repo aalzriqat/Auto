@@ -642,8 +642,13 @@ async function cancelSale(seed: Seed, saleId: Id<"sales">) {
  * The audit facts EVERY terminal root must carry, whichever door closed it.
  *
  * Shared so a door cannot be added without them: asserting `closedAt` in some
- * contracts and not others let a door-specific implementation satisfy all 63
- * while leaving the canonical table with no record of when or why a deal ended.
+ * contracts and not others let a door-specific implementation satisfy every
+ * contract in this file while leaving the canonical table with no record of
+ * when or why a deal ended.
+ *
+ * (Deliberately no total here. A count written into prose is a fact that goes
+ * stale the next time a contract is added, and this file has now shipped four
+ * separate stale counts across three review rounds. Say "every", not a number.)
  */
 function expectTerminalRoot(
   root: Doc<"commitmentRoots">,
