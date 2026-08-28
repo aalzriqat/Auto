@@ -70,12 +70,20 @@ export const create = mutation({
         operation: "deposits.create",
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
+        // ⚠️ THE ADOPTION IS PART OF THE REQUEST, SO IT IS PART OF ITS IDENTITY.
+        // Left out, two calls sharing an idempotency key but naming DIFFERENT
+        // reservations — or one naming a reservation and one naming none — read
+        // as the same request, and the second is answered from the first's
+        // result. That is not a replay: it silently drops an affirmative claim
+        // about which deal the money continues, and the authority never sees
+        // the second call to refuse it.
         fingerprint: JSON.stringify({
           quoteId: args.quoteId,
           amountMinor,
           currency,
           method,
           notes: args.notes ?? null,
+          adoptReservationId: args.adoptReservationId ?? null,
         }),
       },
       async () => {
@@ -149,8 +157,9 @@ export const create = mutation({
         // THIS deposit. One episode per car per acquisition — a further
         // instalment on the same deal joins the same root and opens its own
         // episode, so the history says how the deal was built.
+        const episodeByVehicle = new Map<string, Id<"vehicleCommitmentClaims">>();
         for (const item of depositVehicleItems) {
-          await acquireVehicle(ctx, {
+          const { claimId } = await acquireVehicle(ctx, {
             orgId: args.orgId,
             vehicleId: item.vehicleId,
             customerId: quote.customerId,
@@ -158,6 +167,7 @@ export const create = mutation({
             evidence: { kind: "DEPOSIT", depositId },
             lineage: { quoteId: args.quoteId, adoptReservationId: args.adoptReservationId },
           });
+          episodeByVehicle.set(String(item.vehicleId), claimId);
         }
 
         // Only multi-vehicle deposits need a join row per vehicle — a
@@ -165,12 +175,22 @@ export const create = mutation({
         // own vehicleId + by_vehicle_hold index.
         if (depositVehicleItems.length > 1) {
           for (const item of depositVehicleItems) {
+            // SCRUM-195: the slice names the episode it was created with, so
+            // what this money is evidence OF can be read back exactly instead
+            // of inferred from the surrounding row or searched for in history.
+            const sourceCommitmentClaimId = episodeByVehicle.get(String(item.vehicleId));
+            if (!sourceCommitmentClaimId) {
+              throw new Error(
+                `no commitment episode was recorded for vehicle ${item.vehicleId} on deposit ${depositId}`
+              );
+            }
             await ctx.db.insert("depositVehicleHolds", {
               orgId: args.orgId,
               depositId,
               vehicleId: item.vehicleId,
               active: true,
               createdAt: now,
+              sourceCommitmentClaimId,
             });
           }
         }
@@ -830,7 +850,7 @@ export const resolveReleasedAllocation = mutation({
       // A reservation-origin deposit must not become DEPOSIT authority merely
       // because the surrounding row is a deposit — that is one of the exact
       // inference classes this replacement exists to remove.
-      await acquireVehicle(ctx, {
+      const reallocated = await acquireVehicle(ctx, {
         orgId: args.orgId,
         vehicleId: args.toVehicleId,
         customerId: deposit.customerId,
@@ -849,6 +869,9 @@ export const resolveReleasedAllocation = mutation({
         allocatedBy: user._id,
         allocationStatus: "ALLOCATED",
         sourceHoldId: hold._id,
+        // The NEW episode, not the source hold's. `sourceHoldId` records where
+        // the money came from; this records what now holds the receiving car.
+        sourceCommitmentClaimId: reallocated.claimId,
       });
       await syncVehicleHoldStatus(ctx, args.toVehicleId, user._id);
     } else if (args.treatment === "RETURN_TO_UNALLOCATED") {
@@ -868,7 +891,7 @@ export const resolveReleasedAllocation = mutation({
       // here as `null` and was silently read as "open a new root", which is how
       // one physical car ended up with two. The deposit itself is now the
       // proof, and the evidence tag is carried rather than assumed.
-      await acquireVehicle(ctx, {
+      const reopened = await acquireVehicle(ctx, {
         orgId: args.orgId,
         vehicleId: hold.vehicleId,
         customerId: deposit.customerId,
@@ -883,6 +906,10 @@ export const resolveReleasedAllocation = mutation({
         active: true,
         createdAt: now,
         sourceHoldId: hold._id,
+        // The re-opened slice carries the episode that re-acquired the car —
+        // which inherits its evidence from the released one, so the chain of
+        // what this money proves survives the round trip without re-deriving it.
+        sourceCommitmentClaimId: reopened.claimId,
       });
       await syncVehicleHoldStatus(ctx, hold.vehicleId, user._id);
     } else if (args.treatment === "REFUND_TO_CUSTOMER" || args.treatment === "FORFEITED") {

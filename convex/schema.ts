@@ -2854,6 +2854,29 @@ export default defineSchema({
     releaseReason: v.optional(v.string()),
     resolvedAt: v.optional(v.number()),
     resolvedBy: v.optional(v.id("users")),
+    /**
+     * SCRUM-195 — THE EXACT COMMITMENT EPISODE THIS SLICE WAS CREATED
+     * ALONGSIDE, and the only thing that says what its money is evidence OF.
+     *
+     * A deposit taken with a reservation is RESERVATION evidence that happens
+     * to carry a deposit; the same deposit on the deal's other car is DEPOSIT
+     * evidence. The row itself cannot tell them apart, and the answer used to
+     * be rediscovered by reading every episode sharing this deposit and this
+     * vehicle — correct, but a read that grows with the deal's history until it
+     * meets Convex's transaction limit. A pointer answers it in one `get`.
+     *
+     * A POINTER, not copied evidence columns: duplicating `evidenceKind` and
+     * the reference onto the hold would create a second, independently mutable
+     * copy of the same truth, and two copies of a fact are two facts.
+     *
+     * ⚠️ OPTIONAL IN THE SCHEMA, MANDATORY AT THE AUTHORITY. Holds written
+     * before the canonical model exist and have no episode to point at — that
+     * is the class SCRUM-201 owns, and forcing the column required here would
+     * make this a production migration rather than a bounded correction. Every
+     * Phase-1 writer populates it, and `evidenceForDepositHold` REFUSES a hold
+     * that lacks it rather than assuming a kind.
+     */
+    sourceCommitmentClaimId: v.optional(v.id("vehicleCommitmentClaims")),
   })
     .index("by_deposit", ["depositId"])
     .index("by_vehicle_active", ["vehicleId", "active"])
@@ -2977,13 +3000,9 @@ export default defineSchema({
     .index("by_root_status", ["rootId", "status"])
     .index("by_consumed_sale", ["consumedBySaleId"])
     .index("by_restored_from", ["restoredFromClaimId"])
-    .index("by_deposit", ["depositId"])
-    // ⚠️ PROVENANCE NEEDS BOTH HALVES. One deposit can rest under episodes on
-    // SEVERAL vehicles, so "the claims for this deposit" cannot say which
-    // evidence a particular vehicle's hold came from. Asking by deposit AND
-    // vehicle is what makes that answer deterministic instead of dependent on
-    // which row an index happens to return first.
-    .index("by_deposit_vehicle", ["depositId", "vehicleId"])
+    // No by-deposit index. Provenance is answered by the pointer a
+    // `depositVehicleHolds` row carries, not by searching the episodes that
+    // share a deposit — an index here would only invite that search back.
     .index("by_application", ["applicationId"])
     .index("by_reservation", ["reservationId"]),
 

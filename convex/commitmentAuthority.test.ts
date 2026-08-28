@@ -699,6 +699,22 @@ describe("P1-W the five reachable acquisition writers", () => {
       "every live episode on the same root"
     ).toBe(1);
     expect(live.every((c) => c.evidenceKind === "DEPOSIT"), "tagged by its evidence").toBe(true);
+
+    // SCRUM-195: the re-opened slice NAMES the episode that re-acquired the
+    // car. Without it, the next decision on this money has nothing to read but
+    // history — which is exactly the unbounded search the pointer replaced.
+    const reopened = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("depositVehicleHolds").collect()).find(
+        (h) => String(h.vehicleId) === String(b) && String(h.sourceHoldId) === String(holdId)
+      )
+    );
+    expect(reopened?.sourceCommitmentClaimId, "the re-opened slice names its episode").toBeTruthy();
+    expect(
+      await seed.t.run(async (ctx) =>
+        evidenceForDepositHold(ctx, seed.orgId, (await ctx.db.get(reopened!._id))!)
+      ),
+      "and that episode resolves to what the money is evidence of"
+    ).toEqual({ kind: "DEPOSIT", depositId: reopened!.depositId });
   });
 
   // ⚠️ W.2 WITHDRAWN AS UNREACHABLE IN PHASE 1, AND RECORDED RATHER THAN LEFT
@@ -742,6 +758,21 @@ describe("P1-W the five reachable acquisition writers", () => {
       new Set(liveOnA.map((c) => String(c.rootId))).size,
       "all on the one root"
     ).toBe(1);
+
+    // The receiving car's new slice names the episode that acquired it — the
+    // NEW one, not the source hold's.
+    const moved = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("depositVehicleHolds").collect()).find(
+        (h) => String(h.vehicleId) === String(a) && String(h.sourceHoldId) === String(holdId)
+      )
+    );
+    expect(moved?.sourceCommitmentClaimId, "the moved slice names its episode").toBeTruthy();
+    expect(
+      await seed.t.run(async (ctx) =>
+        evidenceForDepositHold(ctx, seed.orgId, (await ctx.db.get(moved!._id))!)
+      ),
+      "and it resolves to the evidence carried from the source"
+    ).toEqual({ kind: "DEPOSIT", depositId: moved!.depositId });
   });
 
   test("W.4 a finance application acquires the car, tagged FINANCE", async () => {
@@ -1058,18 +1089,28 @@ describe("P1-A continuation is proven, never inferred", () => {
     expect((await rootsOn(seed, v)).length, "one root").toBe(1);
   });
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // A.7 — PROVENANCE, ACTUALLY EXERCISED
+  // ════════════════════════════════════════════════════════════════════════════
+  // A.7 — PROVENANCE IS CARRIED, EXACT, AND BOUNDED
   //
-  // ⚠️ THE PREVIOUS A.7 COULD NOT FAIL, and it was mine. Its fixture was a
-  // single-vehicle reservation, which produces NO `depositVehicleHolds` row, so
-  // the branch that calls `evidenceForDepositHold` was dead and the assertion
-  // ran on a literal built in the test. A helper hardcoded to return DEPOSIT
-  // passed it. Both reviewer seats found that independently.
+  // ⚠️ TWO DEFECTS SHAPED THIS SECTION, AND BOTH WERE MINE.
   //
-  // These three call the helper and assert what it returns. Scope stays narrow:
-  // the provenance LOOKUP, not the Phase 3 release round trip.
-  // ═══════════════════════════════════════════════════════════════════════════
+  // The first A.7 COULD NOT FAIL. Its fixture was a single-vehicle reservation,
+  // which produces NO `depositVehicleHolds` row, so the branch that calls
+  // `evidenceForDepositHold` was dead and the assertion ran on a literal built
+  // inside the test. A helper hardcoded to return DEPOSIT passed it.
+  //
+  // The correction that replaced it asked the right question — which episode
+  // does THIS car's slice of THIS money come from — and answered it by reading
+  // EVERY episode sharing that deposit and that vehicle, then checking they
+  // agreed. Agreement is the normal case, so the read grew with the deal's
+  // history: 61 rows to return one answer, reproduced. An authority that
+  // eventually meets Convex's transaction limit is not a complete authority,
+  // and bounding it with a page size would have been worse still.
+  //
+  // So a hold now NAMES the episode it was created alongside. These contracts
+  // prove the named one is what gets read, that every way of naming the wrong
+  // one fails closed, and that the read does not grow with history.
+  // ════════════════════════════════════════════════════════════════════════════
 
   /** A real multi-vehicle deposit — the one reachable way to get hold rows. */
   async function multiVehicleDeposit(seed: Seed, cars: Id<"vehicles">[], amount = 4_000) {
@@ -1089,38 +1130,68 @@ describe("P1-A continuation is proven, never inferred", () => {
       const holds = (await ctx.db.query("depositVehicleHolds").collect()).filter(
         (h) => String(h.depositId) === String(deposit._id)
       );
-      return { depositId: deposit._id, holds };
+      return { quoteId, depositId: deposit._id, holds };
     });
+  }
+
+  async function holdFor(seed: Seed, depositId: Id<"deposits">, v: Id<"vehicles">) {
+    return await seed.t.run(async (ctx) =>
+      (await ctx.db.query("depositVehicleHolds").collect()).find(
+        (h) => String(h.depositId) === String(depositId) && String(h.vehicleId) === String(v)
+      )!
+    );
   }
 
   async function evidenceFor(seed: Seed, depositId: Id<"deposits">, v: Id<"vehicles">) {
+    const hold = await holdFor(seed, depositId, v);
     return await seed.t.run(async (ctx) => {
-      const hold = (await ctx.db.query("depositVehicleHolds").collect()).find(
-        (h) => String(h.depositId) === String(depositId) && String(h.vehicleId) === String(v)
-      )!;
-      return await evidenceForDepositHold(ctx, seed.orgId, hold);
+      const fresh = (await ctx.db.get(hold._id))!;
+      return await evidenceForDepositHold(ctx, seed.orgId, fresh);
     });
   }
 
-  test("A.7a the helper is CALLED, and returns the episode resting on that car", async () => {
+  /** Point a hold somewhere else, to prove the pointer is CHECKED, not trusted. */
+  async function repoint(
+    seed: Seed,
+    holdId: Id<"depositVehicleHolds">,
+    claimId: Id<"vehicleCommitmentClaims"> | undefined
+  ) {
+    await seed.t.run(async (ctx) =>
+      ctx.db.patch(holdId, { sourceCommitmentClaimId: claimId })
+    );
+  }
+
+  const UNPROVEN = /missing its commitment record/i;
+
+  test("A.7a the WRITER stamps the episode, and the helper reads the one it names", async () => {
     const seed = await seedDealer("a7a");
     const cars = [await vehicle(seed), await vehicle(seed)];
     const { depositId, holds } = await multiVehicleDeposit(seed, cars);
     expect(holds.length, "the fixture really produced hold rows to resolve").toBe(2);
 
-    const evidence = await evidenceFor(seed, depositId, cars[0]);
-    expect(evidence, "the helper's own return value, not a literal").toEqual({
-      kind: "DEPOSIT",
-      depositId,
-    });
+    // The production writer, not the test, put the pointer there.
+    for (const hold of holds) {
+      expect(
+        hold.sourceCommitmentClaimId,
+        `the hold on ${hold.vehicleId} names the episode it was created with`
+      ).toBeTruthy();
+    }
+    const first = holds.find((h) => String(h.vehicleId) === String(cars[0]))!;
+    const claim = await seed.t.run((ctx) => ctx.db.get(first.sourceCommitmentClaimId!));
+    expect(String(claim?.vehicleId), "and it is THIS car's episode").toBe(String(cars[0]));
+    expect(String(claim?.depositId), "resting on THIS money").toBe(String(depositId));
+
+    expect(
+      await evidenceFor(seed, depositId, cars[0]),
+      "the helper's own return value, not a literal"
+    ).toEqual({ kind: "DEPOSIT", depositId });
   });
 
-  test("A.7b provenance is scoped to the CAR — proven in both directions", async () => {
+  test("A.7b provenance is per-CAR — proven in both directions", async () => {
     // ⚠️ FIXTURE BOUNDARY, STATED. One deposit under episodes of DIFFERENT kinds
     // on two cars cannot be built through a public door — the writers keep one
     // defining kind per deposit. That is precisely why nothing enforces it, and
-    // why the helper must not depend on it. Written directly, as contract 1.6
-    // does for its own corrupt-state fixture.
+    // why the helper must not depend on it.
     //
     // Both directions matter: one alone is satisfied by a helper that always
     // answers with the same kind.
@@ -1149,7 +1220,7 @@ describe("P1-A continuation is proven, never inferred", () => {
         openedAt: Date.now(),
         openedBy: seed.userId,
       });
-      await ctx.db.insert("vehicleCommitmentClaims", {
+      const claimId = await ctx.db.insert("vehicleCommitmentClaims", {
         orgId: seed.orgId,
         rootId,
         vehicleId: reservationCar,
@@ -1166,6 +1237,7 @@ describe("P1-A continuation is proven, never inferred", () => {
         vehicleId: reservationCar,
         active: true,
         createdAt: Date.now(),
+        sourceCommitmentClaimId: claimId,
       });
     });
 
@@ -1179,71 +1251,188 @@ describe("P1-A continuation is proven, never inferred", () => {
     ).toEqual({ kind: "DEPOSIT", depositId });
   });
 
-  test("A.7c episodes that DISAGREE about one car's money fail closed", async () => {
-    // ⚠️ NEVER PICK BY QUERY ORDER. Two episodes on the same deposit AND the
-    // same car that disagree on what the money is evidence OF is corrupt state,
-    // not a tie — and choosing either would make a live claim of the wrong KIND
-    // on a real car, silently.
+  test("A.7c a hold that names NO episode REFUSES — it is not an ordinary deposit", async () => {
+    // ⚠️ THE REMOVED FALLBACK, PINNED AS A REFUSAL. The previous helper ended
+    // on "no claim references this deposit anywhere, therefore DEPOSIT". Under
+    // the canonical model every hold is written alongside its acquisition, so a
+    // hold with no episode is either state from before that model (SCRUM-201
+    // owns the cutover) or a row written incompletely. Guessing DEPOSIT is how
+    // a reservation's money became a DEPOSIT-kind claim in the first place.
     const seed = await seedDealer("a7c");
     const car = await vehicle(seed);
     const { depositId } = await multiVehicleDeposit(seed, [car, await vehicle(seed)]);
+    const hold = await holdFor(seed, depositId, car);
 
-    const reservationId = await seed.t.run(async (ctx) =>
-      ctx.db.insert("vehicleReservations", {
-        orgId: seed.orgId,
+    // The control: it resolves BEFORE the pointer is removed, so the refusal
+    // below is the missing pointer and nothing else about the fixture.
+    expect(await evidenceFor(seed, depositId, car)).toEqual({ kind: "DEPOSIT", depositId });
+    await repoint(seed, hold._id, undefined);
+
+    await expectRefusal(evidenceFor(seed, depositId, car), UNPROVEN, "A.7c");
+  });
+
+  test("A.7d a pointer at ANOTHER CAR's episode REFUSES", async () => {
+    const seed = await seedDealer("a7d");
+    const mine = await vehicle(seed);
+    const other = await vehicle(seed);
+    const { depositId } = await multiVehicleDeposit(seed, [mine, other]);
+    const otherHold = await holdFor(seed, depositId, other);
+    const mineHold = await holdFor(seed, depositId, mine);
+
+    // Same deposit, same org, real episode — the ONLY thing wrong is the car,
+    // so nothing else in the helper can be what refuses.
+    await repoint(seed, mineHold._id, otherHold.sourceCommitmentClaimId!);
+    await expectRefusal(evidenceFor(seed, depositId, mine), UNPROVEN, "A.7d");
+  });
+
+  test("A.7e a pointer at ANOTHER DEPOSIT's episode REFUSES", async () => {
+    const seed = await seedDealer("a7e");
+    const car = await vehicle(seed);
+    const second = await vehicle(seed);
+    const first = await multiVehicleDeposit(seed, [car, second], 4_000);
+    // A further instalment on the SAME deal: joins the same root, opens its own
+    // episode, and writes its own holds.
+    await seed.asUser.mutation(api.deposits.create, {
+      orgId: seed.orgId,
+      quoteId: first.quoteId,
+      amount: 3_000,
+    });
+    const secondDepositId = await seed.t.run(async (ctx) => {
+      const rows = (await ctx.db.query("deposits").collect()).filter(
+        (d) => String(d.quoteId) === String(first.quoteId)
+      );
+      return rows.find((d) => String(d._id) !== String(first.depositId))!._id;
+    });
+    const secondHold = await holdFor(seed, secondDepositId, car);
+    const firstHold = await holdFor(seed, first.depositId, car);
+
+    // Same org, same CAR, real episode — only the money is a different row.
+    await repoint(seed, firstHold._id, secondHold.sourceCommitmentClaimId!);
+    await expectRefusal(evidenceFor(seed, first.depositId, car), UNPROVEN, "A.7e");
+  });
+
+  test("A.7f a DANGLING pointer REFUSES", async () => {
+    const seed = await seedDealer("a7f");
+    const car = await vehicle(seed);
+    const { depositId } = await multiVehicleDeposit(seed, [car, await vehicle(seed)]);
+    const hold = await holdFor(seed, depositId, car);
+
+    await seed.t.run((ctx) => ctx.db.delete(hold.sourceCommitmentClaimId!));
+    await expectRefusal(evidenceFor(seed, depositId, car), UNPROVEN, "A.7f");
+  });
+
+  test("A.7g a pointer into ANOTHER TENANT REFUSES", async () => {
+    const seed = await seedDealer("a7g");
+    const other = await secondTenant(seed);
+    const car = await vehicle(seed);
+    const { depositId } = await multiVehicleDeposit(seed, [car, await vehicle(seed)]);
+    const hold = await holdFor(seed, depositId, car);
+
+    // ⚠️ BUILT TO MATCH ON EVERY OTHER AXIS. The foreign episode names this
+    // org's car and this org's deposit, so the vehicle and deposit checks both
+    // pass and the tenancy check is the only thing left to refuse.
+    const foreign = await seed.t.run(async (ctx) => {
+      const rootId = await ctx.db.insert("commitmentRoots", {
+        orgId: other.orgId,
         vehicleId: car,
-        customerId: seed.customerA,
-        status: "ACTIVE" as const,
-        reservedBy: seed.userId,
-        reservedAt: Date.now(),
-      })
-    );
-    const root = (await rootsOn(seed, car))[0];
-    await seed.t.run(async (ctx) =>
-      ctx.db.insert("vehicleCommitmentClaims", {
-        orgId: seed.orgId,
-        rootId: root._id,
+        customerId: other.customerId,
+        status: "OPEN" as const,
+        openedAt: Date.now(),
+        openedBy: seed.userId,
+      });
+      return await ctx.db.insert("vehicleCommitmentClaims", {
+        orgId: other.orgId,
+        rootId,
         vehicleId: car,
         status: "ACTIVE" as const,
-        evidenceKind: "RESERVATION" as const,
-        reservationId,
+        evidenceKind: "DEPOSIT" as const,
         depositId,
         createdAt: Date.now(),
         createdBy: seed.userId,
-      })
-    );
-
-    await expectRefusal(
-      evidenceFor(seed, depositId, car),
-      /conflicting commitment records/i,
-      "A.7c"
-    );
+      });
+    });
+    await repoint(seed, hold._id, foreign);
+    await expectRefusal(evidenceFor(seed, depositId, car), UNPROVEN, "A.7g");
   });
 
-  test("A.7d evidence belonging to ANOTHER car is never borrowed for this one", async () => {
-    // The genuinely unclaimed deposit is the one honest DEPOSIT default. A
-    // deposit that IS claimed, just not here, is provenance that belongs to
-    // somebody else's car — and reaching for it is the same inference this
-    // replacement exists to remove, arriving through a different door.
-    const seed = await seedDealer("a7d");
-    const claimed = await vehicle(seed);
-    const stranger = await vehicle(seed);
-    const { depositId } = await multiVehicleDeposit(seed, [claimed, await vehicle(seed)]);
+  test("A.7h resolving provenance does NOT grow with the deal's history", async () => {
+    // ⚠️ THE CARDINALITY CONTRACT, AND IT ASSERTS THE PROPERTY RATHER THAN THE
+    // MECHANISM. No index name, no timing, no page size — it counts the reads
+    // the helper actually performs and requires that number to be the same
+    // whether the car's slice has one episode behind it or sixty-one. The
+    // previous implementation read every one of them.
+    const seed = await seedDealer("a7h");
+    const car = await vehicle(seed);
+    const { depositId } = await multiVehicleDeposit(seed, [car, await vehicle(seed)]);
+    const hold = await holdFor(seed, depositId, car);
 
-    await seed.t.run(async (ctx) =>
-      ctx.db.insert("depositVehicleHolds", {
-        orgId: seed.orgId,
-        depositId,
-        vehicleId: stranger,
-        active: true,
-        createdAt: Date.now(),
-      })
+    async function resolveCountingReads() {
+      return await seed.t.run(async (ctx) => {
+        // Fetched with the RAW ctx so the fixture's own read is not counted.
+        const fresh = (await ctx.db.get(hold._id))!;
+        let gets = 0;
+        let queries = 0;
+        const counted = {
+          db: {
+            get: (...a: unknown[]) => {
+              gets += 1;
+              return (ctx.db.get as unknown as (...x: unknown[]) => unknown)(...a);
+            },
+            query: (...a: unknown[]) => {
+              queries += 1;
+              return (ctx.db.query as unknown as (...x: unknown[]) => unknown)(...a);
+            },
+          },
+        } as unknown as Parameters<typeof evidenceForDepositHold>[0];
+        const evidence = await evidenceForDepositHold(counted, seed.orgId, fresh);
+        return { gets, queries, evidence };
+      });
+    }
+
+    const before = await resolveCountingReads();
+    expect(before.evidence, "the answer, on a fresh deal").toEqual({ kind: "DEPOSIT", depositId });
+
+    // Sixty more episodes on the SAME deposit and the SAME car, all agreeing —
+    // ordinary reacquisition history, not corruption.
+    const root = (await rootsOn(seed, car))[0];
+    await seed.t.run(async (ctx) => {
+      for (let n = 0; n < 60; n += 1) {
+        await ctx.db.insert("vehicleCommitmentClaims", {
+          orgId: seed.orgId,
+          rootId: root._id,
+          vehicleId: car,
+          status: "RELEASED" as const,
+          evidenceKind: "DEPOSIT" as const,
+          depositId,
+          createdAt: Date.now(),
+          createdBy: seed.userId,
+        });
+      }
+    });
+    const historical = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("vehicleCommitmentClaims").collect()).filter(
+        (c) =>
+          String(c.vehicleId) === String(car) && String(c.depositId) === String(depositId)
+      )
     );
-    await expectRefusal(
-      evidenceFor(seed, depositId, stranger),
-      /conflicting commitment records/i,
-      "A.7d"
-    );
+    expect(historical.length, "the fixture really did build a long history").toBe(61);
+
+    const after = await resolveCountingReads();
+    expect(after.evidence, "the same answer").toEqual({ kind: "DEPOSIT", depositId });
+
+    // ⚠️ THE EQUALITY ALONE WOULD BE TOO WEAK. An implementation that SEARCHES
+    // issues the same number of `query()` calls whatever the history holds, so
+    // "one run cost what the other did" is satisfied by the very design this
+    // contract exists to forbid. What separates bounded from unbounded is that
+    // there is no search AT ALL: one document, fetched by name.
+    expect(
+      { gets: before.gets, queries: before.queries },
+      "one episode fetched by name, and nothing searched"
+    ).toEqual({ gets: 1, queries: 0 });
+    expect(
+      { gets: after.gets, queries: after.queries },
+      "still one, after sixty more episodes on the same money and the same car"
+    ).toEqual({ gets: 1, queries: 0 });
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1704,5 +1893,644 @@ describe("P1-A continuation is proven, never inferred", () => {
     const secondRoots = await rootsOn(seed, secondCar);
     expect(secondRoots.length, "the deal's other car opened its own root").toBe(1);
     expect(String(secondRoots[0].headQuoteId), "on the same deal").toBe(String(quoteId));
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// C2 — A NAMED PROOF IS PROVED BEFORE IT CAN OPEN OR RE-HEAD A ROOT
+//
+// ⚠️ A FREE VEHICLE DOES NOT TURN BAD EVIDENCE INTO GOOD EVIDENCE, and that
+// was the hole. Proofs were checked only where they were USED to JOIN, so a car
+// nobody held took the OPEN_NEW branch before any of it ran and `openRoot`
+// persisted whatever it was handed. `createReservation` takes `dealQuoteId`
+// straight from the client, so another dealership's quote, a deleted one, or
+// one that simply does not include this car became the new root's
+// `headQuoteId` — a permanent, unproven statement about which deal owns a car.
+//
+// The reservation half is worse than untidy metadata: adoption rule (c) admits
+// whoever OWNS the reservation a root claims to have come from, so a root
+// opened with a stranger's `originReservationId` hands that stranger a door
+// into it.
+// ══════════════════════════════════════════════════════════════════════════════
+describe("P1-C2 a supplied lineage proof is proved, not taken on trust", () => {
+  const UNPROVABLE = /does not apply to it/i;
+
+  /** Nothing was opened, nothing was claimed. */
+  async function openedNothing(seed: Seed, v: Id<"vehicles">, label: string) {
+    expect((await rootsOn(seed, v)).length, `${label}: no root was opened`).toBe(0);
+    expect((await claimsOn(seed, v)).length, `${label}: and no episode was attached`).toBe(0);
+  }
+
+  test("C2.1 a quote from ANOTHER TENANT cannot open a root on this org's car", async () => {
+    // ⚠️ THE FOREIGN QUOTE NAMES *THIS* ORG'S CAR, AND THAT IS THE WHOLE POINT.
+    // Written the obvious way — the other dealership quoting its own vehicle —
+    // this contract passed for the wrong reason: the quote did not cover this
+    // car either, so it died on the coverage rule and the tenancy rule was
+    // never reached. Mutation M02 exposed it by deleting the org check and
+    // killing nothing. Covering THIS car leaves tenancy as the only rule left
+    // to refuse.
+    //
+    // FIXTURE BOUNDARY, STATED: a cross-tenant quote row cannot be produced
+    // through `saveQuote`, so it is written directly.
+    const seed = await seedDealer("c21");
+    const other = await secondTenant(seed);
+    const free = await vehicle(seed);
+    const foreignQuote = await seed.t.run((ctx) =>
+      ctx.db.insert("quotes", {
+        orgId: other.orgId,
+        customerId: other.customerId,
+        vehicleId: free,
+        mode: "CASH" as const,
+        vehiclePrice: PRICE,
+        downPayment: 0,
+        termMonths: 0,
+        status: "DRAFT" as const,
+        createdBy: seed.userId,
+        createdAt: Date.now(),
+      })
+    );
+
+    await expectRefusal(
+      seed.asUser.mutation(api.vehicles.createReservation, {
+        orgId: seed.orgId,
+        vehicleId: free,
+        customerId: seed.customerA,
+        dealQuoteId: foreignQuote,
+      }),
+      UNPROVABLE,
+      "C2.1"
+    );
+    await openedNothing(seed, free, "C2.1");
+  });
+
+  test("C2.2 a real quote of OUR OWN that does not cover this car refuses", async () => {
+    const seed = await seedDealer("c22");
+    const otherCar = await vehicle(seed);
+    const free = await vehicle(seed);
+    // Same org, same customer, genuinely valid — just not about this vehicle.
+    const quoteId = await cashQuote(seed, seed.customerA, otherCar);
+
+    await expectRefusal(
+      seed.asUser.mutation(api.vehicles.createReservation, {
+        orgId: seed.orgId,
+        vehicleId: free,
+        customerId: seed.customerA,
+        dealQuoteId: quoteId,
+      }),
+      UNPROVABLE,
+      "C2.2"
+    );
+    await openedNothing(seed, free, "C2.2");
+  });
+
+  test("C2.3 a DANGLING quote id refuses", async () => {
+    const seed = await seedDealer("c23");
+    const free = await vehicle(seed);
+    const quoteId = await cashQuote(seed, seed.customerA, free);
+    await seed.t.run((ctx) => ctx.db.delete(quoteId));
+
+    await expectRefusal(
+      seed.asUser.mutation(api.vehicles.createReservation, {
+        orgId: seed.orgId,
+        vehicleId: free,
+        customerId: seed.customerA,
+        dealQuoteId: quoteId,
+      }),
+      UNPROVABLE,
+      "C2.3"
+    );
+    await openedNothing(seed, free, "C2.3");
+  });
+
+  test("C2.4 the matched POSITIVE — a real covering quote opens the root and heads it", async () => {
+    // ⚠️ WITHOUT THIS, EVERY REFUSAL ABOVE IS SATISFIED BY REFUSING EVERYTHING.
+    const seed = await seedDealer("c24");
+    const free = await vehicle(seed);
+    const quoteId = await cashQuote(seed, seed.customerA, free);
+
+    await seed.asUser.mutation(api.vehicles.createReservation, {
+      orgId: seed.orgId,
+      vehicleId: free,
+      customerId: seed.customerA,
+      dealQuoteId: quoteId,
+    });
+
+    const roots = await rootsOn(seed, free);
+    expect(roots.length, "exactly one root").toBe(1);
+    expect(String(roots[0].headQuoteId), "headed by the quote that proved it").toBe(
+      String(quoteId)
+    );
+  });
+
+  test("C2.5 a deposit that does not apply to this car refuses", async () => {
+    const seed = await seedDealer("c25");
+    const otherCar = await vehicle(seed);
+    const free = await vehicle(seed);
+    const quoteId = await cashQuote(seed, seed.customerA, otherCar);
+    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
+    const depositId = await seed.t.run(async (ctx) => {
+      const rows = await ctx.db.query("deposits").collect();
+      return rows.find((d) => String(d.vehicleId) === String(otherCar))!._id;
+    });
+
+    await expectRefusal(
+      seed.asUser.mutation(api.vehicles.createReservation, {
+        orgId: seed.orgId,
+        vehicleId: free,
+        customerId: seed.customerA,
+        dealDepositId: depositId,
+      }),
+      UNPROVABLE,
+      "C2.5"
+    );
+    await openedNothing(seed, free, "C2.5");
+  });
+
+  test("C2.6 a deposit belonging to ANOTHER customer refuses, and its owner's does not", async () => {
+    // ⚠️ CALLS THE AUTHORITY DIRECTLY, AND THIS IS THE REASON. On the public
+    // path `createReservation` has an older guard — "another customer's deposit
+    // is currently holding this vehicle" — which fires first whenever the
+    // deposit really is on this car. A test that dies at an earlier validator
+    // proves nothing about the guard it is named for.
+    //
+    // FIXTURE BOUNDARY, STATED: the join row is written directly, because a
+    // deposit that applies to a car this org still reads as FREE is not a shape
+    // a public door produces.
+    const seed = await seedDealer("c26");
+    const otherCar = await vehicle(seed);
+    const free = await vehicle(seed);
+    const quoteId = await cashQuote(seed, seed.customerA, otherCar);
+    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
+    const depositId = await seed.t.run(async (ctx) => {
+      const rows = await ctx.db.query("deposits").collect();
+      return rows.find((d) => String(d.vehicleId) === String(otherCar))!._id;
+    });
+    await seed.t.run((ctx) =>
+      ctx.db.insert("depositVehicleHolds", {
+        orgId: seed.orgId,
+        depositId,
+        vehicleId: free,
+        active: true,
+        createdAt: Date.now(),
+      })
+    );
+
+    const rival = await seed.t.run((ctx) =>
+      resolveActingRoot(ctx, {
+        orgId: seed.orgId,
+        vehicleId: free,
+        lineage: { depositId },
+        actingCustomerId: seed.customerB,
+      })
+    );
+    expect(rival.decision, "somebody else's money proves nothing for this deal").toBe("REFUSE");
+
+    const owner = await seed.t.run((ctx) =>
+      resolveActingRoot(ctx, {
+        orgId: seed.orgId,
+        vehicleId: free,
+        lineage: { depositId },
+        actingCustomerId: seed.customerA,
+      })
+    );
+    expect(owner.decision, "and the customer whose money it is may still open it").toBe("OPEN_NEW");
+  });
+
+  test("C2.7 a reservation proof must be live, for this car, and this customer's", async () => {
+    // ⚠️ THE FAIL-CLOSED DEFAULT FOR THE NEXT DOOR, AND SAID PLAINLY. No
+    // shipped caller can present an arbitrary `reservationId`:
+    // `createReservation` passes the row it has just created, for this car and
+    // this customer. These are pinned because the rule is the authority's, not
+    // that caller's — Phase 2 and Phase 3 add doors, and a guard that holds
+    // only because of who calls it today is not a guard.
+    const seed = await seedDealer("c27");
+    const free = await vehicle(seed);
+    const elsewhere = await vehicle(seed);
+
+    async function decide(reservationId: Id<"vehicleReservations">, customerId: Id<"customers">) {
+      return await seed.t.run((ctx) =>
+        resolveActingRoot(ctx, {
+          orgId: seed.orgId,
+          vehicleId: free,
+          lineage: { reservationId },
+          actingCustomerId: customerId,
+        })
+      );
+    }
+    async function reservationRow(
+      vehicleId: Id<"vehicles">,
+      customerId: Id<"customers">,
+      status: "ACTIVE" | "RELEASED"
+    ) {
+      return await seed.t.run((ctx) =>
+        ctx.db.insert("vehicleReservations", {
+          orgId: seed.orgId,
+          vehicleId,
+          customerId,
+          status,
+          reservedBy: seed.userId,
+          reservedAt: Date.now(),
+        })
+      );
+    }
+
+    const otherCar = await reservationRow(elsewhere, seed.customerA, "ACTIVE");
+    expect((await decide(otherCar, seed.customerA)).decision, "not this car").toBe("REFUSE");
+
+    const spent = await reservationRow(free, seed.customerA, "RELEASED");
+    expect((await decide(spent, seed.customerA)).decision, "no longer a live deal").toBe("REFUSE");
+
+    const strangers = await reservationRow(free, seed.customerB, "ACTIVE");
+    expect((await decide(strangers, seed.customerA)).decision, "not this deal's").toBe("REFUSE");
+
+    const good = await reservationRow(free, seed.customerA, "ACTIVE");
+    expect(
+      (await decide(good, seed.customerA)).decision,
+      "and a live reservation for this car and this customer still opens the root"
+    ).toBe("OPEN_NEW");
+  });
+
+  test("C2.9 a proof from ANOTHER TENANT, or one that has been deleted, proves nothing", async () => {
+    // The remaining conjuncts of the deposit and reservation proofs, each with
+    // every OTHER axis deliberately valid so only the rule under test can be
+    // what refuses. Direct authority calls, for the reason C2.7 gives.
+    const seed = await seedDealer("c29");
+    const other = await secondTenant(seed);
+    const free = await vehicle(seed);
+
+    async function decide(lineage: Parameters<typeof resolveActingRoot>[1]["lineage"]) {
+      return await seed.t.run((ctx) =>
+        resolveActingRoot(ctx, {
+          orgId: seed.orgId,
+          vehicleId: free,
+          lineage,
+          actingCustomerId: seed.customerA,
+        })
+      );
+    }
+
+    // A reservation that is real, live, for this very car and this customer —
+    // and recorded under another dealership.
+    const foreignReservation = await seed.t.run((ctx) =>
+      ctx.db.insert("vehicleReservations", {
+        orgId: other.orgId,
+        vehicleId: free,
+        customerId: seed.customerA,
+        status: "ACTIVE" as const,
+        reservedBy: seed.userId,
+        reservedAt: Date.now(),
+      })
+    );
+    expect(
+      (await decide({ reservationId: foreignReservation })).decision,
+      "another dealership's reservation is not proof here"
+    ).toBe("REFUSE");
+
+    // A deposit on this very car, for this customer, under another dealership.
+    const foreignDeposit = await seed.t.run((ctx) =>
+      ctx.db.insert("deposits", {
+        orgId: other.orgId,
+        vehicleId: free,
+        customerId: seed.customerA,
+        amount: 1_000,
+        status: "HELD" as const,
+        holdActive: true,
+        createdBy: seed.userId,
+        createdAt: Date.now(),
+      })
+    );
+    expect(
+      (await decide({ depositId: foreignDeposit })).decision,
+      "and neither is another dealership's money"
+    ).toBe("REFUSE");
+
+    // Ours, this car, this customer — but soft-deleted. The control proves the
+    // fixture would otherwise have opened the root, so the refusal is the
+    // deletion and nothing else.
+    const ourDeposit = await seed.t.run((ctx) =>
+      ctx.db.insert("deposits", {
+        orgId: seed.orgId,
+        vehicleId: free,
+        customerId: seed.customerA,
+        amount: 1_000,
+        status: "HELD" as const,
+        holdActive: true,
+        createdBy: seed.userId,
+        createdAt: Date.now(),
+      })
+    );
+    expect(
+      (await decide({ depositId: ourDeposit })).decision,
+      "the live version of it opens the root"
+    ).toBe("OPEN_NEW");
+    await seed.t.run((ctx) => ctx.db.patch(ourDeposit, { isDeleted: true }));
+    expect(
+      (await decide({ depositId: ourDeposit })).decision,
+      "a deleted row is not a row"
+    ).toBe("REFUSE");
+  });
+
+  test("C2.8 an ADOPTION cannot re-head a root onto a quote that is not about this car", async () => {
+    // ⚠️ THE OTHER DECISION THAT WRITES ROOT METADATA. OPEN_NEW persists the
+    // quote it was handed; ADOPT_RESERVATION re-heads an EXISTING root onto it.
+    // Proving one and not the other would leave the same unproven statement
+    // reachable through the adoption door.
+    //
+    // FAIL-CLOSED DEFAULT, STATED: no shipped caller can present this shape.
+    // `deposits.create` and `applications.createFromQuote` derive the cars they
+    // acquire FROM the quote, so their quote always covers them. Phase 2 and
+    // Phase 3 add doors, and the rule belongs to the authority rather than to
+    // today's callers.
+    const seed = await seedDealer("c28");
+    const reservedCar = await vehicle(seed);
+    const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+      orgId: seed.orgId,
+      vehicleId: reservedCar,
+      customerId: seed.customerA,
+      depositAmount: 1_000,
+    });
+
+    // Real, this org's, this customer's — and about a different car entirely.
+    const elsewhere = await cashQuote(seed, seed.customerA, await vehicle(seed));
+    const refused = await seed.t.run((ctx) =>
+      resolveActingRoot(ctx, {
+        orgId: seed.orgId,
+        vehicleId: reservedCar,
+        lineage: { quoteId: elsewhere, adoptReservationId: reservationId },
+        actingCustomerId: seed.customerA,
+      })
+    );
+    expect(refused.decision, "a quote that does not cover the car cannot head it").toBe("REFUSE");
+
+    const covering = await cashQuote(seed, seed.customerA, reservedCar);
+    const adopted = await seed.t.run((ctx) =>
+      resolveActingRoot(ctx, {
+        orgId: seed.orgId,
+        vehicleId: reservedCar,
+        lineage: { quoteId: covering, adoptReservationId: reservationId },
+        actingCustomerId: seed.customerA,
+      })
+    );
+    expect(adopted.decision, "and the deal's own quote still adopts it").toBe("ADOPT_RESERVATION");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// C4 — AN ADOPTION IS PART OF THE REQUEST, SO IT IS PART OF ITS IDENTITY
+//
+// ⚠️ AN IDEMPOTENCY KEY ANSWERS "IS THIS THE SAME REQUEST?", AND THE ANSWER WAS
+// COMPUTED WITHOUT THE ADOPTION. Two calls sharing a key but naming different
+// reservations — or one naming a reservation and one naming none — read as the
+// same request, so the second was answered from the first's stored result. Not
+// a replay: an affirmative claim about which deal the money continues is
+// silently dropped, and the authority never sees the second call to refuse it.
+// ══════════════════════════════════════════════════════════════════════════════
+describe("P1-C4 an idempotency key does not launder a changed adoption", () => {
+  const CONFLICT = /reused with different request content/i;
+
+  async function reservationOn(seed: Seed, v: Id<"vehicles">) {
+    return await seed.asUser.mutation(api.vehicles.createReservation, {
+      orgId: seed.orgId,
+      vehicleId: v,
+      customerId: seed.customerA,
+      depositAmount: 1_000,
+    });
+  }
+
+  async function depositCount(seed: Seed) {
+    return await seed.t.run(async (ctx) => (await ctx.db.query("deposits").collect()).length);
+  }
+
+  test("C4.1 the SAME request, adoption included, is a genuine replay", async () => {
+    const seed = await seedDealer("c41");
+    const v = await vehicle(seed);
+    const reservationId = await reservationOn(seed, v);
+    const quoteId = await cashQuote(seed, seed.customerA, v);
+    const call = {
+      orgId: seed.orgId,
+      quoteId,
+      amount: 2_000,
+      idempotencyKey: "replay-1",
+      adoptReservationId: reservationId,
+    };
+
+    const first = await seed.asUser.mutation(api.deposits.create, call);
+    const before = await snapshot(seed, v);
+    const again = await seed.asUser.mutation(api.deposits.create, call);
+
+    expect(String(again), "the same deposit is returned, not a second one").toBe(String(first));
+    expect(await snapshot(seed, v), "and nothing moved").toEqual(before);
+  });
+
+  test("C4.2 the same key naming a DIFFERENT reservation is a CONFLICT", async () => {
+    const seed = await seedDealer("c42");
+    const v = await vehicle(seed);
+    const reservationId = await reservationOn(seed, v);
+    const otherReservation = await reservationOn(seed, await vehicle(seed));
+    const quoteId = await cashQuote(seed, seed.customerA, v);
+
+    await seed.asUser.mutation(api.deposits.create, {
+      orgId: seed.orgId,
+      quoteId,
+      amount: 2_000,
+      idempotencyKey: "swap-1",
+      adoptReservationId: reservationId,
+    });
+    const before = await snapshot(seed, v);
+    const deposits = await depositCount(seed);
+
+    await expectRefusal(
+      seed.asUser.mutation(api.deposits.create, {
+        orgId: seed.orgId,
+        quoteId,
+        amount: 2_000,
+        idempotencyKey: "swap-1",
+        adoptReservationId: otherReservation,
+      }),
+      CONFLICT,
+      "C4.2"
+    );
+    expect(await snapshot(seed, v), "no root re-headed, no episode attached").toEqual(before);
+    expect(await depositCount(seed), "and no second deposit").toBe(deposits);
+  });
+
+  test("C4.3 the same key that ADDS an adoption is a CONFLICT", async () => {
+    // The dangerous direction. Without the adoption in the fingerprint the
+    // second call is answered from the first's result, so an adoption the
+    // authority would have had to rule on never reaches it at all.
+    const seed = await seedDealer("c43");
+    const v = await vehicle(seed);
+    const quoteId = await cashQuote(seed, seed.customerA, v);
+    const elsewhere = await reservationOn(seed, await vehicle(seed));
+
+    await seed.asUser.mutation(api.deposits.create, {
+      orgId: seed.orgId,
+      quoteId,
+      amount: 2_000,
+      idempotencyKey: "add-1",
+    });
+    const before = await snapshot(seed, v);
+    const deposits = await depositCount(seed);
+
+    await expectRefusal(
+      seed.asUser.mutation(api.deposits.create, {
+        orgId: seed.orgId,
+        quoteId,
+        amount: 2_000,
+        idempotencyKey: "add-1",
+        adoptReservationId: elsewhere,
+      }),
+      CONFLICT,
+      "C4.3"
+    );
+    expect(await snapshot(seed, v), "nothing on this car changed").toEqual(before);
+    expect(await depositCount(seed), "and no second deposit").toBe(deposits);
+  });
+
+  test("C4.4 the same key that DROPS an adoption is a CONFLICT", async () => {
+    const seed = await seedDealer("c44");
+    const v = await vehicle(seed);
+    const reservationId = await reservationOn(seed, v);
+    const quoteId = await cashQuote(seed, seed.customerA, v);
+
+    await seed.asUser.mutation(api.deposits.create, {
+      orgId: seed.orgId,
+      quoteId,
+      amount: 2_000,
+      idempotencyKey: "drop-1",
+      adoptReservationId: reservationId,
+    });
+    const before = await snapshot(seed, v);
+    const deposits = await depositCount(seed);
+
+    await expectRefusal(
+      seed.asUser.mutation(api.deposits.create, {
+        orgId: seed.orgId,
+        quoteId,
+        amount: 2_000,
+        idempotencyKey: "drop-1",
+      }),
+      CONFLICT,
+      "C4.4"
+    );
+    expect(await snapshot(seed, v), "nothing moved").toEqual(before);
+    expect(await depositCount(seed), "and no second deposit").toBe(deposits);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// THE MULTI-VEHICLE NARROWING, LOAD-BEARING FROM BOTH SIDES
+//
+// A.11 proves a multi-vehicle deal presenting one adoption is not broken by it.
+// These two prove the narrowing did not become a hole: an adoption admitted for
+// the deal's OTHER cars still faces each car's own authority decision, and an
+// invalid adoption still refuses a car nobody holds.
+// ══════════════════════════════════════════════════════════════════════════════
+describe("P1-S the multi-vehicle narrowing refuses what it must", () => {
+  test("S.5 a legitimate adoption does not carry the deal onto a car ANOTHER deal holds", async () => {
+    const seed = await seedDealer("s5");
+    const carA = await vehicle(seed);
+    const carB = await vehicle(seed);
+
+    // A: this deal's own reservation, genuinely adoptable.
+    const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+      orgId: seed.orgId,
+      vehicleId: carA,
+      customerId: seed.customerA,
+      depositAmount: 1_000,
+    });
+    // B: somebody else's deal, already holding it.
+    const rivalQuote = await cashQuote(seed, seed.customerB, carB);
+    await seed.asUser.mutation(api.deposits.create, {
+      orgId: seed.orgId,
+      quoteId: rivalQuote,
+      amount: 2_000,
+    });
+
+    const quoteId = await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerA,
+      vehicleId: carA,
+      vehicleItems: [
+        { vehicleId: carA, unitPrice: PRICE },
+        { vehicleId: carB, unitPrice: PRICE },
+      ],
+      mode: "CASH" as const,
+      vehiclePrice: PRICE * 2,
+      downPayment: 0,
+      termMonths: 0,
+    });
+
+    const beforeA = await snapshot(seed, carA);
+    const beforeB = await snapshot(seed, carB);
+    const deposits = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("deposits").collect()).length
+    );
+
+    await expectRefusal(
+      seed.asUser.mutation(api.deposits.create, {
+        orgId: seed.orgId,
+        quoteId,
+        amount: 4_000,
+        adoptReservationId: reservationId,
+      }),
+      HELD,
+      "S.5"
+    );
+
+    // ⚠️ THE WHOLE OPERATION, NOT JUST CAR B. A refusal that had already
+    // re-headed car A onto this quote would leave the deal half-converted.
+    expect(await snapshot(seed, carA), "car A was not re-headed").toEqual(beforeA);
+    expect(await snapshot(seed, carB), "car B's deal is untouched").toEqual(beforeB);
+    expect(
+      await seed.t.run(async (ctx) => (await ctx.db.query("deposits").collect()).length),
+      "and no deposit was taken"
+    ).toBe(deposits);
+  });
+
+  test("S.6 a FREE car refuses an invalid adoption — validation precedes opening", async () => {
+    const seed = await seedDealer("s6");
+    const free = await vehicle(seed);
+    const quoteId = await cashQuote(seed, seed.customerA, free);
+
+    // A reservation that no longer exists. Every other part of the request is
+    // valid, so an authority that checked adoption only where it could JOIN
+    // would have opened the root and ignored the claim entirely.
+    const dangling = await seed.asUser.mutation(api.vehicles.createReservation, {
+      orgId: seed.orgId,
+      vehicleId: await vehicle(seed),
+      customerId: seed.customerA,
+    });
+    await seed.t.run((ctx) => ctx.db.delete(dangling));
+
+    await expectRefusal(
+      seed.asUser.mutation(api.deposits.create, {
+        orgId: seed.orgId,
+        quoteId,
+        amount: 2_000,
+        adoptReservationId: dangling,
+      }),
+      HELD,
+      "S.6"
+    );
+    expect((await rootsOn(seed, free)).length, "no root was opened").toBe(0);
+    expect((await claimsOn(seed, free)).length, "no episode was attached").toBe(0);
+    expect(
+      await seed.t.run(async (ctx) =>
+        (await ctx.db.query("deposits").collect()).filter(
+          (d) => String(d.vehicleId) === String(free)
+        ).length
+      ),
+      "and no deposit was taken"
+    ).toBe(0);
+
+    // The matched positive: the identical call without the false claim works,
+    // so the refusal above is the adoption and not the fixture.
+    await seed.asUser.mutation(api.deposits.create, {
+      orgId: seed.orgId,
+      quoteId,
+      amount: 2_000,
+    });
+    expect((await rootsOn(seed, free)).length, "the same deal opens it cleanly").toBe(1);
   });
 });

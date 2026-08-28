@@ -63,12 +63,22 @@ export const COMMITMENT_MESSAGES = {
   ambiguousOwnership:
     "This vehicle has conflicting commitment records and cannot be acted on until they are resolved. Please contact support.",
   /**
-   * Two episodes resting on one deposit that disagree about what that money is
-   * evidence OF. Like ambiguous ownership, this is corrupt state rather than a
-   * tie to be broken: choosing either one would be choosing by query order.
+   * A supplied lineage field that does not stand up: a quote, reservation or
+   * deposit that is not real, not this dealership's, not this customer's, or
+   * simply not about this car. Naming one is an affirmative claim, so a false
+   * one refuses rather than being ignored.
    */
-  conflictingProvenance:
-    "This deposit has conflicting commitment records and cannot be re-applied until they are resolved. Please contact support.",
+  unprovableLineage:
+    "The quote, reservation or deposit given for this vehicle does not apply to it, so the vehicle cannot be committed to that deal.",
+  /**
+   * A deposit's vehicle hold that cannot say which episode it came from. Under
+   * the canonical model every hold is written alongside the acquisition that
+   * created it and carries that episode's id; one that does not is either state
+   * from before the model existed (SCRUM-201) or a row written incompletely.
+   * Neither may be guessed at.
+   */
+  unprovenProvenance:
+    "This vehicle's share of the deposit is missing its commitment record and cannot be re-applied until it is restored. Please contact support.",
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -231,7 +241,7 @@ export type ActingRoot =
  * ⚠️ THE ONLY PLACE THAT DECIDES WHICH ROOT AN OPERATION ACTS UNDER.
  *
  * Every acquisition writer in the system routes through here. The return type
- * is deliberately three-valued: the previous design returned a nullable root
+ * is deliberately four-valued: the previous design returned a nullable root
  * id, and every caller independently read `null` as "then open a new one" —
  * which is how a car acquired a second root while its first was still alive.
  * OPEN_NEW is now a decision this function makes, never a fallback a caller
@@ -244,11 +254,20 @@ export type ActingRoot =
  *      REFUSES outright — never laundered by a different field that would have
  *      joined on its own.
  *   3. A FREE car OPENS a new root — the only circumstance in which that is
- *      correct.
+ *      correct — but ONLY once every proof it was handed has been proved.
  *   4. A car this deal already holds is JOINED, proven by lineage.
  *   5. Anything else REFUSES, including the SAME CUSTOMER opening a second
  *      independent deal on the same car (I2, c14865: same customer never
  *      implies same deal).
+ *
+ * ⚠️ WHERE PROOF VALIDATION SITS, AND WHY IT IS NOT EVERYWHERE. It guards the
+ * two decisions that WRITE root metadata — OPEN_NEW, which persists the quote
+ * and the reservation it was handed, and ADOPT_RESERVATION, which re-heads a
+ * root onto the presented quote. A JOIN persists nothing and already binds
+ * every proof to the root it names, so gating it as well would refuse
+ * legitimate work: a car that has since left its quote must still be able to
+ * resolve the money sitting on it, and a false refusal there is as much a
+ * defect as a false admission.
  */
 export async function resolveActingRoot(
   ctx: QueryCtx | MutationCtx,
@@ -314,6 +333,14 @@ export async function resolveActingRoot(
   // something about the world; if the assertion is false the operation is
   // wrong, whatever else it could have proven.
   if (args.lineage.adoptReservationId) {
+    // ⚠️ THE QUOTE IS ABOUT TO BECOME THE ROOT'S HEAD REVISION, so it is proved
+    // BEFORE the adoption can grant that. `acquireVehicle` patches
+    // `headQuoteId` on every ADOPT_RESERVATION, and a quote that is foreign,
+    // dangling or simply not about this car has proven nothing that entitles it
+    // to be written there.
+    if (args.lineage.quoteId && !quoteProofIsValid(actingQuote, args.orgId, args.vehicleId)) {
+      return { decision: "REFUSE", message: COMMITMENT_MESSAGES.unprovableLineage };
+    }
     const adoption = await resolveAdoption(ctx, {
       orgId: args.orgId,
       vehicleId: args.vehicleId,
@@ -329,7 +356,21 @@ export async function resolveActingRoot(
   }
 
   // ── 2. a FREE car opens a root — the only place that is ever correct ─────
-  if (!held) return { decision: "OPEN_NEW" };
+  //
+  // ⚠️ AND ONLY ON PROOF THAT HOLDS UP. Everything the caller handed in is
+  // about to be written onto a brand-new root, so this is the last point at
+  // which a false claim can still be refused instead of persisted.
+  if (!held) {
+    const unprovable = await validateLineageProofs(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      lineage: args.lineage,
+      actingQuote,
+      actingPrincipal,
+    });
+    if (unprovable) return unprovable;
+    return { decision: "OPEN_NEW" };
+  }
 
   // ── 3. AN UNATTRIBUTED OPERATION MAY NOT ACT ON A HELD CAR ───────────────
   //
@@ -419,6 +460,111 @@ function quoteCoversVehicle(quote: Doc<"quotes"> | null, vehicleId: Id<"vehicles
   if (!quote) return false;
   const items = quote.vehicleItems ?? [{ vehicleId: quote.vehicleId }];
   return items.some((item) => String(item.vehicleId) === String(vehicleId));
+}
+
+/** A presented quote is proof for a car only if it is real, ours, and about it. */
+function quoteProofIsValid(
+  quote: Doc<"quotes"> | null,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">
+): boolean {
+  return !!quote && quote.orgId === orgId && quoteCoversVehicle(quote, vehicleId);
+}
+
+/**
+ * ⚠️ A SUPPLIED LINEAGE FIELD IS AN AFFIRMATIVE CLAIM, AND A FREE VEHICLE DOES
+ * NOT TURN BAD EVIDENCE INTO GOOD EVIDENCE.
+ *
+ * The first version proved a lineage field only where it was USED to join, so
+ * a car nobody held took the OPEN_NEW branch before any of it ran, and
+ * `openRoot` persisted whatever it was handed. A quote from another
+ * dealership, a dangling id, a quote that does not include this car at all —
+ * each became the new root's `headQuoteId`.
+ *
+ * The reservation half is worse than untidy metadata. Adoption rule (c) admits
+ * whoever OWNS the reservation a root claims to have come from, so a root
+ * opened with a stranger's `originReservationId` hands that stranger a door
+ * into it: they present their own quote and their own reservation, both real,
+ * and the root is re-headed onto their deal.
+ *
+ * ⚠️ THIS NARROWS. IT NEVER IDENTIFIES. No branch here selects, admits or
+ * invents a root — every outcome is "carry on" or REFUSE. Root identity stays
+ * server-owned (I2).
+ *
+ * Participant consistency is enforced wherever a principal is known. Where one
+ * is NOT known nothing can be persisted either, and that is structural rather
+ * than circumstantial: `openRoot` is reachable only through `acquireVehicle`,
+ * whose `customerId` is a required argument passed straight through as the
+ * acting principal. A caller with no principal can obtain a decision; it cannot
+ * obtain a root.
+ */
+async function validateLineageProofs(
+  ctx: QueryCtx | MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    lineage: CommitmentLineage;
+    actingQuote: Doc<"quotes"> | null;
+    actingPrincipal: Id<"customers"> | null;
+  }
+): Promise<ActingRoot | null> {
+  const refuse: ActingRoot = {
+    decision: "REFUSE",
+    message: COMMITMENT_MESSAGES.unprovableLineage,
+  };
+
+  // ── the quote ───────────────────────────────────────────────────────────
+  //
+  // WHOSE quote it is has already been settled: a quote naming a different
+  // customer than the operation is contradictory evidence and refused above.
+  // What is left is whether the row is real, ours, and about THIS car.
+  if (args.lineage.quoteId && !quoteProofIsValid(args.actingQuote, args.orgId, args.vehicleId)) {
+    return refuse;
+  }
+
+  // ── the reservation ─────────────────────────────────────────────────────
+  //
+  // Real, ours, still live, FOR this car, and this deal's. A released, expired
+  // or converted reservation is no longer a deal anyone can act for — a
+  // converted one continues through the quote it was adopted onto, which is
+  // what re-heading exists for, never through the spent reservation.
+  if (args.lineage.reservationId) {
+    const reservation = await ctx.db.get(args.lineage.reservationId);
+    if (!reservation || reservation.orgId !== args.orgId) return refuse;
+    if (reservation.status !== "ACTIVE") return refuse;
+    if (String(reservation.vehicleId) !== String(args.vehicleId)) return refuse;
+    if (args.actingPrincipal && String(reservation.customerId) !== String(args.actingPrincipal)) {
+      return refuse;
+    }
+  }
+
+  // ── the deposit ─────────────────────────────────────────────────────────
+  //
+  // ⚠️ `deposit.vehicleId` IS NOT THE WHOLE ANSWER. A multi-vehicle deposit
+  // names one car in that column and holds several; the per-vehicle
+  // relationship is the join row. Reading the column alone would refuse a deal
+  // its own second car — so the row is consulted, by one indexed lookup rather
+  // than a walk of the deposit's history.
+  if (args.lineage.depositId) {
+    const depositId = args.lineage.depositId;
+    const deposit = await ctx.db.get(depositId);
+    if (!deposit || deposit.orgId !== args.orgId) return refuse;
+    if (deposit.isDeleted === true) return refuse;
+    if (args.actingPrincipal && String(deposit.customerId) !== String(args.actingPrincipal)) {
+      return refuse;
+    }
+    if (String(deposit.vehicleId) !== String(args.vehicleId)) {
+      const onThisCar = await ctx.db
+        .query("depositVehicleHolds")
+        .withIndex("by_deposit_vehicle", (q) =>
+          q.eq("depositId", depositId).eq("vehicleId", args.vehicleId)
+        )
+        .first();
+      if (!onThisCar) return refuse;
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -604,6 +750,14 @@ export async function attachEpisode(
  *
  * This is what the six acquisition writers call. None of them decides a root,
  * and none of them invents an evidence kind.
+ *
+ * ⚠️ IT RETURNS THE EPISODE IT CREATED, AND THAT IS LOAD-BEARING. A writer that
+ * also records a `depositVehicleHolds` row must stamp that row with the claim
+ * this acquisition opened, so the hold's provenance is a POINTER rather than
+ * something later rediscovered by walking history. Throwing the claim id away
+ * here is what forced the old `evidenceForDepositHold` to read every episode
+ * sharing a deposit and a car in order to answer a question this call already
+ * knew the answer to.
  */
 export async function acquireVehicle(
   ctx: MutationCtx,
@@ -617,7 +771,7 @@ export async function acquireVehicle(
     refusalMessage?: string;
     predecessor?: Doc<"vehicleCommitmentClaims">;
   }
-): Promise<Id<"commitmentRoots">> {
+): Promise<{ rootId: Id<"commitmentRoots">; claimId: Id<"vehicleCommitmentClaims"> }> {
   const acting = await resolveActingRoot(ctx, {
     orgId: args.orgId,
     vehicleId: args.vehicleId,
@@ -649,7 +803,7 @@ export async function acquireVehicle(
     await ctx.db.patch(acting.rootId, { headQuoteId: args.lineage.quoteId });
   }
 
-  await attachEpisode(ctx, {
+  const claimId = await attachEpisode(ctx, {
     orgId: args.orgId,
     rootId,
     vehicleId: args.vehicleId,
@@ -659,78 +813,82 @@ export async function acquireVehicle(
     predecessor: args.predecessor,
   });
 
-  return rootId;
+  return { rootId, claimId };
 }
 
 /**
  * The evidence a released deposit slice should be re-acquired under.
  *
- * CARRIED FROM THE SOURCE EPISODE, NOT ASSUMED FROM THE ROW. A deposit taken
- * with a reservation is RESERVATION evidence that happens to have a deposit
- * attached. Re-acquiring it as `{ kind: "DEPOSIT" }` because the surrounding
- * row is a `depositVehicleHolds` is precisely the inference this replacement
- * removes: it is what turned a consumed reservation episode into a live
- * DEPOSIT-kind claim on a second root.
+ * CARRIED FROM THE SOURCE EPISODE, NOT ASSUMED FROM THE ROW AND NOT REDISCOVERED
+ * FROM HISTORY. A deposit taken with a reservation is RESERVATION evidence that
+ * happens to have a deposit attached. Re-acquiring it as `{ kind: "DEPOSIT" }`
+ * because the surrounding row is a `depositVehicleHolds` is precisely the
+ * inference this replacement removes: it is what turned a consumed reservation
+ * episode into a live DEPOSIT-kind claim on a second root.
  *
- * Falls back to DEPOSIT only when no episode rests on this deposit at all,
- * which is the genuinely deposit-only case.
+ * ## Why a pointer, and not a search
+ *
+ * The first correction of this function asked the right question — which
+ * episode does THIS car's slice of THIS money come from — but answered it by
+ * reading every episode sharing that deposit and that vehicle and checking they
+ * agreed. Agreement is the NORMAL case, so the read grew with the deal's
+ * history: a reproduction of ordinary reacquisition read 61 rows to return one
+ * answer, and an authority that eventually meets Convex's transaction limit is
+ * not a complete authority. Bounding it with a page size would have been worse
+ * still, reintroducing the truncated-read correctness boundary SCRUM-195 exists
+ * to remove.
+ *
+ * So the hold carries the exact claim it was created alongside (M2's own rule:
+ * evidence is tagged and carried, never rediscovered), and this is one `get`.
+ * A pointer rather than copied evidence columns, so there is no second,
+ * independently mutable copy of the truth to drift.
+ *
+ * ⚠️ AND IT FAILS CLOSED. Every Phase-1 writer stamps the pointer, so a hold
+ * without one is either state from before the canonical model (SCRUM-201 owns
+ * the cutover) or a row written incompletely — never an ordinary deposit-only
+ * hold to be waved through. The permissive "no claim anywhere, therefore
+ * DEPOSIT" default this function used to end on is gone: it existed to cover a
+ * shape the model no longer produces, and certifying it with a test would have
+ * pinned an assumption instead of removing it.
  */
 export async function evidenceForDepositHold(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   hold: Doc<"depositVehicleHolds">
 ): Promise<CommitmentEvidence> {
-  // ── the episodes resting on THIS money, for THIS car ─────────────────────
-  //
-  // ⚠️ BOTH HALVES, AND NOT THE FIRST ROW THAT COMES BACK. One deposit can sit
-  // under episodes on several vehicles, so "the claims for this deposit" does
-  // not identify which evidence a particular hold came from — and returning
-  // whichever the index yielded first made the answer depend on query order.
-  const candidates: CommitmentEvidence[] = [];
-  for await (const claim of ctx.db
-    .query("vehicleCommitmentClaims")
-    .withIndex("by_deposit_vehicle", (q) =>
-      q.eq("depositId", hold.depositId).eq("vehicleId", hold.vehicleId)
-    )) {
-    if (claim.orgId !== orgId) continue;
-    candidates.push(evidenceOf(claim));
+  if (!hold.sourceCommitmentClaimId) {
+    throw new ConvexError(COMMITMENT_MESSAGES.unprovenProvenance);
   }
-
-  // Several episodes may legitimately rest on one deposit for one car — a
-  // reacquisition carries its predecessor's evidence forward, so history
-  // AGREEING is the normal case and is not a conflict.
-  const distinct = new Map<string, CommitmentEvidence>();
-  for (const evidence of candidates) {
-    distinct.set(`${evidence.kind}:${evidenceRef(evidence)}`, evidence);
+  const claim = await ctx.db.get(hold.sourceCommitmentClaimId);
+  // The pointer is checked against the row it is stored on rather than trusted.
+  // A dangling id, another dealership's episode, or one belonging to a
+  // different car or a different deposit all mean the same thing: this hold
+  // cannot prove where it came from.
+  if (!claim || claim.orgId !== orgId) {
+    throw new ConvexError(COMMITMENT_MESSAGES.unprovenProvenance);
   }
-  if (distinct.size === 1) return [...distinct.values()][0];
-  // ⚠️ DISAGREEMENT FAILS CLOSED. Picking one would be picking by query order,
-  // and the whole reason this function exists is that a wrong pick becomes a
-  // live claim of the wrong KIND on a real car.
-  if (distinct.size > 1) throw new ConvexError(COMMITMENT_MESSAGES.conflictingProvenance);
-
-  // ── nothing for this car: is the deposit unclaimed, or claimed elsewhere? ──
-  //
-  // Unclaimed anywhere is the genuinely deposit-only case, and DEPOSIT is then
-  // a fact rather than an assumption. But evidence belonging to ANOTHER car is
-  // never borrowed for this one — that is the exact inference this replacement
-  // removes, arriving through a different door.
-  for await (const claim of ctx.db
-    .query("vehicleCommitmentClaims")
-    .withIndex("by_deposit", (q) => q.eq("depositId", hold.depositId))) {
-    if (claim.orgId !== orgId) continue;
-    throw new ConvexError(COMMITMENT_MESSAGES.conflictingProvenance);
+  if (String(claim.vehicleId) !== String(hold.vehicleId)) {
+    throw new ConvexError(COMMITMENT_MESSAGES.unprovenProvenance);
   }
-  return { kind: "DEPOSIT", depositId: hold.depositId };
+  if (!claim.depositId || String(claim.depositId) !== String(hold.depositId)) {
+    throw new ConvexError(COMMITMENT_MESSAGES.unprovenProvenance);
+  }
+  return evidenceOf(claim);
 }
 
 /**
  * Refuse to take a car out from under a live deal.
  *
- * The door version of `resolveActingRoot` for operations that are not
- * acquiring — a sale, a trade-in, an inventory removal — where the only
- * question is whether this deal is allowed to act on the car at all. Every
- * non-REFUSE decision passes, adoption included.
+ * The decision-only form of `resolveActingRoot`, for a door that must know it
+ * MAY act on the car before it starts writing, but is not yet opening the
+ * episode itself. Every non-REFUSE decision passes, adoption included.
+ *
+ * ⚠️ WHAT ACTUALLY ROUTES THROUGH HERE, as of Phase 1: `deposits.create`,
+ * `applications.createFromQuote` and `vehicles.createReservation` — each
+ * checking every car on the deal before any side effect, and each following up
+ * with `acquireVehicle` once its own row exists. Sale completion, trade-ins and
+ * inventory removal do NOT come through here yet; wiring them is later-phase
+ * work, and this comment describes the code rather than the plan.
  */
 export async function assertAcquirable(
   ctx: QueryCtx | MutationCtx,
