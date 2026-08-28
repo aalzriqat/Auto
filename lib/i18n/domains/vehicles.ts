@@ -1,3 +1,67 @@
+import { defineBilingualMessages } from "../defineBilingualMessages";
+
+const workspaceMessages = defineBilingualMessages({
+  VehiclesManageReadiness: ["Manage inventory, availability, and vehicle readiness.", "إدارة المخزون والتوفر وجاهزية المركبات."],
+  VehicleManagerOnlySourcing: ["Only a manager can move vehicles back to sourcing.", "يمكن للمدير فقط إعادة المركبات إلى حالة التوريد."],
+  VehicleVinMissing: ["VIN missing", "رقم الهيكل مفقود"],
+  VehiclePhotosMissing: ["Photos missing", "الصور مفقودة"],
+  VehicleAcquisitionCostMissing: ["Acquisition cost missing", "تكلفة الاستحواذ مفقودة"],
+  SavedViewsUnavailable: ["Saved views are unavailable in this browser session.", "العروض المحفوظة غير متاحة في جلسة المتصفح هذه."],
+  SavedViewSaved: ["View saved", "تم حفظ العرض"],
+  SavedViewRemoved: ["Saved view removed", "تم حذف العرض المحفوظ"],
+  VehicleCsvPriceJod: ["Price (JOD)", "السعر (دينار أردني)"],
+  VehicleCsvInventoryAgeDays: ["Inventory age (days)", "عمر المخزون (بالأيام)"],
+  VehicleBulkUpdateFailedOne: ["{count} vehicle could not be updated. Please try again.", "تعذر تحديث {count} مركبة. يرجى المحاولة مرة أخرى."],
+  VehicleBulkUpdateFailedMany: ["{count} vehicles could not be updated. Please try again.", "تعذر تحديث {count} مركبات. يرجى المحاولة مرة أخرى."],
+  VehicleStatusesUpdated: ["Vehicle statuses updated", "تم تحديث حالات المركبات"],
+  VehicleStatusRequestsSubmitted: ["Status requests submitted", "تم إرسال طلبات تغيير الحالة"],
+  VehicleSearchPlaceholder: ["Search VIN, make, model, trim, or notes", "ابحث برقم الهيكل أو الصانع أو الموديل أو الفئة أو الملاحظات"],
+  AllVehicleStatuses: ["All statuses", "كل الحالات"],
+  SortVehicles: ["Sort vehicles", "ترتيب المركبات"],
+  NewestInventory: ["Newest inventory", "الأحدث في المخزون"],
+  OldestInventory: ["Oldest inventory", "الأقدم في المخزون"],
+  PriceHighToLow: ["Price: high to low", "السعر: من الأعلى إلى الأقل"],
+  PriceLowToHigh: ["Price: low to high", "السعر: من الأقل إلى الأعلى"],
+  ModelAToZ: ["Model: A to Z", "الموديل: أبجدياً"],
+  SavedViews: ["Saved views", "العروض المحفوظة"],
+  SaveView: ["Save view", "حفظ العرض"],
+  DeleteSavedView: ["Delete saved view", "حذف العرض المحفوظ"],
+  TableView: ["Table view", "عرض الجدول"],
+  CardView: ["Card view", "عرض البطاقات"],
+  ExportSelected: ["Export selected", "تصدير المحدد"],
+  OpenVehicleAria: ["Open {vehicle}", "فتح {vehicle}"],
+  SelectVehicleAria: ["Select {vehicle}", "تحديد {vehicle}"],
+  SelectAllFilteredVehicles: ["Select all filtered vehicles", "تحديد كل المركبات المصفّاة"],
+  InventoryAge: ["Inventory age", "عمر المخزون"],
+  KilometersShort: ["km", "كم"],
+  Photos: ["Photos", "الصور"],
+  AuditHistory: ["Audit history", "سجل التدقيق"],
+  ArchiveVehicle: ["Archive vehicle", "أرشفة المركبة"],
+  Photo: ["Photo", "الصورة"],
+  Readiness: ["Readiness", "الجاهزية"],
+  Ready: ["Ready", "جاهزة"],
+  WarningCountOne: ["{count} warning", "{count} تحذير"],
+  WarningCountMany: ["{count} warnings", "{count} تحذيرات"],
+  AddedOn: ["Added {date}", "أضيفت في {date}"],
+  SaveCurrentView: ["Save current view", "حفظ العرض الحالي"],
+  SaveCurrentViewDescription: ["Save the current search, filters, sorting, and layout for quick access later.", "احفظ البحث وعوامل التصفية والترتيب والتخطيط الحالي للوصول السريع لاحقاً."],
+  ViewName: ["View name", "اسم العرض"],
+  SavedViewExample: ["Example: Available over 60 days", "مثال: المركبات المتاحة منذ أكثر من 60 يوماً"],
+  ArchiveVehicleDescription: ["Archive {vehicle}? It will leave active inventory and can be restored by an administrator.", "أرشفة {vehicle}؟ ستغادر المخزون النشط ويمكن للمسؤول استعادتها."],
+  VehicleImageAlt: ["Vehicle image {index}", "صورة المركبة {index}"],
+  VehicleWizardDetails: ["Vehicle details", "تفاصيل المركبة"],
+  VehicleWizardAcquisitionCost: ["Acquisition & cost", "الاستحواذ والتكلفة"],
+  VehicleWizardAvailability: ["Availability", "التوفر"],
+  WizardContinue: ["Continue", "متابعة"],
+  AddVehicleProgress: ["Add vehicle progress", "تقدم إضافة المركبة"],
+  WizardStepProgress: ["Step {current} of {total}", "الخطوة {current} من {total}"],
+  SourceDealerRequired: ["Source dealer is required", "اسم معرض المورد مطلوب"],
+  SalesActivity: ["Sales Activity", "نشاط المبيعات"],
+  Operations: ["Operations", "العمليات"],
+  VehicleDetailsSections: ["Vehicle details sections", "أقسام تفاصيل المركبة"],
+  LeadsDepositsSales: ["Leads, deposits & sales", "العملاء المحتملون والعربونات والمبيعات"],
+});
+
 export const vehiclesEn = {
   Vehicle: "Vehicle",
   AddVehicle: "Add Vehicle",
@@ -237,6 +301,9 @@ export const vehiclesEn = {
   AccidentHistoryYes: "Accident disclosed",
   OwnerCount: "Number of Previous Owners",
   DealerGuarantee: "We guarantee this vehicle's condition to buyers",
+
+  // Inventory workspace, saved views, and vehicle wizard
+  ...workspaceMessages.en,
 };
 
 export const vehiclesAr = {
@@ -478,4 +545,7 @@ export const vehiclesAr = {
   AccidentHistoryYes: "تم الإفصاح عن حادث",
   OwnerCount: "عدد الملاك السابقين",
   DealerGuarantee: "نحن نضمن حالة هذه المركبة للمشترين",
+
+  // مساحة عمل المخزون والعروض المحفوظة ومعالج المركبة
+  ...workspaceMessages.ar,
 };

@@ -1,3 +1,60 @@
+import { defineBilingualMessages } from "../defineBilingualMessages";
+
+const workspaceMessages = defineBilingualMessages({
+  LeadListView: ["List", "القائمة"],
+  LeadBoardView: ["Board", "اللوحة"],
+  AllStages: ["All stages", "كل المراحل"],
+  MoveToStage: ["Move to stage", "نقل إلى مرحلة"],
+  AssignSalesperson: ["Assign salesperson", "تعيين مسؤول مبيعات"],
+  LeadMoved: ["Lead moved", "تم نقل العميل المحتمل"],
+  LeadBulkUpdateFailedOne: ["{count} lead could not be updated. Please try again.", "تعذر تحديث {count} عميل محتمل. يرجى المحاولة مرة أخرى."],
+  LeadBulkUpdateFailedMany: ["{count} leads could not be updated. Please try again.", "تعذر تحديث {count} من العملاء المحتملين. يرجى المحاولة مرة أخرى."],
+  LeadStagesUpdated: ["Lead stages updated", "تم تحديث مراحل العملاء المحتملين"],
+  LeadsAssigned: ["Leads assigned", "تم تعيين العملاء المحتملين"],
+  LeadStaleDays: ["Stale · {count} days", "متوقف · {count} يوم"],
+  LeadInterest: ["Interest", "الاهتمام"],
+  AnyVehicle: ["Any vehicle", "أي مركبة"],
+  LeadOwner: ["Owner", "المسؤول"],
+  LeadAge: ["Age", "العمر"],
+  LeadLastActivity: ["Last activity", "آخر نشاط"],
+  LeadDaysAgo: ["{count} days ago", "منذ {count} يوم"],
+  LeadNextAction: ["Next: ", "التالي: "],
+  LeadNextActionColumn: ["Next action", "الإجراء التالي"],
+  LeadActivityAgeColumn: ["Activity / age", "النشاط / العمر"],
+  LeadDaysSinceActivity: ["{count}d since activity", "منذ آخر نشاط {count} يوم"],
+  LeadDaysOld: ["{count}d old", "منذ الإنشاء {count} يوم"],
+  EmptyStage: ["Empty", "فارغة"],
+  NoLeadsFound: ["No leads found.", "لم يتم العثور على عملاء محتملين."],
+  NoLeadsFoundDescription: ["No leads found. Add a new lead to get started.", "لم يتم العثور على عملاء محتملين. أضف عميلاً محتملاً جديداً للبدء."],
+  OpenLeadAria: ["Open {customer}", "فتح {customer}"],
+  SelectLeadAria: ["Select {customer}", "تحديد {customer}"],
+  DeleteLeadAria: ["Delete {customer}", "حذف {customer}"],
+  SelectAllFilteredLeads: ["Select all filtered leads", "تحديد كل العملاء المحتملين المصفّين"],
+  NextActionMakeFirstContact: ["Make first contact", "إجراء التواصل الأول"],
+  NextActionConfirmInterest: ["Confirm vehicle interest", "تأكيد المركبة المطلوبة"],
+  NextActionScheduleTestDrive: ["Schedule a test drive", "جدولة تجربة قيادة"],
+  NextActionCaptureTestDrive: ["Capture test-drive outcome", "تسجيل نتيجة تجربة القيادة"],
+  NextActionFollowUpQuote: ["Prepare or follow up quote", "إعداد عرض السعر أو متابعته"],
+  NextActionConfirmDeal: ["Confirm deal completion", "تأكيد إتمام الصفقة"],
+  NextActionCompleteHandover: ["Complete handover", "إتمام التسليم"],
+  NextActionRecordLoss: ["Record loss reason", "تسجيل سبب الخسارة"],
+  LoadingLeadWorkspace: ["Loading lead workspace…", "جاري تحميل مساحة عمل العميل المحتمل…"],
+  LeadNotFound: ["Lead not found.", "لم يتم العثور على العميل المحتمل."],
+  BackToLeads: ["Back to leads", "العودة إلى العملاء المحتملين"],
+  UnknownCustomer: ["Unknown customer", "عميل غير معروف"],
+  NoVehicleSelected: ["No vehicle selected", "لم يتم اختيار مركبة"],
+  TimelineStageHistory: ["Timeline & stage history", "الخط الزمني وسجل المراحل"],
+  CustomerVehicle: ["Customer & vehicle", "العميل والمركبة"],
+  TasksQuotes: ["Tasks & quotes", "المهام وعروض الأسعار"],
+  NoVehicleSelectedForLead: ["No vehicle has been selected for this lead.", "لم يتم اختيار مركبة لهذا العميل المحتمل."],
+  NoTasksLinkedToLead: ["No tasks linked to this lead.", "لا توجد مهام مرتبطة بهذا العميل المحتمل."],
+  NoQuotesLinkedToLead: ["No quotes linked to this lead.", "لا توجد عروض أسعار مرتبطة بهذا العميل المحتمل."],
+  Overdue: ["Overdue", "متأخرة"],
+  DueDateLine: ["Due {date} · {assignee}", "تستحق في {date} · {assignee}"],
+  ReservedPendingDeal: ["Reserved (pending deal)", "محجوزة (الصفقة معلقة)"],
+  LeadWhatsAppGreeting: ["Hello {name}", "مرحباً {name}"],
+});
+
 export const leadsEn = {
   // Leads
   LeadsDesc: "Manage potential customers, track stages, and close deals.",
@@ -96,6 +153,9 @@ export const leadsEn = {
   Unanswered: "unanswered",
   Replied: "Replied",
   ShowAllMessages: "Show all {count}",
+
+  // Lead list, board, and workspace
+  ...workspaceMessages.en,
 };
 
 export const leadsAr = {
@@ -196,4 +256,7 @@ export const leadsAr = {
   Unanswered: "بدون رد",
   Replied: "تم الرد",
   ShowAllMessages: "عرض الكل ({count})",
+
+  // قائمة العملاء المحتملين ولوحة المراحل ومساحة العمل
+  ...workspaceMessages.ar,
 };

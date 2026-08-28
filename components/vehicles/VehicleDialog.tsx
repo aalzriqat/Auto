@@ -42,8 +42,16 @@ import { vehicleSchema, VehicleFormValues, VehicleDialogProps } from "./vehicle.
 import { CustomFieldsSection, useSaveCustomFieldValues } from "@/components/custom-fields/CustomFieldsSection";
 import { decodeVinYear, toCarBrand, cleanMfrName, validateVinChecksum } from "@/lib/vinHelpers";
 import { getErrorMessage } from "@/lib/errors";
+import { interpolate } from "@/lib/i18n/interpolate";
+import type { TranslationKey } from "@/lib/i18n/dictionaries";
 
-const VEHICLE_WIZARD_STEPS = ["VIN", "Vehicle details", "Acquisition & cost", "Photos", "Availability"] as const;
+const VEHICLE_WIZARD_STEPS = [
+  "VIN",
+  "VehicleWizardDetails",
+  "VehicleWizardAcquisitionCost",
+  "Photos",
+  "VehicleWizardAvailability",
+] as const satisfies readonly TranslationKey[];
 
 function getWizardStepIndicatorClass(stepIndex: number, currentStep: number): string {
   if (stepIndex < currentStep) return "border-primary bg-primary text-primary-foreground";
@@ -372,11 +380,11 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
     if (wizardStep === 2) {
       const values = form.getValues();
       if (values.sourceType === "SOURCED" && !values.sourcedFromName?.trim()) {
-        form.setError("sourcedFromName", { message: "Source dealer is required" });
+        form.setError("sourcedFromName", { message: t("SourceDealerRequired") });
         return;
       }
       if (values.sourceType !== "SOURCED" && (values.purchasePrice ?? 0) > 0 && !values.purchasePaymentMethod) {
-        form.setError("purchasePaymentMethod", { message: "Payment method is required when a purchase price is entered" });
+        form.setError("purchasePaymentMethod", { message: t("PurchasePaymentMethodRequired") });
         return;
       }
     }
@@ -402,7 +410,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
         </DialogHeader>
 
         {!vehicle && (
-          <div className="space-y-2" aria-label="Add vehicle progress">
+          <div className="space-y-2" aria-label={t("AddVehicleProgress")}>
             <div className="flex items-center justify-between gap-2">
               {VEHICLE_WIZARD_STEPS.map((step, index) => (
                 <button
@@ -415,7 +423,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                   <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${getWizardStepIndicatorClass(index, wizardStep)}`}>
                     {index < wizardStep ? <Check className="h-3.5 w-3.5" /> : index + 1}
                   </span>
-                  <span className={`hidden truncate text-xs lg:block ${index === wizardStep ? "font-medium text-foreground" : "text-muted-foreground"}`}>{step}</span>
+                  <span className={`hidden truncate text-xs lg:block ${index === wizardStep ? "font-medium text-foreground" : "text-muted-foreground"}`}>{t(step)}</span>
                 </button>
               ))}
             </div>
@@ -423,8 +431,8 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
               <div className="h-full bg-primary transition-all" style={{ width: `${((wizardStep + 1) / VEHICLE_WIZARD_STEPS.length) * 100}%` }} />
             </div>
             <div>
-              <p className="text-sm font-semibold">{VEHICLE_WIZARD_STEPS[wizardStep]}</p>
-              <p className="text-xs text-muted-foreground">Step {wizardStep + 1} of {VEHICLE_WIZARD_STEPS.length}</p>
+              <p className="text-sm font-semibold">{t(VEHICLE_WIZARD_STEPS[wizardStep])}</p>
+              <p className="text-xs text-muted-foreground">{interpolate(t("WizardStepProgress"), { current: wizardStep + 1, total: VEHICLE_WIZARD_STEPS.length })}</p>
             </div>
           </div>
         )}
@@ -947,7 +955,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
               <div>
                 {!vehicle && wizardStep > 0 && (
                   <Button type="button" variant="ghost" onClick={() => setWizardStep((currentStep) => Math.max(0, currentStep - 1))}>
-                    <ArrowLeft className="h-4 w-4 me-2 rtl:rotate-180" />Back
+                    <ArrowLeft className="h-4 w-4 me-2 rtl:rotate-180" />{t("Back")}
                   </Button>
                 )}
               </div>
@@ -957,7 +965,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 </Button>
                 {!vehicle && wizardStep < VEHICLE_WIZARD_STEPS.length - 1 ? (
                   <Button type="button" onClick={() => void handleNextStep()}>
-                    Continue<ArrowRight className="h-4 w-4 ms-2 rtl:rotate-180" />
+                    {t("WizardContinue")}<ArrowRight className="h-4 w-4 ms-2 rtl:rotate-180" />
                   </Button>
                 ) : (
                   <Button type="submit" disabled={isSubmitting}>

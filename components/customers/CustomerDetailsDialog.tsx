@@ -7,7 +7,6 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Id } from "@/convex/_generated/dataModel";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { format } from "date-fns";
 import {
   Dialog,
   DialogContent,
@@ -35,6 +34,9 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { getErrorMessage } from "@/lib/errors";
 import { buildWhatsAppDeepLink } from "@/lib/whatsappDeepLink";
+import { interpolate } from "@/lib/i18n/interpolate";
+import { translateLeadSourceLabel } from "@/lib/i18n/defaultLabels";
+import { translateLeadStage, translateWorkflowStatus } from "@/lib/i18n/statusLabels";
 
 interface CustomerActivityItem {
   id: string;
@@ -49,6 +51,17 @@ interface CustomerDetailsDialogProps {
   customerId: Id<"customers"> | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+}
+
+function formatCustomerDate(timestamp: number, locale: "en" | "ar"): string {
+  return new Intl.DateTimeFormat(locale === "ar" ? "ar-JO" : "en-US", { dateStyle: "medium" }).format(timestamp);
+}
+
+function formatCustomerDateTime(timestamp: number, locale: "en" | "ar"): string {
+  return new Intl.DateTimeFormat(locale === "ar" ? "ar-JO" : "en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(timestamp);
 }
 
 function CustomerActivityIcon({ kind }: Readonly<Pick<CustomerActivityItem, "kind">>) {
@@ -67,15 +80,14 @@ function CustomerActivityIcon({ kind }: Readonly<Pick<CustomerActivityItem, "kin
 function CustomerActivityTimeline({
   items,
   isLoading,
-  loadingLabel,
 }: Readonly<{
   items: CustomerActivityItem[];
   isLoading: boolean;
-  loadingLabel: string;
 }>) {
-  if (isLoading) return <p className="text-sm text-muted-foreground">{loadingLabel}</p>;
+  const { t, locale } = useLanguage();
+  if (isLoading) return <p className="text-sm text-muted-foreground">{t("Loading")}</p>;
   if (items.length === 0) {
-    return <p className="rounded-lg border border-dashed py-10 text-center text-sm text-muted-foreground">No customer activity yet.</p>;
+    return <p className="rounded-lg border border-dashed py-10 text-center text-sm text-muted-foreground">{t("NoCustomerActivity")}</p>;
   }
 
   return (
@@ -90,7 +102,7 @@ function CustomerActivityTimeline({
               <div><p className="text-sm font-medium">{activity.title}</p><p className="text-xs text-muted-foreground">{activity.detail}</p></div>
               <Badge variant="outline">{activity.status}</Badge>
             </div>
-            <p className="mt-2 text-xs text-muted-foreground">{format(activity.timestamp, "PP p")}</p>
+            <p className="mt-2 text-xs text-muted-foreground">{formatCustomerDateTime(activity.timestamp, locale)}</p>
           </div>
         </div>
       ))}
@@ -104,7 +116,8 @@ export function CustomerDetailsDialog({
   onOpenChange,
 }: CustomerDetailsDialogProps) {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
+  const localeCode = locale === "ar" ? "ar-JO" : "en-US";
   const router = useRouter();
   // This dialog is reachable with VIEW_CUSTOMERS alone — RECEPTION has that and
   // not VIEW_SALES. `deposits.quoteAllocation` requires VIEW_SALES and throws,
@@ -171,40 +184,56 @@ export function CustomerDetailsDialog({
       ...relations.leads.map((lead) => ({
         id: `lead-${lead._id}`,
         kind: "lead" as const,
-        title: `Lead · ${lead.vehicleDesc}`,
-        detail: `${lead.source} · ${lead.assignedUserName}`,
-        status: lead.stage,
+        title: interpolate(t("CustomerActivityLeadTitle"), { vehicle: lead.vehicleDesc }),
+        detail: interpolate(t("CustomerActivityLeadDetail"), {
+          source: translateLeadSourceLabel(lead.source, locale),
+          assignee: lead.assignedUserName || t("NoAssigned"),
+        }),
+        status: translateLeadStage(lead.stage, t),
         timestamp: lead.updatedAt ?? lead._creationTime,
       })),
       ...relations.sales.map((sale) => ({
         id: `sale-${sale._id}`,
         kind: "sale" as const,
-        title: `Sale · ${sale.vehicleDesc}`,
-        detail: `${sale.salePrice.toLocaleString()} JOD · ${sale.salespersonName}`,
-        status: sale.status,
+        title: interpolate(t("CustomerActivitySaleTitle"), { vehicle: sale.vehicleDesc }),
+        detail: interpolate(t("CustomerActivitySaleDetail"), {
+          amount: sale.salePrice.toLocaleString(localeCode),
+          currency: t("JOD"),
+          salesperson: sale.salespersonName || t("NoAssigned"),
+        }),
+        status: translateWorkflowStatus(sale.status, t),
         timestamp: sale.saleDate,
       })),
       ...relations.quotes.map((quote) => ({
         id: `quote-${quote._id}`,
         kind: "quote" as const,
-        title: `Quote · ${quote.vehicleDesc}`,
-        detail: `${quote.totalFinancedAmount?.toLocaleString() ?? quote.vehiclePrice?.toLocaleString() ?? "—"} JOD`,
-        status: quote.status,
+        title: interpolate(t("CustomerActivityQuoteTitle"), { vehicle: quote.vehicleDesc }),
+        detail: interpolate(t("CustomerActivityQuoteDetail"), {
+          amount: quote.totalFinancedAmount?.toLocaleString(localeCode) ?? quote.vehiclePrice?.toLocaleString(localeCode) ?? "—",
+          currency: t("JOD"),
+        }),
+        status: translateWorkflowStatus(quote.status, t),
         timestamp: quote.createdAt,
       })),
       ...relations.tasks.map((task) => ({
         id: `task-${task._id}`,
         kind: "task" as const,
-        title: `Task · ${task.title}`,
-        detail: `${task.assignedUserName} · due ${format(task.dueDate, "PP p")}`,
-        status: task.status,
+        title: interpolate(t("CustomerActivityTaskTitle"), { task: task.title }),
+        detail: interpolate(t("CustomerActivityTaskDetail"), {
+          assignee: task.assignedUserName || t("NoAssigned"),
+          date: formatCustomerDateTime(task.dueDate, locale),
+        }),
+        status: translateWorkflowStatus(task.status, t),
         timestamp: task._creationTime,
       })),
     ].sort((first, second) => second.timestamp - first.timestamp);
-  }, [relations]);
+  }, [locale, localeCode, relations, t]);
 
   const whatsAppUrl = customer
-    ? buildWhatsAppDeepLink(customer.whatsapp || customer.phone || "", `Hello ${customer.firstName}`)
+    ? buildWhatsAppDeepLink(
+        customer.whatsapp || customer.phone || "",
+        interpolate(t("CustomerWhatsAppGreeting"), { name: customer.firstName })
+      )
     : null;
 
   return (
@@ -221,11 +250,11 @@ export function CustomerDetailsDialog({
           </DialogHeader>
           {customer && (
             <div className="mt-4 flex flex-wrap gap-2">
-              {customer.phone && <Button asChild variant="outline" size="sm"><a href={`tel:${customer.phone}`}><Phone className="h-4 w-4 me-2" />Call</a></Button>}
-              {whatsAppUrl && <Button asChild variant="outline" size="sm"><a href={whatsAppUrl} target="_blank" rel="noreferrer"><MessageCircle className="h-4 w-4 me-2" />WhatsApp</a></Button>}
-              {customer.email && <Button asChild variant="outline" size="sm"><a href={`mailto:${customer.email}`}><Mail className="h-4 w-4 me-2" />Email</a></Button>}
-              {canCreateLead && <Button size="sm" onClick={() => { onOpenChange(false); router.push(`/${activeOrgId}/leads?customerId=${customer._id}`); }}><Plus className="h-4 w-4 me-2" />New lead</Button>}
-              {canCreateQuote && <Button variant="secondary" size="sm" onClick={() => { onOpenChange(false); router.push(`/${activeOrgId}/sales?customerId=${customer._id}`); }}><ReceiptText className="h-4 w-4 me-2" />New quote</Button>}
+              {customer.phone && <Button asChild variant="outline" size="sm"><a href={`tel:${customer.phone}`}><Phone className="h-4 w-4 me-2" />{t("Call")}</a></Button>}
+              {whatsAppUrl && <Button asChild variant="outline" size="sm"><a href={whatsAppUrl} target="_blank" rel="noreferrer"><MessageCircle className="h-4 w-4 me-2" />{t("WhatsApp")}</a></Button>}
+              {customer.email && <Button asChild variant="outline" size="sm"><a href={`mailto:${customer.email}`}><Mail className="h-4 w-4 me-2" />{t("Email")}</a></Button>}
+              {canCreateLead && <Button size="sm" onClick={() => { onOpenChange(false); router.push(`/${activeOrgId}/leads?customerId=${customer._id}`); }}><Plus className="h-4 w-4 me-2" />{t("NewLead")}</Button>}
+              {canCreateQuote && <Button variant="secondary" size="sm" onClick={() => { onOpenChange(false); router.push(`/${activeOrgId}/sales?customerId=${customer._id}`); }}><ReceiptText className="h-4 w-4 me-2" />{t("NewQuote")}</Button>}
             </div>
           )}
         </div>
@@ -242,14 +271,14 @@ export function CustomerDetailsDialog({
                   value="activity"
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
-                  Activity
+                  {t("CustomerActivity")}
                   {activityItems.length > 0 && <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{activityItems.length}</Badge>}
                 </TabsTrigger>
                 <TabsTrigger
                   value="deals"
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
-                  Deals
+                  {t("CustomerDeals")}
                   {relations && (relations.leads.length > 0 || relations.sales.length > 0 || relations.quotes.length > 0) && (
                     <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.leads.length + relations.sales.length + relations.quotes.length}</Badge>
                   )}
@@ -266,13 +295,13 @@ export function CustomerDetailsDialog({
             <div className="flex-1 overflow-y-auto min-h-0 p-6">
               <TabsContent value="activity" className="m-0 focus-visible:outline-none space-y-5">
                 <div className="grid grid-cols-1 gap-3 rounded-lg border bg-muted/20 p-4 sm:grid-cols-2 lg:grid-cols-4">
-                  <div><p className="text-xs text-muted-foreground">Phone</p><p className="text-sm font-medium">{customer.phone || "—"}</p></div>
-                  <div><p className="text-xs text-muted-foreground">Email</p><p className="text-sm font-medium truncate">{customer.email || "—"}</p></div>
-                  <div><p className="text-xs text-muted-foreground">Source</p><p className="text-sm font-medium">{customer.source || "Direct"}</p></div>
-                  <div><p className="text-xs text-muted-foreground">Customer since</p><p className="text-sm font-medium">{format(customer.createdAt ?? customer._creationTime, "PP")}</p></div>
+                  <div><p className="text-xs text-muted-foreground">{t("Phone")}</p><p className="text-sm font-medium">{customer.phone || "—"}</p></div>
+                  <div><p className="text-xs text-muted-foreground">{t("Email")}</p><p className="text-sm font-medium truncate">{customer.email || "—"}</p></div>
+                  <div><p className="text-xs text-muted-foreground">{t("Source")}</p><p className="text-sm font-medium">{customer.source || t("DirectSource")}</p></div>
+                  <div><p className="text-xs text-muted-foreground">{t("CustomerSince")}</p><p className="text-sm font-medium">{formatCustomerDate(customer.createdAt ?? customer._creationTime, locale)}</p></div>
                 </div>
 
-                <CustomerActivityTimeline items={activityItems} isLoading={!relations} loadingLabel={t("Loading")} />
+                <CustomerActivityTimeline items={activityItems} isLoading={!relations} />
               </TabsContent>
 
               <TabsContent value="deals" className="m-0 rounded-lg border p-4 focus-visible:outline-none space-y-6">
@@ -288,11 +317,11 @@ export function CustomerDetailsDialog({
                         <div key={sale._id} className="bg-muted/30 p-3 rounded-lg border text-sm">
                           <div className="flex justify-between items-start mb-2">
                             <span className="font-medium">{sale.vehicleDesc}</span>
-                            <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded">{sale.status}</span>
+                            <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded">{translateWorkflowStatus(sale.status, t)}</span>
                           </div>
                           <div className="grid grid-cols-2 gap-2 text-muted-foreground text-xs">
-                            <p>{t("SaleDate" as any)}: {format(sale.saleDate, "PP")}</p>
-                            <p>{t("Price" as any)}: <span className="font-medium text-foreground">{sale.salePrice.toLocaleString()} JOD</span></p>
+                            <p>{t("SaleDate" as any)}: {formatCustomerDate(sale.saleDate, locale)}</p>
+                            <p>{t("Price" as any)}: <span className="font-medium text-foreground">{sale.salePrice.toLocaleString(localeCode)} {t("JOD")}</span></p>
                             <p>{t("Salesperson" as any)}: {sale.salespersonName}</p>
                           </div>
                         </div>
@@ -344,25 +373,25 @@ export function CustomerDetailsDialog({
                             quote.status === "EXPIRED" ? "bg-red-100 text-red-800" :
                               "bg-blue-100 text-blue-800"
                             }`}>
-                            {quote.status}
+                            {translateWorkflowStatus(quote.status, t)}
                           </span>
                         </div>
 
                         <div className={`grid grid-cols-2 ${quote.companyId ? "md:grid-cols-4" : ""} gap-4 bg-muted/50 p-3 rounded-md`}>
                           <div>
                             <p className="text-xs text-muted-foreground">{t("VehiclePrice" as any)}</p>
-                            <p className="font-medium">{quote.vehiclePrice?.toLocaleString()} JOD</p>
+                            <p className="font-medium">{quote.vehiclePrice?.toLocaleString(localeCode)} {t("JOD")}</p>
                           </div>
                           {quote.companyId && (
                             <div>
                               <p className="text-xs text-muted-foreground">{t("DownPayment" as any)}</p>
-                              <p className="font-medium">{quote.downPayment?.toLocaleString()} JOD</p>
+                              <p className="font-medium">{quote.downPayment?.toLocaleString(localeCode)} {t("JOD")}</p>
                             </div>
                           )}
                           {quote.companyId && (
                             <div>
                               <p className="text-xs text-muted-foreground">{t("Term" as any)}</p>
-                              <p className="font-medium">{quote.termMonths} Months</p>
+                              <p className="font-medium">{quote.termMonths} {t("Months")}</p>
                             </div>
                           )}
                           {quote.companyId && (
@@ -376,18 +405,18 @@ export function CustomerDetailsDialog({
                         <div className={`grid grid-cols-2 ${quote.companyId ? "md:grid-cols-3" : ""} gap-4 border-t pt-3`}>
                           <div>
                             <p className="text-xs text-muted-foreground">{t("TotalAmountDueFinanced" as any)}</p>
-                            <p className="font-medium">{quote.totalFinancedAmount?.toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</p>
+                            <p className="font-medium">{quote.totalFinancedAmount?.toLocaleString(localeCode, { minimumFractionDigits: 2 })} {t("JOD")}</p>
                           </div>
                           {quote.companyId && (
                             <div>
                               <p className="text-xs text-muted-foreground">{t("TotalProfit" as any)}</p>
-                              <p className="font-medium text-orange-600">{quote.totalProfit?.toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</p>
+                              <p className="font-medium text-orange-600">{quote.totalProfit?.toLocaleString(localeCode, { minimumFractionDigits: 2 })} {t("JOD")}</p>
                             </div>
                           )}
                           {quote.companyId && (
                             <div className="bg-primary/10 -m-2 p-2 rounded-md text-center">
                               <p className="text-xs text-primary font-medium">{t("MonthlyInstallment" as any)}</p>
-                              <p className="text-lg font-bold text-primary">{quote.monthlyInstallment?.toLocaleString(undefined, { minimumFractionDigits: 2 })} <span className="text-xs font-normal">JOD</span></p>
+                              <p className="text-lg font-bold text-primary">{quote.monthlyInstallment?.toLocaleString(localeCode, { minimumFractionDigits: 2 })} <span className="text-xs font-normal">{t("JOD")}</span></p>
                             </div>
                           )}
                         </div>
@@ -406,7 +435,7 @@ export function CustomerDetailsDialog({
 
                         <div className="flex justify-between items-center text-xs text-muted-foreground pt-2">
                           <div className="flex flex-col gap-0.5">
-                            <p>{t("GeneratedOn" as any)}: {format(quote.createdAt, "PP p")}</p>
+                            <p>{t("GeneratedOn" as any)}: {formatCustomerDateTime(quote.createdAt, locale)}</p>
                             {quote.createdByUserName && (
                               <p>{t("GeneratedBy" as any) || "Generated By"}: {quote.createdByUserName}</p>
                             )}
@@ -469,7 +498,7 @@ export function CustomerDetailsDialog({
               totalFinancedAmount: printingQuote.totalFinancedAmount,
               recipientName: printingQuote.recipientName || `${customer.firstName} ${customer.lastName}`,
             }}
-            dateStr={format(printingQuote.createdAt, "PP")}
+            dateStr={formatCustomerDate(printingQuote.createdAt, locale)}
             orgBranding={orgBranding}
           />
         )}
