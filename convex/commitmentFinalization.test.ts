@@ -923,7 +923,7 @@ describe("P2-G ground truth the M3 spec is built on", () => {
   // empirically: `IN_FLIGHT_STATUSES` (applications.ts:2050) answers first.
   // ⚠️ DRAFT IS DELIBERATELY NOT EXERCISED, AND THE TITLE IS NARROWED TO SAY SO.
   //
-  // `createFromQuote` writes PENDING_DOCS (applications.ts:2182), so DRAFT is
+  // `createFromQuote` writes PENDING_DOCS (applications.ts:2181), so DRAFT is
   // unreachable through every product door. Pinning it would need a fabricated
   // row, which is the fixture dishonesty this file refuses everywhere else.
   //
@@ -1592,7 +1592,7 @@ describe("P2-F M3 finalization barrier — CONSUME", () => {
       new Set(stamped).size,
       "and no sale id stamps two roots — this is what lets Phase 3 look up a cancelled sale's root " +
         "by index instead of reconstructing it. Requires a by_consumed_sale index ON commitmentRoots; " +
-        "today that index exists only on vehicleCommitmentClaims (schema.ts:3002)."
+        "today that index exists only on vehicleCommitmentClaims (schema.ts:3001)."
     ).toBe(3);
   });
 
