@@ -2862,7 +2862,21 @@ export default defineSchema({
     .index("by_reservation", ["reservationId"])
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_customer", ["orgId", "customerId"])
-    .index("by_vehicle_hold", ["vehicleId", "holdActive"]),
+    .index("by_vehicle_hold", ["vehicleId", "holdActive"])
+    // SCRUM-208 — THE EXACT DIRECT-HOLD RANGE.
+    //
+    // Leads with the representation discriminator so that every row in the
+    // range `(org, vehicle, usesVehicleHoldRows: false, holdActive: true)` is
+    // BY CONSTRUCTION a live direct hold. Sliced deposits are excluded by the
+    // range itself rather than by a post-filter, which is the whole point:
+    // `by_vehicle_hold` returns them and the legacy reader has to notice and
+    // discard them AFTER a capped read, so 50 stale rows can hide a live one.
+    //
+    // Legacy rows (`usesVehicleHoldRows: undefined`) fall OUTSIDE this range,
+    // which is correct in both directions — before activation this path is not
+    // consulted for authority, and after it a legacy row is corruption rather
+    // than a row to be quietly included.
+    .index("by_org_vehicle_direct_hold", ["orgId", "vehicleId", "usesVehicleHoldRows", "holdActive"]),
 
   // Tracks every vehicle a multi-vehicle deposit holds, not just the
   // deposit's primary `vehicleId`. Only written for deposits on quotes with
@@ -2990,7 +3004,14 @@ export default defineSchema({
   })
     .index("by_deposit", ["depositId"])
     .index("by_vehicle_active", ["vehicleId", "active"])
-    .index("by_deposit_vehicle", ["depositId", "vehicleId"]),
+    .index("by_deposit_vehicle", ["depositId", "vehicleId"])
+    // SCRUM-208 — THE EXACT SLICE-HOLD RANGE, tenant-scoped.
+    //
+    // `by_vehicle_active` is bare, so every caller has to remember to filter by
+    // org after reading. Leading with orgId makes the tenant boundary part of
+    // the access path, and every row in `(org, vehicle, active: true)` is by
+    // construction a live slice.
+    .index("by_org_vehicle_active", ["orgId", "vehicleId", "active"]),
 
   /**
    * SCRUM-195 — WHO HOLDS A PHYSICAL CAR, AND ON THE STRENGTH OF WHAT.
