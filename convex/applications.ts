@@ -2285,6 +2285,30 @@ async function assertQuoteVehiclesAcquirable(
     if (!lineVehicle || lineVehicle.orgId !== orgId || lineVehicle.isDeleted) {
       throw new ConvexError("Quote vehicle not found in this organization.");
     }
+    // ⚠️ THE CAR'S OWN LIFECYCLE, NOT JUST ITS EXISTENCE. Both reviewer seats
+    // found this, from opposite directions: a rejected deal resubmitted after
+    // the car was sold opened a fresh OPEN root on a SOLD vehicle, because the
+    // commitment authority reasons only about ROOTS and never reads
+    // `vehicles.status`.
+    //
+    // The damage is bounded — `prepareSaleCompletion` refuses SOLD and ARCHIVED
+    // before anything else, so the stray root can never become a second sale —
+    // but it blocks `softDelete` and any legitimate re-acquisition until
+    // somebody rejects the stale application again. An acquisition that cannot
+    // possibly lead anywhere should refuse where it is made.
+    //
+    // Checked HERE rather than in the reacquisition helper on purpose. This
+    // function is the one place both acquisition doors ask the question, so
+    // `createFromQuote` gets the same rule and the two cannot drift. Fixing
+    // only the door the finding arrived through would have closed the instance
+    // and kept the class — the mistake that produced the duplicate
+    // finance-status list two rounds ago.
+    if (lineVehicle.status === "SOLD") {
+      throw new ConvexError("This vehicle has already been sold and cannot be added to a deal.");
+    }
+    if (lineVehicle.status === "ARCHIVED") {
+      throw new ConvexError("This vehicle is archived. Restore it before adding it to a deal.");
+    }
   }
 }
 

@@ -1875,6 +1875,122 @@ test("F.43 reacquisition needs the same authority as the transition it mirrors",
   expect(await rootsOn(seed, v), "and nothing was acquired").toEqual(rootsBefore);
 });
 
+test("F.44 a car that has been SOLD is not acquirable by a resubmission", async () => {
+  // BOTH SEATS FOUND THIS, AND DISAGREED ABOUT WHAT IT COSTS. It is the second
+  // instance of one class: the reacquisition door asks whether a vehicle exists,
+  // is this dealership's and is not deleted — and nothing anywhere asks whether
+  // the vehicle's own lifecycle permits a new commitment at all. The commitment
+  // authority never reads `vehicles.status`; it reasons only about roots.
+  //
+  //   reject                       -> root RELEASED, car genuinely free
+  //   somebody buys the car        -> vehicle.status SOLD, that sale's own root
+  //                                   CONSUMED (or none, for a walk-in)
+  //   resubmit the rejected deal   -> a fresh OPEN root on a SOLD car
+  //
+  // ⚠️ WHAT IT DOES **NOT** COST, because that matters for how it is ranked:
+  // the stray root can never become a second sale. `prepareSaleCompletion`
+  // refuses SOLD and ARCHIVED before anything else, and every completion door
+  // reaches it. The residue is an orphaned OPEN root that blocks `softDelete`
+  // and any legitimate re-acquisition until somebody rejects the stale
+  // application again — recoverable through a normal door, so a nuisance
+  // rather than a loss. It is fixed here anyway: an acquisition that cannot
+  // possibly lead anywhere should refuse at the point of acquisition, not
+  // survive until something downstream happens to catch it.
+  const seed = await seedDealer("f44");
+  const v = await vehicle(seed);
+  const quoteId = await quoteFor(seed, seed.customerA, [v]);
+  const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
+    orgId: seed.orgId,
+    quoteId,
+  });
+  await seed.asUser.mutation(api.applications.updateStatus, {
+    orgId: seed.orgId,
+    applicationId,
+    status: "REJECTED" as const,
+  });
+
+  // A different customer buys the car, through a real door.
+  const buyerQuote = await quoteFor(seed, seed.customerB, [v]);
+  await completeQuoteOne(seed, buyerQuote);
+  expect(
+    (await seed.t.run((ctx) => ctx.db.get(v)))?.status,
+    "precondition: the car really is sold"
+  ).toBe("SOLD");
+
+  const rootsBefore = await rootsOn(seed, v);
+
+  await expect(
+    seed.asUser.mutation(api.applications.updateStatus, {
+      orgId: seed.orgId,
+      applicationId,
+      status: "PENDING_DOCS" as const,
+    }),
+    "a sold car cannot be committed to a resubmitted deal"
+  ).rejects.toThrow();
+
+  expect(
+    (await seed.t.run((ctx) => ctx.db.get(applicationId)))?.status,
+    "the application stays REJECTED"
+  ).toBe("REJECTED");
+  expect(await rootsOn(seed, v), "and no root was opened on the sold car").toEqual(rootsBefore);
+});
+
+test("F.45 reacquisition needs REVIEW authority \u2014 not more, not less", async () => {
+  // PINS THE TIER, which F.43 does not. F.43 proves only that a role holding
+  // VIEW alone is refused; a gate wrongly demanding APPROVE_FINANCE_APPLICATION
+  // — or almost any other extra permission — would satisfy it just as well, and
+  // F.40's admin fixture holds everything so it cannot tell the difference
+  // either.
+  //
+  // The intended tier is the one the MIRRORED transition uses: rejecting an
+  // application needs REVIEW_FINANCE_APPLICATION, so un-rejecting it needs the
+  // same. Anyone who can put an application into REJECTED can take it out
+  // again, and nobody else can.
+  const seed = await seedDealer("f45");
+  const v = await vehicle(seed);
+  const quoteId = await quoteFor(seed, seed.customerA, [v]);
+  const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
+    orgId: seed.orgId,
+    quoteId,
+  });
+  await seed.asUser.mutation(api.applications.updateStatus, {
+    orgId: seed.orgId,
+    applicationId,
+    status: "REJECTED" as const,
+  });
+
+  // Exactly the two permissions the transition should need, and nothing else.
+  const reviewerRole = await seed.t.run((ctx) =>
+    ctx.db.insert("roles", {
+      orgId: seed.orgId,
+      name: "Reviewer",
+      permissions: ["view:finance_applications", "review:finance_application"],
+    })
+  );
+  const reviewerId = await seed.t.run((ctx) =>
+    ctx.db.insert("users", { clerkId: "rev_f45", email: "rev-f45@test.com", name: "Reviewer" })
+  );
+  await seed.t.run((ctx) =>
+    ctx.db.insert("memberships", { orgId: seed.orgId, userId: reviewerId, roleId: reviewerRole })
+  );
+  const asReviewer = seed.t.withIdentity({ subject: "rev_f45", clerkId: "rev_f45" });
+
+  await asReviewer.mutation(api.applications.updateStatus, {
+    orgId: seed.orgId,
+    applicationId,
+    status: "PENDING_DOCS" as const,
+  });
+
+  expect(
+    (await seed.t.run((ctx) => ctx.db.get(applicationId)))?.status,
+    "REVIEW authority is SUFFICIENT \u2014 the gate does not demand more"
+  ).toBe("PENDING_DOCS");
+  expect(
+    (await rootsOn(seed, v)).filter((r) => r.status === "OPEN").length,
+    "and the car is held again"
+  ).toBe(1);
+});
+
 describe("P2-F M3 finalization barrier — RELEASE", () => {
   /**
    * The shared shape of D1-D7 when the released basis is the ONLY one holding
