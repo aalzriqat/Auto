@@ -4,6 +4,7 @@ import {
   assertVehicleNotCommitted,
   COMMITMENT_MESSAGES,
   releaseRootIfNoLiveBasis,
+  resolveOwnership,
 } from "./commitments";
 import { v, ConvexError } from "convex/values";
 import { MutationCtx, QueryCtx, query } from "./_generated/server";
@@ -1876,6 +1877,35 @@ export const expireReservations = internalMutation({
 
     for (const reservation of reservations) {
       if (reservation.expiresAt === undefined || reservation.expiresAt > now) continue;
+
+      // ⚠️ THIS IS THE ONLY CROSS-TENANT LOOP IN THE SYSTEM, AND ONE MUTATION IS
+      // ONE TRANSACTION. The query above ranges on `by_status_expiresAt` with no
+      // orgId, so a single batch spans every dealership on the deployment. A
+      // throw on the last row therefore un-does every earlier row — belonging to
+      // other people's dealerships — and because the offending reservation never
+      // reaches EXPIRED, the next sweep selects it again. One corrupt car
+      // starves reservation expiry for everyone, permanently.
+      //
+      // So ownership is read HERE, before this row writes anything, and the
+      // AMBIGUOUS case is decided rather than thrown.
+      //
+      // ⚠️ WHAT IS WITHHELD IS ONLY THE ROOT DECISION. The reservation's clock
+      // expiry is an objective fact about time, not about who owns the car, so
+      // it is still materialized below exactly as it would be for any other
+      // row — deposit hold lifted, reservation EXPIRED, projection synced.
+      // Leaving the row ACTIVE "until someone fixes the roots" is what made the
+      // failure permanent rather than transient.
+      //
+      // ⚠️ AND IT IS A TYPED DECISION, NOT A RESCUE. It branches on the
+      // canonical authority's own `Ownership.kind`, never on a try/catch around
+      // the finalizer and never on the wording of an error message. A blanket
+      // catch here would swallow the real bugs this sweep should surface, and a
+      // string match would fail silently the first time someone improves the
+      // copy. Two OPEN roots is one car promised to two deals; refusing to
+      // choose stays correct — it just must not take other tenants down with it.
+      const ownership = await resolveOwnership(ctx, reservation.orgId, reservation.vehicleId);
+      const rootDecisionWithheld = ownership.kind === "AMBIGUOUS";
+
       if (reservation.depositId) {
         const deposit = await ctx.db.get(reservation.depositId);
         if (deposit && deposit.orgId === reservation.orgId && deposit.status === "HELD" && deposit.holdActive) {
@@ -1908,6 +1938,22 @@ export const expireReservations = internalMutation({
         expiredAt: now,
       });
       await syncVehicleHoldStatus(ctx, reservation.vehicleId);
+
+      if (rootDecisionWithheld) {
+        // Loudly, not silently. The corruption is left byte-identical for a
+        // human to repair, and this line is the only record that the sweep
+        // knowingly declined to act on it.
+        console.error(
+          "SCRUM-195 expireReservations: ambiguous commitment ownership — reservation expired, root decision withheld",
+          {
+            orgId: reservation.orgId,
+            vehicleId: reservation.vehicleId,
+            reservationId: reservation._id,
+            openRootCount: ownership.kind === "AMBIGUOUS" ? ownership.roots.length : 0,
+          }
+        );
+        continue;
+      }
 
       // SCRUM-195 M3. WITHOUT THIS THE ROOT IS LOCKED FOREVER. Once a
       // reservation is EXPIRED, `releaseReservation` refuses it (it requires

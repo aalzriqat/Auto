@@ -2180,6 +2180,188 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
     ).toBe("EXPIRED");
   });
 
+  test("F.46 D8 one AMBIGUOUS car must not roll back the whole CROSS-TENANT sweep", async () => {
+    // ⚠️ THE SWEEP IS THE ONLY DOOR IN THIS SYSTEM THAT IS NOT SINGLE-TENANT.
+    // `expireReservations` selects on `by_status_expiresAt` with NO orgId in the
+    // index range, so one batch spans every dealership on the deployment, and
+    // one Convex mutation is one transaction. M3 put a call that THROWS inside
+    // that loop: `releaseRootIfNoLiveBasis` -> `openRootForFinalization`, which
+    // refuses AMBIGUOUS ownership by design.
+    //
+    // Three individually-reasonable properties compose into a cross-tenant
+    // outage:
+    //
+    //   one transaction        -> a late throw rolls back rows already done
+    //   no tenant in the query -> the victim is a DIFFERENT dealership
+    //   row stays ACTIVE       -> the next sweep re-selects it, forever
+    //
+    // So a single corrupt car anywhere on the deployment permanently starves
+    // reservation expiry for everyone, taking the money-adjacent expired-deposit
+    // manager notification down with it.
+    //
+    // ⚠️ REFUSING IS STILL RIGHT — the fix is not to make the authority lenient.
+    // A car with two OPEN roots is one car promised to two deals, and choosing
+    // between them would launder the corruption into a terminal state. What is
+    // wrong is coupling that refusal transactionally to unrelated tenants. The
+    // reservation's clock expiry is an OBJECTIVE SOURCE FACT that does not
+    // depend on who owns the car, so it must still be materialized; only the
+    // ROOT decision is withheld, and withheld loudly.
+    //
+    // ⚠️ AND THE SKIP IS TYPED, NOT DEFENSIVE. It branches on
+    // `Ownership.kind === "AMBIGUOUS"` from the canonical authority — not a
+    // try/catch around the finalizer, and not a match on the human error string.
+    // A blanket catch here would swallow the genuine bugs this sweep should
+    // surface, and a string match would silently stop working the day someone
+    // improves the wording.
+    //
+    // F.38 already proves the AMBIGUOUS refusal fires — but only through
+    // `deposits.release`, a SINGLE-ENTITY door. A guard proven in a single-scope
+    // caller says nothing about the same guard inside a batch caller, which is
+    // exactly how this reached review.
+    const seed = await seedDealer("f46");
+
+    // ── ORG A: an ordinary dealership with an ordinary expired reservation.
+    const vA = await vehicle(seed);
+    const resA = await reserve(seed, vA, seed.customerA, { depositAmount: 1_000 });
+    await seed.t.run((ctx) => ctx.db.patch(resA, { expiresAt: Date.now() - 60_000 }));
+    expect((await rootsOn(seed, vA))[0].status, "precondition: org A holds its car").toBe("OPEN");
+
+    // ── ORG B: a SECOND TENANT sharing the batch, whose car is corrupt.
+    const now = Date.now();
+    const orgB = await seed.t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Dealer f46 B", createdAt: now })
+    );
+    const userB = await seed.t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "user_f46b", email: "f46b@test.com", name: "B User" })
+    );
+    const customerB = await seed.t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId: orgB,
+        firstName: "Customer",
+        lastName: "B-Org",
+        phone: "+962792214699",
+        createdAt: now,
+      })
+    );
+    const vB = await seed.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: orgB,
+        vin: "3VWFA7AT999111ZZ",
+        make: "Toyota",
+        model: "RAV4",
+        year: 2023,
+        color: "White",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        mileage: 90,
+        purchasePrice: 20_000,
+        sellingPrice: 30_000,
+        status: "RESERVED" as const,
+        createdAt: now,
+      })
+    );
+    // TWO OPEN roots — corrupt by construction, exactly as F.38 builds it. No
+    // writer produces this, which is the whole reason the AMBIGUOUS branch exists.
+    for (let i = 0; i < 2; i += 1) {
+      await seed.t.run((ctx) =>
+        ctx.db.insert("commitmentRoots", {
+          orgId: orgB,
+          vehicleId: vB,
+          customerId: customerB,
+          status: "OPEN" as const,
+          openedAt: now - 9_000,
+          openedBy: userB,
+        })
+      );
+    }
+    const depositB = await seed.t.run((ctx) =>
+      ctx.db.insert("deposits", {
+        orgId: orgB,
+        vehicleId: vB,
+        customerId: customerB,
+        amount: 1_000,
+        status: "HELD" as const,
+        holdActive: true,
+        createdBy: userB,
+        createdAt: now,
+      })
+    );
+    const resB = await seed.t.run((ctx) =>
+      ctx.db.insert("vehicleReservations", {
+        orgId: orgB,
+        vehicleId: vB,
+        customerId: customerB,
+        status: "ACTIVE" as const,
+        reservedBy: userB,
+        reservedAt: now - 10_000,
+        expiresAt: now - 60_000,
+        depositId: depositB,
+      })
+    );
+
+    const rootsBBefore = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("commitmentRoots").collect()).filter(
+        (r) => String(r.vehicleId) === String(vB)
+      )
+    );
+    expect(rootsBBefore, "precondition: org B's car really is ambiguous").toHaveLength(2);
+
+    // ── THE SWEEP. One batch, both tenants.
+    await expect(
+      seed.t.mutation(internal.vehicles.expireReservations, {}),
+      "one corrupt car must not abort the sweep"
+    ).resolves.toBeDefined();
+
+    // ── ORG A is not collateral damage.
+    expect(
+      (await seed.t.run((ctx) => ctx.db.get(resA)))?.status,
+      "org A's reservation still expires"
+    ).toBe("EXPIRED");
+    expectTerminalRoot((await rootsOn(seed, vA))[0], {
+      status: "RELEASED",
+      door: "expireReservations — org A's root is eligible and must still terminalize, " +
+        "even though another tenant in the same batch is corrupt",
+    });
+
+    // ── ORG B's SOURCE facts are materialized: the clock does not care who owns
+    // the car, and leaving the row ACTIVE is what made this permanent.
+    expect(
+      (await seed.t.run((ctx) => ctx.db.get(resB)))?.status,
+      "org B's reservation expires on its own clock — the source fact is not owned by the root"
+    ).toBe("EXPIRED");
+    expect(
+      (await seed.t.run((ctx) => ctx.db.get(depositB)))?.holdActive,
+      "and its deposit vehicle-hold is lifted, as it would be for any other expiry"
+    ).toBe(false);
+
+    // ── BUT NOT ONE ROOT MOVED. Byte-identical, so the corruption is preserved
+    // intact for a human to repair rather than half-resolved by a sweep.
+    const rootsBAfter = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("commitmentRoots").collect()).filter(
+        (r) => String(r.vehicleId) === String(vB)
+      )
+    );
+    expect(
+      rootsBAfter,
+      "the ambiguous roots are untouched — no choosing, no releasing, no consuming"
+    ).toEqual(rootsBBefore);
+
+    // ── AND THE POISON ROW IS GONE FROM THE ELIGIBLE SET. Without this the sweep
+    // still converges to permanent starvation, one run later.
+    await expect(
+      seed.t.mutation(internal.vehicles.expireReservations, {}),
+      "a second sweep cannot re-select the now-EXPIRED corrupt reservation"
+    ).resolves.toBeDefined();
+    expect(
+      await seed.t.run(async (ctx) =>
+        (await ctx.db.query("commitmentRoots").collect()).filter(
+          (r) => String(r.vehicleId) === String(vB)
+        )
+      ),
+      "and it still moved no root on the second pass"
+    ).toEqual(rootsBBefore);
+  });
+
   test("F.29 D9 the INLINE expiry sweep inside createReservation does the same", async () => {
     const seed = await seedDealer("f29");
     const v = await vehicle(seed);
