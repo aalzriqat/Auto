@@ -61,6 +61,25 @@ export default defineSchema({
     suspendedReason: v.optional(v.string()),
     deletionRequestedAt: v.optional(v.number()),
     deletionRequestId: v.optional(v.id("organizationDeletionRequests")),
+    /**
+     * SCRUM-208 — WHICH COMMITMENT AUTHORITY THIS DEALERSHIP RUNS ON.
+     *
+     * Canonical-state admission is ONE per-org rule, not per-field `undefined`
+     * semantics reinvented on every column. Before activation the canonical
+     * access paths are simply not consulted for authority; after it, a missing
+     * canonical field is CORRUPTION rather than a default.
+     *
+     *   undefined | 0  → legacy
+     *   1              → canonical V1
+     *   anything else  → REFUSE
+     *
+     * ⚠️ AN UNSUPPORTED VERSION IS REFUSED, NEVER CLAMPED. "Unknown, so treat
+     * it as the newest I know" is how a half-deployed backend silently grants
+     * itself authority it was never activated for. Activation is per org, so a
+     * cross-tenant sweep legitimately meets both legacy and canonical rows in
+     * one batch — that is normal, and never a reason to fail the batch.
+     */
+    commitmentAuthorityVersion: v.optional(v.number()),
   }),
 
   organizationDeletionRequests: defineTable({
@@ -1111,12 +1130,39 @@ export default defineSchema({
     releasedAt: v.optional(v.number()),
     releasedBy: v.optional(v.id("users")),
     expiredAt: v.optional(v.number()),
+    /**
+     * SCRUM-208 — the CURRENT episode this reservation holds its car through.
+     *
+     * A reservation holds exactly one vehicle, so a scalar is sufficient and a
+     * pointer set would be a lie about the cardinality. Maintained across
+     * restoration rather than rediscovered: `by_reservation` is a bare history
+     * locator that answers "every episode this reservation ever had", which is
+     * not the same question as "which episode is live now".
+     */
+    currentCommitmentClaimId: v.optional(v.id("vehicleCommitmentClaims")),
   })
     .index("by_org_vehicle", ["orgId", "vehicleId"])
     .index("by_org_vehicle_status", ["orgId", "vehicleId", "status"])
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_customer", ["orgId", "customerId"])
-    .index("by_status_expiresAt", ["status", "expiresAt"]),
+    .index("by_status_expiresAt", ["status", "expiresAt"])
+    // SCRUM-208 — EXPIRY-AWARE LIVENESS, EXACT IN THE INDEX.
+    //
+    // Reservation liveness needs TWO exact ranges, because `expiresAt` is
+    // optional and an absent value is a legitimate "never expires":
+    //
+    //   ACTIVE with expiresAt absent            → live
+    //   ACTIVE with expiresAt > decisionNow     → live
+    //
+    // An absent `expiresAt` can never satisfy a `>` comparison, so folding
+    // both into one range would silently drop every non-expiring reservation.
+    //
+    // ⚠️ THE RANGE MUST EXPRESS LIVE BEFORE ANYTHING IS TAKEN. Loading ACTIVE
+    // rows and testing expiry afterwards is prohibited: a page filled with
+    // expired-but-unswept rows hides the live one behind them, and the caller
+    // reads "nothing holds this car" from a bounded page rather than from the
+    // data.
+    .index("by_org_vehicle_status_expiresAt", ["orgId", "vehicleId", "status", "expiresAt"]),
 
   vehicleStatusRequests: defineTable({
     orgId: v.id("organizations"),
@@ -2066,6 +2112,32 @@ export default defineSchema({
       vehicleId: v.id("vehicles"),
       unitPrice: v.number(),
     }))),
+    /**
+     * SCRUM-208 — the CURRENT episode PER VEHICLE, not one scalar.
+     *
+     * ⚠️ A SCALAR HERE WOULD BE WRONG BY CONSTRUCTION. The acquisition path
+     * opens one claim PER VEHICLE in the normalized item set, so a single
+     * `currentCommitmentClaimId` could only ever name one of them and every
+     * other car on the application would fall back to a history search.
+     *
+     * ⚠️ THE CARDINALITY AUTHORITY IS THE NORMALIZED SET, NOT THIS FIELD AND
+     * NOT `vehicleItems`. `vehicleItems` is ABSENT on single-vehicle
+     * applications — the commonest shape — so code reading it directly sees
+     * zero vehicles for a perfectly ordinary application. The authority is
+     * `vehicleItems ?? [{ vehicleId }]`, exactly as the acquisition path
+     * normalizes it.
+     *
+     * Vehicle ids within the set are UNIQUE: a duplicate REFUSES before any
+     * claim, root, pointer or status write, and is never silently
+     * deduplicated — a repeated car is a caller bug, and collapsing it would
+     * post one vehicle's authority under another's intent. The persisted order
+     * is canonical (ascending by vehicle id) so two equal sets never compare
+     * unequal on order alone.
+     */
+    currentCommitmentClaims: v.optional(v.array(v.object({
+      vehicleId: v.id("vehicles"),
+      claimId: v.id("vehicleCommitmentClaims"),
+    }))),
     companyId: v.optional(v.id("financeCompanies")),
     salespersonId: v.id("users"),
 
@@ -2742,6 +2814,44 @@ export default defineSchema({
     ),
     resolutionReason: v.optional(v.string()),
     resolutionSaleId: v.optional(v.id("sales")),
+
+    /**
+     * SCRUM-208 — WHICH REPRESENTATION THIS DEPOSIT USES, FOR LIFE.
+     *
+     * false → DIRECT. The deposit holds its own vehicle through
+     *         `holdActive`, and NO `depositVehicleHolds` row may ever exist
+     *         for it. Its episode pointer is the scalar below.
+     * true  → SLICED. `depositVehicleHolds` rows are the whole truth about
+     *         which cars it holds, and the scalar below stays absent.
+     *
+     * ⚠️ A REPRESENTATION CLASS, NOT "does it currently have hold rows".
+     * Deriving it from row existence would flip the deposit's representation
+     * the moment its last slice closed, which is precisely when provenance is
+     * most needed. Write-once at creation.
+     *
+     * ⚠️ `undefined` IS NOT `false`. It means the deposit predates canonical
+     * activation and must FAIL CLOSED, not be read as DIRECT. This is the
+     * single most expensive mistake available on this field: `undefined ===
+     * false` evaluates to false in JavaScript and to "no matching row" in an
+     * index equality component, so a default would answer "not held" for the
+     * entire pre-existing dataset and free cars people have paid to hold.
+     */
+    usesVehicleHoldRows: v.optional(v.boolean()),
+    /**
+     * SCRUM-208 — the CURRENT episode for a DIRECT deposit.
+     *
+     * Named for what it is rather than a generic `sourceCommitmentClaimId`:
+     * this is meaningful ONLY on the direct representation, and a sliced
+     * deposit answers the same question per vehicle through its hold rows.
+     *
+     * ⚠️ A DEPOSIT OPERATION MAY NOT TERMINALIZE A RESERVATION EPISODE merely
+     * because that episode also references this deposit. A reservation taken
+     * with a deposit carries the deposit id for context; the DEFINING evidence
+     * is still the reservation. This pointer names the episode a deposit
+     * operation may act on, and nothing else.
+     */
+    singleVehicleCommitmentClaimId: v.optional(v.id("vehicleCommitmentClaims")),
+
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
     deletedBy: v.optional(v.string()),
@@ -2934,9 +3044,52 @@ export default defineSchema({
      * a deal becomes a sale once.
      */
     consumedBySaleId: v.optional(v.id("sales")),
+
+    /**
+     * SCRUM-208 — LINEAGE IDENTITY, so a succession chain has ONE stable name.
+     *
+     * A root is terminal forever once CONSUMED or RELEASED. A legitimate
+     * restoration therefore opens a SUCCESSOR root rather than reviving the
+     * dead one — and without a stable lineage id, "the current root for this
+     * deal" could only be answered by walking `restoredFromRootId` backwards,
+     * a read that grows with the deal's history.
+     *
+     * ⚠️ ONE CANONICAL ORIGIN REPRESENTATION. Every canonical root COMMITS
+     * with `lineageRootId` populated: the origin points at ITSELF and carries
+     * `lineageGeneration: 0`. Insert-then-self-patch inside the same mutation
+     * is fine — Convex commits the mutation atomically — but no claim may
+     * attach and the mutation may not commit until it is written.
+     *
+     * `lineageRootId === undefined` on an authority read means LEGACY. It
+     * FAILS CLOSED and belongs to SCRUM-201's cutover; it is NEVER normalized
+     * to "self", because that would silently manufacture an origin for a row
+     * that never had one.
+     */
+    lineageRootId: v.optional(v.id("commitmentRoots")),
+    /** 0 at the origin, +1 per successor. Unique within a lineage. */
+    lineageGeneration: v.optional(v.number()),
+    /**
+     * The root this one succeeds. Immutable, and always within the same
+     * lineage, org, vehicle and principal. Distinct from
+     * `vehicleCommitmentClaims.restoredFromClaimId`: that records the episode
+     * chain WITHIN a root, this records the chain BETWEEN roots.
+     */
+    restoredFromRootId: v.optional(v.id("commitmentRoots")),
   })
     .index("by_org_vehicle_status", ["orgId", "vehicleId", "status"])
     .index("by_org_customer", ["orgId", "customerId"])
+    // SCRUM-208 — MAX-GENERATION-FIRST TIP RESOLUTION.
+    //
+    // The tip is established by taking the HIGHEST generation in the lineage
+    // (descending, `take(2)` — two rows at the same generation is corruption),
+    // and only then is the OPEN set consulted to CONFIRM OR CONTRADICT it.
+    //
+    // ⚠️ NOT "find the OPEN root and trust it". An OPEN root sitting BELOW a
+    // later terminal generation is corruption, not a valid tip: answering with
+    // it regresses authority to an older generation and lets dormant evidence
+    // attach behind a root that has already been consumed.
+    .index("by_org_lineage_generation", ["orgId", "lineageRootId", "lineageGeneration"])
+    .index("by_org_lineage_status", ["orgId", "lineageRootId", "status"])
     // TENANT-SCOPED ON PURPOSE. A bare ["consumedBySaleId"] index would answer
     // "which root did this sale consume" across every organization at once, and
     // the answer is only ever wanted within one. Leading with orgId makes the
