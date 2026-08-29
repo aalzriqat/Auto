@@ -2020,7 +2020,12 @@ export const createFromQuote = mutation({
     if (quoteVehicleItems.length !== 1) {
       throw new ConvexError("Finance applications currently support exactly one vehicle.");
     }
-    await assertQuoteVehiclesAcquirable(ctx, args.orgId, quoteVehicleItems);
+    for (const item of quoteVehicleItems) {
+      const lineVehicle = await ctx.db.get(item.vehicleId);
+      if (!lineVehicle || lineVehicle.orgId !== args.orgId || lineVehicle.isDeleted) {
+        throw new ConvexError("Quote vehicle not found in this organization.");
+      }
+    }
     // Kept for the rule snapshot below rather than re-fetched: this handler
     // already validates the company here, and reading it twice per application
     // buys nothing.
@@ -2256,126 +2261,6 @@ export const createFromQuote = mutation({
 });
 
 /**
- * MAY THIS QUOTE'S CARS BE ACQUIRED AT ALL? The existence, tenancy and
- * inventory checks every acquisition door owes before it touches the
- * commitment authority, in ONE place.
- *
- * ⚠️ EXTRACTED, NOT COPIED, and the distinction is the whole point. The
- * reacquisition path below was first written as a mirror of the RELEASE
- * helper — but release and acquisition do not have symmetric preconditions.
- * Letting a car go needs to know nothing about the car; taking one needs to
- * know it exists, is this dealership's, and has not left inventory. Without
- * these checks, `reject -> softDelete -> resubmit` opened a fresh root on a
- * vehicle that was already gone, stranding it where no door can reach it and
- * inverting the rule that a car may only leave inventory once its commitment
- * has ended.
- *
- * A second copy of these three lines would have fixed that instance and
- * recreated the class — two places deciding what "acquirable" means, drifting
- * apart on the next edit. That is the defect this program exists to delete,
- * and it is exactly how the duplicate finance-status list happened.
- */
-async function assertQuoteVehiclesAcquirable(
-  ctx: MutationCtx,
-  orgId: Id<"organizations">,
-  items: ReadonlyArray<{ vehicleId: Id<"vehicles"> }>
-): Promise<void> {
-  for (const item of items) {
-    const lineVehicle = await ctx.db.get(item.vehicleId);
-    if (!lineVehicle || lineVehicle.orgId !== orgId || lineVehicle.isDeleted) {
-      throw new ConvexError("Quote vehicle not found in this organization.");
-    }
-    // ⚠️ THE CAR'S OWN LIFECYCLE, NOT JUST ITS EXISTENCE. Both reviewer seats
-    // found this, from opposite directions: a rejected deal resubmitted after
-    // the car was sold opened a fresh OPEN root on a SOLD vehicle, because the
-    // commitment authority reasons only about ROOTS and never reads
-    // `vehicles.status`.
-    //
-    // The damage is bounded — `prepareSaleCompletion` refuses SOLD and ARCHIVED
-    // before anything else, so the stray root can never become a second sale —
-    // but it blocks `softDelete` and any legitimate re-acquisition until
-    // somebody rejects the stale application again. An acquisition that cannot
-    // possibly lead anywhere should refuse where it is made.
-    //
-    // Checked HERE rather than in the reacquisition helper on purpose. This
-    // function is the one place both acquisition doors ask the question, so
-    // `createFromQuote` gets the same rule and the two cannot drift. Fixing
-    // only the door the finding arrived through would have closed the instance
-    // and kept the class — the mistake that produced the duplicate
-    // finance-status list two rounds ago.
-    if (lineVehicle.status === "SOLD") {
-      throw new ConvexError("This vehicle has already been sold and cannot be added to a deal.");
-    }
-    if (lineVehicle.status === "ARCHIVED") {
-      throw new ConvexError("This vehicle is archived. Restore it before adding it to a deal.");
-    }
-  }
-}
-
-/**
- * RE-ENTERING the in-flight set reacquires the car, exactly as leaving it
- * releases the car. The mirror of `releaseRootsForApplicationQuote`, over the
- * identical vehicle enumeration so the two sides cannot cover different sets.
- *
- * ⚠️ WHY THIS EXISTS. `REJECTED -> PENDING_DOCS` is an allowed transition with
- * its own certified test, and M3 made rejection terminalize the root. Without
- * this, a resubmitted application was finance-LIVE again while nothing held its
- * car: `hasLiveCommitmentBasis` said held, `resolveOwnership` said FREE, and the
- * two halves of the authority contradicted each other.
- *
- * The damage was not the obvious one. A RIVAL is independently refused at
- * completion, so nobody's car gets stolen. The damage is the case with NO rival
- * at all — the car really is free, the completion barrier correctly passes, and
- * `consumeRootForSale` then finds no OPEN root and returns silently BY DESIGN.
- * The financed sale completed carrying no `consumedBySaleId`, which is the one
- * stamp Phase 3 uses to walk a cancelled sale back to the deal that made it.
- * Reproduced: one RELEASED root, no stamp, sale untraceable.
- *
- * A refusal here is correct and wanted: a car another deal has since taken
- * cannot be resubmitted onto this one, and the operator is told exactly that.
- * Convex mutation atomicity means the refusal also rolls back the status patch,
- * so the application does not silently re-enter the in-flight set on a car it
- * does not own.
- */
-async function reacquireRootsForApplicationQuote(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    quoteId: Id<"quotes">;
-    applicationId: Id<"financeApplications">;
-    actorId: Id<"users">;
-  }
-): Promise<void> {
-  // ⚠️ FAIL CLOSED. The release twin returns silently here, correctly: there
-  // is nothing to release for a quote that is not this dealership's. On the
-  // ACQUISITION side that same line let the status patch and the audit row
-  // commit while nothing acquired — a narrower re-run of the very defect this
-  // helper exists to close. Copied symmetry, wrong contract.
-  const quote = await ctx.db.get(args.quoteId);
-  if (!quote || quote.orgId !== args.orgId) {
-    throw new ConvexError("Application quote not found.");
-  }
-  const items = quote.vehicleItems ?? [{ vehicleId: quote.vehicleId }];
-
-  // The same acquirability question `createFromQuote` asks, asked through the
-  // same function, before anything reaches the commitment authority.
-  await assertQuoteVehiclesAcquirable(ctx, args.orgId, items);
-
-  for (const item of items) {
-    await acquireVehicle(ctx, {
-      orgId: args.orgId,
-      vehicleId: item.vehicleId,
-      customerId: quote.customerId,
-      createdBy: args.actorId,
-      // TAGGED FINANCE, same as the original acquisition in `createFromQuote`.
-      // The application is the defining evidence for this episode.
-      evidence: { kind: "FINANCE", applicationId: args.applicationId },
-      lineage: { quoteId: quote._id },
-    });
-  }
-}
-
-/**
  * SCRUM-195 M3. Release every car this application's quote was holding, if
  * nothing else still holds it.
  *
@@ -2451,27 +2336,50 @@ export const updateStatus = mutation({
       await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.REVIEW_FINANCE_APPLICATION]);
     }
 
-    // SCRUM-195. THE TWO SIDES OF THE IN-FLIGHT SET, decided once and used
-    // twice: here for authority, and below for the acquisition itself.
+    // SCRUM-195 PHASE-3 DEMOLITION MARKER — THIS DOOR FAILS CLOSED ON PURPOSE.
+    //
+    // Re-entering the in-flight set means the application is finance-LIVE again
+    // while nothing holds its car: `hasLiveCommitmentBasis` reads the status and
+    // says held, `resolveOwnership` reads the root and says FREE. The damage is
+    // not the theft case — a rival is independently refused at completion. It is
+    // the case with NO rival: the car really is free, the completion barrier
+    // correctly passes, and `consumeRootForSale` finds no OPEN root and returns
+    // silently BY DESIGN, so the financed sale completes carrying no
+    // `consumedBySaleId` — the one stamp Phase 3 uses to walk a cancelled sale
+    // back to the deal that made it.
+    //
+    // ⚠️ THE FIX IS NOT REACQUISITION HERE. Reacquiring the car at this door was
+    // implemented and rejected on a phase boundary, not on its correctness:
+    // restoring a commitment is Phase-3 work, and Phase 3 defines the canonical
+    // restoration and provenance semantics (which episode comes back, what its
+    // predecessor is, how a sale-consumed episode is restored exactly). A
+    // Phase-2 reacquisition would have to guess all of that, and a guess that
+    // writes roots is how the distributed inference this program exists to
+    // delete got built in the first place.
+    //
+    // ⚠️ SO THE CAPABILITY IS DEFERRED, NOT DELETED. `REJECTED -> PENDING_DOCS`
+    // remains a real product requirement and stays in `VALID_STATUS_TRANSITIONS`
+    // as the record of it; it is Phase 3 that restores it, over canonical
+    // restoration rather than a fresh acquisition. Until then this branch
+    // refuses rather than shipping a live application that owns nothing.
     //
     // Derived from the status list rather than from `VALID_STATUS_TRANSITIONS`,
-    // so a future edit to the transition map cannot open a third door neither
-    // of them covers. Today only REJECTED -> PENDING_DOCS re-enters the set,
-    // but that is an outcome of the data, not an assumption in here.
+    // so a future edit to the transition map cannot open a second door this
+    // refusal does not cover. Today only REJECTED -> PENDING_DOCS re-enters the
+    // set, but that is an outcome of the data, not an assumption in here.
+    //
+    // ⚠️ AND IT REFUSES **BEFORE** ANY DURABLE MUTATION. Convex would roll the
+    // whole mutation back from anywhere, but "the rollback saves us" is a
+    // property of the runtime, not of this handler. Refusing above the patch and
+    // the status-log insert means the application, its audit trail, its roots
+    // and claims, the vehicle and every money/accounting/outbox consequence are
+    // untouched by construction rather than by recovery.
     const wasInFlight = IN_FLIGHT_FINANCE_STATUSES.includes(app.status);
     const isInFlight = IN_FLIGHT_FINANCE_STATUSES.includes(args.status);
-    const reentersInFlight = !wasInFlight && isInFlight;
-
-    // ⚠️ AND IT NEEDS THE AUTHORITY THE TRANSITION IT MIRRORS NEEDS. Until M3
-    // this transition wrote nothing but a status, so "may view finance
-    // applications" was a defensible bar. It now performs a real acquisition
-    // against the commitment authority — and `commitments.ts` holds no
-    // permission checks at all, by design: it trusts every caller to have
-    // gated first. A shipped ACCOUNTANT role could open a commitment through
-    // this door. REJECTED asks for REVIEW_FINANCE_APPLICATION; the door that
-    // undoes REJECTED asks for the same thing.
-    if (reentersInFlight) {
-      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.REVIEW_FINANCE_APPLICATION]);
+    if (!wasInFlight && isInFlight) {
+      throw new ConvexError(
+        "This application has already left the finance pipeline and cannot be reopened yet. Start a new application for this deal."
+      );
     }
 
     let approvedBy = app.approvedBy;
@@ -2518,18 +2426,6 @@ export const updateStatus = mutation({
       changedBy: auth.user._id,
       changedAt: patchedAt,
     });
-
-    if (reentersInFlight) {
-      // AFTER the patch, so the application is already in the in-flight set
-      // when the canonical authority evaluates the deal — the same ordering
-      // rule the release branch below follows, for the same reason.
-      await reacquireRootsForApplicationQuote(ctx, {
-        orgId: args.orgId,
-        quoteId: app.quoteId,
-        applicationId: args.applicationId,
-        actorId: auth.user._id,
-      });
-    }
 
     if (args.status === "REJECTED" && app.status !== "REJECTED") {
       await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId, actorId: auth.user._id });

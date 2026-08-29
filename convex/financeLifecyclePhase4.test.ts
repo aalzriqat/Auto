@@ -411,7 +411,26 @@ describe("Finance lifecycle Phase 4", () => {
     expect(app?.disbursedAmountMinor).toBe(20_000_000);
   });
 
-  test("REJECTED to PENDING_DOCS resubmission is allowed", async () => {
+  test("REJECTED to PENDING_DOCS resubmission is DEFERRED to Phase 3 — it refuses, and the transition map keeps the requirement", async () => {
+    // ⚠️ THIS CONTRACT WAS INVERTED ON PURPOSE, AND THE CAPABILITY IS NOT GONE.
+    //
+    // It used to assert that resubmission succeeds. SCRUM-195 M3 made rejection
+    // terminalize the car's commitment root, which turned that success into an
+    // application that is finance-LIVE again while nothing holds its car — and a
+    // financed sale completing from that state carries no `consumedBySaleId`,
+    // the one stamp Phase 3 needs to walk a cancelled sale back to its deal.
+    //
+    // Reacquiring the car at this door was implemented and rejected on a phase
+    // boundary: restoring a commitment is Phase-3 work, because Phase 3 is what
+    // defines which episode returns, its typed predecessor, and how a
+    // sale-consumed episode is restored exactly. So the door fails closed until
+    // then, rather than shipping a live application that owns nothing.
+    //
+    // `REJECTED -> PENDING_DOCS` deliberately REMAINS in
+    // `VALID_STATUS_TRANSITIONS` — this test asserts that too. The product still
+    // wants resubmission; the transition map is where that requirement is
+    // recorded, and Phase 3 restores the behaviour over canonical restoration.
+    // Deleting the transition would erase the requirement along with the bug.
     const { t, orgId, salespersonId, customerId, asSalesperson } =
       await seedFinanceLifecycleDealer("resubmit");
     const { applicationId } = await seedFinanceApplication(t, {
@@ -421,13 +440,28 @@ describe("Finance lifecycle Phase 4", () => {
       status: "REJECTED",
     });
 
-    await asSalesperson.mutation(api.applications.updateStatus, {
-      orgId,
-      applicationId,
-      status: "PENDING_DOCS",
-    });
+    await expect(
+      asSalesperson.mutation(api.applications.updateStatus, {
+        orgId,
+        applicationId,
+        status: "PENDING_DOCS",
+      })
+    ).rejects.toThrow(/cannot be reopened yet/);
 
     const app = await t.run((ctx) => ctx.db.get(applicationId));
-    expect(app?.status).toBe("PENDING_DOCS");
+    expect(app?.status, "and the refusal leaves the application where it was").toBe("REJECTED");
+
+    // THE REQUIREMENT IS STILL ON THE BOOKS. If a later change deletes the
+    // transition instead of implementing Phase-3 restoration, the refusal
+    // message would become "invalid transition" and this deal would quietly
+    // stop being a deal anyone intends to support again.
+    await expect(
+      asSalesperson.mutation(api.applications.updateStatus, {
+        orgId,
+        applicationId,
+        status: "PENDING_DOCS",
+      }),
+      "refused as deferred, NOT as an invalid transition"
+    ).rejects.toThrow(/cannot be reopened yet/);
   });
 });
