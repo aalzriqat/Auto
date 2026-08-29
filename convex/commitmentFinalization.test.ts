@@ -2234,11 +2234,27 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
     const userB = await seed.t.run((ctx) =>
       ctx.db.insert("users", { clerkId: "user_f46b", email: "f46b@test.com", name: "B User" })
     );
+    // ⚠️ ORG B IS INTERNALLY CONSISTENT — its own manager, its own customer, its
+    // own car, its own deposit. The ONLY thing wrong with org B is its two OPEN
+    // roots. Cross-linking ids between orgs is a DIFFERENT defect (SCRUM-206)
+    // and deliberately not exercised here: mixing the two would make a failure
+    // ambiguous about which bug it caught.
+    //
+    // The manager exists so `notifyManagers` can actually fire. Without a
+    // membership holding `manage:users` the notification silently cannot be
+    // produced, and an assertion that it happened would pass for the wrong
+    // reason — which is exactly the hole both reviewer seats found here.
+    const roleB = await seed.t.run((ctx) =>
+      ctx.db.insert("roles", { orgId: orgB, name: "B Manager", permissions: ["manage:users"] })
+    );
+    await seed.t.run((ctx) =>
+      ctx.db.insert("memberships", { orgId: orgB, userId: userB, roleId: roleB })
+    );
     const customerB = await seed.t.run((ctx) =>
       ctx.db.insert("customers", {
         orgId: orgB,
-        firstName: "Customer",
-        lastName: "B-Org",
+        firstName: "Bravo",
+        lastName: "Customer",
         phone: "+962792214699",
         createdAt: now,
       })
@@ -2298,6 +2314,10 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
         depositId: depositB,
       })
     );
+    expect(
+      (await seed.t.run((ctx) => ctx.db.get(vB)))?.status,
+      "precondition: org B's car is projected RESERVED before the sweep"
+    ).toBe("RESERVED");
 
     const rootsBBefore = await seed.t.run(async (ctx) =>
       (await ctx.db.query("commitmentRoots").collect()).filter(
@@ -2307,10 +2327,24 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
     expect(rootsBBefore, "precondition: org B's car really is ambiguous").toHaveLength(2);
 
     // ── THE SWEEP. One batch, both tenants.
-    await expect(
-      seed.t.mutation(internal.vehicles.expireReservations, {}),
-      "one corrupt car must not abort the sweep"
-    ).resolves.toBeDefined();
+    //
+    // ⚠️ THE DIAGNOSTIC IS PART OF THE CONTRACT, NOT DECORATION. Withholding the
+    // root decision is only defensible because it is recorded; a silent skip
+    // would leave corruption invisible with no alerting path behind it. So the
+    // log line is asserted, not assumed.
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    let loggedCalls: unknown[][] = [];
+    try {
+      await expect(
+        seed.t.mutation(internal.vehicles.expireReservations, {}),
+        "one corrupt car must not abort the sweep"
+      ).resolves.toBeDefined();
+      // Snapshot BEFORE restoring: `mockRestore` resets the mock, which clears
+      // `mock.calls` along with it — asserting afterwards silently reads zero.
+      loggedCalls = errorSpy.mock.calls.map((call) => [...call]);
+    } finally {
+      errorSpy.mockRestore();
+    }
 
     // ── ORG A is not collateral damage.
     expect(
@@ -2333,6 +2367,58 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
       (await seed.t.run((ctx) => ctx.db.get(depositB)))?.holdActive,
       "and its deposit vehicle-hold is lifted, as it would be for any other expiry"
     ).toBe(false);
+
+    // ⚠️ THE PROJECTION CONSEQUENCE. Kills M46a — an implementation that skips
+    // `syncVehicleHoldStatus` on the ambiguous branch. AVAILABLE is the TRUTHFUL
+    // answer once no live reservation or deposit hold remains: the reservation
+    // really did expire. Leaving it RESERVED would preserve a rollback artifact,
+    // not a real hold — that stale RESERVED was a symptom of the very bug this
+    // corrects. Canonical ownership is a separate layer and still refuses:
+    // `resolveActingRoot` rejects AMBIGUOUS before any root selection, so a
+    // vehicle that looks bookable here still cannot be acquired.
+    expect(
+      (await seed.t.run((ctx) => ctx.db.get(vB)))?.status,
+      "the hold projection is recomputed truthfully even though the root decision was withheld"
+    ).toBe("AVAILABLE");
+
+    // ⚠️ THE NOTIFICATION CONSEQUENCE. Kills M46b — an implementation that skips
+    // `notifyManagers` on the ambiguous branch. Org B's manager is owed the same
+    // expired-deposit notice any other dealership would get; the money question
+    // (refund vs forfeit) is untouched by the root corruption.
+    const orgBNotes = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("notifications").collect()).filter(
+        (n) => String(n.orgId) === String(orgB)
+      )
+    );
+    expect(orgBNotes, "org B's manager is notified exactly once").toHaveLength(1);
+    expect(orgBNotes[0].type, "and it is the ordinary expired-deposit notice").toBe(
+      "deposit.expired"
+    );
+    expect(
+      JSON.stringify(orgBNotes[0].data),
+      "carrying org B's OWN vehicle and customer labels"
+    ).toContain("Bravo");
+
+    // ⚠️ THE DIAGNOSTIC CONSEQUENCE. Kills M46c — deleting the typed
+    // `resolveOwnership` pre-check and rescuing the strict finalizer with a
+    // blanket `try/catch` instead. That mutant satisfies every assertion above,
+    // because the world ends up in the same state; what it destroys is the
+    // DISTINCTION between "the authority told us this car is ambiguous" and
+    // "something threw and we swallowed it". Only the structured payload can
+    // tell those apart, so the payload is the contract.
+    const ambiguousLogs = loggedCalls.filter((call) =>
+      String(call[0]).includes("ambiguous commitment ownership")
+    );
+    expect(ambiguousLogs, "the withheld decision is recorded exactly once").toHaveLength(1);
+    expect(
+      ambiguousLogs[0][1],
+      "with the structured context a human needs to find the corrupt car"
+    ).toMatchObject({
+      orgId: orgB,
+      vehicleId: vB,
+      reservationId: resB,
+      openRootCount: 2,
+    });
 
     // ── BUT NOT ONE ROOT MOVED. Byte-identical, so the corruption is preserved
     // intact for a human to repair rather than half-resolved by a sweep.
