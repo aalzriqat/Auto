@@ -41,6 +41,11 @@
 
 import { ConvexError } from "convex/values";
 import { hasActiveDepositHold } from "./utils/depositHelpers";
+import {
+  AuthorityDecisionContext,
+  requireCanonicalAuthority,
+  resolveLineageTip,
+} from "./utils/commitmentKernel";
 import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 
@@ -742,6 +747,23 @@ export function throwRefusal(acting: Extract<ActingRoot, { decision: "REFUSE" }>
 // Writing the authority.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * What happened when a restoration tried to continue a finished deal.
+ *
+ * ⚠️ TYPED, BECAUSE THE CALLER MUST BE ABLE TO TELL THESE APART. Once the
+ * reversal journal has posted, a vehicle-authority outcome is no longer an
+ * accounting failure, and reporting it as one is how a legitimate business
+ * result ends up in an outbox `lastError` looking like a transient fault.
+ */
+export type SuccessorOutcome =
+  | { kind: "OPENED"; rootId: Id<"commitmentRoots"> }
+  /** Another deal legitimately holds the car. Nothing was written. */
+  | { kind: "RIVAL"; rivalRootId: Id<"commitmentRoots"> }
+  /** Two OPEN roots on one car — corrupt state, not a tie to be broken. */
+  | { kind: "AMBIGUOUS" }
+  /** Legacy or inconsistent lineage. Fails closed, with a reason for a human. */
+  | { kind: "REFUSED"; reason: string };
+
 async function openRoot(
   ctx: MutationCtx,
   args: {
@@ -752,7 +774,7 @@ async function openRoot(
     lineage: CommitmentLineage;
   }
 ): Promise<Id<"commitmentRoots">> {
-  return await ctx.db.insert("commitmentRoots", {
+  const rootId = await ctx.db.insert("commitmentRoots", {
     orgId: args.orgId,
     vehicleId: args.vehicleId,
     customerId: args.customerId,
@@ -761,7 +783,131 @@ async function openRoot(
     ...(args.lineage.reservationId ? { originReservationId: args.lineage.reservationId } : {}),
     openedAt: Date.now(),
     openedBy: args.createdBy,
+    // SCRUM-208 — this root IS its own lineage origin.
+    lineageGeneration: 0,
   });
+
+  // ⚠️ SCRUM-208 — ONE CANONICAL ORIGIN REPRESENTATION, WRITTEN BEFORE COMMIT.
+  //
+  // A lineage origin points at ITSELF, which cannot be expressed in the insert
+  // because the id does not exist until the insert returns. The self-patch is
+  // safe precisely because a Convex mutation is ONE transaction: no reader ever
+  // observes the row between the two writes, and if anything later in this
+  // mutation throws, neither write lands.
+  //
+  // ⚠️ IT IS NOT LEFT ABSENT FOR A READER TO NORMALIZE TO "SELF". A missing
+  // `lineageRootId` is the LEGACY signal and must keep failing closed; if new
+  // roots also shipped without it, that signal would be worthless and every
+  // reader would need to guess which kind of missing it was looking at.
+  //
+  // Written for legacy and canonical organizations alike. It costs nothing on
+  // the legacy path — `resolveOwnership` provably never reads these fields —
+  // and it means the SCRUM-201 backfill only ever has to reach rows that
+  // predate this code, rather than chasing a moving target.
+  await ctx.db.patch(rootId, { lineageRootId: rootId });
+  return rootId;
+}
+
+/**
+ * SCRUM-208 — OPEN THE SUCCESSOR TO A TERMINAL ROOT.
+ *
+ * A root is terminal FOREVER once CONSUMED or RELEASED (I6), so a restoration
+ * cannot revive one — it opens the next generation of the same lineage. This
+ * is the only function that may do so.
+ *
+ * ⚠️ THE PREDECESSOR MUST BE THE LINEAGE TIP, NOT MERELY A ROOT IN IT.
+ * Succeeding a non-tip forks the lineage: two roots then claim the same next
+ * generation, and `resolveLineageTip` reports corruption forever after. The
+ * tip is resolved MAX-GENERATION-FIRST rather than by looking for the OPEN
+ * one, because an OPEN root sitting below a later terminal generation is
+ * itself the corruption being guarded against.
+ *
+ * ⚠️ A RIVAL NEVER HAS ITS VEHICLE TAKEN. If another deal legitimately holds
+ * the car, this returns RIVAL and writes nothing. The accounting reversal that
+ * triggered the restoration still stands — the money went back — but the
+ * vehicle stays with whoever holds it. Silently opening a second OPEN root
+ * here would be the exact failure the authority exists to prevent: one car
+ * promised to two deals.
+ *
+ * ⚠️ THE PRINCIPAL IS CARRIED, NEVER RE-DERIVED. The successor's customer is
+ * the predecessor's customer, asserted rather than passed in and trusted. A
+ * restoration that adopts whoever is presenting the evidence is how one
+ * customer's money becomes another's deal.
+ */
+export async function openSuccessorRoot(
+  ctx: MutationCtx,
+  args: {
+    decision: AuthorityDecisionContext;
+    predecessor: Doc<"commitmentRoots">;
+    openedBy: Id<"users">;
+    /** Diagnosis only. Nothing may make a decision on this text. */
+    reason: string;
+  }
+): Promise<SuccessorOutcome> {
+  const { decision, predecessor } = args;
+  requireCanonicalAuthority(decision);
+
+  if (String(predecessor.orgId) !== String(decision.orgId)) {
+    throw new Error(
+      `root ${predecessor._id} belongs to another organization than the decision context`
+    );
+  }
+  if (predecessor.status === "OPEN") {
+    throw new Error(
+      `root ${predecessor._id} is still OPEN — a live root is not succeeded, it is resolved`
+    );
+  }
+  if (predecessor.lineageRootId === undefined || predecessor.lineageGeneration === undefined) {
+    // Legacy row. It fails closed and belongs to SCRUM-201's cutover; it is
+    // never normalized to "its own origin at generation 0", which would
+    // manufacture a second origin inside a lineage that already has one.
+    return { kind: "REFUSED", reason: "the previous deal predates the canonical commitment authority" };
+  }
+
+  const tip = await resolveLineageTip(ctx, decision, predecessor.lineageRootId);
+  if (tip.kind === "CORRUPT") {
+    return { kind: "REFUSED", reason: `the deal's history is inconsistent (${tip.reason})` };
+  }
+  if (String(tip.root._id) !== String(predecessor._id)) {
+    return {
+      kind: "REFUSED",
+      reason: "this deal has already been continued, so it cannot be continued again",
+    };
+  }
+  if (tip.isOpen) {
+    // Unreachable given the status check above, and kept because "the tip is
+    // terminal" is the precondition that actually matters here — the two
+    // facts are only equal while the tip and the predecessor are the same row.
+    throw new Error(`lineage tip ${tip.root._id} is OPEN and cannot be succeeded`);
+  }
+
+  // I1 — one physical vehicle, at most one OPEN root. Checked against the
+  // VEHICLE, not the lineage: a rival deal is a different lineage entirely and
+  // would not be visible in the tip resolution above.
+  const ownership = await resolveOwnership(ctx, decision.orgId, predecessor.vehicleId);
+  if (ownership.kind === "AMBIGUOUS") return { kind: "AMBIGUOUS" };
+  if (ownership.kind === "OWNED") {
+    return { kind: "RIVAL", rivalRootId: ownership.root._id };
+  }
+
+  const successorId = await ctx.db.insert("commitmentRoots", {
+    orgId: predecessor.orgId,
+    vehicleId: predecessor.vehicleId,
+    // Carried from the predecessor, never from the caller.
+    customerId: predecessor.customerId,
+    status: "OPEN",
+    ...(predecessor.headQuoteId ? { headQuoteId: predecessor.headQuoteId } : {}),
+    ...(predecessor.originReservationId
+      ? { originReservationId: predecessor.originReservationId }
+      : {}),
+    openedAt: decision.now,
+    openedBy: args.openedBy,
+    lineageRootId: predecessor.lineageRootId,
+    lineageGeneration: predecessor.lineageGeneration + 1,
+    restoredFromRootId: predecessor._id,
+  });
+
+  return { kind: "OPENED", rootId: successorId };
 }
 
 /**
