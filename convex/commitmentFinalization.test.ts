@@ -198,11 +198,14 @@
  * evidence that anything is still holding the car. F.12 makes this concrete: 61
  * ACTIVE episodes survive a completed sale untouched.
  *
- * ⚠️ `IN_FLIGHT_STATUSES` IS A LOCAL `const` INSIDE `createFromQuote`'s HANDLER,
- * not an exported constant. M3 must hoist and share it, not restate it. Two
- * independently-maintained lists of "which finance statuses hold a car" is the
- * distributed-inference defect SCRUM-195 exists to remove — the same shape as
- * the six acquisition writers that each decided evidence kind for themselves.
+ * ⚠️ WHICH FINANCE STATUSES HOLD A CAR IS ANSWERED ONCE, by the exported
+ * `IN_FLIGHT_FINANCE_STATUSES`. It began as a local `const` inside
+ * `createFromQuote`'s handler, and M3's first attempt ADDED the shared constant
+ * without deleting the local one — shipping the two independently-maintained
+ * lists it claimed to have removed, which both reviewer seats caught. The local
+ * copy is gone; acquisition and release now read the same array and cannot
+ * drift. Same shape as the six acquisition writers that each decided evidence
+ * kind for themselves.
  * G.9 pins the acquisition side of that set behaviourally; F.25 pins that the
  * release side agrees with it.
  *
@@ -1609,6 +1612,13 @@ test("F.40 a REJECTED-then-RESUBMITTED application still owns its car at complet
   // branch ONLY. So a resubmitted application is finance-LIVE again while no
   // root holds its car:
   //
+  // ⚠️ BACKEND-CERTIFIED, NOT YET A SHIPPED SCREEN. `grep` over app/ and
+  // components/ finds three `updateStatus` call sites and none passes
+  // PENDING_DOCS, so today this is reachable by direct mutation only. That is
+  // not a reason to leave it broken — the backend is the sole authority here,
+  // by this codebase's own rule — but it is the honest bound on urgency, and
+  // an earlier draft of this comment claimed more than that.
+  //
   //     hasLiveCommitmentBasis  -> held      (FINANCE arm reads the status)
   //     resolveOwnership        -> FREE      (the root is terminal forever)
   //
@@ -1634,8 +1644,9 @@ test("F.40 a REJECTED-then-RESUBMITTED application still owns its car at complet
     applicationId,
     status: "REJECTED" as const,
   });
+  const released = (await rootsOn(seed, v))[0];
   expect(
-    (await rootsOn(seed, v))[0].status,
+    released.status,
     "precondition: rejection terminalizes the root \u2014 this is M3's own new behaviour"
   ).toBe("RELEASED");
 
@@ -1649,10 +1660,31 @@ test("F.40 a REJECTED-then-RESUBMITTED application still owns its car at complet
   // THE CONTRACT. Re-entering the in-flight set must reacquire, exactly as
   // leaving it releases. A live application that owns nothing is not a
   // conservative reading; it is an application whose sale cannot be traced.
+  const live = (await rootsOn(seed, v)).filter((r) => r.status === "OPEN");
+  expect(live.length, "a resubmitted application holds its car again").toBe(1);
+
+  // ⚠️ ON A **FRESH** ROOT, AND THE TERMINAL ONE IS UNTOUCHED. Without these
+  // two, an implementation that simply patched the RELEASED root back to OPEN
+  // would satisfy every other assertion here while destroying terminalization
+  // monotonicity — the property the whole write-once design rests on.
+  expect(String(live[0]._id), "a NEW root, not the terminal one reopened").not.toBe(
+    String(released._id)
+  );
   expect(
-    (await rootsOn(seed, v)).filter((r) => r.status === "OPEN").length,
-    "a resubmitted application holds its car again, on a fresh root"
-  ).toBe(1);
+    await seed.t.run((ctx) => ctx.db.get(released._id)),
+    "and the released root is a closed fact, byte-identical"
+  ).toEqual(released);
+
+  // ⚠️ AND THE EPISODE IS TAGGED AS THE ORIGINAL ACQUISITION TAGS IT. Neither
+  // `resolveOwnership` nor `consumeRootForSale` reads evidence kind, so a
+  // mutant reacquiring with DEPOSIT evidence — or with no quote lineage —
+  // would pass everything above. A resubmitted deal must be indistinguishable
+  // from a fresh one to every later consumer.
+  const episode = (await claimsOn(seed, v)).find(
+    (c) => String(c.rootId) === String(live[0]._id)
+  );
+  expect(episode?.evidenceKind, "tagged FINANCE, as createFromQuote tags it").toBe("FINANCE");
+  expect(String(episode?.quoteId), "and carrying the deal's quote lineage").toBe(String(quoteId));
 
   // AND THE CONSEQUENCE, proved rather than argued: drive the resubmitted
   // application all the way to a completed financed sale and demand that the
@@ -1673,6 +1705,174 @@ test("F.40 a REJECTED-then-RESUBMITTED application still owns its car at complet
     (await rootsOn(seed, v)).map((r) => rootSaleStamp(r)),
     "the completed sale stamps a root \u2014 without this Phase 3 cannot reverse it"
   ).toContain(String(saleId));
+});
+
+test("F.41 resubmission REFUSES to reacquire a car that has left inventory", async () => {
+  // WRITTEN BECAUSE THE ROUND-1 FIX INTRODUCED THIS. Reacquisition was built as
+  // a mirror of the release helper — but release and acquisition do not have
+  // symmetric preconditions. Letting a car go needs no validation of the car;
+  // taking one needs all of it. `createFromQuote` checks that every line
+  // vehicle exists, is this org's, and is not deleted. The reacquire path
+  // checked none of that, so:
+  //
+  //   reject      -> root RELEASED
+  //   softDelete  -> ALLOWED, correctly: `assertVehicleNotCommitted` sees no
+  //                  OPEN root, which is exactly what M3's release made true
+  //   resubmit    -> a fresh root opened on a vehicle that has left inventory
+  //
+  // That inverts F.31: a car may leave inventory once its commitment has ended,
+  // and no new commitment may then be stranded on the hidden car where no door
+  // can reach it.
+  const seed = await seedDealer("f41");
+  const v = await vehicle(seed);
+  const quoteId = await quoteFor(seed, seed.customerA, [v]);
+  const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
+    orgId: seed.orgId,
+    quoteId,
+  });
+  await seed.asUser.mutation(api.applications.updateStatus, {
+    orgId: seed.orgId,
+    applicationId,
+    status: "REJECTED" as const,
+  });
+
+  await seed.asUser.mutation(api.vehicles.softDelete, { orgId: seed.orgId, vehicleId: v });
+  expect(
+    (await seed.t.run((ctx) => ctx.db.get(v)))?.isDeleted,
+    "precondition: the car really did leave inventory"
+  ).toBe(true);
+
+  const rootsBefore = await rootsOn(seed, v);
+  const claimsBefore = await claimSnapshot(seed, v);
+
+  await expect(
+    seed.asUser.mutation(api.applications.updateStatus, {
+      orgId: seed.orgId,
+      applicationId,
+      status: "PENDING_DOCS" as const,
+    }),
+    "a car that has left inventory cannot be reacquired"
+  ).rejects.toThrow();
+
+  // ZERO RESIDUE, and that includes the status itself. Convex rolls the whole
+  // mutation back, so a refused resubmission must not leave the application
+  // sitting in the in-flight set owning nothing — which is the very state this
+  // whole round is about.
+  expect(
+    (await seed.t.run((ctx) => ctx.db.get(applicationId)))?.status,
+    "the application stays REJECTED"
+  ).toBe("REJECTED");
+  expect(await rootsOn(seed, v), "no root was opened").toEqual(rootsBefore);
+  expect(await claimSnapshot(seed, v), "no claim was written").toBe(claimsBefore);
+});
+
+test("F.42 a resubmission REFUSED by a rival leaves nothing behind", async () => {
+  // The REFUSE branch of the new call site. The docstring claims a refusal
+  // rolls the status patch back "so the application does not silently re-enter
+  // the in-flight set on a car it does not own" — a claim about Convex
+  // atomicity that was asserted rather than demonstrated. The status-log row is
+  // inserted BEFORE the reacquire, so if that guarantee ever failed, this door
+  // would leave an orphaned audit row behind.
+  const seed = await seedDealer("f42");
+  const v = await vehicle(seed);
+  const quoteId = await quoteFor(seed, seed.customerA, [v]);
+  const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
+    orgId: seed.orgId,
+    quoteId,
+  });
+  await seed.asUser.mutation(api.applications.updateStatus, {
+    orgId: seed.orgId,
+    applicationId,
+    status: "REJECTED" as const,
+  });
+
+  // A RIVAL takes the freed car. This is legitimate — the car really was free.
+  const rivalQuote = await quoteFor(seed, seed.customerB, [v]);
+  await depositOn(seed, rivalQuote, 5_000);
+  expect(
+    (await rootsOn(seed, v)).filter((r) => r.status === "OPEN").length,
+    "precondition: the rival genuinely holds it"
+  ).toBe(1);
+
+  const rootsBefore = await rootsOn(seed, v);
+  const logsBefore = await seed.t.run(async (ctx) =>
+    (await ctx.db.query("applicationStatusLog").collect()).length
+  );
+
+  await expect(
+    seed.asUser.mutation(api.applications.updateStatus, {
+      orgId: seed.orgId,
+      applicationId,
+      status: "PENDING_DOCS" as const,
+    }),
+    "the first deal cannot take back a car the rival now holds"
+  ).rejects.toThrow();
+
+  expect(
+    (await seed.t.run((ctx) => ctx.db.get(applicationId)))?.status,
+    "the refused application stays REJECTED"
+  ).toBe("REJECTED");
+  expect(await rootsOn(seed, v), "the rival's root is untouched").toEqual(rootsBefore);
+  expect(
+    await seed.t.run(async (ctx) =>
+      (await ctx.db.query("applicationStatusLog").collect()).length
+    ),
+    "and no orphaned audit row survives the rollback"
+  ).toBe(logsBefore);
+});
+
+test("F.43 reacquisition needs the same authority as the transition it mirrors", async () => {
+  // WRITTEN BECAUSE THE ROUND-1 FIX MADE THIS REACHABLE. `updateStatus` gates
+  // UNDER_REVIEW and REJECTED behind REVIEW_FINANCE_APPLICATION and APPROVED
+  // behind APPROVE_FINANCE_APPLICATION, but PENDING_DOCS had no gate beyond
+  // "may view finance applications" — because before the fix that transition
+  // wrote nothing but a status.
+  //
+  // It now performs a real acquisition against the commitment authority, and
+  // `commitments.ts` contains no permission checks at all by design: it trusts
+  // every caller to have gated first. So the door that mirrors REJECTED must
+  // ask for what REJECTED asks for.
+  const seed = await seedDealer("f43");
+  const v = await vehicle(seed);
+  const quoteId = await quoteFor(seed, seed.customerA, [v]);
+  const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
+    orgId: seed.orgId,
+    quoteId,
+  });
+  await seed.asUser.mutation(api.applications.updateStatus, {
+    orgId: seed.orgId,
+    applicationId,
+    status: "REJECTED" as const,
+  });
+
+  // A viewer: may read finance applications, may do nothing else.
+  const viewerRole = await seed.t.run((ctx) =>
+    ctx.db.insert("roles", {
+      orgId: seed.orgId,
+      name: "Viewer",
+      permissions: ["view:finance_applications"],
+    })
+  );
+  const viewerId = await seed.t.run((ctx) =>
+    ctx.db.insert("users", { clerkId: "viewer_f43", email: "v-f43@test.com", name: "Viewer" })
+  );
+  await seed.t.run((ctx) =>
+    ctx.db.insert("memberships", { orgId: seed.orgId, userId: viewerId, roleId: viewerRole })
+  );
+  const asViewer = seed.t.withIdentity({ subject: "viewer_f43", clerkId: "viewer_f43" });
+
+  const rootsBefore = await rootsOn(seed, v);
+
+  await expect(
+    asViewer.mutation(api.applications.updateStatus, {
+      orgId: seed.orgId,
+      applicationId,
+      status: "PENDING_DOCS" as const,
+    }),
+    "view-only authority cannot open a commitment"
+  ).rejects.toThrow();
+
+  expect(await rootsOn(seed, v), "and nothing was acquired").toEqual(rootsBefore);
 });
 
 describe("P2-F M3 finalization barrier — RELEASE", () => {
