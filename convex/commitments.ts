@@ -773,7 +773,28 @@ export function throwRefusal(acting: Extract<ActingRoot, { decision: "REFUSE" }>
 export type RestorationIntent =
   /** The exact sale that consumed the root has been cancelled. */
   | { kind: "SALE_CANCELLED"; saleId: Id<"sales"> }
-  /** The exact source episode whose release ended the root is reinstated. */
+  /**
+   * The exact source episode whose release ended the root is reinstated.
+   *
+   * ⚠️ NOT CONNECTED TO ANY PRODUCTION DOOR, AND NOT REACHABLE BY REAL DATA.
+   *
+   * This branch requires `claim.status === "RELEASED"`, and NOTHING in
+   * production writes a claim status at all: episodes are insert-only and
+   * Phase 2 terminalizes the ROOT, deliberately. So the precondition cannot be
+   * satisfied outside a test that patches the row by hand.
+   *
+   * The resolver logic is exercised by `commitmentLineage.test.ts`, and those
+   * are legitimate unit tests of a pure function — but they must NOT be read
+   * as evidence that this branch is production-ready. Whoever wires the first
+   * caller has to decide what writes a RELEASED claim, and
+   * `scripts/commitmentWriteGuard.test.ts` fails the moment a second
+   * production file constructs this intent, so that wiring is a deliberate act
+   * rather than an assumption inherited from a green suite.
+   *
+   * (Recorded after Sonnet MAX flagged it against 6f7d1b5c3: exactly the
+   * "coverage that proves nothing about production" pattern that blocked the
+   * previous head, isolated here to a dormant branch instead of the live one.)
+   */
   | { kind: "SOURCE_EPISODE_REINSTATED" };
 
 /**
@@ -803,8 +824,15 @@ export type RestorationDecision =
   | { decision: "OPEN_SUCCESSOR"; predecessor: Doc<"commitmentRoots"> }
   /** Another deal legitimately holds the car. */
   | { decision: "RIVAL"; rivalRootId: Id<"commitmentRoots"> }
-  /** Two OPEN roots on one car — corrupt state, not a tie to be broken. */
-  | { decision: "AMBIGUOUS" }
+  /**
+   * Two OPEN roots on one car — corrupt state, not a tie to be broken.
+   *
+   * The count travels with the decision so the caller can report HOW MANY
+   * without taking its own ownership reading. A second read for a REPORT is
+   * how a second read for a DECISION gets added later — which is exactly the
+   * defect this round closed in `settleOneReversalSource`.
+   */
+  | { decision: "AMBIGUOUS"; openRootCount: number }
   /** Legacy or inconsistent lineage, or an intent that does not match. */
   | { decision: "REFUSE"; reason: string };
 
@@ -817,6 +845,27 @@ export type RestorationOutcome =
       /** Whether a successor generation was opened, or the tip was rejoined. */
       opened: "SUCCESSOR" | "JOINED";
     }
+  /**
+   * The postcondition did not hold after the writes were made.
+   *
+   * ⚠️ RETURNED, NOT THROWN — AND THAT IS A CORRECTION, NOT A WEAKENING.
+   * This used to throw, on the stated reasoning that "a Convex mutation is one
+   * transaction, so a throw un-does the whole thing". That reasoning was
+   * FALSE for the deferred caller and both review seats found it
+   * independently: `accountingOutbox.drainEntries` wraps every row in a
+   * `try`/`catch` — pre-existing, and there for good reason, so one bad row
+   * cannot abort a whole organization's drain. A caught exception is ordinary
+   * control flow, so the mutation returns normally and COMMITS, carrying every
+   * write already made. The throw bought no rollback and destroyed the only
+   * record that anything went wrong: the retry then found the reversal already
+   * completed, settled nothing, and marked the entry POSTED with no
+   * `authorityOutcome` at all.
+   *
+   * So the state is reported instead of protested. It is the one outcome the
+   * severity ranking puts above every other, because it is the only one that
+   * says the database itself needs a human.
+   */
+  | { decision: "INCONSISTENT"; reason: string }
   | Exclude<RestorationDecision, { decision: "JOIN_LINEAGE" } | { decision: "OPEN_SUCCESSOR" }>;
 
 /**
@@ -1442,7 +1491,9 @@ export async function resolveRestorationDecision(
   // root on the same car is corruption, and joining the first while the second
   // exists would quietly bless it.
   const ownership = await resolveOwnership(ctx, decision.orgId, tip.root.vehicleId);
-  if (ownership.kind === "AMBIGUOUS") return { decision: "AMBIGUOUS" };
+  if (ownership.kind === "AMBIGUOUS") {
+    return { decision: "AMBIGUOUS", openRootCount: ownership.roots.length };
+  }
 
   if (tip.isOpen) {
     if (ownership.kind !== "OWNED" || String(ownership.root._id) !== String(tip.root._id)) {
@@ -1531,7 +1582,7 @@ export async function restoreCommitment(
     source: args.source,
   });
 
-  // ⚠️ ONE ATOMIC POSTCONDITION — ALL FOUR, OR NONE.
+  // ⚠️ ONE POSTCONDITION, OVER ALL FOUR FACTS.
   //
   //   the source is live for THIS vehicle
   //   the successor claim is attached
@@ -1539,18 +1590,24 @@ export async function restoreCommitment(
   //   the root authority is OPEN
   //
   // Re-READ rather than assumed from the writes above: the point of a
-  // postcondition is that it observes the committed state, not the intent that
-  // produced it. Throwing here rolls the whole mutation back, because a
-  // Convex mutation is one transaction — which is exactly what makes "all four
-  // or none" expressible at all.
+  // postcondition is that it observes the state, not the intent that produced
+  // it.
+  //
+  // ⚠️ IT REPORTS; IT DOES NOT ROLL BACK, BECAUSE IT CANNOT. An earlier
+  // version threw here and claimed "all four or none" on the grounds that a
+  // Convex mutation is one transaction. That is true of the mutation and
+  // FALSE of this call: the deferred caller runs inside
+  // `drainEntries`'s per-row `try`/`catch`, which absorbs the throw and lets
+  // the mutation commit anyway. Safety therefore rests on NOT WRITING until
+  // every failure mode has been decided — see the pre-flight in
+  // `restoreAuthorityAfterReversal` — and this check exists to make the
+  // residual visible rather than to undo it.
   const after = await resolveCanonicalBinding(ctx, args.decision, {
     source: args.source,
     vehicleId: args.vehicleId,
   });
   if (!after.ok) {
-    throw new ConvexError(
-      "This vehicle's records did not settle consistently, so the restoration was not applied."
-    );
+    return { decision: "INCONSISTENT", reason: after.reason };
   }
   if (
     !after.binding.live ||
@@ -1558,9 +1615,16 @@ export async function restoreCommitment(
     String(after.binding.root._id) !== String(rootId) ||
     after.binding.root.status !== "OPEN"
   ) {
-    throw new ConvexError(
-      "This vehicle's records did not settle consistently, so the restoration was not applied."
-    );
+    return {
+      decision: "INCONSISTENT",
+      reason: !after.binding.live
+        ? "the source record is not live after being restored"
+        : String(after.binding.claim._id) !== String(claimId)
+          ? "the source record does not name the episode this restoration opened"
+          : String(after.binding.root._id) !== String(rootId)
+            ? "the episode does not belong to the deal this restoration opened"
+            : "the restored deal is not open",
+    };
   }
 
   return {
@@ -1969,7 +2033,17 @@ export type DeferredAuthorityOutcome =
    * be a DURABLE, findable repair condition — not a retry that will fail
    * identically forever with a message nobody can distinguish.
    */
-  | { outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS"; detail: string };
+  | { outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS"; detail: string }
+  /**
+   * The canonical records contradict each other, or a postcondition did not
+   * hold after the restoration wrote.
+   *
+   * ⚠️ THE OUTCOME THAT REPLACED A THROW. Reported rather than raised because
+   * raising provably does not undo anything at the deferred seam — see the
+   * note on `RestorationOutcome`'s INCONSISTENT variant. Ranked above every
+   * other outcome: it is the only one saying the data itself needs a person.
+   */
+  | { outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT"; detail: string };
 
 /** The detail string an outcome carries, when it carries one. */
 export function authorityOutcomeDetail(outcome: DeferredAuthorityOutcome): string | undefined {
@@ -1997,6 +2071,9 @@ export const AUTHORITY_SEVERITY: Record<DeferredAuthorityOutcome["outcome"], num
   AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE: 2,
   ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL: 3,
   ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS: 4,
+  // Above ambiguity: two open roots is a decision a human must make, but
+  // contradictory records are a database a human must repair.
+  ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT: 5,
 };
 
 /**
@@ -2125,6 +2202,25 @@ export async function restoreAuthorityAfterReversal(
     saleId: Id<"sales">;
     /** Who the restored episode is recorded as having been opened by. */
     createdBy: Id<"users">;
+    /**
+     * Make the source row live again — the deferred half of a cancellation
+     * that deliberately left the hold down while the reversing journal was
+     * only queued.
+     *
+     * ⚠️ RUN BETWEEN THE DECISION AND THE EXECUTION, NEVER BEFORE THE
+     * DECISION. The deferred caller used to reinstate the hold first and take
+     * its OWN `resolveOwnership` reading to decide whether a rival held the
+     * car. That second opinion cannot tell a rival's root from THIS deal's own
+     * restored one — so on a deal paid in two instalments, the first
+     * instalment restored the deal and the second was then reported as a rival
+     * OF ITS OWN CUSTOMER'S root, leaving that money held with no hold and no
+     * episode. The resolver already answers this question, and it answers it
+     * correctly: JOIN_LINEAGE.
+     *
+     * Omitted by the synchronous caller, whose money-side reopening has to
+     * happen whatever the authority decides.
+     */
+    makeSourceLive?: (ctx: MutationCtx) => Promise<void>;
   }
 ): Promise<DeferredAuthorityOutcome> {
   const context = await tryDecisionContext(ctx, args.run, args.orgId);
@@ -2163,28 +2259,84 @@ export async function restoreAuthorityAfterReversal(
     };
   }
 
-  const restored = await restoreCommitment(ctx, {
+  // ⚠️ PRE-FLIGHT — EVERY THROWING READ, BEFORE THE FIRST WRITE.
+  //
+  // `hasCanonicalDepositHold` REFUSES rather than filters when a row
+  // contradicts the range it was found in — a `holdActive: true` deposit that
+  // is VOIDED or deleted — and refusing means throwing. Reaching that after
+  // the successor root and claim are written is precisely the half-restoration
+  // this design must not commit, and a throw does not undo it. So the reader
+  // is exercised HERE, where catching costs nothing because nothing has been
+  // written yet, and a contradiction becomes a durable outcome instead.
+  const probe = await probeCanonicalHold(ctx, decision, args.vehicleId);
+  if (!probe.ok) {
+    return { outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT", detail: probe.reason };
+  }
+
+  // ⚠️ DECIDE BEFORE MAKING THE SOURCE LIVE, AND LET THE RESOLVER OWN THE
+  // JUDGMENT. It writes nothing, and it is the only thing that can tell a
+  // rival's root apart from a later generation of this deal's own lineage.
+  const decided = await resolveRestorationDecision(ctx, {
     decision,
     source: args.source,
     vehicleId: args.vehicleId,
     intent: { kind: "SALE_CANCELLED", saleId: args.saleId },
-    createdBy: args.createdBy,
   });
-
-  switch (restored.decision) {
+  switch (decided.decision) {
     case "RIVAL":
-      return {
-        outcome: "ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL",
-        rootId: restored.rivalRootId,
-      };
+      return { outcome: "ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL", rootId: decided.rivalRootId };
     case "AMBIGUOUS":
       return {
         outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS",
-        detail: "two open commitment roots on this vehicle",
+        detail: `${decided.openRootCount} open commitment roots on this vehicle`,
       };
     case "REFUSE":
+      return { outcome: "ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS", detail: decided.reason };
+    case "ALREADY_LIVE":
+    case "JOIN_LINEAGE":
+    case "OPEN_SUCCESSOR":
+      break;
+  }
+
+  // The decision says this deal comes back. NOW the money may hold its car
+  // again — inside the same transaction as the episode that justifies it.
+  if (decided.decision !== "ALREADY_LIVE" && args.makeSourceLive) {
+    await args.makeSourceLive(ctx);
+  }
+
+  const restored =
+    decided.decision === "ALREADY_LIVE"
+      ? ({
+          decision: "RESTORED" as const,
+          rootId: decided.rootId,
+          claimId: decided.claimId,
+          opened: "JOINED" as const,
+        })
+      : await restoreCommitment(ctx, {
+          decision,
+          source: args.source,
+          vehicleId: args.vehicleId,
+          intent: { kind: "SALE_CANCELLED", saleId: args.saleId },
+          createdBy: args.createdBy,
+        });
+
+  // ⚠️ RE-RESOLVED, NOT ASSUMED. The decision above wrote nothing, so the
+  // execution re-derives it from state that `makeSourceLive` may have changed.
+  // These branches are therefore reachable even though the pre-check passed,
+  // and each is reported rather than raised.
+  switch (restored.decision) {
+    case "RIVAL":
+      return { outcome: "ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL", rootId: restored.rivalRootId };
+    case "AMBIGUOUS":
       return {
-        outcome: "ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS",
+        outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS",
+        detail: `${restored.openRootCount} open commitment roots on this vehicle`,
+      };
+    case "REFUSE":
+      return { outcome: "ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS", detail: restored.reason };
+    case "INCONSISTENT":
+      return {
+        outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT",
         detail: restored.reason,
       };
     case "ALREADY_LIVE":
@@ -2192,40 +2344,70 @@ export async function restoreAuthorityAfterReversal(
       break;
   }
 
-  // ⚠️ THE PROJECTION IS PART OF THE SAME POSTCONDITION, AND IT IS COMPUTED
-  // FROM THE CANONICAL RANGES. Left to its own readers `syncVehicleHoldStatus`
-  // would consult `getActiveDepositHolds`, whose capped post-filtered read can
-  // answer "nothing holds this car" moments after the authority proved
-  // somebody does — leaving the restored car advertised as available.
-  const held =
-    (await hasCanonicalDepositHold(ctx, decision, args.vehicleId)) ||
-    (await hasCanonicalReservationHold(ctx, decision, args.vehicleId));
-  if (!held) {
-    // The binding said the source is live and the exact ranges say nothing
-    // holds the car. Those cannot both be true.
-    throw new ConvexError(
-      "This vehicle's hold records disagree with each other, so the restoration was not applied."
-    );
+  // ⚠️ THE PROJECTION IS PART OF THE SAME OUTCOME, AND IT IS COMPUTED FROM THE
+  // CANONICAL RANGES. Left to its own readers `syncVehicleHoldStatus` would
+  // consult `getActiveDepositHolds`, whose capped post-filtered read can answer
+  // "nothing holds this car" moments after the authority proved somebody does —
+  // leaving the restored car advertised as available.
+  const after = await probeCanonicalHold(ctx, decision, args.vehicleId);
+  if (!after.ok) {
+    return { outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT", detail: after.reason };
+  }
+  if (!after.held) {
+    return {
+      outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT",
+      detail: "the deal was restored but no hold record shows this vehicle held",
+    };
   }
   await syncVehicleHoldStatus(ctx, args.vehicleId, args.createdBy, { hasHold: true });
 
-  const after = await ctx.db.get(args.vehicleId);
-  if (!after) {
-    throw new ConvexError(
-      "This vehicle's records did not settle consistently, so the restoration was not applied."
-    );
-  }
+  const projected = await ctx.db.get(args.vehicleId);
   // Re-READ, not assumed from the call above. `resolveHoldTargetStatus` is the
-  // one definition of what a held car's status should be, so asking it to
-  // name a remaining change is exactly the assertion "nothing is left to do".
-  const remaining = resolveHoldTargetStatus(after, true);
-  if (remaining !== null && remaining !== after.status) {
-    throw new ConvexError(
-      "This vehicle's records did not settle consistently, so the restoration was not applied."
-    );
+  // one definition of what a held car's status should be, so asking it to name
+  // a remaining change is exactly the assertion "nothing is left to do".
+  const remaining = projected ? resolveHoldTargetStatus(projected, true) : null;
+  if (!projected || (remaining !== null && remaining !== projected.status)) {
+    return {
+      outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT",
+      detail: "the vehicle's advertised status could not be brought in line with its restored deal",
+    };
   }
 
   return { outcome: "RESTORED", rootId: restored.rootId, claimId: restored.claimId };
+}
+
+/**
+ * Ask the canonical ranges whether anything holds this car, WITHOUT letting a
+ * contradiction escape as a throw.
+ *
+ * ⚠️ THIS CATCH IS SAFE ONLY BECAUSE OF WHERE IT IS CALLED. Catching after a
+ * write would commit a half-restoration and report it as a clean business
+ * outcome, which is the whole defect this round exists to close. Both call
+ * sites are either before any write, or after the writes are already
+ * unrecoverable and the only remaining question is what to record.
+ */
+async function probeCanonicalHold(
+  ctx: MutationCtx,
+  decision: AuthorityDecisionContext,
+  vehicleId: Id<"vehicles">
+): Promise<{ ok: true; held: boolean } | { ok: false; reason: string }> {
+  try {
+    const held =
+      (await hasCanonicalDepositHold(ctx, decision, vehicleId)) ||
+      (await hasCanonicalReservationHold(ctx, decision, vehicleId));
+    return { ok: true, held };
+  } catch (error) {
+    // A ConvexError from `refuseContradiction` carries a message meant for a
+    // person; anything else is unexpected and is recorded as-is rather than
+    // dressed up.
+    const reason =
+      error instanceof ConvexError
+        ? String(error.data ?? error.message)
+        : error instanceof Error
+          ? error.message
+          : String(error);
+    return { ok: false, reason };
+  }
 }
 
 export async function releaseRootIfNoLiveBasis(

@@ -63,6 +63,29 @@ describe("commitment liveness writes go through the choke", () => {
     expect(offenders).toEqual([]);
   });
 
+  /**
+   * SCRUM-208 c15810 — A DORMANT BRANCH STAYS VISIBLY DORMANT.
+   *
+   * `SOURCE_EPISODE_REINSTATED` cannot fire on real data: it requires a
+   * RELEASED claim, and no production writer ever sets a claim status. Its
+   * resolver is unit-tested, which is legitimate — and is exactly the kind of
+   * green suite that gets mistaken for integration proof. That mistake is what
+   * blocked the previous head.
+   *
+   * So the absence of a caller is asserted rather than assumed. Wiring one
+   * fails here, which is the point: whoever does it has to decide what writes
+   * a RELEASED claim first.
+   */
+  it("SOURCE_EPISODE_REINSTATED has no production caller", () => {
+    const constructing = convexSourceFiles(CONVEX_ROOT)
+      .filter((file) => !file.endsWith(".test.ts"))
+      .filter((file) => fs.readFileSync(file, "utf8").includes("SOURCE_EPISODE_REINSTATED"))
+      .map((file) => path.relative(CONVEX_ROOT, file).split(path.sep).join("/"));
+
+    // Only the module that DEFINES the intent may mention it.
+    expect(constructing).toEqual(["commitments.ts"]);
+  });
+
   it("analyses a surface large enough for the result to mean something", () => {
     // A green result from an analyzer that examined nothing is
     // indistinguishable from a green result from a clean backend.

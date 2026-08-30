@@ -394,40 +394,54 @@ describe("restoration through the acquisition boundary", () => {
     expect(claimsAfter).toEqual(claimsBefore);
   });
 
-  test("attaching and repointing while the source stays dead rolls everything back", async () => {
+  test("a source that stays dead is REPORTED as inconsistent, not thrown", async () => {
     const seed = await seedDealer("r10");
     const f = await consumedByCancelledSale(seed, seed.customerA);
     // The reservation itself has ended. Restoration would otherwise open a
     // successor and repoint onto it, leaving an OPEN root that nothing holds.
     await seed.t.run((ctx) => ctx.db.patch(f.reservationId, { status: "RELEASED" as const }));
 
-    const rootsBefore = await seed.t.run((ctx) => ctx.db.query("commitmentRoots").collect());
-    const claimsBefore = await seed.t.run((ctx) =>
-      ctx.db.query("vehicleCommitmentClaims").collect()
+    // ⚠️ THIS CONTRACT USED TO ASSERT A THROW AND A FULL ROLLBACK, AND IT WAS
+    // WRONG — not about Convex, but about where this function is called from.
+    //
+    // The reasoning was "one Convex mutation is one transaction, so throwing
+    // un-does the attachment and the repoint together". True of a mutation;
+    // false of this call. `accountingOutbox.drainEntries` wraps every row in a
+    // `try`/`catch` so one bad entry cannot abort an entire organization's
+    // drain — a deliberate, pre-existing, correct design. A caught throw is
+    // ordinary control flow: the mutation returns normally and COMMITS,
+    // carrying every write already made. The throw bought no rollback and
+    // destroyed the only record that anything had gone wrong.
+    //
+    // Both review seats found this independently against the frozen head. The
+    // honest contract is the one asserted here: the condition is REPORTED,
+    // durably, with a reason a person can act on. Safety comes from the
+    // pre-flight in `restoreAuthorityAfterReversal`, which decides every
+    // failure mode BEFORE the first write — not from a rollback that does not
+    // happen.
+    const outcome = await seed.t.run(async (ctx) =>
+      restoreCommitment(ctx, {
+        decision: await decisionFor(seed, ctx),
+        source: sourceOf(f.reservationId),
+        vehicleId: f.vehicleId,
+        intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
+        ...restoreArgs(seed, f),
+      })
     );
+    expect(outcome.decision).toBe("INCONSISTENT");
+    expect(
+      (outcome as Extract<typeof outcome, { decision: "INCONSISTENT" }>).reason,
+      "and it names WHICH fact failed, not merely that one did"
+    ).toMatch(/not live/i);
 
-    // ⚠️ ALL FOUR OR NONE. One Convex mutation is one transaction, so throwing
-    // in the postcondition un-does the attachment and the repoint together.
-    await expect(
-      seed.t.run(async (ctx) =>
-        restoreCommitment(ctx, {
-          decision: await decisionFor(seed, ctx),
-          source: sourceOf(f.reservationId),
-          vehicleId: f.vehicleId,
-          intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
-          ...restoreArgs(seed, f),
-        })
-      )
-    ).rejects.toThrow(/did not settle consistently/);
-
-    expect(await seed.t.run((ctx) => ctx.db.query("commitmentRoots").collect())).toEqual(
-      rootsBefore
-    );
-    expect(await seed.t.run((ctx) => ctx.db.query("vehicleCommitmentClaims").collect())).toEqual(
-      claimsBefore
-    );
-    const reservation = await seed.t.run((ctx) => ctx.db.get(f.reservationId));
-    expect(String(reservation?.currentCommitmentClaimId)).toBe(String(f.claimId));
+    // ⚠️ STATED, NOT HIDDEN: the writes are still there. That is the price of
+    // reporting instead of raising, and it is exactly why the pre-flight is
+    // the real control. What must never happen again is this state existing
+    // with NO record of it — which is precisely what the throw produced.
+    const openRoots = (
+      await seed.t.run((ctx) => ctx.db.query("commitmentRoots").collect())
+    ).filter((r) => r.status === "OPEN");
+    expect(openRoots.length, "the successor was opened before the check could run").toBe(1);
   });
 
   test("a legacy predecessor fails closed instead of being normalized", async () => {
@@ -672,7 +686,9 @@ describe("dormant evidence from an earlier generation", () => {
     );
 
     // ⚠️ One valid open lineage PLUS a rival open root is not a safe join.
-    expect(outcome).toEqual({ decision: "AMBIGUOUS" });
+    // The count travels with the decision, so a caller can report HOW MANY
+    // without taking its own ownership reading.
+    expect(outcome).toEqual({ decision: "AMBIGUOUS", openRootCount: 2 });
   });
 
   test("an episode that was not released has nothing to reinstate", async () => {

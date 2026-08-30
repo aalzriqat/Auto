@@ -266,7 +266,12 @@ export default defineSchema({
         v.literal("ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS"),
         v.literal("AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE"),
         v.literal("ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL"),
-        v.literal("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS")
+        v.literal("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS"),
+        // The canonical records contradict each other, or the restoration's
+        // postcondition did not hold. Recorded rather than thrown: the
+        // deferred drain wraps every row in a try/catch, so a throw commits
+        // the partial state anyway AND destroys the only evidence of it.
+        v.literal("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT")
       )
     ),
     authorityOutcomeAt: v.optional(v.number()),

@@ -17,7 +17,7 @@ import schema from "./schema";
 import { Id } from "./_generated/dataModel";
 import { completeDeferredReversal } from "./utils/depositApplications";
 import { reinstateDirectDepositHold } from "./utils/commitmentWriters";
-import { settleFreedHoldsAuthority } from "./accountingOutbox";
+import { AUTHORITY_SEVERITY, settleFreedHoldsAuthority } from "./accountingOutbox";
 import { acquireVehicle, consumeRootForSale } from "./commitments";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { COMMITMENT_AUTHORITY_V1 } from "./utils/commitmentKernel";
@@ -510,5 +510,253 @@ describe("the direct re-hold writer refuses what it must", () => {
     await seed.t.run((ctx) => ctx.db.patch(f.depositId, { orgId: otherOrg }));
 
     expect(await attempt(seed, f.depositId)).toBeNull();
+  });
+});
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SCRUM-208 c15810 — THE CUSTOMER'S OWN SECOND INSTALMENT IS NOT A RIVAL
+//
+// Found by Codex against 6f7d1b5c3 and reproduced before being fixed. The
+// deferred drain used to take its OWN `resolveOwnership` reading before
+// reinstating a hold, and treat ANY owned root as a rival. On a deal paid in
+// two instalments with both reversals deferred, the first instalment restored
+// the deal — and the second was then reported as a rival OF ITS OWN CUSTOMER'S
+// root, leaving that money HELD with no active hold and no episode. Invisible
+// to the canonical reader, so releasing the first deposit afterwards would free
+// the car while the dealership still held the second customer's money.
+//
+// The resolver has always been able to answer this correctly (JOIN_LINEAGE).
+// The caller simply was not asking it.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("a deal paid in instalments", () => {
+  /**
+   * Two deposits on ONE deal, both reversals deferred.
+   *
+   * ⚠️ THE SHARED QUOTE IS THE LINEAGE PROOF, and it has to be. A first
+   * reproduction attempt gave the second deposit its own id as lineage and the
+   * authority correctly REFUSED it as an independent deal — which is the
+   * product's real behaviour, not the scenario. A second instalment belongs to
+   * the same deal because it is on the same quote.
+   */
+  async function twoInstalmentsDeferred(seed: Seed) {
+    const vehicleId = await vehicle(seed);
+    const saleId = await seed.t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: seed.orgId,
+        vehicleId,
+        customerId: seed.customerId,
+        salespersonId: seed.userId,
+        salePrice: 30_000,
+        saleDate: Date.now(),
+        status: "CANCELLED" as const,
+      })
+    );
+    const quoteId = await seed.t.run((ctx) =>
+      ctx.db.insert("quotes", {
+        orgId: seed.orgId,
+        customerId: seed.customerId,
+        vehicleId,
+        mode: "CASH" as const,
+        vehiclePrice: 30_000,
+        downPayment: 0,
+        termMonths: 0,
+        status: "DRAFT" as const,
+        createdBy: seed.userId,
+        createdAt: Date.now(),
+      })
+    );
+
+    const instalment = async (tag: string) => {
+      const depositId = await seed.t.run((ctx) =>
+        ctx.db.insert("deposits", {
+          orgId: seed.orgId,
+          vehicleId,
+          customerId: seed.customerId,
+          quoteId,
+          amount: 1_000,
+          status: "HELD" as const,
+          // As a deferred cancellation leaves it: money back, car not re-held.
+          holdActive: false,
+          usesVehicleHoldRows: false,
+          createdBy: seed.userId,
+          createdAt: Date.now(),
+        })
+      );
+      await seed.t.run((ctx) =>
+        acquireVehicle(ctx, {
+          orgId: seed.orgId,
+          vehicleId,
+          customerId: seed.customerId,
+          createdBy: seed.userId,
+          evidence: { kind: "DEPOSIT", depositId },
+          lineage: { quoteId },
+        })
+      );
+      const key = `apply_${tag}_${depositId}`;
+      await seed.t.run((ctx) =>
+        ctx.db.insert("depositApplications", {
+          orgId: seed.orgId,
+          depositId,
+          vehicleId,
+          saleId,
+          customerId: seed.customerId,
+          amountMinor: 100_000,
+          currency: "JOD",
+          treatment: "CUSTOMER_RECEIVABLE" as const,
+          eventType: "deposit.applied",
+          eventSourceType: "depositApplications",
+          eventSourceId: String(depositId),
+          eventVersion: 1,
+          eventIdempotencyKey: key,
+          status: "REVERSING" as const,
+          appliedAt: Date.now(),
+          appliedBy: seed.userId,
+        })
+      );
+      return { depositId, reversalKey: `reversed_${key}` };
+    };
+
+    const first = await instalment("one");
+    const second = await instalment("two");
+
+    // The REAL finalization writer: it patches the ROOT and nothing else.
+    await seed.t.run((ctx) =>
+      consumeRootForSale(ctx, {
+        orgId: seed.orgId,
+        vehicleId,
+        saleId,
+        reason: "sale completed",
+        decisionNow: Date.now(),
+      })
+    );
+    return { vehicleId, saleId, quoteId, first, second };
+  }
+
+  const drainOne = async (seed: Seed, reversalKey: string) =>
+    await seed.t.run(async (ctx) => {
+      const freed = await completeDeferredReversal(ctx, {
+        orgId: seed.orgId,
+        reversalIdempotencyKey: reversalKey,
+        postedAt: Date.now(),
+      });
+      return await settleFreedHoldsAuthority(ctx, seed.orgId, freed, Date.now(), seed.userId);
+    });
+
+  test("the second instalment JOINS the deal the first one restored", async () => {
+    const seed = await seedDealer("i1");
+    const f = await twoInstalmentsDeferred(seed);
+
+    expect((await drainOne(seed, f.first.reversalKey))?.outcome).toBe("RESTORED");
+    // ⚠️ THE CONTRACT. Before the fix this was
+    // ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL, naming the customer's own
+    // restored root as the rival.
+    expect((await drainOne(seed, f.second.reversalKey))?.outcome).toBe("RESTORED");
+
+    const deposits = await seed.t.run((ctx) => ctx.db.query("deposits").collect());
+    expect(
+      deposits.every((d) => d.holdActive === true),
+      "both instalments hold the car again — neither is left stranded"
+    ).toBe(true);
+    expect(
+      deposits.every((d) => d.singleVehicleCommitmentClaimId !== undefined),
+      "and each names the episode it is now evidence of"
+    ).toBe(true);
+
+    // ⚠️ ONE OPEN ROOT, TWO EPISODES. The second instalment joins the restored
+    // deal; it does not open a rival generation of its own.
+    const roots = await seed.t.run((ctx) => ctx.db.query("commitmentRoots").collect());
+    const open = roots.filter((r) => r.status === "OPEN");
+    expect(open).toHaveLength(1);
+    const claims = await seed.t.run((ctx) => ctx.db.query("vehicleCommitmentClaims").collect());
+    expect(claims.filter((c) => String(c.rootId) === String(open[0]._id))).toHaveLength(2);
+  });
+
+  test("order does not matter — whichever instalment drains first restores the deal", async () => {
+    const seed = await seedDealer("i2");
+    const f = await twoInstalmentsDeferred(seed);
+
+    // The drain visits rows in queue order, which no caller controls.
+    expect((await drainOne(seed, f.second.reversalKey))?.outcome).toBe("RESTORED");
+    expect((await drainOne(seed, f.first.reversalKey))?.outcome).toBe("RESTORED");
+
+    const roots = await seed.t.run((ctx) => ctx.db.query("commitmentRoots").collect());
+    expect(roots.filter((r) => r.status === "OPEN")).toHaveLength(1);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SCRUM-208 c15810 — THE SPINE REPORTS; IT NEVER THROWS
+//
+// Found by BOTH review seats against 6f7d1b5c3. `drainEntries` wraps every row
+// in a try/catch so one bad entry cannot abort an organization's drain. A throw
+// from the settlement is therefore ABSORBED — the mutation commits anyway,
+// carrying whatever the restoration had already written, and the retry finds
+// the reversal already completed and marks the entry POSTED with no
+// authorityOutcome at all. Corruption became the one outcome that left no
+// trace, in a taxonomy built specifically so it could not be overwritten.
+//
+// The fix is not to re-throw harder — that would abort every unrelated entry in
+// the organization. It is to decide every failure mode BEFORE the first write,
+// and to REPORT what a post-write check finds.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("contradictory canonical records", () => {
+  test("are reported as BLOCKED_INCONSISTENT, with nothing thrown", async () => {
+    const seed = await seedDealer("x1");
+    const f = await deferredDirectCancellation(seed);
+
+    // A row that contradicts the range it sits in: live in the canonical
+    // DIRECT index, and VOIDED. `hasCanonicalDepositHold` refuses rather than
+    // filters, because filtering would answer "nothing holds this car" and
+    // free a vehicle somebody has paid to hold.
+    await seed.t.run((ctx) =>
+      ctx.db.insert("deposits", {
+        orgId: seed.orgId,
+        vehicleId: f.vehicleId,
+        customerId: seed.customerB,
+        amount: 1,
+        status: "VOIDED" as const,
+        holdActive: true,
+        usesVehicleHoldRows: false,
+        createdBy: seed.userId,
+        createdAt: Date.now(),
+      })
+    );
+
+    const sources = await completion(seed, f.reversalKey);
+    // ⚠️ RESOLVES, NEVER REJECTS. If this throws, `drainEntries` swallows it
+    // and the entry is marked POSTED on the retry with no outcome recorded.
+    const outcome = await settle(seed, sources);
+    expect(outcome?.outcome).toBe("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT");
+    expect(outcome && "detail" in outcome ? outcome.detail : "").toMatch(/disagree/i);
+
+    // ⚠️ AND IT REFUSED BEFORE WRITING. The pre-flight runs the canonical
+    // readers while nothing has been written yet, so a contradiction costs a
+    // recorded outcome and NOT a half-restoration.
+    const roots = await seed.t.run((ctx) => ctx.db.query("commitmentRoots").collect());
+    expect(roots.filter((r) => r.status === "OPEN"), "no successor was opened").toHaveLength(0);
+    expect(
+      (await seed.t.run((ctx) => ctx.db.get(f.depositId)))?.holdActive,
+      "and the hold was not reinstated against records nobody can trust"
+    ).toBe(false);
+  });
+
+  test("outrank every other outcome, so a clean car cannot bury them", () => {
+    // A reversal can free several cars at once, and the order rows come back in
+    // is not something a caller controls.
+    expect(AUTHORITY_SEVERITY.ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT).toBeGreaterThan(
+      AUTHORITY_SEVERITY.ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS
+    );
+    expect(AUTHORITY_SEVERITY.ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS).toBeGreaterThan(
+      AUTHORITY_SEVERITY.ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL
+    );
+    expect(AUTHORITY_SEVERITY.AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE).toBeGreaterThan(
+      AUTHORITY_SEVERITY.ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS
+    );
+    expect(AUTHORITY_SEVERITY.ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS).toBeGreaterThan(
+      AUTHORITY_SEVERITY.RESTORED
+    );
   });
 });

@@ -29,7 +29,6 @@ import {
   AUTHORITY_SEVERITY,
   authorityOutcomeDetail,
   DeferredAuthorityOutcome,
-  resolveOwnership,
   restoreAuthorityAfterReversal,
   settleAuthorityAfterReversal,
 } from "./commitments";
@@ -375,38 +374,21 @@ async function settleOneReversalSource(
     };
   }
 
-  // ⚠️ THE HOLD AND THE AUTHORITY GO BACK TOGETHER OR NOT AT ALL.
+  // ⚠️ NO SECOND OPINION ABOUT OWNERSHIP HERE. THAT WAS THE DEFECT.
   //
-  // The hold is only reinstated when the car is genuinely free — a rival never
-  // has its vehicle taken — and the restoration that follows is what makes the
-  // customer's DEAL live again rather than merely their money. Both writes are
-  // in this one transaction, alongside the reversal completion that called us.
+  // This used to take its own `resolveOwnership` reading before reinstating
+  // the hold, and treat ANY owned root as a rival. It cannot tell a rival's
+  // root from a later generation of THIS deal's own lineage — so on a deal
+  // paid in two instalments with both reversals deferred, the first instalment
+  // restored the deal and the second was then reported as a rival of its own
+  // customer's root. That money stayed HELD with no active hold and no
+  // episode, invisible to the canonical reader; releasing the first deposit
+  // afterwards would free the car while the dealership still held the second.
   //
-  // ⚠️ AND THE ALREADY-HELD ROW IS NOT SHORT-CIRCUITED. `holdActive === true`
-  // used to return RESTORED immediately, which reported a restoration for a
-  // deposit whose deal had never been reopened, and — worse — would now hand a
-  // rival check the restored root and call it a rival. The restoration
-  // resolver is idempotent by construction: it recognises its own successor
-  // episode and answers ALREADY_LIVE.
-  if (deposit.holdActive !== true) {
-    const ownership = await resolveOwnership(ctx, orgId, source.vehicleId);
-    if (ownership.kind === "AMBIGUOUS") {
-      // Accounting stays complete; the car is left byte-identical for a human.
-      return {
-        outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS",
-        detail: `${ownership.roots.length} open commitment roots on this vehicle`,
-      };
-    }
-    if (ownership.kind === "OWNED") {
-      // ⚠️ A RIVAL NEVER HAS ITS VEHICLE TAKEN. The money stays the customer's
-      // held funds and the car stays with whoever holds it now.
-      return { outcome: "ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL", rootId: ownership.root._id };
-    }
-    // The car is free: the single-vehicle deposit goes back on hold against
-    // it, which is the behaviour the cancellation deliberately deferred.
-    await reinstateDirectDepositHold(ctx, { orgId, depositId: deposit._id });
-  }
-
+  // The resolver already owns that judgment and answers JOIN_LINEAGE. So the
+  // hold is handed to the spine as the step to run once the decision says the
+  // deal comes back — in the same transaction as the episode that justifies
+  // it — and this function no longer decides anything about the vehicle.
   return await restoreAuthorityAfterReversal(ctx, {
     run,
     orgId,
@@ -414,6 +396,9 @@ async function settleOneReversalSource(
     source: { kind: "DEPOSIT", depositId: deposit._id },
     saleId: source.saleId,
     createdBy: actorId,
+    makeSourceLive: async (inner) => {
+      await reinstateDirectDepositHold(inner, { orgId, depositId: deposit._id });
+    },
   });
 }
 

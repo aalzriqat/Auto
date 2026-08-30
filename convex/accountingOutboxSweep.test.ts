@@ -96,14 +96,42 @@ describe("the outbox drain sweeps past held rows", () => {
       await queueExpense(t, orgId, userId, postableDate, i);
     }
 
-    // One sweep. Before the cursor, the first page was 50 held rows, "no
-    // progress" stopped the chain, and these 5 were never looked at.
-    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
-    // The sweep continues by scheduling itself, so the queue has to be drained
-    // for the later pages to run at all.
-    vi.useFakeTimers();
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
-    vi.useRealTimers();
+    // ⚠️ FAKE TIMERS GO ON BEFORE THE SWEEP STARTS, NOT AFTER IT.
+    //
+    // The sweep continues by scheduling ITSELF, so the later pages only run if
+    // the scheduler chain is driven. Installing fake timers after triggering
+    // the sweep left the chain already running on REAL timers — instrumenting
+    // it showed two continuations already `success` and two still `pending`
+    // before the pump was even installed. `vi.runAllTimers` drives fake timers
+    // only, so those orphaned real ones never advanced, and the assertions ran
+    // against a half-finished chain. It passed alone and failed 100% of the
+    // time alongside another convex-heavy file, because the race is decided by
+    // how much CPU the two workers are sharing — a gate that fails on machine
+    // load rather than on what it asserts.
+    //
+    // `Date` is deliberately NOT faked: this test builds accounting periods
+    // from the real calendar year, and freezing the clock at the epoch would
+    // put every queued entry outside the period it was written for.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      // Before the cursor, the first page was 50 held rows, "no progress"
+      // stopped the chain, and these 5 were never looked at.
+      await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+      // Pumped to a fixed point rather than once: the continuation is
+      // scheduled BY a scheduled function, so one pass can return with more
+      // work still queued behind it.
+      for (let pass = 0; pass < 10; pass += 1) {
+        await t.finishAllScheduledFunctions(vi.runAllTimers);
+        const queued = (
+          await t.run(async (ctx: any) =>
+            await ctx.db.system.query("_scheduled_functions").collect()
+          )
+        ).filter((f: any) => f.state.kind === "pending" || f.state.kind === "inProgress").length;
+        if (queued === 0) break;
+      }
+    } finally {
+      vi.useRealTimers();
+    }
 
     const stillPending = await t.run(async (ctx: any) =>
       await ctx.db
