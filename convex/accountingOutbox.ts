@@ -899,7 +899,29 @@ async function settleOneReversalSource(
     // A known contradiction is an EXPECTED terminal answer for both
     // representations: it terminalizes on the first execution, keeps its
     // diagnosis, writes no authority, and never enters the retry channel.
-    if (context.kind === "READY") {
+    // ⚠️ `READY` IS NOT `CANONICAL`, AND THAT MISREADING WAS A DEFECT OF ITS
+    // OWN (SCRUM-208 c15825, found by Codex against 3882014ae).
+    //
+    // `tryDecisionContext` answers `READY` whenever authority could be
+    // RESOLVED — which includes a LEGACY organization, the majority case until
+    // SCRUM-201's cutover. The canonical readers then refuse a non-V1 decision
+    // by THROWING (`requireCanonicalAuthority`), and `probeCanonicalHold`
+    // persists a curated `ConvexError` verbatim as a data contradiction. So
+    // gating on `kind === "READY"` alone recorded "this dealership is not on
+    // the canonical authority" as "this dealership's records contradict each
+    // other" — terminally, in the field a VIEW_FINANCE user reads. The two are
+    // not interchangeable: one says the records were never examined.
+    //
+    // ⚠️ AND THE GATE IS `V1`, NOT A REDIRECT TO WITHHELD. Returning WITHHELD
+    // here would ALSO change what a legacy slice does — today it settles
+    // through the legacy liveness readers inside `settleAuthorityAfterReversal`
+    // and reaches a real business answer. Restoring the audit label while
+    // silently dropping that settlement would be half a fix, and which of the
+    // two legacy policies is correct is a product decision, not something a
+    // repair for this defect gets to make. Non-V1 therefore falls through
+    // BYTE-IDENTICALLY to its previous behaviour; only V1 enters the probe,
+    // which is the only version whose readers can produce a contradiction.
+    if (context.kind === "READY" && context.decision.authorityVersion === "V1") {
       const probe = await probeCanonicalHold(ctx, context.decision, hold.vehicleId);
       if (!probe.ok) {
         return {

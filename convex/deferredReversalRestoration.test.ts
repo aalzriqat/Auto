@@ -1204,3 +1204,95 @@ describe("a source that cannot be made live", () => {
     expect((await seed.t.run((ctx) => ctx.db.get(cleanWork)))?.status).toBe("SETTLED");
   });
 });
+
+/**
+ * SCRUM-208 c15825 — A LEGACY ORGANIZATION IS NOT A CONTRADICTED ONE.
+ *
+ * ⚠️ FOUND BY CODEX AGAINST 3882014ae, AND INTRODUCED BY MY OWN FIX FOR THE
+ * OTHER SEAT'S FINDING.
+ *
+ * `tryDecisionContext` returns `kind: "READY"` for a LEGACY organization — it
+ * means "authority was resolvable", not "the canonical authority is on". The
+ * canonical readers then refuse a non-V1 decision by THROWING a `ConvexError`
+ * (`requireCanonicalAuthority`), and `probeCanonicalHold` persists a curated
+ * `ConvexError` verbatim as a data contradiction. So gating the new SLICE
+ * pre-flight on `context.kind === "READY"` turned "this dealership is not on
+ * the canonical authority" — the MAJORITY case until SCRUM-201's cutover —
+ * into "this dealership's records contradict each other", terminally, in the
+ * audit field every VIEW_FINANCE user reads.
+ *
+ * The DIRECT path never had this: it checks `authorityVersion !== "V1"` and
+ * returns WITHHELD before it probes. I mirrored the probe and not the guard.
+ */
+describe("a legacy organization reaching the sliced path", () => {
+  test("is never recorded as canonically inconsistent", async () => {
+    const seed = await seedDealer("lg1");
+    // Legacy: no stored authority version at all, which `admitAuthorityVersion`
+    // admits as LEGACY rather than refusing.
+    await seed.t.run((ctx) =>
+      ctx.db.patch(seed.orgId, { commitmentAuthorityVersion: undefined })
+    );
+
+    const vehicleId = await vehicle(seed);
+    const depositId = await seed.t.run((ctx) =>
+      ctx.db.insert("deposits", {
+        orgId: seed.orgId,
+        vehicleId,
+        customerId: seed.customerId,
+        amount: 800,
+        status: "HELD" as const,
+        holdActive: false,
+        usesVehicleHoldRows: true,
+        createdBy: seed.userId,
+        createdAt: Date.now(),
+      })
+    );
+    const saleId = await seed.t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: seed.orgId,
+        vehicleId,
+        customerId: seed.customerId,
+        salespersonId: seed.userId,
+        salePrice: 18_000,
+        saleDate: Date.now(),
+        status: "CANCELLED" as const,
+      })
+    );
+    const holdId = await seed.t.run((ctx) =>
+      ctx.db.insert("depositVehicleHolds", {
+        orgId: seed.orgId,
+        depositId,
+        vehicleId,
+        active: false,
+        allocationStatus: "RELEASED_AWAITING_DECISION" as const,
+        createdAt: Date.now(),
+      })
+    );
+
+    const eventId = await seedAuthorityEvent(
+      seed.t,
+      seed.orgId,
+      seed.userId,
+      "reversed_legacy_1"
+    );
+    const [workId] = await seedAuthorityWork(seed.t, seed.orgId, eventId, [
+      { kind: "SLICE", depositId, vehicleId, saleId, holdId },
+    ]);
+
+    const summary = await settleThroughWorkers(seed.t, [workId], eventId);
+
+    // ⚠️ THE DEFECT, STATED AS THE ASSERTION. A legacy dealership must never be
+    // reported as having contradictory canonical records: nothing canonical was
+    // ever examined, and the two claims are not interchangeable.
+    expect(
+      summary?.outcome,
+      "a dealership not on the canonical authority has no canonical contradiction"
+    ).not.toBe("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT");
+
+    // And the legacy settlement still reaches its own business answer, exactly
+    // as it did before the pre-flight was added. Restoring the audit label
+    // without preserving the settlement would be half a fix.
+    expect(summary?.outcome).toBe("ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS");
+    expect((await seed.t.run((ctx) => ctx.db.get(workId)))?.status).toBe("SETTLED");
+  });
+});
