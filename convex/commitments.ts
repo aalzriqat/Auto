@@ -2346,6 +2346,39 @@ export async function restoreAuthorityAfterReversal(
   // again — inside the same transaction as the episode that justifies it.
   if (decided.decision !== "ALREADY_LIVE" && args.makeSourceLive) {
     await args.makeSourceLive(ctx);
+
+    // ⚠️ AND THE REFUSAL IS READ. A GUARD NOBODY READS IS NOT A GUARD.
+    //
+    // `makeSourceLive` returns `void`, so a writer that declined — a deleted
+    // row, a sliced representation, another dealership's deposit — used to be
+    // indistinguishable from one that succeeded. Execution carried on and
+    // `restoreCommitment` opened a successor root, attached a claim and moved
+    // the source pointer for a source that is not live; the postcondition
+    // reported INCONSISTENT only AFTER all three writes were committed. Found
+    // by Codex against 641ead8cb, in the fix that closed the round before it.
+    //
+    // ⚠️ THIS CANNOT BE HOISTED INTO THE RESOLVER. At decision time the source
+    // is legitimately NOT live: a deferred cancellation deliberately leaves the
+    // hold down while the reversal sits in the outbox, and `makeSourceLive` is
+    // the step that changes that. Liveness is only a meaningful question once
+    // the callback has run, so the check belongs here and nowhere earlier.
+    //
+    // The binding is re-read rather than a boolean returned from the writer,
+    // because a boolean would only carry that one writer's opinion. This reads
+    // the same state `restoreCommitment` is about to depend on — pointer,
+    // evidence, lineage and liveness together — while nothing has been written.
+    const relive = await resolveCanonicalBinding(ctx, decision, {
+      source: args.source,
+      vehicleId: args.vehicleId,
+    });
+    if (!relive.ok || !relive.binding.live) {
+      return {
+        outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT",
+        detail: relive.ok
+          ? "this source could not be made live again, so nothing was restored"
+          : relive.reason,
+      };
+    }
   }
 
   const restored =

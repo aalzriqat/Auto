@@ -924,3 +924,164 @@ describe("a sliced source meeting the same contradiction", () => {
    * that asserts a string literal against itself and proves nothing.
    */
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SCRUM-208 — A REFUSAL NOBODY READS IS NOT A GUARD
+//
+// Found by Codex against 641ead8cb, in the fix that closed the round before it.
+// `reinstateDirectDepositHold` was taught to refuse a deleted source and it
+// does — but `makeSourceLive` was typed `Promise<void>` and the caller dropped
+// the `null` on the floor. So the refusal changed nothing: `restoreCommitment`
+// still opened a successor root, attached a claim and moved the source pointer
+// for a source that is not live, and the postcondition reported INCONSISTENT
+// only AFTER those writes were committed.
+//
+// ⚠️ AND THE GATE HAS TO SIT *AFTER* `makeSourceLive`, NOT BEFORE IT. At
+// decision time the source is legitimately NOT live — a deferred cancellation
+// deliberately leaves `holdActive` false while the reversal sits in the outbox,
+// and the callback is the thing that changes it. So `resolveRestorationDecision`
+// cannot gate on liveness; only a re-read afterwards can.
+//
+// The assertion that matters here is NOT that the outcome string says
+// INCONSISTENT — the old code said that too, while committing the writes. It is
+// that NOTHING WAS WRITTEN: no open root, no successor claim, no moved pointer.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("a source that cannot be made live", () => {
+  test("opens no root, attaches no claim and moves no pointer", async () => {
+    const seed = await seedDealer("rf1");
+    const f = await deferredDirectCancellation(seed);
+    const pointerBefore = (await seed.t.run((ctx) => ctx.db.get(f.depositId)))
+      ?.singleVehicleCommitmentClaimId;
+
+    // The one state the writer refuses: HELD (so the money looks restorable)
+    // but deleted (so no reader will ever call it live).
+    await seed.t.run((ctx) => ctx.db.patch(f.depositId, { isDeleted: true }));
+
+    const claimsBefore = (
+      await seed.t.run((ctx) => ctx.db.query("vehicleCommitmentClaims").collect())
+    ).length;
+
+    const outcome = await settle(seed, await completion(seed, f.reversalKey));
+
+    expect(outcome?.outcome).toBe("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT");
+
+    // ⚠️ THE PART THE OLD CODE FAILED. It reported the same outcome while
+    // leaving all three of these behind.
+    const roots = await seed.t.run((ctx) => ctx.db.query("commitmentRoots").collect());
+    expect(roots.filter((r) => r.status === "OPEN"), "no successor root was opened").toHaveLength(
+      0
+    );
+    expect(
+      (await seed.t.run((ctx) => ctx.db.query("vehicleCommitmentClaims").collect())).length,
+      "no successor claim was attached"
+    ).toBe(claimsBefore);
+    expect(
+      (await seed.t.run((ctx) => ctx.db.get(f.depositId)))?.singleVehicleCommitmentClaimId,
+      "the source pointer did not move"
+    ).toBe(pointerBefore);
+    expect(
+      (await seed.t.run((ctx) => ctx.db.get(f.depositId)))?.holdActive,
+      "and the deleted source was never re-held"
+    ).toBe(false);
+  });
+
+  /**
+   * SCRUM-208 — ONE BAD CAR DOES NOT COST THE OTHERS THEIR OUTCOME.
+   *
+   * Raised by Sonnet MAX against 641ead8cb as a coverage gap it could not
+   * execute itself. It matters because of what the pre-fix code did to a BATCH:
+   * `completeDeferredReversal` frees every source before settlement begins, so
+   * a throw on one source skipped every source after it — and the one-way gate
+   * meant the retry freed nothing, so NONE of them ever recorded an outcome.
+   *
+   * The catch is inside the loop precisely so the rest of the batch survives.
+   * Moving it outside would restore the old behaviour while keeping every
+   * single-source test green, which is exactly why this asserts a batch.
+   */
+  test("a contradictory car in the batch does not stop the clean one settling", async () => {
+    const seed = await seedDealer("rf2");
+    const clean = await deferredDirectCancellation(seed);
+
+    // A second car whose canonical records contradict each other.
+    const rogueVehicle = await vehicle(seed);
+    const rogueSale = await seed.t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: seed.orgId,
+        vehicleId: rogueVehicle,
+        customerId: seed.customerId,
+        salespersonId: seed.userId,
+        salePrice: 20_000,
+        saleDate: Date.now(),
+        status: "CANCELLED" as const,
+      })
+    );
+    const rogueDeposit = await seed.t.run((ctx) =>
+      ctx.db.insert("deposits", {
+        orgId: seed.orgId,
+        vehicleId: rogueVehicle,
+        customerId: seed.customerId,
+        amount: 500,
+        status: "HELD" as const,
+        holdActive: false,
+        usesVehicleHoldRows: true,
+        createdBy: seed.userId,
+        createdAt: Date.now(),
+      })
+    );
+    await seed.t.run((ctx) =>
+      acquireVehicle(ctx, {
+        orgId: seed.orgId,
+        vehicleId: rogueVehicle,
+        customerId: seed.customerId,
+        createdBy: seed.userId,
+        evidence: { kind: "DEPOSIT", depositId: rogueDeposit },
+        lineage: { depositId: rogueDeposit },
+      })
+    );
+    const rogueHold = await seed.t.run((ctx) =>
+      ctx.db.insert("depositVehicleHolds", {
+        orgId: seed.orgId,
+        depositId: rogueDeposit,
+        vehicleId: rogueVehicle,
+        active: false,
+        allocationStatus: "RELEASED_AWAITING_DECISION" as const,
+        createdAt: Date.now(),
+      })
+    );
+    await seed.t.run((ctx) =>
+      ctx.db.insert("deposits", {
+        orgId: seed.orgId,
+        vehicleId: rogueVehicle,
+        customerId: seed.customerB,
+        amount: 1,
+        status: "VOIDED" as const,
+        holdActive: true,
+        usesVehicleHoldRows: false,
+        createdBy: seed.userId,
+        createdAt: Date.now(),
+      })
+    );
+
+    const rogue = {
+      kind: "SLICE" as const,
+      depositId: rogueDeposit,
+      vehicleId: rogueVehicle,
+      saleId: rogueSale,
+      holdId: rogueHold,
+    };
+    const cleanSources = await completion(seed, clean.reversalKey);
+
+    // ⚠️ THE ROGUE CAR GOES FIRST. With the catch outside the loop, the clean
+    // car behind it is never reached at all.
+    const outcome = await settle(seed, [rogue, ...cleanSources]);
+
+    // Worst-outcome-wins still reports the contradiction...
+    expect(outcome?.outcome).toBe("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT");
+    // ...and the clean car behind it was still settled and re-held.
+    expect(
+      (await seed.t.run((ctx) => ctx.db.get(clean.depositId)))?.holdActive,
+      "the clean car was reached and restored despite the rogue ahead of it"
+    ).toBe(true);
+  });
+});

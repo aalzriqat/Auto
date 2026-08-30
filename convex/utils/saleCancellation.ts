@@ -502,6 +502,27 @@ async function reinstateAppliedDeposits(
         //
         // The deferred half lives in `accountingOutbox.settleOneReversalSource`
         // and calls the SAME function, so the two paths cannot drift.
+        //
+        // ⚠️ BUT THEY ARE NOT PROTECTED THE SAME WAY, AND THAT ASYMMETRY IS
+        // DELIBERATE — DO NOT "TIDY" IT AWAY.
+        //
+        // The deferred caller wraps this in a per-source `try`/`catch` inside
+        // `settleFreedHoldsAuthority`, because it runs under
+        // `accountingOutbox.drainEntries`, whose own per-row catch would
+        // otherwise absorb a throw and COMMIT a half-restoration with no record
+        // of it. This synchronous caller has no such catch anywhere in this
+        // loop or in either of its callers — so an unexpected throw here
+        // propagates out and Convex aborts the whole mutation. Nothing commits.
+        // That is a different mechanism reaching the same safety property, and
+        // here it is the stronger one.
+        //
+        // So: adding a `try`/`catch`/`continue` around this call — say, to stop
+        // one bad car blocking the others in a multi-vehicle cancellation —
+        // would REMOVE that atomic abort and silently reintroduce the exact
+        // silent-loss shape SCRUM-208 spent three rounds closing. If that
+        // behaviour is ever wanted, it needs the deferred path's full treatment
+        // (a recorded, worst-ranked outcome pushed into `authorityOutcomes`),
+        // not a bare catch. Raised by Sonnet MAX against 641ead8cb.
         authorityOutcomes.push(
           await restoreAuthorityAfterReversal(ctx, {
             run,
