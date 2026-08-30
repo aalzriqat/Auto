@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import path from "node:path";
 import {
   auditCommitmentWrites,
+  auditRootInserts,
   convexSourceFiles,
+  findRootInsertSites,
   findUnchokedWrites,
   summarize,
 } from "./commitmentWriteGuard";
@@ -55,6 +57,34 @@ describe("commitment liveness writes go through the choke", () => {
     expect(convexSourceFiles(CONVEX_ROOT).length).toBeGreaterThan(100);
   });
 
+  describe("root creation has exactly one site", () => {
+    it("is created in one place only, and that place is the private openRoot", () => {
+      // ⚠️ M1 — one place decides which root an operation acts under, one
+      // place opens it. A second opener re-creates the defect that gave one
+      // physical car two roots, and the field guard above CANNOT see it:
+      // `commitments.ts` is choke-exempt, so an extra insert inside that file
+      // passes it. This check deliberately ignores the choke list.
+      expect(auditRootInserts(CONVEX_ROOT)).toEqual([
+        { file: "commitments.ts", enclosingFunction: "openRoot" },
+      ]);
+    });
+
+    it("names the enclosing function, so a second opener is identifiable", () => {
+      const source = [
+        `async function openRoot(ctx) {`,
+        `  return await ctx.db.insert("commitmentRoots", { status: "OPEN" });`,
+        `}`,
+        `export async function openSuccessorRoot(ctx) {`,
+        `  return await ctx.db.insert("commitmentRoots", { status: "OPEN" });`,
+        `}`,
+      ].join("\n");
+      expect(findRootInsertSites(source, "commitments.ts")).toEqual([
+        { file: "commitments.ts", enclosingFunction: "openRoot" },
+        { file: "commitments.ts", enclosingFunction: "openSuccessorRoot" },
+      ]);
+    });
+  });
+
   describe("what the analyzer actually detects", () => {
     it("catches a raw patch of a guarded field outside the choke", () => {
       const source = `await ctx.db.patch(reservation.depositId, { holdActive: false });`;
@@ -88,6 +118,28 @@ describe("commitment liveness writes go through the choke", () => {
     it("does not mistake a later object literal for this call's argument", () => {
       const source = `await ctx.db.patch(id, someVar);\nconst other = { holdActive: true };`;
       expect(findUnchokedWrites(source, "leads.ts")).toEqual([]);
+    });
+
+    it("reads code, not prose — a comment describing the rule is not a violation", () => {
+      // Documenting the rule must not break the check that enforces it.
+      const commented = [
+        `/**`,
+        ` * Never write ctx.db.patch(deposit._id, { holdActive: false }) here.`,
+        ` */`,
+        `// and never ctx.db.insert("commitmentRoots", { status: "OPEN" })`,
+      ].join("\n");
+      expect(findUnchokedWrites(commented, "vehicles.ts")).toEqual([]);
+      expect(findRootInsertSites(commented, "vehicles.ts")).toEqual([]);
+    });
+
+    it("does not treat a // inside a string literal as a comment", () => {
+      const source = [
+        `const url = "https://example.test/docs";`,
+        `await ctx.db.patch(id, { holdActive: false });`,
+      ].join("\n");
+      expect(findUnchokedWrites(source, "vehicles.ts")).toEqual([
+        { file: "vehicles.ts", method: "patch", field: "holdActive" },
+      ]);
     });
   });
 });

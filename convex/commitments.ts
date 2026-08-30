@@ -42,8 +42,12 @@
 import { ConvexError } from "convex/values";
 import { hasActiveDepositHold } from "./utils/depositHelpers";
 import {
+  assertPrincipalMatches,
   AuthorityDecisionContext,
+  EvidenceEpisode,
+  PrincipalBoundEvidence,
   requireCanonicalAuthority,
+  requireCurrentEpisode,
   resolveLineageTip,
 } from "./utils/commitmentKernel";
 import { Doc, Id } from "./_generated/dataModel";
@@ -748,21 +752,64 @@ export function throwRefusal(acting: Extract<ActingRoot, { decision: "REFUSE" }>
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * What happened when a restoration tried to continue a finished deal.
+ * Why a restoration believes it is entitled to continue a finished deal.
+ *
+ * ⚠️ EXACT, NOT CATEGORICAL. "A sale was cancelled" is not a reason to restore
+ * THIS deal — "the exact sale that consumed THIS root was cancelled" is. The
+ * same holds for a released root and the exact episode whose end released it.
+ * Without the exact reference, any cancellation anywhere in the dealership
+ * would satisfy a restoration of any root.
+ */
+export type RestorationIntent =
+  /** The exact sale that consumed the root has been cancelled. */
+  | { kind: "SALE_CANCELLED"; saleId: Id<"sales"> }
+  /** The exact source episode whose release ended the root is reinstated. */
+  | { kind: "SOURCE_EPISODE_REINSTATED" };
+
+/**
+ * What the authority decided about a restoration. **Writes nothing.**
  *
  * ⚠️ TYPED, BECAUSE THE CALLER MUST BE ABLE TO TELL THESE APART. Once the
  * reversal journal has posted, a vehicle-authority outcome is no longer an
  * accounting failure, and reporting it as one is how a legitimate business
  * result ends up in an outbox `lastError` looking like a transient fault.
  */
-export type SuccessorOutcome =
-  | { kind: "OPENED"; rootId: Id<"commitmentRoots"> }
-  /** Another deal legitimately holds the car. Nothing was written. */
-  | { kind: "RIVAL"; rivalRootId: Id<"commitmentRoots"> }
+export type RestorationDecision =
+  /** The lineage tip is still OPEN — rejoin it rather than succeeding it. */
+  | { decision: "JOIN_LINEAGE"; rootId: Id<"commitmentRoots"> }
+  /** The tip is terminal and the car is free: open the next generation. */
+  | { decision: "OPEN_SUCCESSOR"; predecessor: Doc<"commitmentRoots"> }
+  /** Another deal legitimately holds the car. */
+  | { decision: "RIVAL"; rivalRootId: Id<"commitmentRoots"> }
   /** Two OPEN roots on one car — corrupt state, not a tie to be broken. */
-  | { kind: "AMBIGUOUS" }
-  /** Legacy or inconsistent lineage. Fails closed, with a reason for a human. */
-  | { kind: "REFUSED"; reason: string };
+  | { decision: "AMBIGUOUS" }
+  /** Legacy or inconsistent lineage, or an intent that does not match. */
+  | { decision: "REFUSE"; reason: string };
+
+/** The result of actually executing a restoration. */
+export type RestorationOutcome =
+  | {
+      decision: "RESTORED";
+      rootId: Id<"commitmentRoots">;
+      claimId: Id<"vehicleCommitmentClaims">;
+      /** Whether a successor generation was opened, or the tip was rejoined. */
+      opened: "SUCCESSOR" | "JOINED";
+    }
+  | Exclude<RestorationDecision, { decision: "JOIN_LINEAGE" } | { decision: "OPEN_SUCCESSOR" }>;
+
+/**
+ * How a root is being opened. **Server-derived, never caller-supplied.**
+ *
+ * ⚠️ THIS IS A PARAMETER OF THE ONE INSERT SITE, NOT A SECOND WRITER. The
+ * first version of this work added `openSuccessorRoot` with its own
+ * `ctx.db.insert("commitmentRoots", …)`, which re-created exactly the defect
+ * M1 exists to prevent: the question "may a root be created here" answered in
+ * two places instead of one. A successor is a different SHAPE of opening, not
+ * a different opener.
+ */
+type RootOpening =
+  | { kind: "ORIGIN" }
+  | { kind: "SUCCESSOR"; predecessor: Doc<"commitmentRoots"> };
 
 async function openRoot(
   ctx: MutationCtx,
@@ -772,8 +819,39 @@ async function openRoot(
     customerId: Id<"customers">;
     createdBy: Id<"users">;
     lineage: CommitmentLineage;
+    /** ORIGIN unless a restoration decision said otherwise. */
+    opening?: RootOpening;
   }
 ): Promise<Id<"commitmentRoots">> {
+  const opening: RootOpening = args.opening ?? { kind: "ORIGIN" };
+
+  if (opening.kind === "SUCCESSOR") {
+    const { predecessor } = opening;
+    // Belt and braces on a decision `resolveRestorationDecision` already made.
+    // These are `Error`, not `ConvexError`: reaching them means a caller
+    // bypassed the resolver, which is a programming fault and not something to
+    // explain to a salesperson.
+    if (predecessor.lineageRootId === undefined || predecessor.lineageGeneration === undefined) {
+      throw new Error(`root ${predecessor._id} has no lineage identity to succeed`);
+    }
+    if (predecessor.status === "OPEN") {
+      throw new Error(
+        `root ${predecessor._id} is still OPEN — a live root is not succeeded, it is resolved`
+      );
+    }
+    // ⚠️ THE PRINCIPAL IS CARRIED, NEVER RE-DERIVED. A restoration that adopts
+    // whoever is presenting the evidence is how one customer's money becomes
+    // another customer's deal.
+    if (String(predecessor.customerId) !== String(args.customerId)) {
+      throw new Error(
+        `successor principal does not match predecessor ${predecessor._id}`
+      );
+    }
+    if (String(predecessor.vehicleId) !== String(args.vehicleId)) {
+      throw new Error(`successor vehicle does not match predecessor ${predecessor._id}`);
+    }
+  }
+
   const rootId = await ctx.db.insert("commitmentRoots", {
     orgId: args.orgId,
     vehicleId: args.vehicleId,
@@ -783,9 +861,19 @@ async function openRoot(
     ...(args.lineage.reservationId ? { originReservationId: args.lineage.reservationId } : {}),
     openedAt: Date.now(),
     openedBy: args.createdBy,
-    // SCRUM-208 — this root IS its own lineage origin.
-    lineageGeneration: 0,
+    // SCRUM-208 — an ORIGIN is its own lineage; a SUCCESSOR continues one.
+    ...(opening.kind === "SUCCESSOR"
+      ? {
+          lineageRootId: opening.predecessor.lineageRootId,
+          lineageGeneration: opening.predecessor.lineageGeneration! + 1,
+          restoredFromRootId: opening.predecessor._id,
+        }
+      : { lineageGeneration: 0 }),
   });
+
+  // A successor already carries its lineage from the predecessor; only an
+  // origin has to point at itself, and only an origin gets the self-patch.
+  if (opening.kind === "SUCCESSOR") return rootId;
 
   // ⚠️ SCRUM-208 — ONE CANONICAL ORIGIN REPRESENTATION, WRITTEN BEFORE COMMIT.
   //
@@ -808,107 +896,6 @@ async function openRoot(
   return rootId;
 }
 
-/**
- * SCRUM-208 — OPEN THE SUCCESSOR TO A TERMINAL ROOT.
- *
- * A root is terminal FOREVER once CONSUMED or RELEASED (I6), so a restoration
- * cannot revive one — it opens the next generation of the same lineage. This
- * is the only function that may do so.
- *
- * ⚠️ THE PREDECESSOR MUST BE THE LINEAGE TIP, NOT MERELY A ROOT IN IT.
- * Succeeding a non-tip forks the lineage: two roots then claim the same next
- * generation, and `resolveLineageTip` reports corruption forever after. The
- * tip is resolved MAX-GENERATION-FIRST rather than by looking for the OPEN
- * one, because an OPEN root sitting below a later terminal generation is
- * itself the corruption being guarded against.
- *
- * ⚠️ A RIVAL NEVER HAS ITS VEHICLE TAKEN. If another deal legitimately holds
- * the car, this returns RIVAL and writes nothing. The accounting reversal that
- * triggered the restoration still stands — the money went back — but the
- * vehicle stays with whoever holds it. Silently opening a second OPEN root
- * here would be the exact failure the authority exists to prevent: one car
- * promised to two deals.
- *
- * ⚠️ THE PRINCIPAL IS CARRIED, NEVER RE-DERIVED. The successor's customer is
- * the predecessor's customer, asserted rather than passed in and trusted. A
- * restoration that adopts whoever is presenting the evidence is how one
- * customer's money becomes another's deal.
- */
-export async function openSuccessorRoot(
-  ctx: MutationCtx,
-  args: {
-    decision: AuthorityDecisionContext;
-    predecessor: Doc<"commitmentRoots">;
-    openedBy: Id<"users">;
-    /** Diagnosis only. Nothing may make a decision on this text. */
-    reason: string;
-  }
-): Promise<SuccessorOutcome> {
-  const { decision, predecessor } = args;
-  requireCanonicalAuthority(decision);
-
-  if (String(predecessor.orgId) !== String(decision.orgId)) {
-    throw new Error(
-      `root ${predecessor._id} belongs to another organization than the decision context`
-    );
-  }
-  if (predecessor.status === "OPEN") {
-    throw new Error(
-      `root ${predecessor._id} is still OPEN — a live root is not succeeded, it is resolved`
-    );
-  }
-  if (predecessor.lineageRootId === undefined || predecessor.lineageGeneration === undefined) {
-    // Legacy row. It fails closed and belongs to SCRUM-201's cutover; it is
-    // never normalized to "its own origin at generation 0", which would
-    // manufacture a second origin inside a lineage that already has one.
-    return { kind: "REFUSED", reason: "the previous deal predates the canonical commitment authority" };
-  }
-
-  const tip = await resolveLineageTip(ctx, decision, predecessor.lineageRootId);
-  if (tip.kind === "CORRUPT") {
-    return { kind: "REFUSED", reason: `the deal's history is inconsistent (${tip.reason})` };
-  }
-  if (String(tip.root._id) !== String(predecessor._id)) {
-    return {
-      kind: "REFUSED",
-      reason: "this deal has already been continued, so it cannot be continued again",
-    };
-  }
-  if (tip.isOpen) {
-    // Unreachable given the status check above, and kept because "the tip is
-    // terminal" is the precondition that actually matters here — the two
-    // facts are only equal while the tip and the predecessor are the same row.
-    throw new Error(`lineage tip ${tip.root._id} is OPEN and cannot be succeeded`);
-  }
-
-  // I1 — one physical vehicle, at most one OPEN root. Checked against the
-  // VEHICLE, not the lineage: a rival deal is a different lineage entirely and
-  // would not be visible in the tip resolution above.
-  const ownership = await resolveOwnership(ctx, decision.orgId, predecessor.vehicleId);
-  if (ownership.kind === "AMBIGUOUS") return { kind: "AMBIGUOUS" };
-  if (ownership.kind === "OWNED") {
-    return { kind: "RIVAL", rivalRootId: ownership.root._id };
-  }
-
-  const successorId = await ctx.db.insert("commitmentRoots", {
-    orgId: predecessor.orgId,
-    vehicleId: predecessor.vehicleId,
-    // Carried from the predecessor, never from the caller.
-    customerId: predecessor.customerId,
-    status: "OPEN",
-    ...(predecessor.headQuoteId ? { headQuoteId: predecessor.headQuoteId } : {}),
-    ...(predecessor.originReservationId
-      ? { originReservationId: predecessor.originReservationId }
-      : {}),
-    openedAt: decision.now,
-    openedBy: args.openedBy,
-    lineageRootId: predecessor.lineageRootId,
-    lineageGeneration: predecessor.lineageGeneration + 1,
-    restoredFromRootId: predecessor._id,
-  });
-
-  return { kind: "OPENED", rootId: successorId };
-}
 
 /**
  * Open ONE acquisition episode on an ALREADY-DECIDED root.
@@ -932,6 +919,11 @@ export async function attachEpisode(
     createdBy: Id<"users">;
     quoteId?: Id<"quotes"> | null;
     predecessor?: Doc<"vehicleCommitmentClaims">;
+    /**
+     * SCRUM-208 — the root `args.rootId` succeeds, when this episode is being
+     * restored onto a successor. Server-derived from the restoration decision.
+     */
+    succeedsRootId?: Id<"commitmentRoots">;
   }
 ): Promise<Id<"vehicleCommitmentClaims">> {
   const { predecessor } = args;
@@ -941,7 +933,22 @@ export async function attachEpisode(
         `claim ${predecessor._id} is still ACTIVE — a live episode is not succeeded, it is resolved`
       );
     }
-    if (String(predecessor.rootId) !== String(args.rootId)) {
+    // ⚠️ SAME ROOT, OR THE ROOT THIS ONE SUCCEEDS — AND NOTHING ELSE.
+    //
+    // Phase 2 had one rule: a reacquired episode opens a new claim on the SAME
+    // root. Phase 3 adds root succession, where a restored episode necessarily
+    // lands on the SUCCESSOR root while its predecessor claim belongs to the
+    // root that was succeeded. Those two facts collide, and the resolution is
+    // not to drop the check — it is to name the one other root that is
+    // legitimate and prove it.
+    //
+    // `succeedsRootId` is server-derived from the restoration decision, never
+    // caller-supplied. Without this the check would have to be removed
+    // entirely, and a successor that silently changed root is how history
+    // stops meaning anything.
+    const permittedRoots = [String(args.rootId)];
+    if (args.succeedsRootId) permittedRoots.push(String(args.succeedsRootId));
+    if (!permittedRoots.includes(String(predecessor.rootId))) {
       throw new Error(
         `successor root ${args.rootId} does not match predecessor ${predecessor._id} root ${predecessor.rootId}`
       );
@@ -1001,17 +1008,31 @@ export async function acquireVehicle(
     lineage: CommitmentLineage;
     refusalMessage?: string;
     predecessor?: Doc<"vehicleCommitmentClaims">;
+    /**
+     * SCRUM-208 — SERVER-DERIVED, and only ever supplied by
+     * `restoreCommitment` after `resolveRestorationDecision` returned
+     * OPEN_SUCCESSOR.
+     *
+     * ⚠️ ROUTING SUCCESSION THROUGH THIS DOOR IS THE POINT. Because this
+     * function attaches the episode below, a successor root CANNOT commit
+     * without its successor claim — the forbidden intermediate state (an OPEN
+     * successor with no claim, no source pointer and no proven live evidence)
+     * is unreachable rather than merely discouraged.
+     */
+    successorOf?: Doc<"commitmentRoots">;
   }
 ): Promise<{ rootId: Id<"commitmentRoots">; claimId: Id<"vehicleCommitmentClaims"> }> {
-  const acting = await resolveActingRoot(ctx, {
-    orgId: args.orgId,
-    vehicleId: args.vehicleId,
-    lineage: args.lineage,
-    // The customer this acquisition is FOR is already known here, and is the
-    // same value the new root would be opened under.
-    actingCustomerId: args.customerId,
-    refusalMessage: args.refusalMessage,
-  });
+  const acting: ActingRoot = args.successorOf
+    ? { decision: "OPEN_NEW" }
+    : await resolveActingRoot(ctx, {
+        orgId: args.orgId,
+        vehicleId: args.vehicleId,
+        lineage: args.lineage,
+        // The customer this acquisition is FOR is already known here, and is
+        // the same value the new root would be opened under.
+        actingCustomerId: args.customerId,
+        refusalMessage: args.refusalMessage,
+      });
   if (acting.decision === "REFUSE") throwRefusal(acting);
 
   const rootId =
@@ -1023,6 +1044,9 @@ export async function acquireVehicle(
           customerId: args.customerId,
           createdBy: args.createdBy,
           lineage: args.lineage,
+          ...(args.successorOf
+            ? { opening: { kind: "SUCCESSOR" as const, predecessor: args.successorOf } }
+            : {}),
         });
 
   // ⚠️ ADOPTION RE-HEADS THE DEAL, IN ONE PLACE. Once a reservation's deal is
@@ -1042,9 +1066,176 @@ export async function acquireVehicle(
     createdBy: args.createdBy,
     quoteId: args.lineage.quoteId ?? null,
     predecessor: args.predecessor,
+    ...(args.successorOf ? { succeedsRootId: args.successorOf._id } : {}),
   });
 
   return { rootId, claimId };
+}
+
+/**
+ * SCRUM-208 — MAY THIS EVIDENCE CONTINUE THIS FINISHED DEAL? **Writes nothing.**
+ *
+ * The restoration counterpart to `resolveActingRoot`: one place that decides,
+ * returning an explicit decision rather than a nullable value a caller reads
+ * as "then open one". It is a pure resolver so it can be tested directly —
+ * a root-WRITING helper cannot be, because testing one proves a path exists
+ * that bypasses the door.
+ *
+ * The rules, in order:
+ *
+ * 1. **The evidence must already hold a CURRENT episode.** `NEW` is first
+ *    acquisition and can never be restoration: accepting it would let a
+ *    restoration open a root with no provenance back to what was reversed,
+ *    and every later check would find that root perfectly well-formed.
+ * 2. **The principal is proven against the lineage**, not against whoever is
+ *    presenting the evidence.
+ * 3. **The tip is resolved MAX-GENERATION-FIRST.** An OPEN root below a later
+ *    terminal generation is corruption, not a tip.
+ * 4. **The intent must name the exact reason this root ended** — the exact
+ *    sale that consumed it, or the exact episode whose release ended it.
+ *    "Some sale was cancelled" would let any cancellation in the dealership
+ *    restore any root.
+ * 5. **A rival never has its vehicle taken.** If another deal holds the car,
+ *    the money still goes back but the vehicle does not move.
+ */
+export async function resolveRestorationDecision(
+  ctx: MutationCtx,
+  args: {
+    decision: AuthorityDecisionContext;
+    evidence: PrincipalBoundEvidence;
+    intent: RestorationIntent;
+  }
+): Promise<RestorationDecision> {
+  const { decision, evidence, intent } = args;
+  requireCanonicalAuthority(decision);
+
+  if (String(evidence.orgId) !== String(decision.orgId)) {
+    throw new Error("evidence belongs to another organization than the decision context");
+  }
+
+  // 1. NEW may never masquerade as restoration.
+  const episode = requireCurrentEpisode(evidence, "RESTORE");
+
+  // 3. The tip, established before anything is trusted about it.
+  const tip = await resolveLineageTip(ctx, decision, episode.lineageRootId);
+  if (tip.kind === "CORRUPT") {
+    return { decision: "REFUSE", reason: `the deal's history is inconsistent (${tip.reason})` };
+  }
+  if (String(tip.root.vehicleId) !== String(evidence.vehicleId)) {
+    return { decision: "REFUSE", reason: "that evidence belongs to a different vehicle's deal" };
+  }
+
+  // 2. Principal, against the lineage.
+  assertPrincipalMatches(evidence, tip.root.customerId);
+
+  // The tip is still live: this is a rejoin, not a succession. No new root.
+  if (tip.isOpen) return { decision: "JOIN_LINEAGE", rootId: tip.root._id };
+
+  // 4. The exact reason this root ended.
+  if (intent.kind === "SALE_CANCELLED") {
+    if (tip.root.status !== "CONSUMED") {
+      return { decision: "REFUSE", reason: "this deal did not end in a sale" };
+    }
+    if (String(tip.root.consumedBySaleId ?? "") !== String(intent.saleId)) {
+      return {
+        decision: "REFUSE",
+        reason: "that sale is not the one this deal was completed into",
+      };
+    }
+  } else {
+    if (tip.root.status !== "RELEASED") {
+      return { decision: "REFUSE", reason: "this deal did not end by being released" };
+    }
+    const sourceClaim = await ctx.db.get(episode.claimId);
+    if (!sourceClaim || String(sourceClaim.rootId) !== String(tip.root._id)) {
+      return {
+        decision: "REFUSE",
+        reason: "that evidence is not the one this deal was released from",
+      };
+    }
+    if (sourceClaim.status === "ACTIVE") {
+      return { decision: "REFUSE", reason: "that evidence is still live and has nothing to restore" };
+    }
+  }
+
+  // 5. I1 — one physical vehicle, at most one OPEN root. Checked against the
+  // VEHICLE, not the lineage: a rival deal is a different lineage entirely and
+  // would not be visible in the tip resolution above.
+  const ownership = await resolveOwnership(ctx, decision.orgId, tip.root.vehicleId);
+  if (ownership.kind === "AMBIGUOUS") return { decision: "AMBIGUOUS" };
+  if (ownership.kind === "OWNED") return { decision: "RIVAL", rivalRootId: ownership.root._id };
+
+  return { decision: "OPEN_SUCCESSOR", predecessor: tip.root };
+}
+
+/**
+ * SCRUM-208 — THE RESTORATION DOOR. Decide, then execute through `acquireVehicle`.
+ *
+ * ⚠️ IT DOES NOT OPEN A ROOT ITSELF. Execution goes through `acquireVehicle`,
+ * which owns the one call to the one private `openRoot` and which attaches the
+ * episode in the same transaction. That is what makes "an OPEN successor with
+ * no claim" unreachable rather than merely discouraged — and it is the
+ * correction to a first attempt that gave succession its own insert.
+ */
+export async function restoreCommitment(
+  ctx: MutationCtx,
+  args: {
+    decision: AuthorityDecisionContext;
+    evidence: PrincipalBoundEvidence;
+    intent: RestorationIntent;
+    /** The evidence to open the restored episode under, tag and all. */
+    commitmentEvidence: CommitmentEvidence;
+    lineage: CommitmentLineage;
+    createdBy: Id<"users">;
+  }
+): Promise<RestorationOutcome> {
+  const resolved = await resolveRestorationDecision(ctx, {
+    decision: args.decision,
+    evidence: args.evidence,
+    intent: args.intent,
+  });
+  if (
+    resolved.decision === "REFUSE" ||
+    resolved.decision === "RIVAL" ||
+    resolved.decision === "AMBIGUOUS"
+  ) {
+    return resolved;
+  }
+
+  // The episode being restored, carried so `attachEpisode` can check that the
+  // successor keeps the same root, vehicle and defining evidence.
+  const sourceClaim = await ctx.db.get(
+    (args.evidence.episode as Extract<EvidenceEpisode, { state: "CURRENT" }>).claimId
+  );
+  if (!sourceClaim) {
+    return { decision: "REFUSE", reason: "the episode being restored no longer exists" };
+  }
+
+  if (resolved.decision === "JOIN_LINEAGE") {
+    const claimId = await attachEpisode(ctx, {
+      orgId: args.decision.orgId,
+      rootId: resolved.rootId,
+      vehicleId: args.evidence.vehicleId,
+      evidence: args.commitmentEvidence,
+      createdBy: args.createdBy,
+      quoteId: args.lineage.quoteId ?? null,
+      predecessor: sourceClaim.status === "ACTIVE" ? undefined : sourceClaim,
+    });
+    return { decision: "RESTORED", rootId: resolved.rootId, claimId, opened: "JOINED" };
+  }
+
+  const { rootId, claimId } = await acquireVehicle(ctx, {
+    orgId: args.decision.orgId,
+    vehicleId: args.evidence.vehicleId,
+    // Carried from the predecessor the resolver chose, never from the caller.
+    customerId: resolved.predecessor.customerId,
+    createdBy: args.createdBy,
+    evidence: args.commitmentEvidence,
+    lineage: args.lineage,
+    predecessor: sourceClaim,
+    successorOf: resolved.predecessor,
+  });
+  return { decision: "RESTORED", rootId, claimId, opened: "SUCCESSOR" };
 }
 
 /**

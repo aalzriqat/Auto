@@ -45,6 +45,17 @@
  * Recording it rather than papering over it, for the same reason
  * `tenantWriteGuard` records its own: a green result that means "nothing
  * examined" is indistinguishable from "nothing wrong".
+ *
+ * ## ⚠️ SECOND RECORDED BLIND SPOT — string literals are NOT blanked
+ *
+ * Comments are blanked before analysis; string literals deliberately are not,
+ * because the table name in `insert("commitmentRoots", …)` IS a string literal
+ * and blanking strings would disable table detection entirely. A string whose
+ * CONTENTS spell out a guarded write therefore reports a false positive.
+ *
+ * That direction is the safe one — it fails loud and a human deletes the
+ * offending prose — and it is why the rule is documented in comments, which
+ * are blanked, rather than in string constants.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -94,6 +105,55 @@ export const CHOKE_MODULES = new Set([
   "utils/commitmentKernel.ts",
 ]);
 
+/**
+ * Blanks out comments, preserving every byte offset and line break.
+ *
+ * ⚠️ WITHOUT THIS THE ANALYZERS READ PROSE AS CODE. A doc comment that
+ * mentions `ctx.db.insert("commitmentRoots", …)` — as the one on `RootOpening`
+ * legitimately does, explaining why a second insert is forbidden — was counted
+ * as a real insert site. Documenting the rule would have broken the check that
+ * enforces it.
+ *
+ * Replacement rather than deletion so every reported offset still lines up
+ * with the original source, and quote-aware so a `//` inside a string literal
+ * (a URL, a refusal message) is not mistaken for a comment.
+ */
+export function blankComments(source: string): string {
+  const out = source.split("");
+  let i = 0;
+  let quote: string | null = null;
+
+  while (i < source.length) {
+    const c = source[i];
+    const next = source[i + 1];
+
+    if (quote) {
+      if (c === "\\") { i += 2; continue; }
+      if (c === quote) quote = null;
+      i++;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") { quote = c; i++; continue; }
+
+    if (c === "/" && next === "/") {
+      while (i < source.length && source[i] !== "\n") { out[i] = " "; i++; }
+      continue;
+    }
+    if (c === "/" && next === "*") {
+      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) {
+        if (source[i] !== "\n") out[i] = " ";
+        i++;
+      }
+      out[i] = " ";
+      if (i + 1 < source.length) out[i + 1] = " ";
+      i += 2;
+      continue;
+    }
+    i++;
+  }
+  return out.join("");
+}
+
 /** Reads a balanced `{...}` literal starting at `open`, or "" if unbalanced. */
 function objectLiteral(source: string, open: number): string {
   let depth = 0;
@@ -111,9 +171,10 @@ function objectLiteral(source: string, open: number): string {
 const WRITE_CALL = /ctx\.db\.(insert|patch|replace)\(/g;
 
 /** Scans one module's source for writes outside the choke. */
-export function findUnchokedWrites(source: string, file: string): UnchokedWrite[] {
+export function findUnchokedWrites(rawSource: string, file: string): UnchokedWrite[] {
   if (CHOKE_MODULES.has(file)) return [];
 
+  const source = blankComments(rawSource);
   const found: UnchokedWrite[] = [];
   for (const m of source.matchAll(WRITE_CALL)) {
     const method = m[1] as UnchokedWrite["method"];
@@ -165,6 +226,53 @@ export function convexSourceFiles(convexRoot: string): string[] {
 export function auditCommitmentWrites(convexRoot: string): UnchokedWrite[] {
   return convexSourceFiles(convexRoot).flatMap((file) =>
     findUnchokedWrites(
+      fs.readFileSync(file, "utf8"),
+      path.relative(convexRoot, file).split(path.sep).join("/")
+    )
+  );
+}
+
+export interface RootInsertSite {
+  file: string;
+  /** The function the insert is lexically inside. */
+  enclosingFunction: string;
+}
+
+/**
+ * SCRUM-208 — WHERE ROOTS ARE CREATED.
+ *
+ * ⚠️ THIS EXISTS BECAUSE THE FIELD GUARD ABOVE COULD NOT SEE THE DEFECT.
+ * `CHOKE_MODULES` exempts `commitments.ts` wholesale, so a second — or third —
+ * `ctx.db.insert("commitmentRoots", …)` inside that very file passes the field
+ * guard automatically. That is not hypothetical: the first version of the
+ * Phase-3 succession work added exactly such an insert in `openSuccessorRoot`,
+ * and this analyzer was green throughout.
+ *
+ * Module-level exemption is the right granularity for "who may write this
+ * field" and the WRONG granularity for "how many places may create a root".
+ * The root-creation invariant (M1: one place decides, one place opens) needs a
+ * check that counts SITES, and that deliberately ignores the choke list.
+ */
+export function findRootInsertSites(rawSource: string, file: string): RootInsertSite[] {
+  const source = blankComments(rawSource);
+  const sites: RootInsertSite[] = [];
+  for (const m of source.matchAll(/ctx\.db\.insert\(\s*"commitmentRoots"/g)) {
+    const before = source.slice(0, m.index!);
+    const declarations = [
+      ...before.matchAll(/(?:async\s+)?function\s+(\w+)\s*\(|const\s+(\w+)\s*=\s*(?:async\s*)?\(/g),
+    ];
+    const last = declarations[declarations.length - 1];
+    sites.push({
+      file,
+      enclosingFunction: last ? (last[1] ?? last[2]) : "<top level>",
+    });
+  }
+  return sites;
+}
+
+export function auditRootInserts(convexRoot: string): RootInsertSite[] {
+  return convexSourceFiles(convexRoot).flatMap((file) =>
+    findRootInsertSites(
       fs.readFileSync(file, "utf8"),
       path.relative(convexRoot, file).split(path.sep).join("/")
     )
