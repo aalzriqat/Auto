@@ -331,6 +331,97 @@ export function auditRootInserts(convexRoot: string): RootInsertSite[] {
   );
 }
 
+export interface OrganizationInsertSite {
+  file: string;
+  /** The function the insert is lexically inside. */
+  enclosingFunction: string;
+  /** Whether the inserted literal initializes `commitmentAuthorityVersion`. */
+  initializesAuthorityVersion: boolean;
+}
+
+/**
+ * SCRUM-208 / SCRUM-201 — EVERY DEALERSHIP IS BORN ON A KNOWN AUTHORITY.
+ *
+ * ⚠️ THE FIELD GUARD ABOVE CANNOT ENFORCE THIS, AND THE REASON IS THE FAILURE
+ * MODE ITSELF. `findUnchokedWrites` reports modules that WRITE a guarded
+ * field. A second organization creator that simply OMITS
+ * `commitmentAuthorityVersion` writes no guarded field at all — so it passes
+ * the field guard, passes typecheck, passes lint, and silently mints LEGACY
+ * dealerships that can never reach the canonical restoration lifecycle. Every
+ * reversal such a tenant defers terminalizes
+ * AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE forever — precisely the condition
+ * the activation slice exists to end, silently reintroduced.
+ *
+ * "Who may write this field" and "does every creation site set it" are
+ * different questions, and only the second has an ABSENCE for an answer. An
+ * absence is invisible to a write-scanner, so this counts SITES — the same
+ * reason `findRootInsertSites` exists alongside the field guard rather than
+ * inside it.
+ *
+ * ⚠️ AN INDIRECT INSERT IS REPORTED AS NOT-INITIALIZING, DELIBERATELY.
+ * `ctx.db.insert("organizations", orgDoc)` hands the analyzer no literal to
+ * read. Searching forward for the next `{` would find an unrelated block and
+ * could report a FALSE PASS, so the gap between the table name and the brace
+ * must be a bare comma. Anything else fails loudly, and a human either inlines
+ * the literal or records why it cannot be read. Failing closed is the only
+ * safe direction for a check whose green result is an authorization.
+ */
+export function findOrganizationInsertSites(
+  rawSource: string,
+  file: string
+): OrganizationInsertSite[] {
+  const source = blankComments(rawSource);
+  const sites: OrganizationInsertSite[] = [];
+  for (const m of source.matchAll(/ctx\.db\.insert\(\s*"organizations"/g)) {
+    const afterTable = m.index! + m[0].length;
+    const brace = source.indexOf("{", afterTable);
+    // Only an object literal that is this call's own second argument.
+    const literal =
+      brace !== -1 && /^\s*,\s*$/.test(source.slice(afterTable, brace))
+        ? objectLiteral(source, brace)
+        : "";
+
+    // ⚠️ TOP-LEVEL DECLARATIONS ONLY, ANCHORED TO COLUMN 0.
+    //
+    // Broader than the root scanner's pattern in one direction and narrower in
+    // another. Broader because an organization is created inside a registered
+    // `const create = mutation({ … })`, which neither `function f(` nor
+    // `const f = (` matches. Narrower because an unanchored `const` pattern
+    // reports the nearest LOCAL binding instead of the function: in the real
+    // module the statement immediately above the insert is
+    // `const user = await requireOrCreateAuthenticatedUser(ctx)`, so the site
+    // would be named "user" — true of the source text and useless to a reader
+    // trying to find the second creator.
+    //
+    // The root scanner is left byte-identical rather than generalised, because
+    // its exact expected output is already a certified assertion.
+    const declarations = [
+      ...source
+        .slice(0, m.index!)
+        .matchAll(
+          /^(?:export\s+)?(?:async\s+)?function\s+(\w+)|^(?:export\s+)?const\s+(\w+)\s*=/gm
+        ),
+    ];
+    const last = declarations[declarations.length - 1];
+    sites.push({
+      file,
+      enclosingFunction: last ? (last[1] ?? last[2]) : "<top level>",
+      initializesAuthorityVersion:
+        /(^|[{,\s])commitmentAuthorityVersion\s*:/.test(literal),
+    });
+  }
+  return sites;
+}
+
+export function auditOrganizationInserts(convexRoot: string): OrganizationInsertSite[] {
+  return convexSourceFiles(convexRoot).flatMap((file) =>
+    findOrganizationInsertSites(
+      fs.readFileSync(file, "utf8"),
+      path.relative(convexRoot, file).split(path.sep).join("/")
+    )
+  );
+}
+
 /** `file::field` counts, the stable shape the ratchet is pinned on. */
 export function summarize(writes: UnchokedWrite[]): Record<string, number> {
   const out: Record<string, number> = {};

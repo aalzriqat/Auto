@@ -4,8 +4,10 @@ import path from "node:path";
 import {
   analyzeSuccessorTopology,
   auditCommitmentWrites,
+  auditOrganizationInserts,
   auditRootInserts,
   convexSourceFiles,
+  findOrganizationInsertSites,
   findRootInsertSites,
   findUnchokedWrites,
   summarize,
@@ -44,6 +46,18 @@ const BASELINE: Record<string, number> = {
   // that would let the two representations drift apart again.
   "utils/depositRecording.ts::usesVehicleHoldRows": 1,
   "utils/saleCancellation.ts::holdActive": 2,
+  // SCRUM-208 / SCRUM-201 c15855 — THE AUTHORITY VERSION, WRITTEN AT BIRTH.
+  //
+  // `organizations:create` is the ONLY production organization creator, and
+  // it now stamps the canonical version so a dealership is never born LEGACY.
+  // Compared exactly, so a SECOND writer of this field — which is what any
+  // downgrade or "repair" path would be — fails CI.
+  //
+  // ⚠️ The complementary risk is INVISIBLE to this map by construction: a new
+  // creation site that OMITS the field writes nothing for a write-scanner to
+  // see. That one is covered by `auditOrganizationInserts` below, and the two
+  // checks are not redundant.
+  "organizations.ts::commitmentAuthorityVersion": 1,
   // vehicles.ts is deliberately ABSENT. Its three raw
   // `ctx.db.patch(reservation.depositId, { holdActive: false })` calls were
   // the round-4 finding and are now routed through
@@ -139,6 +153,79 @@ describe("commitment liveness writes go through the choke", () => {
         { file: "commitments.ts", enclosingFunction: "openRoot" },
         { file: "commitments.ts", enclosingFunction: "openSuccessorRoot" },
       ]);
+    });
+  });
+
+  describe("every organization is born on a known authority", () => {
+    it("initializes the canonical version at the one production creator", () => {
+      // ⚠️ THE FIELD RATCHET ABOVE CANNOT MAKE THIS ASSERTION. A creator that
+      // OMITS the version writes no guarded field, so it passes the ratchet
+      // while silently minting LEGACY dealerships whose every deferred
+      // reversal terminalizes AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE
+      // forever. Counting SITES is the only shape that catches an absence.
+      expect(auditOrganizationInserts(CONVEX_ROOT)).toEqual([
+        {
+          file: "organizations.ts",
+          enclosingFunction: "create",
+          initializesAuthorityVersion: true,
+        },
+      ]);
+    });
+
+    it("reports a second creator that omits the version", () => {
+      const source = [
+        `export const create = mutation({`,
+        `  handler: async (ctx) => {`,
+        `    await ctx.db.insert("organizations", { name: "a", commitmentAuthorityVersion: 1 });`,
+        `  },`,
+        `});`,
+        `export const createFromInvite = mutation({`,
+        `  handler: async (ctx) => {`,
+        `    await ctx.db.insert("organizations", { name: "b" });`,
+        `  },`,
+        `});`,
+      ].join("\n");
+      expect(findOrganizationInsertSites(source, "organizations.ts")).toEqual([
+        {
+          file: "organizations.ts",
+          enclosingFunction: "create",
+          initializesAuthorityVersion: true,
+        },
+        {
+          file: "organizations.ts",
+          enclosingFunction: "createFromInvite",
+          initializesAuthorityVersion: false,
+        },
+      ]);
+    });
+
+    it("refuses to read an indirect insert as initialized", () => {
+      // A false PASS here would authorize the exact defect being guarded, so
+      // an unreadable literal fails closed instead of searching forward for a
+      // `{` that belongs to something else entirely.
+      const source = [
+        `export const create = mutation({`,
+        `  handler: async (ctx) => {`,
+        `    await ctx.db.insert("organizations", orgDoc);`,
+        `    const unrelated = { commitmentAuthorityVersion: 1 };`,
+        `  },`,
+        `});`,
+      ].join("\n");
+      expect(findOrganizationInsertSites(source, "organizations.ts")).toEqual([
+        {
+          file: "organizations.ts",
+          enclosingFunction: "create",
+          initializesAuthorityVersion: false,
+        },
+      ]);
+    });
+
+    it("does not read the rule stated in a comment as a creation site", () => {
+      const source = [
+        `// ctx.db.insert("organizations", { commitmentAuthorityVersion: 1 })`,
+        `export const noop = 1;`,
+      ].join("\n");
+      expect(findOrganizationInsertSites(source, "organizations.ts")).toEqual([]);
     });
   });
 
