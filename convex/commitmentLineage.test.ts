@@ -23,7 +23,8 @@ import {
   restoreCommitment,
   settleAuthorityAfterReversal,
 } from "./commitments";
-import { AUTHORITY_SEVERITY, settleFreedHoldsAuthority } from "./accountingOutbox";
+import { AUTHORITY_SEVERITY } from "./accountingOutbox";
+import { settleSources } from "../test-utils/authorityWork";
 import {
   AuthorityDecisionContext,
   beginUserRun,
@@ -1040,12 +1041,21 @@ describe("when one reversal frees several cars, the worst outcome survives", () 
     // ⚠️ ORDER-INDEPENDENCE IS THE CONTRACT. The order rows come back in is
     // not something a caller controls, so "worst wins" has to hold both ways
     // round — a clean car read last must not overwrite a repair condition.
+    let seq = 0;
     for (const order of [
       [clean, held, blocked],
       [blocked, held, clean],
     ]) {
-      const outcome = await seed.t.run((ctx) =>
-        settleFreedHoldsAuthority(ctx, seed.orgId, order, Date.now(), seed.userId)
+      // The summary is DERIVED from the durable per-episode outcomes now
+      // (SCRUM-208 c15814) rather than produced by the loop that writes them —
+      // so order-independence is a property of the derivation, and still has to
+      // hold both ways round.
+      const outcome = await settleSources(
+        seed.t,
+        seed.orgId,
+        seed.userId,
+        order,
+        `reversed_order_${(seq += 1)}`
       );
       expect(outcome?.outcome).toBe("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS");
     }
@@ -1056,9 +1066,7 @@ describe("when one reversal frees several cars, the worst outcome survives", () 
     const clean = await freedCar(seed, "FREE");
     const held = await freedCar(seed, "HELD");
 
-    const outcome = await seed.t.run((ctx) =>
-      settleFreedHoldsAuthority(ctx, seed.orgId, [held, clean], Date.now(), seed.userId)
-    );
+    const outcome = await settleSources(seed.t, seed.orgId, seed.userId, [held, clean]);
     expect(outcome?.outcome).toBe("ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL");
   });
 
@@ -1070,9 +1078,10 @@ describe("when one reversal frees several cars, the worst outcome survives", () 
     );
     await seed.t.run((ctx) => ctx.db.patch(clean.holdId, { orgId: otherOrg }));
 
-    expect(
-      await seed.t.run((ctx) => settleFreedHoldsAuthority(ctx, seed.orgId, [clean], Date.now(), seed.userId))
-    ).toBeNull();
+    // A hold in another tenant settles to nothing, so the accounting row is
+    // never summarised at all — no outcome is derived from an episode that was
+    // correctly refused.
+    expect(await settleSources(seed.t, seed.orgId, seed.userId, [clean])).toBeNull();
   });
 
   test("a clean settle can never overwrite a condition needing repair", () => {

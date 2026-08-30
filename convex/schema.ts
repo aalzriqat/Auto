@@ -303,6 +303,108 @@ export default defineSchema({
     // is found by an exact range, never by scanning `lastError` for wording.
     .index("by_org_authority_outcome", ["orgId", "authorityOutcome"]),
 
+  /**
+   * SCRUM-208 c15814 — ONE DURABLE WORK ITEM PER EXACT SOURCE EPISODE, so that
+   * vehicle authority settles in its OWN transaction rather than inside the
+   * accounting drain.
+   *
+   * ⚠️ WHY THIS TABLE EXISTS AT ALL. Authority settlement used to run inside
+   * `accountingOutbox.markEntryPosted`, under `drainEntries`' per-row
+   * `try`/`catch`. That catch is correct for accounting — one bad row must not
+   * abort a whole organization's drain — but it made the authority half
+   * un-rollbackable: an unexpected failure AFTER a successor root, claim or
+   * pointer had been written was caught, the mutation returned normally and
+   * COMMITTED the partial state, and it was then labelled INCONSISTENT. Truthful
+   * about failure, and still a half-restoration on a money path.
+   *
+   * Pre-flight guards closed the failure modes anyone had enumerated. They
+   * cannot prove the next unenumerated one is impossible, which is the property
+   * c15808's postcondition actually demands: source LIVE + successor root and
+   * claim OPEN + pointer + truthful projection, or NONE OF IT.
+   *
+   * So accounting completion and authority settlement become separate durable
+   * states. The accounting transaction finishes the reversal and records what
+   * authority work is owed; each work item then settles in its own registered
+   * mutation, where a throw is a real rollback boundary.
+   *
+   * ⚠️ THIS IS NOT A BACKFILL SURFACE. Rows are minted only by an accounting
+   * reversal completing after this ships. Nothing infers work from a historical
+   * POSTED outbox row: missing authority state on an old row is legacy and
+   * fails closed. SCRUM-201 owns any live backlog reconciliation.
+   */
+  commitmentAuthorityWork: defineTable({
+    orgId: v.id("organizations"),
+    /**
+     * The exact immutable identity of one source episode's settlement.
+     *
+     * `${pendingEvent.idempotencyKey}:${sourceKind}:${holdId ?? depositId}`
+     *
+     * Every component is a STORED FACT — the outbox row's own
+     * `reversed_<applicationKey>`, and the id of the exact slice or deposit.
+     * No clock, no "newest row" selector, no history inference. One source
+     * episode has exactly one settlement identity, so a re-drained accounting
+     * row or a re-run worker cannot mint a second work item, a second root or
+     * a second successor claim.
+     */
+    workKey: v.string(),
+    /**
+     * PENDING — owed, and retryable. The state an unexpected failure leaves
+     *   behind, because that failure rolled its whole transaction back.
+     * SETTLED — an expected typed outcome was reached and recorded. Terminal.
+     * BLOCKED — the attempt budget is spent. Terminal, and a repair condition
+     *   a person must act on; never a silent give-up.
+     */
+    status: v.union(v.literal("PENDING"), v.literal("SETTLED"), v.literal("BLOCKED")),
+    /** DIRECT = the deposit itself holds the car. SLICE = one allocation row. */
+    sourceKind: v.union(v.literal("DIRECT"), v.literal("SLICE")),
+    depositId: v.id("deposits"),
+    vehicleId: v.id("vehicles"),
+    saleId: v.id("sales"),
+    /** Present only for the sliced representation — the exact slice episode. */
+    holdId: v.optional(v.id("depositVehicleHolds")),
+    /**
+     * The accounting row whose completion owed this work.
+     *
+     * ⚠️ PROVENANCE, NEVER A DECISION INPUT. Authority is decided from the
+     * canonical records, not from anything the accounting row says.
+     */
+    pendingEventId: v.id("pendingAccountingEvents"),
+    /**
+     * ⚠️ INCREMENTED IN ITS OWN TRANSACTION, BEFORE THE SETTLEMENT ONE.
+     * Sharing the settlement's transaction would roll the count back with it,
+     * and a permanently failing item would retry forever. Splitting them is
+     * what makes the retry both BOUNDED and genuinely rolled back.
+     */
+    attempts: v.number(),
+    lastAttemptAt: v.optional(v.number()),
+    /** The typed authority answer. Same taxonomy the outbox row summarises. */
+    outcome: v.optional(
+      v.union(
+        v.literal("RESTORED"),
+        v.literal("ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS"),
+        v.literal("AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE"),
+        v.literal("ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL"),
+        v.literal("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS"),
+        v.literal("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT")
+      )
+    ),
+    outcomeAt: v.optional(v.number()),
+    /**
+     * Diagnosis only, and CURATED. Raw technical errors are server-logged and
+     * never persisted here — this text reaches every tenant user holding
+     * VIEW_FINANCE through the accounting surfaces.
+     */
+    outcomeDetail: v.optional(v.string()),
+    createdAt: v.number(),
+    settledAt: v.optional(v.number()),
+  })
+    // At-most-once. The insert is guarded by an exact lookup on this range.
+    .index("by_org_work_key", ["orgId", "workKey"])
+    // The retry sweep reads ONLY this table, and only its own PENDING rows.
+    .index("by_org_status", ["orgId", "status"])
+    // The repair queue: found by an exact range, never by scanning text.
+    .index("by_org_outcome", ["orgId", "outcome"]),
+
   journalEntries: defineTable({
     orgId: v.id("organizations"),
     branchId: v.optional(v.id("branches")),

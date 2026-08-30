@@ -461,15 +461,27 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // id for the guard to own-check, and it is an `internalMutation` reachable
   // only from the cron, with no public entry point.
   //
-  // ⚠️ `analysed` stays at 315 across all four. That is the number that must
-  // never drop silently — a new mutation landing in a skip bucket is only
-  // acceptable when the reason is one of the two above, stated per mutation.
+  // `accountingOutbox.beginAuthorityWork` and
+  // `accountingOutbox.performAuthoritySettlement` (SCRUM-208 c15814):
+  //
+  // Both take ONLY a `workId`. That is deliberate and is stronger than taking
+  // an `orgId`: the tenant is read from the stored `commitmentAuthorityWork`
+  // row and every subsequent read is scoped by it, so there is no
+  // caller-supplied organization for a caller to get wrong or to forge. They
+  // are `internalMutation`s reachable only from the scheduler — the accounting
+  // drain that recorded the work, or the sweep that re-offers it — with no
+  // public entry point. `sweepAuthorityWork` DOES take an `orgId` and is
+  // analysed normally.
+  //
+  // ⚠️ `analysed` rises to 316 and must never drop silently — a new mutation
+  // landing in a skip bucket is only acceptable when the reason is one of the
+  // three above, stated per mutation.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 477,
-      analysed: 315,
+      totalMutations: 480,
+      analysed: 316,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 147,
+      skippedNoOrgId: 149,
     });
   });
 });

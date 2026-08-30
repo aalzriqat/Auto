@@ -241,40 +241,278 @@ async function markEntryPosted(
   // while its journal sat in the ledger, and the application stayed REVERSING
   // with nothing left to finish it. Now a failure leaves the row untouched and
   // retryable, which is what the drain's error handling already expects.
-  let authority: DeferredAuthorityOutcome | null = null;
+  // ⚠️ THIS TRANSACTION FINISHES THE ACCOUNTING AND RECORDS WHAT AUTHORITY IS
+  // OWED. IT PERFORMS NO AUTHORITY WRITES. (SCRUM-208 c15814.)
+  //
+  // Settlement used to happen right here, and it could not be made safe from
+  // here. `drainEntries` wraps every row in a `try`/`catch` — correct for
+  // accounting, because one bad row must not abort an organization's whole
+  // drain — but that same catch makes the authority half un-rollbackable: an
+  // unexpected failure AFTER a successor root, claim or pointer was written is
+  // caught, the mutation returns normally and COMMITS the partial state, and it
+  // is then labelled INCONSISTENT. Truthful about failure, and still a
+  // half-restoration on a money path.
+  //
+  // Pre-flight guards closed every failure mode we had enumerated. They cannot
+  // prove the next unenumerated one is impossible — and "all four or none" is
+  // the property c15808 actually requires. So each freed source now becomes a
+  // durable work item, settled in its OWN registered mutation where a throw is
+  // a real rollback boundary.
+  const owed: Id<"commitmentAuthorityWork">[] = [];
   if (p.kind === "REVERSE") {
     const freed = await completeDeferredReversal(ctx, {
       orgId: p.orgId,
       reversalIdempotencyKey: p.idempotencyKey,
       postedAt: Date.now(),
     });
-
-    // ⚠️ ONE CLOCK READING FOR THE WHOLE DECISION, taken before anything is
-    // consulted, so two cars in the same batch cannot be judged against
-    // different instants.
-    authority = await settleFreedHoldsAuthority(ctx, p.orgId, freed, Date.now(), p.actorId);
+    for (const source of freed) {
+      const workId = await recordAuthorityWork(ctx, p, source);
+      if (workId) owed.push(workId);
+    }
   }
 
+  // The accounting row is FINAL here, and is never retried because vehicle
+  // authority is still pending, rival, ambiguous, withheld or failed. The
+  // summary `authorityOutcome` is DERIVED later from the durable items — it is
+  // no longer the mechanism that performs any authority write.
   await ctx.db.patch(p._id, {
     status: "POSTED",
     resolvedAt: Date.now(),
     ...(resultEventId ? { resultEventId } : {}),
     attempts: p.attempts + 1,
-    ...(authority
-      ? {
-          authorityOutcome: authority.outcome,
-          authorityOutcomeAt: Date.now(),
-          // Every outcome that carries a detail persists it, not only the
-          // ambiguous one. "Nothing to restore" and "authority withheld" are
-          // exactly the answers where the REASON is the whole content, and
-          // dropping it leaves a literal nobody can act on.
-          ...(authorityOutcomeDetail(authority) !== undefined
-            ? { authorityOutcomeDetail: authorityOutcomeDetail(authority)! }
-            : {}),
-        }
-      : {}),
+  });
+
+  // ⚠️ SCHEDULED, NOT CALLED. A scheduled mutation runs in its own transaction,
+  // outside this one and outside `drainEntries`' catch — which is the entire
+  // point. Calling these inline would rebuild the defect with more steps.
+  for (const workId of owed) {
+    await ctx.scheduler.runAfter(0, internal.accountingOutbox.beginAuthorityWork, { workId });
+  }
+}
+
+/**
+ * Record that one exact source episode is owed a canonical authority
+ * settlement. Returns the work item, or null if it already existed.
+ *
+ * ⚠️ AT MOST ONE ITEM PER SOURCE EPISODE, ENFORCED BY AN EXACT LOOKUP. The
+ * identity is built only from STORED FACTS — the accounting row's own
+ * `reversed_<applicationKey>` and the id of the exact slice or deposit. No
+ * clock, no "newest row" selector, no history inference, no fabricated hold
+ * row. So a re-drained accounting row or a re-run worker cannot mint a second
+ * work item, and therefore cannot mint a second root or successor claim.
+ */
+async function recordAuthorityWork(
+  ctx: MutationCtx,
+  p: Doc<"pendingAccountingEvents">,
+  source: ReversalCompletionSource
+): Promise<Id<"commitmentAuthorityWork"> | null> {
+  const workKey = `${p.idempotencyKey}:${source.kind}:${String(source.holdId ?? source.depositId)}`;
+  const existing = await ctx.db
+    .query("commitmentAuthorityWork")
+    .withIndex("by_org_work_key", (q) => q.eq("orgId", p.orgId).eq("workKey", workKey))
+    .unique();
+  if (existing) return null;
+
+  return await ctx.db.insert("commitmentAuthorityWork", {
+    orgId: p.orgId,
+    workKey,
+    status: "PENDING" as const,
+    sourceKind: source.kind,
+    depositId: source.depositId,
+    vehicleId: source.vehicleId,
+    saleId: source.saleId,
+    ...(source.holdId ? { holdId: source.holdId } : {}),
+    pendingEventId: p._id,
+    attempts: 0,
+    createdAt: Date.now(),
   });
 }
+
+/**
+ * How many settlement attempts one source episode gets before it stops being a
+ * retry and becomes a repair condition a person must look at.
+ */
+const MAX_AUTHORITY_ATTEMPTS = 5;
+
+/**
+ * SCRUM-208 c15814 — STEP ONE OF TWO: SPEND AN ATTEMPT, DURABLY.
+ *
+ * ⚠️ THIS EXISTS AS A SEPARATE TRANSACTION ON PURPOSE. The settlement itself
+ * must roll back completely when it fails — that is the whole point of the
+ * split — and a rollback would take the attempt counter with it. An item that
+ * fails permanently would then be retried forever, and nothing would ever
+ * surface it. Incrementing here, in a transaction that COMMITS before the
+ * settlement one begins, is what makes the retry bounded AND genuinely
+ * rolled back. Those two properties cannot share a transaction.
+ */
+export const beginAuthorityWork = internalMutation({
+  args: { workId: v.id("commitmentAuthorityWork") },
+  handler: async (ctx, args) => {
+    const work = await ctx.db.get(args.workId);
+    // Terminal or vanished: nothing owed. This is the at-most-once guard for a
+    // duplicate schedule, a re-drained accounting row, or the sweep racing a
+    // worker that already finished.
+    if (!work || work.status !== "PENDING") return;
+
+    if (work.attempts >= MAX_AUTHORITY_ATTEMPTS) {
+      // ⚠️ BLOCKED IS TERMINAL AND VISIBLE, NEVER A SILENT GIVE-UP. The
+      // accounting stays complete; the car keeps whatever authority it has;
+      // a person is told this one needs them.
+      await ctx.db.patch(work._id, {
+        status: "BLOCKED" as const,
+        outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT" as const,
+        outcomeAt: Date.now(),
+        outcomeDetail:
+          "this vehicle's authority could not be settled after repeated attempts, so a person must review it",
+        settledAt: Date.now(),
+      });
+      await summariseAuthorityOnEvent(ctx, work);
+      return;
+    }
+
+    await ctx.db.patch(work._id, { attempts: work.attempts + 1, lastAttemptAt: Date.now() });
+    await ctx.scheduler.runAfter(0, internal.accountingOutbox.performAuthoritySettlement, {
+      workId: work._id,
+    });
+  },
+});
+
+/**
+ * SCRUM-208 c15814 — STEP TWO OF TWO: SETTLE ONE SOURCE EPISODE, ATOMICALLY.
+ *
+ * ⚠️ NOTHING CATCHES IN HERE, AND THAT IS THE FEATURE. This is a registered
+ * mutation of its own, so an unexpected throw aborts THIS transaction and
+ * nothing else: no successor root, no claim, no moved pointer, no re-held
+ * source, no vehicle projection. The accounting reversal committed in an
+ * earlier transaction and is untouched; the work item stays PENDING with its
+ * attempt already spent, so the sweep will try again.
+ *
+ * That is the property the old in-drain catch could never provide. It ran
+ * under `drainEntries`' per-row `try`/`catch`, so a post-write failure was
+ * absorbed, the mutation returned normally, and the partial authority state
+ * COMMITTED — labelled INCONSISTENT, which was honest and still wrong.
+ *
+ * ⚠️ SO DO NOT ADD A `try`/`catch` HERE. Converting a throw into a recorded
+ * outcome from inside this mutation reintroduces the exact defect: the writes
+ * made before it would commit. Expected business answers already come back as
+ * typed values and never throw; anything that DOES throw is precisely the case
+ * that must roll back rather than be described.
+ */
+export const performAuthoritySettlement = internalMutation({
+  args: { workId: v.id("commitmentAuthorityWork") },
+  handler: async (ctx, args) => {
+    const work = await ctx.db.get(args.workId);
+    if (!work || work.status !== "PENDING") return;
+
+    const settled = await settleOneReversalSource(
+      ctx,
+      work.orgId,
+      {
+        kind: work.sourceKind,
+        depositId: work.depositId,
+        vehicleId: work.vehicleId,
+        saleId: work.saleId,
+        ...(work.holdId ? { holdId: work.holdId } : {}),
+      },
+      Date.now(),
+      // The episode is recorded as opened by whoever initiated the reversal —
+      // carried on the accounting row, because a scheduled run has no user.
+      (await ctx.db.get(work.pendingEventId))!.actorId
+    );
+
+    // ⚠️ `null` IS "NOT OURS TO SETTLE", AND IT IS NOT AN OUTCOME.
+    //
+    // The source vanished, or the hold belongs to another dealership. The work
+    // is finished — leaving it PENDING would retry forever — but inventing a
+    // taxonomy answer for it would be a false audit record, and
+    // NO_RESTORABLE_BASIS specifically means "lawfully nothing to restore",
+    // which is a different statement from "this was never mine". So it
+    // terminalizes with NO outcome, and the summary skips it.
+    if (!settled) {
+      await ctx.db.patch(work._id, { status: "SETTLED" as const, settledAt: Date.now() });
+      return;
+    }
+
+    await ctx.db.patch(work._id, {
+      status: "SETTLED" as const,
+      outcome: settled.outcome,
+      outcomeAt: Date.now(),
+      ...(authorityOutcomeDetail(settled) !== undefined
+        ? { outcomeDetail: authorityOutcomeDetail(settled)! }
+        : {}),
+      settledAt: Date.now(),
+    });
+    await summariseAuthorityOnEvent(ctx, work);
+  },
+});
+
+/**
+ * Derive the accounting row's summary outcome from the durable work items.
+ *
+ * ⚠️ DERIVED AFTER SETTLEMENT — IT PERFORMS NO AUTHORITY WRITES. The worst
+ * outcome still wins, and the order the episodes settle in still must not
+ * matter, but this now reads answers that are already durable instead of being
+ * the loop that produces them. A reversal freeing several cars records
+ * "RESTORED" for one of them and a blocked condition for another; the summary
+ * must never let the clean car bury the one that needs a person.
+ *
+ * The siblings are found by an EXACT bounded range over `workKey`, which is
+ * prefixed by this accounting row's own idempotency key — no scan, and no
+ * second index for something the identity already encodes.
+ */
+async function summariseAuthorityOnEvent(
+  ctx: MutationCtx,
+  work: Doc<"commitmentAuthorityWork">
+): Promise<void> {
+  const event = await ctx.db.get(work.pendingEventId);
+  if (!event) return;
+
+  const prefix = `${event.idempotencyKey}:`;
+  const siblings = await ctx.db
+    .query("commitmentAuthorityWork")
+    .withIndex("by_org_work_key", (q) =>
+      q.eq("orgId", work.orgId).gte("workKey", prefix).lt("workKey", `${prefix}￿`)
+    )
+    .collect();
+
+  let worst: Doc<"commitmentAuthorityWork"> | null = null;
+  for (const s of siblings) {
+    if (!s.outcome) continue;
+    if (!worst || AUTHORITY_SEVERITY[s.outcome] > AUTHORITY_SEVERITY[worst.outcome!]) worst = s;
+  }
+  if (!worst || !worst.outcome) return;
+
+  await ctx.db.patch(event._id, {
+    authorityOutcome: worst.outcome,
+    authorityOutcomeAt: Date.now(),
+    ...(worst.outcomeDetail !== undefined ? { authorityOutcomeDetail: worst.outcomeDetail } : {}),
+  });
+}
+
+/**
+ * SCRUM-208 c15814 — THE RETRY SWEEP. Work that rolled back stays owed.
+ *
+ * ⚠️ IT READS ONLY THIS TABLE, AND ONLY ITS OWN PENDING ROWS. Nothing infers
+ * authority work from a historical POSTED accounting row: an old row with no
+ * work item is legacy and fails closed, exactly as an unactivated organization
+ * does. SCRUM-201 owns any live backlog reconciliation, and this is not it.
+ */
+export const sweepAuthorityWork = internalMutation({
+  args: { orgId: v.id("organizations"), limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const owed = await ctx.db
+      .query("commitmentAuthorityWork")
+      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
+      .take(Math.min(args.limit ?? 25, 100));
+
+    for (const work of owed) {
+      await ctx.scheduler.runAfter(0, internal.accountingOutbox.beginAuthorityWork, {
+        workId: work._id,
+      });
+    }
+    return { scheduled: owed.length };
+  },
+});
 
 /**
  * Re-exported from `commitments.ts`, where it is DEFINED, beside the taxonomy
@@ -283,103 +521,25 @@ async function markEntryPosted(
  */
 export { AUTHORITY_SEVERITY };
 
-/**
- * Settle the vehicle authority for every car a deferred reversal freed, and
- * return the ONE outcome that must be recorded.
- *
- * ⚠️ THE WORST OUTCOME WINS, AND THE ORDER MUST NOT MATTER. A reversal can
- * free several cars at once. Recording "RESTORED" over a blocked one — because
- * the clean car happened to be read last — is how a repair condition
- * disappears, and the order rows come back in is not something a caller
- * controls.
- *
- * Exported so the multi-car behaviour can be exercised directly. Driving it
- * through the whole drain would require an accounting event to reverse and
- * would test the posting engine rather than this rule.
- */
-export async function settleFreedHoldsAuthority(
-  ctx: MutationCtx,
-  orgId: Id<"organizations">,
-  freed: ReversalCompletionSource[],
-  decisionNow: number,
-  /**
-   * Who the restored episodes are recorded as having been opened by.
-   *
-   * ⚠️ THE DRAIN IS A SYSTEM RUN AND THE EPISODE STILL HAS AN AUTHOR. Those
-   * are two different facts and both are true: the outbox entry carries the
-   * operator who initiated the reversal, and the run itself has no
-   * authenticated user. Collapsing them would either invent a user for a cron
-   * or leave a commitment episode with no author.
-   */
-  actorId: Id<"users">
-): Promise<DeferredAuthorityOutcome | null> {
-  let worst: DeferredAuthorityOutcome | null = null;
-  for (const source of freed) {
-    // ⚠️ THE ONE BOUNDARY BOTH SHAPES PASS THROUGH, AND THE ONLY PLACE A
-    // FAILURE NOBODY ENUMERATED CAN STILL BE RECORDED.
-    //
-    // The previous round pre-flighted the throwing canonical reads — but only
-    // on the DIRECT path, inside `restoreAuthorityAfterReversal`. A SLICE
-    // returns early into `settleAuthorityAfterReversal`, whose own liveness
-    // read reaches the SAME `refuseContradiction` with no pre-flight anywhere
-    // on that path. `deferredReversalRestoration.test.ts` reproduces it
-    // through a real contradictory row, no mocking involved.
-    //
-    // What that costs is not a loud failure. `drainEntries` catches the throw
-    // and the mutation COMMITS, and `completeDeferredReversal`'s gate is
-    // ONE-WAY: the application is already REVERSED, so the retry frees nothing,
-    // settles nothing, and marks the entry POSTED with NO `authorityOutcome`
-    // at all. Corruption becomes the one outcome that leaves no trace — in a
-    // taxonomy built so that it could not be overwritten.
-    //
-    // Re-throwing is still not the fix, for the same reason it never was: the
-    // drain is per-organization, so it would abort every unrelated entry for
-    // this dealership. A pre-flight is not the fix either — it cannot cover
-    // every write-time failure, and believing it did is what produced this
-    // round. So the enumeration is closed at the boundary instead: anything
-    // unanticipated becomes the worst-ranked durable outcome, which is exactly
-    // what INCONSISTENT means — the data itself needs a person.
-    let settled: DeferredAuthorityOutcome | null;
-    try {
-      settled = await settleOneReversalSource(ctx, orgId, source, decisionNow, actorId);
-    } catch (error) {
-      // A ConvexError from `refuseContradiction` is curated — written for the
-      // person who has to repair the records, naming only their own data. Kept
-      // verbatim so a SLICE reports the SAME sentence a DIRECT source already
-      // reports through its pre-flight, rather than a vaguer one for having
-      // arrived by a different door.
-      //
-      // ⚠️ ANY OTHER MESSAGE IS LOGGED, NEVER PERSISTED. This detail is
-      // returned to every tenant user holding VIEW_FINANCE through
-      // `listPending`, so a raw technical string would put backend internals in
-      // front of a dealership. The operator gets a stable sentence; the
-      // engineer gets the real error from the server log.
-      if (error instanceof ConvexError) {
-        settled = {
-          outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT",
-          detail: String(error.data ?? error.message),
-        };
-      } else {
-        console.error("[authority-settlement] unexpected failure", {
-          orgId,
-          vehicleId: source.vehicleId,
-          depositId: source.depositId,
-          kind: source.kind,
-          error,
-        });
-        settled = {
-          outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT",
-          detail: "this vehicle's records could not be settled, so a person must review them",
-        };
-      }
-    }
-    if (!settled) continue;
-    if (!worst || AUTHORITY_SEVERITY[settled.outcome] > AUTHORITY_SEVERITY[worst.outcome]) {
-      worst = settled;
-    }
-  }
-  return worst;
-}
+// ⚠️ `settleFreedHoldsAuthority` WAS HERE, AND IT IS NOT COMING BACK.
+//
+// It looped every freed source inside the accounting drain and wrapped each one
+// in a `try`/`catch`, turning an unexpected failure into a recorded
+// INCONSISTENT outcome. That closed the SILENCE and could never close the
+// DEFECT: the catch ran inside `drainEntries`' own transaction, so every
+// authority write made before the failure COMMITTED anyway and was then
+// labelled inconsistent. Honest about failure, and still a half-restoration on
+// a money path (SCRUM-208 c15814).
+//
+// Settlement now happens one source episode at a time, in
+// `performAuthoritySettlement` — a registered mutation of its own, where a
+// throw is a real rollback boundary. The worst-outcome-wins summary still
+// exists, in `summariseAuthorityOnEvent`, but it now DERIVES from durable work
+// items instead of being the loop that writes them.
+//
+// If a future change needs "settle them all here", that is this defect
+// returning. `authorityWorkIsolation.test.ts` fails when settlement can commit
+// partial authority state from inside the drain.
 
 /**
  * Finish one source whose reversing journal has now posted.
@@ -658,6 +818,30 @@ async function drainPageAndContinue(
       }
     );
   }
+
+  // ⚠️ AUTHORITY WORK THAT ROLLED BACK IS STILL OWED, so a finished drain
+  // re-offers this organization's PENDING work items to their own transactions.
+  //
+  // A settlement that fails rolls its whole mutation back — that is the design —
+  // so nothing re-schedules it from inside. Riding the drain gives it a real
+  // retry without inventing cron infrastructure or enumerating tenants: the
+  // events that drain an org (a period opening, a chart initializing, an
+  // operator redrive) re-offer its owed work.
+  //
+  // ⚠️ ONCE PER DRAIN, NOT ONCE PER PAGE. A multi-page backlog continues through
+  // this function many times, and scheduling a sweep from each pass would queue
+  // one redundant sweep per page while changing nothing — the sweep is bounded
+  // and idempotent, so the extra invocations are pure noise. It fires when the
+  // drain has actually finished.
+  //
+  // ⚠️ Stated honestly rather than oversold: an org that never drains again does
+  // not retry on its own. The work stays PENDING and findable by an exact range
+  // rather than being lost, and SCRUM-201 — not this change — owns live backlog
+  // recovery.
+  if (page.isDone) {
+    await ctx.scheduler.runAfter(0, internal.accountingOutbox.sweepAuthorityWork, { orgId });
+  }
+
   return result;
 }
 

@@ -47,6 +47,11 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "accountingPeriods", index: "by_org" },
   { kind: "orgRows", table: "accountingEvents", index: "by_org" },
   { kind: "orgRows", table: "pendingAccountingEvents", index: "by_org_status" },
+  // SCRUM-208 c15814 — the per-source authority work a reversal owed. Deleted
+  // with its organization: the deal, deposit and vehicle it names all go too,
+  // so a surviving row would be an instruction to settle records that no longer
+  // exist.
+  { kind: "orgRows", table: "commitmentAuthorityWork", index: "by_org_status" },
   { kind: "orgRows", table: "journalLines", index: "by_org" },
   { kind: "orgRows", table: "journalEntries", index: "by_org" },
   { kind: "orgRows", table: "paymentAllocations", index: "by_org" },

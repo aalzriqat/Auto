@@ -17,7 +17,13 @@ import schema from "./schema";
 import { Id } from "./_generated/dataModel";
 import { completeDeferredReversal } from "./utils/depositApplications";
 import { reinstateDirectDepositHold } from "./utils/commitmentWriters";
-import { AUTHORITY_SEVERITY, settleFreedHoldsAuthority } from "./accountingOutbox";
+import { AUTHORITY_SEVERITY } from "./accountingOutbox";
+import {
+  seedAuthorityEvent,
+  seedAuthorityWork,
+  settleThroughWorkers,
+  type SettleSource,
+} from "../test-utils/authorityWork";
 import { acquireVehicle, consumeRootForSale } from "./commitments";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { COMMITMENT_AUTHORITY_V1 } from "./utils/commitmentKernel";
@@ -177,10 +183,30 @@ const completion = async (seed: Seed, reversalKey: string) =>
     })
   );
 
-const settle = async (seed: Seed, sources: Awaited<ReturnType<typeof completion>>) =>
-  await seed.t.run((ctx) =>
-    settleFreedHoldsAuthority(ctx, seed.orgId, sources, Date.now(), seed.userId)
+/**
+ * ⚠️ SETTLEMENT NOW RUNS THROUGH ITS REAL DOOR, ONE EPISODE AT A TIME.
+ *
+ * It used to be a single in-drain loop (`settleFreedHoldsAuthority`) whose
+ * `try`/`catch` turned any unexpected failure into a recorded INCONSISTENT
+ * outcome — from inside `drainEntries`' transaction, so the authority writes
+ * made before the failure committed anyway. Each source episode now settles in
+ * `performAuthoritySettlement`, a registered mutation of its own.
+ *
+ * ⚠️ AND THIS HELPER DOES NOT CATCH. A throw is now the CONTRACT — it is what
+ * rolls the episode's writes back — so a test that expects one asserts
+ * `.rejects` and then proves nothing was written.
+ */
+let settleSeq = 0;
+const settle = async (seed: Seed, sources: SettleSource[]) => {
+  const eventId = await seedAuthorityEvent(
+    seed.t,
+    seed.orgId,
+    seed.userId,
+    `reversed_seq_${(settleSeq += 1)}`
   );
+  const workIds = await seedAuthorityWork(seed.t, seed.orgId, eventId, sources);
+  return await settleThroughWorkers(seed.t, workIds, eventId);
+};
 
 describe("while the reversing journal is only queued", () => {
   /**
@@ -657,15 +683,19 @@ describe("a deal paid in instalments", () => {
     return { vehicleId, saleId, quoteId, first, second };
   }
 
-  const drainOne = async (seed: Seed, reversalKey: string) =>
-    await seed.t.run(async (ctx) => {
-      const freed = await completeDeferredReversal(ctx, {
+  // Complete one instalment's reversal, then settle its freed episodes through
+  // the real per-source worker — the two halves that are now separate
+  // transactions in production.
+  const drainOne = async (seed: Seed, reversalKey: string) => {
+    const freed = await seed.t.run((ctx) =>
+      completeDeferredReversal(ctx, {
         orgId: seed.orgId,
         reversalIdempotencyKey: reversalKey,
         postedAt: Date.now(),
-      });
-      return await settleFreedHoldsAuthority(ctx, seed.orgId, freed, Date.now(), seed.userId);
-    });
+      })
+    );
+    return await settle(seed, freed);
+  };
 
   test("the second instalment JOINS the deal the first one restored", async () => {
     const seed = await seedDealer("i1");
@@ -878,20 +908,31 @@ describe("a sliced source meeting the same contradiction", () => {
       })
     );
 
-    // ⚠️ RESOLVES, NEVER REJECTS — for a SLICE exactly as for a DIRECT source.
-    // Before the fix this REJECTS, and `drainEntries` swallows the throw and
-    // commits, leaving the entry POSTED on retry with no outcome at all.
-    const outcome = await settle(seed, [
+    // ⚠️ IT REJECTS NOW, AND THAT IS THE POINT (SCRUM-208 c15814).
+    //
+    // The previous round caught this throw at a loop boundary and recorded
+    // INCONSISTENT. That closed the SILENCE but not the DEFECT: the catch ran
+    // inside the accounting drain's transaction, so any authority write made
+    // before the throw committed anyway. Settlement is now its own registered
+    // mutation, so the throw aborts THAT transaction — which is what makes
+    // "all of it or none of it" true instead of merely claimed.
+    const eventId = await seedAuthorityEvent(seed.t, seed.orgId, seed.userId, "reversed_slice_1");
+    const [workId] = await seedAuthorityWork(seed.t, seed.orgId, eventId, [
       { kind: "SLICE", depositId, vehicleId, saleId, holdId },
     ]);
 
-    expect(outcome?.outcome).toBe("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT");
+    await expect(settleThroughWorkers(seed.t, [workId], eventId)).rejects.toThrow(/disagree/i);
 
-    // ⚠️ AND IT SAYS THE SAME THING A DIRECT SOURCE SAYS. The curated
-    // `refuseContradiction` sentence survives the boundary catch, so arriving
-    // by the slice door does not cost the operator the one detail that tells
-    // them what to repair.
-    expect(outcome && "detail" in outcome ? outcome.detail : "").toMatch(/disagree/i);
+    // ⚠️ AND NOTHING WAS WRITTEN. The rollback is the contract; the message is
+    // only how a person finds out.
+    const work = await seed.t.run((ctx) => ctx.db.get(workId));
+    expect(work?.status, "the episode is still owed, not silently finished").toBe("PENDING");
+    expect(work?.outcome, "and it recorded no outcome it had not reached").toBeUndefined();
+    const event = await seed.t.run((ctx) => ctx.db.get(eventId));
+    expect(
+      event?.authorityOutcome,
+      "the accounting row was not summarised from a settlement that never happened"
+    ).toBeUndefined();
   });
 
   /**
@@ -1072,16 +1113,33 @@ describe("a source that cannot be made live", () => {
     };
     const cleanSources = await completion(seed, clean.reversalKey);
 
-    // ⚠️ THE ROGUE CAR GOES FIRST. With the catch outside the loop, the clean
-    // car behind it is never reached at all.
-    const outcome = await settle(seed, [rogue, ...cleanSources]);
+    // ⚠️ ISOLATION IS NOW PER EPISODE, NOT PER LOOP ITERATION (c15814 §7).
+    //
+    // Both cars are freed by ONE accounting reversal and each gets its own
+    // durable work item and its own transaction. The rogue goes first and
+    // throws; that must cost the rogue its writes and NOTHING else.
+    const eventId = await seedAuthorityEvent(seed.t, seed.orgId, seed.userId, "reversed_batch_1");
+    const [rogueWork, cleanWork] = await seedAuthorityWork(seed.t, seed.orgId, eventId, [
+      rogue,
+      ...cleanSources,
+    ]);
 
-    // Worst-outcome-wins still reports the contradiction...
-    expect(outcome?.outcome).toBe("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT");
-    // ...and the clean car behind it was still settled and re-held.
+    // The rogue's own transaction aborts.
+    await expect(
+      settleThroughWorkers(seed.t, [rogueWork], eventId)
+    ).rejects.toThrow(/disagree/i);
+
+    // ...and the clean car settles anyway, in an invocation of its own. Under
+    // the old single-loop shape the rogue's throw ended the loop and this car
+    // was never reached at all.
+    await settleThroughWorkers(seed.t, [cleanWork], eventId);
     expect(
       (await seed.t.run((ctx) => ctx.db.get(clean.depositId)))?.holdActive,
-      "the clean car was reached and restored despite the rogue ahead of it"
+      "the clean car settled independently of the rogue that failed"
     ).toBe(true);
+
+    // The rogue is still owed — retryable, not silently finished.
+    expect((await seed.t.run((ctx) => ctx.db.get(rogueWork)))?.status).toBe("PENDING");
+    expect((await seed.t.run((ctx) => ctx.db.get(cleanWork)))?.status).toBe("SETTLED");
   });
 });

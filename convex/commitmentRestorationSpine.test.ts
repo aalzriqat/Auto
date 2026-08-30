@@ -33,7 +33,7 @@ import {
   resolveOwnership,
   settleAuthorityAfterReversal,
 } from "./commitments";
-import { settleFreedHoldsAuthority } from "./accountingOutbox";
+import { settleSources } from "../test-utils/authorityWork";
 import { completeDeferredReversal } from "./utils/depositApplications";
 import {
   beginUserRun,
@@ -226,14 +226,22 @@ async function drainDeferredReversals(seed: Seed) {
   );
   const outcomes: Array<string> = [];
   for (const application of pending) {
-    const outcome = await seed.t.run(async (ctx) => {
-      const freed = await completeDeferredReversal(ctx, {
+    // Accounting completion and authority settlement are separate transactions
+    // in production (SCRUM-208 c15814), so drive them as two steps here too.
+    const freed = await seed.t.run((ctx) =>
+      completeDeferredReversal(ctx, {
         orgId: seed.orgId,
         reversalIdempotencyKey: `reversed_${application.eventIdempotencyKey}`,
         postedAt: Date.now(),
-      });
-      return await settleFreedHoldsAuthority(ctx, seed.orgId, freed, Date.now(), seed.managerId);
-    });
+      })
+    );
+    const outcome = await settleSources(
+      seed.t,
+      seed.orgId,
+      seed.managerId,
+      freed,
+      `reversed_${application.eventIdempotencyKey}`
+    );
     if (outcome) outcomes.push(outcome.outcome);
   }
   return outcomes;
