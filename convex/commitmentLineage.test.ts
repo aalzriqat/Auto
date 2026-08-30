@@ -785,10 +785,12 @@ describe("replay — ALREADY_LIVE needs the whole liveness proof, not a claim st
 
   test("a foreign-tenant row cannot hide this tenant's successor", async () => {
     const seed = await seedDealer("p7");
-    const { f, restored } = await restoredOnce(seed);
+    const f = await consumedByCancelledSale(seed, seed.customerA);
 
-    // Another dealership in the same database, carrying a corrupt claim that
-    // points at OUR predecessor. On the BARE index it can be returned first.
+    // ⚠️ INSERTED BEFORE OUR SUCCESSOR, DELIBERATELY. Equal index keys order
+    // by creation, so a foreign row written afterwards is never the one
+    // `.first()` returns and the test would pass against the very defect it
+    // exists to catch. It has to be ordered FIRST to discriminate.
     const otherOrg = await seed.t.run((ctx) =>
       ctx.db.insert("organizations", {
         name: "Other Dealer",
@@ -799,7 +801,7 @@ describe("replay — ALREADY_LIVE needs the whole liveness proof, not a claim st
     await seed.t.run((ctx) =>
       ctx.db.insert("vehicleCommitmentClaims", {
         orgId: otherOrg,
-        rootId: restored.rootId,
+        rootId: f.rootId,
         vehicleId: f.vehicleId,
         evidenceKind: "RESERVATION" as const,
         status: "RELEASED" as const,
@@ -810,9 +812,20 @@ describe("replay — ALREADY_LIVE needs the whole liveness proof, not a claim st
       })
     );
 
-    // ⚠️ Reading one row from the bare index and checking its org afterwards
-    // is a post-filter after a bounded read: the foreign row answers "no
-    // successor here", and the real one is never seen.
+    const first = await seed.t.run(async (ctx) =>
+      restoreCommitment(ctx, {
+        decision: await decisionFor(seed, ctx),
+        evidence: f.evidence,
+        intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
+        ...restoreArgs(seed, f),
+      })
+    );
+    const restored = first as Extract<typeof first, { decision: "RESTORED" }>;
+    expect(restored.decision).toBe("RESTORED");
+
+    // Reading one row from the bare index and checking its org afterwards is a
+    // post-filter after a bounded read: the foreign row answers "no successor
+    // here", the real one is never seen, and a SECOND successor gets opened.
     expect(await replay(seed, f)).toEqual({
       decision: "ALREADY_LIVE",
       rootId: restored.rootId,
