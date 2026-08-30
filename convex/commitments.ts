@@ -975,9 +975,17 @@ async function openRoot(
   //
   // A lineage origin points at ITSELF, which cannot be expressed in the insert
   // because the id does not exist until the insert returns. The self-patch is
-  // safe precisely because a Convex mutation is ONE transaction: no reader ever
-  // observes the row between the two writes, and if anything later in this
-  // mutation throws, neither write lands.
+  // safe because a Convex mutation is ONE transaction: no reader ever observes
+  // the row between the two writes.
+  //
+  // ⚠️ THAT IS AN ATOMICITY CLAIM ABOUT THESE TWO WRITES, AND NOTHING WIDER.
+  // This comment used to end "and if anything later in this mutation throws,
+  // neither write lands." That is true only of a caller that lets the throw
+  // escape. The deferred restoration path runs inside
+  // `accountingOutbox.drainEntries`'s per-row `try`/`catch`, which absorbs the
+  // throw and lets the mutation COMMIT — so a later failure there leaves this
+  // root behind rather than un-writing it. See the contract note on
+  // `restoreAuthorityAfterReversal`.
   //
   // ⚠️ IT IS NOT LEFT ABSENT FOR A READER TO NORMALIZE TO "SELF". A missing
   // `lineageRootId` is the LEGACY signal and must keep failing closed; if new
@@ -2189,21 +2197,41 @@ export async function settleAuthorityAfterReversal(
  *
  * ## What commits, and what does not
  *
- * All of it, or none of it. `restoreCommitment` re-reads its own binding and
- * throws unless the source is live, the successor claim is attached, the
- * pointer names it and the root is OPEN; this function adds the projection to
- * that postcondition. A Convex mutation is one transaction, so a throw here
- * un-does the whole thing — including the reversal completion that called it,
- * which is then retried by the outbox from a clean state.
+ * ⚠️ THIS FUNCTION DECIDES BEFORE IT WRITES. IT DOES NOT ROLL BACK, BECAUSE IT
+ * CANNOT.
  *
- * ⚠️ AND THAT IS A DELIBERATE NARROWING OF "NEVER THROWS". The old contract —
- * an authority result is not an accounting failure — is preserved for every
- * BUSINESS answer: a legacy org, a rival, ambiguity, nothing to restore and a
- * refused binding are all returned as typed values and never thrown. What can
- * still throw is CORRUPTION: canonical rows that contradict each other, or a
- * postcondition that does not hold after the writes. Catching those would be
- * strictly worse, because catching does NOT roll back the writes already made
- * — it would commit a half-restoration and record it as a clean outcome.
+ * An earlier version of this paragraph claimed "all of it, or none of it", on
+ * the grounds that a Convex mutation is one transaction so a throw here un-does
+ * everything — including the reversal completion that called it, which the
+ * outbox then retries from a clean state. **Every clause of that was false**,
+ * and it stayed here, unchanged, for a whole review round after the code below
+ * it had been corrected. Both review seats found the consequences
+ * independently. Stating it plainly, because a comment asserting a safety
+ * property the code does not have is the exact failure this file keeps being
+ * blocked by:
+ *
+ *  - `restoreCommitment` no longer throws on its postcondition; it returns
+ *    INCONSISTENT — see the note on `RestorationOutcome`.
+ *  - A throw does not un-do anything at the deferred seam.
+ *    `accountingOutbox.drainEntries` wraps every row in a `try`/`catch`, which
+ *    is pre-existing and correct — one bad row must not abort an entire
+ *    organization's drain — so a caught throw is ordinary control flow: the
+ *    mutation returns normally and COMMITS every write already made.
+ *  - The reversal completion is NOT retried from a clean state.
+ *    `completeDeferredReversal`'s `status !== "REVERSING"` gate is ONE-WAY, so
+ *    a retry after a throw frees nothing, settles nothing, and marks the entry
+ *    POSTED with no `authorityOutcome` at all.
+ *
+ * So safety rests on NOT WRITING until every failure mode has been decided.
+ * Every throwing read is pre-flighted before the first write; a post-write
+ * check REPORTS rather than raises; and `settleFreedHoldsAuthority` closes the
+ * enumeration at the one boundary both the DIRECT and SLICE shapes pass
+ * through, so a failure nobody anticipated still becomes a durable outcome
+ * instead of vanishing.
+ *
+ * The old contract — an authority result is not an accounting failure — is
+ * preserved for every BUSINESS answer: a legacy org, a rival, ambiguity,
+ * nothing to restore and a refused binding are all typed values, never thrown.
  */
 export async function restoreAuthorityAfterReversal(
   ctx: MutationCtx,
@@ -2413,16 +2441,24 @@ async function probeCanonicalHold(
       (await hasCanonicalReservationHold(ctx, decision, vehicleId));
     return { ok: true, held };
   } catch (error) {
-    // A ConvexError from `refuseContradiction` carries a message meant for a
-    // person; anything else is unexpected and is recorded as-is rather than
-    // dressed up.
-    const reason =
-      error instanceof ConvexError
-        ? String(error.data ?? error.message)
-        : error instanceof Error
-          ? error.message
-          : String(error);
-    return { ok: false, reason };
+    // A ConvexError from `refuseContradiction` is curated: it is written for
+    // the person who has to repair the records, and it names only their own
+    // data. That one is safe to persist and is the whole value of the outcome.
+    if (error instanceof ConvexError) {
+      return { ok: false, reason: String(error.data ?? error.message) };
+    }
+    // ⚠️ ANYTHING ELSE IS LOGGED, NEVER PERSISTED. This reason becomes
+    // `authorityOutcomeDetail`, and `accountingOutbox.listPending` returns the
+    // whole row to any tenant user holding VIEW_FINANCE — so recording a raw
+    // technical message here would put backend internals in front of a
+    // dealership. An unexpected error is also not a diagnosis: "records
+    // disagree" is what the operator can act on, and the engineer gets the
+    // real error from the server log.
+    console.error("[canonical-hold-probe] unexpected failure", { vehicleId, error });
+    return {
+      ok: false,
+      reason: "this vehicle's hold records could not be read, so a person must review them",
+    };
   }
 }
 

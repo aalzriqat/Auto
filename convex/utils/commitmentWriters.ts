@@ -103,6 +103,25 @@ export async function reinstateDirectDepositHold(
   // Money that has left the business is never re-held; a row already holding
   // its car needs nothing.
   if (deposit.status !== "HELD") return null;
+  // ⚠️ AND A DELETED ROW IS NOT A USABLE SOURCE — SAY IT HERE, BECAUSE THE
+  // READER ALREADY DOES.
+  //
+  // `resolveCanonicalBinding` computes `depositUsable` as
+  // `status === "HELD" && isDeleted !== true`. Without this line the writer and
+  // its own paired reader disagree about what a usable source is: the write
+  // would set `holdActive: true` on a row the binding then reports as not live,
+  // committing a successor root, claim and pointer for a source that cannot
+  // hold anything — and `canonicalShadowDepositHold` refuses outright on
+  // "a deposit still holds a car after being voided or deleted", so the very
+  // next canonical read throws.
+  //
+  // No production door writes `HELD + isDeleted` today: `deposits.voidDeposit`
+  // sets VOIDED and `holdActive: false` in the SAME patch, and `deposits` is
+  // not in `adminData`'s ADMIN_TABLES, so the raw editor cannot reach it. That
+  // is why this is a guard and not a bug fix — but a writer whose admissibility
+  // rule is narrower than its reader's is a trap left for whoever adds the next
+  // door, and this branch has already been blocked twice by exactly that shape.
+  if (deposit.isDeleted === true) return null;
   if (deposit.holdActive === true) return deposit;
   // ⚠️ NEVER FOR A SLICED DEPOSIT, AND NEVER FOR A LEGACY ROW. `undefined` is
   // not `false`: a deposit with no representation class predates the canonical

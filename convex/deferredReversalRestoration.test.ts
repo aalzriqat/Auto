@@ -491,6 +491,29 @@ describe("the direct re-hold writer refuses what it must", () => {
     expect((await seed.t.run((ctx) => ctx.db.get(f.depositId)))?.holdActive).toBe(false);
   });
 
+  /**
+   * SCRUM-208 — THE WRITER'S ADMISSIBILITY RULE MATCHES ITS OWN READER'S.
+   *
+   * Found by Codex against 170c5c9f0. `resolveCanonicalBinding` computes
+   * `depositUsable` as `status === "HELD" && isDeleted !== true`, and the
+   * writer checked only the status half. A deleted row would have been put
+   * back on hold and then reported as not live by the very next read.
+   *
+   * No production door writes `HELD + isDeleted` today — `voidDeposit` sets
+   * VOIDED and `holdActive: false` in the same patch, and `deposits` is not an
+   * `adminData` table — so this is a guard against the next door, not a repair
+   * of a live path. It is asserted rather than assumed precisely because
+   * "nothing can reach it" is the claim that stopped being true twice already.
+   */
+  test("a deleted deposit is never re-held, because the binding would not call it live", async () => {
+    const seed = await seedDealer("w4");
+    const f = await deferredDirectCancellation(seed);
+    await seed.t.run((ctx) => ctx.db.patch(f.depositId, { isDeleted: true }));
+
+    expect(await attempt(seed, f.depositId)).toBeNull();
+    expect((await seed.t.run((ctx) => ctx.db.get(f.depositId)))?.holdActive).toBe(false);
+  });
+
   test("a legacy deposit with no representation class fails closed", async () => {
     const seed = await seedDealer("w2");
     const f = await deferredDirectCancellation(seed);
@@ -759,4 +782,145 @@ describe("contradictory canonical records", () => {
       AUTHORITY_SEVERITY.RESTORED
     );
   });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SCRUM-208 — THE PRE-FLIGHT COVERED ONLY ONE OF THE TWO PATHS
+//
+// Found by Sonnet MAX against 170c5c9f0, and reproduced here before being
+// fixed. `probeCanonicalHold` — built by the previous round precisely so a
+// contradictory canonical row is REPORTED rather than thrown — is private to
+// `restoreAuthorityAfterReversal`, which only a DIRECT source reaches. A SLICE
+// returns early into `settleAuthorityAfterReversal`, whose canonical liveness
+// read reaches the very same `refuseContradiction`, with no pre-flight anywhere
+// on that path.
+//
+// The consequence is not a noisy failure. `drainEntries` catches the throw and
+// the mutation COMMITS; `completeDeferredReversal` has already moved the
+// application to REVERSED through a ONE-WAY gate, so the retry finds nothing
+// left to settle and marks the entry POSTED with no `authorityOutcome` at all.
+// That is the exact silent loss this taxonomy exists to prevent, reached
+// through the one door the previous round did not close.
+//
+// The fix is a catch at the single boundary BOTH shapes pass through, so a
+// failure nobody enumerated still becomes a durable, worst-ranked outcome.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("a sliced source meeting the same contradiction", () => {
+  test("is reported, never thrown — the slice path has no pre-flight of its own", async () => {
+    const seed = await seedDealer("sl1");
+    const vehicleId = await vehicle(seed);
+
+    // ⚠️ THE ROOT STAYS OPEN. `settleAuthorityAfterReversal` answers
+    // NO_RESTORABLE_BASIS and returns BEFORE the canonical read whenever the
+    // car is already FREE, so a consumed root never reaches the contradiction
+    // at all. A slice reversal on a car a live deal still holds is the shape
+    // that does.
+    const depositId = await seed.t.run((ctx) =>
+      ctx.db.insert("deposits", {
+        orgId: seed.orgId,
+        vehicleId,
+        customerId: seed.customerId,
+        amount: 1_000,
+        status: "HELD" as const,
+        holdActive: false,
+        usesVehicleHoldRows: true,
+        createdBy: seed.userId,
+        createdAt: Date.now(),
+      })
+    );
+    const saleId = await seed.t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: seed.orgId,
+        vehicleId,
+        customerId: seed.customerId,
+        salespersonId: seed.userId,
+        salePrice: 30_000,
+        saleDate: Date.now(),
+        status: "CANCELLED" as const,
+      })
+    );
+    await seed.t.run((ctx) =>
+      acquireVehicle(ctx, {
+        orgId: seed.orgId,
+        vehicleId,
+        customerId: seed.customerId,
+        createdBy: seed.userId,
+        evidence: { kind: "DEPOSIT", depositId },
+        lineage: { depositId },
+      })
+    );
+
+    const holdId = await seed.t.run((ctx) =>
+      ctx.db.insert("depositVehicleHolds", {
+        orgId: seed.orgId,
+        depositId,
+        vehicleId,
+        active: false,
+        allocationStatus: "RELEASED_AWAITING_DECISION" as const,
+        createdAt: Date.now(),
+      })
+    );
+
+    // The SAME contradictory row the DIRECT path already reports safely: live
+    // in the canonical DIRECT index, and VOIDED.
+    await seed.t.run((ctx) =>
+      ctx.db.insert("deposits", {
+        orgId: seed.orgId,
+        vehicleId,
+        customerId: seed.customerB,
+        amount: 1,
+        status: "VOIDED" as const,
+        holdActive: true,
+        usesVehicleHoldRows: false,
+        createdBy: seed.userId,
+        createdAt: Date.now(),
+      })
+    );
+
+    // ⚠️ RESOLVES, NEVER REJECTS — for a SLICE exactly as for a DIRECT source.
+    // Before the fix this REJECTS, and `drainEntries` swallows the throw and
+    // commits, leaving the entry POSTED on retry with no outcome at all.
+    const outcome = await settle(seed, [
+      { kind: "SLICE", depositId, vehicleId, saleId, holdId },
+    ]);
+
+    expect(outcome?.outcome).toBe("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT");
+
+    // ⚠️ AND IT SAYS THE SAME THING A DIRECT SOURCE SAYS. The curated
+    // `refuseContradiction` sentence survives the boundary catch, so arriving
+    // by the slice door does not cost the operator the one detail that tells
+    // them what to repair.
+    expect(outcome && "detail" in outcome ? outcome.detail : "").toMatch(/disagree/i);
+  });
+
+  /**
+   * SCRUM-208 — AN UNEXPECTED FAILURE IS LOGGED, NOT PUBLISHED.
+   *
+   * Found by Codex against 170c5c9f0. `authorityOutcomeDetail` is returned by
+   * `accountingOutbox.listPending` to every tenant user holding VIEW_FINANCE,
+   * so a raw technical message here reaches a dealership. Only the curated
+   * ConvexError text may be persisted.
+   */
+  /**
+   * ⚠️ THE SANITIZING BRANCH IS NOT COVERED HERE, AND THAT IS SAID RATHER THAN
+   * QUIETLY LEFT.
+   *
+   * The boundary catch has two arms: a curated `ConvexError` is persisted
+   * verbatim (asserted by the test above), and any OTHER throwable is logged
+   * and replaced with a fixed sentence, because `authorityOutcomeDetail`
+   * reaches every VIEW_FINANCE user through `accountingOutbox.listPending`.
+   *
+   * Reaching that second arm needs a plain technical `Error` from inside
+   * `settleOneReversalSource`, and this harness cannot produce one naturally:
+   * `ctx.db.get` under `convex-test` returns null for a malformed id instead of
+   * throwing, so the obvious injection settles to null and never enters the
+   * catch. Forcing it requires module mocking, which would apply to every test
+   * in this file.
+   *
+   * So that arm is verified by reading, not by execution. Recorded here as a
+   * known coverage gap — the same treatment as the deliberately surviving
+   * mutant noted in `restoreCommitment` — rather than dressed up with a test
+   * that asserts a string literal against itself and proves nothing.
+   */
 });

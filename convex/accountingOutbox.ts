@@ -315,7 +315,64 @@ export async function settleFreedHoldsAuthority(
 ): Promise<DeferredAuthorityOutcome | null> {
   let worst: DeferredAuthorityOutcome | null = null;
   for (const source of freed) {
-    const settled = await settleOneReversalSource(ctx, orgId, source, decisionNow, actorId);
+    // ⚠️ THE ONE BOUNDARY BOTH SHAPES PASS THROUGH, AND THE ONLY PLACE A
+    // FAILURE NOBODY ENUMERATED CAN STILL BE RECORDED.
+    //
+    // The previous round pre-flighted the throwing canonical reads — but only
+    // on the DIRECT path, inside `restoreAuthorityAfterReversal`. A SLICE
+    // returns early into `settleAuthorityAfterReversal`, whose own liveness
+    // read reaches the SAME `refuseContradiction` with no pre-flight anywhere
+    // on that path. `deferredReversalRestoration.test.ts` reproduces it
+    // through a real contradictory row, no mocking involved.
+    //
+    // What that costs is not a loud failure. `drainEntries` catches the throw
+    // and the mutation COMMITS, and `completeDeferredReversal`'s gate is
+    // ONE-WAY: the application is already REVERSED, so the retry frees nothing,
+    // settles nothing, and marks the entry POSTED with NO `authorityOutcome`
+    // at all. Corruption becomes the one outcome that leaves no trace — in a
+    // taxonomy built so that it could not be overwritten.
+    //
+    // Re-throwing is still not the fix, for the same reason it never was: the
+    // drain is per-organization, so it would abort every unrelated entry for
+    // this dealership. A pre-flight is not the fix either — it cannot cover
+    // every write-time failure, and believing it did is what produced this
+    // round. So the enumeration is closed at the boundary instead: anything
+    // unanticipated becomes the worst-ranked durable outcome, which is exactly
+    // what INCONSISTENT means — the data itself needs a person.
+    let settled: DeferredAuthorityOutcome | null;
+    try {
+      settled = await settleOneReversalSource(ctx, orgId, source, decisionNow, actorId);
+    } catch (error) {
+      // A ConvexError from `refuseContradiction` is curated — written for the
+      // person who has to repair the records, naming only their own data. Kept
+      // verbatim so a SLICE reports the SAME sentence a DIRECT source already
+      // reports through its pre-flight, rather than a vaguer one for having
+      // arrived by a different door.
+      //
+      // ⚠️ ANY OTHER MESSAGE IS LOGGED, NEVER PERSISTED. This detail is
+      // returned to every tenant user holding VIEW_FINANCE through
+      // `listPending`, so a raw technical string would put backend internals in
+      // front of a dealership. The operator gets a stable sentence; the
+      // engineer gets the real error from the server log.
+      if (error instanceof ConvexError) {
+        settled = {
+          outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT",
+          detail: String(error.data ?? error.message),
+        };
+      } else {
+        console.error("[authority-settlement] unexpected failure", {
+          orgId,
+          vehicleId: source.vehicleId,
+          depositId: source.depositId,
+          kind: source.kind,
+          error,
+        });
+        settled = {
+          outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT",
+          detail: "this vehicle's records could not be settled, so a person must review them",
+        };
+      }
+    }
     if (!settled) continue;
     if (!worst || AUTHORITY_SEVERITY[settled.outcome] > AUTHORITY_SEVERITY[worst.outcome]) {
       worst = settled;
