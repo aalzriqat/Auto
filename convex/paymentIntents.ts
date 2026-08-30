@@ -8,6 +8,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { runWithIdempotency } from "./utils/idempotency";
 import { hookPaymentLinkReceived } from "./accounting/workflowHooks";
 import { allocatePaymentToReceivable, createCanonicalPayment, getReceivableOutstandingMinor } from "./subledger";
+import { planApplication, saleInvoiceForLegacyRow } from "./utils/collectionMovement";
 import { fromMinorUnits, toMinorUnits, scaleForCurrency, assertValidMinorAmount } from "./utils/money";
 
 const statusValidator = v.union(
@@ -103,23 +104,58 @@ async function createCanonicalIntentSettlement(
     canonicalPaymentId,
   };
 
-  if (intent.receivableDocumentId && !intent.paymentAllocationId) {
-    // Clamp to what is still owed, exactly as the legacy mirror below already
-    // does. allocatePaymentToReceivable THROWS when the amount exceeds the
-    // outstanding balance, and a Convex mutation is atomic — so if the
-    // receivable was partly settled through another channel after this intent
-    // was created, the throw rolled back the entire settlement including the
-    // canonical payment row. The provider has already confirmed the money, and
-    // its retries would hit the same throw, so the payment was lost outright.
-    // Any excess correctly stays on the payment as an unapplied balance.
-    const outstandingMinor = await getReceivableOutstandingMinor(ctx, intent.receivableDocumentId);
-    const allocatableMinor = Math.min(intent.amountMinor, outstandingMinor);
-    if (allocatableMinor > 0) {
+  // SCRUM-56 — a payment link settles the same debt cash and cheques settle.
+  // When the intent names a legacy row that stands for a completed sale, that
+  // sale's invoice is the monetary target; the row's own `legacy_receivable`
+  // twin is an obsolete representation. Without this, a payment link quietly
+  // paid down the twin while `recordPayment` and `clearCheque` paid down the
+  // invoice — three paths disagreeing about the target, which is the shape of
+  // the original defect. Rows with no sale behind them are untouched.
+  const legacyRow = intent.receivableId ? await ctx.db.get(intent.receivableId) : null;
+  const ownedLegacyRow = legacyRow && legacyRow.orgId === intent.orgId ? legacyRow : null;
+
+  // The target is the sale's canonical invoice whenever the intent can identify
+  // that sale AT ALL — through its legacy row, or through `intent.saleId`
+  // directly. Gating this on the owned-legacy-row shape alone left the
+  // saleId-present / receivableId-absent combination allocating to whatever
+  // document the intent named, which for a completed sale is the obsolete
+  // `legacy_receivable` twin. A path that can name the sale must settle the
+  // sale.
+  let allocationTargetId = intent.receivableDocumentId;
+  const saleInvoiceViaRow = ownedLegacyRow ? await saleInvoiceForLegacyRow(ctx, ownedLegacyRow) : null;
+  if (saleInvoiceViaRow) {
+    allocationTargetId = saleInvoiceViaRow;
+  } else if (intent.saleId) {
+    const sale = await ctx.db.get(intent.saleId);
+    if (sale && sale.orgId === intent.orgId && sale.canonicalReceivableDocumentId) {
+      allocationTargetId = sale.canonicalReceivableDocumentId;
+    }
+  }
+
+  // R1 + R2 — ONE plan, clamped once against the canonical debt, consumed by
+  // both the allocation below and the legacy mirror further down. This used to
+  // be two clamps: the allocation against the invoice and the mirror against
+  // `receivable.outstandingAmount`. Each looked defensible; together they let a
+  // real 11,000 allocation carry a $0 audit record while a sibling row on the
+  // same sale was stranded open with no way to close it.
+  let plan = { requestedMinor: intent.amountMinor, appliedMinor: 0, unappliedMinor: intent.amountMinor };
+
+  if (allocationTargetId && !intent.paymentAllocationId) {
+    // The canonical debt is the ONLY ceiling. allocatePaymentToReceivable THROWS
+    // when the amount exceeds the outstanding balance, and a Convex mutation is
+    // atomic — so if the receivable was partly settled through another channel
+    // after this intent was created, the throw rolled back the entire settlement
+    // including the canonical payment row. The provider has already confirmed
+    // the money and its retries would hit the same throw, so the payment was
+    // lost outright. The excess correctly stays unapplied on the payment.
+    const outstandingMinor = await getReceivableOutstandingMinor(ctx, allocationTargetId);
+    plan = planApplication(intent.amountMinor, outstandingMinor);
+    if (plan.appliedMinor > 0) {
       links.paymentAllocationId = await allocatePaymentToReceivable(ctx, {
         orgId: intent.orgId,
         paymentId: canonicalPaymentId,
-        receivableDocumentId: intent.receivableDocumentId,
-        amountMinor: allocatableMinor,
+        receivableDocumentId: allocationTargetId,
+        amountMinor: plan.appliedMinor,
         actorId,
       });
     }
@@ -127,43 +163,43 @@ async function createCanonicalIntentSettlement(
     links.paymentAllocationId = intent.paymentAllocationId;
   }
 
-  if (intent.receivableId && !intent.collectionPaymentId) {
-    const receivable = await ctx.db.get(intent.receivableId);
-    if (receivable && receivable.orgId === intent.orgId) {
-      const amount = roundMoney(fromMinorUnits(intent.amountMinor, intent.currency), intent.currency);
-      // The receivable may have been partially paid through another channel
-      // since this intent was created, so the full intent amount can now
-      // exceed what's actually still owed. Clamp what's recorded as applied
-      // to this receivable to its current outstanding balance rather than
-      // posting more than it was ever owed.
-      const appliedAmount = Math.min(amount, receivable.outstandingAmount);
-      const collectionPaymentId = await ctx.db.insert("collectionPayments", {
-        orgId: intent.orgId,
-        receivableId: receivable._id,
-        customerId: intent.customerId,
-        vehicleId: receivable.vehicleId,
-        saleId: receivable.saleId,
-        direction: "IN",
-        method: "PAYMENT_LINK",
-        amount: appliedAmount,
-        paymentDate: occurredAt,
-        status: "POSTED",
-        idempotencyKey: `payment_intent_${intent._id}`,
-        reference: externalId ?? intent.externalId ?? `Payment intent ${intent._id}`,
-        cashierId: actorId,
-        canonicalPaymentId,
-        paymentAllocationId: links.paymentAllocationId,
-        createdAt: occurredAt,
-      });
-      const outstandingAmount = roundMoney(Math.max(0, receivable.outstandingAmount - appliedAmount), intent.currency);
-      await ctx.db.patch(receivable._id, {
-        outstandingAmount,
-        status: nextLegacyReceivableStatus(outstandingAmount, receivable.dueDate, occurredAt),
-        lastPaymentAt: occurredAt,
-        updatedAt: occurredAt,
-      });
-      links.collectionPaymentId = collectionPaymentId;
-    }
+  // R7 — nothing applied means nothing recorded. A settlement that could not be
+  // allocated must not invent an operational payment against the row or close
+  // it: the debt it would appear to settle is still owed to somebody, and the
+  // row would be left reading PAID with no money behind it.
+  if (ownedLegacyRow && !intent.collectionPaymentId && plan.appliedMinor > 0) {
+    // R1 — the SAME appliedMinor the allocation used. Never re-derived from
+    // `receivable.outstandingAmount`; that second clamp is the defect.
+    const appliedAmount = roundMoney(fromMinorUnits(plan.appliedMinor, intent.currency), intent.currency);
+    const collectionPaymentId = await ctx.db.insert("collectionPayments", {
+      orgId: intent.orgId,
+      receivableId: ownedLegacyRow._id,
+      customerId: intent.customerId,
+      vehicleId: ownedLegacyRow.vehicleId,
+      saleId: ownedLegacyRow.saleId,
+      direction: "IN",
+      method: "PAYMENT_LINK",
+      amount: appliedAmount,
+      paymentDate: occurredAt,
+      status: "POSTED",
+      idempotencyKey: `payment_intent_${intent._id}`,
+      reference: externalId ?? intent.externalId ?? `Payment intent ${intent._id}`,
+      cashierId: actorId,
+      canonicalPaymentId,
+      paymentAllocationId: links.paymentAllocationId,
+      createdAt: occurredAt,
+    });
+    const outstandingAmount = roundMoney(
+      Math.max(0, ownedLegacyRow.outstandingAmount - appliedAmount),
+      intent.currency
+    );
+    await ctx.db.patch(ownedLegacyRow._id, {
+      outstandingAmount,
+      status: nextLegacyReceivableStatus(outstandingAmount, ownedLegacyRow.dueDate, occurredAt),
+      lastPaymentAt: occurredAt,
+      updatedAt: occurredAt,
+    });
+    links.collectionPaymentId = collectionPaymentId;
   }
 
   return links;
