@@ -234,6 +234,31 @@ export default defineSchema({
     reason: v.optional(v.string()),
     attempts: v.number(),
     lastError: v.optional(v.string()),
+    /**
+     * SCRUM-208 — WHAT THE VEHICLE AUTHORITY DID AFTER THIS REVERSAL POSTED.
+     *
+     * ⚠️ NOT `lastError`. Once the journal exists the money has already moved
+     * back, so a vehicle-authority result is expected business behaviour and
+     * not a posting failure. Routing it through `lastError` would make a
+     * condition a human must repair indistinguishable from a transient error
+     * the drain will retry — and the retry would fail identically forever.
+     *
+     * RESTORED — the car was freed, or was already free.
+     * ..._NO_AUTHORITY_RIVAL — something else legitimately still holds it; the
+     *   reversal stands and the vehicle does not move.
+     * ..._BLOCKED_AMBIGUOUS — two OPEN roots. A durable repair condition,
+     *   findable by index rather than by reading error strings.
+     */
+    authorityOutcome: v.optional(
+      v.union(
+        v.literal("RESTORED"),
+        v.literal("ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL"),
+        v.literal("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS")
+      )
+    ),
+    authorityOutcomeAt: v.optional(v.number()),
+    /** Diagnosis only. Nothing may make a decision on this text. */
+    authorityOutcomeDetail: v.optional(v.string()),
     createdAt: v.number(),
     resolvedAt: v.optional(v.number()),
     // POST shape (mirrors PostCommand)
@@ -255,7 +280,10 @@ export default defineSchema({
     // one query, not just the one idempotencyKey it happens to know about —
     // a recurring source (monthly F&I recognition) can have more than one
     // stuck entry across different periods. See cancelPendingPostsBySource.
-    .index("by_org_source", ["orgId", "sourceType", "sourceId"]),
+    .index("by_org_source", ["orgId", "sourceType", "sourceId"])
+    // SCRUM-208 — the repair queue. An authority condition a human must act on
+    // is found by an exact range, never by scanning `lastError` for wording.
+    .index("by_org_authority_outcome", ["orgId", "authorityOutcome"]),
 
   journalEntries: defineTable({
     orgId: v.id("organizations"),

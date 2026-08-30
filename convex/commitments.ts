@@ -1773,6 +1773,83 @@ export async function consumeRootForSale(
  *
  * A release is not a sale: `consumedBySaleId` is never written here.
  */
+/**
+ * SCRUM-208 — WHAT THE VEHICLE AUTHORITY DID AFTER A REVERSAL POSTED.
+ *
+ * ⚠️ ONCE THE JOURNAL EXISTS, AN AUTHORITY OUTCOME IS NOT AN ACCOUNTING
+ * FAILURE. The money has already moved back. A fail-closed throw at this point
+ * lands in the outbox drain's generic `catch` and becomes `markEntryFailed`
+ * with a bare `lastError` — indistinguishable from a transient posting error,
+ * even though it is expected business behaviour that a human must act on.
+ *
+ * So this never throws. It returns which of the three things happened, and the
+ * caller records it durably.
+ */
+export type DeferredAuthorityOutcome =
+  /** Authority is consistent: the car was freed, or was already free. */
+  | { outcome: "RESTORED" }
+  /**
+   * Another basis legitimately still holds the car — a finance application
+   * mid-flight, a live reservation. The reversal stands and the vehicle does
+   * not move. **A rival never has its vehicle taken.**
+   */
+  | { outcome: "ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL"; rootId: Id<"commitmentRoots"> }
+  /**
+   * Two OPEN roots on one car. Refusing to choose stays correct, but it must
+   * be a DURABLE, findable repair condition — not a retry that will fail
+   * identically forever with a message nobody can distinguish.
+   */
+  | { outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS"; detail: string };
+
+/**
+ * Settle the vehicle authority after a reversal has posted. **Never throws.**
+ *
+ * Uses the certified release machinery rather than a second opinion about
+ * liveness: `releaseRootIfNoLiveBasis` already knows that a deposit, a
+ * reservation and an in-flight finance application each hold a car, and that
+ * releasing one basis does not release the others.
+ */
+export async function settleAuthorityAfterReversal(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    /** ONE clock reading for the whole decision. */
+    decisionNow: number;
+    reason: string;
+  }
+): Promise<DeferredAuthorityOutcome> {
+  const before = await resolveOwnership(ctx, args.orgId, args.vehicleId);
+  if (before.kind === "AMBIGUOUS") {
+    // ⚠️ LEFT BYTE-IDENTICAL FOR A HUMAN TO REPAIR. Choosing between two OPEN
+    // roots is the failure this authority exists to prevent, so it declines —
+    // loudly and durably, rather than as a retryable error.
+    return {
+      outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS",
+      detail: `${before.roots.length} open commitment roots on this vehicle`,
+    };
+  }
+  if (before.kind === "FREE") return { outcome: "RESTORED" };
+
+  await releaseRootIfNoLiveBasis(ctx, {
+    orgId: args.orgId,
+    vehicleId: args.vehicleId,
+    reason: args.reason,
+    decisionNow: args.decisionNow,
+  });
+
+  const after = await resolveOwnership(ctx, args.orgId, args.vehicleId);
+  if (after.kind === "FREE") return { outcome: "RESTORED" };
+  if (after.kind === "AMBIGUOUS") {
+    return {
+      outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS",
+      detail: `${after.roots.length} open commitment roots on this vehicle`,
+    };
+  }
+  // Still held, and legitimately so: something else on this car is still live.
+  return { outcome: "ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL", rootId: after.root._id };
+}
+
 export async function releaseRootIfNoLiveBasis(
   ctx: MutationCtx,
   args: {

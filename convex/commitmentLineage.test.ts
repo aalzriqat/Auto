@@ -20,7 +20,9 @@ import {
   acquireVehicle,
   resolveRestorationDecision,
   restoreCommitment,
+  settleAuthorityAfterReversal,
 } from "./commitments";
+import { AUTHORITY_SEVERITY } from "./accountingOutbox";
 import {
   AuthorityDecisionContext,
   beginUserRun,
@@ -861,6 +863,97 @@ describe("replay — ALREADY_LIVE needs the whole liveness proof, not a claim st
       rootId: restored.rootId,
       claimId: restored.claimId,
     });
+  });
+});
+
+describe("typed authority outcomes after a reversal posts", () => {
+  const settle = async (seed: Seed, vehicleId: Id<"vehicles">) =>
+    await seed.t.run((ctx) =>
+      settleAuthorityAfterReversal(ctx, {
+        orgId: seed.orgId,
+        vehicleId,
+        decisionNow: Date.now(),
+        reason: "deferred reversal posted",
+      })
+    );
+
+  test("a car nobody holds settles as RESTORED", async () => {
+    const seed = await seedDealer("t1");
+    const vehicleId = await vehicle(seed);
+    expect(await settle(seed, vehicleId)).toEqual({ outcome: "RESTORED" });
+  });
+
+  test("a held car whose basis has ended is freed and settles as RESTORED", async () => {
+    const seed = await seedDealer("t2");
+    const vehicleId = await vehicle(seed);
+    const { reservationId, rootId } = await acquire(seed, vehicleId, seed.customerA);
+    // The reservation has ended, so nothing holds the car any more.
+    await seed.t.run((ctx) => ctx.db.patch(reservationId, { status: "RELEASED" as const }));
+
+    expect(await settle(seed, vehicleId)).toEqual({ outcome: "RESTORED" });
+    const root = await seed.t.run((ctx) => ctx.db.get(rootId));
+    expect(root?.status).toBe("RELEASED");
+  });
+
+  test("a car something still legitimately holds is NOT taken", async () => {
+    const seed = await seedDealer("t3");
+    const vehicleId = await vehicle(seed);
+    const { rootId } = await acquire(seed, vehicleId, seed.customerA);
+
+    // ⚠️ A RIVAL NEVER HAS ITS VEHICLE TAKEN. The accounting reversal stands;
+    // the car does not move, and the root is left exactly as it was.
+    expect(await settle(seed, vehicleId)).toEqual({
+      outcome: "ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL",
+      rootId,
+    });
+    const root = await seed.t.run((ctx) => ctx.db.get(rootId));
+    expect(root?.status).toBe("OPEN");
+  });
+
+  test("two OPEN roots is a durable repair condition, not an error to retry", async () => {
+    const seed = await seedDealer("t4");
+    const vehicleId = await vehicle(seed);
+    await acquire(seed, vehicleId, seed.customerA);
+    await seed.t.run((ctx) =>
+      ctx.db.insert("commitmentRoots", {
+        orgId: seed.orgId,
+        vehicleId,
+        customerId: seed.customerB,
+        status: "OPEN" as const,
+        openedAt: Date.now(),
+        openedBy: seed.userId,
+        lineageGeneration: 0,
+      })
+    );
+
+    const rootsBefore = await seed.t.run((ctx) => ctx.db.query("commitmentRoots").collect());
+    // ⚠️ IT DOES NOT THROW. A throw here lands in the outbox drain's generic
+    // catch and becomes a bare `lastError`, indistinguishable from a transient
+    // posting failure that the drain will retry identically forever.
+    const outcome = await settle(seed, vehicleId);
+    expect(outcome).toEqual({
+      outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS",
+      detail: "2 open commitment roots on this vehicle",
+    });
+
+    // Left byte-identical for a human to repair.
+    expect(await seed.t.run((ctx) => ctx.db.query("commitmentRoots").collect())).toEqual(
+      rootsBefore
+    );
+  });
+});
+
+describe("when one reversal frees several cars, the worst outcome survives", () => {
+  test("a clean settle can never overwrite a condition needing repair", () => {
+    // ⚠️ A reversal can free several cars at once. Recording "RESTORED" over a
+    // blocked one is how a repair condition disappears, so the ordering is
+    // asserted rather than left to the order rows happen to be read in.
+    expect(AUTHORITY_SEVERITY.ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS).toBeGreaterThan(
+      AUTHORITY_SEVERITY.ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL
+    );
+    expect(AUTHORITY_SEVERITY.ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL).toBeGreaterThan(
+      AUTHORITY_SEVERITY.RESTORED
+    );
   });
 });
 

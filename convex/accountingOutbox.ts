@@ -25,6 +25,7 @@ import { payrollPostingBlockedReason } from "./utils/payrollSourceLedger";
 import { commissionPostingBlockedReason } from "./utils/commissionSourceLedger";
 import { reverseAccountingEvent } from "./accounting/reversals";
 import { completeDeferredReversal } from "./utils/depositApplications";
+import { DeferredAuthorityOutcome, settleAuthorityAfterReversal } from "./commitments";
 import { checkPostingAllowed } from "./accountingPeriods";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -232,20 +233,67 @@ async function markEntryPosted(
   // while its journal sat in the ledger, and the application stayed REVERSING
   // with nothing left to finish it. Now a failure leaves the row untouched and
   // retryable, which is what the drain's error handling already expects.
+  let authority: DeferredAuthorityOutcome | null = null;
   if (p.kind === "REVERSE") {
-    await completeDeferredReversal(ctx, {
+    const freed = await completeDeferredReversal(ctx, {
       orgId: p.orgId,
       reversalIdempotencyKey: p.idempotencyKey,
       postedAt: Date.now(),
     });
+
+    // SCRUM-208 — the vehicle authority, settled and TYPED.
+    //
+    // ⚠️ ONE CLOCK READING FOR THE WHOLE DECISION, taken before anything is
+    // consulted, so two cars in the same batch cannot be judged against
+    // different instants.
+    const decisionNow = Date.now();
+    for (const holdId of freed) {
+      const hold = await ctx.db.get(holdId);
+      if (!hold || hold.orgId !== p.orgId) continue;
+      const settled = await settleAuthorityAfterReversal(ctx, {
+        orgId: p.orgId,
+        vehicleId: hold.vehicleId,
+        decisionNow,
+        reason: "deferred reversal posted",
+      });
+      // ⚠️ THE WORST OUTCOME WINS. A reversal can free several cars at once,
+      // and a car that settles cleanly must not mask another that needs a
+      // human — recording "RESTORED" over a blocked one is how a repair
+      // condition disappears.
+      if (!authority || AUTHORITY_SEVERITY[settled.outcome] > AUTHORITY_SEVERITY[authority.outcome]) {
+        authority = settled;
+      }
+    }
   }
+
   await ctx.db.patch(p._id, {
     status: "POSTED",
     resolvedAt: Date.now(),
     ...(resultEventId ? { resultEventId } : {}),
     attempts: p.attempts + 1,
+    ...(authority
+      ? {
+          authorityOutcome: authority.outcome,
+          authorityOutcomeAt: Date.now(),
+          ...(authority.outcome === "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS"
+            ? { authorityOutcomeDetail: authority.detail }
+            : {}),
+        }
+      : {}),
   });
 }
+
+/**
+ * Which outcome must survive when one reversal frees several cars.
+ *
+ * A condition needing human repair outranks one that merely reports the car is
+ * still legitimately held, which outranks a clean settle.
+ */
+export const AUTHORITY_SEVERITY: Record<DeferredAuthorityOutcome["outcome"], number> = {
+  RESTORED: 0,
+  ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL: 1,
+  ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS: 2,
+};
 
 /**
  * Below the retry threshold: keep it PENDING and retryable, just surface the
