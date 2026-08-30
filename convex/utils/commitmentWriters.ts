@@ -77,3 +77,38 @@ export async function releaseReservationDepositHold(
   await ctx.db.patch(deposit._id, { holdActive: false });
   return deposit;
 }
+
+/**
+ * Put a DIRECT deposit's vehicle hold back, once its reversing journal posted.
+ *
+ * ⚠️ THIS IS THE OTHER HALF OF A DEFERRED CANCELLATION. The cancellation
+ * deliberately left `holdActive` false while the reversal sat in the outbox,
+ * because on a single-vehicle deposit that flag IS the car hold and setting it
+ * early holds a car against an entry the ledger still shows posted. This is
+ * where it comes back — and only from the outbox, only once the entry exists.
+ *
+ * ⚠️ ONLY FOR THE DIRECT REPRESENTATION. A sliced deposit's cars are held by
+ * its `depositVehicleHolds` rows, and a slice does not go back on hold at all:
+ * it waits for a manager to choose between refund and re-allocation.
+ *
+ * @returns the deposit whose hold was reinstated, or null if nothing was written.
+ */
+export async function reinstateDirectDepositHold(
+  ctx: MutationCtx,
+  args: { orgId: Id<"organizations">; depositId: Id<"deposits"> }
+): Promise<Doc<"deposits"> | null> {
+  const deposit = await ctx.db.get(args.depositId);
+  if (!deposit) return null;
+  if (deposit.orgId !== args.orgId) return null;
+  // Money that has left the business is never re-held; a row already holding
+  // its car needs nothing.
+  if (deposit.status !== "HELD") return null;
+  if (deposit.holdActive === true) return deposit;
+  // ⚠️ NEVER FOR A SLICED DEPOSIT, AND NEVER FOR A LEGACY ROW. `undefined` is
+  // not `false`: a deposit with no representation class predates the canonical
+  // model and its cutover owns it.
+  if (deposit.usesVehicleHoldRows !== false) return null;
+
+  await ctx.db.patch(deposit._id, { holdActive: true });
+  return await ctx.db.get(deposit._id);
+}

@@ -974,7 +974,7 @@ describe("when one reversal frees several cars, the worst outcome survives", () 
         createdAt: Date.now(),
       })
     );
-    return await seed.t.run((ctx) =>
+    const holdId = await seed.t.run((ctx) =>
       ctx.db.insert("depositVehicleHolds", {
         orgId: seed.orgId,
         depositId,
@@ -983,6 +983,8 @@ describe("when one reversal frees several cars, the worst outcome survives", () 
         createdAt: Date.now(),
       })
     );
+    const saleId = await sale(seed, vehicleId, seed.customerA);
+    return { kind: "SLICE" as const, depositId, vehicleId, saleId, holdId };
   }
 
   test("a blocked car survives however the freed holds are ordered", async () => {
@@ -1022,7 +1024,7 @@ describe("when one reversal frees several cars, the worst outcome survives", () 
     const otherOrg = await seed.t.run((ctx) =>
       ctx.db.insert("organizations", { name: "Other", createdAt: Date.now() })
     );
-    await seed.t.run((ctx) => ctx.db.patch(clean, { orgId: otherOrg }));
+    await seed.t.run((ctx) => ctx.db.patch(clean.holdId, { orgId: otherOrg }));
 
     expect(
       await seed.t.run((ctx) => settleFreedHoldsAuthority(ctx, seed.orgId, [clean], Date.now()))

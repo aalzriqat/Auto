@@ -305,10 +305,33 @@ export async function reverseDepositApplicationsForSale(
  * derives as `reversed_<the application's own key>`. Frees the slice itself and
  * returns the holds it advanced, for callers that want to report on them.
  */
+/**
+ * SCRUM-208 — the EXACT source a completed reversal frees, typed.
+ *
+ * ⚠️ CARRIED FROM THE APPLICATION ROW, NEVER INFERRED FROM HISTORY. The row
+ * already records which deposit, which car, which sale and — only for a
+ * multi-vehicle quote — which slice. Re-deriving any of that at completion
+ * time is the rediscovery this model removes.
+ *
+ * ⚠️ A DIRECT DEPOSIT HAS NO SLICE, AND NONE MAY BE FABRICATED. `holdId` is
+ * absent on a single-vehicle quote because the whole row IS the slice.
+ * Inventing a `depositVehicleHolds` row to make the shapes uniform would put a
+ * hold on a car whose money never had one.
+ */
+export type ReversalCompletionSource = {
+  readonly kind: "SLICE" | "DIRECT";
+  readonly depositId: Id<"deposits">;
+  readonly vehicleId: Id<"vehicles">;
+  /** The exact sale this application was consumed by. */
+  readonly saleId: Id<"sales">;
+  /** Present only on the sliced representation. */
+  readonly holdId?: Id<"depositVehicleHolds">;
+};
+
 export async function completeDeferredReversal(
   ctx: MutationCtx,
   args: { orgId: Id<"organizations">; reversalIdempotencyKey: string; postedAt: number }
-): Promise<Id<"depositVehicleHolds">[]> {
+): Promise<ReversalCompletionSource[]> {
   const prefix = "reversed_";
   if (!args.reversalIdempotencyKey.startsWith(prefix)) return [];
   const applicationKey = args.reversalIdempotencyKey.slice(prefix.length);
@@ -326,13 +349,32 @@ export async function completeDeferredReversal(
     reversedAt: args.postedAt,
   });
 
-  const freed: Id<"depositVehicleHolds">[] = [];
+  const freed: ReversalCompletionSource[] = [];
   if (application.holdId) {
     const hold = await ctx.db.get(application.holdId);
     if (hold && hold.allocationStatus === "REVERSING") {
       await ctx.db.patch(hold._id, { allocationStatus: "RELEASED_AWAITING_DECISION" });
-      freed.push(hold._id);
+      freed.push({
+        kind: "SLICE",
+        depositId: application.depositId,
+        vehicleId: hold.vehicleId,
+        saleId: application.saleId,
+        holdId: hold._id,
+      });
     }
+    return freed;
   }
+
+  // DIRECT — the whole row is the slice, and its car is the one the
+  // application named. Reported so the outbox can finish what the cancellation
+  // deliberately left undone: on a deferred reversal the hold was NOT
+  // reinstated, because a live vehicle hold whose reversing journal is still
+  // queued is a car held against an entry the ledger still shows posted.
+  freed.push({
+    kind: "DIRECT",
+    depositId: application.depositId,
+    vehicleId: application.vehicleId,
+    saleId: application.saleId,
+  });
   return freed;
 }

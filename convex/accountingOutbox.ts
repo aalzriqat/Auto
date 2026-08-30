@@ -24,8 +24,9 @@ import { prepaidPostingBlockedReason } from "./utils/prepaidSourceLedger";
 import { payrollPostingBlockedReason } from "./utils/payrollSourceLedger";
 import { commissionPostingBlockedReason } from "./utils/commissionSourceLedger";
 import { reverseAccountingEvent } from "./accounting/reversals";
-import { completeDeferredReversal } from "./utils/depositApplications";
-import { DeferredAuthorityOutcome, settleAuthorityAfterReversal } from "./commitments";
+import { completeDeferredReversal, ReversalCompletionSource } from "./utils/depositApplications";
+import { DeferredAuthorityOutcome, resolveOwnership, settleAuthorityAfterReversal } from "./commitments";
+import { reinstateDirectDepositHold } from "./utils/commitmentWriters";
 import { checkPostingAllowed } from "./accountingPeriods";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -293,24 +294,85 @@ export const AUTHORITY_SEVERITY: Record<DeferredAuthorityOutcome["outcome"], num
 export async function settleFreedHoldsAuthority(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
-  freed: Id<"depositVehicleHolds">[],
+  freed: ReversalCompletionSource[],
   decisionNow: number
 ): Promise<DeferredAuthorityOutcome | null> {
   let worst: DeferredAuthorityOutcome | null = null;
-  for (const holdId of freed) {
-    const hold = await ctx.db.get(holdId);
-    if (!hold || hold.orgId !== orgId) continue;
-    const settled = await settleAuthorityAfterReversal(ctx, {
-      orgId,
-      vehicleId: hold.vehicleId,
-      decisionNow,
-      reason: "deferred reversal posted",
-    });
+  for (const source of freed) {
+    const settled = await settleOneReversalSource(ctx, orgId, source, decisionNow);
+    if (!settled) continue;
     if (!worst || AUTHORITY_SEVERITY[settled.outcome] > AUTHORITY_SEVERITY[worst.outcome]) {
       worst = settled;
     }
   }
   return worst;
+}
+
+/**
+ * Finish one source whose reversing journal has now posted.
+ *
+ * ⚠️ THE ACCOUNTING IS ALREADY DONE AND STAYS DONE. Every branch below leaves
+ * the reversal completed. What varies is only whether the CAR comes back, and
+ * a car that cannot come back is reported rather than forced.
+ *
+ * ⚠️ AT MOST ONCE, AND INDEPENDENT OF QUEUE ORDER. The restoration is decided
+ * from PERSISTED state — the deposit's own hold flag and the vehicle's
+ * ownership — not from anything the drain remembers about what it has already
+ * seen. A second completion for the same source therefore finds the work done
+ * and changes nothing, whichever order the entries drain in.
+ */
+async function settleOneReversalSource(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  source: ReversalCompletionSource,
+  decisionNow: number
+): Promise<DeferredAuthorityOutcome | null> {
+  if (source.kind === "SLICE") {
+    // A slice does NOT go back on hold — it waits for a manager to decide
+    // between refund and re-allocation. Only the vehicle authority settles.
+    const hold = source.holdId ? await ctx.db.get(source.holdId) : null;
+    if (!hold || hold.orgId !== orgId) return null;
+    return await settleAuthorityAfterReversal(ctx, {
+      orgId,
+      vehicleId: hold.vehicleId,
+      decisionNow,
+      reason: "deferred reversal posted",
+    });
+  }
+
+  const deposit = await ctx.db.get(source.depositId);
+  if (!deposit || deposit.orgId !== orgId) return null;
+  // Already restored — by an earlier completion, or synchronously because the
+  // journal had posted by the time the sale was cancelled. Nothing to redo.
+  if (deposit.holdActive === true) return { outcome: "RESTORED" };
+  // The money must still be reinstatable. A row refunded or forfeited in the
+  // meantime has had real money leave the business, and putting the car back
+  // on hold for it would make that money spendable a second time.
+  if (deposit.status !== "HELD") return { outcome: "RESTORED" };
+
+  const ownership = await resolveOwnership(ctx, orgId, source.vehicleId);
+  if (ownership.kind === "AMBIGUOUS") {
+    // Accounting stays complete; the car is left byte-identical for a human.
+    return {
+      outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS",
+      detail: `${ownership.roots.length} open commitment roots on this vehicle`,
+    };
+  }
+  if (ownership.kind === "OWNED") {
+    // ⚠️ A RIVAL NEVER HAS ITS VEHICLE TAKEN. The money goes back to being the
+    // customer's held funds, and the car stays with whoever holds it now.
+    return { outcome: "ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL", rootId: ownership.root._id };
+  }
+
+  // The car is free: the single-vehicle deposit goes back on hold against it,
+  // which is the behaviour the cancellation deliberately deferred.
+  await reinstateDirectDepositHold(ctx, { orgId, depositId: deposit._id });
+  return await settleAuthorityAfterReversal(ctx, {
+    orgId,
+    vehicleId: source.vehicleId,
+    decisionNow,
+    reason: "deferred reversal posted",
+  });
 }
 
 /**

@@ -327,8 +327,28 @@ async function cancelPendingSupplierPayables(
  */
 async function reopenDepositAfterReversal(
   ctx: MutationCtx,
-  depositId: Id<"deposits">
+  depositId: Id<"deposits">,
+  /**
+   * SCRUM-208 — MAY THE VEHICLE HOLD COME BACK YET?
+   *
+   * ⚠️ THE MONEY SIDE AND THE CAR SIDE ARE DIFFERENT QUESTIONS. Taking the row
+   * out of APPLIED says the money is no longer consumed by that sale, and that
+   * is true the moment the application is reversed or reversing. Setting
+   * `holdActive` says the CAR is held again, and on a single-vehicle deposit
+   * that flag IS the hold — so doing it while the reversing journal is only
+   * queued holds a car against an entry the ledger still shows posted.
+   *
+   * The multi-vehicle path already knew this and gated its slice on
+   * `journalReversed`; the direct path did not, and that asymmetry is the
+   * defect. Same class as every other one this phase found: the rule was
+   * pinned on the branch somebody looked at and missing from its neighbour.
+   *
+   * Defaults to true so the callers that reopen a row with no deferred
+   * accounting behind it are unchanged.
+   */
+  options: { reinstateHold?: boolean } = {}
 ): Promise<Doc<"deposits"> | null> {
+  const reinstateHold = options.reinstateHold ?? true;
   const deposit = await ctx.db.get(depositId);
   if (!deposit) return null;
   // A row with money left over never closes as APPLIED — it keeps HELD so the
@@ -339,6 +359,7 @@ async function reopenDepositAfterReversal(
   // share left active on a vehicle now marked SOLD. Every control agreed the
   // books were fine, because they were — the money simply never moved.
   if (deposit.status === "HELD" && deposit.holdActive === false) {
+    if (!reinstateHold) return deposit;
     await ctx.db.patch(deposit._id, {
       holdActive: true,
       resolvedBy: undefined,
@@ -352,7 +373,9 @@ async function reopenDepositAfterReversal(
   if (deposit.status !== "APPLIED") return deposit;
   await ctx.db.patch(deposit._id, {
     status: "HELD",
-    holdActive: true,
+    // The money is no longer consumed by that sale either way; only the CAR
+    // waits for the journal.
+    ...(reinstateHold ? { holdActive: true } : {}),
     resolvedBy: undefined,
     resolvedAt: undefined,
     // Cleared alongside the status. Leaving them set pointed a live deposit
@@ -403,7 +426,12 @@ async function reinstateAppliedDeposits(
   const touchedDeposits = new Set<string>();
   for (const application of reversed) {
     touchedDeposits.add(application.depositId.toString());
-    const deposit = await reopenDepositAfterReversal(ctx, application.depositId);
+    // ⚠️ A SLICED DEPOSIT'S PARENT FLAG IS NOT THE CAR HOLD — its slices are,
+    // and they are gated below. A DIRECT deposit's flag IS the car hold, so it
+    // waits for the reversing journal.
+    const deposit = await reopenDepositAfterReversal(ctx, application.depositId, {
+      reinstateHold: application.holdId !== undefined || application.journalReversed,
+    });
     if (!deposit) continue;
 
     if (application.holdId) {
@@ -430,7 +458,15 @@ async function reinstateAppliedDeposits(
       // Single-vehicle quote: no hold rows exist, the whole row is the slice,
       // and the long-standing behaviour — the deposit goes back on hold against
       // its car — is exactly right.
-      await reactivateAllVehiclesForDeposit(ctx, deposit);
+      //
+      // ⚠️ BUT ONLY ONCE THE REVERSING JOURNAL HAS POSTED. While it is merely
+      // queued this leaves the car un-held and the money un-restorable, and the
+      // outbox finishes the job when the entry posts. Reinstating here would
+      // hold a car against an entry the ledger still shows credited — the
+      // single-vehicle twin of the slice rule three lines above.
+      if (application.journalReversed) {
+        await reactivateAllVehiclesForDeposit(ctx, deposit);
+      }
     }
   }
 
