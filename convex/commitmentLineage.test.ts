@@ -25,7 +25,6 @@ import {
   AuthorityDecisionContext,
   beginUserRun,
   COMMITMENT_AUTHORITY_V1,
-  PrincipalBoundEvidence,
   requireDecisionContext,
   resolveLineageTip,
 } from "./utils/commitmentKernel";
@@ -145,31 +144,16 @@ async function acquire(seed: Seed, vehicleId: Id<"vehicles">, customerId: Id<"cu
   return { reservationId, rootId, claimId };
 }
 
-/** Build the principal-bound evidence a source resolver would produce. */
-async function currentEvidence(
-  seed: Seed,
-  args: {
-    vehicleId: Id<"vehicles">;
-    customerId: Id<"customers">;
-    reservationId: Id<"vehicleReservations">;
-    claimId: Id<"vehicleCommitmentClaims">;
-    root: Doc<"commitmentRoots">;
-  }
-): Promise<PrincipalBoundEvidence> {
-  return {
-    orgId: seed.orgId,
-    vehicleId: args.vehicleId,
-    customerId: args.customerId,
-    evidenceKind: "RESERVATION",
-    evidenceRef: { kind: "RESERVATION", reservationId: args.reservationId },
-    episode: {
-      state: "CURRENT",
-      claimId: args.claimId,
-      lineageRootId: args.root.lineageRootId!,
-      lineageGeneration: args.root.lineageGeneration!,
-    },
-  };
-}
+/**
+ * The exact source a business operation names.
+ *
+ * ⚠️ THERE IS NO SECOND IDENTITY TO SUPPLY. The episode, root, lineage,
+ * principal and defining evidence are all read from the database by walking
+ * this one reference, so a test cannot compose a mismatched pair — which is
+ * the structural point of the change.
+ */
+const sourceOf = (reservationId: Id<"vehicleReservations">) =>
+  ({ kind: "RESERVATION", reservationId }) as const;
 
 /** A deal that completed into a sale, then had that sale cancelled. */
 async function consumedByCancelledSale(seed: Seed, customerId: Id<"customers">) {
@@ -187,19 +171,15 @@ async function consumedByCancelledSale(seed: Seed, customerId: Id<"customers">) 
     ctx.db.patch(claimId, { status: "CONSUMED" as const, consumedBySaleId: saleId })
   );
   const root = (await seed.t.run((ctx) => ctx.db.get(rootId)))!;
-  const evidence = await currentEvidence(seed, {
-    vehicleId,
-    customerId,
-    reservationId,
-    claimId,
-    root,
-  });
-  return { vehicleId, reservationId, rootId, claimId, saleId, root, evidence };
+  return { vehicleId, reservationId, rootId, claimId, saleId, root };
 }
 
-function restoreArgs(seed: Seed, fixture: { reservationId: Id<"vehicleReservations"> }) {
+function restoreArgs(
+  seed: Seed,
+  fixture: { reservationId: Id<"vehicleReservations">; vehicleId: Id<"vehicles"> }
+) {
+  void fixture.vehicleId;
   return {
-    commitmentEvidence: { kind: "RESERVATION" as const, reservationId: fixture.reservationId },
     lineage: { reservationId: fixture.reservationId },
     createdBy: seed.userId,
   };
@@ -227,7 +207,8 @@ describe("restoration through the acquisition boundary", () => {
     const outcome = await seed.t.run(async (ctx) =>
       restoreCommitment(ctx, {
         decision: await decisionFor(seed, ctx),
-        evidence: f.evidence,
+        source: sourceOf(f.reservationId),
+        vehicleId: f.vehicleId,
         intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
         ...restoreArgs(seed, f),
       })
@@ -258,24 +239,29 @@ describe("restoration through the acquisition boundary", () => {
     expect(String(claims[0].restoredFromClaimId)).toBe(String(f.claimId));
   });
 
-  test("NEW evidence can never be a restoration", async () => {
+  test("a source naming no episode can never be a restoration", async () => {
     const seed = await seedDealer("r2");
     const f = await consumedByCancelledSale(seed, seed.customerA);
-
-    // First acquisition has no episode. Accepting it here would open a root
+    // A source with no maintained pointer: either it predates the canonical
+    // model or it was written incompletely. Accepting it would open a root
     // with no provenance back to what was reversed.
-    const asNew: PrincipalBoundEvidence = { ...f.evidence, episode: { state: "NEW" } };
+    await seed.t.run((ctx) =>
+      ctx.db.patch(f.reservationId, { currentCommitmentClaimId: undefined })
+    );
 
-    await expect(
-      seed.t.run(async (ctx) =>
-        restoreCommitment(ctx, {
-          decision: await decisionFor(seed, ctx),
-          evidence: asNew,
-          intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
-          ...restoreArgs(seed, f),
-        })
-      )
-    ).rejects.toThrow(/no live commitment episode/);
+    const outcome = await seed.t.run(async (ctx) =>
+      restoreCommitment(ctx, {
+        decision: await decisionFor(seed, ctx),
+        source: sourceOf(f.reservationId),
+        vehicleId: f.vehicleId,
+        intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
+        ...restoreArgs(seed, f),
+      })
+    );
+    expect(outcome).toEqual({
+      decision: "REFUSE",
+      reason: "that record does not name a current commitment episode",
+    });
   });
 
   test("a DIFFERENT sale does not entitle a restoration of this deal", async () => {
@@ -287,7 +273,8 @@ describe("restoration through the acquisition boundary", () => {
     const outcome = await seed.t.run(async (ctx) =>
       restoreCommitment(ctx, {
         decision: await decisionFor(seed, ctx),
-        evidence: f.evidence,
+        source: sourceOf(f.reservationId),
+        vehicleId: f.vehicleId,
         intent: { kind: "SALE_CANCELLED", saleId: unrelated },
         ...restoreArgs(seed, f),
       })
@@ -299,25 +286,26 @@ describe("restoration through the acquisition boundary", () => {
     });
   });
 
-  test("evidence proving a different customer is refused", async () => {
+  test("a source belonging to a different customer than its deal is refused", async () => {
     const seed = await seedDealer("r4");
     const f = await consumedByCancelledSale(seed, seed.customerA);
-    // The row is genuine; it simply belongs to somebody else.
-    const otherCustomer: PrincipalBoundEvidence = {
-      ...f.evidence,
-      customerId: seed.customerB,
-    };
+    // The reservation is genuine and names a genuine episode; it simply
+    // belongs to somebody else than the deal that episode sits on.
+    await seed.t.run((ctx) => ctx.db.patch(f.reservationId, { customerId: seed.customerB }));
 
-    await expect(
-      seed.t.run(async (ctx) =>
-        restoreCommitment(ctx, {
-          decision: await decisionFor(seed, ctx),
-          evidence: otherCustomer,
-          intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
-          ...restoreArgs(seed, f),
-        })
-      )
-    ).rejects.toThrow(/different customer/);
+    const outcome = await seed.t.run(async (ctx) =>
+      restoreCommitment(ctx, {
+        decision: await decisionFor(seed, ctx),
+        source: sourceOf(f.reservationId),
+        vehicleId: f.vehicleId,
+        intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
+        ...restoreArgs(seed, f),
+      })
+    );
+    expect(outcome).toEqual({
+      decision: "REFUSE",
+      reason: "that record belongs to a different customer than the deal it names",
+    });
   });
 
   test("a rival holding the car is refused, and NOTHING is written", async () => {
@@ -331,7 +319,8 @@ describe("restoration through the acquisition boundary", () => {
     const outcome = await seed.t.run(async (ctx) =>
       restoreCommitment(ctx, {
         decision: await decisionFor(seed, ctx),
-        evidence: f.evidence,
+        source: sourceOf(f.reservationId),
+        vehicleId: f.vehicleId,
         intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
         ...restoreArgs(seed, f),
       })
@@ -349,14 +338,8 @@ describe("restoration through the acquisition boundary", () => {
     const seed = await seedDealer("r6");
     const vehicleId = await vehicle(seed);
     const { reservationId, rootId, claimId } = await acquire(seed, vehicleId, seed.customerA);
-    const root = (await seed.t.run((ctx) => ctx.db.get(rootId)))!;
-    const evidence = await currentEvidence(seed, {
-      vehicleId,
-      customerId: seed.customerA,
-      reservationId,
-      claimId,
-      root,
-    });
+    void rootId;
+    void claimId;
 
     const rootsBefore = await seed.t.run((ctx) => ctx.db.query("commitmentRoots").collect());
     const claimsBefore = await seed.t.run((ctx) =>
@@ -366,9 +349,10 @@ describe("restoration through the acquisition boundary", () => {
     const outcome = await seed.t.run(async (ctx) =>
       restoreCommitment(ctx, {
         decision: await decisionFor(seed, ctx),
-        evidence,
+        source: sourceOf(reservationId),
+        vehicleId,
         intent: { kind: "SOURCE_EPISODE_REINSTATED" },
-        ...restoreArgs(seed, { reservationId }),
+        ...restoreArgs(seed, { reservationId, vehicleId }),
       })
     );
 
@@ -378,7 +362,7 @@ describe("restoration through the acquisition boundary", () => {
     // commitments.ts says claim status may never do.
     expect(outcome).toEqual({
       decision: "REFUSE",
-      reason: "that evidence was not released",
+      reason: "that evidence is still live and has nothing to restore",
     });
 
     // ⚠️ CARDINALITY, NOT JUST ROOT COUNT. An earlier version returned
@@ -395,14 +379,48 @@ describe("restoration through the acquisition boundary", () => {
     expect(claimsAfter).toEqual(claimsBefore);
   });
 
+  test("attaching and repointing while the source stays dead rolls everything back", async () => {
+    const seed = await seedDealer("r10");
+    const f = await consumedByCancelledSale(seed, seed.customerA);
+    // The reservation itself has ended. Restoration would otherwise open a
+    // successor and repoint onto it, leaving an OPEN root that nothing holds.
+    await seed.t.run((ctx) => ctx.db.patch(f.reservationId, { status: "RELEASED" as const }));
+
+    const rootsBefore = await seed.t.run((ctx) => ctx.db.query("commitmentRoots").collect());
+    const claimsBefore = await seed.t.run((ctx) =>
+      ctx.db.query("vehicleCommitmentClaims").collect()
+    );
+
+    // ⚠️ ALL FOUR OR NONE. One Convex mutation is one transaction, so throwing
+    // in the postcondition un-does the attachment and the repoint together.
+    await expect(
+      seed.t.run(async (ctx) =>
+        restoreCommitment(ctx, {
+          decision: await decisionFor(seed, ctx),
+          source: sourceOf(f.reservationId),
+          vehicleId: f.vehicleId,
+          intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
+          ...restoreArgs(seed, f),
+        })
+      )
+    ).rejects.toThrow(/did not settle consistently/);
+
+    expect(await seed.t.run((ctx) => ctx.db.query("commitmentRoots").collect())).toEqual(
+      rootsBefore
+    );
+    expect(await seed.t.run((ctx) => ctx.db.query("vehicleCommitmentClaims").collect())).toEqual(
+      claimsBefore
+    );
+    const reservation = await seed.t.run((ctx) => ctx.db.get(f.reservationId));
+    expect(String(reservation?.currentCommitmentClaimId)).toBe(String(f.claimId));
+  });
+
   test("a legacy predecessor fails closed instead of being normalized", async () => {
     const seed = await seedDealer("r7");
     const f = await consumedByCancelledSale(seed, seed.customerA);
-    const legacyEvidence: PrincipalBoundEvidence = {
-      ...f.evidence,
-      // A lineage id that names a row carrying no lineage identity at all.
-      episode: { state: "CURRENT", claimId: f.claimId, lineageRootId: f.rootId, lineageGeneration: 0 },
-    };
+    // A deal that predates the canonical model: no lineage identity at all.
+    // It is never normalized to "its own origin at generation 0", which would
+    // manufacture a second origin in a lineage that already has one.
     await seed.t.run((ctx) =>
       ctx.db.patch(f.rootId, { lineageRootId: undefined, lineageGeneration: undefined })
     );
@@ -410,7 +428,8 @@ describe("restoration through the acquisition boundary", () => {
     const outcome = await seed.t.run(async (ctx) =>
       restoreCommitment(ctx, {
         decision: await decisionFor(seed, ctx),
-        evidence: legacyEvidence,
+        source: sourceOf(f.reservationId),
+        vehicleId: f.vehicleId,
         intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
         ...restoreArgs(seed, f),
       })
@@ -427,7 +446,8 @@ describe("restoration through the acquisition boundary", () => {
       seed.t.run(async (ctx) =>
         restoreCommitment(ctx, {
           decision: await decisionFor(seed, ctx),
-          evidence: f.evidence,
+          source: sourceOf(f.reservationId),
+          vehicleId: f.vehicleId,
           intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
           ...restoreArgs(seed, f),
         })
@@ -442,7 +462,8 @@ describe("restoration through the acquisition boundary", () => {
     const first = await seed.t.run(async (ctx) =>
       restoreCommitment(ctx, {
         decision: await decisionFor(seed, ctx),
-        evidence: f.evidence,
+        source: sourceOf(f.reservationId),
+        vehicleId: f.vehicleId,
         intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
         ...restoreArgs(seed, f),
       })
@@ -465,7 +486,8 @@ describe("restoration through the acquisition boundary", () => {
     const second = await seed.t.run(async (ctx) =>
       resolveRestorationDecision(ctx, {
         decision: await decisionFor(seed, ctx),
-        evidence: f.evidence,
+        source: sourceOf(f.reservationId),
+        vehicleId: f.vehicleId,
         intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
       })
     );
@@ -525,14 +547,7 @@ describe("dormant evidence from an earlier generation", () => {
     const tipReservation = await reservation(seed, vehicleId, seed.customerA);
     const r2 = await generation(2, tipStatus, r1, { originReservationId: tipReservation });
 
-    const evidence = await currentEvidence(seed, {
-      vehicleId,
-      customerId: seed.customerA,
-      reservationId,
-      claimId: c0,
-      root: origin,
-    });
-    return { vehicleId, reservationId, tipReservation, r0, c0, r1, r2, origin, evidence };
+    return { vehicleId, reservationId, tipReservation, r0, c0, r1, r2, origin };
   }
 
   test("a dormant R0 episode joins the OPEN tip two generations later", async () => {
@@ -542,7 +557,8 @@ describe("dormant evidence from an earlier generation", () => {
     const outcome = await seed.t.run(async (ctx) =>
       restoreCommitment(ctx, {
         decision: await decisionFor(seed, ctx),
-        evidence: f.evidence,
+        source: sourceOf(f.reservationId),
+        vehicleId: f.vehicleId,
         intent: { kind: "SOURCE_EPISODE_REINSTATED" },
         ...restoreArgs(seed, f),
       })
@@ -567,7 +583,8 @@ describe("dormant evidence from an earlier generation", () => {
     const outcome = await seed.t.run(async (ctx) =>
       restoreCommitment(ctx, {
         decision: await decisionFor(seed, ctx),
-        evidence: f.evidence,
+        source: sourceOf(f.reservationId),
+        vehicleId: f.vehicleId,
         intent: { kind: "SOURCE_EPISODE_REINSTATED" },
         ...restoreArgs(seed, f),
       })
@@ -591,12 +608,12 @@ describe("dormant evidence from an earlier generation", () => {
     const outcome = await seed.t.run(async (ctx) =>
       restoreCommitment(ctx, {
         decision: await decisionFor(seed, ctx),
-        evidence: f.evidence,
+        source: sourceOf(f.reservationId),
+        vehicleId: f.vehicleId,
         intent: { kind: "SOURCE_EPISODE_REINSTATED" },
-        // The DEFINING evidence is carried from the predecessor, as M2
+        // The DEFINING evidence is derived from the predecessor claim, as M2
         // requires; only the lineage PROOF differs, which is the part a caller
         // controls and which must not reach root identity.
-        commitmentEvidence: { kind: "RESERVATION" as const, reservationId: f.reservationId },
         lineage: { reservationId: callerReservation },
         createdBy: seed.userId,
       })
@@ -629,7 +646,8 @@ describe("dormant evidence from an earlier generation", () => {
     const outcome = await seed.t.run(async (ctx) =>
       restoreCommitment(ctx, {
         decision: await decisionFor(seed, ctx),
-        evidence: f.evidence,
+        source: sourceOf(f.reservationId),
+        vehicleId: f.vehicleId,
         intent: { kind: "SOURCE_EPISODE_REINSTATED" },
         ...restoreArgs(seed, f),
       })
@@ -647,7 +665,8 @@ describe("dormant evidence from an earlier generation", () => {
     const outcome = await seed.t.run(async (ctx) =>
       resolveRestorationDecision(ctx, {
         decision: await decisionFor(seed, ctx),
-        evidence: f.evidence,
+        source: sourceOf(f.reservationId),
+        vehicleId: f.vehicleId,
         intent: { kind: "SOURCE_EPISODE_REINSTATED" },
       })
     );
@@ -662,7 +681,8 @@ describe("replay — ALREADY_LIVE needs the whole liveness proof, not a claim st
     const first = await seed.t.run(async (ctx) =>
       restoreCommitment(ctx, {
         decision: await decisionFor(seed, ctx),
-        evidence: f.evidence,
+        source: sourceOf(f.reservationId),
+        vehicleId: f.vehicleId,
         intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
         ...restoreArgs(seed, f),
       })
@@ -672,11 +692,19 @@ describe("replay — ALREADY_LIVE needs the whole liveness proof, not a claim st
     return { f, restored };
   }
 
-  const replay = async (seed: Seed, f: { evidence: PrincipalBoundEvidence; saleId: Id<"sales"> }) =>
+  const replay = async (
+    seed: Seed,
+    f: {
+      reservationId: Id<"vehicleReservations">;
+      vehicleId: Id<"vehicles">;
+      saleId: Id<"sales">;
+    }
+  ) =>
     await seed.t.run(async (ctx) =>
       resolveRestorationDecision(ctx, {
         decision: await decisionFor(seed, ctx),
-        evidence: f.evidence,
+        source: sourceOf(f.reservationId),
+        vehicleId: f.vehicleId,
         intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
       })
     );
@@ -749,7 +777,8 @@ describe("replay — ALREADY_LIVE needs the whole liveness proof, not a claim st
     const outcome = await seed.t.run(async (ctx) =>
       resolveRestorationDecision(ctx, {
         decision: await decisionFor(seed, ctx),
-        evidence: f.evidence,
+        source: sourceOf(f.reservationId),
+        vehicleId: f.vehicleId,
         intent: { kind: "SALE_CANCELLED", saleId: unrelated },
       })
     );
@@ -815,7 +844,8 @@ describe("replay — ALREADY_LIVE needs the whole liveness proof, not a claim st
     const first = await seed.t.run(async (ctx) =>
       restoreCommitment(ctx, {
         decision: await decisionFor(seed, ctx),
-        evidence: f.evidence,
+        source: sourceOf(f.reservationId),
+        vehicleId: f.vehicleId,
         intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
         ...restoreArgs(seed, f),
       })
@@ -902,7 +932,8 @@ describe("L3 — the tip is the MAXIMUM generation, not whichever root is OPEN",
     const outcome = await seed.t.run(async (ctx) =>
       restoreCommitment(ctx, {
         decision: await decisionFor(seed, ctx),
-        evidence: f.evidence,
+        source: sourceOf(f.reservationId),
+        vehicleId: f.vehicleId,
         intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
         ...restoreArgs(seed, f),
       })

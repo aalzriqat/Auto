@@ -50,7 +50,8 @@ import {
   requireCurrentEpisode,
   resolveLineageTip,
 } from "./utils/commitmentKernel";
-import { repointSourceToClaim, resolveSourceState } from "./utils/commitmentSources";
+import { resolveCanonicalBinding, SourceRef, stampAcquisitionPointer } from "./utils/commitmentSources";
+import { IN_FLIGHT_FINANCE_STATUSES as FINANCE_IN_FLIGHT } from "./utils/financeStatuses";
 import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 
@@ -1116,6 +1117,8 @@ async function executeAcquisition(
       | { kind: "ORIGIN" }
       | { kind: "SUCCESSOR"; predecessorRoot: Doc<"commitmentRoots"> };
     adoptReservation?: boolean;
+    /** The exact source, when the caller knows it (a named deposit slice). */
+    source?: SourceRef;
   }
 ): Promise<{ rootId: Id<"commitmentRoots">; claimId: Id<"vehicleCommitmentClaims"> }> {
   const rootId =
@@ -1160,7 +1163,25 @@ async function executeAcquisition(
     predecessor: args.predecessor,
   });
 
+  // ⚠️ THE POINTER IS STAMPED IN THE SAME TRANSACTION AS THE CLAIM, ON EVERY
+  // PATH — not only on restoration. A pointer that appears only after a
+  // restoration is absent for every ordinary deal, so the first reader to
+  // consult it fails closed on healthy data.
+  await stampAcquisitionPointer(ctx, {
+    orgId: args.orgId,
+    source: args.source ?? sourceRefOfEvidence(args.evidence),
+    vehicleId: args.vehicleId,
+    claimId,
+  });
+
   return { rootId, claimId };
+}
+
+/** The source a piece of evidence names, without a slice it cannot know yet. */
+function sourceRefOfEvidence(evidence: CommitmentEvidence): SourceRef {
+  if (evidence.kind === "DEPOSIT") return { kind: "DEPOSIT", depositId: evidence.depositId };
+  if (evidence.kind === "FINANCE") return { kind: "FINANCE", applicationId: evidence.applicationId };
+  return { kind: "RESERVATION", reservationId: evidence.reservationId };
 }
 
 /**
@@ -1193,126 +1214,103 @@ export async function resolveRestorationDecision(
   ctx: MutationCtx,
   args: {
     decision: AuthorityDecisionContext;
-    evidence: PrincipalBoundEvidence;
+    /** The exact source row — a sliced deposit names its hold row. */
+    source: SourceRef;
+    vehicleId: Id<"vehicles">;
     intent: RestorationIntent;
   }
 ): Promise<RestorationDecision> {
-  const { decision, evidence, intent } = args;
+  const { decision, source, vehicleId, intent } = args;
   requireCanonicalAuthority(decision);
 
-  if (String(evidence.orgId) !== String(decision.orgId)) {
-    throw new Error("evidence belongs to another organization than the decision context");
-  }
+  // ⚠️ ONE BINDING, WALKED FROM THE SOURCE ROW. The caller names a source and
+  // a car; everything else — the episode, the root, the lineage, the principal
+  // and the defining evidence — is read from the database. There is no second
+  // identity to disagree with the first.
+  const bound = await resolveCanonicalBinding(ctx, decision, { source, vehicleId });
+  if (!bound.ok) return { decision: "REFUSE", reason: bound.reason };
+  const { binding } = bound;
 
-  // 1. NEW may never masquerade as restoration.
-  const episode = requireCurrentEpisode(evidence, "RESTORE");
-
-  // 3. The tip, established before anything is trusted about it.
-  const tip = await resolveLineageTip(ctx, decision, episode.lineageRootId);
+  const tip = await resolveLineageTip(ctx, decision, binding.root.lineageRootId!);
   if (tip.kind === "CORRUPT") {
     return { decision: "REFUSE", reason: `the deal's history is inconsistent (${tip.reason})` };
   }
-  if (String(tip.root.vehicleId) !== String(evidence.vehicleId)) {
+  if (String(tip.root.vehicleId) !== String(vehicleId)) {
     return { decision: "REFUSE", reason: "that evidence belongs to a different vehicle's deal" };
   }
-
-  // 2. Principal, against the lineage.
-  assertPrincipalMatches(evidence, tip.root.customerId);
-
-  // 3. The source episode itself.
-  //
-  // ⚠️ ITS ROOT IS NOT REQUIRED TO BE THE TIP. A dormant deposit episode can
-  // belong to R0 while finance has since advanced the lineage through R1 to
-  // R2. Requiring it to sit on the tip would strand that evidence forever.
-  // What is required is that it belongs to THIS lineage — proven, not assumed.
-  const sourceClaim = await ctx.db.get(episode.claimId);
-  if (!sourceClaim) {
-    return { decision: "REFUSE", reason: "the episode being restored no longer exists" };
-  }
-  const sourceRoot = await ctx.db.get(sourceClaim.rootId);
-  if (
-    !sourceRoot ||
-    sourceRoot.lineageRootId === undefined ||
-    String(sourceRoot.lineageRootId) !== String(episode.lineageRootId) ||
-    String(sourceRoot.orgId) !== String(tip.root.orgId) ||
-    String(sourceRoot.vehicleId) !== String(tip.root.vehicleId) ||
-    String(sourceRoot.customerId) !== String(tip.root.customerId)
-  ) {
-    return { decision: "REFUSE", reason: "that evidence belongs to a different deal" };
-  }
-
-  // 4. The exact reason this episode ended. Claim-level, because with dormant
-  // siblings the tip's own ending is a different event from this episode's.
-  //
-  // ⚠️ BEFORE ANY REPLAY ANSWER. A caller naming the WRONG sale must not be
-  // handed "already done" merely because the right sale was restored earlier.
-  // An episode that is still ACTIVE fails both branches here, which is how
-  // "nothing to restore" stays a refusal rather than becoming a success.
-  if (intent.kind === "SALE_CANCELLED") {
-    if (sourceClaim.status !== "CONSUMED") {
-      return { decision: "REFUSE", reason: "that evidence was not completed into a sale" };
-    }
-    if (String(sourceClaim.consumedBySaleId ?? "") !== String(intent.saleId)) {
-      return {
-        decision: "REFUSE",
-        reason: "that sale is not the one this deal was completed into",
-      };
-    }
-  } else if (sourceClaim.status !== "RELEASED") {
-    return { decision: "REFUSE", reason: "that evidence was not released" };
-  }
-
-  // The source row's OWN liveness, and the episode it currently names.
-  const sourceState = await resolveSourceState(ctx, decision, {
-    source: evidence.evidenceRef,
-    vehicleId: evidence.vehicleId,
-  });
-
-  // ⚠️ AN EPISODE IS SUCCEEDED ONCE — PROVEN WITH AN EXACT, TENANT-SCOPED
-  // UNIQUENESS PROBE.
-  //
-  // `.first()` on the bare `by_restored_from` could not do this job twice
-  // over: a corrupt foreign-tenant row ordered first HIDES a valid same-tenant
-  // successor, and one row cannot reveal that TWO successors branch from the
-  // same predecessor. `take(2)` on the tenant-scoped range is an exact
-  // 0 / 1 / more-than-one answer.
-  const successors = await ctx.db
-    .query("vehicleCommitmentClaims")
-    .withIndex("by_org_restored_from", (q) =>
-      q.eq("orgId", decision.orgId).eq("restoredFromClaimId", sourceClaim._id)
-    )
-    .take(2);
-  if (successors.length > 1) {
+  if (String(tip.root.customerId) !== String(binding.customerId)) {
     return {
       decision: "REFUSE",
-      reason: "this evidence has been reinstated more than once, which is inconsistent state",
+      reason: "that record belongs to a different customer than the deal it names",
     };
   }
 
-  if (successors.length === 1) {
-    const successor = successors[0];
-    // ⚠️ CLAIM STATUS ALONE NEVER MEANS LIVE. Claims stay ACTIVE forever,
-    // including on a terminal root, so an ACTIVE successor proves nothing by
-    // itself. A replay answer requires the whole chain: the claim is ACTIVE,
-    // its root is OPEN, that root is the validated current tip, the SOURCE row
-    // is still live, and the source's maintained pointer names this very
-    // episode.
-    //
-    // Anything short of that is stale or corrupt state, and the honest answer
-    // is a refusal — not an idempotent success that hands back a claim nobody
-    // is holding the car under.
-    const successorRoot = await ctx.db.get(successor.rootId);
-    const proven =
-      successor.status === "ACTIVE" &&
-      successorRoot !== null &&
-      successorRoot.status === "OPEN" &&
-      String(successorRoot._id) === String(tip.root._id) &&
-      sourceState.live &&
-      sourceState.pointer.kind === "NAMES" &&
-      String(sourceState.pointer.claimId) === String(successor._id);
+  /** Did this episode end for the exact reason the caller gave? */
+  const endedForThisReason = (claim: Doc<"vehicleCommitmentClaims">): boolean =>
+    intent.kind === "SALE_CANCELLED"
+      ? claim.status === "CONSUMED" &&
+        String(claim.consumedBySaleId ?? "") === String(intent.saleId)
+      : claim.status === "RELEASED";
 
+  // ⚠️ THE POINTER NAMES A LIVE EPISODE — this is a replay, not a restoration.
+  //
+  // Claim status alone proves nothing, so the replay answer requires the whole
+  // chain: the named episode is ACTIVE, its root is OPEN and is the validated
+  // tip, the SOURCE is still live, and the predecessor it succeeded is the
+  // episode the caller's intent actually names. A caller naming the wrong sale
+  // is refused here rather than handed "already done".
+  /**
+   * How many successors this episode already has, tenant-scoped and exact.
+   *
+   * ⚠️ RUN ON BOTH BRANCHES. A first version probed only when the pointer
+   * named a TERMINAL episode, so once the pointer had moved to a live
+   * successor a SECOND successor branching from the same predecessor was
+   * invisible and the replay path reported success over corrupt state.
+   */
+  const successorsOf = async (claimId: Id<"vehicleCommitmentClaims">) =>
+    await ctx.db
+      .query("vehicleCommitmentClaims")
+      .withIndex("by_org_restored_from", (q) =>
+        q.eq("orgId", decision.orgId).eq("restoredFromClaimId", claimId)
+      )
+      .take(2);
+
+  const branched = {
+    decision: "REFUSE" as const,
+    reason: "this evidence has been reinstated more than once, which is inconsistent state",
+  };
+
+  if (binding.claim.status === "ACTIVE") {
+    const predecessorId = binding.claim.restoredFromClaimId;
+    if (!predecessorId) {
+      return { decision: "REFUSE", reason: "that evidence is still live and has nothing to restore" };
+    }
+    if ((await successorsOf(predecessorId)).length > 1) return branched;
+
+    const predecessor = await ctx.db.get(predecessorId);
+    if (!predecessor || String(predecessor.orgId) !== String(decision.orgId)) {
+      return { decision: "REFUSE", reason: "the episode this one succeeded no longer exists" };
+    }
+    // ⚠️ INTENT FIRST, AND ITS OWN REASON. Naming the wrong sale is a
+    // different failure from a stale episode, and reporting it as the latter
+    // would send whoever hit it looking for corruption that is not there.
+    if (!endedForThisReason(predecessor)) {
+      return {
+        decision: "REFUSE",
+        reason:
+          intent.kind === "SALE_CANCELLED"
+            ? predecessor.status === "CONSUMED"
+              ? "that sale is not the one this deal was completed into"
+              : "that evidence was not completed into a sale"
+            : "that evidence was not released",
+      };
+    }
+    const proven =
+      binding.live &&
+      binding.root.status === "OPEN" &&
+      String(binding.root._id) === String(tip.root._id);
     if (proven) {
-      return { decision: "ALREADY_LIVE", rootId: successor.rootId, claimId: successor._id };
+      return { decision: "ALREADY_LIVE", rootId: binding.root._id, claimId: binding.claim._id };
     }
     return {
       decision: "REFUSE",
@@ -1321,18 +1319,47 @@ export async function resolveRestorationDecision(
     };
   }
 
-  // 5. I1 — one physical vehicle, at most one OPEN root. Checked against the
-  // VEHICLE, not the lineage: a rival deal is a different lineage entirely and
-  // would not be visible in the tip resolution above.
+  // The exact reason THIS episode ended. Claim-level, because with dormant
+  // siblings the tip's own ending is a different event from this episode's.
+  if (!endedForThisReason(binding.claim)) {
+    return {
+      decision: "REFUSE",
+      reason:
+        intent.kind === "SALE_CANCELLED"
+          ? binding.claim.status === "CONSUMED"
+            ? "that sale is not the one this deal was completed into"
+            : "that evidence was not completed into a sale"
+          : "that evidence was not released",
+    };
+  }
+
+  // ⚠️ AN EPISODE IS SUCCEEDED ONCE — EXACT, TENANT-SCOPED UNIQUENESS PROBE.
   //
-  // ⚠️ BEFORE THE JOIN DECISION, NOT AFTER IT. One valid open lineage plus a
-  // second OPEN root on the same car is corruption, and joining the first
-  // while the second exists would quietly bless it.
+  // `.first()` on the bare `by_restored_from` could not do this job twice
+  // over: a corrupt foreign-tenant row ordered first HIDES a valid same-tenant
+  // successor, and one row cannot reveal that TWO successors branch from the
+  // same predecessor.
+  const successors = await successorsOf(binding.claim._id);
+  if (successors.length > 1) return branched;
+  if (successors.length === 1) {
+    // The pointer still names the terminal predecessor while a successor
+    // exists: the two disagree, and the honest answer is neither of them.
+    return {
+      decision: "REFUSE",
+      reason:
+        "this evidence has already been reinstated, and its current episode no longer holds this vehicle",
+    };
+  }
+
+  // I1 — one physical vehicle, at most one OPEN root. Checked against the
+  // VEHICLE, not the lineage: a rival deal is a different lineage entirely.
+  //
+  // ⚠️ BEFORE THE JOIN DECISION. One valid open lineage plus a second OPEN
+  // root on the same car is corruption, and joining the first while the second
+  // exists would quietly bless it.
   const ownership = await resolveOwnership(ctx, decision.orgId, tip.root.vehicleId);
   if (ownership.kind === "AMBIGUOUS") return { decision: "AMBIGUOUS" };
 
-  // The tip is still live: this is a rejoin of dormant evidence onto the
-  // lineage's current root, not a succession. No new root.
   if (tip.isOpen) {
     if (ownership.kind !== "OWNED" || String(ownership.root._id) !== String(tip.root._id)) {
       return {
@@ -1361,17 +1388,19 @@ export async function restoreCommitment(
   ctx: MutationCtx,
   args: {
     decision: AuthorityDecisionContext;
-    evidence: PrincipalBoundEvidence;
+    /** The exact source row — a sliced deposit names its hold row. */
+    source: SourceRef;
+    vehicleId: Id<"vehicles">;
     intent: RestorationIntent;
-    /** The evidence to open the restored episode under, tag and all. */
-    commitmentEvidence: CommitmentEvidence;
+    /** Lineage PROOF for the new episode. It never reaches root identity. */
     lineage: CommitmentLineage;
     createdBy: Id<"users">;
   }
 ): Promise<RestorationOutcome> {
   const resolved = await resolveRestorationDecision(ctx, {
     decision: args.decision,
-    evidence: args.evidence,
+    source: args.source,
+    vehicleId: args.vehicleId,
     intent: args.intent,
   });
   if (
@@ -1383,15 +1412,13 @@ export async function restoreCommitment(
     return resolved;
   }
 
-  // The episode being restored. The resolver already proved it exists, belongs
-  // to this lineage and is terminal; it is re-read here only to carry the
-  // document into `attachEpisode`, which re-proves the lineage relationship
-  // rather than trusting this caller.
-  const episode = args.evidence.episode as Extract<EvidenceEpisode, { state: "CURRENT" }>;
-  const sourceClaim = await ctx.db.get(episode.claimId);
-  if (!sourceClaim) {
-    return { decision: "REFUSE", reason: "the episode being restored no longer exists" };
-  }
+  // Re-resolved rather than carried out of the decision, so the episode and
+  // the evidence come from the SAME walk of the same chain.
+  const bound = await resolveCanonicalBinding(ctx, args.decision, {
+    source: args.source,
+    vehicleId: args.vehicleId,
+  });
+  if (!bound.ok) return { decision: "REFUSE", reason: bound.reason };
 
   const target =
     resolved.decision === "JOIN_LINEAGE"
@@ -1400,26 +1427,51 @@ export async function restoreCommitment(
 
   const { rootId, claimId } = await executeAcquisition(ctx, {
     orgId: args.decision.orgId,
-    vehicleId: args.evidence.vehicleId,
+    vehicleId: args.vehicleId,
     // Carried from the lineage the resolver validated, never from the caller.
-    customerId: args.evidence.customerId,
+    customerId: bound.binding.customerId,
     createdBy: args.createdBy,
-    evidence: args.commitmentEvidence,
+    // ⚠️ DERIVED FROM THE VALIDATED PREDECESSOR CLAIM, never supplied beside
+    // it. Two independently composable identities could name different rows;
+    // one identity cannot disagree with itself.
+    evidence: bound.binding.evidence,
     lineage: args.lineage,
-    predecessor: sourceClaim,
+    predecessor: bound.binding.claim,
     target,
+    source: args.source,
   });
 
-  // ⚠️ THE POINTER MOVES IN THE SAME TRANSACTION AS THE ATTACHMENT. Left
-  // naming the terminal predecessor while an ACTIVE successor exists, the next
-  // restoration would resolve the stale episode as "current" — the exact drift
-  // the maintained pointer was introduced to remove, reintroduced one step
-  // later.
-  await repointSourceToClaim(ctx, args.decision, {
-    source: args.evidence.evidenceRef,
-    vehicleId: args.evidence.vehicleId,
-    claimId,
+  // ⚠️ ONE ATOMIC POSTCONDITION — ALL FOUR, OR NONE.
+  //
+  //   the source is live for THIS vehicle
+  //   the successor claim is attached
+  //   the source pointer names that claim
+  //   the root authority is OPEN
+  //
+  // Re-READ rather than assumed from the writes above: the point of a
+  // postcondition is that it observes the committed state, not the intent that
+  // produced it. Throwing here rolls the whole mutation back, because a
+  // Convex mutation is one transaction — which is exactly what makes "all four
+  // or none" expressible at all.
+  const after = await resolveCanonicalBinding(ctx, args.decision, {
+    source: args.source,
+    vehicleId: args.vehicleId,
   });
+  if (!after.ok) {
+    throw new ConvexError(
+      "This vehicle's records did not settle consistently, so the restoration was not applied."
+    );
+  }
+  if (
+    !after.binding.live ||
+    String(after.binding.claim._id) !== String(claimId) ||
+    String(after.binding.root._id) !== String(rootId) ||
+    after.binding.root.status !== "OPEN"
+  ) {
+    throw new ConvexError(
+      "This vehicle's records did not settle consistently, so the restoration was not applied."
+    );
+  }
 
   return {
     decision: "RESTORED",
@@ -1562,12 +1614,12 @@ export async function assertAcquirable(
  * PENDING_DOCS) and is retained because the existing guard retained it: a DRAFT
  * row from before this model is conservatively treated as holding the car.
  */
-export const IN_FLIGHT_FINANCE_STATUSES: readonly string[] = [
-  "DRAFT",
-  "PENDING_DOCS",
-  "UNDER_REVIEW",
-  "APPROVED",
-];
+/**
+ * Re-exported so existing importers keep working, but DEFINED ONCE in
+ * `utils/financeStatuses.ts` — the source module needs the same list and a
+ * second copy of it is the distributed-inference defect, not a convenience.
+ */
+export { IN_FLIGHT_FINANCE_STATUSES } from "./utils/financeStatuses";
 
 /**
  * IS ANY INDEPENDENT BASIS STILL HOLDING THIS CAR?
@@ -1634,7 +1686,7 @@ export async function hasLiveCommitmentBasis(
       .query("financeApplications")
       .withIndex("by_vehicle", (q) => q.eq("vehicleId", args.vehicleId))) {
       if (application.orgId !== args.orgId) continue;
-      if (IN_FLIGHT_FINANCE_STATUSES.includes(application.status)) return true;
+      if (FINANCE_IN_FLIGHT.includes(application.status)) return true;
     }
   }
 
