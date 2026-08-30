@@ -376,6 +376,28 @@ export async function hasCanonicalDepositHold(
   vehicleId: Id<"vehicles">
 ): Promise<boolean> {
   requireCanonicalAuthority(decision);
+  return await canonicalShadowDepositHold(ctx, decision.orgId, vehicleId);
+}
+
+/**
+ * SCRUM-208 — THE SAME PREDICATE, WITHOUT THE ACTIVATION GATE.
+ *
+ * ⚠️ FOR CUTOVER MEASUREMENT ONLY. An organization is compared BEFORE it is
+ * flipped, so the version gate would refuse exactly the reader the comparison
+ * needs. Sharing the body rather than copying it is the point: a shadow that
+ * reimplemented the ranges would be measuring a different function from the one
+ * that later goes live.
+ *
+ * ⚠️ NOT A BACK DOOR FOR RUNTIME. Authority decisions call
+ * `hasCanonicalDepositHold`, which is gated. This one is named so that a call
+ * site outside the cutover tooling reads as obviously wrong.
+ */
+export async function canonicalShadowDepositHold(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">
+): Promise<boolean> {
+  const decision = { orgId } as AuthorityDecisionContext;
 
   const direct = await ctx.db
     .query("deposits")
@@ -433,6 +455,17 @@ export async function hasCanonicalReservationHold(
   vehicleId: Id<"vehicles">
 ): Promise<boolean> {
   requireCanonicalAuthority(decision);
+  return await canonicalShadowReservationHold(ctx, decision.orgId, vehicleId, decision.now);
+}
+
+/** The reservation predicate without the activation gate. Cutover only. */
+export async function canonicalShadowReservationHold(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">,
+  now: number
+): Promise<boolean> {
+  const decision = { orgId, now } as AuthorityDecisionContext;
 
   const neverExpires = await ctx.db
     .query("vehicleReservations")
