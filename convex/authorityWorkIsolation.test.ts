@@ -33,7 +33,15 @@ import schema from "./schema";
 import { Id } from "./_generated/dataModel";
 import { acquireVehicle, consumeRootForSale } from "./commitments";
 import { COMMITMENT_AUTHORITY_V1 } from "./utils/commitmentKernel";
-import { seedAuthorityEvent, seedAuthorityWork, settleThroughWorkers } from "../test-utils/authorityWork";
+import {
+  readAttempts,
+  readWork,
+  seedAuthorityEvent,
+  seedAuthorityWork,
+  settleThroughWorkers,
+  settleViaScheduler,
+} from "../test-utils/authorityWork";
+import { internal } from "./_generated/api";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -232,10 +240,24 @@ describe("an unexpected failure after an authority write", () => {
     expect(after.pointer, "the source pointer did not move").toBe(before.pointer);
     expect(after.holdActive, "and the source was not left live").toBe(before.holdActive);
 
-    // Still owed, and still findable — not silently finished, not lost.
+    // ⚠️ THE WORK IS CLAIMED, NOT OWED — AND THAT IS THE CORRECTED STATE
+    // (SCRUM-208 c15825). It used to stay `PENDING` through an outstanding
+    // execution, which is exactly why anything that re-offered PENDING work
+    // could spend a second unit of a budget meant to count real failures. The
+    // execution is recorded as having happened; releasing the claim is the
+    // observer's job, not a side effect of failing.
     const work = await seed.t.run((ctx) => ctx.db.get(workId));
-    expect(work?.status, "the episode remains retryable").toBe("PENDING");
-    expect(work?.outcome, "and claims no outcome it never reached").toBeUndefined();
+    expect(work?.status, "the claim survives its own failed execution").toBe("DISPATCHED");
+    expect(work?.executions, "and exactly one execution was spent").toBe(1);
+    expect(work?.outcome, "and it claims no outcome it never reached").toBeUndefined();
+
+    // ⚠️ THE ATTEMPT ROW OUTLIVES THE ROLLBACK, WHICH IS THE POINT OF IT. The
+    // settlement's own transaction is gone; without a record committed BEFORE
+    // it ran, nothing would survive to say the execution ever happened.
+    const attempts = await readAttempts(seed.t, workId);
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]?.generation).toBe(1);
+    expect(attempts[0]?.scheduledFunctionId, "and it names the exact execution").toBeDefined();
 
     // The accounting row is untouched by a settlement that did not happen.
     const event = await seed.t.run((ctx) => ctx.db.get(eventId));
@@ -243,23 +265,68 @@ describe("an unexpected failure after an authority write", () => {
     expect(event?.authorityOutcome).toBeUndefined();
   });
 
-  test("and the retry settles it, once the fault is gone", async () => {
+  test("the observer releases a failed execution, and the retry settles it", async () => {
     const seed = await seedDealer("r2");
     const deal = await deferredCancelledDeal(seed);
     const { eventId, workId } = await workFor(seed, deal, "reversed_retry_1");
 
+    // ⚠️ THROUGH THE SCHEDULER, NOT BY A DIRECT CALL. A direct call proves the
+    // rollback (the test above) but leaves the queued job `pending`, so the
+    // observer would have nothing real to read. Here the settlement genuinely
+    // executes and genuinely fails, and Convex's own scheduled-function record
+    // is what the observer then reads.
     inject.failProjection = true;
     try {
-      await expect(settleThroughWorkers(seed.t, [workId], eventId)).rejects.toThrow();
+      await settleViaScheduler(seed.t, workId);
     } finally {
       inject.failProjection = false;
     }
+    expect(
+      (await readWork(seed.t, workId))?.status,
+      "the execution failed and left the claim standing"
+    ).toBe("DISPATCHED");
 
-    // The same work item, tried again — which is only possible because the
-    // failure left it PENDING rather than terminal.
+    // ⚠️ THE RETRY IS DRIVEN BY OBSERVATION, NOT BY ACCOUNTING TRAFFIC. No
+    // drain runs anywhere in this test, and that is the contract: the
+    // predecessor re-offered owed work only when an organization's accounting
+    // drain finished, so an organization that stopped draining stopped
+    // retrying.
+    const observed = await seed.t.mutation(internal.accountingOutbox.observeAuthorityAttempt, {
+      workId,
+    });
+    expect(observed.transition).toBe("RETRY");
+
+    const released = await readWork(seed.t, workId);
+    expect(released?.status, "the claim is given back").toBe("READY");
+    expect(released?.activeAttemptId, "and no stale attempt may still write").toBeUndefined();
+    expect(released?.executions, "the spent execution is NOT refunded").toBe(1);
+    const attempts = await readAttempts(seed.t, workId);
+    expect(attempts[0]?.status).toBe("FAILED");
+    // ⚠️ RIGHT-REASON CHECK. `RETRY` is also what the observer returns when it
+    // cannot find the scheduled-function document at all, so the transition
+    // alone does not prove the scheduler was read. These two branches write
+    // different sentences; asserting the wording is what separates "Convex
+    // reported this execution failed" from "we could not tell".
+    expect(
+      attempts[0]?.detail,
+      "the transition came from an observed failure, not from an unobservable one"
+    ).toBe("this settlement attempt did not complete");
+
+    // Simulate the backoff elapsing. Nothing else about the row is touched —
+    // the dispatcher's due-time gate is what a real clock would satisfy.
+    await seed.t.run((ctx) => ctx.db.patch(workId, { nextActionAt: Date.now() - 1 }));
+
     const summary = await settleThroughWorkers(seed.t, [workId], eventId);
     expect(summary?.outcome).toBe("RESTORED");
     expect((await residue(seed, deal.depositId)).openRoots).toBe(1);
+
+    // ⚠️ A SECOND EXECUTION, UNDER A SECOND GENERATION — never a reuse of the
+    // first. The generation is what makes a late arrival of attempt 1 unable
+    // to write anything.
+    const finalWork = await readWork(seed.t, workId);
+    expect(finalWork?.executions).toBe(2);
+    expect(finalWork?.generation).toBe(2);
+    expect(await readAttempts(seed.t, workId)).toHaveLength(2);
   });
 });
 

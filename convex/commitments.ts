@@ -2067,7 +2067,23 @@ export type DeferredAuthorityOutcome =
    * note on `RestorationOutcome`'s INCONSISTENT variant. Ranked above every
    * other outcome: it is the only one saying the data itself needs a person.
    */
-  | { outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT"; detail: string };
+  | { outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT"; detail: string }
+  /**
+   * The settlement kept failing for a TECHNICAL reason and the execution
+   * budget is spent.
+   *
+   * ⚠️ SCRUM-208 c15825 — THIS IS NOT `BLOCKED_INCONSISTENT`, AND CONFLATING
+   * THEM WAS A FALSE AUDIT RECORD. "The canonical records contradict each
+   * other" is a DIAGNOSIS: a person knows what to repair. "Five settlement
+   * executions failed unexpectedly" is an ABSENCE of diagnosis: nobody knows
+   * what the authority state is, only that we stopped trying. Both need a
+   * human, and they need different humans doing different things.
+   *
+   * Never produced by a settlement branch — settlement returns typed answers
+   * and rolls back on anything else. Produced only by the observer, from
+   * counted ACTUAL failed executions.
+   */
+  | { outcome: "ACCOUNTING_REVERSED_AUTHORITY_RETRY_EXHAUSTED"; detail: string };
 
 /** The detail string an outcome carries, when it carries one. */
 export function authorityOutcomeDetail(outcome: DeferredAuthorityOutcome): string | undefined {
@@ -2098,6 +2114,13 @@ export const AUTHORITY_SEVERITY: Record<DeferredAuthorityOutcome["outcome"], num
   // Above ambiguity: two open roots is a decision a human must make, but
   // contradictory records are a database a human must repair.
   ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT: 5,
+  // ⚠️ ABOVE EVEN A CONTRADICTION, AND THE RANKING IS DELIBERATE. Every
+  // outcome below this line is CHARACTERIZED: something read the records and
+  // can say what is wrong with them. This one says only that the settlement
+  // stopped executing successfully and nobody knows what the authority state
+  // is. An unknown must never be buried by a clean sibling in the worst-of
+  // summary — which is the only thing this ordering decides.
+  ACCOUNTING_REVERSED_AUTHORITY_RETRY_EXHAUSTED: 6,
 };
 
 /**
@@ -2197,37 +2220,40 @@ export async function settleAuthorityAfterReversal(
  *
  * ## What commits, and what does not
  *
- * ⚠️ THIS FUNCTION DECIDES BEFORE IT WRITES. IT DOES NOT ROLL BACK, BECAUSE IT
- * CANNOT.
+ * ⚠️ THIS PARAGRAPH HAS BEEN WRONG TWICE, IN OPPOSITE DIRECTIONS. Read it as a
+ * statement about the CALLER's transaction, never as a safety guarantee of its
+ * own — nothing tests prose, which is exactly how it went stale both times.
  *
- * An earlier version of this paragraph claimed "all of it, or none of it", on
- * the grounds that a Convex mutation is one transaction so a throw here un-does
- * everything — including the reversal completion that called it, which the
- * outbox then retries from a clean state. **Every clause of that was false**,
- * and it stayed here, unchanged, for a whole review round after the code below
- * it had been corrected. Both review seats found the consequences
- * independently. Stating it plainly, because a comment asserting a safety
- * property the code does not have is the exact failure this file keeps being
- * blocked by:
+ * Round one it claimed "all of it, or none of it" when the deferred seam ran
+ * inside `drainEntries`' per-row `try`/`catch`, so a throw committed every
+ * write already made. I rewrote it for that. Round three my OWN structural
+ * split falsified the correction: the rewrite still says a throw un-does
+ * nothing at the deferred seam, and that stopped being true the moment
+ * settlement moved into its own registered mutation.
  *
- *  - `restoreCommitment` no longer throws on its postcondition; it returns
- *    INCONSISTENT — see the note on `RestorationOutcome`.
- *  - A throw does not un-do anything at the deferred seam.
- *    `accountingOutbox.drainEntries` wraps every row in a `try`/`catch`, which
- *    is pre-existing and correct — one bad row must not abort an entire
- *    organization's drain — so a caught throw is ordinary control flow: the
- *    mutation returns normally and COMMITS every write already made.
- *  - The reversal completion is NOT retried from a clean state.
- *    `completeDeferredReversal`'s `status !== "REVERSING"` gate is ONE-WAY, so
- *    a retry after a throw frees nothing, settles nothing, and marks the entry
- *    POSTED with no `authorityOutcome` at all.
+ * What is true at each of the two call sites, as of SCRUM-208 c15825:
  *
- * So safety rests on NOT WRITING until every failure mode has been decided.
- * Every throwing read is pre-flighted before the first write; a post-write
- * check REPORTS rather than raises; and `settleFreedHoldsAuthority` closes the
- * enumeration at the one boundary both the DIRECT and SLICE shapes pass
- * through, so a failure nobody anticipated still becomes a durable outcome
- * instead of vanishing.
+ *  - **Deferred** — `accountingOutbox.performAuthoritySettlement` (Tx C) is a
+ *    registered mutation with nothing catching inside it. A throw aborts THAT
+ *    transaction: no successor root, no claim, no moved pointer, no re-held
+ *    source, no vehicle projection. The accounting reversal committed in an
+ *    earlier transaction and is untouched. The observer sees the failed
+ *    execution and the work retries under a bounded budget.
+ *  - **Synchronous** — `saleCancellation.reinstateAppliedDeposits` runs inside
+ *    the cancellation mutation with no enclosing catch, so a throw aborts the
+ *    whole cancellation. Also a real rollback boundary.
+ *
+ * ⚠️ THAT IS NOT A LICENCE TO WRITE FIRST AND THROW LATER. Pre-flighting every
+ * throwing read stays the design, for a reason a rollback does not address: a
+ * KNOWN contradiction is an expected terminal business answer, and routing it
+ * through a throw spends the technical retry budget and finally reports "could
+ * not be settled after repeated attempts" — a sentence that names nothing the
+ * repairer can act on. Rollback protects the DATA; the pre-flight protects the
+ * AUDIT RECORD. Both are required, and `probeCanonicalHold` is now shared by
+ * the DIRECT and SLICE paths so neither can classify a contradiction late.
+ *
+ * `restoreCommitment` still REPORTS its postcondition as INCONSISTENT rather
+ * than raising — see the note on `RestorationOutcome`.
  *
  * The old contract — an authority result is not an accounting failure — is
  * preserved for every BUSINESS answer: a legacy org, a rival, ambiguity,
@@ -2471,11 +2497,21 @@ export async function restoreAuthorityAfterReversal(
  *
  * ⚠️ THIS CATCH IS SAFE ONLY BECAUSE OF WHERE IT IS CALLED. Catching after a
  * write would commit a half-restoration and report it as a clean business
- * outcome, which is the whole defect this round exists to close. Both call
- * sites are either before any write, or after the writes are already
+ * outcome, which is the whole defect this round exists to close. Every call
+ * site is either before any write, or after the writes are already
  * unrecoverable and the only remaining question is what to record.
+ *
+ * ⚠️ EXPORTED BECAUSE BOTH SOURCE REPRESENTATIONS NEED IT, AND ONLY ONE HAD IT
+ * (SCRUM-208 c15825). The DIRECT path reached this through
+ * `restoreAuthorityAfterReversal`; the SLICE path went straight to
+ * `settleAuthorityAfterReversal` with no pre-flight at all. So a known
+ * canonical contradiction on a slice THREW, rolled its settlement back, spent
+ * a technical retry, and after the budget ran out surfaced as a generic "could
+ * not be settled after repeated attempts" — the one sentence that tells the
+ * repairer nothing. A contradiction is an EXPECTED terminal answer for both
+ * representations and must never enter the technical retry channel.
  */
-async function probeCanonicalHold(
+export async function probeCanonicalHold(
   ctx: MutationCtx,
   decision: AuthorityDecisionContext,
   vehicleId: Id<"vehicles">

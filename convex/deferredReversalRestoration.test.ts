@@ -19,6 +19,7 @@ import { completeDeferredReversal } from "./utils/depositApplications";
 import { reinstateDirectDepositHold } from "./utils/commitmentWriters";
 import { AUTHORITY_SEVERITY } from "./accountingOutbox";
 import {
+  readAttempts,
   seedAuthorityEvent,
   seedAuthorityWork,
   settleThroughWorkers,
@@ -908,31 +909,68 @@ describe("a sliced source meeting the same contradiction", () => {
       })
     );
 
-    // ⚠️ IT REJECTS NOW, AND THAT IS THE POINT (SCRUM-208 c15814).
+    // ⚠️ A KNOWN CONTRADICTION IS A TERMINAL BUSINESS ANSWER ON BOTH PATHS,
+    // AND THIS ASSERTION HAS NOW BEEN WRONG IN BOTH DIRECTIONS (c15825).
     //
-    // The previous round caught this throw at a loop boundary and recorded
-    // INCONSISTENT. That closed the SILENCE but not the DEFECT: the catch ran
-    // inside the accounting drain's transaction, so any authority write made
-    // before the throw committed anyway. Settlement is now its own registered
-    // mutation, so the throw aborts THAT transaction — which is what makes
-    // "all of it or none of it" true instead of merely claimed.
+    // Originally it asserted the persisted INCONSISTENT outcome and its curated
+    // detail. Last round I replaced that with `.rejects`, called it the stronger
+    // contract, and shipped it — but throwing here is not strength. The throw
+    // did roll the transaction back, and it ALSO destroyed the one sentence the
+    // repairer can act on, spent a technical retry on a condition no retry can
+    // change, and finally surfaced as "could not be settled after repeated
+    // attempts". I ratified the loss of the audit channel as an improvement.
+    //
+    // Rollback protects the DATA. The pre-flight protects the AUDIT RECORD.
+    // `probeCanonicalHold` now runs on the SLICE path too, so the contradiction
+    // is classified BEFORE any write: recorded, diagnosed, terminal on the
+    // first execution.
     const eventId = await seedAuthorityEvent(seed.t, seed.orgId, seed.userId, "reversed_slice_1");
     const [workId] = await seedAuthorityWork(seed.t, seed.orgId, eventId, [
       { kind: "SLICE", depositId, vehicleId, saleId, holdId },
     ]);
 
-    await expect(settleThroughWorkers(seed.t, [workId], eventId)).rejects.toThrow(/disagree/i);
+    // ⚠️ MEASURED BEFORE, BECAUSE THE FIXTURE ITSELF OPENS A ROOT. The deal was
+    // acquired and never consumed, so an OPEN root is the PRE-EXISTING state —
+    // asserting "no roots exist" afterwards would fail against correct code and
+    // pass against nothing useful. The contract is that settlement added none.
+    const rootsBefore = await seed.t.run((ctx) => ctx.db.query("commitmentRoots").collect());
+    const claimsBefore = await seed.t.run((ctx) =>
+      ctx.db.query("vehicleCommitmentClaims").collect()
+    );
 
-    // ⚠️ AND NOTHING WAS WRITTEN. The rollback is the contract; the message is
-    // only how a person finds out.
-    const work = await seed.t.run((ctx) => ctx.db.get(workId));
-    expect(work?.status, "the episode is still owed, not silently finished").toBe("PENDING");
-    expect(work?.outcome, "and it recorded no outcome it had not reached").toBeUndefined();
-    const event = await seed.t.run((ctx) => ctx.db.get(eventId));
+    const summary = await settleThroughWorkers(seed.t, [workId], eventId);
+    expect(summary?.outcome).toBe("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT");
     expect(
-      event?.authorityOutcome,
-      "the accounting row was not summarised from a settlement that never happened"
-    ).toBeUndefined();
+      summary?.detail,
+      "the curated diagnosis survives — it is the whole value of the outcome"
+    ).toMatch(/disagree/i);
+
+    // ⚠️ TERMINAL ON EXECUTION ONE. A contradiction must never enter the
+    // technical retry channel: five identical failures would tell the repairer
+    // nothing the first one did not, and would end in the generic exhaustion
+    // message instead of this diagnosis.
+    const work = await seed.t.run((ctx) => ctx.db.get(workId));
+    expect(work?.status).toBe("SETTLED");
+    expect(work?.executions, "one execution, and no retry burned").toBe(1);
+    const attempts = await readAttempts(seed.t, workId);
+    expect(attempts).toHaveLength(1);
+    expect(
+      attempts[0]?.status,
+      "reaching a typed answer IS a successful execution, even a blocked one"
+    ).toBe("SUCCEEDED");
+
+    // ⚠️ AND NO AUTHORITY WAS WRITTEN. The outcome string said INCONSISTENT
+    // once before while an OPEN root sat behind it, so the assertion is the
+    // ABSENCE of the writes, never the presence of the label.
+    const roots = await seed.t.run((ctx) => ctx.db.query("commitmentRoots").collect());
+    expect(
+      roots.length,
+      "no successor root for a source whose records contradict each other"
+    ).toBe(rootsBefore.length);
+    const claims = await seed.t.run((ctx) =>
+      ctx.db.query("vehicleCommitmentClaims").collect()
+    );
+    expect(claims.length, "and no successor claim").toBe(claimsBefore.length);
   });
 
   /**
@@ -1113,33 +1151,56 @@ describe("a source that cannot be made live", () => {
     };
     const cleanSources = await completion(seed, clean.reversalKey);
 
-    // ⚠️ ISOLATION IS NOW PER EPISODE, NOT PER LOOP ITERATION (c15814 §7).
+    // ⚠️ TWO SEPARATE ACCOUNTING EVENTS, BECAUSE THAT IS THE ONLY SHAPE
+    // PRODUCTION BUILDS (SCRUM-208 c15825).
     //
-    // Both cars are freed by ONE accounting reversal and each gets its own
-    // durable work item and its own transaction. The rogue goes first and
-    // throws; that must cost the rogue its writes and NOTHING else.
-    const eventId = await seedAuthorityEvent(seed.t, seed.orgId, seed.userId, "reversed_batch_1");
-    const [rogueWork, cleanWork] = await seedAuthorityWork(seed.t, seed.orgId, eventId, [
-      rogue,
-      ...cleanSources,
-    ]);
+    // This test previously put both cars under ONE event and I published it as
+    // proof that a failing episode cannot damage a clean sibling. It was not
+    // proof of anything about production: `completeDeferredReversal` returns AT
+    // MOST ONE source per accounting event — the SLICE branch returns
+    // immediately, the DIRECT branch pushes one — so a real reversal never
+    // mints siblings, and the topology I measured was one only the helpers can
+    // build. I withdrew the claim; this is the honest version of it.
+    //
+    // What it now proves is real and separately worth having: two independent
+    // reversals settle independently, and each accounting row summarises ITS
+    // OWN work through the exact `by_org_pending_event` range. A blocked car
+    // must never be buried by a clean one, and a clean car must never be
+    // tarred by a blocked one.
+    const rogueEvent = await seedAuthorityEvent(
+      seed.t,
+      seed.orgId,
+      seed.userId,
+      "reversed_rogue_1"
+    );
+    const [rogueWork] = await seedAuthorityWork(seed.t, seed.orgId, rogueEvent, [rogue]);
+    const cleanEvent = await seedAuthorityEvent(
+      seed.t,
+      seed.orgId,
+      seed.userId,
+      "reversed_clean_1"
+    );
+    const [cleanWork] = await seedAuthorityWork(seed.t, seed.orgId, cleanEvent, cleanSources);
 
-    // The rogue's own transaction aborts.
-    await expect(
-      settleThroughWorkers(seed.t, [rogueWork], eventId)
-    ).rejects.toThrow(/disagree/i);
+    const rogueSummary = await settleThroughWorkers(seed.t, [rogueWork], rogueEvent);
+    expect(rogueSummary?.outcome).toBe("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT");
 
-    // ...and the clean car settles anyway, in an invocation of its own. Under
-    // the old single-loop shape the rogue's throw ended the loop and this car
-    // was never reached at all.
-    await settleThroughWorkers(seed.t, [cleanWork], eventId);
+    const cleanSummary = await settleThroughWorkers(seed.t, [cleanWork], cleanEvent);
     expect(
       (await seed.t.run((ctx) => ctx.db.get(clean.depositId)))?.holdActive,
-      "the clean car settled independently of the rogue that failed"
+      "the clean car settled independently of the reversal that could not"
     ).toBe(true);
+    expect(cleanSummary?.outcome).toBe("RESTORED");
 
-    // The rogue is still owed — retryable, not silently finished.
-    expect((await seed.t.run((ctx) => ctx.db.get(rogueWork)))?.status).toBe("PENDING");
+    // ⚠️ NEITHER SUMMARY MOVED THE OTHER. The rogue's accounting row keeps its
+    // repair condition after the clean one settles — the prefix-range summary
+    // this replaced would have been one shared idempotency-key prefix away
+    // from writing the wrong row.
+    expect(
+      (await seed.t.run((ctx) => ctx.db.get(rogueEvent)))?.authorityOutcome,
+      "a clean restoration elsewhere does not clear a car that needs a person"
+    ).toBe("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT");
+    expect((await seed.t.run((ctx) => ctx.db.get(rogueWork)))?.status).toBe("SETTLED");
     expect((await seed.t.run((ctx) => ctx.db.get(cleanWork)))?.status).toBe("SETTLED");
   });
 });

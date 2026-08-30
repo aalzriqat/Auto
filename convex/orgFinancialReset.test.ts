@@ -300,6 +300,22 @@ describe("resetOrgFinancialData", () => {
     for (const table of forbidden) {
       expect(RESET_TABLES_FOR_TEST).not.toContain(table);
     }
+    // 31 -> 33: `commitmentAuthorityAttempt` and `commitmentAuthorityWork` —
+    // the deferred vehicle-authority settlement queue and its per-execution
+    // attempt records (SCRUM-208 c15825). They are listed FIRST, ahead of
+    // `pendingAccountingEvents`, because each references the one after it and
+    // the reset is not one transaction.
+    //
+    // ⚠️ THIS OMISSION WAS FOUND BY A REVIEWER, NOT BY A GUARD. When the work
+    // table was introduced, `orgDeletionCoverage.test.ts` failed because it had
+    // no organization hard-delete step; that step was added and nobody asked
+    // which OTHER destructive path had the same gap. This one did — a reset
+    // clears the ledger but KEEPS the organization, so the leftover rows are
+    // not obviously orphaned: they are live instructions to settle a car
+    // against a reversal that the same reset just deleted.
+    // `authorityLifecycleManifests.test.ts` now asserts the invariant across
+    // both manifests rather than one at a time.
+    //
     // 28 -> 31: `financeDealCustodyEntries`, `financeDealFees` and
     // `financeDealCustody` — a financed deal's itemized costs and the money an
     // employee is holding to pay them. All three are per-deal financial records
@@ -317,6 +333,6 @@ describe("resetOrgFinancialData", () => {
     // them. They are listed immediately before their parent so a run that stops
     // between batches never leaves a child without one. The financeCompanies
     // row itself is still deliberately out of scope, as `forbidden` pins above.
-    expect(RESET_TABLES_FOR_TEST).toHaveLength(31);
+    expect(RESET_TABLES_FOR_TEST).toHaveLength(33);
   });
 });

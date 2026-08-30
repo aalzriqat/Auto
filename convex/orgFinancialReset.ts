@@ -33,6 +33,18 @@ import type { Id } from "./_generated/dataModel";
  * status by hand. This is a deliberate choice, not an oversight.
  */
 const RESET_TABLES = [
+  // ⚠️ SCRUM-208 c15825 — AUTHORITY LIFECYCLE FIRST, IN DEPENDENCY ORDER:
+  // attempts → work → the accounting rows they reference.
+  //
+  // This omission was found by a reviewer, not by me. Last round a repository
+  // guard failed because `commitmentAuthorityWork` had no organization
+  // hard-delete step; I added the step it asked for and never asked which
+  // OTHER destructive path had the same gap. This one did. A financial reset
+  // that cleared `pendingAccountingEvents` while leaving authority work behind
+  // would leave rows instructing a settlement against a reversal that no
+  // longer exists — pointing at deleted accounting rows, on a fresh ledger.
+  "commitmentAuthorityAttempt",
+  "commitmentAuthorityWork",
   // General ledger
   "accountingEvents",
   "pendingAccountingEvents",

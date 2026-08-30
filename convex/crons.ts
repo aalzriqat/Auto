@@ -99,6 +99,26 @@ crons.interval(
   {}
 );
 
+// SCRUM-208 c15825 — settle vehicle authority owed by completed accounting
+// reversals, and observe what became of each settlement execution.
+//
+// ⚠️ THIS IS DELIBERATELY NOT ATTACHED TO ACCOUNTING TRAFFIC. The predecessor
+// re-offered owed work when an organization's accounting drain finished, which
+// meant an organization that stopped draining stopped retrying — a car's
+// authority left unresolved indefinitely with nothing to surface it. A fixed
+// tick over `nextActionAt` is the whole point.
+//
+// One minute, because the queue holds cars whose commitment state is unsettled
+// and a salesperson may be about to promise one of them twice. It is bounded
+// per tick and reads an exact due-time range, so an empty queue costs one
+// indexed read.
+crons.interval(
+  "dispatch-authority-work",
+  { minutes: 1 },
+  internal.accountingOutbox.dispatchDueAuthorityWork,
+  {}
+);
+
 // Refresh Instagram long-lived tokens for orgs whose token expires within 7 days.
 // Instagram tokens last 60 days; refreshing weekly keeps them perpetually valid.
 crons.cron(

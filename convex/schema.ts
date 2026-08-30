@@ -268,10 +268,16 @@ export default defineSchema({
         v.literal("ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL"),
         v.literal("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS"),
         // The canonical records contradict each other, or the restoration's
-        // postcondition did not hold. Recorded rather than thrown: the
-        // deferred drain wraps every row in a try/catch, so a throw commits
-        // the partial state anyway AND destroys the only evidence of it.
-        v.literal("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT")
+        // postcondition did not hold. A DIAGNOSIS: the repairer is told what
+        // disagrees with what.
+        v.literal("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT"),
+        // ⚠️ SCRUM-208 c15825 — THE ABSENCE OF A DIAGNOSIS, AND A SEPARATE
+        // AUDIT FACT. Repeated settlement executions failed for unexpected
+        // technical reasons and the budget is spent, so nobody knows what the
+        // authority state is. This used to be recorded as
+        // BLOCKED_INCONSISTENT, which told the repairer the records
+        // contradicted each other when nothing had established that.
+        v.literal("ACCOUNTING_REVERSED_AUTHORITY_RETRY_EXHAUSTED")
       )
     ),
     authorityOutcomeAt: v.optional(v.number()),
@@ -348,13 +354,27 @@ export default defineSchema({
      */
     workKey: v.string(),
     /**
-     * PENDING — owed, and retryable. The state an unexpected failure leaves
-     *   behind, because that failure rolled its whole transaction back.
+     * READY — owed, and nothing is executing. Dispatchable once due.
+     * DISPATCHED — one attempt is claimed and outstanding. ⚠️ THIS IS THE
+     *   CLAIM ITSELF: a second dispatcher sees it and does nothing, which is
+     *   what makes the budget count executions instead of delivery offers.
      * SETTLED — an expected typed outcome was reached and recorded. Terminal.
-     * BLOCKED — the attempt budget is spent. Terminal, and a repair condition
-     *   a person must act on; never a silent give-up.
+     * BLOCKED — the execution budget is spent. Terminal, and a repair
+     *   condition a person must act on; never a silent give-up.
+     *
+     * ⚠️ SCRUM-208 c15825 — `PENDING` MEANT BOTH "OWED" AND "EXECUTING", AND
+     * THAT WAS THE DEFECT. A work row stayed PENDING while its settlement was
+     * outstanding, so anything that re-offered PENDING work — the drain-riding
+     * sweep, a duplicate schedule — could spend another unit of a budget that
+     * was supposed to measure real executions. Splitting the two states is the
+     * durable claim the old design had no way to express.
      */
-    status: v.union(v.literal("PENDING"), v.literal("SETTLED"), v.literal("BLOCKED")),
+    status: v.union(
+      v.literal("READY"),
+      v.literal("DISPATCHED"),
+      v.literal("SETTLED"),
+      v.literal("BLOCKED")
+    ),
     /** DIRECT = the deposit itself holds the car. SLICE = one allocation row. */
     sourceKind: v.union(v.literal("DIRECT"), v.literal("SLICE")),
     depositId: v.id("deposits"),
@@ -370,12 +390,40 @@ export default defineSchema({
      */
     pendingEventId: v.id("pendingAccountingEvents"),
     /**
-     * ⚠️ INCREMENTED IN ITS OWN TRANSACTION, BEFORE THE SETTLEMENT ONE.
-     * Sharing the settlement's transaction would roll the count back with it,
-     * and a permanently failing item would retry forever. Splitting them is
-     * what makes the retry both BOUNDED and genuinely rolled back.
+     * How many settlement executions were ACTUALLY scheduled for this work.
+     *
+     * ⚠️ DELIBERATELY NOT NAMED `attempts` (SCRUM-208 c15825). The old field
+     * counted `beginAuthorityWork` DELIVERIES, and a duplicate delivery spent
+     * budget without a settlement ever running — so a row could reach its cap
+     * and record "repeated attempts" when fewer had happened. Reusing the
+     * familiar name for the corrected meaning is how that reading survives a
+     * redesign, so the name went with the defect.
+     *
+     * Incremented in exactly one place: the dispatcher transaction that mints
+     * the attempt row and moves this work to DISPATCHED. One increment, one
+     * immutable attempt, one scheduled execution.
      */
-    attempts: v.number(),
+    executions: v.number(),
+    /**
+     * How many attempt rows have ever existed for this work. Monotonic, and
+     * the second half of an attempt's identity — a stale generation may not
+     * write authority or spend budget.
+     */
+    generation: v.number(),
+    /**
+     * The one attempt permitted to settle this work right now. Cleared when an
+     * attempt is observed failed, so a late execution of it cannot write.
+     */
+    activeAttemptId: v.optional(v.id("commitmentAuthorityAttempt")),
+    /**
+     * When this row is next due for whatever its status implies — dispatch
+     * while READY, observation while DISPATCHED.
+     *
+     * ⚠️ THIS IS WHAT MAKES RETRY INDEPENDENT OF ACCOUNTING TRAFFIC. The old
+     * retry rode a finished accounting drain, so an organization that never
+     * drained again never retried. A static cron reads this due time instead.
+     */
+    nextActionAt: v.number(),
     lastAttemptAt: v.optional(v.number()),
     /** The typed authority answer. Same taxonomy the outbox row summarises. */
     outcome: v.optional(
@@ -385,7 +433,8 @@ export default defineSchema({
         v.literal("AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE"),
         v.literal("ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL"),
         v.literal("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS"),
-        v.literal("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT")
+        v.literal("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT"),
+        v.literal("ACCOUNTING_REVERSED_AUTHORITY_RETRY_EXHAUSTED")
       )
     ),
     outcomeAt: v.optional(v.number()),
@@ -400,10 +449,102 @@ export default defineSchema({
   })
     // At-most-once. The insert is guarded by an exact lookup on this range.
     .index("by_org_work_key", ["orgId", "workKey"])
-    // The retry sweep reads ONLY this table, and only its own PENDING rows.
+    // Per-organization operational visibility, and the reset/delete manifests.
     .index("by_org_status", ["orgId", "status"])
     // The repair queue: found by an exact range, never by scanning text.
-    .index("by_org_outcome", ["orgId", "outcome"]),
+    .index("by_org_outcome", ["orgId", "outcome"])
+    /**
+     * ⚠️ THE ONLY THING THE CRON DISPATCHER READS, AND IT IS DELIBERATELY NOT
+     * ORG-SCOPED. A static cron has no tenant to scope to — which is exactly
+     * why the dispatcher only SELECTS and SCHEDULES here. Every unit of real
+     * per-row work runs in its own mutation, deriving `orgId` from the row, so
+     * one poisoned row cannot roll back another dealership's settlement. A
+     * throwing call inside a global batch is a cross-tenant outage.
+     */
+    .index("by_status_next_action", ["status", "nextActionAt"])
+    /**
+     * The accounting row's summary reads its own work by an EXACT range.
+     *
+     * It previously used a string-prefix range over `workKey`, which encodes
+     * the idempotency key — correct in practice, and one key that is a prefix
+     * of another away from silently summarising a different accounting row's
+     * work. The relationship is a stored id; it should be read as one.
+     */
+    .index("by_org_pending_event", ["orgId", "pendingEventId"]),
+
+  /**
+   * SCRUM-208 c15825 — ONE IMMUTABLE ROW PER ACTUAL SETTLEMENT EXECUTION.
+   *
+   * ⚠️ WHY A SECOND TABLE RATHER THAN A COUNTER. The previous design held one
+   * number, `attempts`, incremented by whatever delivered a settlement offer.
+   * Two things it could not express, and both were blocking findings:
+   *
+   *  1. **Which execution is allowed to write.** With no durable execution
+   *     identity, a late or duplicated settlement could not be told apart from
+   *     the current one, so the only guard available was "is the work still
+   *     owed" — which is true of both.
+   *  2. **What actually happened to an execution.** A settlement that fails
+   *     rolls its own transaction back, taking any record of the failure with
+   *     it. The count of offers was the only surviving signal, and it counted
+   *     the wrong thing.
+   *
+   * An attempt row is written by the DISPATCHER, in a transaction that commits
+   * before the settlement runs — so it survives the settlement's rollback and
+   * remains the durable evidence that one execution really was scheduled. The
+   * observer then reads the exact scheduled-function document and closes it.
+   *
+   * ⚠️ APPLICATION STATE IS AUTHORITATIVE; THE SCHEDULER IS A TRANSPORT
+   * OBSERVATION. `_scheduled_functions` answers what happened to one exact
+   * execution and nothing else. It never decides a business outcome, its raw
+   * error text is never persisted or shown to a tenant, and its results are
+   * retained only for a bounded window — so a MISSING document is unobservable,
+   * never success.
+   */
+  commitmentAuthorityAttempt: defineTable({
+    orgId: v.id("organizations"),
+    workId: v.id("commitmentAuthorityWork"),
+    /** Monotonic within one work item. `(workId, generation)` is the identity. */
+    generation: v.number(),
+    /** `${workId}:${generation}` — the unique key that makes the pair exact. */
+    attemptKey: v.string(),
+    /**
+     * The exact scheduled settlement execution this attempt is.
+     *
+     * ⚠️ OPTIONAL IN THE VALIDATOR ONLY BECAUSE OF WRITE ORDER, NEVER IN
+     * PRACTICE. The row must exist before `ctx.scheduler.runAfter` can be told
+     * the attempt id, and `runAfter` is what returns this id — so the insert
+     * and the patch that fills it are two steps of ONE transaction. It is
+     * never observably absent to anything outside that transaction.
+     */
+    scheduledFunctionId: v.optional(v.id("_scheduled_functions")),
+    /**
+     * SCHEDULED — dispatched, outcome not yet observed.
+     * SUCCEEDED — the settlement committed a typed outcome.
+     * FAILED / CANCELED — the execution did not complete. Retryable until the
+     *   work's execution budget is spent.
+     */
+    status: v.union(
+      v.literal("SCHEDULED"),
+      v.literal("SUCCEEDED"),
+      v.literal("FAILED"),
+      v.literal("CANCELED")
+    ),
+    createdAt: v.number(),
+    observedAt: v.optional(v.number()),
+    /**
+     * Diagnosis only, and CURATED. ⚠️ NEVER the scheduler's raw error text:
+     * that is a backend stack trace, and these rows are reachable from the
+     * accounting surfaces every VIEW_FINANCE user can open. The real error is
+     * server-logged for the engineer.
+     */
+    detail: v.optional(v.string()),
+  })
+    // Exactly one attempt per (work, generation).
+    .index("by_attempt_key", ["attemptKey"])
+    // An item's execution history, oldest first, for repair and audit.
+    .index("by_org_work", ["orgId", "workId", "generation"])
+    // The reset and hard-delete manifests.
+    .index("by_org_status", ["orgId", "status"]),
 
   journalEntries: defineTable({
     orgId: v.id("organizations"),
