@@ -241,29 +241,10 @@ async function markEntryPosted(
       postedAt: Date.now(),
     });
 
-    // SCRUM-208 — the vehicle authority, settled and TYPED.
-    //
     // ⚠️ ONE CLOCK READING FOR THE WHOLE DECISION, taken before anything is
     // consulted, so two cars in the same batch cannot be judged against
     // different instants.
-    const decisionNow = Date.now();
-    for (const holdId of freed) {
-      const hold = await ctx.db.get(holdId);
-      if (!hold || hold.orgId !== p.orgId) continue;
-      const settled = await settleAuthorityAfterReversal(ctx, {
-        orgId: p.orgId,
-        vehicleId: hold.vehicleId,
-        decisionNow,
-        reason: "deferred reversal posted",
-      });
-      // ⚠️ THE WORST OUTCOME WINS. A reversal can free several cars at once,
-      // and a car that settles cleanly must not mask another that needs a
-      // human — recording "RESTORED" over a blocked one is how a repair
-      // condition disappears.
-      if (!authority || AUTHORITY_SEVERITY[settled.outcome] > AUTHORITY_SEVERITY[authority.outcome]) {
-        authority = settled;
-      }
-    }
+    authority = await settleFreedHoldsAuthority(ctx, p.orgId, freed, Date.now());
   }
 
   await ctx.db.patch(p._id, {
@@ -294,6 +275,43 @@ export const AUTHORITY_SEVERITY: Record<DeferredAuthorityOutcome["outcome"], num
   ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL: 1,
   ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS: 2,
 };
+
+/**
+ * Settle the vehicle authority for every car a deferred reversal freed, and
+ * return the ONE outcome that must be recorded.
+ *
+ * ⚠️ THE WORST OUTCOME WINS, AND THE ORDER MUST NOT MATTER. A reversal can
+ * free several cars at once. Recording "RESTORED" over a blocked one — because
+ * the clean car happened to be read last — is how a repair condition
+ * disappears, and the order rows come back in is not something a caller
+ * controls.
+ *
+ * Exported so the multi-car behaviour can be exercised directly. Driving it
+ * through the whole drain would require an accounting event to reverse and
+ * would test the posting engine rather than this rule.
+ */
+export async function settleFreedHoldsAuthority(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  freed: Id<"depositVehicleHolds">[],
+  decisionNow: number
+): Promise<DeferredAuthorityOutcome | null> {
+  let worst: DeferredAuthorityOutcome | null = null;
+  for (const holdId of freed) {
+    const hold = await ctx.db.get(holdId);
+    if (!hold || hold.orgId !== orgId) continue;
+    const settled = await settleAuthorityAfterReversal(ctx, {
+      orgId,
+      vehicleId: hold.vehicleId,
+      decisionNow,
+      reason: "deferred reversal posted",
+    });
+    if (!worst || AUTHORITY_SEVERITY[settled.outcome] > AUTHORITY_SEVERITY[worst.outcome]) {
+      worst = settled;
+    }
+  }
+  return worst;
+}
 
 /**
  * Below the retry threshold: keep it PENDING and retryable, just surface the

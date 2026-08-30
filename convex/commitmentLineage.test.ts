@@ -22,7 +22,7 @@ import {
   restoreCommitment,
   settleAuthorityAfterReversal,
 } from "./commitments";
-import { AUTHORITY_SEVERITY } from "./accountingOutbox";
+import { AUTHORITY_SEVERITY, settleFreedHoldsAuthority } from "./accountingOutbox";
 import {
   AuthorityDecisionContext,
   beginUserRun,
@@ -944,6 +944,91 @@ describe("typed authority outcomes after a reversal posts", () => {
 });
 
 describe("when one reversal frees several cars, the worst outcome survives", () => {
+  /** A hold row on its own car, in whichever authority state is wanted. */
+  async function freedCar(seed: Seed, state: "FREE" | "HELD" | "AMBIGUOUS") {
+    const vehicleId = await vehicle(seed);
+    if (state !== "FREE") await acquire(seed, vehicleId, seed.customerA);
+    if (state === "AMBIGUOUS") {
+      await seed.t.run((ctx) =>
+        ctx.db.insert("commitmentRoots", {
+          orgId: seed.orgId,
+          vehicleId,
+          customerId: seed.customerB,
+          status: "OPEN" as const,
+          openedAt: Date.now(),
+          openedBy: seed.userId,
+          lineageGeneration: 0,
+        })
+      );
+    }
+    const depositId = await seed.t.run((ctx) =>
+      ctx.db.insert("deposits", {
+        orgId: seed.orgId,
+        vehicleId,
+        customerId: seed.customerA,
+        amount: 100,
+        status: "HELD" as const,
+        holdActive: true,
+        usesVehicleHoldRows: true,
+        createdBy: seed.userId,
+        createdAt: Date.now(),
+      })
+    );
+    return await seed.t.run((ctx) =>
+      ctx.db.insert("depositVehicleHolds", {
+        orgId: seed.orgId,
+        depositId,
+        vehicleId,
+        active: false,
+        createdAt: Date.now(),
+      })
+    );
+  }
+
+  test("a blocked car survives however the freed holds are ordered", async () => {
+    const seed = await seedDealer("w1");
+    const clean = await freedCar(seed, "FREE");
+    const held = await freedCar(seed, "HELD");
+    const blocked = await freedCar(seed, "AMBIGUOUS");
+
+    // ⚠️ ORDER-INDEPENDENCE IS THE CONTRACT. The order rows come back in is
+    // not something a caller controls, so "worst wins" has to hold both ways
+    // round — a clean car read last must not overwrite a repair condition.
+    for (const order of [
+      [clean, held, blocked],
+      [blocked, held, clean],
+    ]) {
+      const outcome = await seed.t.run((ctx) =>
+        settleFreedHoldsAuthority(ctx, seed.orgId, order, Date.now())
+      );
+      expect(outcome?.outcome).toBe("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS");
+    }
+  });
+
+  test("a rival outranks a clean settle but yields to a blocked one", async () => {
+    const seed = await seedDealer("w2");
+    const clean = await freedCar(seed, "FREE");
+    const held = await freedCar(seed, "HELD");
+
+    const outcome = await seed.t.run((ctx) =>
+      settleFreedHoldsAuthority(ctx, seed.orgId, [held, clean], Date.now())
+    );
+    expect(outcome?.outcome).toBe("ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL");
+  });
+
+  test("a hold belonging to another dealership is skipped, not settled", async () => {
+    const seed = await seedDealer("w3");
+    const clean = await freedCar(seed, "FREE");
+    const otherOrg = await seed.t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Other", createdAt: Date.now() })
+    );
+    await seed.t.run((ctx) => ctx.db.patch(clean, { orgId: otherOrg }));
+
+    expect(
+      await seed.t.run((ctx) => settleFreedHoldsAuthority(ctx, seed.orgId, [clean], Date.now()))
+    ).toBeNull();
+  });
+
   test("a clean settle can never overwrite a condition needing repair", () => {
     // ⚠️ A reversal can free several cars at once. Recording "RESTORED" over a
     // blocked one is how a repair condition disappears, so the ordering is
