@@ -464,6 +464,15 @@ async function reinstateAppliedDeposits(
       // outbox finishes the job when the entry posts. Reinstating here would
       // hold a car against an entry the ledger still shows credited — the
       // single-vehicle twin of the slice rule three lines above.
+      //
+      // ⚠️ HONEST NOTE ON COVERAGE: this gate is belt-and-braces, and its own
+      // mutant SURVIVES. The load-bearing gate is `reinstateHold` above — with
+      // `holdActive` still false, this call only re-syncs the vehicle
+      // projection and reactivates secondary slices, of which a direct deposit
+      // has none, so forcing it true changes nothing observable. It is kept
+      // because it would become load-bearing the moment `reinstateHold` were
+      // loosened, but it is NOT independently proven and should not be read as
+      // if it were.
       if (application.journalReversed) {
         await reactivateAllVehiclesForDeposit(ctx, deposit);
       }

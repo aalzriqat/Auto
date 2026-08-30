@@ -19,6 +19,7 @@ import { completeDeferredReversal } from "./utils/depositApplications";
 import { reinstateDirectDepositHold } from "./utils/commitmentWriters";
 import { settleFreedHoldsAuthority } from "./accountingOutbox";
 import { acquireVehicle } from "./commitments";
+import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { COMMITMENT_AUTHORITY_V1 } from "./utils/commitmentKernel";
 
 vi.mock("./rateLimit", () => ({
@@ -155,13 +156,132 @@ const settle = async (seed: Seed, sources: Awaited<ReturnType<typeof completion>
   );
 
 describe("while the reversing journal is only queued", () => {
+  /**
+   * Drives the REAL cancellation door.
+   *
+   * ⚠️ THIS HAD TO GO THROUGH `cancelCompletedSaleOperationalRecords`. A first
+   * version of this contract built the post-cancellation state by hand and
+   * asserted it — which asserts the FIXTURE, not the gate. Forcing
+   * `reinstateHold: true` back into the code left that version green, so it
+   * was covering nothing. With no chart of accounts the reversal necessarily
+   * DEFERS, which is exactly the branch under test.
+   */
+  async function cancelWithDeferredReversal(seed: Seed, options: { posted?: boolean } = {}) {
+    const vehicleId = await vehicle(seed);
+    const saleId = await seed.t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: seed.orgId,
+        vehicleId,
+        customerId: seed.customerId,
+        salespersonId: seed.userId,
+        salePrice: 30_000,
+        saleDate: Date.now(),
+        status: "COMPLETED" as const,
+      })
+    );
+    const depositId = await seed.t.run((ctx) =>
+      ctx.db.insert("deposits", {
+        orgId: seed.orgId,
+        vehicleId,
+        customerId: seed.customerId,
+        amount: 1_000,
+        // As a completed sale leaves it: consumed, and its car released.
+        status: "APPLIED" as const,
+        holdActive: false,
+        usesVehicleHoldRows: false,
+        createdBy: seed.userId,
+        createdAt: Date.now(),
+      })
+    );
+    await seed.t.run((ctx) =>
+      ctx.db.insert("depositApplications", {
+        orgId: seed.orgId,
+        depositId,
+        vehicleId,
+        saleId,
+        customerId: seed.customerId,
+        amountMinor: 100_000,
+        currency: "JOD",
+        treatment: "CUSTOMER_RECEIVABLE" as const,
+        eventType: "deposit.applied",
+        eventSourceType: "depositApplications",
+        eventSourceId: String(depositId),
+        eventVersion: 1,
+        eventIdempotencyKey: `apply_${depositId}`,
+        status: "APPLIED" as const,
+        appliedAt: Date.now(),
+        appliedBy: seed.userId,
+      })
+    );
+
+    if (options.posted) {
+      // ⚠️ THE ORIGINAL ENTRY, STILL POSTED. With it present the reversal has
+      // something real to back out and — with no chart or open period — must
+      // QUEUE that work, which is the DEFERRED branch. Without it the reversal
+      // resolves to NOT_POSTED and finishes inside the cancellation.
+      await seed.t.run((ctx) =>
+        ctx.db.insert("accountingEvents", {
+          orgId: seed.orgId,
+          eventType: "DEPOSIT_APPLIED",
+          sourceType: "depositApplications",
+          sourceId: String(depositId),
+          eventVersion: 1,
+          idempotencyKey: `apply_${depositId}`,
+          occurredAt: Date.now(),
+          accountingDate: Date.now(),
+          currency: "JOD",
+          payload: {},
+          status: "POSTED" as const,
+          createdBy: seed.userId,
+          createdAt: Date.now(),
+        })
+      );
+    }
+
+    const sale = (await seed.t.run((ctx) => ctx.db.get(saleId)))!;
+    await seed.t.run((ctx) =>
+      cancelCompletedSaleOperationalRecords(ctx, {
+        orgId: seed.orgId,
+        sale,
+        actorId: seed.userId,
+        reason: "cancelled in test",
+        reversalDate: Date.now(),
+      })
+    );
+    return { vehicleId, saleId, depositId };
+  }
+
+  test("the NOT_POSTED control restores atomically inside the cancellation", async () => {
+    const seed = await seedDealer("q0");
+    const f = await cancelWithDeferredReversal(seed, { posted: false });
+
+    const application = (
+      await seed.t.run((ctx) => ctx.db.query("depositApplications").collect())
+    )[0];
+    // Nothing was ever posted, so there is nothing to wait for: the reversal
+    // completes inside the cancellation mutation...
+    expect(application.status).toBe("REVERSED");
+    // ...and the car comes back in that same transaction.
+    const deposit = await seed.t.run((ctx) => ctx.db.get(f.depositId));
+    expect(deposit?.status).toBe("HELD");
+    expect(deposit?.holdActive).toBe(true);
+  });
+
   test("the car stays un-held and no successor exists", async () => {
     const seed = await seedDealer("q1");
-    const f = await deferredDirectCancellation(seed);
+    const f = await cancelWithDeferredReversal(seed, { posted: true });
+
+    const application = (
+      await seed.t.run((ctx) => ctx.db.query("depositApplications").collect())
+    )[0];
+    // The reversal really did defer — otherwise this contract proves nothing.
+    expect(application.status).toBe("REVERSING");
 
     const deposit = await seed.t.run((ctx) => ctx.db.get(f.depositId));
     // ⚠️ THE WHOLE POINT. Re-holding here would hold a car against an entry
-    // the ledger still shows credited against the customer's invoice.
+    // the ledger still shows credited against the customer's invoice. The
+    // MONEY comes back out of APPLIED; the CAR waits for the journal.
+    expect(deposit?.status).toBe("HELD");
     expect(deposit?.holdActive).toBe(false);
 
     const roots = await seed.t.run((ctx) => ctx.db.query("commitmentRoots").collect());
