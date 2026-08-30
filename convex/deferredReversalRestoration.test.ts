@@ -1223,9 +1223,19 @@ describe("a source that cannot be made live", () => {
  *
  * The DIRECT path never had this: it checks `authorityVersion !== "V1"` and
  * returns WITHHELD before it probes. I mirrored the probe and not the guard.
+ *
+ * ⚠️ AND MY FIRST REPAIR WAS ALSO WRONG (c15831). I gated only the PROBE on
+ * V1 and let a legacy slice fall through to `settleAuthorityAfterReversal`,
+ * reasoning that changing legacy behaviour was a product decision I should not
+ * make inside a bug fix. The structural objection I missed: that fallthrough
+ * reaches `releaseRootIfNoLiveBasis`, which patches
+ * `commitmentRoots.status = "RELEASED"` — a CANONICAL write — after consulting
+ * the LEGACY liveness readers. Legacy data may not authorize a canonical
+ * write. It is the same class of defect as the one above, pointed the other
+ * way, and it is reachable because `acquireVehicle` has no version gate.
  */
 describe("a legacy organization reaching the sliced path", () => {
-  test("is never recorded as canonically inconsistent", async () => {
+  test("is WITHHELD, and never touches canonical authority", async () => {
     const seed = await seedDealer("lg1");
     // Legacy: no stored authority version at all, which `admitAuthorityVersion`
     // admits as LEGACY rather than refusing.
@@ -1269,6 +1279,32 @@ describe("a legacy organization reaching the sliced path", () => {
       })
     );
 
+    // ⚠️ AN OPEN CANONICAL ROOT IS PART OF THE FIXTURE, DELIBERATELY. Without
+    // one this test cannot tell the corrected behaviour from the defective
+    // one: the fallthrough's actual damage is that it RELEASES this root on
+    // the authority of the legacy liveness readers. `acquireVehicle` has no
+    // version gate, which is exactly why a legacy dealership can hold one.
+    await seed.t.run((ctx) =>
+      acquireVehicle(ctx, {
+        orgId: seed.orgId,
+        vehicleId,
+        customerId: seed.customerId,
+        createdBy: seed.userId,
+        evidence: { kind: "DEPOSIT", depositId },
+        lineage: { depositId },
+      })
+    );
+    const before = await seed.t.run(async (ctx) => ({
+      roots: await ctx.db.query("commitmentRoots").collect(),
+      claims: await ctx.db.query("vehicleCommitmentClaims").collect(),
+      deposit: await ctx.db.get(depositId),
+      hold: await ctx.db.get(holdId),
+    }));
+    expect(
+      before.roots.filter((r) => r.status === "OPEN"),
+      "the fixture must actually hold an open root, or this proves nothing"
+    ).toHaveLength(1);
+
     const eventId = await seedAuthorityEvent(
       seed.t,
       seed.orgId,
@@ -1281,18 +1317,43 @@ describe("a legacy organization reaching the sliced path", () => {
 
     const summary = await settleThroughWorkers(seed.t, [workId], eventId);
 
-    // ⚠️ THE DEFECT, STATED AS THE ASSERTION. A legacy dealership must never be
-    // reported as having contradictory canonical records: nothing canonical was
-    // ever examined, and the two claims are not interchangeable.
-    expect(
-      summary?.outcome,
-      "a dealership not on the canonical authority has no canonical contradiction"
-    ).not.toBe("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT");
+    // ⚠️ WITHHELD, AND NEITHER NEIGHBOUR. Nothing canonical was examined, so
+    // reporting a contradiction would be a false diagnosis and reporting
+    // "lawfully nothing to restore" would claim an examination that never
+    // happened.
+    expect(summary?.outcome).toBe("AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE");
 
-    // And the legacy settlement still reaches its own business answer, exactly
-    // as it did before the pre-flight was added. Restoring the audit label
-    // without preserving the settlement would be half a fix.
-    expect(summary?.outcome).toBe("ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS");
-    expect((await seed.t.run((ctx) => ctx.db.get(workId)))?.status).toBe("SETTLED");
+    // ⚠️ AND NOT ONE BYTE OF CANONICAL AUTHORITY MOVED. The root above is the
+    // one the old fallthrough would have RELEASED.
+    const after = await seed.t.run(async (ctx) => ({
+      roots: await ctx.db.query("commitmentRoots").collect(),
+      claims: await ctx.db.query("vehicleCommitmentClaims").collect(),
+      deposit: await ctx.db.get(depositId),
+      hold: await ctx.db.get(holdId),
+    }));
+    expect(
+      after.roots.filter((r) => r.status === "OPEN"),
+      "legacy liveness readers may not terminalize a canonical root"
+    ).toHaveLength(1);
+    expect(after.roots.map((r) => r.status)).toEqual(before.roots.map((r) => r.status));
+    expect(after.claims.length, "no successor claim").toBe(before.claims.length);
+    expect(
+      after.deposit?.singleVehicleCommitmentClaimId,
+      "the source pointer did not move"
+    ).toBe(before.deposit?.singleVehicleCommitmentClaimId);
+
+    // The source fails CLOSED — it is not made live by a withheld answer.
+    expect(after.deposit?.holdActive, "the deposit was not re-held").toBe(false);
+    expect(after.hold?.active, "and the slice was not re-activated").toBe(false);
+
+    // The accounting reversal stays final, and no technical retry was spent on
+    // an answer no retry can change.
+    expect((await seed.t.run((ctx) => ctx.db.get(eventId)))?.status).toBe("POSTED");
+    const work = await seed.t.run((ctx) => ctx.db.get(workId));
+    expect(work?.status).toBe("SETTLED");
+    expect(work?.executions, "terminal on the first execution").toBe(1);
+    const attempts = await readAttempts(seed.t, workId);
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]?.status).toBe("SUCCEEDED");
   });
 });

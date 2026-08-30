@@ -22,7 +22,7 @@
  * status by hand. The one deliberate exception is the corruption fixture in
  * S.10, which exists precisely to reproduce state no writer should produce.
  */
-import { convexTestWithComponents } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -56,6 +56,21 @@ const PERMISSIONS = [
   "approve:requests",
   "manage:finance",
   "view:finance",
+  // S.4b reopens a closed month so a deferred reversal can finally post.
+  // Deliberately a separate permission in production — MANAGE_FINANCE alone
+  // does not grant it, because reopening un-does a close's own protections.
+  "reopen:accounting_periods",
+  // S.4c drives the OTHER public cancellation door, which needs a finance
+  // application finalized into a sale before `cancelApplication` can reach the
+  // shared cancellation spine at all.
+  "view:finance_applications",
+  "create:finance_application",
+  "review:finance_application",
+  "approve:finance_application",
+  "finalize:financed_deal",
+  "verify:finance_documents",
+  "register:vehicle_handover",
+  "register:expected_payment",
 ];
 
 const PRICE = 30_000;
@@ -469,6 +484,147 @@ describe("S.3 cancelling a real sale gives the customer their deal back", () => 
   });
 });
 
+// ── the accounting fixture the DEFERRED path needs ──────────────────────────
+//
+// ⚠️ A CANCELLATION WHOSE ORIGINAL POSTING NEVER POSTED REVERSES SYNCHRONOUSLY,
+// through `reinstateAppliedDeposits` — a different authority path entirely. The
+// deferred worker is reached only when the original DID post and the reversal
+// cannot: sell inside an open month, close the month, cancel, then reopen so
+// the queued reversal can finally post. That is an ordinary business sequence,
+// and it is the only one that reaches the code S.4b/S.4c are about.
+
+async function openAccountingMonth(seed: Seed) {
+  const year = new Date().getUTCFullYear();
+  await seed.asManager.mutation(api.chartOfAccounts.initialize, { orgId: seed.orgId });
+  await seed.asManager.mutation(api.accountingPeriods.create, {
+    orgId: seed.orgId,
+    startDate: Date.UTC(year, 0, 1),
+    endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+    fiscalYear: year,
+    periodNumber: 1,
+  });
+  const period = (await seed.asManager.query(api.accountingPeriods.list, {
+    orgId: seed.orgId,
+  }))[0]!;
+  await seed.asManager.mutation(api.accountingPeriods.open, {
+    orgId: seed.orgId,
+    periodId: period._id,
+  });
+  return period;
+}
+
+async function closeAccountingMonth(seed: Seed, periodId: Id<"accountingPeriods">) {
+  const checklist = await seed.asManager.query(api.accountingPeriods.closeChecklist, {
+    orgId: seed.orgId,
+    periodId,
+  });
+  await seed.asManager.mutation(api.accountingPeriods.close, {
+    orgId: seed.orgId,
+    periodId,
+    overrideReason: "test fixture: closing the month before the cancellation",
+    acknowledgedWarnings: (checklist.warnings ?? []).map((w) =>
+      typeof w === "string" ? w : String((w as { message?: string }).message ?? w)
+    ),
+  });
+}
+
+/**
+ * Run a cancellation and let the whole deferred chain finish deterministically.
+ *
+ * ⚠️ THE FAKE TIMERS GO ON BEFORE THE MUTATION THAT SCHEDULES, NOT AFTER.
+ * `runAfter` creates its timer inside the mutation, so installing them
+ * afterwards leaves the chain on real timers where the pump cannot reach it —
+ * and the contract then races, passing or failing on machine speed. Only the
+ * timer functions are faked: freezing `Date` would move every row out of the
+ * due-time window the dispatcher compares against.
+ */
+async function cancelAndDrain(
+  seed: Seed,
+  periodId: Id<"accountingPeriods">,
+  cancel: () => Promise<unknown>
+) {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+  try {
+    await cancel();
+    // The queued reversal cannot post into a closed month — it waits, which is
+    // the whole reason the REVERSING state exists. Reopening is what finally
+    // lets it through, and it is the accountant's ordinary next step rather
+    // than a test shortcut: `reopen` schedules the drain itself.
+    await seed.asManager.mutation(api.accountingPeriods.reopen, {
+      orgId: seed.orgId,
+      periodId,
+      reason: "cancellation reversal must post",
+    });
+    await seed.t.finishAllScheduledFunctions(vi.runAllTimers);
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+/** The authority work this organization's deferred cancellation produced. */
+const authorityWorkFor = async (seed: Seed) =>
+  await seed.t.run(async (ctx) =>
+    (await ctx.db.query("commitmentAuthorityWork").collect()).filter(
+      (w) => String(w.orgId) === String(seed.orgId)
+    )
+  );
+
+const summarisedOutcomes = async (seed: Seed) =>
+  await seed.t.run(async (ctx) =>
+    (await ctx.db.query("pendingAccountingEvents").collect())
+      .map((p) => p.authorityOutcome)
+      .filter(Boolean)
+  );
+
+/**
+ * Every assertion c15831 requires of a withheld legacy slice, in one place so
+ * the two public doors cannot drift apart in what they prove.
+ */
+async function expectWithheldWithNoAuthorityResidue(
+  seed: Seed,
+  before: { roots: Doc<"commitmentRoots">[]; claims: Doc<"vehicleCommitmentClaims">[]; holds: Doc<"depositVehicleHolds">[] },
+  depositId: Id<"deposits">,
+  sourceKind: "DIRECT" | "SLICE"
+) {
+  const settled = await authorityWorkFor(seed);
+  // ⚠️ IT MUST HAVE BEEN THE DEFERRED PATH, IN THE EXPECTED REPRESENTATION.
+  // Without this the contract could pass against a synchronous reversal, which
+  // is a different code path and not the one this ruling is about.
+  expect(settled, "the deferred authority worker was reached").toHaveLength(1);
+  expect(settled[0]!.sourceKind, "in the expected representation").toBe(sourceKind);
+  expect(settled[0]!.status).toBe("SETTLED");
+  expect(settled[0]!.outcome).toBe("AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE");
+  // Terminal on the first execution — no technical retry spent on an answer no
+  // retry can change.
+  expect(settled[0]!.executions, "no retry budget consumed").toBe(1);
+
+  const summarised = await summarisedOutcomes(seed);
+  expect(summarised).toContain("AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE");
+  expect(summarised).not.toContain("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT");
+  expect(summarised).not.toContain("ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS");
+  expect(summarised).not.toContain("RESTORED");
+
+  // ⚠️ NOT ONE CANONICAL BYTE MOVED. Root statuses are compared as a SET,
+  // because the damage the old fallthrough did was to CHANGE one — and an
+  // assertion that only counted OPEN roots would miss a release that happened
+  // to be offset by another open row.
+  const after = await seed.t.run(async (ctx) => ({
+    roots: await ctx.db.query("commitmentRoots").collect(),
+    claims: await ctx.db.query("vehicleCommitmentClaims").collect(),
+    holds: await ctx.db.query("depositVehicleHolds").collect(),
+  }));
+  expect(
+    after.roots.map((r) => `${String(r._id)}:${r.status}`).sort(),
+    "legacy liveness readers may not terminalize a canonical root"
+  ).toEqual(before.roots.map((r) => `${String(r._id)}:${r.status}`).sort());
+  expect(after.claims.length, "no successor claim was opened").toBe(before.claims.length);
+  expect(
+    after.holds.map((h) => `${String(h._id)}:${h.active}`).sort(),
+    "no slice was re-activated — a withheld answer restores nothing"
+  ).toEqual(before.holds.map((h) => `${String(h._id)}:${h.active}`).sort());
+  expect((await depositRow(seed, depositId)).status, "and the money is untouched").toBe("HELD");
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // S.4 — A LEGACY ORGANIZATION KEEPS WORKING
 // ═════════════════════════════════════════════════════════════════════════════
@@ -499,6 +655,225 @@ describe("S.4 an organization without the canonical authority", () => {
 
     // No canonical rows were invented for an org that is not on the model.
     expect((await rootsOn(seed, deal.vehicleId)).filter((r) => r.status === "OPEN").length).toBe(0);
+  });
+
+  /**
+   * SCRUM-208 c15831 — THE SLICED PATH MUST WITHHOLD TOO, AND FOR A REASON
+   * STRONGER THAN SYMMETRY.
+   *
+   * ⚠️ TWO DEFECTS WERE FOUND HERE IN SUCCESSIVE ROUNDS, AND THE SECOND WAS MY
+   * REPAIR FOR THE FIRST.
+   *
+   * First, the sliced path ran the canonical contradiction probe for ANY
+   * resolvable context — and a legacy org resolves. The canonical readers throw
+   * for non-V1, the probe persists that throw verbatim, and every sliced
+   * deferred reversal in every dealership was recorded as "your records
+   * contradict each other". Both reviewer seats found that independently.
+   *
+   * I then gated only the PROBE on V1 and let a legacy slice fall through to
+   * `settleAuthorityAfterReversal`, on the grounds that changing legacy
+   * behaviour was a product decision. The structural objection I missed: that
+   * fallthrough reaches `releaseRootIfNoLiveBasis`, which patches
+   * `commitmentRoots.status = "RELEASED"` — a CANONICAL write — on the word of
+   * `hasLiveCommitmentBasis` using the LEGACY readers. **S.6a above proves that
+   * exact reader false-negatives on a stale backlog.** So the fallthrough could
+   * release a live deal's canonical root, which is the precise harm S.6 exists
+   * to forbid, reached through the one door that still used the old reader.
+   *
+   * Legacy data may not authorize a canonical write. An operational
+   * legacy-slice settlement, if AutoFlow needs one, is SCRUM-201's to design
+   * explicitly — not something obtained sideways through the canonical worker.
+   */
+  test("S.4b a SLICED legacy deal withholds through api.sales.update, touching no authority", async () => {
+    const seed = await seedDealer("s4b", { canonical: false });
+
+    // ⚠️ THE REVERSAL MUST ACTUALLY DEFER, OR THIS CONTRACT TESTS THE WRONG
+    // CODE. A cancellation whose original posting never posted reverses
+    // synchronously through `reinstateAppliedDeposits` — a different authority
+    // path entirely. The deferred SLICE worker is only reached when the
+    // original DID post and the reversal cannot: sell inside an open month,
+    // close the month, then cancel. That is an ordinary business sequence, and
+    // it is the only one that reaches the code this ruling is about.
+    const year = new Date().getUTCFullYear();
+    await seed.asManager.mutation(api.chartOfAccounts.initialize, { orgId: seed.orgId });
+    await seed.asManager.mutation(api.accountingPeriods.create, {
+      orgId: seed.orgId,
+      startDate: Date.UTC(year, 0, 1),
+      endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+      fiscalYear: year,
+      periodNumber: 1,
+    });
+    const period = (await seed.asManager.query(api.accountingPeriods.list, {
+      orgId: seed.orgId,
+    }))[0]!;
+    await seed.asManager.mutation(api.accountingPeriods.open, {
+      orgId: seed.orgId,
+      periodId: period._id,
+    });
+
+    const vehicleA = await vehicle(seed);
+    const vehicleB = await vehicle(seed);
+    // Two vehicles on one quote is the definition of the sliced representation.
+    const quoteId = await quoteFor(seed, seed.customerA, [vehicleA, vehicleB]);
+    const depositId = (await depositOn(seed, quoteId, 2_000)) as Id<"deposits">;
+    // ⚠️ THE PRODUCT REFUSES TO COMPLETE THE SALE UNTIL THE CUSTOMER'S SPLIT IS
+    // RECORDED, and it is right to: the share cannot be inferred from prices.
+    // Going through the real allocation door is what makes the slice rows this
+    // contract depends on exist at all.
+    await seed.asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId: seed.orgId,
+      quoteId,
+      allocations: [
+        { vehicleId: vehicleA, amount: 1_200 },
+        { vehicleId: vehicleB, amount: 800 },
+      ],
+    });
+    const saleId = await directSale(seed, quoteId, vehicleA, seed.customerA);
+
+    // Close the month the sale posted in, so the cancellation's reversing entry
+    // has nowhere to post and is queued instead.
+    const checklist = await seed.asManager.query(api.accountingPeriods.closeChecklist, {
+      orgId: seed.orgId,
+      periodId: period._id,
+    });
+    await seed.asManager.mutation(api.accountingPeriods.close, {
+      orgId: seed.orgId,
+      periodId: period._id,
+      overrideReason: "test fixture: closing the month before the cancellation",
+      acknowledgedWarnings: (checklist.warnings ?? []).map((w) =>
+        typeof w === "string" ? w : String((w as { message?: string }).message ?? w)
+      ),
+    });
+
+    const before = await seed.t.run(async (ctx) => ({
+      roots: await ctx.db.query("commitmentRoots").collect(),
+      claims: await ctx.db.query("vehicleCommitmentClaims").collect(),
+      holds: await ctx.db.query("depositVehicleHolds").collect(),
+    }));
+
+    // ⚠️ NOTHING IS DRAINED BY HAND HERE, AND THE SCHEDULER IS DRIVEN
+    // DETERMINISTICALLY. The cancellation queues the reversing entry, the
+    // outbox drain posts it, `markEntryPosted` records the authority work, and
+    // the dispatcher and settlement each run in their own scheduled
+    // transaction — exactly as production does. This is the first contract in
+    // the repo that reaches the deferred authority worker with no seeded row.
+    //
+    // ⚠️ THE FAKE TIMERS GO ON BEFORE THE MUTATION THAT SCHEDULES, NOT AFTER.
+    // `runAfter` creates its timer inside the mutation, so installing them
+    // afterwards leaves the chain on real timers where the pump cannot reach
+    // it — and the contract then races, passing or failing on machine speed.
+    // Only the timer functions are faked: freezing `Date` would move every row
+    // out of the due-time window the dispatcher compares against.
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    try {
+      await cancelSale(seed, saleId);
+      // The queued reversal cannot post into a closed month — it waits, which
+      // is the whole reason the REVERSING state exists. Reopening is what
+      // finally lets it through, and it is the accountant's ordinary next
+      // step, not a test shortcut: `reopen` schedules the drain itself.
+      await seed.asManager.mutation(api.accountingPeriods.reopen, {
+        orgId: seed.orgId,
+        periodId: period._id,
+        reason: "cancellation reversal must post",
+      });
+      await seed.t.finishAllScheduledFunctions(vi.runAllTimers);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await expectWithheldWithNoAuthorityResidue(seed, before, depositId, "SLICE");
+
+    // Vehicle B was never part of the cancelled sale and must be inert.
+    expect((await rootsOn(seed, vehicleB)).filter((r) => r.status === "OPEN").length).toBe(1);
+  });
+
+  /**
+   * THE SECOND PUBLIC DOOR — AND THE REACHABILITY BOUNDARY THAT SHAPES IT.
+   *
+   * ⚠️ THE SLICED REPRESENTATION CANNOT REACH THIS DOOR AT ALL, and that is a
+   * product rule rather than an oversight: `applications.createFromQuote`
+   * refuses a multi-vehicle quote outright ("Finance applications currently
+   * support exactly one vehicle"), because `finalizeDeal` only ever completes
+   * `app.vehicleId`'s sale and would silently drop the rest. A sliced deposit
+   * requires a multi-vehicle quote. The two are mutually exclusive.
+   *
+   * So this door carries the DIRECT representation, and the contract asserted
+   * is the same one — a legacy dealership withholds and touches no canonical
+   * authority. The refusal itself is pinned below, so the day financed deals
+   * gain multi-vehicle support, this test fails and whoever changes it is told
+   * that the sliced withheld contract now needs extending to this door too.
+   */
+  test("S.4c a multi-vehicle quote cannot reach the applications door at all", async () => {
+    const seed = await seedDealer("s4c", { canonical: false });
+    const vehicleA = await vehicle(seed);
+    const vehicleB = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [vehicleA, vehicleB]);
+    await depositOn(seed, quoteId, 2_000);
+
+    await expect(
+      seed.asUser.mutation(api.applications.createFromQuote, {
+        orgId: seed.orgId,
+        quoteId,
+      }),
+      "if this ever succeeds, S.4b's sliced withheld contract must be extended to this door"
+    ).rejects.toThrow(/exactly one vehicle/i);
+  });
+
+  test("S.4d the withheld contract holds through api.applications.cancelApplication", async () => {
+    const seed = await seedDealer("s4d", { canonical: false });
+    const period = await openAccountingMonth(seed);
+
+    const vehicleA = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [vehicleA]);
+    const depositId = (await depositOn(seed, quoteId, 2_000)) as Id<"deposits">;
+
+    // The financed close, through the real doors it actually requires.
+    const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
+      orgId: seed.orgId,
+      quoteId,
+    });
+    await seed.asUser.mutation(api.applications.updateStatus, {
+      orgId: seed.orgId,
+      applicationId,
+      status: "UNDER_REVIEW" as const,
+    });
+    // A salesperson may not approve their own application.
+    await seed.asManager.mutation(api.applications.updateStatus, {
+      orgId: seed.orgId,
+      applicationId,
+      status: "APPROVED" as const,
+    });
+    await registerHandover(seed.asUser, api, seed.orgId, applicationId);
+    await seed.asUser.mutation(api.applications.registerExpectedPayment, {
+      orgId: seed.orgId,
+      applicationId,
+      method: "CASH" as const,
+      expectedDate: Date.now() + 86_400_000,
+    });
+    await seed.asUser.mutation(api.applications.finalizeDeal, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+
+    await closeAccountingMonth(seed, period._id);
+
+    const before = await seed.t.run(async (ctx) => ({
+      roots: await ctx.db.query("commitmentRoots").collect(),
+      claims: await ctx.db.query("vehicleCommitmentClaims").collect(),
+      holds: await ctx.db.query("depositVehicleHolds").collect(),
+    }));
+
+    await cancelAndDrain(seed, period._id, () =>
+      seed.asManager.mutation(api.applications.cancelApplication, {
+        orgId: seed.orgId,
+        applicationId,
+        reason: "customer withdrew",
+      })
+    );
+
+    await expectWithheldWithNoAuthorityResidue(seed, before, depositId, "DIRECT");
   });
 });
 

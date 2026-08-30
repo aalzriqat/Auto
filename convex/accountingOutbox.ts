@@ -899,36 +899,64 @@ async function settleOneReversalSource(
     // A known contradiction is an EXPECTED terminal answer for both
     // representations: it terminalizes on the first execution, keeps its
     // diagnosis, writes no authority, and never enters the retry channel.
-    // ⚠️ `READY` IS NOT `CANONICAL`, AND THAT MISREADING WAS A DEFECT OF ITS
-    // OWN (SCRUM-208 c15825, found by Codex against 3882014ae).
+    // ⚠️ NON-CANONICAL IS WITHHELD, AND IT FAILS CLOSED. THE SLICE PATH NOW
+    // MIRRORS THE DIRECT PATH EXACTLY (SCRUM-208 c15831).
+    //
+    // Two defects were found here in successive rounds, and the second was my
+    // repair for the first.
     //
     // `tryDecisionContext` answers `READY` whenever authority could be
-    // RESOLVED — which includes a LEGACY organization, the majority case until
-    // SCRUM-201's cutover. The canonical readers then refuse a non-V1 decision
-    // by THROWING (`requireCanonicalAuthority`), and `probeCanonicalHold`
-    // persists a curated `ConvexError` verbatim as a data contradiction. So
-    // gating on `kind === "READY"` alone recorded "this dealership is not on
+    // RESOLVED — which includes a LEGACY organization, and NO organization is
+    // canonical today because nothing writes `commitmentAuthorityVersion`. The
+    // canonical readers refuse a non-V1 decision by THROWING
+    // (`requireCanonicalAuthority`), and `probeCanonicalHold` persists a
+    // curated `ConvexError` verbatim as a contradiction. Gating on
+    // `kind === "READY"` alone therefore recorded "this dealership is not on
     // the canonical authority" as "this dealership's records contradict each
-    // other" — terminally, in the field a VIEW_FINANCE user reads. The two are
-    // not interchangeable: one says the records were never examined.
+    // other" — for EVERY sliced deferred reversal in every dealership.
     //
-    // ⚠️ AND THE GATE IS `V1`, NOT A REDIRECT TO WITHHELD. Returning WITHHELD
-    // here would ALSO change what a legacy slice does — today it settles
-    // through the legacy liveness readers inside `settleAuthorityAfterReversal`
-    // and reaches a real business answer. Restoring the audit label while
-    // silently dropping that settlement would be half a fix, and which of the
-    // two legacy policies is correct is a product decision, not something a
-    // repair for this defect gets to make. Non-V1 therefore falls through
-    // BYTE-IDENTICALLY to its previous behaviour; only V1 enters the probe,
-    // which is the only version whose readers can produce a contradiction.
-    if (context.kind === "READY" && context.decision.authorityVersion === "V1") {
-      const probe = await probeCanonicalHold(ctx, context.decision, hold.vehicleId);
-      if (!probe.ok) {
-        return {
-          outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT",
-          detail: probe.reason,
-        };
-      }
+    // ⚠️ I THEN FIXED THAT BY GATING THE PROBE ON V1 AND LETTING NON-V1 FALL
+    // THROUGH TO `settleAuthorityAfterReversal`, ON THE GROUNDS THAT CHANGING
+    // LEGACY BEHAVIOUR WAS A PRODUCT DECISION. THAT WAS WRONG, AND THE REASON
+    // IS STRUCTURAL RATHER THAN COSMETIC.
+    //
+    // That fallthrough reaches `releaseRootIfNoLiveBasis`, which patches
+    // `commitmentRoots.status = "RELEASED"` — a CANONICAL authority write —
+    // after asking `hasLiveCommitmentBasis`, which uses the LEGACY liveness
+    // readers for a non-V1 decision. So a legacy dealership could terminalize a
+    // canonical root on the authority of the very readers the canonical model
+    // exists to replace. And it is reachable: `acquireVehicle` has no
+    // version gate and has five production callers, so legacy organizations
+    // hold canonical roots today.
+    //
+    // Answering a canonical question with legacy data is the exact failure the
+    // DIRECT path already refuses. WITHHELD means the canonical records were
+    // NOT EXAMINED because canonical authority is not activated;
+    // NO_RESTORABLE_BASIS means they were examined and lawfully held nothing.
+    // A legacy org is the first, always.
+    //
+    // If AutoFlow needs an operational legacy-SLICE settlement, SCRUM-201 owns
+    // designing it as an explicit legacy workflow. It may not be obtained
+    // sideways by letting legacy readers drive the canonical worker.
+    if (context.kind === "WITHHELD") {
+      return { outcome: "AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE", detail: context.reason };
+    }
+    if (context.decision.authorityVersion !== "V1") {
+      return {
+        outcome: "AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE",
+        detail: "this dealership is not on the canonical commitment authority",
+      };
+    }
+
+    // ⚠️ PRE-FLIGHT BEFORE ANY WRITE. A known contradiction is an EXPECTED
+    // terminal answer: it terminalizes on the first execution with its curated
+    // diagnosis, and never enters the technical retry channel.
+    const probe = await probeCanonicalHold(ctx, context.decision, hold.vehicleId);
+    if (!probe.ok) {
+      return {
+        outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT",
+        detail: probe.reason,
+      };
     }
 
     return await settleAuthorityAfterReversal(ctx, {
@@ -936,7 +964,7 @@ async function settleOneReversalSource(
       vehicleId: hold.vehicleId,
       decisionNow,
       reason: "deferred reversal posted",
-      ...(context.kind === "READY" ? { decision: context.decision } : {}),
+      decision: context.decision,
     });
   }
 
