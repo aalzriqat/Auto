@@ -103,6 +103,8 @@ export const CHOKE_MODULES = new Set([
   "commitments.ts",
   "utils/commitmentWriters.ts",
   "utils/commitmentKernel.ts",
+  // The one writer of the maintained episode pointers.
+  "utils/commitmentSources.ts",
 ]);
 
 /**

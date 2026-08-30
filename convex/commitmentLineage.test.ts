@@ -345,7 +345,7 @@ describe("restoration through the acquisition boundary", () => {
     expect(after).toHaveLength(before.length);
   });
 
-  test("an ACTIVE episode is ALREADY_LIVE — no second claim, nothing touched", async () => {
+  test("an ACTIVE episode has nothing to restore — no second claim, nothing touched", async () => {
     const seed = await seedDealer("r6");
     const vehicleId = await vehicle(seed);
     const { reservationId, rootId, claimId } = await acquire(seed, vehicleId, seed.customerA);
@@ -372,7 +372,14 @@ describe("restoration through the acquisition boundary", () => {
       })
     );
 
-    expect(outcome).toEqual({ decision: "ALREADY_LIVE", rootId, claimId });
+    // ⚠️ NOT "ALREADY_LIVE". An episode that was never terminalized has
+    // nothing to reinstate, and answering a restoration request with success
+    // would let claim status stand in for liveness — the exact thing
+    // commitments.ts says claim status may never do.
+    expect(outcome).toEqual({
+      decision: "REFUSE",
+      reason: "that evidence was not released",
+    });
 
     // ⚠️ CARDINALITY, NOT JUST ROOT COUNT. An earlier version returned
     // JOIN_LINEAGE here and then dropped the predecessor because the claim was
@@ -449,11 +456,11 @@ describe("restoration through the acquisition boundary", () => {
       })
     );
 
-    // ⚠️ AN EPISODE IS SUCCEEDED ONCE. Restoring the same terminal episode a
-    // second time would mint a parallel chain from one predecessor. Note this
-    // is NOT enforced by demanding the source sit on the tip — that rule was
-    // rejected because it strands dormant evidence — but by an exact lookup of
-    // the successor this episode already has.
+    // ⚠️ AN ACTIVE CLAIM ON A TERMINAL ROOT IS NOT LIVE. Claims stay ACTIVE
+    // forever, including on a released or consumed root, so the successor
+    // being ACTIVE proves nothing on its own. An earlier version returned
+    // ALREADY_LIVE from exactly this state — an ACTIVE claim whose root had
+    // been released — which is claim status manufacturing liveness.
     const restored = first as Extract<typeof first, { decision: "RESTORED" }>;
     const second = await seed.t.run(async (ctx) =>
       resolveRestorationDecision(ctx, {
@@ -462,29 +469,12 @@ describe("restoration through the acquisition boundary", () => {
         intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
       })
     );
-    // The evidence's live episode is the successor, so the answer names it
-    // rather than opening anything.
     expect(second).toEqual({
-      decision: "ALREADY_LIVE",
-      rootId: restored.rootId,
-      claimId: restored.claimId,
-    });
-
-    // And once that successor is itself terminal, the original episode still
-    // cannot be reinstated a second time — the chain continues from the
-    // successor, never again from its predecessor.
-    await seed.t.run((ctx) => ctx.db.patch(restored.claimId, { status: "RELEASED" as const }));
-    const third = await seed.t.run(async (ctx) =>
-      resolveRestorationDecision(ctx, {
-        decision: await decisionFor(seed, ctx),
-        evidence: f.evidence,
-        intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
-      })
-    );
-    expect(third).toEqual({
       decision: "REFUSE",
-      reason: "this evidence has already been reinstated once and cannot be reinstated again",
+      reason:
+        "this evidence has already been reinstated, and its current episode no longer holds this vehicle",
     });
+    void restored;
   });
 });
 
@@ -662,6 +652,172 @@ describe("dormant evidence from an earlier generation", () => {
       })
     );
     expect(outcome).toEqual({ decision: "REFUSE", reason: "that evidence was not released" });
+  });
+});
+
+describe("replay — ALREADY_LIVE needs the whole liveness proof, not a claim status", () => {
+  /** Restore once, so a proven-live successor episode exists. */
+  async function restoredOnce(seed: Seed) {
+    const f = await consumedByCancelledSale(seed, seed.customerA);
+    const first = await seed.t.run(async (ctx) =>
+      restoreCommitment(ctx, {
+        decision: await decisionFor(seed, ctx),
+        evidence: f.evidence,
+        intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
+        ...restoreArgs(seed, f),
+      })
+    );
+    const restored = first as Extract<typeof first, { decision: "RESTORED" }>;
+    expect(restored.decision).toBe("RESTORED");
+    return { f, restored };
+  }
+
+  const replay = async (seed: Seed, f: { evidence: PrincipalBoundEvidence; saleId: Id<"sales"> }) =>
+    await seed.t.run(async (ctx) =>
+      resolveRestorationDecision(ctx, {
+        decision: await decisionFor(seed, ctx),
+        evidence: f.evidence,
+        intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
+      })
+    );
+
+  test("a proven-live successor replays byte-identically and writes nothing", async () => {
+    const seed = await seedDealer("p1");
+    const { f, restored } = await restoredOnce(seed);
+
+    const rootsBefore = await seed.t.run((ctx) => ctx.db.query("commitmentRoots").collect());
+    const claimsBefore = await seed.t.run((ctx) =>
+      ctx.db.query("vehicleCommitmentClaims").collect()
+    );
+
+    expect(await replay(seed, f)).toEqual({
+      decision: "ALREADY_LIVE",
+      rootId: restored.rootId,
+      claimId: restored.claimId,
+    });
+
+    expect(await seed.t.run((ctx) => ctx.db.query("commitmentRoots").collect())).toEqual(
+      rootsBefore
+    );
+    expect(await seed.t.run((ctx) => ctx.db.query("vehicleCommitmentClaims").collect())).toEqual(
+      claimsBefore
+    );
+  });
+
+  test("the maintained pointer moved to the restored episode", async () => {
+    const seed = await seedDealer("p2");
+    const { f, restored } = await restoredOnce(seed);
+    const reservation = (await seed.t.run((ctx) => ctx.db.get(f.reservationId)))!;
+    // ⚠️ Left naming the terminal predecessor, the next restoration would
+    // resolve the stale episode as "current".
+    expect(String(reservation.currentCommitmentClaimId)).toBe(String(restored.claimId));
+  });
+
+  test("an ACTIVE successor whose SOURCE is dead is not live", async () => {
+    const seed = await seedDealer("p3");
+    const { f } = await restoredOnce(seed);
+    // Root still OPEN, claim still ACTIVE, pointer still correct — only the
+    // reservation itself has ended.
+    await seed.t.run((ctx) => ctx.db.patch(f.reservationId, { status: "RELEASED" as const }));
+
+    expect(await replay(seed, f)).toEqual({
+      decision: "REFUSE",
+      reason:
+        "this evidence has already been reinstated, and its current episode no longer holds this vehicle",
+    });
+  });
+
+  test("an ACTIVE successor the source no longer points at is not live", async () => {
+    const seed = await seedDealer("p4");
+    const { f } = await restoredOnce(seed);
+    // The car is held under some OTHER episode. Handing back the claim the
+    // caller asked about would be a lie about who holds it.
+    await seed.t.run((ctx) =>
+      ctx.db.patch(f.reservationId, { currentCommitmentClaimId: f.claimId })
+    );
+
+    expect((await replay(seed, f)).decision).toBe("REFUSE");
+  });
+
+  test("the WRONG sale is refused even though the right one was restored", async () => {
+    const seed = await seedDealer("p5");
+    const { f } = await restoredOnce(seed);
+    const unrelated = await sale(seed, f.vehicleId, seed.customerA);
+
+    // ⚠️ Intent is validated BEFORE any replay answer, so naming the wrong
+    // sale can never be answered with "already done".
+    const outcome = await seed.t.run(async (ctx) =>
+      resolveRestorationDecision(ctx, {
+        decision: await decisionFor(seed, ctx),
+        evidence: f.evidence,
+        intent: { kind: "SALE_CANCELLED", saleId: unrelated },
+      })
+    );
+    expect(outcome).toEqual({
+      decision: "REFUSE",
+      reason: "that sale is not the one this deal was completed into",
+    });
+  });
+
+  test("two successors from one predecessor is corruption, never a choice", async () => {
+    const seed = await seedDealer("p6");
+    const { f, restored } = await restoredOnce(seed);
+    // A second successor branching from the same predecessor.
+    await seed.t.run((ctx) =>
+      ctx.db.insert("vehicleCommitmentClaims", {
+        orgId: seed.orgId,
+        rootId: restored.rootId,
+        vehicleId: f.vehicleId,
+        evidenceKind: "RESERVATION" as const,
+        status: "ACTIVE" as const,
+        reservationId: f.reservationId,
+        restoredFromClaimId: f.claimId,
+        createdAt: Date.now(),
+        createdBy: seed.userId,
+      })
+    );
+
+    expect(await replay(seed, f)).toEqual({
+      decision: "REFUSE",
+      reason: "this evidence has been reinstated more than once, which is inconsistent state",
+    });
+  });
+
+  test("a foreign-tenant row cannot hide this tenant's successor", async () => {
+    const seed = await seedDealer("p7");
+    const { f, restored } = await restoredOnce(seed);
+
+    // Another dealership in the same database, carrying a corrupt claim that
+    // points at OUR predecessor. On the BARE index it can be returned first.
+    const otherOrg = await seed.t.run((ctx) =>
+      ctx.db.insert("organizations", {
+        name: "Other Dealer",
+        createdAt: Date.now(),
+        commitmentAuthorityVersion: COMMITMENT_AUTHORITY_V1,
+      })
+    );
+    await seed.t.run((ctx) =>
+      ctx.db.insert("vehicleCommitmentClaims", {
+        orgId: otherOrg,
+        rootId: restored.rootId,
+        vehicleId: f.vehicleId,
+        evidenceKind: "RESERVATION" as const,
+        status: "RELEASED" as const,
+        reservationId: f.reservationId,
+        restoredFromClaimId: f.claimId,
+        createdAt: Date.now(),
+        createdBy: seed.userId,
+      })
+    );
+
+    // ⚠️ Reading one row from the bare index and checking its org afterwards
+    // is a post-filter after a bounded read: the foreign row answers "no
+    // successor here", and the real one is never seen.
+    expect(await replay(seed, f)).toEqual({
+      decision: "ALREADY_LIVE",
+      rootId: restored.rootId,
+      claimId: restored.claimId,
+    });
   });
 });
 

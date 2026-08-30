@@ -50,6 +50,7 @@ import {
   requireCurrentEpisode,
   resolveLineageTip,
 } from "./utils/commitmentKernel";
+import { repointSourceToClaim, resolveSourceState } from "./utils/commitmentSources";
 import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 
@@ -1240,42 +1241,13 @@ export async function resolveRestorationDecision(
     return { decision: "REFUSE", reason: "that evidence belongs to a different deal" };
   }
 
-  // ⚠️ ALREADY LIVE IS NOT A REASON TO ATTACH AGAIN. An episode that is still
-  // ACTIVE has nothing to restore, and opening a second ACTIVE claim for the
-  // same evidence on the same car is a duplicate, not an idempotent retry.
-  // A first version returned JOIN_LINEAGE before this check and then dropped
-  // the predecessor when the claim was ACTIVE — which inserted exactly that
-  // duplicate, and passed a test that only counted ROOTS.
-  if (sourceClaim.status === "ACTIVE") {
-    return { decision: "ALREADY_LIVE", rootId: sourceClaim.rootId, claimId: sourceClaim._id };
-  }
-
-  // ⚠️ AN EPISODE IS SUCCEEDED ONCE. If a successor already exists for this
-  // claim, the evidence has already been reinstated and its live episode is
-  // that successor — restoring the same terminal episode again would mint a
-  // second parallel chain from one predecessor.
-  //
-  // Exact index lookup rather than a scan. `by_restored_from` is a BARE index,
-  // so the tenant is proven on the row rather than assumed from the path.
-  const existingSuccessor = await ctx.db
-    .query("vehicleCommitmentClaims")
-    .withIndex("by_restored_from", (q) => q.eq("restoredFromClaimId", sourceClaim._id))
-    .first();
-  if (existingSuccessor && String(existingSuccessor.orgId) === String(decision.orgId)) {
-    return existingSuccessor.status === "ACTIVE"
-      ? {
-          decision: "ALREADY_LIVE",
-          rootId: existingSuccessor.rootId,
-          claimId: existingSuccessor._id,
-        }
-      : {
-          decision: "REFUSE",
-          reason: "this evidence has already been reinstated once and cannot be reinstated again",
-        };
-  }
-
   // 4. The exact reason this episode ended. Claim-level, because with dormant
   // siblings the tip's own ending is a different event from this episode's.
+  //
+  // ⚠️ BEFORE ANY REPLAY ANSWER. A caller naming the WRONG sale must not be
+  // handed "already done" merely because the right sale was restored earlier.
+  // An episode that is still ACTIVE fails both branches here, which is how
+  // "nothing to restore" stays a refusal rather than becoming a success.
   if (intent.kind === "SALE_CANCELLED") {
     if (sourceClaim.status !== "CONSUMED") {
       return { decision: "REFUSE", reason: "that evidence was not completed into a sale" };
@@ -1288,6 +1260,65 @@ export async function resolveRestorationDecision(
     }
   } else if (sourceClaim.status !== "RELEASED") {
     return { decision: "REFUSE", reason: "that evidence was not released" };
+  }
+
+  // The source row's OWN liveness, and the episode it currently names.
+  const sourceState = await resolveSourceState(ctx, decision, {
+    source: evidence.evidenceRef,
+    vehicleId: evidence.vehicleId,
+  });
+
+  // ⚠️ AN EPISODE IS SUCCEEDED ONCE — PROVEN WITH AN EXACT, TENANT-SCOPED
+  // UNIQUENESS PROBE.
+  //
+  // `.first()` on the bare `by_restored_from` could not do this job twice
+  // over: a corrupt foreign-tenant row ordered first HIDES a valid same-tenant
+  // successor, and one row cannot reveal that TWO successors branch from the
+  // same predecessor. `take(2)` on the tenant-scoped range is an exact
+  // 0 / 1 / more-than-one answer.
+  const successors = await ctx.db
+    .query("vehicleCommitmentClaims")
+    .withIndex("by_org_restored_from", (q) =>
+      q.eq("orgId", decision.orgId).eq("restoredFromClaimId", sourceClaim._id)
+    )
+    .take(2);
+  if (successors.length > 1) {
+    return {
+      decision: "REFUSE",
+      reason: "this evidence has been reinstated more than once, which is inconsistent state",
+    };
+  }
+
+  if (successors.length === 1) {
+    const successor = successors[0];
+    // ⚠️ CLAIM STATUS ALONE NEVER MEANS LIVE. Claims stay ACTIVE forever,
+    // including on a terminal root, so an ACTIVE successor proves nothing by
+    // itself. A replay answer requires the whole chain: the claim is ACTIVE,
+    // its root is OPEN, that root is the validated current tip, the SOURCE row
+    // is still live, and the source's maintained pointer names this very
+    // episode.
+    //
+    // Anything short of that is stale or corrupt state, and the honest answer
+    // is a refusal — not an idempotent success that hands back a claim nobody
+    // is holding the car under.
+    const successorRoot = await ctx.db.get(successor.rootId);
+    const proven =
+      successor.status === "ACTIVE" &&
+      successorRoot !== null &&
+      successorRoot.status === "OPEN" &&
+      String(successorRoot._id) === String(tip.root._id) &&
+      sourceState.live &&
+      sourceState.pointer.kind === "NAMES" &&
+      String(sourceState.pointer.claimId) === String(successor._id);
+
+    if (proven) {
+      return { decision: "ALREADY_LIVE", rootId: successor.rootId, claimId: successor._id };
+    }
+    return {
+      decision: "REFUSE",
+      reason:
+        "this evidence has already been reinstated, and its current episode no longer holds this vehicle",
+    };
   }
 
   // 5. I1 — one physical vehicle, at most one OPEN root. Checked against the
@@ -1377,6 +1408,17 @@ export async function restoreCommitment(
     lineage: args.lineage,
     predecessor: sourceClaim,
     target,
+  });
+
+  // ⚠️ THE POINTER MOVES IN THE SAME TRANSACTION AS THE ATTACHMENT. Left
+  // naming the terminal predecessor while an ACTIVE successor exists, the next
+  // restoration would resolve the stale episode as "current" — the exact drift
+  // the maintained pointer was introduced to remove, reintroduced one step
+  // later.
+  await repointSourceToClaim(ctx, args.decision, {
+    source: args.evidence.evidenceRef,
+    vehicleId: args.evidence.vehicleId,
+    claimId,
   });
 
   return {

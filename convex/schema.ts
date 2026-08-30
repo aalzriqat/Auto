@@ -3193,6 +3193,19 @@ export default defineSchema({
     .index("by_root_status", ["rootId", "status"])
     .index("by_consumed_sale", ["consumedBySaleId"])
     .index("by_restored_from", ["restoredFromClaimId"])
+    // SCRUM-208 — SUCCESSOR UNIQUENESS, TENANT-SCOPED.
+    //
+    // ⚠️ THE BARE INDEX ABOVE CANNOT ANSWER THIS QUESTION SAFELY. Asking it
+    // for "does this episode already have a successor" and then checking the
+    // returned row's org is a post-filter after a bounded read: a corrupt
+    // foreign-tenant row ordered first HIDES a valid same-tenant successor,
+    // and the answer comes back "none" for a car that has one.
+    //
+    // Leading with orgId makes the tenant part of the access path, so a
+    // `take(2)` on this range is an exact 0 / 1 / more-than-one uniqueness
+    // probe — and more-than-one is corruption to refuse, never a set to pick
+    // from.
+    .index("by_org_restored_from", ["orgId", "restoredFromClaimId"])
     // No by-deposit index. Provenance is answered by the pointer a
     // `depositVehicleHolds` row carries, not by searching the episodes that
     // share a deposit — an index here would only invite that search back.
