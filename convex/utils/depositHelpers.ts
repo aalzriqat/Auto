@@ -246,14 +246,33 @@ export async function syncVehicleHoldStatus(
   ctx: MutationCtx,
   vehicleId: Id<"vehicles">,
   actorId?: Id<"users">,
+  /**
+   * SCRUM-208 — THE ANSWER, WHEN THE CALLER ALREADY HAS A BETTER ONE.
+   *
+   * ⚠️ THE DEFAULT READER IS KNOWN TO FALSE-NEGATIVE. `hasActiveDepositHold`
+   * delegates to `getActiveDepositHolds`, which `.take(50)`s an index range
+   * and post-filters it, so fifty stale `holdActive: true` rows on one car
+   * hide a live hold behind them — reproduced directly in
+   * `commitmentCutover.test.ts`. That is tolerable for a projection an
+   * operator can see and correct; it is NOT tolerable as the last step of a
+   * canonical restoration, where it would leave a car advertised AVAILABLE
+   * immediately after the authority proved somebody holds it.
+   *
+   * So a canonical caller computes the predicate through the exact ranges and
+   * passes it here, and the PATCH still happens in exactly one place. The
+   * alternative — a second function that decides a vehicle's status — is the
+   * duplicated-writer shape this phase exists to remove.
+   */
+  options: { hasHold?: boolean } = {},
 ): Promise<void> {
   const vehicle = await ctx.db.get(vehicleId);
   if (!vehicle || vehicle.isDeleted) return;
   if (vehicle.status === "SOLD" || vehicle.status === "ARCHIVED") return;
 
   const hasHold =
-    (await hasActiveDepositHold(ctx, vehicleId)) ||
-    (await hasActiveReservationHold(ctx, { orgId: vehicle.orgId, vehicleId }));
+    options.hasHold ??
+    ((await hasActiveDepositHold(ctx, vehicleId)) ||
+      (await hasActiveReservationHold(ctx, { orgId: vehicle.orgId, vehicleId })));
 
   // One resolver decides the target for both this function and the
   // reconcileVehicleHolds migration, so a dry-run preview cannot disagree with

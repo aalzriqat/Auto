@@ -33,6 +33,16 @@ const BASELINE: Record<string, number> = {
   "deposits.ts::insert:depositVehicleHolds": 3,
   "utils/depositHelpers.ts::holdActive": 6,
   "utils/depositRecording.ts::holdActive": 1,
+  // SCRUM-208 c15808 — THE REPRESENTATION CLASS, WRITTEN EXACTLY ONCE.
+  //
+  // This entry appearing is the point. `usesVehicleHoldRows` shipped with
+  // readers on both sides and NO writer, so every deposit the product created
+  // carried `undefined`, every canonical reader correctly failed closed on it,
+  // and the whole canonical range matched nothing. The field now has one
+  // writer, in the one function that inserts a deposit, and the map is
+  // compared exactly — so a SECOND writer for it fails CI, which is the thing
+  // that would let the two representations drift apart again.
+  "utils/depositRecording.ts::usesVehicleHoldRows": 1,
   "utils/saleCancellation.ts::holdActive": 2,
   // vehicles.ts is deliberately ABSENT. Its three raw
   // `ctx.db.patch(reservation.depositId, { holdActive: false })` calls were

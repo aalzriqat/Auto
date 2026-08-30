@@ -57,7 +57,15 @@ type AuditActionType =
   // needs an audit trail: nothing in the ledger would otherwise show who
   // asserted it, or when.
   | "CONFIRM_SUPPLIER_DISBURSEMENT"
-  | "AMEND_SUPPLIER_DISBURSEMENT_ADVICE";
+  | "AMEND_SUPPLIER_DISBURSEMENT_ADVICE"
+  // What the vehicle commitment authority did after a sale was cancelled and
+  // its deposit money came back. Moves no money, and that is exactly why it
+  // needs a trail: whether the customer's DEAL was restored, blocked by a
+  // rival, left for a human to repair, or not examined at all is otherwise
+  // visible only as the absence of a change nobody recorded. The deferred
+  // half of the same decision lands on `pendingAccountingEvents`; this is the
+  // synchronous half, which has no queue row to land on.
+  | "SETTLE_COMMITMENT_AUTHORITY";
 
 // ─── Internal: write audit entry ─────────────────────────────────────────────
 

@@ -158,6 +158,11 @@ export const create = mutation({
           actorId: user._id,
           now,
           sourceLabel: `quote ${args.quoteId}`,
+          // SCRUM-208 — THE SAME CONDITION THAT DECIDES WHETHER HOLD ROWS ARE
+          // WRITTEN, read once and stamped on the row. The `> 1` test below is
+          // the definition of the sliced representation; expressing it twice
+          // is how the discriminator and the rows it describes drift apart.
+          usesVehicleHoldRows: depositVehicleItems.length > 1,
         });
 
         // SCRUM-195: record WHOSE deal now holds each car, on the strength of

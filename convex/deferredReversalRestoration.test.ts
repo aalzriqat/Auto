@@ -18,7 +18,7 @@ import { Id } from "./_generated/dataModel";
 import { completeDeferredReversal } from "./utils/depositApplications";
 import { reinstateDirectDepositHold } from "./utils/commitmentWriters";
 import { settleFreedHoldsAuthority } from "./accountingOutbox";
-import { acquireVehicle } from "./commitments";
+import { acquireVehicle, consumeRootForSale } from "./commitments";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { COMMITMENT_AUTHORITY_V1 } from "./utils/commitmentKernel";
 
@@ -138,6 +138,33 @@ async function deferredDirectCancellation(seed: Seed) {
       appliedBy: seed.userId,
     })
   );
+  // ⚠️ A REAL DEAL BEHIND THE MONEY, TERMINALIZED BY THE REAL WRITER.
+  //
+  // This fixture used to stop at the deposit row, so the car it described had
+  // no commitment root at all — and the contract that asserted the car "comes
+  // back" was passing against a vehicle no deal had ever held. Restoration
+  // needs something to restore, and `consumeRootForSale` is what a completed
+  // sale actually does: it patches the ROOT and leaves the episode ACTIVE.
+  await seed.t.run((ctx) =>
+    acquireVehicle(ctx, {
+      orgId: seed.orgId,
+      vehicleId,
+      customerId: seed.customerId,
+      createdBy: seed.userId,
+      evidence: { kind: "DEPOSIT", depositId },
+      lineage: { depositId },
+    })
+  );
+  await seed.t.run((ctx) =>
+    consumeRootForSale(ctx, {
+      orgId: seed.orgId,
+      vehicleId,
+      saleId,
+      reason: "sale completed",
+      decisionNow: Date.now(),
+    })
+  );
+
   return { vehicleId, saleId, depositId, reversalKey: `reversed_${key}` };
 }
 
@@ -152,7 +179,7 @@ const completion = async (seed: Seed, reversalKey: string) =>
 
 const settle = async (seed: Seed, sources: Awaited<ReturnType<typeof completion>>) =>
   await seed.t.run((ctx) =>
-    settleFreedHoldsAuthority(ctx, seed.orgId, sources, Date.now())
+    settleFreedHoldsAuthority(ctx, seed.orgId, sources, Date.now(), seed.userId)
   );
 
 describe("while the reversing journal is only queued", () => {

@@ -17,6 +17,14 @@ import {
   hasActiveReservationHold,
 } from "./depositHelpers";
 import { reverseDepositApplicationsForSale } from "./depositApplications";
+import {
+  DeferredAuthorityOutcome,
+  authorityOutcomeDetail,
+  restoreAuthorityAfterReversal,
+  worstAuthorityOutcome,
+} from "../commitments";
+import { beginUserRun } from "./commitmentKernel";
+import { auditLog } from "../financialAudit";
 
 async function getActiveReceivableAllocations(
   ctx: MutationCtx,
@@ -423,6 +431,12 @@ async function reinstateAppliedDeposits(
     reversalDate: args.reversalDate,
   });
 
+  // ⚠️ ONE CLOCK AND ONE ACTOR FOR EVERY AUTHORITY DECISION IN THIS
+  // CANCELLATION, taken before anything is consulted, so two cars on the same
+  // quote cannot be judged against different instants.
+  const run = beginUserRun(args.actorId, args.reversalDate);
+  const authorityOutcomes: DeferredAuthorityOutcome[] = [];
+
   const touchedDeposits = new Set<string>();
   for (const application of reversed) {
     touchedDeposits.add(application.depositId.toString());
@@ -475,8 +489,60 @@ async function reinstateAppliedDeposits(
       // if it were.
       if (application.journalReversed) {
         await reactivateAllVehiclesForDeposit(ctx, deposit);
+
+        // ⚠️ SCRUM-208 c15808 — THE MONEY CAME BACK, SO THE DEAL COMES BACK.
+        //
+        // This is the synchronous half of the cancellation spine: the
+        // reversing journal already exists, so `reopenDepositAfterReversal`
+        // above has just made this deposit hold its car again. Without what
+        // follows, the customer's root stays CONSUMED, `resolveOwnership`
+        // reports the car FREE, and a rival's `acquireVehicle` succeeds on a
+        // car whose original buyer's deposit reads `holdActive: true`. That is
+        // the defect SCRUM-195 exists to prevent, reintroduced one layer up.
+        //
+        // The deferred half lives in `accountingOutbox.settleOneReversalSource`
+        // and calls the SAME function, so the two paths cannot drift.
+        authorityOutcomes.push(
+          await restoreAuthorityAfterReversal(ctx, {
+            run,
+            orgId: args.orgId,
+            vehicleId: application.vehicleId,
+            source: { kind: "DEPOSIT", depositId: deposit._id },
+            saleId: args.saleId,
+            createdBy: args.actorId,
+          })
+        );
       }
     }
+  }
+
+  // ⚠️ RECORDED DURABLY, NOT RETURNED AND DROPPED. The deferred path has
+  // `pendingAccountingEvents.authorityOutcome` to land on; the synchronous one
+  // has no queue row at all — `journalReversed` is precisely the case where no
+  // entry was ever queued — so without this an authority result a human must
+  // act on would exist only in the shape of the data it failed to change.
+  //
+  // Written only when a restoration was actually attempted. A cancellation
+  // with no direct deposit behind it has nothing to report, and a row saying
+  // so on every cancellation would bury the ones that matter.
+  const worst = worstAuthorityOutcome(authorityOutcomes);
+  if (worst) {
+    const detail = authorityOutcomeDetail(worst);
+    await auditLog(ctx, {
+      orgId: args.orgId,
+      actorId: args.actorId,
+      actionType: "SETTLE_COMMITMENT_AUTHORITY",
+      resourceType: "sales",
+      resourceId: args.saleId,
+      description: detail
+        ? `Commitment authority after cancellation: ${worst.outcome} — ${detail}`
+        : `Commitment authority after cancellation: ${worst.outcome}`,
+      after: {
+        outcome: worst.outcome,
+        ...(detail ? { detail } : {}),
+        vehiclesSettled: authorityOutcomes.length,
+      },
+    });
   }
 
   if (!args.quoteId) return;

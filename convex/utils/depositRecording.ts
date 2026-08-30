@@ -66,6 +66,31 @@ export async function recordHeldDeposit(
     notes?: string;
     idempotencyKey?: string;
     sourceLabel: string;
+    /**
+     * SCRUM-208 — WHICH REPRESENTATION HOLDS THIS DEPOSIT'S CARS.
+     *
+     * ⚠️ REQUIRED, AND WRITTEN IN THE INSERT. This is the canonical
+     * authority's discriminator between the two shapes a deposit hold can
+     * take:
+     *
+     *   false — DIRECT: the row's own `holdActive` IS the hold on its car.
+     *   true  — SLICED: `depositVehicleHolds` rows are, one per car.
+     *
+     * It was added to the schema with readers on both sides and NO WRITER, so
+     * every deposit this product creates carried `undefined` — which those
+     * readers correctly treat as "predates the canonical model" and fail
+     * closed on. The canonical range then matched nothing, no pointer was ever
+     * stamped, and no deposit could be restored. A field with readers and no
+     * writer is not a half-built feature; it is a feature that is inert on
+     * every real row while its tests pass on hand-written ones.
+     *
+     * ⚠️ NOT DERIVED HERE. Only the caller knows whether it is about to write
+     * hold rows — this function cannot see the quote's line items, and
+     * guessing from `vehicleId` alone would call every multi-vehicle deposit
+     * DIRECT. It is passed in, and it is not optional, so a new door cannot
+     * omit it and silently create another inert row.
+     */
+    usesVehicleHoldRows: boolean;
   },
 ): Promise<Id<"deposits">> {
   const now = args.now ?? Date.now();
@@ -92,6 +117,10 @@ export async function recordHeldDeposit(
     method: args.method,
     status: "HELD",
     holdActive: true,
+    // Stamped in the insert, never patched afterwards: a deposit that exists
+    // for even one write without its representation class is a row the
+    // canonical readers must refuse.
+    usesVehicleHoldRows: args.usesVehicleHoldRows,
     idempotencyKey: args.idempotencyKey,
     notes: args.notes,
     createdBy: args.actorId,

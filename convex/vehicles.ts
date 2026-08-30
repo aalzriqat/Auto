@@ -1710,6 +1710,10 @@ export const createReservation = mutation({
         actorId: user._id,
         now,
         sourceLabel: `reservation ${reservationId}`,
+        // A reservation's deposit holds exactly the car it was taken on, and
+        // this door writes no `depositVehicleHolds` rows — so the row's own
+        // `holdActive` IS the hold. DIRECT.
+        usesVehicleHoldRows: false,
       });
       await ctx.db.patch(reservationId, { depositId });
       reservationDepositId = depositId;

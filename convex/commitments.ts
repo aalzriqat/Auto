@@ -40,15 +40,23 @@
  */
 
 import { ConvexError } from "convex/values";
-import { hasActiveDepositHold } from "./utils/depositHelpers";
+import {
+  hasActiveDepositHold,
+  resolveHoldTargetStatus,
+  syncVehicleHoldStatus,
+} from "./utils/depositHelpers";
 import {
   assertPrincipalMatches,
   AuthorityDecisionContext,
+  AuthorityRunContext,
   EvidenceEpisode,
+  hasCanonicalDepositHold,
+  hasCanonicalReservationHold,
   PrincipalBoundEvidence,
   requireCanonicalAuthority,
   requireCurrentEpisode,
   resolveLineageTip,
+  tryDecisionContext,
 } from "./utils/commitmentKernel";
 import { resolveCanonicalBinding, SourceRef, stampAcquisitionPointer } from "./utils/commitmentSources";
 import { IN_FLIGHT_FINANCE_STATUSES as FINANCE_IN_FLIGHT } from "./utils/financeStatuses";
@@ -963,9 +971,33 @@ export async function attachEpisode(
   const { predecessor } = args;
   if (predecessor) {
     if (predecessor.status === "ACTIVE") {
-      throw new Error(
-        `claim ${predecessor._id} is still ACTIVE — a live episode is not succeeded, it is resolved`
-      );
+      // ⚠️ SCRUM-208 c15808 — AN ACTIVE CLAIM ON A TERMINAL ROOT IS SUCCEEDABLE.
+      //
+      // This guard used to refuse any ACTIVE predecessor outright, which made
+      // restoration structurally unreachable on the state finalization
+      // actually produces. `consumeRootForSale` patches the ROOT and nothing
+      // else, and Phase 2's certified contract F.12 pins that deliberately:
+      // finalization "neither scans nor patches" the episodes, so a deal with
+      // sixty live episodes does not become a sixty-row write. Every claim on
+      // a completed sale is therefore still ACTIVE.
+      //
+      // That is exactly invariant I10 at the top of this file — a claim
+      // pointing at a non-OPEN root is stale bookkeeping, not ownership. The
+      // refusal below now asks the question I10 already answers: is the DEAL
+      // still live? A live episode on a live deal is resolved, not succeeded.
+      // A live episode on a finished deal is the ordinary thing a restoration
+      // continues.
+      const predecessorRoot = await ctx.db.get(predecessor.rootId);
+      if (!predecessorRoot || String(predecessorRoot.orgId) !== String(args.orgId)) {
+        throw new Error(
+          `cannot prove predecessor ${predecessor._id} belongs to a deal in this dealership`
+        );
+      }
+      if (predecessorRoot.status === "OPEN") {
+        throw new Error(
+          `claim ${predecessor._id} is ACTIVE on OPEN root ${predecessorRoot._id} — a live episode is not succeeded, it is resolved`
+        );
+      }
     }
     // ⚠️ SAME ROOT, OR THE SAME LINEAGE — PROVEN, NOT ASSUMED.
     //
@@ -1245,12 +1277,45 @@ export async function resolveRestorationDecision(
     };
   }
 
-  /** Did this episode end for the exact reason the caller gave? */
-  const endedForThisReason = (claim: Doc<"vehicleCommitmentClaims">): boolean =>
-    intent.kind === "SALE_CANCELLED"
-      ? claim.status === "CONSUMED" &&
-        String(claim.consumedBySaleId ?? "") === String(intent.saleId)
-      : claim.status === "RELEASED";
+  /**
+   * Did this deal end for the exact reason the caller gave?
+   *
+   * ⚠️ SCRUM-208 c15808 — A CANCELLED SALE IS A FACT ABOUT THE ROOT, NOT THE
+   * EPISODE. This asked `claim.status === "CONSUMED" && claim.consumedBySaleId
+   * === saleId`, a state real finalization never produces: `consumeRootForSale`
+   * patches the ROOT and nothing else, and Phase 2's certified F.12 pins that
+   * deliberately — completing a deal must not become one write per episode. So
+   * every claim on a completed sale is still ACTIVE, this predicate was false
+   * for every real cancellation, and restoration could not have restored
+   * anything. The fixtures that made it pass were hand-patching the claim into
+   * a shape production has no writer for.
+   *
+   * Invariant I10 at the top of this file already says which row is
+   * authoritative: a claim pointing at a non-OPEN root is stale bookkeeping,
+   * not ownership. The ROOT carries the sale.
+   *
+   * An ordinary release is a different fact and stays claim-level: releasing
+   * ONE piece of evidence ends that evidence and nothing else, and the deal may
+   * legitimately still be open on another basis.
+   */
+  const endingProof = (
+    claim: Doc<"vehicleCommitmentClaims">,
+    root: Doc<"commitmentRoots">
+  ): { ok: true } | { ok: false; reason: string } => {
+    if (intent.kind === "SALE_CANCELLED") {
+      if (root.status !== "CONSUMED") {
+        return { ok: false, reason: "that deal was not completed into a sale" };
+      }
+      if (String(root.consumedBySaleId ?? "") !== String(intent.saleId)) {
+        return { ok: false, reason: "that sale is not the one this deal was completed into" };
+      }
+      return { ok: true };
+    }
+    if (claim.status !== "RELEASED") {
+      return { ok: false, reason: "that evidence was not released" };
+    }
+    return { ok: true };
+  };
 
   // ⚠️ THE POINTER NAMES A LIVE EPISODE — this is a replay, not a restoration.
   //
@@ -1280,10 +1345,32 @@ export async function resolveRestorationDecision(
     reason: "this evidence has been reinstated more than once, which is inconsistent state",
   };
 
-  if (binding.claim.status === "ACTIVE") {
+  // ⚠️ THE TERMINAL FACT IS TESTED FIRST, AND THE REPLAY IS THE EXCEPTION.
+  //
+  // Keying this branch on `claim.status === "ACTIVE"` was wrong twice over.
+  // Under c15808 the predecessor of a cancelled sale IS ACTIVE, so the live
+  // branch swallowed the ordinary case; and keying it on the root instead
+  // would refuse a genuinely RELEASED episode sitting on a still-OPEN root —
+  // one basis of several ending, which is a lawful JOIN_LINEAGE.
+  //
+  // So the question is neither: does THIS record carry the ending the caller
+  // named? If it does, this is a restoration. If it does not, the one lawful
+  // way that happens is a REPLAY — the restoration already ran, the maintained
+  // pointer moved onto the successor episode, and the ending now sits on its
+  // predecessor.
+  const proof = endingProof(binding.claim, binding.root);
+  if (!proof.ok) {
     const predecessorId = binding.claim.restoredFromClaimId;
+    // Not terminal, and not a successor either: nothing here ended for the
+    // reason given. Reported with the ending's own reason rather than as a
+    // replay, so whoever hits it is not sent looking for corruption — except
+    // for the one case where a plainer answer exists. A live episode on a live
+    // deal is not "that evidence was not released"; it is evidence that never
+    // stopped holding the car, and saying so is what a person can act on.
     if (!predecessorId) {
-      return { decision: "REFUSE", reason: "that evidence is still live and has nothing to restore" };
+      return binding.claim.status === "ACTIVE" && binding.root.status === "OPEN"
+        ? { decision: "REFUSE", reason: "that evidence is still live and has nothing to restore" }
+        : { decision: "REFUSE", reason: proof.reason };
     }
     if ((await successorsOf(predecessorId)).length > 1) return branched;
 
@@ -1291,20 +1378,31 @@ export async function resolveRestorationDecision(
     if (!predecessor || String(predecessor.orgId) !== String(decision.orgId)) {
       return { decision: "REFUSE", reason: "the episode this one succeeded no longer exists" };
     }
+    const predecessorRoot = await ctx.db.get(predecessor.rootId);
+    if (!predecessorRoot || String(predecessorRoot.orgId) !== String(decision.orgId)) {
+      return { decision: "REFUSE", reason: "the deal this evidence succeeded no longer exists" };
+    }
+    // ⚠️ SAME LINEAGE, PROVEN. Two roots that merely both lack a lineage id
+    // are not thereby related: `undefined === undefined` would marry two
+    // unrelated deals, which is the exact shape `attachEpisode` refuses.
+    if (
+      predecessorRoot.lineageRootId === undefined ||
+      binding.root.lineageRootId === undefined ||
+      String(predecessorRoot.lineageRootId) !== String(binding.root.lineageRootId)
+    ) {
+      return {
+        decision: "REFUSE",
+        reason: "the deal's history is inconsistent (a successor left its lineage)",
+      };
+    }
     // ⚠️ INTENT FIRST, AND ITS OWN REASON. Naming the wrong sale is a
     // different failure from a stale episode, and reporting it as the latter
     // would send whoever hit it looking for corruption that is not there.
-    if (!endedForThisReason(predecessor)) {
-      return {
-        decision: "REFUSE",
-        reason:
-          intent.kind === "SALE_CANCELLED"
-            ? predecessor.status === "CONSUMED"
-              ? "that sale is not the one this deal was completed into"
-              : "that evidence was not completed into a sale"
-            : "that evidence was not released",
-      };
+    const predecessorProof = endingProof(predecessor, predecessorRoot);
+    if (!predecessorProof.ok) {
+      return { decision: "REFUSE", reason: predecessorProof.reason };
     }
+
     const proven =
       binding.live &&
       binding.root.status === "OPEN" &&
@@ -1316,20 +1414,6 @@ export async function resolveRestorationDecision(
       decision: "REFUSE",
       reason:
         "this evidence has already been reinstated, and its current episode no longer holds this vehicle",
-    };
-  }
-
-  // The exact reason THIS episode ended. Claim-level, because with dormant
-  // siblings the tip's own ending is a different event from this episode's.
-  if (!endedForThisReason(binding.claim)) {
-    return {
-      decision: "REFUSE",
-      reason:
-        intent.kind === "SALE_CANCELLED"
-          ? binding.claim.status === "CONSUMED"
-            ? "that sale is not the one this deal was completed into"
-            : "that evidence was not completed into a sale"
-          : "that evidence was not released",
     };
   }
 
@@ -1392,8 +1476,6 @@ export async function restoreCommitment(
     source: SourceRef;
     vehicleId: Id<"vehicles">;
     intent: RestorationIntent;
-    /** Lineage PROOF for the new episode. It never reaches root identity. */
-    lineage: CommitmentLineage;
     createdBy: Id<"users">;
   }
 ): Promise<RestorationOutcome> {
@@ -1435,7 +1517,15 @@ export async function restoreCommitment(
     // it. Two independently composable identities could name different rows;
     // one identity cannot disagree with itself.
     evidence: bound.binding.evidence,
-    lineage: args.lineage,
+    // ⚠️ NOT A CALLER INPUT. Root identity is copied from the predecessor and
+    // adoption is unreachable from here, so the only thing lineage can still
+    // do is set the new EPISODE's quote — and the honest answer to "which
+    // quote is this episode on" is the one the episode being continued was on.
+    // Taking it from the caller would let whoever happens to be cancelling a
+    // sale re-quote somebody else's deal as a side effect of a refund.
+    lineage: {
+      ...(bound.binding.claim.quoteId ? { quoteId: bound.binding.claim.quoteId } : {}),
+    },
     predecessor: bound.binding.claim,
     target,
     source: args.source,
@@ -1656,27 +1746,68 @@ export async function hasLiveCommitmentBasis(
      * guard never fires.
      */
     excludeKinds?: ReadonlyArray<"DEPOSIT" | "RESERVATION" | "FINANCE">;
+    /**
+     * SCRUM-208 c15808 — READ THE CANONICAL RANGES INSTEAD OF THE LEGACY ONES.
+     *
+     * ⚠️ A CANONICAL AUTHORITY WRITE MAY NOT REST ON THE DEFECTIVE READER.
+     * `hasActiveDepositHold` delegates to `getActiveDepositHolds`, which
+     * `.take(50)`s an index range and post-filters it — so fifty stale
+     * `holdActive: true` rows on one car hide a live hold behind them. That
+     * false negative is reproduced directly in `commitmentCutover.test.ts`
+     * against this very reader. Reaching it from `releaseRootIfNoLiveBasis`
+     * means an authority that answers "nothing holds this car" and RELEASES a
+     * root while a rival's paid deposit is live underneath.
+     *
+     * When a canonical decision is supplied every deposit and reservation
+     * basis is read through the exact ranges, where every row in range is by
+     * construction live. Absent, the legacy readers stand unchanged — a legacy
+     * org has no canonical ranges to read and must keep working exactly as it
+     * did.
+     */
+    decision?: AuthorityDecisionContext;
   }
 ): Promise<boolean> {
   const skip = (kind: "DEPOSIT" | "RESERVATION" | "FINANCE") =>
     args.excludeKinds !== undefined && args.excludeKinds.includes(kind);
 
+  // ⚠️ ONE CLOCK, OR NONE. A decision carrying a different instant from the one
+  // this call was told to judge against would silently answer a second
+  // question. That is a programming fault, not a business condition.
+  const canonical =
+    args.decision !== undefined && args.decision.authorityVersion === "V1"
+      ? args.decision
+      : undefined;
+  if (canonical && canonical.now !== args.decisionNow) {
+    throw new Error(
+      `hasLiveCommitmentBasis: decision clock ${canonical.now} disagrees with decisionNow ${args.decisionNow}`
+    );
+  }
+
   // DEPOSIT — the product's own definition of a deposit hold, not a second
   // opinion about it. On a multi-vehicle quote a row holds a car only while
   // that car's own share is live, which `getActiveDepositHolds` already knows.
-  if (!skip("DEPOSIT") && (await hasActiveDepositHold(ctx, args.vehicleId))) return true;
+  if (!skip("DEPOSIT")) {
+    const held = canonical
+      ? await hasCanonicalDepositHold(ctx, canonical, args.vehicleId)
+      : await hasActiveDepositHold(ctx, args.vehicleId);
+    if (held) return true;
+  }
 
   // RESERVATION — the certified predicate, with the decision's own clock. An
   // ACTIVE row past its expiry is NOT live, merely unswept: the sweep's own
   // query is the spec, and `.take(100)` means a backlog can stretch that window
   // well past the cron.
   if (!skip("RESERVATION")) {
-    for await (const reservation of ctx.db
-      .query("vehicleReservations")
-      .withIndex("by_org_vehicle_status", (q) =>
-        q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId).eq("status", "ACTIVE")
-      )) {
-      if (reservationIsLive(reservation, args.decisionNow)) return true;
+    if (canonical) {
+      if (await hasCanonicalReservationHold(ctx, canonical, args.vehicleId)) return true;
+    } else {
+      for await (const reservation of ctx.db
+        .query("vehicleReservations")
+        .withIndex("by_org_vehicle_status", (q) =>
+          q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId).eq("status", "ACTIVE")
+        )) {
+        if (reservationIsLive(reservation, args.decisionNow)) return true;
+      }
     }
   }
 
@@ -1786,12 +1917,51 @@ export async function consumeRootForSale(
  * caller records it durably.
  */
 export type DeferredAuthorityOutcome =
-  /** Authority is consistent: the car was freed, or was already free. */
-  | { outcome: "RESTORED" }
+  /**
+   * The customer's commitment is LIVE again, and it was verified so before
+   * this value was returned: a successor episode exists, its root is OPEN, the
+   * source row is live, the maintained pointer names that episode, and the
+   * vehicle projection agrees.
+   *
+   * ⚠️ SCRUM-208 c15808 — THIS LITERAL USED TO MEAN THREE DIFFERENT THINGS.
+   * It was returned for "the car was freed", for "the car was already free",
+   * and for "nothing needed doing" — none of which is a restoration, and all
+   * of which were being written into `pendingAccountingEvents.authorityOutcome`
+   * as if a customer's deal had come back. An audit field that says RESTORED
+   * where nothing was restored is worse than no field: the pre-Phase-3 state
+   * was merely silent, and this asserted something false. RESTORED now means
+   * restored, and the other cases have their own names below.
+   */
+  | {
+      outcome: "RESTORED";
+      rootId: Id<"commitmentRoots">;
+      claimId: Id<"vehicleCommitmentClaims">;
+    }
+  /**
+   * There was nothing to restore, and that is a lawful answer — the money had
+   * already left the business, the deal never ended for the reason given, the
+   * car has since been sold, or the source predates the canonical model.
+   *
+   * The accounting reversal stands either way. This is not a failure; it is
+   * the honest name for "the authority did not need to act".
+   */
+  | { outcome: "ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS"; detail: string }
+  /**
+   * The organization is not on the canonical authority, so no canonical
+   * restoration could be attempted.
+   *
+   * ⚠️ THE MAJORITY CASE, AND IT MUST NOT MASQUERADE AS EITHER NEIGHBOUR.
+   * Activation is per organization and SCRUM-201 owns the cutover, so most
+   * orgs will report this for as long as that is true. Reporting it as
+   * RESTORED would claim work nobody did; reporting it as NO_RESTORABLE_BASIS
+   * would claim the records were examined and found wanting, when they were
+   * never examined at all.
+   */
+  | { outcome: "AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE"; detail: string }
   /**
    * Another basis legitimately still holds the car — a finance application
-   * mid-flight, a live reservation. The reversal stands and the vehicle does
-   * not move. **A rival never has its vehicle taken.**
+   * mid-flight, a live reservation, a rival deal. The reversal stands and the
+   * vehicle does not move. **A rival never has its vehicle taken.**
    */
   | { outcome: "ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL"; rootId: Id<"commitmentRoots"> }
   /**
@@ -1800,6 +1970,53 @@ export type DeferredAuthorityOutcome =
    * identically forever with a message nobody can distinguish.
    */
   | { outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS"; detail: string };
+
+/** The detail string an outcome carries, when it carries one. */
+export function authorityOutcomeDetail(outcome: DeferredAuthorityOutcome): string | undefined {
+  return "detail" in outcome ? outcome.detail : undefined;
+}
+
+/**
+ * Which outcome must survive when one cancellation settles several cars.
+ *
+ * A condition needing human repair outranks one that merely reports the car is
+ * still legitimately held, which outranks "nothing was examined", which
+ * outranks "examined, nothing to do", which outranks a clean restoration.
+ *
+ * Defined beside the taxonomy rather than in the outbox, because BOTH
+ * cancellation paths rank outcomes and a second copy of this order is a second
+ * opinion about which condition is worse.
+ */
+export const AUTHORITY_SEVERITY: Record<DeferredAuthorityOutcome["outcome"], number> = {
+  RESTORED: 0,
+  // Examined, and there was lawfully nothing to put back.
+  ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS: 1,
+  // NOT examined at all — the organization is not on the canonical authority.
+  // Ranked above "nothing to restore" because the two are different claims:
+  // one says the records were read, the other says they were not.
+  AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE: 2,
+  ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL: 3,
+  ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS: 4,
+};
+
+/**
+ * The ONE outcome that must be recorded for a set of them.
+ *
+ * ⚠️ THE ORDER ROWS ARRIVE IN MUST NOT MATTER. Recording a clean restoration
+ * over a blocked one because the clean car happened to be settled last is how
+ * a repair condition disappears.
+ */
+export function worstAuthorityOutcome(
+  outcomes: ReadonlyArray<DeferredAuthorityOutcome>
+): DeferredAuthorityOutcome | null {
+  let worst: DeferredAuthorityOutcome | null = null;
+  for (const outcome of outcomes) {
+    if (!worst || AUTHORITY_SEVERITY[outcome.outcome] > AUTHORITY_SEVERITY[worst.outcome]) {
+      worst = outcome;
+    }
+  }
+  return worst;
+}
 
 /**
  * Settle the vehicle authority after a reversal has posted. **Never throws.**
@@ -1817,6 +2034,8 @@ export async function settleAuthorityAfterReversal(
     /** ONE clock reading for the whole decision. */
     decisionNow: number;
     reason: string;
+    /** Canonical orgs read the exact ranges. See `hasLiveCommitmentBasis`. */
+    decision?: AuthorityDecisionContext;
   }
 ): Promise<DeferredAuthorityOutcome> {
   const before = await resolveOwnership(ctx, args.orgId, args.vehicleId);
@@ -1829,17 +2048,30 @@ export async function settleAuthorityAfterReversal(
       detail: `${before.roots.length} open commitment roots on this vehicle`,
     };
   }
-  if (before.kind === "FREE") return { outcome: "RESTORED" };
+  // ⚠️ FREE IS NOT RESTORED. Nothing holds this car and nothing here put
+  // anything back — see the taxonomy note on RESTORED.
+  if (before.kind === "FREE") {
+    return {
+      outcome: "ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS",
+      detail: "no commitment root holds this vehicle",
+    };
+  }
 
   await releaseRootIfNoLiveBasis(ctx, {
     orgId: args.orgId,
     vehicleId: args.vehicleId,
     reason: args.reason,
     decisionNow: args.decisionNow,
+    ...(args.decision ? { decision: args.decision } : {}),
   });
 
   const after = await resolveOwnership(ctx, args.orgId, args.vehicleId);
-  if (after.kind === "FREE") return { outcome: "RESTORED" };
+  if (after.kind === "FREE") {
+    return {
+      outcome: "ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS",
+      detail: "the deal was closed because nothing still held this vehicle",
+    };
+  }
   if (after.kind === "AMBIGUOUS") {
     return {
       outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS",
@@ -1850,6 +2082,152 @@ export async function settleAuthorityAfterReversal(
   return { outcome: "ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL", rootId: after.root._id };
 }
 
+/**
+ * SCRUM-208 c15808 — THE PRODUCTION RESTORATION SPINE. One entry point, used
+ * by BOTH cancellation paths.
+ *
+ * The lifecycle the owner specified, end to end, through real business doors:
+ *
+ *   real deposit creation      → representation class + current pointer written
+ *   real sale completion       → the ROOT is consumed by that exact sale
+ *   real cancellation/reversal → the source row becomes live again
+ *   here                       → successor claim + OPEN root + moved pointer
+ *                                + a truthful vehicle projection
+ *
+ * ## What commits, and what does not
+ *
+ * All of it, or none of it. `restoreCommitment` re-reads its own binding and
+ * throws unless the source is live, the successor claim is attached, the
+ * pointer names it and the root is OPEN; this function adds the projection to
+ * that postcondition. A Convex mutation is one transaction, so a throw here
+ * un-does the whole thing — including the reversal completion that called it,
+ * which is then retried by the outbox from a clean state.
+ *
+ * ⚠️ AND THAT IS A DELIBERATE NARROWING OF "NEVER THROWS". The old contract —
+ * an authority result is not an accounting failure — is preserved for every
+ * BUSINESS answer: a legacy org, a rival, ambiguity, nothing to restore and a
+ * refused binding are all returned as typed values and never thrown. What can
+ * still throw is CORRUPTION: canonical rows that contradict each other, or a
+ * postcondition that does not hold after the writes. Catching those would be
+ * strictly worse, because catching does NOT roll back the writes already made
+ * — it would commit a half-restoration and record it as a clean outcome.
+ */
+export async function restoreAuthorityAfterReversal(
+  ctx: MutationCtx,
+  args: {
+    /** ONE clock reading and ONE actor for the whole run. */
+    run: AuthorityRunContext;
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    /** The exact source row — a sliced deposit names its hold row. */
+    source: SourceRef;
+    /** The exact sale whose cancellation is being applied. */
+    saleId: Id<"sales">;
+    /** Who the restored episode is recorded as having been opened by. */
+    createdBy: Id<"users">;
+  }
+): Promise<DeferredAuthorityOutcome> {
+  const context = await tryDecisionContext(ctx, args.run, args.orgId);
+  if (context.kind === "WITHHELD") {
+    return { outcome: "AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE", detail: context.reason };
+  }
+  const { decision } = context;
+  if (decision.authorityVersion !== "V1") {
+    // ⚠️ RETURNED, NEVER THROWN, AND NEVER FALLEN BACK FROM. Most
+    // organizations are legacy today. Throwing would abort a cancellation
+    // whose accounting is already correct; falling back to the legacy readers
+    // would answer a canonical question with data the canonical model has not
+    // been established over, and record it as canonical.
+    return {
+      outcome: "AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE",
+      detail: "this dealership is not on the canonical commitment authority",
+    };
+  }
+
+  // ⚠️ CHECKED BEFORE ANY WRITE, so the projection postcondition below cannot
+  // be unsatisfiable. `syncVehicleHoldStatus` deliberately declines to touch a
+  // SOLD or ARCHIVED car, so restoring a commitment onto one would leave a
+  // projection that can never be made truthful and an outbox entry that
+  // retries forever. A car sold to somebody else is a business answer.
+  const vehicle = await ctx.db.get(args.vehicleId);
+  if (!vehicle || vehicle.isDeleted === true || vehicle.orgId !== args.orgId) {
+    return {
+      outcome: "ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS",
+      detail: "that vehicle record is no longer available in this dealership",
+    };
+  }
+  if (vehicle.status === "SOLD" || vehicle.status === "ARCHIVED") {
+    return {
+      outcome: "ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS",
+      detail: `the vehicle is ${vehicle.status}`,
+    };
+  }
+
+  const restored = await restoreCommitment(ctx, {
+    decision,
+    source: args.source,
+    vehicleId: args.vehicleId,
+    intent: { kind: "SALE_CANCELLED", saleId: args.saleId },
+    createdBy: args.createdBy,
+  });
+
+  switch (restored.decision) {
+    case "RIVAL":
+      return {
+        outcome: "ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL",
+        rootId: restored.rivalRootId,
+      };
+    case "AMBIGUOUS":
+      return {
+        outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS",
+        detail: "two open commitment roots on this vehicle",
+      };
+    case "REFUSE":
+      return {
+        outcome: "ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS",
+        detail: restored.reason,
+      };
+    case "ALREADY_LIVE":
+    case "RESTORED":
+      break;
+  }
+
+  // ⚠️ THE PROJECTION IS PART OF THE SAME POSTCONDITION, AND IT IS COMPUTED
+  // FROM THE CANONICAL RANGES. Left to its own readers `syncVehicleHoldStatus`
+  // would consult `getActiveDepositHolds`, whose capped post-filtered read can
+  // answer "nothing holds this car" moments after the authority proved
+  // somebody does — leaving the restored car advertised as available.
+  const held =
+    (await hasCanonicalDepositHold(ctx, decision, args.vehicleId)) ||
+    (await hasCanonicalReservationHold(ctx, decision, args.vehicleId));
+  if (!held) {
+    // The binding said the source is live and the exact ranges say nothing
+    // holds the car. Those cannot both be true.
+    throw new ConvexError(
+      "This vehicle's hold records disagree with each other, so the restoration was not applied."
+    );
+  }
+  await syncVehicleHoldStatus(ctx, args.vehicleId, args.createdBy, { hasHold: true });
+
+  const after = await ctx.db.get(args.vehicleId);
+  if (!after) {
+    throw new ConvexError(
+      "This vehicle's records did not settle consistently, so the restoration was not applied."
+    );
+  }
+  // Re-READ, not assumed from the call above. `resolveHoldTargetStatus` is the
+  // one definition of what a held car's status should be, so asking it to
+  // name a remaining change is exactly the assertion "nothing is left to do".
+  const remaining = resolveHoldTargetStatus(after, true);
+  if (remaining !== null && remaining !== after.status) {
+    throw new ConvexError(
+      "This vehicle's records did not settle consistently, so the restoration was not applied."
+    );
+  }
+
+  return { outcome: "RESTORED", rootId: restored.rootId, claimId: restored.claimId };
+}
+
 export async function releaseRootIfNoLiveBasis(
   ctx: MutationCtx,
   args: {
@@ -1857,6 +2235,8 @@ export async function releaseRootIfNoLiveBasis(
     vehicleId: Id<"vehicles">;
     reason: string;
     decisionNow: number;
+    /** Canonical orgs read the exact ranges. See `hasLiveCommitmentBasis`. */
+    decision?: AuthorityDecisionContext;
   }
 ): Promise<void> {
   const root = await openRootForFinalization(ctx, args.orgId, args.vehicleId);
@@ -1867,6 +2247,7 @@ export async function releaseRootIfNoLiveBasis(
       orgId: args.orgId,
       vehicleId: args.vehicleId,
       decisionNow: args.decisionNow,
+      ...(args.decision ? { decision: args.decision } : {}),
     })
   ) {
     return;

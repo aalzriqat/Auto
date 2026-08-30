@@ -243,7 +243,18 @@ export default defineSchema({
      * condition a human must repair indistinguishable from a transient error
      * the drain will retry — and the retry would fail identically forever.
      *
-     * RESTORED — the car was freed, or was already free.
+     * RESTORED — the customer's commitment is LIVE again, verified: successor
+     *   episode, OPEN root, live source, moved pointer, truthful vehicle
+     *   projection. ⚠️ It used to also mean "the car was freed" and "the car
+     *   was already free" — an audit record asserting a restoration that never
+     *   happened, which is worse than the silence it replaced (SCRUM-208
+     *   c15808). Those cases now have their own names.
+     * ..._NO_RESTORABLE_BASIS — nothing to restore, lawfully: money already
+     *   gone, the deal did not end for this reason, the car has since been
+     *   sold, or the record predates the canonical model.
+     * AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE — the organization is not on
+     *   the canonical authority, so nothing was examined. The majority case
+     *   until SCRUM-201's cutover, and it must not read as either neighbour.
      * ..._NO_AUTHORITY_RIVAL — something else legitimately still holds it; the
      *   reversal stands and the vehicle does not move.
      * ..._BLOCKED_AMBIGUOUS — two OPEN roots. A durable repair condition,
@@ -252,6 +263,8 @@ export default defineSchema({
     authorityOutcome: v.optional(
       v.union(
         v.literal("RESTORED"),
+        v.literal("ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS"),
+        v.literal("AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE"),
         v.literal("ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL"),
         v.literal("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS")
       )
@@ -510,6 +523,11 @@ export default defineSchema({
       // the audit trail shows an amendment as an amendment — a second
       // CONFIRM would read as a second payment.
       v.literal("AMEND_SUPPLIER_DISBURSEMENT_ADVICE"),
+      // The vehicle commitment authority's result after a cancellation —
+      // restored, rival, blocked, nothing to restore, or withheld because the
+      // organization is not on the canonical authority yet. See
+      // utils/saleCancellation.ts.
+      v.literal("SETTLE_COMMITMENT_AUTHORITY"),
     ),
     resourceType: v.string(),
     resourceId: v.string(),

@@ -18,6 +18,7 @@ import schema from "./schema";
 import { Doc, Id } from "./_generated/dataModel";
 import {
   acquireVehicle,
+  consumeRootForSale,
   resolveRestorationDecision,
   restoreCommitment,
   settleAuthorityAfterReversal,
@@ -157,20 +158,30 @@ async function acquire(seed: Seed, vehicleId: Id<"vehicles">, customerId: Id<"cu
 const sourceOf = (reservationId: Id<"vehicleReservations">) =>
   ({ kind: "RESERVATION", reservationId }) as const;
 
-/** A deal that completed into a sale, then had that sale cancelled. */
+/**
+ * A deal that completed into a sale, then had that sale cancelled.
+ *
+ * ⚠️ THE TERMINALIZATION IS THE REAL WRITER, AND IT TOUCHES ONLY THE ROOT.
+ * This used to hand-patch the root AND the claim into CONSUMED — a shape
+ * production has no writer for. Phase 2's certified F.12 pins the opposite:
+ * finalization "neither scans nor patches" the episodes, so a completed deal
+ * leaves every claim ACTIVE. Manufacturing the claim status made the whole
+ * suite agree with a resolver that could never have fired on real data, which
+ * is exactly how a restoration model with zero reachable paths passed 71
+ * contracts (SCRUM-208 c15807/c15808).
+ */
 async function consumedByCancelledSale(seed: Seed, customerId: Id<"customers">) {
   const vehicleId = await vehicle(seed);
   const { reservationId, rootId, claimId } = await acquire(seed, vehicleId, customerId);
   const saleId = await sale(seed, vehicleId, customerId);
   await seed.t.run((ctx) =>
-    ctx.db.patch(rootId, {
-      status: "CONSUMED" as const,
-      consumedBySaleId: saleId,
-      closedAt: Date.now(),
+    consumeRootForSale(ctx, {
+      orgId: seed.orgId,
+      vehicleId,
+      saleId,
+      reason: "sale completed",
+      decisionNow: Date.now(),
     })
-  );
-  await seed.t.run((ctx) =>
-    ctx.db.patch(claimId, { status: "CONSUMED" as const, consumedBySaleId: saleId })
   );
   const root = (await seed.t.run((ctx) => ctx.db.get(rootId)))!;
   return { vehicleId, reservationId, rootId, claimId, saleId, root };
@@ -180,11 +191,13 @@ function restoreArgs(
   seed: Seed,
   fixture: { reservationId: Id<"vehicleReservations">; vehicleId: Id<"vehicles"> }
 ) {
+  void fixture.reservationId;
   void fixture.vehicleId;
-  return {
-    lineage: { reservationId: fixture.reservationId },
-    createdBy: seed.userId,
-  };
+  // ⚠️ NO `lineage`. Root identity is copied from the predecessor and the new
+  // episode's quote is carried from the episode being continued, so there is
+  // nothing about the deal left for a caller to supply — and therefore nothing
+  // for a caller to get wrong.
+  return { createdBy: seed.userId };
 }
 
 describe("L9 — a canonical root commits as its own lineage origin", () => {
@@ -613,10 +626,11 @@ describe("dormant evidence from an earlier generation", () => {
         source: sourceOf(f.reservationId),
         vehicleId: f.vehicleId,
         intent: { kind: "SOURCE_EPISODE_REINSTATED" },
-        // The DEFINING evidence is derived from the predecessor claim, as M2
-        // requires; only the lineage PROOF differs, which is the part a caller
-        // controls and which must not reach root identity.
-        lineage: { reservationId: callerReservation },
+        // ⚠️ THERE IS NO LONGER A LINEAGE INPUT TO GET WRONG. The caller's own
+        // reservation is created below and deliberately NOT passed: root
+        // identity comes from the tip and the episode's quote from the episode
+        // being continued, so this contract now proves the absence of the
+        // channel rather than that the channel is ignored.
         createdBy: seed.userId,
       })
     );
@@ -626,6 +640,8 @@ describe("dormant evidence from an earlier generation", () => {
     // ⚠️ Dormant evidence cannot rewrite root identity as a side effect of
     // being reinstated.
     expect(String(successor.originReservationId)).toBe(String(f.tipReservation));
+    // The caller's own reservation exists and is not reachable from root
+    // identity by any route — there is no lineage parameter to pass it through.
     expect(String(successor.originReservationId)).not.toBe(String(callerReservation));
   });
 
@@ -877,20 +893,32 @@ describe("typed authority outcomes after a reversal posts", () => {
       })
     );
 
-  test("a car nobody holds settles as RESTORED", async () => {
+  test("a car nobody holds reports NOTHING TO RESTORE — never RESTORED", async () => {
     const seed = await seedDealer("t1");
     const vehicleId = await vehicle(seed);
-    expect(await settle(seed, vehicleId)).toEqual({ outcome: "RESTORED" });
+    // ⚠️ SCRUM-208 c15808. This asserted RESTORED, and the code obliged: an
+    // audit field claiming a customer's deal had been reinstated when no deal
+    // existed at all. RESTORED now means restored — see the taxonomy note in
+    // commitments.ts — and "there was nothing here" has its own name.
+    expect(await settle(seed, vehicleId)).toEqual({
+      outcome: "ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS",
+      detail: "no commitment root holds this vehicle",
+    });
   });
 
-  test("a held car whose basis has ended is freed and settles as RESTORED", async () => {
+  test("a held car whose basis has ended is FREED — reported as such, not as a restoration", async () => {
     const seed = await seedDealer("t2");
     const vehicleId = await vehicle(seed);
     const { reservationId, rootId } = await acquire(seed, vehicleId, seed.customerA);
     // The reservation has ended, so nothing holds the car any more.
     await seed.t.run((ctx) => ctx.db.patch(reservationId, { status: "RELEASED" as const }));
 
-    expect(await settle(seed, vehicleId)).toEqual({ outcome: "RESTORED" });
+    // Freeing a car is not restoring a deal. The root closes because nothing
+    // holds it any more, which is the opposite of a restoration.
+    expect(await settle(seed, vehicleId)).toEqual({
+      outcome: "ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS",
+      detail: "the deal was closed because nothing still held this vehicle",
+    });
     const root = await seed.t.run((ctx) => ctx.db.get(rootId));
     expect(root?.status).toBe("RELEASED");
   });
@@ -1001,7 +1029,7 @@ describe("when one reversal frees several cars, the worst outcome survives", () 
       [blocked, held, clean],
     ]) {
       const outcome = await seed.t.run((ctx) =>
-        settleFreedHoldsAuthority(ctx, seed.orgId, order, Date.now())
+        settleFreedHoldsAuthority(ctx, seed.orgId, order, Date.now(), seed.userId)
       );
       expect(outcome?.outcome).toBe("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS");
     }
@@ -1013,7 +1041,7 @@ describe("when one reversal frees several cars, the worst outcome survives", () 
     const held = await freedCar(seed, "HELD");
 
     const outcome = await seed.t.run((ctx) =>
-      settleFreedHoldsAuthority(ctx, seed.orgId, [held, clean], Date.now())
+      settleFreedHoldsAuthority(ctx, seed.orgId, [held, clean], Date.now(), seed.userId)
     );
     expect(outcome?.outcome).toBe("ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL");
   });
@@ -1027,7 +1055,7 @@ describe("when one reversal frees several cars, the worst outcome survives", () 
     await seed.t.run((ctx) => ctx.db.patch(clean.holdId, { orgId: otherOrg }));
 
     expect(
-      await seed.t.run((ctx) => settleFreedHoldsAuthority(ctx, seed.orgId, [clean], Date.now()))
+      await seed.t.run((ctx) => settleFreedHoldsAuthority(ctx, seed.orgId, [clean], Date.now(), seed.userId))
     ).toBeNull();
   });
 
