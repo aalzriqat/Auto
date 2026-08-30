@@ -1606,6 +1606,22 @@ export async function restoreCommitment(
     source: args.source,
     vehicleId: args.vehicleId,
   });
+  // ⚠️ HONEST NOTE ON COVERAGE: THIS BRANCH'S MUTANT SURVIVES, AND IT IS KEPT
+  // ANYWAY.
+  //
+  // Replacing this `return` with a `throw` leaves the suite green, because no
+  // test reaches it — and none can. `resolveCanonicalBinding` succeeded
+  // moments ago inside `resolveRestorationDecision`, and everything the
+  // acquisition wrote since only ADDS the rows this walk needs: the source row
+  // is untouched, the pointer now names the claim just created, that claim
+  // exists with matching evidence, and its root exists with a lineage. The
+  // reachable failures all land in the check below instead, whose mutant IS
+  // killed.
+  //
+  // It is retained as a guard against a future writer breaking the binding
+  // mid-transaction, and it is recorded here rather than quietly claimed as
+  // proven. A surviving mutant that is understood is a different thing from
+  // one nobody looked at.
   if (!after.ok) {
     return { decision: "INCONSISTENT", reason: after.reason };
   }
