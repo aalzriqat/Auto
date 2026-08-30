@@ -443,6 +443,34 @@ async function reinstateAppliedDeposits(
     // ⚠️ A SLICED DEPOSIT'S PARENT FLAG IS NOT THE CAR HOLD — its slices are,
     // and they are gated below. A DIRECT deposit's flag IS the car hold, so it
     // waits for the reversing journal.
+    //
+    // ⚠️ AND THIS IS WHERE THE SYNCHRONOUS PATH GETS ITS LIVENESS, IMPLICITLY.
+    //
+    // The deferred caller re-reads the canonical binding after making its
+    // source live, and refuses to write authority if the source did not
+    // actually come back — see the `relive` gate in
+    // `commitments.restoreAuthorityAfterReversal`. This path has no such gate,
+    // because it has no callback for one to verify: the source is made live
+    // HERE, earlier in the same transaction, before `restoreAuthorityAfterReversal`
+    // is reached further down under the SAME `journalReversed` condition.
+    //
+    // That ordering is what makes it safe, and it is an INVARIANT NOBODY
+    // ASSERTS: a deposit reaching this line with a live application is APPLIED,
+    // so it always transitions to HELD + holdActive. Note the asymmetry that
+    // makes it worth writing down — unlike `reinstateDirectDepositHold`, this
+    // writer does NOT check `isDeleted`. No door can currently produce a
+    // deleted deposit still carrying a live application (`deposits.voidDeposit`
+    // refuses unless the status is HELD with no APPLIED/REVERSING application,
+    // and `deposits` is absent from `adminData`'s ADMIN_TABLES), so there is no
+    // reachable counterexample today.
+    //
+    // But "nothing can reach it" is the claim that has already stopped being
+    // true twice on this branch, and the sibling writer carries an `isDeleted`
+    // guard for exactly that reason. If a new deposit-mutating door is ever
+    // added that does not route through `voidDeposit`'s guards, this is the
+    // line that silently stops being safe. Raised by Sonnet MAX against
+    // e3850d972; left as a documented invariant rather than a speculative
+    // guard, because the reachable behaviour is correct as it stands.
     const deposit = await reopenDepositAfterReversal(ctx, application.depositId, {
       reinstateHold: application.holdId !== undefined || application.journalReversed,
     });

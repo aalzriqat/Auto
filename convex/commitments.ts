@@ -2367,6 +2367,18 @@ export async function restoreAuthorityAfterReversal(
     // because a boolean would only carry that one writer's opinion. This reads
     // the same state `restoreCommitment` is about to depend on — pointer,
     // evidence, lineage and liveness together — while nothing has been written.
+    //
+    // ⚠️ AND IT CANNOT THROW HERE, WHICH IS WHY IT IS SAFE TO CALL AFTER A
+    // WRITE. `resolveCanonicalBinding` returns `{ok:false}` for every
+    // structural refusal, and its one throwing path —
+    // `requireCanonicalAuthority` — fires only when
+    // `decision.authorityVersion !== "V1"`. That was already proven above: the
+    // function returned AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE for a
+    // non-canonical org before the first write, `decision` is a `const` and is
+    // never reassigned, and `makeSourceLive` touches only `deposits`. The
+    // invariant is real but implicit, so it is written down here rather than
+    // left for the next reader to re-derive under time pressure. Raised by
+    // Sonnet MAX against e3850d972.
     const relive = await resolveCanonicalBinding(ctx, decision, {
       source: args.source,
       vehicleId: args.vehicleId,
