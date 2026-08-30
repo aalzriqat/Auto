@@ -270,6 +270,56 @@ export function findRootInsertSites(rawSource: string, file: string): RootInsert
   return sites;
 }
 
+/**
+ * SCRUM-208 — WHO CAN ASK FOR A SUCCESSOR ROOT.
+ *
+ * ⚠️ A COMMENT IS NOT AN ENFORCEMENT BOUNDARY. A first correction moved
+ * succession out of its own writer and into an optional `successorOf`
+ * parameter on the EXPORTED `acquireVehicle`, documented as "only
+ * `restoreCommitment` supplies this". Any backend caller could still have
+ * passed a terminal root with unrelated evidence and reached successor
+ * creation without ever going through the restoration resolver.
+ *
+ * Module privacy is the boundary. This check pins it: the successor opening
+ * shape may only be constructed inside the unexported executor, and the
+ * executor may not be exported.
+ */
+export interface SuccessorTopology {
+  /**
+   * Enclosing function of every `opening: { … }` argument construction — the
+   * shape actually handed to the private `openRoot`.
+   *
+   * Deliberately NOT every `kind: "SUCCESSOR"` token: the discriminated-union
+   * TYPE declaration and the executor's internal `target` descriptor both use
+   * that literal without opening anything, and counting them would make the
+   * check fire on declarations rather than on writes.
+   */
+  openingSites: string[];
+  /** Names of any exported function taking a caller-supplied successor root. */
+  exportedSuccessorParams: string[];
+}
+
+export function analyzeSuccessorTopology(rawSource: string): SuccessorTopology {
+  const source = blankComments(rawSource);
+  const openingSites: string[] = [];
+  for (const m of source.matchAll(/opening:\s*\{/g)) {
+    const before = source.slice(0, m.index!);
+    const declarations = [
+      ...before.matchAll(/(?:async\s+)?function\s+(\w+)\s*\(|const\s+(\w+)\s*=\s*(?:async\s*)?\(/g),
+    ];
+    const last = declarations[declarations.length - 1];
+    openingSites.push(last ? (last[1] ?? last[2]) : "<top level>");
+  }
+
+  const exportedSuccessorParams: string[] = [];
+  for (const m of source.matchAll(
+    /export\s+(?:async\s+)?function\s+(\w+)\s*\(([\s\S]*?)\n\)/g
+  )) {
+    if (/successorOf\s*\??\s*:/.test(m[2])) exportedSuccessorParams.push(m[1]);
+  }
+  return { openingSites, exportedSuccessorParams };
+}
+
 export function auditRootInserts(convexRoot: string): RootInsertSite[] {
   return convexSourceFiles(convexRoot).flatMap((file) =>
     findRootInsertSites(

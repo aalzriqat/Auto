@@ -775,6 +775,18 @@ export type RestorationIntent =
  * result ends up in an outbox `lastError` looking like a transient fault.
  */
 export type RestorationDecision =
+  /**
+   * The source episode is still ACTIVE — there is nothing to restore.
+   *
+   * Returned rather than throwing so a reversal that runs twice is idempotent,
+   * and rather than attaching so a retry cannot mint a duplicate ACTIVE claim
+   * for the same evidence on the same car.
+   */
+  | {
+      decision: "ALREADY_LIVE";
+      rootId: Id<"commitmentRoots">;
+      claimId: Id<"vehicleCommitmentClaims">;
+    }
   /** The lineage tip is still OPEN — rejoin it rather than succeeding it. */
   | { decision: "JOIN_LINEAGE"; rootId: Id<"commitmentRoots"> }
   /** The tip is terminal and the car is free: open the next generation. */
@@ -852,23 +864,48 @@ async function openRoot(
     }
   }
 
-  const rootId = await ctx.db.insert("commitmentRoots", {
-    orgId: args.orgId,
-    vehicleId: args.vehicleId,
-    customerId: args.customerId,
-    status: "OPEN",
-    ...(args.lineage.quoteId ? { headQuoteId: args.lineage.quoteId } : {}),
-    ...(args.lineage.reservationId ? { originReservationId: args.lineage.reservationId } : {}),
-    openedAt: Date.now(),
-    openedBy: args.createdBy,
-    // SCRUM-208 — an ORIGIN is its own lineage; a SUCCESSOR continues one.
-    ...(opening.kind === "SUCCESSOR"
+  // ⚠️ SCRUM-208 — A SUCCESSOR'S ROOT IDENTITY IS COPIED FROM THE TIP, NOT
+  // FROM THE CALLER'S LINEAGE PROOF.
+  //
+  // `args.lineage` is what the OPERATION presented to prove which deal it
+  // belongs to. Letting it fill `headQuoteId` / `originReservationId` on a
+  // successor would let dormant evidence — a months-old deposit being
+  // reinstated — silently re-head the deal onto whatever quote it happened to
+  // carry. Root identity survives succession unchanged; only the separately
+  // validated adoption path may ever move the quote head.
+  //
+  // The new EPISODE still carries its own evidence and its own quote, which is
+  // claim-level and is exactly where operation-specific facts belong.
+  const identity =
+    opening.kind === "SUCCESSOR"
       ? {
+          customerId: opening.predecessor.customerId,
+          ...(opening.predecessor.headQuoteId
+            ? { headQuoteId: opening.predecessor.headQuoteId }
+            : {}),
+          ...(opening.predecessor.originReservationId
+            ? { originReservationId: opening.predecessor.originReservationId }
+            : {}),
           lineageRootId: opening.predecessor.lineageRootId,
           lineageGeneration: opening.predecessor.lineageGeneration! + 1,
           restoredFromRootId: opening.predecessor._id,
         }
-      : { lineageGeneration: 0 }),
+      : {
+          customerId: args.customerId,
+          ...(args.lineage.quoteId ? { headQuoteId: args.lineage.quoteId } : {}),
+          ...(args.lineage.reservationId
+            ? { originReservationId: args.lineage.reservationId }
+            : {}),
+          lineageGeneration: 0,
+        };
+
+  const rootId = await ctx.db.insert("commitmentRoots", {
+    orgId: args.orgId,
+    vehicleId: args.vehicleId,
+    status: "OPEN",
+    openedAt: Date.now(),
+    openedBy: args.createdBy,
+    ...identity,
   });
 
   // A successor already carries its lineage from the predecessor; only an
@@ -919,11 +956,6 @@ export async function attachEpisode(
     createdBy: Id<"users">;
     quoteId?: Id<"quotes"> | null;
     predecessor?: Doc<"vehicleCommitmentClaims">;
-    /**
-     * SCRUM-208 — the root `args.rootId` succeeds, when this episode is being
-     * restored onto a successor. Server-derived from the restoration decision.
-     */
-    succeedsRootId?: Id<"commitmentRoots">;
   }
 ): Promise<Id<"vehicleCommitmentClaims">> {
   const { predecessor } = args;
@@ -933,25 +965,44 @@ export async function attachEpisode(
         `claim ${predecessor._id} is still ACTIVE — a live episode is not succeeded, it is resolved`
       );
     }
-    // ⚠️ SAME ROOT, OR THE ROOT THIS ONE SUCCEEDS — AND NOTHING ELSE.
+    // ⚠️ SAME ROOT, OR THE SAME LINEAGE — PROVEN, NOT ASSUMED.
     //
     // Phase 2 had one rule: a reacquired episode opens a new claim on the SAME
-    // root. Phase 3 adds root succession, where a restored episode necessarily
-    // lands on the SUCCESSOR root while its predecessor claim belongs to the
-    // root that was succeeded. Those two facts collide, and the resolution is
-    // not to drop the check — it is to name the one other root that is
-    // legitimate and prove it.
+    // root. Phase 3 adds root succession, and a first attempt at reconciling
+    // them permitted "the same root, or the root this one directly succeeds".
+    // That direct-parent rule is wrong, and it strands dormant evidence
+    // permanently: a deposit episode can belong to R0 while finance has since
+    // advanced the lineage through R1 to R2. Restoring that deposit onto R2 —
+    // or onto an R3 opened from R2 — is legitimate, and the parent-only rule
+    // refuses it forever because R0 is two generations back.
     //
-    // `succeedsRootId` is server-derived from the restoration decision, never
-    // caller-supplied. Without this the check would have to be removed
-    // entirely, and a successor that silently changed root is how history
-    // stops meaning anything.
-    const permittedRoots = [String(args.rootId)];
-    if (args.succeedsRootId) permittedRoots.push(String(args.succeedsRootId));
-    if (!permittedRoots.includes(String(predecessor.rootId))) {
-      throw new Error(
-        `successor root ${args.rootId} does not match predecessor ${predecessor._id} root ${predecessor.rootId}`
-      );
+    // The real invariant is that both roots are the SAME DEAL: same tenant,
+    // same car, same principal, same lineage. Generation distance is not part
+    // of it.
+    //
+    // ⚠️ AND A LEGACY ROOT CANNOT SATISFY IT. Two roots that both lack a
+    // lineage id are not thereby in the same lineage — `undefined === undefined`
+    // would silently marry two unrelated deals.
+    if (String(predecessor.rootId) !== String(args.rootId)) {
+      const [target, source] = await Promise.all([
+        ctx.db.get(args.rootId),
+        ctx.db.get(predecessor.rootId),
+      ]);
+      if (!target || !source) {
+        throw new Error(`cannot prove predecessor ${predecessor._id} shares this deal's lineage`);
+      }
+      const sameLineage =
+        target.lineageRootId !== undefined &&
+        source.lineageRootId !== undefined &&
+        String(target.lineageRootId) === String(source.lineageRootId) &&
+        String(target.orgId) === String(source.orgId) &&
+        String(target.vehicleId) === String(source.vehicleId) &&
+        String(target.customerId) === String(source.customerId);
+      if (!sameLineage) {
+        throw new Error(
+          `successor root ${args.rootId} is not in the same lineage as predecessor ${predecessor._id} root ${predecessor.rootId}`
+        );
+      }
     }
     if (String(predecessor.vehicleId) !== String(args.vehicleId)) {
       throw new Error(`successor vehicle does not match predecessor ${predecessor._id}`);
@@ -1008,44 +1059,80 @@ export async function acquireVehicle(
     lineage: CommitmentLineage;
     refusalMessage?: string;
     predecessor?: Doc<"vehicleCommitmentClaims">;
-    /**
-     * SCRUM-208 — SERVER-DERIVED, and only ever supplied by
-     * `restoreCommitment` after `resolveRestorationDecision` returned
-     * OPEN_SUCCESSOR.
-     *
-     * ⚠️ ROUTING SUCCESSION THROUGH THIS DOOR IS THE POINT. Because this
-     * function attaches the episode below, a successor root CANNOT commit
-     * without its successor claim — the forbidden intermediate state (an OPEN
-     * successor with no claim, no source pointer and no proven live evidence)
-     * is unreachable rather than merely discouraged.
-     */
-    successorOf?: Doc<"commitmentRoots">;
   }
 ): Promise<{ rootId: Id<"commitmentRoots">; claimId: Id<"vehicleCommitmentClaims"> }> {
-  const acting: ActingRoot = args.successorOf
-    ? { decision: "OPEN_NEW" }
-    : await resolveActingRoot(ctx, {
-        orgId: args.orgId,
-        vehicleId: args.vehicleId,
-        lineage: args.lineage,
-        // The customer this acquisition is FOR is already known here, and is
-        // the same value the new root would be opened under.
-        actingCustomerId: args.customerId,
-        refusalMessage: args.refusalMessage,
-      });
+  const acting = await resolveActingRoot(ctx, {
+    orgId: args.orgId,
+    vehicleId: args.vehicleId,
+    lineage: args.lineage,
+    // The customer this acquisition is FOR is already known here, and is the
+    // same value the new root would be opened under.
+    actingCustomerId: args.customerId,
+    refusalMessage: args.refusalMessage,
+  });
   if (acting.decision === "REFUSE") throwRefusal(acting);
 
+  return await executeAcquisition(ctx, {
+    ...args,
+    target:
+      acting.decision === "JOIN" || acting.decision === "ADOPT_RESERVATION"
+        ? { kind: "JOIN", rootId: acting.rootId }
+        : { kind: "ORIGIN" },
+    adoptReservation: acting.decision === "ADOPT_RESERVATION",
+  });
+}
+
+/**
+ * SCRUM-208 — THE ONE EXECUTOR. **Unexported, deliberately.**
+ *
+ * Open-or-join, then attach, in one transaction. Both doors converge here:
+ * `acquireVehicle` after `resolveActingRoot`, `restoreCommitment` after
+ * `resolveRestorationDecision`.
+ *
+ * ⚠️ THE SUCCESSOR SHAPE IS NOT REACHABLE FROM THE EXPORTED API. A first
+ * attempt put an optional `successorOf` on `acquireVehicle` itself, with a
+ * comment saying only `restoreCommitment` would supply it. A comment is not an
+ * enforcement boundary: any backend caller could have passed a terminal root
+ * with unrelated evidence and reached successor creation without ever going
+ * through the restoration resolver. Module privacy is the boundary; the
+ * comment was only ever a wish.
+ *
+ * ⚠️ AND THE CLAIM IS NOT OPTIONAL. Because attachment happens here, in the
+ * same transaction as the opening, a root cannot commit without its episode.
+ */
+async function executeAcquisition(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    customerId: Id<"customers">;
+    createdBy: Id<"users">;
+    evidence: CommitmentEvidence;
+    lineage: CommitmentLineage;
+    predecessor?: Doc<"vehicleCommitmentClaims">;
+    target:
+      | { kind: "JOIN"; rootId: Id<"commitmentRoots"> }
+      | { kind: "ORIGIN" }
+      | { kind: "SUCCESSOR"; predecessorRoot: Doc<"commitmentRoots"> };
+    adoptReservation?: boolean;
+  }
+): Promise<{ rootId: Id<"commitmentRoots">; claimId: Id<"vehicleCommitmentClaims"> }> {
   const rootId =
-    acting.decision === "JOIN" || acting.decision === "ADOPT_RESERVATION"
-      ? acting.rootId
+    args.target.kind === "JOIN"
+      ? args.target.rootId
       : await openRoot(ctx, {
           orgId: args.orgId,
           vehicleId: args.vehicleId,
           customerId: args.customerId,
           createdBy: args.createdBy,
           lineage: args.lineage,
-          ...(args.successorOf
-            ? { opening: { kind: "SUCCESSOR" as const, predecessor: args.successorOf } }
+          ...(args.target.kind === "SUCCESSOR"
+            ? {
+                opening: {
+                  kind: "SUCCESSOR" as const,
+                  predecessor: args.target.predecessorRoot,
+                },
+              }
             : {}),
         });
 
@@ -1054,8 +1141,12 @@ export async function acquireVehicle(
   // by — so every later door (a further deposit, a finance application) proves
   // lineage by quote in the ordinary way instead of re-adopting. The
   // conversion happens exactly once, here, and is auditable.
-  if (acting.decision === "ADOPT_RESERVATION" && args.lineage.quoteId) {
-    await ctx.db.patch(acting.rootId, { headQuoteId: args.lineage.quoteId });
+  //
+  // ⚠️ RESTORATION NEVER REACHES THIS. `adoptReservation` is set only by
+  // `acquireVehicle` from its own ADOPT_RESERVATION decision: dormant evidence
+  // may not re-head a deal as a side effect of being reinstated.
+  if (args.adoptReservation && args.lineage.quoteId) {
+    await ctx.db.patch(rootId, { headQuoteId: args.lineage.quoteId });
   }
 
   const claimId = await attachEpisode(ctx, {
@@ -1066,7 +1157,6 @@ export async function acquireVehicle(
     createdBy: args.createdBy,
     quoteId: args.lineage.quoteId ?? null,
     predecessor: args.predecessor,
-    ...(args.successorOf ? { succeedsRootId: args.successorOf._id } : {}),
   });
 
   return { rootId, claimId };
@@ -1128,41 +1218,100 @@ export async function resolveRestorationDecision(
   // 2. Principal, against the lineage.
   assertPrincipalMatches(evidence, tip.root.customerId);
 
-  // The tip is still live: this is a rejoin, not a succession. No new root.
-  if (tip.isOpen) return { decision: "JOIN_LINEAGE", rootId: tip.root._id };
+  // 3. The source episode itself.
+  //
+  // ⚠️ ITS ROOT IS NOT REQUIRED TO BE THE TIP. A dormant deposit episode can
+  // belong to R0 while finance has since advanced the lineage through R1 to
+  // R2. Requiring it to sit on the tip would strand that evidence forever.
+  // What is required is that it belongs to THIS lineage — proven, not assumed.
+  const sourceClaim = await ctx.db.get(episode.claimId);
+  if (!sourceClaim) {
+    return { decision: "REFUSE", reason: "the episode being restored no longer exists" };
+  }
+  const sourceRoot = await ctx.db.get(sourceClaim.rootId);
+  if (
+    !sourceRoot ||
+    sourceRoot.lineageRootId === undefined ||
+    String(sourceRoot.lineageRootId) !== String(episode.lineageRootId) ||
+    String(sourceRoot.orgId) !== String(tip.root.orgId) ||
+    String(sourceRoot.vehicleId) !== String(tip.root.vehicleId) ||
+    String(sourceRoot.customerId) !== String(tip.root.customerId)
+  ) {
+    return { decision: "REFUSE", reason: "that evidence belongs to a different deal" };
+  }
 
-  // 4. The exact reason this root ended.
+  // ⚠️ ALREADY LIVE IS NOT A REASON TO ATTACH AGAIN. An episode that is still
+  // ACTIVE has nothing to restore, and opening a second ACTIVE claim for the
+  // same evidence on the same car is a duplicate, not an idempotent retry.
+  // A first version returned JOIN_LINEAGE before this check and then dropped
+  // the predecessor when the claim was ACTIVE — which inserted exactly that
+  // duplicate, and passed a test that only counted ROOTS.
+  if (sourceClaim.status === "ACTIVE") {
+    return { decision: "ALREADY_LIVE", rootId: sourceClaim.rootId, claimId: sourceClaim._id };
+  }
+
+  // ⚠️ AN EPISODE IS SUCCEEDED ONCE. If a successor already exists for this
+  // claim, the evidence has already been reinstated and its live episode is
+  // that successor — restoring the same terminal episode again would mint a
+  // second parallel chain from one predecessor.
+  //
+  // Exact index lookup rather than a scan. `by_restored_from` is a BARE index,
+  // so the tenant is proven on the row rather than assumed from the path.
+  const existingSuccessor = await ctx.db
+    .query("vehicleCommitmentClaims")
+    .withIndex("by_restored_from", (q) => q.eq("restoredFromClaimId", sourceClaim._id))
+    .first();
+  if (existingSuccessor && String(existingSuccessor.orgId) === String(decision.orgId)) {
+    return existingSuccessor.status === "ACTIVE"
+      ? {
+          decision: "ALREADY_LIVE",
+          rootId: existingSuccessor.rootId,
+          claimId: existingSuccessor._id,
+        }
+      : {
+          decision: "REFUSE",
+          reason: "this evidence has already been reinstated once and cannot be reinstated again",
+        };
+  }
+
+  // 4. The exact reason this episode ended. Claim-level, because with dormant
+  // siblings the tip's own ending is a different event from this episode's.
   if (intent.kind === "SALE_CANCELLED") {
-    if (tip.root.status !== "CONSUMED") {
-      return { decision: "REFUSE", reason: "this deal did not end in a sale" };
+    if (sourceClaim.status !== "CONSUMED") {
+      return { decision: "REFUSE", reason: "that evidence was not completed into a sale" };
     }
-    if (String(tip.root.consumedBySaleId ?? "") !== String(intent.saleId)) {
+    if (String(sourceClaim.consumedBySaleId ?? "") !== String(intent.saleId)) {
       return {
         decision: "REFUSE",
         reason: "that sale is not the one this deal was completed into",
       };
     }
-  } else {
-    if (tip.root.status !== "RELEASED") {
-      return { decision: "REFUSE", reason: "this deal did not end by being released" };
-    }
-    const sourceClaim = await ctx.db.get(episode.claimId);
-    if (!sourceClaim || String(sourceClaim.rootId) !== String(tip.root._id)) {
-      return {
-        decision: "REFUSE",
-        reason: "that evidence is not the one this deal was released from",
-      };
-    }
-    if (sourceClaim.status === "ACTIVE") {
-      return { decision: "REFUSE", reason: "that evidence is still live and has nothing to restore" };
-    }
+  } else if (sourceClaim.status !== "RELEASED") {
+    return { decision: "REFUSE", reason: "that evidence was not released" };
   }
 
   // 5. I1 — one physical vehicle, at most one OPEN root. Checked against the
   // VEHICLE, not the lineage: a rival deal is a different lineage entirely and
   // would not be visible in the tip resolution above.
+  //
+  // ⚠️ BEFORE THE JOIN DECISION, NOT AFTER IT. One valid open lineage plus a
+  // second OPEN root on the same car is corruption, and joining the first
+  // while the second exists would quietly bless it.
   const ownership = await resolveOwnership(ctx, decision.orgId, tip.root.vehicleId);
   if (ownership.kind === "AMBIGUOUS") return { decision: "AMBIGUOUS" };
+
+  // The tip is still live: this is a rejoin of dormant evidence onto the
+  // lineage's current root, not a succession. No new root.
+  if (tip.isOpen) {
+    if (ownership.kind !== "OWNED" || String(ownership.root._id) !== String(tip.root._id)) {
+      return {
+        decision: "REFUSE",
+        reason: "the deal's records disagree about which root holds this vehicle",
+      };
+    }
+    return { decision: "JOIN_LINEAGE", rootId: tip.root._id };
+  }
+
   if (ownership.kind === "OWNED") return { decision: "RIVAL", rivalRootId: ownership.root._id };
 
   return { decision: "OPEN_SUCCESSOR", predecessor: tip.root };
@@ -1197,45 +1346,45 @@ export async function restoreCommitment(
   if (
     resolved.decision === "REFUSE" ||
     resolved.decision === "RIVAL" ||
-    resolved.decision === "AMBIGUOUS"
+    resolved.decision === "AMBIGUOUS" ||
+    resolved.decision === "ALREADY_LIVE"
   ) {
     return resolved;
   }
 
-  // The episode being restored, carried so `attachEpisode` can check that the
-  // successor keeps the same root, vehicle and defining evidence.
-  const sourceClaim = await ctx.db.get(
-    (args.evidence.episode as Extract<EvidenceEpisode, { state: "CURRENT" }>).claimId
-  );
+  // The episode being restored. The resolver already proved it exists, belongs
+  // to this lineage and is terminal; it is re-read here only to carry the
+  // document into `attachEpisode`, which re-proves the lineage relationship
+  // rather than trusting this caller.
+  const episode = args.evidence.episode as Extract<EvidenceEpisode, { state: "CURRENT" }>;
+  const sourceClaim = await ctx.db.get(episode.claimId);
   if (!sourceClaim) {
     return { decision: "REFUSE", reason: "the episode being restored no longer exists" };
   }
 
-  if (resolved.decision === "JOIN_LINEAGE") {
-    const claimId = await attachEpisode(ctx, {
-      orgId: args.decision.orgId,
-      rootId: resolved.rootId,
-      vehicleId: args.evidence.vehicleId,
-      evidence: args.commitmentEvidence,
-      createdBy: args.createdBy,
-      quoteId: args.lineage.quoteId ?? null,
-      predecessor: sourceClaim.status === "ACTIVE" ? undefined : sourceClaim,
-    });
-    return { decision: "RESTORED", rootId: resolved.rootId, claimId, opened: "JOINED" };
-  }
+  const target =
+    resolved.decision === "JOIN_LINEAGE"
+      ? ({ kind: "JOIN", rootId: resolved.rootId } as const)
+      : ({ kind: "SUCCESSOR", predecessorRoot: resolved.predecessor } as const);
 
-  const { rootId, claimId } = await acquireVehicle(ctx, {
+  const { rootId, claimId } = await executeAcquisition(ctx, {
     orgId: args.decision.orgId,
     vehicleId: args.evidence.vehicleId,
-    // Carried from the predecessor the resolver chose, never from the caller.
-    customerId: resolved.predecessor.customerId,
+    // Carried from the lineage the resolver validated, never from the caller.
+    customerId: args.evidence.customerId,
     createdBy: args.createdBy,
     evidence: args.commitmentEvidence,
     lineage: args.lineage,
     predecessor: sourceClaim,
-    successorOf: resolved.predecessor,
+    target,
   });
-  return { decision: "RESTORED", rootId, claimId, opened: "SUCCESSOR" };
+
+  return {
+    decision: "RESTORED",
+    rootId,
+    claimId,
+    opened: resolved.decision === "JOIN_LINEAGE" ? "JOINED" : "SUCCESSOR",
+  };
 }
 
 /**

@@ -345,7 +345,7 @@ describe("restoration through the acquisition boundary", () => {
     expect(after).toHaveLength(before.length);
   });
 
-  test("a still-open lineage is REJOINED, not succeeded", async () => {
+  test("an ACTIVE episode is ALREADY_LIVE — no second claim, nothing touched", async () => {
     const seed = await seedDealer("r6");
     const vehicleId = await vehicle(seed);
     const { reservationId, rootId, claimId } = await acquire(seed, vehicleId, seed.customerA);
@@ -358,6 +358,11 @@ describe("restoration through the acquisition boundary", () => {
       root,
     });
 
+    const rootsBefore = await seed.t.run((ctx) => ctx.db.query("commitmentRoots").collect());
+    const claimsBefore = await seed.t.run((ctx) =>
+      ctx.db.query("vehicleCommitmentClaims").collect()
+    );
+
     const outcome = await seed.t.run(async (ctx) =>
       restoreCommitment(ctx, {
         decision: await decisionFor(seed, ctx),
@@ -367,13 +372,20 @@ describe("restoration through the acquisition boundary", () => {
       })
     );
 
-    const restored = outcome as Extract<typeof outcome, { decision: "RESTORED" }>;
-    expect(restored.decision).toBe("RESTORED");
-    expect(restored.opened).toBe("JOINED");
-    expect(String(restored.rootId)).toBe(String(rootId));
+    expect(outcome).toEqual({ decision: "ALREADY_LIVE", rootId, claimId });
 
-    const roots = await seed.t.run((ctx) => ctx.db.query("commitmentRoots").collect());
-    expect(roots).toHaveLength(1);
+    // ⚠️ CARDINALITY, NOT JUST ROOT COUNT. An earlier version returned
+    // JOIN_LINEAGE here and then dropped the predecessor because the claim was
+    // ACTIVE, inserting a SECOND ACTIVE claim for the same evidence on the
+    // same car. The test at the time only counted roots, so it certified the
+    // duplicate.
+    const rootsAfter = await seed.t.run((ctx) => ctx.db.query("commitmentRoots").collect());
+    const claimsAfter = await seed.t.run((ctx) =>
+      ctx.db.query("vehicleCommitmentClaims").collect()
+    );
+    expect(rootsAfter).toHaveLength(rootsBefore.length);
+    expect(claimsAfter).toHaveLength(claimsBefore.length);
+    expect(claimsAfter).toEqual(claimsBefore);
   });
 
   test("a legacy predecessor fails closed instead of being normalized", async () => {
@@ -437,8 +449,12 @@ describe("restoration through the acquisition boundary", () => {
       })
     );
 
-    // ⚠️ The tip is now the successor, and the evidence still names generation
-    // 0. Succeeding a NON-TIP forks the lineage.
+    // ⚠️ AN EPISODE IS SUCCEEDED ONCE. Restoring the same terminal episode a
+    // second time would mint a parallel chain from one predecessor. Note this
+    // is NOT enforced by demanding the source sit on the tip — that rule was
+    // rejected because it strands dormant evidence — but by an exact lookup of
+    // the successor this episode already has.
+    const restored = first as Extract<typeof first, { decision: "RESTORED" }>;
     const second = await seed.t.run(async (ctx) =>
       resolveRestorationDecision(ctx, {
         decision: await decisionFor(seed, ctx),
@@ -446,7 +462,206 @@ describe("restoration through the acquisition boundary", () => {
         intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
       })
     );
-    expect(second.decision).toBe("REFUSE");
+    // The evidence's live episode is the successor, so the answer names it
+    // rather than opening anything.
+    expect(second).toEqual({
+      decision: "ALREADY_LIVE",
+      rootId: restored.rootId,
+      claimId: restored.claimId,
+    });
+
+    // And once that successor is itself terminal, the original episode still
+    // cannot be reinstated a second time — the chain continues from the
+    // successor, never again from its predecessor.
+    await seed.t.run((ctx) => ctx.db.patch(restored.claimId, { status: "RELEASED" as const }));
+    const third = await seed.t.run(async (ctx) =>
+      resolveRestorationDecision(ctx, {
+        decision: await decisionFor(seed, ctx),
+        evidence: f.evidence,
+        intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
+      })
+    );
+    expect(third).toEqual({
+      decision: "REFUSE",
+      reason: "this evidence has already been reinstated once and cannot be reinstated again",
+    });
+  });
+});
+
+describe("dormant evidence from an earlier generation", () => {
+  /**
+   * A lineage that has advanced two generations past the episode being
+   * restored. R0 released, R1 released, R2 the tip.
+   *
+   * This is the ordinary shape when a deposit sits dormant while finance moves
+   * the deal forward — and it is exactly what a direct-parent rule strands
+   * forever, because R0 is two generations back from R2.
+   */
+  async function advancedLineage(seed: Seed, tipStatus: "OPEN" | "RELEASED") {
+    const vehicleId = await vehicle(seed);
+    const { reservationId, rootId: r0, claimId: c0 } = await acquire(
+      seed,
+      vehicleId,
+      seed.customerA
+    );
+    await seed.t.run((ctx) => ctx.db.patch(r0, { status: "RELEASED" as const }));
+    await seed.t.run((ctx) => ctx.db.patch(c0, { status: "RELEASED" as const }));
+    const origin = (await seed.t.run((ctx) => ctx.db.get(r0)))!;
+
+    const generation = async (
+      gen: number,
+      status: "OPEN" | "RELEASED",
+      previous: Id<"commitmentRoots">,
+      extra: Record<string, unknown> = {}
+    ) =>
+      await seed.t.run((ctx) =>
+        ctx.db.insert("commitmentRoots", {
+          orgId: seed.orgId,
+          vehicleId,
+          customerId: seed.customerA,
+          status,
+          openedAt: Date.now(),
+          openedBy: seed.userId,
+          lineageRootId: origin.lineageRootId!,
+          lineageGeneration: gen,
+          restoredFromRootId: previous,
+          ...extra,
+        })
+      );
+
+    const r1 = await generation(1, "RELEASED", r0);
+    // The tip carries its own origin reservation, which the successor must
+    // inherit rather than taking the caller's.
+    const tipReservation = await reservation(seed, vehicleId, seed.customerA);
+    const r2 = await generation(2, tipStatus, r1, { originReservationId: tipReservation });
+
+    const evidence = await currentEvidence(seed, {
+      vehicleId,
+      customerId: seed.customerA,
+      reservationId,
+      claimId: c0,
+      root: origin,
+    });
+    return { vehicleId, reservationId, tipReservation, r0, c0, r1, r2, origin, evidence };
+  }
+
+  test("a dormant R0 episode joins the OPEN tip two generations later", async () => {
+    const seed = await seedDealer("d1");
+    const f = await advancedLineage(seed, "OPEN");
+
+    const outcome = await seed.t.run(async (ctx) =>
+      restoreCommitment(ctx, {
+        decision: await decisionFor(seed, ctx),
+        evidence: f.evidence,
+        intent: { kind: "SOURCE_EPISODE_REINSTATED" },
+        ...restoreArgs(seed, f),
+      })
+    );
+
+    const restored = outcome as Extract<typeof outcome, { decision: "RESTORED" }>;
+    expect(restored.decision).toBe("RESTORED");
+    expect(restored.opened).toBe("JOINED");
+    // ⚠️ Onto the TIP, not onto R0's direct child. A parent-only rule refuses
+    // this forever and the deposit can never be reinstated.
+    expect(String(restored.rootId)).toBe(String(f.r2));
+
+    const claim = (await seed.t.run((ctx) => ctx.db.get(restored.claimId)))!;
+    expect(String(claim.rootId)).toBe(String(f.r2));
+    expect(String(claim.restoredFromClaimId)).toBe(String(f.c0));
+  });
+
+  test("a dormant R0 episode opens R3 from a terminal R2", async () => {
+    const seed = await seedDealer("d2");
+    const f = await advancedLineage(seed, "RELEASED");
+
+    const outcome = await seed.t.run(async (ctx) =>
+      restoreCommitment(ctx, {
+        decision: await decisionFor(seed, ctx),
+        evidence: f.evidence,
+        intent: { kind: "SOURCE_EPISODE_REINSTATED" },
+        ...restoreArgs(seed, f),
+      })
+    );
+
+    const restored = outcome as Extract<typeof outcome, { decision: "RESTORED" }>;
+    expect(restored.opened).toBe("SUCCESSOR");
+    const successor = (await seed.t.run((ctx) => ctx.db.get(restored.rootId)))!;
+    expect(successor.lineageGeneration).toBe(3);
+    expect(String(successor.restoredFromRootId)).toBe(String(f.r2));
+    expect(String(successor.lineageRootId)).toBe(String(f.origin.lineageRootId));
+  });
+
+  test("the successor's root identity comes from the tip, not the caller", async () => {
+    const seed = await seedDealer("d3");
+    const f = await advancedLineage(seed, "RELEASED");
+    // The operation presents its OWN reservation as lineage proof. That is a
+    // claim-level fact and must not re-head the deal.
+    const callerReservation = await reservation(seed, f.vehicleId, seed.customerA);
+
+    const outcome = await seed.t.run(async (ctx) =>
+      restoreCommitment(ctx, {
+        decision: await decisionFor(seed, ctx),
+        evidence: f.evidence,
+        intent: { kind: "SOURCE_EPISODE_REINSTATED" },
+        // The DEFINING evidence is carried from the predecessor, as M2
+        // requires; only the lineage PROOF differs, which is the part a caller
+        // controls and which must not reach root identity.
+        commitmentEvidence: { kind: "RESERVATION" as const, reservationId: f.reservationId },
+        lineage: { reservationId: callerReservation },
+        createdBy: seed.userId,
+      })
+    );
+
+    const restored = outcome as Extract<typeof outcome, { decision: "RESTORED" }>;
+    const successor = (await seed.t.run((ctx) => ctx.db.get(restored.rootId)))!;
+    // ⚠️ Dormant evidence cannot rewrite root identity as a side effect of
+    // being reinstated.
+    expect(String(successor.originReservationId)).toBe(String(f.tipReservation));
+    expect(String(successor.originReservationId)).not.toBe(String(callerReservation));
+  });
+
+  test("a second OPEN root on the car is AMBIGUOUS, decided before any join", async () => {
+    const seed = await seedDealer("d4");
+    const f = await advancedLineage(seed, "OPEN");
+    // A rival OPEN root on the same car, in a lineage of its own.
+    await seed.t.run((ctx) =>
+      ctx.db.insert("commitmentRoots", {
+        orgId: seed.orgId,
+        vehicleId: f.vehicleId,
+        customerId: seed.customerB,
+        status: "OPEN" as const,
+        openedAt: Date.now(),
+        openedBy: seed.userId,
+        lineageGeneration: 0,
+      })
+    );
+
+    const outcome = await seed.t.run(async (ctx) =>
+      restoreCommitment(ctx, {
+        decision: await decisionFor(seed, ctx),
+        evidence: f.evidence,
+        intent: { kind: "SOURCE_EPISODE_REINSTATED" },
+        ...restoreArgs(seed, f),
+      })
+    );
+
+    // ⚠️ One valid open lineage PLUS a rival open root is not a safe join.
+    expect(outcome).toEqual({ decision: "AMBIGUOUS" });
+  });
+
+  test("an episode that was not released has nothing to reinstate", async () => {
+    const seed = await seedDealer("d5");
+    const f = await advancedLineage(seed, "OPEN");
+    await seed.t.run((ctx) => ctx.db.patch(f.c0, { status: "CONSUMED" as const }));
+
+    const outcome = await seed.t.run(async (ctx) =>
+      resolveRestorationDecision(ctx, {
+        decision: await decisionFor(seed, ctx),
+        evidence: f.evidence,
+        intent: { kind: "SOURCE_EPISODE_REINSTATED" },
+      })
+    );
+    expect(outcome).toEqual({ decision: "REFUSE", reason: "that evidence was not released" });
   });
 });
 

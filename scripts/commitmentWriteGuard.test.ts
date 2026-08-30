@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import fs from "node:fs";
 import path from "node:path";
 import {
+  analyzeSuccessorTopology,
   auditCommitmentWrites,
   auditRootInserts,
   convexSourceFiles,
@@ -67,6 +69,28 @@ describe("commitment liveness writes go through the choke", () => {
       expect(auditRootInserts(CONVEX_ROOT)).toEqual([
         { file: "commitments.ts", enclosingFunction: "openRoot" },
       ]);
+    });
+
+    it("keeps the successor shape inside the unexported executor", () => {
+      const source = fs.readFileSync(path.join(CONVEX_ROOT, "commitments.ts"), "utf8");
+      const topology = analyzeSuccessorTopology(source);
+
+      // ⚠️ A comment saying "only restoreCommitment supplies this" is not an
+      // enforcement boundary. Module privacy is.
+      expect(topology.exportedSuccessorParams).toEqual([]);
+      expect(new Set(topology.openingSites)).toEqual(new Set(["executeAcquisition"]));
+      expect(source).not.toMatch(/export\s+(async\s+)?function\s+executeAcquisition/);
+    });
+
+    it("flags a successor shape constructed in an exported function", () => {
+      const source = [
+        `export async function acquireVehicle(\n  ctx,\n  args: { successorOf?: Doc<"commitmentRoots"> }\n) {`,
+        `  await openRoot(ctx, { opening: { kind: "SUCCESSOR", predecessor: args.successorOf } });`,
+        `}`,
+      ].join("\n");
+      const topology = analyzeSuccessorTopology(source);
+      expect(topology.openingSites).toEqual(["acquireVehicle"]);
+      expect(topology.exportedSuccessorParams).toEqual(["acquireVehicle"]);
     });
 
     it("names the enclosing function, so a second opener is identifiable", () => {
