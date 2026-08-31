@@ -574,8 +574,14 @@ async function reinstateAppliedDeposits(
   // Written only when a restoration was actually attempted. A cancellation
   // with no direct deposit behind it has nothing to report, and a row saying
   // so on every cancellation would bury the ones that matter.
-  const worst = worstAuthorityOutcome(authorityOutcomes);
-  if (worst) {
+  // ⚠️ DEFERRED TO EVERY EXIT, NOT TAKEN HERE. This used to run inline, above
+  // the zero-share loop below — so an outcome that loop produced could not
+  // reach it, and the loop produced none because it performed no restoration at
+  // all. Both halves of that are fixed; the audit is now taken after ALL
+  // restoration work, at whichever exit the function actually takes.
+  const recordWorstAuthorityOutcome = async () => {
+    const worst = worstAuthorityOutcome(authorityOutcomes);
+    if (!worst) return;
     const detail = authorityOutcomeDetail(worst);
     await auditLog(ctx, {
       orgId: args.orgId,
@@ -592,9 +598,12 @@ async function reinstateAppliedDeposits(
         vehiclesSettled: authorityOutcomes.length,
       },
     });
-  }
+  };
 
-  if (!args.quoteId) return;
+  if (!args.quoteId) {
+    await recordWorstAuthorityOutcome();
+    return;
+  }
 
   // Slices this sale consumed that carry no money.
   //
@@ -636,6 +645,40 @@ async function reinstateAppliedDeposits(
       // it, and that is rarely the one being cancelled.
       await reopenDepositAfterReversal(ctx, deposit._id);
       await syncVehicleHoldStatus(ctx, hold.vehicleId, args.actorId);
+
+      // ⚠️ SCRUM-208 — THE MONEY WENT BACK ON THE CAR, SO THE DEAL MUST TOO.
+      //
+      // The asymmetry this closes is exact. In the application-backed loop a
+      // FUNDED slice's hold goes DOWN — released, awaiting the customer's
+      // decision — so the car is genuinely freed and no authority is owed. This
+      // loop does the opposite: it puts the hold back UP. Without what follows,
+      // the source was live again over a root that stayed CONSUMED, so
+      // `resolveOwnership` reported the car FREE while its projection said
+      // RESERVED, and a rival's `acquireVehicle` succeeded on a car the
+      // original deal still held money against — the exact defect SCRUM-195
+      // exists to prevent, reachable only through the zero-share door.
+      //
+      // ⚠️ INVISIBLE TO EVERY EXISTING TEST IN THIS AREA, AND THAT IS WHY IT
+      // SURVIVED. Every fixture in `multiVehicleDepositAllocation.test.ts`
+      // seeds a LEGACY organization, and a LEGACY organization performs no
+      // canonical restoration at all — so the whole zero-share path was built
+      // and tested in the one regime where this gap cannot appear. The
+      // regression test stamps V1 first. Found by Codex xhigh against 6e2dceb83.
+      //
+      // Same spine and same ordering as the DIRECT case above: the source is
+      // made live first, then the decision is taken. No try/catch, for the
+      // reason spelled out there — a throw must abort the whole mutation.
+      authorityOutcomes.push(
+        await restoreAuthorityAfterReversal(ctx, {
+          run,
+          orgId: args.orgId,
+          vehicleId: hold.vehicleId,
+          // The sliced representation names its exact hold row.
+          source: { kind: "DEPOSIT", depositId: deposit._id, holdId: hold._id },
+          saleId: args.saleId,
+          createdBy: args.actorId,
+        })
+      );
     }
   }
 
@@ -677,6 +720,8 @@ async function reinstateAppliedDeposits(
       reversalDate: args.reversalDate,
     });
   }
+
+  await recordWorstAuthorityOutcome();
 }
 
 /**

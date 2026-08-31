@@ -29,6 +29,7 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { COMMITMENT_AUTHORITY_V1 } from "./utils/commitmentKernel";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -2611,5 +2612,101 @@ describe("the completion monetary invariant reaches multi-vehicle completion", (
 
     // Atomicity makes the refusal total across every line, not just the bad one.
     expect(await s.t.run((ctx) => ctx.db.query("sales").collect())).toHaveLength(0);
+  });
+});
+
+/**
+ * SCRUM-208 — A ZERO SHARE STILL OWES CANONICAL AUTHORITY.
+ *
+ * ⚠️ WHY THIS COULD NOT HAVE BEEN CAUGHT BY ANYTHING ELSE IN THIS FILE.
+ * Every other fixture here seeds its organization with a raw insert and no
+ * `commitmentAuthorityVersion`, so it is LEGACY — and a LEGACY organization
+ * correctly performs no canonical restoration at all. The whole zero-share
+ * path was therefore developed and tested where this gap is invisible by
+ * construction. This test stamps V1 first, which is the only reason the
+ * contradiction can appear.
+ *
+ * The chain, each link verified in the source before this was written:
+ *   - `deposits.create` calls `acquireVehicle` for EVERY vehicle item
+ *     (deposits.ts:174), so the zero-share car has a root and a claim. The
+ *     allocation amount is decided later and does not gate this.
+ *   - a zero allocation consumes the hold APPLIED and returns early WITHOUT
+ *     writing a `depositApplications` row, because nothing posts for nothing
+ *     (saleCompletion.ts:641).
+ *   - cancellation's restoration spine is driven by those application rows, so
+ *     it sees nothing; the authority audit is computed BEFORE the zero-slice
+ *     loop; and that loop reactivates the hold and re-syncs the projection with
+ *     no restoration and no outcome (saleCancellation.ts:610-637).
+ *
+ * The result is a source made live again over a root that stays CONSUMED: the
+ * money is against the car, the projection says RESERVED, and canonical
+ * ownership says FREE — so a rival may open a new root on a car the original
+ * deal still holds money against.
+ *
+ * ⚠️ ASSERTS THE INVARIANT, NOT THE SYMPTOM. "The hold came back" already
+ * passes today; it is the authority half that does not.
+ */
+describe("a zero share whose sale is cancelled", () => {
+  test("its car regains an OPEN root, not live money over a consumed one", async () => {
+    const s = await seed("zeroSliceAuthority");
+    await s.t.run((ctx) =>
+      ctx.db.patch(s.orgId, { commitmentAuthorityVersion: COMMITMENT_AUTHORITY_V1 })
+    );
+
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 0 },
+      { vehicleId: s.vehicleB!, amount: 5_000 },
+    ]);
+    const saleA = await sell(s, s.vehicleA, PRICE_A);
+    await cancel(s, saleA);
+
+    const rootsFor = async (vehicleId: Id<"vehicles">) =>
+      await s.t.run(async (ctx) =>
+        (await ctx.db.query("commitmentRoots").collect()).filter(
+          (r) => String(r.vehicleId) === String(vehicleId)
+        )
+      );
+    const holdFor = async (vehicleId: Id<"vehicles">) =>
+      await s.t.run(async (ctx) =>
+        (await ctx.db.query("depositVehicleHolds").collect()).find(
+          (h) => String(h.vehicleId) === String(vehicleId) && h.active === true
+        )
+      );
+
+    // Precondition, not the contract: the zero-slice loop really did run and
+    // put the money back against the car. Without this the test would pass
+    // vacuously on a path that never executed.
+    expect((await holdFor(s.vehicleA))?.active, "the zero slice was reinstated").toBe(true);
+
+    // THE CONTRACT. A source that is live again must be held by an OPEN root.
+    expect(
+      (await rootsFor(s.vehicleA)).filter((r) => r.status === "OPEN"),
+      "the reinstated zero share must be backed by exactly one OPEN root"
+    ).toHaveLength(1);
+  });
+
+  test("CONTROL — a funded share on the same quote restores correctly", async () => {
+    // Codex's own control, and the reason the zero case is attributable to the
+    // zero-amount early return rather than to cancellation, V1 or sale state.
+    const s = await seed("fundedSliceAuthority");
+    await s.t.run((ctx) =>
+      ctx.db.patch(s.orgId, { commitmentAuthorityVersion: COMMITMENT_AUTHORITY_V1 })
+    );
+
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 2_000 },
+      { vehicleId: s.vehicleB!, amount: 3_000 },
+    ]);
+    const saleA = await sell(s, s.vehicleA, PRICE_A);
+    await cancel(s, saleA);
+
+    const roots = await s.t.run(async (ctx) =>
+      (await ctx.db.query("commitmentRoots").collect()).filter(
+        (r) => String(r.vehicleId) === String(s.vehicleA)
+      )
+    );
+    expect(roots.length, "the funded car has a commitment history at all").toBeGreaterThan(0);
   });
 });
