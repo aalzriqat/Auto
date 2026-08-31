@@ -221,9 +221,37 @@ export type FieldVerdict = "UNCONDITIONAL" | "ABSENT" | "UNRESOLVED";
  * anything computed at runtime, is refused. Found by Codex xhigh against
  * 6e2dceb83.
  */
-function isCanonicalVersionValue(value: ts.Expression): boolean {
+function isCanonicalVersionValue(value: ts.Expression, importsTheConstant: boolean): boolean {
   if (ts.isNumericLiteral(value)) return value.text === String(CANONICAL_AUTHORITY_VERSION);
-  return ts.isIdentifier(value) && value.text === "COMMITMENT_AUTHORITY_V1";
+  // ⚠️ THE SPELLING IS NOT THE BINDING. Accepting the identifier on its name
+  // alone certified this, which mints a LEGACY dealership:
+  //
+  //   const COMMITMENT_AUTHORITY_V1 = 0;
+  //   ctx.db.insert("organizations", { commitmentAuthorityVersion: COMMITMENT_AUTHORITY_V1 });
+  //
+  // So the name only counts when the file actually imports it from the kernel.
+  // A file cannot both import that binding and redeclare it locally — TypeScript
+  // rejects the redeclaration — so the import is proof the identifier resolves
+  // to the real constant. Found by Codex xhigh against 02582f606; it was a hole
+  // in my own previous round's value check.
+  return importsTheConstant && ts.isIdentifier(value) && value.text === "COMMITMENT_AUTHORITY_V1";
+}
+
+/** Does this module import `COMMITMENT_AUTHORITY_V1` from the commitment kernel? */
+function importsCanonicalVersionConstant(sf: ts.SourceFile): boolean {
+  for (const stmt of sf.statements) {
+    if (!ts.isImportDeclaration(stmt)) continue;
+    if (!ts.isStringLiteral(stmt.moduleSpecifier)) continue;
+    if (!stmt.moduleSpecifier.text.includes("commitmentKernel")) continue;
+    const bindings = stmt.importClause?.namedBindings;
+    if (!bindings || !ts.isNamedImports(bindings)) continue;
+    for (const el of bindings.elements) {
+      // `import { COMMITMENT_AUTHORITY_V1 }` — and not a rename, whose local
+      // name would say nothing about what it is bound to.
+      if (!el.propertyName && el.name.text === "COMMITMENT_AUTHORITY_V1") return true;
+    }
+  }
+  return false;
 }
 
 export function topLevelFieldVerdict(
@@ -703,6 +731,8 @@ export function findOrganizationInsertSites(
   file: string
 ): OrganizationInsertSite[] {
   const source = blankComments(rawSource);
+  // Whether the canonical constant's NAME can be trusted in this file at all.
+  const importsConstant = importsCanonicalVersionConstant(parseModule(rawSource, file));
   const sites: OrganizationInsertSite[] = [];
   for (const call of collectDbWrites(rawSource, file)) {
     if (call.method !== "insert") continue;
@@ -742,7 +772,9 @@ export function findOrganizationInsertSites(
       file,
       enclosingFunction: last ? (last[1] ?? last[2]) : "<top level>",
       initializesAuthorityVersion:
-        topLevelFieldVerdict(call.literal, "commitmentAuthorityVersion", isCanonicalVersionValue) ===
+        topLevelFieldVerdict(call.literal, "commitmentAuthorityVersion", (v) =>
+          isCanonicalVersionValue(v, importsConstant)
+        ) ===
         "UNCONDITIONAL",
     });
   }

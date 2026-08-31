@@ -483,11 +483,57 @@ describe("round-6: the analyzers cannot be forged by position or by value", () =
     }
   );
 
+  /**
+   * ⚠️ THE IMPORT IS PART OF THE FIXTURE, AND THAT IS THE CONTRACT.
+   * The identifier's NAME proves nothing on its own — see the shadowing test
+   * below — so a snippet that does not import the constant must not certify,
+   * and one that does must.
+   */
+  const IMPORT = `import { COMMITMENT_AUTHORITY_V1 } from "./utils/commitmentKernel";\n`;
+  const orgInsertImporting = (literal: string) =>
+    findOrganizationInsertSites(
+      `${IMPORT}ctx.db.insert("organizations", ${literal})`,
+      "convex/organizations.ts"
+    )[0];
+
   it("CONTROL — certifies the real pinned constant and a bare canonical literal", () => {
-    expect(orgInsert(`{ commitmentAuthorityVersion: COMMITMENT_AUTHORITY_V1 }`)
-      .initializesAuthorityVersion).toBe(true);
+    expect(
+      orgInsertImporting(`{ commitmentAuthorityVersion: COMMITMENT_AUTHORITY_V1 }`)
+        .initializesAuthorityVersion
+    ).toBe(true);
+    // A bare canonical literal needs no import to be trustworthy.
     expect(orgInsert(`{ commitmentAuthorityVersion: ${COMMITMENT_AUTHORITY_V1} }`)
       .initializesAuthorityVersion).toBe(true);
+  });
+
+  /**
+   * ⚠️ THE SPELLING IS NOT THE BINDING — a hole in my own round-6 value check.
+   * `const COMMITMENT_AUTHORITY_V1 = 0` certified as V1 purely because the
+   * identifier was spelled right. Found by Codex xhigh against 02582f606.
+   */
+  it("refuses a SHADOWED COMMITMENT_AUTHORITY_V1 bound to a legacy value", () => {
+    const shadowed = findOrganizationInsertSites(
+      `const COMMITMENT_AUTHORITY_V1 = 0;
+       ctx.db.insert("organizations", { commitmentAuthorityVersion: COMMITMENT_AUTHORITY_V1 });`,
+      "x.ts"
+    )[0];
+    expect(shadowed.initializesAuthorityVersion).toBe(false);
+  });
+
+  it("refuses the identifier in a file that never imports it", () => {
+    expect(
+      orgInsert(`{ commitmentAuthorityVersion: COMMITMENT_AUTHORITY_V1 }`)
+        .initializesAuthorityVersion
+    ).toBe(false);
+  });
+
+  it("refuses a RENAMED import, whose local name proves nothing", () => {
+    const renamed = findOrganizationInsertSites(
+      `import { SOMETHING as COMMITMENT_AUTHORITY_V1 } from "./utils/commitmentKernel";
+       ctx.db.insert("organizations", { commitmentAuthorityVersion: COMMITMENT_AUTHORITY_V1 });`,
+      "x.ts"
+    )[0];
+    expect(renamed.initializesAuthorityVersion).toBe(false);
   });
 
   /**
