@@ -17,6 +17,14 @@ import {
   hasActiveReservationHold,
 } from "./depositHelpers";
 import { reverseDepositApplicationsForSale } from "./depositApplications";
+import {
+  DeferredAuthorityOutcome,
+  authorityOutcomeDetail,
+  restoreAuthorityAfterReversal,
+  worstAuthorityOutcome,
+} from "../commitments";
+import { beginUserRun } from "./commitmentKernel";
+import { auditLog } from "../financialAudit";
 
 async function getActiveReceivableAllocations(
   ctx: MutationCtx,
@@ -327,8 +335,28 @@ async function cancelPendingSupplierPayables(
  */
 async function reopenDepositAfterReversal(
   ctx: MutationCtx,
-  depositId: Id<"deposits">
+  depositId: Id<"deposits">,
+  /**
+   * SCRUM-208 — MAY THE VEHICLE HOLD COME BACK YET?
+   *
+   * ⚠️ THE MONEY SIDE AND THE CAR SIDE ARE DIFFERENT QUESTIONS. Taking the row
+   * out of APPLIED says the money is no longer consumed by that sale, and that
+   * is true the moment the application is reversed or reversing. Setting
+   * `holdActive` says the CAR is held again, and on a single-vehicle deposit
+   * that flag IS the hold — so doing it while the reversing journal is only
+   * queued holds a car against an entry the ledger still shows posted.
+   *
+   * The multi-vehicle path already knew this and gated its slice on
+   * `journalReversed`; the direct path did not, and that asymmetry is the
+   * defect. Same class as every other one this phase found: the rule was
+   * pinned on the branch somebody looked at and missing from its neighbour.
+   *
+   * Defaults to true so the callers that reopen a row with no deferred
+   * accounting behind it are unchanged.
+   */
+  options: { reinstateHold?: boolean } = {}
 ): Promise<Doc<"deposits"> | null> {
+  const reinstateHold = options.reinstateHold ?? true;
   const deposit = await ctx.db.get(depositId);
   if (!deposit) return null;
   // A row with money left over never closes as APPLIED — it keeps HELD so the
@@ -339,6 +367,7 @@ async function reopenDepositAfterReversal(
   // share left active on a vehicle now marked SOLD. Every control agreed the
   // books were fine, because they were — the money simply never moved.
   if (deposit.status === "HELD" && deposit.holdActive === false) {
+    if (!reinstateHold) return deposit;
     await ctx.db.patch(deposit._id, {
       holdActive: true,
       resolvedBy: undefined,
@@ -352,7 +381,9 @@ async function reopenDepositAfterReversal(
   if (deposit.status !== "APPLIED") return deposit;
   await ctx.db.patch(deposit._id, {
     status: "HELD",
-    holdActive: true,
+    // The money is no longer consumed by that sale either way; only the CAR
+    // waits for the journal.
+    ...(reinstateHold ? { holdActive: true } : {}),
     resolvedBy: undefined,
     resolvedAt: undefined,
     // Cleared alongside the status. Leaving them set pointed a live deposit
@@ -400,10 +431,49 @@ async function reinstateAppliedDeposits(
     reversalDate: args.reversalDate,
   });
 
+  // ⚠️ ONE CLOCK AND ONE ACTOR FOR EVERY AUTHORITY DECISION IN THIS
+  // CANCELLATION, taken before anything is consulted, so two cars on the same
+  // quote cannot be judged against different instants.
+  const run = beginUserRun(args.actorId, args.reversalDate);
+  const authorityOutcomes: DeferredAuthorityOutcome[] = [];
+
   const touchedDeposits = new Set<string>();
   for (const application of reversed) {
     touchedDeposits.add(application.depositId.toString());
-    const deposit = await reopenDepositAfterReversal(ctx, application.depositId);
+    // ⚠️ A SLICED DEPOSIT'S PARENT FLAG IS NOT THE CAR HOLD — its slices are,
+    // and they are gated below. A DIRECT deposit's flag IS the car hold, so it
+    // waits for the reversing journal.
+    //
+    // ⚠️ AND THIS IS WHERE THE SYNCHRONOUS PATH GETS ITS LIVENESS, IMPLICITLY.
+    //
+    // The deferred caller re-reads the canonical binding after making its
+    // source live, and refuses to write authority if the source did not
+    // actually come back — see the `relive` gate in
+    // `commitments.restoreAuthorityAfterReversal`. This path has no such gate,
+    // because it has no callback for one to verify: the source is made live
+    // HERE, earlier in the same transaction, before `restoreAuthorityAfterReversal`
+    // is reached further down under the SAME `journalReversed` condition.
+    //
+    // That ordering is what makes it safe, and it is an INVARIANT NOBODY
+    // ASSERTS: a deposit reaching this line with a live application is APPLIED,
+    // so it always transitions to HELD + holdActive. Note the asymmetry that
+    // makes it worth writing down — unlike `reinstateDirectDepositHold`, this
+    // writer does NOT check `isDeleted`. No door can currently produce a
+    // deleted deposit still carrying a live application (`deposits.voidDeposit`
+    // refuses unless the status is HELD with no APPLIED/REVERSING application,
+    // and `deposits` is absent from `adminData`'s ADMIN_TABLES), so there is no
+    // reachable counterexample today.
+    //
+    // But "nothing can reach it" is the claim that has already stopped being
+    // true twice on this branch, and the sibling writer carries an `isDeleted`
+    // guard for exactly that reason. If a new deposit-mutating door is ever
+    // added that does not route through `voidDeposit`'s guards, this is the
+    // line that silently stops being safe. Raised by Sonnet MAX against
+    // e3850d972; left as a documented invariant rather than a speculative
+    // guard, because the reachable behaviour is correct as it stands.
+    const deposit = await reopenDepositAfterReversal(ctx, application.depositId, {
+      reinstateHold: application.holdId !== undefined || application.journalReversed,
+    });
     if (!deposit) continue;
 
     if (application.holdId) {
@@ -430,11 +500,110 @@ async function reinstateAppliedDeposits(
       // Single-vehicle quote: no hold rows exist, the whole row is the slice,
       // and the long-standing behaviour — the deposit goes back on hold against
       // its car — is exactly right.
-      await reactivateAllVehiclesForDeposit(ctx, deposit);
+      //
+      // ⚠️ BUT ONLY ONCE THE REVERSING JOURNAL HAS POSTED. While it is merely
+      // queued this leaves the car un-held and the money un-restorable, and the
+      // outbox finishes the job when the entry posts. Reinstating here would
+      // hold a car against an entry the ledger still shows credited — the
+      // single-vehicle twin of the slice rule three lines above.
+      //
+      // ⚠️ HONEST NOTE ON COVERAGE: this gate is belt-and-braces, and its own
+      // mutant SURVIVES. The load-bearing gate is `reinstateHold` above — with
+      // `holdActive` still false, this call only re-syncs the vehicle
+      // projection and reactivates secondary slices, of which a direct deposit
+      // has none, so forcing it true changes nothing observable. It is kept
+      // because it would become load-bearing the moment `reinstateHold` were
+      // loosened, but it is NOT independently proven and should not be read as
+      // if it were.
+      if (application.journalReversed) {
+        await reactivateAllVehiclesForDeposit(ctx, deposit);
+
+        // ⚠️ SCRUM-208 c15808 — THE MONEY CAME BACK, SO THE DEAL COMES BACK.
+        //
+        // This is the synchronous half of the cancellation spine: the
+        // reversing journal already exists, so `reopenDepositAfterReversal`
+        // above has just made this deposit hold its car again. Without what
+        // follows, the customer's root stays CONSUMED, `resolveOwnership`
+        // reports the car FREE, and a rival's `acquireVehicle` succeeds on a
+        // car whose original buyer's deposit reads `holdActive: true`. That is
+        // the defect SCRUM-195 exists to prevent, reintroduced one layer up.
+        //
+        // The deferred half lives in `accountingOutbox.settleOneReversalSource`
+        // and calls the SAME function, so the two paths cannot drift.
+        //
+        // ⚠️ BUT THEY ARE NOT PROTECTED THE SAME WAY, AND THAT ASYMMETRY IS
+        // DELIBERATE — DO NOT "TIDY" IT AWAY.
+        //
+        // The deferred caller wraps this in a per-source `try`/`catch` inside
+        // `settleFreedHoldsAuthority`, because it runs under
+        // `accountingOutbox.drainEntries`, whose own per-row catch would
+        // otherwise absorb a throw and COMMIT a half-restoration with no record
+        // of it. This synchronous caller has no such catch anywhere in this
+        // loop or in either of its callers — so an unexpected throw here
+        // propagates out and Convex aborts the whole mutation. Nothing commits.
+        // That is a different mechanism reaching the same safety property, and
+        // here it is the stronger one.
+        //
+        // So: adding a `try`/`catch`/`continue` around this call — say, to stop
+        // one bad car blocking the others in a multi-vehicle cancellation —
+        // would REMOVE that atomic abort and silently reintroduce the exact
+        // silent-loss shape SCRUM-208 spent three rounds closing. If that
+        // behaviour is ever wanted, it needs the deferred path's full treatment
+        // (a recorded, worst-ranked outcome pushed into `authorityOutcomes`),
+        // not a bare catch. Raised by Sonnet MAX against 641ead8cb.
+        authorityOutcomes.push(
+          await restoreAuthorityAfterReversal(ctx, {
+            run,
+            orgId: args.orgId,
+            vehicleId: application.vehicleId,
+            source: { kind: "DEPOSIT", depositId: deposit._id },
+            saleId: args.saleId,
+            createdBy: args.actorId,
+          })
+        );
+      }
     }
   }
 
-  if (!args.quoteId) return;
+  // ⚠️ RECORDED DURABLY, NOT RETURNED AND DROPPED. The deferred path has
+  // `pendingAccountingEvents.authorityOutcome` to land on; the synchronous one
+  // has no queue row at all — `journalReversed` is precisely the case where no
+  // entry was ever queued — so without this an authority result a human must
+  // act on would exist only in the shape of the data it failed to change.
+  //
+  // Written only when a restoration was actually attempted. A cancellation
+  // with no direct deposit behind it has nothing to report, and a row saying
+  // so on every cancellation would bury the ones that matter.
+  // ⚠️ DEFERRED TO EVERY EXIT, NOT TAKEN HERE. This used to run inline, above
+  // the zero-share loop below — so an outcome that loop produced could not
+  // reach it, and the loop produced none because it performed no restoration at
+  // all. Both halves of that are fixed; the audit is now taken after ALL
+  // restoration work, at whichever exit the function actually takes.
+  const recordWorstAuthorityOutcome = async () => {
+    const worst = worstAuthorityOutcome(authorityOutcomes);
+    if (!worst) return;
+    const detail = authorityOutcomeDetail(worst);
+    await auditLog(ctx, {
+      orgId: args.orgId,
+      actorId: args.actorId,
+      actionType: "SETTLE_COMMITMENT_AUTHORITY",
+      resourceType: "sales",
+      resourceId: args.saleId,
+      description: detail
+        ? `Commitment authority after cancellation: ${worst.outcome} — ${detail}`
+        : `Commitment authority after cancellation: ${worst.outcome}`,
+      after: {
+        outcome: worst.outcome,
+        ...(detail ? { detail } : {}),
+        vehiclesSettled: authorityOutcomes.length,
+      },
+    });
+  };
+
+  if (!args.quoteId) {
+    await recordWorstAuthorityOutcome();
+    return;
+  }
 
   // Slices this sale consumed that carry no money.
   //
@@ -476,6 +645,40 @@ async function reinstateAppliedDeposits(
       // it, and that is rarely the one being cancelled.
       await reopenDepositAfterReversal(ctx, deposit._id);
       await syncVehicleHoldStatus(ctx, hold.vehicleId, args.actorId);
+
+      // ⚠️ SCRUM-208 — THE MONEY WENT BACK ON THE CAR, SO THE DEAL MUST TOO.
+      //
+      // The asymmetry this closes is exact. In the application-backed loop a
+      // FUNDED slice's hold goes DOWN — released, awaiting the customer's
+      // decision — so the car is genuinely freed and no authority is owed. This
+      // loop does the opposite: it puts the hold back UP. Without what follows,
+      // the source was live again over a root that stayed CONSUMED, so
+      // `resolveOwnership` reported the car FREE while its projection said
+      // RESERVED, and a rival's `acquireVehicle` succeeded on a car the
+      // original deal still held money against — the exact defect SCRUM-195
+      // exists to prevent, reachable only through the zero-share door.
+      //
+      // ⚠️ INVISIBLE TO EVERY EXISTING TEST IN THIS AREA, AND THAT IS WHY IT
+      // SURVIVED. Every fixture in `multiVehicleDepositAllocation.test.ts`
+      // seeds a LEGACY organization, and a LEGACY organization performs no
+      // canonical restoration at all — so the whole zero-share path was built
+      // and tested in the one regime where this gap cannot appear. The
+      // regression test stamps V1 first. Found by Codex xhigh against 6e2dceb83.
+      //
+      // Same spine and same ordering as the DIRECT case above: the source is
+      // made live first, then the decision is taken. No try/catch, for the
+      // reason spelled out there — a throw must abort the whole mutation.
+      authorityOutcomes.push(
+        await restoreAuthorityAfterReversal(ctx, {
+          run,
+          orgId: args.orgId,
+          vehicleId: hold.vehicleId,
+          // The sliced representation names its exact hold row.
+          source: { kind: "DEPOSIT", depositId: deposit._id, holdId: hold._id },
+          saleId: args.saleId,
+          createdBy: args.actorId,
+        })
+      );
     }
   }
 
@@ -517,6 +720,8 @@ async function reinstateAppliedDeposits(
       reversalDate: args.reversalDate,
     });
   }
+
+  await recordWorstAuthorityOutcome();
 }
 
 /**

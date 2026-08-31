@@ -1,5 +1,13 @@
+import {
+  acquireVehicle,
+  assertAcquirable,
+  assertNoLiveBasisHolds,
+  COMMITMENT_MESSAGES,
+  evidenceForDepositHold,
+  releaseRootIfNoLiveBasis,
+} from "./commitments";
 import { ConvexError, v } from "convex/values";
-import { query, type QueryCtx } from "./_generated/server";
+import { query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, type Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -41,6 +49,13 @@ export const create = mutation({
     method: v.optional(depositMethodValidator),
     notes: v.optional(v.string()),
     idempotencyKey: v.optional(v.string()),
+    /**
+     * SCRUM-195: EXPLICIT proof that this deal continues the reservation
+     * already holding the car. Naming the reservation is the only way that
+     * continuation is recognised — the authority never infers it from the
+     * customer and the vehicle matching.
+     */
+    adoptReservationId: v.optional(v.id("vehicleReservations")),
   },
   handler: async (ctx, args) => {
     // Recording a deposit while working a deal in the wizard is normal
@@ -62,12 +77,20 @@ export const create = mutation({
         operation: "deposits.create",
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
+        // ⚠️ THE ADOPTION IS PART OF THE REQUEST, SO IT IS PART OF ITS IDENTITY.
+        // Left out, two calls sharing an idempotency key but naming DIFFERENT
+        // reservations — or one naming a reservation and one naming none — read
+        // as the same request, and the second is answered from the first's
+        // result. That is not a replay: it silently drops an affirmative claim
+        // about which deal the money continues, and the authority never sees
+        // the second call to refuse it.
         fingerprint: JSON.stringify({
           quoteId: args.quoteId,
           amountMinor,
           currency,
           method,
           notes: args.notes ?? null,
+          adoptReservationId: args.adoptReservationId ?? null,
         }),
       },
       async () => {
@@ -99,6 +122,23 @@ export const create = mutation({
         // (no-op if already RESERVED — parallel deposits are allowed). A multi-vehicle
         // quote holds every vehicle on the deal, not just the first one.
         const depositVehicleItems = quote.vehicleItems ?? [{ vehicleId: quote.vehicleId }];
+
+        // SCRUM-195: ask the AUTHORITY before moving a car's status. Vehicle
+        // status is an advisory projection (I4) — it says where a car IS, not
+        // whose deal it belongs to, and two deals can both see AVAILABLE. The
+        // commitment root is the lock, and it refuses BEFORE any side effect.
+        //
+        // The quote is the lineage PROOF, not the identity: presenting it says
+        // "I am acting for the deal this quote belongs to". A quote with no
+        // root has proven nothing, so a second independent quote for the same
+        // customer on the same car is refused here, exactly as a rival's is.
+        for (const item of depositVehicleItems) {
+          await assertAcquirable(ctx, {
+            orgId: args.orgId,
+            vehicleId: item.vehicleId,
+            lineage: { quoteId: args.quoteId, adoptReservationId: args.adoptReservationId },
+          });
+        }
         for (const item of depositVehicleItems) {
           await holdVehicleForDeposit(ctx, item.vehicleId);
         }
@@ -118,19 +158,51 @@ export const create = mutation({
           actorId: user._id,
           now,
           sourceLabel: `quote ${args.quoteId}`,
+          // SCRUM-208 — THE SAME CONDITION THAT DECIDES WHETHER HOLD ROWS ARE
+          // WRITTEN, read once and stamped on the row. The `> 1` test below is
+          // the definition of the sliced representation; expressing it twice
+          // is how the discriminator and the rows it describes drift apart.
+          usesVehicleHoldRows: depositVehicleItems.length > 1,
         });
+
+        // SCRUM-195: record WHOSE deal now holds each car, on the strength of
+        // THIS deposit. One episode per car per acquisition — a further
+        // instalment on the same deal joins the same root and opens its own
+        // episode, so the history says how the deal was built.
+        const episodeByVehicle = new Map<string, Id<"vehicleCommitmentClaims">>();
+        for (const item of depositVehicleItems) {
+          const { claimId } = await acquireVehicle(ctx, {
+            orgId: args.orgId,
+            vehicleId: item.vehicleId,
+            customerId: quote.customerId,
+            createdBy: user._id,
+            evidence: { kind: "DEPOSIT", depositId },
+            lineage: { quoteId: args.quoteId, adoptReservationId: args.adoptReservationId },
+          });
+          episodeByVehicle.set(String(item.vehicleId), claimId);
+        }
 
         // Only multi-vehicle deposits need a join row per vehicle — a
         // single-vehicle deposit is already fully tracked by the deposit's
         // own vehicleId + by_vehicle_hold index.
         if (depositVehicleItems.length > 1) {
           for (const item of depositVehicleItems) {
+            // SCRUM-195: the slice names the episode it was created with, so
+            // what this money is evidence OF can be read back exactly instead
+            // of inferred from the surrounding row or searched for in history.
+            const sourceCommitmentClaimId = episodeByVehicle.get(String(item.vehicleId));
+            if (!sourceCommitmentClaimId) {
+              throw new Error(
+                `no commitment episode was recorded for vehicle ${item.vehicleId} on deposit ${depositId}`
+              );
+            }
             await ctx.db.insert("depositVehicleHolds", {
               orgId: args.orgId,
               depositId,
               vehicleId: item.vehicleId,
               active: true,
               createdAt: now,
+              sourceCommitmentClaimId,
             });
           }
         }
@@ -149,6 +221,28 @@ export const create = mutation({
     );
   },
 });
+
+/**
+ * Every car this deposit could have been holding.
+ *
+ * A single-vehicle deposit holds its own `vehicleId` and writes no join rows at
+ * all (see the guard in `create`), so reading only `depositVehicleHolds` would
+ * find nothing for the commonest walk-in case. A multi-vehicle deposit holds
+ * whatever its hold rows name. Both are needed.
+ */
+async function vehiclesHeldByDeposit(
+  ctx: MutationCtx,
+  deposit: Doc<"deposits">
+): Promise<Array<Id<"vehicles">>> {
+  const seen = new Map<string, Id<"vehicles">>();
+  seen.set(String(deposit.vehicleId), deposit.vehicleId);
+  for await (const hold of ctx.db
+    .query("depositVehicleHolds")
+    .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))) {
+    seen.set(String(hold.vehicleId), hold.vehicleId);
+  }
+  return [...seen.values()];
+}
 
 export const release = mutation({
   args: {
@@ -203,6 +297,20 @@ export const release = mutation({
           notes: args.notes,
           idempotencyKey: args.idempotencyKey,
         });
+
+        // SCRUM-195 M3. The money decision is made; now ask the canonical
+        // authority whether anything still holds each car. Deliberately AFTER
+        // `releaseHeldDeposit`, so the deposit basis this door just ended is
+        // already gone when the predicate runs.
+        const releasedAt = Date.now();
+        for (const vehicleId of await vehiclesHeldByDeposit(ctx, deposit)) {
+          await releaseRootIfNoLiveBasis(ctx, {
+            orgId: args.orgId,
+            vehicleId,
+            reason: `deposit ${args.resolution.toLowerCase()}`,
+            decisionNow: releasedAt,
+          });
+        }
 
         const actorName = await getActorName(ctx);
         await notifyManagers(
@@ -269,6 +377,17 @@ export const voidDeposit = mutation({
       resolvedAt: now,
       notes: args.reason !== undefined ? args.reason : deposit.notes,
     });
+
+    // SCRUM-195 M3. The row is voided and its hold cleared above, so the
+    // deposit basis is gone by the time this asks what still holds each car.
+    for (const vehicleId of await vehiclesHeldByDeposit(ctx, deposit)) {
+      await releaseRootIfNoLiveBasis(ctx, {
+        orgId: args.orgId,
+        vehicleId,
+        reason: "deposit voided as recorded in error",
+        decisionNow: now,
+      });
+    }
 
     // Voiding means "recorded in error" — every artifact written when the
     // deposit was recorded must be unwound, not just the operational row:
@@ -724,6 +843,16 @@ export const resolveReleasedAllocation = mutation({
     const amountMinor = hold.allocatedAmountMinor ?? 0;
     const now = Date.now();
 
+    // SCRUM-195: whatever this decision does with the money, it acts for the
+    // deal the money is already on. The deposit is the proof — it works for a
+    // reservation-origin deposit that has no quote as well as for one that
+    // does, without inferring anything from the customer.
+    const sourceLineage = {
+      quoteId: deposit.quoteId ?? null,
+      reservationId: deposit.reservationId ?? null,
+      depositId: hold.depositId,
+    };
+
     if (args.treatment === "REALLOCATE_TO_VEHICLE") {
       if (!args.toVehicleId) {
         throw new ConvexError("Name the vehicle that is to receive the released amount.");
@@ -771,6 +900,23 @@ export const resolveReleasedAllocation = mutation({
       // row to point at the receiving car would erase the fact that the money
       // was ever against the first one — the audit question a re-allocation
       // exists to answer.
+      // SCRUM-195: moving money ONTO a car is a fresh acquisition of that car,
+      // and it goes through the same authority boundary as every other one. If
+      // something else has legitimately taken that car in the meantime, this
+      // REFUSES rather than opening a second root on it.
+      //
+      // ⚠️ THE EVIDENCE IS CARRIED FROM THE SOURCE, NOT ASSUMED FROM THE ROW.
+      // A reservation-origin deposit must not become DEPOSIT authority merely
+      // because the surrounding row is a deposit — that is one of the exact
+      // inference classes this replacement exists to remove.
+      const reallocated = await acquireVehicle(ctx, {
+        orgId: args.orgId,
+        vehicleId: args.toVehicleId,
+        customerId: deposit.customerId,
+        createdBy: user._id,
+        evidence: await evidenceForDepositHold(ctx, args.orgId, hold),
+        lineage: sourceLineage,
+      });
       await ctx.db.insert("depositVehicleHolds", {
         orgId: args.orgId,
         depositId: hold.depositId,
@@ -782,6 +928,9 @@ export const resolveReleasedAllocation = mutation({
         allocatedBy: user._id,
         allocationStatus: "ALLOCATED",
         sourceHoldId: hold._id,
+        // The NEW episode, not the source hold's. `sourceHoldId` records where
+        // the money came from; this records what now holds the receiving car.
+        sourceCommitmentClaimId: reallocated.claimId,
       });
       await syncVehicleHoldStatus(ctx, args.toVehicleId, user._id);
     } else if (args.treatment === "RETURN_TO_UNALLOCATED") {
@@ -791,6 +940,24 @@ export const resolveReleasedAllocation = mutation({
       // permanently unsellable on this quote, because an allocation can only be
       // written onto an active hold row and every path out of RESOLVED is
       // terminal.
+      // SCRUM-195: putting the money back ON the deal is asking for the car
+      // again — a FRESH acquisition, not the undoing of a mistake. Between the
+      // release and this decision somebody else may legitimately have taken the
+      // vehicle, so this must refuse rather than re-hold it.
+      //
+      // ⚠️ AND THE LINEAGE COMES FROM THE SOURCE EPISODE. A deposit taken with a
+      // reservation carries no `quoteId`. Under the old design that arrived
+      // here as `null` and was silently read as "open a new root", which is how
+      // one physical car ended up with two. The deposit itself is now the
+      // proof, and the evidence tag is carried rather than assumed.
+      const reopened = await acquireVehicle(ctx, {
+        orgId: args.orgId,
+        vehicleId: hold.vehicleId,
+        customerId: deposit.customerId,
+        createdBy: user._id,
+        evidence: await evidenceForDepositHold(ctx, args.orgId, hold),
+        lineage: sourceLineage,
+      });
       await ctx.db.insert("depositVehicleHolds", {
         orgId: args.orgId,
         depositId: hold.depositId,
@@ -798,6 +965,10 @@ export const resolveReleasedAllocation = mutation({
         active: true,
         createdAt: now,
         sourceHoldId: hold._id,
+        // The re-opened slice carries the episode that re-acquired the car —
+        // which inherits its evidence from the released one, so the chain of
+        // what this money proves survives the round trip without re-deriving it.
+        sourceCommitmentClaimId: reopened.claimId,
       });
       await syncVehicleHoldStatus(ctx, hold.vehicleId, user._id);
     } else if (args.treatment === "REFUND_TO_CUSTOMER" || args.treatment === "FORFEITED") {
@@ -985,6 +1156,27 @@ export const releaseVehicleAllocation = mutation({
       throwAppError(AppErrorCode.QUOTE_NOT_FOUND, "Quote not found in this organization.");
     }
 
+    // SCRUM-195 M3. EXPLICIT VEHICLE RELEASE IS STRICTER THAN EVIDENCE RELEASE.
+    //
+    // This operation's actual meaning is "take this car out of this deal", and
+    // it does not get to end a reservation or a finance application because
+    // somebody clicked a button about the vehicle. The operator ends that
+    // workflow explicitly first (owner ruling c15683).
+    //
+    // DEPOSIT is excluded because this door IS the deposit's own release — its
+    // hold is obviously still live at this point, and including it would make
+    // the guard fire every time.
+    //
+    // Before any write, so a refusal leaves no hold in limbo.
+    const decisionNow = Date.now();
+    await assertNoLiveBasisHolds(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      decisionNow,
+      excludeKinds: ["DEPOSIT"],
+      message: COMMITMENT_MESSAGES.vehicleStillHeldByAnotherBasis,
+    });
+
     const deposits = await ctx.db
       .query("deposits")
       .withIndex("by_quote", (q) => q.eq("quoteId", args.quoteId))
@@ -1032,6 +1224,16 @@ export const releaseVehicleAllocation = mutation({
     }
 
     await maybeReleaseVehicleHold(ctx, args.vehicleId);
+
+    // SCRUM-199: the car is free the moment it leaves the deal, even though its
+    // money is still sitting in RELEASED_AWAITING_DECISION. The root locks the
+    // car; it does not lock the cash.
+    await releaseRootIfNoLiveBasis(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      reason: "vehicle removed from the deal",
+      decisionNow,
+    });
 
     await auditLog(ctx, {
       orgId: args.orgId,

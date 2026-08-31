@@ -305,12 +305,58 @@ export async function reverseDepositApplicationsForSale(
  * derives as `reversed_<the application's own key>`. Frees the slice itself and
  * returns the holds it advanced, for callers that want to report on them.
  */
-export async function completeDeferredReversal(
+/**
+ * SCRUM-208 — the EXACT source a completed reversal frees, typed.
+ *
+ * ⚠️ CARRIED FROM THE APPLICATION ROW, NEVER INFERRED FROM HISTORY. The row
+ * already records which deposit, which car, which sale and — only for a
+ * multi-vehicle quote — which slice. Re-deriving any of that at completion
+ * time is the rediscovery this model removes.
+ *
+ * ⚠️ A DIRECT DEPOSIT HAS NO SLICE, AND NONE MAY BE FABRICATED. `holdId` is
+ * absent on a single-vehicle quote because the whole row IS the slice.
+ * Inventing a `depositVehicleHolds` row to make the shapes uniform would put a
+ * hold on a car whose money never had one.
+ */
+export type ReversalCompletionSource = {
+  readonly kind: "SLICE" | "DIRECT";
+  readonly depositId: Id<"deposits">;
+  readonly vehicleId: Id<"vehicles">;
+  /** The exact sale this application was consumed by. */
+  readonly saleId: Id<"sales">;
+  /** Present only on the sliced representation. */
+  readonly holdId?: Id<"depositVehicleHolds">;
+};
+
+/**
+ * What a completed reversal WOULD free, and the rows that would be consumed to
+ * free it. Read-only.
+ *
+ * ⚠️ SPLIT FROM THE CONSUMING WRITES ON PURPOSE (SCRUM-208 F1). Resolving and
+ * consuming used to be one step, so the caller could not record what authority
+ * was owed BEFORE the reversal's idempotency was spent. See
+ * `commitDeferredReversal` for why that ordering is load-bearing.
+ */
+export type ResolvedDeferredReversal = {
+  /** Null when there is nothing to complete — no key match, or already done. */
+  readonly applicationId: Id<"depositApplications"> | null;
+  /** Present only for the sliced representation, and only while REVERSING. */
+  readonly holdId: Id<"depositVehicleHolds"> | null;
+  readonly sources: ReversalCompletionSource[];
+};
+
+const NOTHING_TO_COMPLETE: ResolvedDeferredReversal = {
+  applicationId: null,
+  holdId: null,
+  sources: [],
+};
+
+export async function resolveDeferredReversalSources(
   ctx: MutationCtx,
-  args: { orgId: Id<"organizations">; reversalIdempotencyKey: string; postedAt: number }
-): Promise<Id<"depositVehicleHolds">[]> {
+  args: { orgId: Id<"organizations">; reversalIdempotencyKey: string }
+): Promise<ResolvedDeferredReversal> {
   const prefix = "reversed_";
-  if (!args.reversalIdempotencyKey.startsWith(prefix)) return [];
+  if (!args.reversalIdempotencyKey.startsWith(prefix)) return NOTHING_TO_COMPLETE;
   const applicationKey = args.reversalIdempotencyKey.slice(prefix.length);
 
   const application = await ctx.db
@@ -319,20 +365,104 @@ export async function completeDeferredReversal(
       q.eq("orgId", args.orgId).eq("eventIdempotencyKey", applicationKey)
     )
     .unique();
-  if (!application || application.status !== "REVERSING") return [];
+  if (!application || application.status !== "REVERSING") return NOTHING_TO_COMPLETE;
 
-  await ctx.db.patch(application._id, {
-    status: "REVERSED",
-    reversedAt: args.postedAt,
-  });
-
-  const freed: Id<"depositVehicleHolds">[] = [];
   if (application.holdId) {
     const hold = await ctx.db.get(application.holdId);
     if (hold && hold.allocationStatus === "REVERSING") {
-      await ctx.db.patch(hold._id, { allocationStatus: "RELEASED_AWAITING_DECISION" });
-      freed.push(hold._id);
+      return {
+        applicationId: application._id,
+        holdId: hold._id,
+        sources: [
+          {
+            kind: "SLICE",
+            depositId: application.depositId,
+            vehicleId: hold.vehicleId,
+            saleId: application.saleId,
+            holdId: hold._id,
+          },
+        ],
+      };
     }
+    // The application is still completable; its slice simply is not.
+    return { applicationId: application._id, holdId: null, sources: [] };
   }
-  return freed;
+
+  // DIRECT — the whole row is the slice, and its car is the one the
+  // application named. Reported so the outbox can finish what the cancellation
+  // deliberately left undone: on a deferred reversal the hold was NOT
+  // reinstated, because a live vehicle hold whose reversing journal is still
+  // queued is a car held against an entry the ledger still shows posted.
+  return {
+    applicationId: application._id,
+    holdId: null,
+    sources: [
+      {
+        kind: "DIRECT",
+        depositId: application.depositId,
+        vehicleId: application.vehicleId,
+        saleId: application.saleId,
+      },
+    ],
+  };
+}
+
+/**
+ * Spend the reversal's idempotency. THE LAST STEP, NEVER AN EARLY ONE.
+ *
+ * ⚠️ THIS IS THE WRITE THAT CANNOT BE UNDONE BY A RETRY (SCRUM-208 F1). Once
+ * the application reads REVERSED, `resolveDeferredReversalSources` returns
+ * nothing forever after — that is exactly what makes the completion idempotent,
+ * and exactly why anything that must happen "because this reversal completed"
+ * has to be durably recorded FIRST.
+ *
+ * In Convex a CAUGHT exception rolls nothing back; only an uncaught one aborts
+ * the mutation. `drainEntries` catches per row, by design, so a throw between
+ * this patch and the work-item insert used to commit the consumption while the
+ * obligation was never written — and the retry then found nothing left to do
+ * and settled clean over the loss. Reproduced in
+ * `authorityOutcomePersistence.test.ts`.
+ */
+export async function commitDeferredReversal(
+  ctx: MutationCtx,
+  resolved: ResolvedDeferredReversal,
+  postedAt: number
+): Promise<void> {
+  if (!resolved.applicationId) return;
+
+  // ⚠️ THE HOLD FIRST, THE APPLICATION LAST — THE SAME PRINCIPLE ONE LEVEL DOWN.
+  //
+  // The application patch is what gates retryability: once it reads REVERSED,
+  // `resolveDeferredReversalSources` returns nothing forever after. So it must
+  // be the LAST write, for exactly the reason `recordAuthorityWork` had to move
+  // before it one level up.
+  //
+  // Written application-first, a throw on the hold patch committed the
+  // application (a caught exception rolls nothing back) and the retry then
+  // resolved to nothing — leaving the slice stranded at REVERSING, a state that
+  // never surfaces for the refund/reallocate decision it is waiting on, while
+  // the row still reached POSTED cleanly. Raised by Sonnet MAX against
+  // 6e2dceb83, and verified pre-existing at the Phase-2 anchor 1bb62ab4c.
+  //
+  // In this order a throw on the application patch leaves the application
+  // REVERSING, so the retry re-resolves, finds the hold already released, and
+  // takes the existing "the application is still completable; its slice simply
+  // is not" branch — completing correctly. A throw on the hold patch commits
+  // nothing at all.
+  if (resolved.holdId) {
+    await ctx.db.patch(resolved.holdId, { allocationStatus: "RELEASED_AWAITING_DECISION" });
+  }
+  await ctx.db.patch(resolved.applicationId, {
+    status: "REVERSED",
+    reversedAt: postedAt,
+  });
+}
+
+export async function completeDeferredReversal(
+  ctx: MutationCtx,
+  args: { orgId: Id<"organizations">; reversalIdempotencyKey: string; postedAt: number }
+): Promise<ReversalCompletionSource[]> {
+  const resolved = await resolveDeferredReversalSources(ctx, args);
+  await commitDeferredReversal(ctx, resolved, args.postedAt);
+  return resolved.sources;
 }

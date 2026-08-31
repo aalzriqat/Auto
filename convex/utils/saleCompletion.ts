@@ -18,6 +18,10 @@ import type { DepositMethod } from "./depositRecording";
 import { throwAppError, AppErrorCode } from "./errors";
 import { requireOrgMember } from "./tenancy";
 import {
+  assertSaleMayCompleteForVehicle,
+  consumeRootForSale,
+} from "../commitments";
+import {
   hookSaleCompleted,
   hookCommissionAccrued,
   hookTradeInAccepted,
@@ -173,9 +177,19 @@ export const FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT =
 export const CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN =
   "This sale is the supplier's car, financed, and settled directly with him, but it carries no usable record of what the dealership earned on it — so a commission cannot be worked out. Its recorded margin is missing, unreadable, or in a different currency from the organization's. Have the deal's figures corrected before recalculating; the existing commission has been left untouched.";
 
+/**
+ * What this preparation is FOR. Passed explicitly rather than inferred from
+ * `args.status`, because the canonical commitment check below is the whole
+ * difference between the two and a derived answer is exactly the distributed
+ * inference SCRUM-195 exists to remove. Required, so a future caller has to
+ * decide rather than inherit somebody else's default.
+ */
+type SalePreparationIntent = "DRAFT" | "COMPLETION";
+
 async function prepareSaleCompletion(
   ctx: MutationCtx,
-  args: SaleCompletionArgs
+  args: SaleCompletionArgs,
+  intent: SalePreparationIntent
 ): Promise<PreparedSaleCompletion> {
   const vehicle = await ctx.db.get(args.vehicleId);
   if (vehicle?.orgId !== args.orgId) {
@@ -301,6 +315,41 @@ async function prepareSaleCompletion(
       externallyFinanced: args.financingType === "FINANCED" || args.financingType === "LEASE",
     });
     accrueAtCompletion = commissionAmount != null;
+  }
+
+  if (intent === "COMPLETION") {
+    // Amounts first — pure input validation, in the position it already
+    // occupied (both completion callers ran it immediately after this
+    // function returned and before their first write).
+    assertCompletableSaleAmounts(args, currency);
+
+    // === SCRUM-195 M3 — THE CANONICAL COMMITMENT CHECK ===================
+    //
+    // ONE boundary for all four public completion doors: sales.create,
+    // sales.completeFromQuote, sales.completeDraft and
+    // applications.finalizeDeal. Each of them used to carry its own copy,
+    // which is the caller-drift defect this program exists to eliminate — a
+    // fifth caller of `completeSale` would have inherited nothing at all.
+    // Here it cannot be bypassed: every completion path reaches this
+    // function, and `intent` is a required argument.
+    //
+    // ⚠️ POSITION IS LOAD-BEARING, AND NOT ONLY FOR SAFETY. Everything above
+    // is authorization, input validation and quote/org/mismatch validation;
+    // everything below is the first irreversible business write. Placed any
+    // EARLIER it answered "committed to another deal" for a deal whose quote
+    // simply did not exist or did not match — replacing a precise validation
+    // failure with a misleading one and hiding the real defect. Placed any
+    // LATER a refused sale would already have written a row.
+    //
+    // A FREE vehicle passes: a walk-in sale is ordinary business. A sale with
+    // NO lineage on a committed car refuses, because naming no evidence
+    // against a held car proves nothing.
+    await assertSaleMayCompleteForVehicle(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      lineage: { quoteId: args.quoteId },
+      actingCustomerId: args.customerId,
+    });
   }
 
   return { vehicle, customer, leadId, commissionAmount, currency, accrueAtCompletion };
@@ -906,6 +955,24 @@ async function applySaleCompletionSideEffects(
   prepared: PreparedSaleCompletion,
   saleId: Id<"sales">
 ) {
+  // SCRUM-195 M3 — OPEN -> CONSUMED, beside the vehicle status change it
+  // belongs with. This function has exactly two callers, `completeSale` and
+  // `completeExistingSale`, and they are the only two ways a sale becomes
+  // COMPLETED — so stamping the root here is reached by every door for the
+  // same reason the check is, and a per-caller copy could drift.
+  //
+  // The root is stamped with the sale produced by THIS call, so a
+  // multi-vehicle completion cannot cross-stamp one car's root with another
+  // car's sale. `consumedBySaleId` carries the precise provenance; the reason
+  // string is deliberately uniform rather than re-derived from the args.
+  await consumeRootForSale(ctx, {
+    orgId: args.orgId,
+    vehicleId: args.vehicleId,
+    saleId,
+    reason: "sale completed",
+    decisionNow: Date.now(),
+  });
+
   await markVehicleAsSold(ctx, args.vehicleId);
 
   const isSourced = prepared.vehicle.sourceType === "SOURCED";
@@ -1582,7 +1649,9 @@ export async function createDraftSale(
   if (args.status !== undefined && args.status !== "PENDING") {
     throwAppError(AppErrorCode.VALIDATION_FAILED, "Draft sales must be created with PENDING status.");
   }
-  const prepared = await prepareSaleCompletion(ctx, args);
+  // A draft commits nothing and reserves nothing, so it is NOT gated on the
+  // commitment authority. `sales.completeDraft` is, at the moment it completes.
+  const prepared = await prepareSaleCompletion(ctx, args, "DRAFT");
   return await insertSaleRecord(ctx, args, prepared, "PENDING");
 }
 
@@ -1597,10 +1666,10 @@ export async function completeSale(
     );
   }
 
-  const prepared = await prepareSaleCompletion(ctx, args);
-  // Before the insert, so a refusal leaves no sale row, no vehicle status
+  // Amounts and the canonical commitment check both run inside this call,
+  // before the insert, so a refusal leaves no sale row, no vehicle status
   // change, no receivable and no queued accounting event behind.
-  assertCompletableSaleAmounts(args, prepared.currency);
+  const prepared = await prepareSaleCompletion(ctx, args, "COMPLETION");
   const saleId = await insertSaleRecord(ctx, args, prepared, "COMPLETED", prepared.commissionAmount);
   await applySaleCompletionSideEffects(ctx, args, prepared, saleId);
 
@@ -1739,11 +1808,10 @@ export async function completeExistingSale(
     existingCommissionAmount: sale.commissionAmount,
   };
 
-  const prepared = await prepareSaleCompletion(ctx, completionArgs);
   // Same authority, same position: before the status patch, so a draft that
   // cannot legally complete stays a draft rather than becoming a COMPLETED sale
   // whose accounting is refused afterwards.
-  assertCompletableSaleAmounts(completionArgs, prepared.currency);
+  const prepared = await prepareSaleCompletion(ctx, completionArgs, "COMPLETION");
   await ctx.db.patch(args.saleId, {
     status: "COMPLETED",
     commissionAmount: prepared.commissionAmount,

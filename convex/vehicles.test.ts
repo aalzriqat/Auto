@@ -872,7 +872,16 @@ describe("inventory intelligence", () => {
         createdAt: Date.now(),
       })
     );
-    await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 500 });
+    // SCRUM-195: this deposit CONTINUES the reservation already holding the car,
+    // and names it. Without that proof the authority correctly refuses — a
+    // second, unrelated deal on a held vehicle is exactly what it exists to stop,
+    // and the same customer is not evidence of the same deal.
+    await asUser.mutation(api.deposits.create, {
+      orgId,
+      quoteId,
+      amount: 500,
+      adoptReservationId: reservationId,
+    });
 
     await asUser.mutation(api.vehicles.releaseReservation, { orgId, reservationId });
 

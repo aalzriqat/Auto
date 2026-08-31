@@ -47,9 +47,53 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const user = await requireOrCreateAuthenticatedUser(ctx);
 
+    // ⚠️ A NEW DEALERSHIP IS BORN CANONICAL (SCRUM-208 / SCRUM-201, owner
+    // ruling c15855).
+    //
+    // `admitAuthorityVersion` reads `undefined | 0` as LEGACY, so an
+    // organization created without this field can never reach the canonical
+    // restoration lifecycle: every reversal it defers terminalizes as
+    // AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE, permanently. That is not future
+    // migration work — it is a brand-new tenant switched for good into the very
+    // model the canonical authority exists to replace. The legacy half of that
+    // behaviour was proven against a real backend in SCRUM-208 c15854.
+    //
+    // Server-owned and unconditional. No argument selects it, no update path
+    // reaches it, and there is no downgrade: `commitmentAuthorityVersion` is a
+    // guarded field, so a second writer outside the choke fails CI, and
+    // `commitmentWriteGuard` also counts organization INSERT SITES — because a
+    // future creator that merely OMITTED this field would write no guarded
+    // field at all, pass the field guard, and silently return every new
+    // dealership to LEGACY.
+    //
+    // ⚠️ WHY THE LITERAL 1 AND NOT `COMMITMENT_AUTHORITY_V1` (SCRUM-208
+    // c15929, owner ruling). The structural guard has to decide, from source
+    // text alone, that this field is really bound to the canonical version.
+    // Twice it tried to do that by trusting the CONSTANT'S NAME, and twice the
+    // name was forged — first by a plain redeclaration, then by an inner-scope
+    // shadow sitting under a genuine top-level import. Resolving a name to its
+    // binding needs a TypeScript Program, not a text scan, so the guard now
+    // accepts only a numeric literal. A number cannot be shadowed.
+    //
+    // The duplication is deliberate and it is NOT unpinned. Two executable
+    // contracts tie this literal to the kernel:
+    //
+    //   1. the guard's suite compares the guard's own canonical number with
+    //      the real `COMMITMENT_AUTHORITY_V1`;
+    //   2. `organizations.test.ts` drives THIS mutation and asserts the value
+    //      it actually stored equals that same kernel constant.
+    //
+    // So bumping the kernel to V2 does not silently leave new dealerships on
+    // 1 — it turns both suites red until this line and the guard are changed
+    // on purpose, together.
+    //
+    // EXISTING organizations are untouched. They stay LEGACY and keep failing
+    // closed; activating them is SCRUM-201's cutover and deliberately does not
+    // happen here.
     const orgId = await ctx.db.insert("organizations", {
       name: args.name.trim(),
       createdAt: Date.now(),
+      commitmentAuthorityVersion: 1,
     });
 
     // A brand-new org has no social events, so its materialised conversation

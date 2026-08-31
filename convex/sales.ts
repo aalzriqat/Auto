@@ -369,7 +369,19 @@ export const create = mutation({
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
       },
-      async () => await completeSale(ctx, { ...args, actorId: user._id })
+      async () => {
+        // SCRUM-195 M3, DOOR 1. A direct completed sale, no quote wizard — and
+        // `quoteId` is OPTIONAL here, a shape no other door can produce. An
+        // unlineaged manual sale on a held car must refuse: naming no lineage
+        // on a committed vehicle proves nothing, which is the authority's
+        // existing rule. A genuinely free car passes, as a walk-in should.
+        //
+        // Both that check and the root's consumption live inside
+        // `completeSale`'s shared boundary — see utils/saleCompletion.ts.
+        // This door adds nothing of its own, so there is nothing here to
+        // drift from the other three.
+        return await completeSale(ctx, { ...args, actorId: user._id });
+      }
     );
   },
 });
@@ -418,6 +430,11 @@ export const completeFromQuote = mutation({
 
         const vehicleItems = quote.vehicleItems ?? [{ vehicleId: quote.vehicleId, unitPrice: quote.vehiclePrice }];
 
+        // SCRUM-195 M3, DOOR 2. Each line item completes through
+        // `completeSale`, so every car on the deal passes the same shared
+        // check and stamps its OWN root with its OWN sale. A car that refuses
+        // rolls the whole mutation back — a multi-line completion is one
+        // transaction precisely so a partial deal cannot exist.
         return await completeSalesForLineItems(ctx, {
           orgId: args.orgId,
           quoteId: quote._id,
@@ -519,14 +536,19 @@ export const completeDraft = mutation({
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
       },
-      async () =>
-        await completeExistingSale(ctx, {
+      async () => {
+        // SCRUM-195 M3, DOOR 3. A draft commits nothing, so the barrier
+        // belongs at completion — and `completeExistingSale` rebuilds the
+        // completion args from the draft row and passes them through the same
+        // shared boundary. Nothing door-specific is needed here.
+        return await completeExistingSale(ctx, {
           orgId: args.orgId,
           saleId: args.saleId,
           actorId: user._id,
           depositResolution: args.depositResolution,
           idempotencyKey: args.idempotencyKey,
-        })
+        });
+      }
     );
   },
 });

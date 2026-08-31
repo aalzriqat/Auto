@@ -1,3 +1,11 @@
+import {
+  acquireVehicle,
+  assertAcquirable,
+  assertVehicleNotCommitted,
+  COMMITMENT_MESSAGES,
+  releaseRootIfNoLiveBasis,
+  resolveOwnership,
+} from "./commitments";
 import { v, ConvexError } from "convex/values";
 import { MutationCtx, QueryCtx, query } from "./_generated/server";
 import { internalMutation, mutation } from "./functions";
@@ -32,6 +40,7 @@ function generateImportVinPlaceholder(): string {
   return `IMPORT-${Date.now()}-${randomHex(3)}`;
 }
 import { syncVehicleHoldStatus, getDefaultReservationExpiry, getActiveDepositHolds } from "./utils/depositHelpers";
+import { releaseReservationDepositHold } from "./utils/commitmentWriters";
 import {
   amountToMinorOrThrow,
   depositMethodValidator,
@@ -1528,6 +1537,15 @@ export const createReservation = mutation({
     depositAmount: v.optional(v.number()),
     depositMethod: v.optional(depositMethodValidator),
     expiresAt: v.optional(v.number()),
+    /**
+     * SCRUM-195: EXPLICIT proof that this reservation belongs to the deal
+     * already holding the car — reserving a vehicle the same deal's own
+     * deposit is holding is ordinary dealership work. Naming the deal is the
+     * only way it is recognised; the authority never infers it from the
+     * customer and the vehicle matching.
+     */
+    dealQuoteId: v.optional(v.id("quotes")),
+    dealDepositId: v.optional(v.id("deposits")),
   },
   handler: async (ctx, args) => {
     const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
@@ -1580,15 +1598,23 @@ export const createReservation = mutation({
       .collect();
     for (const reservation of existingReservations) {
       if (reservation.expiresAt !== undefined && reservation.expiresAt <= now) {
-        if (reservation.depositId) {
-          const deposit = await ctx.db.get(reservation.depositId);
-          if (deposit && deposit.orgId === args.orgId && deposit.status === "HELD" && deposit.holdActive) {
-            await ctx.db.patch(reservation.depositId, { holdActive: false });
-          }
-        }
+        await releaseReservationDepositHold(ctx, {
+          orgId: args.orgId,
+          reservation,
+          reason: "reservation expired during reservation attempt",
+        });
         await ctx.db.patch(reservation._id, {
           status: "EXPIRED",
           expiredAt: now,
+        });
+        // Same reasoning as the cron sweep: this is the last door that can
+        // close the expired deal's root. It runs BEFORE the acquisition below,
+        // so the next customer is not refused a car nobody holds any more.
+        await releaseRootIfNoLiveBasis(ctx, {
+          orgId: args.orgId,
+          vehicleId: reservation.vehicleId,
+          reason: "reservation expired",
+          decisionNow: now,
         });
       }
     }
@@ -1639,6 +1665,23 @@ export const createReservation = mutation({
       throw new ConvexError("Another customer's deposit is currently holding this vehicle.");
     }
 
+    // SCRUM-195: the AUTHORITY decides, and it decides before anything is
+    // written. The three checks above are real and stay — but each answers a
+    // different question (where the car IS, whether an older reservation
+    // stands, whether a deposit holds it) and none of them answers "whose deal
+    // is this car on". A reservation has no quote yet, so it presents no
+    // lineage: it may only take a car that is genuinely FREE.
+    await assertAcquirable(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      lineage: { quoteId: args.dealQuoteId, depositId: args.dealDepositId },
+      // This door can present a deposit as its proof WITHOUT a quote, so the
+      // authority would otherwise have no one to check the proof against. The
+      // customer being reserved for is the operation's own participant — it
+      // proves nothing by itself, and is used only to refuse.
+      actingCustomerId: args.customerId,
+    });
+
     const reservationId = await ctx.db.insert("vehicleReservations", {
       orgId: args.orgId,
       vehicleId: args.vehicleId,
@@ -1653,6 +1696,7 @@ export const createReservation = mutation({
       reservedAt: now,
     });
 
+    let reservationDepositId: Id<"deposits"> | undefined;
     if (hasDeposit && amountMinor !== undefined && currency !== undefined) {
       const depositId = await recordHeldDeposit(ctx, {
         orgId: args.orgId,
@@ -1666,9 +1710,43 @@ export const createReservation = mutation({
         actorId: user._id,
         now,
         sourceLabel: `reservation ${reservationId}`,
+        // A reservation's deposit holds exactly the car it was taken on, and
+        // this door writes no `depositVehicleHolds` rows — so the row's own
+        // `holdActive` IS the hold. DIRECT.
+        usesVehicleHoldRows: false,
       });
       await ctx.db.patch(reservationId, { depositId });
+      reservationDepositId = depositId;
     }
+
+    // SCRUM-195: a standalone reservation is a deal in its own right and opens
+    // its own root. A later quote joins that root only by adopting the
+    // reservation explicitly.
+    //
+    // ⚠️ THE EVIDENCE IS THE RESERVATION, NOT ITS DEPOSIT. The deposit taken
+    // alongside is carried as context and is deliberately NOT the defining
+    // reference: treating it as one is how a consumed reservation episode came
+    // back as a live DEPOSIT-kind claim on a second root, silently, with the
+    // reservation reference simply absent (SCRUM-200).
+    await acquireVehicle(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      customerId: args.customerId,
+      createdBy: user._id,
+      evidence: {
+        kind: "RESERVATION",
+        reservationId,
+        ...(reservationDepositId ? { depositId: reservationDepositId } : {}),
+      },
+      // A reservation on a car this deal already holds JOINS that deal on the
+      // proof presented; a reservation on a FREE car opens the deal's root and
+      // is known by this reservation from then on.
+      lineage: {
+        reservationId,
+        quoteId: args.dealQuoteId,
+        depositId: args.dealDepositId,
+      },
+    });
 
     await syncVehicleHoldStatus(ctx, args.vehicleId, user._id);
 
@@ -1761,18 +1839,28 @@ export const releaseReservation = mutation({
     }
 
     const now = Date.now();
-    if (reservation.depositId) {
-      const deposit = await ctx.db.get(reservation.depositId);
-      if (deposit && deposit.orgId === args.orgId && deposit.status === "HELD" && deposit.holdActive) {
-        await ctx.db.patch(reservation.depositId, { holdActive: false });
-      }
-    }
+    await releaseReservationDepositHold(ctx, {
+      orgId: args.orgId,
+      reservation,
+      reason: "reservation released",
+    });
     await ctx.db.patch(args.reservationId, {
       status: "RELEASED",
       releasedAt: now,
       releasedBy: user._id,
     });
     await syncVehicleHoldStatus(ctx, reservation.vehicleId, user._id);
+
+    // SCRUM-195 M3. The reservation basis is gone; the root follows only if
+    // nothing else holds the car. A finance application on the same deal
+    // legitimately keeps it OPEN — releasing a reservation is not a decision to
+    // abandon the deal.
+    await releaseRootIfNoLiveBasis(ctx, {
+      orgId: args.orgId,
+      vehicleId: reservation.vehicleId,
+      reason: "reservation released",
+      decisionNow: now,
+    });
   },
 });
 
@@ -1792,38 +1880,95 @@ export const expireReservations = internalMutation({
 
     for (const reservation of reservations) {
       if (reservation.expiresAt === undefined || reservation.expiresAt > now) continue;
-      if (reservation.depositId) {
-        const deposit = await ctx.db.get(reservation.depositId);
-        if (deposit && deposit.orgId === reservation.orgId && deposit.status === "HELD" && deposit.holdActive) {
-          await ctx.db.patch(reservation.depositId, { holdActive: false });
-          // Money already changed hands (عربون) — expiry only lifts the vehicle
-          // hold. A manager still has to decide REFUNDED vs. FORFEITED via
-          // deposits.release, same human-in-the-loop as every other deposit
-          // resolution (see deposits.ts release/void).
-          const [vehicle, customer] = await Promise.all([
-            ctx.db.get(reservation.vehicleId),
-            ctx.db.get(reservation.customerId),
-          ]);
-          const vehicleLabel = vehicle
-            ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim()
-            : "Vehicle";
-          const customerLabel = customer
-            ? `${customer.firstName ?? ""} ${customer.lastName ?? ""}`.trim() || "Customer"
-            : "Customer";
-          await notifyManagers(
-            ctx,
-            reservation.orgId,
-            "deposit.expired",
-            { vehicleLabel, customerLabel, amount: String(deposit.amount) },
-            { link: `/${reservation.orgId}/vehicles?highlightId=${reservation.vehicleId}` }
-          );
-        }
+
+      // ⚠️ THIS IS THE ONLY CROSS-TENANT LOOP IN THE SYSTEM, AND ONE MUTATION IS
+      // ONE TRANSACTION. The query above ranges on `by_status_expiresAt` with no
+      // orgId, so a single batch spans every dealership on the deployment. A
+      // throw on the last row therefore un-does every earlier row — belonging to
+      // other people's dealerships — and because the offending reservation never
+      // reaches EXPIRED, the next sweep selects it again. One corrupt car
+      // starves reservation expiry for everyone, permanently.
+      //
+      // So ownership is read HERE, before this row writes anything, and the
+      // AMBIGUOUS case is decided rather than thrown.
+      //
+      // ⚠️ WHAT IS WITHHELD IS ONLY THE ROOT DECISION. The reservation's clock
+      // expiry is an objective fact about time, not about who owns the car, so
+      // it is still materialized below exactly as it would be for any other
+      // row — deposit hold lifted, reservation EXPIRED, projection synced.
+      // Leaving the row ACTIVE "until someone fixes the roots" is what made the
+      // failure permanent rather than transient.
+      //
+      // ⚠️ AND IT IS A TYPED DECISION, NOT A RESCUE. It branches on the
+      // canonical authority's own `Ownership.kind`, never on a try/catch around
+      // the finalizer and never on the wording of an error message. A blanket
+      // catch here would swallow the real bugs this sweep should surface, and a
+      // string match would fail silently the first time someone improves the
+      // copy. Two OPEN roots is one car promised to two deals; refusing to
+      // choose stays correct — it just must not take other tenants down with it.
+      const ownership = await resolveOwnership(ctx, reservation.orgId, reservation.vehicleId);
+      const rootDecisionWithheld = ownership.kind === "AMBIGUOUS";
+
+      // Money already changed hands (عربون) — expiry only lifts the vehicle
+      // hold. A manager still has to decide REFUNDED vs. FORFEITED via
+      // deposits.release, same human-in-the-loop as every other deposit
+      // resolution (see deposits.ts release/void).
+      const releasedDeposit = await releaseReservationDepositHold(ctx, {
+        orgId: reservation.orgId,
+        reservation,
+        reason: "reservation expired by sweep",
+      });
+      if (releasedDeposit) {
+        const [vehicle, customer] = await Promise.all([
+          ctx.db.get(reservation.vehicleId),
+          ctx.db.get(reservation.customerId),
+        ]);
+        const vehicleLabel = vehicle
+          ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim()
+          : "Vehicle";
+        const customerLabel = customer
+          ? `${customer.firstName ?? ""} ${customer.lastName ?? ""}`.trim() || "Customer"
+          : "Customer";
+        await notifyManagers(
+          ctx,
+          reservation.orgId,
+          "deposit.expired",
+          { vehicleLabel, customerLabel, amount: String(releasedDeposit.amount) },
+          { link: `/${reservation.orgId}/vehicles?highlightId=${reservation.vehicleId}` }
+        );
       }
       await ctx.db.patch(reservation._id, {
         status: "EXPIRED",
         expiredAt: now,
       });
       await syncVehicleHoldStatus(ctx, reservation.vehicleId);
+
+      if (rootDecisionWithheld) {
+        // Loudly, not silently. The corruption is left byte-identical for a
+        // human to repair, and this line is the only record that the sweep
+        // knowingly declined to act on it.
+        console.error(
+          "SCRUM-195 expireReservations: ambiguous commitment ownership — reservation expired, root decision withheld",
+          {
+            orgId: reservation.orgId,
+            vehicleId: reservation.vehicleId,
+            reservationId: reservation._id,
+            openRootCount: ownership.kind === "AMBIGUOUS" ? ownership.roots.length : 0,
+          }
+        );
+        continue;
+      }
+
+      // SCRUM-195 M3. WITHOUT THIS THE ROOT IS LOCKED FOREVER. Once a
+      // reservation is EXPIRED, `releaseReservation` refuses it (it requires
+      // ACTIVE), so no operator door can ever release the root it opened. The
+      // sweep that ends the basis is the only place left that can close it.
+      await releaseRootIfNoLiveBasis(ctx, {
+        orgId: reservation.orgId,
+        vehicleId: reservation.vehicleId,
+        reason: "reservation expired",
+        decisionNow: now,
+      });
     }
 
     return { expired: reservations.length };
@@ -2014,6 +2159,19 @@ export const softDelete = mutation({
         `Cannot delete a vehicle with status "${vehicle.status}". Archive it first.`
       );
     }
+
+    // SCRUM-195 M3. THE STATUS CHECK ABOVE IS NOT ENOUGH.
+    //
+    // A finance-only commitment leaves the vehicle AVAILABLE — `hasHold` counts
+    // deposits and reservations, not applications — so a car with a live
+    // in-flight application sails past that guard. Deleting it strands the root
+    // where no door can reach it: the car is gone from every listing, so nobody
+    // can navigate to the deal to end it properly.
+    await assertVehicleNotCommitted(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      message: COMMITMENT_MESSAGES.vehicleStillHeldByAnotherBasis,
+    });
 
     // We no longer delete associated images, we just soft-delete the record
     await ctx.db.patch(args.vehicleId, {

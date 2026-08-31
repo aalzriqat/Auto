@@ -1,3 +1,9 @@
+import {
+  acquireVehicle,
+  assertAcquirable,
+  IN_FLIGHT_FINANCE_STATUSES,
+  releaseRootIfNoLiveBasis,
+} from "./commitments";
 import { v, ConvexError } from "convex/values";
 import { MutationCtx, QueryCtx, query } from "./_generated/server";
 import { mutation } from "./functions";
@@ -1986,6 +1992,11 @@ export const createFromQuote = mutation({
   args: {
     orgId: v.id("organizations"),
     quoteId: v.id("quotes"),
+    /**
+     * SCRUM-195: EXPLICIT proof that this financed deal continues the
+     * reservation already holding the car. Never inferred.
+     */
+    adoptReservationId: v.optional(v.id("vehicleReservations")),
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -2038,17 +2049,23 @@ export const createFromQuote = mutation({
     }
 
     // Every vehicle on the quote should only have one in-flight application at
-    // a time. Use an explicit allowlist of blocking statuses so REJECTED and
-    // CLOSED applications (which are effectively terminal) don't strand the
-    // vehicle indefinitely and allow a fresh deal to begin without cancellation.
-    const IN_FLIGHT_STATUSES: string[] = ["DRAFT", "PENDING_DOCS", "UNDER_REVIEW", "APPROVED"];
+    // a time. REJECTED and CLOSED applications are effectively terminal, so they
+    // must not strand the vehicle — a fresh deal may begin without cancellation.
+    //
+    // ⚠️ THE LIST IS `IN_FLIGHT_FINANCE_STATUSES`, IMPORTED. It used to be a
+    // local copy here, and M3's commit message claimed to have removed it while
+    // in fact only ADDING the shared one — so two hand-maintained lists shipped,
+    // which is the exact distributed inference this program exists to delete.
+    // Both reviewer seats caught it. "Which statuses hold a car" is now answered
+    // in one place, and the release side (`hasLiveCommitmentBasis`) reads the
+    // same array, so acquisition and release cannot drift apart.
     for (const item of quoteVehicleItems) {
       const activeForVehicle = await ctx.db
         .query("financeApplications")
         .withIndex("by_vehicle", (q) => q.eq("vehicleId", item.vehicleId))
         .filter((q) => q.eq(q.field("orgId"), args.orgId))
         .collect()
-        .then((rows) => rows.find((r) => IN_FLIGHT_STATUSES.includes(r.status)));
+        .then((rows) => rows.find((r) => IN_FLIGHT_FINANCE_STATUSES.includes(r.status)));
       if (activeForVehicle) {
         throw new ConvexError(
           "This vehicle already has an active finance application. Cancel it before starting a new one."
@@ -2148,6 +2165,22 @@ export const createFromQuote = mutation({
       if (versionRow) companyRuleVersionId = versionRow._id;
     }
 
+    // SCRUM-195: a live finance application is per-vehicle commitment evidence
+    // in its own right — no deposit required. So creating one is an
+    // ACQUISITION and goes through the same authority boundary as a deposit or
+    // a reservation, refusing before anything is written.
+    //
+    // The quote is the lineage: a financed deal that already took a deposit
+    // JOINS the root that deposit opened (the ordinary financed flow), while a
+    // quote that has proven nothing cannot take a car another deal holds.
+    for (const item of quoteVehicleItems) {
+      await assertAcquirable(ctx, {
+        orgId: args.orgId,
+        vehicleId: item.vehicleId,
+        lineage: { quoteId: quote._id, adoptReservationId: args.adoptReservationId },
+      });
+    }
+
     const appId = await ctx.db.insert("financeApplications", {
       orgId: args.orgId,
       quoteId: quote._id,
@@ -2173,6 +2206,20 @@ export const createFromQuote = mutation({
       ...(manualFinanceSnapshot ? { manualFinanceSnapshot } : {}),
       underwritingSnapshot,
     });
+
+    // ⚠️ TAGGED FINANCE, not DEPOSIT. The application is the defining evidence
+    // here even when a deposit exists on the same deal — they are two separate
+    // episodes on one root, and each must be able to end independently.
+    for (const item of quoteVehicleItems) {
+      await acquireVehicle(ctx, {
+        orgId: args.orgId,
+        vehicleId: item.vehicleId,
+        customerId: quote.customerId,
+        createdBy: auth.user._id,
+        evidence: { kind: "FINANCE", applicationId: appId },
+        lineage: { quoteId: quote._id, adoptReservationId: args.adoptReservationId },
+      });
+    }
 
     await ctx.db.insert("applicationStatusLog", {
       orgId: args.orgId,
@@ -2212,6 +2259,32 @@ export const createFromQuote = mutation({
     return appId;
   },
 });
+
+/**
+ * SCRUM-195 M3. Release every car this application's quote was holding, if
+ * nothing else still holds it.
+ *
+ * Called AFTER `releaseHoldForApplicationQuote`, never before. That helper ends
+ * TWO bases in one call — the quote's deposit holds and any same-customer
+ * reservation — so a liveness check run first would read a basis this very
+ * mutation is about to retire and leave the root open forever.
+ */
+async function releaseRootsForApplicationQuote(
+  ctx: MutationCtx,
+  args: { orgId: Id<"organizations">; quoteId: Id<"quotes">; decisionNow: number; reason: string }
+): Promise<void> {
+  const quote = await ctx.db.get(args.quoteId);
+  if (!quote || quote.orgId !== args.orgId) return;
+  const items = quote.vehicleItems ?? [{ vehicleId: quote.vehicleId }];
+  for (const item of items) {
+    await releaseRootIfNoLiveBasis(ctx, {
+      orgId: args.orgId,
+      vehicleId: item.vehicleId,
+      reason: args.reason,
+      decisionNow: args.decisionNow,
+    });
+  }
+}
 
 export const updateStatus = mutation({
   args: {
@@ -2263,6 +2336,52 @@ export const updateStatus = mutation({
       await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.REVIEW_FINANCE_APPLICATION]);
     }
 
+    // SCRUM-195 PHASE-3 DEMOLITION MARKER — THIS DOOR FAILS CLOSED ON PURPOSE.
+    //
+    // Re-entering the in-flight set means the application is finance-LIVE again
+    // while nothing holds its car: `hasLiveCommitmentBasis` reads the status and
+    // says held, `resolveOwnership` reads the root and says FREE. The damage is
+    // not the theft case — a rival is independently refused at completion. It is
+    // the case with NO rival: the car really is free, the completion barrier
+    // correctly passes, and `consumeRootForSale` finds no OPEN root and returns
+    // silently BY DESIGN, so the financed sale completes carrying no
+    // `consumedBySaleId` — the one stamp Phase 3 uses to walk a cancelled sale
+    // back to the deal that made it.
+    //
+    // ⚠️ THE FIX IS NOT REACQUISITION HERE. Reacquiring the car at this door was
+    // implemented and rejected on a phase boundary, not on its correctness:
+    // restoring a commitment is Phase-3 work, and Phase 3 defines the canonical
+    // restoration and provenance semantics (which episode comes back, what its
+    // predecessor is, how a sale-consumed episode is restored exactly). A
+    // Phase-2 reacquisition would have to guess all of that, and a guess that
+    // writes roots is how the distributed inference this program exists to
+    // delete got built in the first place.
+    //
+    // ⚠️ SO THE CAPABILITY IS DEFERRED, NOT DELETED. `REJECTED -> PENDING_DOCS`
+    // remains a real product requirement and stays in `VALID_STATUS_TRANSITIONS`
+    // as the record of it; it is Phase 3 that restores it, over canonical
+    // restoration rather than a fresh acquisition. Until then this branch
+    // refuses rather than shipping a live application that owns nothing.
+    //
+    // Derived from the status list rather than from `VALID_STATUS_TRANSITIONS`,
+    // so a future edit to the transition map cannot open a second door this
+    // refusal does not cover. Today only REJECTED -> PENDING_DOCS re-enters the
+    // set, but that is an outcome of the data, not an assumption in here.
+    //
+    // ⚠️ AND IT REFUSES **BEFORE** ANY DURABLE MUTATION. Convex would roll the
+    // whole mutation back from anywhere, but "the rollback saves us" is a
+    // property of the runtime, not of this handler. Refusing above the patch and
+    // the status-log insert means the application, its audit trail, its roots
+    // and claims, the vehicle and every money/accounting/outbox consequence are
+    // untouched by construction rather than by recovery.
+    const wasInFlight = IN_FLIGHT_FINANCE_STATUSES.includes(app.status);
+    const isInFlight = IN_FLIGHT_FINANCE_STATUSES.includes(args.status);
+    if (!wasInFlight && isInFlight) {
+      throw new ConvexError(
+        "This application has already left the finance pipeline and cannot be reopened yet. Start a new application for this deal."
+      );
+    }
+
     let approvedBy = app.approvedBy;
     let approvedAt = app.approvedAt;
 
@@ -2310,6 +2429,14 @@ export const updateStatus = mutation({
 
     if (args.status === "REJECTED" && app.status !== "REJECTED") {
       await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId, actorId: auth.user._id });
+      // The application has left the in-flight set and its quote's holds are
+      // released, so this is the first moment the canonical answer can change.
+      await releaseRootsForApplicationQuote(ctx, {
+        orgId: args.orgId,
+        quoteId: app.quoteId,
+        decisionNow: patchedAt,
+        reason: "finance application rejected",
+      });
     }
   },
 });
@@ -2350,6 +2477,12 @@ export const cancelApplication = mutation({
 
         if (app.status === "CANCELLED") {
           await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId, actorId: auth.user._id });
+          await releaseRootsForApplicationQuote(ctx, {
+            orgId: args.orgId,
+            quoteId: app.quoteId,
+            decisionNow: Date.now(),
+            reason: "finance application cancelled",
+          });
           return;
         }
 
@@ -2516,6 +2649,17 @@ export const cancelApplication = mutation({
           ...(app.gapResolution === "PENDING_NEGOTIATION"
             ? { gapResolution: "FAILED" as const }
             : {}),
+        });
+
+        // SCRUM-195 M3. AFTER the application row itself is CANCELLED, so the
+        // FINANCE basis is genuinely gone when the predicate runs. Before this
+        // patch the application is still in the in-flight set and the root
+        // would correctly refuse to release.
+        await releaseRootsForApplicationQuote(ctx, {
+          orgId: args.orgId,
+          quoteId: app.quoteId,
+          decisionNow: now,
+          reason: "finance application cancelled",
         });
 
         await ctx.db.insert("applicationStatusLog", {
@@ -2972,6 +3116,7 @@ export const finalizeDeal = mutation({
         // reappraisal leaves status APPROVED, so this is the only thing
         // stopping a sale being completed on economics nothing supports.
         assertDealerEconomicsRecorded(app, "finalizing");
+
         // The last step in the ordering Codex traced, and the one that creates
         // a SALE. A deal whose denomination cannot be established must not be
         // turned into money here either — otherwise every guard upstream is
@@ -3066,6 +3211,21 @@ export const finalizeDeal = mutation({
           throw new ConvexError("Application finance company does not match the quote.");
         }
         await assertRequiredApplicationDocumentsComplete(ctx, app, quote);
+
+        // SCRUM-195 M3, DOOR 4. COMPLETION-TIME OWNERSHIP IS NOT REDUNDANT
+        // HERE, AND IT IS NOT THIS FUNCTION'S TO IMPLEMENT.
+        //
+        // An APPROVED application is not proof that its car is still this
+        // deal's. The deal can be closed through a different door and then
+        // cancelled: the root goes CONSUMED and STAYS CONSUMED, while nothing
+        // touches `financeApplications`, so the application stays APPROVED
+        // with every finalizeDeal precondition satisfied. Another customer
+        // then legitimately acquires the car, and only a completion-time check
+        // stops the stale application selling it out from under them.
+        //
+        // That check — and the root's consumption — live in `completeSale`'s
+        // shared boundary in utils/saleCompletion.ts, which this door reaches
+        // below. Four doors, one guard.
 
         // Re-verify at the commit point, not just at quote time: the approval
         // could have been rejected or the vehicle's minimum raised in between.
