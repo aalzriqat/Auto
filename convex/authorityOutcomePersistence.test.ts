@@ -351,3 +351,102 @@ describe("the vehicle-authority outcome is persisted by the real drain", () => {
     ).toBe(false);
   });
 });
+
+/**
+ * SCRUM-208 F1 — THE OBLIGATION MUST SURVIVE A FAILURE IN THE RECORDING STEP.
+ *
+ * ⚠️ WHY THIS FILE GREW. Sonnet MAX found, and I validated at the line, that
+ * `markEntryPosted` consumed the reversal's idempotency BEFORE it recorded what
+ * authority was owed:
+ *
+ *   completeDeferredReversal()   ← patches the application REVERSING -> REVERSED
+ *   recordAuthorityWork()        ← can throw; `drainEntries` CATCHES it
+ *   patch(p, POSTED)
+ *
+ * A caught exception rolls nothing back in Convex — only an UNCAUGHT one aborts
+ * the mutation. So the REVERSED patch commits, the row is retried, and on the
+ * retry `completeDeferredReversal`'s own guard (`status !== "REVERSING"`) returns
+ * an empty list. The loop body never runs, the row is marked POSTED with no
+ * error, and the settlement obligation is gone. Nothing rediscovers it: every
+ * discovery path reads `commitmentAuthorityWork`, and that row was never
+ * inserted.
+ *
+ * ⚠️ THE FAILURE TAKES TWO DRAIN PASSES, AND THAT IS THE WHOLE POINT. The first
+ * pass throws before POSTED; the SECOND pass is the one that finishes cleanly
+ * over the top of the lost obligation. A one-pass test sees a failed row and
+ * concludes the system is safe.
+ *
+ * ⚠️ THE TRIGGER IS REPRESENTATIVE, NOT THE ONLY ONE. Two work rows sharing a
+ * workKey make `recordAuthorityWork`'s own `.unique()` throw for real — no mock,
+ * no patched module, a documented Convex behavior at the exact line. The defect
+ * is the WINDOW, not this trigger; any throw there (transaction limits, a future
+ * validator) does the same thing.
+ *
+ * ⚠️ ASSERTS AN ABSENCE, DELIBERATELY. The contract is that the consuming write
+ * did NOT happen. An outcome-shaped assertion ("did it end RESTORED?") passes
+ * against the defect, because the defect's end state is a clean POSTED row.
+ */
+describe("a failure while recording owed authority cannot consume the reversal", () => {
+  test("the application stays REVERSING and the row stays retryable", async () => {
+    const seed = await seedCanonicalOrgWithChart("f1");
+    const originalEventId = await postAnEvent(seed, 1);
+    const deal = await deferredCancelledDeal(seed, "f1");
+    const entryId = await queueReversal(seed, originalEventId, deal.applicationKey);
+
+    // The exact identity `recordAuthorityWork` will look up. DIRECT, because
+    // this application carries no holdId, so the deposit itself holds the car.
+    const workKey = `reversed_${deal.applicationKey}:DIRECT:${String(deal.depositId)}`;
+    const duplicate = {
+      orgId: seed.orgId,
+      workKey,
+      status: "SETTLED" as const,
+      sourceKind: "DIRECT" as const,
+      depositId: deal.depositId,
+      vehicleId: deal.vehicleId,
+      saleId: deal.saleId,
+      pendingEventId: entryId,
+      executions: 0,
+      generation: 0,
+      nextActionAt: Date.now(),
+      createdAt: Date.now(),
+    };
+    const dupA = await seed.t.run((ctx) => ctx.db.insert("commitmentAuthorityWork", duplicate));
+    const dupB = await seed.t.run((ctx) => ctx.db.insert("commitmentAuthorityWork", duplicate));
+
+    // Pass 1 throws inside the recording step. Pass 2 is the dangerous one.
+    await drain(seed);
+    await drain(seed);
+
+    const application = await seed.t.run(async (ctx: any) =>
+      (await ctx.db.query("depositApplications").collect()).find(
+        (a: any) => a.eventIdempotencyKey === deal.applicationKey
+      )
+    );
+    const entry = await seed.t.run(async (ctx: any) => await ctx.db.get(entryId));
+
+    // ⚠️ THE TWO CONTRACTS. Both are absences.
+    expect(
+      application.status,
+      "the reversal's idempotency must NOT be consumed while the obligation went unrecorded"
+    ).toBe("REVERSING");
+    expect(
+      entry.status,
+      "and the accounting row must NOT settle clean over a lost obligation"
+    ).not.toBe("POSTED");
+
+    // Recoverability: with the duplicates gone the retry must complete for real.
+    await seed.t.run(async (ctx: any) => {
+      await ctx.db.delete(dupA);
+      await ctx.db.delete(dupB);
+    });
+    await drain(seed);
+
+    const settled = await seed.t.run(async (ctx: any) => await ctx.db.get(entryId));
+    expect(settled.status, "the retry finishes once the injected fault is gone").toBe("POSTED");
+    expect(settled.authorityOutcome, "and the obligation was really settled").toBe("RESTORED");
+    expect(
+      (await seed.t.run(async (ctx: any) => await ctx.db.get(deal.depositId))).holdActive,
+      "the customer's car is actually re-held"
+    ).toBe(true);
+  });
+});

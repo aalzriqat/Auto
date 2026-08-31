@@ -24,7 +24,11 @@ import { prepaidPostingBlockedReason } from "./utils/prepaidSourceLedger";
 import { payrollPostingBlockedReason } from "./utils/payrollSourceLedger";
 import { commissionPostingBlockedReason } from "./utils/commissionSourceLedger";
 import { reverseAccountingEvent } from "./accounting/reversals";
-import { completeDeferredReversal, ReversalCompletionSource } from "./utils/depositApplications";
+import {
+  commitDeferredReversal,
+  resolveDeferredReversalSources,
+  ReversalCompletionSource,
+} from "./utils/depositApplications";
 import {
   AUTHORITY_SEVERITY,
   authorityOutcomeDetail,
@@ -259,17 +263,31 @@ async function markEntryPosted(
   // the property c15808 actually requires. So each freed source now becomes a
   // durable work item, settled in its OWN registered mutation where a throw is
   // a real rollback boundary.
+  // ⚠️ RESOLVE -> RECORD -> COMMIT, AND THE ORDER IS THE CONTRACT.
+  // (SCRUM-208 F1.) Completing the reversal SPENDS its idempotency: once the
+  // application reads REVERSED, resolution returns nothing forever after. This
+  // used to be the FIRST step, with `recordAuthorityWork` after it — so a throw
+  // in between was caught by `drainEntries` (which cannot roll back, see the
+  // comment above), the consumption committed, and the retry found nothing left
+  // to do and marked the row POSTED over an obligation that was never written.
+  // Every discovery path reads `commitmentAuthorityWork`, so the freed car was
+  // then owed a settlement no one could ever find again.
+  //
+  // Recording first inverts that: a throw now leaves the application REVERSING
+  // and the row retryable, losing nothing. A throw AFTER recording is equally
+  // safe — the retry re-resolves, `recordAuthorityWork` no-ops on the existing
+  // key, and the commit runs again.
   const owed: Id<"commitmentAuthorityWork">[] = [];
   if (p.kind === "REVERSE") {
-    const freed = await completeDeferredReversal(ctx, {
+    const resolved = await resolveDeferredReversalSources(ctx, {
       orgId: p.orgId,
       reversalIdempotencyKey: p.idempotencyKey,
-      postedAt: Date.now(),
     });
-    for (const source of freed) {
+    for (const source of resolved.sources) {
       const workId = await recordAuthorityWork(ctx, p, source);
       if (workId) owed.push(workId);
     }
+    await commitDeferredReversal(ctx, resolved, Date.now());
   }
 
   // The accounting row is FINAL here, and is never retried because vehicle
