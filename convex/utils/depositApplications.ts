@@ -429,13 +429,33 @@ export async function commitDeferredReversal(
   postedAt: number
 ): Promise<void> {
   if (!resolved.applicationId) return;
+
+  // ⚠️ THE HOLD FIRST, THE APPLICATION LAST — THE SAME PRINCIPLE ONE LEVEL DOWN.
+  //
+  // The application patch is what gates retryability: once it reads REVERSED,
+  // `resolveDeferredReversalSources` returns nothing forever after. So it must
+  // be the LAST write, for exactly the reason `recordAuthorityWork` had to move
+  // before it one level up.
+  //
+  // Written application-first, a throw on the hold patch committed the
+  // application (a caught exception rolls nothing back) and the retry then
+  // resolved to nothing — leaving the slice stranded at REVERSING, a state that
+  // never surfaces for the refund/reallocate decision it is waiting on, while
+  // the row still reached POSTED cleanly. Raised by Sonnet MAX against
+  // 6e2dceb83, and verified pre-existing at the Phase-2 anchor 1bb62ab4c.
+  //
+  // In this order a throw on the application patch leaves the application
+  // REVERSING, so the retry re-resolves, finds the hold already released, and
+  // takes the existing "the application is still completable; its slice simply
+  // is not" branch — completing correctly. A throw on the hold patch commits
+  // nothing at all.
+  if (resolved.holdId) {
+    await ctx.db.patch(resolved.holdId, { allocationStatus: "RELEASED_AWAITING_DECISION" });
+  }
   await ctx.db.patch(resolved.applicationId, {
     status: "REVERSED",
     reversedAt: postedAt,
   });
-  if (resolved.holdId) {
-    await ctx.db.patch(resolved.holdId, { allocationStatus: "RELEASED_AWAITING_DECISION" });
-  }
 }
 
 export async function completeDeferredReversal(
