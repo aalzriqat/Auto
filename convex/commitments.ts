@@ -58,7 +58,12 @@ import {
   resolveLineageTip,
   tryDecisionContext,
 } from "./utils/commitmentKernel";
-import { resolveCanonicalBinding, SourceRef, stampAcquisitionPointer } from "./utils/commitmentSources";
+import {
+  repointSourceToClaim,
+  resolveCanonicalBinding,
+  SourceRef,
+  stampAcquisitionPointer,
+} from "./utils/commitmentSources";
 import { IN_FLIGHT_FINANCE_STATUSES as FINANCE_IN_FLIGHT } from "./utils/financeStatuses";
 import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
@@ -846,26 +851,26 @@ export type RestorationOutcome =
       opened: "SUCCESSOR" | "JOINED";
     }
   /**
-   * The postcondition did not hold after the writes were made.
+   * ⚠️ THERE IS NO `INCONSISTENT` VARIANT, AND ITS ABSENCE IS THE CONTRACT
+   * (SCRUM-208 c16000).
    *
-   * ⚠️ RETURNED, NOT THROWN — AND THAT IS A CORRECTION, NOT A WEAKENING.
-   * This used to throw, on the stated reasoning that "a Convex mutation is one
-   * transaction, so a throw un-does the whole thing". That reasoning was
-   * FALSE for the deferred caller and both review seats found it
-   * independently: `accountingOutbox.drainEntries` wraps every row in a
-   * `try`/`catch` — pre-existing, and there for good reason, so one bad row
-   * cannot abort a whole organization's drain. A caught exception is ordinary
-   * control flow, so the mutation returns normally and COMMITS, carrying every
-   * write already made. The throw bought no rollback and destroyed the only
-   * record that anything went wrong: the retry then found the reversal already
-   * completed, settled nothing, and marked the entry POSTED with no
-   * `authorityOutcome` at all.
+   * A post-write invariant failure is not a value this function can return,
+   * because returning one is what let a half-restoration commit: the successor
+   * root and claim were already written when the check ran, and reporting the
+   * contradiction left them in the database with a truthful audit row beside
+   * them. Truthful, and still contradictory ownership.
    *
-   * So the state is reported instead of protested. It is the one outcome the
-   * severity ranking puts above every other, because it is the only one that
-   * says the database itself needs a human.
+   * It now THROWS, so the enclosing mutation rolls the whole attempt back.
+   * That is safe here — and was NOT safe under the topology the removed note
+   * described — because neither production caller absorbs it:
+   * `performAuthoritySettlement` is its own registered mutation with no
+   * enclosing `try`/`catch`, and the synchronous cancellation path has none
+   * either. `drainEntries`' per-row catch wraps posting, not settlement.
+   *
+   * The split is binding:
+   *   pre-write data contradiction  → typed BLOCKED_INCONSISTENT outcome
+   *   post-write invariant failure  → throw → rollback
    */
-  | { decision: "INCONSISTENT"; reason: string }
   | Exclude<RestorationDecision, { decision: "JOIN_LINEAGE" } | { decision: "OPEN_SUCCESSOR" }>;
 
 /**
@@ -1170,6 +1175,10 @@ export async function acquireVehicle(
         ? { kind: "JOIN", rootId: acting.rootId }
         : { kind: "ORIGIN" },
     adoptReservation: acting.decision === "ADOPT_RESERVATION",
+    // First acquisition, always: this door has no predecessor source to
+    // repoint, so the pointer is derived from the evidence and a sliced
+    // deposit is left for the writer that creates its hold row.
+    pointerPolicy: { kind: "INITIAL" },
   });
 }
 
@@ -1206,8 +1215,24 @@ async function executeAcquisition(
       | { kind: "ORIGIN" }
       | { kind: "SUCCESSOR"; predecessorRoot: Doc<"commitmentRoots"> };
     adoptReservation?: boolean;
-    /** The exact source, when the caller knows it (a named deposit slice). */
-    source?: SourceRef;
+    /**
+     * ⚠️ WHICH POINTER RULE THIS ACQUISITION IS UNDER — STATED, NEVER INFERRED
+     * (SCRUM-208 c16000).
+     *
+     * The source belongs to this policy rather than sitting beside it as an
+     * ambiguous optional, so the two cases cannot be silently conflated: a
+     * RESTORATION without an exact source is now a type error rather than a
+     * value that quietly falls back to the evidence-derived one.
+     *
+     * ⚠️ AND IT IS NOT DERIVED FROM `predecessor`. A future acquisition path
+     * could legitimately carry a predecessor without meeting restoration's
+     * requirement that the source already exists and has been resolved, so
+     * inferring the mode from its presence would hand that path restoration's
+     * pointer behaviour by accident.
+     */
+    pointerPolicy:
+      | { kind: "INITIAL"; source?: SourceRef }
+      | { kind: "RESTORATION"; source: SourceRef };
   }
 ): Promise<{ rootId: Id<"commitmentRoots">; claimId: Id<"vehicleCommitmentClaims"> }> {
   const rootId =
@@ -1252,16 +1277,43 @@ async function executeAcquisition(
     predecessor: args.predecessor,
   });
 
-  // ⚠️ THE POINTER IS STAMPED IN THE SAME TRANSACTION AS THE CLAIM, ON EVERY
-  // PATH — not only on restoration. A pointer that appears only after a
-  // restoration is absent for every ordinary deal, so the first reader to
-  // consult it fails closed on healthy data.
-  await stampAcquisitionPointer(ctx, {
-    orgId: args.orgId,
-    source: args.source ?? sourceRefOfEvidence(args.evidence),
-    vehicleId: args.vehicleId,
-    claimId,
-  });
+  // ⚠️ THE POINTER MOVES IN THE SAME TRANSACTION AS THE CLAIM, ON EVERY PATH —
+  // not only on restoration. A pointer that appears only after a restoration is
+  // absent for every ordinary deal, so the first reader to consult it fails
+  // closed on healthy data.
+  //
+  // ⚠️ BUT THE TWO PATHS NEED DIFFERENT WRITERS, AND ROUTING BOTH THROUGH THE
+  // INITIAL STAMPER IS THE DEFECT THIS SPLIT CLOSES (SCRUM-208 c15998/c16000).
+  // `stampAcquisitionPointer` deliberately SKIPS a sliced deposit, because at
+  // first acquisition the hold row does not exist yet — the deposit writer
+  // inserts it moments later already carrying this claim id. That skip is
+  // correct for INITIAL and wrong for RESTORATION, where the exact hold has
+  // been resolved and is sitting in the source: skipping it left the hold
+  // pointing at the terminal predecessor while an ACTIVE successor existed,
+  // which the postcondition below then caught as a contradiction — after the
+  // root and claim had already been written.
+  //
+  // Proven on real Convex against 249bea1cb: the zero-share cancellation
+  // committed a successor root and claim, reserved the car, and recorded
+  // BLOCKED_INCONSISTENT because the pointer had never moved.
+  if (args.pointerPolicy.kind === "RESTORATION") {
+    // The exact source is mandatory here, and `repointSourceToClaim` re-proves
+    // tenant, deposit linkage and vehicle before patching the exact hold — so
+    // this is a validated write, not a trusted one.
+    await repointSourceToClaim(ctx, {
+      orgId: args.orgId,
+      source: args.pointerPolicy.source,
+      vehicleId: args.vehicleId,
+      claimId,
+    });
+  } else {
+    await stampAcquisitionPointer(ctx, {
+      orgId: args.orgId,
+      source: args.pointerPolicy.source ?? sourceRefOfEvidence(args.evidence),
+      vehicleId: args.vehicleId,
+      claimId,
+    });
+  }
 
   return { rootId, claimId };
 }
@@ -1587,7 +1639,11 @@ export async function restoreCommitment(
     },
     predecessor: bound.binding.claim,
     target,
-    source: args.source,
+    // ⚠️ RESTORATION, STATED EXPLICITLY. The source already exists and has
+    // just been re-resolved by `resolveCanonicalBinding` above, so the exact
+    // pointer — including a sliced deposit's own hold row — must move onto the
+    // successor claim inside this transaction.
+    pointerPolicy: { kind: "RESTORATION", source: args.source },
   });
 
   // ⚠️ ONE POSTCONDITION, OVER ALL FOUR FACTS.
@@ -1601,37 +1657,38 @@ export async function restoreCommitment(
   // postcondition is that it observes the state, not the intent that produced
   // it.
   //
-  // ⚠️ IT REPORTS; IT DOES NOT ROLL BACK, BECAUSE IT CANNOT. An earlier
-  // version threw here and claimed "all four or none" on the grounds that a
-  // Convex mutation is one transaction. That is true of the mutation and
-  // FALSE of this call: the deferred caller runs inside
-  // `drainEntries`'s per-row `try`/`catch`, which absorbs the throw and lets
-  // the mutation commit anyway. Safety therefore rests on NOT WRITING until
-  // every failure mode has been decided — see the pre-flight in
-  // `restoreAuthorityAfterReversal` — and this check exists to make the
-  // residual visible rather than to undo it.
+  // ⚠️ IT THROWS, AND THE THROW IS THE ROLLBACK (SCRUM-208 c16000).
+  //
+  // This previously RETURNED an `INCONSISTENT` value, justified by the claim
+  // that the deferred caller sits inside `drainEntries`' per-row `try`/`catch`
+  // so a throw would be absorbed and commit anyway. That justification
+  // described a topology that no longer exists, and it was verified line by
+  // line at c15999: the deferred caller is `performAuthoritySettlement`, its
+  // OWN registered mutation, with no enclosing catch between its handler and
+  // this call; the synchronous caller is the cancellation spine, which has
+  // none either. `drainEntries`' catch wraps posting and reversing, not
+  // settlement.
+  //
+  // Reporting instead of raising is what let a half-restoration commit: the
+  // successor root and claim are ALREADY WRITTEN by the time this runs, so a
+  // returned value leaves them in the database beside a truthful audit row.
+  // Truthful, and still contradictory ownership. An uncaught throw un-does all
+  // of it.
+  //
+  // ⚠️ THIS IS NOT A LICENCE TO WRITE FIRST AND CHECK LATER. A KNOWN
+  // contradiction is still decided BEFORE the first write and returned as a
+  // typed business outcome — see the pre-flight in
+  // `restoreAuthorityAfterReversal`. Rollback protects the DATA; the
+  // pre-flight protects the AUDIT RECORD. What reaches here is by definition
+  // unanticipated, and an unanticipated invariant failure must not commit.
   const after = await resolveCanonicalBinding(ctx, args.decision, {
     source: args.source,
     vehicleId: args.vehicleId,
   });
-  // ⚠️ HONEST NOTE ON COVERAGE: THIS BRANCH'S MUTANT SURVIVES, AND IT IS KEPT
-  // ANYWAY.
-  //
-  // Replacing this `return` with a `throw` leaves the suite green, because no
-  // test reaches it — and none can. `resolveCanonicalBinding` succeeded
-  // moments ago inside `resolveRestorationDecision`, and everything the
-  // acquisition wrote since only ADDS the rows this walk needs: the source row
-  // is untouched, the pointer now names the claim just created, that claim
-  // exists with matching evidence, and its root exists with a lineage. The
-  // reachable failures all land in the check below instead, whose mutant IS
-  // killed.
-  //
-  // It is retained as a guard against a future writer breaking the binding
-  // mid-transaction, and it is recorded here rather than quietly claimed as
-  // proven. A surviving mutant that is understood is a different thing from
-  // one nobody looked at.
   if (!after.ok) {
-    return { decision: "INCONSISTENT", reason: after.reason };
+    throw new ConvexError(
+      `The restored deal could not be re-read after it was written: ${after.reason}`
+    );
   }
   if (
     !after.binding.live ||
@@ -1639,16 +1696,15 @@ export async function restoreCommitment(
     String(after.binding.root._id) !== String(rootId) ||
     after.binding.root.status !== "OPEN"
   ) {
-    return {
-      decision: "INCONSISTENT",
-      reason: !after.binding.live
+    throw new ConvexError(
+      !after.binding.live
         ? "the source record is not live after being restored"
         : String(after.binding.claim._id) !== String(claimId)
           ? "the source record does not name the episode this restoration opened"
           : String(after.binding.root._id) !== String(rootId)
             ? "the episode does not belong to the deal this restoration opened"
-            : "the restored deal is not open",
-    };
+            : "the restored deal is not open"
+    );
   }
 
   return {
@@ -2059,13 +2115,19 @@ export type DeferredAuthorityOutcome =
    */
   | { outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS"; detail: string }
   /**
-   * The canonical records contradict each other, or a postcondition did not
-   * hold after the restoration wrote.
+   * The canonical records contradict each other, and it was found BEFORE any
+   * authority write was made.
    *
-   * ⚠️ THE OUTCOME THAT REPLACED A THROW. Reported rather than raised because
-   * raising provably does not undo anything at the deferred seam — see the
-   * note on `RestorationOutcome`'s INCONSISTENT variant. Ranked above every
-   * other outcome: it is the only one saying the data itself needs a person.
+   * ⚠️ PRE-WRITE ONLY (SCRUM-208 c16000). This is a diagnosis a person can act
+   * on, reached by the pre-flight while nothing has been written, so reporting
+   * it durably is exactly right. It is ranked above every other outcome
+   * because it is the only one saying the data itself needs a person.
+   *
+   * ⚠️ IT NO LONGER CARRIES POST-WRITE FAILURES, AND MUST NOT BE MADE TO. Once
+   * the successor root and claim exist, a broken invariant throws instead, so
+   * the transaction rolls back and there is no state left to describe. Routing
+   * that case back through this outcome would re-introduce exactly the
+   * committed half-restoration that real-Convex evidence caught on 249bea1cb.
    */
   | { outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT"; detail: string }
   /**
@@ -2252,8 +2314,9 @@ export async function settleAuthorityAfterReversal(
  * AUDIT RECORD. Both are required, and `probeCanonicalHold` is now shared by
  * the DIRECT and SLICE paths so neither can classify a contradiction late.
  *
- * `restoreCommitment` still REPORTS its postcondition as INCONSISTENT rather
- * than raising — see the note on `RestorationOutcome`.
+ * `restoreCommitment`'s postcondition RAISES, because both boundaries above
+ * are real — see the note on `RestorationOutcome`. A post-write invariant
+ * failure is never a returned value.
  *
  * The old contract — an authority result is not an accounting failure — is
  * preserved for every BUSINESS answer: a legacy org, a rival, ambiguity,
@@ -2449,11 +2512,11 @@ export async function restoreAuthorityAfterReversal(
       };
     case "REFUSE":
       return { outcome: "ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS", detail: restored.reason };
-    case "INCONSISTENT":
-      return {
-        outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT",
-        detail: restored.reason,
-      };
+    // ⚠️ THERE IS NO `INCONSISTENT` CASE, AND THERE CANNOT BE ONE. A post-write
+    // invariant failure now throws out of `restoreCommitment` and rolls this
+    // whole mutation back, so there is no value left here to translate into an
+    // outcome. Re-adding a case would not compile: the variant is gone from
+    // `RestorationOutcome` (SCRUM-208 c16000).
     case "ALREADY_LIVE":
     case "RESTORED":
       break;

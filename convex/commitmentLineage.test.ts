@@ -395,54 +395,68 @@ describe("restoration through the acquisition boundary", () => {
     expect(claimsAfter).toEqual(claimsBefore);
   });
 
-  test("a source that stays dead is REPORTED as inconsistent, not thrown", async () => {
+  test("a source that stays dead THROWS, and every write is rolled back", async () => {
     const seed = await seedDealer("r10");
     const f = await consumedByCancelledSale(seed, seed.customerA);
     // The reservation itself has ended. Restoration would otherwise open a
     // successor and repoint onto it, leaving an OPEN root that nothing holds.
     await seed.t.run((ctx) => ctx.db.patch(f.reservationId, { status: "RELEASED" as const }));
 
-    // ⚠️ THIS CONTRACT USED TO ASSERT A THROW AND A FULL ROLLBACK, AND IT WAS
-    // WRONG — not about Convex, but about where this function is called from.
+    // ⚠️ THIS IS THE FORCED LATE FAILURE, AND IT PROVES THE ROLLBACK
+    // (SCRUM-208 c16000).
     //
-    // The reasoning was "one Convex mutation is one transaction, so throwing
-    // un-does the attachment and the repoint together". True of a mutation;
-    // false of this call. `accountingOutbox.drainEntries` wraps every row in a
-    // `try`/`catch` so one bad entry cannot abort an entire organization's
-    // drain — a deliberate, pre-existing, correct design. A caught throw is
-    // ordinary control flow: the mutation returns normally and COMMITS,
-    // carrying every write already made. The throw bought no rollback and
-    // destroyed the only record that anything had gone wrong.
+    // The failure is genuinely POST-WRITE: `restoreCommitment` has already
+    // opened the successor root, attached the claim and moved the pointer by
+    // the time it re-reads the binding and finds the source dead. So this is
+    // the exact shape of the half-restoration that real Convex caught on
+    // 249bea1cb — with the difference that it must now leave nothing behind.
     //
-    // Both review seats found this independently against the frozen head. The
-    // honest contract is the one asserted here: the condition is REPORTED,
-    // durably, with a reason a person can act on. Safety comes from the
-    // pre-flight in `restoreAuthorityAfterReversal`, which decides every
-    // failure mode BEFORE the first write — not from a rollback that does not
-    // happen.
-    const outcome = await seed.t.run(async (ctx) =>
-      restoreCommitment(ctx, {
-        decision: await decisionFor(seed, ctx),
-        source: sourceOf(f.reservationId),
-        vehicleId: f.vehicleId,
-        intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
-        ...restoreArgs(seed, f),
-      })
-    );
-    expect(outcome.decision).toBe("INCONSISTENT");
-    expect(
-      (outcome as Extract<typeof outcome, { decision: "INCONSISTENT" }>).reason,
-      "and it names WHICH fact failed, not merely that one did"
-    ).toMatch(/not live/i);
+    // This contract was previously asserted the other way round: the condition
+    // was REPORTED as an `INCONSISTENT` value and the test asserted that the
+    // successor root SURVIVED. That was justified by the claim that the
+    // deferred caller sits inside `drainEntries`' per-row catch, which would
+    // absorb a throw and commit anyway. Verified line by line at c15999, that
+    // is false: the deferred caller is `performAuthoritySettlement`, its own
+    // registered mutation with no enclosing catch, and the synchronous caller
+    // has none either. The throw does roll back, so the honest contract is
+    // all-or-nothing.
+    const before = await seed.t.run(async (ctx) => ({
+      roots: await ctx.db.query("commitmentRoots").collect(),
+      claims: await ctx.db.query("vehicleCommitmentClaims").collect(),
+      reservation: await ctx.db.get(f.reservationId),
+      vehicle: await ctx.db.get(f.vehicleId),
+    }));
 
-    // ⚠️ STATED, NOT HIDDEN: the writes are still there. That is the price of
-    // reporting instead of raising, and it is exactly why the pre-flight is
-    // the real control. What must never happen again is this state existing
-    // with NO record of it — which is precisely what the throw produced.
-    const openRoots = (
-      await seed.t.run((ctx) => ctx.db.query("commitmentRoots").collect())
-    ).filter((r) => r.status === "OPEN");
-    expect(openRoots.length, "the successor was opened before the check could run").toBe(1);
+    await expect(
+      seed.t.run(async (ctx) =>
+        restoreCommitment(ctx, {
+          decision: await decisionFor(seed, ctx),
+          source: sourceOf(f.reservationId),
+          vehicleId: f.vehicleId,
+          intent: { kind: "SALE_CANCELLED", saleId: f.saleId },
+          ...restoreArgs(seed, f),
+        })
+      ),
+      "it names WHICH fact failed, not merely that one did"
+    ).rejects.toThrow(/not live/i);
+
+    // ⚠️ BYTE-IDENTICAL, NOT MERELY "NO NEW OPEN ROOT". Counting open roots
+    // would still pass if the successor had committed as CONSUMED, or if the
+    // pointer had moved and only the root had been undone. Comparing the whole
+    // rows catches a partial rollback that a count cannot see.
+    const after = await seed.t.run(async (ctx) => ({
+      roots: await ctx.db.query("commitmentRoots").collect(),
+      claims: await ctx.db.query("vehicleCommitmentClaims").collect(),
+      reservation: await ctx.db.get(f.reservationId),
+      vehicle: await ctx.db.get(f.vehicleId),
+    }));
+
+    expect(after.roots, "no successor root survived the failed restoration").toEqual(before.roots);
+    expect(after.claims, "no successor claim survived the failed restoration").toEqual(
+      before.claims
+    );
+    expect(after.reservation, "the source pointer never moved").toEqual(before.reservation);
+    expect(after.vehicle, "the vehicle projection never moved").toEqual(before.vehicle);
   });
 
   test("a legacy predecessor fails closed instead of being normalized", async () => {
