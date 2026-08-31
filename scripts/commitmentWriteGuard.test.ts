@@ -12,6 +12,8 @@ import {
   findUnchokedWrites,
   summarize,
 } from "./commitmentWriteGuard";
+// The real constant, so the guard's deliberate restatement of it cannot drift.
+import { COMMITMENT_AUTHORITY_V1 } from "../convex/utils/commitmentKernel";
 
 const CONVEX_ROOT = path.resolve(__dirname, "..", "convex");
 
@@ -428,5 +430,113 @@ describe("the write analyzers cannot be forged by spelling", () => {
     );
     // The literal that NAMES the field is a separate statement, not the write.
     expect(w.map((r) => r.field)).not.toContain("commitmentAuthorityVersion");
+  });
+});
+
+/**
+ * SCRUM-208 round 6 — the defects BOTH SEATS found in the round-5 repair.
+ *
+ * ⚠️ THESE EXIST BECAUSE MY OWN FIX WAS FORGEABLE. The round-5 change closed
+ * the four spellings it was told about and left seven more, found by Codex
+ * xhigh, Sonnet MAX and my own probe against `6e2dceb83` — including one
+ * outright algorithmic bug (below) and a doc comment claiming the opposite.
+ * Every case here failed against that revision.
+ */
+describe("round-6: the analyzers cannot be forged by position or by value", () => {
+  const orgInsert = (literal: string) =>
+    findOrganizationInsertSites(`ctx.db.insert("organizations", ${literal})`, "x.ts")[0];
+
+  /**
+   * ⚠️ THE ALGORITHMIC ONE. Object literals resolve in source order and later
+   * entries WIN, so anything after the match can overwrite it. The old code
+   * returned on the first match and never looked further. Runtime, verified not
+   * assumed: `{ver:1, ...{ver:0}}` is `{ver:0}`. Found by Sonnet MAX.
+   */
+  it("refuses when a spread AFTER the match can override it", () => {
+    expect(orgInsert(`{ commitmentAuthorityVersion: 1, ...extra }`).initializesAuthorityVersion)
+      .toBe(false);
+  });
+
+  /**
+   * ⚠️ AND THE MIRROR CASE MUST STILL PASS. A spread BEFORE the assignment is
+   * genuinely safe — the explicit value wins. Refusing it too would have been
+   * the lazy fix; the verdict is position-aware precisely so this stays true.
+   */
+  it("still certifies when the spread comes BEFORE the assignment", () => {
+    expect(orgInsert(`{ ...extra, commitmentAuthorityVersion: 1 }`).initializesAuthorityVersion)
+      .toBe(true);
+  });
+
+  it("refuses a duplicate key whose LAST value is not canonical", () => {
+    expect(
+      orgInsert(`{ commitmentAuthorityVersion: 1, commitmentAuthorityVersion: 0 }`)
+        .initializesAuthorityVersion
+    ).toBe(false);
+  });
+
+  // The key being present was never the question — `: 0` mints a LEGACY org.
+  it.each([["0"], ["undefined"], ["someRuntimeValue"], ["flag ? 1 : 0"]])(
+    "refuses commitmentAuthorityVersion: %s",
+    (value) => {
+      expect(orgInsert(`{ commitmentAuthorityVersion: ${value} }`).initializesAuthorityVersion)
+        .toBe(false);
+    }
+  );
+
+  it("CONTROL — certifies the real pinned constant and a bare canonical literal", () => {
+    expect(orgInsert(`{ commitmentAuthorityVersion: COMMITMENT_AUTHORITY_V1 }`)
+      .initializesAuthorityVersion).toBe(true);
+    expect(orgInsert(`{ commitmentAuthorityVersion: ${COMMITMENT_AUTHORITY_V1} }`)
+      .initializesAuthorityVersion).toBe(true);
+  });
+
+  /**
+   * The guard restates the canonical version rather than importing convex
+   * runtime code into a static-analysis script. This is what stops that
+   * duplication drifting.
+   */
+  it("pins its canonical version to the real COMMITMENT_AUTHORITY_V1", () => {
+    expect(orgInsert(`{ commitmentAuthorityVersion: ${COMMITMENT_AUTHORITY_V1 + 1} }`)
+      .initializesAuthorityVersion).toBe(false);
+  });
+
+  /**
+   * ⚠️ `commitments.ts` IS CHOKE-EXEMPT, so `findUnchokedWrites` cannot see an
+   * extra root insert placed there. This audit is the ONLY defence for "exactly
+   * one creation site", and a quote character defeated it.
+   */
+  it.each([
+    ["single-quoted", `'commitmentRoots'`],
+    ["template-literal", "`commitmentRoots`"],
+    ["unresolved binding", "table"],
+  ])("sees a %s commitmentRoots insert", (_label, table) => {
+    expect(
+      findRootInsertSites(`function rogue(ctx){ return ctx.db.insert(${table}, {}); }`, "x.ts")
+    ).toHaveLength(1);
+  });
+
+  it("CONTROL — still sees the ordinary double-quoted root insert", () => {
+    expect(
+      findRootInsertSites(`function openRoot(ctx){ return ctx.db.insert("commitmentRoots", {}); }`, "x.ts")
+    ).toEqual([{ file: "x.ts", enclosingFunction: "openRoot" }]);
+  });
+
+  // A guard that depends on where somebody put a newline is not a guard.
+  it.each([
+    ["single-line function", `export function f(ctx, args: { successorOf?: string }) { return 1; }`],
+    ["arrow-const", `export const f = async (ctx, args: { successorOf?: string }) => { return 1; };`],
+    [
+      "multi-line function",
+      `export async function f(\n  ctx,\n  args: { successorOf?: string }\n) { return 1; }`,
+    ],
+  ])("sees a caller-supplied successorOf on an exported %s", (_label, src) => {
+    expect(analyzeSuccessorTopology(src).exportedSuccessorParams).toEqual(["f"]);
+  });
+
+  it("CONTROL — an exported function without successorOf is not reported", () => {
+    expect(
+      analyzeSuccessorTopology(`export function f(ctx, args: { vehicleId: string }) { return 1; }`)
+        .exportedSuccessorParams
+    ).toEqual([]);
   });
 });

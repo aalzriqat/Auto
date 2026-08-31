@@ -62,6 +62,15 @@ import path from "node:path";
 import ts from "typescript";
 
 /**
+ * The canonical version this guard certifies, restated rather than imported.
+ *
+ * A static-analysis script should not pull convex runtime modules into its own
+ * module graph. The duplication is pinned instead: `commitmentWriteGuard.test.ts`
+ * asserts this equals the real `COMMITMENT_AUTHORITY_V1`, so drift fails CI.
+ */
+const CANONICAL_AUTHORITY_VERSION = 1;
+
+/**
  * SCRUM-208 — WHY THE WRITE ANALYZERS PARSE INSTEAD OF MATCHING TEXT.
  *
  * The regex versions of these two checks were forgeable in seven ordinary
@@ -81,12 +90,43 @@ import ts from "typescript";
  * earned. A green result here is an AUTHORIZATION, so the only acceptable
  * direction of error is refusal.
  *
- * ⚠️ UNRESOLVED IS NOT SAFE, AND IS NEVER TREATED AS SAFE. Anything the parser
- * cannot read to the byte — a computed key, a spread, a non-literal table name,
- * a value that is a binding rather than a literal — is reported, not skipped.
- * A human then either inlines the literal or records the site in the burn-down
- * map with a reason. That is what "fails loudly" has to mean for a check whose
- * silence is permission.
+ * ⚠️ WHAT THIS ACTUALLY COVERS — STATED HONESTLY, BECAUSE THE PREVIOUS VERSION
+ * OF THIS COMMENT DID NOT.
+ *
+ * It claimed that anything unreadable "is reported, not skipped." That was
+ * FALSE, and it was the worst defect in the round-5 repair: a confident wrong
+ * comment on a check whose green result is an authorization is more dangerous
+ * than the holes it was describing away. What is true:
+ *
+ * CERTIFICATION (`findOrganizationInsertSites`) is fail-closed. It must PROVE
+ * the field is set to the canonical version, so it refuses a conditional
+ * spread, a nested object, a shorthand binding, an unreadable literal, an
+ * unresolved table name, a non-canonical value, and any later property or
+ * spread that could override the match. If it cannot read it, it does not
+ * certify it.
+ *
+ * THE RATCHET (`findUnchokedWrites`) is NOT fail-closed, and cannot be made so
+ * here. It reads guarded field names at every depth of an INLINE literal —
+ * including inside conditional spreads — and reports shorthand, computed keys
+ * and unresolved table names. But a payload that is not an inline literal is
+ * INVISIBLE to it:
+ *
+ *   ctx.db.patch(id, patch)          // a binding
+ *   ctx.db.patch(id, makePatch())    // a call result
+ *   ctx.db.patch(id, cond ? a : b)   // a conditional expression
+ *
+ * ⚠️ AND THAT IS A DELIBERATE, MEASURED CHOICE, NOT AN OVERSIGHT. Reporting
+ * them would be sound, and it was measured: convex/ contains 53 such sites
+ * today against a burn-down map of ~9 entries — roughly a sixfold expansion,
+ * almost entirely with writes to tables that have no guarded fields at all. A
+ * map whose majority is "unreadable but fine" is no longer a ratchet, and the
+ * three sites in money files were each read by hand and write `status` /
+ * `preHoldStatus`, not guarded fields.
+ *
+ * A SOUND version of this check needs the target table resolved from the id's
+ * `Id<Table>` type, which needs a TypeScript program rather than a source-text
+ * pass. That is real work and it is not this file. Until then: this catches
+ * inline writes, and it does not catch indirect ones.
  */
 
 /** A `ctx.db.insert|patch|replace(...)` call, with its arguments resolved. */
@@ -171,21 +211,60 @@ function collectDbWrites(source: string, file: string): DbWriteCall[] {
  */
 export type FieldVerdict = "UNCONDITIONAL" | "ABSENT" | "UNRESOLVED";
 
+/**
+ * Does this expression provably say V1, rather than merely say something?
+ *
+ * ⚠️ THE KEY BEING PRESENT WAS NEVER THE QUESTION. `commitmentAuthorityVersion: 0`
+ * and `: undefined` both satisfied "the property exists" and both mint a LEGACY
+ * dealership — the exact state the activation slice exists to end. Only the
+ * literal `1` and the pinned constant count; every other expression, including
+ * anything computed at runtime, is refused. Found by Codex xhigh against
+ * 6e2dceb83.
+ */
+function isCanonicalVersionValue(value: ts.Expression): boolean {
+  if (ts.isNumericLiteral(value)) return value.text === String(CANONICAL_AUTHORITY_VERSION);
+  return ts.isIdentifier(value) && value.text === "COMMITMENT_AUTHORITY_V1";
+}
+
 export function topLevelFieldVerdict(
   literal: ts.ObjectLiteralExpression | null,
-  field: string
+  field: string,
+  /**
+   * Optional proof that the VALUE is acceptable, not merely that the key is
+   * present. Without it, `{ commitmentAuthorityVersion: 0 }` certified as
+   * initialized — the key was there and nothing looked at what it said.
+   */
+  acceptsValue?: (value: ts.Expression) => boolean
 ): FieldVerdict {
   if (!literal) return "UNRESOLVED";
-  let unreadable = false;
+
+  // ⚠️ A FORWARD PASS, LAST-WINS — NOT AN EARLY RETURN ON THE FIRST MATCH.
+  //
+  // JS object literals resolve duplicate keys and spreads in source order, so
+  // ANYTHING after the match can overwrite it:
+  //
+  //   { commitmentAuthorityVersion: 1, ...extra }   -> runtime value is extra's
+  //   { commitmentAuthorityVersion: 1, …: 0 }       -> runtime value is 0
+  //
+  // The previous version returned UNCONDITIONAL the instant it saw the key and
+  // never looked further, so both of those certified as initialized. Verified
+  // against real runtime semantics, not reasoned: `{ver:1, ...{ver:0}}` is
+  // `{ver:0}`. Found by Sonnet MAX against 6e2dceb83.
+  //
+  // Position matters in BOTH directions, which is why this is a running verdict
+  // rather than a blanket "any spread refuses": `{ ...extra, ver: 1 }` really is
+  // safe, because the explicit assignment comes last and wins.
+  let verdict: FieldVerdict = "ABSENT";
   for (const prop of literal.properties) {
-    // `...x` can carry anything, including the field. Never provably absent.
+    // `...x` can carry the field, and overrides whatever preceded it.
     if (ts.isSpreadAssignment(prop)) {
-      unreadable = true;
+      verdict = "UNRESOLVED";
       continue;
     }
     const name = prop.name;
+    // A computed key might BE the field; it cannot be ruled in or out.
     if (!name || ts.isComputedPropertyName(name)) {
-      unreadable = true;
+      verdict = "UNRESOLVED";
       continue;
     }
     const key =
@@ -193,18 +272,22 @@ export function topLevelFieldVerdict(
         ? name.text
         : null;
     if (key === null) {
-      unreadable = true;
+      verdict = "UNRESOLVED";
       continue;
     }
     if (key !== field) continue;
+
     // Named at top level. A shorthand's value is a binding, not a literal, so
     // it names the field without proving what it sets — refuse rather than
     // certify. `{ commitmentAuthorityVersion }` after `const … = 0` is exactly
     // the downgrade this must not wave through.
-    if (ts.isPropertyAssignment(prop)) return "UNCONDITIONAL";
-    return "UNRESOLVED";
+    verdict = ts.isPropertyAssignment(prop)
+      ? !acceptsValue || acceptsValue(prop.initializer)
+        ? "UNCONDITIONAL"
+        : "UNRESOLVED"
+      : "UNRESOLVED";
   }
-  return unreadable ? "UNRESOLVED" : "ABSENT";
+  return verdict;
 }
 
 export interface UnchokedWrite {
@@ -449,10 +532,25 @@ export interface RootInsertSite {
  * check that counts SITES, and that deliberately ignores the choke list.
  */
 export function findRootInsertSites(rawSource: string, file: string): RootInsertSite[] {
+  // ⚠️ PARSED, NOT MATCHED — AND FOR A SHARPER REASON THAN ITS SIBLING.
+  //
+  // This was `/ctx\.db\.insert\(\s*"commitmentRoots"/`, double-quote only, with
+  // no unresolved fallback at all. A second root opener written
+  // `insert('commitmentRoots', …)` or with a template literal was completely
+  // invisible — and because `commitments.ts` is choke-exempt, `findUnchokedWrites`
+  // cannot see an extra insert placed there either. This audit is the ONLY
+  // defence for "commitmentRoots has exactly one creation site", and changing a
+  // quote character defeated it. Found independently by Codex xhigh and Sonnet
+  // MAX against 6e2dceb83.
+  //
+  // An unreadable table name is audited as if it were `commitmentRoots`, for the
+  // same reason as the organizations audit: it might be.
   const source = blankComments(rawSource);
   const sites: RootInsertSite[] = [];
-  for (const m of source.matchAll(/ctx\.db\.insert\(\s*"commitmentRoots"/g)) {
-    const before = source.slice(0, m.index!);
+  for (const call of collectDbWrites(rawSource, file)) {
+    if (call.method !== "insert") continue;
+    if (!call.tableUnresolved && call.table !== "commitmentRoots") continue;
+    const before = source.slice(0, call.start);
     const declarations = [
       ...before.matchAll(/(?:async\s+)?function\s+(\w+)\s*\(|const\s+(\w+)\s*=\s*(?:async\s*)?\(/g),
     ];
@@ -506,12 +604,53 @@ export function analyzeSuccessorTopology(rawSource: string): SuccessorTopology {
     openingSites.push(last ? (last[1] ?? last[2]) : "<top level>");
   }
 
+  // ⚠️ PARSED, BECAUSE THE OLD PATTERN REQUIRED A PARTICULAR LAYOUT.
+  //
+  // It was `/export\s+(?:async\s+)?function\s+(\w+)\s*\(([\s\S]*?)\n\)/`, which
+  // needs the closing paren on its own line — so it saw only the multi-line
+  // declaration style the test itself happens to use. A single-line `export
+  // function f(ctx, args: { successorOf?: … })` and an `export const f = async
+  // (…) => …` were both MISSED, and this check is what stops a caller-supplied
+  // successor root being reintroduced on an exported function. A guard that
+  // depends on where somebody put a newline is not a guard. Found by Sonnet MAX
+  // against 6e2dceb83.
   const exportedSuccessorParams: string[] = [];
-  for (const m of source.matchAll(
-    /export\s+(?:async\s+)?function\s+(\w+)\s*\(([\s\S]*?)\n\)/g
-  )) {
-    if (/successorOf\s*\??\s*:/.test(m[2])) exportedSuccessorParams.push(m[1]);
-  }
+  const isExported = (node: ts.Node): boolean =>
+    (ts.canHaveModifiers(node) ? (ts.getModifiers(node) ?? []) : []).some(
+      (m) => m.kind === ts.SyntaxKind.ExportKeyword
+    );
+  const declaresSuccessorOf = (params: readonly ts.ParameterDeclaration[]): boolean => {
+    let found = false;
+    const visit = (n: ts.Node): void => {
+      if (found) return;
+      if (ts.isPropertySignature(n) && n.name && ts.isIdentifier(n.name)) {
+        if (n.name.text === "successorOf") {
+          found = true;
+          return;
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    for (const p of params) visit(p);
+    return found;
+  };
+  const walk = (node: ts.Node): void => {
+    if (ts.isFunctionDeclaration(node) && node.name && isExported(node)) {
+      if (declaresSuccessorOf(node.parameters)) exportedSuccessorParams.push(node.name.text);
+    }
+    // `export const f = (…) => …` and `export const f = function (…) {…}`
+    if (ts.isVariableStatement(node) && isExported(node)) {
+      for (const decl of node.declarationList.declarations) {
+        const init = decl.initializer;
+        if (!init || !ts.isIdentifier(decl.name)) continue;
+        if (!ts.isArrowFunction(init) && !ts.isFunctionExpression(init)) continue;
+        if (declaresSuccessorOf(init.parameters)) exportedSuccessorParams.push(decl.name.text);
+      }
+    }
+    ts.forEachChild(node, walk);
+  };
+  walk(parseModule(rawSource, "successorTopology.ts"));
+
   return { openingSites, exportedSuccessorParams };
 }
 
@@ -603,7 +742,8 @@ export function findOrganizationInsertSites(
       file,
       enclosingFunction: last ? (last[1] ?? last[2]) : "<top level>",
       initializesAuthorityVersion:
-        topLevelFieldVerdict(call.literal, "commitmentAuthorityVersion") === "UNCONDITIONAL",
+        topLevelFieldVerdict(call.literal, "commitmentAuthorityVersion", isCanonicalVersionValue) ===
+        "UNCONDITIONAL",
     });
   }
   return sites;
