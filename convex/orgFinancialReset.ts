@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { internalMutation } from "./functions";
 import type { Id } from "./_generated/dataModel";
 
@@ -147,6 +147,13 @@ export const resetOrgFinancialData = internalMutation({
     perTable: Record<string, number>;
     total: number;
     remaining: number;
+    /**
+     * True when this org holds canonical commitment-authority records, which
+     * make a destructive reset unsafe. Reported on a dry run so an operator
+     * learns the precondition BEFORE typing the destructive form, rather than
+     * discovering it as an error.
+     */
+    authorityLifecyclePresent: boolean;
   }> => {
     const dryRun = args.dryRun ?? true;
     const limit = Math.min(Math.max(args.batchSize ?? RESET_DELETE_BATCH, 1), RESET_DELETE_BATCH);
@@ -155,6 +162,48 @@ export const resetOrgFinancialData = internalMutation({
     // to act on, which dealership this actually hit.
     const org = await ctx.db.get(args.orgId);
     const orgName = org?.name ?? null;
+
+    // ⚠️ FAIL-CLOSED PREFLIGHT, TAKEN BEFORE ANY DELETE OR STORAGE WRITE.
+    // (SCRUM-208 c15892, Option C.)
+    //
+    // Phase 3 added `commitmentAuthorityAttempt` and `commitmentAuthorityWork`
+    // to this reset. Every table here is batched independently, so a partial
+    // pass could delete a `pendingAccountingEvents` row while a work row
+    // referencing it survived — and `performAuthoritySettlement` dereferences
+    // `work.pendingEventId` with a non-null assertion, so the surviving row
+    // would throw on every dispatch, burn its retry budget and record a false
+    // RETRY_EXHAUSTED against a deal nobody could explain.
+    //
+    // `CHILD_TABLES` already defers a parent whose children remain, but the
+    // authority lifecycle is not expressible that way: work rows reference
+    // pending events, deposits, sales, holds and vehicles at once, and the
+    // ordering of this array is not a dependency proof.
+    //
+    // ⚠️ SO THIS REFUSES RATHER THAN ORDERING. Safety beats partial progress on
+    // a destructive internal tool: an organization carrying canonical authority
+    // state simply cannot be reset until the dependency-safe cursor
+    // implementation exists. A wrong guess here orphans money records; a refusal
+    // costs an operator an error message.
+    const authorityAttempts = await ctx.db
+      .query("commitmentAuthorityAttempt")
+      .filter((q) => q.eq(q.field("orgId"), args.orgId))
+      .take(1);
+    const authorityWork = await ctx.db
+      .query("commitmentAuthorityWork")
+      .filter((q) => q.eq(q.field("orgId"), args.orgId))
+      .take(1);
+    const authorityLifecyclePresent =
+      authorityAttempts.length > 0 || authorityWork.length > 0;
+
+    if (authorityLifecyclePresent && !dryRun) {
+      // Thrown, not returned: an uncaught throw aborts the whole transaction,
+      // which is the strongest possible guarantee that nothing was deleted.
+      throw new ConvexError(
+        "This organization holds canonical commitment-authority records, which this reset " +
+          "cannot remove safely in one pass. Refusing before any deletion. Run with " +
+          "dryRun to inspect, and clear the authority lifecycle first."
+      );
+    }
 
     const perTable: Record<string, number> = {};
     let total = 0;
@@ -214,7 +263,9 @@ export const resetOrgFinancialData = internalMutation({
       }
     }
 
-    return { dryRun, orgName, perTable, total, remaining };
+    // Reported truthfully on a dry run so an operator sees the precondition
+    // BEFORE typing the destructive form, rather than discovering it as an error.
+    return { dryRun, orgName, perTable, total, remaining, authorityLifecyclePresent };
   },
 });
 

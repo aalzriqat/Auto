@@ -24,6 +24,7 @@ import { prepaidPostingBlockedReason } from "./utils/prepaidSourceLedger";
 import { payrollPostingBlockedReason } from "./utils/payrollSourceLedger";
 import { commissionPostingBlockedReason } from "./utils/commissionSourceLedger";
 import { reverseAccountingEvent } from "./accounting/reversals";
+import { scheduleAuthorityDispatch } from "./utils/authorityDispatchScheduler";
 import {
   commitDeferredReversal,
   resolveDeferredReversalSources,
@@ -313,9 +314,9 @@ async function markEntryPosted(
   // delivery here is now harmless rather than a spent attempt: the dispatcher
   // no-ops unless the work is still READY.
   for (const workId of owed) {
-    await ctx.scheduler.runAfter(0, internal.accountingOutbox.dispatchAuthorityWorkItem, {
-      workId,
-    });
+    // Behind a plain-function seam so a test can make this reject; the
+    // production path is permanently the real scheduler. See the module.
+    await scheduleAuthorityDispatch(ctx, workId);
   }
 }
 
@@ -1031,9 +1032,45 @@ async function settleOneReversalSource(
  * error for visibility. At/above it: stop auto-retrying and mark FAILED so it
  * needs deliberate attention instead of retrying forever.
  */
+/**
+ * ⚠️ RE-READS THE ROW. NEVER TRUSTS THE SNAPSHOT THE CALLER CARRIED IN.
+ * (SCRUM-208 c15892 — the class guard, not a scheduler special case.)
+ *
+ * `drainEntries` hands this the `p` it loaded BEFORE the row was processed, and
+ * `markEntryPosted` can already have made that row terminal `POSTED` — journal
+ * written, application REVERSED, authority work durable — before something
+ * after the commit point throws. Deriving `attempts` and the FAILED transition
+ * from the stale snapshot then downgraded completed accounting to FAILED, and
+ * at `MAX_ATTEMPTS` it did so terminally: a row whose journal exists, reported
+ * as failed, retryable by a manager who would be retrying nothing.
+ *
+ * ⚠️ THIS IS THE THIRD TIME THIS SHAPE HAS APPEARED IN THIS SUBSYSTEM, AND THE
+ * FIRST TIME IT IS CLOSED AS A CLASS. The record-of-obligation (F1) and the
+ * SLICE hold ordering were each fixed at their own call site; this one is fixed
+ * where the damage is written instead. Any future step added after a durable
+ * commit — another optimisation, another notification — is now harmless here by
+ * construction, because failure state can only ever be written onto a row that
+ * is still failable.
+ *
+ * `PENDING` is exactly that set: `POSTED` is completed accounting and `FAILED`
+ * is already dead-lettered, so neither may consume a further attempt. A row
+ * that has been deleted underneath us fails safe by doing nothing rather than
+ * recreating state.
+ */
 async function markEntryFailed(ctx: MutationCtx, p: Doc<"pendingAccountingEvents">, message: string): Promise<void> {
-  const attempts = p.attempts + 1;
-  await ctx.db.patch(p._id, {
+  const current = await ctx.db.get(p._id);
+  if (!current) return;
+  if (current.status !== "PENDING") {
+    // Server-side only: this text can carry raw error detail, and the row it
+    // would have been written onto is not a failure.
+    console.error(
+      `[outbox] suppressed failure write on a ${current.status} entry ${String(p._id)}: ${message}`
+    );
+    return;
+  }
+
+  const attempts = current.attempts + 1;
+  await ctx.db.patch(current._id, {
     attempts,
     lastError: message,
     ...(attempts >= MAX_ATTEMPTS ? { status: "FAILED" as const } : {}),

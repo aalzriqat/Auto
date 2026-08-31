@@ -336,3 +336,149 @@ describe("resetOrgFinancialData", () => {
     expect(RESET_TABLES_FOR_TEST).toHaveLength(33);
   });
 });
+
+/**
+ * SCRUM-208 R2 — A DESTRUCTIVE RESET MUST REFUSE, NOT PARTIALLY ORPHAN.
+ * (Codex AF-208-02582-R2; Option C containment authorized in c15892.)
+ *
+ * Phase 3 added the authority lifecycle to this reset. Each table is batched
+ * independently, so a partial pass could delete a `pendingAccountingEvents` row
+ * while a `commitmentAuthorityWork` row referencing it survived — and
+ * `performAuthoritySettlement` dereferences `work.pendingEventId` with a
+ * non-null assertion, so the survivor throws on every dispatch, burns its retry
+ * budget and records a false RETRY_EXHAUSTED.
+ *
+ * ⚠️ THE FIX REFUSES RATHER THAN REORDERING, DELIBERATELY. Work rows reference
+ * pending events, deposits, sales, holds and vehicles at once; array order is
+ * not a dependency proof, and a wrong guess on a destructive tool orphans money
+ * records. A refusal costs an operator an error message.
+ */
+async function seedAuthorityLifecycle(t: ReturnType<typeof setup>, orgId: Id<"organizations">) {
+  return await t.run(async (ctx: any) => {
+    const userId = await ctx.db.insert("users", {
+      clerkId: `reset_auth_${orgId}`,
+      email: "a@b.com",
+      name: "Op",
+    });
+    const vehicle = (await ctx.db.query("vehicles").collect()).find(
+      (v: any) => String(v.orgId) === String(orgId)
+    );
+    const customer = (await ctx.db.query("customers").collect()).find(
+      (c: any) => String(c.orgId) === String(orgId)
+    );
+    const depositId = await ctx.db.insert("deposits", {
+      orgId,
+      vehicleId: vehicle._id,
+      customerId: customer._id,
+      amount: 1000,
+      status: "HELD" as const,
+      holdActive: true,
+      usesVehicleHoldRows: false,
+      createdBy: userId,
+      createdAt: Date.now(),
+    });
+    const saleId = await ctx.db.insert("sales", {
+      orgId,
+      vehicleId: vehicle._id,
+      customerId: customer._id,
+      salespersonId: userId,
+      salePrice: 10000,
+      saleDate: Date.now(),
+      status: "CANCELLED" as const,
+    });
+    const pendingEventId = await ctx.db.insert("pendingAccountingEvents", {
+      orgId,
+      kind: "REVERSE" as const,
+      status: "POSTED" as const,
+      idempotencyKey: `reversed_reset_${orgId}`,
+      accountingDate: Date.now(),
+      actorId: userId,
+      attempts: 1,
+      createdAt: Date.now(),
+      sourceType: "depositApplications",
+      sourceId: `reset_${orgId}`,
+    });
+    await ctx.db.insert("commitmentAuthorityWork", {
+      orgId,
+      workKey: `reset_${orgId}:DIRECT:${String(depositId)}`,
+      status: "READY" as const,
+      sourceKind: "DIRECT" as const,
+      depositId,
+      vehicleId: vehicle._id,
+      saleId,
+      pendingEventId,
+      executions: 0,
+      generation: 0,
+      nextActionAt: Date.now(),
+      createdAt: Date.now(),
+    });
+    return { pendingEventId };
+  });
+}
+
+describe("resetOrgFinancialData refuses an org carrying authority lifecycle state", () => {
+  test("refuses BEFORE any deletion, leaving every table untouched", async () => {
+    const t = setup();
+    const orgId = await seedOrg(t, "AuthRefuse");
+    await seedAuthorityLifecycle(t, orgId);
+
+    const before = {
+      chart: await countFor(t, "chartOfAccounts", orgId),
+      tx: await countFor(t, "transactions", orgId),
+      exp: await countFor(t, "expenses", orgId),
+    };
+
+    // batchSize 1 is the shape that could orphan: far more lifecycle rows than
+    // one pass can clear.
+    await expect(
+      t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
+        orgId,
+        dryRun: false,
+        batchSize: 1,
+      })
+    ).rejects.toThrow(/commitment-authority/i);
+
+    // THE CONTRACT: nothing was deleted. Asserted as an absence, because the
+    // damage this prevents is a partial delete, not a bad return value.
+    expect(await countFor(t, "chartOfAccounts", orgId)).toBe(before.chart);
+    expect(await countFor(t, "transactions", orgId)).toBe(before.tx);
+    expect(await countFor(t, "expenses", orgId)).toBe(before.exp);
+    const survivingWork = await t.run(async (ctx: any) =>
+      (await ctx.db.query("commitmentAuthorityWork").collect()).length
+    );
+    expect(survivingWork, "and the authority row itself is untouched").toBe(1);
+  });
+
+  test("a dry run stays non-destructive and reports the precondition truthfully", async () => {
+    const t = setup();
+    const orgId = await seedOrg(t, "AuthDry");
+    await seedAuthorityLifecycle(t, orgId);
+
+    const res = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
+      orgId,
+      batchSize: 1,
+    });
+
+    expect(res.dryRun).toBe(true);
+    expect(res.authorityLifecyclePresent, "the operator learns it BEFORE typing the destructive form")
+      .toBe(true);
+    expect(await countFor(t, "chartOfAccounts", orgId)).toBeGreaterThan(0);
+  });
+
+  test("CONTROL — an org with no authority state resets exactly as before", async () => {
+    const t = setup();
+    const orgId = await seedOrg(t, "NoAuth");
+
+    const res = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
+      orgId,
+      dryRun: false,
+    });
+
+    expect(res.authorityLifecyclePresent).toBe(false);
+    expect(await countFor(t, "chartOfAccounts", orgId)).toBe(0);
+    expect(await countFor(t, "transactions", orgId)).toBe(0);
+    // Protected tables still survive, as before.
+    expect(await countFor(t, "vehicles", orgId)).toBe(1);
+    expect(await countFor(t, "customers", orgId)).toBe(1);
+  });
+});

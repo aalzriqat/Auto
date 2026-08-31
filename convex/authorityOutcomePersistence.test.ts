@@ -450,3 +450,102 @@ describe("a failure while recording owed authority cannot consume the reversal",
     ).toBe(true);
   });
 });
+
+/**
+ * SCRUM-208 R1 — A POST-COMMIT TRANSPORT FAILURE MUST NOT DOWNGRADE COMPLETED
+ * ACCOUNTING. (Codex AF-208-02582-R1; class fix authorized in c15892.)
+ *
+ * `markEntryPosted` makes the row terminal `POSTED` — journal written,
+ * application REVERSED, authority work durable — and only THEN runs the eager
+ * dispatch, which is explicitly a latency optimisation rather than the retry
+ * mechanism. `drainEntries` catches whatever that throws and called
+ * `markEntryFailed` with the snapshot it loaded BEFORE the row was processed,
+ * so `attempts` and the FAILED transition were both derived from stale state.
+ * At the attempt cap that terminally relabelled completed accounting as FAILED.
+ *
+ * ⚠️ THE SEAM IS TEST-ONLY AND CANNOT BE REACHED FROM PRODUCTION. The eager
+ * dispatch lives behind a plain function whose single implementation is
+ * permanently bound to the real scheduler; the test substitutes the whole
+ * module. No registered mutation argument, no persisted state and no runtime
+ * flag can select this behaviour, per the c15892 ruling.
+ *
+ * ⚠️ ATTEMPTS ARE SEEDED AT 9 DELIBERATELY. Below the cap the stale write only
+ * scribbled `lastError` onto a POSTED row; at the cap it flipped `status`. The
+ * cap is where the defect is terminal, so that is where it is pinned.
+ */
+const injectSchedule = { fail: false };
+vi.mock("./utils/authorityDispatchScheduler", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./utils/authorityDispatchScheduler")>();
+  return {
+    ...actual,
+    scheduleAuthorityDispatch: async (ctx: any, workId: any) => {
+      if (injectSchedule.fail) throw new Error("injected scheduler rejection");
+      return actual.scheduleAuthorityDispatch(ctx, workId);
+    },
+  };
+});
+
+describe("a rejected eager dispatch after the row is POSTED", () => {
+  test("leaves completed accounting completed, and the work still settleable", async () => {
+    const seed = await seedCanonicalOrgWithChart("r1");
+    const originalEventId = await postAnEvent(seed, 1);
+    const deal = await deferredCancelledDeal(seed, "r1");
+    const entryId = await queueReversal(seed, originalEventId, deal.applicationKey);
+    // One below MAX_ATTEMPTS (10), so the stale write lands on the cap.
+    await seed.t.run(async (ctx: any) => await ctx.db.patch(entryId, { attempts: 9 }));
+
+    injectSchedule.fail = true;
+    try {
+      await drain(seed);
+    } finally {
+      injectSchedule.fail = false;
+    }
+
+    const entry = await seed.t.run(async (ctx: any) => await ctx.db.get(entryId));
+
+    // 1-2. The accounting result is durable and stays truthful.
+    expect(entry.status, "a failed latency optimisation must not fail the accounting").toBe(
+      "POSTED"
+    );
+    expect(entry.resolvedAt, "and it stays resolved").toBeGreaterThan(0);
+
+    // 3. The obligation is still durable and discoverable by the cron.
+    const work = await seed.t.run(async (ctx: any) =>
+      (await ctx.db.query("commitmentAuthorityWork").collect()).filter(
+        (w: any) => String(w.orgId) === String(seed.orgId)
+      )
+    );
+    expect(work, "the work item survives the transport failure").toHaveLength(1);
+    expect(["READY", "DISPATCHED"]).toContain(work[0].status);
+
+    // 4. The journal was not duplicated by the failure.
+    const reversals = await seed.t.run(async (ctx: any) =>
+      (await ctx.db.query("accountingEvents").collect()).filter((e: any) => e.reversesEventId)
+    );
+    expect(reversals.length, "no second reversal is created").toBeLessThanOrEqual(1);
+
+    // 5. And settlement still completes once the transport recovers.
+    await drain(seed);
+    await seed.t.run(async (ctx: any) => {
+      await ctx.scheduler.runAfter(0, internal.accountingOutbox.dispatchDueAuthorityWork, {});
+    });
+    await drain(seed);
+    const settled = await seed.t.run(async (ctx: any) => await ctx.db.get(entryId));
+    expect(settled.status, "still POSTED after recovery").toBe("POSTED");
+  });
+
+  test("CONTROL — with no injected rejection the same deal drains clean", async () => {
+    const seed = await seedCanonicalOrgWithChart("r1ok");
+    const originalEventId = await postAnEvent(seed, 1);
+    const deal = await deferredCancelledDeal(seed, "r1ok");
+    const entryId = await queueReversal(seed, originalEventId, deal.applicationKey);
+    await seed.t.run(async (ctx: any) => await ctx.db.patch(entryId, { attempts: 9 }));
+
+    await drain(seed);
+
+    const entry = await seed.t.run(async (ctx: any) => await ctx.db.get(entryId));
+    expect(entry.status).toBe("POSTED");
+    expect(entry.authorityOutcome).toBe("RESTORED");
+  });
+});
