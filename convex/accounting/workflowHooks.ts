@@ -13,10 +13,10 @@ import { ConvexError } from "convex/values";
 import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 import { postAccountingEvent, PostCommand } from "./postingEngine";
-import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting } from "./postingRules";
+import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting, type FinancedSalePlanPayload } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate, checkPostingAllowed } from "../accountingPeriods";
-import { isChartInitialized, ensureCommissionAccounts, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureConsignmentAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount, ensurePayrollAccounts } from "../chartOfAccounts";
+import { isChartInitialized, ensureCommissionAccounts, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureConsignmentAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount, ensurePayrollAccounts, ensureFinancedSettlementAccounts } from "../chartOfAccounts";
 import {
   enqueuePendingPost,
   enqueuePendingReversal,
@@ -638,6 +638,12 @@ export async function hookSaleCompleted(
     warrantyCostMinor?: number;
     gapSoldMinor?: number;
     gapCostMinor?: number;
+    /**
+     * Present only on an external financed sale settled through the dealership.
+     * Carries the frozen recognition plan into the sale's own journal entry, so
+     * the sale has exactly one writer and its reversal mirrors what posted.
+     */
+    financedSalePlan?: FinancedSalePlanPayload;
   }
 ) {
   // Self-heal for orgs that initialized their chart before dealer-fee/warranty/GAP
@@ -652,6 +658,11 @@ export async function hookSaleCompleted(
   // sale after deploy would otherwise fail to resolve these three keys.
   if (args.consignment && (await isChartInitialized(ctx, args.orgId))) {
     await ensureConsignmentAccounts(ctx, args.orgId, args.actorId);
+  }
+  // Same reason, for the contra-revenue, finance-payable and settlement-expense
+  // accounts a financed plan posts to. Scoped to sales that carry one.
+  if (args.financedSalePlan && (await isChartInitialized(ctx, args.orgId))) {
+    await ensureFinancedSettlementAccounts(ctx, args.orgId, args.actorId);
   }
   await postDomainEvent(ctx, {
     orgId: args.orgId,
@@ -691,6 +702,7 @@ export async function hookSaleCompleted(
       warrantyCostMinor: args.warrantyCostMinor,
       gapSoldMinor: args.gapSoldMinor,
       gapCostMinor: args.gapCostMinor,
+      ...(args.financedSalePlan ? { financedSalePlan: args.financedSalePlan } : {}),
     },
   });
 }

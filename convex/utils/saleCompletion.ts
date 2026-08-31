@@ -28,7 +28,7 @@ import {
   getOrgCurrency,
   commissionAccountingDate,
 } from "../accounting/workflowHooks";
-import { computeResoldProductMargin } from "../accounting/postingRules";
+import { computeResoldProductMargin, type FinancedSalePlanPayload } from "../accounting/postingRules";
 import { toMinorUnits, fromMinorUnits } from "./money";
 import { computeVehicleCapitalizedCost, vehicleHasCostBasis } from "./vehicleCost";
 import { computeConsignedSupplierPosition } from "../../lib/financingEconomics";
@@ -65,6 +65,13 @@ type SaleCompletionArgs = {
   status?: SaleStatus;
   quoteId?: Id<"quotes">;
   applicationId?: Id<"financeApplications">;
+  /**
+   * The frozen recognition plan for an external financed deal settled through
+   * the dealership. Built and validated by the caller BEFORE this runs, because
+   * a plan that cannot be built must refuse the whole finalization rather than
+   * leave a sale row behind.
+   */
+  financedSalePlan?: FinancedSalePlanPayload;
   taxRate?: number;
   taxAmount?: number;
   dealerFees?: number;
@@ -1002,8 +1009,14 @@ async function applySaleCompletionSideEffects(
   // On a consigned sale settled DIRECT_TO_SUPPLIER the vehicle itself is NOT
   // billed by the dealership: the buyer paid the supplier, the dealership
   // issued no invoice for the car, and the customer owes it nothing for it.
-  const vehicleReceivableMinor =
-    isSourced && !dealershipCollectsGross(settlementRoute)
+  // With a financed settlement plan the financing company is the legal buyer of
+  // the car, so what the CUSTOMER owes for it is only what the plan says they
+  // independently owe — usually nothing. `ruleSaleCompleted` debits AR-Customers
+  // from the same figure, so the canonical document and the GL cannot disagree
+  // about what this customer was billed.
+  const vehicleReceivableMinor = args.financedSalePlan
+    ? args.financedSalePlan.customerReceivableMinor
+    : isSourced && !dealershipCollectsGross(settlementRoute)
       ? 0
       : toMinorUnits(args.salePrice, prepared.currency);
   // Sales tax is billed ON TOP of the price, so it is part of what the customer
@@ -1324,6 +1337,7 @@ async function applySaleCompletionSideEffects(
     warrantyCostMinor,
     gapSoldMinor,
     gapCostMinor,
+    financedSalePlan: args.financedSalePlan,
   });
 
   for (const deferral of [
