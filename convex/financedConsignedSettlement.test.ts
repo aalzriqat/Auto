@@ -213,6 +213,18 @@ async function runDeal(
     });
   }
 
+  // The quotation solver refuses a company with no LTV, and the application
+  // freezes the company's rules at creation — so this has to be set before the
+  // application exists, not before the quotation. At 100% the company funds the
+  // whole approval and the dealership contributes nothing, which keeps these
+  // tests about the supplier rather than about the funding split.
+  await s.t.run(async (ctx) => {
+    const company = await ctx.db.get(s.companyId);
+    if (company && company.defaultLtvPercent === undefined) {
+      await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
+    }
+  });
+
   const applicationId = await s.asUser.mutation(api.applications.createFromQuote, {
     orgId: s.orgId,
     quoteId,
@@ -238,6 +250,43 @@ async function runDeal(
     });
   }
 
+  // A financed deal settled through the dealership now has to carry the figures
+  // its settlement posts from: what the company approved, and therefore what it
+  // will actually remit. Finalization refuses without them. Before SCRUM-192
+  // every fixture here relied on the legacy no-quotation carve-out and the deal
+  // posted from the customer's financing principal instead — which is the defect,
+  // not the baseline.
+  //
+  // Recorded here because handover seals the approved amount, and skipped when
+  // the caller drives its own: `approveDealerPurchaseAmount` refuses to change a
+  // recorded approval, so seeding one would make that path unreachable.
+  const throughRouteNeedsEconomics =
+    opts.finalize !== false &&
+    mode === "CONFIGURED_FINANCE_COMPANY" &&
+    !opts.omitMode &&
+    opts.route !== "DIRECT_TO_SUPPLIER";
+  if (throughRouteNeedsEconomics) {
+    const alreadyApproved = await s.t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      return app?.approvedDealerPurchaseAmountMinor !== undefined;
+    });
+    if (!alreadyApproved) {
+      await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: s.orgId,
+        applicationId,
+        submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+        source: "MANUAL_ENTRY",
+      });
+      await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: s.orgId,
+        applicationId,
+        approvedAmountMinor: VEHICLE_PRICE * SCALE,
+        basis: "MANUAL",
+        notes: "Approved at the quotation.",
+      });
+    }
+  }
+
   // Anything that must be on the record BEFORE the vehicle goes out.
   //
   // Handover seals the approved amount: `approveDealerPurchaseAmount` now
@@ -255,6 +304,42 @@ async function runDeal(
   await s.asUser.mutation(api.applications.registerExpectedPayment, {
     orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
   });
+
+  // The legal invoice the car was sold under, and the deal's costs settled and
+  // checked. Together they are what `classifyDealAccounting` requires, and
+  // classification is what finalization requires. The single cost line carries a
+  // zero actual and is NOT deducted from the settlement — the shape the refusal
+  // message itself suggests for a deal the dealership bore no costs on — so the
+  // remittance stays the whole approval and these tests keep testing the supplier.
+  if (throughRouteNeedsEconomics) {
+    await s.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+      orgId: s.orgId,
+      applicationId,
+      legalInvoiceAmountMinor: VEHICLE_PRICE * SCALE,
+      legalInvoiceNumber: `INV-${applicationId}`,
+      legalInvoiceDate: Date.now(),
+      issuedTo: "FINANCE_COMPANY",
+    });
+    const feeId = await s.asUser.mutation(api.financeDealCosts.recordDealFee, {
+      orgId: s.orgId,
+      applicationId,
+      feeType: "OTHER_CLOSING_EXPENSE",
+      paidBy: "DEALER",
+      paidTo: "OTHER",
+      accountingTreatment: "SELLING_EXPENSE",
+      deductedFromSettlement: false,
+      actualAmountMinor: 0,
+      description: "The dealership bore no closing costs on this deal.",
+    });
+    await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: s.orgId, feeId, notes: "Nothing to match.",
+    });
+    await s.asUser.mutation(api.financeDealCosts.classifyDealAccounting, {
+      orgId: s.orgId,
+      applicationId,
+      notes: "Invoice and settlement advice on file.",
+    });
+  }
 
   // On the direct route the finance company's APPROVED amount is what reaches
   // the supplier, so the dealership's claim on him is measured from it and
@@ -538,13 +623,19 @@ describe("confirming the money, on each route", () => {
 });
 
 describe("THROUGH_DEALERSHIP is unchanged by any of this", () => {
-  test("it still opens the finance-company receivable for the financed principal", async () => {
+  test("it opens the finance-company receivable for what the COMPANY owes, not the customer principal", async () => {
     const s = await seedDealership("thd1");
     const { applicationId } = await runDeal(s, { route: "THROUGH_DEALERSHIP", downPayment: 3_000 });
 
     const receivable = await financeReceivableOf(s, applicationId);
     expect(receivable?.payerType).toBe("FINANCE_COMPANY");
-    expect(receivable?.originalAmountMinor).toBe((VEHICLE_PRICE - 3_000) * SCALE);
+    // This asserted `VEHICLE_PRICE - downPayment` and was named "for the financed
+    // principal", which is the defect SCRUM-192 removes rather than a property to
+    // preserve. A down payment reduces what the CUSTOMER borrows; it does not
+    // reduce what the financing company owes the dealership for the car. The
+    // company approved the whole purchase, so the whole purchase is what it owes,
+    // and the receivable now says so.
+    expect(receivable?.originalAmountMinor).toBe(VEHICLE_PRICE * SCALE);
   });
 
   test("a new consigned financed deal cannot be finalized without choosing a route", async () => {
@@ -633,17 +724,28 @@ describe("a reservation deposit on the direct route", () => {
     ).rejects.toThrow(/then finalize/i);
   });
 
-  test("a deposit deal still finalizes through the dealership, exactly as before", async () => {
+  test("a held deposit refuses: the car is invoiced to the financier, so no customer balance absorbs it", async () => {
     const s = await seedDealership("dep1");
 
-    // The descope's guarantee: nothing about deposits changes on the route that
-    // already handled them. The customer is billed the gross, so the عربون is
-    // absorbed by what they owe and no treatment has to be stated.
-    const { saleId } = await runDeal(s, { route: "THROUGH_DEALERSHIP", deposit: 3_000, downPayment: 3_000 });
-    expect(saleId).toBeTruthy();
+    // This asserted the opposite, on the stated premise that the customer is
+    // billed the gross so the عربون is absorbed by what they owe. Direct
+    // recognition removes that premise: on an external financed sale the car is
+    // the financing company's purchase, no customer receivable is raised for it,
+    // and the deposit has nothing left to reduce.
+    //
+    // Where the money should go instead — reducing what the company is asked to
+    // fund, standing as consideration the dealership already holds, or sitting in
+    // the deposits liability until the deal closes — are three different answers
+    // putting real customer money in three different places. Nothing on the
+    // record chooses between them, so finalization refuses rather than guessing,
+    // and it refuses in terms that name the cause instead of the symptom.
+    await expect(
+      runDeal(s, { route: "THROUGH_DEALERSHIP", deposit: 3_000, downPayment: 3_000 })
+    ).rejects.toThrow(/reservation deposit is still held/i);
 
+    // And it refuses before anything is written: the deposit is untouched.
     const deposits = await s.t.run((ctx) => ctx.db.query("deposits").collect());
-    expect(deposits.some((d) => d.status === "HELD")).toBe(false);
+    expect(deposits.every((d) => d.status === "HELD")).toBe(true);
   });
 });
 

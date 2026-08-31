@@ -2717,6 +2717,17 @@ export default defineSchema({
     accountingClassifiedAt: v.optional(v.number()),
     accountingClassificationNotes: v.optional(v.string()),
 
+    /**
+     * The settlement plan this deal was actually recognised from.
+     *
+     * Server-owned and written only by finalization, beside the sale id and the
+     * idempotency key it belongs with. It is the record of WHICH plan posted:
+     * the fee rows behind it can be corrected afterwards, and when they are,
+     * what the journal says must still be traceable to the figures that produced
+     * it rather than to whatever those rows say later.
+     */
+    financedSaleRecognitionFingerprint: v.optional(v.string()),
+
     // Appraisal gap and its negotiated split. The gap negotiated is the RAW
     // difference against the submitted quotation, not the change in the
     // company's funded portion.
