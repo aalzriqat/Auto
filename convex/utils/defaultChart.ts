@@ -50,6 +50,22 @@ export const SYSTEM_KEYS = {
   // paid, then released to the matching operating-expense account ratably over
   // amortizationMonths — see prepaidExpenses.ts and rulePrepaidExpenseAmortized.
   PREPAID_EXPENSES: "PREPAID_EXPENSES",
+  // Contra-revenue for amounts a financing company nets out of a settlement
+  // that reduce what the dealership earned rather than costing it something —
+  // a dealer concession, or a negotiated reduction in the consideration.
+  SALES_CONSIDERATION_REDUCTIONS: "SALES_CONSIDERATION_REDUCTIONS",
+  // The mirror of ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES. Reachable whenever a
+  // company's deductions exceed the gross it owes, which is a payable and not
+  // a negative receivable.
+  ACCOUNTS_PAYABLE_FINANCE_COMPANIES: "ACCOUNTS_PAYABLE_FINANCE_COMPANIES",
+  // Settlement deductions the dealership actually bears. Each is its own
+  // account because "what the company withheld" is not one fact: a commission
+  // and a transfer fee are different costs and are analysed separately.
+  FINANCE_COMPANY_COMMISSION_EXPENSE: "FINANCE_COMPANY_COMMISSION_EXPENSE",
+  APPRAISAL_EXPENSE: "APPRAISAL_EXPENSE",
+  INSURANCE_EXPENSE: "INSURANCE_EXPENSE",
+  OWNERSHIP_TRANSFER_EXPENSE: "OWNERSHIP_TRANSFER_EXPENSE",
+  SELLING_EXPENSE: "SELLING_EXPENSE",
 } as const;
 
 export type SystemKey = typeof SYSTEM_KEYS[keyof typeof SYSTEM_KEYS];
@@ -276,6 +292,22 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     systemKey: SYSTEM_KEYS.REFUNDS_PAYABLE,
   },
   {
+    // What the dealership owes a financing company, which happens whenever the
+    // company's classified deductions exceed the gross it owes on the deal.
+    // Not AP-Suppliers: a supplier and a financier are different counterparties
+    // and netting them would hide both. Not a negative balance on 1210 either —
+    // a receivable that has gone negative is a payable filed in the wrong half
+    // of the balance sheet.
+    code: "2220",
+    name: "Accounts Payable — Finance Companies",
+    nameAr: "ذمم دائنة - شركات التمويل",
+    type: "LIABILITY",
+    normalBalance: "CREDIT",
+    isControlAccount: true,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.ACCOUNTS_PAYABLE_FINANCE_COMPANIES,
+  },
+  {
     code: "2300",
     name: "Commission Payable",
     nameAr: "عمولات مستحقة",
@@ -416,6 +448,24 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     isControlAccount: false,
     allowManualPosting: false,
     systemKey: SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE,
+  },
+  {
+    // Contra-revenue: type REVENUE with a CREDIT normal balance, carrying a
+    // DEBIT balance in practice. That combination is deliberate and load-
+    // bearing. Both reports net by normal balance (accountingReports.ts:254
+    // and :353), so a debit here reads as NEGATIVE revenue and correctly
+    // reduces the top line. Declaring it DEBIT-normal instead — the intuitive
+    // choice for an account that holds debits — would make the same posting
+    // ADD to revenue, and would break the balance sheet's isBalanced check by
+    // twice the amount.
+    code: "4180",
+    name: "Sales Consideration Reductions",
+    nameAr: "تخفيضات قيمة البيع",
+    type: "REVENUE",
+    normalBalance: "CREDIT",
+    isControlAccount: false,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.SALES_CONSIDERATION_REDUCTIONS,
   },
   {
     code: "4200",
@@ -595,6 +645,56 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     isControlAccount: false,
     allowManualPosting: true,
     systemKey: SYSTEM_KEYS.PROFESSIONAL_FEES_EXPENSE,
+  },
+  {
+    code: "6860",
+    name: "Finance Company Commission Expense",
+    nameAr: "مصروف عمولة شركة تمويل",
+    type: "EXPENSE",
+    normalBalance: "DEBIT",
+    isControlAccount: false,
+    allowManualPosting: true,
+    systemKey: SYSTEM_KEYS.FINANCE_COMPANY_COMMISSION_EXPENSE,
+  },
+  {
+    code: "6870",
+    name: "Appraisal Expense",
+    nameAr: "مصروف تثمين",
+    type: "EXPENSE",
+    normalBalance: "DEBIT",
+    isControlAccount: false,
+    allowManualPosting: true,
+    systemKey: SYSTEM_KEYS.APPRAISAL_EXPENSE,
+  },
+  {
+    code: "6880",
+    name: "Insurance Expense",
+    nameAr: "مصروف تأمين",
+    type: "EXPENSE",
+    normalBalance: "DEBIT",
+    isControlAccount: false,
+    allowManualPosting: true,
+    systemKey: SYSTEM_KEYS.INSURANCE_EXPENSE,
+  },
+  {
+    code: "6890",
+    name: "Ownership Transfer Expense",
+    nameAr: "مصروف نقل ملكية",
+    type: "EXPENSE",
+    normalBalance: "DEBIT",
+    isControlAccount: false,
+    allowManualPosting: true,
+    systemKey: SYSTEM_KEYS.OWNERSHIP_TRANSFER_EXPENSE,
+  },
+  {
+    code: "6900",
+    name: "Selling Expense",
+    nameAr: "مصروف بيع",
+    type: "EXPENSE",
+    normalBalance: "DEBIT",
+    isControlAccount: false,
+    allowManualPosting: true,
+    systemKey: SYSTEM_KEYS.SELLING_EXPENSE,
   },
 ];
 

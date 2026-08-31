@@ -177,6 +177,51 @@ export interface DepositForfeitedPayload {
   customerId: string;
 }
 
+/**
+ * One classified line of a financed settlement, already resolved to an account.
+ *
+ * The rule does not decide where a component posts. That decision belongs to
+ * `buildFinancedSalePostingPlan`, which refuses a treatment it cannot map rather
+ * than defaulting one — so by the time a component reaches here it carries a
+ * system key somebody explicitly assigned to its treatment.
+ */
+export interface FinancedSalePlanLine {
+  sourceKind: string;
+  sourceId: string;
+  label: string;
+  amountMinor: number;
+  treatment: string;
+  systemKey: SystemKey;
+  side: "DEBIT" | "CREDIT";
+}
+
+/**
+ * The frozen recognition plan for an external-finance sale settled through the
+ * dealership.
+ *
+ * It rides on SALE_COMPLETED rather than arriving as a second event, and that is
+ * the design rather than a convenience. Two writers capable of posting the same
+ * sale is how a ledger ends up with two versions of one transaction; and
+ * `hookSaleCancelled` is a `makeReversalHook`, which mirrors the ORIGINAL
+ * journal's own lines instead of recomputing them. Carrying the plan inside the
+ * sale entry therefore makes cancellation reverse the exact plan that posted,
+ * for free, even after the fee rows it was derived from have been edited.
+ */
+export interface FinancedSalePlanPayload {
+  version: number;
+  fingerprint: string;
+  financeCompanyId: string;
+  /** The only figure the vehicle leg's revenue is posted from. */
+  legalInvoiceConsiderationMinor: number;
+  /** N — what the financing company will actually remit. */
+  financeCompanyReceivableMinor: number;
+  /** P — what the dealership owes the company when deductions exceed the gross. */
+  financeCompanyPayableMinor: number;
+  /** Only what the customer independently owes the dealership on the vehicle leg. */
+  customerReceivableMinor: number;
+  components: FinancedSalePlanLine[];
+}
+
 export interface SaleCompletedPayload {
   saleId: string;
   saleAmountMinor: number;
@@ -210,6 +255,15 @@ export interface SaleCompletedPayload {
    * bug and still throws.
    */
   consignmentEvaluated?: boolean;
+  /**
+   * Present only on an external-finance sale settled THROUGH_DEALERSHIP.
+   *
+   * Its presence changes who owes the dealership for the car, and nothing else:
+   * tax, dealer fees, warranty and GAP stay the customer's and stay in
+   * AR-Customers. Absent, this rule behaves exactly as it did — every cash sale,
+   * every consigned sale and every already-queued event is untouched.
+   */
+  financedSalePlan?: FinancedSalePlanPayload;
   /**
    * Set by every emitter that knows `saleAmountMinor` is tax-EXCLUSIVE — i.e.
    * every one of them from this deploy onward (SCRUM-22). It is how this rule
@@ -852,15 +906,85 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
   // sizes the canonical receivable document for the same sale. The GL and the
   // AR subledger disagreeing about one customer's bill is the failure this
   // arithmetic is shared to prevent.
+  // On an external financed deal settled through the dealership the financing
+  // company is the legal buyer of the CAR. The dealership's claim for the
+  // vehicle is therefore against the company, and the customer's receivable
+  // carries only what the customer independently owes: the tax, the dealer's own
+  // fees, warranty and GAP, plus any gap cash the plan says is still theirs.
+  //
+  // Raising the whole consideration as customer debt and transferring it out
+  // again afterwards is what this replaces. That shape opened the finance
+  // receivable from the customer's financing principal — a number that is
+  // neither what the company owes the dealership nor what the customer owes it —
+  // and drove AR-Customers negative whenever the principal exceeded the price.
+  const plan = p.financedSalePlan;
+
+  // A plan is only ever attached by an emitter that already knows the
+  // tax-exclusive convention. A legacy tax-INCLUSIVE event carrying one would
+  // mean the receivable and the journal were sized under different conventions,
+  // and the difference would sit in AR permanently.
+  if (plan && !taxExclusive) {
+    throw new ConvexError(
+      `Sale ${p.saleId} carries a financed settlement plan on the legacy tax convention, which cannot be posted. It must be re-derived under the current convention.`
+    );
+  }
+
+  const vehicleArDebitMinor = plan ? plan.customerReceivableMinor : p.saleAmountMinor;
   const arDebitMinor =
-    p.saleAmountMinor +
+    vehicleArDebitMinor +
     (taxExclusive ? taxMinor : 0) +
     dealerFeesMinor +
     warrantySoldMinor +
     gapSoldMinor;
-  const lines: LineSpec[] = [
-    line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, arDebitMinor, 0, "Sale receivable", dims),
-  ];
+  const lines: LineSpec[] = [];
+  // Unconditional without a plan, so no existing sale's entry changes shape.
+  // With one, a financed deal carrying no customer-owed extras legitimately owes
+  // the dealership nothing, and `validateBalance` refuses a line that is neither
+  // a debit nor a credit — so the correct entry omits the line rather than
+  // posting a zero one.
+  if (!plan || arDebitMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, arDebitMinor, 0, "Sale receivable", dims));
+  }
+  if (plan) {
+    if (plan.financeCompanyReceivableMinor > 0) {
+      lines.push(
+        line(
+          SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES,
+          plan.financeCompanyReceivableMinor,
+          0,
+          "Finance company receivable — expected remittance",
+          { ...dims, financeCompanyId: plan.financeCompanyId }
+        )
+      );
+    }
+    // Deductions above the gross mean the dealership owes the company, which is a
+    // payable and not a receivable wearing a minus sign.
+    if (plan.financeCompanyPayableMinor > 0) {
+      lines.push(
+        line(
+          SYSTEM_KEYS.ACCOUNTS_PAYABLE_FINANCE_COMPANIES,
+          0,
+          plan.financeCompanyPayableMinor,
+          "Owed to finance company — settlement deductions exceed the gross",
+          { ...dims, financeCompanyId: plan.financeCompanyId }
+        )
+      );
+    }
+    // One line per classified component, at the account its own treatment names.
+    // Never summed into a single bucket: a commission, an appraisal fee and a
+    // concession are three different facts that happen to reduce one payment.
+    for (const component of plan.components) {
+      lines.push(
+        line(
+          component.systemKey,
+          component.side === "DEBIT" ? component.amountMinor : 0,
+          component.side === "CREDIT" ? component.amountMinor : 0,
+          component.label,
+          { ...dims, financeCompanyId: plan.financeCompanyId }
+        )
+      );
+    }
+  }
   // Only when there IS revenue. On the legacy branch `price - tax` is zero when
   // the two are equal, and `validateBalance` refuses a line carrying neither a
   // debit nor a credit — so the drain threw, the outbox retried, and after
@@ -885,8 +1009,14 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
   // to write a payload directly through the super-admin raw-JSON editor, which
   // can post an arbitrary payload to any rule by design. Stated because the
   // earlier wording claimed the refusal held generally, and it does not.
-  if (revenueMinor > 0) {
-    lines.push(line(SYSTEM_KEYS.SALES_REVENUE, 0, revenueMinor, "Vehicle sale revenue", dims));
+  // With a plan the consideration comes from the legal invoice, which is the only
+  // document the sale of the car was made under. `saleAmountMinor` is the
+  // dealership's own operational figure and the two are allowed to differ — a
+  // 10,500 target against a 12,500 invoice to the financier is the ordinary
+  // shape of these deals, not an error to reconcile away.
+  const vehicleRevenueMinor = plan ? plan.legalInvoiceConsiderationMinor : revenueMinor;
+  if (vehicleRevenueMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.SALES_REVENUE, 0, vehicleRevenueMinor, "Vehicle sale revenue", dims));
   }
   if (dealerFeesMinor > 0) {
     lines.push(line(SYSTEM_KEYS.DEALER_FEE_INCOME, 0, dealerFeesMinor, "Dealer fee income", dims));
@@ -914,7 +1044,9 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
     lines,
     memo: legacySourced
       ? "Vehicle sale completed (sourced, principal basis — queued before agent accounting; awaiting restatement)"
-      : "Vehicle sale completed",
+      : plan
+        ? "Vehicle sale completed (financed — settlement recognized against the finance company)"
+        : "Vehicle sale completed",
     category: "SYSTEM",
   };
 }
