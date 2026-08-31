@@ -1,4 +1,5 @@
 import { ConvexError, v } from "convex/values";
+import { settlementDeductedTotalMinor } from "./utils/settlementDeductions";
 import { paginationOptsValidator } from "convex/server";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
@@ -86,6 +87,33 @@ async function resolveRuleSnapshot(
  * zeroes would read as "the company funds nothing", which is a different and
  * false claim.
  */
+/**
+ * Re-derive one application's economics from whatever is on the record now.
+ *
+ * Exported so the step that ESTABLISHES a deal's accounting can also refresh
+ * the figures it is establishing. The settlement costs feed the expected
+ * remittance, and a cost recorded after the last recompute would otherwise
+ * leave a stored figure that no longer follows from the deal's own rows.
+ *
+ * Safe to call at any point: it is a pure re-derivation of stored inputs, and
+ * it does nothing at all until the quotation, the approval and the applied LTV
+ * all exist.
+ */
+export async function recomputeEconomicsForApplication(
+  ctx: MutationCtx,
+  applicationId: Id<"financeApplications">
+): Promise<void> {
+  const app = await ctx.db.get(applicationId);
+  if (!app) return;
+  // A deal with no configured financier has no dealer-side purchase rules to
+  // derive anything from, and `resolveRuleSnapshot` refuses rather than
+  // inventing some. Classifying such a deal is still perfectly legitimate — it
+  // simply has no funding split — so this declines to run rather than turning a
+  // successful classification into a failure about rules the deal never had.
+  if (!app.companyId) return;
+  await recomputeAndPatchEconomics(ctx, app);
+}
+
 async function recomputeAndPatchEconomics(
   ctx: MutationCtx,
   app: Doc<"financeApplications">
@@ -141,10 +169,21 @@ async function recomputeAndPatchEconomics(
     // who did.
     customerContributionToFinanceCompanyMinor:
       app.customerContributionToFinanceCompanyMinor ?? 0,
-    // Fee deductions are per-deal fee rows, which arrive with the settlement
-    // work. Until then nothing is withheld, which is the correct reading of
-    // "no fees have been recorded" rather than a placeholder.
-    feeDeductionsMinor: 0,
+    // What the company actually withholds, read from the deal's own recorded
+    // cost lines.
+    //
+    // This was a literal zero, described as the correct reading of "no fees have
+    // been recorded". It was that on the day it was written and stopped being it
+    // the moment fee rows existed: the stored remittance then asserted that a
+    // company withholding a commission would nonetheless transfer the whole
+    // gross. Every consumer read that number as authoritative, so the overstatement
+    // was invisible — there was nothing to compare it against.
+    //
+    // Recorded actuals only, and a line still awaiting one contributes nothing.
+    // That is not a claim it withholds nothing: `classifyDealAccounting` refuses
+    // while any line lacks an actual, and finalization refuses an unclassified
+    // deal, so no journal is ever posted from a partially-recorded settlement.
+    feeDeductionsMinor: await settlementDeductedTotalMinor(ctx, app._id),
     customerDirectToDealerMinor: customerGapToDealer,
     dealerBorneExpensesMinor:
       app.actualClosingExpensesMinor ?? app.estimatedClosingExpensesMinor ?? 0,

@@ -1412,3 +1412,92 @@ describe("input validation", () => {
     ).rejects.toThrow();
   });
 });
+
+describe("classification establishes the remittance from what the company actually withholds", () => {
+  /** A deal with a financier and the inputs its funding split derives from. */
+  async function financedSeed(suffix: string) {
+    const seed = await seedDeal(suffix);
+    const companyId = await seed.t.run((ctx) =>
+      ctx.db.insert("financeCompanies", {
+        orgId: seed.orgId,
+        name: "Test Bank",
+        isActive: true,
+        profitRate: 5.5,
+        maxTermMonths: 72,
+        gracePeriodMonths: 3,
+      })
+    );
+    await seed.t.run((ctx) =>
+      ctx.db.patch(seed.applicationId, {
+        companyId,
+        submittedQuotationMinor: jod(10_500),
+        approvedDealerPurchaseAmountMinor: jod(10_500),
+        appliedLtvPercent: 100,
+        economicsCurrency: "JOD",
+      })
+    );
+    return seed;
+  }
+
+  async function classifyWithFee(
+    seed: Seed,
+    fee: { deductedFromSettlement: boolean; actualAmountMinor: number }
+  ) {
+    const feeId = await seed.asUser.mutation(api.financeDealCosts.recordDealFee, {
+      orgId: seed.orgId,
+      applicationId: seed.applicationId,
+      feeType: "LICENSING",
+      paidBy: "DEALER",
+      paidTo: "FINANCE_COMPANY",
+      accountingTreatment: "FINANCE_COMPANY_COMMISSION",
+      deductedFromSettlement: fee.deductedFromSettlement,
+      actualAmountMinor: fee.actualAmountMinor,
+    });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: seed.orgId,
+      feeId,
+      notes: "Matched to the settlement advice.",
+    });
+    await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+      orgId: seed.orgId,
+      applicationId: seed.applicationId,
+      legalInvoiceAmountMinor: jod(10_500),
+      legalInvoiceNumber: "INV-REMIT-" + fee.actualAmountMinor,
+      legalInvoiceDate: Date.now(),
+      issuedTo: "FINANCE_COMPANY",
+    });
+    await seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, {
+      orgId: seed.orgId,
+      applicationId: seed.applicationId,
+      notes: "Settlement advice on file.",
+    });
+    return await seed.t.run((ctx) => ctx.db.get(seed.applicationId));
+  }
+
+  test("a cost the company withholds reduces the stored remittance", async () => {
+    const seed = await financedSeed("remit_net");
+    const app = await classifyWithFee(seed, {
+      deductedFromSettlement: true,
+      actualAmountMinor: jod(375),
+    });
+
+    // The company owes 10,500 for the car and keeps 375 of it, so 10,125 is what
+    // actually arrives. Stored as 10,500 the dealership would carry a receivable
+    // for money nobody was ever going to send, and the difference would surface
+    // only as an unexplained shortfall at settlement.
+    expect(app?.expectedDealerRemittanceMinor).toBe(jod(10_125));
+  });
+
+  test("a cost the company does NOT withhold leaves the remittance alone", async () => {
+    const seed = await financedSeed("remit_gross");
+    const app = await classifyWithFee(seed, {
+      deductedFromSettlement: false,
+      actualAmountMinor: jod(375),
+    });
+
+    // Same amount, same treatment, billed separately rather than netted. The
+    // dealership still bears it, but it does not reduce the transfer — which is
+    // exactly why the flag is recorded per line and never inferred from who paid.
+    expect(app?.expectedDealerRemittanceMinor).toBe(jod(10_500));
+  });
+});

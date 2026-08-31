@@ -9,6 +9,7 @@ import { runWithIdempotency } from "./utils/idempotency";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { reconcileEmployeeCustody } from "../lib/financingEconomics";
+import { recomputeEconomicsForApplication } from "./financingEconomics";
 import {
   assertMinorAmount,
   feeAccountingTreatmentValidator,
@@ -1456,6 +1457,16 @@ export const classifyDealAccounting = mutation({
         "This deal's accounting has already been classified. Change what it was based on to reopen it."
       );
     }
+
+    // Establishing a deal's accounting means establishing the figures that
+    // follow from it, not just stamping a flag beside them. Every settlement
+    // cost above now has a checked actual, so this is the first moment the
+    // expected remittance can be derived from what the company actually
+    // withholds — and the last moment before finalization reads it.
+    //
+    // Ordered after the refusals deliberately: a deal that cannot be classified
+    // must not have its stored economics moved on the way to being told so.
+    await recomputeEconomicsForApplication(ctx, args.applicationId);
 
     const now = Date.now();
     await ctx.db.patch(args.applicationId, {
