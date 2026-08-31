@@ -1057,16 +1057,16 @@ async function settleOneReversalSource(
  * that has been deleted underneath us fails safe by doing nothing rather than
  * recreating state.
  */
-async function markEntryFailed(ctx: MutationCtx, p: Doc<"pendingAccountingEvents">, message: string): Promise<void> {
+async function markEntryFailed(ctx: MutationCtx, p: Doc<"pendingAccountingEvents">, message: string): Promise<boolean> {
   const current = await ctx.db.get(p._id);
-  if (!current) return;
+  if (!current) return false;
   if (current.status !== "PENDING") {
     // Server-side only: this text can carry raw error detail, and the row it
     // would have been written onto is not a failure.
     console.error(
       `[outbox] suppressed failure write on a ${current.status} entry ${String(p._id)}: ${message}`
     );
-    return;
+    return false;
   }
 
   const attempts = current.attempts + 1;
@@ -1075,6 +1075,7 @@ async function markEntryFailed(ctx: MutationCtx, p: Doc<"pendingAccountingEvents
     lastError: message,
     ...(attempts >= MAX_ATTEMPTS ? { status: "FAILED" as const } : {}),
   });
+  return true;
 }
 
 /**
@@ -1165,8 +1166,13 @@ export async function drainEntries(
       posted++;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await markEntryFailed(ctx, p, message);
-      failed++;
+      // ⚠️ COUNT WHAT WAS RECORDED, NOT WHAT WAS ATTEMPTED. `markEntryFailed`
+      // refuses to write onto a row that is no longer failable, so an
+      // unconditional `failed++` here reported a POSTED row as failed — the
+      // durable state was right and the returned counters were not. An
+      // operator reading a drain summary would see a failure that does not
+      // exist anywhere in the data.
+      if (await markEntryFailed(ctx, p, message)) failed++;
     }
   }
 

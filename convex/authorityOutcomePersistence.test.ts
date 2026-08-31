@@ -96,10 +96,44 @@ type Seed = Awaited<ReturnType<typeof seedCanonicalOrgWithChart>>;
  * the pump cannot reach it, and freezing the clock would move every entry out
  * of the accounting period it was written for.
  */
-async function drain(seed: Seed) {
+/**
+ * Runs the cron sweep that recovers work whose EAGER dispatch never happened,
+ * with the same timer discipline as `drain` — and for the same reason.
+ *
+ * ⚠️ THE SCHEDULING CALL MUST HAPPEN INSIDE THE FAKE-TIMER WINDOW. Scheduling
+ * the sweep first and pumping afterwards leaves the chain on real timers,
+ * where `finishAllScheduledFunctions` cannot reach it: the work stays READY
+ * with zero executions and the entry never gains its authority outcome. That
+ * looks exactly like a stranded work item and is not one, which is precisely
+ * the confusion a weak assertion hides.
+ *
+ * This is also what production does. The eager dispatch is a latency
+ * optimisation; when it is rejected, `dispatchDueAuthorityWork` is the channel
+ * that still settles the work.
+ */
+async function sweepDueAuthorityWork(seed: Seed) {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
   try {
-    await seed.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, {
+    await seed.t.mutation(internal.accountingOutbox.dispatchDueAuthorityWork, {});
+    for (let pass = 0; pass < 10; pass += 1) {
+      await seed.t.finishAllScheduledFunctions(vi.runAllTimers);
+      const queued = (
+        await seed.t.run(async (ctx: any) =>
+          await ctx.db.system.query("_scheduled_functions").collect()
+        )
+      ).filter((f: any) => f.state.kind === "pending" || f.state.kind === "inProgress").length;
+      if (queued === 0) break;
+    }
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+async function drain(seed: Seed) {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+  let counters: { posted: number; failed: number; held: number } | undefined;
+  try {
+    counters = await seed.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, {
       orgId: seed.orgId,
     });
     for (let pass = 0; pass < 10; pass += 1) {
@@ -114,6 +148,7 @@ async function drain(seed: Seed) {
   } finally {
     vi.useRealTimers();
   }
+  return counters!;
 }
 
 /** A real posted event, so a real reversal has something to reverse. */
@@ -496,8 +531,9 @@ describe("a rejected eager dispatch after the row is POSTED", () => {
     await seed.t.run(async (ctx: any) => await ctx.db.patch(entryId, { attempts: 9 }));
 
     injectSchedule.fail = true;
+    let counters: { posted: number; failed: number; held: number } | undefined;
     try {
-      await drain(seed);
+      counters = await drain(seed);
     } finally {
       injectSchedule.fail = false;
     }
@@ -517,6 +553,31 @@ describe("a rejected eager dispatch after the row is POSTED", () => {
       )
     );
     expect(work, "the work item survives the transport failure").toHaveLength(1);
+
+    // ⚠️ THE DRAIN'S OWN COUNTERS, PINNED IN FULL — BOTH HALVES DELIBERATE.
+    //
+    // `failed: 0` is the contract this assertion exists for. `markEntryFailed`
+    // refuses to write onto a row that is no longer failable, so the entry
+    // stayed POSTED — and the unconditional `failed++` this replaced reported
+    // that completed row as failed. Durable state right, operator-facing
+    // summary wrong, which is the harder kind to notice.
+    //
+    // `posted: 0` is NOT a second bug being blessed; it is a known and stated
+    // understatement, pinned so it cannot drift silently. The eager dispatch
+    // throws from inside `markEntryPosted`, after the row is durably POSTED but
+    // before `posted++` runs. So this drain did real, committed work and
+    // reports none of it. Silence understates; it does not assert anything
+    // false, which is why it is strictly better than the old `failed: 1` lie.
+    //
+    // Making it say `posted: 1` means stopping the scheduler rejection
+    // propagating at all — a change to the eager-dispatch design that c15892
+    // ruled on and BOTH review seats confirmed as correct. That is a separate
+    // decision, not a fix to smuggle in here. Recorded as follow-up instead.
+    expect(counters, "suppressed rejection: nothing failed, and nothing is claimed").toEqual({
+      posted: 0,
+      failed: 0,
+      held: 0,
+    });
     expect(["READY", "DISPATCHED"]).toContain(work[0].status);
 
     // 4. The journal was not duplicated by the failure.
@@ -526,13 +587,41 @@ describe("a rejected eager dispatch after the row is POSTED", () => {
     expect(reversals.length, "no second reversal is created").toBeLessThanOrEqual(1);
 
     // 5. And settlement still completes once the transport recovers.
-    await drain(seed);
-    await seed.t.run(async (ctx: any) => {
-      await ctx.scheduler.runAfter(0, internal.accountingOutbox.dispatchDueAuthorityWork, {});
-    });
-    await drain(seed);
+    await sweepDueAuthorityWork(seed);
     const settled = await seed.t.run(async (ctx: any) => await ctx.db.get(entryId));
     expect(settled.status, "still POSTED after recovery").toBe("POSTED");
+
+    // ⚠️ "STILL POSTED" IS NOT "SETTLEMENT COMPLETED". The row was already
+    // POSTED before the recovery drain, so re-asserting it alone would pass
+    // just as happily against a work item that never settled at all — an
+    // outcome-shaped assertion weaker than the sentence above it. What the
+    // step actually claims is that the authority work reached a truthful
+    // terminal result, so assert THAT, against the same terminal state the
+    // CONTROL pins for an uninterrupted drain.
+    expect(
+      settled.authorityOutcome,
+      "the recovered drain reaches the same terminal outcome as the clean one"
+    ).toBe("RESTORED");
+
+    const workAfter = await seed.t.run(async (ctx: any) =>
+      (await ctx.db.query("commitmentAuthorityWork").collect()).filter(
+        (w: any) => String(w.orgId) === String(seed.orgId)
+      )
+    );
+    expect(workAfter, "still exactly one work item — recovery did not duplicate it").toHaveLength(1);
+    expect(workAfter[0].status, "the work item is terminal, not merely re-queued").toBe("SETTLED");
+
+    // The authority the reversal owed is actually back on the car: one OPEN
+    // successor root, and a projection that says the vehicle is held.
+    const roots = await seed.t.run(async (ctx: any) =>
+      (await ctx.db.query("commitmentRoots").collect()).filter(
+        (r: any) => String(r.vehicleId) === String(deal.vehicleId) && r.status === "OPEN"
+      )
+    );
+    expect(roots, "exactly one OPEN successor root on the restored car").toHaveLength(1);
+
+    const vehicle = await seed.t.run(async (ctx: any) => await ctx.db.get(deal.vehicleId));
+    expect(vehicle?.status, "the projection matches the restored authority").toBe("RESERVED");
   });
 
   test("CONTROL — with no injected rejection the same deal drains clean", async () => {

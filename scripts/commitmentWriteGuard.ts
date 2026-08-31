@@ -221,37 +221,46 @@ export type FieldVerdict = "UNCONDITIONAL" | "ABSENT" | "UNRESOLVED";
  * anything computed at runtime, is refused. Found by Codex xhigh against
  * 6e2dceb83.
  */
-function isCanonicalVersionValue(value: ts.Expression, importsTheConstant: boolean): boolean {
-  if (ts.isNumericLiteral(value)) return value.text === String(CANONICAL_AUTHORITY_VERSION);
-  // ⚠️ THE SPELLING IS NOT THE BINDING. Accepting the identifier on its name
-  // alone certified this, which mints a LEGACY dealership:
+function isCanonicalVersionValue(value: ts.Expression): boolean {
+  // ONLY THE NUMERIC LITERAL. No identifier, no import, no module path.
   //
-  //   const COMMITMENT_AUTHORITY_V1 = 0;
-  //   ctx.db.insert("organizations", { commitmentAuthorityVersion: COMMITMENT_AUTHORITY_V1 });
+  // SCRUM-208 c15929 (owner ruling). Two earlier rounds tried to certify the
+  // NAME `COMMITMENT_AUTHORITY_V1`, and both were forged:
   //
-  // So the name only counts when the file actually imports it from the kernel.
-  // A file cannot both import that binding and redeclare it locally — TypeScript
-  // rejects the redeclaration — so the import is proof the identifier resolves
-  // to the real constant. Found by Codex xhigh against 02582f606; it was a hole
-  // in my own previous round's value check.
-  return importsTheConstant && ts.isIdentifier(value) && value.text === "COMMITMENT_AUTHORITY_V1";
-}
-
-/** Does this module import `COMMITMENT_AUTHORITY_V1` from the commitment kernel? */
-function importsCanonicalVersionConstant(sf: ts.SourceFile): boolean {
-  for (const stmt of sf.statements) {
-    if (!ts.isImportDeclaration(stmt)) continue;
-    if (!ts.isStringLiteral(stmt.moduleSpecifier)) continue;
-    if (!stmt.moduleSpecifier.text.includes("commitmentKernel")) continue;
-    const bindings = stmt.importClause?.namedBindings;
-    if (!bindings || !ts.isNamedImports(bindings)) continue;
-    for (const el of bindings.elements) {
-      // `import { COMMITMENT_AUTHORITY_V1 }` — and not a rename, whose local
-      // name would say nothing about what it is bound to.
-      if (!el.propertyName && el.name.text === "COMMITMENT_AUTHORITY_V1") return true;
-    }
-  }
-  return false;
+  //   round 6  `const COMMITMENT_AUTHORITY_V1 = 0`   certified as canonical
+  //   round 9  a genuine top-level import, then an INNER-SCOPE shadow bound
+  //            to 0 at the call site                 certified as canonical
+  //
+  // The round-6 repair asserted that "a file cannot both import that binding
+  // and redeclare it locally, so the import is proof". THAT WAS FALSE, and it
+  // is worth stating plainly because the comment outlived the belief:
+  // TypeScript rejects redeclaration only at the SAME scope. A parameter or a
+  // block-scoped `const` inside a function shadows a module import perfectly
+  // legally, and `tsc --strict` compiles it with no TS2451. A second forgery
+  // used `.includes("commitmentKernel")`, so `./fakecommitmentKernel` passed.
+  //
+  // ⚠️ THE LESSON IS NOT "SHARPEN THE HEURISTIC". Two consecutive rounds found
+  // a defect introduced by the previous round's fix, in this one function —
+  // the convergence circuit breaker. Resolving an identifier to its binding is
+  // a job for a TypeScript Program and a TypeChecker; approximating it from
+  // source text is what kept failing. So the inference is DELETED rather than
+  // improved. A number cannot be shadowed.
+  //
+  // The cost is a duplicated literal, and it is paid by two pins that fail
+  // LOUDLY if the kernel ever moves off 1:
+  //
+  //   1. the guard's own suite compares this number with the real
+  //      `COMMITMENT_AUTHORITY_V1` exported by the kernel;
+  //   2. `organizations.test.ts` drives the real `organizations:create` and
+  //      asserts the STORED version equals that same kernel constant.
+  //
+  // A kernel bump therefore breaks both tests until the writer and this guard
+  // are updated together, deliberately. That is the whole point: the coupling
+  // is enforced by executable tests instead of by a static-analysis guess.
+  //
+  // Symbol-resolving this properly is real work and is deferred as tooling
+  // debt, not silently dropped.
+  return ts.isNumericLiteral(value) && value.text === String(CANONICAL_AUTHORITY_VERSION);
 }
 
 export function topLevelFieldVerdict(
@@ -731,8 +740,6 @@ export function findOrganizationInsertSites(
   file: string
 ): OrganizationInsertSite[] {
   const source = blankComments(rawSource);
-  // Whether the canonical constant's NAME can be trusted in this file at all.
-  const importsConstant = importsCanonicalVersionConstant(parseModule(rawSource, file));
   const sites: OrganizationInsertSite[] = [];
   for (const call of collectDbWrites(rawSource, file)) {
     if (call.method !== "insert") continue;
@@ -772,9 +779,7 @@ export function findOrganizationInsertSites(
       file,
       enclosingFunction: last ? (last[1] ?? last[2]) : "<top level>",
       initializesAuthorityVersion:
-        topLevelFieldVerdict(call.literal, "commitmentAuthorityVersion", (v) =>
-          isCanonicalVersionValue(v, importsConstant)
-        ) ===
+        topLevelFieldVerdict(call.literal, "commitmentAuthorityVersion", isCanonicalVersionValue) ===
         "UNCONDITIONAL",
     });
   }

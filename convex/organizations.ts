@@ -10,7 +10,6 @@ import {
   SOCIAL_CONVERSATION_GENERATION,
   SOCIAL_PLATFORMS,
 } from "./utils/materialization";
-import { COMMITMENT_AUTHORITY_V1 } from "./utils/commitmentKernel";
 
 const ACTIVE_DELETION_STATUSES = ["PENDING_REVIEW", "APPROVED", "RUNNING"] as const;
 
@@ -67,13 +66,34 @@ export const create = mutation({
     // field at all, pass the field guard, and silently return every new
     // dealership to LEGACY.
     //
+    // ⚠️ WHY THE LITERAL 1 AND NOT `COMMITMENT_AUTHORITY_V1` (SCRUM-208
+    // c15929, owner ruling). The structural guard has to decide, from source
+    // text alone, that this field is really bound to the canonical version.
+    // Twice it tried to do that by trusting the CONSTANT'S NAME, and twice the
+    // name was forged — first by a plain redeclaration, then by an inner-scope
+    // shadow sitting under a genuine top-level import. Resolving a name to its
+    // binding needs a TypeScript Program, not a text scan, so the guard now
+    // accepts only a numeric literal. A number cannot be shadowed.
+    //
+    // The duplication is deliberate and it is NOT unpinned. Two executable
+    // contracts tie this literal to the kernel:
+    //
+    //   1. the guard's suite compares the guard's own canonical number with
+    //      the real `COMMITMENT_AUTHORITY_V1`;
+    //   2. `organizations.test.ts` drives THIS mutation and asserts the value
+    //      it actually stored equals that same kernel constant.
+    //
+    // So bumping the kernel to V2 does not silently leave new dealerships on
+    // 1 — it turns both suites red until this line and the guard are changed
+    // on purpose, together.
+    //
     // EXISTING organizations are untouched. They stay LEGACY and keep failing
     // closed; activating them is SCRUM-201's cutover and deliberately does not
     // happen here.
     const orgId = await ctx.db.insert("organizations", {
       name: args.name.trim(),
       createdAt: Date.now(),
-      commitmentAuthorityVersion: COMMITMENT_AUTHORITY_V1,
+      commitmentAuthorityVersion: 1,
     });
 
     // A brand-new org has no social events, so its materialised conversation

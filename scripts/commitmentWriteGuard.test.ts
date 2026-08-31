@@ -484,47 +484,84 @@ describe("round-6: the analyzers cannot be forged by position or by value", () =
   );
 
   /**
-   * ⚠️ THE IMPORT IS PART OF THE FIXTURE, AND THAT IS THE CONTRACT.
-   * The identifier's NAME proves nothing on its own — see the shadowing test
-   * below — so a snippet that does not import the constant must not certify,
-   * and one that does must.
+   * ⚠️ ONLY A NUMERIC LITERAL CERTIFIES (SCRUM-208 c15929, owner ruling).
+   *
+   * The identifier `COMMITMENT_AUTHORITY_V1` is no longer accepted in ANY
+   * form, imported or not. Two rounds of trying to prove a name resolves to
+   * the kernel binding were forged twice, the second time by the repair for
+   * the first — the convergence circuit breaker. The inference is deleted
+   * rather than sharpened, and the duplicated number is held in place by the
+   * two pins at the bottom of this block instead.
    */
-  const IMPORT = `import { COMMITMENT_AUTHORITY_V1 } from "./utils/commitmentKernel";\n`;
+  const IMPORT = `import { COMMITMENT_AUTHORITY_V1 } from "./utils/commitmentKernel";
+`;
   const orgInsertImporting = (literal: string) =>
     findOrganizationInsertSites(
       `${IMPORT}ctx.db.insert("organizations", ${literal})`,
       "convex/organizations.ts"
     )[0];
 
-  it("CONTROL — certifies the real pinned constant and a bare canonical literal", () => {
+  it("CONTROL — certifies the canonical numeric literal", () => {
+    expect(
+      orgInsert(`{ commitmentAuthorityVersion: ${COMMITMENT_AUTHORITY_V1} }`)
+        .initializesAuthorityVersion
+    ).toBe(true);
+  });
+
+  it("refuses the identifier even under a GENUINE kernel import", () => {
+    // This case CERTIFIED before c15929. It is the whole behaviour change:
+    // the name buys nothing, so nothing can be forged through it.
     expect(
       orgInsertImporting(`{ commitmentAuthorityVersion: COMMITMENT_AUTHORITY_V1 }`)
         .initializesAuthorityVersion
-    ).toBe(true);
-    // A bare canonical literal needs no import to be trustworthy.
-    expect(orgInsert(`{ commitmentAuthorityVersion: ${COMMITMENT_AUTHORITY_V1} }`)
-      .initializesAuthorityVersion).toBe(true);
+    ).toBe(false);
   });
 
   /**
-   * ⚠️ THE SPELLING IS NOT THE BINDING — a hole in my own round-6 value check.
-   * `const COMMITMENT_AUTHORITY_V1 = 0` certified as V1 purely because the
-   * identifier was spelled right. Found by Codex xhigh against 02582f606.
+   * ⚠️ THE TWO FORGERIES THAT DEFEATED THE PREVIOUS RULE, KEPT AS PERMANENT
+   * REGRESSIONS. Both certified at 69f020415 with a real top-level import.
+   *
+   * The round-9 test that was SUPPOSED to cover this had no import in its
+   * fixture, so it silently duplicated the "no import" case and never
+   * exercised import+shadow at all — which is exactly how the hole survived a
+   * green 53-test suite. Both shapes below carry the import deliberately.
    */
-  it("refuses a SHADOWED COMMITMENT_AUTHORITY_V1 bound to a legacy value", () => {
-    const shadowed = findOrganizationInsertSites(
-      `const COMMITMENT_AUTHORITY_V1 = 0;
-       ctx.db.insert("organizations", { commitmentAuthorityVersion: COMMITMENT_AUTHORITY_V1 });`,
-      "x.ts"
+  it("refuses a PARAMETER-DEFAULT shadow under a genuine import (Codex)", () => {
+    const forged = findOrganizationInsertSites(
+      `${IMPORT}export const create = mutation({
+         handler: async (ctx) => {
+           const insertOrg = (COMMITMENT_AUTHORITY_V1 = 0) =>
+             ctx.db.insert("organizations", { commitmentAuthorityVersion: COMMITMENT_AUTHORITY_V1 });
+           return await insertOrg();
+         },
+       });`,
+      "convex/organizations.ts"
     )[0];
-    expect(shadowed.initializesAuthorityVersion).toBe(false);
+    expect(forged.initializesAuthorityVersion).toBe(false);
   });
 
-  it("refuses the identifier in a file that never imports it", () => {
-    expect(
-      orgInsert(`{ commitmentAuthorityVersion: COMMITMENT_AUTHORITY_V1 }`)
-        .initializesAuthorityVersion
-    ).toBe(false);
+  it("refuses a BLOCK-SCOPED shadow under a genuine import (Sonnet MAX)", () => {
+    // `tsc --strict` compiles this with no TS2451: an inner scope may shadow a
+    // module import. The previous rule's stated justification was false.
+    const forged = findOrganizationInsertSites(
+      `${IMPORT}export function createLegacyMigratedOrg(ctx: any) {
+         const COMMITMENT_AUTHORITY_V1 = 0;
+         return ctx.db.insert("organizations", { commitmentAuthorityVersion: COMMITMENT_AUTHORITY_V1 });
+       }`,
+      "convex/organizations.ts"
+    )[0];
+    expect(forged.initializesAuthorityVersion).toBe(false);
+  });
+
+  it("refuses an identifier imported from a LOOK-ALIKE module path", () => {
+    // `.includes("commitmentKernel")` accepted `./fakecommitmentKernel`. The
+    // path is no longer consulted at all, so the shape cannot recur.
+    const forged = findOrganizationInsertSites(
+      `import { COMMITMENT_AUTHORITY_V1 } from "./fakecommitmentKernel";
+       ctx.db.insert("organizations", { commitmentAuthorityVersion: COMMITMENT_AUTHORITY_V1 });`,
+      "convex/organizations.ts"
+    )[0];
+    expect(forged.initializesAuthorityVersion).toBe(false);
   });
 
   it("refuses a RENAMED import, whose local name proves nothing", () => {
@@ -537,13 +574,29 @@ describe("round-6: the analyzers cannot be forged by position or by value", () =
   });
 
   /**
-   * The guard restates the canonical version rather than importing convex
-   * runtime code into a static-analysis script. This is what stops that
-   * duplication drifting.
+   * ⚠️ PIN 1 OF 2. The guard restates the canonical version rather than
+   * importing convex runtime code into a static-analysis script, and c15929
+   * made the production writer restate it a second time. This pins the guard's
+   * number to the real kernel constant from BOTH sides, so the duplication
+   * cannot drift in either direction: the kernel's value must certify, and the
+   * value one above it must not.
+   *
+   * PIN 2 lives in `convex/organizations.test.ts`, which drives the real
+   * `organizations:create` and asserts the STORED version equals this same
+   * kernel constant. Together they mean a kernel bump to V2 fails both suites
+   * until the writer and this guard are updated deliberately, together.
    */
   it("pins its canonical version to the real COMMITMENT_AUTHORITY_V1", () => {
-    expect(orgInsert(`{ commitmentAuthorityVersion: ${COMMITMENT_AUTHORITY_V1 + 1} }`)
-      .initializesAuthorityVersion).toBe(false);
+    expect(
+      orgInsert(`{ commitmentAuthorityVersion: ${COMMITMENT_AUTHORITY_V1} }`)
+        .initializesAuthorityVersion,
+      "the kernel's own value must certify"
+    ).toBe(true);
+    expect(
+      orgInsert(`{ commitmentAuthorityVersion: ${COMMITMENT_AUTHORITY_V1 + 1} }`)
+        .initializesAuthorityVersion,
+      "one above the kernel's value must not"
+    ).toBe(false);
   });
 
   /**
