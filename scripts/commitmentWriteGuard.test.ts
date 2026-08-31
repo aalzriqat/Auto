@@ -287,3 +287,146 @@ describe("commitment liveness writes go through the choke", () => {
     });
   });
 });
+
+/**
+ * SCRUM-208 — THE ANALYZERS MUST NOT BE FORGEABLE BY SPELLING.
+ *
+ * Codex xhigh blocked on this, Sonnet MAX filed it, and I reproduced every case
+ * against the exported functions before any of it was fixed. The regex versions
+ * certified — or simply never saw — a creator that mints LEGACY dealerships.
+ *
+ * ⚠️ THE TWO ANALYZERS ANSWER OPPOSITE QUESTIONS, AND THE TESTS SAY SO.
+ * `findOrganizationInsertSites` must PROVE a field is set, so anything it cannot
+ * read is NOT initialized. `findUnchokedWrites` must catch a field that MIGHT be
+ * written, so it searches every depth. Collapsing them is what produced both a
+ * false certification on one side and, when first fixed, a silent loss of
+ * coverage on the other.
+ */
+describe("the write analyzers cannot be forged by spelling", () => {
+  const withField = (table: string) =>
+    `export const create = mutation({ handler: async (ctx, args) => {
+       return await ctx.db.insert(${table}, { name: args.name, commitmentAuthorityVersion: 1 });
+     }});`;
+  const withoutField = (table: string) =>
+    `export const create = mutation({ handler: async (ctx, args) => {
+       return await ctx.db.insert(${table}, { name: args.name });
+     }});`;
+
+  // CONTROLS — if these ever fail, the rest of this block proves nothing.
+  it("CONTROL: sees a double-quoted creator and certifies a real initializer", () => {
+    const sites = findOrganizationInsertSites(withField('"organizations"'), "f.ts");
+    expect(sites).toHaveLength(1);
+    expect(sites[0].initializesAuthorityVersion).toBe(true);
+  });
+
+  it("CONTROL: sees a double-quoted creator that omits the field", () => {
+    const sites = findOrganizationInsertSites(withoutField('"organizations"'), "f.ts");
+    expect(sites).toHaveLength(1);
+    expect(sites[0].initializesAuthorityVersion).toBe(false);
+  });
+
+  it.each([
+    ["single-quoted", "'organizations'"],
+    ["template-literal", "`organizations`"],
+  ])("sees a %s creator that omits the field — was INVISIBLE", (_label, table) => {
+    const sites = findOrganizationInsertSites(withoutField(table), "f.ts");
+    expect(sites).toHaveLength(1);
+    expect(sites[0].initializesAuthorityVersion).toBe(false);
+  });
+
+  it("refuses to certify a CONDITIONAL initializer — was falsely certified", () => {
+    const src = `export const create = mutation({ handler: async (ctx, args) => {
+      return await ctx.db.insert("organizations", {
+        name: args.name,
+        ...(args.canonical ? { commitmentAuthorityVersion: 1 } : {}),
+      });
+    }});`;
+    const sites = findOrganizationInsertSites(src, "f.ts");
+    expect(sites).toHaveLength(1);
+    // The runtime document has no such field when the condition is false.
+    expect(sites[0].initializesAuthorityVersion).toBe(false);
+  });
+
+  it("refuses to certify the field NESTED in an unrelated object — was falsely certified", () => {
+    const src = `export const create = mutation({ handler: async (ctx, args) => {
+      return await ctx.db.insert("organizations", {
+        name: args.name,
+        migrationHints: { commitmentAuthorityVersion: "set me later" },
+      });
+    }});`;
+    const sites = findOrganizationInsertSites(src, "f.ts");
+    expect(sites).toHaveLength(1);
+    expect(sites[0].initializesAuthorityVersion).toBe(false);
+  });
+
+  it("refuses to certify a SHORTHAND initializer, whose value it cannot read", () => {
+    const src = `export const create = mutation({ handler: async (ctx, args) => {
+      const commitmentAuthorityVersion = 0;
+      return await ctx.db.insert("organizations", { name: args.name, commitmentAuthorityVersion });
+    }});`;
+    const sites = findOrganizationInsertSites(src, "f.ts");
+    expect(sites[0].initializesAuthorityVersion).toBe(false);
+  });
+
+  it("audits an UNREADABLE table name as if it were organizations", () => {
+    const src = `export async function seed(ctx, table) {
+      return await ctx.db.insert(table, { name: "x" });
+    }`;
+    const sites = findOrganizationInsertSites(src, "f.ts");
+    expect(sites).toHaveLength(1);
+    expect(sites[0].initializesAuthorityVersion).toBe(false);
+  });
+
+  // ── the no-downgrade ratchet ────────────────────────────────────────────
+  it("CONTROL: reports an explicit downgrade", () => {
+    const w = findUnchokedWrites(
+      `await ctx.db.patch(orgId, { commitmentAuthorityVersion: 0 });`,
+      "x.ts"
+    );
+    expect(w.map((r) => r.field)).toContain("commitmentAuthorityVersion");
+  });
+
+  it("reports a SHORTHAND downgrade — was INVISIBLE to the ratchet", () => {
+    const w = findUnchokedWrites(
+      `const commitmentAuthorityVersion = 0;
+       await ctx.db.patch(orgId, { commitmentAuthorityVersion });`,
+      "x.ts"
+    );
+    expect(w.map((r) => r.field)).toContain("commitmentAuthorityVersion");
+  });
+
+  it("reports a COMPUTED key — was INVISIBLE to the ratchet", () => {
+    const w = findUnchokedWrites(`await ctx.db.patch(orgId, { [k]: 0 });`, "x.ts");
+    expect(w.map((r) => r.field)).toContain("write:<computed-key>");
+  });
+
+  /**
+   * ⚠️ REGRESSION GUARD FOR MY OWN FIRST FIX. Restricting the ratchet to
+   * top-level properties made it miss the two real conditional-spread sites
+   * (`saleCancellation.ts`, `depositHelpers.ts`) — a silent LOSS of coverage,
+   * strictly worse than the forgery it was meant to close.
+   */
+  it("still reports a guarded field written inside a CONDITIONAL SPREAD", () => {
+    const w = findUnchokedWrites(
+      `await ctx.db.patch(d._id, { ...(reinstateHold ? { holdActive: true } : {}) });`,
+      "x.ts"
+    );
+    expect(w.map((r) => r.field)).toContain("holdActive");
+  });
+
+  /**
+   * ⚠️ AN HONEST LIMIT, ASSERTED SO IT CANNOT BE MISREAD AS COVERAGE.
+   * A spread of a binding built elsewhere names no field at this call site, and
+   * resolving it needs type information this source-text analyzer does not have.
+   * Recorded as a known gap rather than claimed as closed.
+   */
+  it("does NOT resolve a spread of a prebuilt object — known, recorded gap", () => {
+    const w = findUnchokedWrites(
+      `const patch = { commitmentAuthorityVersion: 0 };
+       await ctx.db.patch(orgId, { ...patch });`,
+      "x.ts"
+    );
+    // The literal that NAMES the field is a separate statement, not the write.
+    expect(w.map((r) => r.field)).not.toContain("commitmentAuthorityVersion");
+  });
+});

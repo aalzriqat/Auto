@@ -59,6 +59,153 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import ts from "typescript";
+
+/**
+ * SCRUM-208 — WHY THE WRITE ANALYZERS PARSE INSTEAD OF MATCHING TEXT.
+ *
+ * The regex versions of these two checks were forgeable in seven ordinary
+ * TypeScript spellings, found by Codex xhigh, Sonnet MAX and my own probe and
+ * reproduced with controls:
+ *
+ *   ctx.db.insert('organizations', …)      — invisible, only `"` was matched
+ *   ctx.db.insert(`organizations`, …)      — invisible
+ *   { ...(f ? { commitmentAuthorityVersion: 1 } : {}) }  — certified INITIALIZED
+ *   { migrationHints: { commitmentAuthorityVersion } }   — certified INITIALIZED
+ *   ctx.db.patch(o, { commitmentAuthorityVersion })      — invisible to the ratchet
+ *   ctx.db.patch(o, { [k]: 0 })                          — invisible to the ratchet
+ *   ctx.db.patch(o, { ...patch })                        — invisible to the ratchet
+ *
+ * A text scan cannot see nesting, conditionality or a binding, and every one of
+ * those failures pointed the same way: toward a green result the code had not
+ * earned. A green result here is an AUTHORIZATION, so the only acceptable
+ * direction of error is refusal.
+ *
+ * ⚠️ UNRESOLVED IS NOT SAFE, AND IS NEVER TREATED AS SAFE. Anything the parser
+ * cannot read to the byte — a computed key, a spread, a non-literal table name,
+ * a value that is a binding rather than a literal — is reported, not skipped.
+ * A human then either inlines the literal or records the site in the burn-down
+ * map with a reason. That is what "fails loudly" has to mean for a check whose
+ * silence is permission.
+ */
+
+/** A `ctx.db.insert|patch|replace(...)` call, with its arguments resolved. */
+type DbWriteCall = {
+  readonly method: "insert" | "patch" | "replace";
+  /** For `insert`, the table name when it is a static literal. */
+  readonly table: string | null;
+  /** True when the first argument could not be read as a static literal. */
+  readonly tableUnresolved: boolean;
+  /** The written object literal, when this call's own argument is one. */
+  readonly literal: ts.ObjectLiteralExpression | null;
+  /**
+   * The raw second argument, whatever its shape.
+   *
+   * ⚠️ NOT THE SAME AS `literal`, AND BOTH ARE NEEDED. Certification asks "is
+   * this field provably set here", which only an object literal can answer, so
+   * it reads `literal`. The ratchet asks "might a guarded field be written",
+   * which must also see a variable, a call result or a conditional — so it
+   * reads this.
+   */
+  readonly written: ts.Expression | null;
+  /** Byte offset of the call, for locating its enclosing declaration. */
+  readonly start: number;
+};
+
+function parseModule(source: string, file: string): ts.SourceFile {
+  return ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+}
+
+/** `ctx.db.<method>` and nothing else — not `foo.db.insert`, not a rename. */
+function ctxDbMethod(node: ts.CallExpression): DbWriteCall["method"] | null {
+  const access = node.expression;
+  if (!ts.isPropertyAccessExpression(access)) return null;
+  const name = access.name.text;
+  if (name !== "insert" && name !== "patch" && name !== "replace") return null;
+  const db = access.expression;
+  if (!ts.isPropertyAccessExpression(db) || db.name.text !== "db") return null;
+  return ts.isIdentifier(db.expression) && db.expression.text === "ctx" ? name : null;
+}
+
+/** A string only when it is written as one. A binding is NOT a string. */
+function staticStringOf(node: ts.Expression | undefined): string | null {
+  if (!node) return null;
+  if (ts.isStringLiteral(node)) return node.text;
+  if (ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
+  return null;
+}
+
+function collectDbWrites(source: string, file: string): DbWriteCall[] {
+  const out: DbWriteCall[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const method = ctxDbMethod(node);
+      if (method) {
+        const first = node.arguments[0];
+        const table = method === "insert" ? staticStringOf(first) : null;
+        // The written object is the 2nd argument for all three methods.
+        const written = node.arguments[1];
+        out.push({
+          method,
+          table,
+          tableUnresolved: method === "insert" && table === null,
+          literal: written && ts.isObjectLiteralExpression(written) ? written : null,
+          written: written ?? null,
+          start: node.getStart(),
+        });
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(parseModule(source, file));
+  return out;
+}
+
+/**
+ * Is `field` set, at the literal's OWN top level, to something readable?
+ *
+ * UNCONDITIONAL — a plain `field: <value>` property on this literal.
+ * ABSENT        — provably not written here, and every property was readable.
+ * UNRESOLVED    — the literal is missing, or carries a spread, a computed key,
+ *                 or a shorthand binding, so the answer cannot be proven.
+ */
+export type FieldVerdict = "UNCONDITIONAL" | "ABSENT" | "UNRESOLVED";
+
+export function topLevelFieldVerdict(
+  literal: ts.ObjectLiteralExpression | null,
+  field: string
+): FieldVerdict {
+  if (!literal) return "UNRESOLVED";
+  let unreadable = false;
+  for (const prop of literal.properties) {
+    // `...x` can carry anything, including the field. Never provably absent.
+    if (ts.isSpreadAssignment(prop)) {
+      unreadable = true;
+      continue;
+    }
+    const name = prop.name;
+    if (!name || ts.isComputedPropertyName(name)) {
+      unreadable = true;
+      continue;
+    }
+    const key =
+      ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)
+        ? name.text
+        : null;
+    if (key === null) {
+      unreadable = true;
+      continue;
+    }
+    if (key !== field) continue;
+    // Named at top level. A shorthand's value is a binding, not a literal, so
+    // it names the field without proving what it sets — refuse rather than
+    // certify. `{ commitmentAuthorityVersion }` after `const … = 0` is exactly
+    // the downgrade this must not wave through.
+    if (ts.isPropertyAssignment(prop)) return "UNCONDITIONAL";
+    return "UNRESOLVED";
+  }
+  return unreadable ? "UNRESOLVED" : "ABSENT";
+}
 
 export interface UnchokedWrite {
   /** Path relative to the convex root, POSIX separators. */
@@ -170,41 +317,87 @@ function objectLiteral(source: string, open: number): string {
   return "";
 }
 
-const WRITE_CALL = /ctx\.db\.(insert|patch|replace)\(/g;
-
 /** Scans one module's source for writes outside the choke. */
 export function findUnchokedWrites(rawSource: string, file: string): UnchokedWrite[] {
   if (CHOKE_MODULES.has(file)) return [];
 
-  const source = blankComments(rawSource);
   const found: UnchokedWrite[] = [];
-  for (const m of source.matchAll(WRITE_CALL)) {
-    const method = m[1] as UnchokedWrite["method"];
-    const afterOpen = m.index! + m[0].length;
-
-    if (method === "insert") {
-      const table = source.slice(afterOpen).match(/^\s*"(\w+)"/)?.[1];
-      if (table && (GUARDED_INSERT_TABLES as readonly string[]).includes(table)) {
-        found.push({ file, method, field: `insert:${table}` });
+  for (const call of collectDbWrites(rawSource, file)) {
+    if (call.method === "insert") {
+      // ⚠️ A TABLE NAME WE CANNOT READ IS NOT A TABLE WE CAN CLEAR. It could be
+      // any guarded table, so it is reported rather than skipped.
+      if (call.tableUnresolved) {
+        found.push({ file, method: call.method, field: "insert:<unresolved>" });
+        continue;
+      }
+      if (call.table && (GUARDED_INSERT_TABLES as readonly string[]).includes(call.table)) {
+        found.push({ file, method: call.method, field: `insert:${call.table}` });
         continue;
       }
     }
 
-    const brace = source.indexOf("{", afterOpen);
-    if (brace === -1) continue;
-    // Only an object literal that starts within this call's own argument list.
-    // A `{` several statements away belongs to something else entirely.
-    if (source.slice(afterOpen, brace).includes(";")) continue;
-
-    const literal = objectLiteral(source, brace);
-    if (!literal) continue;
-
-    for (const field of GUARDED_FIELDS) {
-      if (new RegExp(`(^|[{,\\s])${field}\\s*:`).test(literal)) {
-        found.push({ file, method, field });
+    // ⚠️ THE RATCHET ASKS THE OPPOSITE QUESTION FROM THE CREATOR AUDIT, AND
+    // THEREFORE SEARCHES DIFFERENTLY. `findOrganizationInsertSites` must prove
+    // a field IS set, so only an unconditional top-level property counts and
+    // every other shape is refused. This asks whether a guarded field MIGHT be
+    // written, so it looks at every depth — including inside a conditional
+    // spread, which is exactly how the two real sites are written:
+    //
+    //   ...(reinstateHold ? { holdActive: true } : {})       saleCancellation
+    //   ...(closesTheRow ? { …, holdActive: false } : {})    depositHelpers
+    //
+    // Restricting this side to top-level properties silently DROPPED both, and
+    // a guard that loses coverage is worse than one that is merely forgeable.
+    // The burn-down map's exact comparison caught it, which is why it is exact.
+    for (const field of namedFieldsAnywhere(call.written)) {
+      if ((GUARDED_FIELDS as readonly string[]).includes(field)) {
+        found.push({ file, method: call.method, field });
       }
     }
+
+    // A computed key names nothing readable, so it cannot be cleared.
+    if (call.written && hasComputedKey(call.written)) {
+      found.push({ file, method: call.method, field: "write:<computed-key>" });
+    }
   }
+  return found;
+}
+
+/**
+ * Every property name written anywhere inside an expression, at any depth,
+ * including shorthand bindings and both branches of a conditional spread.
+ *
+ * ⚠️ SHORTHAND IS INCLUDED, AND THAT IS THE POINT.
+ * `{ commitmentAuthorityVersion }` after `const commitmentAuthorityVersion = 0`
+ * writes a guarded field while naming it only once; the text scan this replaced
+ * looked for `field:` and so reported nothing. Codex xhigh's reproduction.
+ */
+function namedFieldsAnywhere(root: ts.Node | null): string[] {
+  if (!root) return [];
+  const names: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) {
+      const name = node.name;
+      if (ts.isIdentifier(name) || ts.isStringLiteral(name)) names.push(name.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(root);
+  return names;
+}
+
+/** A `{ [expr]: v }` key anywhere inside the written expression. */
+function hasComputedKey(root: ts.Node): boolean {
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (found) return;
+    if (ts.isPropertyAssignment(node) && ts.isComputedPropertyName(node.name)) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(root);
   return found;
 }
 
@@ -372,14 +565,13 @@ export function findOrganizationInsertSites(
 ): OrganizationInsertSite[] {
   const source = blankComments(rawSource);
   const sites: OrganizationInsertSite[] = [];
-  for (const m of source.matchAll(/ctx\.db\.insert\(\s*"organizations"/g)) {
-    const afterTable = m.index! + m[0].length;
-    const brace = source.indexOf("{", afterTable);
-    // Only an object literal that is this call's own second argument.
-    const literal =
-      brace !== -1 && /^\s*,\s*$/.test(source.slice(afterTable, brace))
-        ? objectLiteral(source, brace)
-        : "";
+  for (const call of collectDbWrites(rawSource, file)) {
+    if (call.method !== "insert") continue;
+    // ⚠️ AN UNREADABLE TABLE NAME IS AUDITED AS IF IT WERE `organizations`.
+    // It might be. Skipping it is the single-quote hole that made this scanner
+    // forgeable; reporting it costs nothing (there are no dynamic inserts in
+    // convex/ today) and refuses the future one.
+    if (!call.tableUnresolved && call.table !== "organizations") continue;
 
     // ⚠️ TOP-LEVEL DECLARATIONS ONLY, ANCHORED TO COLUMN 0.
     //
@@ -397,17 +589,21 @@ export function findOrganizationInsertSites(
     // its exact expected output is already a certified assertion.
     const declarations = [
       ...source
-        .slice(0, m.index!)
+        .slice(0, call.start)
         .matchAll(
           /^(?:export\s+)?(?:async\s+)?function\s+(\w+)|^(?:export\s+)?const\s+(\w+)\s*=/gm
         ),
     ];
     const last = declarations[declarations.length - 1];
+    // ⚠️ ONLY AN UNCONDITIONAL TOP-LEVEL PROPERTY COUNTS AS INITIALIZED.
+    // A conditional spread, a nested object, a shorthand binding and an
+    // unreadable literal all resolve to NOT initialized — each of those was a
+    // way to make this scanner certify a creator that mints LEGACY orgs.
     sites.push({
       file,
       enclosingFunction: last ? (last[1] ?? last[2]) : "<top level>",
       initializesAuthorityVersion:
-        /(^|[{,\s])commitmentAuthorityVersion\s*:/.test(literal),
+        topLevelFieldVerdict(call.literal, "commitmentAuthorityVersion") === "UNCONDITIONAL",
     });
   }
   return sites;
