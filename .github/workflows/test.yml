@@ -115,9 +115,9 @@ jobs:
 
     # Produces coverage/lcov.info, which sonar-project.properties points at.
     #
-    # `test:coverage:sonar` instruments ALL non-generated Convex production
-    # TypeScript — `convex/**/*.ts` minus `convex/_generated/**` and
-    # `**/*.test.ts`.
+    # `test:coverage:sonar` instruments ALL non-generated production TypeScript
+    # that Sonar measures as main code — `convex/**/*.ts` and `scripts/**/*.ts`,
+    # minus `convex/_generated/**` and `**/*.test.ts`.
     #
     # It used to carry a hand-maintained module allowlist, and this note used to
     # say that list held 7 modules while it had already drifted to 16 — which is
@@ -127,7 +127,25 @@ jobs:
     # module the branch ADDS — so the gate read 53.1% on new code that ~4,000
     # tests exercise. There is now no list to drift.
     #
-    # Do not reintroduce one to move the percentage (SCRUM-208 c16151).
+    # That failure had a second half, found and fixed in SCRUM-208 c16195. The
+    # command began `vitest run convex`, and a vitest positional argument is a
+    # filter on which test FILES EXECUTE, not merely on what is instrumented.
+    # It matched 183 of the repo's 286 test files by path substring — the 182
+    # under `convex/` plus `scripts/convexApiContract.test.ts`, whose path
+    # happens to contain the word. The other seven under `scripts/` never ran.
+    #
+    # `scripts/commitmentWriteGuard.ts` is not a fixture. It parses the Convex
+    # tree and decides whether commitment-authority writes go through the choke,
+    # so a green result from it is an authorization. Sonar read it as 182 of 182
+    # new lines uncovered while its own 55-test suite measured 92.47% line
+    # coverage of it — an instrumentation artifact, identical in kind to the
+    # allowlist above and one directory over.
+    #
+    # The filter is now `convex scripts`, which collects 190 files: the union,
+    # with `convexApiContract.test.ts` counted once.
+    #
+    # Do not reintroduce a list to move the percentage, and do not narrow the
+    # execution filter back to one tree (SCRUM-208 c16151, c16195).
     - name: Generate coverage for Sonar
       run: pnpm test:coverage:sonar
       env:

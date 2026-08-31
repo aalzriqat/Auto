@@ -9,7 +9,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:coverage:sonar": "vitest run convex --coverage --coverage.include=\"convex/**/*.ts\" --coverage.exclude=\"convex/_generated/**\" --coverage.exclude=\"convex/**/*.test.ts\" --coverage.thresholds.lines=0 --coverage.thresholds.functions=0 --coverage.thresholds.branches=0 --coverage.thresholds.statements=0",
+    "test:coverage:sonar": "vitest run convex scripts --coverage --coverage.include=\"convex/**/*.ts\" --coverage.include=\"scripts/**/*.ts\" --coverage.exclude=\"convex/_generated/**\" --coverage.exclude=\"**/*.test.ts\" --coverage.thresholds.lines=0 --coverage.thresholds.functions=0 --coverage.thresholds.branches=0 --coverage.thresholds.statements=0",
     "typecheck": "tsc --noEmit",
     "typecheck:convex": "tsc -p convex/tsconfig.json --noEmit",
     "shared:typecheck": "pnpm --filter @autoflow/shared typecheck",

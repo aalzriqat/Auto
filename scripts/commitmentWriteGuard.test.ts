@@ -67,17 +67,47 @@ const BASELINE: Record<string, number> = {
   // return would fail CI.
 };
 
+/**
+ * SCRUM-208 c16192, extended by c16195 — the whole-tree audits get a timeout
+ * chosen FOR them.
+ *
+ * Four tests here parse every file under `convex/` — 215 of them — against
+ * vitest's DEFAULT 5000ms, a number nobody picked for this work. On one CI
+ * run the file took 15818ms and passed; on the next, 21768ms, and three of
+ * them timed out; on the re-run of the identical commit, 12901ms and green.
+ * A 69% swing on the same work, with zero assertion failures.
+ *
+ * c16192 authorized it for exactly the three that had already failed. c16195
+ * makes it a class rule and adds the fourth, `no longer sees a raw holdActive
+ * write in vehicles.ts` — the same `auditCommitmentWrites` pass over the same
+ * 215 files, at the same measured cost. It carried the default only because
+ * the earlier ruling was keyed on which tests had been unlucky, not on what
+ * they do.
+ *
+ * The other two tests that walk the whole tree deliberately do NOT get it:
+ * they enumerate files and substring-scan without ever building an AST. One
+ * local run of this file measured the four parses at 982 / 961 / 865 / 760ms,
+ * `SOURCE_EPISODE_REINSTATED has no production caller` at 24ms, and
+ * `analyses a surface large enough…` at 2ms. 5000ms was tight for the parse
+ * and nowhere near tight for the other two.
+ *
+ * This is a timeout proportionate to the work, NOT a retry and NOT a weakened
+ * assertion — every expectation below is unchanged. A test that still exceeds
+ * 15s is reporting a real regression in the audit, and should fail.
+ */
+const WHOLE_TREE_PARSE_TIMEOUT_MS = 15_000;
+
 describe("commitment liveness writes go through the choke", () => {
   it("matches the recorded burn-down list exactly", () => {
     expect(summarize(auditCommitmentWrites(CONVEX_ROOT))).toEqual(BASELINE);
-  });
+  }, WHOLE_TREE_PARSE_TIMEOUT_MS);
 
   it("no longer sees a raw holdActive write in vehicles.ts", () => {
     const offenders = auditCommitmentWrites(CONVEX_ROOT).filter(
       (w) => w.file === "vehicles.ts" && w.field === "holdActive"
     );
     expect(offenders).toEqual([]);
-  });
+  }, WHOLE_TREE_PARSE_TIMEOUT_MS);
 
   /**
    * SCRUM-208 c15810 — A DORMANT BRANCH STAYS VISIBLY DORMANT.
@@ -118,7 +148,7 @@ describe("commitment liveness writes go through the choke", () => {
       expect(auditRootInserts(CONVEX_ROOT)).toEqual([
         { file: "commitments.ts", enclosingFunction: "openRoot" },
       ]);
-    });
+    }, WHOLE_TREE_PARSE_TIMEOUT_MS);
 
     it("keeps the successor shape inside the unexported executor", () => {
       const source = fs.readFileSync(path.join(CONVEX_ROOT, "commitments.ts"), "utf8");
@@ -172,7 +202,7 @@ describe("commitment liveness writes go through the choke", () => {
           initializesAuthorityVersion: true,
         },
       ]);
-    });
+    }, WHOLE_TREE_PARSE_TIMEOUT_MS);
 
     it("reports a second creator that omits the version", () => {
       const source = [

@@ -107,6 +107,23 @@ async function deposit(
   );
 }
 
+async function holdRow(
+  seed: Seed,
+  depositId: Id<"deposits">,
+  vehicleId: Id<"vehicles">,
+  active: boolean
+) {
+  return await seed.t.run((ctx) =>
+    ctx.db.insert("depositVehicleHolds", {
+      orgId: seed.orgId,
+      depositId,
+      vehicleId,
+      active,
+      createdAt: Date.now(),
+    })
+  );
+}
+
 describe("the oracle is genuinely independent of the legacy reader", () => {
   test("50 stale rows hide a live deposit from the legacy reader, not from the oracle", async () => {
     const seed = await seedDealer("o1");
@@ -264,5 +281,115 @@ describe("the dispatcher is for runtime only", () => {
   test("version selects the reader", () => {
     expect(readerForVersion("V1")).toBe("CANONICAL");
     expect(readerForVersion("LEGACY")).toBe("LEGACY");
+  });
+});
+
+/**
+ * SCRUM-208 c16192 — THE HOLD-ROW HALF OF THE ORACLE.
+ *
+ * ⚠️ WHY THIS BLOCK EXISTS. Every fixture above seeds `deposits` and NEVER
+ * `depositVehicleHolds`. So the hold-row half of `oracleDepositHold` had never
+ * executed once: not the first loop's body, not a NON-EMPTY result from the
+ * inner existence probe, not the terminal `false`. A mutant forcing the probe
+ * to answer "empty" survived the whole suite. Both adversarial seats measured
+ * that gap independently, and it sits on an oracle whose disagreement BLOCKS
+ * activation — a wrong oracle mis-certifies the cutover.
+ *
+ * ⚠️ EVERY NON-EMPTY FIXTURE HERE KEEPS THE FIRST LOOP SILENT ON THE CAR UNDER
+ * TEST. That is the load-bearing part of the design, not a detail: if the first
+ * loop could return `true` on its own, a probe test would pass without the probe
+ * ever deciding anything — passing for the wrong reason about the very line it
+ * names. Each test below says which loop is allowed to answer.
+ *
+ * These assert the ORACLE only. The canonical shadow is compared against it in
+ * the blocks above; re-asserting agreement here would test a second contract
+ * under a name that promises one.
+ */
+describe("the oracle reads hold rows, not merely the deposit's own vehicleId", () => {
+  test("a live slice on THIS car is a hold — only the first loop can answer", async () => {
+    const seed = await seedDealer("h1");
+    const vehicleId = await vehicle(seed);
+    const elsewhere = await vehicle(seed);
+    // The deposit's own `vehicleId` names a DIFFERENT car, so the second loop
+    // never reaches this vehicle. The first loop's body is the only decider.
+    const depositId = await deposit(seed, elsewhere, {});
+    await holdRow(seed, depositId, vehicleId, true);
+
+    expect(await seed.t.run((ctx) => oracleDepositHold(ctx, seed.orgId, vehicleId))).toBe(true);
+  });
+
+  test("a slice whose parent deposit is VOIDED is not a hold", async () => {
+    const seed = await seedDealer("h2");
+    const vehicleId = await vehicle(seed);
+    const elsewhere = await vehicle(seed);
+    // Same shape as above, but the parent fails `depositUsable`. This pins the
+    // first loop's parent check specifically — the row itself is ACTIVE.
+    const depositId = await deposit(seed, elsewhere, { status: "VOIDED" });
+    await holdRow(seed, depositId, vehicleId, true);
+
+    expect(await seed.t.run((ctx) => oracleDepositHold(ctx, seed.orgId, vehicleId))).toBe(false);
+  });
+
+  test("a deposit whose ONE slice moved off this car does not hold it", async () => {
+    const seed = await seedDealer("h3");
+    const vehicleId = await vehicle(seed);
+    const elsewhere = await vehicle(seed);
+    // The deposit still NAMES this car, so the second loop does reach it...
+    const depositId = await deposit(seed, vehicleId, {});
+    // ...but its slices say it holds a different one, and hold rows are the
+    // whole truth for a deposit that has any. No slice points at this car, so
+    // the first loop stays silent and the PROBE alone decides.
+    await holdRow(seed, depositId, elsewhere, true);
+
+    expect(await seed.t.run((ctx) => oracleDepositHold(ctx, seed.orgId, vehicleId))).toBe(false);
+  });
+
+  test("MULTIPLE slices elsewhere are still not a hold on this car", async () => {
+    const seed = await seedDealer("h4");
+    const vehicleId = await vehicle(seed);
+    const a = await vehicle(seed);
+    const b = await vehicle(seed);
+    const c = await vehicle(seed);
+    const depositId = await deposit(seed, vehicleId, {});
+    // Three rows rather than one: `.first()` must answer "non-empty" the same
+    // way it does for a single row. Again none names this car, so the first
+    // loop stays silent.
+    await holdRow(seed, depositId, a, true);
+    await holdRow(seed, depositId, b, true);
+    await holdRow(seed, depositId, c, false);
+
+    expect(await seed.t.run((ctx) => oracleDepositHold(ctx, seed.orgId, vehicleId))).toBe(false);
+  });
+
+  test("an INACTIVE slice on this car is a row, and still not a hold", async () => {
+    const seed = await seedDealer("h5");
+    const vehicleId = await vehicle(seed);
+    const depositId = await deposit(seed, vehicleId, {});
+    // The row IS on this car, so it proves the range non-empty — but it is not
+    // active, so the first loop skips it. The deposit therefore holds nothing
+    // here, and the probe's non-empty answer is what prevents the scalar
+    // `vehicleId` fallback from wrongly reporting a hold.
+    await holdRow(seed, depositId, vehicleId, false);
+
+    expect(await seed.t.run((ctx) => oracleDepositHold(ctx, seed.orgId, vehicleId))).toBe(false);
+  });
+
+  test("a deposit with NO slices at all falls back to its own vehicleId", async () => {
+    const seed = await seedDealer("h6");
+    const vehicleId = await vehicle(seed);
+    await deposit(seed, vehicleId, {});
+
+    // The contrast case for the three above: an EMPTY range is what licenses
+    // the fallback. This is the only shape in which the probe may answer true.
+    expect(await seed.t.run((ctx) => oracleDepositHold(ctx, seed.orgId, vehicleId))).toBe(true);
+  });
+
+  test("a car nothing holds reaches the terminal false", async () => {
+    const seed = await seedDealer("h7");
+    const vehicleId = await vehicle(seed);
+
+    // No deposits and no slices: both loops run to exhaustion and the function
+    // returns from its final statement, which nothing else exercises.
+    expect(await seed.t.run((ctx) => oracleDepositHold(ctx, seed.orgId, vehicleId))).toBe(false);
   });
 });
