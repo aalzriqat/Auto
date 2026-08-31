@@ -43,9 +43,13 @@
  *
  * ## What makes the oracle an oracle
  *
- * It reads raw rows, applies NO cap, never filters after a cap, is never
- * reachable at runtime, and runs per organization. It is deliberately the
- * slowest of the three.
+ * It reads raw rows, NEVER filters after a bounded read, is never reachable at
+ * runtime, and runs per organization. It is deliberately the slowest of the
+ * three.
+ *
+ * "Never filters after a bound" is the operative rule — not "never bounds". A
+ * bounded read whose range needs no filtering cannot truncate an answer; a
+ * bounded read followed by a filter is precisely the shipped defect above.
  */
 
 import { Doc, Id } from "../_generated/dataModel";
@@ -60,19 +64,43 @@ function depositUsable(deposit: Doc<"deposits">): boolean {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The oracle. Exhaustive, uncapped, offline.
+// The oracle. Unbounded, never filtered after a bound, offline.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * Does anything hold this car through a deposit? **Raw truth.**
  *
- * ⚠️ STREAMED, NEVER TAKEN. `for await` walks the whole range; a `.take(n)`
- * anywhere in here would reintroduce the exact truncation this exists to
- * measure. It is slow on purpose and must never be called at runtime.
+ * ⚠️ EVERY SURVEYED RANGE IS UNBOUNDED — which is not the same as exhausted.
+ * Both loops below return early at their own `return true` once they have a
+ * definitive positive, and stream the range to its end whenever the answer is
+ * negative. (No line numbers here on purpose: nothing checks them, so an edit
+ * silently makes the citation false — which is exactly what happened to the
+ * version of this sentence that carried them.) Neither ever reads
+ * a BOUNDED page, because both discard rows AFTER reading them (`orgId`, `active`,
+ * `holdActive`, `depositUsable`). A `.take(n)` or `.first()` on either would
+ * reintroduce the
+ * exact truncation this exists to measure: a bounded page filled with rows that
+ * are then filtered away, hiding a live one behind them.
  *
- * The definition mirrors the shipped semantics minus the caps: hold rows are
- * the whole truth about which cars a deposit holds WHEN IT HAS ANY, and the
- * deposit's own `vehicleId` counts only when it has none.
+ * The one bounded read in this function is not that case. The inner existence
+ * probe asks only whether a range is EMPTY and filters nothing afterwards, so ANY
+ * row answers it. Note what is NOT being claimed: `by_deposit` carries inactive
+ * and historical rows, so that range is not all-live. `.first()` is safe here
+ * because non-emptiness is the entire question, NOT because every row is a live
+ * basis.
+ *
+ * That is the same REASONING as `commitmentKernel` invariant 4, applied to an
+ * existence question instead of a liveness one. Invariant 4 itself is narrower —
+ * it governs a predicate that AUTHORIZES and demands every row in the range be by
+ * construction a LIVE BASIS. Do not read this paragraph as license to bound any
+ * range that merely "exists": wherever the answer authorizes, invariant 4 governs
+ * and this relaxation does not apply.
+ *
+ * It is slow on purpose and must never be called at runtime.
+ *
+ * The definition mirrors the shipped semantics minus the TRUNCATING caps: hold
+ * rows are the whole truth about which cars a deposit holds WHEN IT HAS ANY,
+ * and the deposit's own `vehicleId` counts only when it has none.
  */
 export async function oracleDepositHold(
   ctx: Ctx,
@@ -94,14 +122,20 @@ export async function oracleDepositHold(
     if (!depositUsable(deposit)) continue;
     // Where a deposit carries hold rows, those rows are the whole truth about
     // which cars it holds — including the one named on the deposit itself.
-    let hasAnyHoldRow = false;
-    for await (const _ of ctx.db
+    //
+    // ⚠️ `.first()` is legal HERE and nowhere else in this function. This range
+    // is neither surveyed nor post-filtered: the only question is whether it is
+    // empty, so ANY row answers it and a second would change nothing. The range
+    // is NOT all-live — `by_deposit` carries inactive and historical rows — and
+    // that is fine only because non-emptiness is the whole question. It would NOT
+    // be fine for a predicate that authorizes, which is what `commitmentKernel`
+    // invariant 4 governs. Both enclosing loops DO discard rows after reading
+    // them, which is why they stay streamed.
+    const anyHoldRow = await ctx.db
       .query("depositVehicleHolds")
-      .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))) {
-      hasAnyHoldRow = true;
-      break;
-    }
-    if (!hasAnyHoldRow) return true;
+      .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))
+      .first();
+    if (anyHoldRow === null) return true;
   }
 
   return false;

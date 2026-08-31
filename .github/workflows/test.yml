@@ -115,12 +115,19 @@ jobs:
 
     # Produces coverage/lcov.info, which sonar-project.properties points at.
     #
-    # NOTE: `test:coverage:sonar` restricts --coverage.include to 7 convex
-    # modules, so everything else reports 0%. Against a gate with a
-    # coverage-on-new-code condition that will read as a regression the first
-    # time it runs. Widen the include list (or scope the gate) before treating
-    # Sonar's coverage number as meaningful — the security rating, which is what
-    # this PR is about, is unaffected.
+    # `test:coverage:sonar` instruments ALL non-generated Convex production
+    # TypeScript — `convex/**/*.ts` minus `convex/_generated/**` and
+    # `**/*.test.ts`.
+    #
+    # It used to carry a hand-maintained module allowlist, and this note used to
+    # say that list held 7 modules while it had already drifted to 16 — which is
+    # the whole problem with the shape. An allowlist cannot measure NEW code: a
+    # file that is not on it reports 0% however well tested it is. 15 of the 24
+    # Convex production files SCRUM-195/208 touches were off it — including every
+    # module the branch ADDS — so the gate read 53.1% on new code that ~4,000
+    # tests exercise. There is now no list to drift.
+    #
+    # Do not reintroduce one to move the percentage (SCRUM-208 c16151).
     - name: Generate coverage for Sonar
       run: pnpm test:coverage:sonar
       env:
