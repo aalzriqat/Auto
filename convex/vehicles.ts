@@ -40,6 +40,7 @@ function generateImportVinPlaceholder(): string {
   return `IMPORT-${Date.now()}-${randomHex(3)}`;
 }
 import { syncVehicleHoldStatus, getDefaultReservationExpiry, getActiveDepositHolds } from "./utils/depositHelpers";
+import { releaseReservationDepositHold } from "./utils/commitmentWriters";
 import {
   amountToMinorOrThrow,
   depositMethodValidator,
@@ -1597,12 +1598,11 @@ export const createReservation = mutation({
       .collect();
     for (const reservation of existingReservations) {
       if (reservation.expiresAt !== undefined && reservation.expiresAt <= now) {
-        if (reservation.depositId) {
-          const deposit = await ctx.db.get(reservation.depositId);
-          if (deposit && deposit.orgId === args.orgId && deposit.status === "HELD" && deposit.holdActive) {
-            await ctx.db.patch(reservation.depositId, { holdActive: false });
-          }
-        }
+        await releaseReservationDepositHold(ctx, {
+          orgId: args.orgId,
+          reservation,
+          reason: "reservation expired during reservation attempt",
+        });
         await ctx.db.patch(reservation._id, {
           status: "EXPIRED",
           expiredAt: now,
@@ -1710,6 +1710,10 @@ export const createReservation = mutation({
         actorId: user._id,
         now,
         sourceLabel: `reservation ${reservationId}`,
+        // A reservation's deposit holds exactly the car it was taken on, and
+        // this door writes no `depositVehicleHolds` rows — so the row's own
+        // `holdActive` IS the hold. DIRECT.
+        usesVehicleHoldRows: false,
       });
       await ctx.db.patch(reservationId, { depositId });
       reservationDepositId = depositId;
@@ -1835,12 +1839,11 @@ export const releaseReservation = mutation({
     }
 
     const now = Date.now();
-    if (reservation.depositId) {
-      const deposit = await ctx.db.get(reservation.depositId);
-      if (deposit && deposit.orgId === args.orgId && deposit.status === "HELD" && deposit.holdActive) {
-        await ctx.db.patch(reservation.depositId, { holdActive: false });
-      }
-    }
+    await releaseReservationDepositHold(ctx, {
+      orgId: args.orgId,
+      reservation,
+      reason: "reservation released",
+    });
     await ctx.db.patch(args.reservationId, {
       status: "RELEASED",
       releasedAt: now,
@@ -1906,32 +1909,33 @@ export const expireReservations = internalMutation({
       const ownership = await resolveOwnership(ctx, reservation.orgId, reservation.vehicleId);
       const rootDecisionWithheld = ownership.kind === "AMBIGUOUS";
 
-      if (reservation.depositId) {
-        const deposit = await ctx.db.get(reservation.depositId);
-        if (deposit && deposit.orgId === reservation.orgId && deposit.status === "HELD" && deposit.holdActive) {
-          await ctx.db.patch(reservation.depositId, { holdActive: false });
-          // Money already changed hands (عربون) — expiry only lifts the vehicle
-          // hold. A manager still has to decide REFUNDED vs. FORFEITED via
-          // deposits.release, same human-in-the-loop as every other deposit
-          // resolution (see deposits.ts release/void).
-          const [vehicle, customer] = await Promise.all([
-            ctx.db.get(reservation.vehicleId),
-            ctx.db.get(reservation.customerId),
-          ]);
-          const vehicleLabel = vehicle
-            ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim()
-            : "Vehicle";
-          const customerLabel = customer
-            ? `${customer.firstName ?? ""} ${customer.lastName ?? ""}`.trim() || "Customer"
-            : "Customer";
-          await notifyManagers(
-            ctx,
-            reservation.orgId,
-            "deposit.expired",
-            { vehicleLabel, customerLabel, amount: String(deposit.amount) },
-            { link: `/${reservation.orgId}/vehicles?highlightId=${reservation.vehicleId}` }
-          );
-        }
+      // Money already changed hands (عربون) — expiry only lifts the vehicle
+      // hold. A manager still has to decide REFUNDED vs. FORFEITED via
+      // deposits.release, same human-in-the-loop as every other deposit
+      // resolution (see deposits.ts release/void).
+      const releasedDeposit = await releaseReservationDepositHold(ctx, {
+        orgId: reservation.orgId,
+        reservation,
+        reason: "reservation expired by sweep",
+      });
+      if (releasedDeposit) {
+        const [vehicle, customer] = await Promise.all([
+          ctx.db.get(reservation.vehicleId),
+          ctx.db.get(reservation.customerId),
+        ]);
+        const vehicleLabel = vehicle
+          ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim()
+          : "Vehicle";
+        const customerLabel = customer
+          ? `${customer.firstName ?? ""} ${customer.lastName ?? ""}`.trim() || "Customer"
+          : "Customer";
+        await notifyManagers(
+          ctx,
+          reservation.orgId,
+          "deposit.expired",
+          { vehicleLabel, customerLabel, amount: String(releasedDeposit.amount) },
+          { link: `/${reservation.orgId}/vehicles?highlightId=${reservation.vehicleId}` }
+        );
       }
       await ctx.db.patch(reservation._id, {
         status: "EXPIRED",

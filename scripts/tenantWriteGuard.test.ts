@@ -461,15 +461,40 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // id for the guard to own-check, and it is an `internalMutation` reachable
   // only from the cron, with no public entry point.
   //
-  // ⚠️ `analysed` stays at 315 across all four. That is the number that must
-  // never drop silently — a new mutation landing in a skip bucket is only
-  // acceptable when the reason is one of the two above, stated per mutation.
+  // `accountingOutbox.dispatchAuthorityWorkItem`,
+  // `accountingOutbox.performAuthoritySettlement` and
+  // `accountingOutbox.observeAuthorityAttempt` (SCRUM-208 c15814/c15825):
+  //
+  // All three take ONLY a `workId` (plus, for settlement, the execution
+  // identity it must validate). That is deliberate and is stronger than taking
+  // an `orgId`: the tenant is read from the stored `commitmentAuthorityWork`
+  // row and every subsequent read is scoped by it, so there is no
+  // caller-supplied organization for a caller to get wrong or to forge. They
+  // are `internalMutation`s reachable only from the scheduler — the accounting
+  // drain that recorded the work, or the cron dispatcher — with no public entry
+  // point.
+  //
+  // `accountingOutbox.dispatchDueAuthorityWork` (SCRUM-208 c15825):
+  //
+  // The cron selector, and the one mutation here that is cross-tenant BY
+  // DESIGN. It takes no `orgId` because a cron has no tenant: it reads the
+  // global `by_status_next_action` range and does nothing but SCHEDULE one
+  // per-row mutation each. It performs no writes to tenant data at all — which
+  // is also why a poisoned row cannot roll back another dealership's dispatch,
+  // the failure mode a throwing call inside a global batch produces.
+  //
+  // ⚠️ `analysed` is 315 and must never drop silently — a new mutation landing
+  // in a skip bucket is only acceptable when the reason is one of the four
+  // above, stated per mutation. It fell by one from 316 because
+  // `sweepAuthorityWork`, which took an `orgId` and was analysed, was deleted
+  // with the drain-riding retry it implemented; the three replacements above
+  // are all `workId`-only and the cron selector takes nothing.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 477,
+      totalMutations: 481,
       analysed: 315,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 147,
+      skippedNoOrgId: 151,
     });
   });
 });

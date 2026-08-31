@@ -29,6 +29,7 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { COMMITMENT_AUTHORITY_V1 } from "./utils/commitmentKernel";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -2611,5 +2612,293 @@ describe("the completion monetary invariant reaches multi-vehicle completion", (
 
     // Atomicity makes the refusal total across every line, not just the bad one.
     expect(await s.t.run((ctx) => ctx.db.query("sales").collect())).toHaveLength(0);
+  });
+});
+
+/**
+ * SCRUM-208 — A ZERO SHARE STILL OWES CANONICAL AUTHORITY.
+ *
+ * ⚠️ WHY THIS COULD NOT HAVE BEEN CAUGHT BY ANYTHING ELSE IN THIS FILE.
+ * Every other fixture here seeds its organization with a raw insert and no
+ * `commitmentAuthorityVersion`, so it is LEGACY — and a LEGACY organization
+ * correctly performs no canonical restoration at all. The whole zero-share
+ * path was therefore developed and tested where this gap is invisible by
+ * construction. This test stamps V1 first, which is the only reason the
+ * contradiction can appear.
+ *
+ * The chain, each link verified in the source before this was written:
+ *   - `deposits.create` calls `acquireVehicle` for EVERY vehicle item
+ *     (deposits.ts:174), so the zero-share car has a root and a claim. The
+ *     allocation amount is decided later and does not gate this.
+ *   - a zero allocation consumes the hold APPLIED and returns early WITHOUT
+ *     writing a `depositApplications` row, because nothing posts for nothing
+ *     (saleCompletion.ts:641).
+ *   - cancellation's restoration spine is driven by those application rows, so
+ *     it sees nothing; the authority audit is computed BEFORE the zero-slice
+ *     loop; and that loop reactivates the hold and re-syncs the projection with
+ *     no restoration and no outcome (saleCancellation.ts:610-637).
+ *
+ * The result is a source made live again over a root that stays CONSUMED: the
+ * money is against the car, the projection says RESERVED, and canonical
+ * ownership says FREE — so a rival may open a new root on a car the original
+ * deal still holds money against.
+ *
+ * ⚠️ ASSERTS THE INVARIANT, NOT THE SYMPTOM. "The hold came back" already
+ * passes today; it is the authority half that does not.
+ */
+describe("a zero share whose sale is cancelled", () => {
+  test("its car regains an OPEN root, not live money over a consumed one", async () => {
+    const s = await seed("zeroSliceAuthority");
+    await s.t.run((ctx) =>
+      ctx.db.patch(s.orgId, { commitmentAuthorityVersion: COMMITMENT_AUTHORITY_V1 })
+    );
+
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 0 },
+      { vehicleId: s.vehicleB!, amount: 5_000 },
+    ]);
+    const saleA = await sell(s, s.vehicleA, PRICE_A);
+
+    // ⚠️ CAPTURED BEFORE THE CANCELLATION, so provenance is proved against the
+    // exact predecessor rows rather than re-derived afterwards from whatever
+    // the restoration happened to produce. A test that reads its own expected
+    // value out of the result cannot fail.
+    const before = await s.t.run(async (ctx) => {
+      const roots = (await ctx.db.query("commitmentRoots").collect()).filter(
+        (r) => String(r.vehicleId) === String(s.vehicleA)
+      );
+      const claims = (await ctx.db.query("vehicleCommitmentClaims").collect()).filter(
+        (c) => String(c.vehicleId) === String(s.vehicleA)
+      );
+      const holds = await ctx.db.query("depositVehicleHolds").collect();
+      expect(roots, "one predecessor root before cancellation").toHaveLength(1);
+      expect(claims, "one predecessor claim before cancellation").toHaveLength(1);
+      return {
+        predecessorRoot: roots[0],
+        predecessorClaim: claims[0],
+        depositId: claims[0].depositId,
+        fundedHold: holds.find((h) => String(h.vehicleId) === String(s.vehicleB!))!,
+      };
+    });
+
+    await cancel(s, saleA);
+
+    const rootsFor = async (vehicleId: Id<"vehicles">) =>
+      await s.t.run(async (ctx) =>
+        (await ctx.db.query("commitmentRoots").collect()).filter(
+          (r) => String(r.vehicleId) === String(vehicleId)
+        )
+      );
+    const holdFor = async (vehicleId: Id<"vehicles">) =>
+      await s.t.run(async (ctx) =>
+        (await ctx.db.query("depositVehicleHolds").collect()).find(
+          (h) => String(h.vehicleId) === String(vehicleId) && h.active === true
+        )
+      );
+
+    // Precondition, not the contract: the zero-slice loop really did run and
+    // put the money back against the car. Without this the test would pass
+    // vacuously on a path that never executed.
+    expect((await holdFor(s.vehicleA))?.active, "the zero slice was reinstated").toBe(true);
+
+    // ⚠️ THE CONTRACT IS ALL NINE FACTS TOGETHER, NOT THE FIRST ONE
+    // (SCRUM-208 c16000).
+    //
+    // This assertion used to be `OPEN roots === 1` alone, under a comment
+    // calling itself THE CONTRACT — and it PASSED against a real defect that
+    // real Convex later caught on 249bea1cb. The successor root and claim were
+    // committed correctly; what never moved was the exact hold's
+    // `sourceCommitmentClaimId`, so the car was RESERVED under an authority
+    // record the system itself labelled BLOCKED_INCONSISTENT. A single-clause
+    // assertion under a five-clause contract is how that survived 3977 tests.
+    const openRoots = (await rootsFor(s.vehicleA)).filter((r) => r.status === "OPEN");
+    expect(openRoots, "exactly one OPEN successor root").toHaveLength(1);
+
+    // 1. The terminal predecessor is untouched and still CONSUMED by that sale.
+    const predecessorAfter = await s.t.run((ctx) => ctx.db.get(before.predecessorRoot._id));
+    expect(predecessorAfter, "the predecessor root is byte-identical").toEqual(
+      before.predecessorRoot
+    );
+    expect(predecessorAfter?.status, "and still CONSUMED").toBe("CONSUMED");
+    expect(String(predecessorAfter?.consumedBySaleId), "by the cancelled sale").toBe(
+      String(saleA)
+    );
+
+    // 2-3. Exactly one successor claim, with exact provenance on every axis.
+    const successorClaims = await s.t.run(async (ctx) =>
+      (await ctx.db.query("vehicleCommitmentClaims").collect()).filter(
+        (c) => String(c.rootId) === String(openRoots[0]._id)
+      )
+    );
+    expect(successorClaims, "exactly one successor claim on the successor root").toHaveLength(1);
+    const successor = successorClaims[0];
+    expect(successor.status, "and it is ACTIVE").toBe("ACTIVE");
+    expect(String(successor.vehicleId), "on the zero-share car").toBe(String(s.vehicleA));
+    expect(String(successor.restoredFromClaimId), "naming the exact predecessor claim").toBe(
+      String(before.predecessorClaim._id)
+    );
+    expect(String(successor.depositId), "and the exact deposit").toBe(String(before.depositId));
+
+    // 4. ⚠️ THE CLAUSE THE OLD TEST NEVER MADE. The exact sliced hold's pointer
+    // must name the successor claim — this is the one that failed on real
+    // Convex while every other clause passed.
+    const zeroHold = await holdFor(s.vehicleA);
+    expect(
+      String(zeroHold?.sourceCommitmentClaimId),
+      "the exact hold must point at the successor claim, not the terminal predecessor"
+    ).toBe(String(successor._id));
+
+    // 5. The source is live.
+    expect(zeroHold?.active, "the source remains live").toBe(true);
+
+    // 6. The vehicle projection agrees.
+    const vehicleAfter = await s.t.run((ctx) => ctx.db.get(s.vehicleA));
+    expect(vehicleAfter?.status, "the car reads RESERVED").toBe("RESERVED");
+
+    // 7. The recorded outcome is exactly RESTORED — not a truthful-but-blocked
+    // label. Before the fix this row said BLOCKED_INCONSISTENT.
+    const authorityAudit = await s.t.run(async (ctx) =>
+      (await ctx.db.query("financialAuditLog").collect()).filter(
+        (r) => r.actionType === "SETTLE_COMMITMENT_AUTHORITY"
+      )
+    );
+    expect(authorityAudit.length, "an authority outcome was recorded").toBeGreaterThan(0);
+    expect(
+      (authorityAudit.at(-1)?.after as { outcome?: string } | undefined)?.outcome,
+      "and it is RESTORED"
+    ).toBe("RESTORED");
+
+    // 8. Replay is inert. Cancelling an already-cancelled sale is a SILENT
+    // NO-OP through the real door — it neither throws nor re-runs the
+    // restoration — and the part that matters is that no second root or claim
+    // appears behind that quiet return.
+    //
+    // ⚠️ Asserted as observed, not as assumed: this was first written expecting
+    // a refusal, and the door resolves instead. A test that had asserted the
+    // refusal it expected would have failed for the wrong reason and taught
+    // nothing about idempotency.
+    await expect(cancel(s, saleA)).resolves.toBeNull();
+    expect(
+      (await rootsFor(s.vehicleA)).filter((r) => r.status === "OPEN"),
+      "replay opened no additional root"
+    ).toHaveLength(1);
+    expect(
+      await s.t.run(async (ctx) =>
+        (await ctx.db.query("vehicleCommitmentClaims").collect()).filter(
+          (c) => String(c.rootId) === String(openRoots[0]._id)
+        )
+      ),
+      "replay attached no additional claim"
+    ).toHaveLength(1);
+
+    // 9. The funded sibling is behaviourally distinct and its pointer is
+    // untouched — which is what makes the zero-share result attributable to the
+    // zero allocation rather than to cancellation generally.
+    const fundedHoldAfter = await s.t.run((ctx) => ctx.db.get(before.fundedHold._id));
+    expect(fundedHoldAfter, "the funded sibling's hold is byte-identical").toEqual(
+      before.fundedHold
+    );
+  });
+
+  test("CONTROL — a mismatched hold REFUSES before any successor write", async () => {
+    // ⚠️ THE REFUSAL MUST STILL BE PRE-WRITE (SCRUM-208 c16000).
+    //
+    // Under the pointer-policy split, RESTORATION now calls
+    // `repointSourceToClaim`, which THROWS on a hold that does not belong to
+    // its deposit or car. That throw is defence-in-depth and must stay
+    // unreachable from here: `restoreCommitment` re-resolves the binding
+    // through `resolveCanonicalBinding` BEFORE `executeAcquisition`, and that
+    // resolver runs the same four checks and returns a typed refusal instead.
+    //
+    // Asserted because the fix moved a validated write to AFTER the claim is
+    // attached. If the pre-flight ever stopped covering these cases, the first
+    // symptom would be a rollback where there used to be a clean business
+    // answer — recoverable, but a spent retry budget and a worse audit record.
+    const s = await seed("mismatchedSliceAuthority");
+    await s.t.run((ctx) =>
+      ctx.db.patch(s.orgId, { commitmentAuthorityVersion: COMMITMENT_AUTHORITY_V1 })
+    );
+
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 0 },
+      { vehicleId: s.vehicleB!, amount: 5_000 },
+    ]);
+    const saleA = await sell(s, s.vehicleA, PRICE_A);
+
+    // Point the zero slice at the OTHER car, so the hold no longer describes
+    // the vehicle being restored. Corrupting the linkage rather than deleting
+    // the row keeps the zero-share loop reachable — a deleted hold would simply
+    // not be found and would prove nothing about the refusal.
+    const zeroHold = await s.t.run(async (ctx) =>
+      (await ctx.db.query("depositVehicleHolds").collect()).find(
+        (h) => String(h.vehicleId) === String(s.vehicleA)
+      )
+    );
+    await s.t.run((ctx) => ctx.db.patch(zeroHold!._id, { vehicleId: s.vehicleB! }));
+
+    const before = await s.t.run(async (ctx) => ({
+      roots: await ctx.db.query("commitmentRoots").collect(),
+      claims: await ctx.db.query("vehicleCommitmentClaims").collect(),
+    }));
+
+    await cancel(s, saleA);
+
+    const after = await s.t.run(async (ctx) => ({
+      roots: await ctx.db.query("commitmentRoots").collect(),
+      claims: await ctx.db.query("vehicleCommitmentClaims").collect(),
+    }));
+
+    // The contract: no successor authority was minted on a source that does not
+    // describe this car. Compared as id:status sets, because a count alone
+    // would miss a root that was re-opened rather than added.
+    expect(
+      after.roots.map((r) => `${String(r._id)}:${r.status}`).sort(),
+      "no successor root, and no existing root changed status"
+    ).toEqual(before.roots.map((r) => `${String(r._id)}:${r.status}`).sort());
+    expect(
+      after.claims.map((c) => `${String(c._id)}:${c.status}`).sort(),
+      "no successor claim was attached"
+    ).toEqual(before.claims.map((c) => `${String(c._id)}:${c.status}`).sort());
+
+    // ⚠️ PINNED POSITIVELY, NOT AS "NOT RESTORED". A bare `not.toContain`
+    // passes just as well when the zero-share loop never ran at all, so it
+    // would have proved nothing about the refusal. The exact value is asserted
+    // instead: one recorded outcome, and it is the typed PRE-WRITE refusal —
+    // which is simultaneously the proof that the path executed and that it
+    // took the business exit rather than the rollback one.
+    const outcomes = await s.t.run(async (ctx) =>
+      (await ctx.db.query("financialAuditLog").collect())
+        .filter((r) => r.actionType === "SETTLE_COMMITMENT_AUTHORITY")
+        .map((r) => (r.after as { outcome?: string } | undefined)?.outcome)
+    );
+    expect(outcomes, "the refusal is a typed business answer, decided before any write").toEqual([
+      "ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS",
+    ]);
+  });
+
+  test("CONTROL — a funded share on the same quote restores correctly", async () => {
+    // Codex's own control, and the reason the zero case is attributable to the
+    // zero-amount early return rather than to cancellation, V1 or sale state.
+    const s = await seed("fundedSliceAuthority");
+    await s.t.run((ctx) =>
+      ctx.db.patch(s.orgId, { commitmentAuthorityVersion: COMMITMENT_AUTHORITY_V1 })
+    );
+
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 2_000 },
+      { vehicleId: s.vehicleB!, amount: 3_000 },
+    ]);
+    const saleA = await sell(s, s.vehicleA, PRICE_A);
+    await cancel(s, saleA);
+
+    const roots = await s.t.run(async (ctx) =>
+      (await ctx.db.query("commitmentRoots").collect()).filter(
+        (r) => String(r.vehicleId) === String(s.vehicleA)
+      )
+    );
+    expect(roots.length, "the funded car has a commitment history at all").toBeGreaterThan(0);
   });
 });

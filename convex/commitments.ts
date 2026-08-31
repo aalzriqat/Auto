@@ -40,7 +40,31 @@
  */
 
 import { ConvexError } from "convex/values";
-import { hasActiveDepositHold } from "./utils/depositHelpers";
+import {
+  hasActiveDepositHold,
+  resolveHoldTargetStatus,
+  syncVehicleHoldStatus,
+} from "./utils/depositHelpers";
+import {
+  assertPrincipalMatches,
+  AuthorityDecisionContext,
+  AuthorityRunContext,
+  EvidenceEpisode,
+  hasCanonicalDepositHold,
+  hasCanonicalReservationHold,
+  PrincipalBoundEvidence,
+  requireCanonicalAuthority,
+  requireCurrentEpisode,
+  resolveLineageTip,
+  tryDecisionContext,
+} from "./utils/commitmentKernel";
+import {
+  repointSourceToClaim,
+  resolveCanonicalBinding,
+  SourceRef,
+  stampAcquisitionPointer,
+} from "./utils/commitmentSources";
+import { IN_FLIGHT_FINANCE_STATUSES as FINANCE_IN_FLIGHT } from "./utils/financeStatuses";
 import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 
@@ -742,6 +766,127 @@ export function throwRefusal(acting: Extract<ActingRoot, { decision: "REFUSE" }>
 // Writing the authority.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Why a restoration believes it is entitled to continue a finished deal.
+ *
+ * ⚠️ EXACT, NOT CATEGORICAL. "A sale was cancelled" is not a reason to restore
+ * THIS deal — "the exact sale that consumed THIS root was cancelled" is. The
+ * same holds for a released root and the exact episode whose end released it.
+ * Without the exact reference, any cancellation anywhere in the dealership
+ * would satisfy a restoration of any root.
+ */
+export type RestorationIntent =
+  /** The exact sale that consumed the root has been cancelled. */
+  | { kind: "SALE_CANCELLED"; saleId: Id<"sales"> }
+  /**
+   * The exact source episode whose release ended the root is reinstated.
+   *
+   * ⚠️ NOT CONNECTED TO ANY PRODUCTION DOOR, AND NOT REACHABLE BY REAL DATA.
+   *
+   * This branch requires `claim.status === "RELEASED"`, and NOTHING in
+   * production writes a claim status at all: episodes are insert-only and
+   * Phase 2 terminalizes the ROOT, deliberately. So the precondition cannot be
+   * satisfied outside a test that patches the row by hand.
+   *
+   * The resolver logic is exercised by `commitmentLineage.test.ts`, and those
+   * are legitimate unit tests of a pure function — but they must NOT be read
+   * as evidence that this branch is production-ready. Whoever wires the first
+   * caller has to decide what writes a RELEASED claim, and
+   * `scripts/commitmentWriteGuard.test.ts` fails the moment a second
+   * production file constructs this intent, so that wiring is a deliberate act
+   * rather than an assumption inherited from a green suite.
+   *
+   * (Recorded after Sonnet MAX flagged it against 6f7d1b5c3: exactly the
+   * "coverage that proves nothing about production" pattern that blocked the
+   * previous head, isolated here to a dormant branch instead of the live one.)
+   */
+  | { kind: "SOURCE_EPISODE_REINSTATED" };
+
+/**
+ * What the authority decided about a restoration. **Writes nothing.**
+ *
+ * ⚠️ TYPED, BECAUSE THE CALLER MUST BE ABLE TO TELL THESE APART. Once the
+ * reversal journal has posted, a vehicle-authority outcome is no longer an
+ * accounting failure, and reporting it as one is how a legitimate business
+ * result ends up in an outbox `lastError` looking like a transient fault.
+ */
+export type RestorationDecision =
+  /**
+   * The source episode is still ACTIVE — there is nothing to restore.
+   *
+   * Returned rather than throwing so a reversal that runs twice is idempotent,
+   * and rather than attaching so a retry cannot mint a duplicate ACTIVE claim
+   * for the same evidence on the same car.
+   */
+  | {
+      decision: "ALREADY_LIVE";
+      rootId: Id<"commitmentRoots">;
+      claimId: Id<"vehicleCommitmentClaims">;
+    }
+  /** The lineage tip is still OPEN — rejoin it rather than succeeding it. */
+  | { decision: "JOIN_LINEAGE"; rootId: Id<"commitmentRoots"> }
+  /** The tip is terminal and the car is free: open the next generation. */
+  | { decision: "OPEN_SUCCESSOR"; predecessor: Doc<"commitmentRoots"> }
+  /** Another deal legitimately holds the car. */
+  | { decision: "RIVAL"; rivalRootId: Id<"commitmentRoots"> }
+  /**
+   * Two OPEN roots on one car — corrupt state, not a tie to be broken.
+   *
+   * The count travels with the decision so the caller can report HOW MANY
+   * without taking its own ownership reading. A second read for a REPORT is
+   * how a second read for a DECISION gets added later — which is exactly the
+   * defect this round closed in `settleOneReversalSource`.
+   */
+  | { decision: "AMBIGUOUS"; openRootCount: number }
+  /** Legacy or inconsistent lineage, or an intent that does not match. */
+  | { decision: "REFUSE"; reason: string };
+
+/** The result of actually executing a restoration. */
+export type RestorationOutcome =
+  | {
+      decision: "RESTORED";
+      rootId: Id<"commitmentRoots">;
+      claimId: Id<"vehicleCommitmentClaims">;
+      /** Whether a successor generation was opened, or the tip was rejoined. */
+      opened: "SUCCESSOR" | "JOINED";
+    }
+  /**
+   * ⚠️ THERE IS NO `INCONSISTENT` VARIANT, AND ITS ABSENCE IS THE CONTRACT
+   * (SCRUM-208 c16000).
+   *
+   * A post-write invariant failure is not a value this function can return,
+   * because returning one is what let a half-restoration commit: the successor
+   * root and claim were already written when the check ran, and reporting the
+   * contradiction left them in the database with a truthful audit row beside
+   * them. Truthful, and still contradictory ownership.
+   *
+   * It now THROWS, so the enclosing mutation rolls the whole attempt back.
+   * That is safe here — and was NOT safe under the topology the removed note
+   * described — because neither production caller absorbs it:
+   * `performAuthoritySettlement` is its own registered mutation with no
+   * enclosing `try`/`catch`, and the synchronous cancellation path has none
+   * either. `drainEntries`' per-row catch wraps posting, not settlement.
+   *
+   * The split is binding:
+   *   pre-write data contradiction  → typed BLOCKED_INCONSISTENT outcome
+   *   post-write invariant failure  → throw → rollback
+   */
+  | Exclude<RestorationDecision, { decision: "JOIN_LINEAGE" } | { decision: "OPEN_SUCCESSOR" }>;
+
+/**
+ * How a root is being opened. **Server-derived, never caller-supplied.**
+ *
+ * ⚠️ THIS IS A PARAMETER OF THE ONE INSERT SITE, NOT A SECOND WRITER. The
+ * first version of this work added `openSuccessorRoot` with its own
+ * `ctx.db.insert("commitmentRoots", …)`, which re-created exactly the defect
+ * M1 exists to prevent: the question "may a root be created here" answered in
+ * two places instead of one. A successor is a different SHAPE of opening, not
+ * a different opener.
+ */
+type RootOpening =
+  | { kind: "ORIGIN" }
+  | { kind: "SUCCESSOR"; predecessor: Doc<"commitmentRoots"> };
+
 async function openRoot(
   ctx: MutationCtx,
   args: {
@@ -750,19 +895,116 @@ async function openRoot(
     customerId: Id<"customers">;
     createdBy: Id<"users">;
     lineage: CommitmentLineage;
+    /** ORIGIN unless a restoration decision said otherwise. */
+    opening?: RootOpening;
   }
 ): Promise<Id<"commitmentRoots">> {
-  return await ctx.db.insert("commitmentRoots", {
+  const opening: RootOpening = args.opening ?? { kind: "ORIGIN" };
+
+  if (opening.kind === "SUCCESSOR") {
+    const { predecessor } = opening;
+    // Belt and braces on a decision `resolveRestorationDecision` already made.
+    // These are `Error`, not `ConvexError`: reaching them means a caller
+    // bypassed the resolver, which is a programming fault and not something to
+    // explain to a salesperson.
+    if (predecessor.lineageRootId === undefined || predecessor.lineageGeneration === undefined) {
+      throw new Error(`root ${predecessor._id} has no lineage identity to succeed`);
+    }
+    if (predecessor.status === "OPEN") {
+      throw new Error(
+        `root ${predecessor._id} is still OPEN — a live root is not succeeded, it is resolved`
+      );
+    }
+    // ⚠️ THE PRINCIPAL IS CARRIED, NEVER RE-DERIVED. A restoration that adopts
+    // whoever is presenting the evidence is how one customer's money becomes
+    // another customer's deal.
+    if (String(predecessor.customerId) !== String(args.customerId)) {
+      throw new Error(
+        `successor principal does not match predecessor ${predecessor._id}`
+      );
+    }
+    if (String(predecessor.vehicleId) !== String(args.vehicleId)) {
+      throw new Error(`successor vehicle does not match predecessor ${predecessor._id}`);
+    }
+  }
+
+  // ⚠️ SCRUM-208 — A SUCCESSOR'S ROOT IDENTITY IS COPIED FROM THE TIP, NOT
+  // FROM THE CALLER'S LINEAGE PROOF.
+  //
+  // `args.lineage` is what the OPERATION presented to prove which deal it
+  // belongs to. Letting it fill `headQuoteId` / `originReservationId` on a
+  // successor would let dormant evidence — a months-old deposit being
+  // reinstated — silently re-head the deal onto whatever quote it happened to
+  // carry. Root identity survives succession unchanged; only the separately
+  // validated adoption path may ever move the quote head.
+  //
+  // The new EPISODE still carries its own evidence and its own quote, which is
+  // claim-level and is exactly where operation-specific facts belong.
+  const identity =
+    opening.kind === "SUCCESSOR"
+      ? {
+          customerId: opening.predecessor.customerId,
+          ...(opening.predecessor.headQuoteId
+            ? { headQuoteId: opening.predecessor.headQuoteId }
+            : {}),
+          ...(opening.predecessor.originReservationId
+            ? { originReservationId: opening.predecessor.originReservationId }
+            : {}),
+          lineageRootId: opening.predecessor.lineageRootId,
+          lineageGeneration: opening.predecessor.lineageGeneration! + 1,
+          restoredFromRootId: opening.predecessor._id,
+        }
+      : {
+          customerId: args.customerId,
+          ...(args.lineage.quoteId ? { headQuoteId: args.lineage.quoteId } : {}),
+          ...(args.lineage.reservationId
+            ? { originReservationId: args.lineage.reservationId }
+            : {}),
+          lineageGeneration: 0,
+        };
+
+  const rootId = await ctx.db.insert("commitmentRoots", {
     orgId: args.orgId,
     vehicleId: args.vehicleId,
-    customerId: args.customerId,
     status: "OPEN",
-    ...(args.lineage.quoteId ? { headQuoteId: args.lineage.quoteId } : {}),
-    ...(args.lineage.reservationId ? { originReservationId: args.lineage.reservationId } : {}),
     openedAt: Date.now(),
     openedBy: args.createdBy,
+    ...identity,
   });
+
+  // A successor already carries its lineage from the predecessor; only an
+  // origin has to point at itself, and only an origin gets the self-patch.
+  if (opening.kind === "SUCCESSOR") return rootId;
+
+  // ⚠️ SCRUM-208 — ONE CANONICAL ORIGIN REPRESENTATION, WRITTEN BEFORE COMMIT.
+  //
+  // A lineage origin points at ITSELF, which cannot be expressed in the insert
+  // because the id does not exist until the insert returns. The self-patch is
+  // safe because a Convex mutation is ONE transaction: no reader ever observes
+  // the row between the two writes.
+  //
+  // ⚠️ THAT IS AN ATOMICITY CLAIM ABOUT THESE TWO WRITES, AND NOTHING WIDER.
+  // This comment used to end "and if anything later in this mutation throws,
+  // neither write lands." That is true only of a caller that lets the throw
+  // escape. The deferred restoration path runs inside
+  // `accountingOutbox.drainEntries`'s per-row `try`/`catch`, which absorbs the
+  // throw and lets the mutation COMMIT — so a later failure there leaves this
+  // root behind rather than un-writing it. See the contract note on
+  // `restoreAuthorityAfterReversal`.
+  //
+  // ⚠️ IT IS NOT LEFT ABSENT FOR A READER TO NORMALIZE TO "SELF". A missing
+  // `lineageRootId` is the LEGACY signal and must keep failing closed; if new
+  // roots also shipped without it, that signal would be worthless and every
+  // reader would need to guess which kind of missing it was looking at.
+  //
+  // Written for legacy and canonical organizations alike. It costs nothing on
+  // the legacy path — `resolveOwnership` provably never reads these fields —
+  // and it means the SCRUM-201 backfill only ever has to reach rows that
+  // predate this code, rather than chasing a moving target.
+  await ctx.db.patch(rootId, { lineageRootId: rootId });
+  return rootId;
 }
+
 
 /**
  * Open ONE acquisition episode on an ALREADY-DECIDED root.
@@ -791,14 +1033,72 @@ export async function attachEpisode(
   const { predecessor } = args;
   if (predecessor) {
     if (predecessor.status === "ACTIVE") {
-      throw new Error(
-        `claim ${predecessor._id} is still ACTIVE — a live episode is not succeeded, it is resolved`
-      );
+      // ⚠️ SCRUM-208 c15808 — AN ACTIVE CLAIM ON A TERMINAL ROOT IS SUCCEEDABLE.
+      //
+      // This guard used to refuse any ACTIVE predecessor outright, which made
+      // restoration structurally unreachable on the state finalization
+      // actually produces. `consumeRootForSale` patches the ROOT and nothing
+      // else, and Phase 2's certified contract F.12 pins that deliberately:
+      // finalization "neither scans nor patches" the episodes, so a deal with
+      // sixty live episodes does not become a sixty-row write. Every claim on
+      // a completed sale is therefore still ACTIVE.
+      //
+      // That is exactly invariant I10 at the top of this file — a claim
+      // pointing at a non-OPEN root is stale bookkeeping, not ownership. The
+      // refusal below now asks the question I10 already answers: is the DEAL
+      // still live? A live episode on a live deal is resolved, not succeeded.
+      // A live episode on a finished deal is the ordinary thing a restoration
+      // continues.
+      const predecessorRoot = await ctx.db.get(predecessor.rootId);
+      if (!predecessorRoot || String(predecessorRoot.orgId) !== String(args.orgId)) {
+        throw new Error(
+          `cannot prove predecessor ${predecessor._id} belongs to a deal in this dealership`
+        );
+      }
+      if (predecessorRoot.status === "OPEN") {
+        throw new Error(
+          `claim ${predecessor._id} is ACTIVE on OPEN root ${predecessorRoot._id} — a live episode is not succeeded, it is resolved`
+        );
+      }
     }
+    // ⚠️ SAME ROOT, OR THE SAME LINEAGE — PROVEN, NOT ASSUMED.
+    //
+    // Phase 2 had one rule: a reacquired episode opens a new claim on the SAME
+    // root. Phase 3 adds root succession, and a first attempt at reconciling
+    // them permitted "the same root, or the root this one directly succeeds".
+    // That direct-parent rule is wrong, and it strands dormant evidence
+    // permanently: a deposit episode can belong to R0 while finance has since
+    // advanced the lineage through R1 to R2. Restoring that deposit onto R2 —
+    // or onto an R3 opened from R2 — is legitimate, and the parent-only rule
+    // refuses it forever because R0 is two generations back.
+    //
+    // The real invariant is that both roots are the SAME DEAL: same tenant,
+    // same car, same principal, same lineage. Generation distance is not part
+    // of it.
+    //
+    // ⚠️ AND A LEGACY ROOT CANNOT SATISFY IT. Two roots that both lack a
+    // lineage id are not thereby in the same lineage — `undefined === undefined`
+    // would silently marry two unrelated deals.
     if (String(predecessor.rootId) !== String(args.rootId)) {
-      throw new Error(
-        `successor root ${args.rootId} does not match predecessor ${predecessor._id} root ${predecessor.rootId}`
-      );
+      const [target, source] = await Promise.all([
+        ctx.db.get(args.rootId),
+        ctx.db.get(predecessor.rootId),
+      ]);
+      if (!target || !source) {
+        throw new Error(`cannot prove predecessor ${predecessor._id} shares this deal's lineage`);
+      }
+      const sameLineage =
+        target.lineageRootId !== undefined &&
+        source.lineageRootId !== undefined &&
+        String(target.lineageRootId) === String(source.lineageRootId) &&
+        String(target.orgId) === String(source.orgId) &&
+        String(target.vehicleId) === String(source.vehicleId) &&
+        String(target.customerId) === String(source.customerId);
+      if (!sameLineage) {
+        throw new Error(
+          `successor root ${args.rootId} is not in the same lineage as predecessor ${predecessor._id} root ${predecessor.rootId}`
+        );
+      }
     }
     if (String(predecessor.vehicleId) !== String(args.vehicleId)) {
       throw new Error(`successor vehicle does not match predecessor ${predecessor._id}`);
@@ -868,15 +1168,90 @@ export async function acquireVehicle(
   });
   if (acting.decision === "REFUSE") throwRefusal(acting);
 
+  return await executeAcquisition(ctx, {
+    ...args,
+    target:
+      acting.decision === "JOIN" || acting.decision === "ADOPT_RESERVATION"
+        ? { kind: "JOIN", rootId: acting.rootId }
+        : { kind: "ORIGIN" },
+    adoptReservation: acting.decision === "ADOPT_RESERVATION",
+    // First acquisition, always: this door has no predecessor source to
+    // repoint, so the pointer is derived from the evidence and a sliced
+    // deposit is left for the writer that creates its hold row.
+    pointerPolicy: { kind: "INITIAL" },
+  });
+}
+
+/**
+ * SCRUM-208 — THE ONE EXECUTOR. **Unexported, deliberately.**
+ *
+ * Open-or-join, then attach, in one transaction. Both doors converge here:
+ * `acquireVehicle` after `resolveActingRoot`, `restoreCommitment` after
+ * `resolveRestorationDecision`.
+ *
+ * ⚠️ THE SUCCESSOR SHAPE IS NOT REACHABLE FROM THE EXPORTED API. A first
+ * attempt put an optional `successorOf` on `acquireVehicle` itself, with a
+ * comment saying only `restoreCommitment` would supply it. A comment is not an
+ * enforcement boundary: any backend caller could have passed a terminal root
+ * with unrelated evidence and reached successor creation without ever going
+ * through the restoration resolver. Module privacy is the boundary; the
+ * comment was only ever a wish.
+ *
+ * ⚠️ AND THE CLAIM IS NOT OPTIONAL. Because attachment happens here, in the
+ * same transaction as the opening, a root cannot commit without its episode.
+ */
+async function executeAcquisition(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    customerId: Id<"customers">;
+    createdBy: Id<"users">;
+    evidence: CommitmentEvidence;
+    lineage: CommitmentLineage;
+    predecessor?: Doc<"vehicleCommitmentClaims">;
+    target:
+      | { kind: "JOIN"; rootId: Id<"commitmentRoots"> }
+      | { kind: "ORIGIN" }
+      | { kind: "SUCCESSOR"; predecessorRoot: Doc<"commitmentRoots"> };
+    adoptReservation?: boolean;
+    /**
+     * ⚠️ WHICH POINTER RULE THIS ACQUISITION IS UNDER — STATED, NEVER INFERRED
+     * (SCRUM-208 c16000).
+     *
+     * The source belongs to this policy rather than sitting beside it as an
+     * ambiguous optional, so the two cases cannot be silently conflated: a
+     * RESTORATION without an exact source is now a type error rather than a
+     * value that quietly falls back to the evidence-derived one.
+     *
+     * ⚠️ AND IT IS NOT DERIVED FROM `predecessor`. A future acquisition path
+     * could legitimately carry a predecessor without meeting restoration's
+     * requirement that the source already exists and has been resolved, so
+     * inferring the mode from its presence would hand that path restoration's
+     * pointer behaviour by accident.
+     */
+    pointerPolicy:
+      | { kind: "INITIAL"; source?: SourceRef }
+      | { kind: "RESTORATION"; source: SourceRef };
+  }
+): Promise<{ rootId: Id<"commitmentRoots">; claimId: Id<"vehicleCommitmentClaims"> }> {
   const rootId =
-    acting.decision === "JOIN" || acting.decision === "ADOPT_RESERVATION"
-      ? acting.rootId
+    args.target.kind === "JOIN"
+      ? args.target.rootId
       : await openRoot(ctx, {
           orgId: args.orgId,
           vehicleId: args.vehicleId,
           customerId: args.customerId,
           createdBy: args.createdBy,
           lineage: args.lineage,
+          ...(args.target.kind === "SUCCESSOR"
+            ? {
+                opening: {
+                  kind: "SUCCESSOR" as const,
+                  predecessor: args.target.predecessorRoot,
+                },
+              }
+            : {}),
         });
 
   // ⚠️ ADOPTION RE-HEADS THE DEAL, IN ONE PLACE. Once a reservation's deal is
@@ -884,8 +1259,12 @@ export async function acquireVehicle(
   // by — so every later door (a further deposit, a finance application) proves
   // lineage by quote in the ordinary way instead of re-adopting. The
   // conversion happens exactly once, here, and is auditable.
-  if (acting.decision === "ADOPT_RESERVATION" && args.lineage.quoteId) {
-    await ctx.db.patch(acting.rootId, { headQuoteId: args.lineage.quoteId });
+  //
+  // ⚠️ RESTORATION NEVER REACHES THIS. `adoptReservation` is set only by
+  // `acquireVehicle` from its own ADOPT_RESERVATION decision: dormant evidence
+  // may not re-head a deal as a side effect of being reinstated.
+  if (args.adoptReservation && args.lineage.quoteId) {
+    await ctx.db.patch(rootId, { headQuoteId: args.lineage.quoteId });
   }
 
   const claimId = await attachEpisode(ctx, {
@@ -898,7 +1277,442 @@ export async function acquireVehicle(
     predecessor: args.predecessor,
   });
 
+  // ⚠️ THE POINTER MOVES IN THE SAME TRANSACTION AS THE CLAIM, ON EVERY PATH —
+  // not only on restoration. A pointer that appears only after a restoration is
+  // absent for every ordinary deal, so the first reader to consult it fails
+  // closed on healthy data.
+  //
+  // ⚠️ BUT THE TWO PATHS NEED DIFFERENT WRITERS, AND ROUTING BOTH THROUGH THE
+  // INITIAL STAMPER IS THE DEFECT THIS SPLIT CLOSES (SCRUM-208 c15998/c16000).
+  // `stampAcquisitionPointer` deliberately SKIPS a sliced deposit, because at
+  // first acquisition the hold row does not exist yet — the deposit writer
+  // inserts it moments later already carrying this claim id. That skip is
+  // correct for INITIAL and wrong for RESTORATION, where the exact hold has
+  // been resolved and is sitting in the source: skipping it left the hold
+  // pointing at the terminal predecessor while an ACTIVE successor existed,
+  // which the postcondition below then caught as a contradiction — after the
+  // root and claim had already been written.
+  //
+  // Proven on real Convex against 249bea1cb: the zero-share cancellation
+  // committed a successor root and claim, reserved the car, and recorded
+  // BLOCKED_INCONSISTENT because the pointer had never moved.
+  if (args.pointerPolicy.kind === "RESTORATION") {
+    // The exact source is mandatory here, and `repointSourceToClaim` re-proves
+    // tenant, deposit linkage and vehicle before patching the exact hold — so
+    // this is a validated write, not a trusted one.
+    await repointSourceToClaim(ctx, {
+      orgId: args.orgId,
+      source: args.pointerPolicy.source,
+      vehicleId: args.vehicleId,
+      claimId,
+    });
+  } else {
+    await stampAcquisitionPointer(ctx, {
+      orgId: args.orgId,
+      source: args.pointerPolicy.source ?? sourceRefOfEvidence(args.evidence),
+      vehicleId: args.vehicleId,
+      claimId,
+    });
+  }
+
   return { rootId, claimId };
+}
+
+/** The source a piece of evidence names, without a slice it cannot know yet. */
+function sourceRefOfEvidence(evidence: CommitmentEvidence): SourceRef {
+  if (evidence.kind === "DEPOSIT") return { kind: "DEPOSIT", depositId: evidence.depositId };
+  if (evidence.kind === "FINANCE") return { kind: "FINANCE", applicationId: evidence.applicationId };
+  return { kind: "RESERVATION", reservationId: evidence.reservationId };
+}
+
+/**
+ * SCRUM-208 — MAY THIS EVIDENCE CONTINUE THIS FINISHED DEAL? **Writes nothing.**
+ *
+ * The restoration counterpart to `resolveActingRoot`: one place that decides,
+ * returning an explicit decision rather than a nullable value a caller reads
+ * as "then open one". It is a pure resolver so it can be tested directly —
+ * a root-WRITING helper cannot be, because testing one proves a path exists
+ * that bypasses the door.
+ *
+ * The rules, in order:
+ *
+ * 1. **The evidence must already hold a CURRENT episode.** `NEW` is first
+ *    acquisition and can never be restoration: accepting it would let a
+ *    restoration open a root with no provenance back to what was reversed,
+ *    and every later check would find that root perfectly well-formed.
+ * 2. **The principal is proven against the lineage**, not against whoever is
+ *    presenting the evidence.
+ * 3. **The tip is resolved MAX-GENERATION-FIRST.** An OPEN root below a later
+ *    terminal generation is corruption, not a tip.
+ * 4. **The intent must name the exact reason this root ended** — the exact
+ *    sale that consumed it, or the exact episode whose release ended it.
+ *    "Some sale was cancelled" would let any cancellation in the dealership
+ *    restore any root.
+ * 5. **A rival never has its vehicle taken.** If another deal holds the car,
+ *    the money still goes back but the vehicle does not move.
+ */
+export async function resolveRestorationDecision(
+  ctx: MutationCtx,
+  args: {
+    decision: AuthorityDecisionContext;
+    /** The exact source row — a sliced deposit names its hold row. */
+    source: SourceRef;
+    vehicleId: Id<"vehicles">;
+    intent: RestorationIntent;
+  }
+): Promise<RestorationDecision> {
+  const { decision, source, vehicleId, intent } = args;
+  requireCanonicalAuthority(decision);
+
+  // ⚠️ ONE BINDING, WALKED FROM THE SOURCE ROW. The caller names a source and
+  // a car; everything else — the episode, the root, the lineage, the principal
+  // and the defining evidence — is read from the database. There is no second
+  // identity to disagree with the first.
+  const bound = await resolveCanonicalBinding(ctx, decision, { source, vehicleId });
+  if (!bound.ok) return { decision: "REFUSE", reason: bound.reason };
+  const { binding } = bound;
+
+  const tip = await resolveLineageTip(ctx, decision, binding.root.lineageRootId!);
+  if (tip.kind === "CORRUPT") {
+    return { decision: "REFUSE", reason: `the deal's history is inconsistent (${tip.reason})` };
+  }
+  if (String(tip.root.vehicleId) !== String(vehicleId)) {
+    return { decision: "REFUSE", reason: "that evidence belongs to a different vehicle's deal" };
+  }
+  if (String(tip.root.customerId) !== String(binding.customerId)) {
+    return {
+      decision: "REFUSE",
+      reason: "that record belongs to a different customer than the deal it names",
+    };
+  }
+
+  /**
+   * Did this deal end for the exact reason the caller gave?
+   *
+   * ⚠️ SCRUM-208 c15808 — A CANCELLED SALE IS A FACT ABOUT THE ROOT, NOT THE
+   * EPISODE. This asked `claim.status === "CONSUMED" && claim.consumedBySaleId
+   * === saleId`, a state real finalization never produces: `consumeRootForSale`
+   * patches the ROOT and nothing else, and Phase 2's certified F.12 pins that
+   * deliberately — completing a deal must not become one write per episode. So
+   * every claim on a completed sale is still ACTIVE, this predicate was false
+   * for every real cancellation, and restoration could not have restored
+   * anything. The fixtures that made it pass were hand-patching the claim into
+   * a shape production has no writer for.
+   *
+   * Invariant I10 at the top of this file already says which row is
+   * authoritative: a claim pointing at a non-OPEN root is stale bookkeeping,
+   * not ownership. The ROOT carries the sale.
+   *
+   * An ordinary release is a different fact and stays claim-level: releasing
+   * ONE piece of evidence ends that evidence and nothing else, and the deal may
+   * legitimately still be open on another basis.
+   */
+  const endingProof = (
+    claim: Doc<"vehicleCommitmentClaims">,
+    root: Doc<"commitmentRoots">
+  ): { ok: true } | { ok: false; reason: string } => {
+    if (intent.kind === "SALE_CANCELLED") {
+      if (root.status !== "CONSUMED") {
+        return { ok: false, reason: "that deal was not completed into a sale" };
+      }
+      if (String(root.consumedBySaleId ?? "") !== String(intent.saleId)) {
+        return { ok: false, reason: "that sale is not the one this deal was completed into" };
+      }
+      return { ok: true };
+    }
+    if (claim.status !== "RELEASED") {
+      return { ok: false, reason: "that evidence was not released" };
+    }
+    return { ok: true };
+  };
+
+  // ⚠️ THE POINTER NAMES A LIVE EPISODE — this is a replay, not a restoration.
+  //
+  // Claim status alone proves nothing, so the replay answer requires the whole
+  // chain: the named episode is ACTIVE, its root is OPEN and is the validated
+  // tip, the SOURCE is still live, and the predecessor it succeeded is the
+  // episode the caller's intent actually names. A caller naming the wrong sale
+  // is refused here rather than handed "already done".
+  /**
+   * How many successors this episode already has, tenant-scoped and exact.
+   *
+   * ⚠️ RUN ON BOTH BRANCHES. A first version probed only when the pointer
+   * named a TERMINAL episode, so once the pointer had moved to a live
+   * successor a SECOND successor branching from the same predecessor was
+   * invisible and the replay path reported success over corrupt state.
+   */
+  const successorsOf = async (claimId: Id<"vehicleCommitmentClaims">) =>
+    await ctx.db
+      .query("vehicleCommitmentClaims")
+      .withIndex("by_org_restored_from", (q) =>
+        q.eq("orgId", decision.orgId).eq("restoredFromClaimId", claimId)
+      )
+      .take(2);
+
+  const branched = {
+    decision: "REFUSE" as const,
+    reason: "this evidence has been reinstated more than once, which is inconsistent state",
+  };
+
+  // ⚠️ THE TERMINAL FACT IS TESTED FIRST, AND THE REPLAY IS THE EXCEPTION.
+  //
+  // Keying this branch on `claim.status === "ACTIVE"` was wrong twice over.
+  // Under c15808 the predecessor of a cancelled sale IS ACTIVE, so the live
+  // branch swallowed the ordinary case; and keying it on the root instead
+  // would refuse a genuinely RELEASED episode sitting on a still-OPEN root —
+  // one basis of several ending, which is a lawful JOIN_LINEAGE.
+  //
+  // So the question is neither: does THIS record carry the ending the caller
+  // named? If it does, this is a restoration. If it does not, the one lawful
+  // way that happens is a REPLAY — the restoration already ran, the maintained
+  // pointer moved onto the successor episode, and the ending now sits on its
+  // predecessor.
+  const proof = endingProof(binding.claim, binding.root);
+  if (!proof.ok) {
+    const predecessorId = binding.claim.restoredFromClaimId;
+    // Not terminal, and not a successor either: nothing here ended for the
+    // reason given. Reported with the ending's own reason rather than as a
+    // replay, so whoever hits it is not sent looking for corruption — except
+    // for the one case where a plainer answer exists. A live episode on a live
+    // deal is not "that evidence was not released"; it is evidence that never
+    // stopped holding the car, and saying so is what a person can act on.
+    if (!predecessorId) {
+      return binding.claim.status === "ACTIVE" && binding.root.status === "OPEN"
+        ? { decision: "REFUSE", reason: "that evidence is still live and has nothing to restore" }
+        : { decision: "REFUSE", reason: proof.reason };
+    }
+    if ((await successorsOf(predecessorId)).length > 1) return branched;
+
+    const predecessor = await ctx.db.get(predecessorId);
+    if (!predecessor || String(predecessor.orgId) !== String(decision.orgId)) {
+      return { decision: "REFUSE", reason: "the episode this one succeeded no longer exists" };
+    }
+    const predecessorRoot = await ctx.db.get(predecessor.rootId);
+    if (!predecessorRoot || String(predecessorRoot.orgId) !== String(decision.orgId)) {
+      return { decision: "REFUSE", reason: "the deal this evidence succeeded no longer exists" };
+    }
+    // ⚠️ SAME LINEAGE, PROVEN. Two roots that merely both lack a lineage id
+    // are not thereby related: `undefined === undefined` would marry two
+    // unrelated deals, which is the exact shape `attachEpisode` refuses.
+    if (
+      predecessorRoot.lineageRootId === undefined ||
+      binding.root.lineageRootId === undefined ||
+      String(predecessorRoot.lineageRootId) !== String(binding.root.lineageRootId)
+    ) {
+      return {
+        decision: "REFUSE",
+        reason: "the deal's history is inconsistent (a successor left its lineage)",
+      };
+    }
+    // ⚠️ INTENT FIRST, AND ITS OWN REASON. Naming the wrong sale is a
+    // different failure from a stale episode, and reporting it as the latter
+    // would send whoever hit it looking for corruption that is not there.
+    const predecessorProof = endingProof(predecessor, predecessorRoot);
+    if (!predecessorProof.ok) {
+      return { decision: "REFUSE", reason: predecessorProof.reason };
+    }
+
+    const proven =
+      binding.live &&
+      binding.root.status === "OPEN" &&
+      String(binding.root._id) === String(tip.root._id);
+    if (proven) {
+      return { decision: "ALREADY_LIVE", rootId: binding.root._id, claimId: binding.claim._id };
+    }
+    return {
+      decision: "REFUSE",
+      reason:
+        "this evidence has already been reinstated, and its current episode no longer holds this vehicle",
+    };
+  }
+
+  // ⚠️ AN EPISODE IS SUCCEEDED ONCE — EXACT, TENANT-SCOPED UNIQUENESS PROBE.
+  //
+  // `.first()` on the bare `by_restored_from` could not do this job twice
+  // over: a corrupt foreign-tenant row ordered first HIDES a valid same-tenant
+  // successor, and one row cannot reveal that TWO successors branch from the
+  // same predecessor.
+  const successors = await successorsOf(binding.claim._id);
+  if (successors.length > 1) return branched;
+  if (successors.length === 1) {
+    // The pointer still names the terminal predecessor while a successor
+    // exists: the two disagree, and the honest answer is neither of them.
+    return {
+      decision: "REFUSE",
+      reason:
+        "this evidence has already been reinstated, and its current episode no longer holds this vehicle",
+    };
+  }
+
+  // I1 — one physical vehicle, at most one OPEN root. Checked against the
+  // VEHICLE, not the lineage: a rival deal is a different lineage entirely.
+  //
+  // ⚠️ BEFORE THE JOIN DECISION. One valid open lineage plus a second OPEN
+  // root on the same car is corruption, and joining the first while the second
+  // exists would quietly bless it.
+  const ownership = await resolveOwnership(ctx, decision.orgId, tip.root.vehicleId);
+  if (ownership.kind === "AMBIGUOUS") {
+    return { decision: "AMBIGUOUS", openRootCount: ownership.roots.length };
+  }
+
+  if (tip.isOpen) {
+    if (ownership.kind !== "OWNED" || String(ownership.root._id) !== String(tip.root._id)) {
+      return {
+        decision: "REFUSE",
+        reason: "the deal's records disagree about which root holds this vehicle",
+      };
+    }
+    return { decision: "JOIN_LINEAGE", rootId: tip.root._id };
+  }
+
+  if (ownership.kind === "OWNED") return { decision: "RIVAL", rivalRootId: ownership.root._id };
+
+  return { decision: "OPEN_SUCCESSOR", predecessor: tip.root };
+}
+
+/**
+ * SCRUM-208 — THE RESTORATION DOOR. Decide, then execute through `acquireVehicle`.
+ *
+ * ⚠️ IT DOES NOT OPEN A ROOT ITSELF. Execution goes through `acquireVehicle`,
+ * which owns the one call to the one private `openRoot` and which attaches the
+ * episode in the same transaction. That is what makes "an OPEN successor with
+ * no claim" unreachable rather than merely discouraged — and it is the
+ * correction to a first attempt that gave succession its own insert.
+ */
+export async function restoreCommitment(
+  ctx: MutationCtx,
+  args: {
+    decision: AuthorityDecisionContext;
+    /** The exact source row — a sliced deposit names its hold row. */
+    source: SourceRef;
+    vehicleId: Id<"vehicles">;
+    intent: RestorationIntent;
+    createdBy: Id<"users">;
+  }
+): Promise<RestorationOutcome> {
+  const resolved = await resolveRestorationDecision(ctx, {
+    decision: args.decision,
+    source: args.source,
+    vehicleId: args.vehicleId,
+    intent: args.intent,
+  });
+  if (
+    resolved.decision === "REFUSE" ||
+    resolved.decision === "RIVAL" ||
+    resolved.decision === "AMBIGUOUS" ||
+    resolved.decision === "ALREADY_LIVE"
+  ) {
+    return resolved;
+  }
+
+  // Re-resolved rather than carried out of the decision, so the episode and
+  // the evidence come from the SAME walk of the same chain.
+  const bound = await resolveCanonicalBinding(ctx, args.decision, {
+    source: args.source,
+    vehicleId: args.vehicleId,
+  });
+  if (!bound.ok) return { decision: "REFUSE", reason: bound.reason };
+
+  const target =
+    resolved.decision === "JOIN_LINEAGE"
+      ? ({ kind: "JOIN", rootId: resolved.rootId } as const)
+      : ({ kind: "SUCCESSOR", predecessorRoot: resolved.predecessor } as const);
+
+  const { rootId, claimId } = await executeAcquisition(ctx, {
+    orgId: args.decision.orgId,
+    vehicleId: args.vehicleId,
+    // Carried from the lineage the resolver validated, never from the caller.
+    customerId: bound.binding.customerId,
+    createdBy: args.createdBy,
+    // ⚠️ DERIVED FROM THE VALIDATED PREDECESSOR CLAIM, never supplied beside
+    // it. Two independently composable identities could name different rows;
+    // one identity cannot disagree with itself.
+    evidence: bound.binding.evidence,
+    // ⚠️ NOT A CALLER INPUT. Root identity is copied from the predecessor and
+    // adoption is unreachable from here, so the only thing lineage can still
+    // do is set the new EPISODE's quote — and the honest answer to "which
+    // quote is this episode on" is the one the episode being continued was on.
+    // Taking it from the caller would let whoever happens to be cancelling a
+    // sale re-quote somebody else's deal as a side effect of a refund.
+    lineage: {
+      ...(bound.binding.claim.quoteId ? { quoteId: bound.binding.claim.quoteId } : {}),
+    },
+    predecessor: bound.binding.claim,
+    target,
+    // ⚠️ RESTORATION, STATED EXPLICITLY. The source already exists and has
+    // just been re-resolved by `resolveCanonicalBinding` above, so the exact
+    // pointer — including a sliced deposit's own hold row — must move onto the
+    // successor claim inside this transaction.
+    pointerPolicy: { kind: "RESTORATION", source: args.source },
+  });
+
+  // ⚠️ ONE POSTCONDITION, OVER ALL FOUR FACTS.
+  //
+  //   the source is live for THIS vehicle
+  //   the successor claim is attached
+  //   the source pointer names that claim
+  //   the root authority is OPEN
+  //
+  // Re-READ rather than assumed from the writes above: the point of a
+  // postcondition is that it observes the state, not the intent that produced
+  // it.
+  //
+  // ⚠️ IT THROWS, AND THE THROW IS THE ROLLBACK (SCRUM-208 c16000).
+  //
+  // This previously RETURNED an `INCONSISTENT` value, justified by the claim
+  // that the deferred caller sits inside `drainEntries`' per-row `try`/`catch`
+  // so a throw would be absorbed and commit anyway. That justification
+  // described a topology that no longer exists, and it was verified line by
+  // line at c15999: the deferred caller is `performAuthoritySettlement`, its
+  // OWN registered mutation, with no enclosing catch between its handler and
+  // this call; the synchronous caller is the cancellation spine, which has
+  // none either. `drainEntries`' catch wraps posting and reversing, not
+  // settlement.
+  //
+  // Reporting instead of raising is what let a half-restoration commit: the
+  // successor root and claim are ALREADY WRITTEN by the time this runs, so a
+  // returned value leaves them in the database beside a truthful audit row.
+  // Truthful, and still contradictory ownership. An uncaught throw un-does all
+  // of it.
+  //
+  // ⚠️ THIS IS NOT A LICENCE TO WRITE FIRST AND CHECK LATER. A KNOWN
+  // contradiction is still decided BEFORE the first write and returned as a
+  // typed business outcome — see the pre-flight in
+  // `restoreAuthorityAfterReversal`. Rollback protects the DATA; the
+  // pre-flight protects the AUDIT RECORD. What reaches here is by definition
+  // unanticipated, and an unanticipated invariant failure must not commit.
+  const after = await resolveCanonicalBinding(ctx, args.decision, {
+    source: args.source,
+    vehicleId: args.vehicleId,
+  });
+  if (!after.ok) {
+    throw new ConvexError(
+      `The restored deal could not be re-read after it was written: ${after.reason}`
+    );
+  }
+  if (
+    !after.binding.live ||
+    String(after.binding.claim._id) !== String(claimId) ||
+    String(after.binding.root._id) !== String(rootId) ||
+    after.binding.root.status !== "OPEN"
+  ) {
+    throw new ConvexError(
+      !after.binding.live
+        ? "the source record is not live after being restored"
+        : String(after.binding.claim._id) !== String(claimId)
+          ? "the source record does not name the episode this restoration opened"
+          : String(after.binding.root._id) !== String(rootId)
+            ? "the episode does not belong to the deal this restoration opened"
+            : "the restored deal is not open"
+    );
+  }
+
+  return {
+    decision: "RESTORED",
+    rootId,
+    claimId,
+    opened: resolved.decision === "JOIN_LINEAGE" ? "JOINED" : "SUCCESSOR",
+  };
 }
 
 /**
@@ -1034,12 +1848,12 @@ export async function assertAcquirable(
  * PENDING_DOCS) and is retained because the existing guard retained it: a DRAFT
  * row from before this model is conservatively treated as holding the car.
  */
-export const IN_FLIGHT_FINANCE_STATUSES: readonly string[] = [
-  "DRAFT",
-  "PENDING_DOCS",
-  "UNDER_REVIEW",
-  "APPROVED",
-];
+/**
+ * Re-exported so existing importers keep working, but DEFINED ONCE in
+ * `utils/financeStatuses.ts` — the source module needs the same list and a
+ * second copy of it is the distributed-inference defect, not a convenience.
+ */
+export { IN_FLIGHT_FINANCE_STATUSES } from "./utils/financeStatuses";
 
 /**
  * IS ANY INDEPENDENT BASIS STILL HOLDING THIS CAR?
@@ -1076,27 +1890,68 @@ export async function hasLiveCommitmentBasis(
      * guard never fires.
      */
     excludeKinds?: ReadonlyArray<"DEPOSIT" | "RESERVATION" | "FINANCE">;
+    /**
+     * SCRUM-208 c15808 — READ THE CANONICAL RANGES INSTEAD OF THE LEGACY ONES.
+     *
+     * ⚠️ A CANONICAL AUTHORITY WRITE MAY NOT REST ON THE DEFECTIVE READER.
+     * `hasActiveDepositHold` delegates to `getActiveDepositHolds`, which
+     * `.take(50)`s an index range and post-filters it — so fifty stale
+     * `holdActive: true` rows on one car hide a live hold behind them. That
+     * false negative is reproduced directly in `commitmentCutover.test.ts`
+     * against this very reader. Reaching it from `releaseRootIfNoLiveBasis`
+     * means an authority that answers "nothing holds this car" and RELEASES a
+     * root while a rival's paid deposit is live underneath.
+     *
+     * When a canonical decision is supplied every deposit and reservation
+     * basis is read through the exact ranges, where every row in range is by
+     * construction live. Absent, the legacy readers stand unchanged — a legacy
+     * org has no canonical ranges to read and must keep working exactly as it
+     * did.
+     */
+    decision?: AuthorityDecisionContext;
   }
 ): Promise<boolean> {
   const skip = (kind: "DEPOSIT" | "RESERVATION" | "FINANCE") =>
     args.excludeKinds !== undefined && args.excludeKinds.includes(kind);
 
+  // ⚠️ ONE CLOCK, OR NONE. A decision carrying a different instant from the one
+  // this call was told to judge against would silently answer a second
+  // question. That is a programming fault, not a business condition.
+  const canonical =
+    args.decision !== undefined && args.decision.authorityVersion === "V1"
+      ? args.decision
+      : undefined;
+  if (canonical && canonical.now !== args.decisionNow) {
+    throw new Error(
+      `hasLiveCommitmentBasis: decision clock ${canonical.now} disagrees with decisionNow ${args.decisionNow}`
+    );
+  }
+
   // DEPOSIT — the product's own definition of a deposit hold, not a second
   // opinion about it. On a multi-vehicle quote a row holds a car only while
   // that car's own share is live, which `getActiveDepositHolds` already knows.
-  if (!skip("DEPOSIT") && (await hasActiveDepositHold(ctx, args.vehicleId))) return true;
+  if (!skip("DEPOSIT")) {
+    const held = canonical
+      ? await hasCanonicalDepositHold(ctx, canonical, args.vehicleId)
+      : await hasActiveDepositHold(ctx, args.vehicleId);
+    if (held) return true;
+  }
 
   // RESERVATION — the certified predicate, with the decision's own clock. An
   // ACTIVE row past its expiry is NOT live, merely unswept: the sweep's own
   // query is the spec, and `.take(100)` means a backlog can stretch that window
   // well past the cron.
   if (!skip("RESERVATION")) {
-    for await (const reservation of ctx.db
-      .query("vehicleReservations")
-      .withIndex("by_org_vehicle_status", (q) =>
-        q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId).eq("status", "ACTIVE")
-      )) {
-      if (reservationIsLive(reservation, args.decisionNow)) return true;
+    if (canonical) {
+      if (await hasCanonicalReservationHold(ctx, canonical, args.vehicleId)) return true;
+    } else {
+      for await (const reservation of ctx.db
+        .query("vehicleReservations")
+        .withIndex("by_org_vehicle_status", (q) =>
+          q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId).eq("status", "ACTIVE")
+        )) {
+        if (reservationIsLive(reservation, args.decisionNow)) return true;
+      }
     }
   }
 
@@ -1106,7 +1961,7 @@ export async function hasLiveCommitmentBasis(
       .query("financeApplications")
       .withIndex("by_vehicle", (q) => q.eq("vehicleId", args.vehicleId))) {
       if (application.orgId !== args.orgId) continue;
-      if (IN_FLIGHT_FINANCE_STATUSES.includes(application.status)) return true;
+      if (FINANCE_IN_FLIGHT.includes(application.status)) return true;
     }
   }
 
@@ -1193,6 +2048,564 @@ export async function consumeRootForSale(
  *
  * A release is not a sale: `consumedBySaleId` is never written here.
  */
+/**
+ * SCRUM-208 — WHAT THE VEHICLE AUTHORITY DID AFTER A REVERSAL POSTED.
+ *
+ * ⚠️ ONCE THE JOURNAL EXISTS, AN AUTHORITY OUTCOME IS NOT AN ACCOUNTING
+ * FAILURE. The money has already moved back. A fail-closed throw at this point
+ * lands in the outbox drain's generic `catch` and becomes `markEntryFailed`
+ * with a bare `lastError` — indistinguishable from a transient posting error,
+ * even though it is expected business behaviour that a human must act on.
+ *
+ * So this never throws. It returns which of the three things happened, and the
+ * caller records it durably.
+ */
+export type DeferredAuthorityOutcome =
+  /**
+   * The customer's commitment is LIVE again, and it was verified so before
+   * this value was returned: a successor episode exists, its root is OPEN, the
+   * source row is live, the maintained pointer names that episode, and the
+   * vehicle projection agrees.
+   *
+   * ⚠️ SCRUM-208 c15808 — THIS LITERAL USED TO MEAN THREE DIFFERENT THINGS.
+   * It was returned for "the car was freed", for "the car was already free",
+   * and for "nothing needed doing" — none of which is a restoration, and all
+   * of which were being written into `pendingAccountingEvents.authorityOutcome`
+   * as if a customer's deal had come back. An audit field that says RESTORED
+   * where nothing was restored is worse than no field: the pre-Phase-3 state
+   * was merely silent, and this asserted something false. RESTORED now means
+   * restored, and the other cases have their own names below.
+   */
+  | {
+      outcome: "RESTORED";
+      rootId: Id<"commitmentRoots">;
+      claimId: Id<"vehicleCommitmentClaims">;
+    }
+  /**
+   * There was nothing to restore, and that is a lawful answer — the money had
+   * already left the business, the deal never ended for the reason given, the
+   * car has since been sold, or the source predates the canonical model.
+   *
+   * The accounting reversal stands either way. This is not a failure; it is
+   * the honest name for "the authority did not need to act".
+   */
+  | { outcome: "ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS"; detail: string }
+  /**
+   * The organization is not on the canonical authority, so no canonical
+   * restoration could be attempted.
+   *
+   * ⚠️ THE MAJORITY CASE, AND IT MUST NOT MASQUERADE AS EITHER NEIGHBOUR.
+   * Activation is per organization and SCRUM-201 owns the cutover, so most
+   * orgs will report this for as long as that is true. Reporting it as
+   * RESTORED would claim work nobody did; reporting it as NO_RESTORABLE_BASIS
+   * would claim the records were examined and found wanting, when they were
+   * never examined at all.
+   */
+  | { outcome: "AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE"; detail: string }
+  /**
+   * Another basis legitimately still holds the car — a finance application
+   * mid-flight, a live reservation, a rival deal. The reversal stands and the
+   * vehicle does not move. **A rival never has its vehicle taken.**
+   */
+  | { outcome: "ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL"; rootId: Id<"commitmentRoots"> }
+  /**
+   * Two OPEN roots on one car. Refusing to choose stays correct, but it must
+   * be a DURABLE, findable repair condition — not a retry that will fail
+   * identically forever with a message nobody can distinguish.
+   */
+  | { outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS"; detail: string }
+  /**
+   * The canonical records contradict each other, and it was found BEFORE any
+   * authority write was made.
+   *
+   * ⚠️ PRE-WRITE ONLY (SCRUM-208 c16000). This is a diagnosis a person can act
+   * on, reached by the pre-flight while nothing has been written, so reporting
+   * it durably is exactly right. It is ranked above every other outcome
+   * because it is the only one saying the data itself needs a person.
+   *
+   * ⚠️ IT NO LONGER CARRIES POST-WRITE FAILURES, AND MUST NOT BE MADE TO. Once
+   * the successor root and claim exist, a broken invariant throws instead, so
+   * the transaction rolls back and there is no state left to describe. Routing
+   * that case back through this outcome would re-introduce exactly the
+   * committed half-restoration that real-Convex evidence caught on 249bea1cb.
+   */
+  | { outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT"; detail: string }
+  /**
+   * The settlement kept failing for a TECHNICAL reason and the execution
+   * budget is spent.
+   *
+   * ⚠️ SCRUM-208 c15825 — THIS IS NOT `BLOCKED_INCONSISTENT`, AND CONFLATING
+   * THEM WAS A FALSE AUDIT RECORD. "The canonical records contradict each
+   * other" is a DIAGNOSIS: a person knows what to repair. "Five settlement
+   * executions failed unexpectedly" is an ABSENCE of diagnosis: nobody knows
+   * what the authority state is, only that we stopped trying. Both need a
+   * human, and they need different humans doing different things.
+   *
+   * Never produced by a settlement branch — settlement returns typed answers
+   * and rolls back on anything else. Produced only by the observer, from
+   * counted ACTUAL failed executions.
+   */
+  | { outcome: "ACCOUNTING_REVERSED_AUTHORITY_RETRY_EXHAUSTED"; detail: string };
+
+/** The detail string an outcome carries, when it carries one. */
+export function authorityOutcomeDetail(outcome: DeferredAuthorityOutcome): string | undefined {
+  return "detail" in outcome ? outcome.detail : undefined;
+}
+
+/**
+ * Which outcome must survive when one cancellation settles several cars.
+ *
+ * A condition needing human repair outranks one that merely reports the car is
+ * still legitimately held, which outranks "nothing was examined", which
+ * outranks "examined, nothing to do", which outranks a clean restoration.
+ *
+ * Defined beside the taxonomy rather than in the outbox, because BOTH
+ * cancellation paths rank outcomes and a second copy of this order is a second
+ * opinion about which condition is worse.
+ */
+export const AUTHORITY_SEVERITY: Record<DeferredAuthorityOutcome["outcome"], number> = {
+  RESTORED: 0,
+  // Examined, and there was lawfully nothing to put back.
+  ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS: 1,
+  // NOT examined at all — the organization is not on the canonical authority.
+  // Ranked above "nothing to restore" because the two are different claims:
+  // one says the records were read, the other says they were not.
+  AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE: 2,
+  ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL: 3,
+  ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS: 4,
+  // Above ambiguity: two open roots is a decision a human must make, but
+  // contradictory records are a database a human must repair.
+  ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT: 5,
+  // ⚠️ ABOVE EVEN A CONTRADICTION, AND THE RANKING IS DELIBERATE. Every
+  // outcome below this line is CHARACTERIZED: something read the records and
+  // can say what is wrong with them. This one says only that the settlement
+  // stopped executing successfully and nobody knows what the authority state
+  // is. An unknown must never be buried by a clean sibling in the worst-of
+  // summary — which is the only thing this ordering decides.
+  ACCOUNTING_REVERSED_AUTHORITY_RETRY_EXHAUSTED: 6,
+};
+
+/**
+ * The ONE outcome that must be recorded for a set of them.
+ *
+ * ⚠️ THE ORDER ROWS ARRIVE IN MUST NOT MATTER. Recording a clean restoration
+ * over a blocked one because the clean car happened to be settled last is how
+ * a repair condition disappears.
+ */
+export function worstAuthorityOutcome(
+  outcomes: ReadonlyArray<DeferredAuthorityOutcome>
+): DeferredAuthorityOutcome | null {
+  let worst: DeferredAuthorityOutcome | null = null;
+  for (const outcome of outcomes) {
+    if (!worst || AUTHORITY_SEVERITY[outcome.outcome] > AUTHORITY_SEVERITY[worst.outcome]) {
+      worst = outcome;
+    }
+  }
+  return worst;
+}
+
+/**
+ * Settle the vehicle authority after a reversal has posted. **Never throws.**
+ *
+ * Uses the certified release machinery rather than a second opinion about
+ * liveness: `releaseRootIfNoLiveBasis` already knows that a deposit, a
+ * reservation and an in-flight finance application each hold a car, and that
+ * releasing one basis does not release the others.
+ */
+export async function settleAuthorityAfterReversal(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    /** ONE clock reading for the whole decision. */
+    decisionNow: number;
+    reason: string;
+    /** Canonical orgs read the exact ranges. See `hasLiveCommitmentBasis`. */
+    decision?: AuthorityDecisionContext;
+  }
+): Promise<DeferredAuthorityOutcome> {
+  const before = await resolveOwnership(ctx, args.orgId, args.vehicleId);
+  if (before.kind === "AMBIGUOUS") {
+    // ⚠️ LEFT BYTE-IDENTICAL FOR A HUMAN TO REPAIR. Choosing between two OPEN
+    // roots is the failure this authority exists to prevent, so it declines —
+    // loudly and durably, rather than as a retryable error.
+    return {
+      outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS",
+      detail: `${before.roots.length} open commitment roots on this vehicle`,
+    };
+  }
+  // ⚠️ FREE IS NOT RESTORED. Nothing holds this car and nothing here put
+  // anything back — see the taxonomy note on RESTORED.
+  if (before.kind === "FREE") {
+    return {
+      outcome: "ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS",
+      detail: "no commitment root holds this vehicle",
+    };
+  }
+
+  await releaseRootIfNoLiveBasis(ctx, {
+    orgId: args.orgId,
+    vehicleId: args.vehicleId,
+    reason: args.reason,
+    decisionNow: args.decisionNow,
+    ...(args.decision ? { decision: args.decision } : {}),
+  });
+
+  const after = await resolveOwnership(ctx, args.orgId, args.vehicleId);
+  if (after.kind === "FREE") {
+    return {
+      outcome: "ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS",
+      detail: "the deal was closed because nothing still held this vehicle",
+    };
+  }
+  if (after.kind === "AMBIGUOUS") {
+    return {
+      outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS",
+      detail: `${after.roots.length} open commitment roots on this vehicle`,
+    };
+  }
+  // Still held, and legitimately so: something else on this car is still live.
+  return { outcome: "ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL", rootId: after.root._id };
+}
+
+/**
+ * SCRUM-208 c15808 — THE PRODUCTION RESTORATION SPINE. One entry point, used
+ * by BOTH cancellation paths.
+ *
+ * The lifecycle the owner specified, end to end, through real business doors:
+ *
+ *   real deposit creation      → representation class + current pointer written
+ *   real sale completion       → the ROOT is consumed by that exact sale
+ *   real cancellation/reversal → the source row becomes live again
+ *   here                       → successor claim + OPEN root + moved pointer
+ *                                + a truthful vehicle projection
+ *
+ * ## What commits, and what does not
+ *
+ * ⚠️ THIS PARAGRAPH HAS BEEN WRONG TWICE, IN OPPOSITE DIRECTIONS. Read it as a
+ * statement about the CALLER's transaction, never as a safety guarantee of its
+ * own — nothing tests prose, which is exactly how it went stale both times.
+ *
+ * Round one it claimed "all of it, or none of it" when the deferred seam ran
+ * inside `drainEntries`' per-row `try`/`catch`, so a throw committed every
+ * write already made. I rewrote it for that. Round three my OWN structural
+ * split falsified the correction: the rewrite still says a throw un-does
+ * nothing at the deferred seam, and that stopped being true the moment
+ * settlement moved into its own registered mutation.
+ *
+ * What is true at each of the two call sites, as of SCRUM-208 c15825:
+ *
+ *  - **Deferred** — `accountingOutbox.performAuthoritySettlement` (Tx C) is a
+ *    registered mutation with nothing catching inside it. A throw aborts THAT
+ *    transaction: no successor root, no claim, no moved pointer, no re-held
+ *    source, no vehicle projection. The accounting reversal committed in an
+ *    earlier transaction and is untouched. The observer sees the failed
+ *    execution and the work retries under a bounded budget.
+ *  - **Synchronous** — `saleCancellation.reinstateAppliedDeposits` runs inside
+ *    the cancellation mutation with no enclosing catch, so a throw aborts the
+ *    whole cancellation. Also a real rollback boundary.
+ *
+ * ⚠️ THAT IS NOT A LICENCE TO WRITE FIRST AND THROW LATER. Pre-flighting every
+ * throwing read stays the design, for a reason a rollback does not address: a
+ * KNOWN contradiction is an expected terminal business answer, and routing it
+ * through a throw spends the technical retry budget and finally reports "could
+ * not be settled after repeated attempts" — a sentence that names nothing the
+ * repairer can act on. Rollback protects the DATA; the pre-flight protects the
+ * AUDIT RECORD. Both are required, and `probeCanonicalHold` is now shared by
+ * the DIRECT and SLICE paths so neither can classify a contradiction late.
+ *
+ * `restoreCommitment`'s postcondition RAISES, because both boundaries above
+ * are real — see the note on `RestorationOutcome`. A post-write invariant
+ * failure is never a returned value.
+ *
+ * The old contract — an authority result is not an accounting failure — is
+ * preserved for every BUSINESS answer: a legacy org, a rival, ambiguity,
+ * nothing to restore and a refused binding are all typed values, never thrown.
+ */
+export async function restoreAuthorityAfterReversal(
+  ctx: MutationCtx,
+  args: {
+    /** ONE clock reading and ONE actor for the whole run. */
+    run: AuthorityRunContext;
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    /** The exact source row — a sliced deposit names its hold row. */
+    source: SourceRef;
+    /** The exact sale whose cancellation is being applied. */
+    saleId: Id<"sales">;
+    /** Who the restored episode is recorded as having been opened by. */
+    createdBy: Id<"users">;
+    /**
+     * Make the source row live again — the deferred half of a cancellation
+     * that deliberately left the hold down while the reversing journal was
+     * only queued.
+     *
+     * ⚠️ RUN BETWEEN THE DECISION AND THE EXECUTION, NEVER BEFORE THE
+     * DECISION. The deferred caller used to reinstate the hold first and take
+     * its OWN `resolveOwnership` reading to decide whether a rival held the
+     * car. That second opinion cannot tell a rival's root from THIS deal's own
+     * restored one — so on a deal paid in two instalments, the first
+     * instalment restored the deal and the second was then reported as a rival
+     * OF ITS OWN CUSTOMER'S root, leaving that money held with no hold and no
+     * episode. The resolver already answers this question, and it answers it
+     * correctly: JOIN_LINEAGE.
+     *
+     * Omitted by the synchronous caller, whose money-side reopening has to
+     * happen whatever the authority decides.
+     */
+    makeSourceLive?: (ctx: MutationCtx) => Promise<void>;
+  }
+): Promise<DeferredAuthorityOutcome> {
+  const context = await tryDecisionContext(ctx, args.run, args.orgId);
+  if (context.kind === "WITHHELD") {
+    return { outcome: "AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE", detail: context.reason };
+  }
+  const { decision } = context;
+  if (decision.authorityVersion !== "V1") {
+    // ⚠️ RETURNED, NEVER THROWN, AND NEVER FALLEN BACK FROM. Most
+    // organizations are legacy today. Throwing would abort a cancellation
+    // whose accounting is already correct; falling back to the legacy readers
+    // would answer a canonical question with data the canonical model has not
+    // been established over, and record it as canonical.
+    return {
+      outcome: "AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE",
+      detail: "this dealership is not on the canonical commitment authority",
+    };
+  }
+
+  // ⚠️ CHECKED BEFORE ANY WRITE, so the projection postcondition below cannot
+  // be unsatisfiable. `syncVehicleHoldStatus` deliberately declines to touch a
+  // SOLD or ARCHIVED car, so restoring a commitment onto one would leave a
+  // projection that can never be made truthful and an outbox entry that
+  // retries forever. A car sold to somebody else is a business answer.
+  const vehicle = await ctx.db.get(args.vehicleId);
+  if (!vehicle || vehicle.isDeleted === true || vehicle.orgId !== args.orgId) {
+    return {
+      outcome: "ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS",
+      detail: "that vehicle record is no longer available in this dealership",
+    };
+  }
+  if (vehicle.status === "SOLD" || vehicle.status === "ARCHIVED") {
+    return {
+      outcome: "ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS",
+      detail: `the vehicle is ${vehicle.status}`,
+    };
+  }
+
+  // ⚠️ PRE-FLIGHT — EVERY THROWING READ, BEFORE THE FIRST WRITE.
+  //
+  // `hasCanonicalDepositHold` REFUSES rather than filters when a row
+  // contradicts the range it was found in — a `holdActive: true` deposit that
+  // is VOIDED or deleted — and refusing means throwing. Reaching that after
+  // the successor root and claim are written is precisely the half-restoration
+  // this design must not commit, and a throw does not undo it. So the reader
+  // is exercised HERE, where catching costs nothing because nothing has been
+  // written yet, and a contradiction becomes a durable outcome instead.
+  const probe = await probeCanonicalHold(ctx, decision, args.vehicleId);
+  if (!probe.ok) {
+    return { outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT", detail: probe.reason };
+  }
+
+  // ⚠️ DECIDE BEFORE MAKING THE SOURCE LIVE, AND LET THE RESOLVER OWN THE
+  // JUDGMENT. It writes nothing, and it is the only thing that can tell a
+  // rival's root apart from a later generation of this deal's own lineage.
+  const decided = await resolveRestorationDecision(ctx, {
+    decision,
+    source: args.source,
+    vehicleId: args.vehicleId,
+    intent: { kind: "SALE_CANCELLED", saleId: args.saleId },
+  });
+  switch (decided.decision) {
+    case "RIVAL":
+      return { outcome: "ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL", rootId: decided.rivalRootId };
+    case "AMBIGUOUS":
+      return {
+        outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS",
+        detail: `${decided.openRootCount} open commitment roots on this vehicle`,
+      };
+    case "REFUSE":
+      return { outcome: "ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS", detail: decided.reason };
+    case "ALREADY_LIVE":
+    case "JOIN_LINEAGE":
+    case "OPEN_SUCCESSOR":
+      break;
+  }
+
+  // The decision says this deal comes back. NOW the money may hold its car
+  // again — inside the same transaction as the episode that justifies it.
+  if (decided.decision !== "ALREADY_LIVE" && args.makeSourceLive) {
+    await args.makeSourceLive(ctx);
+
+    // ⚠️ AND THE REFUSAL IS READ. A GUARD NOBODY READS IS NOT A GUARD.
+    //
+    // `makeSourceLive` returns `void`, so a writer that declined — a deleted
+    // row, a sliced representation, another dealership's deposit — used to be
+    // indistinguishable from one that succeeded. Execution carried on and
+    // `restoreCommitment` opened a successor root, attached a claim and moved
+    // the source pointer for a source that is not live; the postcondition
+    // reported INCONSISTENT only AFTER all three writes were committed. Found
+    // by Codex against 641ead8cb, in the fix that closed the round before it.
+    //
+    // ⚠️ THIS CANNOT BE HOISTED INTO THE RESOLVER. At decision time the source
+    // is legitimately NOT live: a deferred cancellation deliberately leaves the
+    // hold down while the reversal sits in the outbox, and `makeSourceLive` is
+    // the step that changes that. Liveness is only a meaningful question once
+    // the callback has run, so the check belongs here and nowhere earlier.
+    //
+    // The binding is re-read rather than a boolean returned from the writer,
+    // because a boolean would only carry that one writer's opinion. This reads
+    // the same state `restoreCommitment` is about to depend on — pointer,
+    // evidence, lineage and liveness together — while nothing has been written.
+    //
+    // ⚠️ AND IT CANNOT THROW HERE, WHICH IS WHY IT IS SAFE TO CALL AFTER A
+    // WRITE. `resolveCanonicalBinding` returns `{ok:false}` for every
+    // structural refusal, and its one throwing path —
+    // `requireCanonicalAuthority` — fires only when
+    // `decision.authorityVersion !== "V1"`. That was already proven above: the
+    // function returned AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE for a
+    // non-canonical org before the first write, `decision` is a `const` and is
+    // never reassigned, and `makeSourceLive` touches only `deposits`. The
+    // invariant is real but implicit, so it is written down here rather than
+    // left for the next reader to re-derive under time pressure. Raised by
+    // Sonnet MAX against e3850d972.
+    const relive = await resolveCanonicalBinding(ctx, decision, {
+      source: args.source,
+      vehicleId: args.vehicleId,
+    });
+    if (!relive.ok || !relive.binding.live) {
+      return {
+        outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT",
+        detail: relive.ok
+          ? "this source could not be made live again, so nothing was restored"
+          : relive.reason,
+      };
+    }
+  }
+
+  const restored =
+    decided.decision === "ALREADY_LIVE"
+      ? ({
+          decision: "RESTORED" as const,
+          rootId: decided.rootId,
+          claimId: decided.claimId,
+          opened: "JOINED" as const,
+        })
+      : await restoreCommitment(ctx, {
+          decision,
+          source: args.source,
+          vehicleId: args.vehicleId,
+          intent: { kind: "SALE_CANCELLED", saleId: args.saleId },
+          createdBy: args.createdBy,
+        });
+
+  // ⚠️ RE-RESOLVED, NOT ASSUMED. The decision above wrote nothing, so the
+  // execution re-derives it from state that `makeSourceLive` may have changed.
+  // These branches are therefore reachable even though the pre-check passed,
+  // and each is reported rather than raised.
+  switch (restored.decision) {
+    case "RIVAL":
+      return { outcome: "ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL", rootId: restored.rivalRootId };
+    case "AMBIGUOUS":
+      return {
+        outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS",
+        detail: `${restored.openRootCount} open commitment roots on this vehicle`,
+      };
+    case "REFUSE":
+      return { outcome: "ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS", detail: restored.reason };
+    // ⚠️ THERE IS NO `INCONSISTENT` CASE, AND THERE CANNOT BE ONE. A post-write
+    // invariant failure now throws out of `restoreCommitment` and rolls this
+    // whole mutation back, so there is no value left here to translate into an
+    // outcome. Re-adding a case would not compile: the variant is gone from
+    // `RestorationOutcome` (SCRUM-208 c16000).
+    case "ALREADY_LIVE":
+    case "RESTORED":
+      break;
+  }
+
+  // ⚠️ THE PROJECTION IS PART OF THE SAME OUTCOME, AND IT IS COMPUTED FROM THE
+  // CANONICAL RANGES. Left to its own readers `syncVehicleHoldStatus` would
+  // consult `getActiveDepositHolds`, whose capped post-filtered read can answer
+  // "nothing holds this car" moments after the authority proved somebody does —
+  // leaving the restored car advertised as available.
+  const after = await probeCanonicalHold(ctx, decision, args.vehicleId);
+  if (!after.ok) {
+    return { outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT", detail: after.reason };
+  }
+  if (!after.held) {
+    return {
+      outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT",
+      detail: "the deal was restored but no hold record shows this vehicle held",
+    };
+  }
+  await syncVehicleHoldStatus(ctx, args.vehicleId, args.createdBy, { hasHold: true });
+
+  const projected = await ctx.db.get(args.vehicleId);
+  // Re-READ, not assumed from the call above. `resolveHoldTargetStatus` is the
+  // one definition of what a held car's status should be, so asking it to name
+  // a remaining change is exactly the assertion "nothing is left to do".
+  const remaining = projected ? resolveHoldTargetStatus(projected, true) : null;
+  if (!projected || (remaining !== null && remaining !== projected.status)) {
+    return {
+      outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT",
+      detail: "the vehicle's advertised status could not be brought in line with its restored deal",
+    };
+  }
+
+  return { outcome: "RESTORED", rootId: restored.rootId, claimId: restored.claimId };
+}
+
+/**
+ * Ask the canonical ranges whether anything holds this car, WITHOUT letting a
+ * contradiction escape as a throw.
+ *
+ * ⚠️ THIS CATCH IS SAFE ONLY BECAUSE OF WHERE IT IS CALLED. Catching after a
+ * write would commit a half-restoration and report it as a clean business
+ * outcome, which is the whole defect this round exists to close. Every call
+ * site is either before any write, or after the writes are already
+ * unrecoverable and the only remaining question is what to record.
+ *
+ * ⚠️ EXPORTED BECAUSE BOTH SOURCE REPRESENTATIONS NEED IT, AND ONLY ONE HAD IT
+ * (SCRUM-208 c15825). The DIRECT path reached this through
+ * `restoreAuthorityAfterReversal`; the SLICE path went straight to
+ * `settleAuthorityAfterReversal` with no pre-flight at all. So a known
+ * canonical contradiction on a slice THREW, rolled its settlement back, spent
+ * a technical retry, and after the budget ran out surfaced as a generic "could
+ * not be settled after repeated attempts" — the one sentence that tells the
+ * repairer nothing. A contradiction is an EXPECTED terminal answer for both
+ * representations and must never enter the technical retry channel.
+ */
+export async function probeCanonicalHold(
+  ctx: MutationCtx,
+  decision: AuthorityDecisionContext,
+  vehicleId: Id<"vehicles">
+): Promise<{ ok: true; held: boolean } | { ok: false; reason: string }> {
+  try {
+    const held =
+      (await hasCanonicalDepositHold(ctx, decision, vehicleId)) ||
+      (await hasCanonicalReservationHold(ctx, decision, vehicleId));
+    return { ok: true, held };
+  } catch (error) {
+    // A ConvexError from `refuseContradiction` is curated: it is written for
+    // the person who has to repair the records, and it names only their own
+    // data. That one is safe to persist and is the whole value of the outcome.
+    if (error instanceof ConvexError) {
+      return { ok: false, reason: String(error.data ?? error.message) };
+    }
+    // ⚠️ ANYTHING ELSE IS LOGGED, NEVER PERSISTED. This reason becomes
+    // `authorityOutcomeDetail`, and `accountingOutbox.listPending` returns the
+    // whole row to any tenant user holding VIEW_FINANCE — so recording a raw
+    // technical message here would put backend internals in front of a
+    // dealership. An unexpected error is also not a diagnosis: "records
+    // disagree" is what the operator can act on, and the engineer gets the
+    // real error from the server log.
+    console.error("[canonical-hold-probe] unexpected failure", { vehicleId, error });
+    return {
+      ok: false,
+      reason: "this vehicle's hold records could not be read, so a person must review them",
+    };
+  }
+}
+
 export async function releaseRootIfNoLiveBasis(
   ctx: MutationCtx,
   args: {
@@ -1200,6 +2613,8 @@ export async function releaseRootIfNoLiveBasis(
     vehicleId: Id<"vehicles">;
     reason: string;
     decisionNow: number;
+    /** Canonical orgs read the exact ranges. See `hasLiveCommitmentBasis`. */
+    decision?: AuthorityDecisionContext;
   }
 ): Promise<void> {
   const root = await openRootForFinalization(ctx, args.orgId, args.vehicleId);
@@ -1210,6 +2625,7 @@ export async function releaseRootIfNoLiveBasis(
       orgId: args.orgId,
       vehicleId: args.vehicleId,
       decisionNow: args.decisionNow,
+      ...(args.decision ? { decision: args.decision } : {}),
     })
   ) {
     return;
