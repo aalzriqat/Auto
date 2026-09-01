@@ -6522,3 +6522,486 @@ describe("deposit authority — whose money, and was it actually applied (c16213
     ).rejects.toThrow(/already been applied/i);
   });
 });
+
+/**
+ * The closing matrix c16216 requires before this branch may be frozen.
+ *
+ * Each of these is a property somebody could break without any other test in
+ * this file going red: the deposit's cash banked twice, a sibling car's slice
+ * eaten, a cancellation reversing once too often or not at all, a replay
+ * opening a second receivable, or a refund that quietly leaves the liability
+ * open. They are the difference between a suite that describes the happy path
+ * and one that pins the money.
+ */
+describe("the closing matrix c16216 requires", () => {
+  test("the deposit is banked once, at receipt, and finalization never touches cash again", async () => {
+    const s = await seedDealership("c16216cash");
+
+    // c16216 §1. The deposit is money ALREADY in the drawer — `ruleDepositReceived`
+    // debited cash and credited the liability when it was taken. Recognising the
+    // sale must release that liability, never ask for the cash a second time.
+    // Snapshotted mid-deal because the distinction is a DELTA: a finalization
+    // that re-banked the deposit would leave the same closing cash balance as one
+    // that refused it, if the receipt were the only thing measured.
+    let atHandover: Record<string, number> | undefined;
+    const { applicationId } = await runDeal(s, {
+      route: "THROUGH_DEALERSHIP",
+      deposit: 3_000,
+      downPayment: 3_000,
+      beforeHandover: async () => {
+        atHandover = await ledgerBySystemKey(s);
+      },
+    });
+
+    // Receipt: cash in, liability up. Before the sale exists.
+    expect(atHandover![SYSTEM_KEYS.CASH_ON_HAND] ?? 0).toBe(3_000 * SCALE);
+    expect(atHandover![SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(-3_000 * SCALE);
+
+    const after = await ledgerBySystemKey(s);
+
+    // Finalization moved no cash at all, by any tender.
+    for (const key of [
+      SYSTEM_KEYS.CASH_ON_HAND,
+      SYSTEM_KEYS.BANK_ACCOUNT,
+      SYSTEM_KEYS.CHEQUES_IN_HAND,
+    ]) {
+      expect((after[key] ?? 0) - (atHandover![key] ?? 0)).toBe(0);
+    }
+
+    // What it did instead: released the liability, exactly to zero.
+    expect(after[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(0);
+
+    // And asked the company for the remainder rather than the whole invoice.
+    const receivable = await financeReceivableOf(s, applicationId);
+    expect(receivable?.originalAmountMinor).toBe((VEHICLE_PRICE - 3_000) * SCALE);
+  });
+
+  test("a multi-vehicle quote cannot become a financed deal at all", async () => {
+    const s = await seedDealership("c16216multi");
+
+    // c16216 §2, door one. This is the guard the deposit slice actually rests
+    // on: `deposit.vehicleId` is the quote's FIRST line item and nothing more,
+    // so reading it as an allocation would give car one the whole عربون and
+    // leave its siblings looking undeposited.
+    const secondVehicleId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId,
+        vin: "VINFINmulti2",
+        make: "Kia",
+        model: "Cerato",
+        year: 2024,
+        mileage: 12,
+        color: "White",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        sellingPrice: VEHICLE_PRICE,
+        status: "AVAILABLE",
+        sourceType: "SOURCED" as const,
+        sourcedFromName: "Amman Importer Co",
+        sourceCost: SUPPLIER_ENTITLEMENT,
+      })
+    );
+    const quoteId = await s.asUser.mutation(api.quotes.saveQuote, {
+      orgId: s.orgId,
+      customerId: s.customerId,
+      vehicleId: s.vehicleId,
+      vehiclePrice: VEHICLE_PRICE,
+      downPayment: 0,
+      termMonths: 48,
+      mode: "CONFIGURED_FINANCE_COMPANY" as const,
+      companyId: s.companyId,
+      totalFinancedAmount: VEHICLE_PRICE,
+      vehicleItems: [
+        { vehicleId: s.vehicleId, unitPrice: VEHICLE_PRICE },
+        { vehicleId: secondVehicleId, unitPrice: VEHICLE_PRICE },
+      ],
+    });
+
+    await expect(
+      s.asUser.mutation(api.applications.createFromQuote, { orgId: s.orgId, quoteId })
+    ).rejects.toThrow(/exactly one vehicle/i);
+  });
+
+  test("and if that door were opened, the settlement plan still refuses to guess the slice", async () => {
+    const s = await seedDealership("c16216multi2");
+
+    // The guard above lives in `createFromQuote`, another file, and is described
+    // by its own comment as defensive rather than structural. If it were relaxed,
+    // the first car would take the entire deposit as consideration and the entry
+    // would still BALANCE — `N` absorbs the difference — so the dealership would
+    // under-bill the financier by the other cars' deposits with nothing going red.
+    // The settlement plan therefore establishes single-vehicle-ness itself.
+    const secondVehicleId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId,
+        vin: "VINFINmulti2b",
+        make: "Kia",
+        model: "Cerato",
+        year: 2024,
+        mileage: 12,
+        color: "White",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        sellingPrice: VEHICLE_PRICE,
+        status: "AVAILABLE",
+        sourceType: "SOURCED" as const,
+        sourcedFromName: "Amman Importer Co",
+        sourceCost: SUPPLIER_ENTITLEMENT,
+      })
+    );
+
+    await expect(
+      runDeal(s, {
+        route: "THROUGH_DEALERSHIP",
+        deposit: 3_000,
+        downPayment: 3_000,
+        beforeHandover: async (applicationId) => {
+          // Exactly the shape a relaxed `createFromQuote` would hand it.
+          const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+          await s.t.run((ctx) =>
+            ctx.db.patch(app!.quoteId, {
+              vehicleItems: [
+                { vehicleId: s.vehicleId, unitPrice: VEHICLE_PRICE },
+                { vehicleId: secondVehicleId, unitPrice: VEHICLE_PRICE },
+              ],
+            })
+          );
+        },
+      })
+    ).rejects.toThrow(/more than one vehicle/i);
+
+    // Refused before the sale exists.
+    const sales = await s.t.run((ctx) => ctx.db.query("sales").collect());
+    expect(sales).toHaveLength(0);
+  });
+
+  test("cancelling restores the receivable, the consideration and the deposit — each exactly once", async () => {
+    const s = await seedDealership("c16216cancel");
+    const { applicationId } = await runDeal(s, {
+      route: "THROUGH_DEALERSHIP",
+      deposit: 3_000,
+      downPayment: 3_000,
+    });
+
+    const entriesBefore = await s.t.run((ctx) =>
+      ctx.db.query("journalEntries").collect()
+    );
+
+    // ⚠️ MEASURED BEFORE THE CANCELLATION, because otherwise this whole test
+    // passes against the defect it exists to catch. "The liability is a
+    // liability again" is equally true of a sale that RELEASED it and had the
+    // release reversed, and of a sale that never released it at all — the
+    // closing balance cannot tell those apart. Only the intermediate state can.
+    const atSale = await ledgerBySystemKey(s);
+    expect(atSale[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(0);
+    expect(atSale[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES] ?? 0).toBe(
+      (VEHICLE_PRICE - 3_000) * SCALE
+    );
+
+    await s.asUser.mutation(api.applications.cancelApplication, {
+      orgId: s.orgId,
+      applicationId,
+      reason: "Customer withdrew after handover",
+    });
+
+    const after = await ledgerBySystemKey(s);
+
+    // c16216 §3. The frozen sale journal reverses as one entry, so all three
+    // legs come back together: the finance receivable, the consideration, and
+    // the deposit liability the sale had released.
+    expect(after[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES] ?? 0).toBe(0);
+
+    // The deposit is a LIABILITY again — back exactly where its receipt put it,
+    // because cancelling a sale does not refund anybody.
+    expect(after[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(-3_000 * SCALE);
+
+    // And the cash never moved in either direction.
+    expect(after[SYSTEM_KEYS.CASH_ON_HAND] ?? 0).toBe(3_000 * SCALE);
+
+    // ⚠️ EXACTLY ONE reversing entry. The deposit-application path must NOT
+    // issue a second: `reverseDepositApplication` short-circuits on
+    // FINANCED_SALE_CONSIDERATION because the release it would reverse was
+    // never posted on its own — it was a line inside the sale entry.
+    const entriesAfter = await s.t.run((ctx) =>
+      ctx.db.query("journalEntries").collect()
+    );
+    expect(entriesAfter.length - entriesBefore.length).toBe(1);
+
+    // The lifecycle came back too, and this is load-bearing in a way that is
+    // easy to lose: `reinstateHold` is gated on
+    // `holdId !== undefined || journalReversed`. A financed-consideration
+    // application has no hold row, so the hold returns ONLY because the
+    // short-circuit reports NOT_POSTED rather than DEFERRED. Return DEFERRED
+    // there and the deposit is stranded: applied to a sale that no longer
+    // exists, with no door left to reach it.
+    const deposits = await s.t.run((ctx) => ctx.db.query("deposits").collect());
+    expect(deposits[0].status).toBe("HELD");
+    expect(deposits[0].holdActive).toBe(true);
+
+    const applications = await s.t.run((ctx) =>
+      ctx.db.query("depositApplications").collect()
+    );
+    expect(applications).toHaveLength(1);
+    expect(applications[0].status).toBe("REVERSED");
+  });
+
+  test("finalizing twice returns the same sale and creates nothing a second time", async () => {
+    const s = await seedDealership("c16216replay");
+    const { applicationId, saleId } = await runDeal(s, {
+      route: "THROUGH_DEALERSHIP",
+      deposit: 3_000,
+      downPayment: 3_000,
+    });
+
+    // c16216 §4. Every table the financed path writes to.
+    const census = async () =>
+      await s.t.run(async (ctx) => ({
+        sales: (await ctx.db.query("sales").collect()).length,
+        journals: (await ctx.db.query("journalEntries").collect()).length,
+        lines: (await ctx.db.query("journalLines").collect()).length,
+        events: (await ctx.db.query("accountingEvents").collect()).length,
+        applications: (await ctx.db.query("depositApplications").collect()).length,
+        receivables: (await ctx.db.query("receivableDocuments").collect()).length,
+        payables: (await ctx.db.query("vehicleSupplierPayables").collect()).length,
+      }));
+
+    const before = await census();
+
+    const again = await s.asUser.mutation(api.applications.finalizeDeal, {
+      orgId: s.orgId,
+      applicationId,
+    });
+
+    // The same sale, not a new one.
+    expect(again).toBe(saleId);
+    expect(await census()).toEqual(before);
+
+    // And the receivable was not re-opened at a different figure.
+    const receivable = await financeReceivableOf(s, applicationId);
+    expect(receivable?.originalAmountMinor).toBe((VEHICLE_PRICE - 3_000) * SCALE);
+  });
+
+  test("a deposit belonging to another organization refuses before anything is written", async () => {
+    const s = await seedDealership("c16216tenant");
+
+    // c16216 §5. The quote index scopes the query, so a foreign row is
+    // REACHABLE here — org is a separate fact and has to be proved, not assumed.
+    const otherOrgId = await s.t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Another dealership", createdAt: Date.now() })
+    );
+
+    await expect(
+      runDeal(s, {
+        route: "THROUGH_DEALERSHIP",
+        deposit: 3_000,
+        downPayment: 3_000,
+        beforeHandover: async () => {
+          const deposits = await s.t.run((ctx) => ctx.db.query("deposits").collect());
+          await s.t.run((ctx) => ctx.db.patch(deposits[0]._id, { orgId: otherOrgId }));
+        },
+      })
+    ).rejects.toThrow(/different organization/i);
+
+    const sales = await s.t.run((ctx) => ctx.db.query("sales").collect());
+    expect(sales).toHaveLength(0);
+    const applications = await s.t.run((ctx) =>
+      ctx.db.query("depositApplications").collect()
+    );
+    expect(applications).toHaveLength(0);
+  });
+
+  test("a quote that is not this deal's quote refuses before anything is written", async () => {
+    const s = await seedDealership("c16216quote");
+
+    const otherVehicleId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId,
+        vin: "VINFINother",
+        make: "Kia",
+        model: "Rio",
+        year: 2024,
+        mileage: 8,
+        color: "Red",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        sellingPrice: VEHICLE_PRICE,
+        status: "AVAILABLE",
+        sourceType: "SOURCED" as const,
+        sourcedFromName: "Amman Importer Co",
+        sourceCost: SUPPLIER_ENTITLEMENT,
+      })
+    );
+
+    await expect(
+      runDeal(s, {
+        route: "THROUGH_DEALERSHIP",
+        deposit: 3_000,
+        downPayment: 3_000,
+        beforeHandover: async (applicationId) => {
+          // The quote now describes a different car from the one the
+          // application is about to sell, so its deposit is not this sale's.
+          const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+          await s.t.run((ctx) =>
+            ctx.db.patch(app!.quoteId, { vehicleId: otherVehicleId })
+          );
+        },
+      })
+    ).rejects.toThrow(/does not match/i);
+
+    const sales = await s.t.run((ctx) => ctx.db.query("sales").collect());
+    expect(sales).toHaveLength(0);
+  });
+
+  test("a deposit mid-reversal is still spoken for, and cannot be spent again", async () => {
+    const s = await seedDealership("c16216reversing");
+
+    // REVERSING means the reversing entry is queued and the ORIGINAL is still
+    // POSTED — the money is not back yet. Treating it as available would spend
+    // it twice across the window where the outbox has not drained.
+    await expect(
+      runDeal(s, {
+        route: "THROUGH_DEALERSHIP",
+        deposit: 3_000,
+        downPayment: 3_000,
+        beforeHandover: async (applicationId) => {
+            const deposits = await s.t.run((ctx) => ctx.db.query("deposits").collect());
+            const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+            const priorSaleId = await s.t.run((ctx) =>
+              ctx.db.insert("sales", {
+                orgId: s.orgId,
+                vehicleId: app!.vehicleId,
+                customerId: app!.customerId,
+                salespersonId: app!.salespersonId,
+                salePrice: VEHICLE_PRICE,
+                saleDate: Date.now(),
+                status: "CANCELLED",
+              })
+            );
+            await s.t.run((ctx) =>
+              ctx.db.insert("depositApplications", {
+                orgId: s.orgId,
+                depositId: deposits[0]._id,
+                vehicleId: app!.vehicleId,
+                saleId: priorSaleId,
+                customerId: app!.customerId,
+                amountMinor: 3_000 * SCALE,
+                currency: "JOD",
+                treatment: "CUSTOMER_RECEIVABLE",
+                eventType: "DEPOSIT_APPLIED",
+                eventSourceType: "depositApplications",
+                eventSourceId: "prior_reversing",
+                eventVersion: 1,
+                eventIdempotencyKey: "prior_reversing_application",
+                status: "REVERSING",
+                appliedAt: Date.now(),
+                appliedBy: app!.salespersonId,
+              })
+            );
+        },
+      })
+    ).rejects.toThrow(/already been applied/i);
+
+    const sales = await s.t.run((ctx) => ctx.db.query("sales").collect());
+    expect(sales.filter((sale) => sale.status !== "CANCELLED")).toHaveLength(0);
+  });
+
+  test("a refunded deposit leaves the financier owing everything, and pays the customer back exactly once", async () => {
+    const s = await seedDealership("c16216refund");
+
+    // c16216 §6, and its wording correction. "Not H" is a statement about the
+    // SETTLEMENT, not about the money sitting still: the refund runs its own
+    // rule and really does pay out.
+    const { applicationId } = await runDeal(s, {
+      route: "THROUGH_DEALERSHIP",
+      deposit: 3_000,
+      downPayment: 3_000,
+      depositTakenBy: "approver",
+      depositResolution: { treatment: "REFUND_TO_CUSTOMER", refundMethod: "CASH" },
+    });
+
+    // N unchanged: the company owes the whole settlement.
+    const receivable = await financeReceivableOf(s, applicationId);
+    expect(receivable?.originalAmountMinor).toBe(VEHICLE_PRICE * SCALE);
+
+    const after = await ledgerBySystemKey(s);
+
+    // The liability is discharged — by the refund, not by the sale.
+    expect(after[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(0);
+
+    // Cash in at receipt, cash out at refund: net zero, and the outbound leg
+    // is a distinct event rather than a duplicate of the receipt.
+    expect(after[SYSTEM_KEYS.CASH_ON_HAND] ?? 0).toBe(0);
+
+    // It never became consideration for the car.
+    const applications = await s.t.run((ctx) =>
+      ctx.db.query("depositApplications").collect()
+    );
+    expect(
+      applications.filter((a) => a.treatment === "FINANCED_SALE_CONSIDERATION")
+    ).toHaveLength(0);
+
+    // Exactly one refund event.
+    const events = await s.t.run((ctx) =>
+      ctx.db.query("accountingEvents").collect()
+    );
+    expect(events.filter((e) => e.eventType === "DEPOSIT_REFUNDED")).toHaveLength(1);
+  });
+
+  test("a forfeited deposit leaves the financier owing everything, and becomes income exactly once", async () => {
+    const s = await seedDealership("c16216forfeit");
+
+    const { applicationId } = await runDeal(s, {
+      route: "THROUGH_DEALERSHIP",
+      deposit: 3_000,
+      downPayment: 3_000,
+      depositTakenBy: "approver",
+      depositResolution: { treatment: "FORFEITED" },
+    });
+
+    const receivable = await financeReceivableOf(s, applicationId);
+    expect(receivable?.originalAmountMinor).toBe(VEHICLE_PRICE * SCALE);
+
+    const after = await ledgerBySystemKey(s);
+
+    // Liability discharged into income — the dealership keeps it.
+    expect(after[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(0);
+    expect(after[SYSTEM_KEYS.DEPOSIT_FORFEITURE_INCOME] ?? 0).toBe(-3_000 * SCALE);
+
+    // The cash stays: forfeiting pays nobody.
+    expect(after[SYSTEM_KEYS.CASH_ON_HAND] ?? 0).toBe(3_000 * SCALE);
+
+    const events = await s.t.run((ctx) =>
+      ctx.db.query("accountingEvents").collect()
+    );
+    expect(events.filter((e) => e.eventType === "DEPOSIT_FORFEITED")).toHaveLength(1);
+  });
+
+  test("applying the deposit to a customer debt is refused, because this sale raises none", async () => {
+    const s = await seedDealership("c16216dealerAmt");
+
+    // The third disposition. On a financed deal the car is invoiced to the
+    // FINANCE COMPANY, so there is no customer-to-dealer obligation for the
+    // deposit to come off — and inventing one would show the customer in credit
+    // for money nobody billed them. The exact outcome here is a refusal, and
+    // saying so is the honest form of "its own supported path".
+    await expect(
+      runDeal(s, {
+        route: "THROUGH_DEALERSHIP",
+        deposit: 3_000,
+        downPayment: 3_000,
+        depositResolution: { treatment: "APPLY_TO_DEALER_AMOUNT" },
+      })
+    ).rejects.toThrow(/exceeds what the dealership billed/i);
+
+    // Nothing written, and the deposit is still held for a real decision.
+    const sales = await s.t.run((ctx) => ctx.db.query("sales").collect());
+    expect(sales).toHaveLength(0);
+    const deposits = await s.t.run((ctx) => ctx.db.query("deposits").collect());
+    expect(deposits[0].status).toBe("HELD");
+    expect(deposits[0].holdActive).toBe(true);
+
+    // Still a liability, because no disposition has executed.
+    const after = await ledgerBySystemKey(s);
+    expect(after[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(-3_000 * SCALE);
+  });
+});

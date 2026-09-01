@@ -680,6 +680,12 @@ async function resolveReservationDeposits(
   // that have always handled them. Applying every held deposit regardless would
   // silently consume money an operator had asked to give back.
   //
+  // "Falls through" is about WHICH balance it discharges, not about the money
+  // sitting still: a refund debits the deposit liability and credits cash, a
+  // forfeiture credits forfeiture income, and each posts exactly once through
+  // its own rule. What they share is only that they do not become part of the
+  // settlement and do not reduce the finance company's receivable.
+  //
   // Ahead of the absorbed-by-the-bill test below, which measures the deposit
   // against what the CUSTOMER was billed. On these deals the customer is billed
   // nothing for the car, so that test reads every deposit as unabsorbed and
@@ -900,12 +906,24 @@ async function recordOtherTreatment(
  * The reservation deposits still holding THIS car under this quote.
  *
  * Scoped to the vehicle, not the quote. A quote can cover several cars
- * (`quotes.vehicleItems`), each completed on its own sale, and every deposit
- * row names the car it is holding — so the allocation is recorded per deposit
- * and never has to be apportioned or guessed. Summing the quote instead
- * compared one car's invoice against every car's deposits, which made a
- * two-vehicle quote demand a deposit treatment on the first completion and
- * then refuse every one of them.
+ * (`quotes.vehicleItems`), each completed on its own sale, so summing the
+ * whole quote compared one car's invoice against every car's deposits — which
+ * made a two-vehicle quote demand a deposit treatment on the first completion
+ * and then refuse every one of them.
+ *
+ * ⚠️ `deposit.vehicleId` is NOT an allocation. `depositAllocation.ts` is the
+ * authority on this: it is "the quote's FIRST line item, nothing more. Reading
+ * it as an allocation assigns the entire deposit to whichever car was listed
+ * first, and leaves the others looking undeposited." This reader is therefore
+ * correct ONLY where the quote carries one car — which is also the only shape
+ * where `resolveDepositsForQuote` consumes on the same predicate, the deposit
+ * having no hold rows. On a multi-vehicle quote the allocation lives on
+ * `depositVehicleHolds` and `allocatedDepositForVehicle` is the reader to use.
+ *
+ * Every caller must therefore establish single-vehicle-ness itself. The
+ * refund/forfeit path does it by refusing a shared allocation outright;
+ * `resolveFinancedSalePlan` does it with its own explicit guard rather than
+ * relying on `createFromQuote` continuing to reject multi-vehicle deals.
  */
 // Exported so the settlement plan reads the SAME slice completion will consume.
 // The plan is built before the first write and decides what the financing

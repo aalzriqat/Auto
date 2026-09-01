@@ -46,10 +46,17 @@ export async function resolveFinancedSalePlan(
     /**
      * What the operator said happens to any held deposit.
      *
-     * Only an application to THIS purchase becomes `H`. A refund, forfeiture or
-     * offset against something the customer separately owes leaves the money in
-     * the deposit liability where its receipt put it, and the financing company
-     * still owes the whole settlement.
+     * Only an application to THIS purchase becomes `H` and reduces `N`. A
+     * refund, a forfeiture or an offset against something the customer
+     * separately owes each follows its own explicit accounting treatment,
+     * exactly once — `ruleDepositRefunded` debits the liability and credits the
+     * disbursement account, `ruleDepositForfeited` credits forfeiture income.
+     * The money stays in `CUSTOMER_DEPOSITS_LIABILITY` only while no
+     * disposition has executed yet.
+     *
+     * The shared property is narrower than "it stays a liability": these
+     * dispositions do not become `H` and do not reduce what the financing
+     * company owes.
      */
     depositTreatment?: string;
   }
@@ -128,6 +135,34 @@ export async function resolveFinancedSalePlan(
   // moved, and it names the car it is holding — which is what makes this correct
   // on a quote covering several vehicles, where each sale must take its own
   // slice and no other.
+  // A financed deal is single-vehicle, and `H` depends on it being so.
+  //
+  // `heldDepositRowsForVehicle` selects on `deposit.vehicleId`, which
+  // `depositAllocation.ts` states plainly is "the quote's FIRST line item,
+  // nothing more. Reading it as an allocation assigns the entire deposit to
+  // whichever car was listed first, and leaves the others looking
+  // undeposited." On a single-vehicle quote that is exactly right, and it is
+  // the same predicate `resolveDepositsForQuote` applies when a deposit carries
+  // no hold rows — so the plan and completion consume the identical slice.
+  //
+  // `applications.createFromQuote` refuses a multi-vehicle quote outright, so
+  // no financed deal can be built on one today. That guard lives in another
+  // file and could be relaxed by someone who never reads this one; if it were,
+  // the first car would take the whole deposit as consideration while its
+  // siblings took none, and the entry would still balance because `N` absorbs
+  // the difference. The dealership would under-bill the financier by the other
+  // cars' deposits and no assertion anywhere would fire.
+  //
+  // So refuse rather than inherit a guarantee from a distant precondition.
+  // The correct multi-vehicle derivation is the stored allocation on
+  // `depositVehicleHolds`, not this reader.
+  const quote = await ctx.db.get(app.quoteId);
+  if ((quote?.vehicleItems?.length ?? 1) > 1) {
+    throw new ConvexError(
+      "This financed deal is attached to a quote covering more than one vehicle, so how much of the reservation deposit belongs to this car is a stored allocation rather than the whole deposit. Finalizing cannot determine the settlement safely. Split the deal, or allocate the deposit per vehicle first."
+    );
+  }
+
   // H — the deposit slice this sale consumes, proved row by row.
   //
   // The quote index scopes the query to this deal, and the reader filters to the
