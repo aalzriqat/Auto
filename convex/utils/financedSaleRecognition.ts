@@ -11,7 +11,8 @@ import {
   settlementDeductedActualMinor,
   settlementDeductedFees,
 } from "./settlementDeductions";
-import { heldDepositTotalForVehicle } from "./saleCompletion";
+import { heldDepositRowsForVehicle } from "./saleCompletion";
+import { liveAppliedMinorForDeposit } from "./depositApplications";
 import { toMinorUnits } from "./money";
 
 /**
@@ -39,7 +40,19 @@ export function financedSaleRecognitionApplies(
 export async function resolveFinancedSalePlan(
   ctx: QueryCtx | MutationCtx,
   app: Doc<"financeApplications">,
-  opts: { settlesDirect: boolean; currency: string }
+  opts: {
+    settlesDirect: boolean;
+    currency: string;
+    /**
+     * What the operator said happens to any held deposit.
+     *
+     * Only an application to THIS purchase becomes `H`. A refund, forfeiture or
+     * offset against something the customer separately owes leaves the money in
+     * the deposit liability where its receipt put it, and the financing company
+     * still owes the whole settlement.
+     */
+    depositTreatment?: string;
+  }
 ): Promise<FinancedSalePostingPlan | undefined> {
   if (!financedSaleRecognitionApplies(app, opts)) return undefined;
 
@@ -115,17 +128,73 @@ export async function resolveFinancedSalePlan(
   // moved, and it names the car it is holding — which is what makes this correct
   // on a quote covering several vehicles, where each sale must take its own
   // slice and no other.
-  // `heldDepositTotalForVehicle` returns MAJOR units — `deposits.amount` is stored
-  // the way an operator types it — so it is converted here. Passing it through
-  // unconverted made a 3,000 deposit reduce the settlement by 3, which balances
-  // arithmetically and is wrong by a factor of the currency scale.
-  const depositHeldMajor = await heldDepositTotalForVehicle(
+  // H — the deposit slice this sale consumes, proved row by row.
+  //
+  // The quote index scopes the query to this deal, and the reader filters to the
+  // rows still holding THIS vehicle. Everything else about a row is a separate
+  // fact that has to be checked rather than assumed: a deposit belonging to
+  // another organization, another customer, or denominated in another currency
+  // is somebody else's money, and one already consumed by a live application
+  // would be spent twice.
+  const depositRows = await heldDepositRowsForVehicle(
     ctx as MutationCtx,
     app.quoteId,
     app.vehicleId
   );
+
+  let depositHeldMajor = 0;
+  for (const row of depositRows) {
+    if (row.orgId !== app.orgId) {
+      throw new ConvexError(
+        "A deposit recorded against this deal belongs to a different organization. It cannot be applied to this sale."
+      );
+    }
+    if (row.customerId !== app.customerId) {
+      throw new ConvexError(
+        "A deposit held on this vehicle was paid by a different customer, so it cannot be applied to this purchase. Resolve it separately before finalizing."
+      );
+    }
+    if (row.currency !== undefined && row.currency !== opts.currency) {
+      throw new ConvexError(
+        "A deposit held on this vehicle is recorded in a different currency from the deal. Resolve it before finalizing rather than converting it here."
+      );
+    }
+    const alreadyApplied = await liveAppliedMinorForDeposit(ctx, row.depositId);
+    if (alreadyApplied > 0) {
+      throw new ConvexError(
+        "A deposit held on this vehicle has already been applied to a sale that still stands. It cannot be applied again."
+      );
+    }
+    depositHeldMajor += row.amount;
+  }
+
+  // Only an application to THIS purchase becomes H. A refund, a forfeiture or an
+  // offset against a separate customer obligation leaves the money where its
+  // receipt put it — in the deposit liability — and the company still owes the
+  // whole settlement.
+  const depositIsApplied =
+    opts.depositTreatment === undefined ||
+    opts.depositTreatment === "APPLY_TO_TRANSACTION_SETTLEMENT";
+
+  // `deposits.amount` is MAJOR units, stored the way an operator types it.
+  // Passing it through unconverted made a 3,000 deposit reduce the settlement by
+  // 3 — arithmetically balanced, and wrong by the whole currency scale.
   const depositLiabilityAppliedMinor =
-    depositHeldMajor > 0 ? toMinorUnits(depositHeldMajor, opts.currency) : 0;
+    depositIsApplied && depositHeldMajor > 0
+      ? toMinorUnits(depositHeldMajor, opts.currency)
+      : 0;
+
+  // The same customer money cannot be counted twice — once as a contribution the
+  // financing company received and netted out of its transfer, and again as a
+  // deposit the dealership holds. Whichever it actually was, it happened once.
+  if (
+    depositLiabilityAppliedMinor > 0 &&
+    (app.customerContributionToFinanceCompanyMinor ?? 0) > 0
+  ) {
+    throw new ConvexError(
+      "This deal records the customer's money both as a deposit held by the dealership and as a contribution paid to the financing company. Record which of the two actually happened before finalizing."
+    );
+  }
 
   const result = buildFinancedSalePostingPlan({
     currency: opts.currency,

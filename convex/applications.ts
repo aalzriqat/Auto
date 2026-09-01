@@ -3339,6 +3339,10 @@ export const finalizeDeal = mutation({
         const financedSalePlan = await resolveFinancedSalePlan(ctx, app, {
           settlesDirect: settlesDirectAtFinalize,
           currency: app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId)),
+          // The same disposition completion will act on, so the plan and the
+          // deposits it consumes cannot disagree about whether the money was
+          // applied to this purchase at all.
+          depositTreatment: args.depositResolution?.treatment,
         });
 
 

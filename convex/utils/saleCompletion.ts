@@ -667,21 +667,29 @@ async function resolveReservationDeposits(
   }
   const allocationHoldId = allocation.kind === "ALLOCATED" ? allocation.holdId : undefined;
 
+  const stated = args.depositResolution?.treatment;
+
   // A financed sale recognised from a settlement plan takes its deposit as
   // consideration for the car, and the plan has already counted it: the
-  // financing company is asked for the settlement MINUS this amount. So there is
-  // no leftover to decide the fate of, and no treatment for the operator to
-  // state.
+  // financing company is asked for the settlement MINUS this amount.
+  //
+  // Only when the deposit is actually applied to this purchase. A refund, a
+  // forfeiture, an approved other treatment, or an offset against something the
+  // customer separately owes are each their own disposition, and none of them
+  // reduces what the financing company owes — so they fall through to the paths
+  // that have always handled them. Applying every held deposit regardless would
+  // silently consume money an operator had asked to give back.
   //
   // Ahead of the absorbed-by-the-bill test below, which measures the deposit
   // against what the CUSTOMER was billed. On these deals the customer is billed
   // nothing for the car, so that test reads every deposit as unabsorbed and
   // refuses a deal that is in fact fully accounted for.
-  if (args.financedSalePlan) {
+  if (
+    args.financedSalePlan &&
+    (stated === undefined || stated === "APPLY_TO_TRANSACTION_SETTLEMENT")
+  ) {
     return await applyHeldDeposits(ctx, opts, undefined, "FINANCED_SALE_CONSIDERATION");
   }
-
-  const stated = args.depositResolution?.treatment;
 
   // Determined exactly when the dealership billed the customer at least what it
   // is holding: the deposit comes off that bill and nothing is left over. Note
@@ -909,14 +917,34 @@ export async function heldDepositRowsForVehicle(
   ctx: MutationCtx,
   quoteId: Id<"quotes">,
   vehicleId: Id<"vehicles">
-): Promise<Array<{ depositId: Id<"deposits">; customerId: Id<"customers">; amount: number; method?: string }>> {
+): Promise<
+  Array<{
+    depositId: Id<"deposits">;
+    customerId: Id<"customers">;
+    amount: number;
+    method?: string;
+    // Carried so a caller can prove the slice belongs to this deal rather than
+    // assuming it: the quote index scopes the query, but org, customer and
+    // currency are separate facts and a mismatch in any of them means the row
+    // is somebody else's money.
+    orgId: Id<"organizations">;
+    currency?: string;
+  }>
+> {
   const deposits = await ctx.db
     .query("deposits")
     .withIndex("by_quote", (q) => q.eq("quoteId", quoteId))
     .collect();
   return deposits
     .filter((d) => d.holdActive && d.isDeleted !== true && d.vehicleId === vehicleId)
-    .map((d) => ({ depositId: d._id, customerId: d.customerId, amount: d.amount, method: d.method }));
+    .map((d) => ({
+      depositId: d._id,
+      customerId: d.customerId,
+      amount: d.amount,
+      method: d.method,
+      orgId: d.orgId,
+      currency: d.currency,
+    }));
 }
 
 export async function heldDepositTotalForVehicle(

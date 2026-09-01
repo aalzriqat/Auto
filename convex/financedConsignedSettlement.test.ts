@@ -160,6 +160,14 @@ async function runDeal(
     approvedAmount?: number;
     /** A reservation deposit (عربون) held on the quote before the deal closes. */
     deposit?: number;
+    /**
+     * Who takes the deposit.
+     *
+     * `releaseHeldDeposit` refuses to let the person who took a deposit be the one
+     * who refunds or forfeits it, so a case that ends in a refund has to have
+     * been taken by somebody else — the same segregation a real dealership runs.
+     */
+    depositTakenBy?: "user" | "approver";
     /** A deposit taken AFTER the route was chosen — the ordering the route-time guard cannot see. */
     depositAfterRoute?: number;
     /**
@@ -183,6 +191,7 @@ async function runDeal(
     depositResolution?: {
       treatment: "APPLY_TO_DEALER_AMOUNT" | "APPLY_TO_TRANSACTION_SETTLEMENT" | "REFUND_TO_CUSTOMER" | "FORFEITED" | "OTHER";
       reason?: string;
+      refundMethod?: "CASH" | "BANK_TRANSFER" | "CHEQUE" | "CARD";
     };
     /** Runs after the route is chosen and before the vehicle goes out. */
     beforeHandover?: (applicationId: Id<"financeApplications">) => Promise<void>;
@@ -206,7 +215,8 @@ async function runDeal(
   });
 
   if (opts.deposit) {
-    await s.asUser.mutation(api.deposits.create, {
+    const taker = opts.depositTakenBy === "approver" ? s.asApprover : s.asUser;
+    await taker.mutation(api.deposits.create, {
       orgId: s.orgId,
       quoteId,
       amount: opts.deposit,
@@ -6376,5 +6386,139 @@ describe("the cockpit's workflow projections", () => {
     expect(view!.money).toBeNull();
     expect(view!.expectedPaymentRegistered).toBe(true);
     expect(view!.supplierSettlementRouteRequired).toBe(true);
+  });
+});
+
+describe("deposit authority — whose money, and was it actually applied (c16213 §2, §3, §8)", () => {
+  test("a deposit the operator is refunding does NOT reduce what the financier owes", async () => {
+    const s = await seedDealership("depRefund");
+
+    // c16213 §3: refund, forfeiture and other dispositions remain their own
+    // explicit outcomes and none of them reduces Finance-company AR. An earlier
+    // version of this applied every held deposit on a planned sale regardless of
+    // what the operator asked for, which would have silently consumed money
+    // somebody had just decided to give back.
+    const { applicationId } = await runDeal(s, {
+      route: "THROUGH_DEALERSHIP",
+      deposit: 3_000,
+      downPayment: 3_000,
+      depositTakenBy: "approver",
+      depositResolution: { treatment: "REFUND_TO_CUSTOMER", refundMethod: "CASH" },
+    });
+
+    // The company still owes the whole settlement — §6's coherent B-shaped case.
+    const receivable = await financeReceivableOf(s, applicationId);
+    expect(receivable?.originalAmountMinor).toBe(VEHICLE_PRICE * SCALE);
+
+    // And no consideration application was recorded against the purchase.
+    const applications = await s.t.run((ctx) =>
+      ctx.db.query("depositApplications").collect()
+    );
+    expect(
+      applications.filter((a) => a.treatment === "FINANCED_SALE_CONSIDERATION")
+    ).toHaveLength(0);
+  });
+
+  test("a deposit paid by a different customer refuses before anything is written", async () => {
+    const s = await seedDealership("depWrongCust");
+
+    // The quote index scopes the query to this deal, which is why the row is
+    // reachable at all. Whose money it is, is a separate fact — and applying it
+    // would settle one customer's purchase with another customer's cash.
+    const strangerId = await s.t.run((ctx) =>
+      ctx.db.insert("customers", { orgId: s.orgId, firstName: "Some", lastName: "Stranger" })
+    );
+
+    await expect(
+      runDeal(s, {
+        route: "THROUGH_DEALERSHIP",
+        deposit: 3_000,
+        downPayment: 3_000,
+        beforeHandover: async () => {
+          const deposits = await s.t.run((ctx) =>
+            ctx.db.query("deposits").collect()
+          );
+          await s.t.run((ctx) =>
+            ctx.db.patch(deposits[0]._id, { customerId: strangerId })
+          );
+        },
+      })
+    ).rejects.toThrow(/paid by a different customer/i);
+
+    // Refused before the sale exists.
+    const sales = await s.t.run((ctx) => ctx.db.query("sales").collect());
+    expect(sales).toHaveLength(0);
+  });
+
+  test("a deposit recorded in another currency refuses rather than being converted", async () => {
+    const s = await seedDealership("depFx");
+
+    await expect(
+      runDeal(s, {
+        route: "THROUGH_DEALERSHIP",
+        deposit: 3_000,
+        downPayment: 3_000,
+        beforeHandover: async () => {
+          const deposits = await s.t.run((ctx) =>
+            ctx.db.query("deposits").collect()
+          );
+          await s.t.run((ctx) => ctx.db.patch(deposits[0]._id, { currency: "USD" }));
+        },
+      })
+    ).rejects.toThrow(/different currency/i);
+
+    const sales = await s.t.run((ctx) => ctx.db.query("sales").collect());
+    expect(sales).toHaveLength(0);
+  });
+
+  test("a deposit already consumed by a live application cannot be spent twice", async () => {
+    const s = await seedDealership("depTwice");
+
+    await expect(
+      runDeal(s, {
+        route: "THROUGH_DEALERSHIP",
+        deposit: 3_000,
+        downPayment: 3_000,
+        beforeHandover: async (applicationId) => {
+          const deposits = await s.t.run((ctx) =>
+            ctx.db.query("deposits").collect()
+          );
+          const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+          // A live application from some earlier sale, standing against the same
+          // deposit row.
+          const priorSaleId = await s.t.run((ctx) =>
+            ctx.db.insert("sales", {
+              orgId: s.orgId,
+              vehicleId: app!.vehicleId,
+              customerId: app!.customerId,
+              salespersonId: app!.salespersonId,
+              salePrice: VEHICLE_PRICE,
+              saleDate: Date.now(),
+              status: "COMPLETED",
+            })
+          );
+          await s.t.run((ctx) =>
+            ctx.db.insert("depositApplications", {
+              orgId: s.orgId,
+              depositId: deposits[0]._id,
+              vehicleId: app!.vehicleId,
+              saleId: priorSaleId,
+              customerId: app!.customerId,
+              amountMinor: 3_000 * SCALE,
+              currency: "JOD",
+              treatment: "CUSTOMER_RECEIVABLE",
+              eventType: "DEPOSIT_APPLIED",
+              eventSourceType: "depositApplications",
+              eventSourceId: "prior",
+              eventVersion: 1,
+              eventIdempotencyKey: "prior_application",
+              status: "APPLIED",
+              appliedAt: Date.now(),
+              appliedBy: app!.salespersonId,
+            })
+          );
+        },
+      })
+    ).rejects.toThrow(/already been applied/i);
   });
 });
