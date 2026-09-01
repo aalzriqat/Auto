@@ -65,7 +65,19 @@ export async function restoreVehicleFromSale(
   // A SOLD car with no owner recorded fails the same way and for the same
   // reason: missing authority is not permission. There is deliberately no
   // legacy fallback (c16229 item 5).
-  if (String(vehicle.soldBySaleId ?? "") !== String(saleId)) {
+  //
+  // ⚠️ THE TWO CAUSES GET DIFFERENT MESSAGES, because they are different facts
+  // and only one of them names something the operator can act on. A single
+  // message covering both told the operator the car "was sold again" and to
+  // cancel that later sale — when for a car with no recorded owner there IS no
+  // later sale, so the instruction pointed at nothing. The Sonnet MAX seat
+  // reproduced that through the real cancellation door.
+  if (vehicle.soldBySaleId === undefined) {
+    throw new ConvexError(
+      "This car does not record which sale marked it sold, so returning it to the lot cannot be done automatically — doing it blind could take the car from a different sale. Nothing is wrong with this sale; the car simply predates sale-ownership tracking. A manual correction is needed."
+    );
+  }
+  if (String(vehicle.soldBySaleId) !== String(saleId)) {
     throw new ConvexError(
       "This car's current sale is not the sale being reversed, so it cannot be returned to the lot from here. It was sold again after this sale was cancelled, and that later sale still owns it — cancel that sale instead."
     );

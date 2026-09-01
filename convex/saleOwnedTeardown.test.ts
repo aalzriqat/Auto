@@ -57,6 +57,8 @@ async function seedTeardownOrg(
         "edit:vehicles",
         "view:commissions",
         "manage:commissions",
+        "manage:finance",
+        "view:finance",
       ],
     })
   );
@@ -322,14 +324,18 @@ describe("SCRUM-212 — the guards under the doors", () => {
     expect(untouched?.status).toBe("SOLD");
     expect(untouched?.soldBySaleId).toBe(saleA);
 
-    // A SOLD car with NO owner recorded fails the same way. Missing authority
-    // is not permission, and there is deliberately no legacy fallback.
+    // A SOLD car with NO owner recorded is refused too — missing authority is
+    // not permission, and there is deliberately no legacy fallback — but it is
+    // refused with its OWN message. Both used to share one, which told the
+    // operator to go and cancel a later sale that, in this case, does not
+    // exist. Sonnet MAX reproduced that; the two causes are different facts and
+    // only one of them names something anybody can act on.
     await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { soldBySaleId: undefined }));
     await expect(
       s.t.run((ctx) =>
         restoreVehicleFromSale(ctx as unknown as MutationCtx, s.vehicleId, saleA)
       )
-    ).rejects.toThrow(/not the sale being reversed/i);
+    ).rejects.toThrow(/does not record which sale/i);
 
     // And the owner it names really can restore it — the guard refuses the
     // wrong sale, not every sale.
@@ -409,5 +415,203 @@ describe("SCRUM-212 — the guards under the doors", () => {
 
     const stillThere = await t.run((ctx) => ctx.db.get(saleA));
     expect(stillThere?.isDeleted).not.toBe(true);
+  });
+});
+
+/**
+ * SCRUM-212-R1 / R2 — found by the Codex xhigh seat against 0dd4b9c3a, and
+ * validated at the real lines before anything here was written.
+ *
+ * Both are places where the FIRST correction stopped short of the ruling it
+ * was implementing:
+ *
+ *   R1. The teardown gate asked `sale.status !== "CANCELLED"`. The ruling asks
+ *       for the exact COMPLETED -> CANCELLED transition, and those differ on
+ *       every other status — PENDING most of all, because a CANCELLED sale
+ *       could be reopened to PENDING through the ordinary update door.
+ *
+ *   R2. The void still filtered on `category` and searched the vehicle index,
+ *       both of which a finance user can edit on the row afterwards. The
+ *       ruling says not to select by vehicle or category as a monetary
+ *       authority; `saleId` has to be the whole locator, not part of it.
+ */
+describe("SCRUM-212 — the locator and the transition must be exact", () => {
+  test("a cancelled sale cannot be reopened to PENDING", async () => {
+    const s = await seedTeardownOrg(
+      convexTestWithComponents(schema, import.meta.glob("./**/*.ts")),
+      "r1_seal"
+    );
+
+    const saleA = await completeSale(s, s.customerId, 20_000);
+    await s.asManager.mutation(api.sales.update, {
+      orgId: s.orgId,
+      saleId: saleA,
+      status: "CANCELLED",
+    });
+
+    // Reopening is what made the teardown gate reachable a second time: a
+    // CANCELLED sale has already given its car back, reversed its journal and
+    // reinstated its deposits. Sending it back to PENDING invites all of that
+    // to happen again against a car someone else may now own.
+    await expect(
+      s.asManager.mutation(api.sales.update, {
+        orgId: s.orgId,
+        saleId: saleA,
+        status: "PENDING",
+      })
+    ).rejects.toThrow();
+
+    const after = await s.t.run((ctx) => ctx.db.get(saleA));
+    expect(after?.status).toBe("CANCELLED");
+  });
+
+  test("a car with no recorded owner is refused honestly, not blamed on a later sale", async () => {
+    const s = await seedTeardownOrg(
+      convexTestWithComponents(schema, import.meta.glob("./**/*.ts")),
+      "f2_message"
+    );
+
+    const saleA = await completeSale(s, s.customerId, 20_000);
+
+    // A SOLD car whose owning sale was never recorded. Under the clean-slate
+    // ruling this is deliberately not backfilled, so the REFUSAL is correct.
+    // The MESSAGE was not: it told the operator the car had been sold again
+    // and to cancel that later sale instead, when no later sale exists at
+    // all. Sonnet MAX reproduced that through this exact public door.
+    await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { soldBySaleId: undefined }));
+
+    await expect(
+      s.asManager.mutation(api.sales.update, {
+        orgId: s.orgId,
+        saleId: saleA,
+        status: "CANCELLED",
+      })
+    ).rejects.toThrow(/does not record which sale/i);
+
+    // ...and specifically does NOT accuse a later sale that does not exist.
+    let message = "";
+    try {
+      await s.asManager.mutation(api.sales.update, {
+        orgId: s.orgId,
+        saleId: saleA,
+        status: "CANCELLED",
+      });
+    } catch (error) {
+      message = String((error as Error).message ?? error);
+    }
+    expect(message).not.toMatch(/sold again/i);
+  });
+  test("cancelling a sale voids its cashflow row even after the row is reclassified", async () => {
+    const s = await seedTeardownOrg(
+      convexTestWithComponents(schema, import.meta.glob("./**/*.ts")),
+      "r2_category"
+    );
+
+    const saleA = await completeSale(s, s.customerId, 20_000);
+    const rows = await liveSaleTransactions(s);
+    expect(rows).toHaveLength(1);
+
+    // An ordinary finance edit through the public door. `category` is on the
+    // args validator, and the mobile accounting screen offers it — so the row
+    // keeps its saleId and its recognized revenue while ceasing to look like a
+    // vehicle sale.
+    await s.asAdmin.mutation(api.transactions.update, {
+      orgId: s.orgId,
+      transactionId: rows[0]._id,
+      category: "DEPOSIT",
+    });
+
+    await s.asManager.mutation(api.sales.update, {
+      orgId: s.orgId,
+      saleId: saleA,
+      status: "CANCELLED",
+    });
+
+    // The row belongs to a sale that no longer exists. getProfitAndLoss counts
+    // DEPOSIT as revenue, so leaving it live reports income for a cancelled
+    // deal — the exact failure the void exists to prevent.
+    const stillLive = await s.t.run(async (ctx) => {
+      const all = await ctx.db.query("transactions").collect();
+      return all.filter((r) => r.saleId === saleA && r.isDeleted !== true);
+    });
+    expect(stillLive).toHaveLength(0);
+  });
+
+  test("cancelling a sale voids its cashflow row even after the row is moved to another car", async () => {
+    const s = await seedTeardownOrg(
+      convexTestWithComponents(schema, import.meta.glob("./**/*.ts")),
+      "r2_vehicle"
+    );
+
+    const otherVehicleId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId,
+        vin: "VIN-r2-other",
+        make: "Kia",
+        model: "Rio",
+        year: 2019,
+        color: "Blue",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        mileage: 40000,
+        sellingPrice: 12000,
+        status: "AVAILABLE" as const,
+      })
+    );
+
+    const saleA = await completeSale(s, s.customerId, 20_000);
+    const rows = await liveSaleTransactions(s);
+    expect(rows).toHaveLength(1);
+
+    // The second escape: the row keeps category VEHICLE_SALE but leaves the
+    // index range the void searched.
+    await s.asAdmin.mutation(api.transactions.update, {
+      orgId: s.orgId,
+      transactionId: rows[0]._id,
+      vehicleId: otherVehicleId,
+    });
+
+    await s.asManager.mutation(api.sales.update, {
+      orgId: s.orgId,
+      saleId: saleA,
+      status: "CANCELLED",
+    });
+
+    const stillLive = await s.t.run(async (ctx) => {
+      const all = await ctx.db.query("transactions").collect();
+      return all.filter((r) => r.saleId === saleA && r.isDeleted !== true);
+    });
+    expect(stillLive).toHaveLength(0);
+  });
+
+  test("a row that never belonged to a sale is still left alone", async () => {
+    const s = await seedTeardownOrg(
+      convexTestWithComponents(schema, import.meta.glob("./**/*.ts")),
+      "r2_control"
+    );
+
+    const saleA = await completeSale(s, s.customerId, 20_000);
+
+    // The control that stops R2's fix widening into 'void everything on this
+    // car': a manually entered VEHICLE_SALE row carries no saleId and is no
+    // sale's to void.
+    const manual = await s.asAdmin.mutation(api.transactions.add, {
+      orgId: s.orgId,
+      type: "IN",
+      amount: 750,
+      date: Date.now(),
+      category: "VEHICLE_SALE",
+      description: "Manually entered, owned by nobody",
+      vehicleId: s.vehicleId,
+    });
+
+    await s.asManager.mutation(api.sales.update, {
+      orgId: s.orgId,
+      saleId: saleA,
+      status: "CANCELLED",
+    });
+
+    const manualRow = await s.t.run((ctx) => ctx.db.get(manual));
+    expect(manualRow?.isDeleted).not.toBe(true);
   });
 });

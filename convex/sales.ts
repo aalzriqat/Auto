@@ -636,6 +636,26 @@ export const update = mutation({
       throwAppError(AppErrorCode.SALE_ALREADY_COMPLETED, "Completed sales can only transition through cancellation.");
     }
 
+    // ⚠️ CANCELLED IS TERMINAL — SCRUM-212-R1.
+    //
+    // A cancelled sale has already given its car back, reversed its journal
+    // and reinstated its deposits. Sending it back to PENDING offered every
+    // one of those a second time: `applications.cancelApplication` gated its
+    // destructive teardown on `status !== "CANCELLED"`, so a reopened sale
+    // read as the one COMPLETED -> CANCELLED transition and tore down again —
+    // against a car a LATER sale may by then own.
+    //
+    // Sealed at both ends on purpose. The destructive caller now demands
+    // COMPLETED, and this stops the state arising at all; either guard alone
+    // would regress silently if the other were later changed. Found by the
+    // Codex xhigh seat and reproduced through this door before it was closed.
+    if (sale.status === "CANCELLED" && args.status !== undefined && args.status !== "CANCELLED") {
+      throwAppError(
+        AppErrorCode.SALE_ALREADY_CANCELLED,
+        "This sale has been cancelled, and a cancelled sale cannot be reopened — its car, deposits and accounting entries have already been returned. Record a new sale instead."
+      );
+    }
+
     const patch: Record<string, unknown> = {};
     if (args.salePrice !== undefined) patch.salePrice = args.salePrice;
     if (args.saleDate !== undefined) patch.saleDate = args.saleDate;

@@ -752,38 +752,35 @@ async function voidSaleCashflowTransaction(
     reversalDate: number;
   }
 ) {
+  // ⚠️ THE SALE IS THE WHOLE LOCATOR — SCRUM-212 / R2.
+  //
+  // This matched `(vehicleId, category, customerId)` before, which does not
+  // identify a sale. A first teardown was safe on its own — it voids its own
+  // row, so two live VEHICLE_SALE rows for one (vehicle, customer) never
+  // coexist through the public doors. The damage needed a REPLAY: teardown
+  // running a second time for an old sale after the same customer had bought
+  // the same car again, whereupon the filter selected the LATER sale's live row
+  // and deleted it.
+  //
+  // Keying on `saleId` while still SEARCHING the vehicle range and FILTERING on
+  // category was the same mistake one step along, and the Codex xhigh seat
+  // caught it: `transactions.update` lets a finance user change `category` and
+  // `vehicleId` on a row that keeps its `saleId`. Reclassify the row to DEPOSIT
+  // — which `getProfitAndLoss` also counts as revenue — or move it to another
+  // car, and cancellation walked straight past it, leaving live income for a
+  // cancelled deal. Both were reproduced through the public door before this
+  // was changed.
+  //
+  // So the ownership stamp is the only thing consulted. Rows carrying no
+  // `saleId` are never selected: `transactions.add` writes manual VEHICLE_SALE
+  // rows that belong to no sale, and no cancellation is entitled to void them.
+  // There is no legacy fallback here by design (c16229 item 5).
   const saleRows = await ctx.db
     .query("transactions")
-    .withIndex("by_org_vehicle", (q) =>
-      q.eq("orgId", args.orgId).eq("vehicleId", args.sale.vehicleId)
+    .withIndex("by_org_sale", (q) =>
+      q.eq("orgId", args.orgId).eq("saleId", args.sale._id)
     )
-    .filter((q) =>
-      q.and(
-        q.eq(q.field("category"), "VEHICLE_SALE"),
-        // ⚠️ THE SALE, NOT A TUPLE THAT RESEMBLES IT — SCRUM-212.
-        //
-        // This matched on `customerId` before, which does not identify a sale.
-        // A first teardown was safe on its own: it voids its row, so two live
-        // VEHICLE_SALE rows for one (vehicle, customer) never coexist through
-        // the public doors. The damage needed a REPLAY — teardown running a
-        // second time for an old sale after the same customer had bought the
-        // same car again — and then this filter selected the LATER sale's live
-        // row and deleted it, so `reports.getProfitAndLoss` omitted a sale
-        // whose journal, receivable and sale row were all still standing.
-        //
-        // Matching the exact sale removes the ambiguity rather than relying on
-        // the replay being unreachable, which is the other half of the fix.
-        //
-        // Rows carrying no `saleId` are never selected. That is a guarantee
-        // this makes explicit rather than a behaviour change: the public
-        // `transactions.add` door can write a VEHICLE_SALE row for a vehicle
-        // but takes no customerId, so such rows did not match the old filter
-        // either. No sale's cancellation is entitled to void them. There is no
-        // legacy fallback here by design (c16229 item 5).
-        q.eq(q.field("saleId"), args.sale._id),
-        q.neq(q.field("isDeleted"), true)
-      )
-    )
+    .filter((q) => q.neq(q.field("isDeleted"), true))
     .collect();
 
   for (const row of saleRows) {

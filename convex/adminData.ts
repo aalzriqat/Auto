@@ -84,6 +84,51 @@ function assertPatchDoesNotRetenant(patch: unknown): void {
   }
 }
 
+/**
+ * A vehicle's sale-lifecycle fields are workflow output, not editable data.
+ *
+ * SCRUM-212. `vehicles` is deliberately NOT in `FINANCIAL_TABLES` — a dealer's
+ * VIN, colour or mileage genuinely does need repairing from here. But
+ * `soldBySaleId` is the authority `restoreVehicleFromSale` trusts to decide
+ * whether a car may be returned to the lot, and that guard fails closed. A
+ * forged value therefore does not corrupt the books; it does something quieter
+ * and harder to undo — it strands the car, because every legitimate
+ * cancellation is refused with a message blaming a sale that does not own it.
+ * Setting SOLD with no owner at all strands it the same way.
+ *
+ * Both reviewer seats found this independently and reproduced it, which is why
+ * it is closed here rather than deferred: the field is new in this change, and
+ * a guard that trusts a value anyone can forge is not a guard.
+ *
+ * ⚠️ Only an actual CHANGE is refused. The admin UI round-trips the whole
+ * record as JSON, so an ordinary edit re-sends these fields at their current
+ * values; refusing any patch that merely mentions them would break every
+ * legitimate repair. Status changes belong to the sale workflow and to
+ * `vehicleRequests`, which is where the tenant-facing doors already send them.
+ */
+const VEHICLE_LIFECYCLE_FIELDS = ["status", "soldBySaleId", "preHoldStatus"] as const;
+
+function assertPatchDoesNotForgeVehicleLifecycle(
+  table: string,
+  patch: unknown,
+  before: Record<string, unknown>
+): void {
+  if (table !== "vehicles") return;
+  if (!patch || typeof patch !== "object") return;
+  const next = patch as Record<string, unknown>;
+
+  for (const field of VEHICLE_LIFECYCLE_FIELDS) {
+    if (!(field in next)) continue;
+    // Compared as strings so an Id and its serialized form agree, and so
+    // undefined and a missing value are the same absence.
+    if (String(next[field] ?? "") === String(before[field] ?? "")) continue;
+    throwAppError(
+      AppErrorCode.VALIDATION_FAILED,
+      `A vehicle's ${field} records which sale owns the car and is set by the sale workflow, not by direct edit. Changing it here would let a cancellation restore a car that belongs to another sale, or strand this one. Use the sale or vehicle-request workflow instead.`
+    );
+  }
+}
+
 export const listAdminTables = query({
   args: {},
   handler: async (ctx) => {
@@ -138,6 +183,12 @@ export const adminUpdateRecord = mutation({
     const id = assertIdBelongsToTable(ctx, table, args.id);
     const before = await ctx.db.get(id);
     if (!before) throwAppError(AppErrorCode.VALIDATION_FAILED, "Record not found.");
+
+    assertPatchDoesNotForgeVehicleLifecycle(
+      args.table,
+      args.patch,
+      before as unknown as Record<string, unknown>
+    );
 
     await ctx.db.patch(id, args.patch);
     const after = await ctx.db.get(id);

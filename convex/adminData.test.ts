@@ -37,6 +37,68 @@ async function seedOrgWithVehicle(t: ReturnType<typeof convexTestWithComponents>
   return { orgId, vehicleId, asAdmin: t.withIdentity({ subject: "dev_1" }), asMember: t.withIdentity({ subject: "member_1" }) };
 }
 
+describe("the raw editor may not forge vehicle sale-ownership authority", () => {
+  test("changing a vehicle status or its owning sale is refused; other fields still edit", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, vehicleId, asAdmin } = await seedOrgWithVehicle(t);
+
+    // SCRUM-212-R3 / F3, found independently by both reviewer seats.
+    //
+    // `vehicles` is not in FINANCIAL_TABLES and this patch validator is
+    // `v.any`, so a super-admin could write SOLD with no owner, or name a
+    // sale that does not own the car. `restoreVehicleFromSale` then trusts
+    // that field and fails closed — turning a forged value into a car that
+    // can never be released, and a legitimate cancellation into a refusal
+    // blaming the wrong sale.
+    await expect(
+      asAdmin.mutation(api.adminData.adminUpdateRecord, {
+        table: "vehicles",
+        id: vehicleId,
+        patch: { status: "SOLD" },
+      })
+    ).rejects.toThrow(/sale workflow/i);
+
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Forge", lastName: "Target" })
+    );
+    const userId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "forge_user", email: "forge@acme.com" })
+    );
+    const foreignSaleId = await t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId,
+        vehicleId,
+        customerId,
+        salespersonId: userId,
+        salePrice: 1,
+        saleDate: Date.now(),
+        status: "PENDING" as const,
+      })
+    );
+    await expect(
+      asAdmin.mutation(api.adminData.adminUpdateRecord, {
+        table: "vehicles",
+        id: vehicleId,
+        patch: { soldBySaleId: foreignSaleId },
+      })
+    ).rejects.toThrow(/sale workflow/i);
+
+    // The control that keeps the guard narrow: ordinary admin repair of a
+    // non-lifecycle field must still work, and a full-record patch that
+    // merely REPEATS the current status unchanged is not a forge — the
+    // admin UI sends the whole record back, so refusing any patch that
+    // mentions the field would break every legitimate edit.
+    await asAdmin.mutation(api.adminData.adminUpdateRecord, {
+      table: "vehicles",
+      id: vehicleId,
+      patch: { color: "Repainted", status: "AVAILABLE" },
+    });
+    const after = await t.run((ctx) => ctx.db.get(vehicleId));
+    expect(after?.color).toBe("Repainted");
+    expect(after?.status).toBe("AVAILABLE");
+  });
+});
+
 describe("adminData", () => {
   test("rejects a non-allowlisted caller", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));

@@ -1016,7 +1016,15 @@ export default defineSchema({
      *
      * Written by `markVehicleAsSold` in the same transition that sets SOLD and
      * cleared by `restoreVehicleFromSale` in the transition that clears it, so
-     * it is present exactly when the projection it names is.
+     * every ordinary door keeps the pair consistent.
+     *
+     * ⚠️ NOT an invariant the database enforces, and an earlier version of this
+     * comment overstated it as one. `adminData.adminUpdateRecord` patches
+     * `vehicles` with a `v.any` payload and `vehicles` is not in
+     * `FINANCIAL_TABLES`, so a super-admin can set SOLD with no owner, or name
+     * the wrong one. The guard fails closed for exactly that reason rather than
+     * assuming the pair is well-formed. Narrowing that editor is tracked
+     * separately (SCRUM-212-R3).
      *
      * NOT a duplicate of `commitmentRoots.consumedBySaleId`, and deliberately
      * not derived from it: `consumeRootForSale` returns early when no open
@@ -4026,7 +4034,12 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_date", ["orgId", "date"])
     .index("by_org_vehicle", ["orgId", "vehicleId"])
-    .index("by_org_customer", ["orgId", "customerId"]),
+    .index("by_org_customer", ["orgId", "customerId"])
+    // Cancellation finds a sale's own cashflow rows by the sale itself.
+    // Searching the vehicle range and filtering on category meant an edit to
+    // either field moved a row out of reach while it kept its `saleId`, so a
+    // cancelled deal could leave live revenue behind — SCRUM-212-R2.
+    .index("by_org_sale", ["orgId", "saleId"]),
 
   fixedAssets: defineTable({
     orgId: v.id("organizations"),

@@ -7523,6 +7523,39 @@ describe("a stale finance application cannot tear down the sale that replaced it
     expect(appsAfterReplay).toHaveLength(appsAfterCancel.length);
   });
 
+  test("a sale that never completed is never torn down, even reopened behind the seal", async () => {
+    const s = await seedDealership("st212Reopened");
+    const { applicationId, saleA } = await staleApplicationOver(s);
+    const saleB = await sellAgain(s, s.customerId);
+
+    // ⚠️ DEFENCE IN DEPTH, and the test says so. `sales.update` now refuses
+    // CANCELLED -> PENDING, so no public door produces this state any more.
+    // The row is patched directly to prove the DESTRUCTIVE CALLER refuses on
+    // its own: the Codex seat reached the old teardown exactly this way, and
+    // sealing only the status writer would leave that caller depending on a
+    // guard in a different file to stay correct.
+    await s.t.run((ctx) => ctx.db.patch(saleA, { status: "PENDING" as const }));
+
+    // The cancellation SUCCEEDS and does nothing sale-owned. Before the gate
+    // asked for COMPLETED, this reached the teardown, hit B ownership and threw
+    // — leaving the stale application permanently un-cancellable and telling
+    // the operator to cancel the perfectly good sale B.
+    await s.asUser.mutation(api.applications.cancelApplication, {
+      orgId: s.orgId,
+      applicationId,
+      reason: "Old deal tidied up",
+    });
+
+    const vehicle = await s.t.run((ctx) => ctx.db.get(s.vehicleId));
+    expect(vehicle?.status).toBe("SOLD");
+    expect(vehicle?.soldBySaleId).toBe(saleB);
+
+    const b = await s.t.run((ctx) => ctx.db.get(saleB));
+    expect(b?.status).toBe("COMPLETED");
+    const live = await liveSaleRows(s);
+    expect(live).toHaveLength(1);
+    expect(live[0].saleId).toBe(saleB);
+  });
   test("cancelling the deal that still owns the car does restore it, once", async () => {
     const s = await seedDealership("st212Control");
     const { applicationId, saleId } = await runDeal(s, {
