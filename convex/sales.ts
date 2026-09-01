@@ -9,7 +9,6 @@ import { notifyManagers, getActorName } from "./utils/notifications";
 import { checkTenantWriteLimit } from "./rateLimit";
 import { validateInput } from "./utils/validation";
 import { CreateDraftSaleSchema, CreateSaleSchema, UpdateSaleSchema } from "./validations/sales";
-import { restoreVehicleFromSale } from "./utils/saleHelpers";
 import { vehicleHasCostBasis, computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import {
   saleEconomics,
@@ -811,7 +810,20 @@ export const update = mutation({
 
 /**
  * Soft deletes a sale record. Only CANCELLED or PENDING sales can be deleted.
- * Restores the vehicle to AVAILABLE if it was marked SOLD.
+ *
+ * ⚠️ DELETING A SALE RESTORES NOTHING — SCRUM-212.
+ *
+ * This used to call `restoreVehicleFromSale`, which took a vehicleId alone and
+ * freed any SOLD car it was handed. Neither status it accepts has a
+ * completed-sale projection to give back: a CANCELLED sale returned the car
+ * when it was cancelled, and a PENDING draft never took it off the lot in the
+ * first place. So the call could only ever fire against a car some OTHER sale
+ * had since sold — restoring it out from under a live COMPLETED sale, which is
+ * reachable through this door with nothing but a draft and no cancellation at
+ * all.
+ *
+ * Deleting the paperwork is not reversing the deal. Cancellation reverses the
+ * deal, and it is the transition that owns the teardown.
  */
 // TODO: Add admin recovery endpoint if needed
 export const softDelete = mutation({
@@ -837,8 +849,6 @@ export const softDelete = mutation({
     if (sale.status === "COMPLETED") {
       throwAppError(AppErrorCode.SALE_ALREADY_COMPLETED, "Cannot delete a completed sale. Cancel it first.");
     }
-
-    await restoreVehicleFromSale(ctx, sale.vehicleId);
 
     await ctx.db.patch(args.saleId, {
       isDeleted: true,

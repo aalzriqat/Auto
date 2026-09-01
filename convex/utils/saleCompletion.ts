@@ -1054,7 +1054,7 @@ async function applySaleCompletionSideEffects(
     decisionNow: Date.now(),
   });
 
-  await markVehicleAsSold(ctx, args.vehicleId);
+  await markVehicleAsSold(ctx, args.vehicleId, saleId);
 
   const isSourced = prepared.vehicle.sourceType === "SOURCED";
   const settlementRoute = consignedSettlementRoute(args);
@@ -1239,6 +1239,7 @@ async function applySaleCompletionSideEffects(
     saleDate: args.saleDate,
     vehicle: prepared.vehicle,
     customer: prepared.customer,
+    saleId,
     previouslyCollected,
     // Agent basis recognizes the margin only; the gross stays on the row as
     // `amount`. Computed from the same cost basis the GL and commissions use.

@@ -760,7 +760,27 @@ async function voidSaleCashflowTransaction(
     .filter((q) =>
       q.and(
         q.eq(q.field("category"), "VEHICLE_SALE"),
-        q.eq(q.field("customerId"), args.sale.customerId),
+        // ⚠️ THE SALE, NOT A TUPLE THAT RESEMBLES IT — SCRUM-212.
+        //
+        // This matched on `customerId` before, which does not identify a sale.
+        // A first teardown was safe on its own: it voids its row, so two live
+        // VEHICLE_SALE rows for one (vehicle, customer) never coexist through
+        // the public doors. The damage needed a REPLAY — teardown running a
+        // second time for an old sale after the same customer had bought the
+        // same car again — and then this filter selected the LATER sale's live
+        // row and deleted it, so `reports.getProfitAndLoss` omitted a sale
+        // whose journal, receivable and sale row were all still standing.
+        //
+        // Matching the exact sale removes the ambiguity rather than relying on
+        // the replay being unreachable, which is the other half of the fix.
+        //
+        // Rows carrying no `saleId` are never selected. That is a guarantee
+        // this makes explicit rather than a behaviour change: the public
+        // `transactions.add` door can write a VEHICLE_SALE row for a vehicle
+        // but takes no customerId, so such rows did not match the old filter
+        // either. No sale's cancellation is entitled to void them. There is no
+        // legacy fallback here by design (c16229 item 5).
+        q.eq(q.field("saleId"), args.sale._id),
         q.neq(q.field("isDeleted"), true)
       )
     )
@@ -820,7 +840,7 @@ export async function cancelCompletedSaleOperationalRecords(
     reason: args.reason,
     reversalDate: args.reversalDate,
   });
-  await restoreVehicleFromSale(ctx, args.sale.vehicleId);
+  await restoreVehicleFromSale(ctx, args.sale.vehicleId, args.sale._id);
   await reinstateAppliedDeposits(ctx, {
     orgId: args.orgId,
     saleId: args.sale._id,
