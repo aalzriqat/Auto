@@ -5,6 +5,8 @@ import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { getReceivableOutstandingMinor } from "./subledger";
+import { drainPendingForOrg } from "./accountingOutbox";
+import { postAccountingEvent } from "./accounting/postingEngine";
 
 /**
  * SCRUM-51 / 237-A — Claims is retired as a finance-company AR authority.
@@ -253,6 +255,124 @@ describe("SCRUM-51 — every Claims writer refuses, and writes nothing", () => {
         claimAmountMinor: 1,
       })
     ).rejects.toThrow(/not a member|forbidden|unauthor|access/i);
+  });
+});
+
+/**
+ * ⚠️ THE DOOR I CLOSED LAST, AND SHOULD HAVE CLOSED FIRST.
+ *
+ * Retiring the five writers stopped NEW claim events. It did nothing about
+ * events ALREADY QUEUED. `postClaimEvent` routed through `postDomainEvent`,
+ * which parks the event in `pendingAccountingEvents` whenever the org cannot
+ * post yet — no chart of accounts, or no open period covering the date. That
+ * is not an edge case; it is the entire reason the outbox exists. So any org
+ * that settled or rejected a claim before this deploy, at a moment when it
+ * could not post, still has a live CLAIM_SETTLED or CLAIM_WRITTEN_OFF waiting.
+ * Opening a period drains it, and it credits Accounts Receivable — Finance
+ * Companies with nothing having debited it: the exact defect this ticket
+ * exists to remove, arriving through ordinary business activity with no
+ * operator action at all.
+ *
+ * Both review seats found this independently after the first remediation.
+ * Closing it at the drain would have been the third patch to the same defect
+ * and the next path would have been the fourth, so it is closed at
+ * `postAccountingEvent` — the single function every posting path reaches.
+ */
+describe("SCRUM-51 — a queued claim event can never post, however it got queued", () => {
+  async function chartAndPeriod(s: Seeded) {
+    await s.asOwner.mutation(api.chartOfAccounts.initialize, { orgId: s.orgId });
+    const fiscalYear = new Date().getUTCFullYear();
+    await s.asOwner.mutation(api.accountingPeriods.create, {
+      orgId: s.orgId,
+      startDate: Date.UTC(fiscalYear, 0, 1),
+      endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+      fiscalYear,
+      periodNumber: 1,
+    });
+    const period = (await s.asOwner.query(api.accountingPeriods.list, { orgId: s.orgId }))[0];
+    await s.asOwner.mutation(api.accountingPeriods.open, { orgId: s.orgId, periodId: period._id });
+  }
+
+  for (const eventType of ["CLAIM_SETTLED", "CLAIM_WRITTEN_OFF"]) {
+    test(`a queued ${eventType} is refused by the drain and posts nothing`, async () => {
+      const s = await seedClaimsOrg(`outbox_${eventType}`);
+      await chartAndPeriod(s);
+
+      // Exactly what the pre-retirement `claims.settle` / `claims.reject` left
+      // behind for an org that could not post at the time. Planted directly
+      // because the door that used to write it is now closed — which is the
+      // point: the row outlives the writer.
+      await s.t.run((ctx) =>
+        ctx.db.insert("pendingAccountingEvents", {
+          orgId: s.orgId,
+          kind: "POST" as const,
+          status: "PENDING" as const,
+          idempotencyKey: `${eventType.toLowerCase()}_staleclaim`,
+          accountingDate: Date.now(),
+          actorId: s.userId,
+          reason: "No chart of accounts or open period at operation time",
+          attempts: 0,
+          createdAt: Date.now(),
+          eventType,
+          sourceType: "claims",
+          sourceId: "staleclaim",
+          eventVersion: 1,
+          occurredAt: Date.now(),
+          currency: "JOD",
+          payload: {
+            claimId: "staleclaim",
+            amountMinor: 500_000,
+            currency: "JOD",
+            paymentMethod: "BANK_TRANSFER",
+          },
+        })
+      );
+
+      const result = await s.t.run((ctx) =>
+        drainPendingForOrg(ctx as unknown as MutationCtx, s.orgId)
+      );
+
+      // Failed, not posted. A retired event will never become postable, so
+      // holding it would retry forever and describe a wait that never ends.
+      expect(result.posted).toBe(0);
+      expect(result.failed).toBe(1);
+
+      // The assertion that matters is in the ledger, not in the counters.
+      const events = await s.t.run((ctx) => ctx.db.query("accountingEvents").collect());
+      expect(events.filter((e) => e.eventType === eventType)).toHaveLength(0);
+
+      const accounts = await s.t.run((ctx) =>
+        ctx.db.query("chartOfAccounts").collect()
+      );
+      const arFc = accounts.find(
+        (a) => a.orgId === s.orgId && a.systemKey === "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES"
+      );
+      const lines = await s.t.run((ctx) => ctx.db.query("journalLines").collect());
+      expect(lines.filter((l) => arFc && l.accountId === arFc._id)).toHaveLength(0);
+    });
+  }
+
+  test("the refusal names the event type and points at the real authority", async () => {
+    const s = await seedClaimsOrg("outbox_message");
+    await chartAndPeriod(s);
+
+    await expect(
+      s.t.run((ctx) =>
+        postAccountingEvent(ctx as unknown as MutationCtx, {
+          orgId: s.orgId,
+          eventType: "CLAIM_SETTLED",
+          sourceType: "claims",
+          sourceId: "direct",
+          eventVersion: 1,
+          accountingDate: Date.now(),
+          occurredAt: Date.now(),
+          currency: "JOD",
+          idempotencyKey: "direct_call",
+          payload: { claimId: "direct", amountMinor: 1_000, currency: "JOD", paymentMethod: "CASH" },
+          actorId: s.userId,
+        })
+      )
+    ).rejects.toThrow(/CLAIM_SETTLED accounting event is retired/i);
   });
 });
 
@@ -596,6 +716,67 @@ describe("SCRUM-51 — the authoritative projection Claims was retired in favour
     });
     expect(totals.count).toBe(1);
     expect(totals.byCurrency.JOD.originalMinor).toBe(100_000);
+  });
+
+  test("two scales under one currency are refused, not averaged", async () => {
+    const s = await seedClaimsOrg("scaleclash");
+    await seedFinanceApplicationReceivable(s, {
+      amountMinor: 100_000,
+      applicationId: "scaleA",
+      currency: "JOD",
+      scale: 3,
+    });
+    await seedFinanceApplicationReceivable(s, {
+      amountMinor: 100_000,
+      applicationId: "scaleB",
+      currency: "JOD",
+      scale: 2,
+    });
+
+    // ⚠️ DEFENCE IN DEPTH, and stated as such: `ensureReceivableDocument`
+    // derives scale from the currency, so two JOD documents cannot disagree
+    // about it today. The state is built directly because no door produces it.
+    // It would become reachable if the currency-scale table were ever edited
+    // between two writes, and the wrong answer then is not a rounding error —
+    // 100_000 at scale 3 is 100.000 and at scale 2 is 1,000.00, so adding them
+    // reports a number that is wrong by a factor of ten with no sign of it.
+    await expect(
+      s.asOwner.query(api.claims.financeCompanyReceivableTotals, { orgId: s.orgId })
+    ).rejects.toThrow(/disagree about scale/i);
+  });
+
+  test("the cap counts settled history too, which is a known limitation", async () => {
+    const s = await seedClaimsOrg("capratchet");
+    // 501 receivables that are all PAID — every one economically finished,
+    // nothing collectable among them. The view still refuses.
+    await s.t.run(async (ctx) => {
+      for (let i = 0; i < 501; i++) {
+        await ctx.db.insert("receivableDocuments", {
+          orgId: s.orgId,
+          documentType: "INVOICE" as const,
+          documentNumber: `AR-PAID-${i}`,
+          payerType: "FINANCE_COMPANY" as const,
+          sourceType: FINANCE_APPLICATION_SOURCE,
+          sourceId: `paid_${i}`,
+          originalAmountMinor: 1_000,
+          currency: "JOD",
+          scale: 3,
+          issueDate: Date.now(),
+          dueDate: Date.now(),
+          status: "PAID" as const,
+          createdAt: Date.now(),
+          createdBy: s.userId,
+        });
+      }
+    });
+
+    // ⚠️ THIS TEST PINS A LIMITATION, NOT A GUARANTEE. The cap counts lifetime
+    // documents, so a long-lived dealer loses the view even with nothing owed.
+    // It is asserted rather than left implicit so that 237-B designs pagination
+    // from the real behaviour instead of from the comment above the constant.
+    await expect(
+      s.asOwner.query(api.claims.financeCompanyReceivableTotals, { orgId: s.orgId })
+    ).rejects.toThrow(/more than this view can total/i);
   });
 
   test("beyond the cap it refuses rather than reporting a partial total", async () => {

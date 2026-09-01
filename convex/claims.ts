@@ -56,19 +56,21 @@ export const list = query({
  * authority. Hiding the buttons would leave the door open to anything holding
  * a session; refusing server-side closes it for every caller.
  *
- * ⚠️ THE REFUSAL WRITES NO CLAIM, SUBLEDGER OR GL STATE — but it is not
- * literally true that nothing is written before it. `requireTenantAuth`
- * runs first, and for an impersonation session it appends an
- * `impersonated-write:` row to the audit trail via `enforceImpersonationGrant`
- * before returning. That is every tenant-scoped function's behaviour, it
- * records an ATTEMPT that wrote nothing, and suppressing it would reduce
- * oversight of impersonators to make a comment true. Reported by the Sonnet
- * MAX seat as SCRUM-51-F3.
+ * ⚠️ NOTHING IS WRITTEN, AND THE REASON IS ROLLBACK — NOT ABSENCE OF WRITES.
+ * This comment took three tries and both seats to get right, so it states the
+ * mechanism rather than the conclusion. `requireTenantAuth` runs first, and
+ * under an impersonation session `enforceImpersonationGrant` INSERTS an
+ * `impersonated-write:` row into `adminAuditLog`. But the refusal below throws
+ * uncaught, and an uncaught throw rolls the whole Convex mutation back — so
+ * that row never commits either. A refused attempt therefore leaves no trace
+ * in the database at all, including no audit trail of the attempt. If durable
+ * failed-attempt auditing is ever wanted here it needs a different mechanism,
+ * because anything written inside the transaction dies with it.
  */
 function refuseRetiredClaimsWriter(door: string): never {
   throwAppError(
     AppErrorCode.CLAIMS_RETIRED,
-    `Claims no longer records finance-company money (claims.${door} is retired). A financed deal's receivable is opened and settled by its Finance Application, which is the only authority for finance-company AR. Open the deal's Finance Application instead.`
+    `Claims no longer records finance-company money (claims.${door} is retired). Finance-company receivables are opened and settled through the deal's Finance Application, which is the only authority for them. If this claim has no finance application behind it, it has no receivable either, and there is nothing here to settle or write off.`
   );
 }
 
@@ -161,6 +163,15 @@ const FINANCE_APPLICATION_SOURCE = "finance_application";
  * comes from `subledger.getReceivableOutstandingMinor` rather than a second
  * summation — the helper the mutation side already trusts, including its
  * CANCELLED handling.
+ *
+ * ⚠️ `applications.ts` reaches the same ANSWER by a different SHAPE, and an
+ * earlier version of this comment wrongly called them the same rule. This is
+ * an allow-list of two; that one is a block-list of three, which leaves PAID
+ * on its live side. They agree only because a PAID receivable always nets to
+ * zero through the shared helper — an invariant, not a structural guarantee.
+ * Add a seventh status to the schema and they diverge silently, which is the
+ * list-versus-total failure this file just closed, moved up a level. Worth
+ * one shared predicate if either side is touched again.
  */
 const COLLECTIBLE_STATUSES = new Set(["OPEN", "PARTIALLY_PAID"]);
 
@@ -180,6 +191,17 @@ async function collectibleBalanceMinor(
  * kind of number someone acts on. So beyond the cap this refuses, and the
  * consuming client (237-B) has to arrive with pagination rather than inherit a
  * silently partial figure.
+ *
+ * ⚠️ THE CAP COUNTS LIFETIME DOCUMENTS, NOT OPEN ONES, and both seats were
+ * right to call that a ratchet: a PAID receivable from three years ago counts
+ * against it exactly like an open one, nothing purges these rows, and so a
+ * long-lived dealer crosses the line and loses the view entirely. It is left
+ * this way ON PURPOSE rather than half-fixed here — filtering the cap to open
+ * statuses needs an index this schema does not have, and these queries take no
+ * pagination arguments at all, so 237-B cannot simply 'arrive with pagination'
+ * against this shape. Designing that is 237-B's job and it should start from
+ * this sentence rather than from the optimistic one above it. Refusing beats
+ * lying in the meantime, and there is no consumer yet for it to break.
  */
 const MAX_FINANCE_COMPANY_ROWS = 500;
 
@@ -222,37 +244,41 @@ export const listFinanceCompanyReceivables = query({
     const documents = await financeCompanyReceivableDocs(ctx, args.orgId);
     documents.sort((a, b) => b.issueDate - a.issueDate);
 
-    const rows = [];
-    for (const doc of documents) {
-      // ⚠️ RE-CHECK THE TENANT ON EVERY RELATED READ. These ids come off the
-      // document, not off the request, so a malformed or legacy row would
-      // otherwise let this view print another dealership's finance company or
-      // customer name. Belt and braces: the writers set them correctly today.
-      const company = doc.financeCompanyId ? await ctx.db.get(doc.financeCompanyId) : null;
-      const customer = doc.customerId ? await ctx.db.get(doc.customerId) : null;
-      const sameOrgCompany = company && company.orgId === args.orgId ? company : null;
-      const sameOrgCustomer = customer && customer.orgId === args.orgId ? customer : null;
+    // Resolved together rather than one document after another. Each row needs
+    // two point reads and a balance lookup, and awaiting them in sequence made
+    // the handler as slow as the row count — a needless multiplier, since none
+    // of the reads depends on another.
+    return await Promise.all(
+      documents.map(async (doc) => {
+        // ⚠️ RE-CHECK THE TENANT ON EVERY RELATED READ. These ids come off the
+        // document, not off the request, so a malformed or legacy row would
+        // otherwise let this view print another dealership's finance company or
+        // customer name. Belt and braces: the writers set them correctly today.
+        const company = doc.financeCompanyId ? await ctx.db.get(doc.financeCompanyId) : null;
+        const customer = doc.customerId ? await ctx.db.get(doc.customerId) : null;
+        const sameOrgCompany = company && company.orgId === args.orgId ? company : null;
+        const sameOrgCustomer = customer && customer.orgId === args.orgId ? customer : null;
 
-      rows.push({
-        receivableDocumentId: doc._id,
-        documentNumber: doc.documentNumber,
-        applicationId: doc.sourceId,
-        financeCompanyId: doc.financeCompanyId,
-        financingEntity: sameOrgCompany ? sameOrgCompany.name : null,
-        customerId: doc.customerId,
-        buyerName: sameOrgCustomer
-          ? `${sameOrgCustomer.firstName ?? ""} ${sameOrgCustomer.lastName ?? ""}`.trim()
-          : null,
-        originalAmountMinor: doc.originalAmountMinor,
-        outstandingMinor: await collectibleBalanceMinor(ctx, doc),
-        currency: doc.currency,
-        scale: doc.scale,
-        status: doc.status,
-        issueDate: doc.issueDate,
-        dueDate: doc.dueDate,
-      });
-    }
-    return rows;
+        return {
+          receivableDocumentId: doc._id,
+          documentNumber: doc.documentNumber,
+          applicationId: doc.sourceId,
+          financeCompanyId: doc.financeCompanyId,
+          financingEntity: sameOrgCompany ? sameOrgCompany.name : null,
+          customerId: doc.customerId,
+          buyerName: sameOrgCustomer
+            ? `${sameOrgCustomer.firstName ?? ""} ${sameOrgCustomer.lastName ?? ""}`.trim()
+            : null,
+          originalAmountMinor: doc.originalAmountMinor,
+          outstandingMinor: await collectibleBalanceMinor(ctx, doc),
+          currency: doc.currency,
+          scale: doc.scale,
+          status: doc.status,
+          issueDate: doc.issueDate,
+          dueDate: doc.dueDate,
+        };
+      })
+    );
   },
 });
 
@@ -284,6 +310,21 @@ export const financeCompanyReceivableTotals = query({
       const bucket =
         byCurrency[doc.currency] ??
         { scale: doc.scale, count: 0, originalMinor: 0, outstandingMinor: 0 };
+
+      // ⚠️ TWO SCALES UNDER ONE CURRENCY IS CORRUPTION, NOT A ROUNDING QUESTION.
+      // The bucket takes its scale from whichever document is seen first, so a
+      // second document claiming the same currency at a different scale would
+      // have its minor units added under the wrong one — 100 fils and 100
+      // piastres silently becoming 200 of something. `ensureReceivableDocument`
+      // derives scale from the currency, so this cannot happen today; it could
+      // if the currency table were ever edited between writes. Refused rather
+      // than averaged, because there is no honest number to report here.
+      if (bucket.scale !== doc.scale) {
+        throwAppError(
+          AppErrorCode.VALIDATION_FAILED,
+          `Finance-company receivables in ${doc.currency} disagree about scale (${bucket.scale} and ${doc.scale}). A total across them would be meaningless, so it is refused until the documents are corrected.`
+        );
+      }
       bucket.count += 1;
       bucket.originalMinor += doc.originalAmountMinor;
       bucket.outstandingMinor += await collectibleBalanceMinor(ctx, doc);
