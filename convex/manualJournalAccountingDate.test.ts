@@ -311,6 +311,36 @@ describe("SCRUM-50 — the declared date is validated, never guessed", () => {
     expect(entries).toHaveLength(0);
   });
 
+  test("a legacy dateless draft can still be REJECTED, so refusing it is not a dead end", async () => {
+    const s = await seedDealer();
+    const legacyDraftId = await s.t.run((ctx) =>
+      ctx.db.insert("manualJournalDrafts", {
+        orgId: s.orgId,
+        status: "PENDING_APPROVAL" as const,
+        memo: "Pre-SCRUM-50 draft",
+        lines: s.lines,
+        idempotencyKey: "s50-legacy-rejectable",
+        createdBy: s.userId,
+        createdAt: Date.now(),
+      })
+    );
+
+    // ⚠️ THIS IS THE TEST THAT KEEPS THE FIX FROM BEING A DEAD END, and it is
+    // here because the previous ticket in this program shipped exactly that
+    // mistake: a fail-closed refusal with no disposal path, which permanently
+    // blocked a workflow. Refusing to APPROVE a dateless draft is only
+    // acceptable while REJECTING it still works, because that is the operator's
+    // way out — reject, then resubmit with a date they actually chose.
+    await s.asReviewer.mutation(api.financialAudit.rejectManualJournal, {
+      orgId: s.orgId,
+      draftId: legacyDraftId,
+      rejectionReason: "Prepared before the accounting date became explicit.",
+    });
+
+    const draft = await s.t.run((ctx) => ctx.db.get(legacyDraftId));
+    expect(draft!.status).toBe("REJECTED");
+  });
+
   test("reusing an idempotency key with a different accounting date is refused", async () => {
     const s = await seedDealer();
     await s.asUser.mutation(api.financialAudit.createManualJournal, {
