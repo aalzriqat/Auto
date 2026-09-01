@@ -7094,3 +7094,79 @@ describe("a reversal reads back the identity it was recorded under (Sonnet MAX)"
     expect(deposits[0].holdActive).toBe(true);
   });
 });
+
+/**
+ * CX-4, raised by the Codex xhigh seat against d0cdf9051 and reproduced here.
+ *
+ * FAILING-FIRST EVIDENCE, frozen under c16220 §3B before any correction is
+ * designed. This test documents the defect; it is expected to be RED until the
+ * class-level correction lands.
+ *
+ * The ordering that produces it:
+ *
+ *   cancelCompletedSaleOperationalRecords  ->  reinstateAppliedDeposits
+ *   ...then...                                 hookSaleCancelled
+ *
+ * `reinstateHold` is `holdId !== undefined || journalReversed`, and
+ * `journalReversed` is `outcome !== "DEFERRED"`. A FINANCED_SALE_CONSIDERATION
+ * application posts no journal of its own, so its reversal returns NOT_POSTED
+ * UNCONDITIONALLY — including when the parent sale reversal cannot post and is
+ * queued instead. The hold therefore comes back while the general ledger still
+ * carries the original sale entry and the deposit release inside it.
+ *
+ * Before this branch the same deposit used CUSTOMER_RECEIVABLE, which posts a
+ * real DEPOSIT_APPLIED journal; in a closed period ITS reversal defers,
+ * `journalReversed` is false, and the hold correctly stays locked. So the new
+ * treatment turned a period-aware safety property into an unconditional one.
+ */
+describe("a deposit released inside a sale journal stays locked until that journal reverses (CX-4)", () => {
+  test("a deposit is not spendable while the sale's reversal is still queued", async () => {
+    const s = await seedDealership("cx4Deferred");
+    const { applicationId } = await runDeal(s, {
+      route: "THROUGH_DEALERSHIP",
+      deposit: 3_000,
+      downPayment: 3_000,
+    });
+
+    // The sale posted while the period was open. Close it, so the cancellation's
+    // reversal cannot post and must queue — the ordinary month-end shape, not an
+    // exotic one.
+    await s.t.run(async (ctx) => {
+      for (const period of await ctx.db.query("accountingPeriods").collect()) {
+        await ctx.db.patch(period._id, { status: "CLOSED" as const });
+      }
+    });
+
+    await s.asUser.mutation(api.applications.cancelApplication, {
+      orgId: s.orgId,
+      applicationId,
+      reason: "Customer withdrew after the period closed",
+    });
+
+    // The parent reversal could not post, so it is queued.
+    const queued = await s.t.run((ctx) =>
+      ctx.db.query("pendingAccountingEvents").collect()
+    );
+    expect(queued.length).toBeGreaterThan(0);
+
+    // And the ledger still says the deposit liability was released by the sale:
+    // the original entry stands, unreversed.
+    const after = await ledgerBySystemKey(s);
+    expect(after[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(0);
+
+    // ⚠️ THEREFORE THE MONEY IS NOT AVAILABLE YET. Reinstating the hold here
+    // publishes 3,000 as spendable — refundable, re-allocatable, applicable to
+    // another car — while the GL still records it as consumed by a sale that has
+    // not been backed out. Two books, two answers, and the deposit is the one
+    // that moves.
+    const deposits = await s.t.run((ctx) => ctx.db.query("deposits").collect());
+    expect(deposits[0].holdActive).toBe(false);
+
+    // The application must also not read as fully reversed while its parent
+    // reversal is outstanding.
+    const applications = await s.t.run((ctx) =>
+      ctx.db.query("depositApplications").collect()
+    );
+    expect(applications[0].status).toBe("REVERSING");
+  });
+});
