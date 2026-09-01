@@ -455,6 +455,32 @@ export async function ensureConsignmentAccounts(
   await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE, "4170");
 }
 
+/**
+ * The accounts a financed settlement posts to.
+ *
+ * Every org's chart predates them, so the first financed sale after deploy
+ * would otherwise fail to resolve the keys. Same insert-if-missing self-heal
+ * every other account group here uses — no migration, and an org that already
+ * has one of these codes as a custom account is refused rather than having it
+ * quietly repurposed.
+ *
+ * Called only when a sale actually carries a settlement plan, so an ordinary
+ * cash sale pays for none of these lookups.
+ */
+export async function ensureFinancedSettlementAccounts(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.SALES_CONSIDERATION_REDUCTIONS, "4180");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.ACCOUNTS_PAYABLE_FINANCE_COMPANIES, "2220");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.FINANCE_COMPANY_COMMISSION_EXPENSE, "6860");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.APPRAISAL_EXPENSE, "6870");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.INSURANCE_EXPENSE, "6880");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.OWNERSHIP_TRANSFER_EXPENSE, "6890");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.SELLING_EXPENSE, "6900");
+}
+
 // ─── Queries ──────────────────────────────────────────────────────────────────
 
 export const list = query({

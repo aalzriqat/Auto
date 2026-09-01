@@ -1,3 +1,4 @@
+import { ConvexError } from "convex/values";
 import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 import {
@@ -42,7 +43,10 @@ import {
  * money anybody may spend again.
  */
 
-export type DepositApplicationTreatment = "CUSTOMER_RECEIVABLE" | "SUPPLIER_SETTLEMENT";
+export type DepositApplicationTreatment =
+  | "CUSTOMER_RECEIVABLE"
+  | "SUPPLIER_SETTLEMENT"
+  | "FINANCED_SALE_CONSIDERATION";
 
 /** Statuses that still hold a claim on the deposit — the money is not back. */
 const LIVE_APPLICATION_STATUSES = new Set(["APPLIED", "REVERSING"]);
@@ -54,8 +58,18 @@ function identityFor(args: {
   treatment: DepositApplicationTreatment;
 }): DepositApplicationIdentity {
   const settlement = args.treatment === "SUPPLIER_SETTLEMENT";
+  const financedConsideration = args.treatment === "FINANCED_SALE_CONSIDERATION";
   return {
-    eventType: settlement ? "DEPOSIT_APPLIED_TO_SETTLEMENT" : "DEPOSIT_APPLIED",
+    // The financed-consideration identity names an event that is never posted.
+    // That is deliberate rather than a gap: the release lives in the financed
+    // sale's own journal, so there is nothing here to reverse, and
+    // `reverseEventIfPosted` finds nothing and does nothing — while the row
+    // itself still reverses, which is what restores the hold.
+    eventType: financedConsideration
+      ? "FINANCED_SALE_CONSIDERATION"
+      : settlement
+        ? "DEPOSIT_APPLIED_TO_SETTLEMENT"
+        : "DEPOSIT_APPLIED",
     // Its own source type. The tuple (eventType, sourceType, sourceId,
     // eventVersion) is what `postAccountingEvent` dedupes on, and sharing
     // "deposits" would put every car on the quote under one source.
@@ -65,9 +79,13 @@ function identityFor(args: {
     // a genuine new movement, so each needs its own version — at version 1 the
     // second posting is silently swallowed as a duplicate.
     eventVersion: args.sequence,
-    idempotencyKey: `${settlement ? "deposit_applied_settlement" : "deposit_applied"}_${
-      args.depositId
-    }_${args.vehicleId}_${args.sequence}`,
+    idempotencyKey: `${
+      financedConsideration
+        ? "deposit_financed_consideration"
+        : settlement
+          ? "deposit_applied_settlement"
+          : "deposit_applied"
+    }_${args.depositId}_${args.vehicleId}_${args.sequence}`,
   };
 }
 
@@ -165,6 +183,16 @@ export async function recordDepositApplication(
     appliedBy: args.actorId,
   });
 
+  // No journal of its own. The financed sale's entry already debits the deposit
+  // liability for exactly this amount, and emitting DEPOSIT_APPLIED beside it
+  // would release the same liability twice — and credit AR-Customers, which on
+  // this deal is not the debtor. The row above is still written in full, so the
+  // deposit, hold, quote, vehicle and sale provenance is preserved and the
+  // application reverses like any other.
+  if (args.treatment === "FINANCED_SALE_CONSIDERATION") {
+    return applicationId;
+  }
+
   if (args.treatment === "SUPPLIER_SETTLEMENT") {
     await hookDepositAppliedToSettlement(ctx, {
       orgId: args.orgId,
@@ -199,10 +227,33 @@ export async function recordDepositApplication(
 /** The identity a row was posted under, read back rather than re-derived. */
 function recordedIdentity(row: Doc<"depositApplications">): DepositApplicationIdentity {
   return {
+    // ⚠️ EXHAUSTIVE OVER EVERY TREATMENT `identityFor` CAN WRITE.
+    //
+    // This is the read-back half of the pair, and it used to be a two-way
+    // ternary while the write side had three branches — so a row recorded as
+    // FINANCED_SALE_CONSIDERATION was read back as DEPOSIT_APPLIED. That is the
+    // precise failure this module's own header says the stored identity exists
+    // to prevent: a wrong re-derivation "does not fail — it finds no event and
+    // returns quietly."
+    //
+    // Nothing broke in practice, because a financed-consideration row posts no
+    // event and the misread lookup found nothing either — the right answer for
+    // the wrong reason. It also made the FINANCED_SALE_CONSIDERATION
+    // short-circuit in `reverseDepositApplication` unreachable from
+    // `reverseDepositApplicationsForSale`, its only production caller, so the
+    // guard read as load-bearing while being dead.
+    //
+    // The narrow case where it does bite: the tuple this builds
+    // (orgId, sourceType, sourceId, eventVersion, eventType) is shared across
+    // treatments except for eventType, so a DEPOSIT_APPLIED event on the SAME
+    // deposit+vehicle at the SAME sequence is a live target for a reversal that
+    // belongs to a different application entirely.
     eventType:
-      row.eventType === "DEPOSIT_APPLIED_TO_SETTLEMENT"
-        ? "DEPOSIT_APPLIED_TO_SETTLEMENT"
-        : "DEPOSIT_APPLIED",
+      row.eventType === "FINANCED_SALE_CONSIDERATION"
+        ? "FINANCED_SALE_CONSIDERATION"
+        : row.eventType === "DEPOSIT_APPLIED_TO_SETTLEMENT"
+          ? "DEPOSIT_APPLIED_TO_SETTLEMENT"
+          : "DEPOSIT_APPLIED",
     sourceType: row.eventSourceType,
     sourceId: row.eventSourceId,
     eventVersion: row.eventVersion,
@@ -350,6 +401,91 @@ const NOTHING_TO_COMPLETE: ResolvedDeferredReversal = {
   holdId: null,
   sources: [],
 };
+
+/**
+ * Refuses a cancellation that would free a deposit its journal still holds.
+ *
+ * A FINANCED_SALE_CONSIDERATION application posts no journal of its own — the
+ * deposit-liability release is a line INSIDE the sale's own entry. So the only
+ * thing that can restore that deposit is the reversal of the parent sale, and
+ * until that reversal actually posts the money is still spent on the books.
+ *
+ * `reverseDepositApplication` returns NOT_POSTED for these rows unconditionally,
+ * which `reverseDepositApplicationsForSale` reads as `journalReversed`, which
+ * `reinstateAppliedDeposits` reads as permission to reopen the hold. That chain
+ * is correct only when the parent reversal actually posted. When it DEFERS —
+ * an ordinary month-end cancellation — the deposit becomes refundable,
+ * re-allocatable and re-applicable while the ledger still records it consumed.
+ *
+ * ## Why this refuses rather than deferring the deposit too
+ *
+ * Marking the application REVERSING and waiting for the parent to drain is the
+ * better long-run model, and it is NOT implementable as a small change:
+ * `resolveDeferredReversalSources` accepts only a `reversed_<applicationKey>`
+ * idempotency key and resolves it with `.unique()`, while the parent reversal
+ * is queued under `sale_cancelled_<saleId>` and one sale can carry SEVERAL of
+ * these applications. There is no completion path for them today, and no cron
+ * scans REVERSING rows independently — so deferring here would strand the
+ * deposit permanently instead of releasing it early. Trading a double-spend for
+ * a silent permanent freeze is not an improvement.
+ *
+ * Refusing keeps the invariant absolutely and creates no unreachable state: the
+ * abort happens before any application is touched, so no REVERSING row and no
+ * dead-letterable obligation is ever created. Open a period covering the
+ * cancellation date and the same cancellation succeeds unchanged.
+ *
+ * The owner-aware, multi-dependent completion protocol is recorded as the
+ * follow-up that removes the refusal.
+ */
+export async function assertFinancedDepositsSurviveParentReversal(
+  ctx: MutationCtx,
+  args: { orgId: Id<"organizations">; saleId: Id<"sales"> }
+): Promise<void> {
+  // ⚠️ READ FROM THE LEDGER, NOT FROM THE CALLER'S OUTCOME.
+  //
+  // The first version of this took the `ReversalOutcome` the caller had just
+  // computed. That made the guard only as complete as the branch that computed
+  // it — and in `applications.cancelApplication` the parent reversal sits inside
+  // an `if (sale.status !== "CANCELLED")` block while the operational teardown
+  // does not. Re-entering on an already-cancelled sale skipped the reversal, the
+  // outcome, and therefore the guard, while still running the teardown that
+  // reinstates the hold. Both review seats found that hole independently, from
+  // opposite ends.
+  //
+  // Asking the ledger instead makes the answer independent of how the caller got
+  // here. The question is not what this transaction just did; it is whether the
+  // journal that released the deposit is still standing.
+  const saleEvent = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_source", (q) =>
+      q.eq("orgId", args.orgId).eq("sourceType", "sales").eq("sourceId", args.saleId.toString())
+    )
+    .filter((q) => q.eq(q.field("eventType"), "SALE_COMPLETED"))
+    .first();
+
+  // Absent, still queued, or failed: the release never reached the general
+  // ledger, so there is nothing for the deposit to contradict. REVERSED: the
+  // entry has been backed out and the money really is free again. Only a
+  // standing POSTED entry means the books still spend this deposit.
+  if (!saleEvent || saleEvent.status !== "POSTED") return;
+
+  const applications = await ctx.db
+    .query("depositApplications")
+    .withIndex("by_sale", (q) => q.eq("saleId", args.saleId))
+    .collect();
+
+  const stranded = applications.filter(
+    (a) =>
+      a.orgId === args.orgId &&
+      a.treatment === "FINANCED_SALE_CONSIDERATION" &&
+      (a.status === "APPLIED" || a.status === "REVERSING")
+  );
+  if (stranded.length === 0) return;
+
+  throw new ConvexError(
+    "The journal that recorded this sale has not been reversed yet — its accounting period is closed, so the reversal is waiting for an open one. The customer deposit applied to this sale was released inside that journal, so freeing it now would show the money as available while the books still record it as spent on this car. Open an accounting period covering today, then cancel."
+  );
+}
 
 export async function resolveDeferredReversalSources(
   ctx: MutationCtx,

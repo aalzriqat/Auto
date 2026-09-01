@@ -177,6 +177,59 @@ export interface DepositForfeitedPayload {
   customerId: string;
 }
 
+/**
+ * One classified line of a financed settlement, already resolved to an account.
+ *
+ * The rule does not decide where a component posts. That decision belongs to
+ * `buildFinancedSalePostingPlan`, which refuses a treatment it cannot map rather
+ * than defaulting one — so by the time a component reaches here it carries a
+ * system key somebody explicitly assigned to its treatment.
+ */
+export interface FinancedSalePlanLine {
+  sourceKind: string;
+  sourceId: string;
+  label: string;
+  amountMinor: number;
+  treatment: string;
+  systemKey: SystemKey;
+  side: "DEBIT" | "CREDIT";
+}
+
+/**
+ * The frozen recognition plan for an external-finance sale settled through the
+ * dealership.
+ *
+ * It rides on SALE_COMPLETED rather than arriving as a second event, and that is
+ * the design rather than a convenience. Two writers capable of posting the same
+ * sale is how a ledger ends up with two versions of one transaction; and
+ * `hookSaleCancelled` is a `makeReversalHook`, which mirrors the ORIGINAL
+ * journal's own lines instead of recomputing them. Carrying the plan inside the
+ * sale entry therefore makes cancellation reverse the exact plan that posted,
+ * for free, even after the fee rows it was derived from have been edited.
+ */
+export interface FinancedSalePlanPayload {
+  version: number;
+  fingerprint: string;
+  financeCompanyId: string;
+  /** The only figure the vehicle leg's revenue is posted from. */
+  legalInvoiceConsiderationMinor: number;
+  /** N — what the financing company will actually remit. */
+  financeCompanyReceivableMinor: number;
+  /** P — what the dealership owes the company when deductions exceed the gross. */
+  financeCompanyPayableMinor: number;
+  /** Only what the customer independently owes the dealership on the vehicle leg. */
+  customerReceivableMinor: number;
+  /**
+   * H — the customer's deposit slice this sale consumes.
+   *
+   * Already banked: `ruleDepositReceived` debited cash and credited the deposit
+   * liability when it was taken. Recognising the sale therefore RELEASES that
+   * liability, and debiting cash here as well would book the same money twice.
+   */
+  depositLiabilityAppliedMinor: number;
+  components: FinancedSalePlanLine[];
+}
+
 export interface SaleCompletedPayload {
   saleId: string;
   saleAmountMinor: number;
@@ -210,6 +263,15 @@ export interface SaleCompletedPayload {
    * bug and still throws.
    */
   consignmentEvaluated?: boolean;
+  /**
+   * Present only on an external-finance sale settled THROUGH_DEALERSHIP.
+   *
+   * Its presence changes who owes the dealership for the car, and nothing else:
+   * tax, dealer fees, warranty and GAP stay the customer's and stay in
+   * AR-Customers. Absent, this rule behaves exactly as it did — every cash sale,
+   * every consigned sale and every already-queued event is untouched.
+   */
+  financedSalePlan?: FinancedSalePlanPayload;
   /**
    * Set by every emitter that knows `saleAmountMinor` is tax-EXCLUSIVE — i.e.
    * every one of them from this deploy onward (SCRUM-22). It is how this rule
@@ -274,6 +336,21 @@ export interface SaleCompletedPayload {
      * first posts the very receivable this redesign removes.
      */
     externallyFinanced?: boolean;
+    /**
+     * Whether a CONFIGURED finance company is on this deal.
+     *
+     * Narrower than `externallyFinanced`, and the difference is the whole point.
+     * A lease or a manually-named financier is externally financed too, but
+     * `quotes.saveQuote` refuses it a `companyId`, so no settlement plan is ever
+     * built for it and no finance-company receivable is ever opened — in this
+     * book or in the subledger. Its gross genuinely is the customer's debt, and
+     * always was.
+     *
+     * Only a configured company produces the pair that can disagree: a plan on
+     * one side and a canonical receivable on the other. So this, not
+     * `externallyFinanced`, is what makes a missing plan a refusal.
+     */
+    financedByConfiguredCompany?: boolean;
     supplierName?: string;
     settlementRoute: "DIRECT_TO_SUPPLIER" | "THROUGH_DEALERSHIP";
   };
@@ -560,6 +637,121 @@ function addResoldProductLines(
 }
 
 /**
+ * The CONSIDERATION side of a financed settlement plan: who owes the money for
+ * this sale, and which classified components reduce what the financier sends.
+ *
+ * ## Why this is shared rather than written twice
+ *
+ * Who funds a sale and what the dealership owned when it sold it are
+ * ORTHOGONAL questions. A car can be owned or consigned; independently of
+ * that, it can be paid for in cash or settled by a financing company. Treating
+ * them as competing top-level branches is what let a consigned financed sale
+ * post its gross to Customer AR while the subledger opened a finance-company
+ * receivable for the same money — one sale, two debtors, and a deposit
+ * liability nobody released.
+ *
+ * So this builder answers only the funding question, for every ownership
+ * basis, from the frozen plan:
+ *
+ * ```
+ *   N  finance-company receivable — what the company still owes
+ *   P  finance-company payable    — when deductions exceed the gross
+ *   H  deposit liability released — money the dealership already holds
+ *   D  one line per classified component, at its own mapped account
+ * ```
+ *
+ * `C` — what the customer independently owes — is returned as an amount rather
+ * than a line, because each basis already raises its own customer receivable
+ * and how `C` combines with the tax, dealer fees, warranty and GAP on that
+ * receivable is a question about the basis, not about the funding.
+ *
+ * ⚠️ **It must never decide vehicle revenue, COGS, inventory, the supplier's
+ * entitlement or the agent commission.** Those belong to the ownership basis,
+ * and collapsing the two is the defect this exists to make unrepresentable.
+ */
+interface SettlementFunding {
+  /** N, P, H and every classified component — the plan's own lines, not recomputed. */
+  lines: LineSpec[];
+  /** C — for the basis to fold into the customer receivable it already raises. */
+  customerReceivableMinor: number;
+  /** L — the consideration the plan was made under, for the basis's balance bridge. */
+  legalInvoiceConsiderationMinor: number;
+}
+
+function settlementFundingLines(
+  plan: FinancedSalePlanPayload,
+  dims: Partial<Pick<LineSpec, "vehicleId" | "customerId" | "salespersonId" | "financeCompanyId">>
+): SettlementFunding {
+  const financeDims = { ...dims, financeCompanyId: plan.financeCompanyId };
+  const lines: LineSpec[] = [];
+
+  if (plan.financeCompanyReceivableMinor > 0) {
+    lines.push(
+      line(
+        SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES,
+        plan.financeCompanyReceivableMinor,
+        0,
+        "Finance company receivable — expected remittance",
+        financeDims
+      )
+    );
+  }
+  // Deductions above the gross mean the dealership owes the company, which is a
+  // payable and not a receivable wearing a minus sign.
+  if (plan.financeCompanyPayableMinor > 0) {
+    lines.push(
+      line(
+        SYSTEM_KEYS.ACCOUNTS_PAYABLE_FINANCE_COMPANIES,
+        0,
+        plan.financeCompanyPayableMinor,
+        "Owed to finance company — settlement deductions exceed the gross",
+        financeDims
+      )
+    );
+  }
+  // The deposit the customer already paid, released from the liability it
+  // created rather than debited to cash again. It is a debit because the
+  // liability is being discharged: the dealership no longer owes that money
+  // back, it has earned it against the car.
+  //
+  // No DEPOSIT_APPLIED event accompanies this. The ordinary deposit rule credits
+  // AR-Customers, which is right when the customer is the debtor and wrong here,
+  // where the financing company is — and emitting one beside this entry would
+  // release the same liability twice.
+  if (plan.depositLiabilityAppliedMinor > 0) {
+    lines.push(
+      line(
+        SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY,
+        plan.depositLiabilityAppliedMinor,
+        0,
+        "Customer deposit applied to the financed purchase",
+        dims
+      )
+    );
+  }
+  // One line per classified component, at the account its own treatment names.
+  // Never summed into a single bucket: a commission, an appraisal fee and a
+  // concession are three different facts that happen to reduce one payment.
+  for (const component of plan.components) {
+    lines.push(
+      line(
+        component.systemKey,
+        component.side === "DEBIT" ? component.amountMinor : 0,
+        component.side === "CREDIT" ? component.amountMinor : 0,
+        component.label,
+        financeDims
+      )
+    );
+  }
+
+  return {
+    lines,
+    customerReceivableMinor: plan.customerReceivableMinor,
+    legalInvoiceConsiderationMinor: plan.legalInvoiceConsiderationMinor,
+  };
+}
+
+/**
  * A consigned vehicle sold as the supplier's agent.
  *
  * The dealership never owned the car, never invoiced the buyer for it, and may
@@ -569,7 +761,21 @@ function addResoldProductLines(
  * receivables and payables by the supplier's share, and puts a car the
  * dealership never owned through its inventory.
  */
-function consignedAgentSaleLines(p: SaleCompletedPayload): RuleResult {
+function consignedAgentSaleLines(
+  p: SaleCompletedPayload,
+  /**
+   * The settlement funding for this sale, or `undefined` when the customer
+   * funds it directly.
+   *
+   * A PARAMETER rather than something this function looks up, deliberately.
+   * The plan used to be read only by the owned-sale branch, so a consigned
+   * sale carrying one silently dropped it — the entry still balanced, and
+   * nothing in 3,357 tests noticed. Passing it in means a basis has to decide
+   * what to do with it, and a fourth ownership basis added later cannot fail
+   * to be asked the question.
+   */
+  funding: SettlementFunding | undefined
+): RuleResult {
   const consignment = p.consignment!;
   const entitlementMinor = consignment.supplierEntitlementMinor;
   // The dealership's commission is its spread over the supplier's entitlement —
@@ -699,6 +905,82 @@ function consignedAgentSaleLines(p: SaleCompletedPayload): RuleResult {
   // dealership's own minimum-profit policy objects, that is for
   // `convex/utils/profitApproval.ts` to raise as an approval, not for the
   // ledger to make structurally unrepresentable.
+  // ── The funding bridge, for a consigned sale settled THROUGH the dealership ──
+  //
+  // Placed here, after every other refusal, so it cannot pre-empt a more
+  // specific one. An earlier version of a sibling guard sat at the top of its
+  // handler and turned "no settlement route" and "below the minimum profit"
+  // into the wrong message.
+  //
+  // DIRECT_TO_SUPPLIER is excluded because no plan is ever built for it: the
+  // company pays the supplier, so the dealership holds no finance receivable to
+  // recognise (`financedSaleRecognitionApplies` returns false on that route).
+  if (consignment.settlementRoute !== "DIRECT_TO_SUPPLIER") {
+    // FAIL CLOSED. A consigned sale financed by a configured company funds its
+    // gross from that company, which is the legal buyer of the car. Falling
+    // back to a gross Customer AR debit is precisely the misstatement this rule
+    // was corrected to stop, and it is silent — the entry balances either way.
+    //
+    // ⚠️ Keyed on `financedByConfiguredCompany`, NOT `externallyFinanced`.
+    // The wider field was the first thing tried and it refused every LEASE and
+    // manually-named financier: those are externally financed, but they carry
+    // no `companyId`, so no plan exists for them and no finance-company
+    // receivable is opened on either side. Their gross IS the customer's debt.
+    // There is no divergence to prevent, and refusing them would break a shape
+    // that posts correctly today.
+    //
+    // An older event carries neither marker and keeps the behaviour its own
+    // subledger rows were opened under — the same scoping the direct route's
+    // refusal uses.
+    if (consignment.financedByConfiguredCompany === true && funding === undefined) {
+      throw new ConvexError(
+        `Consigned sale ${p.saleId} is externally financed and settles through the dealership, but carries no settlement plan saying what the financing company owes. Billing the customer for the whole ${p.saleAmountMinor} minor units would name the wrong debtor. Re-derive the deal's settlement before posting it.`
+      );
+    }
+
+    // The BRIDGE. The funding side sums to the plan's legal consideration; the
+    // basis side credits the supplier's entitlement plus the commission, and
+    // the commission is computed as `saleAmountMinor - entitlement`. So the two
+    // sides balance exactly when the plan's consideration IS `saleAmountMinor`,
+    // and are short or long by the difference when it is not.
+    //
+    // Refused rather than reconciled. The gap between two figures is not
+    // evidence of a third: plugging it would invent an amount nobody recorded,
+    // and choosing which side to trust would silently overrule either the legal
+    // invoice or the supplier agreement.
+    //
+    // ⚠️ THIS IS STRICTER THAN THE OWNED BRANCH, DELIBERATELY, AND THE
+    // ASYMMETRY IS NOT AN OVERSIGHT.
+    //
+    // The owned branch says a few hundred lines below that the two figures
+    // "are allowed to differ — a 10,500 target against a 12,500 invoice to the
+    // financier is the ordinary shape of these deals". That is true THERE
+    // because the owned credit side is the legal consideration itself, so any
+    // L balances and `saleAmountMinor` is only the dealership's own operational
+    // target, carried for reporting.
+    //
+    // Here it is load-bearing arithmetic. The agent-basis credit side is
+    // `entitlement + commission`, and commission is DERIVED as
+    // `saleAmountMinor - entitlement` — so the credit side is pinned to
+    // `saleAmountMinor` while the funding side sums to L. Divergence is not a
+    // reporting nuance; it is an entry short by exactly `L - saleAmountMinor`,
+    // and the only ways to close it are to move the supplier's entitlement or
+    // the dealership's commission. Both are somebody's money and neither is
+    // recorded anywhere as the answer.
+    //
+    // Raised as a possible oversight by the Sonnet MAX seat against d0cdf9051
+    // — a fair reading, since the tolerance is documented generally and the
+    // strictness was not documented at all. Ruled in c16218 §4: "require exact
+    // equality with the plan's legal-invoice consideration. Do not infer a
+    // balancing amount from a difference." Written down here so the next
+    // reviewer does not have to re-derive it.
+    if (funding && funding.legalInvoiceConsiderationMinor !== p.saleAmountMinor) {
+      throw new ConvexError(
+        `Consigned sale ${p.saleId} was invoiced to the financing company for ${funding.legalInvoiceConsiderationMinor} minor units but records gross proceeds of ${p.saleAmountMinor}. The supplier's entitlement and the dealership's commission are measured from the proceeds, so the two must agree before this can post. Reconcile the legal invoice with the sale before completing it.`
+      );
+    }
+  }
+
   const lines: LineSpec[] =
     consignment.settlementRoute === "DIRECT_TO_SUPPLIER"
       ? marginMinor > 0
@@ -719,7 +1001,42 @@ function consignedAgentSaleLines(p: SaleCompletedPayload): RuleResult {
           // one account and the payment debited another, so the liability stood
           // forever while the payment's debit landed somewhere nothing had
           // credited.
-          line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, p.saleAmountMinor, 0, "Consigned sale proceeds receivable", dims),
+          // ── FUNDING SIDE: who owes the gross ──
+          //
+          // Without a plan, the customer, for the whole amount — unchanged, and
+          // the shape every cash-consigned sale in history posted under.
+          //
+          // With one, the financing company bought the car, so the plan says how
+          // the same gross is funded: what the company still owes (N), the
+          // deposit the dealership already holds (H), each classified deduction
+          // (D), and whatever the customer independently owes (C). The plan's own
+          // lines are used rather than recomputed here — two derivations of one
+          // settlement are free to disagree, and the disagreement lands between
+          // the journal and the subledger, which is exactly where it landed.
+          ...(funding
+            ? [
+                ...funding.lines,
+                ...(funding.customerReceivableMinor > 0
+                  ? [
+                      line(
+                        SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS,
+                        funding.customerReceivableMinor,
+                        0,
+                        "Consigned sale — customer's own share",
+                        dims
+                      ),
+                    ]
+                  : []),
+              ]
+            : [
+                line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, p.saleAmountMinor, 0, "Consigned sale proceeds receivable", dims),
+              ]),
+          // ── OWNERSHIP BASIS: whose car it was ──
+          //
+          // Untouched by any of the above. Who paid does not change who owned:
+          // the supplier's entitlement is his from the instant the money lands,
+          // and the dealership may recognise only its spread. Both figures keep
+          // their existing authority.
           line(SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, 0, entitlementMinor, `Owed to ${supplier}`, dims),
           // No tax line: `taxMinor` cannot be non-zero here, because the
           // refusal above returns first. One used to sit at this point, and it
@@ -773,9 +1090,49 @@ function consignedAgentSaleLines(p: SaleCompletedPayload): RuleResult {
 }
 
 export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
-  // Agent basis is a different rule, not a variation of this one — every line
-  // below assumes the dealership owned what it sold.
-  if (p.consignment) return consignedAgentSaleLines(p);
+  // ⚠️ FUNDING FIRST, THEN OWNERSHIP BASIS. The two are orthogonal.
+  //
+  // Who paid for the car and who owned it are independent facts, and this
+  // function used to treat them as competing top-level branches: the consigned
+  // return below came first, and the settlement plan was read only by the owned
+  // path underneath it. A consigned financed sale therefore built a plan,
+  // carried it in, and had it silently discarded — posting the gross to
+  // Customer AR while the subledger opened a finance-company receivable for the
+  // same money, and never releasing the deposit liability. The entry balanced,
+  // so nothing failed.
+  //
+  // Resolving the funding here and PASSING it to the basis is what stops that
+  // returning. A basis cannot forget to look up something it is handed, and a
+  // fourth ownership basis added later has to decide what to do with it before
+  // it will compile.
+  const saleDims = { customerId: p.customerId, vehicleId: p.vehicleId, salespersonId: p.salespersonId };
+  const funding = p.financedSalePlan
+    ? settlementFundingLines(p.financedSalePlan, saleDims)
+    : undefined;
+
+  // Agent basis is a different CREDIT side, not a variation of this one — every
+  // revenue, COGS and inventory line below assumes the dealership owned what it
+  // sold. It funds itself from exactly the same plan.
+  //
+  // ⚠️ NOTE THE ASYMMETRY: the consigned basis fails closed when a
+  // configured-company sale arrives with no plan, and the owned branch below
+  // does not. Raised by the Sonnet MAX seat against d0cdf9051 and accepted as a
+  // real gap in rule-level defence — recorded rather than closed here.
+  //
+  // Why it is contained today, verified rather than assumed: the only producer
+  // of a plan is `applications.finalizeDeal`, and for an OWNED vehicle
+  // `settlesDirectToSupplier` returns false (it requires
+  // `isConsignedAgentSale(vehicle)`), so `financedSaleRecognitionApplies` is
+  // true whenever `app.companyId` is set and `resolveFinancedSalePlan` must
+  // then either produce a plan or throw. It cannot return undefined. The other
+  // completion doors in `sales.ts` take no application id at all.
+  //
+  // Why it is not closed in this change: c16218 §6 requires that owned/STOCK
+  // financed sales remain unchanged, and adding a refusal path to this branch
+  // is a change to them. The guard belongs on the payload rather than inside
+  // `consignment`, which is a small change but an owner-proxy decision, not
+  // mine to take under a fired convergence breaker.
+  if (p.consignment) return consignedAgentSaleLines(p, funding);
 
   // Fail closed, and loudly. A sourced vehicle is the supplier's, so reaching
   // the principal branch without consignment details means the caller is about
@@ -852,15 +1209,52 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
   // sizes the canonical receivable document for the same sale. The GL and the
   // AR subledger disagreeing about one customer's bill is the failure this
   // arithmetic is shared to prevent.
+  // On an external financed deal settled through the dealership the financing
+  // company is the legal buyer of the CAR. The dealership's claim for the
+  // vehicle is therefore against the company, and the customer's receivable
+  // carries only what the customer independently owes: the tax, the dealer's own
+  // fees, warranty and GAP, plus any gap cash the plan says is still theirs.
+  //
+  // Raising the whole consideration as customer debt and transferring it out
+  // again afterwards is what this replaces. That shape opened the finance
+  // receivable from the customer's financing principal — a number that is
+  // neither what the company owes the dealership nor what the customer owes it —
+  // and drove AR-Customers negative whenever the principal exceeded the price.
+  const plan = p.financedSalePlan;
+
+  // A plan is only ever attached by an emitter that already knows the
+  // tax-exclusive convention. A legacy tax-INCLUSIVE event carrying one would
+  // mean the receivable and the journal were sized under different conventions,
+  // and the difference would sit in AR permanently.
+  if (plan && !taxExclusive) {
+    throw new ConvexError(
+      `Sale ${p.saleId} carries a financed settlement plan on the legacy tax convention, which cannot be posted. It must be re-derived under the current convention.`
+    );
+  }
+
+  const vehicleArDebitMinor = plan ? plan.customerReceivableMinor : p.saleAmountMinor;
   const arDebitMinor =
-    p.saleAmountMinor +
+    vehicleArDebitMinor +
     (taxExclusive ? taxMinor : 0) +
     dealerFeesMinor +
     warrantySoldMinor +
     gapSoldMinor;
-  const lines: LineSpec[] = [
-    line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, arDebitMinor, 0, "Sale receivable", dims),
-  ];
+  const lines: LineSpec[] = [];
+  // Unconditional without a plan, so no existing sale's entry changes shape.
+  // With one, a financed deal carrying no customer-owed extras legitimately owes
+  // the dealership nothing, and `validateBalance` refuses a line that is neither
+  // a debit nor a credit — so the correct entry omits the line rather than
+  // posting a zero one.
+  if (!plan || arDebitMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, arDebitMinor, 0, "Sale receivable", dims));
+  }
+  // The same funding lines the consigned basis composes, in the same order
+  // they were emitted inline here before — N, P, H, then one line per
+  // classified component. Shared rather than duplicated: the owned and
+  // consigned bases differ in what they CREDIT, never in who owes the money.
+  if (funding) {
+    lines.push(...funding.lines);
+  }
   // Only when there IS revenue. On the legacy branch `price - tax` is zero when
   // the two are equal, and `validateBalance` refuses a line carrying neither a
   // debit nor a credit — so the drain threw, the outbox retried, and after
@@ -885,8 +1279,14 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
   // to write a payload directly through the super-admin raw-JSON editor, which
   // can post an arbitrary payload to any rule by design. Stated because the
   // earlier wording claimed the refusal held generally, and it does not.
-  if (revenueMinor > 0) {
-    lines.push(line(SYSTEM_KEYS.SALES_REVENUE, 0, revenueMinor, "Vehicle sale revenue", dims));
+  // With a plan the consideration comes from the legal invoice, which is the only
+  // document the sale of the car was made under. `saleAmountMinor` is the
+  // dealership's own operational figure and the two are allowed to differ — a
+  // 10,500 target against a 12,500 invoice to the financier is the ordinary
+  // shape of these deals, not an error to reconcile away.
+  const vehicleRevenueMinor = plan ? plan.legalInvoiceConsiderationMinor : revenueMinor;
+  if (vehicleRevenueMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.SALES_REVENUE, 0, vehicleRevenueMinor, "Vehicle sale revenue", dims));
   }
   if (dealerFeesMinor > 0) {
     lines.push(line(SYSTEM_KEYS.DEALER_FEE_INCOME, 0, dealerFeesMinor, "Dealer fee income", dims));
@@ -914,7 +1314,9 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
     lines,
     memo: legacySourced
       ? "Vehicle sale completed (sourced, principal basis — queued before agent accounting; awaiting restatement)"
-      : "Vehicle sale completed",
+      : plan
+        ? "Vehicle sale completed (financed — settlement recognized against the finance company)"
+        : "Vehicle sale completed",
     category: "SYSTEM",
   };
 }

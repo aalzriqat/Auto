@@ -976,6 +976,72 @@ describe("applications hold release and deposit resolution", () => {
 });
 
 /** Seeds a finance company, quote, and application, then walks it to a finalized deal. */
+
+/**
+ * Puts a financed deal in the state finalization now requires.
+ *
+ * Before SCRUM-192 these fixtures finalized on the legacy no-quotation carve-out,
+ * and the deal posted from the customer's financing principal. Finalization now
+ * needs the figures the settlement actually posts from — what the company
+ * approved, and a classified accounting basis — so the fixture drives the same
+ * writers an operator would.
+ */
+async function recordFinancedDealEconomics(
+  ids: { orgId: any; applicationId: any; asUser: any; asApprover: any },
+  vehiclePrice: number
+) {
+  const { orgId, applicationId, asUser, asApprover } = ids;
+  await asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+    orgId,
+    applicationId,
+    submittedQuotationMinor: vehiclePrice * 1000,
+    source: "MANUAL_ENTRY",
+  });
+  await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+    orgId,
+    applicationId,
+    approvedAmountMinor: vehiclePrice * 1000,
+    basis: "MANUAL",
+    notes: "Approved at the quotation.",
+  });
+}
+
+/** The legal invoice and a reconciled cost basis — what classification requires. */
+async function classifyFinancedDeal(
+  ids: { orgId: any; applicationId: any; asUser: any },
+  vehiclePrice: number
+) {
+  const { orgId, applicationId, asUser } = ids;
+  await asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+    orgId,
+    applicationId,
+    legalInvoiceAmountMinor: vehiclePrice * 1000,
+    legalInvoiceNumber: `INV-${applicationId}`,
+    legalInvoiceDate: Date.now(),
+    issuedTo: "FINANCE_COMPANY",
+  });
+  const feeId = await asUser.mutation(api.financeDealCosts.recordDealFee, {
+    orgId,
+    applicationId,
+    feeType: "OTHER_CLOSING_EXPENSE",
+    paidBy: "DEALER",
+    paidTo: "OTHER",
+    accountingTreatment: "SELLING_EXPENSE",
+    deductedFromSettlement: false,
+    actualAmountMinor: 0,
+    description: "The dealership bore no closing costs on this deal.",
+  });
+  await asUser.mutation(api.financeDealCosts.reconcileDealFee, {
+    orgId,
+    feeId,
+    notes: "Nothing to match.",
+  });
+  await asUser.mutation(api.financeDealCosts.classifyDealAccounting, {
+    orgId,
+    applicationId,
+    notes: "Invoice and settlement advice on file.",
+  });
+}
 async function setupFinalizedFinancedDeal() {
   const base = await setup();
   const { t, orgId, customerId, vehicleId, asUser, asApprover } = base;
@@ -988,6 +1054,11 @@ async function setupFinalizedFinancedDeal() {
       maxTermMonths: 60,
       gracePeriodMonths: 0,
       isActive: true,
+      // The quotation solver refuses a company with no LTV, and the application
+      // freezes the company's rules at creation. At 100% the company funds the
+      // whole approval, which keeps these tests about the receivable rather than
+      // about the funding split.
+      defaultLtvPercent: 100,
     })
   );
 
@@ -1023,6 +1094,8 @@ async function setupFinalizedFinancedDeal() {
     applicationId,
     status: "APPROVED",
   });
+  // Before handover, which seals the approved amount.
+  await recordFinancedDealEconomics({ orgId, applicationId, asUser, asApprover }, 20000);
   await registerHandover(asUser, api, orgId, applicationId);
   await asUser.mutation(api.applications.registerExpectedPayment, {
     orgId,
@@ -1030,6 +1103,7 @@ async function setupFinalizedFinancedDeal() {
     method: "BANK_TRANSFER",
     expectedDate: Date.now(),
   });
+  await classifyFinancedDeal({ orgId, applicationId, asUser }, 20000);
   await asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId });
 
   const getFinanceReceivable = () =>
@@ -1069,8 +1143,13 @@ describe("applications finance-company canonical receivable", () => {
 
     const customerReceivableAfterFinalize = await getCustomerReceivable();
     expect(customerReceivableAfterFinalize?.payerType).toBe("CUSTOMER");
-    expect(customerReceivableAfterFinalize?.originalAmountMinor).toBe(3_000_000);
-    expect(customerReceivableAfterFinalize?.status).toBe("PAID");
+    // This expected 3,000,000 — `salePrice - financedAmount`, left behind by the
+    // old transfer and then paid off by the deposit. Under direct recognition the
+    // car is invoiced to the financing company, so the customer is billed nothing
+    // for it and their deposit is consideration rather than a debt they settle.
+    // Both models end with the customer owing nothing; only this one says so
+    // without routing the money through a receivable that was never theirs.
+    expect(customerReceivableAfterFinalize?.originalAmountMinor).toBe(0);
 
     await t.run(async (ctx) => {
       const customerAllocations = await ctx.db
@@ -1119,7 +1198,7 @@ describe("applications finance-company canonical receivable", () => {
     });
   });
 
-  test("confirmDisbursement rejects amounts that differ from the financed deal total", async () => {
+  test("confirmDisbursement rejects an amount that is not what the company owes", async () => {
     const { orgId, applicationId, asUser } = await setupFinalizedFinancedDeal();
 
     await expect(
@@ -1128,7 +1207,11 @@ describe("applications finance-company canonical receivable", () => {
         applicationId,
         disbursedAmountMinor: 16_999_999,
       })
-    ).rejects.toThrow(/does not match the financed amount/i);
+    // The yardstick moved from the customer's financing principal to what the
+    // company actually owes. On this deal they happen to coincide at 17,000,000
+    // — the deposit reduces the settlement by exactly the down payment — so the
+    // refusal is proved by the message, not by the number.
+    ).rejects.toThrow(/is not what this financing company owes/i);
   });
 
   test("voiding a finalized (undisbursed) deal cancels the finance-company receivable", async () => {
@@ -1152,12 +1235,21 @@ describe("applications finance-company canonical receivable", () => {
       expect(deposit?.status).toBe("HELD");
       expect(deposit?.holdActive).toBe(true);
 
+      // The deposit no longer pays down a customer receivable, because direct
+      // recognition raises none for the vehicle leg — so there is no allocation to
+      // reverse. What must come back is the application row and the hold, and each
+      // exactly once: reversing twice would return the money to a customer whose
+      // deposit is still held.
+      const applications = await ctx.db.query("depositApplications").collect();
+      expect(applications).toHaveLength(1);
+      expect(applications[0].status).toBe("REVERSED");
+      expect(applications[0].treatment).toBe("FINANCED_SALE_CONSIDERATION");
+
       const allocations = await ctx.db
         .query("paymentAllocations")
         .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", customerReceivable!._id))
         .collect();
-      expect(allocations.length).toBeGreaterThan(0);
-      expect(allocations.every((allocation) => allocation.status === "REVERSED")).toBe(true);
+      expect(allocations).toHaveLength(0);
     });
   });
 });
@@ -1349,6 +1441,11 @@ async function setupFinalizedFinancedDealWithCheque() {
       maxTermMonths: 60,
       gracePeriodMonths: 0,
       isActive: true,
+      // The quotation solver refuses a company with no LTV, and the application
+      // freezes the company's rules at creation. At 100% the company funds the
+      // whole approval, which keeps these tests about the receivable rather than
+      // about the funding split.
+      defaultLtvPercent: 100,
     })
   );
 
@@ -1367,6 +1464,8 @@ async function setupFinalizedFinancedDealWithCheque() {
   const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
   await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
   await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
+  // Before handover, which seals the approved amount.
+  await recordFinancedDealEconomics({ orgId, applicationId, asUser, asApprover }, 20000);
   await registerHandover(asUser, api, orgId, applicationId);
   await asUser.mutation(api.applications.registerExpectedPayment, {
     orgId,
@@ -1375,6 +1474,7 @@ async function setupFinalizedFinancedDealWithCheque() {
     expectedDate: Date.now(),
     chequeDetails: { bank: "Arab Bank", chequeNumber: "CHQ-001" },
   });
+  await classifyFinancedDeal({ orgId, applicationId, asUser }, 20000);
   await asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId });
 
   const getCheque = () =>
@@ -1398,7 +1498,7 @@ describe("applications.confirmDisbursement cheque linking", () => {
     await asUser.mutation(api.applications.confirmDisbursement, {
       orgId,
       applicationId,
-      disbursedAmountMinor: 17_000_000,
+      disbursedAmountMinor: 20_000_000,
     });
 
     const chequeAfter = await getCheque();
@@ -1420,7 +1520,7 @@ describe("applications.confirmDisbursement cheque linking", () => {
       asUser.mutation(api.applications.confirmDisbursement, {
         orgId,
         applicationId,
-        disbursedAmountMinor: 17_000_000,
+        disbursedAmountMinor: 20_000_000,
       })
     ).rejects.toThrow(/returned\/cancelled/i);
   });
@@ -1450,7 +1550,7 @@ describe("applications.confirmDisbursement cheque linking", () => {
     await asUser.mutation(api.applications.confirmDisbursement, {
       orgId,
       applicationId,
-      disbursedAmountMinor: 17_000_000,
+      disbursedAmountMinor: 20_000_000,
     });
 
     const chequeAfter = await getCheque();
@@ -1468,7 +1568,7 @@ describe("applications.confirmDisbursement cheque linking", () => {
       asUser.mutation(api.applications.confirmDisbursement, {
         orgId,
         applicationId,
-        disbursedAmountMinor: 17_000_000,
+        disbursedAmountMinor: 20_000_000,
       })
     ).rejects.toThrow(/cheque record not found/i);
   });

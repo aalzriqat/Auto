@@ -50,6 +50,7 @@ import { allocatedDepositForVehicle } from "./utils/depositAllocation";
 import { planDepositSettlementApplication } from "./utils/depositSettlementPlan";
 import { checkPostingAllowed } from "./accountingPeriods";
 import { hasVerifiedFinancingApplication } from "./utils/financingProvenance";
+import { assertFinancedDepositsSurviveParentReversal } from "./utils/depositApplications";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -731,19 +732,47 @@ export const update = mutation({
       // margin. Cancelling a draft is now just a status change, which is the
       // correct semantics for work that was never done.
       if (sale.status === "COMPLETED") {
-        await cancelCompletedSaleOperationalRecords(ctx, {
-          orgId: args.orgId,
-          sale,
-          actorId: user._id,
-          reason: "Sale cancelled",
-          reversalDate: cancellationDate,
-        });
-        // Post reversal journal entry for the original SALE_COMPLETED GL event
+        // ⚠️ THE PARENT REVERSAL RUNS FIRST, AND ITS OUTCOME IS A GATE.
+        //
+        // Operational reinstatement used to run first and hand the deposit
+        // back before anyone knew whether the sale's journal had actually
+        // reversed. For a FINANCED_SALE_CONSIDERATION deposit that is the
+        // whole question: its release lives inside the sale entry, so a
+        // DEFERRED parent leaves the release standing while the deposit
+        // reads as available again.
+        //
+        // Safe in both directions, verified rather than assumed: nothing in
+        // `cancelCompletedSaleOperationalRecords` reads `accountingEvents`,
+        // and `reverseAccountingEvent` reads only the ORIGINAL event's own
+        // stored journal — never current sale or deposit state. So neither
+        // half depends on the other having run.
+        //
+        // The refusal below is a real rollback boundary: these mutations are
+        // not wrapped in try/catch, so an uncaught throw discards the queued
+        // reversal and every other write in the transaction.
+        //
+        // ⚠️ An earlier version of this comment said this door accepts a
+        // caller-supplied cancellation date, so backdating could reach the
+        // deferred case. That was FALSE: `cancellationDate` is derived
+        // unconditionally as `Date.now()` and no such field exists on the args
+        // validator. The deferred case is reachable only when no open period
+        // covers TODAY — month-end. Caught by the Sonnet MAX seat.
         await hookSaleCancelled(ctx, {
           orgId: args.orgId,
           saleId: args.saleId,
           reason: "Sale cancelled",
           actorId: user._id,
+          reversalDate: cancellationDate,
+        });
+        await assertFinancedDepositsSurviveParentReversal(ctx, {
+          orgId: args.orgId,
+          saleId: args.saleId,
+        });
+        await cancelCompletedSaleOperationalRecords(ctx, {
+          orgId: args.orgId,
+          sale,
+          actorId: user._id,
+          reason: "Sale cancelled",
           reversalDate: cancellationDate,
         });
         // Unconditional: reverseEventIfPosted no-ops when there is nothing on

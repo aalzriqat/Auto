@@ -28,7 +28,7 @@ import {
   getOrgCurrency,
   commissionAccountingDate,
 } from "../accounting/workflowHooks";
-import { computeResoldProductMargin } from "../accounting/postingRules";
+import { computeResoldProductMargin, type FinancedSalePlanPayload } from "../accounting/postingRules";
 import { toMinorUnits, fromMinorUnits } from "./money";
 import { computeVehicleCapitalizedCost, vehicleHasCostBasis } from "./vehicleCost";
 import { computeConsignedSupplierPosition } from "../../lib/financingEconomics";
@@ -38,7 +38,7 @@ import {
   throwAllocationRequired,
   assertQuoteDepositConservation,
 } from "./depositAllocation";
-import { recordDepositApplication } from "./depositApplications";
+import { type DepositApplicationTreatment, recordDepositApplication } from "./depositApplications";
 import { planDepositSettlementApplication } from "./depositSettlementPlan";
 import {
   consignedSettlementRoute,
@@ -65,6 +65,13 @@ type SaleCompletionArgs = {
   status?: SaleStatus;
   quoteId?: Id<"quotes">;
   applicationId?: Id<"financeApplications">;
+  /**
+   * The frozen recognition plan for an external financed deal settled through
+   * the dealership. Built and validated by the caller BEFORE this runs, because
+   * a plan that cannot be built must refuse the whole finalization rather than
+   * leave a sale row behind.
+   */
+  financedSalePlan?: FinancedSalePlanPayload;
   taxRate?: number;
   taxAmount?: number;
   dealerFees?: number;
@@ -662,6 +669,34 @@ async function resolveReservationDeposits(
 
   const stated = args.depositResolution?.treatment;
 
+  // A financed sale recognised from a settlement plan takes its deposit as
+  // consideration for the car, and the plan has already counted it: the
+  // financing company is asked for the settlement MINUS this amount.
+  //
+  // Only when the deposit is actually applied to this purchase. A refund, a
+  // forfeiture, an approved other treatment, or an offset against something the
+  // customer separately owes are each their own disposition, and none of them
+  // reduces what the financing company owes — so they fall through to the paths
+  // that have always handled them. Applying every held deposit regardless would
+  // silently consume money an operator had asked to give back.
+  //
+  // "Falls through" is about WHICH balance it discharges, not about the money
+  // sitting still: a refund debits the deposit liability and credits cash, a
+  // forfeiture credits forfeiture income, and each posts exactly once through
+  // its own rule. What they share is only that they do not become part of the
+  // settlement and do not reduce the finance company's receivable.
+  //
+  // Ahead of the absorbed-by-the-bill test below, which measures the deposit
+  // against what the CUSTOMER was billed. On these deals the customer is billed
+  // nothing for the car, so that test reads every deposit as unabsorbed and
+  // refuses a deal that is in fact fully accounted for.
+  if (
+    args.financedSalePlan &&
+    (stated === undefined || stated === "APPLY_TO_TRANSACTION_SETTLEMENT")
+  ) {
+    return await applyHeldDeposits(ctx, opts, undefined, "FINANCED_SALE_CONSIDERATION");
+  }
+
   // Determined exactly when the dealership billed the customer at least what it
   // is holding: the deposit comes off that bill and nothing is left over. Note
   // this is a statement about amounts, not about the settlement route — a
@@ -676,7 +711,7 @@ async function resolveReservationDeposits(
       // recorded on consigned sales so an auditor can see which of several
       // possible dispositions applied; on owned stock APPLIED has only ever
       // meant one thing, so nothing is recorded and old rows stay comparable.
-      return await applyDepositsToCustomerAr(
+      return await applyHeldDeposits(
         ctx,
         opts,
         isSourced ? "APPLY_TO_DEALER_AMOUNT" : undefined
@@ -699,7 +734,7 @@ async function resolveReservationDeposits(
           "The reservation deposit exceeds what the dealership billed this customer on this sale, so it cannot all be applied against it. Refund, forfeit, or apply the excess to the supplier settlement instead."
         );
       }
-      return await applyDepositsToCustomerAr(ctx, opts, treatment);
+      return await applyHeldDeposits(ctx, opts, treatment);
     }
 
     case "APPLY_TO_TRANSACTION_SETTLEMENT": {
@@ -726,7 +761,7 @@ async function resolveReservationDeposits(
         // carries `CUSTOMER_RECEIVABLE`, so a later cancellation reverses the
         // entry that was really posted rather than a settlement entry that
         // never was.
-        return await applyDepositsToCustomerAr(ctx, opts, "APPLY_TO_DEALER_AMOUNT");
+        return await applyHeldDeposits(ctx, opts, "APPLY_TO_DEALER_AMOUNT");
       }
 
       const resolved = await resolveDepositsForQuote(ctx, {
@@ -871,28 +906,66 @@ async function recordOtherTreatment(
  * The reservation deposits still holding THIS car under this quote.
  *
  * Scoped to the vehicle, not the quote. A quote can cover several cars
- * (`quotes.vehicleItems`), each completed on its own sale, and every deposit
- * row names the car it is holding — so the allocation is recorded per deposit
- * and never has to be apportioned or guessed. Summing the quote instead
- * compared one car's invoice against every car's deposits, which made a
- * two-vehicle quote demand a deposit treatment on the first completion and
- * then refuse every one of them.
+ * (`quotes.vehicleItems`), each completed on its own sale, so summing the
+ * whole quote compared one car's invoice against every car's deposits — which
+ * made a two-vehicle quote demand a deposit treatment on the first completion
+ * and then refuse every one of them.
+ *
+ * ⚠️ `deposit.vehicleId` is NOT an allocation. `depositAllocation.ts` is the
+ * authority on this: it is "the quote's FIRST line item, nothing more. Reading
+ * it as an allocation assigns the entire deposit to whichever car was listed
+ * first, and leaves the others looking undeposited." This reader is therefore
+ * correct ONLY where the quote carries one car — which is also the only shape
+ * where `resolveDepositsForQuote` consumes on the same predicate, the deposit
+ * having no hold rows. On a multi-vehicle quote the allocation lives on
+ * `depositVehicleHolds` and `allocatedDepositForVehicle` is the reader to use.
+ *
+ * Every caller must therefore establish single-vehicle-ness itself. The
+ * refund/forfeit path does it by refusing a shared allocation outright;
+ * `resolveFinancedSalePlan` does it with its own explicit guard rather than
+ * relying on `createFromQuote` continuing to reject multi-vehicle deals.
  */
-async function heldDepositRowsForVehicle(
+// Exported so the settlement plan reads the SAME slice completion will consume.
+// The plan is built before the first write and decides what the financing
+// company still owes; completion then applies exactly those rows. Two
+// derivations of "which deposits does this sale take" would be free to disagree,
+// and the disagreement would land as a difference between the journal and the
+// receivable.
+export async function heldDepositRowsForVehicle(
   ctx: MutationCtx,
   quoteId: Id<"quotes">,
   vehicleId: Id<"vehicles">
-): Promise<Array<{ depositId: Id<"deposits">; customerId: Id<"customers">; amount: number; method?: string }>> {
+): Promise<
+  Array<{
+    depositId: Id<"deposits">;
+    customerId: Id<"customers">;
+    amount: number;
+    method?: string;
+    // Carried so a caller can prove the slice belongs to this deal rather than
+    // assuming it: the quote index scopes the query, but org, customer and
+    // currency are separate facts and a mismatch in any of them means the row
+    // is somebody else's money.
+    orgId: Id<"organizations">;
+    currency?: string;
+  }>
+> {
   const deposits = await ctx.db
     .query("deposits")
     .withIndex("by_quote", (q) => q.eq("quoteId", quoteId))
     .collect();
   return deposits
     .filter((d) => d.holdActive && d.isDeleted !== true && d.vehicleId === vehicleId)
-    .map((d) => ({ depositId: d._id, customerId: d.customerId, amount: d.amount, method: d.method }));
+    .map((d) => ({
+      depositId: d._id,
+      customerId: d.customerId,
+      amount: d.amount,
+      method: d.method,
+      orgId: d.orgId,
+      currency: d.currency,
+    }));
 }
 
-async function heldDepositTotalForVehicle(
+export async function heldDepositTotalForVehicle(
   ctx: MutationCtx,
   quoteId: Id<"quotes">,
   vehicleId: Id<"vehicles">
@@ -903,14 +976,22 @@ async function heldDepositTotalForVehicle(
 
 
 /** The long-standing behaviour: the deposit comes off what the customer owes. */
-async function applyDepositsToCustomerAr(
+async function applyHeldDeposits(
   ctx: MutationCtx,
   opts: {
     args: SaleCompletionArgs;
     prepared: PreparedSaleCompletion;
     saleId: Id<"sales">;
   },
-  treatment: "APPLY_TO_DEALER_AMOUNT" | undefined
+  treatment: "APPLY_TO_DEALER_AMOUNT" | undefined,
+  /**
+   * Which balance the deposit discharges.
+   *
+   * CUSTOMER_RECEIVABLE for an ordinary sale, where the customer is the debtor.
+   * FINANCED_SALE_CONSIDERATION where the car is invoiced to a financing company
+   * and there is no customer receivable for the deposit to reduce.
+   */
+  applicationTreatment: DepositApplicationTreatment = "CUSTOMER_RECEIVABLE"
 ): Promise<ResolvedReservationDeposits> {
   const { args, prepared, saleId } = opts;
   const resolved = await resolveDepositsForQuote(ctx, {
@@ -937,7 +1018,7 @@ async function applyDepositsToCustomerAr(
       holdId,
       amountMinor: toMinorUnits(amount, prepared.currency),
       currency: prepared.currency,
-      treatment: "CUSTOMER_RECEIVABLE",
+      treatment: applicationTreatment,
       actorId: args.actorId,
       occurredAt: args.saleDate,
     });
@@ -1002,8 +1083,14 @@ async function applySaleCompletionSideEffects(
   // On a consigned sale settled DIRECT_TO_SUPPLIER the vehicle itself is NOT
   // billed by the dealership: the buyer paid the supplier, the dealership
   // issued no invoice for the car, and the customer owes it nothing for it.
-  const vehicleReceivableMinor =
-    isSourced && !dealershipCollectsGross(settlementRoute)
+  // With a financed settlement plan the financing company is the legal buyer of
+  // the car, so what the CUSTOMER owes for it is only what the plan says they
+  // independently owe — usually nothing. `ruleSaleCompleted` debits AR-Customers
+  // from the same figure, so the canonical document and the GL cannot disagree
+  // about what this customer was billed.
+  const vehicleReceivableMinor = args.financedSalePlan
+    ? args.financedSalePlan.customerReceivableMinor
+    : isSourced && !dealershipCollectsGross(settlementRoute)
       ? 0
       : toMinorUnits(args.salePrice, prepared.currency);
   // Sales tax is billed ON TOP of the price, so it is part of what the customer
@@ -1199,6 +1286,19 @@ async function applySaleCompletionSideEffects(
   // Posting anyway would either claim the whole transaction as the
   // dealership's or invent a cost; both misstate revenue on a car it never
   // owned, so the sale stops here rather than guessing.
+  // Whether a CONFIGURED finance company is on this deal.
+  //
+  // Read from the application rather than inferred from `financingType`. That
+  // field is equally true of a LEASE, and `quotes.saveQuote` refuses a lease a
+  // `companyId` — so a lease has no settlement plan and no finance-company
+  // receivable, and its gross genuinely is the customer's debt. Keying the
+  // posting rule's fail-closed guard on the wider fact refused every lease.
+  //
+  // Resolved here rather than inside the builder below, which is synchronous.
+  const financedByConfiguredCompany = args.applicationId
+    ? (await ctx.db.get(args.applicationId))?.companyId !== undefined
+    : false;
+
   const consignment = isSourced
     ? (() => {
         if (costMinor === undefined || costMinor <= 0) {
@@ -1296,6 +1396,11 @@ async function applySaleCompletionSideEffects(
           // a financed one (where it is not). Only the current emitter sets it.
           externallyFinanced:
             args.financingType === "FINANCED" || args.financingType === "LEASE",
+          // The narrower fact: is there a CONFIGURED company, the only shape
+          // whose settlement is recognised from a plan and whose receivable is
+          // opened in the finance-company subledger. A lease is externally
+          // financed and has no such company.
+          financedByConfiguredCompany,
           supplierName: prepared.vehicle.sourcedFromName,
           settlementRoute,
         };
@@ -1324,6 +1429,7 @@ async function applySaleCompletionSideEffects(
     warrantyCostMinor,
     gapSoldMinor,
     gapCostMinor,
+    financedSalePlan: args.financedSalePlan,
   });
 
   for (const deferral of [
@@ -1371,7 +1477,16 @@ async function applySaleCompletionSideEffects(
   });
   await ctx.db.patch(saleId, { canonicalReceivableDocumentId: saleReceivableId });
 
-  for (const { depositId, amount } of appliedDeposits) {
+  // Skipped entirely when a settlement plan governs the sale. There the deposit is
+  // consideration for a car invoiced to the financing company, so there is no
+  // customer receivable for it to pay down — booking a CUSTOMER payment and
+  // allocating it would assert the customer settled a debt they never had, and the
+  // allocation refuses outright against a zero balance.
+  //
+  // Its discharge is already recorded twice over: the sale journal debits the
+  // deposit liability for exactly this amount, and the depositApplications row
+  // carries the deposit, hold, quote, vehicle and sale provenance.
+  for (const { depositId, amount } of (args.financedSalePlan ? [] : appliedDeposits)) {
     const depositPaymentId = await createCanonicalPayment(ctx, {
       orgId: args.orgId,
       branchId: prepared.vehicle.branchId,

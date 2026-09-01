@@ -18,6 +18,7 @@ import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifi
 import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
 import { depositMethodValidator, type DepositMethod } from "./utils/depositRecording";
 import { completeSale } from "./utils/saleCompletion";
+import { resolveFinancedSalePlan } from "./utils/financedSaleRecognition";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { runWithIdempotency } from "./utils/idempotency";
 import { registerChequeCore, markChequeClearedCore } from "./collections";
@@ -77,6 +78,7 @@ import {
 } from "./utils/vehicleOwnership";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { auditLog } from "./financialAudit";
+import { assertFinancedDepositsSurviveParentReversal } from "./utils/depositApplications";
 
 /** sourceType used for the canonical finance-company receivable opened at finalizeDeal. */
 const FINANCE_APP_RECEIVABLE_SOURCE = "finance_application";
@@ -146,10 +148,12 @@ async function getActiveReceivableAllocations(
  * money-path gate drift, and the drift shows up as the stricter one being
  * quietly bypassed through the other door.
  */
-function assertDealerEconomicsRecorded(
+function assertDealerEconomicsReady(
   app: Doc<"financeApplications">,
-  action: "handing over the vehicle" | "finalizing"
+  opts: { phase: "HANDOVER" | "FINALIZATION" }
 ): void {
+  const action =
+    opts.phase === "HANDOVER" ? "handing over the vehicle" : "finalizing";
   if (app.submittedQuotationMinor === undefined) return;
   if (app.approvedDealerPurchaseAmountMinor === undefined) {
     throw new ConvexError(
@@ -162,6 +166,70 @@ function assertDealerEconomicsRecorded(
   if (app.financeCompanyFundedPortionMinor === undefined) {
     throw new ConvexError(
       `This deal's funding split could not be calculated. Resolve the reconciliation note on it before ${action}.`
+    );
+  }
+}
+
+/**
+ * What finalization needs and handover does not.
+ *
+ * Handing a customer their car is an operational step: the dealership has
+ * decided the deal is good and the vehicle goes out. Finalizing is the step that
+ * writes money — it creates the sale, the receivables and the journal — so it is
+ * the one that must refuse while the figures those postings come from are
+ * unestablished. Widening either requirement to handover would strand cars on the
+ * lot over a settlement figure nobody needs yet.
+ *
+ * Deliberately NOT folded into `assertDealerEconomicsReady`, for two separate
+ * reasons.
+ *
+ * The first is the no-quotation carve-out. That exemption is right for the checks
+ * it covers — a deal predating the funding-split model has nothing to check — but
+ * it is not a licence to post a financed sale whose settlement nobody can name.
+ * Those facts are unrelated, and letting the older exemption swallow the newer
+ * requirement is how a guard stops guarding.
+ *
+ * The second is refusal precedence, and it is why this is a separate CALL rather
+ * than a later branch of the same one. `assertDealerEconomicsReady` runs at the
+ * top of finalization, ahead of the refusals for a missing settlement route, a
+ * mismatched finance company, incomplete documents and unapproved profit. Asking
+ * a deal for its remittance before telling the operator it has no settlement route
+ * recorded answers a question they have not reached yet — the same principle the
+ * handover site states, that the more specific refusal is the more useful one. So
+ * this runs last, immediately before `completeSale`, after every other refusal has
+ * had its say and still before the first write.
+ *
+ * Scoped to exactly the population the posting plan covers: a configured external
+ * financier settling through the dealership. A cash deal, a deal with no named
+ * company and a direct-route deal each post something different and none of them
+ * raise a dealership-side finance receivable, so none are asked for evidence they
+ * have no use for.
+ */
+function assertFinancedFinalizationEvidence(
+  app: Doc<"financeApplications">,
+  opts: { settlesDirect: boolean }
+): void {
+  if (opts.settlesDirect) return;
+  if (!app.companyId) return;
+
+  // The single figure the finance-company receivable is opened from. Unknown
+  // means the server could not establish where the customer's money went, and
+  // the honest answer is to refuse rather than fall back to the approved amount,
+  // the quotation, or the customer's financing principal.
+  if (app.expectedDealerRemittanceMinor === undefined) {
+    throw new ConvexError(
+      "What this financing company will actually remit to the dealership is not known on this deal, so the amount it owes cannot be recorded. Resolve the reconciliation note on it before finalizing."
+    );
+  }
+
+  // Every settlement component must already carry an actual, reconciled amount
+  // and an explicit accounting treatment. `classifyDealAccounting` is the step
+  // that establishes all three and refuses while any is missing, so requiring its
+  // flag here asks for the evidence once rather than re-deriving the same
+  // three conditions beside the posting.
+  if (app.accountingClassification !== "CLASSIFIED") {
+    throw new ConvexError(
+      "This deal's accounting has not been classified, so what the financing company withholds cannot be posted to the right accounts. Record the legal invoice and classify the deal before finalizing."
     );
   }
 }
@@ -2539,14 +2607,24 @@ export const cancelApplication = mutation({
           if (app.finalizedSaleId) {
             const sale = await ctx.db.get(app.finalizedSaleId);
             if (sale && sale.orgId === args.orgId) {
-              await cancelCompletedSaleOperationalRecords(ctx, {
-                orgId: args.orgId,
-                sale,
-                actorId: auth.user._id,
-                reason,
-                reversalDate: now,
-              });
-
+              // ⚠️ THE PARENT REVERSAL RUNS FIRST, AND ITS OUTCOME IS A GATE.
+              //
+              // Operational reinstatement used to run first and hand the deposit
+              // back before anyone knew whether the sale's journal had actually
+              // reversed. For a FINANCED_SALE_CONSIDERATION deposit that is the
+              // whole question: its release lives inside the sale entry, so a
+              // DEFERRED parent leaves the release standing while the deposit
+              // reads as available again.
+              //
+              // Safe in both directions, verified rather than assumed: nothing in
+              // `cancelCompletedSaleOperationalRecords` reads `accountingEvents`,
+              // and `reverseAccountingEvent` reads only the ORIGINAL event's own
+              // stored journal — never current sale or deposit state. So neither
+              // half depends on the other having run.
+              //
+              // The refusal below is a real rollback boundary: these mutations are
+              // not wrapped in try/catch, so an uncaught throw discards the queued
+              // reversal and every other write in the transaction.
               if (sale.status !== "CANCELLED") {
                 await ctx.db.patch(sale._id, { status: "CANCELLED" });
                 await hookSaleCancelled(ctx, {
@@ -2555,6 +2633,10 @@ export const cancelApplication = mutation({
                   reason,
                   actorId: auth.user._id,
                   reversalDate: now,
+                });
+                await assertFinancedDepositsSurviveParentReversal(ctx, {
+                  orgId: args.orgId,
+                  saleId: sale._id,
                 });
                 // Accrual plus every correction posted against it, called
                 // unconditionally for the same reason sales.update's
@@ -2569,6 +2651,38 @@ export const cancelApplication = mutation({
                   reversalDate: now,
                 });
               }
+
+              // ⚠️ GUARDED ON EVERY PATH, not only the one that just reversed.
+              //
+              // This call sits OUTSIDE the status block above, so re-entering on a
+              // sale that is already CANCELLED reaches the teardown — and the
+              // teardown is what reinstates the deposit hold. An earlier version
+              // of this comment claimed the parent reversal was 'known' by the
+              // time we got here; on that path nothing about it was known at all.
+              //
+              // The guard now reads the ledger rather than a value only the other
+              // branch computes, so it answers correctly however this line was
+              // reached.
+              //
+              // ⚠️ Its position outside the status block is PRE-EXISTING and is
+              // NOT corrected here: re-running teardown for an already-cancelled
+              // sale can also strip a LATER sale of the same vehicle, because
+              // `restoreVehicleFromSale` takes only a vehicleId and
+              // `voidSaleCashflowTransaction` matches without a saleId. That is a
+              // separate defect with its own data question — whether production
+              // holds legacy CANCELLED sales whose teardown never ran and which
+              // this re-entry currently repairs — and it is SCRUM-212.
+              await assertFinancedDepositsSurviveParentReversal(ctx, {
+                orgId: args.orgId,
+                saleId: sale._id,
+              });
+              await cancelCompletedSaleOperationalRecords(ctx, {
+                orgId: args.orgId,
+                sale,
+                actorId: auth.user._id,
+                reason,
+                reversalDate: now,
+              });
             }
           }
 
@@ -2783,7 +2897,7 @@ export const registerVehicleHandover = mutation({
     // Deal fitness first. A deal that cannot be handed over at all is not
     // improved by being asked to confirm a figure — and the refusal that names
     // the missing funding split is the more useful one to reach the operator.
-    assertDealerEconomicsRecorded(app, "handing over the vehicle");
+    assertDealerEconomicsReady(app, { phase: "HANDOVER" });
     /**
      * The denomination, enforced HERE and not only in what the screens render.
      *
@@ -3115,7 +3229,7 @@ export const finalizeDeal = mutation({
         // Same guard as registerVehicleHandover: an approval cleared by a
         // reappraisal leaves status APPROVED, so this is the only thing
         // stopping a sale being completed on economics nothing supports.
-        assertDealerEconomicsRecorded(app, "finalizing");
+        assertDealerEconomicsReady(app, { phase: "FINALIZATION" });
 
         // The last step in the ordering Codex traced, and the one that creates
         // a SALE. A deal whose denomination cannot be established must not be
@@ -3164,7 +3278,7 @@ export const finalizeDeal = mutation({
           // On the direct route the approved amount IS the settlement, so it is
           // not optional here.
           //
-          // `assertDealerEconomicsRecorded` lets a deal with no recorded
+          // `assertDealerEconomicsReady` lets a deal with no recorded
           // quotation through untouched, which is right for a legacy deal
           // settling through the dealership and wrong for this one: the direct
           // route is only ever reachable with an external financier paying the
@@ -3251,6 +3365,34 @@ export const finalizeDeal = mutation({
               ? "FINANCED"
               : "CASH";
 
+        // The last refusals before the first write. Everything above has had its
+        // say, and nothing below can be undone by throwing: no sale row, no
+        // application patch, no receivable, no journal, no outbox entry.
+        const settlesDirectAtFinalize = await settlesDirectToSupplier(ctx, app);
+        assertFinancedFinalizationEvidence(app, {
+          settlesDirect: settlesDirectAtFinalize,
+        });
+
+        // How this financed sale will be recognised, frozen before anything is
+        // written and derived entirely from the record: the legal invoice the car
+        // was sold under, what the company will actually remit, and each cost it
+        // withholds at the account that cost's own treatment names.
+        //
+        // `undefined` for every deal this model does not cover — a cash sale, a
+        // deal with no named financier, the direct route — and those post exactly
+        // as they always have. When it DOES cover a deal and the plan cannot be
+        // derived, it throws here rather than returning nothing, so there is no
+        // path where a missing plan quietly falls back to the old posting.
+        const financedSalePlan = await resolveFinancedSalePlan(ctx, app, {
+          settlesDirect: settlesDirectAtFinalize,
+          currency: app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId)),
+          // The same disposition completion will act on, so the plan and the
+          // deposits it consumes cannot disagree about whether the money was
+          // applied to this purchase at all.
+          depositTreatment: args.depositResolution?.treatment,
+        });
+
+
         const saleId = await completeSale(ctx, {
           orgId: args.orgId,
           vehicleId: app.vehicleId,
@@ -3265,6 +3407,32 @@ export const finalizeDeal = mutation({
           termMonths: quote.termMonths,
           applicationId: args.applicationId,
           quoteId: app.quoteId,
+          // Absent on every deal this model does not cover, which is what keeps
+          // cash and consigned completion byte-identical.
+          financedSalePlan: financedSalePlan
+            ? {
+                version: financedSalePlan.version,
+                fingerprint: financedSalePlan.fingerprint,
+                financeCompanyId: app.companyId as string,
+                legalInvoiceConsiderationMinor:
+                  financedSalePlan.legalInvoiceConsiderationMinor,
+                financeCompanyReceivableMinor:
+                  financedSalePlan.financeCompanyReceivableMinor,
+                financeCompanyPayableMinor: financedSalePlan.financeCompanyPayableMinor,
+                customerReceivableMinor: financedSalePlan.customerReceivableMinor,
+                depositLiabilityAppliedMinor:
+                  financedSalePlan.depositLiabilityAppliedMinor,
+                components: financedSalePlan.components.map((component) => ({
+                  sourceKind: component.sourceKind,
+                  sourceId: component.sourceId,
+                  label: component.label,
+                  amountMinor: component.amountMinor,
+                  treatment: component.treatment,
+                  systemKey: component.systemKey,
+                  side: component.side,
+                })),
+              }
+            : undefined,
           // Carried from the application onto the sale. Without this every
           // financed consigned deal posted THROUGH_DEALERSHIP no matter what
           // was agreed, because an absent route reads as that — so a deal whose
@@ -3314,26 +3482,20 @@ export const finalizeDeal = mutation({
         // settles, and re-deriving it twice invites them to disagree.
         const directToSupplier = await settlesDirectToSupplier(ctx, app);
 
-        // The finance-company receivable below is still opened for
-        // quote.totalFinancedAmount — the customer's principal — while this PR
-        // computes expectedDealerRemittanceMinor from the approved purchase
-        // amount. Reconciling the two is PR 2's job, but shipping the
-        // divergence silently is not acceptable: flag it so the deal enters
-        // the same queue the legacy rows do rather than looking settled.
-
-        // NOTE: no reconciliation flag is raised here, deliberately.
+        // The divergence the surrounding comment used to describe is closed.
         //
-        // This module still opens the finance-company receivable from
+        // This module opened the finance-company receivable from
         // quote.totalFinancedAmount — the customer's financing principal, which
-        // is not what the company owes the dealership. PR 2 replaces that
-        // posting. Flagging every new financed deal in the meantime would make
-        // "we know this is wrong" a normal operating state, and a queue nobody
-        // can act on is worse than a defect nobody has been told about twice.
+        // is not what the company owes the dealership — and the note here said
+        // "PR 2 replaces that posting" while this one stayed deliberately dormant
+        // on the money path. This is that replacement. A deal the settlement plan
+        // covers is now recognised from the plan, and the principal reaches no
+        // ledger account at all.
         //
-        // So this PR stays behaviorally dormant on the money path: it adds the
-        // model and the arithmetic, and changes no posting. The migration still
-        // flags LEGACY rows, which is diagnosis of state that already exists
-        // rather than a new deal knowingly created wrong.
+        // No reconciliation flag is raised, and now for a better reason than
+        // before: there is no longer a knowingly-wrong figure to flag. A deal
+        // whose settlement cannot be established refuses at
+        // `assertFinancedFinalizationEvidence` instead of posting and queueing.
 
         await ctx.db.patch(args.applicationId, {
           status: "CLOSED",
@@ -3352,6 +3514,16 @@ export const finalizeDeal = mutation({
           // deal into the reconciliation triage queue describing the wrong
           // arrangement — the queue a later settlement PR reconciles against.
           ...(directToSupplier ? { expectedDealerRemittanceMinor: 0 } : {}),
+          // Which plan actually posted, recorded next to the sale it posted for.
+          // Correcting a fee row afterwards re-derives a different plan; this says
+          // what the journal was built from, so the two can be told apart.
+          ...(financedSalePlan
+            ? {
+                financedSaleRecognitionFingerprint: financedSalePlan.fingerprint,
+                financedSaleNetReceivableMinor:
+                  financedSalePlan.financeCompanyReceivableMinor,
+              }
+            : {}),
         });
 
         // On the direct route the finance company pays the SUPPLIER, so none of
@@ -3379,8 +3551,35 @@ export const finalizeDeal = mutation({
         // The dealership's asset on this deal is that supplier margin claim.
         // It is already open by the time this runs.
 
-        // Post the finance receivable transfer when a finance company is on the deal
-        if (!directToSupplier && app.companyId && quote.totalFinancedAmount && quote.totalFinancedAmount > 0) {
+        // A deal the plan covers has already recognised its finance-company
+        // receivable inside the sale's own journal entry, at what the company will
+        // actually remit. All that remains is the matching subledger document, at
+        // exactly the same figure — the GL and the canonical receivable disagreeing
+        // about one counterparty is the failure the shared amount exists to prevent.
+        if (financedSalePlan) {
+          if (financedSalePlan.financeCompanyReceivableMinor > 0) {
+            await ensureFinanceCompanyReceivable(ctx, {
+              orgId: args.orgId,
+              applicationId: args.applicationId,
+              financeCompanyId: app.companyId as Id<"financeCompanies">,
+              customerId: app.customerId,
+              amountMinor: financedSalePlan.financeCompanyReceivableMinor,
+              currency: financedSalePlan.currency,
+              actorId: auth.user._id,
+              now,
+            });
+          }
+        } else if (
+          // The pre-plan posting, now reachable only by the deals the plan does
+          // not cover. It opens the receivable from the customer's principal and
+          // transfers the customer's own receivable down to match, which is the
+          // defect SCRUM-192 exists to remove — so nothing that CAN take the plan
+          // is allowed to arrive here instead.
+          !directToSupplier &&
+          app.companyId &&
+          quote.totalFinancedAmount &&
+          quote.totalFinancedAmount > 0
+        ) {
           const currency = await getOrgCurrency(ctx, args.orgId);
           const loanAmountMinor = toMinorUnits(quote.totalFinancedAmount, currency);
           const saleAmountMinor = toMinorUnits(quote.vehiclePrice, currency);
@@ -3481,7 +3680,20 @@ export const confirmDisbursement = mutation({
         }
 
         const quote = await ctx.db.get(app.quoteId);
-        if (quote?.totalFinancedAmount !== undefined) {
+        // What the company actually owed when the sale was recognised, frozen at
+        // finalization. The customer's financing principal is what THEY borrow;
+        // it is not what the company transfers, and the two differ by every
+        // deposit the dealership holds and every cost the company withholds. A
+        // receipt of the correct amount was being refused for not matching the
+        // principal, and a receipt short by exactly the withheld fees was being
+        // accepted whenever the two happened to coincide.
+        if (app.financedSaleNetReceivableMinor !== undefined) {
+          if (args.disbursedAmountMinor !== app.financedSaleNetReceivableMinor) {
+            throw new ConvexError(
+              `The amount received (${args.disbursedAmountMinor}) is not what this financing company owes the dealership on this deal (${app.financedSaleNetReceivableMinor}).`
+            );
+          }
+        } else if (quote?.totalFinancedAmount !== undefined) {
           const currency = await getOrgCurrency(ctx, args.orgId);
           const expectedAmountMinor = toMinorUnits(quote.totalFinancedAmount, currency);
           if (args.disbursedAmountMinor !== expectedAmountMinor) {

@@ -13,10 +13,10 @@ import { ConvexError } from "convex/values";
 import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 import { postAccountingEvent, PostCommand } from "./postingEngine";
-import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting } from "./postingRules";
+import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting, type FinancedSalePlanPayload } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate, checkPostingAllowed } from "../accountingPeriods";
-import { isChartInitialized, ensureCommissionAccounts, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureConsignmentAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount, ensurePayrollAccounts } from "../chartOfAccounts";
+import { isChartInitialized, ensureCommissionAccounts, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureConsignmentAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount, ensurePayrollAccounts, ensureFinancedSettlementAccounts } from "../chartOfAccounts";
 import {
   enqueuePendingPost,
   enqueuePendingReversal,
@@ -316,7 +316,14 @@ export async function hookDepositReceived(
  * ledger still showing the liability discharged.
  */
 export type DepositApplicationIdentity = {
-  eventType: "DEPOSIT_APPLIED" | "DEPOSIT_APPLIED_TO_SETTLEMENT";
+  // FINANCED_SALE_CONSIDERATION names an event that is never posted: the release
+  // is a line inside the financed sale journal, so there is nothing separate to
+  // reverse. The identity is still recorded in full so the application row is
+  // indistinguishable in shape from the two that do post.
+  eventType:
+    | "DEPOSIT_APPLIED"
+    | "DEPOSIT_APPLIED_TO_SETTLEMENT"
+    | "FINANCED_SALE_CONSIDERATION";
   sourceType: string;
   sourceId: string;
   eventVersion: number;
@@ -386,6 +393,25 @@ export async function reverseDepositApplication(
     reversalDate: number;
   }
 ): Promise<ReversalOutcome> {
+  // A financed-consideration application never posted an entry of its own — the
+  // deposit liability was released by a line inside the financed sale journal, and
+  // reversing THAT sale restores it. There is nothing here to undo, and saying so
+  // is different from failing to find it: the caller still marks the application
+  // row REVERSED, which is what puts the hold back.
+  // ⚠️ NOT_POSTED here is a statement about THIS row, never about the parent.
+  //
+  // A neighbouring comment used to say reversing the sale restores the deposit.
+  // It does not, by itself: nothing consumes the parent reversal's completion
+  // for this row shape — `resolveDeferredReversalSources` accepts only a
+  // `reversed_<applicationKey>` key, and the parent is queued under
+  // `sale_cancelled_<saleId>`. Callers that treat this outcome as proof the
+  // parent journal is off the books are wrong, which is why
+  // `assertFinancedDepositsSurviveParentReversal` refuses a cancellation whose
+  // parent reversal defers.
+  if (args.identity.eventType === "FINANCED_SALE_CONSIDERATION") {
+    return "NOT_POSTED";
+  }
+
   return await reverseEventIfPosted(ctx, {
     orgId: args.orgId,
     sourceType: args.identity.sourceType,
@@ -628,6 +654,8 @@ export async function hookSaleCompleted(
       supplierGrossReceiptMinor?: number;
       /** Whether an outside financier pays for the car — see SaleCompletedPayload. */
       externallyFinanced?: boolean;
+      /** Whether that financier is a CONFIGURED company — see SaleCompletedPayload. */
+      financedByConfiguredCompany?: boolean;
       supplierName?: string;
       settlementRoute: "DIRECT_TO_SUPPLIER" | "THROUGH_DEALERSHIP";
     };
@@ -638,6 +666,12 @@ export async function hookSaleCompleted(
     warrantyCostMinor?: number;
     gapSoldMinor?: number;
     gapCostMinor?: number;
+    /**
+     * Present only on an external financed sale settled through the dealership.
+     * Carries the frozen recognition plan into the sale's own journal entry, so
+     * the sale has exactly one writer and its reversal mirrors what posted.
+     */
+    financedSalePlan?: FinancedSalePlanPayload;
   }
 ) {
   // Self-heal for orgs that initialized their chart before dealer-fee/warranty/GAP
@@ -652,6 +686,11 @@ export async function hookSaleCompleted(
   // sale after deploy would otherwise fail to resolve these three keys.
   if (args.consignment && (await isChartInitialized(ctx, args.orgId))) {
     await ensureConsignmentAccounts(ctx, args.orgId, args.actorId);
+  }
+  // Same reason, for the contra-revenue, finance-payable and settlement-expense
+  // accounts a financed plan posts to. Scoped to sales that carry one.
+  if (args.financedSalePlan && (await isChartInitialized(ctx, args.orgId))) {
+    await ensureFinancedSettlementAccounts(ctx, args.orgId, args.actorId);
   }
   await postDomainEvent(ctx, {
     orgId: args.orgId,
@@ -691,6 +730,7 @@ export async function hookSaleCompleted(
       warrantyCostMinor: args.warrantyCostMinor,
       gapSoldMinor: args.gapSoldMinor,
       gapCostMinor: args.gapCostMinor,
+      ...(args.financedSalePlan ? { financedSalePlan: args.financedSalePlan } : {}),
     },
   });
 }

@@ -2717,6 +2717,28 @@ export default defineSchema({
     accountingClassifiedAt: v.optional(v.number()),
     accountingClassificationNotes: v.optional(v.string()),
 
+    /**
+     * The settlement plan this deal was actually recognised from.
+     *
+     * Server-owned and written only by finalization, beside the sale id and the
+     * idempotency key it belongs with. It is the record of WHICH plan posted:
+     * the fee rows behind it can be corrected afterwards, and when they are,
+     * what the journal says must still be traceable to the figures that produced
+     * it rather than to whatever those rows say later.
+     */
+    financedSaleRecognitionFingerprint: v.optional(v.string()),
+
+    /**
+     * N — what the financing company still owed when the sale was recognised.
+     *
+     * Frozen at finalization, beside the plan that produced it, and the figure
+     * `confirmDisbursement` measures an actual receipt against. Re-deriving it at
+     * receipt time would compare the money that arrived against economics that
+     * may have moved since — a deposit resolved, a fee corrected — and call a
+     * correct payment wrong.
+     */
+    financedSaleNetReceivableMinor: v.optional(v.number()),
+
     // Appraisal gap and its negotiated split. The gap negotiated is the RAW
     // difference against the submitted quotation, not the change in the
     // company's funded portion.
@@ -3552,7 +3574,12 @@ export default defineSchema({
      */
     treatment: v.union(
       v.literal("CUSTOMER_RECEIVABLE"),
-      v.literal("SUPPLIER_SETTLEMENT")
+      v.literal("SUPPLIER_SETTLEMENT"),
+      // The deposit is consideration for a car invoiced to a financing
+      // company. It releases the deposit liability like the others, but the
+      // release is a line INSIDE the financed sale's own journal rather than a
+      // second entry beside it — so this application posts no event of its own.
+      v.literal("FINANCED_SALE_CONSIDERATION")
     ),
     // ── the accounting identity, exactly as posted ──────────────────────────
     eventType: v.string(),
