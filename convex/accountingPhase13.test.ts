@@ -119,8 +119,14 @@ async function accountBySystemKey(t: Ctx["t"], orgId: Id<"organizations">, syste
  * five-door refusal matrix, the zero-side-effect proof and the projection
  * coverage live in `claimsRetirement.test.ts`.
  *
- * Phase 13's legacy CLAIM_PAYMENT migration coverage below is untouched: it
- * concerns historical `transactions` rows, not the retired writers.
+ * ⚠️ THE LEGACY CLAIM_PAYMENT MIGRATION BELOW IS SUPERSEDED TOO, and I had
+ * this wrong at first: I wrote that it was untouched because it concerns
+ * historical `transactions` rows rather than the retired writers. Both review
+ * seats showed that it reaches the SAME defect by another road —
+ * `mapCategoryToEventType` turned CLAIM_PAYMENT into CLAIM_SETTLED, whose
+ * posting rule credits Finance-company AR with nothing having debited it. A
+ * retirement that closes `claims.add` and leaves that open has not closed the
+ * defect, only one of its doors.
  */
 describe("Phase 13 — the Claims GL lifecycle is retired (SCRUM-51)", () => {
   test("a claim can no longer open a finance-company receivable", async () => {
@@ -147,8 +153,8 @@ describe("Phase 13 — the Claims GL lifecycle is retired (SCRUM-51)", () => {
     expect(receivables).toHaveLength(0);
   });
 });
-describe("Phase 13 — legacy migration gap", () => {
-  test("CLAIM_PAYMENT legacy transactions now migrate with a balanced entry", async () => {
+describe("Phase 13 — a legacy CLAIM_PAYMENT no longer posts (SCRUM-51)", () => {
+  test("the migration skips it instead of crediting AR nothing ever debited", async () => {
     const { t, orgId, asOwner } = await seedClaimsDealer();
 
     await t.run((ctx) =>
@@ -161,18 +167,20 @@ describe("Phase 13 — legacy migration gap", () => {
     const result = await asOwner.mutation(api.accountingMigration.migrateUnpostedTransactions, {
       orgId, dryRun: false,
     });
-    expect(result.posted).toBe(1);
-    expect(result.skipped).toBe(0);
+
+    // Skipped, not posted. This row used to become DR Cash / CR Finance-company
+    // AR with no receivable and no originating debit anywhere — the SCRUM-51
+    // defect reached through the migration rather than through `claims.add`.
+    expect(result.posted).toBe(0);
+    expect(result.skipped).toBe(1);
 
     const events = await eventsOfType(t, orgId, "CLAIM_SETTLED");
-    expect(events).toHaveLength(1);
+    expect(events).toHaveLength(0);
 
-    // 400 JOD → 400_000 minor at scale 3; legacy migration settles as CASH.
-    const lines = await linesForEvent(t, events[0]);
-    const { debit, credit } = totals(lines);
-    expect(debit).toBe(400_000);
-    expect(debit).toBe(credit);
-    const cash = await accountBySystemKey(t, orgId, "CASH_ON_HAND");
-    expect(lines.find((l) => l.accountId === cash?._id)?.debitMinor).toBe(400_000);
+    // Asserted as an absence in the GL itself, not just in the event table:
+    // nothing may touch Finance-company AR from here.
+    const arFc = await accountBySystemKey(t, orgId, "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES");
+    const lines = await t.run((ctx) => ctx.db.query("journalLines").collect());
+    expect(lines.filter((l) => l.accountId === arFc?._id)).toHaveLength(0);
   });
 });

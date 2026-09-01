@@ -28,13 +28,21 @@ import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
 /**
  * Posts one balanced journal the way the posting engine does.
  *
- * ⚠️ THE SNAPSHOT IS NOT OPTIONAL. `trialBalance` and `balanceSheet` do not
- * read journal lines at all when asked for the cumulative position — GL Phase
- * 18 made them read the running `accountBalanceSnapshots` instead. A fixture
- * that inserts only entries and lines is therefore INVISIBLE to exactly the two
- * reports this suite exists to test, and its assertions would fail against a
- * perfectly correct report. So this calls the same `incrementAccountSnapshot`
- * the engine calls, rather than reimplementing what it does.
+ * ⚠️ `periodId` IS WHAT THESE TESTS DEPEND ON — NOT THE SNAPSHOT. I first
+ * wrote the opposite here: that the reports read only the running
+ * `accountBalanceSnapshots`, so the snapshot call was the essential part. The
+ * Codex seat disproved it and a counterfactual confirmed it — removing the
+ * `incrementAccountSnapshot` call leaves every test in this file GREEN, while
+ * removing `periodId` breaks them. `getCumulativeBalancesAsOf` reads entries
+ * and lines directly for the period that CONTAINS the report date, and only
+ * consults snapshots for periods that have fully elapsed. These tests report
+ * as of now, inside an open period, so they never reach the snapshot path.
+ *
+ * The snapshot call is kept because it is what a real posting leaves behind,
+ * so a future test that reports from a LATER period reads a faithful fixture
+ * rather than a half-written one. It is deliberately not load-bearing for the
+ * assertions in this file, and it is not evidence that snapshots work —
+ * `accountingPhase18.test.ts` owns that.
  */
 async function seedJournal(
   t: ReturnType<typeof convexTestWithComponents>,

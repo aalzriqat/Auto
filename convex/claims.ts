@@ -3,7 +3,8 @@ import { query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { paginationOptsValidator } from "convex/server";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
+import { getReceivableOutstandingMinor } from "./subledger";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { throwAppError, AppErrorCode } from "./utils/errors";
@@ -53,8 +54,16 @@ export const list = query({
  * the old backend still resolves the function and still type-checks its call
  * — it receives a named refusal instead of silently writing a second
  * authority. Hiding the buttons would leave the door open to anything holding
- * a session; refusing server-side after authentication and before any write
- * closes it for every caller.
+ * a session; refusing server-side closes it for every caller.
+ *
+ * ⚠️ THE REFUSAL WRITES NO CLAIM, SUBLEDGER OR GL STATE — but it is not
+ * literally true that nothing is written before it. `requireTenantAuth`
+ * runs first, and for an impersonation session it appends an
+ * `impersonated-write:` row to the audit trail via `enforceImpersonationGrant`
+ * before returning. That is every tenant-scoped function's behaviour, it
+ * records an ATTEMPT that wrote nothing, and suppressing it would reduce
+ * oversight of impersonators to make a comment true. Reported by the Sonnet
+ * MAX seat as SCRUM-51-F3.
  */
 function refuseRetiredClaimsWriter(door: string): never {
   throwAppError(
@@ -137,50 +146,58 @@ export const remove = mutation({
 const FINANCE_APPLICATION_SOURCE = "finance_application";
 
 /**
- * Every finance-company receivable an org actually has, with its live
- * outstanding balance.
+ * ⚠️ ONE DEFINITION OF WHAT IS STILL COLLECTABLE, USED BY BOTH READERS.
  *
- * ⚠️ ONE OUTSTANDING FORMULA, USED BY BOTH READERS. The list and the totals
- * below are computed from this single function, because two implementations
- * of `outstanding` is precisely how a list and its own total come to disagree.
- * The formula is the one `subledger.getReceivableOutstandingMinor` uses —
- * CANCELLED reads as zero (its allocations are reversed, so
- * `original - allocated` would otherwise report it fully outstanding again),
- * and everything else is the original less its ACTIVE allocations, floored at
- * zero. `claimsRetirement.test.ts` asserts row-by-row equality against that
- * helper so the two cannot drift apart silently.
+ * The first version of this file zeroed only CANCELLED in the row computation
+ * while the totals separately excluded WRITTEN_OFF and REVERSED from the sum.
+ * A written-off receivable therefore reported its full balance as outstanding
+ * in the list and zero in the total — the exact disagreement the shared-formula
+ * design was supposed to prevent. Both seats found it (SCRUM-51-F4 /
+ * SCRUM51-ADV-002), and `applications.ts` already carries the same rule with a
+ * comment saying why: a written-off or reversed receivable would otherwise
+ * assert the finance company still owes money the dealership has given up on.
  *
- * Reads are index-backed and do not scale with the org's whole receivable
- * history: the documents come from the `by_org_source` prefix, which is
- * exactly the finance-application receivables, and the allocations from
- * `by_org_status` restricted to ACTIVE — one query each, rather than one
- * allocation query per document.
+ * So collectability is decided in exactly one place, and the balance itself
+ * comes from `subledger.getReceivableOutstandingMinor` rather than a second
+ * summation — the helper the mutation side already trusts, including its
+ * CANCELLED handling.
  */
-async function financeCompanyReceivableRows(ctx: QueryCtx, orgId: Id<"organizations">) {
+const COLLECTIBLE_STATUSES = new Set(["OPEN", "PARTIALLY_PAID"]);
+
+async function collectibleBalanceMinor(
+  ctx: QueryCtx,
+  doc: Doc<"receivableDocuments">
+): Promise<number> {
+  if (!COLLECTIBLE_STATUSES.has(doc.status)) return 0;
+  return await getReceivableOutstandingMinor(ctx, doc._id);
+}
+
+/**
+ * A finance-company view has to fit in one read, and this one does not page.
+ *
+ * ⚠️ IT FAILS LOUDLY RATHER THAN TRUNCATING. A capped list is merely short; a
+ * capped TOTAL is wrong, and a wrong total on a finance-company balance is the
+ * kind of number someone acts on. So beyond the cap this refuses, and the
+ * consuming client (237-B) has to arrive with pagination rather than inherit a
+ * silently partial figure.
+ */
+const MAX_FINANCE_COMPANY_ROWS = 500;
+
+async function financeCompanyReceivableDocs(ctx: QueryCtx, orgId: Id<"organizations">) {
   const documents = await ctx.db
     .query("receivableDocuments")
     .withIndex("by_org_source", (q) =>
       q.eq("orgId", orgId).eq("sourceType", FINANCE_APPLICATION_SOURCE)
     )
-    .collect();
+    .take(MAX_FINANCE_COMPANY_ROWS + 1);
 
-  const activeAllocations = await ctx.db
-    .query("paymentAllocations")
-    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "ACTIVE"))
-    .collect();
-
-  const allocatedByReceivable = new Map<string, number>();
-  for (const a of activeAllocations) {
-    const key = a.receivableDocumentId as string;
-    allocatedByReceivable.set(key, (allocatedByReceivable.get(key) ?? 0) + a.amountMinor);
+  if (documents.length > MAX_FINANCE_COMPANY_ROWS) {
+    throwAppError(
+      AppErrorCode.VALIDATION_FAILED,
+      `This organization has more than ${MAX_FINANCE_COMPANY_ROWS} finance-company receivables, which is more than this view can total in one read. It is refused rather than shown partially, because a partial total reads like a complete one.`
+    );
   }
-
-  return documents.map((doc) => {
-    const allocated = allocatedByReceivable.get(doc._id as string) ?? 0;
-    const outstandingMinor =
-      doc.status === "CANCELLED" ? 0 : Math.max(0, doc.originalAmountMinor - allocated);
-    return { doc, allocatedMinor: allocated, outstandingMinor };
-  });
+  return documents;
 }
 
 /**
@@ -190,6 +207,10 @@ async function financeCompanyReceivableRows(ctx: QueryCtx, orgId: Id<"organizati
  * its origin as an opaque `sourceId` string, and resolving that back to the
  * Finance Application is the server's job. A client that had to guess how to
  * reach the authority would be a second authority in waiting.
+ *
+ * ⚠️ `applicationId` is the receivable's RAW `sourceId` and is not proven to
+ * name a live application — `sourceType` is a free-form string on the document,
+ * so this reader states provenance rather than certifying it.
  */
 export const listFinanceCompanyReceivables = query({
   args: { orgId: v.id("organizations") },
@@ -198,81 +219,79 @@ export const listFinanceCompanyReceivables = query({
     // rendered, so it must not demand more than that tab already required.
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
 
-    const rows = await financeCompanyReceivableRows(ctx, args.orgId);
+    const documents = await financeCompanyReceivableDocs(ctx, args.orgId);
+    documents.sort((a, b) => b.issueDate - a.issueDate);
 
-    const financeCompanyNames = new Map<string, string>();
-    const customerNames = new Map<string, string>();
-    for (const { doc } of rows) {
-      if (doc.financeCompanyId && !financeCompanyNames.has(doc.financeCompanyId)) {
-        const company = await ctx.db.get(doc.financeCompanyId);
-        if (company) financeCompanyNames.set(doc.financeCompanyId, company.name);
-      }
-      if (doc.customerId && !customerNames.has(doc.customerId)) {
-        const customer = await ctx.db.get(doc.customerId);
-        if (customer) {
-          customerNames.set(
-            doc.customerId,
-            `${customer.firstName ?? ""} ${customer.lastName ?? ""}`.trim()
-          );
-        }
-      }
-    }
+    const rows = [];
+    for (const doc of documents) {
+      // ⚠️ RE-CHECK THE TENANT ON EVERY RELATED READ. These ids come off the
+      // document, not off the request, so a malformed or legacy row would
+      // otherwise let this view print another dealership's finance company or
+      // customer name. Belt and braces: the writers set them correctly today.
+      const company = doc.financeCompanyId ? await ctx.db.get(doc.financeCompanyId) : null;
+      const customer = doc.customerId ? await ctx.db.get(doc.customerId) : null;
+      const sameOrgCompany = company && company.orgId === args.orgId ? company : null;
+      const sameOrgCustomer = customer && customer.orgId === args.orgId ? customer : null;
 
-    return rows
-      .sort((a, b) => b.doc.issueDate - a.doc.issueDate)
-      .map(({ doc, outstandingMinor }) => ({
+      rows.push({
         receivableDocumentId: doc._id,
         documentNumber: doc.documentNumber,
         applicationId: doc.sourceId,
         financeCompanyId: doc.financeCompanyId,
-        financingEntity: doc.financeCompanyId
-          ? financeCompanyNames.get(doc.financeCompanyId) ?? null
-          : null,
+        financingEntity: sameOrgCompany ? sameOrgCompany.name : null,
         customerId: doc.customerId,
-        buyerName: doc.customerId ? customerNames.get(doc.customerId) ?? null : null,
+        buyerName: sameOrgCustomer
+          ? `${sameOrgCustomer.firstName ?? ""} ${sameOrgCustomer.lastName ?? ""}`.trim()
+          : null,
         originalAmountMinor: doc.originalAmountMinor,
-        outstandingMinor,
+        outstandingMinor: await collectibleBalanceMinor(ctx, doc),
         currency: doc.currency,
         scale: doc.scale,
         status: doc.status,
         issueDate: doc.issueDate,
         dueDate: doc.dueDate,
-      }));
+      });
+    }
+    return rows;
   },
 });
 
 /**
- * Totals for the same set, from the same rows as the list above.
+ * Totals for the same set, from the same collectability rule as the list.
  *
- * `outstandingMinor` counts only documents that can still be collected. A
- * WRITTEN_OFF receivable keeps a non-zero `original - allocated` — the write-off
- * is recorded as an expense in the GL, not as an allocation — so counting it as
- * outstanding would overstate what the financiers still owe. It stays visible
- * in `byStatus` rather than being dropped.
+ * ⚠️ PER CURRENCY, NEVER ONE SCALAR. Minor units only mean something next to
+ * their currency and scale: 50_000 is 500.00 USD at scale 2 and 50.000 JOD at
+ * scale 3. The first version of this query added them into a single
+ * `originalMinor`, which is a number with no unit — reported by the Codex seat
+ * as SCRUM51-ADV-002. There is deliberately no cross-currency grand total here;
+ * producing one needs exchange rates and a stated reporting currency, which is
+ * `accountingReports`'s job, not this view's.
  */
 export const financeCompanyReceivableTotals = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
 
-    const rows = await financeCompanyReceivableRows(ctx, args.orgId);
+    const documents = await financeCompanyReceivableDocs(ctx, args.orgId);
 
-    const byStatus: Record<string, { count: number; originalMinor: number }> = {};
-    let originalMinor = 0;
-    let outstandingMinor = 0;
+    const byCurrency: Record<
+      string,
+      { scale: number; count: number; originalMinor: number; outstandingMinor: number }
+    > = {};
+    const byStatus: Record<string, number> = {};
 
-    for (const { doc, outstandingMinor: rowOutstanding } of rows) {
-      const bucket = byStatus[doc.status] ?? { count: 0, originalMinor: 0 };
+    for (const doc of documents) {
+      const bucket =
+        byCurrency[doc.currency] ??
+        { scale: doc.scale, count: 0, originalMinor: 0, outstandingMinor: 0 };
       bucket.count += 1;
       bucket.originalMinor += doc.originalAmountMinor;
-      byStatus[doc.status] = bucket;
+      bucket.outstandingMinor += await collectibleBalanceMinor(ctx, doc);
+      byCurrency[doc.currency] = bucket;
 
-      originalMinor += doc.originalAmountMinor;
-      if (doc.status === "OPEN" || doc.status === "PARTIALLY_PAID") {
-        outstandingMinor += rowOutstanding;
-      }
+      byStatus[doc.status] = (byStatus[doc.status] ?? 0) + 1;
     }
 
-    return { count: rows.length, originalMinor, outstandingMinor, byStatus };
+    return { count: documents.length, byCurrency, byStatus };
   },
 });

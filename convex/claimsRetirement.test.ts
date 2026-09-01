@@ -3,6 +3,8 @@ import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
+import { getReceivableOutstandingMinor } from "./subledger";
 
 /**
  * SCRUM-51 / 237-A — Claims is retired as a finance-company AR authority.
@@ -263,11 +265,17 @@ describe("SCRUM-51 — the authoritative projection Claims was retired in favour
       reversedMinor?: number;
       status?: string;
       applicationId?: string;
+      currency?: string;
+      scale?: number;
+      companyOrgId?: Id<"organizations">;
+      customerOrgId?: Id<"organizations">;
     }
   ) {
+    const currency = opts.currency ?? "JOD";
+    const scale = opts.scale ?? 3;
     const financeCompanyId = await s.t.run((ctx) =>
       ctx.db.insert("financeCompanies", {
-        orgId: s.orgId,
+        orgId: (opts.companyOrgId ?? s.orgId) as never,
         name: "Jordan Finance Co",
         profitRate: 5.5,
         maxTermMonths: 72,
@@ -277,7 +285,7 @@ describe("SCRUM-51 — the authoritative projection Claims was retired in favour
     );
     const customerId = await s.t.run((ctx) =>
       ctx.db.insert("customers", {
-        orgId: s.orgId,
+        orgId: (opts.customerOrgId ?? s.orgId) as never,
         firstName: "Real",
         lastName: "Buyer",
       })
@@ -293,8 +301,8 @@ describe("SCRUM-51 — the authoritative projection Claims was retired in favour
         sourceType: FINANCE_APPLICATION_SOURCE,
         sourceId: opts.applicationId ?? "app1",
         originalAmountMinor: opts.amountMinor,
-        currency: "JOD",
-        scale: 3,
+        currency,
+        scale,
         issueDate: Date.now(),
         dueDate: Date.now(),
         status: (opts.status ?? "OPEN") as never,
@@ -303,7 +311,7 @@ describe("SCRUM-51 — the authoritative projection Claims was retired in favour
       })
     );
 
-    if (opts.allocatedMinor) {
+    async function allocate(amountMinor: number, status: "ACTIVE" | "REVERSED", tag: string) {
       const paymentId = await s.t.run((ctx) =>
         ctx.db.insert("canonicalPayments", {
           orgId: s.orgId,
@@ -311,11 +319,11 @@ describe("SCRUM-51 — the authoritative projection Claims was retired in favour
           payerType: "FINANCE_COMPANY" as const,
           financeCompanyId,
           method: "BANK_TRANSFER" as const,
-          amountMinor: opts.allocatedMinor!,
-          currency: "JOD",
-          scale: 3,
+          amountMinor,
+          currency,
+          scale,
           status: "SETTLED" as const,
-          idempotencyKey: `alloc_${opts.applicationId ?? "app1"}`,
+          idempotencyKey: `${tag}_${opts.applicationId ?? "app1"}`,
           receivedAt: Date.now(),
           createdAt: Date.now(),
           createdBy: s.userId,
@@ -326,50 +334,19 @@ describe("SCRUM-51 — the authoritative projection Claims was retired in favour
           orgId: s.orgId,
           paymentId,
           receivableDocumentId: receivableId,
-          amountMinor: opts.allocatedMinor!,
-          currency: "JOD",
-          scale: 3,
+          amountMinor,
+          currency,
+          scale,
           allocationDate: Date.now(),
-          status: "ACTIVE" as const,
+          status,
           createdBy: s.userId,
           createdAt: Date.now(),
         })
       );
     }
 
-    if (opts.reversedMinor) {
-      const reversedPaymentId = await s.t.run((ctx) =>
-        ctx.db.insert("canonicalPayments", {
-          orgId: s.orgId,
-          direction: "IN" as const,
-          payerType: "FINANCE_COMPANY" as const,
-          financeCompanyId,
-          method: "BANK_TRANSFER" as const,
-          amountMinor: opts.reversedMinor!,
-          currency: "JOD",
-          scale: 3,
-          status: "FAILED" as const,
-          idempotencyKey: `reversed_${opts.applicationId ?? "app1"}`,
-          receivedAt: Date.now(),
-          createdAt: Date.now(),
-          createdBy: s.userId,
-        })
-      );
-      await s.t.run((ctx) =>
-        ctx.db.insert("paymentAllocations", {
-          orgId: s.orgId,
-          paymentId: reversedPaymentId,
-          receivableDocumentId: receivableId,
-          amountMinor: opts.reversedMinor!,
-          currency: "JOD",
-          scale: 3,
-          allocationDate: Date.now(),
-          status: "REVERSED" as const,
-          createdBy: s.userId,
-          createdAt: Date.now(),
-        })
-      );
-    }
+    if (opts.allocatedMinor) await allocate(opts.allocatedMinor, "ACTIVE", "alloc");
+    if (opts.reversedMinor) await allocate(opts.reversedMinor, "REVERSED", "reversed");
 
     return { receivableId, financeCompanyId, customerId };
   }
@@ -391,7 +368,27 @@ describe("SCRUM-51 — the authoritative projection Claims was retired in favour
     expect(rows[0].applicationId).toBe("app1");
   });
 
-  test("the totals are computed from the same rows the list returns", async () => {
+  test("the outstanding it reports IS the canonical subledger balance", async () => {
+    const s = await seedClaimsOrg("canonical");
+    const { receivableId } = await seedFinanceApplicationReceivable(s, {
+      amountMinor: 900_000,
+      allocatedMinor: 125_000,
+    });
+
+    const rows = await s.asOwner.query(api.claims.listFinanceCompanyReceivables, {
+      orgId: s.orgId,
+    });
+    // Compared against the helper itself, not against a number I chose. This is
+    // the assertion that stops the projection quietly growing a second
+    // definition of what is owed.
+    const canonical = await s.t.run((ctx) =>
+      getReceivableOutstandingMinor(ctx as unknown as MutationCtx, receivableId)
+    );
+    expect(rows[0].outstandingMinor).toBe(canonical);
+    expect(canonical).toBe(775_000);
+  });
+
+  test("the totals agree with the list, per currency", async () => {
     const s = await seedClaimsOrg("totals");
     await seedFinanceApplicationReceivable(s, {
       amountMinor: 750_000,
@@ -409,35 +406,66 @@ describe("SCRUM-51 — the authoritative projection Claims was retired in favour
 
     // A list and its own total disagreeing is the failure this asserts against,
     // so the total is compared to the list rather than to a hand-written number.
-    const listOutstanding = rows
-      .filter((r) => r.status === "OPEN" || r.status === "PARTIALLY_PAID")
-      .reduce((sum, r) => sum + r.outstandingMinor, 0);
+    const listOutstanding = rows.reduce((sum, r) => sum + r.outstandingMinor, 0);
     expect(totals.count).toBe(rows.length);
-    expect(totals.outstandingMinor).toBe(listOutstanding);
-    expect(totals.originalMinor).toBe(850_000);
-    expect(totals.outstandingMinor).toBe(600_000);
+    expect(totals.byCurrency.JOD.outstandingMinor).toBe(listOutstanding);
+    expect(totals.byCurrency.JOD.originalMinor).toBe(850_000);
+    expect(totals.byCurrency.JOD.outstandingMinor).toBe(600_000);
   });
 
-  test("a cancelled receivable reads as zero outstanding, not as fully owed", async () => {
-    const s = await seedClaimsOrg("cancelled");
+  test("two currencies are never added into one number", async () => {
+    const s = await seedClaimsOrg("multicurrency");
+    await seedFinanceApplicationReceivable(s, { amountMinor: 750_000, applicationId: "jod" });
     await seedFinanceApplicationReceivable(s, {
-      amountMinor: 500_000,
-      status: "CANCELLED",
-      applicationId: "appC",
+      amountMinor: 50_000,
+      applicationId: "usd",
+      currency: "USD",
+      scale: 2,
     });
-
-    const rows = await s.asOwner.query(api.claims.listFinanceCompanyReceivables, {
-      orgId: s.orgId,
-    });
-    // Cancellation reverses the allocations, so `original - allocated` would
-    // otherwise report the whole amount as owed again.
-    expect(rows[0].outstandingMinor).toBe(0);
 
     const totals = await s.asOwner.query(api.claims.financeCompanyReceivableTotals, {
       orgId: s.orgId,
     });
-    expect(totals.outstandingMinor).toBe(0);
-    expect(totals.byStatus.CANCELLED.count).toBe(1);
+
+    // 750_000 minor at scale 3 is 750.000 JOD; 50_000 at scale 2 is 500.00 USD.
+    // Added together they would read 800_000 of nothing at all — a number with
+    // no unit. Each currency keeps its own total and its own scale.
+    expect(totals.byCurrency.JOD.originalMinor).toBe(750_000);
+    expect(totals.byCurrency.JOD.scale).toBe(3);
+    expect(totals.byCurrency.USD.originalMinor).toBe(50_000);
+    expect(totals.byCurrency.USD.scale).toBe(2);
+    expect(Object.keys(totals.byCurrency).sort()).toEqual(["JOD", "USD"]);
+  });
+
+  test("a terminal receivable reads as nothing owed, in the row AND in the total", async () => {
+    for (const status of ["CANCELLED", "WRITTEN_OFF", "REVERSED"]) {
+      const s = await seedClaimsOrg(`terminal_${status}`);
+      await seedFinanceApplicationReceivable(s, {
+        amountMinor: 500_000,
+        status,
+        applicationId: `app_${status}`,
+      });
+
+      const rows = await s.asOwner.query(api.claims.listFinanceCompanyReceivables, {
+        orgId: s.orgId,
+      });
+      const totals = await s.asOwner.query(api.claims.financeCompanyReceivableTotals, {
+        orgId: s.orgId,
+      });
+
+      // ⚠️ THE ROW, NOT ONLY THE TOTAL. An earlier version of this suite asserted
+      // the total was zero and never looked at the row, and the row was reporting
+      // the full balance as still owed — a list and its own total disagreeing
+      // about whether a written-off debt is collectable. Both seats caught it.
+      expect(rows[0].outstandingMinor).toBe(0);
+      expect(totals.byCurrency.JOD.outstandingMinor).toBe(0);
+
+      // Still visible, and its face value still reported: the money left the
+      // books, the record of it did not.
+      expect(rows[0].status).toBe(status);
+      expect(totals.byCurrency.JOD.originalMinor).toBe(500_000);
+      expect(totals.byStatus[status]).toBe(1);
+    }
   });
 
   test("a reversed allocation does not count as money received", async () => {
@@ -449,11 +477,11 @@ describe("SCRUM-51 — the authoritative projection Claims was retired in favour
       applicationId: "appR",
     });
 
-    // Cancelling a settlement reverses its allocation in place, so a reader
-    // that counted every allocation would treat 600.000 as received and report
-    // 300.000 still owed. Only the 200.000 that is still ACTIVE was really
-    // received, so 700.000 is outstanding — the difference is money the dealer
-    // would otherwise stop chasing.
+    // Cancelling a settlement reverses its allocation in place, so a reader that
+    // counted every allocation would treat 600.000 as received and report
+    // 300.000 still owed. Only the 200.000 still ACTIVE was really received, so
+    // 700.000 is outstanding — the difference is money the dealer would
+    // otherwise stop chasing.
     const rows = await s.asOwner.query(api.claims.listFinanceCompanyReceivables, {
       orgId: s.orgId,
     });
@@ -462,41 +490,47 @@ describe("SCRUM-51 — the authoritative projection Claims was retired in favour
     const totals = await s.asOwner.query(api.claims.financeCompanyReceivableTotals, {
       orgId: s.orgId,
     });
-    expect(totals.outstandingMinor).toBe(700_000);
+    expect(totals.byCurrency.JOD.outstandingMinor).toBe(700_000);
   });
 
-  test("a written-off receivable is not counted as still collectable", async () => {
-    const s = await seedClaimsOrg("writtenoff");
-    await seedFinanceApplicationReceivable(s, {
-      amountMinor: 300_000,
-      status: "WRITTEN_OFF",
-      applicationId: "appW",
-    });
-
-    // A write-off is recorded as an expense in the GL, not as an allocation, so
-    // `original - allocated` stays at the full amount. Counting that as
-    // outstanding would tell the dealer the financier still owes 300.000 that
-    // the books have already given up on.
-    const totals = await s.asOwner.query(api.claims.financeCompanyReceivableTotals, {
-      orgId: s.orgId,
-    });
-    expect(totals.outstandingMinor).toBe(0);
-    expect(totals.originalMinor).toBe(300_000);
-    expect(totals.byStatus.WRITTEN_OFF.count).toBe(1);
-
-    // It stays visible rather than being dropped — the money left the books,
-    // the record of it did not.
-    const rows = await s.asOwner.query(api.claims.listFinanceCompanyReceivables, {
-      orgId: s.orgId,
-    });
-    expect(rows).toHaveLength(1);
-    expect(rows[0].status).toBe("WRITTEN_OFF");
-  });
+  /**
+   * ⚠️ THE FOREIGN ORG MUST LIVE IN THE SAME DATABASE.
+   *
+   * `seedClaimsOrg` builds a fresh `convexTest` instance each time, so rows
+   * seeded into a second one are not in the database being queried at all —
+   * and both instances hand out ids from the same counter, so their ids even
+   * COLLIDE. A tenancy test written that way passes because the table is
+   * empty, not because the filter works, and a cross-tenant read would sail
+   * straight through it. An earlier version of these two tests did exactly
+   * that. The neighbour org is therefore inserted into `s`'s own database.
+   */
+  async function foreignOrg(s: Seeded) {
+    return await s.t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Neighbour Motors", createdAt: Date.now() })
+    );
+  }
 
   test("it never shows another org's finance-company receivables", async () => {
     const s = await seedClaimsOrg("tenancy");
-    const other = await seedClaimsOrg("tenancy_other");
-    await seedFinanceApplicationReceivable(other, { amountMinor: 999_000, applicationId: "appX" });
+    const otherOrgId = await foreignOrg(s);
+    await s.t.run((ctx) =>
+      ctx.db.insert("receivableDocuments", {
+        orgId: otherOrgId,
+        documentType: "INVOICE" as const,
+        documentNumber: "AR-NEIGHBOUR",
+        payerType: "FINANCE_COMPANY" as const,
+        sourceType: FINANCE_APPLICATION_SOURCE,
+        sourceId: "appX",
+        originalAmountMinor: 999_000,
+        currency: "JOD",
+        scale: 3,
+        issueDate: Date.now(),
+        dueDate: Date.now(),
+        status: "OPEN" as const,
+        createdAt: Date.now(),
+        createdBy: s.userId,
+      })
+    );
 
     const rows = await s.asOwner.query(api.claims.listFinanceCompanyReceivables, {
       orgId: s.orgId,
@@ -507,7 +541,28 @@ describe("SCRUM-51 — the authoritative projection Claims was retired in favour
       orgId: s.orgId,
     });
     expect(totals.count).toBe(0);
-    expect(totals.originalMinor).toBe(0);
+    expect(totals.byCurrency).toEqual({});
+  });
+
+  test("a related company or customer from another org is never printed", async () => {
+    const s = await seedClaimsOrg("relatedtenancy");
+    const otherOrgId = await foreignOrg(s);
+    await seedFinanceApplicationReceivable(s, {
+      amountMinor: 100_000,
+      applicationId: "appRel",
+      companyOrgId: otherOrgId,
+      customerOrgId: otherOrgId,
+    });
+
+    // The ids come off the document, not off the request, so a malformed or
+    // legacy row must not turn this view into a cross-tenant disclosure. The row
+    // still appears — it belongs to this org — but the foreign names do not.
+    const rows = await s.asOwner.query(api.claims.listFinanceCompanyReceivables, {
+      orgId: s.orgId,
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].financingEntity).toBeNull();
+    expect(rows[0].buyerName).toBeNull();
   });
 
   test("a claims-sourced receivable is not mistaken for an authoritative one", async () => {
@@ -540,6 +595,37 @@ describe("SCRUM-51 — the authoritative projection Claims was retired in favour
       orgId: s.orgId,
     });
     expect(totals.count).toBe(1);
-    expect(totals.originalMinor).toBe(100_000);
+    expect(totals.byCurrency.JOD.originalMinor).toBe(100_000);
+  });
+
+  test("beyond the cap it refuses rather than reporting a partial total", async () => {
+    const s = await seedClaimsOrg("cap");
+    // 501 documents against a cap of 500. A capped list is merely short; a
+    // capped TOTAL is wrong and reads exactly like a complete one, so this view
+    // fails loudly and leaves pagination to the client that eventually needs it.
+    await s.t.run(async (ctx) => {
+      for (let i = 0; i < 501; i++) {
+        await ctx.db.insert("receivableDocuments", {
+          orgId: s.orgId,
+          documentType: "INVOICE" as const,
+          documentNumber: `AR-BULK-${i}`,
+          payerType: "FINANCE_COMPANY" as const,
+          sourceType: FINANCE_APPLICATION_SOURCE,
+          sourceId: `bulk_${i}`,
+          originalAmountMinor: 1_000,
+          currency: "JOD",
+          scale: 3,
+          issueDate: Date.now(),
+          dueDate: Date.now(),
+          status: "OPEN" as const,
+          createdAt: Date.now(),
+          createdBy: s.userId,
+        });
+      }
+    });
+
+    await expect(
+      s.asOwner.query(api.claims.financeCompanyReceivableTotals, { orgId: s.orgId })
+    ).rejects.toThrow(/more than this view can total/i);
   });
 });
