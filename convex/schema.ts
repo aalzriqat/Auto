@@ -4649,7 +4649,29 @@ export default defineSchema({
     supportedLanguages: v.array(v.union(v.literal("en"), v.literal("ar"))),
     primaryColor: v.optional(v.string()),
     secondaryColor: v.optional(v.string()),
-    logoUrl: v.optional(v.string()),
+    // There is deliberately NO website-level logo field here.
+    //
+    // This table used to carry `logoUrl: v.optional(v.string())` — a
+    // caller-supplied absolute URL that `websiteProjection` preferred over the
+    // org's own logo, and that `websites.resolveDomain` (no auth) served to
+    // anonymous visitors of the published dealer site. It is not only rendered
+    // as an <img>: the dealer site also assigns it to the icon / shortcut icon
+    // / apple-touch-icon <link> elements, so every anonymous visitor's browser
+    // fetched it. Any `website.manage` holder could therefore point every
+    // visitor at an arbitrary third-party origin.
+    //
+    // The field was removed rather than retyped to `v.id("_storage")`. A
+    // storage id would have closed the arbitrary-origin hole, but it has no
+    // producer: no web or mobile client sends a logo to `websites.saveDraft`,
+    // no settings UI exposes one, and production held zero values. Adding a
+    // second storage-bearing field bought nothing and cost two defects — the
+    // blob outliving the org in `hardDeleteOrg`, and, once that was fixed, a
+    // cross-tenant deletion path (`_storage` is deployment-global, so the id
+    // could name another org's blob and the purge would destroy it).
+    //
+    // The dealer site's logo comes from `orgSettings.logoStorageId`, which is
+    // already storage-backed, already has an upload path, and is already
+    // deleted with the org. See `websiteProjection.publicDealerProfile`.
     heroTitle: v.optional(v.string()),
     heroSubtitle: v.optional(v.string()),
     // Free-text badge shown as a small pill over the hero (e.g. Kinetic Sales'

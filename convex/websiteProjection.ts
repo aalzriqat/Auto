@@ -59,8 +59,24 @@ async function publicDealerProfile(
     .query("orgSettings")
     .withIndex("by_org", (settingsQuery) => settingsQuery.eq("orgId", orgId))
     .unique();
-  const logoUrl = websiteSettings.logoUrl
-    ?? (orgSettings?.logoStorageId ? await ctx.storage.getUrl(orgSettings.logoStorageId) : null);
+  // Resolved through ctx.storage.getUrl(), so the only URL this projection can
+  // emit points at our own storage backend. `websiteSettings` used to carry a
+  // caller-supplied `logoUrl` that won over this one; it was removed (see the
+  // note in schema.ts) because it let a `website.manage` holder aim every
+  // anonymous visitor's browser at an arbitrary origin.
+  //
+  // The value is not only rendered as an <img>: the dealer site also assigns it
+  // to the icon / shortcut icon / apple-touch-icon <link> elements, so every
+  // visitor's browser fetches it. That is why the trust boundary has to hold
+  // here, in the projection, rather than at each render site.
+  //
+  // Scope, so this does not read as a completeness claim: only the LOGO is
+  // closed. `primaryColor` / `secondaryColor` below are still unvalidated
+  // caller strings, and the themes interpolate them into a raw <style> block —
+  // a live CSS-injection vector on this same anonymous surface, with a
+  // shipped free-text producer in the settings UI. Tracked separately; the
+  // projection is the right choke point for that fix too.
+  const logoUrl = orgSettings?.logoStorageId ? await ctx.storage.getUrl(orgSettings.logoStorageId) : null;
 
   const branchRows = await ctx.db
     .query("branches")

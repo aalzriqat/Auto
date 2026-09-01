@@ -790,3 +790,121 @@ describe("public lead blocklist", () => {
     expect(rows[0].reason).toBe("Second strike");
   });
 });
+
+describe("the dealer website logo cannot be an arbitrary caller-supplied origin", () => {
+  // The threat: `websiteSettings.logoUrl` was a caller-supplied string that
+  // `websiteProjection` PREFERRED over the org's own logo, and that
+  // `websites.resolveDomain` (no auth) served to anonymous visitors of the
+  // published site. Every visitor's browser then fetched that origin —
+  // including as three favicon <link> elements — leaking IP / User-Agent /
+  // Referer to whoever the URL pointed at.
+  //
+  // The field was REMOVED rather than retyped to `v.id("_storage")`. Nothing
+  // produced it (no web or mobile client sends a logo to saveDraft, no UI
+  // exposes one, production held zero values), and a second storage-bearing
+  // field on this table cost two defects: the blob outliving the org, and then
+  // a cross-tenant deletion path once that was fixed. The dealer site's logo
+  // comes from `orgSettings.logoStorageId`, which is already storage-backed and
+  // already deleted with the org.
+
+  test("neither an external URL nor a raw storage id can be saved as a website logo", async () => {
+    const { orgId, asOwner } = await seedDealer();
+    await asOwner.mutation(api.websites.startSetup, { orgId });
+
+    for (const external of [
+      "https://attacker.example/beacon.gif?org=acme",
+      "http://attacker.example/px.png",
+      "//attacker.example/px.png",
+      "javascript:alert(1)",
+      "data:image/svg+xml;base64,PHN2Zy8+",
+    ]) {
+      await expect(
+        asOwner.mutation(api.websites.saveDraft, {
+          orgId,
+          // @ts-expect-error - logoUrl does not exist on the args; this test
+          // exists to prove the old unsafe shape is rejected at the boundary.
+          logoUrl: external,
+        }),
+        // Assert the SPECIFIC reason. Without naming the field this would also
+        // pass if saveDraft threw for an unrelated reason (missing permission,
+        // absent settings row) and would keep passing after a regression that
+        // reintroduced the field.
+      ).rejects.toThrow(/logoUrl/i);
+    }
+
+    // The storage-id shape is refused too. `_storage` is deployment-global, so
+    // accepting an unowned id here would let a website.manage holder name
+    // another tenant's blob — which the org purge would then delete.
+    await expect(
+      asOwner.mutation(api.websites.saveDraft, {
+        orgId,
+        // @ts-expect-error - logoStorageId does not exist on the args either.
+        logoStorageId: "kg2abcdefghijklmnopqrstuvwxyz01",
+      }),
+    ).rejects.toThrow(/logoStorageId/i);
+  });
+
+  test("the public projection serves the org logo, resolved through Convex storage", async () => {
+    const { convex, orgId, asOwner } = await seedDealer();
+    await asOwner.mutation(api.websites.startSetup, { orgId });
+
+    const orgLogo = await convex.run((ctx) => ctx.storage.store(new Blob(["org-logo"], { type: "image/png" })));
+    await convex.run(async (ctx) => {
+      const settings = await ctx.db
+        .query("orgSettings")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .unique();
+      // seedDealer always creates this row; fail loudly rather than silently
+      // testing nothing if that ever stops being true.
+      if (!settings) throw new Error("expected seedDealer to have created an orgSettings row");
+      await ctx.db.patch(settings._id, { logoStorageId: orgLogo });
+    });
+
+    const expectedUrl = await convex.run((ctx) => ctx.storage.getUrl(orgLogo));
+    const preview = await asOwner.query(api.websites.preview, { orgId });
+    expect(preview?.profile.logoUrl).toBe(expectedUrl);
+    expect(preview?.profile.logoUrl).toMatch(/\/api\/storage\//);
+  });
+
+  test("no logo anywhere yields null rather than an empty or attacker-controlled string", async () => {
+    const { orgId, asOwner } = await seedDealer();
+    await asOwner.mutation(api.websites.startSetup, { orgId });
+
+    const preview = await asOwner.query(api.websites.preview, { orgId });
+    expect(preview?.profile.logoUrl).toBeNull();
+  });
+
+  test("the anonymous public path serves a storage-derived logo, not a caller string", async () => {
+    // The tests above use api.websites.preview, which is authenticated and
+    // reads the LIVE projection. The real exposure is resolveDomain: it is
+    // unauthenticated and returns snapshot.snapshotJson, frozen at publish
+    // time. Covering only preview would leave the actual public path untested.
+    const { convex, orgId, asOwner } = await saveDealerWebsiteDraft();
+
+    const orgLogo = await convex.run((ctx) =>
+      ctx.storage.store(new Blob(["published-logo"], { type: "image/png" })),
+    );
+    await convex.run(async (ctx) => {
+      const settings = await ctx.db
+        .query("orgSettings")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .unique();
+      // seedDealer always creates this row; fail loudly rather than silently
+      // testing nothing if that ever stops being true.
+      if (!settings) throw new Error("expected seedDealer to have created an orgSettings row");
+      await ctx.db.patch(settings._id, { logoStorageId: orgLogo });
+    });
+    await asOwner.mutation(api.websites.publish, { orgId });
+
+    const expectedUrl = await convex.run((ctx) => ctx.storage.getUrl(orgLogo));
+    const site = await convex.query(api.websites.resolveDomain, {
+      host: "premiumcars.autoflowdealer.com",
+    });
+
+    // This is the exact value app/dealer-site/[[...slug]]/page.tsx hands to
+    // DealerBrowserChrome, which assigns it to the icon / shortcut icon /
+    // apple-touch-icon <link> elements every anonymous visitor's browser fetches.
+    expect(site?.profile.logoUrl).toBe(expectedUrl);
+    expect(site?.profile.logoUrl).toMatch(/\/api\/storage\//);
+  });
+});
