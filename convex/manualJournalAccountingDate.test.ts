@@ -267,6 +267,29 @@ describe("SCRUM-50 — the declared date is validated, never guessed", () => {
     ).rejects.toThrow(/CLOSED|closed/);
   });
 
+  test("a date in a LOCKED period is refused, not only a CLOSED one", async () => {
+    const s = await seedDealer();
+    const { draftId } = await s.asUser.mutation(api.financialAudit.createManualJournal, {
+      orgId: s.orgId,
+      memo: "Into a locked period",
+      lines: s.lines,
+      idempotencyKey: "s50-locked",
+      accountingDate: s.declaredDate,
+    });
+    // CLOSED and LOCKED share one branch, so only CLOSED was ever exercised —
+    // a reviewer found the gap on a line this change edited. Seeded directly
+    // for the same reason the CLOSED case is: the close checklist blocks on the
+    // very draft the test needs pending.
+    await s.t.run((ctx) => ctx.db.patch(s.priorPeriod._id, { status: "LOCKED" as const }));
+
+    await expect(
+      s.asReviewer.mutation(api.financialAudit.approveManualJournal, { orgId: s.orgId, draftId })
+    ).rejects.toThrow(/LOCKED/);
+
+    const entries = await s.t.run((ctx) => ctx.db.query("journalEntries").collect());
+    expect(entries).toHaveLength(0);
+  });
+
   test("a date in a period that exists but was never opened is refused", async () => {
     const s = await seedDealer();
     // A period that has been created but not opened is FUTURE. Posting into it
@@ -383,6 +406,13 @@ describe("SCRUM-50 — the declared date is validated, never guessed", () => {
 
   test("omitting the accounting date entirely is refused before any write", async () => {
     const s = await seedDealer();
+    // ⚠️ THIS IS THE EXACT ARGUMENT SHAPE THE LIVE PRODUCTION CLIENT SENDS.
+    // components/accounting/ManualJournalTab.tsx on main passes
+    // { orgId, memo, lines, idempotencyKey } and no date, so this test is not
+    // only a unit assertion — it pins what happens to every real manual journal
+    // the moment this backend is activated ahead of the Stage-B client. See the
+    // deploy-sequencing constraint recorded against SCRUM-201.
+    //
     // The validator ACCEPTS the omission — c16529 keeps the wire contract
     // compatible because main auto-deploys the frontend while the backend
     // deploy is separately gated, and an asymmetric validator would reject

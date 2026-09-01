@@ -296,17 +296,33 @@ export const createManualJournal = mutation({
     lines: v.array(manualJournalLineValidator),
     idempotencyKey: v.string(),
     // SCRUM-50 / c16529 — OPTIONAL AT THE TRANSPORT BOUNDARY, MANDATORY IN THE
-    // HANDLER. The two are not in tension, and the split is deliberate.
+    // HANDLER.
     //
-    // `main` auto-deploys the FRONTEND, while the Convex backend deploy is
-    // separately owner-gated. A REQUIRED validator here would make the wire
-    // contract asymmetric across that gap: whichever side ships first, calls
-    // from the other are rejected by the validator before the handler can say
-    // why. Optional keeps the transport compatible in both directions.
+    // ⚠️ WHAT THIS DOES *NOT* BUY, stated first because an earlier version of
+    // this comment claimed it and was wrong. Optional does NOT make the two
+    // deploys compatible. Once this backend is live, a call from the current
+    // client — which sends no `accountingDate` at all — fails either way: a
+    // required validator would reject it with an ArgumentValidationError, and
+    // this optional one lets it reach the handler, which refuses it below.
+    // Both outcomes are a 100% failure of manual-journal creation. The only
+    // thing optional buys on that path is a readable business message instead
+    // of a raw validator error. It is a better error, not availability.
     //
-    // It does NOT weaken the rule. The handler refuses a missing date before
-    // any write, so no dateless draft can be created through the backend
-    // whatever the caller sends.
+    // What actually prevents the skew is that Stage A ships NO client change:
+    // `main` auto-deploys the frontend while the Convex backend deploy is
+    // separately owner-gated, so merging this alone leaves the live client and
+    // the live backend exactly as they were.
+    //
+    // The residual hazard is therefore OPERATIONAL, not structural, and it is
+    // recorded against SCRUM-201 rather than papered over here:
+    //
+    //     backend activation WITHOUT the Stage-B client
+    //       = manual-journal creation fully unavailable until Stage B ships.
+    //
+    // The rule itself is not weakened. The handler refuses a missing date
+    // before any write, so no dateless draft can be created through the
+    // backend whatever the caller sends — and softening that to restore
+    // availability would reinstate the exact defect this ticket removes.
     accountingDate: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
