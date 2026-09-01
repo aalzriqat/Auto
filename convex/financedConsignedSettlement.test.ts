@@ -7233,7 +7233,7 @@ describe("a deposit released inside a sale journal stays locked until that journ
     expect(deposits.every((d) => d.holdActive !== true)).toBe(true);
   });
 
-  test("re-entering on an already-cancelled sale is guarded too, not waved through", async () => {
+  test("re-entering on an already-cancelled sale never reaches sale teardown", async () => {
     const s = await seedDealership("cx4Reentry");
     const { applicationId, saleId } = await runDeal(s, {
       route: "THROUGH_DEALERSHIP",
@@ -7241,17 +7241,19 @@ describe("a deposit released inside a sale journal stays locked until that journ
       downPayment: 3_000,
     });
 
-    // ⚠️ DEFENCE IN DEPTH, and the test says so honestly: no mutation can
-    // currently reach this state. Convex rolls an uncaught throw back, there is
-    // no try/catch anywhere in the cancellation call graph, and `sales` is in
-    // FINANCIAL_TABLES so the admin raw editor refuses it. This patches the row
-    // directly to characterise the gap rather than to model a reachable flow.
+    // ⚠️ THIS TEST USED TO ASSERT A THROW, AND THE THROW WAS THE WEAKER ANSWER.
     //
-    // The gap it characterises is real: `cancelCompletedSaleOperationalRecords`
-    // sits OUTSIDE the `sale.status !== "CANCELLED"` block, so re-entry reaches
-    // the teardown — which reinstates the hold — while skipping the parent
-    // reversal entirely. A guard keyed on the outcome that block computes would
-    // simply not run. Both review seats found this independently.
+    // Its original form pinned the SCRUM-192 deposit gate catching a re-entry
+    // that reached `cancelCompletedSaleOperationalRecords` anyway, because that
+    // call sat OUTSIDE the `sale.status !== "CANCELLED"` block. The comment here
+    // described that position as PRE-EXISTING and left it alone.
+    //
+    // SCRUM-212 moved the teardown inside the block that performs the
+    // COMPLETED -> CANCELLED transition, so re-entry no longer reaches it at
+    // all. Nothing is left for the deposit gate to catch on this path, and the
+    // cancellation succeeds while doing nothing sale-owned. Catching a
+    // destructive call is strictly worse than not making it, so the assertion
+    // moved with the behaviour rather than being relaxed to fit it.
     await s.t.run(async (ctx) => {
       for (const period of await ctx.db.query("accountingPeriods").collect()) {
         await ctx.db.patch(period._id, { status: "CLOSED" as const });
@@ -7259,16 +7261,23 @@ describe("a deposit released inside a sale journal stays locked until that journ
       await ctx.db.patch(saleId!, { status: "CANCELLED" as const });
     });
 
-    await expect(
-      s.asUser.mutation(api.applications.cancelApplication, {
-        orgId: s.orgId,
-        applicationId,
-        reason: "Second cancellation attempt",
-      })
-    ).rejects.toThrow(/has not been reversed yet/i);
+    const vehicleBefore = await s.t.run((ctx) => ctx.db.get(s.vehicleId));
 
-    // The deposit was NOT handed back: the sale journal is still POSTED and
-    // still spends it.
+    await s.asUser.mutation(api.applications.cancelApplication, {
+      orgId: s.orgId,
+      applicationId,
+      reason: "Second cancellation attempt",
+    });
+
+    // The car was never given back. Only the teardown does that, and the
+    // teardown did not run — this is what M1 (teardown outside the block) dies
+    // on.
+    const vehicleAfter = await s.t.run((ctx) => ctx.db.get(s.vehicleId));
+    expect(vehicleAfter?.status).toBe(vehicleBefore?.status);
+    expect(vehicleAfter?.status).toBe("SOLD");
+
+    // And the deposit is still spent, for the original reason: the sale journal
+    // is still POSTED, so the money it consumed is not free.
     const applications = await s.t.run((ctx) =>
       ctx.db.query("depositApplications").collect()
     );
@@ -7322,5 +7331,257 @@ describe("a deposit released inside a sale journal stays locked until that journ
     const after = await ledgerBySystemKey(s);
     expect(after[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES] ?? 0).toBe(0);
     expect(after[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(-3_000 * SCALE);
+  });
+});
+
+/**
+ * SCRUM-212 — the application door may only tear down its own transition.
+ *
+ * `sales.update` cancels a sale and deliberately leaves the finance
+ * application at CLOSED. That is what makes the replay reachable: the
+ * application door is still open on a sale that is already CANCELLED, and it
+ * used to run the destructive teardown regardless.
+ */
+describe("a stale finance application cannot tear down the sale that replaced it", () => {
+  /** Sells the seeded car again, through the ordinary cash door. */
+  async function sellAgain(s: Seeded, customerId: Id<"customers">) {
+    return await s.asUser.mutation(api.sales.create, {
+      orgId: s.orgId,
+      vehicleId: s.vehicleId,
+      customerId,
+      salespersonId: s.userId,
+      salePrice: VEHICLE_PRICE,
+      saleDate: Date.now(),
+      status: "COMPLETED" as const,
+      financingType: "CASH" as const,
+    });
+  }
+
+  async function liveSaleRows(s: Seeded) {
+    return await s.t.run(async (ctx) => {
+      const rows = await ctx.db.query("transactions").collect();
+      return rows.filter(
+        (r) => r.category === "VEHICLE_SALE" && r.isDeleted !== true
+      );
+    });
+  }
+
+  /**
+   * Walks a financed deal to COMPLETED, then cancels the SALE through the
+   * sales door — leaving the application CLOSED and re-enterable.
+   */
+  async function staleApplicationOver(s: Seeded) {
+    const { applicationId, saleId } = await runDeal(s, {
+      route: "THROUGH_DEALERSHIP",
+      downPayment: 3_000,
+    });
+
+    await s.asApprover.mutation(api.sales.update, {
+      orgId: s.orgId,
+      saleId: saleId!,
+      status: "CANCELLED" as const,
+    });
+
+    // The precondition of the whole defect, asserted rather than assumed:
+    // cancelling the sale does NOT cancel the application.
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(app?.status).toBe("CLOSED");
+
+    return { applicationId, saleA: saleId! };
+  }
+
+  test("the later sale keeps its car, its cashflow and its ledger — same customer", async () => {
+    const s = await seedDealership("st212SameCust");
+    const { applicationId } = await staleApplicationOver(s);
+
+    // The SAME customer buys the car again. This is the variant the old
+    // (orgId, vehicleId, category, customerId) match could not tell apart from
+    // the sale it was cancelling.
+    const saleB = await sellAgain(s, s.customerId);
+
+    const vehicleSold = await s.t.run((ctx) => ctx.db.get(s.vehicleId));
+    expect(vehicleSold?.status).toBe("SOLD");
+    expect(await liveSaleRows(s)).toHaveLength(1);
+
+    // Now the stale paperwork is cancelled.
+    await s.asUser.mutation(api.applications.cancelApplication, {
+      orgId: s.orgId,
+      applicationId,
+      reason: "Old deal tidied up",
+    });
+
+    const b = await s.t.run((ctx) => ctx.db.get(saleB));
+    expect(b?.status).toBe("COMPLETED");
+
+    const vehicle = await s.t.run((ctx) => ctx.db.get(s.vehicleId));
+    expect(vehicle?.status).toBe("SOLD");
+    expect(vehicle?.soldBySaleId).toBe(saleB);
+
+    // B's cashflow row survives — M3 (matching by customer) dies here.
+    const live = await liveSaleRows(s);
+    expect(live).toHaveLength(1);
+    expect(live[0].saleId).toBe(saleB);
+
+    // And B's ledger entry is still standing.
+    const bEvent = await s.t.run(async (ctx) => {
+      const events = await ctx.db.query("accountingEvents").collect();
+      return events.find(
+        (e) => e.sourceId === saleB.toString() && e.eventType === "SALE_COMPLETED"
+      );
+    });
+    expect(bEvent?.status).toBe("POSTED");
+  });
+
+  test("the later sale keeps everything when a different customer bought it", async () => {
+    const s = await seedDealership("st212OtherCust");
+    const { applicationId } = await staleApplicationOver(s);
+
+    const otherCustomerId = await s.t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId: s.orgId,
+        firstName: "Second",
+        lastName: "Buyer",
+        email: "st212.other@example.com",
+      })
+    );
+    const saleB = await sellAgain(s, otherCustomerId);
+
+    await s.asUser.mutation(api.applications.cancelApplication, {
+      orgId: s.orgId,
+      applicationId,
+      reason: "Old deal tidied up",
+    });
+
+    const vehicle = await s.t.run((ctx) => ctx.db.get(s.vehicleId));
+    expect(vehicle?.status).toBe("SOLD");
+    expect(vehicle?.soldBySaleId).toBe(saleB);
+
+    const live = await liveSaleRows(s);
+    expect(live).toHaveLength(1);
+    expect(live[0].saleId).toBe(saleB);
+  });
+
+  test("cancelling the stale application twice changes nothing either time", async () => {
+    const s = await seedDealership("st212Twice");
+    const { applicationId } = await staleApplicationOver(s);
+    const saleB = await sellAgain(s, s.customerId);
+
+    for (const attempt of [1, 2]) {
+      await s.asUser.mutation(api.applications.cancelApplication, {
+        orgId: s.orgId,
+        applicationId,
+        reason: `Attempt ${attempt}`,
+      });
+
+      const vehicle = await s.t.run((ctx) => ctx.db.get(s.vehicleId));
+      expect(vehicle?.status).toBe("SOLD");
+      expect(vehicle?.soldBySaleId).toBe(saleB);
+      const live = await liveSaleRows(s);
+      expect(live).toHaveLength(1);
+      expect(live[0].saleId).toBe(saleB);
+    }
+
+    // The application really did close, so idempotence here is not the early
+    // return standing in for a fix that never ran.
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(app?.status).toBe("CANCELLED");
+  });
+
+  test("a deposit on the stale deal is not handed back a second time", async () => {
+    const s = await seedDealership("st212Deposit");
+    const { applicationId, saleId } = await runDeal(s, {
+      route: "THROUGH_DEALERSHIP",
+      deposit: 3_000,
+      downPayment: 3_000,
+    });
+
+    await s.asApprover.mutation(api.sales.update, {
+      orgId: s.orgId,
+      saleId: saleId!,
+      status: "CANCELLED" as const,
+    });
+
+    // Cancelling the sale reinstated the hold: that is the legitimate,
+    // once-only restoration, and it is the state the replay must not repeat.
+    const afterSaleCancel = await s.t.run((ctx) => ctx.db.query("deposits").collect());
+    const holdAfterCancel = afterSaleCancel[0].holdActive;
+    const appsAfterCancel = await s.t.run((ctx) => ctx.db.query("depositApplications").collect());
+    const statusesAfterCancel = appsAfterCancel.map((a) => a.status).sort();
+
+    await s.asUser.mutation(api.applications.cancelApplication, {
+      orgId: s.orgId,
+      applicationId,
+      reason: "Old deal tidied up",
+    });
+
+    // Byte-identical deposit lineage: the replay reinstated nothing, because
+    // it never reached the teardown that reinstates.
+    const afterReplay = await s.t.run((ctx) => ctx.db.query("deposits").collect());
+    expect(afterReplay[0].holdActive).toBe(holdAfterCancel);
+    const appsAfterReplay = await s.t.run((ctx) => ctx.db.query("depositApplications").collect());
+    expect(appsAfterReplay.map((a) => a.status).sort()).toEqual(statusesAfterCancel);
+    expect(appsAfterReplay).toHaveLength(appsAfterCancel.length);
+  });
+
+  test("a sale that never completed is never torn down, even reopened behind the seal", async () => {
+    const s = await seedDealership("st212Reopened");
+    const { applicationId, saleA } = await staleApplicationOver(s);
+    const saleB = await sellAgain(s, s.customerId);
+
+    // ⚠️ DEFENCE IN DEPTH, and the test says so. `sales.update` now refuses
+    // CANCELLED -> PENDING, so no public door produces this state any more.
+    // The row is patched directly to prove the DESTRUCTIVE CALLER refuses on
+    // its own: the Codex seat reached the old teardown exactly this way, and
+    // sealing only the status writer would leave that caller depending on a
+    // guard in a different file to stay correct.
+    await s.t.run((ctx) => ctx.db.patch(saleA, { status: "PENDING" as const }));
+
+    // The cancellation SUCCEEDS and does nothing sale-owned. Before the gate
+    // asked for COMPLETED, this reached the teardown, hit B ownership and threw
+    // — leaving the stale application permanently un-cancellable and telling
+    // the operator to cancel the perfectly good sale B.
+    await s.asUser.mutation(api.applications.cancelApplication, {
+      orgId: s.orgId,
+      applicationId,
+      reason: "Old deal tidied up",
+    });
+
+    const vehicle = await s.t.run((ctx) => ctx.db.get(s.vehicleId));
+    expect(vehicle?.status).toBe("SOLD");
+    expect(vehicle?.soldBySaleId).toBe(saleB);
+
+    const b = await s.t.run((ctx) => ctx.db.get(saleB));
+    expect(b?.status).toBe("COMPLETED");
+    const live = await liveSaleRows(s);
+    expect(live).toHaveLength(1);
+    expect(live[0].saleId).toBe(saleB);
+  });
+  test("cancelling the deal that still owns the car does restore it, once", async () => {
+    const s = await seedDealership("st212Control");
+    const { applicationId, saleId } = await runDeal(s, {
+      route: "THROUGH_DEALERSHIP",
+      downPayment: 3_000,
+    });
+
+    const sold = await s.t.run((ctx) => ctx.db.get(s.vehicleId));
+    expect(sold?.status).toBe("SOLD");
+    expect(sold?.soldBySaleId).toBe(saleId);
+    expect(await liveSaleRows(s)).toHaveLength(1);
+
+    // The positive control for the application door. A fix that simply stopped
+    // tearing anything down would pass every test above and break the product.
+    await s.asUser.mutation(api.applications.cancelApplication, {
+      orgId: s.orgId,
+      applicationId,
+      reason: "Customer withdrew",
+    });
+
+    const restored = await s.t.run((ctx) => ctx.db.get(s.vehicleId));
+    expect(restored?.status).not.toBe("SOLD");
+    expect(restored?.soldBySaleId).toBeUndefined();
+    expect(await liveSaleRows(s)).toHaveLength(0);
+
+    const cancelled = await s.t.run((ctx) => ctx.db.get(saleId!));
+    expect(cancelled?.status).toBe("CANCELLED");
   });
 });

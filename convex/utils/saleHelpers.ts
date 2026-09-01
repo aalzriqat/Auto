@@ -1,13 +1,22 @@
+import { ConvexError } from "convex/values";
 import { MutationCtx } from "../_generated/server";
 import { Id } from "../_generated/dataModel";
 import { Doc } from "../_generated/dataModel";
 import { recordLeadActivity } from "./leadActivity";
 
+/**
+ * Marks a vehicle sold AND records which sale did it.
+ *
+ * The two are one write on purpose. A SOLD status whose owner is recorded
+ * separately — or later — is a window in which the projection exists with no
+ * author, and `restoreVehicleFromSale` refuses to act inside that window.
+ */
 export async function markVehicleAsSold(
   ctx: MutationCtx,
-  vehicleId: Id<"vehicles">
+  vehicleId: Id<"vehicles">,
+  saleId: Id<"sales">
 ): Promise<void> {
-  await ctx.db.patch(vehicleId, { status: "SOLD" as const });
+  await ctx.db.patch(vehicleId, { status: "SOLD" as const, soldBySaleId: saleId });
 }
 
 /**
@@ -27,10 +36,52 @@ export async function markVehicleAsSold(
  */
 export async function restoreVehicleFromSale(
   ctx: MutationCtx,
-  vehicleId: Id<"vehicles">
+  vehicleId: Id<"vehicles">,
+  saleId: Id<"sales">
 ): Promise<void> {
   const vehicle = await ctx.db.get(vehicleId);
+
+  // Nothing to give back. The car is not sold, so this sale has no inventory
+  // projection standing anywhere — a cancelled sale being tidied up later, or
+  // a draft that never took the car off the lot.
   if (!vehicle || vehicle.status !== "SOLD") return;
+
+  // ⚠️ OWNERSHIP IS PROVEN, NEVER INFERRED FROM THE STATUS — SCRUM-212.
+  //
+  // This used to take a vehicleId alone and free any SOLD car it was handed.
+  // That reads the projection as its own authority, which it is not: once
+  // sale A is cancelled the car can be sold again as B, and A's paperwork
+  // then names a car that B owns. Freeing it there left B COMPLETED with its
+  // GL posted against a car the lot was offering for sale.
+  //
+  // Refusing rather than returning quietly, because reaching here at all means
+  // a caller believes it is reversing a projection it does not own. On fresh
+  // data the fixed doors make that unreachable — teardown runs only inside the
+  // one COMPLETED -> CANCELLED transition, where the car is provably still
+  // this sale's — so this throw is the floor under that argument, not a case
+  // the product is expected to hit. A silent no-op would instead leave a
+  // cancelled sale beside a SOLD car and no signal that they disagree.
+  //
+  // A SOLD car with no owner recorded fails the same way and for the same
+  // reason: missing authority is not permission. There is deliberately no
+  // legacy fallback (c16229 item 5).
+  //
+  // ⚠️ THE TWO CAUSES GET DIFFERENT MESSAGES, because they are different facts
+  // and only one of them names something the operator can act on. A single
+  // message covering both told the operator the car "was sold again" and to
+  // cancel that later sale — when for a car with no recorded owner there IS no
+  // later sale, so the instruction pointed at nothing. The Sonnet MAX seat
+  // reproduced that through the real cancellation door.
+  if (vehicle.soldBySaleId === undefined) {
+    throw new ConvexError(
+      "This car does not record which sale marked it sold, so returning it to the lot cannot be done automatically — doing it blind could take the car from a different sale. Nothing is wrong with this sale; the car simply predates sale-ownership tracking. A manual correction is needed."
+    );
+  }
+  if (String(vehicle.soldBySaleId) !== String(saleId)) {
+    throw new ConvexError(
+      "This car's current sale is not the sale being reversed, so it cannot be returned to the lot from here. It was sold again after this sale was cancelled, and that later sale still owns it — cancel that sale instead."
+    );
+  }
 
   // `preHoldStatus` is a snapshot, and two things can make it wrong by the time
   // a sale is cancelled:
@@ -54,6 +105,9 @@ export async function restoreVehicleFromSale(
   await ctx.db.patch(vehicleId, {
     status: snapshot ?? (stillOnOrder ? ("SOURCING" as const) : ("AVAILABLE" as const)),
     preHoldStatus: undefined,
+    // Cleared with the status it authorises. Leaving it behind would name a
+    // sale that no longer owns a car that is no longer sold.
+    soldBySaleId: undefined,
   });
 }
 
@@ -73,6 +127,8 @@ export async function createSaleTransaction(
      * a consigned sale. Omitted for owned stock, where the two are the same.
      */
     recognizedRevenue?: number;
+    /** Exact provenance, so cancellation can void THIS sale's row and no other. */
+    saleId: Id<"sales">;
     idempotencyKey?: string;
   }
 ): Promise<void> {
@@ -113,6 +169,7 @@ export async function createSaleTransaction(
     description: `Sale of vehicle ${vehicleLabel} to ${customerLabel}${vinLabel}`,
     vehicleId: args.vehicleId,
     customerId: args.customer._id,
+    saleId: args.saleId,
     idempotencyKey: args.idempotencyKey,
   });
 }

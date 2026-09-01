@@ -1006,6 +1006,33 @@ export default defineSchema({
     // special-order car (SOURCING) into what looks like owned stock on the lot.
     // Set when syncVehicleHoldStatus promotes to RESERVED, cleared on release.
     preHoldStatus: v.optional(v.union(v.literal("AVAILABLE"), v.literal("SOURCING"))),
+    /**
+     * The sale that owns this vehicle's SOLD status.
+     *
+     * SCRUM-212. `status: "SOLD"` on its own is a projection with no author,
+     * so any door holding *a* sale for this car could undo a SOLD that a
+     * DIFFERENT, later sale had established — restoring the car out from under
+     * a live COMPLETED sale, and leaving it available to sell a third time.
+     *
+     * Written by `markVehicleAsSold` in the same transition that sets SOLD and
+     * cleared by `restoreVehicleFromSale` in the transition that clears it, so
+     * every ordinary door keeps the pair consistent.
+     *
+     * ⚠️ NOT an invariant the database enforces, and an earlier version of this
+     * comment overstated it as one. `adminData.adminUpdateRecord` patches
+     * `vehicles` with a `v.any` payload and `vehicles` is not in
+     * `FINANCIAL_TABLES`, so a super-admin can set SOLD with no owner, or name
+     * the wrong one. The guard fails closed for exactly that reason rather than
+     * assuming the pair is well-formed. Narrowing that editor is tracked
+     * separately (SCRUM-212-R3).
+     *
+     * NOT a duplicate of `commitmentRoots.consumedBySaleId`, and deliberately
+     * not derived from it: `consumeRootForSale` returns early when no open
+     * root exists, so that stamp is absent for every sale with no commitment
+     * lineage. Sale ownership of the INVENTORY projection has to be answerable
+     * for every sale, including those, which is why it lives here.
+     */
+    soldBySaleId: v.optional(v.id("sales")),
     // Sourced / drop-ship vehicles: dealer locates from another dealer on demand
     sourceType: v.optional(v.union(v.literal("STOCK"), v.literal("SOURCED"))),
     sourcedFromName: v.optional(v.string()),
@@ -3983,6 +4010,20 @@ export default defineSchema({
     // Optional links to operational entities
     vehicleId: v.optional(v.id("vehicles")),
     customerId: v.optional(v.id("customers")),
+    /**
+     * The sale this row was written for — exact provenance, SCRUM-212.
+     *
+     * `voidSaleCashflowTransaction` used to find a sale's cashflow row by
+     * (orgId, vehicleId, category, customerId). That tuple does not identify a
+     * sale: the same customer buying the same car twice produces two rows each
+     * matching the other's criteria, so tearing down the first voided the
+     * second's live revenue — dropping it out of the P&L while its journal,
+     * receivable and sale row all stayed live.
+     *
+     * Written by `createSaleTransaction` only. A row without it is not
+     * sale-owned and is never voided by a sale cancellation.
+     */
+    saleId: v.optional(v.id("sales")),
     depositId: v.optional(v.id("deposits")),
     userId: v.optional(v.id("users")), // For partner draws/salaries
     expenseId: v.optional(v.id("expenses")),
@@ -3993,7 +4034,12 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_date", ["orgId", "date"])
     .index("by_org_vehicle", ["orgId", "vehicleId"])
-    .index("by_org_customer", ["orgId", "customerId"]),
+    .index("by_org_customer", ["orgId", "customerId"])
+    // Cancellation finds a sale's own cashflow rows by the sale itself.
+    // Searching the vehicle range and filtering on category meant an edit to
+    // either field moved a row out of reach while it kept its `saleId`, so a
+    // cancelled deal could leave live revenue behind — SCRUM-212-R2.
+    .index("by_org_sale", ["orgId", "saleId"]),
 
   fixedAssets: defineTable({
     orgId: v.id("organizations"),

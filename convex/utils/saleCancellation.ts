@@ -742,6 +742,12 @@ async function reinstateAppliedDeposits(
  * DEPOSIT rows are deliberately left alone — cancelling a sale reinstates the
  * deposit against the quote rather than refunding it, so that cash really was
  * received and still is held.
+ *
+ * ⚠️ This docblock used to say the match was org + vehicle + customer +
+ * VEHICLE_SALE, because `transactions` had no `saleId`. Both halves stopped
+ * being true in SCRUM-212 and the comment was left behind by the same change
+ * that falsified it. It matches on the sale alone now; see the note on the
+ * query itself for why every other predicate was removed.
  */
 async function voidSaleCashflowTransaction(
   ctx: MutationCtx,
@@ -752,18 +758,35 @@ async function voidSaleCashflowTransaction(
     reversalDate: number;
   }
 ) {
+  // ⚠️ THE SALE IS THE WHOLE LOCATOR — SCRUM-212 / R2.
+  //
+  // This matched `(vehicleId, category, customerId)` before, which does not
+  // identify a sale. A first teardown was safe on its own — it voids its own
+  // row, so two live VEHICLE_SALE rows for one (vehicle, customer) never
+  // coexist through the public doors. The damage needed a REPLAY: teardown
+  // running a second time for an old sale after the same customer had bought
+  // the same car again, whereupon the filter selected the LATER sale's live row
+  // and deleted it.
+  //
+  // Keying on `saleId` while still SEARCHING the vehicle range and FILTERING on
+  // category was the same mistake one step along, and the Codex xhigh seat
+  // caught it: `transactions.update` lets a finance user change `category` and
+  // `vehicleId` on a row that keeps its `saleId`. Reclassify the row to DEPOSIT
+  // — which `getProfitAndLoss` also counts as revenue — or move it to another
+  // car, and cancellation walked straight past it, leaving live income for a
+  // cancelled deal. Both were reproduced through the public door before this
+  // was changed.
+  //
+  // So the ownership stamp is the only thing consulted. Rows carrying no
+  // `saleId` are never selected: `transactions.add` writes manual VEHICLE_SALE
+  // rows that belong to no sale, and no cancellation is entitled to void them.
+  // There is no legacy fallback here by design (c16229 item 5).
   const saleRows = await ctx.db
     .query("transactions")
-    .withIndex("by_org_vehicle", (q) =>
-      q.eq("orgId", args.orgId).eq("vehicleId", args.sale.vehicleId)
+    .withIndex("by_org_sale", (q) =>
+      q.eq("orgId", args.orgId).eq("saleId", args.sale._id)
     )
-    .filter((q) =>
-      q.and(
-        q.eq(q.field("category"), "VEHICLE_SALE"),
-        q.eq(q.field("customerId"), args.sale.customerId),
-        q.neq(q.field("isDeleted"), true)
-      )
-    )
+    .filter((q) => q.neq(q.field("isDeleted"), true))
     .collect();
 
   for (const row of saleRows) {
@@ -820,7 +843,7 @@ export async function cancelCompletedSaleOperationalRecords(
     reason: args.reason,
     reversalDate: args.reversalDate,
   });
-  await restoreVehicleFromSale(ctx, args.sale.vehicleId);
+  await restoreVehicleFromSale(ctx, args.sale.vehicleId, args.sale._id);
   await reinstateAppliedDeposits(ctx, {
     orgId: args.orgId,
     saleId: args.sale._id,

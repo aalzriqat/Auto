@@ -2625,7 +2625,19 @@ export const cancelApplication = mutation({
               // The refusal below is a real rollback boundary: these mutations are
               // not wrapped in try/catch, so an uncaught throw discards the queued
               // reversal and every other write in the transaction.
-              if (sale.status !== "CANCELLED") {
+              // ⚠️ THE EXACT TRANSITION, NOT MERELY 'NOT CANCELLED' — SCRUM-212-R1.
+              //
+              // This asked `sale.status !== "CANCELLED"`, which is a different
+              // question from the one the invariant is about. Every other status
+              // answered yes — PENDING included, and a CANCELLED sale could be
+              // reopened to PENDING through `sales.update`. A sale that never
+              // completed would then run the full completed-sale teardown.
+              //
+              // Only a COMPLETED sale has a projection, a journal, an accrual and
+              // a cashflow row to reverse, so only a COMPLETED sale may be torn
+              // down. Reopening is now also refused at that door; this guard does
+              // not depend on that one holding.
+              if (sale.status === "COMPLETED") {
                 await ctx.db.patch(sale._id, { status: "CANCELLED" });
                 await hookSaleCancelled(ctx, {
                   orgId: args.orgId,
@@ -2650,39 +2662,40 @@ export const cancelApplication = mutation({
                   actorId: auth.user._id,
                   reversalDate: now,
                 });
-              }
 
-              // ⚠️ GUARDED ON EVERY PATH, not only the one that just reversed.
-              //
-              // This call sits OUTSIDE the status block above, so re-entering on a
-              // sale that is already CANCELLED reaches the teardown — and the
-              // teardown is what reinstates the deposit hold. An earlier version
-              // of this comment claimed the parent reversal was 'known' by the
-              // time we got here; on that path nothing about it was known at all.
-              //
-              // The guard now reads the ledger rather than a value only the other
-              // branch computes, so it answers correctly however this line was
-              // reached.
-              //
-              // ⚠️ Its position outside the status block is PRE-EXISTING and is
-              // NOT corrected here: re-running teardown for an already-cancelled
-              // sale can also strip a LATER sale of the same vehicle, because
-              // `restoreVehicleFromSale` takes only a vehicleId and
-              // `voidSaleCashflowTransaction` matches without a saleId. That is a
-              // separate defect with its own data question — whether production
-              // holds legacy CANCELLED sales whose teardown never ran and which
-              // this re-entry currently repairs — and it is SCRUM-212.
-              await assertFinancedDepositsSurviveParentReversal(ctx, {
-                orgId: args.orgId,
-                saleId: sale._id,
-              });
-              await cancelCompletedSaleOperationalRecords(ctx, {
-                orgId: args.orgId,
-                sale,
-                actorId: auth.user._id,
-                reason,
-                reversalDate: now,
-              });
+                // ⚠️ INSIDE THE TRANSITION THAT OWNS IT — SCRUM-212.
+                //
+                // This sat outside the status block, so re-entering on a sale
+                // that was already CANCELLED skipped the reversal, the commission
+                // void and the deposit gate — and still ran the destructive
+                // teardown. By then the car could belong to a LATER sale, and the
+                // teardown would restore it out from under one that is still
+                // COMPLETED, voiding that sale's cashflow row on the way past.
+                //
+                // Destructive teardown belongs to the one transaction that
+                // performs COMPLETED -> CANCELLED for this exact sale, so it now
+                // lives inside the block that performs it and runs at most once.
+                // Everything below stays outside: cancelling the application's
+                // own receivable, disbursement and root state IS idempotent on
+                // re-entry, and re-entry still needs to reach it.
+                //
+                // The deposit gate above still precedes it, and now does so on
+                // the only path that reaches it — so the duplicate call this
+                // block used to need is gone with the hole it was covering.
+                await cancelCompletedSaleOperationalRecords(ctx, {
+                  orgId: args.orgId,
+                  sale,
+                  actorId: auth.user._id,
+                  reason,
+                  reversalDate: now,
+                });
+              } else if (sale.status !== "CANCELLED") {
+                // A draft that never completed. Cancelling the application ends
+                // the deal, so the sale goes with it — but `createDraft` performs
+                // no inventory, deposit, CRM or accounting side effects, so there
+                // is nothing to reverse and nothing to hand back.
+                await ctx.db.patch(sale._id, { status: "CANCELLED" });
+              }
             }
           }
 
