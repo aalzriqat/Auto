@@ -206,8 +206,12 @@ describe("SCRUM-212 — sale teardown may not act on a projection another sale o
     // housekeeping, not a reversal: A gave the car back long ago.
     await s.asManager.mutation(api.sales.softDelete, { orgId: s.orgId, saleId: saleA });
 
-    // The defect: restoreVehicleFromSale takes only a vehicleId, so it cannot
-    // tell that the SOLD status it is undoing belongs to B rather than to A.
+    // The car stays SOLD because B owns it and A no longer restores anything.
+    // Two separate changes hold this up now: `softDelete` does not touch the
+    // vehicle at all, and `restoreVehicleFromSale` requires the exact owning
+    // sale. The original defect was that the helper took only a vehicleId, so
+    // it could not tell that the SOLD status it was undoing belonged to B —
+    // tidying A away handed B's car back to the lot.
     expect(await vehicleStatus(s)).toBe("SOLD");
 
     const bAfter = await s.t.run((ctx) => ctx.db.get(saleB));
@@ -485,13 +489,17 @@ describe("SCRUM-212 — the locator and the transition must be exact", () => {
     // CANCELLED sale has already given its car back, reversed its journal and
     // reinstated its deposits. Sending it back to PENDING invites all of that
     // to happen again against a car someone else may now own.
+    // Matched on the writer's own words, not a bare `toThrow()`. A bare one
+    // passes on ANY error — a permission failure, a rate limit, a validator
+    // rejection — so it would keep passing if this path ever started throwing
+    // for a reason that has nothing to do with the cancellation seal.
     await expect(
       s.asManager.mutation(api.sales.update, {
         orgId: s.orgId,
         saleId: saleA,
         status: "PENDING",
       })
-    ).rejects.toThrow();
+    ).rejects.toThrow(/cancelled sale cannot be reopened/i);
 
     const after = await s.t.run((ctx) => ctx.db.get(saleA));
     expect(after?.status).toBe("CANCELLED");
