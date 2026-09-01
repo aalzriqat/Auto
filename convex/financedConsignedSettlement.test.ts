@@ -7506,6 +7506,12 @@ describe("a stale finance application cannot tear down the sale that replaced it
     const afterSaleCancel = await s.t.run((ctx) => ctx.db.query("deposits").collect());
     const holdAfterCancel = afterSaleCancel[0].holdActive;
     const appsAfterCancel = await s.t.run((ctx) => ctx.db.query("depositApplications").collect());
+    // ⚠️ WITHOUT THIS THE COMPARISONS BELOW ARE VACUOUS. They assert that the
+    // replay leaves the deposit lineage byte-identical, but two empty arrays
+    // are also identical — so a deal that never applied its deposit at all
+    // would pass a test whose whole subject is the deposit not being handed
+    // back a second time. Raised by CodeRabbit on PR #266 and confirmed here.
+    expect(appsAfterCancel.length).toBeGreaterThan(0);
     const statusesAfterCancel = appsAfterCancel.map((a) => a.status).sort();
 
     await s.asUser.mutation(api.applications.cancelApplication, {
