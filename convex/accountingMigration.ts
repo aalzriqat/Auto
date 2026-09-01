@@ -51,8 +51,20 @@ function mapCategoryToEventType(category: string, type: string): string | null {
   // partner — the rules treat it as optional metadata).
   if (category === "PARTNER_DRAW") return "PARTNER_DREW";
   if (category === "CAPITAL_INJECTION") return "CAPITAL_CONTRIBUTED";
-  // GL Phase 13 closed the claim skip gap the same way.
-  if (category === "CLAIM_PAYMENT") return "CLAIM_SETTLED";
+  // ⚠️ CLAIM_PAYMENT IS DELIBERATELY UNMAPPED — SCRUM-51.
+  //
+  // GL Phase 13 mapped it to CLAIM_SETTLED, whose posting rule credits
+  // Accounts Receivable — Finance Companies. Nothing in this path ever opens
+  // a receivable or posts the matching debit, so migrating one of these rows
+  // credited an AR balance that had never been debited: the very defect
+  // SCRUM-51 exists to remove, reached through the migration instead of
+  // through `claims.add`. Both review seats found it independently.
+  //
+  // Returning null leaves the legacy row unposted, which is the safe answer
+  // and is consistent with the owner ruling that current data is disposable.
+  // Finance-company AR is originated and settled by the Finance Application
+  // alone. Recording a genuinely historical claim receipt is a cutover
+  // question for SCRUM-4, not something to infer from a category string.
   return null;
 }
 

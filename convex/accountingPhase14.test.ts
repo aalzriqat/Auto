@@ -7,15 +7,107 @@
  * additionally enforced by accountingPhase5.test.ts, which runs the same
  * reports against a JOD-only org and still passes untouched).
  *
- * Multi-currency lines are produced through a real domain flow: claim
- * currency is captured at creation from org settings, so flipping the org
- * currency between two claims yields JOD and USD postings on the same
- * accounts end-to-end.
+ * ⚠️ THE PRODUCER CHANGED IN SCRUM-51, THE SUBJECT DID NOT. These lines used
+ * to be produced by creating and settling a claim in each currency, because
+ * claim currency was captured from org settings. Claims is retired as an
+ * accounting authority (owner ruling c14514 / c14519) and its writers now
+ * refuse, so the ledger is seeded directly here, as `accountingPhase5.test.ts`
+ * seeds its own reports — plus the running balance snapshots these two reports
+ * actually read, which phase 5 does not need and `seedJournal` explains below.
+ * That is the right shape for a REPORT test: the subject is whether the report
+ * splits one account's lines by currency, not which workflow wrote them.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
+import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
+
+/**
+ * Posts one balanced journal the way the posting engine does.
+ *
+ * ⚠️ `periodId` IS WHAT THESE TESTS DEPEND ON — NOT THE SNAPSHOT. I first
+ * wrote the opposite here: that the reports read only the running
+ * `accountBalanceSnapshots`, so the snapshot call was the essential part. The
+ * Codex seat disproved it and a counterfactual confirmed it — removing the
+ * `incrementAccountSnapshot` call leaves every test in this file GREEN, while
+ * removing `periodId` breaks them. `getCumulativeBalancesAsOf` reads entries
+ * and lines directly for the period that CONTAINS the report date, and only
+ * consults snapshots for periods that have fully elapsed. These tests report
+ * as of now, inside an open period, so they never reach the snapshot path.
+ *
+ * The snapshot call is kept because it is what a real posting leaves behind,
+ * so a future test that reports from a LATER period reads a faithful fixture
+ * rather than a half-written one. It is deliberately not load-bearing for the
+ * assertions in this file, and it is not evidence that snapshots work —
+ * `accountingPhase18.test.ts` owns that.
+ */
+async function seedJournal(
+  t: ReturnType<typeof convexTestWithComponents>,
+  orgId: Id<"organizations">,
+  userId: Id<"users">,
+  opts: {
+    currency: string;
+    scale: number;
+    memo: string;
+    lines: Array<{ systemKey: string; debitMinor: number; creditMinor: number }>;
+  }
+) {
+  await t.run(async (ctx) => {
+    const now = Date.now();
+    const periods = await ctx.db.query("accountingPeriods").collect();
+    const period = periods.find((p) => p.orgId === orgId);
+    if (!period) throw new Error("no accounting period was opened for this org");
+    const journalEntryId = await ctx.db.insert("journalEntries", {
+      orgId,
+      periodId: period._id,
+      journalNumber: `JRN-${opts.memo}`,
+      accountingDate: now,
+      sourceType: "manual",
+      sourceId: opts.memo,
+      category: "SYSTEM",
+      memo: opts.memo,
+      status: "POSTED",
+      currency: opts.currency,
+      postedBy: userId,
+      postedAt: now,
+      createdAt: now,
+    });
+    let lineNumber = 1;
+    for (const line of opts.lines) {
+      // Collected rather than indexed: `ReturnType<typeof
+      // convexTestWithComponents>` drops the schema type parameter, so
+      // `withIndex` has no table types to read. The seeded chart is small and
+      // this matches how the suite's other cross-file helpers are typed.
+      const accounts = await ctx.db.query("chartOfAccounts").collect();
+      const account = accounts.find(
+        (a) => a.orgId === orgId && a.systemKey === line.systemKey
+      );
+      if (!account) throw new Error(`account ${line.systemKey} was not initialized`);
+      await ctx.db.insert("journalLines", {
+        orgId,
+        journalEntryId,
+        lineNumber: lineNumber++,
+        accountId: account._id,
+        debitMinor: line.debitMinor,
+        creditMinor: line.creditMinor,
+        currency: opts.currency,
+        scale: opts.scale,
+        accountingDate: now,
+      });
+      await incrementAccountSnapshot(ctx as unknown as MutationCtx, {
+        orgId,
+        accountId: account._id,
+        currency: opts.currency,
+        periodId: period._id,
+        debitMinor: line.debitMinor,
+        creditMinor: line.creditMinor,
+      });
+    }
+  });
+}
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -44,7 +136,7 @@ async function seedMultiCurrencyDealer() {
     })
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
-  const settingsId = await t.run((ctx) =>
+  await t.run((ctx) =>
     ctx.db.insert("orgSettings", {
       orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH"],
     })
@@ -63,21 +155,29 @@ async function seedMultiCurrencyDealer() {
   const period = (await asOwner.query(api.accountingPeriods.list, { orgId }))[0];
   await asOwner.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
 
-  // JOD claim: 750.000 JOD = 750_000 minor (scale 3), settled to the bank.
-  const jodClaim = await asOwner.mutation(api.claims.add, {
-    orgId, claimDate: Date.now(), financingEntity: "JOD FC", buyerName: "A", claimAmountMinor: 750_000,
+  // The same two postings the retired claim flow produced: money into the
+  // bank against finance-company AR, once in each currency, on the SAME two
+  // accounts. 750.000 JOD is 750_000 minor at scale 3; 500.00 USD is 50_000
+  // minor at scale 2 — deliberately different scales, so a report that summed
+  // raw minor units would be caught by the totals rather than flattered.
+  await seedJournal(t, orgId, userId, {
+    currency: "JOD",
+    scale: 3,
+    memo: "JOD-BANK-RECEIPT",
+    lines: [
+      { systemKey: "BANK_ACCOUNT", debitMinor: 750_000, creditMinor: 0 },
+      { systemKey: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", debitMinor: 0, creditMinor: 750_000 },
+    ],
   });
-  await asOwner.mutation(api.claims.settle, { orgId, claimId: jodClaim, paymentMethod: "BANK_TRANSFER" });
-
-  // Flip the org to USD, then a USD claim: 500.00 USD = 50_000 minor (scale 2).
-  await t.run((ctx) => ctx.db.patch(settingsId, { currency: "USD" }));
-  const usdClaim = await asOwner.mutation(api.claims.add, {
-    orgId, claimDate: Date.now(), financingEntity: "USD FC", buyerName: "B", claimAmountMinor: 50_000,
+  await seedJournal(t, orgId, userId, {
+    currency: "USD",
+    scale: 2,
+    memo: "USD-BANK-RECEIPT",
+    lines: [
+      { systemKey: "BANK_ACCOUNT", debitMinor: 50_000, creditMinor: 0 },
+      { systemKey: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", debitMinor: 0, creditMinor: 50_000 },
+    ],
   });
-  await asOwner.mutation(api.claims.settle, { orgId, claimId: usdClaim, paymentMethod: "BANK_TRANSFER" });
-
-  // Restore JOD as the org (reporting) currency.
-  await t.run((ctx) => ctx.db.patch(settingsId, { currency: "JOD" }));
 
   return { t, orgId, userId, asOwner };
 }
@@ -160,23 +260,28 @@ describe("Phase 14 — balance sheet", () => {
 
 describe("Phase 14 — income statement", () => {
   test("P&L rows and subtotals split by currency", async () => {
-    const { t, orgId, asOwner } = await seedMultiCurrencyDealer();
+    const { t, orgId, userId, asOwner } = await seedMultiCurrencyDealer();
 
-    // A rejected claim posts CLAIM_WRITE_OFF_EXPENSE — do one in each currency.
-    const jodClaim = await asOwner.mutation(api.claims.add, {
-      orgId, claimDate: Date.now(), financingEntity: "JOD FC", buyerName: "C", claimAmountMinor: 120_000,
+    // A write-off in each currency, the postings a rejected claim used to
+    // produce. Seeded directly for the reason given at the top of the file.
+    await seedJournal(t, orgId, userId, {
+      currency: "JOD",
+      scale: 3,
+      memo: "JOD-WRITE-OFF",
+      lines: [
+        { systemKey: "CLAIM_WRITE_OFF_EXPENSE", debitMinor: 120_000, creditMinor: 0 },
+        { systemKey: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", debitMinor: 0, creditMinor: 120_000 },
+      ],
     });
-    await asOwner.mutation(api.claims.reject, { orgId, claimId: jodClaim });
-
-    const settings = await t.run(async (ctx) =>
-      (await ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique())!
-    );
-    await t.run((ctx) => ctx.db.patch(settings._id, { currency: "USD" }));
-    const usdClaim = await asOwner.mutation(api.claims.add, {
-      orgId, claimDate: Date.now(), financingEntity: "USD FC", buyerName: "D", claimAmountMinor: 9_900,
+    await seedJournal(t, orgId, userId, {
+      currency: "USD",
+      scale: 2,
+      memo: "USD-WRITE-OFF",
+      lines: [
+        { systemKey: "CLAIM_WRITE_OFF_EXPENSE", debitMinor: 9_900, creditMinor: 0 },
+        { systemKey: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", debitMinor: 0, creditMinor: 9_900 },
+      ],
     });
-    await asOwner.mutation(api.claims.reject, { orgId, claimId: usdClaim });
-    await t.run((ctx) => ctx.db.patch(settings._id, { currency: "JOD" }));
 
     const now = Date.now();
     const is = await asOwner.query(api.accountingReports.incomeStatement, {

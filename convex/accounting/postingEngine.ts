@@ -43,6 +43,18 @@ export interface PostResult {
   skipped?: boolean;
 }
 
+/**
+ * Event types that may never post again, whatever queued or called them.
+ *
+ * SCRUM-51 retired the Claims lifecycle: it opened finance-company
+ * receivables with no originating GL debit and then credited them. The rules
+ * themselves (`ruleClaimSettled`, `ruleClaimWrittenOff`) are deliberately
+ * LEFT IN PLACE — they are how a historical, already-posted claim event is
+ * still described when something reads it back. What is removed is the
+ * ability to post a NEW one.
+ */
+const RETIRED_EVENT_TYPES = new Set<string>(["CLAIM_SETTLED", "CLAIM_WRITTEN_OFF"]);
+
 export async function postAccountingEvent(
   ctx: MutationCtx,
   cmd: PostCommand
@@ -50,6 +62,34 @@ export async function postAccountingEvent(
   // 1. Validate event type is known
   if (!ALL_EVENT_TYPES.has(cmd.eventType)) {
     throw new ConvexError(`Unknown event type: ${cmd.eventType}`);
+  }
+
+  // ⚠️ RETIRED EVENT TYPES ARE REFUSED HERE, AT THE ONE PLACE EVERY POSTING
+  // PATH MUST PASS — SCRUM-51.
+  //
+  // Claims used to credit Accounts Receivable — Finance Companies with no
+  // originating debit. Retiring the five `claims.ts` writers closed the front
+  // door; removing the CLAIM_PAYMENT migration mapping closed a second. Both
+  // review seats then found a third: a CLAIM_SETTLED or CLAIM_WRITTEN_OFF
+  // event ALREADY QUEUED in `pendingAccountingEvents` by the pre-retirement
+  // code still drains and posts the moment an accounting period opens, with
+  // no operator action at all.
+  //
+  // Closing that door individually would have been the third patch to the
+  // same defect, and the next path would have been the fourth. This is the
+  // invariant, so it belongs where the invariant can actually be enforced:
+  // every posting — domain hook, ledger call, either migration, and the
+  // outbox drain — reaches this function, and none of them can post a retired
+  // event type past this point.
+  //
+  // A drained entry that hits this refuses, is marked failed by the drain's
+  // own error handling, and eventually dead-letters. That is the right end
+  // for it: unlike a held entry it will never become postable, so retrying
+  // forever would be dishonest about what is waiting.
+  if (RETIRED_EVENT_TYPES.has(cmd.eventType)) {
+    throw new ConvexError(
+      `The ${cmd.eventType} accounting event is retired and can no longer post. Finance-company receivables are originated and settled through the Finance Application, which is the only authority for them.`
+    );
   }
 
   // 2. Validate currency

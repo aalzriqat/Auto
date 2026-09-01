@@ -419,8 +419,20 @@ describe("Phase 17 — parallel reporting and sign-off", () => {
   });
 });
 
-describe("Phase 17 — settling a legacy claim backfilled by the minor-unit migration", () => {
-  test("settle() self-heals a missing receivable instead of posting to the GL with no subledger record", async () => {
+/**
+ * ⚠️ SUPERSEDED BY SCRUM-51. This described `claims.settle` self-healing a
+ * missing receivable for a legacy claim so it would not post to the GL with
+ * no subledger record behind it. That repair only existed because Claims was
+ * allowed to settle finance-company money at all.
+ *
+ * Claims is retired (owner ruling c14514 / c14519), so the settle door now
+ * refuses before writing anything — which is strictly safer than the
+ * self-heal it replaces: no payment, no allocation and no GL posting, rather
+ * than a correct-looking one. The backfill itself is unchanged and still
+ * asserted here, because it only normalises stored amounts.
+ */
+describe("Phase 17 — a legacy claim can no longer be settled (SCRUM-51)", () => {
+  test("the backfill still normalises the amount, but settle refuses and writes nothing", async () => {
     const { t, orgId, asOwner } = await seedCutoverDealer();
 
     // A pre-Phase-13 claim: only the legacy major-unit field, no
@@ -439,22 +451,26 @@ describe("Phase 17 — settling a legacy claim backfilled by the minor-unit migr
     expect(claimBeforeSettle?.claimAmountMinor).toBe(500_000);
     expect(claimBeforeSettle?.receivableDocumentId).toBeUndefined();
 
-    await asOwner.mutation(api.claims.settle, { orgId, claimId: legacyClaimId, paymentMethod: "BANK_TRANSFER" });
+    await expect(
+      asOwner.mutation(api.claims.settle, { orgId, claimId: legacyClaimId, paymentMethod: "BANK_TRANSFER" })
+    ).rejects.toThrow(/retired/i);
 
+    // The claim is left exactly as the backfill found it: still PENDING,
+    // still with no receivable. The refusal is proven by what did NOT happen
+    // rather than by the thrown error alone.
     const claimAfterSettle = await t.run((ctx) => ctx.db.get(legacyClaimId));
-    expect(claimAfterSettle?.status).toBe("PAID");
-    expect(claimAfterSettle?.receivableDocumentId).toBeTruthy();
+    expect(claimAfterSettle?.status).toBe("PENDING");
+    expect(claimAfterSettle?.receivableDocumentId).toBeUndefined();
 
-    const receivable = await t.run((ctx) => ctx.db.get(claimAfterSettle!.receivableDocumentId!));
-    expect(receivable?.status).toBe("PAID");
-    expect(receivable?.originalAmountMinor).toBe(500_000);
+    const receivables = await t.run((ctx) =>
+      ctx.db.query("receivableDocuments").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(receivables).toHaveLength(0);
 
     const allocations = await t.run((ctx) =>
       ctx.db.query("paymentAllocations").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
     );
-    expect(allocations).toHaveLength(1);
-    expect(allocations[0].receivableDocumentId).toBe(claimAfterSettle!.receivableDocumentId);
-    expect(allocations[0].amountMinor).toBe(500_000);
+    expect(allocations).toHaveLength(0);
   });
 });
 
