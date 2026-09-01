@@ -199,19 +199,22 @@ describe("AccountingModule — cash movements are read-only", () => {
 });
 
 describe("the caution rule leads the reading direction", () => {
-  // `borderStartWidth` resolves against the Yoga node's layout direction, which
-  // falls back to the NATIVE `I18nManager.isRTL`. This app never calls
-  // `forceRTL` — `LocaleProvider` only calls `allowRTL(true)` — so an Arabic UI
-  // on an English-locale device has `textDirection: "rtl"` while `isRTL` is
-  // false. `apps/mobile/src/features/dashboard/homeModel.ts` documents that
-  // exact divergence and compensates for it. `DEFAULT_LOCALE` is "ar", so a
-  // first-run user on an English-locale phone is precisely that case.
+  // Neither a logical edge nor a physical one is sufficient alone, and each
+  // fails a different pair of the four locale/native-layout combinations:
   //
-  // The rule therefore has to be keyed off the APP locale and expressed as a
-  // physical edge, the way `SummaryRow` in moduleShared already does it. A
-  // logical edge cannot satisfy this, and jest performs no Yoga layout, so
-  // asserting the resolved physical property is the only check that can fail
-  // when the rule lands on the trailing side.
+  //   * logical alone resolves against the NATIVE direction, and the app locale
+  //     can diverge from it (`allowRTL` without `forceRTL`; `homeModel.ts`
+  //     documents the same divergence). `DEFAULT_LOCALE` is "ar", so Arabic on
+  //     an English-locale phone is the first-run case.
+  //   * physical alone does not stay physical: under native RTL, React Native
+  //     rewrites authored left/right into start/end before Yoga runs
+  //     (`YogaLayoutableShadowNode::swapLeftAndRightInYogaStyleProps` and
+  //     `swapLeftAndRightInViewProps` in the shipped 0.86 source).
+  //
+  // So the banner declares its own `direction` from the app locale and uses a
+  // logical start edge. Jest runs no Yoga, so these assert those two properties
+  // — the ones that make the rendered edge correct in all four combinations —
+  // rather than the rendered edge itself, which still wants a device check.
   async function noticeStyle(stored: string | null) {
     mockGetItem.mockResolvedValue(stored);
     mockPaginatedQuery.mockReturnValue({
@@ -227,19 +230,26 @@ describe("the caution rule leads the reading direction", () => {
     return StyleSheet.flatten(screen.getByTestId("cash-movements-notice").props.style);
   }
 
-  test("sits on the right in Arabic and the left in English", async () => {
+  test("carries the app locale's direction and a logical leading edge", async () => {
     const ar = await noticeStyle(null);
     const en = await noticeStyle("en");
 
-    // Leading edge for right-to-left reading is the physical right.
-    expect(ar.borderRightWidth).toBe(3);
-    expect(ar.borderLeftWidth).toBeUndefined();
+    // The node's own direction, so its start edge never consults I18nManager.
+    expect(ar.direction).toBe("rtl");
+    expect(en.direction).toBe("ltr");
 
-    expect(en.borderLeftWidth).toBe(3);
-    expect(en.borderRightWidth).toBeUndefined();
+    // Logical, and no authored physical edge for the native swap to rewrite.
+    expect(ar.borderStartWidth).toBe(3);
+    expect(en.borderStartWidth).toBe(3);
+    for (const style of [ar, en]) {
+      expect(style.borderLeftWidth).toBeUndefined();
+      expect(style.borderRightWidth).toBeUndefined();
+      expect(style.borderLeftColor).toBeUndefined();
+      expect(style.borderRightColor).toBeUndefined();
+    }
 
-    // The control: the two must actually differ. A rule that ignores the locale
-    // produces an identical style object in both, which is the defect itself.
+    // The control: the two must actually differ. A banner that ignores the
+    // locale produces an identical style object in both, which is the defect.
     expect(ar).not.toEqual(en);
   });
 });

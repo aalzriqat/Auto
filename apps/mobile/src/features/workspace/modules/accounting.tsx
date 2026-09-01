@@ -17,7 +17,7 @@ import { useStyles } from "./moduleStyles";
 export function AccountingModule({ orgId }: { orgId: string }) {
   const styles = useStyles();
   const notice = useThemedStyles(makeNoticeStyles);
-  const { isRtl, locale } = useLocale();
+  const { locale, textDirection } = useLocale();
   const isArabic = locale === "ar";
   const { loadMore, results, status } = usePaginatedQuery(
     api.transactions.list,
@@ -34,7 +34,7 @@ export function AccountingModule({ orgId }: { orgId: string }) {
       status={status}
       header={
         <View
-          style={[notice.banner, isRtl ? notice.ruleRight : notice.ruleLeft]}
+          style={[notice.banner, { direction: textDirection }]}
           testID="cash-movements-notice"
         >
           <Text style={notice.title}>
@@ -66,30 +66,37 @@ export function AccountingModule({ orgId }: { orgId: string }) {
 // A caution surface, deliberately unlike `recordCard`: a reader scanning the
 // list must not mistake the standing caveat for one more cash movement.
 //
-// The rule is a PHYSICAL edge chosen from the app locale, not a logical
-// `borderStart`. A logical edge resolves against the native layout direction,
-// and this app never calls `forceRTL` — `LocaleProvider` only calls
-// `allowRTL(true)` — so an Arabic UI on an English-locale device has
-// `textDirection: "rtl"` while `I18nManager.isRTL` is false. `homeModel.ts`
-// documents that same divergence. `DEFAULT_LOCALE` is "ar", so a first-run user
-// on an English-locale phone is exactly that case, and `borderStart` would put
-// the caution rule on the trailing edge for the reader it is warning.
+// The rule is a LOGICAL edge, and the banner carries its own `direction` taken
+// from the app locale. Both halves are load-bearing, and each closes two of the
+// four locale/native-layout combinations:
+//
+//   * a logical edge alone resolves against the NATIVE layout direction. This
+//     app calls `allowRTL(true)` and never `forceRTL`, so an Arabic UI on an
+//     English-locale device has `textDirection: "rtl"` while `I18nManager.isRTL`
+//     is false — see `homeModel.ts`, which compensates for the same divergence.
+//     `DEFAULT_LOCALE` is "ar", so that is the first-run case.
+//   * a physical edge alone does NOT stay physical. Under native RTL, React
+//     Native rewrites authored left/right into logical start/end before Yoga
+//     runs — `YogaLayoutableShadowNode::swapLeftAndRightInYogaStyleProps` moves
+//     `border(Edge::Left)` to `Edge::Start`, and `swapLeftAndRightInViewProps`
+//     does the same for `borderColors.left`. It is on by default and this app
+//     never calls `swapLeftAndRightInRTL(false)`.
+//
+// Declaring the direction on this node makes its own start edge resolve against
+// the app locale in all four combinations, and leaves no authored left/right for
+// the native swap to rewrite. Jest runs no Yoga, so the tests assert those two
+// properties rather than the rendered edge; the rendered edge still wants a
+// device check on an Arabic-locale phone.
 const makeNoticeStyles = (theme: AppTheme) =>
   StyleSheet.create({
     banner: {
       gap: theme.spacing.xs,
       borderRadius: theme.radius.md,
+      borderStartWidth: 3,
+      borderStartColor: theme.colors.warning,
       backgroundColor: theme.colors.warningSoft,
       paddingHorizontal: theme.spacing.lg,
       paddingVertical: theme.spacing.md,
-    },
-    ruleLeft: {
-      borderLeftWidth: 3,
-      borderLeftColor: theme.colors.warning,
-    },
-    ruleRight: {
-      borderRightWidth: 3,
-      borderRightColor: theme.colors.warning,
     },
     title: {
       color: theme.colors.text,
