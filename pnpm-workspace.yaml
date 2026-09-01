@@ -42,6 +42,26 @@ overrides:
   # six weeks (4.28.7 shipped 2026-07-21, both GHSAs 2026-09-01) — this is
   # advisory-database drift, not a dependency we let rot.
   browserslist: 4.28.8
+  # Collateral to the pin above, and required for it to be INSTALLABLE rather
+  # than merely correct. browserslist 4.28.8 requires electron-to-chromium
+  # ^1.5.402, so the old 1.5.371 this repo carried cannot satisfy it — and a
+  # fresh resolution takes the newest match, which on the day this was written
+  # was 1.5.419, published hours earlier. CI runs pnpm 11, whose supply-chain
+  # policy REJECTS any entry younger than 24h:
+  #
+  #   ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION
+  #   electron-to-chromium@1.5.419 published 2026-09-01T18:02:46Z,
+  #   within the minimumReleaseAge cutoff
+  #
+  # 1.5.417 (published 2026-08-31) is the newest release that both satisfies
+  # ^1.5.402 and clears the age gate.
+  #
+  # This pin is a RESOLUTION-DATE artifact, not a security pin: it exists
+  # because the lockfile was regenerated on the day a new release landed.
+  # Once the lockfile is committed it stays put, so this may be raised or
+  # dropped whenever electron-to-chromium is next revisited — unlike the
+  # postcss/nanoid pins above, nothing here is defending against a CVE.
+  electron-to-chromium: 1.5.417
   # brace-expansion: pin each major line to its own patched release. The 5.x
   # line changed the module's export shape, so it is NOT a drop-in for the
   # old-API CommonJS consumers (minimatch@3 via eslint/exceljs) — forcing 5.x
