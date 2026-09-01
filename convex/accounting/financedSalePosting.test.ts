@@ -318,3 +318,232 @@ describe("financed sale recognition — a deposit the dealership already banked 
     expect(credits).toBe(jod(20_000));
   });
 });
+
+/**
+ * c16218: settlement funding and ownership basis are ORTHOGONAL.
+ *
+ * These two questions were competing top-level branches, and a consigned
+ * financed sale answered only the second: it returned agent-basis lines and
+ * dropped the plan, so the GL debited the customer for the gross while the
+ * subledger opened a finance-company receivable for the same sale. The entry
+ * balanced, which is why nothing caught it.
+ *
+ * Each of these asserts the EXACT line set, not merely that the entry balances.
+ * Every wrong answer in this area balances.
+ */
+describe("funding and ownership basis, composed (c16218)", () => {
+  const AGENT_GROSS = 20_000;
+  const ENTITLEMENT = 15_000;
+  const COMMISSION = AGENT_GROSS - ENTITLEMENT;
+
+  const consignment = (over = {}) => ({
+    supplierEntitlementMinor: jod(ENTITLEMENT),
+    supplierName: "Amman Importer Co",
+    settlementRoute: "THROUGH_DEALERSHIP" as const,
+    externallyFinanced: true,
+    financedByConfiguredCompany: true,
+    ...over,
+  });
+
+  const consignedPlan = (over: Partial<FinancedSalePlanPayload> = {}) =>
+    plan({
+      legalInvoiceConsiderationMinor: jod(AGENT_GROSS),
+      financeCompanyReceivableMinor: jod(17_000),
+      depositLiabilityAppliedMinor: jod(3_000),
+      customerReceivableMinor: 0,
+      components: [],
+      ...over,
+    });
+
+  const consignedSale = (over: Partial<SaleCompletedPayload> = {}) =>
+    sale({
+      saleAmountMinor: jod(AGENT_GROSS),
+      consignment: consignment(),
+      financedSalePlan: consignedPlan(),
+      ...over,
+    });
+
+  /** Every line as [account, debit, credit], for an exact comparison. */
+  const shape = (result: ReturnType<typeof ruleSaleCompleted>) =>
+    result.lines.map((l) => [l.accountSystemKey, l.debitMinor, l.creditMinor]);
+
+  test("the four facts of a consigned financed sale, and nothing else", () => {
+    const result = ruleSaleCompleted(consignedSale());
+
+    // c16218 §2's worked case, exactly.
+    expect(shape(result)).toEqual([
+      [SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES, jod(17_000), 0],
+      [SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY, jod(3_000), 0],
+      [SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, 0, jod(ENTITLEMENT)],
+      [SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE, 0, jod(COMMISSION)],
+    ]);
+
+    // The company owes 17,000 · the deposit is already held · the supplier is
+    // owed 15,000 · the dealership earned 5,000. Four facts, one entry.
+    expect(() => validateBalance(result.lines)).not.toThrow();
+  });
+
+  test("no customer receivable, no dealership vehicle revenue, no inventory movement", () => {
+    const result = ruleSaleCompleted(consignedSale());
+
+    // The three things the old path did wrong, and the one thing routing this
+    // through the owned branch would do wrong instead.
+    expect(net(result, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(0);
+    expect(net(result, SYSTEM_KEYS.SALES_REVENUE)).toBe(0);
+    expect(net(result, SYSTEM_KEYS.COST_OF_VEHICLES_SOLD)).toBe(0);
+    expect(net(result, SYSTEM_KEYS.VEHICLE_INVENTORY)).toBe(0);
+  });
+
+  test("with no deposit the company owes the whole gross", () => {
+    const result = ruleSaleCompleted(
+      consignedSale({
+        financedSalePlan: consignedPlan({
+          financeCompanyReceivableMinor: jod(AGENT_GROSS),
+          depositLiabilityAppliedMinor: 0,
+        }),
+      })
+    );
+
+    expect(shape(result)).toEqual([
+      [SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES, jod(AGENT_GROSS), 0],
+      [SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, 0, jod(ENTITLEMENT)],
+      [SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE, 0, jod(COMMISSION)],
+    ]);
+  });
+
+  test("a classified deduction reduces the funding side once, and leaves the agent basis alone", () => {
+    // 20,000 gross = 15,625 still owed + 3,000 deposit + 1,375 withheld and
+    // classified. The supplier is still owed 15,000 and the dealership still
+    // earned 5,000 — who withheld what does not change whose car it was.
+    const result = ruleSaleCompleted(
+      consignedSale({
+        financedSalePlan: consignedPlan({
+          financeCompanyReceivableMinor: jod(15_625),
+          components: [
+            {
+              sourceKind: "FEE",
+              sourceId: "fee_1",
+              label: "Netted dealer contribution",
+              amountMinor: jod(1_375),
+              treatment: "DEALER_CONCESSION",
+              systemKey: SYSTEM_KEYS.SALES_CONSIDERATION_REDUCTIONS,
+              side: "DEBIT",
+            },
+          ],
+        }),
+      })
+    );
+
+    expect(shape(result)).toEqual([
+      [SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES, jod(15_625), 0],
+      [SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY, jod(3_000), 0],
+      [SYSTEM_KEYS.SALES_CONSIDERATION_REDUCTIONS, jod(1_375), 0],
+      [SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, 0, jod(ENTITLEMENT)],
+      [SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE, 0, jod(COMMISSION)],
+    ]);
+    expect(() => validateBalance(result.lines)).not.toThrow();
+  });
+
+  test("what the customer separately owes is theirs, and only that", () => {
+    const result = ruleSaleCompleted(
+      consignedSale({
+        financedSalePlan: consignedPlan({
+          financeCompanyReceivableMinor: jod(16_000),
+          customerReceivableMinor: jod(1_000),
+        }),
+      })
+    );
+
+    // 1,000, not 20,000. The distinction the defect erased.
+    expect(net(result, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(jod(1_000));
+    expect(net(result, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES)).toBe(jod(16_000));
+    expect(() => validateBalance(result.lines)).not.toThrow();
+  });
+
+  // ── The shapes that must not have moved ──────────────────────────────────
+
+  test("a cash consigned sale posts exactly what it always posted", () => {
+    const result = ruleSaleCompleted(
+      consignedSale({
+        financedSalePlan: undefined,
+        consignment: consignment({
+          externallyFinanced: undefined,
+          financedByConfiguredCompany: undefined,
+        }),
+      })
+    );
+
+    // Nobody else funded it, so the customer owes the gross — unchanged, and
+    // the shape every consigned sale in history posted under.
+    expect(shape(result)).toEqual([
+      [SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, jod(AGENT_GROSS), 0],
+      [SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, 0, jod(ENTITLEMENT)],
+      [SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE, 0, jod(COMMISSION)],
+    ]);
+  });
+
+  test("a lease is externally financed, has no configured company, and still posts", () => {
+    // ⚠️ The first version of the fail-closed guard keyed on `externallyFinanced`
+    // and refused every one of these. A lease carries no `companyId`, so no plan
+    // is ever built for it and no finance-company receivable is opened on either
+    // side — there is no divergence to prevent, and its gross really is the
+    // customer's debt. The suite caught it, not inspection.
+    const result = ruleSaleCompleted(
+      consignedSale({
+        financedSalePlan: undefined,
+        consignment: consignment({ financedByConfiguredCompany: undefined }),
+      })
+    );
+
+    expect(shape(result)).toEqual([
+      [SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, jod(AGENT_GROSS), 0],
+      [SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, 0, jod(ENTITLEMENT)],
+      [SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE, 0, jod(COMMISSION)],
+    ]);
+  });
+
+  test("the direct route is untouched and opens no dealership finance receivable", () => {
+    const result = ruleSaleCompleted(
+      consignedSale({
+        financedSalePlan: undefined,
+        consignment: consignment({
+          settlementRoute: "DIRECT_TO_SUPPLIER",
+          supplierGrossReceiptMinor: jod(AGENT_GROSS),
+        }),
+      })
+    );
+
+    // The buyer paid the supplier; the only asset is the margin he owes back.
+    expect(shape(result)).toEqual([
+      [SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, jod(COMMISSION), 0],
+      [SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE, 0, jod(COMMISSION)],
+    ]);
+    expect(net(result, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES)).toBe(0);
+  });
+
+  // ── The refusals ─────────────────────────────────────────────────────────
+
+  test("a configured-company consigned sale with no plan refuses rather than billing the customer", () => {
+    // The silent failure this replaces: fall back to a gross Customer AR debit
+    // and the entry balances, while the subledger names the finance company.
+    expect(() =>
+      ruleSaleCompleted(consignedSale({ financedSalePlan: undefined }))
+    ).toThrow(/carries no settlement plan/i);
+  });
+
+  test("a legal invoice that disagrees with the proceeds refuses rather than plugging the gap", () => {
+    // The supplier's entitlement and the commission are measured from the
+    // proceeds; the funding side sums to the legal consideration. If those two
+    // differ the entry is short by the difference — and the difference is not
+    // evidence of a third amount.
+    expect(() =>
+      ruleSaleCompleted(
+        consignedSale({
+          financedSalePlan: consignedPlan({
+            legalInvoiceConsiderationMinor: jod(19_000),
+          }),
+        })
+      )
+    ).toThrow(/must agree before this can post/i);
+  });
+});

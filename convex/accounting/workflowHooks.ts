@@ -644,6 +644,8 @@ export async function hookSaleCompleted(
       supplierGrossReceiptMinor?: number;
       /** Whether an outside financier pays for the car — see SaleCompletedPayload. */
       externallyFinanced?: boolean;
+      /** Whether that financier is a CONFIGURED company — see SaleCompletedPayload. */
+      financedByConfiguredCompany?: boolean;
       supplierName?: string;
       settlementRoute: "DIRECT_TO_SUPPLIER" | "THROUGH_DEALERSHIP";
     };

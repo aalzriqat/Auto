@@ -1286,6 +1286,19 @@ async function applySaleCompletionSideEffects(
   // Posting anyway would either claim the whole transaction as the
   // dealership's or invent a cost; both misstate revenue on a car it never
   // owned, so the sale stops here rather than guessing.
+  // Whether a CONFIGURED finance company is on this deal.
+  //
+  // Read from the application rather than inferred from `financingType`. That
+  // field is equally true of a LEASE, and `quotes.saveQuote` refuses a lease a
+  // `companyId` — so a lease has no settlement plan and no finance-company
+  // receivable, and its gross genuinely is the customer's debt. Keying the
+  // posting rule's fail-closed guard on the wider fact refused every lease.
+  //
+  // Resolved here rather than inside the builder below, which is synchronous.
+  const financedByConfiguredCompany = args.applicationId
+    ? (await ctx.db.get(args.applicationId))?.companyId !== undefined
+    : false;
+
   const consignment = isSourced
     ? (() => {
         if (costMinor === undefined || costMinor <= 0) {
@@ -1383,6 +1396,11 @@ async function applySaleCompletionSideEffects(
           // a financed one (where it is not). Only the current emitter sets it.
           externallyFinanced:
             args.financingType === "FINANCED" || args.financingType === "LEASE",
+          // The narrower fact: is there a CONFIGURED company, the only shape
+          // whose settlement is recognised from a plan and whose receivable is
+          // opened in the finance-company subledger. A lease is externally
+          // financed and has no such company.
+          financedByConfiguredCompany,
           supplierName: prepared.vehicle.sourcedFromName,
           settlementRoute,
         };
