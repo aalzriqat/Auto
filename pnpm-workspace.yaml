@@ -25,6 +25,23 @@ overrides:
   # by @istanbuljs/load-nyc-config via the mobile jest preset. Held inside 3.x —
   # 4.x changed the API and is not a drop-in for those CommonJS consumers.
   "js-yaml@3": ">=3.15.1 <4.0.0"
+  # GHSA-73wf-gq98-2v4g (uncaught crash / prototype write via untrusted
+  # browserslist-stats.json in normalizeStats) and GHSA-c83g-rgw3-j3cx
+  # (unbounded cache growth -> OOM). Both fixed in >=4.28.7; reached only
+  # transitively, via @clerk/nextjs > next > styled-jsx > @babel/core and
+  # @sentry/nextjs > @sentry/bundler-plugin-core > @babel/core.
+  #
+  # Pinned exact for the same reason as postcss and nanoid above: a range
+  # lets lockfile regeneration drift onto a release younger than the CI
+  # minimumReleaseAge (<24h) supply-chain gate. 4.28.8 was published
+  # 2026-08-08 and clears it comfortably.
+  #
+  # NOT added to auditConfig.ignoreGhsas: a patched, compatible release
+  # exists, so an override is the correct remedy and an ignore would be
+  # suppressing a fixable advisory. Note the PATCH predates the ADVISORY by
+  # six weeks (4.28.7 shipped 2026-07-21, both GHSAs 2026-09-01) — this is
+  # advisory-database drift, not a dependency we let rot.
+  browserslist: 4.28.8
   # brace-expansion: pin each major line to its own patched release. The 5.x
   # line changed the module's export shape, so it is NOT a drop-in for the
   # old-API CommonJS consumers (minimatch@3 via eslint/exceljs) — forcing 5.x
