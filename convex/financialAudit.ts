@@ -306,7 +306,17 @@ export const createManualJournal = mutation({
     // Refused here rather than at approval: a draft carrying an unusable date
     // could never be approved, and a draft that can only ever be rejected is a
     // dead end handed to the reviewer instead of to the person who can fix it.
-    if (!Number.isFinite(args.accountingDate)) {
+    //
+    // `Number.isFinite` alone is NOT enough, and both review seats found this
+    // independently. JavaScript's Date domain stops at +/-8.64e15 ms, so
+    // 8640000000000001 is a perfectly finite safe integer whose `toISOString()`
+    // throws RangeError. Accepting one would persist a draft that can never be
+    // approved and that counts against EVERY period-close checklist until
+    // somebody rejects it.
+    if (
+      !Number.isFinite(args.accountingDate) ||
+      Number.isNaN(new Date(args.accountingDate).getTime())
+    ) {
       throw new ConvexError("The manual journal's accounting date is not a valid date.");
     }
 
@@ -404,6 +414,16 @@ export const approveManualJournal = mutation({
     if (accountingDate === undefined) {
       throw new ConvexError(
         "This manual journal draft carries no accounting date, so it cannot be posted. It was prepared before the accounting date became explicit. Reject it and resubmit the journal with the date the entry belongs to."
+      );
+    }
+    // Defence in depth, and NOT redundant with the guard in
+    // createManualJournal: that one only protects drafts that came through
+    // createManualJournal. A row written directly — a migration, an admin tool,
+    // a future caller — would otherwise reach the formatting below and throw an
+    // uncaught RangeError instead of a refusal an operator can act on.
+    if (Number.isNaN(new Date(accountingDate).getTime())) {
+      throw new ConvexError(
+        "This manual journal draft carries an unusable accounting date, so it cannot be posted. Reject it and resubmit the journal with a valid date."
       );
     }
     const declaredDay = new Date(accountingDate).toISOString().slice(0, 10);

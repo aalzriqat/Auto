@@ -12,9 +12,29 @@
  * the stub said and prove nothing — the same trap the sibling opening-balance
  * suite records for `scaleForCurrency`.
  */
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { todayDateInput } from "@/lib/dateInput";
+
+/**
+ * ⚠️ RUN AT UTC+3, FOR THE REASON lib/dateInput.test.ts ALREADY DOCUMENTS.
+ *
+ * Under the CI default of UTC a local-calendar date and a UTC-calendar date
+ * coincide, so the "defaults to LOCAL today" assertion below could not tell the
+ * correct helper apart from the `toISOString().slice(0,10)` pattern its own
+ * comment warns about — it would pass either way. The review seat caught that
+ * this file omitted the guard its sibling had had all along.
+ */
+const ORIGINAL_TZ = process.env.TZ;
+beforeAll(() => {
+  process.env.TZ = "Asia/Amman";
+  // Self-check: prove the override actually took effect, so a silently ignored
+  // TZ cannot hand back a green run that means nothing.
+  expect(new Date(Date.UTC(2026, 7, 31, 21, 30)).getHours()).toBe(0);
+});
+afterAll(() => {
+  process.env.TZ = ORIGINAL_TZ;
+});
 
 vi.mock("@/components/providers/OrgProvider", () => ({
   useOrg: () => ({ activeOrgId: "org_1" }),
@@ -39,6 +59,8 @@ const stubs = vi.hoisted(() => ({
   // FRESH spy on every render, so no test could ever inspect what was sent —
   // the failure mode the sibling container suite records.
   mutations: new Map<string, ReturnType<typeof vi.fn>>(),
+  /** Pending drafts the reviewer's queue should render, set per test. */
+  pending: [] as Record<string, unknown>[],
 }));
 
 vi.mock("convex/react", async () => {
@@ -48,6 +70,7 @@ vi.mock("convex/react", async () => {
       const name = getFunctionName(reference);
       if (name.includes("getMe")) return { _id: "user_1", name: "Preparer" };
       if (name.includes("chartOfAccounts")) return [];
+      if (name.includes("listPendingManualJournals")) return stubs.pending;
       return [];
     },
     useMutation: (reference: never) => {
@@ -66,7 +89,26 @@ import { manualJournalSchema } from "./manualJournal.schema";
 afterEach(() => {
   cleanup();
   stubs.mutations.clear();
+  stubs.pending = [];
+  vi.useRealTimers();
 });
+
+/** A pending draft prepared by SOMEONE ELSE, so the reviewer may act on it. */
+function pendingDraft(overrides: Record<string, unknown> = {}) {
+  return {
+    _id: "draft_1",
+    orgId: "org_1",
+    status: "PENDING_APPROVAL",
+    memo: "Prior-month accrual",
+    creatorName: "Layla Haddad",
+    createdBy: "user_2",
+    createdAt: Date.UTC(2026, 7, 31),
+    idempotencyKey: "k1",
+    accountingDate: Date.UTC(2026, 7, 31),
+    lines: [],
+    ...overrides,
+  };
+}
 
 function openDialog() {
   render(<ManualJournalTab />);
@@ -150,5 +192,73 @@ describe("SCRUM-50 — the manual journal form declares its accounting date", ()
       ],
     });
     expect(blank.success).toBe(false);
+  });
+});
+
+describe("SCRUM-50 R1 — the reviewer can see the date they are authorising", () => {
+  test("the pending card shows the draft's accounting date", () => {
+    stubs.pending = [pendingDraft()];
+    render(<ManualJournalTab />);
+
+    // Before this, the card showed memo, submitter and amounts but NOT the
+    // date — so the second approver signed off on the one fact this change
+    // made authoritative without ever seeing it. Rendered from the UTC parts,
+    // so it reads as the calendar day the ledger will store.
+    expect(screen.getByText("2026-08-31")).toBeTruthy();
+  });
+
+  test("a legacy dateless draft is called out rather than looking normal", () => {
+    stubs.pending = [pendingDraft({ accountingDate: undefined })];
+    render(<ManualJournalTab />);
+
+    expect(screen.getByText("ManualJournalMissingDate")).toBeTruthy();
+  });
+
+  test("Approve is disabled for a dateless draft, because it can only ever refuse", () => {
+    stubs.pending = [pendingDraft({ accountingDate: undefined })];
+    render(<ManualJournalTab />);
+
+    const approve = screen.getByRole("button", { name: /Approve/ }) as HTMLButtonElement;
+    expect(approve.disabled).toBe(true);
+  });
+
+  test("Reject stays ENABLED for that same draft — this is what stops it being a dead end", () => {
+    stubs.pending = [pendingDraft({ accountingDate: undefined })];
+    render(<ManualJournalTab />);
+
+    // The paired assertion matters more than either half. Disabling Approve
+    // without leaving Reject reachable would trap the draft in the queue, which
+    // is precisely the failure that fired the convergence breaker on the
+    // preceding ticket in this program.
+    const reject = screen.getByRole("button", { name: /Reject/ }) as HTMLButtonElement;
+    expect(reject.disabled).toBe(false);
+  });
+
+  test("a dated draft remains approvable — the gate is the missing date, not the card", () => {
+    stubs.pending = [pendingDraft()];
+    render(<ManualJournalTab />);
+
+    // POSITIVE CONTROL: without this, disabling Approve unconditionally would
+    // pass the test above and break the product.
+    const approve = screen.getByRole("button", { name: /Approve/ }) as HTMLButtonElement;
+    expect(approve.disabled).toBe(false);
+  });
+});
+
+describe("SCRUM-50 R2 — a tab left open across midnight does not default to yesterday", () => {
+  test("opening the form after local midnight uses the NEW local day", () => {
+    vi.useFakeTimers();
+    // 23:30 local on 31 August in Amman (UTC+3) — the module and the component
+    // both first see "2026-08-31".
+    vi.setSystemTime(new Date(Date.UTC(2026, 7, 31, 20, 30)));
+    render(<ManualJournalTab />);
+
+    // 00:30 local on 1 September: a new local day, a new MONTH, and therefore a
+    // different accounting period.
+    vi.setSystemTime(new Date(Date.UTC(2026, 7, 31, 21, 30)));
+    fireEvent.click(screen.getByRole("button", { name: /NewManualJournal/ }));
+
+    const input = document.querySelector('input[type="date"]') as HTMLInputElement;
+    expect(input.value).toBe("2026-09-01");
   });
 });

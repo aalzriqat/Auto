@@ -341,6 +341,78 @@ describe("SCRUM-50 — the declared date is validated, never guessed", () => {
     expect(draft!.status).toBe("REJECTED");
   });
 
+  test("a finite but unrenderable date is refused at create, not persisted", async () => {
+    const s = await seedDealer();
+    // 8_640_000_000_000_001 is ONE MILLISECOND past JavaScript's maximum Date.
+    // It is finite, it is a safe integer, and `new Date(it).toISOString()`
+    // throws RangeError. Number.isFinite alone let it through.
+    await expect(
+      s.asUser.mutation(api.financialAudit.createManualJournal, {
+        orgId: s.orgId,
+        memo: "Unrenderable date",
+        lines: s.lines,
+        idempotencyKey: "s50-range",
+        accountingDate: 8_640_000_000_000_001,
+      })
+    ).rejects.toThrow(/not a valid date/i);
+
+    // Refused BEFORE anything was written: an accepted draft here could never
+    // be approved and would count against every period-close checklist.
+    const drafts = await s.t.run((ctx) => ctx.db.query("manualJournalDrafts").collect());
+    expect(drafts).toHaveLength(0);
+  });
+
+  test("the exact maximum JavaScript date is still accepted — the guard is a boundary, not a mood", async () => {
+    const s = await seedDealer();
+    // POSITIVE CONTROL. 8_640_000_000_000_000 is the largest valid Date, so the
+    // refusal above must be failing for being one past the boundary and not for
+    // some unrelated shape error.
+    const created = await s.asUser.mutation(api.financialAudit.createManualJournal, {
+      orgId: s.orgId,
+      memo: "Maximum representable date",
+      lines: s.lines,
+      idempotencyKey: "s50-max",
+      accountingDate: 8_640_000_000_000_000,
+    });
+    expect(created.alreadyCreated).toBe(false);
+  });
+
+  test("a directly-written unusable date fails approval cleanly instead of throwing RangeError", async () => {
+    const s = await seedDealer();
+    // Bypasses createManualJournal entirely, which is the point: the create
+    // guard cannot protect a row a migration or admin tool wrote.
+    const poisoned = await s.t.run((ctx) =>
+      ctx.db.insert("manualJournalDrafts", {
+        orgId: s.orgId,
+        status: "PENDING_APPROVAL" as const,
+        memo: "Written past the Date domain",
+        lines: s.lines,
+        accountingDate: 8_640_000_000_000_001,
+        idempotencyKey: "s50-poisoned",
+        createdBy: s.userId,
+        createdAt: Date.now(),
+      })
+    );
+
+    // A ConvexError the operator can read and act on — NOT an uncaught
+    // RangeError, which reaches the UI as a generic "unexpected error".
+    await expect(
+      s.asReviewer.mutation(api.financialAudit.approveManualJournal, {
+        orgId: s.orgId,
+        draftId: poisoned,
+      })
+    ).rejects.toThrow(/unusable accounting date/i);
+
+    // And the way out still exists.
+    await s.asReviewer.mutation(api.financialAudit.rejectManualJournal, {
+      orgId: s.orgId,
+      draftId: poisoned,
+      rejectionReason: "Unusable accounting date.",
+    });
+    const after = await s.t.run((ctx) => ctx.db.get(poisoned));
+    expect(after!.status).toBe("REJECTED");
+  });
+
   test("reusing an idempotency key with a different accounting date is refused", async () => {
     const s = await seedDealer();
     await s.asUser.mutation(api.financialAudit.createManualJournal, {
