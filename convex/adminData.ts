@@ -122,6 +122,38 @@ function assertPatchDoesNotForgeVehicleLifecycle(
     // Compared as strings so an Id and its serialized form agree, and so
     // undefined and a missing value are the same absence.
     if (String(next[field] ?? "") === String(before[field] ?? "")) continue;
+
+    // ⚠️ RELEASING A CAR NOBODY OWNS IS NOT A FORGERY — SCRUM-212-NEW-1.
+    //
+    // The first version of this guard refused every status change, and that
+    // closed the LAST door out of a state it could not itself repair. A car
+    // that is SOLD with no owner recorded is refused by all four doors:
+    // `restoreVehicleFromSale` refuses it (no ownership to prove),
+    // `vehicles.update` and `vehicleRequests` both refuse it
+    // (`assertDirectVehicleStatusTransition` rejects any change away from a
+    // workflow-controlled status), and this guard refused the last one. The
+    // Sonnet MAX seat reproduced that dead end through the real mutation.
+    //
+    // The owner ruling makes the DATA disposable; it does not say the tool
+    // that repairs it may be removed, and those are different claims. So the
+    // narrow case is allowed back: a car with no recorded owner may be moved
+    // off SOLD.
+    //
+    // It cannot be used to forge, which is what F3 was actually about:
+    //   - changing `soldBySaleId` is refused unconditionally, so an owner
+    //     cannot be cleared first to unlock this path, nor laundered in by
+    //     the same patch;
+    //   - moving a car INTO SOLD is refused, because only a completed sale
+    //     may say a car is sold;
+    //   - a car whose owner IS recorded is still refused — that one has a
+    //     real answer, which is to cancel the sale that owns it.
+    const releasingAnUnownedCar =
+      field === "status" &&
+      before.soldBySaleId === undefined &&
+      String(before.status ?? "") === "SOLD" &&
+      String(next.status ?? "") !== "SOLD";
+    if (releasingAnUnownedCar) continue;
+
     throwAppError(
       AppErrorCode.VALIDATION_FAILED,
       `A vehicle's ${field} records which sale owns the car and is set by the sale workflow, not by direct edit. Changing it here would let a cancellation restore a car that belongs to another sale, or strand this one. Use the sale or vehicle-request workflow instead.`

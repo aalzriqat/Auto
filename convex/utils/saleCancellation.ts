@@ -742,6 +742,12 @@ async function reinstateAppliedDeposits(
  * DEPOSIT rows are deliberately left alone — cancelling a sale reinstates the
  * deposit against the quote rather than refunding it, so that cash really was
  * received and still is held.
+ *
+ * ⚠️ This docblock used to say the match was org + vehicle + customer +
+ * VEHICLE_SALE, because `transactions` had no `saleId`. Both halves stopped
+ * being true in SCRUM-212 and the comment was left behind by the same change
+ * that falsified it. It matches on the sale alone now; see the note on the
+ * query itself for why every other predicate was removed.
  */
 async function voidSaleCashflowTransaction(
   ctx: MutationCtx,

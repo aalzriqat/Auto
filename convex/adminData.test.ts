@@ -99,6 +99,120 @@ describe("the raw editor may not forge vehicle sale-ownership authority", () => 
   });
 });
 
+/**
+ * SCRUM-212-NEW-1 — the forgery guard must not also seal the only exit.
+ *
+ * ⚠️ DEFENCE IN DEPTH, and stated as such: on fresh data a SOLD car ALWAYS
+ * has an owner, because `markVehicleAsSold` is the only writer of that status
+ * and it stamps `soldBySaleId` in the same patch. These fixtures build the
+ * unowned state directly, because no door produces it any more — which is
+ * exactly why the state needs a way OUT rather than a way in.
+ */
+describe("a SOLD car nobody owns can still be released", () => {
+  async function soldVehicle(
+    t: ReturnType<typeof convexTestWithComponents>,
+    orgId: string,
+    vehicleId: string,
+    owner: string | undefined
+  ) {
+    await t.run((ctx) =>
+      ctx.db.patch(vehicleId as never, {
+        status: "SOLD" as const,
+        soldBySaleId: owner as never,
+      })
+    );
+  }
+
+  async function realSale(t: ReturnType<typeof convexTestWithComponents>, orgId: string, vehicleId: string) {
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId: orgId as never, firstName: "Real", lastName: "Buyer" })
+    );
+    const userId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "new1_user", email: "new1@acme.com" })
+    );
+    return await t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: orgId as never,
+        vehicleId: vehicleId as never,
+        customerId,
+        salespersonId: userId,
+        salePrice: 1,
+        saleDate: Date.now(),
+        status: "COMPLETED" as const,
+      })
+    );
+  }
+
+  test("with no owner recorded, an admin can move it off SOLD", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, vehicleId, asAdmin } = await seedOrgWithVehicle(t);
+    await soldVehicle(t, orgId, vehicleId, undefined);
+
+    // Every other door refuses this car: restoreVehicleFromSale has no
+    // ownership to prove, and vehicles.update / vehicleRequests both refuse
+    // any change away from a workflow-controlled status. If this one refuses
+    // too the car is stranded permanently.
+    await asAdmin.mutation(api.adminData.adminUpdateRecord, {
+      table: "vehicles",
+      id: vehicleId,
+      patch: { status: "AVAILABLE" },
+    });
+
+    const after = await t.run((ctx) => ctx.db.get(vehicleId));
+    expect(after?.status).toBe("AVAILABLE");
+  });
+
+  test("with a real owner recorded, it is still refused", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, vehicleId, asAdmin } = await seedOrgWithVehicle(t);
+    const saleId = await realSale(t, orgId, vehicleId);
+    await soldVehicle(t, orgId, vehicleId, saleId as unknown as string);
+
+    // The F3 regression guard. This car has a real answer — cancel the sale
+    // that owns it — so the escape hatch must NOT apply here.
+    await expect(
+      asAdmin.mutation(api.adminData.adminUpdateRecord, {
+        table: "vehicles",
+        id: vehicleId,
+        patch: { status: "AVAILABLE" },
+      })
+    ).rejects.toThrow(/sale workflow/i);
+
+    const after = await t.run((ctx) => ctx.db.get(vehicleId));
+    expect(after?.status).toBe("SOLD");
+  });
+
+  test("the escape hatch cannot mark a car SOLD, nor launder an owner in", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, vehicleId, asAdmin } = await seedOrgWithVehicle(t);
+
+    // Moving INTO SOLD stays refused — only a completed sale says that.
+    await expect(
+      asAdmin.mutation(api.adminData.adminUpdateRecord, {
+        table: "vehicles",
+        id: vehicleId,
+        patch: { status: "SOLD" },
+      })
+    ).rejects.toThrow(/sale workflow/i);
+
+    // And an unowned SOLD car cannot be released WHILE naming an owner in the
+    // same patch — otherwise the hatch becomes the forgery it exists beside.
+    await soldVehicle(t, orgId, vehicleId, undefined);
+    const saleId = await realSale(t, orgId, vehicleId);
+    await expect(
+      asAdmin.mutation(api.adminData.adminUpdateRecord, {
+        table: "vehicles",
+        id: vehicleId,
+        patch: { status: "AVAILABLE", soldBySaleId: saleId },
+      })
+    ).rejects.toThrow(/sale workflow/i);
+
+    const after = await t.run((ctx) => ctx.db.get(vehicleId));
+    expect(after?.status).toBe("SOLD");
+    expect(after?.soldBySaleId).toBeUndefined();
+  });
+});
+
 describe("adminData", () => {
   test("rejects a non-allowlisted caller", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
