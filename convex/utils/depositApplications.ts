@@ -226,10 +226,33 @@ export async function recordDepositApplication(
 /** The identity a row was posted under, read back rather than re-derived. */
 function recordedIdentity(row: Doc<"depositApplications">): DepositApplicationIdentity {
   return {
+    // ⚠️ EXHAUSTIVE OVER EVERY TREATMENT `identityFor` CAN WRITE.
+    //
+    // This is the read-back half of the pair, and it used to be a two-way
+    // ternary while the write side had three branches — so a row recorded as
+    // FINANCED_SALE_CONSIDERATION was read back as DEPOSIT_APPLIED. That is the
+    // precise failure this module's own header says the stored identity exists
+    // to prevent: a wrong re-derivation "does not fail — it finds no event and
+    // returns quietly."
+    //
+    // Nothing broke in practice, because a financed-consideration row posts no
+    // event and the misread lookup found nothing either — the right answer for
+    // the wrong reason. It also made the FINANCED_SALE_CONSIDERATION
+    // short-circuit in `reverseDepositApplication` unreachable from
+    // `reverseDepositApplicationsForSale`, its only production caller, so the
+    // guard read as load-bearing while being dead.
+    //
+    // The narrow case where it does bite: the tuple this builds
+    // (orgId, sourceType, sourceId, eventVersion, eventType) is shared across
+    // treatments except for eventType, so a DEPOSIT_APPLIED event on the SAME
+    // deposit+vehicle at the SAME sequence is a live target for a reversal that
+    // belongs to a different application entirely.
     eventType:
-      row.eventType === "DEPOSIT_APPLIED_TO_SETTLEMENT"
-        ? "DEPOSIT_APPLIED_TO_SETTLEMENT"
-        : "DEPOSIT_APPLIED",
+      row.eventType === "FINANCED_SALE_CONSIDERATION"
+        ? "FINANCED_SALE_CONSIDERATION"
+        : row.eventType === "DEPOSIT_APPLIED_TO_SETTLEMENT"
+          ? "DEPOSIT_APPLIED_TO_SETTLEMENT"
+          : "DEPOSIT_APPLIED",
     sourceType: row.eventSourceType,
     sourceId: row.eventSourceId,
     eventVersion: row.eventVersion,

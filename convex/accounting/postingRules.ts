@@ -948,6 +948,32 @@ function consignedAgentSaleLines(
     // evidence of a third: plugging it would invent an amount nobody recorded,
     // and choosing which side to trust would silently overrule either the legal
     // invoice or the supplier agreement.
+    //
+    // ⚠️ THIS IS STRICTER THAN THE OWNED BRANCH, DELIBERATELY, AND THE
+    // ASYMMETRY IS NOT AN OVERSIGHT.
+    //
+    // The owned branch says a few hundred lines below that the two figures
+    // "are allowed to differ — a 10,500 target against a 12,500 invoice to the
+    // financier is the ordinary shape of these deals". That is true THERE
+    // because the owned credit side is the legal consideration itself, so any
+    // L balances and `saleAmountMinor` is only the dealership's own operational
+    // target, carried for reporting.
+    //
+    // Here it is load-bearing arithmetic. The agent-basis credit side is
+    // `entitlement + commission`, and commission is DERIVED as
+    // `saleAmountMinor - entitlement` — so the credit side is pinned to
+    // `saleAmountMinor` while the funding side sums to L. Divergence is not a
+    // reporting nuance; it is an entry short by exactly `L - saleAmountMinor`,
+    // and the only ways to close it are to move the supplier's entitlement or
+    // the dealership's commission. Both are somebody's money and neither is
+    // recorded anywhere as the answer.
+    //
+    // Raised as a possible oversight by the Sonnet MAX seat against d0cdf9051
+    // — a fair reading, since the tolerance is documented generally and the
+    // strictness was not documented at all. Ruled in c16218 §4: "require exact
+    // equality with the plan's legal-invoice consideration. Do not infer a
+    // balancing amount from a difference." Written down here so the next
+    // reviewer does not have to re-derive it.
     if (funding && funding.legalInvoiceConsiderationMinor !== p.saleAmountMinor) {
       throw new ConvexError(
         `Consigned sale ${p.saleId} was invoiced to the financing company for ${funding.legalInvoiceConsiderationMinor} minor units but records gross proceeds of ${p.saleAmountMinor}. The supplier's entitlement and the dealership's commission are measured from the proceeds, so the two must agree before this can post. Reconcile the legal invoice with the sale before completing it.`
@@ -1087,6 +1113,25 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
   // Agent basis is a different CREDIT side, not a variation of this one — every
   // revenue, COGS and inventory line below assumes the dealership owned what it
   // sold. It funds itself from exactly the same plan.
+  //
+  // ⚠️ NOTE THE ASYMMETRY: the consigned basis fails closed when a
+  // configured-company sale arrives with no plan, and the owned branch below
+  // does not. Raised by the Sonnet MAX seat against d0cdf9051 and accepted as a
+  // real gap in rule-level defence — recorded rather than closed here.
+  //
+  // Why it is contained today, verified rather than assumed: the only producer
+  // of a plan is `applications.finalizeDeal`, and for an OWNED vehicle
+  // `settlesDirectToSupplier` returns false (it requires
+  // `isConsignedAgentSale(vehicle)`), so `financedSaleRecognitionApplies` is
+  // true whenever `app.companyId` is set and `resolveFinancedSalePlan` must
+  // then either produce a plan or throw. It cannot return undefined. The other
+  // completion doors in `sales.ts` take no application id at all.
+  //
+  // Why it is not closed in this change: c16218 §6 requires that owned/STOCK
+  // financed sales remain unchanged, and adding a refusal path to this branch
+  // is a change to them. The guard belongs on the payload rather than inside
+  // `consignment`, which is a small change but an owner-proxy decision, not
+  // mine to take under a fired convergence breaker.
   if (p.consignment) return consignedAgentSaleLines(p, funding);
 
   // Fail closed, and loudly. A sourced vehicle is the supplier's, so reaching

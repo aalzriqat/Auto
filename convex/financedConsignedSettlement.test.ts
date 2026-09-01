@@ -6719,9 +6719,17 @@ describe("the closing matrix c16216 requires", () => {
     expect(after[SYSTEM_KEYS.CASH_ON_HAND] ?? 0).toBe(3_000 * SCALE);
 
     // ⚠️ EXACTLY ONE reversing entry. The deposit-application path must NOT
-    // issue a second: `reverseDepositApplication` short-circuits on
-    // FINANCED_SALE_CONSIDERATION because the release it would reverse was
-    // never posted on its own — it was a line inside the sale entry.
+    // issue a second, because the release it would reverse was never posted on
+    // its own — it was a line inside the sale entry.
+    //
+    // This assertion alone does not say WHICH mechanism prevents the second
+    // one, and an earlier version of this comment claimed the wrong one: that
+    // `reverseDepositApplication` short-circuits on FINANCED_SALE_CONSIDERATION.
+    // It does, but `recordedIdentity` was collapsing that eventType on read-back,
+    // so the short-circuit never ran and the second reversal was prevented by
+    // the fallback lookup finding no event instead. Both return NOT_POSTED, so
+    // the count below is identical either way and could not tell them apart.
+    // The test that distinguishes them is the decoy-event one below.
     const entriesAfter = await s.t.run((ctx) =>
       ctx.db.query("journalEntries").collect()
     );
@@ -7003,5 +7011,86 @@ describe("the closing matrix c16216 requires", () => {
     // Still a liability, because no disposition has executed.
     const after = await ledgerBySystemKey(s);
     expect(after[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(-3_000 * SCALE);
+  });
+});
+
+/**
+ * Raised by the Sonnet MAX seat against d0cdf9051, reproduced, and accepted.
+ *
+ * `identityFor` writes three event types; `recordedIdentity` read back only
+ * two, collapsing FINANCED_SALE_CONSIDERATION into DEPOSIT_APPLIED. Nothing
+ * misbehaved, because a financed-consideration row posts no event and the
+ * misread lookup found none either — the right answer for the wrong reason,
+ * which is exactly the failure mode this module's header says the STORED
+ * identity exists to prevent: it "does not fail — it finds no event and
+ * returns quietly."
+ *
+ * The way to tell a correct read-back from a lucky miss is to put something
+ * where the wrong lookup would land.
+ */
+describe("a reversal reads back the identity it was recorded under (Sonnet MAX)", () => {
+  test("a foreign event sharing the deposit's tuple is not consumed by the cancellation", async () => {
+    const s = await seedDealership("identityRoundTrip");
+    const { applicationId } = await runDeal(s, {
+      route: "THROUGH_DEALERSHIP",
+      deposit: 3_000,
+      downPayment: 3_000,
+    });
+
+    // The row the sale actually recorded, and the identity it stored.
+    const application = await s.t.run(async (ctx) => {
+      const rows = await ctx.db.query("depositApplications").collect();
+      return rows[0];
+    });
+    expect(application.eventType).toBe("FINANCED_SALE_CONSIDERATION");
+
+    // A DECOY standing exactly where a misclassified read-back would look:
+    // same org, same sourceType, same sourceId, same version — differing only
+    // in the eventType, which is the one field the collapse got wrong. It
+    // belongs to a different application and must not be touched by this
+    // sale's cancellation.
+    const decoyId = await s.t.run((ctx) =>
+      ctx.db.insert("accountingEvents", {
+        orgId: s.orgId,
+        eventType: "DEPOSIT_APPLIED",
+        sourceType: application.eventSourceType,
+        sourceId: application.eventSourceId,
+        eventVersion: application.eventVersion,
+        idempotencyKey: "decoy_someone_elses_application",
+        occurredAt: Date.now(),
+        accountingDate: Date.now(),
+        currency: "JOD",
+        payload: {},
+        status: "POSTED" as const,
+        createdBy: s.userId,
+        createdAt: Date.now(),
+      })
+    );
+
+    await s.asUser.mutation(api.applications.cancelApplication, {
+      orgId: s.orgId,
+      applicationId,
+      reason: "Customer withdrew",
+    });
+
+    // Untouched. Before the read-back was made exhaustive, the cancellation
+    // found this event and acted on it.
+    const decoy = await s.t.run((ctx) => ctx.db.get(decoyId));
+    expect(decoy?.status).toBe("POSTED");
+    expect(decoy?.reversedByEventId).toBeUndefined();
+
+    // And nothing was queued against it either.
+    const reversals = await s.t.run((ctx) =>
+      ctx.db.query("accountingEvents").collect()
+    );
+    expect(
+      reversals.filter((e) => e.reversalOfEventId === decoyId)
+    ).toHaveLength(0);
+
+    // The deposit lifecycle still came back, which is what the cancellation
+    // was actually for.
+    const deposits = await s.t.run((ctx) => ctx.db.query("deposits").collect());
+    expect(deposits[0].status).toBe("HELD");
+    expect(deposits[0].holdActive).toBe(true);
   });
 });
