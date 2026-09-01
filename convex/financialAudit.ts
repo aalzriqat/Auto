@@ -295,13 +295,35 @@ export const createManualJournal = mutation({
     memo: v.string(),
     lines: v.array(manualJournalLineValidator),
     idempotencyKey: v.string(),
-    // SCRUM-50: REQUIRED. The date the entry belongs to is an accounting
-    // assertion the preparer makes; it is not derivable from when anyone
-    // happens to click.
-    accountingDate: v.number(),
+    // SCRUM-50 / c16529 — OPTIONAL AT THE TRANSPORT BOUNDARY, MANDATORY IN THE
+    // HANDLER. The two are not in tension, and the split is deliberate.
+    //
+    // `main` auto-deploys the FRONTEND, while the Convex backend deploy is
+    // separately owner-gated. A REQUIRED validator here would make the wire
+    // contract asymmetric across that gap: whichever side ships first, calls
+    // from the other are rejected by the validator before the handler can say
+    // why. Optional keeps the transport compatible in both directions.
+    //
+    // It does NOT weaken the rule. The handler refuses a missing date before
+    // any write, so no dateless draft can be created through the backend
+    // whatever the caller sends.
+    accountingDate: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+
+    // FAIL CLOSED, BEFORE ANY WRITE.
+    //
+    // The accounting date is an assertion the preparer makes about which period
+    // the economic event belongs to. It is never inferred, never defaulted and
+    // never taken from the clock — that inference IS the defect this ticket
+    // removes, so re-introducing it here as a convenience would undo the fix at
+    // its own front door.
+    if (args.accountingDate === undefined) {
+      throw new ConvexError(
+        "A manual journal must state the accounting date the entry belongs to. Supply the date explicitly and submit it again."
+      );
+    }
 
     // Refused here rather than at approval: a draft carrying an unusable date
     // could never be approved, and a draft that can only ever be rejected is a
@@ -319,11 +341,12 @@ export const createManualJournal = mutation({
     ) {
       throw new ConvexError("The manual journal's accounting date is not a valid date.");
     }
+    const accountingDate = args.accountingDate;
 
     validateManualJournalLines(args.lines);
     await resolveManualJournalCurrency(ctx, args.orgId, args.lines);
 
-    const fingerprint = manualJournalFingerprint(args.memo, args.lines, args.accountingDate);
+    const fingerprint = manualJournalFingerprint(args.memo, args.lines, accountingDate);
     const existing = await ctx.db
       .query("manualJournalDrafts")
       .withIndex("by_org_idempotency", (q) =>
@@ -348,7 +371,7 @@ export const createManualJournal = mutation({
       status: "PENDING_APPROVAL",
       memo: args.memo,
       lines: args.lines,
-      accountingDate: args.accountingDate,
+      accountingDate,
       idempotencyKey: args.idempotencyKey,
       createdBy: user._id,
       createdAt: now,

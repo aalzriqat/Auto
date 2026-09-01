@@ -29,22 +29,10 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import {
-  Form,
-  FormControl,
-  FormDescription,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "@/components/ui/form";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { manualJournalSchema, ManualJournalFormValues } from "./manualJournal.schema";
-import { dateInputToMs, scaleForCurrency } from "./AccountingTabShared";
-// Read the clock when a form session starts, not once at module load — see the
-// dialog's onOpenChange. msToDateInput reads the UTC parts, so a stored
-// accounting date renders as the calendar day the ledger actually holds.
-import { msToDateInput, todayDateInput } from "@/lib/dateInput";
+import { scaleForCurrency } from "./AccountingTabShared";
 import { getErrorMessage } from "@/lib/errors";
 
 function emptyLine() {
@@ -88,7 +76,7 @@ export function ManualJournalTab() {
 
   const form = useForm<ManualJournalFormValues>({
     resolver: zodResolver(manualJournalSchema),
-    defaultValues: { accountingDate: todayDateInput(), memo: "", lines: [emptyLine(), emptyLine()] },
+    defaultValues: { memo: "", lines: [emptyLine(), emptyLine()] },
   });
 
   const { fields, append, remove } = useFieldArray({ control: form.control, name: "lines" });
@@ -98,7 +86,7 @@ export function ManualJournalTab() {
   const balanced = totalDebits > 0 && Math.abs(totalDebits - totalCredits) < 1e-9;
 
   function resetForm() {
-    form.reset({ accountingDate: todayDateInput(), memo: "", lines: [emptyLine(), emptyLine()] });
+    form.reset({ memo: "", lines: [emptyLine(), emptyLine()] });
   }
 
   async function onSubmit(values: ManualJournalFormValues) {
@@ -111,11 +99,6 @@ export function ManualJournalTab() {
     try {
       await createDraft({
         orgId: activeOrgId,
-        // dateInputToMs, not `new Date(value)`: the bare input is a calendar
-        // date, and parsing it as local time drops a Jordan (UTC+3) user's entry
-        // into the previous UTC month — and at a year boundary, the previous
-        // fiscal year.
-        accountingDate: dateInputToMs(values.accountingDate),
         memo: values.memo,
         lines: values.lines.map((l) => ({
           accountId: l.accountId as Id<"chartOfAccounts">,
@@ -197,20 +180,6 @@ export function ManualJournalTab() {
                     <CardDescription>
                       {t("SubmittedBy")}: {draft.creatorName}
                     </CardDescription>
-                    {/* The accounting date is the authority this change
-                        introduced. Showing the memo and the amounts but not the
-                        date would leave the second approver authorising the one
-                        fact they cannot see — the two-person control would be
-                        signing off on a period allocation blind. dir="ltr"
-                        because RTL reorders a bare numeric date. */}
-                    <CardDescription className="font-medium text-slate-700">
-                      {t("ManualJournalAccountingDate")}:{" "}
-                      {draft.accountingDate === undefined ? (
-                        <span className="text-red-600">{t("ManualJournalMissingDate")}</span>
-                      ) : (
-                        <span dir="ltr">{msToDateInput(draft.accountingDate)}</span>
-                      )}
-                    </CardDescription>
                   </div>
                   <Badge variant="outline" className="bg-yellow-500/10 text-yellow-600 border-yellow-500/20 shrink-0">
                     {t("Pending")}
@@ -252,12 +221,7 @@ export function ManualJournalTab() {
                   </Button>
                   <Button
                     className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"
-                    // A dateless legacy draft cannot post, so offering Approve
-                    // would send the reviewer into a refusal they cannot
-                    // resolve. Reject stays enabled directly above: that is the
-                    // way out, and it is the reason this refusal is not a dead
-                    // end.
-                    disabled={isOwnDraft || busy || draft.accountingDate === undefined}
+                    disabled={isOwnDraft || busy}
                     onClick={() => handleApprove(draft._id)}
                   >
                     {busy ? (
@@ -287,13 +251,6 @@ export function ManualJournalTab() {
           open={dialogOpen}
           onOpenChange={(open) => {
             setDialogOpen(open);
-            // A tab left open across local midnight would otherwise start a NEW
-            // journal defaulted to yesterday — and at a month boundary that is
-            // the previous accounting period, which is this ticket's own defect
-            // arriving through the front door. Re-read the clock when a form
-            // session STARTS, and only then, so an in-progress edit is never
-            // overwritten under the operator.
-            if (open) form.setValue("accountingDate", todayDateInput());
             if (!open) resetForm();
           }}
         >
@@ -311,24 +268,6 @@ export function ManualJournalTab() {
 
             <Form {...form}>
               <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-                {/* First, and before the memo: this is the field that decides
-                    which period the amounts land in. Constrained width because a
-                    date input stretched across the dialog reads as a text box. */}
-                <FormField
-                  control={form.control}
-                  name="accountingDate"
-                  render={({ field }) => (
-                    <FormItem className="sm:max-w-[14rem]">
-                      <FormLabel>{t("ManualJournalAccountingDate")}</FormLabel>
-                      <FormControl>
-                        <Input type="date" {...field} />
-                      </FormControl>
-                      <FormDescription>{t("ManualJournalAccountingDateHint")}</FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-
                 <FormField
                   control={form.control}
                   name="memo"

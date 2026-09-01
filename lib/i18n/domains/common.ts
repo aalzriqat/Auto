@@ -576,10 +576,6 @@ export const commonEn = {
   NoPendingManualJournals: "No manual journals pending approval.",
   ManualJournalMemo: "Memo",
   ManualJournalMemoPlaceholder: "Reason for this manual entry",
-  ManualJournalAccountingDate: "Accounting date",
-  ManualJournalMissingDate: "Missing — reject and resubmit with a date",
-  ManualJournalAccountingDateHint:
-    "The date this entry belongs to. It decides which period the amounts post to — not the day it is approved.",
   JournalLines: "Lines",
   AddLine: "Add line",
   Account: "Account",
@@ -1517,10 +1513,6 @@ export const commonAr = {
   NoPendingManualJournals: "لا توجد قيود يدوية بانتظار الموافقة.",
   ManualJournalMemo: "المذكرة",
   ManualJournalMemoPlaceholder: "سبب هذا القيد اليدوي",
-  ManualJournalAccountingDate: "تاريخ القيد",
-  ManualJournalMissingDate: "غير محدد — ارفض القيد وأعد إرساله بتاريخ",
-  ManualJournalAccountingDateHint:
-    "التاريخ الذي يعود إليه هذا القيد. هو الذي يحدد الفترة المحاسبية التي تُرحَّل إليها المبالغ، وليس تاريخ الاعتماد.",
   JournalLines: "البنود",
   AddLine: "إضافة بند",
   Account: "الحساب",

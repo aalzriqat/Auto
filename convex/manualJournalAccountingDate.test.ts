@@ -39,6 +39,12 @@ function monthEnd(ms: number): number {
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1) - 1;
 }
 
+/** Same day-of-month in the NEXT UTC month, at UTC midnight. */
+function nextMonthDay(ms: number, day: number): number {
+  const d = new Date(ms);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, day);
+}
+
 /** Same day-of-month in the previous UTC month, at UTC midnight. */
 function previousMonthDay(ms: number, day: number): number {
   const d = new Date(ms);
@@ -261,6 +267,40 @@ describe("SCRUM-50 — the declared date is validated, never guessed", () => {
     ).rejects.toThrow(/CLOSED|closed/);
   });
 
+  test("a date in a period that exists but was never opened is refused", async () => {
+    const s = await seedDealer();
+    // A period that has been created but not opened is FUTURE. Posting into it
+    // would put amounts into books the organisation has not started keeping.
+    // This case was named in the verification floor and then not written; the
+    // Stage-A mutation floor caught the omission when removing the guard
+    // changed nothing.
+    const futureStart = monthStart(nextMonthDay(s.now, 15));
+    const futureEnd = monthEnd(nextMonthDay(s.now, 15));
+    await s.asUser.mutation(api.accountingPeriods.create, {
+      orgId: s.orgId,
+      startDate: futureStart,
+      endDate: futureEnd,
+      fiscalYear: new Date(futureStart).getUTCFullYear(),
+      periodNumber: new Date(futureStart).getUTCMonth() + 1,
+    });
+    // Deliberately NOT opened.
+
+    const { draftId } = await s.asUser.mutation(api.financialAudit.createManualJournal, {
+      orgId: s.orgId,
+      memo: "Into an unopened period",
+      lines: s.lines,
+      idempotencyKey: "s50-future",
+      accountingDate: nextMonthDay(s.now, 15),
+    });
+
+    await expect(
+      s.asReviewer.mutation(api.financialAudit.approveManualJournal, { orgId: s.orgId, draftId })
+    ).rejects.toThrow(/not been opened/i);
+
+    const entries = await s.t.run((ctx) => ctx.db.query("journalEntries").collect());
+    expect(entries).toHaveLength(0);
+  });
+
   test("a date no accounting period covers is refused, not silently retargeted", async () => {
     const s = await seedDealer();
     // Ten years before any period this org has ever defined.
@@ -339,6 +379,26 @@ describe("SCRUM-50 — the declared date is validated, never guessed", () => {
 
     const draft = await s.t.run((ctx) => ctx.db.get(legacyDraftId));
     expect(draft!.status).toBe("REJECTED");
+  });
+
+  test("omitting the accounting date entirely is refused before any write", async () => {
+    const s = await seedDealer();
+    // The validator ACCEPTS the omission — c16529 keeps the wire contract
+    // compatible because main auto-deploys the frontend while the backend
+    // deploy is separately gated, and an asymmetric validator would reject
+    // callers before the handler could tell them why. The HANDLER is what
+    // refuses, and it refuses before anything is written.
+    await expect(
+      s.asUser.mutation(api.financialAudit.createManualJournal, {
+        orgId: s.orgId,
+        memo: "No date at all",
+        lines: s.lines,
+        idempotencyKey: "s50-omitted",
+      })
+    ).rejects.toThrow(/must state the accounting date/i);
+
+    const drafts = await s.t.run((ctx) => ctx.db.query("manualJournalDrafts").collect());
+    expect(drafts).toHaveLength(0);
   });
 
   test("a finite but unrenderable date is refused at create, not persisted", async () => {
