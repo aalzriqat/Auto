@@ -219,3 +219,48 @@ dependencies {
         implementation jscFlavor
     }
 }
+
+// Dependency locking for the release runtime graph only.
+//
+// This exists so security scanning has a *reproducible* record of the native
+// AAR/JAR dependencies that actually ship inside the release APK — androidx,
+// com.facebook.react (react-android, hermes-android), okhttp/okio and the
+// transitive graph pulled in by every autolinked Expo module. Gradle is the
+// only thing that can resolve that graph; pnpm-lock.yaml covers the JS side
+// and stops at the module boundary.
+//
+// The resulting gradle.lockfile is committed and scanned by the `osv-runtime`
+// job in .github/workflows/security.yml, so CI never has to run Gradle (no
+// JDK, no Android SDK, no autolinking) to know what ships.
+//
+// Deliberately NOT lockAllConfigurations(). Locking changes resolution
+// behaviour: Gradle fails the build when a locked configuration resolves to
+// anything other than the recorded versions. Applying that to every
+// configuration would make unrelated build/test/tooling classpaths able to
+// break the APK build, for no security benefit — those are not what ships.
+// Only the one configuration whose contents are a security question is locked.
+//
+// `releaseRuntimeClasspath` is not a guessed name. `./gradlew
+// :app:resolvableConfigurations` reports it as "Runtime classpath of
+// '/release'", distinct from releaseCompileClasspath (compile-only deps that
+// are not packaged), releaseUnitTestRuntimeClasspath (tests) and the
+// debug/debugOptimized variants.
+//
+// To update after any native dependency change, from apps/mobile/android:
+//   ./gradlew :app:dependencies --write-locks
+// Run it through this project's own wrapper so the Gradle version is the one
+// the repo pins, and commit the regenerated lockfile.
+//
+// Note the missing `--configuration releaseRuntimeClasspath`. Gradle puts task
+// *options* into `gradle.startParameter.taskNames`, so passing it makes the
+// release-signing guard near the top of this file match "release" and abort
+// with "Release signing is not configured" — even though nothing is being
+// built. Only this one configuration has locking activated, so the unfiltered
+// form writes exactly the same lock state.
+//
+// That command also emits ../settings-gradle.lockfile, which only ever holds
+// `empty=incomingCatalogForLibs0`. It carries no dependency data, so it is
+// git-ignored rather than committed and scanned.
+configurations.matching { it.name == "releaseRuntimeClasspath" }.configureEach {
+    resolutionStrategy.activateDependencyLocking()
+}

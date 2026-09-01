@@ -18,3 +18,11 @@ dist/
 # env / EAS secret. The Gradle plugin applies only when this file is present.
 google-services.json
 android/app/google-services.json
+
+# Byproduct of `./gradlew :app:dependencies --write-locks`, which regenerates
+# android/app/gradle.lockfile (that one IS committed and IS scanned). This file
+# only ever locks the settings-level version-catalog classpath and resolves to
+# `empty=incomingCatalogForLibs0`, so it carries no dependency information to
+# scan and OSV-Scanner has no parser for the filename. Ignored so regenerating
+# the runtime lock does not leave an unclassifiable manifest in the tree.
+android/settings-gradle.lockfile
