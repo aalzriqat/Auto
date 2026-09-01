@@ -34,7 +34,16 @@ const CONTRACT = path.join(REPO_ROOT, "apps", "mobile", "src", "convexApi.ts");
 // the dealer home screen's workspace search. Same story: the query already
 // existed in `convex/search.ts`, so this is one more real reference now
 // checked against the backend, with nothing dropped from the extraction.
-const EXPECTED_REFERENCE_COUNT = 195;
+//
+// Moved 195→192 by SCRUM-53 stage 53-A, which retires the mobile client's
+// `transactions:add`, `transactions:update` and `transactions:remove`
+// references. This is the one direction the pin usually guards against — a
+// count going DOWN — so it is deliberate and it is the point of the change:
+// `transactions` is the operational cash-movement projection, not the General
+// Ledger, and a phone must not hold a write reference to it. The backend still
+// exports all three during 53-A for installed-client compatibility; 53-B
+// retires those. Measured by running this suite, not by subtracting three.
+const EXPECTED_REFERENCE_COUNT = 192;
 
 describe("mobile convexApi contract extraction", () => {
   test("reads the reference out of a multi-line declaration with nested generics", () => {
@@ -148,4 +157,40 @@ describe("every backend function the mobile app declares exists", () => {
     const report = broken.map((b) => `  ${b.reference} → ${b.reason} (${b.expectedModule})`).join("\n");
     expect(broken, `Mobile declares backend functions that do not exist:\n${report}`).toEqual([]);
   });
+});
+
+/**
+ * SCRUM-53 stage 53-A deliberately leaves the two sides asymmetric for one
+ * release: the client stops asking, the backend keeps answering. An installed
+ * APK addresses Convex by string name, so retiring the backend mutations in the
+ * same release would break every phone that has not yet taken the read-only
+ * build. This asserts the asymmetry in both directions, so neither half can
+ * drift out of the staged order unnoticed.
+ */
+describe("SCRUM-53 stage 53-A — client retired the cashbook writes, backend has not", () => {
+  const contractSource = fs.readFileSync(CONTRACT, "utf8");
+  const backendSource = fs.readFileSync(path.join(CONVEX_ROOT, "transactions.ts"), "utf8");
+
+  test.each(["transactions:add", "transactions:update", "transactions:remove"])(
+    "the mobile contract emits no %s reference",
+    (reference) => {
+      // The string is what a build actually sends, so the source string — not
+      // only the typed surface — has to be gone.
+      expect(contractSource).not.toContain(reference);
+    },
+  );
+
+  test("the mobile contract keeps the read projection", () => {
+    expect(referencePaths(contractSource)).toContain("transactions:list");
+  });
+
+  test.each(["add", "update", "remove"])(
+    "the backend still exports transactions:%s for installed clients",
+    (name) => {
+      // If this fails because the export is gone, 53-B landed before the
+      // read-only client shipped. The ordering is the defect, not this test.
+      expect(checkReference(CONVEX_ROOT, `transactions:${name}`)).toBeNull();
+      expect(backendSource).toMatch(new RegExp(`^export const ${name} = mutation\\(`, "m"));
+    },
+  );
 });

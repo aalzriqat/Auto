@@ -1,159 +1,87 @@
-import { useMutation, usePaginatedQuery } from "convex/react";
-import { useState } from "react";
-import { Text, View } from "react-native";
-import { api, type MobileLedgerCategory, type MobileLedgerTransaction, type MobileLedgerType } from "../../../convexApi";
+import { usePaginatedQuery } from "convex/react";
+import { StyleSheet, Text, View } from "react-native";
+
+import { api, type MobileLedgerTransaction } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { PAGE_SIZE, type Option, money, dateLabel, parseRequiredPositiveNumber, idempotencyKey, requiredText, useFieldFocusChain, useFormErrors, useGenericError, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
+import { useThemedStyles } from "../../../providers/ThemeProvider";
+import { type AppTheme } from "../../../theme";
+import { PAGE_SIZE, money, dateLabel, RecordCard, ModuleList } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
+// These rows are the operational cash-movement projection. `journalEntries` +
+// `journalLines` are the authoritative books, and nothing reachable from this
+// screen posts or reverses them — so the screen must not offer a write it
+// cannot honour, and must not call itself a ledger. Adding, editing or deleting
+// a row here moved this list and left the General Ledger, trial balance and
+// financial statements on a different number. SCRUM-53.
 export function AccountingModule({ orgId }: { orgId: string }) {
   const styles = useStyles();
+  const notice = useThemedStyles(makeNoticeStyles);
   const { locale } = useLocale();
-  const reportError = useGenericError();
-  const addTransaction = useMutation(api.transactions.add);
-  const updateTransaction = useMutation(api.transactions.update);
-  const removeTransaction = useMutation(api.transactions.remove);
-  const { loadMore, results, status } = usePaginatedQuery(api.transactions.list, { orgId }, { initialNumItems: PAGE_SIZE });
-  const [open, setOpen] = useState(false);
-  const [editing, setEditing] = useState<MobileLedgerTransaction | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({
-    type: "IN" as MobileLedgerType,
-    amount: "",
-    category: "OTHER" as MobileLedgerCategory,
-    description: "",
-  });
-  const typeOptions: Array<Option<MobileLedgerType>> = [
-    { label: locale === "ar" ? "داخل" : "In", value: "IN" },
-    { label: locale === "ar" ? "خارج" : "Out", value: "OUT" },
-  ];
-  const categoryOptions: Array<Option<MobileLedgerCategory>> = [
-    "VEHICLE_SALE",
-    "VEHICLE_PURCHASE",
-    "EXPENSE",
-    "DEPOSIT",
-    "COLLECTION_PAYMENT",
-    "REFUND",
-    "PARTNER_DRAW",
-    "CAPITAL_INJECTION",
-    "CLAIM_PAYMENT",
-    "OTHER",
-  ].map((value) => ({ label: value, value: value as MobileLedgerCategory }));
-  const { errors, reset, validate } = useFormErrors<"amount" | "description">();
-  const chain = useFieldFocusChain(2);
-
-  function openCreate() {
-    setEditing(null);
-    setForm({ type: "IN", amount: "", category: "OTHER", description: "" });
-    reset();
-    setOpen(true);
-  }
-
-  function openEdit(transaction: MobileLedgerTransaction) {
-    setEditing(transaction);
-    setForm({
-      type: transaction.type,
-      amount: String(transaction.amount),
-      category: transaction.category,
-      description: transaction.description,
-    });
-    reset();
-    setOpen(true);
-  }
-
-  async function save() {
-    const amount = parseRequiredPositiveNumber(form.amount);
-    const valid = validate({
-      // A ledger line of zero or a negative amount is not a typo to shrug at.
-      amount: amount === null
-        ? (locale === "ar" ? "أدخل مبلغاً أكبر من صفر" : "Enter an amount greater than zero")
-        : undefined,
-      description: requiredText(form.description, locale),
-    });
-    if (!valid || amount === null) return;
-    setSaving(true);
-    try {
-      if (editing) {
-        await updateTransaction({
-          orgId,
-          transactionId: editing._id,
-          type: form.type,
-          amount,
-          category: form.category,
-          description: form.description,
-          date: editing.date,
-        });
-      } else {
-        await addTransaction({
-          orgId,
-          type: form.type,
-          amount,
-          category: form.category,
-          description: form.description,
-          date: Date.now(),
-          idempotencyKey: idempotencyKey("transactions.add"),
-        });
-      }
-      setOpen(false);
-      setEditing(null);
-    } catch (error) {
-      reportError("Mobile accounting save failed", error);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function remove(row: MobileLedgerTransaction) {
-    try {
-      await removeTransaction({ orgId, transactionId: row._id });
-    } catch (error) {
-      reportError("Mobile accounting delete failed", error);
-    }
-  }
+  const isArabic = locale === "ar";
+  const { loadMore, results, status } = usePaginatedQuery(
+    api.transactions.list,
+    { orgId },
+    { initialNumItems: PAGE_SIZE },
+  );
 
   return (
-    <>
-      <ModuleList
-        data={results}
-        emptyLabel={locale === "ar" ? "لا توجد قيود." : "No ledger entries found."}
-        keyExtractor={(transaction) => transaction._id}
-        loadMore={loadMore}
-        status={status}
-        header={
-          <View style={styles.actionRow}>
-            <PrimaryButton label={locale === "ar" ? "إضافة قيد" : "Add entry"} onPress={openCreate} />
+    <ModuleList
+      data={results}
+      emptyLabel={isArabic ? "لا توجد حركات نقدية." : "No cash movements found."}
+      keyExtractor={(transaction) => transaction._id}
+      loadMore={loadMore}
+      status={status}
+      header={
+        <View style={notice.banner} testID="cash-movements-notice">
+          <Text style={notice.title}>
+            {isArabic
+              ? "حركات نقدية — للعرض فقط، وليست دفتر الأستاذ العام"
+              : "Cash movements — view only, not the General Ledger"}
+          </Text>
+          <Text style={notice.body}>
+            {isArabic
+              ? "تُسجَّل القيود المحاسبية من العملية التي تخصها أو من قيد يدوي معتمد."
+              : "Accounting entries are posted by the operation that owns them, or by an approved manual journal."}
+          </Text>
+        </View>
+      }
+      renderItem={(transaction: MobileLedgerTransaction) => (
+        <RecordCard>
+          <View style={styles.recordHeader} testID={`cash-movement-${transaction._id}`}>
+            <Text style={styles.recordTitle}>{transaction.description}</Text>
+            <Text style={styles.statusPill}>{transaction.type}</Text>
           </View>
-        }
-        renderItem={(transaction: MobileLedgerTransaction) => (
-          <RecordCard>
-            <View style={styles.recordHeader}>
-              <Text style={styles.recordTitle}>{transaction.description}</Text>
-              <Text style={styles.statusPill}>{transaction.type}</Text>
-            </View>
-            <Text style={styles.recordMeta}>{transaction.category} · {dateLabel(transaction.date, locale)}</Text>
-            <Text style={styles.recordMeta}>{money(transaction.amount, locale)} · {transaction.vehicleLabel || transaction.customerName || "-"}</Text>
-            <View style={styles.cardActions}>
-              <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => openEdit(transaction)} />
-              <PrimaryButton label={locale === "ar" ? "حذف" : "Delete"} tone="danger" onPress={() => remove(transaction)} />
-            </View>
-          </RecordCard>
-        )}
-      />
-      <FormModal
-        title={editing ? (locale === "ar" ? "تعديل قيد" : "Edit entry") : (locale === "ar" ? "قيد جديد" : "New entry")}
-        visible={open}
-        onClose={() => {
-          setEditing(null);
-          setOpen(false);
-        }}
-      >
-        <SegmentedControl options={typeOptions} value={form.type} onChange={(type) => setForm((prev) => ({ ...prev, type }))} />
-        <SelectField label={locale === "ar" ? "التصنيف" : "Category"} value={form.category} options={categoryOptions} onChange={(category) => setForm((prev) => ({ ...prev, category: category as MobileLedgerCategory }))} />
-        <FormField error={errors.amount} keyboardType="numeric" label={locale === "ar" ? "المبلغ" : "Amount"} value={form.amount} onChangeText={(amount) => setForm((prev) => ({ ...prev, amount }))} {...chain.fieldProps(0)} />
-        <FormField multiline error={errors.description} label={locale === "ar" ? "البيان" : "Description"} value={form.description} onChangeText={(description) => setForm((prev) => ({ ...prev, description }))} {...chain.fieldProps(1)} />
-        <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ" : "Save")} onPress={save} />
-      </FormModal>
-    </>
+          <Text style={styles.recordMeta}>{transaction.category} · {dateLabel(transaction.date, locale)}</Text>
+          <Text style={styles.recordMeta}>{money(transaction.amount, locale)} · {transaction.vehicleLabel || transaction.customerName || "-"}</Text>
+        </RecordCard>
+      )}
+    />
   );
 }
 
+// A caution surface, deliberately unlike `recordCard`: a reader scanning the
+// list must not mistake the standing caveat for one more cash movement. The
+// rule sits on the inline start edge so it stays leading in Arabic RTL.
+const makeNoticeStyles = (theme: AppTheme) =>
+  StyleSheet.create({
+    banner: {
+      gap: theme.spacing.xs,
+      borderRadius: theme.radius.md,
+      borderStartWidth: 3,
+      borderStartColor: theme.colors.warning,
+      backgroundColor: theme.colors.warningSoft,
+      paddingHorizontal: theme.spacing.lg,
+      paddingVertical: theme.spacing.md,
+    },
+    title: {
+      color: theme.colors.text,
+      fontSize: 14,
+      fontWeight: "700",
+    },
+    body: {
+      color: theme.colors.mutedText,
+      fontSize: 13,
+      lineHeight: 19,
+    },
+  });
