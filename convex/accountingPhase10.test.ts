@@ -141,8 +141,17 @@ describe("Phase 10 — manual journal draft creation", () => {
   test("reusing an idempotency key with different content is rejected", async () => {
     const { orgId, manualAccounts, asUser } = await seedAuditDealer();
 
+    // ONE date, shared by both requests. SCRUM-50 put accountingDate into the
+    // fingerprint, and calling Date.now() separately at each site made the two
+    // dates differ by the elapsed milliseconds — so this test was being
+    // satisfied by the DATE and would still have passed against a mutant that
+    // stopped fingerprinting memo and lines entirely. Holding the date constant
+    // makes the CONTENT the only thing that can trigger the mismatch, which is
+    // the only thing this test claims to check.
+    const sharedDate = Date.now();
+
     await asUser.mutation(api.financialAudit.createManualJournal, {
-      accountingDate: Date.now(),
+      accountingDate: sharedDate,
       orgId,
       memo: "First version",
       lines: [
@@ -154,7 +163,7 @@ describe("Phase 10 — manual journal draft creation", () => {
 
     await expect(
       asUser.mutation(api.financialAudit.createManualJournal, {
-        accountingDate: Date.now(),
+        accountingDate: sharedDate,
         orgId,
         memo: "Different content, same key",
         lines: [

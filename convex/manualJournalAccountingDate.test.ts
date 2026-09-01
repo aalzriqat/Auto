@@ -21,7 +21,7 @@
  * Both are real, and they are not the same fact.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 
@@ -217,30 +217,61 @@ describe("SCRUM-50 — a manual journal posts to its declared accounting date", 
     expect(touched.some((row) => row.periodId === s.currentPeriod._id)).toBe(false);
   });
 
-  test("approval-time audit metadata stays approval-time and is NOT back-dated", async () => {
+  test("approval-time audit metadata is APPROVAL time — not creation time, not the declared date", async () => {
     const s = await seedDealer();
-    const before = Date.now();
-    const { draftId } = await s.asUser.mutation(api.financialAudit.createManualJournal, {
-      orgId: s.orgId,
-      memo: "Audit metadata is a different fact from the accounting date",
-      lines: s.lines,
-      idempotencyKey: "s50-audit-meta",
-      accountingDate: s.declaredDate,
-    });
-    const { journalId } = await s.asReviewer.mutation(api.financialAudit.approveManualJournal, {
-      orgId: s.orgId,
-      draftId,
-    });
 
-    // The fix must not over-reach: back-dating postedAt/decidedAt would destroy
-    // the record of when a human actually approved it, which is the audit trail
-    // segregation of duties exists to produce.
-    const entry = await s.t.run((ctx) => ctx.db.get(journalId));
-    const draft = await s.t.run((ctx) => ctx.db.get(draftId));
-    expect(entry!.postedAt).toBeGreaterThanOrEqual(before);
-    expect(entry!.createdAt).toBeGreaterThanOrEqual(before);
-    expect(draft!.decidedAt).toBeGreaterThanOrEqual(before);
-    expect(entry!.postedAt).not.toBe(s.declaredDate);
+    // THE CLOCK IS SEPARATED DELIBERATELY, and that is the whole point of this
+    // test. The earlier version captured a single `before` ahead of creation
+    // and asserted postedAt >= before. A mutant stamping draft.createdAt
+    // satisfies that too, because createdAt is itself >= before — so the test
+    // pinned "not back-dated to the declared date" and nothing more, while
+    // claiming to pin approval-time. Creation and approval now sit an hour
+    // apart on a controlled clock, which makes creation-time and approval-time
+    // distinguishable values and lets the assertions below discriminate.
+    const createdAtMs = Date.UTC(2026, 6, 10, 9, 0, 0);
+    const approvedAtMs = Date.UTC(2026, 6, 10, 10, 0, 0);
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    try {
+      vi.setSystemTime(createdAtMs);
+      const { draftId } = await s.asUser.mutation(api.financialAudit.createManualJournal, {
+        orgId: s.orgId,
+        memo: "Audit metadata is a different fact from the accounting date",
+        lines: s.lines,
+        idempotencyKey: "s50-audit-meta",
+        accountingDate: s.declaredDate,
+      });
+
+      vi.setSystemTime(approvedAtMs);
+      const { journalId } = await s.asReviewer.mutation(
+        api.financialAudit.approveManualJournal,
+        { orgId: s.orgId, draftId }
+      );
+
+      const entry = await s.t.run((ctx) => ctx.db.get(journalId));
+      const draft = await s.t.run((ctx) => ctx.db.get(draftId));
+
+      // Control: the clock really did move, so the two instants are genuinely
+      // different values. Without this the assertions below could pass on a
+      // coincidence rather than on the behaviour.
+      expect(draft!.createdAt).toBe(createdAtMs);
+      expect(approvedAtMs).not.toBe(createdAtMs);
+
+      // The fix must not over-reach: back-dating postedAt/decidedAt would
+      // destroy the record of when a human actually approved it, which is the
+      // audit trail segregation of duties exists to produce.
+      expect(entry!.postedAt).toBe(approvedAtMs);
+      expect(entry!.createdAt).toBe(approvedAtMs);
+      expect(draft!.decidedAt).toBe(approvedAtMs);
+
+      // ...and it is neither of the two wrong answers.
+      expect(entry!.postedAt).not.toBe(draft!.createdAt);
+      expect(entry!.postedAt).not.toBe(s.declaredDate);
+
+      // The accounting date is untouched by any of it.
+      expect(entry!.accountingDate).toBe(s.declaredDate);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
