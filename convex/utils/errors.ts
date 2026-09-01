@@ -37,6 +37,9 @@ export const AppErrorCode = {
   ALREADY_ADMIN: "ALREADY_ADMIN",
   CANNOT_REMOVE_OWNER: "CANNOT_REMOVE_OWNER",
   CANNOT_CHANGE_OWNER_ROLE: "CANNOT_CHANGE_OWNER_ROLE",
+  // SCRUM-51. Claims is retired as an accounting authority; its five
+  // writers refuse rather than open a second finance-company receivable.
+  CLAIMS_RETIRED: "CLAIMS_RETIRED",
 } as const;
 
 export type AppErrorCode = typeof AppErrorCode[keyof typeof AppErrorCode];
