@@ -350,9 +350,11 @@ async function computeCloseChecklist(
   const pendingOutboxEvents = allPendingOutbox.filter((e) => e.accountingDate <= period.endDate);
   const failedOutboxEvents = allFailedOutbox.filter((e) => e.accountingDate <= period.endDate);
 
-  // Not period-scoped by date — manualJournalDrafts have no accountingDate
-  // until posted, and an unresolved approval is a control gap regardless of
-  // which period it will eventually land in.
+  // Not period-scoped by date. Since SCRUM-50 a draft DOES carry its declared
+  // accountingDate from creation, so the original reason given here ("they have
+  // no accountingDate until posted") is no longer true — but the behaviour is
+  // still right for the other reason: an unresolved approval is a control gap
+  // regardless of which period it will eventually land in.
   const pendingManualJournals = await ctx.db
     .query("manualJournalDrafts")
     .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING_APPROVAL"))

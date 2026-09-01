@@ -272,9 +272,19 @@ async function resolveManualJournalCurrency(
   return { currency: effectiveCurrency, scale: scaleForCurrency(effectiveCurrency) };
 }
 
-function manualJournalFingerprint(memo: string, lines: ManualJournalLine[]): string {
+function manualJournalFingerprint(
+  memo: string,
+  lines: ManualJournalLine[],
+  accountingDate: number | undefined
+): string {
+  // SCRUM-50: the accounting date is part of what makes a journal that journal.
+  // Two drafts with identical memo and lines but different dates are DIFFERENT
+  // journals, so leaving the date out would let a retried key silently return
+  // the first draft and discard the second date — the same silent substitution
+  // this ticket exists to remove, just relocated to the idempotency guard.
   return JSON.stringify({
     memo,
+    accountingDate,
     lines: lines.map((l) => ({ a: l.accountId, d: l.debitMinor, c: l.creditMinor })),
   });
 }
@@ -285,14 +295,74 @@ export const createManualJournal = mutation({
     memo: v.string(),
     lines: v.array(manualJournalLineValidator),
     idempotencyKey: v.string(),
+    // SCRUM-50 / c16529 — OPTIONAL AT THE TRANSPORT BOUNDARY, MANDATORY IN THE
+    // HANDLER.
+    //
+    // ⚠️ WHAT THIS DOES *NOT* BUY, stated first because an earlier version of
+    // this comment claimed it and was wrong. Optional does NOT make the two
+    // deploys compatible. Once this backend is live, a call from the current
+    // client — which sends no `accountingDate` at all — fails either way: a
+    // required validator would reject it with an ArgumentValidationError, and
+    // this optional one lets it reach the handler, which refuses it below.
+    // Both outcomes are a 100% failure of manual-journal creation. The only
+    // thing optional buys on that path is a readable business message instead
+    // of a raw validator error. It is a better error, not availability.
+    //
+    // What actually prevents the skew is that Stage A ships NO client change:
+    // `main` auto-deploys the frontend while the Convex backend deploy is
+    // separately owner-gated, so merging this alone leaves the live client and
+    // the live backend exactly as they were.
+    //
+    // The residual hazard is therefore OPERATIONAL, not structural, and it is
+    // recorded against SCRUM-201 rather than papered over here:
+    //
+    //     backend activation WITHOUT the Stage-B client
+    //       = manual-journal creation fully unavailable until Stage B ships.
+    //
+    // The rule itself is not weakened. The handler refuses a missing date
+    // before any write, so no dateless draft can be created through the
+    // backend whatever the caller sends — and softening that to restore
+    // availability would reinstate the exact defect this ticket removes.
+    accountingDate: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
+    // FAIL CLOSED, BEFORE ANY WRITE.
+    //
+    // The accounting date is an assertion the preparer makes about which period
+    // the economic event belongs to. It is never inferred, never defaulted and
+    // never taken from the clock — that inference IS the defect this ticket
+    // removes, so re-introducing it here as a convenience would undo the fix at
+    // its own front door.
+    if (args.accountingDate === undefined) {
+      throw new ConvexError(
+        "A manual journal must state the accounting date the entry belongs to. Supply the date explicitly and submit it again."
+      );
+    }
+
+    // Refused here rather than at approval: a draft carrying an unusable date
+    // could never be approved, and a draft that can only ever be rejected is a
+    // dead end handed to the reviewer instead of to the person who can fix it.
+    //
+    // `Number.isFinite` alone is NOT enough, and both review seats found this
+    // independently. JavaScript's Date domain stops at +/-8.64e15 ms, so
+    // 8640000000000001 is a perfectly finite safe integer whose `toISOString()`
+    // throws RangeError. Accepting one would persist a draft that can never be
+    // approved and that counts against EVERY period-close checklist until
+    // somebody rejects it.
+    if (
+      !Number.isFinite(args.accountingDate) ||
+      Number.isNaN(new Date(args.accountingDate).getTime())
+    ) {
+      throw new ConvexError("The manual journal's accounting date is not a valid date.");
+    }
+    const accountingDate = args.accountingDate;
+
     validateManualJournalLines(args.lines);
     await resolveManualJournalCurrency(ctx, args.orgId, args.lines);
 
-    const fingerprint = manualJournalFingerprint(args.memo, args.lines);
+    const fingerprint = manualJournalFingerprint(args.memo, args.lines, accountingDate);
     const existing = await ctx.db
       .query("manualJournalDrafts")
       .withIndex("by_org_idempotency", (q) =>
@@ -300,7 +370,11 @@ export const createManualJournal = mutation({
       )
       .first();
     if (existing) {
-      const priorFingerprint = manualJournalFingerprint(existing.memo, existing.lines);
+      const priorFingerprint = manualJournalFingerprint(
+        existing.memo,
+        existing.lines,
+        existing.accountingDate
+      );
       if (priorFingerprint !== fingerprint) {
         throw new ConvexError("Idempotency key reused with different journal content.");
       }
@@ -313,6 +387,7 @@ export const createManualJournal = mutation({
       status: "PENDING_APPROVAL",
       memo: args.memo,
       lines: args.lines,
+      accountingDate,
       idempotencyKey: args.idempotencyKey,
       createdBy: user._id,
       createdAt: now,
@@ -363,31 +438,66 @@ export const approveManualJournal = mutation({
     const { currency: effectiveCurrency, scale: journalScale } =
       await resolveManualJournalCurrency(ctx, args.orgId, draft.lines);
 
+    // `now` is approval-time AUDIT metadata only — postedAt, decidedAt,
+    // createdAt. It is deliberately NOT the accounting date (SCRUM-50). Both
+    // facts are real and they are not the same fact: one says when the money
+    // moved, the other says when a human signed off.
     const now = Date.now();
 
-    // Verify an open period covers today; inline to avoid circular import with accountingPeriods.ts
+    // A draft written before SCRUM-50 carries no declared date, and there is no
+    // honest way to supply one here. `Date.now()` is the precise defect this
+    // closes, and the draft's creation timestamp would invent an accounting
+    // assertion the preparer never made. Refuse, and let the operator resubmit
+    // with a date they actually chose.
+    const accountingDate = draft.accountingDate;
+    if (accountingDate === undefined) {
+      throw new ConvexError(
+        "This manual journal draft carries no accounting date, so it cannot be posted. It was prepared before the accounting date became explicit. Reject it and resubmit the journal with the date the entry belongs to."
+      );
+    }
+    // Defence in depth, and NOT redundant with the guard in
+    // createManualJournal: that one only protects drafts that came through
+    // createManualJournal. A row written directly — a migration, an admin tool,
+    // a future caller — would otherwise reach the formatting below and throw an
+    // uncaught RangeError instead of a refusal an operator can act on.
+    if (Number.isNaN(new Date(accountingDate).getTime())) {
+      throw new ConvexError(
+        "This manual journal draft carries an unusable accounting date, so it cannot be posted. Reject it and resubmit the journal with a valid date."
+      );
+    }
+    const declaredDay = new Date(accountingDate).toISOString().slice(0, 10);
+
+    // The period containing the DECLARED date, not today's; inline to avoid a
+    // circular import with accountingPeriods.ts.
     const period = await ctx.db
       .query("accountingPeriods")
       .withIndex("by_org_startDate", (q) => q.eq("orgId", args.orgId))
       .filter((q) =>
-        q.and(q.lte(q.field("startDate"), now), q.gte(q.field("endDate"), now))
+        q.and(
+          q.lte(q.field("startDate"), accountingDate),
+          q.gte(q.field("endDate"), accountingDate)
+        )
       )
       .first();
     if (!period) {
-      throw new ConvexError("No accounting period found for today. Create and open a period first.");
+      throw new ConvexError(
+        `No accounting period covers ${declaredDay}. Open the period for that date, or resubmit the journal with a date the books cover.`
+      );
     }
     if (period.status === "CLOSED" || period.status === "LOCKED") {
-      throw new ConvexError(`Accounting period is ${period.status}. Manual journal posting not allowed.`);
+      throw new ConvexError(
+        `The accounting period covering ${declaredDay} is ${period.status}. Manual journal posting not allowed.`
+      );
     }
     if (period.status === "FUTURE") {
-      throw new ConvexError("Accounting period has not been opened yet.");
+      throw new ConvexError(`The accounting period covering ${declaredDay} has not been opened yet.`);
     }
 
     const journalId = await ctx.db.insert("journalEntries", {
       orgId: args.orgId,
       periodId: period._id,
       journalNumber: "MJ-pending",
-      accountingDate: now,
+      accountingDate,
       sourceType: "manual",
       sourceId: draft.createdBy.toString(),
       category: "MANUAL",
@@ -412,7 +522,9 @@ export const approveManualJournal = mutation({
         creditMinor: line.creditMinor,
         currency: effectiveCurrency,
         scale: journalScale,
-        accountingDate: now,
+        // journalLines carries its OWN accountingDate, so dating only the entry
+        // above would leave every line contradicting the entry it belongs to.
+        accountingDate,
         description: line.description,
       });
       // GL Phase 18: a direct journalLines insert (not routed through

@@ -217,11 +217,18 @@ describe("Phase 18 — every direct journalLines inserter keeps snapshots in syn
   // posting-engine tests to imply the others are fine.
   test("approveManualJournal keeps the running snapshot in sync", async () => {
     const ctx = await seedSnapshotDealer();
-    // approveManualJournal (unlike this file's other mutations) always
-    // checks for a period covering the real Date.now(), not a caller-given
-    // date — this seed's periods are both dated in 2025, so a period
-    // covering "today" needs to exist too, distinct from the period-boundary
+    // approveManualJournal resolves the period from the draft's DECLARED
+    // accountingDate (SCRUM-50), not from Date.now(). This seed's periods are
+    // both dated in 2025 and the draft below declares Date.now(), so a period
+    // covering "today" still needs to exist, distinct from the period-boundary
     // periods the other tests in this file rely on.
+    //
+    // ⚠️ THIS TEST CANNOT DETECT THE SCRUM-50 REGRESSION, and that is by
+    // design rather than oversight: its period spans a whole calendar year, so
+    // the declared date and the approval time fall in the SAME period and the
+    // pre-fix (Date.now()-based) lookup would pass here unchanged. The
+    // regression coverage lives in manualJournalAccountingDate.test.ts, which
+    // uses adjacent MONTHLY periods precisely so the two can diverge.
     const now = Date.now();
     const nowYear = new Date(now).getUTCFullYear();
     await ctx.asOwner.mutation(api.accountingPeriods.create, {
@@ -250,6 +257,7 @@ describe("Phase 18 — every direct journalLines inserter keeps snapshots in syn
     const asPoster = ctx.t.withIdentity({ subject: "p18_poster", clerkId: "p18_poster" });
 
     const draft = await asPoster.mutation(api.financialAudit.createManualJournal, {
+      accountingDate: Date.now(),
       orgId: ctx.orgId,
       memo: "Snapshot regression check",
       lines: [
@@ -266,9 +274,9 @@ describe("Phase 18 — every direct journalLines inserter keeps snapshots in syn
     expect(sumSnapshots(snapshots, expenseAccount!._id).debitMinor).toBe(40_000);
     expect(sumSnapshots(snapshots, cashOverShort!._id).creditMinor).toBe(40_000);
 
-    // Query strictly after the posting's own accountingDate (approveManualJournal
-    // stamps its own later Date.now(), not the `now` captured above) so the
-    // containing-period bounded scan doesn't exclude it.
+    // Query strictly after the posting's own accountingDate — which is the
+    // date the DRAFT declared (SCRUM-50), not a fresh stamp taken at approval
+    // — so the containing-period bounded scan doesn't exclude it.
     const tb = await ctx.asOwner.query(api.accountingReports.trialBalance, { orgId: ctx.orgId, toDate: Date.now() + 1 });
     expect(tb.rows.find((r) => r.code === expenseAccount!.code)?.netMinor).toBe(40_000);
   });
