@@ -807,6 +807,11 @@ export default defineSchema({
       creditMinor: v.number(),
       description: v.optional(v.string()),
     })),
+    // SCRUM-50: the accounting date the preparer declared for the economic
+    // event. OPTIONAL only so drafts written before SCRUM-50 remain readable —
+    // `approveManualJournal` REFUSES a draft without one rather than inferring
+    // a date. Every new draft is required to carry it.
+    accountingDate: v.optional(v.number()),
     idempotencyKey: v.string(),
     createdBy: v.id("users"),
     createdAt: v.number(),

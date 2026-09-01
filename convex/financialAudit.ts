@@ -272,9 +272,19 @@ async function resolveManualJournalCurrency(
   return { currency: effectiveCurrency, scale: scaleForCurrency(effectiveCurrency) };
 }
 
-function manualJournalFingerprint(memo: string, lines: ManualJournalLine[]): string {
+function manualJournalFingerprint(
+  memo: string,
+  lines: ManualJournalLine[],
+  accountingDate: number | undefined
+): string {
+  // SCRUM-50: the accounting date is part of what makes a journal that journal.
+  // Two drafts with identical memo and lines but different dates are DIFFERENT
+  // journals, so leaving the date out would let a retried key silently return
+  // the first draft and discard the second date — the same silent substitution
+  // this ticket exists to remove, just relocated to the idempotency guard.
   return JSON.stringify({
     memo,
+    accountingDate,
     lines: lines.map((l) => ({ a: l.accountId, d: l.debitMinor, c: l.creditMinor })),
   });
 }
@@ -285,14 +295,25 @@ export const createManualJournal = mutation({
     memo: v.string(),
     lines: v.array(manualJournalLineValidator),
     idempotencyKey: v.string(),
+    // SCRUM-50: REQUIRED. The date the entry belongs to is an accounting
+    // assertion the preparer makes; it is not derivable from when anyone
+    // happens to click.
+    accountingDate: v.number(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
+    // Refused here rather than at approval: a draft carrying an unusable date
+    // could never be approved, and a draft that can only ever be rejected is a
+    // dead end handed to the reviewer instead of to the person who can fix it.
+    if (!Number.isFinite(args.accountingDate)) {
+      throw new ConvexError("The manual journal's accounting date is not a valid date.");
+    }
+
     validateManualJournalLines(args.lines);
     await resolveManualJournalCurrency(ctx, args.orgId, args.lines);
 
-    const fingerprint = manualJournalFingerprint(args.memo, args.lines);
+    const fingerprint = manualJournalFingerprint(args.memo, args.lines, args.accountingDate);
     const existing = await ctx.db
       .query("manualJournalDrafts")
       .withIndex("by_org_idempotency", (q) =>
@@ -300,7 +321,11 @@ export const createManualJournal = mutation({
       )
       .first();
     if (existing) {
-      const priorFingerprint = manualJournalFingerprint(existing.memo, existing.lines);
+      const priorFingerprint = manualJournalFingerprint(
+        existing.memo,
+        existing.lines,
+        existing.accountingDate
+      );
       if (priorFingerprint !== fingerprint) {
         throw new ConvexError("Idempotency key reused with different journal content.");
       }
@@ -313,6 +338,7 @@ export const createManualJournal = mutation({
       status: "PENDING_APPROVAL",
       memo: args.memo,
       lines: args.lines,
+      accountingDate: args.accountingDate,
       idempotencyKey: args.idempotencyKey,
       createdBy: user._id,
       createdAt: now,
@@ -363,31 +389,56 @@ export const approveManualJournal = mutation({
     const { currency: effectiveCurrency, scale: journalScale } =
       await resolveManualJournalCurrency(ctx, args.orgId, draft.lines);
 
+    // `now` is approval-time AUDIT metadata only — postedAt, decidedAt,
+    // createdAt. It is deliberately NOT the accounting date (SCRUM-50). Both
+    // facts are real and they are not the same fact: one says when the money
+    // moved, the other says when a human signed off.
     const now = Date.now();
 
-    // Verify an open period covers today; inline to avoid circular import with accountingPeriods.ts
+    // A draft written before SCRUM-50 carries no declared date, and there is no
+    // honest way to supply one here. `Date.now()` is the precise defect this
+    // closes, and the draft's creation timestamp would invent an accounting
+    // assertion the preparer never made. Refuse, and let the operator resubmit
+    // with a date they actually chose.
+    const accountingDate = draft.accountingDate;
+    if (accountingDate === undefined) {
+      throw new ConvexError(
+        "This manual journal draft carries no accounting date, so it cannot be posted. It was prepared before the accounting date became explicit. Reject it and resubmit the journal with the date the entry belongs to."
+      );
+    }
+    const declaredDay = new Date(accountingDate).toISOString().slice(0, 10);
+
+    // The period containing the DECLARED date, not today's; inline to avoid a
+    // circular import with accountingPeriods.ts.
     const period = await ctx.db
       .query("accountingPeriods")
       .withIndex("by_org_startDate", (q) => q.eq("orgId", args.orgId))
       .filter((q) =>
-        q.and(q.lte(q.field("startDate"), now), q.gte(q.field("endDate"), now))
+        q.and(
+          q.lte(q.field("startDate"), accountingDate),
+          q.gte(q.field("endDate"), accountingDate)
+        )
       )
       .first();
     if (!period) {
-      throw new ConvexError("No accounting period found for today. Create and open a period first.");
+      throw new ConvexError(
+        `No accounting period covers ${declaredDay}. Open the period for that date, or resubmit the journal with a date the books cover.`
+      );
     }
     if (period.status === "CLOSED" || period.status === "LOCKED") {
-      throw new ConvexError(`Accounting period is ${period.status}. Manual journal posting not allowed.`);
+      throw new ConvexError(
+        `The accounting period covering ${declaredDay} is ${period.status}. Manual journal posting not allowed.`
+      );
     }
     if (period.status === "FUTURE") {
-      throw new ConvexError("Accounting period has not been opened yet.");
+      throw new ConvexError(`The accounting period covering ${declaredDay} has not been opened yet.`);
     }
 
     const journalId = await ctx.db.insert("journalEntries", {
       orgId: args.orgId,
       periodId: period._id,
       journalNumber: "MJ-pending",
-      accountingDate: now,
+      accountingDate,
       sourceType: "manual",
       sourceId: draft.createdBy.toString(),
       category: "MANUAL",
@@ -412,7 +463,9 @@ export const approveManualJournal = mutation({
         creditMinor: line.creditMinor,
         currency: effectiveCurrency,
         scale: journalScale,
-        accountingDate: now,
+        // journalLines carries its OWN accountingDate, so dating only the entry
+        // above would leave every line contradicting the entry it belongs to.
+        accountingDate,
         description: line.description,
       });
       // GL Phase 18: a direct journalLines insert (not routed through

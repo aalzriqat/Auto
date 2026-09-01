@@ -250,6 +250,7 @@ describe("Phase 18 — every direct journalLines inserter keeps snapshots in syn
     const asPoster = ctx.t.withIdentity({ subject: "p18_poster", clerkId: "p18_poster" });
 
     const draft = await asPoster.mutation(api.financialAudit.createManualJournal, {
+      accountingDate: Date.now(),
       orgId: ctx.orgId,
       memo: "Snapshot regression check",
       lines: [

@@ -29,10 +29,18 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { manualJournalSchema, ManualJournalFormValues } from "./manualJournal.schema";
-import { scaleForCurrency } from "./AccountingTabShared";
+import { dateInputToMs, scaleForCurrency, todayInput } from "./AccountingTabShared";
 import { getErrorMessage } from "@/lib/errors";
 
 function emptyLine() {
@@ -76,7 +84,7 @@ export function ManualJournalTab() {
 
   const form = useForm<ManualJournalFormValues>({
     resolver: zodResolver(manualJournalSchema),
-    defaultValues: { memo: "", lines: [emptyLine(), emptyLine()] },
+    defaultValues: { accountingDate: todayInput, memo: "", lines: [emptyLine(), emptyLine()] },
   });
 
   const { fields, append, remove } = useFieldArray({ control: form.control, name: "lines" });
@@ -86,7 +94,7 @@ export function ManualJournalTab() {
   const balanced = totalDebits > 0 && Math.abs(totalDebits - totalCredits) < 1e-9;
 
   function resetForm() {
-    form.reset({ memo: "", lines: [emptyLine(), emptyLine()] });
+    form.reset({ accountingDate: todayInput, memo: "", lines: [emptyLine(), emptyLine()] });
   }
 
   async function onSubmit(values: ManualJournalFormValues) {
@@ -99,6 +107,11 @@ export function ManualJournalTab() {
     try {
       await createDraft({
         orgId: activeOrgId,
+        // dateInputToMs, not `new Date(value)`: the bare input is a calendar
+        // date, and parsing it as local time drops a Jordan (UTC+3) user's entry
+        // into the previous UTC month — and at a year boundary, the previous
+        // fiscal year.
+        accountingDate: dateInputToMs(values.accountingDate),
         memo: values.memo,
         lines: values.lines.map((l) => ({
           accountId: l.accountId as Id<"chartOfAccounts">,
@@ -268,6 +281,24 @@ export function ManualJournalTab() {
 
             <Form {...form}>
               <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+                {/* First, and before the memo: this is the field that decides
+                    which period the amounts land in. Constrained width because a
+                    date input stretched across the dialog reads as a text box. */}
+                <FormField
+                  control={form.control}
+                  name="accountingDate"
+                  render={({ field }) => (
+                    <FormItem className="sm:max-w-[14rem]">
+                      <FormLabel>{t("ManualJournalAccountingDate")}</FormLabel>
+                      <FormControl>
+                        <Input type="date" {...field} />
+                      </FormControl>
+                      <FormDescription>{t("ManualJournalAccountingDateHint")}</FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
                 <FormField
                   control={form.control}
                   name="memo"

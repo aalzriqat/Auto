@@ -72,6 +72,7 @@ describe("Phase 10 — manual journal draft creation", () => {
     expect(manualAccounts.length).toBeGreaterThanOrEqual(2);
 
     const result = await asUser.mutation(api.financialAudit.createManualJournal, {
+      accountingDate: Date.now(),
       orgId,
       memo: "Year-end adjustment",
       lines: [
@@ -90,6 +91,7 @@ describe("Phase 10 — manual journal draft creation", () => {
 
     await expect(
       asUser.mutation(api.financialAudit.createManualJournal, {
+        accountingDate: Date.now(),
         orgId,
         memo: "Bad journal",
         lines: [
@@ -104,7 +106,14 @@ describe("Phase 10 — manual journal draft creation", () => {
   test("draft creation is idempotent", async () => {
     const { orgId, manualAccounts, asUser } = await seedAuditDealer();
 
+    // ONE date shared by both calls. A retry is only a retry if it resends the
+    // same content, and SCRUM-50 made the accounting date part of that content:
+    // two separate Date.now() readings differ by milliseconds and are correctly
+    // refused as a key reused with different content.
+    const accountingDate = Date.now();
+
     const first = await asUser.mutation(api.financialAudit.createManualJournal, {
+      accountingDate,
       orgId,
       memo: "Idempotent adjustment",
       lines: [
@@ -115,6 +124,7 @@ describe("Phase 10 — manual journal draft creation", () => {
     });
 
     const second = await asUser.mutation(api.financialAudit.createManualJournal, {
+      accountingDate,
       orgId,
       memo: "Idempotent adjustment",
       lines: [
@@ -132,6 +142,7 @@ describe("Phase 10 — manual journal draft creation", () => {
     const { orgId, manualAccounts, asUser } = await seedAuditDealer();
 
     await asUser.mutation(api.financialAudit.createManualJournal, {
+      accountingDate: Date.now(),
       orgId,
       memo: "First version",
       lines: [
@@ -143,6 +154,7 @@ describe("Phase 10 — manual journal draft creation", () => {
 
     await expect(
       asUser.mutation(api.financialAudit.createManualJournal, {
+        accountingDate: Date.now(),
         orgId,
         memo: "Different content, same key",
         lines: [
@@ -160,6 +172,7 @@ describe("Phase 10 — manual journal approval", () => {
     const { orgId, manualAccounts, asUser, asReviewer } = await seedAuditDealer();
 
     const { draftId } = await asUser.mutation(api.financialAudit.createManualJournal, {
+      accountingDate: Date.now(),
       orgId,
       memo: "Approved adjustment",
       lines: [
@@ -182,6 +195,7 @@ describe("Phase 10 — manual journal approval", () => {
     const { orgId, manualAccounts, asUser } = await seedAuditDealer();
 
     const { draftId } = await asUser.mutation(api.financialAudit.createManualJournal, {
+      accountingDate: Date.now(),
       orgId,
       memo: "Self-approval attempt",
       lines: [
@@ -200,6 +214,7 @@ describe("Phase 10 — manual journal approval", () => {
     const { orgId, manualAccounts, asUser, asReviewer } = await seedAuditDealer();
 
     const { draftId } = await asUser.mutation(api.financialAudit.createManualJournal, {
+      accountingDate: Date.now(),
       orgId,
       memo: "Double-approve attempt",
       lines: [
@@ -222,6 +237,7 @@ describe("Phase 10 — manual journal rejection", () => {
     const { orgId, manualAccounts, asUser, asReviewer } = await seedAuditDealer();
 
     const { draftId } = await asUser.mutation(api.financialAudit.createManualJournal, {
+      accountingDate: Date.now(),
       orgId,
       memo: "Reject me",
       lines: [
@@ -251,6 +267,7 @@ describe("Phase 10 — manual journal rejection", () => {
     const { orgId, manualAccounts, asUser } = await seedAuditDealer();
 
     const { draftId } = await asUser.mutation(api.financialAudit.createManualJournal, {
+      accountingDate: Date.now(),
       orgId,
       memo: "Self-reject attempt",
       lines: [
@@ -273,6 +290,7 @@ describe("Phase 10 — pending manual journal queue", () => {
     const { orgId, manualAccounts, asUser, asReviewer } = await seedAuditDealer();
 
     const { draftId: approvedDraftId } = await asUser.mutation(api.financialAudit.createManualJournal, {
+      accountingDate: Date.now(),
       orgId,
       memo: "Will be approved",
       lines: [
@@ -284,6 +302,7 @@ describe("Phase 10 — pending manual journal queue", () => {
     await asReviewer.mutation(api.financialAudit.approveManualJournal, { orgId, draftId: approvedDraftId });
 
     const { draftId: pendingDraftId } = await asUser.mutation(api.financialAudit.createManualJournal, {
+      accountingDate: Date.now(),
       orgId,
       memo: "Still pending",
       lines: [

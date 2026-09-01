@@ -496,6 +496,7 @@ describe("Phase 9 — manual journal reviewer authority", () => {
     const manual = accounts.filter((a: any) => a.allowManualPosting);
 
     const { draftId } = await asUser.mutation(api.financialAudit.createManualJournal, {
+      accountingDate: Date.now(),
       orgId, memo: "Needs real approver",
       lines: [
         { accountId: manual[0]._id, debitMinor: 1000, creditMinor: 0 },
