@@ -2,6 +2,7 @@
 
 import { render, waitFor } from "@testing-library/react-native";
 import * as SecureStore from "expo-secure-store";
+import { StyleSheet } from "react-native";
 
 const mockPaginatedQuery = jest.fn();
 
@@ -191,6 +192,52 @@ describe("AccountingModule — cash movements are read-only", () => {
       { orgId: ORG_ID },
       { initialNumItems: 25 },
     );
+  });
+});
+
+describe("the caution rule leads the reading direction", () => {
+  // `borderStartWidth` resolves against the Yoga node's layout direction, which
+  // falls back to the NATIVE `I18nManager.isRTL`. This app never calls
+  // `forceRTL` — `LocaleProvider` only calls `allowRTL(true)` — so an Arabic UI
+  // on an English-locale device has `textDirection: "rtl"` while `isRTL` is
+  // false. `apps/mobile/src/features/dashboard/homeModel.ts` documents that
+  // exact divergence and compensates for it. `DEFAULT_LOCALE` is "ar", so a
+  // first-run user on an English-locale phone is precisely that case.
+  //
+  // The rule therefore has to be keyed off the APP locale and expressed as a
+  // physical edge, the way `SummaryRow` in moduleShared already does it. A
+  // logical edge cannot satisfy this, and jest performs no Yoga layout, so
+  // asserting the resolved physical property is the only check that can fail
+  // when the rule lands on the trailing side.
+  async function noticeStyle(stored: string | null) {
+    mockGetItem.mockResolvedValue(stored);
+    mockPaginatedQuery.mockReturnValue({
+      results: [makeRow()],
+      status: "Exhausted",
+      loadMore: jest.fn(),
+      isLoading: false,
+    });
+    const screen = await renderModule();
+    await waitFor(() =>
+      expect(screen.getByText(stored === "en" ? EN_NOTICE : AR_NOTICE)).toBeTruthy(),
+    );
+    return StyleSheet.flatten(screen.getByTestId("cash-movements-notice").props.style);
+  }
+
+  test("sits on the right in Arabic and the left in English", async () => {
+    const ar = await noticeStyle(null);
+    const en = await noticeStyle("en");
+
+    // Leading edge for right-to-left reading is the physical right.
+    expect(ar.borderRightWidth).toBe(3);
+    expect(ar.borderLeftWidth).toBeUndefined();
+
+    expect(en.borderLeftWidth).toBe(3);
+    expect(en.borderRightWidth).toBeUndefined();
+
+    // The control: the two must actually differ. A rule that ignores the locale
+    // produces an identical style object in both, which is the defect itself.
+    expect(ar).not.toEqual(en);
   });
 });
 
