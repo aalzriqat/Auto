@@ -14,9 +14,12 @@ jest.mock("expo-router", () => ({
   useRouter: () => ({ push: jest.fn() }),
 }));
 
+import { getMobileFoundationString } from "@autoflow/shared";
+
 import { api, type MobileLedgerTransaction } from "../../../convexApi";
 import { LocaleProvider } from "../../../providers/LocaleProvider";
 import { ThemeProvider } from "../../../providers/ThemeProvider";
+import { getNativeModule } from "../nativeModules";
 import { AccountingModule } from "./accounting";
 
 const ORG_ID = "org_1";
@@ -238,6 +241,34 @@ describe("the caution rule leads the reading direction", () => {
     // The control: the two must actually differ. A rule that ignores the locale
     // produces an identical style object in both, which is the defect itself.
     expect(ar).not.toEqual(en);
+  });
+});
+
+describe("every surface that opens this module tells the truth about it", () => {
+  // The accountant's dashboard role-start card routes straight to
+  // `moduleId: "accounting"` (OrgDashboardScreen `getRoleStart`), but its copy
+  // lives in `packages/shared`, outside `apps/mobile`. Renaming the module, its
+  // banner and its launcher tile therefore left that card behind, still
+  // promising ledger management for a destination that is now an explicitly
+  // read-only cash projection. A grep of the mobile app alone does not find it.
+  test("the accountant dashboard card does not promise ledger management", () => {
+    const en = getMobileFoundationString("en", "roleStartAccountantBody");
+    const ar = getMobileFoundationString("ar", "roleStartAccountantBody");
+
+    expect(en).not.toMatch(/manage/i);
+    expect(en).toMatch(/not the General Ledger/);
+    expect(ar).not.toContain("إدارة");
+    expect(ar).toContain("وليست دفتر الأستاذ العام");
+  });
+
+  test("the dashboard card and the launcher tile name the same destination", () => {
+    const accounting = getNativeModule("accounting");
+    if (!accounting) throw new Error("the accounting native module is missing");
+
+    // Two copies of the same name in two packages is how they drifted apart in
+    // the first place; this fails if either moves without the other.
+    expect(getMobileFoundationString("en", "roleStartAccountantTitle")).toBe(accounting.title.en);
+    expect(getMobileFoundationString("ar", "roleStartAccountantTitle")).toBe(accounting.title.ar);
   });
 });
 
