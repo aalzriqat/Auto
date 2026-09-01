@@ -42,7 +42,10 @@ import {
  * money anybody may spend again.
  */
 
-export type DepositApplicationTreatment = "CUSTOMER_RECEIVABLE" | "SUPPLIER_SETTLEMENT";
+export type DepositApplicationTreatment =
+  | "CUSTOMER_RECEIVABLE"
+  | "SUPPLIER_SETTLEMENT"
+  | "FINANCED_SALE_CONSIDERATION";
 
 /** Statuses that still hold a claim on the deposit — the money is not back. */
 const LIVE_APPLICATION_STATUSES = new Set(["APPLIED", "REVERSING"]);
@@ -54,8 +57,18 @@ function identityFor(args: {
   treatment: DepositApplicationTreatment;
 }): DepositApplicationIdentity {
   const settlement = args.treatment === "SUPPLIER_SETTLEMENT";
+  const financedConsideration = args.treatment === "FINANCED_SALE_CONSIDERATION";
   return {
-    eventType: settlement ? "DEPOSIT_APPLIED_TO_SETTLEMENT" : "DEPOSIT_APPLIED",
+    // The financed-consideration identity names an event that is never posted.
+    // That is deliberate rather than a gap: the release lives in the financed
+    // sale's own journal, so there is nothing here to reverse, and
+    // `reverseEventIfPosted` finds nothing and does nothing — while the row
+    // itself still reverses, which is what restores the hold.
+    eventType: financedConsideration
+      ? "FINANCED_SALE_CONSIDERATION"
+      : settlement
+        ? "DEPOSIT_APPLIED_TO_SETTLEMENT"
+        : "DEPOSIT_APPLIED",
     // Its own source type. The tuple (eventType, sourceType, sourceId,
     // eventVersion) is what `postAccountingEvent` dedupes on, and sharing
     // "deposits" would put every car on the quote under one source.
@@ -65,9 +78,13 @@ function identityFor(args: {
     // a genuine new movement, so each needs its own version — at version 1 the
     // second posting is silently swallowed as a duplicate.
     eventVersion: args.sequence,
-    idempotencyKey: `${settlement ? "deposit_applied_settlement" : "deposit_applied"}_${
-      args.depositId
-    }_${args.vehicleId}_${args.sequence}`,
+    idempotencyKey: `${
+      financedConsideration
+        ? "deposit_financed_consideration"
+        : settlement
+          ? "deposit_applied_settlement"
+          : "deposit_applied"
+    }_${args.depositId}_${args.vehicleId}_${args.sequence}`,
   };
 }
 
@@ -164,6 +181,16 @@ export async function recordDepositApplication(
     appliedAt: args.occurredAt,
     appliedBy: args.actorId,
   });
+
+  // No journal of its own. The financed sale's entry already debits the deposit
+  // liability for exactly this amount, and emitting DEPOSIT_APPLIED beside it
+  // would release the same liability twice — and credit AR-Customers, which on
+  // this deal is not the debtor. The row above is still written in full, so the
+  // deposit, hold, quote, vehicle and sale provenance is preserved and the
+  // application reverses like any other.
+  if (args.treatment === "FINANCED_SALE_CONSIDERATION") {
+    return applicationId;
+  }
 
   if (args.treatment === "SUPPLIER_SETTLEMENT") {
     await hookDepositAppliedToSettlement(ctx, {

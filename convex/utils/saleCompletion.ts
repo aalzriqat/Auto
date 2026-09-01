@@ -38,7 +38,7 @@ import {
   throwAllocationRequired,
   assertQuoteDepositConservation,
 } from "./depositAllocation";
-import { recordDepositApplication } from "./depositApplications";
+import { type DepositApplicationTreatment, recordDepositApplication } from "./depositApplications";
 import { planDepositSettlementApplication } from "./depositSettlementPlan";
 import {
   consignedSettlementRoute,
@@ -667,6 +667,20 @@ async function resolveReservationDeposits(
   }
   const allocationHoldId = allocation.kind === "ALLOCATED" ? allocation.holdId : undefined;
 
+  // A financed sale recognised from a settlement plan takes its deposit as
+  // consideration for the car, and the plan has already counted it: the
+  // financing company is asked for the settlement MINUS this amount. So there is
+  // no leftover to decide the fate of, and no treatment for the operator to
+  // state.
+  //
+  // Ahead of the absorbed-by-the-bill test below, which measures the deposit
+  // against what the CUSTOMER was billed. On these deals the customer is billed
+  // nothing for the car, so that test reads every deposit as unabsorbed and
+  // refuses a deal that is in fact fully accounted for.
+  if (args.financedSalePlan) {
+    return await applyHeldDeposits(ctx, opts, undefined, "FINANCED_SALE_CONSIDERATION");
+  }
+
   const stated = args.depositResolution?.treatment;
 
   // Determined exactly when the dealership billed the customer at least what it
@@ -683,7 +697,7 @@ async function resolveReservationDeposits(
       // recorded on consigned sales so an auditor can see which of several
       // possible dispositions applied; on owned stock APPLIED has only ever
       // meant one thing, so nothing is recorded and old rows stay comparable.
-      return await applyDepositsToCustomerAr(
+      return await applyHeldDeposits(
         ctx,
         opts,
         isSourced ? "APPLY_TO_DEALER_AMOUNT" : undefined
@@ -706,7 +720,7 @@ async function resolveReservationDeposits(
           "The reservation deposit exceeds what the dealership billed this customer on this sale, so it cannot all be applied against it. Refund, forfeit, or apply the excess to the supplier settlement instead."
         );
       }
-      return await applyDepositsToCustomerAr(ctx, opts, treatment);
+      return await applyHeldDeposits(ctx, opts, treatment);
     }
 
     case "APPLY_TO_TRANSACTION_SETTLEMENT": {
@@ -733,7 +747,7 @@ async function resolveReservationDeposits(
         // carries `CUSTOMER_RECEIVABLE`, so a later cancellation reverses the
         // entry that was really posted rather than a settlement entry that
         // never was.
-        return await applyDepositsToCustomerAr(ctx, opts, "APPLY_TO_DEALER_AMOUNT");
+        return await applyHeldDeposits(ctx, opts, "APPLY_TO_DEALER_AMOUNT");
       }
 
       const resolved = await resolveDepositsForQuote(ctx, {
@@ -885,7 +899,13 @@ async function recordOtherTreatment(
  * two-vehicle quote demand a deposit treatment on the first completion and
  * then refuse every one of them.
  */
-async function heldDepositRowsForVehicle(
+// Exported so the settlement plan reads the SAME slice completion will consume.
+// The plan is built before the first write and decides what the financing
+// company still owes; completion then applies exactly those rows. Two
+// derivations of "which deposits does this sale take" would be free to disagree,
+// and the disagreement would land as a difference between the journal and the
+// receivable.
+export async function heldDepositRowsForVehicle(
   ctx: MutationCtx,
   quoteId: Id<"quotes">,
   vehicleId: Id<"vehicles">
@@ -899,7 +919,7 @@ async function heldDepositRowsForVehicle(
     .map((d) => ({ depositId: d._id, customerId: d.customerId, amount: d.amount, method: d.method }));
 }
 
-async function heldDepositTotalForVehicle(
+export async function heldDepositTotalForVehicle(
   ctx: MutationCtx,
   quoteId: Id<"quotes">,
   vehicleId: Id<"vehicles">
@@ -910,14 +930,22 @@ async function heldDepositTotalForVehicle(
 
 
 /** The long-standing behaviour: the deposit comes off what the customer owes. */
-async function applyDepositsToCustomerAr(
+async function applyHeldDeposits(
   ctx: MutationCtx,
   opts: {
     args: SaleCompletionArgs;
     prepared: PreparedSaleCompletion;
     saleId: Id<"sales">;
   },
-  treatment: "APPLY_TO_DEALER_AMOUNT" | undefined
+  treatment: "APPLY_TO_DEALER_AMOUNT" | undefined,
+  /**
+   * Which balance the deposit discharges.
+   *
+   * CUSTOMER_RECEIVABLE for an ordinary sale, where the customer is the debtor.
+   * FINANCED_SALE_CONSIDERATION where the car is invoiced to a financing company
+   * and there is no customer receivable for the deposit to reduce.
+   */
+  applicationTreatment: DepositApplicationTreatment = "CUSTOMER_RECEIVABLE"
 ): Promise<ResolvedReservationDeposits> {
   const { args, prepared, saleId } = opts;
   const resolved = await resolveDepositsForQuote(ctx, {
@@ -944,7 +972,7 @@ async function applyDepositsToCustomerAr(
       holdId,
       amountMinor: toMinorUnits(amount, prepared.currency),
       currency: prepared.currency,
-      treatment: "CUSTOMER_RECEIVABLE",
+      treatment: applicationTreatment,
       actorId: args.actorId,
       occurredAt: args.saleDate,
     });
@@ -1385,7 +1413,16 @@ async function applySaleCompletionSideEffects(
   });
   await ctx.db.patch(saleId, { canonicalReceivableDocumentId: saleReceivableId });
 
-  for (const { depositId, amount } of appliedDeposits) {
+  // Skipped entirely when a settlement plan governs the sale. There the deposit is
+  // consideration for a car invoiced to the financing company, so there is no
+  // customer receivable for it to pay down — booking a CUSTOMER payment and
+  // allocating it would assert the customer settled a debt they never had, and the
+  // allocation refuses outright against a zero balance.
+  //
+  // Its discharge is already recorded twice over: the sale journal debits the
+  // deposit liability for exactly this amount, and the depositApplications row
+  // carries the deposit, hold, quote, vehicle and sale provenance.
+  for (const { depositId, amount } of (args.financedSalePlan ? [] : appliedDeposits)) {
     const depositPaymentId = await createCanonicalPayment(ctx, {
       orgId: args.orgId,
       branchId: prepared.vehicle.branchId,

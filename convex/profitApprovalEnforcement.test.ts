@@ -75,6 +75,9 @@ async function seedOrg(t: any, seed: string, minimumProfit: number | undefined) 
       maxTermMonths: 72,
       gracePeriodMonths: 3,
       isActive: true,
+      // The quotation solver refuses a company with no LTV, and the application
+      // freezes the company rules at creation.
+      defaultLtvPercent: 100,
     });
     return { orgId, userId, approverId, vehicleId, customerId, companyId };
   });
@@ -286,12 +289,56 @@ describe("applications.finalizeDeal re-verifies at the commit point", () => {
       applicationId,
       status: "APPROVED",
     });
+    // What the settlement posts from. Recorded before handover, which seals the
+    // approved amount. These fixtures previously finalized on the legacy
+    // no-quotation carve-out, so the deal posted from the customer principal.
+    const vehiclePrice = 20000 + desiredProfit;
+    await ids.asOwner.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: ids.orgId,
+      applicationId,
+      submittedQuotationMinor: vehiclePrice * 1000,
+      source: "MANUAL_ENTRY",
+    });
+    await ids.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: ids.orgId,
+      applicationId,
+      approvedAmountMinor: vehiclePrice * 1000,
+      basis: "MANUAL",
+      notes: "Approved at the quotation.",
+    });
     await registerHandover(ids.asOwner, api, ids.orgId, applicationId);
     await ids.asOwner.mutation(api.applications.registerExpectedPayment, {
       orgId: ids.orgId,
       applicationId,
       method: "CASH",
       expectedDate: Date.now(),
+    });
+    await ids.asOwner.mutation(api.financeDealCosts.recordLegalInvoice, {
+      orgId: ids.orgId,
+      applicationId,
+      legalInvoiceAmountMinor: vehiclePrice * 1000,
+      legalInvoiceNumber: `INV-${applicationId}`,
+      legalInvoiceDate: Date.now(),
+      issuedTo: "FINANCE_COMPANY",
+    });
+    const feeId = await ids.asOwner.mutation(api.financeDealCosts.recordDealFee, {
+      orgId: ids.orgId,
+      applicationId,
+      feeType: "OTHER_CLOSING_EXPENSE",
+      paidBy: "DEALER",
+      paidTo: "OTHER",
+      accountingTreatment: "SELLING_EXPENSE",
+      deductedFromSettlement: false,
+      actualAmountMinor: 0,
+      description: "The dealership bore no closing costs on this deal.",
+    });
+    await ids.asOwner.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: ids.orgId, feeId, notes: "Nothing to match.",
+    });
+    await ids.asOwner.mutation(api.financeDealCosts.classifyDealAccounting, {
+      orgId: ids.orgId,
+      applicationId,
+      notes: "Invoice and settlement advice on file.",
     });
     return { quoteId, applicationId };
   }

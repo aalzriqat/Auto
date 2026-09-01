@@ -37,7 +37,7 @@ function input(over: Partial<FinancedSalePlanInput> = {}): FinancedSalePlanInput
       }),
     ],
     customerReceivableMinor: 0,
-    cashOrDepositAppliedMinor: 0,
+    depositLiabilityAppliedMinor: 0,
     ...over,
   };
 }
@@ -66,7 +66,7 @@ function refusalOf(over: Partial<FinancedSalePlanInput> = {}) {
 function assertBalanced(plan: FinancedSalePostingPlan): void {
   const debits =
     plan.financeCompanyReceivableMinor +
-    plan.cashOrDepositAppliedMinor +
+    plan.depositLiabilityAppliedMinor +
     plan.customerReceivableMinor +
     plan.components
       .filter((c) => c.side === "DEBIT")
@@ -262,5 +262,120 @@ describe("financed sale posting plan — fingerprint", () => {
       ],
     });
     expect(c.fingerprint).not.toBe(a.fingerprint);
+  });
+});
+
+describe("financed sale posting plan — the deposit is money the dealership already holds (c16213)", () => {
+  test("a 3,000 deposit against a 20,000 invoice leaves the company owing 17,000, and the customer owing nothing", () => {
+    const plan = planOf({
+      legalInvoiceConsiderationMinor: jod(20_000),
+      grossDealerSettlementMinor: jod(20_000),
+      storedExpectedDealerRemittanceMinor: jod(20_000),
+      components: [],
+      depositLiabilityAppliedMinor: jod(3_000),
+    });
+
+    expect(plan.financeCompanyReceivableMinor).toBe(jod(17_000));
+    expect(plan.depositLiabilityAppliedMinor).toBe(jod(3_000));
+    expect(plan.customerReceivableMinor).toBe(0);
+    expect(plan.financeCompanyPayableMinor).toBe(0);
+    assertBalanced(plan);
+  });
+
+  test("the deposit changes only what the company still owes — never the invoice or the gross", () => {
+    const withDeposit = planOf({
+      legalInvoiceConsiderationMinor: jod(20_000),
+      grossDealerSettlementMinor: jod(20_000),
+      storedExpectedDealerRemittanceMinor: jod(20_000),
+      components: [],
+      depositLiabilityAppliedMinor: jod(3_000),
+    });
+    const without = planOf({
+      legalInvoiceConsiderationMinor: jod(20_000),
+      grossDealerSettlementMinor: jod(20_000),
+      storedExpectedDealerRemittanceMinor: jod(20_000),
+      components: [],
+      depositLiabilityAppliedMinor: 0,
+    });
+
+    expect(withDeposit.legalInvoiceConsiderationMinor).toBe(
+      without.legalInvoiceConsiderationMinor
+    );
+    expect(withDeposit.grossDealerSettlementMinor).toBe(without.grossDealerSettlementMinor);
+    // Only this moves, and by exactly the deposit.
+    expect(without.financeCompanyReceivableMinor - withDeposit.financeCompanyReceivableMinor).toBe(
+      jod(3_000)
+    );
+  });
+
+  test("the invariant N + D + H = G + P holds with a deposit and deductions together", () => {
+    const plan = planOf({
+      legalInvoiceConsiderationMinor: jod(20_000),
+      grossDealerSettlementMinor: jod(20_000),
+      storedExpectedDealerRemittanceMinor: jod(18_625),
+      depositLiabilityAppliedMinor: jod(3_000),
+    });
+    // 20,000 gross - 1,375 netted contribution - 3,000 deposit = 15,625.
+    expect(plan.financeCompanyReceivableMinor).toBe(jod(15_625));
+    expect(
+      plan.financeCompanyReceivableMinor +
+        plan.totalDeductionsMinor +
+        plan.depositLiabilityAppliedMinor
+    ).toBe(plan.grossDealerSettlementMinor + plan.financeCompanyPayableMinor);
+    assertBalanced(plan);
+  });
+
+  test("a deposit larger than what the company still owes refuses rather than inventing a credit", () => {
+    const refusal = refusalOf({
+      legalInvoiceConsiderationMinor: jod(20_000),
+      grossDealerSettlementMinor: jod(20_000),
+      storedExpectedDealerRemittanceMinor: jod(20_000),
+      components: [],
+      depositLiabilityAppliedMinor: jod(25_000),
+    });
+    expect(refusal.code).toBe("DEPOSIT_EXCEEDS_SETTLEMENT");
+  });
+
+  test("a deposit alongside a net payable refuses — nobody has said whose money settles which obligation", () => {
+    const refusal = refusalOf({
+      legalInvoiceConsiderationMinor: jod(1_000),
+      grossDealerSettlementMinor: jod(1_000),
+      storedExpectedDealerRemittanceMinor: 0,
+      components: [component({ amountMinor: jod(1_500) })],
+      depositLiabilityAppliedMinor: jod(500),
+    });
+    expect(refusal.code).toBe("DEPOSIT_WITH_NET_PAYABLE");
+  });
+
+  test("deductions above the gross with NO deposit still produce a payable, not a deposit refusal", () => {
+    // The guard that distinguishes them. D > G drives the same figure negative
+    // for a different reason, and an earlier version of this refused it as a
+    // deposit overage on deals carrying no deposit at all.
+    const plan = planOf({
+      legalInvoiceConsiderationMinor: jod(1_000),
+      grossDealerSettlementMinor: jod(1_000),
+      storedExpectedDealerRemittanceMinor: 0,
+      components: [component({ amountMinor: jod(1_500) })],
+      depositLiabilityAppliedMinor: 0,
+    });
+    expect(plan.financeCompanyPayableMinor).toBe(jod(500));
+    expect(plan.financeCompanyReceivableMinor).toBe(0);
+    assertBalanced(plan);
+  });
+});
+
+describe("financed sale posting plan — staleness is checked before the deposit is netted", () => {
+  test("a stale stored remittance refuses even on a deal carrying a deposit", () => {
+    // The stored figure answers "what does the company owe", which knows nothing
+    // about deposits. Checking it against the POST-deposit number would let a
+    // stale one through whenever the deposit happened to absorb the difference.
+    const refusal = refusalOf({
+      legalInvoiceConsiderationMinor: jod(20_000),
+      grossDealerSettlementMinor: jod(20_000),
+      storedExpectedDealerRemittanceMinor: jod(17_000),
+      components: [],
+      depositLiabilityAppliedMinor: jod(3_000),
+    });
+    expect(refusal.code).toBe("REMITTANCE_STALE");
   });
 });

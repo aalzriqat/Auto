@@ -316,7 +316,14 @@ export async function hookDepositReceived(
  * ledger still showing the liability discharged.
  */
 export type DepositApplicationIdentity = {
-  eventType: "DEPOSIT_APPLIED" | "DEPOSIT_APPLIED_TO_SETTLEMENT";
+  // FINANCED_SALE_CONSIDERATION names an event that is never posted: the release
+  // is a line inside the financed sale journal, so there is nothing separate to
+  // reverse. The identity is still recorded in full so the application row is
+  // indistinguishable in shape from the two that do post.
+  eventType:
+    | "DEPOSIT_APPLIED"
+    | "DEPOSIT_APPLIED_TO_SETTLEMENT"
+    | "FINANCED_SALE_CONSIDERATION";
   sourceType: string;
   sourceId: string;
   eventVersion: number;
@@ -386,6 +393,15 @@ export async function reverseDepositApplication(
     reversalDate: number;
   }
 ): Promise<ReversalOutcome> {
+  // A financed-consideration application never posted an entry of its own — the
+  // deposit liability was released by a line inside the financed sale journal, and
+  // reversing THAT sale restores it. There is nothing here to undo, and saying so
+  // is different from failing to find it: the caller still marks the application
+  // row REVERSED, which is what puts the hold back.
+  if (args.identity.eventType === "FINANCED_SALE_CONSIDERATION") {
+    return "NOT_POSTED";
+  }
+
   return await reverseEventIfPosted(ctx, {
     orgId: args.orgId,
     sourceType: args.identity.sourceType,

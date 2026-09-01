@@ -40,6 +40,7 @@ function plan(over: Partial<FinancedSalePlanPayload> = {}): FinancedSalePlanPayl
     financeCompanyReceivableMinor: jod(11_125),
     financeCompanyPayableMinor: 0,
     customerReceivableMinor: 0,
+    depositLiabilityAppliedMinor: 0,
     components: [
       {
         sourceKind: "FEE",
@@ -263,5 +264,57 @@ describe("financed sale recognition — what it must not disturb", () => {
     expect(() => ruleSaleCompleted(sale({ taxConventionExclusive: undefined }))).toThrow(
       /legacy tax convention/i
     );
+  });
+});
+
+describe("financed sale recognition — a deposit the dealership already banked (c16213)", () => {
+  test("the deposit RELEASES the deposit liability and touches no cash account", () => {
+    const result = ruleSaleCompleted(
+      sale({
+        saleAmountMinor: jod(20_000),
+        financedSalePlan: plan({
+          legalInvoiceConsiderationMinor: jod(20_000),
+          financeCompanyReceivableMinor: jod(17_000),
+          depositLiabilityAppliedMinor: jod(3_000),
+          fingerprint: "v1-deposit",
+          components: [],
+        }),
+      })
+    );
+
+    // The correction that matters. The deposit was banked when it was taken —
+    // DR cash / CR deposit liability — so recognising the sale discharges that
+    // liability. Debiting cash here instead would book the same 3,000 twice and
+    // still balance, which is exactly why this asserts the account and not just
+    // the total.
+    expect(net(result, SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY)).toBe(jod(3_000));
+    expect(net(result, SYSTEM_KEYS.BANK_ACCOUNT)).toBe(0);
+    expect(net(result, SYSTEM_KEYS.CASH_ON_HAND)).toBe(0);
+
+    expect(net(result, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES)).toBe(jod(17_000));
+    expect(net(result, SYSTEM_KEYS.SALES_REVENUE)).toBe(-jod(20_000));
+    expect(net(result, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(0);
+    expect(() => validateBalance(result.lines)).not.toThrow();
+  });
+
+  test("omitting the deposit leg would leave the entry short — the balance check catches it", () => {
+    // Guards the leg itself rather than its account: without the release the
+    // debits come to 17,000 against 20,000 of revenue.
+    const result = ruleSaleCompleted(
+      sale({
+        saleAmountMinor: jod(20_000),
+        financedSalePlan: plan({
+          legalInvoiceConsiderationMinor: jod(20_000),
+          financeCompanyReceivableMinor: jod(17_000),
+          depositLiabilityAppliedMinor: jod(3_000),
+          fingerprint: "v1-deposit-balance",
+          components: [],
+        }),
+      })
+    );
+    const debits = result.lines.reduce((sum, l) => sum + l.debitMinor, 0);
+    const credits = result.lines.reduce((sum, l) => sum + l.creditMinor, 0);
+    expect(debits).toBe(jod(20_000));
+    expect(credits).toBe(jod(20_000));
   });
 });

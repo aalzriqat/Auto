@@ -724,28 +724,50 @@ describe("a reservation deposit on the direct route", () => {
     ).rejects.toThrow(/then finalize/i);
   });
 
-  test("a held deposit refuses: the car is invoiced to the financier, so no customer balance absorbs it", async () => {
+  test("a deposit reduces what the financier owes, and never becomes customer debt", async () => {
     const s = await seedDealership("dep1");
 
-    // This asserted the opposite, on the stated premise that the customer is
-    // billed the gross so the عربون is absorbed by what they owe. Direct
-    // recognition removes that premise: on an external financed sale the car is
-    // the financing company's purchase, no customer receivable is raised for it,
-    // and the deposit has nothing left to reduce.
+    // This asserted that the deposit is absorbed by what the customer owes for
+    // the car. That premise is gone: the car is invoiced to the financing company,
+    // so no customer receivable is raised for it and there is nothing for the
+    // deposit to be absorbed BY.
     //
-    // Where the money should go instead — reducing what the company is asked to
-    // fund, standing as consideration the dealership already holds, or sitting in
-    // the deposits liability until the deal closes — are three different answers
-    // putting real customer money in three different places. Nothing on the
-    // record chooses between them, so finalization refuses rather than guessing,
-    // and it refuses in terms that name the cause instead of the symptom.
-    await expect(
-      runDeal(s, { route: "THROUGH_DEALERSHIP", deposit: 3_000, downPayment: 3_000 })
-    ).rejects.toThrow(/reservation deposit is still held/i);
+    // What the deposit does instead is reduce the amount still to be transferred.
+    // It is money the dealership already banked — the deposit was recorded as
+    // DR cash / CR deposit liability when it was taken — so recognising the sale
+    // releases that liability rather than asking the company for the money a
+    // second time.
+    const { applicationId, saleId } = await runDeal(s, {
+      route: "THROUGH_DEALERSHIP",
+      deposit: 3_000,
+      downPayment: 3_000,
+    });
+    expect(saleId).toBeTruthy();
 
-    // And it refuses before anything is written: the deposit is untouched.
+    // 20,000 invoiced, 3,000 already held, so 17,000 left to come.
+    const receivable = await financeReceivableOf(s, applicationId);
+    expect(receivable?.originalAmountMinor).toBe((VEHICLE_PRICE - 3_000) * SCALE);
+
+    // The hold is consumed exactly once, and the application row records it.
     const deposits = await s.t.run((ctx) => ctx.db.query("deposits").collect());
-    expect(deposits.every((d) => d.status === "HELD")).toBe(true);
+    expect(deposits.some((d) => d.status === "HELD")).toBe(false);
+    const applications = await s.t.run((ctx) =>
+      ctx.db.query("depositApplications").collect()
+    );
+    expect(applications).toHaveLength(1);
+    expect(applications[0].treatment).toBe("FINANCED_SALE_CONSIDERATION");
+    expect(applications[0].amountMinor).toBe(3_000 * SCALE);
+
+    // And no second journal beside the sale's own. The ordinary deposit rule
+    // credits AR-Customers, which on this deal is not the debtor, and it would
+    // release the same liability the sale entry already released.
+    const events = await s.t.run((ctx) =>
+      ctx.db.query("accountingEvents").collect()
+    );
+    expect(events.filter((e) => e.eventType === "DEPOSIT_APPLIED")).toHaveLength(0);
+    expect(
+      events.filter((e) => e.eventType === "DEPOSIT_APPLIED_TO_SETTLEMENT")
+    ).toHaveLength(0);
   });
 });
 

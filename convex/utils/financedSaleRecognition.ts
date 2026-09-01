@@ -11,6 +11,8 @@ import {
   settlementDeductedActualMinor,
   settlementDeductedFees,
 } from "./settlementDeductions";
+import { heldDepositTotalForVehicle } from "./saleCompletion";
+import { toMinorUnits } from "./money";
 
 /**
  * Turns one finance application into the plan its sale will post from, or
@@ -105,6 +107,26 @@ export async function resolveFinancedSalePlan(
     (app.customerGapCashToDealerMinor ?? 0) +
     (app.customerGapInstallmentToDealerMinor ?? 0);
 
+  // H — the deposit slice this sale actually consumes, read from the deposit
+  // rows holding THIS car. Not `quote.downPayment`, which is an intention
+  // recorded on a quote and may never have been paid; not
+  // `customerFirstPaymentMinor`, which says what the customer owes toward the
+  // purchase without saying who received it. A held deposit row is money that
+  // moved, and it names the car it is holding — which is what makes this correct
+  // on a quote covering several vehicles, where each sale must take its own
+  // slice and no other.
+  // `heldDepositTotalForVehicle` returns MAJOR units — `deposits.amount` is stored
+  // the way an operator types it — so it is converted here. Passing it through
+  // unconverted made a 3,000 deposit reduce the settlement by 3, which balances
+  // arithmetically and is wrong by a factor of the currency scale.
+  const depositHeldMajor = await heldDepositTotalForVehicle(
+    ctx as MutationCtx,
+    app.quoteId,
+    app.vehicleId
+  );
+  const depositLiabilityAppliedMinor =
+    depositHeldMajor > 0 ? toMinorUnits(depositHeldMajor, opts.currency) : 0;
+
   const result = buildFinancedSalePostingPlan({
     currency: opts.currency,
     legalInvoiceConsiderationMinor: app.legalInvoiceAmountMinor,
@@ -114,12 +136,7 @@ export async function resolveFinancedSalePlan(
     storedExpectedDealerRemittanceMinor: app.expectedDealerRemittanceMinor,
     components,
     customerReceivableMinor,
-    // Deposits already reach the ledger through their own events, and applying
-    // them a second time here would relieve the same money twice. A deal
-    // carrying one is refused by the plan's balance check rather than being
-    // silently posted, because where an applied deposit belongs under direct
-    // recognition is a question nobody has answered yet.
-    cashOrDepositAppliedMinor: 0,
+    depositLiabilityAppliedMinor,
   });
 
   // A net payable has a general-ledger account but no canonical subledger, and

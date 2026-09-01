@@ -219,6 +219,14 @@ export interface FinancedSalePlanPayload {
   financeCompanyPayableMinor: number;
   /** Only what the customer independently owes the dealership on the vehicle leg. */
   customerReceivableMinor: number;
+  /**
+   * H — the customer's deposit slice this sale consumes.
+   *
+   * Already banked: `ruleDepositReceived` debited cash and credited the deposit
+   * liability when it was taken. Recognising the sale therefore RELEASES that
+   * liability, and debiting cash here as well would book the same money twice.
+   */
+  depositLiabilityAppliedMinor: number;
   components: FinancedSalePlanLine[];
 }
 
@@ -967,6 +975,26 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
           plan.financeCompanyPayableMinor,
           "Owed to finance company — settlement deductions exceed the gross",
           { ...dims, financeCompanyId: plan.financeCompanyId }
+        )
+      );
+    }
+    // The deposit the customer already paid, released from the liability it
+    // created rather than debited to cash again. It is a debit because the
+    // liability is being discharged: the dealership no longer owes that money
+    // back, it has earned it against the car.
+    //
+    // No DEPOSIT_APPLIED event accompanies this. The ordinary deposit rule credits
+    // AR-Customers, which is right when the customer is the debtor and wrong here,
+    // where the financing company is — and emitting one beside this entry would
+    // release the same liability twice.
+    if (plan.depositLiabilityAppliedMinor > 0) {
+      lines.push(
+        line(
+          SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY,
+          plan.depositLiabilityAppliedMinor,
+          0,
+          "Customer deposit applied to the financed purchase",
+          dims
         )
       );
     }

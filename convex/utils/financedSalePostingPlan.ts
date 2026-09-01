@@ -23,10 +23,18 @@ import { SYSTEM_KEYS, type SystemKey } from "./defaultChart";
  *
  *     G  gross dealer-side settlement, before anything the company nets out
  *     D  the sum of explicit classified settlement components
- *     N  max(0, G - D)   what the company will actually remit -> finance receivable
+ *     H  the customer's deposit slice this sale consumes
+ *     N  G - D - H       what the company will actually remit -> finance receivable
  *     P  max(0, D - G)   what the dealership owes the company -> finance payable
  *
- *     N + D = G + P      always, by construction
+ *     N + D + H = G + P  always, by construction
+ *
+ * `H` is money the dealership ALREADY HOLDS. The deposit was banked when it was
+ * taken — `ruleDepositReceived` debits cash and credits the deposit liability —
+ * so recognising the sale RELEASES that liability rather than debiting cash a
+ * second time. It changes the amount still due from the financing company and
+ * nothing else: not the legal invoice, not the approved purchase amount, and not
+ * the customer's financing principal.
  *
  * `N` and `P` are floored against each other rather than allowed to go negative,
  * because a negative receivable is a payable wearing the wrong sign, and the two
@@ -116,6 +124,8 @@ export type PlanRefusalCode =
   | "COMPONENT_AMOUNT_INVALID"
   | "COMPONENT_SOURCE_DUPLICATED"
   | "TREATMENT_UNMAPPED"
+  | "DEPOSIT_EXCEEDS_SETTLEMENT"
+  | "DEPOSIT_WITH_NET_PAYABLE"
   | "PLAN_UNBALANCED";
 
 export interface PlanRefusal {
@@ -158,8 +168,14 @@ export interface FinancedSalePlanInput {
   components: SettlementComponentInput[];
   /** Only amounts the customer independently owes the dealership. */
   customerReceivableMinor: number;
-  /** Consideration the dealership already holds — cash and applied deposits. */
-  cashOrDepositAppliedMinor: number;
+  /**
+   * H — the customer's deposit slice this sale consumes, already banked.
+   *
+   * Derived from the actual deposit rows held against this vehicle, never from
+   * `quote.downPayment`, `customerFirstPaymentMinor`, or any total a caller
+   * supplies. Those are intentions; a deposit row is money that moved.
+   */
+  depositLiabilityAppliedMinor: number;
 }
 
 export interface FinancedSalePostingPlan {
@@ -171,7 +187,7 @@ export interface FinancedSalePostingPlan {
   financeCompanyReceivableMinor: number;
   financeCompanyPayableMinor: number;
   customerReceivableMinor: number;
-  cashOrDepositAppliedMinor: number;
+  depositLiabilityAppliedMinor: number;
   components: PlannedComponent[];
   /**
    * Identifies this exact plan.
@@ -285,16 +301,60 @@ export function buildFinancedSalePostingPlan(
   }
 
   const totalDeductionsMinor = components.reduce((sum, c) => sum + c.amountMinor, 0);
-  const financeCompanyReceivableMinor = Math.max(0, grossMinor - totalDeductionsMinor);
+  const depositAppliedMinor = input.depositLiabilityAppliedMinor;
+
+  // The payable is deductions measured against the gross, and the deposit has no
+  // part in it. A deposit is the customer's money: it can reduce what the
+  // financing company still owes, but it can never make the dealership owe the
+  // company anything.
   const financeCompanyPayableMinor = Math.max(0, totalDeductionsMinor - grossMinor);
 
-  // The stored figure was computed by a path that supplies no fee rows, so it
-  // is not automatically authoritative. Finalization recomputes it from the
-  // actual reconciled components and refuses on disagreement rather than
-  // patching the application to match — a settlement whose expected amount
-  // moved silently under the operator is exactly what a fresh recomputation is
-  // supposed to catch.
-  if (storedRemittanceMinor !== financeCompanyReceivableMinor) {
+  // Both at once is a shape nobody has described — the company owed money by the
+  // dealership while the customer has also prepaid against its funding. Netting
+  // them is a guess about whose money settles whose obligation.
+  if (financeCompanyPayableMinor > 0 && depositAppliedMinor > 0) {
+    return refuse(
+      "DEPOSIT_WITH_NET_PAYABLE",
+      "This deal has both a customer deposit and settlement costs larger than what the financing company owes. Settle the costs with the company, or resolve the deposit, before finalizing."
+    );
+  }
+
+  const netReceivableMinor = grossMinor - totalDeductionsMinor - depositAppliedMinor;
+
+  // A deposit larger than what the company had left to send means the customer
+  // prepaid more than their share of the car. The excess is owed back to them, or
+  // belongs against something else they owe — two different answers, neither
+  // derivable here, and inventing a credit for the difference is precisely the
+  // balancing plug this model exists to refuse.
+  // Guarded on there being no payable, because D > G drives the same figure
+  // negative for an entirely different reason — deductions exceeding the gross,
+  // which is the payable case handled above and below. Without the guard this
+  // refusal claimed a deposit was too large on deals carrying no deposit at all.
+  if (netReceivableMinor < 0 && financeCompanyPayableMinor === 0) {
+    return refuse(
+      "DEPOSIT_EXCEEDS_SETTLEMENT",
+      "The deposit held on this deal is larger than what the financing company still owes the dealership for the car. Record what happens to the difference before finalizing."
+    );
+  }
+  const financeCompanyReceivableMinor = Math.max(0, netReceivableMinor);
+
+  // The stored figure is checked BEFORE the deposit is netted off, and that
+  // boundary is deliberate.
+  //
+  // `expectedDealerRemittanceMinor` is the shared economics engine's answer to
+  // "what does this company owe the dealership", derived from the approval and
+  // what the company withholds. It knows nothing about deposits, and it should
+  // not: a deposit is the customer prepaying their own share, which changes who
+  // still has to send money without changing what the company agreed to fund.
+  // Teaching the engine about deposits would make one number answer two
+  // questions and leave neither reliable.
+  //
+  // So the engine's figure is verified against the engine's own inputs, and the
+  // deposit is applied here, at recognition. What the company will actually
+  // transfer is `financeCompanyReceivableMinor`, frozen onto the application for
+  // `confirmDisbursement` to measure a real receipt against.
+  const settlementBeforeDepositMinor = Math.max(0, grossMinor - totalDeductionsMinor);
+  if (storedRemittanceMinor !== settlementBeforeDepositMinor) {
     return refuse(
       "REMITTANCE_STALE",
       "This deal's expected remittance no longer matches what its recorded settlement costs produce. Recalculate the deal's economics before finalizing."
@@ -303,7 +363,7 @@ export function buildFinancedSalePostingPlan(
 
   const debitsMinor =
     financeCompanyReceivableMinor +
-    input.cashOrDepositAppliedMinor +
+    depositAppliedMinor +
     input.customerReceivableMinor +
     components
       .filter((c) => c.side === "DEBIT")
@@ -338,7 +398,7 @@ export function buildFinancedSalePostingPlan(
       financeCompanyReceivableMinor,
       financeCompanyPayableMinor,
       customerReceivableMinor: input.customerReceivableMinor,
-      cashOrDepositAppliedMinor: input.cashOrDepositAppliedMinor,
+      depositLiabilityAppliedMinor: depositAppliedMinor,
       components,
       fingerprint: fingerprintOf({
         currency: input.currency,
@@ -347,7 +407,7 @@ export function buildFinancedSalePostingPlan(
         financeCompanyReceivableMinor,
         financeCompanyPayableMinor,
         customerReceivableMinor: input.customerReceivableMinor,
-        cashOrDepositAppliedMinor: input.cashOrDepositAppliedMinor,
+        depositLiabilityAppliedMinor: depositAppliedMinor,
         components,
       }),
     },
@@ -370,7 +430,7 @@ function fingerprintOf(parts: {
   financeCompanyReceivableMinor: number;
   financeCompanyPayableMinor: number;
   customerReceivableMinor: number;
-  cashOrDepositAppliedMinor: number;
+  depositLiabilityAppliedMinor: number;
   components: PlannedComponent[];
 }): string {
   const componentPart = [...parts.components]
@@ -386,7 +446,7 @@ function fingerprintOf(parts: {
     `N${parts.financeCompanyReceivableMinor}`,
     `P${parts.financeCompanyPayableMinor}`,
     `C${parts.customerReceivableMinor}`,
-    `H${parts.cashOrDepositAppliedMinor}`,
+    `H${parts.depositLiabilityAppliedMinor}`,
     componentPart,
   ].join(";");
 }

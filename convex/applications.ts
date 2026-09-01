@@ -3341,28 +3341,6 @@ export const finalizeDeal = mutation({
           currency: app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId)),
         });
 
-        // A reservation deposit on a deal recognised this way has nowhere
-        // established to go, and refusing is the only honest answer available.
-        //
-        // The deposit is the customer's money, and it used to be applied against
-        // the customer's receivable for the car. Under direct recognition the car
-        // is the financing company's purchase, so that receivable is not created
-        // and there is nothing for the deposit to reduce — `resolveReservationDeposits`
-        // sees a deposit larger than the customer was billed and refuses in terms
-        // that describe the symptom rather than the cause.
-        //
-        // The three plausible answers put the money in three different places: it
-        // reduces what the company is asked to fund, or it is additional
-        // consideration the dealership already holds, or it is refundable and
-        // belongs in the deposits liability until the deal closes. They are not
-        // interchangeable, nothing on the record says which applies, and picking
-        // one would move real customer money on a guess. So this refuses at the
-        // same door as every other unestablished figure, before any write.
-        if (financedSalePlan && (await hasHeldQuoteDeposit(ctx, app.quoteId))) {
-          throw new ConvexError(
-            "A reservation deposit is still held on this deal, and on a financed sale the car is invoiced to the financing company rather than to the customer — so there is no customer balance for the deposit to be applied against. Resolve the deposit before finalizing."
-          );
-        }
 
         const saleId = await completeSale(ctx, {
           orgId: args.orgId,
@@ -3391,6 +3369,8 @@ export const finalizeDeal = mutation({
                   financedSalePlan.financeCompanyReceivableMinor,
                 financeCompanyPayableMinor: financedSalePlan.financeCompanyPayableMinor,
                 customerReceivableMinor: financedSalePlan.customerReceivableMinor,
+                depositLiabilityAppliedMinor:
+                  financedSalePlan.depositLiabilityAppliedMinor,
                 components: financedSalePlan.components.map((component) => ({
                   sourceKind: component.sourceKind,
                   sourceId: component.sourceId,
@@ -3487,7 +3467,11 @@ export const finalizeDeal = mutation({
           // Correcting a fee row afterwards re-derives a different plan; this says
           // what the journal was built from, so the two can be told apart.
           ...(financedSalePlan
-            ? { financedSaleRecognitionFingerprint: financedSalePlan.fingerprint }
+            ? {
+                financedSaleRecognitionFingerprint: financedSalePlan.fingerprint,
+                financedSaleNetReceivableMinor:
+                  financedSalePlan.financeCompanyReceivableMinor,
+              }
             : {}),
         });
 
@@ -3645,7 +3629,20 @@ export const confirmDisbursement = mutation({
         }
 
         const quote = await ctx.db.get(app.quoteId);
-        if (quote?.totalFinancedAmount !== undefined) {
+        // What the company actually owed when the sale was recognised, frozen at
+        // finalization. The customer's financing principal is what THEY borrow;
+        // it is not what the company transfers, and the two differ by every
+        // deposit the dealership holds and every cost the company withholds. A
+        // receipt of the correct amount was being refused for not matching the
+        // principal, and a receipt short by exactly the withheld fees was being
+        // accepted whenever the two happened to coincide.
+        if (app.financedSaleNetReceivableMinor !== undefined) {
+          if (args.disbursedAmountMinor !== app.financedSaleNetReceivableMinor) {
+            throw new ConvexError(
+              `The amount received (${args.disbursedAmountMinor}) is not what this financing company owes the dealership on this deal (${app.financedSaleNetReceivableMinor}).`
+            );
+          }
+        } else if (quote?.totalFinancedAmount !== undefined) {
           const currency = await getOrgCurrency(ctx, args.orgId);
           const expectedAmountMinor = toMinorUnits(quote.totalFinancedAmount, currency);
           if (args.disbursedAmountMinor !== expectedAmountMinor) {
