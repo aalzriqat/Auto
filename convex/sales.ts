@@ -751,9 +751,13 @@ export const update = mutation({
         // not wrapped in try/catch, so an uncaught throw discards the queued
         // reversal and every other write in the transaction.
         //
-        // This door also accepts a caller-supplied cancellation date, so the
-        // deferred case is reachable by backdating as well as by month-end.
-        const parentOutcome = await hookSaleCancelled(ctx, {
+        // ⚠️ An earlier version of this comment said this door accepts a
+        // caller-supplied cancellation date, so backdating could reach the
+        // deferred case. That was FALSE: `cancellationDate` is derived
+        // unconditionally as `Date.now()` and no such field exists on the args
+        // validator. The deferred case is reachable only when no open period
+        // covers TODAY — month-end. Caught by the Sonnet MAX seat.
+        await hookSaleCancelled(ctx, {
           orgId: args.orgId,
           saleId: args.saleId,
           reason: "Sale cancelled",
@@ -763,7 +767,6 @@ export const update = mutation({
         await assertFinancedDepositsSurviveParentReversal(ctx, {
           orgId: args.orgId,
           saleId: args.saleId,
-          parentOutcome,
         });
         await cancelCompletedSaleOperationalRecords(ctx, {
           orgId: args.orgId,

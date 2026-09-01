@@ -6,7 +6,6 @@ import {
   hookDepositAppliedToSettlement,
   reverseDepositApplication,
   type DepositApplicationIdentity,
-  type ReversalOutcome,
 } from "../accounting/workflowHooks";
 
 /**
@@ -440,15 +439,35 @@ const NOTHING_TO_COMPLETE: ResolvedDeferredReversal = {
  */
 export async function assertFinancedDepositsSurviveParentReversal(
   ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    saleId: Id<"sales">;
-    parentOutcome: ReversalOutcome;
-  }
+  args: { orgId: Id<"organizations">; saleId: Id<"sales"> }
 ): Promise<void> {
-  // REVERSED means the journal is off the books now; NOT_POSTED means it was
-  // never on them. Only a queued reversal leaves the release standing.
-  if (args.parentOutcome !== "DEFERRED") return;
+  // ⚠️ READ FROM THE LEDGER, NOT FROM THE CALLER'S OUTCOME.
+  //
+  // The first version of this took the `ReversalOutcome` the caller had just
+  // computed. That made the guard only as complete as the branch that computed
+  // it — and in `applications.cancelApplication` the parent reversal sits inside
+  // an `if (sale.status !== "CANCELLED")` block while the operational teardown
+  // does not. Re-entering on an already-cancelled sale skipped the reversal, the
+  // outcome, and therefore the guard, while still running the teardown that
+  // reinstates the hold. Both review seats found that hole independently, from
+  // opposite ends.
+  //
+  // Asking the ledger instead makes the answer independent of how the caller got
+  // here. The question is not what this transaction just did; it is whether the
+  // journal that released the deposit is still standing.
+  const saleEvent = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_source", (q) =>
+      q.eq("orgId", args.orgId).eq("sourceType", "sales").eq("sourceId", args.saleId.toString())
+    )
+    .filter((q) => q.eq(q.field("eventType"), "SALE_COMPLETED"))
+    .first();
+
+  // Absent, still queued, or failed: the release never reached the general
+  // ledger, so there is nothing for the deposit to contradict. REVERSED: the
+  // entry has been backed out and the money really is free again. Only a
+  // standing POSTED entry means the books still spend this deposit.
+  if (!saleEvent || saleEvent.status !== "POSTED") return;
 
   const applications = await ctx.db
     .query("depositApplications")
@@ -464,7 +483,7 @@ export async function assertFinancedDepositsSurviveParentReversal(
   if (stranded.length === 0) return;
 
   throw new ConvexError(
-    "This sale's accounting period is closed, so reversing its journal has to wait for an open period — and the customer deposit applied to it was released inside that journal. Cancelling now would show the deposit as available again while the books still record it as spent on this car. Open an accounting period covering the cancellation date, then cancel."
+    "The journal that recorded this sale has not been reversed yet — its accounting period is closed, so the reversal is waiting for an open one. The customer deposit applied to this sale was released inside that journal, so freeing it now would show the money as available while the books still record it as spent on this car. Open an accounting period covering today, then cancel."
   );
 }
 

@@ -7233,6 +7233,50 @@ describe("a deposit released inside a sale journal stays locked until that journ
     expect(deposits.every((d) => d.holdActive !== true)).toBe(true);
   });
 
+  test("re-entering on an already-cancelled sale is guarded too, not waved through", async () => {
+    const s = await seedDealership("cx4Reentry");
+    const { applicationId, saleId } = await runDeal(s, {
+      route: "THROUGH_DEALERSHIP",
+      deposit: 3_000,
+      downPayment: 3_000,
+    });
+
+    // ⚠️ DEFENCE IN DEPTH, and the test says so honestly: no mutation can
+    // currently reach this state. Convex rolls an uncaught throw back, there is
+    // no try/catch anywhere in the cancellation call graph, and `sales` is in
+    // FINANCIAL_TABLES so the admin raw editor refuses it. This patches the row
+    // directly to characterise the gap rather than to model a reachable flow.
+    //
+    // The gap it characterises is real: `cancelCompletedSaleOperationalRecords`
+    // sits OUTSIDE the `sale.status !== "CANCELLED"` block, so re-entry reaches
+    // the teardown — which reinstates the hold — while skipping the parent
+    // reversal entirely. A guard keyed on the outcome that block computes would
+    // simply not run. Both review seats found this independently.
+    await s.t.run(async (ctx) => {
+      for (const period of await ctx.db.query("accountingPeriods").collect()) {
+        await ctx.db.patch(period._id, { status: "CLOSED" as const });
+      }
+      await ctx.db.patch(saleId!, { status: "CANCELLED" as const });
+    });
+
+    await expect(
+      s.asUser.mutation(api.applications.cancelApplication, {
+        orgId: s.orgId,
+        applicationId,
+        reason: "Second cancellation attempt",
+      })
+    ).rejects.toThrow(/has not been reversed yet/i);
+
+    // The deposit was NOT handed back: the sale journal is still POSTED and
+    // still spends it.
+    const applications = await s.t.run((ctx) =>
+      ctx.db.query("depositApplications").collect()
+    );
+    expect(applications[0].status).toBe("APPLIED");
+    const deposits = await s.t.run((ctx) => ctx.db.query("deposits").collect());
+    expect(deposits[0].holdActive).toBe(false);
+  });
+
   test("re-opening a period lets the same cancellation through, unchanged", async () => {
     const s = await seedDealership("cx4Retry");
     const { applicationId } = await runDeal(s, {

@@ -2627,7 +2627,7 @@ export const cancelApplication = mutation({
               // reversal and every other write in the transaction.
               if (sale.status !== "CANCELLED") {
                 await ctx.db.patch(sale._id, { status: "CANCELLED" });
-                const parentOutcome = await hookSaleCancelled(ctx, {
+                await hookSaleCancelled(ctx, {
                   orgId: args.orgId,
                   saleId: sale._id,
                   reason,
@@ -2637,7 +2637,6 @@ export const cancelApplication = mutation({
                 await assertFinancedDepositsSurviveParentReversal(ctx, {
                   orgId: args.orgId,
                   saleId: sale._id,
-                  parentOutcome,
                 });
                 // Accrual plus every correction posted against it, called
                 // unconditionally for the same reason sales.update's
@@ -2653,8 +2652,30 @@ export const cancelApplication = mutation({
                 });
               }
 
-              // Only once the parent reversal is known to have posted, or to
-              // have never posted at all.
+              // ⚠️ GUARDED ON EVERY PATH, not only the one that just reversed.
+              //
+              // This call sits OUTSIDE the status block above, so re-entering on a
+              // sale that is already CANCELLED reaches the teardown — and the
+              // teardown is what reinstates the deposit hold. An earlier version
+              // of this comment claimed the parent reversal was 'known' by the
+              // time we got here; on that path nothing about it was known at all.
+              //
+              // The guard now reads the ledger rather than a value only the other
+              // branch computes, so it answers correctly however this line was
+              // reached.
+              //
+              // ⚠️ Its position outside the status block is PRE-EXISTING and is
+              // NOT corrected here: re-running teardown for an already-cancelled
+              // sale can also strip a LATER sale of the same vehicle, because
+              // `restoreVehicleFromSale` takes only a vehicleId and
+              // `voidSaleCashflowTransaction` matches without a saleId. That is a
+              // separate defect with its own data question — whether production
+              // holds legacy CANCELLED sales whose teardown never ran and which
+              // this re-entry currently repairs — and it is SCRUM-212.
+              await assertFinancedDepositsSurviveParentReversal(ctx, {
+                orgId: args.orgId,
+                saleId: sale._id,
+              });
               await cancelCompletedSaleOperationalRecords(ctx, {
                 orgId: args.orgId,
                 sale,
