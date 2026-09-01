@@ -348,6 +348,38 @@ describe("SCRUM-212 — the guards under the doors", () => {
     expect(restored?.soldBySaleId).toBeUndefined();
   });
 
+  test("a second sale cannot complete on a car an earlier sale already owns", async () => {
+    const s = await seedTeardownOrg(
+      convexTestWithComponents(schema, import.meta.glob("./**/*.ts")),
+      "depth_exclusive"
+    );
+
+    // The exclusivity the owner ruling (c16334 §3) relies on INSTEAD of a
+    // `sales` vehicle index: completion reads the projection and refuses a
+    // car that is already SOLD, so the SOLD row is itself the mutual
+    // exclusion, and `soldBySaleId` names the one sale allowed to reverse it.
+    const saleA = await completeSale(s, s.customerId, 20_000);
+    const owned = await s.t.run((ctx) => ctx.db.get(s.vehicleId));
+    expect(owned?.status).toBe("SOLD");
+    expect(owned?.soldBySaleId).toBe(saleA);
+
+    await expect(completeSale(s, s.secondCustomerId, 21_000)).rejects.toThrow(
+      /already been sold/i
+    );
+
+    // Still exactly one owner, and it is still the first sale.
+    const after = await s.t.run((ctx) => ctx.db.get(s.vehicleId));
+    expect(after?.status).toBe("SOLD");
+    expect(after?.soldBySaleId).toBe(saleA);
+
+    // ⚠️ SEQUENTIAL ONLY, and stated as such. `convex-test` serializes every
+    // mutation and models no OCC, so the CONCURRENT case the ruling argues
+    // from — two completions contending on the same vehicle row, the loser
+    // retrying and then observing SOLD — is NOT verifiable here and is not
+    // claimed by this test. What is proven is that the read-then-refuse path
+    // exists and fires; the retry-then-observe half rests on Convex OCC.
+  });
+
   test("cancelling a sale voids that sale's cashflow row and no other", async () => {
     const s = await seedTeardownOrg(
       convexTestWithComponents(schema, import.meta.glob("./**/*.ts")),

@@ -100,15 +100,22 @@ describe("the raw editor may not forge vehicle sale-ownership authority", () => 
 });
 
 /**
- * SCRUM-212-NEW-1 — the forgery guard must not also seal the only exit.
+ * SCRUM-212-NEW-2 — missing provenance is refused, never repaired.
+ *
+ * ⚠️ THIS SUPERSEDES SCRUM-212-NEW-1. An earlier revision of this suite
+ * asserted the OPPOSITE — that an admin could move a SOLD car with no
+ * recorded owner back to AVAILABLE so the row was not stranded. Owner ruling
+ * c16334 rejected that: absence of a recorded owner proves only that none was
+ * recorded, and releasing on that basis let a car whose COMPLETED sale was
+ * simply unstamped be sold a second time.
  *
  * ⚠️ DEFENCE IN DEPTH, and stated as such: on fresh data a SOLD car ALWAYS
  * has an owner, because `markVehicleAsSold` is the only writer of that status
  * and it stamps `soldBySaleId` in the same patch. These fixtures build the
- * unowned state directly, because no door produces it any more — which is
- * exactly why the state needs a way OUT rather than a way in.
+ * unowned state directly, because no door produces it any more. Such a row is
+ * corruption to be diagnosed, not a supported state with a repair path.
  */
-describe("a SOLD car nobody owns can still be released", () => {
+describe("a SOLD car with no recorded owner is refused, not released", () => {
   async function soldVehicle(
     t: ReturnType<typeof convexTestWithComponents>,
     orgId: string,
@@ -123,12 +130,17 @@ describe("a SOLD car nobody owns can still be released", () => {
     );
   }
 
-  async function realSale(t: ReturnType<typeof convexTestWithComponents>, orgId: string, vehicleId: string) {
+  async function realSale(
+    t: ReturnType<typeof convexTestWithComponents>,
+    orgId: string,
+    vehicleId: string,
+    suffix = "a"
+  ) {
     const customerId = await t.run((ctx) =>
       ctx.db.insert("customers", { orgId: orgId as never, firstName: "Real", lastName: "Buyer" })
     );
     const userId = await t.run((ctx) =>
-      ctx.db.insert("users", { clerkId: "new1_user", email: "new1@acme.com" })
+      ctx.db.insert("users", { clerkId: `sale_owner_${suffix}`, email: `${suffix}@acme.com` })
     );
     return await t.run((ctx) =>
       ctx.db.insert("sales", {
@@ -143,23 +155,29 @@ describe("a SOLD car nobody owns can still be released", () => {
     );
   }
 
-  test("with no owner recorded, an admin can move it off SOLD", async () => {
+  test("an unowned SOLD car cannot be released to any destination", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, vehicleId, asAdmin } = await seedOrgWithVehicle(t);
     await soldVehicle(t, orgId, vehicleId, undefined);
 
-    // Every other door refuses this car: restoreVehicleFromSale has no
-    // ownership to prove, and vehicles.update / vehicleRequests both refuse
-    // any change away from a workflow-controlled status. If this one refuses
-    // too the car is stranded permanently.
-    await asAdmin.mutation(api.adminData.adminUpdateRecord, {
-      table: "vehicles",
-      id: vehicleId,
-      patch: { status: "AVAILABLE" },
-    });
+    // AVAILABLE is the destination the superseded hatch was written for.
+    // RESERVED and SOURCING are the ones it permitted by accident: it
+    // excluded only SOLD, so every other status was a laundering
+    // destination for a provenance-less row. All three fail closed now.
+    for (const status of ["AVAILABLE", "RESERVED", "SOURCING"]) {
+      await expect(
+        asAdmin.mutation(api.adminData.adminUpdateRecord, {
+          table: "vehicles",
+          id: vehicleId,
+          patch: { status },
+        })
+      ).rejects.toThrow(/sale workflow/i);
+    }
 
+    // Refused, and refused without writing.
     const after = await t.run((ctx) => ctx.db.get(vehicleId));
-    expect(after?.status).toBe("AVAILABLE");
+    expect(after?.status).toBe("SOLD");
+    expect(after?.soldBySaleId).toBeUndefined();
   });
 
   test("with a real owner recorded, it is still refused", async () => {
@@ -169,7 +187,8 @@ describe("a SOLD car nobody owns can still be released", () => {
     await soldVehicle(t, orgId, vehicleId, saleId as unknown as string);
 
     // The F3 regression guard. This car has a real answer — cancel the sale
-    // that owns it — so the escape hatch must NOT apply here.
+    // that owns it — and it was refused before c16334 as well; the ruling
+    // narrowed what is permitted, so nothing here may become permitted.
     await expect(
       asAdmin.mutation(api.adminData.adminUpdateRecord, {
         table: "vehicles",
@@ -182,7 +201,7 @@ describe("a SOLD car nobody owns can still be released", () => {
     expect(after?.status).toBe("SOLD");
   });
 
-  test("the escape hatch cannot mark a car SOLD, nor launder an owner in", async () => {
+  test("the guard cannot mark a car SOLD, nor launder an owner in", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, vehicleId, asAdmin } = await seedOrgWithVehicle(t);
 
@@ -195,10 +214,12 @@ describe("a SOLD car nobody owns can still be released", () => {
       })
     ).rejects.toThrow(/sale workflow/i);
 
-    // And an unowned SOLD car cannot be released WHILE naming an owner in the
-    // same patch — otherwise the hatch becomes the forgery it exists beside.
+    // And an unowned SOLD car cannot be released while naming an owner in
+    // the same patch. Under c16334 the release alone is already refused, so
+    // this asserts the narrower property that BOTH halves are refused
+    // together — the multi-field patch is not a way around either one.
     await soldVehicle(t, orgId, vehicleId, undefined);
-    const saleId = await realSale(t, orgId, vehicleId);
+    const saleId = await realSale(t, orgId, vehicleId, "launder");
     await expect(
       asAdmin.mutation(api.adminData.adminUpdateRecord, {
         table: "vehicles",
@@ -210,6 +231,33 @@ describe("a SOLD car nobody owns can still be released", () => {
     const after = await t.run((ctx) => ctx.db.get(vehicleId));
     expect(after?.status).toBe("SOLD");
     expect(after?.soldBySaleId).toBeUndefined();
+  });
+
+  test("the recorded owner cannot be swapped or cleared on its own", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, vehicleId, asAdmin } = await seedOrgWithVehicle(t);
+    const owner = await realSale(t, orgId, vehicleId, "owner");
+    const rival = await realSale(t, orgId, vehicleId, "rival");
+    await soldVehicle(t, orgId, vehicleId, owner as unknown as string);
+
+    // `soldBySaleId` is refused on its own, with `status` never mentioned.
+    // Swapping the owner is what F3 was actually about — it hands the right
+    // to restore the car to a sale that never sold it — and clearing the
+    // owner manufactures precisely the provenance-less row that NEW-2 now
+    // refuses to release, which would otherwise be a two-step forgery.
+    for (const owned of [{ soldBySaleId: rival }, { soldBySaleId: null }]) {
+      await expect(
+        asAdmin.mutation(api.adminData.adminUpdateRecord, {
+          table: "vehicles",
+          id: vehicleId,
+          patch: owned,
+        })
+      ).rejects.toThrow(/sale workflow/i);
+    }
+
+    const after = await t.run((ctx) => ctx.db.get(vehicleId));
+    expect(after?.status).toBe("SOLD");
+    expect(after?.soldBySaleId).toBe(owner);
   });
 });
 
