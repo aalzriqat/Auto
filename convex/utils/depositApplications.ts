@@ -1,3 +1,4 @@
+import { ConvexError } from "convex/values";
 import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 import {
@@ -5,6 +6,7 @@ import {
   hookDepositAppliedToSettlement,
   reverseDepositApplication,
   type DepositApplicationIdentity,
+  type ReversalOutcome,
 } from "../accounting/workflowHooks";
 
 /**
@@ -400,6 +402,71 @@ const NOTHING_TO_COMPLETE: ResolvedDeferredReversal = {
   holdId: null,
   sources: [],
 };
+
+/**
+ * Refuses a cancellation that would free a deposit its journal still holds.
+ *
+ * A FINANCED_SALE_CONSIDERATION application posts no journal of its own — the
+ * deposit-liability release is a line INSIDE the sale's own entry. So the only
+ * thing that can restore that deposit is the reversal of the parent sale, and
+ * until that reversal actually posts the money is still spent on the books.
+ *
+ * `reverseDepositApplication` returns NOT_POSTED for these rows unconditionally,
+ * which `reverseDepositApplicationsForSale` reads as `journalReversed`, which
+ * `reinstateAppliedDeposits` reads as permission to reopen the hold. That chain
+ * is correct only when the parent reversal actually posted. When it DEFERS —
+ * an ordinary month-end cancellation — the deposit becomes refundable,
+ * re-allocatable and re-applicable while the ledger still records it consumed.
+ *
+ * ## Why this refuses rather than deferring the deposit too
+ *
+ * Marking the application REVERSING and waiting for the parent to drain is the
+ * better long-run model, and it is NOT implementable as a small change:
+ * `resolveDeferredReversalSources` accepts only a `reversed_<applicationKey>`
+ * idempotency key and resolves it with `.unique()`, while the parent reversal
+ * is queued under `sale_cancelled_<saleId>` and one sale can carry SEVERAL of
+ * these applications. There is no completion path for them today, and no cron
+ * scans REVERSING rows independently — so deferring here would strand the
+ * deposit permanently instead of releasing it early. Trading a double-spend for
+ * a silent permanent freeze is not an improvement.
+ *
+ * Refusing keeps the invariant absolutely and creates no unreachable state: the
+ * abort happens before any application is touched, so no REVERSING row and no
+ * dead-letterable obligation is ever created. Open a period covering the
+ * cancellation date and the same cancellation succeeds unchanged.
+ *
+ * The owner-aware, multi-dependent completion protocol is recorded as the
+ * follow-up that removes the refusal.
+ */
+export async function assertFinancedDepositsSurviveParentReversal(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    saleId: Id<"sales">;
+    parentOutcome: ReversalOutcome;
+  }
+): Promise<void> {
+  // REVERSED means the journal is off the books now; NOT_POSTED means it was
+  // never on them. Only a queued reversal leaves the release standing.
+  if (args.parentOutcome !== "DEFERRED") return;
+
+  const applications = await ctx.db
+    .query("depositApplications")
+    .withIndex("by_sale", (q) => q.eq("saleId", args.saleId))
+    .collect();
+
+  const stranded = applications.filter(
+    (a) =>
+      a.orgId === args.orgId &&
+      a.treatment === "FINANCED_SALE_CONSIDERATION" &&
+      (a.status === "APPLIED" || a.status === "REVERSING")
+  );
+  if (stranded.length === 0) return;
+
+  throw new ConvexError(
+    "This sale's accounting period is closed, so reversing its journal has to wait for an open period — and the customer deposit applied to it was released inside that journal. Cancelling now would show the deposit as available again while the books still record it as spent on this car. Open an accounting period covering the cancellation date, then cancel."
+  );
+}
 
 export async function resolveDeferredReversalSources(
   ctx: MutationCtx,

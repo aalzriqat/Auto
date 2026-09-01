@@ -398,6 +398,16 @@ export async function reverseDepositApplication(
   // reversing THAT sale restores it. There is nothing here to undo, and saying so
   // is different from failing to find it: the caller still marks the application
   // row REVERSED, which is what puts the hold back.
+  // ⚠️ NOT_POSTED here is a statement about THIS row, never about the parent.
+  //
+  // A neighbouring comment used to say reversing the sale restores the deposit.
+  // It does not, by itself: nothing consumes the parent reversal's completion
+  // for this row shape — `resolveDeferredReversalSources` accepts only a
+  // `reversed_<applicationKey>` key, and the parent is queued under
+  // `sale_cancelled_<saleId>`. Callers that treat this outcome as proof the
+  // parent journal is off the books are wrong, which is why
+  // `assertFinancedDepositsSurviveParentReversal` refuses a cancellation whose
+  // parent reversal defers.
   if (args.identity.eventType === "FINANCED_SALE_CONSIDERATION") {
     return "NOT_POSTED";
   }

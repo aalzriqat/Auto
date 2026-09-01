@@ -6739,9 +6739,20 @@ describe("the closing matrix c16216 requires", () => {
     // easy to lose: `reinstateHold` is gated on
     // `holdId !== undefined || journalReversed`. A financed-consideration
     // application has no hold row, so the hold returns ONLY because the
-    // short-circuit reports NOT_POSTED rather than DEFERRED. Return DEFERRED
-    // there and the deposit is stranded: applied to a sale that no longer
-    // exists, with no door left to reach it.
+    // short-circuit reports NOT_POSTED.
+    //
+    // ⚠️ THE ORIGINAL FORM OF THIS COMMENT DESCRIBED THE DEFECT AND CALLED IT
+    // THE DESIGN. It said returning DEFERRED here would strand the deposit, and
+    // treated the unconditional NOT_POSTED as the way to avoid that. Both halves
+    // were true and the conclusion was still wrong: dodging the stranding that
+    // way bought a closed-period DOUBLE SPEND instead, which is CX-4.
+    //
+    // Neither is the answer. `assertFinancedDepositsSurviveParentReversal` now
+    // refuses the cancellation outright when the parent reversal would defer, so
+    // no application is ever left REVERSING with no completion path AND no
+    // deposit is ever freed against a journal that still stands. This test is
+    // the OPEN-period case, where the parent reverses synchronously and the hold
+    // legitimately returns.
     const deposits = await s.t.run((ctx) => ctx.db.query("deposits").collect());
     expect(deposits[0].status).toBe("HELD");
     expect(deposits[0].holdActive).toBe(true);
@@ -7120,53 +7131,152 @@ describe("a reversal reads back the identity it was recorded under (Sonnet MAX)"
  * treatment turned a period-aware safety property into an unconditional one.
  */
 describe("a deposit released inside a sale journal stays locked until that journal reverses (CX-4)", () => {
-  test("a deposit is not spendable while the sale's reversal is still queued", async () => {
-    const s = await seedDealership("cx4Deferred");
-    const { applicationId } = await runDeal(s, {
+  test("cancelling into a closed period is refused rather than freeing the deposit", async () => {
+    const s = await seedDealership("cx4Refused");
+    const { applicationId, saleId } = await runDeal(s, {
       route: "THROUGH_DEALERSHIP",
       deposit: 3_000,
       downPayment: 3_000,
     });
 
     // The sale posted while the period was open. Close it, so the cancellation's
-    // reversal cannot post and must queue — the ordinary month-end shape, not an
-    // exotic one.
+    // reversal cannot post — the ordinary month-end shape, not an exotic one.
     await s.t.run(async (ctx) => {
       for (const period of await ctx.db.query("accountingPeriods").collect()) {
         await ctx.db.patch(period._id, { status: "CLOSED" as const });
       }
     });
 
-    await s.asUser.mutation(api.applications.cancelApplication, {
-      orgId: s.orgId,
-      applicationId,
-      reason: "Customer withdrew after the period closed",
-    });
+    const before = await s.t.run(async (ctx) => ({
+      journals: (await ctx.db.query("journalEntries").collect()).length,
+      pending: (await ctx.db.query("pendingAccountingEvents").collect()).length,
+      events: (await ctx.db.query("accountingEvents").collect()).length,
+    }));
 
-    // The parent reversal could not post, so it is queued.
-    const queued = await s.t.run((ctx) =>
-      ctx.db.query("pendingAccountingEvents").collect()
-    );
-    expect(queued.length).toBeGreaterThan(0);
+    await expect(
+      s.asUser.mutation(api.applications.cancelApplication, {
+        orgId: s.orgId,
+        applicationId,
+        reason: "Customer withdrew after the period closed",
+      })
+    ).rejects.toThrow(/accounting period is closed/i);
 
-    // And the ledger still says the deposit liability was released by the sale:
-    // the original entry stands, unreversed.
-    const after = await ledgerBySystemKey(s);
-    expect(after[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(0);
+    // ⚠️ ZERO WRITES, not merely a thrown error. The refusal is only worth
+    // anything if nothing committed — and these mutations are not wrapped in
+    // try/catch, so an uncaught throw discards the queued reversal too.
+    const sale = await s.t.run((ctx) => ctx.db.get(saleId!));
+    expect(sale?.status).toBe("COMPLETED");
 
-    // ⚠️ THEREFORE THE MONEY IS NOT AVAILABLE YET. Reinstating the hold here
-    // publishes 3,000 as spendable — refundable, re-allocatable, applicable to
-    // another car — while the GL still records it as consumed by a sale that has
-    // not been backed out. Two books, two answers, and the deposit is the one
-    // that moves.
-    const deposits = await s.t.run((ctx) => ctx.db.query("deposits").collect());
-    expect(deposits[0].holdActive).toBe(false);
-
-    // The application must also not read as fully reversed while its parent
-    // reversal is outstanding.
     const applications = await s.t.run((ctx) =>
       ctx.db.query("depositApplications").collect()
     );
-    expect(applications[0].status).toBe("REVERSING");
+    expect(applications).toHaveLength(1);
+    expect(applications[0].status).toBe("APPLIED");
+
+    const after = await s.t.run(async (ctx) => ({
+      journals: (await ctx.db.query("journalEntries").collect()).length,
+      pending: (await ctx.db.query("pendingAccountingEvents").collect()).length,
+      events: (await ctx.db.query("accountingEvents").collect()).length,
+    }));
+    expect(after).toEqual(before);
+
+    // And the deposit is exactly where the sale left it: consumed, not free.
+    const deposits = await s.t.run((ctx) => ctx.db.query("deposits").collect());
+    expect(deposits[0].holdActive).toBe(false);
+    expect(deposits[0].status).toBe("APPLIED");
+  });
+
+  test("two deposits on one sale are refused together, not one at a time", async () => {
+    const s = await seedDealership("cx4MultiDeposit");
+
+    // `applyHeldDeposits` iterates EVERY active deposit row for the vehicle, so
+    // one sale really can carry several financed-consideration applications.
+    // The gate is per-sale and must protect all of them at once.
+    const { applicationId } = await runDeal(s, {
+      route: "THROUGH_DEALERSHIP",
+      deposit: 2_000,
+      downPayment: 3_000,
+      beforeHandover: async (appId) => {
+        const app = await s.t.run((ctx) => ctx.db.get(appId));
+        await s.asUser.mutation(api.deposits.create, {
+          orgId: s.orgId,
+          quoteId: app!.quoteId,
+          amount: 1_000,
+        });
+      },
+    });
+
+    const applicationsBefore = await s.t.run((ctx) =>
+      ctx.db.query("depositApplications").collect()
+    );
+    expect(applicationsBefore.length).toBeGreaterThan(1);
+
+    await s.t.run(async (ctx) => {
+      for (const period of await ctx.db.query("accountingPeriods").collect()) {
+        await ctx.db.patch(period._id, { status: "CLOSED" as const });
+      }
+    });
+
+    await expect(
+      s.asUser.mutation(api.applications.cancelApplication, {
+        orgId: s.orgId,
+        applicationId,
+        reason: "Customer withdrew",
+      })
+    ).rejects.toThrow(/accounting period is closed/i);
+
+    const applicationsAfter = await s.t.run((ctx) =>
+      ctx.db.query("depositApplications").collect()
+    );
+    expect(applicationsAfter.every((a) => a.status === "APPLIED")).toBe(true);
+    const deposits = await s.t.run((ctx) => ctx.db.query("deposits").collect());
+    expect(deposits.every((d) => d.holdActive !== true)).toBe(true);
+  });
+
+  test("re-opening a period lets the same cancellation through, unchanged", async () => {
+    const s = await seedDealership("cx4Retry");
+    const { applicationId } = await runDeal(s, {
+      route: "THROUGH_DEALERSHIP",
+      deposit: 3_000,
+      downPayment: 3_000,
+    });
+
+    // Refused while closed…
+    await s.t.run(async (ctx) => {
+      for (const period of await ctx.db.query("accountingPeriods").collect()) {
+        await ctx.db.patch(period._id, { status: "CLOSED" as const });
+      }
+    });
+    await expect(
+      s.asUser.mutation(api.applications.cancelApplication, {
+        orgId: s.orgId,
+        applicationId,
+        reason: "Customer withdrew",
+      })
+    ).rejects.toThrow(/accounting period is closed/i);
+
+    // …and the refusal is recoverable by the operator action it names, with no
+    // repair step. This is what makes the refusal a delay rather than a
+    // dead end.
+    await s.t.run(async (ctx) => {
+      for (const period of await ctx.db.query("accountingPeriods").collect()) {
+        await ctx.db.patch(period._id, { status: "OPEN" as const });
+      }
+    });
+    await s.asUser.mutation(api.applications.cancelApplication, {
+      orgId: s.orgId,
+      applicationId,
+      reason: "Customer withdrew",
+    });
+
+    // Identical end state to cancelling with the period open throughout:
+    // the deposit is held again and the ledger is back where it started.
+    const deposits = await s.t.run((ctx) => ctx.db.query("deposits").collect());
+    expect(deposits[0].status).toBe("HELD");
+    expect(deposits[0].holdActive).toBe(true);
+
+    const after = await ledgerBySystemKey(s);
+    expect(after[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES] ?? 0).toBe(0);
+    expect(after[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(-3_000 * SCALE);
   });
 });

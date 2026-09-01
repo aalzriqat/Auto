@@ -78,6 +78,7 @@ import {
 } from "./utils/vehicleOwnership";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { auditLog } from "./financialAudit";
+import { assertFinancedDepositsSurviveParentReversal } from "./utils/depositApplications";
 
 /** sourceType used for the canonical finance-company receivable opened at finalizeDeal. */
 const FINANCE_APP_RECEIVABLE_SOURCE = "finance_application";
@@ -2606,22 +2607,37 @@ export const cancelApplication = mutation({
           if (app.finalizedSaleId) {
             const sale = await ctx.db.get(app.finalizedSaleId);
             if (sale && sale.orgId === args.orgId) {
-              await cancelCompletedSaleOperationalRecords(ctx, {
-                orgId: args.orgId,
-                sale,
-                actorId: auth.user._id,
-                reason,
-                reversalDate: now,
-              });
-
+              // ⚠️ THE PARENT REVERSAL RUNS FIRST, AND ITS OUTCOME IS A GATE.
+              //
+              // Operational reinstatement used to run first and hand the deposit
+              // back before anyone knew whether the sale's journal had actually
+              // reversed. For a FINANCED_SALE_CONSIDERATION deposit that is the
+              // whole question: its release lives inside the sale entry, so a
+              // DEFERRED parent leaves the release standing while the deposit
+              // reads as available again.
+              //
+              // Safe in both directions, verified rather than assumed: nothing in
+              // `cancelCompletedSaleOperationalRecords` reads `accountingEvents`,
+              // and `reverseAccountingEvent` reads only the ORIGINAL event's own
+              // stored journal — never current sale or deposit state. So neither
+              // half depends on the other having run.
+              //
+              // The refusal below is a real rollback boundary: these mutations are
+              // not wrapped in try/catch, so an uncaught throw discards the queued
+              // reversal and every other write in the transaction.
               if (sale.status !== "CANCELLED") {
                 await ctx.db.patch(sale._id, { status: "CANCELLED" });
-                await hookSaleCancelled(ctx, {
+                const parentOutcome = await hookSaleCancelled(ctx, {
                   orgId: args.orgId,
                   saleId: sale._id,
                   reason,
                   actorId: auth.user._id,
                   reversalDate: now,
+                });
+                await assertFinancedDepositsSurviveParentReversal(ctx, {
+                  orgId: args.orgId,
+                  saleId: sale._id,
+                  parentOutcome,
                 });
                 // Accrual plus every correction posted against it, called
                 // unconditionally for the same reason sales.update's
@@ -2636,6 +2652,16 @@ export const cancelApplication = mutation({
                   reversalDate: now,
                 });
               }
+
+              // Only once the parent reversal is known to have posted, or to
+              // have never posted at all.
+              await cancelCompletedSaleOperationalRecords(ctx, {
+                orgId: args.orgId,
+                sale,
+                actorId: auth.user._id,
+                reason,
+                reversalDate: now,
+              });
             }
           }
 
