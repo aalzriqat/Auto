@@ -21,7 +21,7 @@ import { completeSale } from "./utils/saleCompletion";
 import { resolveFinancedSalePlan } from "./utils/financedSaleRecognition";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { runWithIdempotency } from "./utils/idempotency";
-import { registerChequeCore, markChequeClearedCore } from "./collections";
+import { registerChequeCore, markChequeClearedCore, assertNoActiveAllocations } from "./collections";
 import {
   hookFinanceDisbursed,
   hookFinanceCashReceived,
@@ -2561,6 +2561,17 @@ export const cancelApplication = mutation({
         }
 
         const reason = args.reason ?? "Finance application cancelled";
+        // SCRUM-121A-PRE §5.2 — the stored cancellation reason is never blank.
+        // `args.reason` is an optional STRING, so `??` only catches undefined:
+        // an empty or whitespace-only string passed straight through and became
+        // a cancelledAt/cancelledBy pair with no reason beside it, which is the
+        // one field of that trio a human actually reads.
+        //
+        // Deliberately a separate constant rather than a change to `reason`
+        // above: `reason` also feeds the sale reversal, the commission void and
+        // the teardown, and this stage is authorized for the finance-receivable
+        // cancellation slice only.
+        const cancellationReason = args.reason?.trim() || "Finance application cancelled";
         const now = Date.now();
 
         if (app.status === "CLOSED") {
@@ -2602,6 +2613,35 @@ export const cancelApplication = mutation({
                 ? "The finance company has already paid the supplier on this deal, and the recorded advice does not agree with the approved amount. Cancelling would reverse a sale that has been funded while that disagreement is still unresolved — settle what was actually paid first, then unwind it with the company and record a manual accounting correction."
                 : "The finance company has already paid the supplier on this deal. That payment is between the company and the supplier and can't be reversed from here — unwind it with them and record a manual accounting correction instead."
             );
+          }
+
+          // SCRUM-121A-PRE §5.1 — resolved and gated HERE, above every write
+          // in this branch, so a refusal leaves the deal exactly as it was.
+          //
+          // `app.disbursedAt` was the only thing standing in for this, and it
+          // is not sufficient: `subledger.allocate` allocates against the
+          // finance-company document without touching the application at all,
+          // so `disbursedAt` stays unset and the guard above sees a clean deal
+          // while the subledger holds live money. The document itself is the
+          // only thing that knows.
+          //
+          // Scope note: this reads the canonical receivable and refuses. It
+          // deliberately changes nothing about `confirmDisbursement`, the
+          // remittance economics, the settlement route, or the deal teardown
+          // below.
+          const financeReceivable = app.companyId
+            ? await ctx.db
+                .query("receivableDocuments")
+                .withIndex("by_org_source", (q) =>
+                  q
+                    .eq("orgId", args.orgId)
+                    .eq("sourceType", FINANCE_APP_RECEIVABLE_SOURCE)
+                    .eq("sourceId", args.applicationId)
+                )
+                .unique()
+            : null;
+          if (financeReceivable && financeReceivable.status !== "CANCELLED") {
+            await assertNoActiveAllocations(ctx, financeReceivable._id);
           }
 
           if (app.finalizedSaleId) {
@@ -2700,17 +2740,6 @@ export const cancelApplication = mutation({
           }
 
           const quote = await ctx.db.get(app.quoteId);
-          const financeReceivable = app.companyId
-            ? await ctx.db
-                .query("receivableDocuments")
-                .withIndex("by_org_source", (q) =>
-                  q
-                    .eq("orgId", args.orgId)
-                    .eq("sourceType", FINANCE_APP_RECEIVABLE_SOURCE)
-                    .eq("sourceId", args.applicationId)
-                )
-                .unique()
-            : null;
           // Deliberately NOT gated on the settlement route.
           //
           // It looks like it should be: on the direct route `finalizeDeal`
@@ -2749,7 +2778,21 @@ export const cancelApplication = mutation({
             // is no longer owed once the deal is voided (this branch already
             // rejects deals whose disbursement was received).
             if (financeReceivable && financeReceivable.status !== "CANCELLED") {
-              await ctx.db.patch(financeReceivable._id, { status: "CANCELLED" });
+              // SCRUM-121A-PRE §5.2 — the same metadata the other two writers
+              // now carry. Without `cancelledAt`, `getReceivablesAsOf` keeps
+              // this document in every historical AR report forever, while this
+              // very branch reverses its GL.
+              //
+              // `cancellationReason` (not `reason`) is the trimmed fallback, so
+              // this is never stored blank. They are separate constants on
+              // purpose: `reason` still feeds the sale reversal, the commission
+              // void and the teardown, which are outside this stage's slice.
+              await ctx.db.patch(financeReceivable._id, {
+                status: "CANCELLED",
+                cancelledAt: now,
+                cancelledBy: auth.user._id,
+                cancellationReason,
+              });
             }
           }
         } else {
@@ -2761,7 +2804,7 @@ export const cancelApplication = mutation({
           updatedAt: now,
           cancelledBy: auth.user._id,
           cancelledAt: now,
-          cancellationReason: args.reason,
+          cancellationReason,
           creditDecision: "CANCELLED",
           // This branch has already reversed the sale and voided the
           // finance-company receivable, so nothing is expected any more. The
