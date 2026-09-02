@@ -2781,8 +2781,12 @@ export const cancelApplication = mutation({
               // SCRUM-121A-PRE §5.2 — the same metadata the other two writers
               // now carry. Without `cancelledAt`, `getReceivablesAsOf` keeps
               // this document in every historical AR report forever, while this
-              // very branch reverses its GL. `reason` is the already-normalized
-              // fallback, never the optional argument, so it is never empty.
+              // very branch reverses its GL.
+              //
+              // `cancellationReason` (not `reason`) is the trimmed fallback, so
+              // this is never stored blank. They are separate constants on
+              // purpose: `reason` still feeds the sale reversal, the commission
+              // void and the teardown, which are outside this stage's slice.
               await ctx.db.patch(financeReceivable._id, {
                 status: "CANCELLED",
                 cancelledAt: now,

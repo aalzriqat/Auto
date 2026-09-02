@@ -293,6 +293,23 @@ async function applyPostedPayment(
   await ctx.db.patch(receivable._id, patch);
 }
 
+/**
+ * ⚠️ This trusts `receivable.canonicalReceivableDocumentId` without checking
+ * that the document it names is actually sourced from THIS receivable, and the
+ * REFUND and RESCHEDULE approval branches reach it without passing through the
+ * cancellation gate's stricter `findCanonicalReceivableForLegacy`.
+ *
+ * That is safe today for one reason, and it is worth stating because it is a
+ * convention rather than a constraint: `receivables.canonicalReceivableDocumentId`
+ * has exactly ONE writer whole-tree — the patch at the bottom of this function —
+ * and it always stores the document resolved from this receivable's own
+ * `legacy_receivable/<id>` source key, so the link is self-consistent by
+ * construction. Two independent review seats verified that enumeration.
+ *
+ * If a second writer ever appears, or if REFUND/RESCHEDULE grow their own
+ * document resolution, this early return becomes a way to act on the wrong
+ * document and must adopt the same source-key check.
+ */
 async function ensureCanonicalReceivableForLegacy(
   ctx: MutationCtx,
   receivable: Doc<"receivables">,

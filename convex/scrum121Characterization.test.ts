@@ -3300,6 +3300,16 @@ describe("SCRUM-121A-PRE — verification floor", () => {
       expect(doc?.status).toBe("CANCELLED");
       expect(doc?.cancellationReason).toBe("Finance application cancelled");
       expect(doc?.cancellationReason?.trim()).not.toBe("");
+
+      // BOTH halves, added after the cross-family seat pointed out that this
+      // locked only the canonical document while the fix also covers the
+      // application row. Asserting one half of a two-part fix leaves the other
+      // half free to regress silently, which is the same shape as the
+      // observation that started this whole ticket.
+      const app = await ctx.db.get(applicationId);
+      expect(app?.status).toBe("CANCELLED");
+      expect(app?.cancellationReason).toBe("Finance application cancelled");
+      expect(app?.cancellationReason?.trim()).not.toBe("");
     });
   });
 
