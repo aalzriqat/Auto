@@ -2561,6 +2561,17 @@ export const cancelApplication = mutation({
         }
 
         const reason = args.reason ?? "Finance application cancelled";
+        // SCRUM-121A-PRE §5.2 — the stored cancellation reason is never blank.
+        // `args.reason` is an optional STRING, so `??` only catches undefined:
+        // an empty or whitespace-only string passed straight through and became
+        // a cancelledAt/cancelledBy pair with no reason beside it, which is the
+        // one field of that trio a human actually reads.
+        //
+        // Deliberately a separate constant rather than a change to `reason`
+        // above: `reason` also feeds the sale reversal, the commission void and
+        // the teardown, and this stage is authorized for the finance-receivable
+        // cancellation slice only.
+        const cancellationReason = args.reason?.trim() || "Finance application cancelled";
         const now = Date.now();
 
         if (app.status === "CLOSED") {
@@ -2776,7 +2787,7 @@ export const cancelApplication = mutation({
                 status: "CANCELLED",
                 cancelledAt: now,
                 cancelledBy: auth.user._id,
-                cancellationReason: reason,
+                cancellationReason,
               });
             }
           }
@@ -2789,7 +2800,7 @@ export const cancelApplication = mutation({
           updatedAt: now,
           cancelledBy: auth.user._id,
           cancelledAt: now,
-          cancellationReason: args.reason,
+          cancellationReason,
           creditDecision: "CANCELLED",
           // This branch has already reversed the sale and voided the
           // finance-company receivable, so nothing is expected any more. The

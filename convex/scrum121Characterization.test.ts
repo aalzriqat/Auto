@@ -9,11 +9,23 @@
  * behavioural finding is a claim until it is reproduced, and code-reasoning
  * alone is not reproduction.
  *
- * Eleven of them have since been INVERTED. Each was written against unfixed
+ * FOURTEEN of them have since been INVERTED. Each was written against unfixed
  * code, asserting the defect; each FAILED the moment its fix landed; each was
  * then flipped to assert the correct behaviour. That sequence is the
  * failing-first evidence for its defect, and the comment at each inversion
- * records it. They keep their original names (`D1`, `F4`, `EV4`, `CODEX121A02`
+ * records it. `EV1` was RE-BASED rather than inverted (see below), and
+ * `CODEXR6` is failing-first without being an inversion: it was written to
+ * assert a refusal, run against the unfixed code, and observed to fail.
+ *
+ * The count was stated as eleven for several hours, in this header and in the
+ * published record, without ever being recounted — a figure repeated from
+ * memory rather than re-derived, which is the same failure this ticket has hit
+ * before with enumerations.
+ *
+ * So it is written to be reconcilable rather than trusted: `grep -n INVERTED`
+ * returns SEVENTEEN lines — fourteen fixture markers, two in this header, and
+ * one on R3-04's control. If those three numbers stop adding up, the header is
+ * wrong and the fixtures are right. They keep their original names (`D1`, `F4`, `EV4`, `CODEX121A02`
  * …) because those names are how the design document, the reviewer findings and
  * the Jira record refer to them; renaming would silently orphan that trail.
  *
@@ -1799,10 +1811,11 @@ describe("SCRUM-121A — golden GL baselines for the paths 121A changes", () => 
       }
     `);
 
-    // The defect this baseline sat next to: the legacy row was resurrected.
-    // §6 flipped THIS and left the command list above untouched — when the fix
-    // landed, the inline GL snapshot above still passed and only this line
-    // failed, which is the GL-neutrality proof rather than an argument for it.
+    // INVERTED by §6. The defect this baseline sat next to: the legacy row was
+    // resurrected. The fix flipped THIS and left the command list above
+    // untouched — when it landed, the inline GL snapshot still passed and only
+    // this line failed, which is the GL-neutrality proof rather than an
+    // argument for it.
     await t.run(async (ctx) => {
       const row = await ctx.db.get(receivableId);
       expect(row?.status).toBe("CANCELLED");
@@ -2200,22 +2213,104 @@ describe("SCRUM-121A-PRE — R3-05, saleId is never correlated", () => {
       })
     ).rejects.toThrow(/does not match the selected receivable/);
 
-    // The gap: document B plus a saleId belonging to nothing related to it.
-    // Accepted, and stored, with no correlation of any kind.
-    const intentId = await asFinance.mutation(api.paymentIntents.create, {
-      orgId, customerId, receivableDocumentId: docB, saleId: unrelatedSaleId,
-      amountMinor: 100_000, currency: "JOD", provider: "tap",
+    // INVERTED after the Sonnet MAX seat's Finding 1. This asserted that
+    // document B plus a saleId related to nothing was accepted and stored with
+    // no correlation of any kind, and it failed the moment the correlation
+    // landed — the failing-first proof for that finding.
+    //
+    // Why it existed in this shape: design revision 3 scoped the
+    // UNPROVEN_TARGET refusal to sale-ONLY mode, so this combination — a sale
+    // with no document of its own, alongside a document resolved from some
+    // other identifier — fell between the two branches. The commit message then
+    // claimed every supplied identifier must agree, which this test disproved.
+    await expect(
+      asFinance.mutation(api.paymentIntents.create, {
+        orgId, customerId, receivableDocumentId: docB, saleId: unrelatedSaleId,
+        amountMinor: 100_000, currency: "JOD", provider: "tap",
+      })
+    ).rejects.toThrow(/sale does not match the selected debt/i);
+
+    await t.run(async (ctx) => {
+      const intents = await ctx.db
+        .query("paymentIntents")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .collect();
+      expect(intents).toHaveLength(0);
+      const row = await ctx.db.get(receivableB);
+      expect(row?.saleId).toBeUndefined();
+    });
+  });
+
+  /**
+   * The CONTROL for that fix, and the reason the reviewer's proposed form of it
+   * was not adopted.
+   *
+   * The seat proposed refusing whenever a supplied sale carries no canonical
+   * document. That is too blunt: `createReceivable` accepts a `saleId` with no
+   * completion requirement, and `sale.canonicalReceivableDocumentId` is written
+   * only at completion — so a receivable naming its own PENDING sale is an
+   * ordinary state, and a payment link for it must keep working.
+   *
+   * Measured, not asserted: with the blunt form applied, 2 of 40 tests fail —
+   * this control, and R3-05 itself on the changed message text. R3-05's failure
+   * is the kind a reviewer papers over by relaxing a regex, which would leave
+   * this control as the only thing standing between the blunt fix and a
+   * legitimate everyday call being refused.
+   */
+  test("R3_05_CONTROL_a_receivable_may_still_be_billed_alongside_its_own_pending_sale", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, userId, customerId, asFinance } = await seedFinanceMember(t);
+
+    const saleId = await t.run(async (ctx) => {
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId, make: "Kia", model: "Rio", year: 2021, mileage: 30_000,
+        color: "Blue", fuelType: "PETROL", transmission: "AUTOMATIC",
+        sellingPrice: 15_000, status: "AVAILABLE",
+      });
+      return await ctx.db.insert("sales", {
+        orgId, vehicleId, customerId, salespersonId: userId,
+        salePrice: 15_000, saleDate: Date.now(), status: "PENDING",
+      });
+    });
+
+    // The receivable names the pending sale, which therefore has no canonical
+    // document of its own yet.
+    const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      orgId, customerId, saleId, sourceType: "INTERNAL_INSTALLMENT",
+      title: "Owed against a deal still in progress",
+      amount: 1000, dueDate: DUE(), creditSystemKey: "MISCELLANEOUS_INCOME",
     });
 
     await t.run(async (ctx) => {
+      expect((await ctx.db.get(saleId))?.canonicalReceivableDocumentId).toBeUndefined();
+      expect((await ctx.db.get(receivableId))?.saleId).toBe(saleId);
+    });
+
+    const intentId = await asFinance.mutation(api.paymentIntents.create, {
+      orgId, customerId, receivableId, saleId,
+      amountMinor: 100_000, currency: "JOD", provider: "tap",
+    });
+    expect(intentId).toBeTruthy();
+
+    // …and the end-to-end assertion the cross-family seat's verification floor
+    // asked for: the intent and the receipt settlement produces must identify
+    // the SAME sale.
+    //
+    // This is the half that made the finding matter rather than being cosmetic.
+    // The legacy mirror stamps `saleId: receivable.saleId` — the RECEIVABLE's
+    // sale, never the intent's — so before the correlation landed an intent
+    // could name S2 while its own receipt named S1, and the two records of one
+    // payment disagreed about which deal it belonged to. Equality here is only
+    // guaranteed because creation now refuses the pair that could differ.
+    await asFinance.mutation(api.paymentIntents.markSettled, { orgId, intentId });
+    await t.run(async (ctx) => {
       const intent = await ctx.db.get(intentId);
-      expect(intent?.receivableDocumentId).toBe(docB);
-      expect(intent?.saleId).toBe(unrelatedSaleId);
-      // The document it will actually settle against carries no such sale.
-      const doc = await ctx.db.get(docB);
-      expect(doc).toBeTruthy();
-      const row = await ctx.db.get(receivableB);
-      expect(row?.saleId).toBeUndefined();
+      expect(intent?.status).toBe("SETTLED");
+      const receipt = intent?.collectionPaymentId ? await ctx.db.get(intent.collectionPaymentId) : null;
+      expect(receipt).toBeTruthy();
+      expect(receipt?.saleId).toBe(saleId);
+      expect(intent?.saleId).toBe(saleId);
+      expect(receipt?.saleId).toBe(intent?.saleId);
     });
   });
 });
@@ -2638,7 +2733,8 @@ describe("SCRUM-121A-PRE — Codex R5 findings, validated independently", () => 
  * before it, so none of them is failing-first evidence and none is presented as
  * such. Their job is different: each pins a branch of the new rules that no
  * inverted fixture reaches, so that a later change which quietly widens one of
- * them fails here. The failing-first proofs are the eleven inverted fixtures.
+ * them fails here. The failing-first proofs are the fourteen inverted fixtures
+ * plus `CODEXR6`.
  */
 describe("SCRUM-121A-PRE — verification floor", () => {
   async function seedVehicleAndSale(
@@ -2813,11 +2909,19 @@ describe("SCRUM-121A-PRE — verification floor", () => {
    * §5.1 — the refused cancellation is a whole-world zero delta, on the
    * finance-application writer specifically.
    *
-   * PRE03 asserts the document and the application survive. This asserts the
-   * money world does, which is the stronger claim: the gate is hoisted above a
-   * branch that reverses a sale, voids a commission and runs a destructive
-   * teardown, so "the document was not cancelled" would still be true of a
-   * refusal that had already unwound half a deal.
+   * CORRECTED after the cross-family seat's LOW finding, which was right: the
+   * first version of this test claimed it proved the gate sits above the
+   * destructive teardown, while its fixture had no `finalizedSaleId` and no
+   * idempotency key — so neither the teardown branch nor the documented
+   * STARTED-row case ever executed. Equality after an uncaught throw showed
+   * rollback, which is a weaker property than the one the comment asserted.
+   *
+   * The fixture now carries BOTH. The application names a COMPLETED sale, so
+   * the branch that reverses the sale, voids the commission and runs the
+   * destructive teardown is genuinely reachable below the gate; and an
+   * idempotency key is supplied, so `runWithIdempotency` inserts its STARTED
+   * row before the callback. The assertion that the whole money world plus that
+   * row are unchanged is therefore now the claim the comment makes.
    */
   test("FLOOR_a_refused_application_cancellation_writes_nothing_at_all", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
@@ -2847,9 +2951,14 @@ describe("SCRUM-121A-PRE — verification floor", () => {
         totalFinancedAmount: 10000, termMonths: 36, status: "DRAFT",
         companyId: financeCompanyId, createdBy: userId, createdAt: Date.now(),
       });
+      const finalizedSaleId = await ctx.db.insert("sales", {
+        orgId, vehicleId, customerId, salespersonId: userId,
+        salePrice: 15000, saleDate: Date.now(), status: "COMPLETED",
+      });
       return await ctx.db.insert("financeApplications", {
         orgId, customerId, vehicleId, companyId: financeCompanyId,
         quoteId, salespersonId: userId, status: "CLOSED",
+        finalizedSaleId,
         createdAt: Date.now(), updatedAt: Date.now(),
       });
     });
@@ -2884,13 +2993,27 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     await expect(
       asFinance.mutation(api.applications.cancelApplication, {
         orgId, applicationId, reason: "Deal voided",
+        // Supplied so runWithIdempotency inserts its STARTED row BEFORE the
+        // callback runs. The refusal must roll that row back too — a caught
+        // exception in Convex would commit it.
+        idempotencyKey: "floor_zero_write_probe",
       })
     ).rejects.toThrow(/still has payments applied to it/i);
     expect(await snapshotMoneyWorld(t)).toBe(before);
 
     await t.run(async (ctx) => {
       expect((await ctx.db.get(docId))?.status).not.toBe("CANCELLED");
-      expect((await ctx.db.get(applicationId))?.status).toBe("CLOSED");
+      const app = await ctx.db.get(applicationId);
+      expect(app?.status).toBe("CLOSED");
+      // The teardown branch below the gate never ran: the sale it would have
+      // reversed is still COMPLETED.
+      expect((await ctx.db.get(app!.finalizedSaleId!))?.status).toBe("COMPLETED");
+      // …and the idempotency STARTED row rolled back with everything else.
+      const started = await ctx.db
+        .query("commandIdempotency")
+        .filter((q) => q.eq(q.field("orgId"), orgId))
+        .collect();
+      expect(started).toHaveLength(0);
     });
   });
 
@@ -2953,6 +3076,230 @@ describe("SCRUM-121A-PRE — verification floor", () => {
       expect(typeof doc?.cancelledAt).toBe("number");
       expect(doc?.cancelledBy).toBe(userId);
       expect(doc?.cancellationReason).toBe("Customer withdrew");
+    });
+  });
+
+  /**
+   * CODEX-R6 — a GAP-FILLED link may not contradict the receivable's other facts.
+   *
+   * The §3.1 contradiction checks compare like-named fields only, and the ad-hoc
+   * sale correlation was gated on there being NO receivable. Between those two
+   * rules sat this hole: when the receivable carries no sale of its own, the
+   * caller's sale is not a contradiction of anything, so it was accepted and
+   * derived — attaching customer B's deal to customer A's debt, with the payment
+   * stored against A.
+   *
+   * This is the same class as D1, one level indirect: D1 caught the caller
+   * contradicting a value the row HAS; this catches the caller contradicting a
+   * value the row IMPLIES.
+   */
+  test("CODEXR6_a_caller_filled_sale_may_not_contradict_the_receivables_own_customer", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId: customerA, userId, asFinance } = await seedFinanceMember(t);
+
+    const customerB = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Bilal", lastName: "Nasser", phone: "+962790000333" })
+    );
+
+    // Customer B's deal.
+    const salesB = await t.run(async (ctx) => {
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId, make: "Honda", model: "Civic", year: 2022, mileage: 100, color: "Silver",
+        fuelType: "PETROL", transmission: "AUTOMATIC", sellingPrice: 18000, status: "SOLD",
+      });
+      const saleId = await ctx.db.insert("sales", {
+        orgId, vehicleId, customerId: customerB, salespersonId: userId,
+        salePrice: 18000, saleDate: Date.now(), status: "COMPLETED",
+      });
+      return { vehicleId, saleId };
+    });
+
+    // Customer A's debt, carrying NO sale of its own — so the caller's sale is
+    // not a contradiction of any like-named field.
+    const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      orgId, customerId: customerA,
+      sourceType: "INTERNAL_INSTALLMENT",
+      title: "A's debt, no sale attached",
+      amount: 1000, dueDate: DUE(), creditSystemKey: "MISCELLANEOUS_INCOME",
+    });
+
+    const before = await snapshotMoneyWorld(t);
+    await expect(
+      asFinance.mutation(api.collections.recordPayment, {
+        orgId, receivableId, saleId: salesB.saleId,
+        amount: 100, method: "CASH", paymentDate: Date.now(),
+      })
+    ).rejects.toThrow(/sale belongs to a different customer/i);
+    expect(await snapshotMoneyWorld(t)).toBe(before);
+
+    // …and the vehicle variant: the receivable carries no vehicle, so a
+    // caller-filled vehicle that disagrees with the resolved sale is the same
+    // hole one field over.
+    const receivableWithSale = await asFinance.mutation(api.collections.createReceivable, {
+      orgId, customerId: customerB, saleId: salesB.saleId,
+      sourceType: "INTERNAL_INSTALLMENT",
+      title: "B's debt, sale but no vehicle",
+      amount: 1000, dueDate: DUE(), creditSystemKey: "MISCELLANEOUS_INCOME",
+    });
+    const strangerVehicle = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, make: "Ford", model: "Focus", year: 2019, mileage: 900, color: "Green",
+        fuelType: "PETROL", transmission: "AUTOMATIC", sellingPrice: 9000, status: "AVAILABLE",
+      })
+    );
+    await expect(
+      asFinance.mutation(api.collections.recordPayment, {
+        orgId, receivableId: receivableWithSale, vehicleId: strangerVehicle,
+        amount: 100, method: "CASH", paymentDate: Date.now(),
+      })
+    ).rejects.toThrow(/sale is for a different vehicle/i);
+
+    // CONTROL — the same gap-filling is still ACCEPTED when it agrees. The
+    // point of the rule is that an absent field stays fillable; only a
+    // contradiction is refused.
+    await expect(
+      asFinance.mutation(api.collections.recordPayment, {
+        orgId, receivableId: receivableWithSale, vehicleId: salesB.vehicleId,
+        amount: 100, method: "CASH", paymentDate: Date.now(),
+      })
+    ).resolves.toBeTruthy();
+  });
+
+  /**
+   * CR-2 — a stale canonical link refuses instead of gating another document.
+   *
+   * CodeRabbit found that neither the gate's resolver nor
+   * `ensureCanonicalReceivableForLegacy` validates the stored link's source
+   * key. The finding is real as a property; it is NOT reachable, because
+   * `receivables.canonicalReceivableDocumentId` has exactly one production
+   * writer and it always stores the document resolved from this receivable's
+   * own source key. So this constructs the state.
+   *
+   * Its proposed fix — validate the link and fall through to the source key —
+   * was SUPERSEDED: that would make the gate prove the absence of allocations
+   * on one document while the cancellation patched a different one, which is
+   * strictly worse than the state it was fixing. Refusing is the fix.
+   */
+  test("FLOOR_a_stale_canonical_link_refuses_cancellation_rather_than_gating_the_wrong_document", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, userId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
+
+    const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      orgId, customerId,
+      sourceType: "INTERNAL_INSTALLMENT",
+      title: "Mislinked debt",
+      amount: 1000,
+      dueDate: DUE(),
+      creditSystemKey: "MISCELLANEOUS_INCOME",
+    });
+
+    // A real, unrelated document in the same organization, and a live
+    // allocation against the receivable's REAL document — so a gate that
+    // followed the stale link would read the unrelated document, find it clean,
+    // and cancel while real money stayed applied to the true one.
+    const { strangerDocId, realDocId } = await t.run(async (ctx) => {
+      const row = await ctx.db.get(receivableId);
+      const { createReceivableDocument, createCanonicalPayment, allocatePaymentToReceivable } =
+        await import("./subledger");
+      const stranger = await createReceivableDocument(ctx as never, {
+        orgId, documentType: "INVOICE", payerType: "CUSTOMER", customerId,
+        sourceType: "legacy_receivable", sourceId: "some-other-receivable",
+        originalAmountMinor: 500_000, currency: "JOD",
+        issueDate: Date.now(), dueDate: DUE(), actorId: userId,
+      });
+      const paymentId = await createCanonicalPayment(ctx as never, {
+        orgId, direction: "IN", payerType: "CUSTOMER", customerId,
+        method: "CASH", amountMinor: 300_000, currency: "JOD",
+        idempotencyKey: "stale_link_alloc", actorId: userId, status: "SETTLED",
+      });
+      await allocatePaymentToReceivable(ctx as never, {
+        orgId, paymentId,
+        receivableDocumentId: row!.canonicalReceivableDocumentId!,
+        amountMinor: 300_000, actorId: userId,
+      });
+      return {
+        strangerDocId: stranger as Id<"receivableDocuments">,
+        realDocId: row!.canonicalReceivableDocumentId!,
+      };
+    });
+
+    await t.run((ctx) => ctx.db.patch(receivableId, { canonicalReceivableDocumentId: strangerDocId }));
+
+    const cancelReq = await asFinance.mutation(api.collections.requestApproval, {
+      orgId, receivableId, requestType: "CANCEL_RECEIVABLE", reason: "Booked in error",
+    });
+    await expect(
+      asApprover.mutation(api.collections.respondToApproval, {
+        orgId, requestId: cancelReq, status: "APPROVED",
+      })
+    ).rejects.toThrow(/cannot be identified/i);
+
+    await t.run(async (ctx) => {
+      // Neither document was touched, and the live allocation is still live.
+      expect((await ctx.db.get(strangerDocId))?.status).not.toBe("CANCELLED");
+      expect((await ctx.db.get(realDocId))?.status).not.toBe("CANCELLED");
+      expect((await ctx.db.get(receivableId))?.status).not.toBe("CANCELLED");
+    });
+  });
+
+  /**
+   * CR-1 — a blank cancellation reason is normalized, not stored.
+   *
+   * `args.reason` is an optional STRING, so `??` only catches undefined. An
+   * empty or whitespace-only reason passed straight through and produced a
+   * cancelledAt/cancelledBy pair with no reason beside it — the one field of
+   * that trio a person actually reads.
+   */
+  test("FLOOR_a_blank_finance_cancellation_reason_is_normalized_not_stored", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, userId, customerId, asFinance } = await seedFinanceMember(t);
+
+    await t.run(async (ctx) => {
+      const role = await ctx.db.query("roles").filter((q) => q.eq(q.field("orgId"), orgId)).first();
+      await ctx.db.patch(role!._id, {
+        permissions: [...role!.permissions, "create:finance_application", "finalize:financed_deal"],
+      });
+    });
+
+    const { applicationId, docId } = await t.run(async (ctx) => {
+      const financeCompanyId = await ctx.db.insert("financeCompanies", {
+        orgId, name: "Blank Reason Finance", isActive: true,
+        profitRate: 5.0, maxTermMonths: 60, gracePeriodMonths: 2,
+      });
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId, make: "Mazda", model: "6", year: 2023, mileage: 5, color: "Black",
+        fuelType: "PETROL", transmission: "AUTOMATIC", sellingPrice: 12000, status: "AVAILABLE",
+      });
+      const quoteId = await ctx.db.insert("quotes", {
+        orgId, vehicleId, customerId, vehiclePrice: 12000, downPayment: 2000,
+        totalFinancedAmount: 10000, termMonths: 24, status: "DRAFT",
+        companyId: financeCompanyId, createdBy: userId, createdAt: Date.now(),
+      });
+      const appId = await ctx.db.insert("financeApplications", {
+        orgId, customerId, vehicleId, companyId: financeCompanyId,
+        quoteId, salespersonId: userId, status: "CLOSED",
+        createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      const { createReceivableDocument } = await import("./subledger");
+      const id = await createReceivableDocument(ctx as never, {
+        orgId, documentType: "INVOICE", payerType: "FINANCE_COMPANY",
+        financeCompanyId, customerId,
+        sourceType: "finance_application", sourceId: appId,
+        originalAmountMinor: 10_000_000, currency: "JOD",
+        issueDate: Date.now(), dueDate: Date.now(), actorId: userId,
+      });
+      return { applicationId: appId, docId: id as Id<"receivableDocuments"> };
+    });
+
+    await asFinance.mutation(api.applications.cancelApplication, {
+      orgId, applicationId, reason: "   ",
+    });
+
+    await t.run(async (ctx) => {
+      const doc = await ctx.db.get(docId);
+      expect(doc?.status).toBe("CANCELLED");
+      expect(doc?.cancellationReason).toBe("Finance application cancelled");
+      expect(doc?.cancellationReason?.trim()).not.toBe("");
     });
   });
 

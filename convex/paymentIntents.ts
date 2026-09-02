@@ -338,6 +338,7 @@ export const create = mutation({
         // neither reader able to see the contradiction.
         let receivableDocumentId = args.receivableDocumentId;
         let legacyOutstandingMinor: number | null = null;
+        let legacyReceivableSaleId: Id<"sales"> | undefined;
         if (args.receivableId) {
           const receivable = await ctx.db.get(args.receivableId);
           if (!receivable || receivable.orgId !== args.orgId) throw new ConvexError("Receivable not found.");
@@ -350,6 +351,7 @@ export const create = mutation({
           }
           receivableDocumentId = receivable.canonicalReceivableDocumentId;
           legacyOutstandingMinor = toMinorUnits(receivable.outstandingAmount, currency);
+          legacyReceivableSaleId = receivable.saleId;
         }
 
         if (args.saleId) {
@@ -366,6 +368,23 @@ export const create = mutation({
             // names no document and nothing else does either, the intent has
             // nowhere to allocate and would settle into an unattributed receipt.
             throw new ConvexError("This sale has no accounting document to collect against.");
+          } else if (!legacyReceivableSaleId || legacyReceivableSaleId !== args.saleId) {
+            // The sale carries no document of its own — `canonicalReceivableDocumentId`
+            // is written only at completion — while a document was resolved from
+            // some OTHER identifier. Revision 3 of the design scoped the
+            // UNPROVEN_TARGET refusal to sale-ONLY mode, which left exactly this
+            // combination accepting an unverified sale: any pending deal for the
+            // same customer could be stamped on an intent collecting against an
+            // unrelated debt. The money still lands correctly, because settlement
+            // never reads `saleId` — the damage is a permanently wrong deal
+            // attribution on the payment record.
+            //
+            // The remaining way to prove the pair describe one debt is the
+            // receivable's own `saleId`. Refusing outright instead would be
+            // wrong: `createReceivable` accepts a `saleId` with no completion
+            // requirement, so a receivable legitimately naming a PENDING sale is
+            // an ordinary state, and that call must keep working.
+            throw new ConvexError("Payment intent sale does not match the selected debt.");
           }
         }
 

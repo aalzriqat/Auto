@@ -368,9 +368,13 @@ export async function assertNoActiveAllocations(
     .take(ALLOCATION_HISTORY_PROBE_LIMIT + 1);
 
   if (history.length > ALLOCATION_HISTORY_PROBE_LIMIT) {
+    // The advice is deliberately state-agnostic. The likeliest way to reach
+    // this bound is a long, entirely REVERSED correction history — in which case
+    // "reverse the remaining allocations" names an action the operator cannot
+    // take, because there is nothing left to reverse.
     throw new ConvexError(
       "This debt has too long an allocation history to verify in one step, so it cannot be cancelled safely from here. " +
-      "Reverse its remaining allocations individually first."
+      "It needs a manual reconciliation before it can be closed."
     );
   }
   if (history.some((allocation) => allocation.status === "ACTIVE")) {
@@ -394,7 +398,33 @@ async function findCanonicalReceivableForLegacy(
 ) {
   if (receivable.canonicalReceivableDocumentId) {
     const linked = await ctx.db.get(receivable.canonicalReceivableDocumentId);
-    if (linked && linked.orgId === receivable.orgId) return linked;
+    if (linked && linked.orgId === receivable.orgId) {
+      // FAIL CLOSED on a link that does not identify THIS receivable.
+      //
+      // Neither this resolver nor `ensureCanonicalReceivableForLegacy` checks
+      // the source key, so a stale link would send BOTH the gate and the
+      // cancellation to the same wrong document — they would agree with each
+      // other while the receivable's real document stayed open with live
+      // allocations against it.
+      //
+      // Validating the link and silently falling through to the source key
+      // would be worse than either: the gate would then prove the absence of
+      // allocations on document A while the cancellation patched document B.
+      // A gate that proves something about a different row than the one being
+      // written is not a gate. So this refuses instead.
+      //
+      // No production writer can create this state — `receivables`'
+      // `canonicalReceivableDocumentId` has exactly one writer, the patch in
+      // `ensureCanonicalReceivableForLegacy`, which always stores the document
+      // it resolved from this receivable's own source key. This is a forward
+      // guard, exercised by a constructed fixture.
+      if (linked.sourceType !== "legacy_receivable" || linked.sourceId !== receivable._id) {
+        throw new ConvexError(
+          "This receivable's accounting document cannot be identified, so it cannot be cancelled safely."
+        );
+      }
+      return linked;
+    }
   }
   return await ctx.db
     .query("receivableDocuments")
@@ -960,16 +990,36 @@ export const recordPayment = mutation({
         const saleId = receivable?.saleId ?? args.saleId;
         await validateOptionalLinks(ctx, args.orgId, { vehicleId, saleId });
 
-        // SCRUM-121A-PRE §3.1, ad-hoc mode. The no-receivable shape is supported
-        // and tested, and nothing correlated its links either: customer A plus a
-        // sale belonging to customer B stored cleanly, attributing the canonical
-        // payment to A while every operational reader showed B's deal.
+        // SCRUM-121A-PRE §3.1 — a link the CALLER filled in may not contradict
+        // what the selected debt already implies.
+        //
+        // Two shapes reach this. The no-receivable one is supported and tested,
+        // and nothing correlated its links: customer A plus a sale belonging to
+        // customer B stored cleanly, attributing the canonical payment to A
+        // while every operational reader showed B's deal.
+        //
+        // The second was the cross-family seat's finding, and it is the same
+        // defect one level indirect. The contradiction checks above compare
+        // LIKE-NAMED fields, so they see nothing when the receivable carries no
+        // sale of its own: the caller's sale contradicts no field, is derived,
+        // and attaches another customer's deal to this debt. Same hole one field
+        // over for a caller-filled vehicle against the sale the receivable does
+        // name.
         //
         // A sale names both a customer and a vehicle, so it is the identifier
         // that can prove the others. Vehicle-only and customer-only ad-hoc
-        // payments stay supported and unconstrained — a vehicle does not imply a
-        // customer, and requiring one would refuse legitimate counter takings.
-        if (!receivable && saleId) {
+        // payments stay unconstrained — a vehicle does not imply a customer, and
+        // requiring one would refuse legitimate counter takings.
+        //
+        // Deliberately NOT applied to a pair that came entirely FROM the
+        // receivable row. `createReceivable` never correlated its own customer,
+        // sale and vehicle either, so a row can already hold an inconsistent
+        // triple; refusing there would block collection on rows that exist
+        // today. That is a pre-existing defect at the creation door, and fixing
+        // it is not this change's to make.
+        const callerFilledSale = !receivable?.saleId && args.saleId !== undefined;
+        const callerFilledVehicle = !receivable?.vehicleId && args.vehicleId !== undefined;
+        if (saleId && (!receivable || callerFilledSale || callerFilledVehicle)) {
           const sale = await ctx.db.get(saleId);
           if (sale) {
             if (sale.customerId !== customerId) {
