@@ -323,6 +323,87 @@ async function ensureCanonicalReceivableForLegacy(
   return canonicalReceivableDocumentId;
 }
 
+/**
+ * SCRUM-121A-PRE §5.1 — the canonical allocation gate.
+ *
+ * Cancelling a receivable while money is still applied to it produces
+ * `CANCELLED` + `ACTIVE`: the GL is reversed and zeroed while the subledger
+ * still holds the allocation, so the two disagree permanently and no reader can
+ * tell which is right. Both cancellation writers must prove the absence of an
+ * ACTIVE allocation before they write, and this is the single proof they share
+ * — a second implementation would be a second opinion.
+ *
+ * ## Why the read is bounded and unfiltered
+ *
+ * `by_receivable` carries no `status`, so a filtered `.first()` bounds what is
+ * RETURNED, not what is SCANNED: a document with a long history of REVERSED
+ * allocations would walk that whole history and could exhaust the transaction's
+ * read allowance, making a legitimate cancellation permanently unavailable.
+ *
+ * So this reads at most `LIMIT + 1` rows unfiltered and refuses explicitly when
+ * more history exists than it can prove over. That refusal is a real operational
+ * cost and it is the deliberate choice: the gate never permits a cancellation it
+ * could not prove. The durable fix is a compound
+ * `by_receivable_and_status` index, which reads only the ACTIVE range — that
+ * needs `schema.ts`, which this stage is not authorized to touch, and is
+ * required before the accounting backend deploys.
+ *
+ * ## Why it throws rather than returning a verdict
+ *
+ * The refusal must be an UNCAUGHT throw. Both callers run inside
+ * `runWithIdempotency`, which inserts its `STARTED` row before the callback, and
+ * a caught exception in Convex COMMITS everything already written. Only an
+ * uncaught one rolls the whole transaction back — including that row — which is
+ * what makes the refusal a true zero-delta.
+ */
+export const ALLOCATION_HISTORY_PROBE_LIMIT = 200;
+
+export async function assertNoActiveAllocations(
+  ctx: MutationCtx,
+  receivableDocumentId: Id<"receivableDocuments">
+) {
+  const history = await ctx.db
+    .query("paymentAllocations")
+    .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", receivableDocumentId))
+    .take(ALLOCATION_HISTORY_PROBE_LIMIT + 1);
+
+  if (history.length > ALLOCATION_HISTORY_PROBE_LIMIT) {
+    throw new ConvexError(
+      "This debt has too long an allocation history to verify in one step, so it cannot be cancelled safely from here. " +
+      "Reverse its remaining allocations individually first."
+    );
+  }
+  if (history.some((allocation) => allocation.status === "ACTIVE")) {
+    throw new ConvexError(
+      "This debt still has payments applied to it and cannot be cancelled. Reverse the allocations first."
+    );
+  }
+}
+
+/**
+ * Resolve the canonical document for a legacy receivable WITHOUT creating one.
+ *
+ * `ensureCanonicalReceivableForLegacy` writes, so the gate cannot use it. The
+ * source key is checked as well as the stored link: a document that exists but
+ * whose back-link is missing would otherwise let the gate read nothing and
+ * conclude "no allocations" about a document it never looked at.
+ */
+async function findCanonicalReceivableForLegacy(
+  ctx: MutationCtx,
+  receivable: Doc<"receivables">
+) {
+  if (receivable.canonicalReceivableDocumentId) {
+    const linked = await ctx.db.get(receivable.canonicalReceivableDocumentId);
+    if (linked && linked.orgId === receivable.orgId) return linked;
+  }
+  return await ctx.db
+    .query("receivableDocuments")
+    .withIndex("by_org_source", (q) =>
+      q.eq("orgId", receivable.orgId).eq("sourceType", "legacy_receivable").eq("sourceId", receivable._id)
+    )
+    .unique();
+}
+
 async function mirrorCollectionPaymentToCanonical(
   ctx: MutationCtx,
   args: {
@@ -840,6 +921,35 @@ export const recordPayment = mutation({
           if (args.amount > receivable.outstandingAmount) {
             throw new ConvexError("Payment amount cannot exceed the outstanding receivable amount.");
           }
+          // SCRUM-121A-PRE §3.1 — a contradictory caller identity is refused,
+          // not silently discarded.
+          //
+          // The derivation below reads `receivable?.x ?? args.x`, so when the
+          // caller named a DIFFERENT customer, vehicle or sale than the
+          // receivable carries, the row quietly won and the caller's identity
+          // vanished. `validateOptionalLinks` never closed this: it proves each
+          // link exists and belongs to the org independently, and never that two
+          // links describe the same debt. `registerChequeCore` already refuses
+          // the same contradiction for the customer, so one file held both
+          // answers.
+          //
+          // Only a genuine conflict refuses. A value the receivable does not
+          // carry is not a contradiction, so caller-supplied links still fill
+          // gaps exactly as before.
+          if (args.customerId && args.customerId !== receivable.customerId) {
+            throw new ConvexError("Payment customer does not match the receivable customer.");
+          }
+          if (args.vehicleId && receivable.vehicleId && args.vehicleId !== receivable.vehicleId) {
+            throw new ConvexError("Payment vehicle does not match the receivable vehicle.");
+          }
+          if (args.saleId && receivable.saleId && args.saleId !== receivable.saleId) {
+            throw new ConvexError("Payment sale does not match the receivable sale.");
+          }
+          // Forward guard (§3.3), unreachable today — see the identical note in
+          // registerChequeCore. No production writer soft-deletes a receivable.
+          if (receivable.isDeleted) {
+            throw new ConvexError("This receivable has been removed and can no longer accept payments.");
+          }
         }
 
         const customerId = receivable?.customerId ?? args.customerId;
@@ -849,6 +959,27 @@ export const recordPayment = mutation({
         const vehicleId = receivable?.vehicleId ?? args.vehicleId;
         const saleId = receivable?.saleId ?? args.saleId;
         await validateOptionalLinks(ctx, args.orgId, { vehicleId, saleId });
+
+        // SCRUM-121A-PRE §3.1, ad-hoc mode. The no-receivable shape is supported
+        // and tested, and nothing correlated its links either: customer A plus a
+        // sale belonging to customer B stored cleanly, attributing the canonical
+        // payment to A while every operational reader showed B's deal.
+        //
+        // A sale names both a customer and a vehicle, so it is the identifier
+        // that can prove the others. Vehicle-only and customer-only ad-hoc
+        // payments stay supported and unconstrained — a vehicle does not imply a
+        // customer, and requiring one would refuse legitimate counter takings.
+        if (!receivable && saleId) {
+          const sale = await ctx.db.get(saleId);
+          if (sale) {
+            if (sale.customerId !== customerId) {
+              throw new ConvexError("Payment sale belongs to a different customer.");
+            }
+            if (vehicleId && sale.vehicleId !== vehicleId) {
+              throw new ConvexError("Payment sale is for a different vehicle.");
+            }
+          }
+        }
 
         const currency = await getOrgCurrency(ctx, args.orgId);
         const now = Date.now();
@@ -950,7 +1081,19 @@ export async function registerChequeCore(
     throw new ConvexError("Bank and cheque number are required.");
   }
 
-  await validateOrgCustomer(ctx, args.orgId, args.customerId);
+  const chequeCustomer = await validateOrgCustomer(ctx, args.orgId, args.customerId);
+  // SCRUM-121A-PRE §3.3 — no NEW financial instrument against a withdrawn
+  // payer. Registering a cheque creates a future claim on someone the
+  // dealership has already removed, and `customers.softDelete` permits the
+  // withdrawal while money is still owed.
+  //
+  // This lives in the shared core rather than the public `registerCheque`
+  // wrapper on purpose: `applications.registerExpectedPayment` reaches this
+  // same function under its own permission, so a guard placed in the wrapper
+  // would leave that door open while looking closed.
+  if (chequeCustomer.isDeleted) {
+    throw new ConvexError("This customer has been removed and cannot have new cheques registered.");
+  }
   await validateOptionalLinks(ctx, args.orgId, {
     vehicleId: args.vehicleId,
     saleId: args.saleId,
@@ -962,6 +1105,35 @@ export async function registerChequeCore(
     receivable = await ctx.db.get(args.receivableId);
     if (!receivable || receivable.orgId !== args.orgId) throw new ConvexError("Receivable not found.");
     if (receivable.customerId !== args.customerId) throw new ConvexError("Cheque customer must match receivable customer.");
+    // SCRUM-121A-PRE §3.3 — a settled or voided debt cannot be given a new
+    // instrument. This door checked organization and customer but never status,
+    // so a cheque could be registered against a PAID, CANCELLED or REFUNDED
+    // receivable and then CLEARED — and clearing runs `applyPostedPayment`,
+    // which reopens the closed row. That is a pre-funds REGISTRATION refusal
+    // and moves no money: it prevents the instrument that would later resurrect
+    // the debt, rather than refusing a cheque that has already cleared.
+    if (["PAID", "CANCELLED", "REFUNDED"].includes(receivable.status)) {
+      throw new ConvexError("This receivable is closed and cannot accept a new cheque.");
+    }
+    // Forward guard, and labelled as one: no production WRITER sets
+    // `isDeleted` on a receivable today, so this cannot be reached through the
+    // real doors. It is here because the field exists on the row and the
+    // calendar reader at :562 already honours it, so the first writer that
+    // appears must not find the money paths silently accepting a withdrawn
+    // target.
+    //
+    // Not unreachable by the SUITE, though: `D10` constructs the state directly
+    // and exercises both this and its twin in recordPayment, so a mutation here
+    // is killed rather than surviving as dead code.
+    if (receivable.isDeleted) {
+      throw new ConvexError("This receivable has been removed and cannot accept a new cheque.");
+    }
+    if (args.vehicleId && receivable.vehicleId && args.vehicleId !== receivable.vehicleId) {
+      throw new ConvexError("Cheque vehicle does not match the receivable vehicle.");
+    }
+    if (args.saleId && receivable.saleId && args.saleId !== receivable.saleId) {
+      throw new ConvexError("Cheque sale does not match the receivable sale.");
+    }
   }
 
   const existingCheques = await ctx.db
@@ -1649,6 +1821,23 @@ export const respondToApproval = mutation({
                 "Return or cancel the cheque first, then cancel the receivable."
               );
             }
+            // SCRUM-121A-PRE §5.1 — the canonical gate, evaluated before this
+            // branch writes anything.
+            //
+            // The `paidAmount` check above is KEPT, not replaced: it asks a
+            // different question, about the legacy row's own balance. It cannot
+            // see a canonical allocation, because a document-only payment intent
+            // never runs the legacy mirror — that mirror requires a
+            // `receivableId` — so an intent settled against the canonical
+            // document leaves `paidAmount` at zero while the subledger holds a
+            // live allocation. That is a reachable CANCELLED + ACTIVE through
+            // public mutations only, which is why the gate is here and not a
+            // stronger version of the legacy check.
+            const existingCanonical = await findCanonicalReceivableForLegacy(ctx, receivable);
+            if (existingCanonical) {
+              await assertNoActiveAllocations(ctx, existingCanonical._id);
+            }
+
             await ctx.db.patch(receivable._id, {
               outstandingAmount: 0,
               status: "CANCELLED",
@@ -1660,7 +1849,25 @@ export const respondToApproval = mutation({
               user._id,
               currency
             );
-            await ctx.db.patch(cancelledDocId, { status: "CANCELLED" });
+            // SCRUM-121A-PRE §5.2 — cancel WITH the metadata, atomically.
+            //
+            // Patching `status` alone left `cancelledAt` undefined, and
+            // `getReceivablesAsOf` excludes a cancelled document only when
+            // `cancelledAt <= asOfDate`. A document with no `cancelledAt` is
+            // therefore included at EVERY asOfDate, permanently — so this
+            // transition reversed the GL while `arAging` went on counting the
+            // debt at full value forever. `saleCancellation.ts` already writes
+            // all four fields; this makes the second writer agree with it.
+            //
+            // The reason is never stored empty: the approver's notes when they
+            // wrote any, otherwise the requester's mandatory reason.
+            const cancellationReason = args.decisionNotes?.trim() || request.reason;
+            await ctx.db.patch(cancelledDocId, {
+              status: "CANCELLED",
+              cancelledAt: now,
+              cancelledBy: user._id,
+              cancellationReason,
+            });
             // Reverse the RECEIVABLE_CREATED entry (or cancel its pending post)
             // so AR and the credit account it hit (income/deposit liability/
             // expense reimbursement) don't stay overstated once the receivable

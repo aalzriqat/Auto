@@ -21,7 +21,7 @@ import { completeSale } from "./utils/saleCompletion";
 import { resolveFinancedSalePlan } from "./utils/financedSaleRecognition";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { runWithIdempotency } from "./utils/idempotency";
-import { registerChequeCore, markChequeClearedCore } from "./collections";
+import { registerChequeCore, markChequeClearedCore, assertNoActiveAllocations } from "./collections";
 import {
   hookFinanceDisbursed,
   hookFinanceCashReceived,
@@ -2604,6 +2604,35 @@ export const cancelApplication = mutation({
             );
           }
 
+          // SCRUM-121A-PRE §5.1 — resolved and gated HERE, above every write
+          // in this branch, so a refusal leaves the deal exactly as it was.
+          //
+          // `app.disbursedAt` was the only thing standing in for this, and it
+          // is not sufficient: `subledger.allocate` allocates against the
+          // finance-company document without touching the application at all,
+          // so `disbursedAt` stays unset and the guard above sees a clean deal
+          // while the subledger holds live money. The document itself is the
+          // only thing that knows.
+          //
+          // Scope note: this reads the canonical receivable and refuses. It
+          // deliberately changes nothing about `confirmDisbursement`, the
+          // remittance economics, the settlement route, or the deal teardown
+          // below.
+          const financeReceivable = app.companyId
+            ? await ctx.db
+                .query("receivableDocuments")
+                .withIndex("by_org_source", (q) =>
+                  q
+                    .eq("orgId", args.orgId)
+                    .eq("sourceType", FINANCE_APP_RECEIVABLE_SOURCE)
+                    .eq("sourceId", args.applicationId)
+                )
+                .unique()
+            : null;
+          if (financeReceivable && financeReceivable.status !== "CANCELLED") {
+            await assertNoActiveAllocations(ctx, financeReceivable._id);
+          }
+
           if (app.finalizedSaleId) {
             const sale = await ctx.db.get(app.finalizedSaleId);
             if (sale && sale.orgId === args.orgId) {
@@ -2700,17 +2729,6 @@ export const cancelApplication = mutation({
           }
 
           const quote = await ctx.db.get(app.quoteId);
-          const financeReceivable = app.companyId
-            ? await ctx.db
-                .query("receivableDocuments")
-                .withIndex("by_org_source", (q) =>
-                  q
-                    .eq("orgId", args.orgId)
-                    .eq("sourceType", FINANCE_APP_RECEIVABLE_SOURCE)
-                    .eq("sourceId", args.applicationId)
-                )
-                .unique()
-            : null;
           // Deliberately NOT gated on the settlement route.
           //
           // It looks like it should be: on the direct route `finalizeDeal`
@@ -2749,7 +2767,17 @@ export const cancelApplication = mutation({
             // is no longer owed once the deal is voided (this branch already
             // rejects deals whose disbursement was received).
             if (financeReceivable && financeReceivable.status !== "CANCELLED") {
-              await ctx.db.patch(financeReceivable._id, { status: "CANCELLED" });
+              // SCRUM-121A-PRE §5.2 — the same metadata the other two writers
+              // now carry. Without `cancelledAt`, `getReceivablesAsOf` keeps
+              // this document in every historical AR report forever, while this
+              // very branch reverses its GL. `reason` is the already-normalized
+              // fallback, never the optional argument, so it is never empty.
+              await ctx.db.patch(financeReceivable._id, {
+                status: "CANCELLED",
+                cancelledAt: now,
+                cancelledBy: auth.user._id,
+                cancellationReason: reason,
+              });
             }
           }
         } else {

@@ -155,10 +155,36 @@ async function createCanonicalIntentSettlement(
         paymentAllocationId: links.paymentAllocationId,
         createdAt: occurredAt,
       });
+      // SCRUM-121A-PRE §6 — do not resurrect a cancelled debt.
+      //
+      // A CANCELLED receivable carries outstandingAmount 0 (cancellation zeroes
+      // it in the same patch that sets the status), so appliedAmount is 0, the
+      // recomputed outstanding is 0, and nextLegacyReceivableStatus(0, ...)
+      // returns PAID — turning a debt that was deliberately closed into one
+      // that reads as fully collected, on the strength of a receipt that
+      // applied nothing to it.
+      //
+      // The receipt itself is kept: the zero-applied collectionPayments row
+      // above is the lineage an operator needs to see that money arrived, and
+      // the two timestamps below stay truthful for the same reason. Only the
+      // operational status and balance are left exactly as cancellation set
+      // them.
+      //
+      // CANCELLED ONLY, deliberately. REFUNDED also reads as terminal, but a
+      // refund REOPENS the debt with a real outstanding balance, so a later
+      // settlement legitimately applies real money and must still update both
+      // fields. Suppressing them there would leave this row claiming a balance
+      // the canonical document disagrees with — a new divergence, not a fix.
+      // That case belongs to SCRUM-218's received/applied/unapplied model.
+      const receivableWasCancelled = receivable.status === "CANCELLED";
       const outstandingAmount = roundMoney(Math.max(0, receivable.outstandingAmount - appliedAmount), intent.currency);
       await ctx.db.patch(receivable._id, {
-        outstandingAmount,
-        status: nextLegacyReceivableStatus(outstandingAmount, receivable.dueDate, occurredAt),
+        ...(receivableWasCancelled
+          ? {}
+          : {
+              outstandingAmount,
+              status: nextLegacyReceivableStatus(outstandingAmount, receivable.dueDate, occurredAt),
+            }),
         lastPaymentAt: occurredAt,
         updatedAt: occurredAt,
       });
@@ -286,8 +312,32 @@ export const create = mutation({
       async () => {
         const customer = await ctx.db.get(args.customerId);
         if (!customer || customer.orgId !== args.orgId) throw new ConvexError("Customer not found.");
+        // SCRUM-121A-PRE §3.3 — a withdrawn payer cannot be sent a NEW request
+        // to pay. `customers.softDelete` refuses a customer who has leads or
+        // sales and says nothing about money owed, so a payer carrying an open
+        // receivable can be withdrawn and still be billed from the panel that
+        // keeps listing the debt.
+        //
+        // Creation only. An intent that ALREADY exists must still settle: the
+        // provider may have taken the money before the payer was withdrawn, and
+        // refusing there would destroy a confirmed receipt rather than prevent
+        // one. That is the funds boundary, and it is why this check lives here
+        // and not in the settlement helper.
+        if (customer.isDeleted) {
+          throw new ConvexError("This customer has been removed and can no longer be sent a payment request.");
+        }
 
+        // SCRUM-121A-PRE §3.2 — resolve ONE authoritative canonical document
+        // from EVERY supplied business identifier, and require each supplied
+        // identifier to agree with it.
+        //
+        // Previously only `receivableId` derived a document. `saleId` was
+        // accepted, stored on the intent and correlated with nothing at all, so
+        // a payment link could name customer A's sale while collecting against
+        // customer B's document — with both rows internally consistent and
+        // neither reader able to see the contradiction.
         let receivableDocumentId = args.receivableDocumentId;
+        let legacyOutstandingMinor: number | null = null;
         if (args.receivableId) {
           const receivable = await ctx.db.get(args.receivableId);
           if (!receivable || receivable.orgId !== args.orgId) throw new ConvexError("Receivable not found.");
@@ -299,10 +349,54 @@ export const create = mutation({
             throw new ConvexError("Payment intent receivable document does not match the selected receivable.");
           }
           receivableDocumentId = receivable.canonicalReceivableDocumentId;
-          const outstandingMinor = toMinorUnits(receivable.outstandingAmount, currency);
-          if (args.amountMinor > outstandingMinor) {
-            throw new ConvexError("Payment link amount cannot exceed the receivable outstanding amount.");
+          legacyOutstandingMinor = toMinorUnits(receivable.outstandingAmount, currency);
+        }
+
+        if (args.saleId) {
+          const sale = await ctx.db.get(args.saleId);
+          if (!sale || sale.orgId !== args.orgId) throw new ConvexError("Sale not found.");
+          if (sale.customerId !== args.customerId) throw new ConvexError("Sale customer does not match.");
+          if (sale.canonicalReceivableDocumentId) {
+            if (receivableDocumentId && receivableDocumentId !== sale.canonicalReceivableDocumentId) {
+              throw new ConvexError("Payment intent sale does not match the selected debt.");
+            }
+            receivableDocumentId = sale.canonicalReceivableDocumentId;
+          } else if (!receivableDocumentId) {
+            // A supplied sale is a target, never decorative metadata. If it
+            // names no document and nothing else does either, the intent has
+            // nowhere to allocate and would settle into an unattributed receipt.
+            throw new ConvexError("This sale has no accounting document to collect against.");
           }
+        }
+
+        // SCRUM-121A-PRE §4 — however the target was resolved, prove it BEFORE
+        // funds exist. This is deliberately not a document-only-mode rule; the
+        // currency case is why. `create` capped against the legacy outstanding
+        // using the CALLER's currency and never compared the document's, so a
+        // JOD document plus `currency: "USD"` was accepted here and failed only
+        // at settlement, inside `assertSameCurrency` — which rolls back the
+        // canonical receipt, the intent metadata, the GL outbox row and the
+        // idempotency record, and then fails identically on every provider
+        // retry. A refusal here costs a rejected request; the same refusal after
+        // funds costs a receipt the provider already took.
+        if (receivableDocumentId) {
+          const document = await ctx.db.get(receivableDocumentId);
+          if (!document || document.orgId !== args.orgId) {
+            throw new ConvexError("Receivable document not found.");
+          }
+          if (document.payerType !== "CUSTOMER" || document.customerId !== args.customerId) {
+            throw new ConvexError("Receivable document belongs to a different payer.");
+          }
+          if (document.currency !== currency) {
+            throw new ConvexError("Receivable document currency does not match the payment currency.");
+          }
+          if (document.status !== "OPEN" && document.status !== "PARTIALLY_PAID") {
+            throw new ConvexError("This debt can no longer accept payments.");
+          }
+        }
+
+        if (legacyOutstandingMinor !== null && args.amountMinor > legacyOutstandingMinor) {
+          throw new ConvexError("Payment link amount cannot exceed the receivable outstanding amount.");
         }
 
         if (externalId) {
