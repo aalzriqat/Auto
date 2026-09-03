@@ -21,6 +21,7 @@ import {
   MessageSquarePlus,
   Camera,
   MessageCircle,
+  ListChecks,
   Bell,
   Globe2,
   CreditCard,
@@ -42,6 +43,16 @@ export interface NavItem {
 /** Primary navigation, shown in both the desktop sidebar and the mobile drawer. */
 export const mainNavigation: NavItem[] = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, permission: "manage:users" },
+  // The unified queue (SCRUM-63). It is placed above the two destinations it is
+  // replacing rather than beside them, because an operator reaching for "my
+  // work" should land here first.
+  //
+  // "Finance Applications" and "Sales" deliberately REMAIN for now. The
+  // architecture review gated their removal on this queue reaching functional
+  // parity — pre-sale applications, provider and waiting-time filters,
+  // deposit-resolution actions and permissions — and removing a destination
+  // dealers use daily before that is met would strand real workflows.
+  { name: "Deals", href: "/deals", icon: ListChecks, permission: "view:sales" },
   { name: "Vehicles", href: "/vehicles", icon: Car, permission: "view:vehicles" },
   { name: "Customers", href: "/customers", icon: Users, permission: "view:customers" },
   { name: "Leads", href: "/leads", icon: Target, permission: "view:leads" },

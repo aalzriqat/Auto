@@ -1822,6 +1822,12 @@ export default defineSchema({
     // created rather than the sale date the UI sorts and displays — a draft
     // created early but completed later would land in the wrong page.
     .index("by_org_salesperson_saleDate", ["orgId", "salespersonId", "saleDate"])
+    // SCRUM-63: the deal queue needs OPEN sales (status PENDING) reachable
+    // independently of how recent they are. Scanning `by_org` newest-first and
+    // filtering afterwards means an old unfinished sale can never enter the
+    // candidate set once newer rows fill the window — precisely the row a
+    // worklist exists to surface.
+    .index("by_org_status", ["orgId", "status"])
     .index("by_org_saleDate", ["orgId", "saleDate"])
     .index("by_org_customer", ["orgId", "customerId"])
     .index("by_quote", ["quoteId"])
@@ -2812,6 +2818,11 @@ export default defineSchema({
     .index("by_vehicle", ["vehicleId"])
     .index("by_status", ["status"])
     .index("by_org_status", ["orgId", "status"])
+    // A deposit names a quote, and the queue has to reach that quote's
+    // application to know whether the deal behind the held money is dead. Going
+    // through `by_customer` read every application the customer has ever had and
+    // was not org-scoped at the index, so tenancy rested on a post-filter.
+    .index("by_org_quote", ["orgId", "quoteId"])
     .index("by_org_reconciliation", ["orgId", "needsFinancingReconciliation"]),
 
   /**
