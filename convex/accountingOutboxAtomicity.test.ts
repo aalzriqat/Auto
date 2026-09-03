@@ -31,7 +31,7 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { drainEntries, enqueuePendingReversal } from "./accountingOutbox";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
@@ -496,6 +496,102 @@ describe("SCRUM-222 §5.2 — a revived row is immediately eligible", () => {
     const settled = await outboxRow(t, orgId, "expense_retry_1");
     expect(settled?.status).toBe("POSTED");
     expect(await glFootprint(t, orgId)).toMatchObject({ unbalancedJournals: 0 });
+  });
+});
+
+/**
+ * SCRUM-222 STAGE A — the EXACT selector, run locally before the runtime gate.
+ *
+ * ⚠️ THIS TESTS A DIFFERENT QUERY FROM THE PROBE BELOW, AND THE DIFFERENCE IS
+ * THE WHOLE RISK. The probe below proves `eq(field, undefined)` matches an
+ * absent field. The selector additionally does `lte("nextActionAt", now)` on a
+ * field that is ABSENT — a RANGE comparison against a missing value, which is a
+ * separate platform question that `eq` semantics do not answer. My first pass
+ * treated the probe as covering both; it does not.
+ *
+ * Local agreement here is still not certification: §4.2's real-runtime gate on
+ * a non-production deployment is what certifies it, because `convex-test` has
+ * documented divergence from the real runtime on exactly this kind of query
+ * constraint.
+ */
+describe("SCRUM-222 §4.2 — the exact due-work selector, locally", () => {
+  test("a legacy row with nextActionAt COMPLETELY ABSENT is returned as due", async () => {
+    const { t, orgId, userId } = await seedOrgWithChart("duework");
+    const accountingDate = Date.UTC(new Date().getUTCFullYear(), 5, 10);
+    const now = Date.now();
+
+    // Three genuinely LEGACY-shaped rows: none of the SCRUM-222 fields exist.
+    await queueExpense(t, orgId, userId, accountingDate, "due_legacy_1");
+    await queueExpense(t, orgId, userId, accountingDate, "due_legacy_2");
+    await queueExpense(t, orgId, userId, accountingDate, "due_legacy_3");
+
+    // A claimed row whose observation deadline has passed.
+    await queueExpense(t, orgId, userId, accountingDate, "due_claimed");
+    // A row deliberately scheduled into the future — must NOT be selected.
+    await queueExpense(t, orgId, userId, accountingDate, "due_future");
+    await t.run(async (ctx: any) => {
+      const claimed = await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q: any) =>
+          q.eq("orgId", orgId).eq("idempotencyKey", "due_claimed")
+        )
+        .first();
+      await ctx.db.patch(claimed._id, {
+        dispatchState: "DISPATCHED", generation: 1,
+        activeAttemptId: "attempt-1", nextActionAt: now - 60_000,
+      });
+      const future = await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q: any) =>
+          q.eq("orgId", orgId).eq("idempotencyKey", "due_future")
+        )
+        .first();
+      await ctx.db.patch(future._id, { nextActionAt: now + 3_600_000 });
+    });
+
+    const due = await t.query(internal.accountingOutbox.selectDueOutboxWork, { now });
+
+    const unclaimedKeys = due.unclaimed.map((r: any) => r.idempotencyKey).sort();
+    const observeKeys = due.awaitingObservation.map((r: any) => r.idempotencyKey).sort();
+
+    // THE LOAD-BEARING ASSERTION: rows whose `nextActionAt` is absent are due.
+    expect(unclaimedKeys).toEqual(["due_legacy_1", "due_legacy_2", "due_legacy_3"]);
+    // ...and they really were legacy-shaped, not stamped by the fixture.
+    expect(due.unclaimed.every((r: any) => r.hasNextActionAt === false)).toBe(true);
+    expect(due.unclaimed.every((r: any) => r.hasDispatchState === false)).toBe(true);
+    // A claimed row is NOT offered as unclaimed work; it is offered for
+    // observation instead, so a lost worker cannot strand it (§5).
+    expect(observeKeys).toEqual(["due_claimed"]);
+    // A future-dated row is excluded from both ranges.
+    expect(unclaimedKeys).not.toContain("due_future");
+    expect(observeKeys).not.toContain("due_future");
+  });
+
+  test("the selector never offers a POSTED or FAILED row", async () => {
+    const { t, orgId, userId } = await seedOrgWithChart("duestatus");
+    const accountingDate = Date.UTC(new Date().getUTCFullYear(), 5, 10);
+
+    await queueExpense(t, orgId, userId, accountingDate, "due_status_pending");
+    await queueExpense(t, orgId, userId, accountingDate, "due_status_posted");
+    await queueExpense(t, orgId, userId, accountingDate, "due_status_failed");
+    await t.run(async (ctx: any) => {
+      for (const [key, status] of [
+        ["due_status_posted", "POSTED"],
+        ["due_status_failed", "FAILED"],
+      ] as const) {
+        const row = await ctx.db
+          .query("pendingAccountingEvents")
+          .withIndex("by_org_idempotency", (q: any) =>
+            q.eq("orgId", orgId).eq("idempotencyKey", key)
+          )
+          .first();
+        await ctx.db.patch(row._id, { status });
+      }
+    });
+
+    const due = await t.query(internal.accountingOutbox.selectDueOutboxWork, {});
+    expect(due.unclaimed.map((r: any) => r.idempotencyKey)).toEqual(["due_status_pending"]);
+    expect(due.awaitingObservation).toEqual([]);
   });
 });
 

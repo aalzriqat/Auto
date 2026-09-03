@@ -14,7 +14,7 @@
  * if the original operation later posts directly.
  */
 import { v, ConvexError } from "convex/values";
-import { query } from "./_generated/server";
+import { query, internalQuery } from "./_generated/server";
 import { internalMutation, mutation } from "./functions";
 import { MutationCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
@@ -1293,6 +1293,75 @@ export const drainPendingAccountingEvents = internalMutation({
 });
 
 // ─── Visibility query ─────────────────────────────────────────────────────────
+
+/**
+ * SCRUM-222 STAGE A — THE EXACT DUE-WORK SELECTOR, DORMANT.
+ *
+ * Read-only, and wired to nothing: no cron, no worker, no posting path, no
+ * caller. It exists at Stage A precisely so the contract §4.2 real-runtime gate
+ * can execute THIS query — not a paraphrase of it — against a genuinely
+ * legacy-shaped row on a real non-production deployment, BEFORE any financial
+ * code is allowed to depend on its behaviour.
+ *
+ * ⚠️ `.take()`, NEVER `.paginate()`. Convex permits ONE paginated query per
+ * function and this reads TWO ranges — the same constraint
+ * `dispatchDueAuthorityWork:455-456` records against itself. `convex-test` does
+ * NOT enforce that limit, and this repository has the receipt: a backfill
+ * cleared 2,115 tests, full CI and thirteen adversarial review rounds, then
+ * failed on its first production call. Both ranges here are bounded and exact.
+ *
+ * ⚠️ THE ABSENT-FIELD SEMANTICS ARE THE WHOLE QUESTION. Every pre-SCRUM-222 row
+ * has no `dispatchState` and no `nextActionAt` at all — absent, not `null`, not
+ * `0`. This selector is correct only if `eq("dispatchState", undefined)` matches
+ * a document where the field is ABSENT, and `lte("nextActionAt", now)` admits an
+ * absent value as ordering before every number. If either is false, an entire
+ * visible backlog silently becomes invisible, which is strictly worse than the
+ * defect this ticket repairs. The diagnostic shape below reports
+ * `hasNextActionAt` so the gate can prove it saw a genuinely legacy row rather
+ * than one the fixture accidentally stamped.
+ */
+export const selectDueOutboxWork = internalQuery({
+  args: { now: v.optional(v.number()), limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const now = args.now ?? Date.now();
+    const limit = Math.min(args.limit ?? 50, 200);
+
+    // Range 1 — unclaimed work: PENDING, no outstanding attempt, and due.
+    const unclaimed = await ctx.db
+      .query("pendingAccountingEvents")
+      .withIndex("by_dispatch_next_action", (q) =>
+        q.eq("status", "PENDING").eq("dispatchState", undefined).lte("nextActionAt", now)
+      )
+      .take(limit);
+
+    // Range 2 — claimed work whose observation deadline has passed. Without
+    // this range a lost worker leaves its row claimed forever; §5 requires the
+    // sweep to RE-OBSERVE such a row, never to dispatch a second worker.
+    const awaitingObservation = await ctx.db
+      .query("pendingAccountingEvents")
+      .withIndex("by_dispatch_next_action", (q) =>
+        q.eq("status", "PENDING").eq("dispatchState", "DISPATCHED").lte("nextActionAt", now)
+      )
+      .take(limit);
+
+    const describe = (r: Doc<"pendingAccountingEvents">) => ({
+      id: r._id,
+      idempotencyKey: r.idempotencyKey,
+      status: r.status,
+      kind: r.kind,
+      // Proof the row really is legacy-shaped rather than fixture-stamped.
+      hasNextActionAt: r.nextActionAt !== undefined,
+      hasDispatchState: r.dispatchState !== undefined,
+      hasGeneration: r.generation !== undefined,
+    });
+
+    return {
+      now,
+      unclaimed: unclaimed.map(describe),
+      awaitingObservation: awaitingObservation.map(describe),
+    };
+  },
+});
 
 export const listPending = query({
   args: {
