@@ -1,3 +1,9 @@
+> 🛑 **FAILED DESIGN-REVIEW EVIDENCE — superseded by `01-contract.md`**
+> (owner-proxy `c17353`). Both DESIGN seats BLOCKED this revision at `f37c09327`.
+> **Preserve for forensics. DO NOT implement from it.** Its §4 status-literal
+> choice and its grep-shaped reader audit are the two things `01-contract.md`
+> corrects.
+
 # SCRUM-222 — outbox posting atomicity
 
 **Status:** DESIGN CONTRACT ONLY. No implementation. No PR. No production action.
