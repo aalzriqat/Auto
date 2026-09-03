@@ -170,6 +170,77 @@ export async function makeDue(
   });
 }
 
+/**
+ * Run `body` with the scheduler frozen, so nothing scheduled inside it can run
+ * until the test says so.
+ *
+ * ⚠️ THE FREEZE MUST WRAP THE ACTION, NOT FOLLOW IT. `convex-test` runs a
+ * scheduled function off a real `setTimeout`, and its pump only reaches timers
+ * faked BEFORE the scheduling mutation ran (see `TIMER_FNS` above). Installing
+ * fake timers after the action leaves its chain already running on real ones, so
+ * "did this action schedule anything?" becomes a race rather than an assertion.
+ */
+export async function withFrozenScheduler<T>(body: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers({ toFake: [...TIMER_FNS] });
+  try {
+    return await body();
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+/**
+ * Claims currently scheduled against ONE exact row — pending or running, never
+ * yet observed.
+ *
+ * ⚠️ THIS IS THE DETECTOR THE SUITE WAS MISSING, and its absence is why
+ * `retryFailed` shipped returning `{ retryQueued: true }` having queued nothing
+ * (Codex B02, owner ruling c17371). The test called the mutation and then drove
+ * the queue by hand, so it could not distinguish "the code scheduled the work"
+ * from "the test scheduled the work" — the assertion was on durable state and
+ * was still blind. Assert the side effect THE ACTION ITSELF must produce, before
+ * pumping anything.
+ *
+ * Must be called inside `withFrozenScheduler`, or the claim may already have run.
+ */
+export async function scheduledClaimsFor(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  t: any,
+  rowId: Id<"pendingAccountingEvents">
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): Promise<any[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return await t.run(async (ctx: any) =>
+    (await ctx.db.system.query("_scheduled_functions").collect()).filter(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (f: any) =>
+        String(f.name).includes("claimOutboxRow") &&
+        String(f.args?.[0]?.rowId) === String(rowId) &&
+        (f.state.kind === "pending" || f.state.kind === "inProgress")
+    )
+  );
+}
+
+/**
+ * Settle whatever is ALREADY scheduled — dispatching nothing new.
+ *
+ * The difference from `settleOutbox` is the whole point: that one calls the
+ * sweep first, so it makes a row post whether or not the action under test ever
+ * queued anything. This one refuses to supply the missing step, which is what
+ * makes "the manual retry alone is enough" a falsifiable claim.
+ *
+ * Call inside `withFrozenScheduler`.
+ */
+export async function settleScheduledOnly(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  t: any,
+  orgId: Id<"organizations">
+): Promise<void> {
+  await pump(t);
+  await observeClaimed(t, orgId);
+  await pump(t);
+}
+
 /** Every outbox row for one org. */
 export async function outboxRows(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

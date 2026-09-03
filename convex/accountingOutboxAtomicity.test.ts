@@ -33,6 +33,11 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { drainEntries, enqueuePendingReversal } from "./accountingOutbox";
+import {
+  scheduledClaimsFor,
+  settleScheduledOnly,
+  withFrozenScheduler,
+} from "../test-utils/outboxWork";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 const SHARD_COUNT = 8; // mirrors accounting/accountSnapshots.ts:24
@@ -531,8 +536,73 @@ describe("SCRUM-222 §5.2 — a revived row is immediately eligible", () => {
     expect(revived?.lastError).toBeUndefined();
 
     // The very next drain must find it — not a later one.
+    //
+    // ⚠️ THIS TEST CANNOT SEE WHETHER `retryFailed` QUEUED ANYTHING, and read as
+    // a check on that it is worthless: the `drainOnce` below supplies the very
+    // step the implementation was missing, so it stayed green while
+    // `retryQueued: true` described work nobody had scheduled. It pins a
+    // different, still-real property — a revived row is eligible to the NEXT
+    // sweep rather than a later one. The queueing claim is pinned by [B02].
     await drainOnce(t, orgId);
     const settled = await outboxRow(t, orgId, "expense_retry_1");
+    expect(settled?.status).toBe("POSTED");
+    expect(await glFootprint(t, orgId)).toMatchObject({ unbalancedJournals: 0 });
+  });
+
+  /**
+   * B02 (Codex, owner ruling `c17371`) — `retryQueued` MUST MEAN QUEUED.
+   *
+   * `retryFailed` revived the row and scheduled nothing, then reported
+   * `{ retryQueued: true }`. The row did eventually post, an average of thirty
+   * seconds later, off the one-minute cron — so the damage was not lost work but
+   * a false statement on a `MANAGE_FINANCE` control, which is the exact class of
+   * claim this ticket exists to stop the outbox making.
+   *
+   * Two assertions, and the ORDER is the design:
+   *
+   *  1. the scheduled claim exists for THIS row before anything is pumped — the
+   *     side effect the action itself must produce; and
+   *  2. that claim alone carries the row to POSTED, with nothing dispatching.
+   *
+   * `settleScheduledOnly` deliberately does NOT sweep. A helper that swept here
+   * would be doing the system's job and the test would pass against the defect,
+   * which is precisely how the defect survived the first round.
+   */
+  test("[B02] retryFailed queues the exact row itself — no drain, no cron", async () => {
+    const { t, orgId, userId, asAdmin } = await seedOrgWithChart("retryq");
+    const year = new Date().getUTCFullYear();
+    await openCurrentYearPeriod(asAdmin, orgId, year);
+    const accountingDate = Date.UTC(year, 5, 10);
+
+    // Chart initialization and period opening each schedule their own drains.
+    // Flush them, or a leftover sweep would dispatch the row below and this test
+    // would be measuring the fixture instead of `retryFailed`.
+    await withFrozenScheduler(() => settleScheduledOnly(t, orgId));
+
+    const pendingEventId = await t.run(async (ctx: any) =>
+      await ctx.db.insert("pendingAccountingEvents", {
+        orgId, kind: "POST", status: "FAILED",
+        idempotencyKey: "expense_retry_2",
+        accountingDate, actorId: userId, attempts: 10, createdAt: Date.now(),
+        lastError: "chart of accounts was not initialized",
+        eventType: "EXPENSE_POSTED", sourceType: "expenses", sourceId: "retry_2",
+        eventVersion: 1, occurredAt: accountingDate, currency: "USD",
+        payload: { expenseId: "retry_2", amountMinor: 5000, currency: "USD", category: "OTHER" },
+      })
+    );
+
+    await withFrozenScheduler(async () => {
+      const outcome = await asAdmin.mutation(api.accountingOutbox.retryFailed, {
+        orgId, pendingEventId,
+      });
+      expect(outcome).toEqual({ retryQueued: true });
+
+      expect(await scheduledClaimsFor(t, pendingEventId)).toHaveLength(1);
+
+      await settleScheduledOnly(t, orgId);
+    });
+
+    const settled = await outboxRow(t, orgId, "expense_retry_2");
     expect(settled?.status).toBe("POSTED");
     expect(await glFootprint(t, orgId)).toMatchObject({ unbalancedJournals: 0 });
   });

@@ -133,13 +133,16 @@ function ScheduleStatusPopover({
   async function handleRedrive() {
     await submitWithFeedback(async () => {
       const result = await redrive({ orgId, scheduleId: schedule._id });
-      if (result.posted === 0 && result.failed === 0) {
+      // Queued and revived, never posted — posting is asynchronous (SCRUM-222).
+      // A revived row is always scheduled too, so `revived` is a subset of
+      // `scheduled` and the copy says so.
+      if (result.scheduled === 0 && result.revived === 0) {
         toast.success(t("PrepaidRedriveNothingToDo" as any));
       } else {
         toast.success(
           t("PrepaidRedriveSuccess" as any)
-            .replace("{posted}", String(result.posted))
-            .replace("{failed}", String(result.failed))
+            .replace("{scheduled}", String(result.scheduled))
+            .replace("{revived}", String(result.revived))
         );
       }
     });

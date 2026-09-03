@@ -102,21 +102,108 @@ unreachable, because the seam exists only so a test can make it reject and
 "a transport hiccup now discards completed accounting work and retries it" is a
 trade the owner should see rather than discover.
 
+## Round 2 — the three review findings, and what they cost
+
+`89a3a35f4` is frozen as the BLOCKED artifact both seats reviewed. Sonnet MAX and
+Codex `xhigh` each returned BLOCK; neither found the architecture wrong. Owner
+ruling `c17371` authorised exactly the corrections below.
+
+**B01 — the branch did not compile, and my gate evidence hid it.** I published
+"typecheck clean" on the strength of `tsc -p convex/tsconfig.json` alone. That
+project **excludes `components/`**, so it could not see that two backend return
+shapes had changed under their consumers: `AccountingSetupTab.tsx:140-141` read
+`outcome.posted` / `outcome.failed` from `{ scheduled }`, and
+`PrepaidExpensesTab.tsx:136,141-142` read the same names from
+`{ revived, scheduled }` — six real `TS2339` errors. The English and Arabic
+strings still said "{posted} posted, {failed} failed" on a `MANAGE_FINANCE`
+control, which would have **moved this ticket's lie one layer up** rather than
+removing it: the outbox would stop claiming to have posted, and the toast above
+it would carry on claiming it.
+
+> **A changed return shape is cross-surface by construction** — a backend
+> function's consumers are, by definition, not in the backend's own tsconfig. The
+> scoped check for the surface you edited is the one most likely to miss them.
+
+**B02 — `retryQueued: true` queued nothing.** `retryFailed` revived the row and
+scheduled no claim, leaving the row to the next cron tick while telling the
+operator it was already moving. **My own test could not have caught it**: it
+called the mutation and then drove the queue by hand, so it was measuring the
+test's sweep, not the code's. The regression test now asserts the side effect the
+action itself must produce — a scheduled `claimOutboxRow` for that exact row —
+before anything is pumped, and then settles *without dispatching*.
+
+**B03 — eager dispatch, ruled cron-only.** Not implemented, and now not required:
+the owner retired it from ordinary `enqueuePendingPost` / `enqueuePendingReversal`
+rather than have a sale depend on `scheduler.runAfter` availability to save one
+dispatcher cadence. Recorded at the code site. Contract item §5.1's eager-dispatch
+clause is superseded for the ordinary enqueue path; the operator doors still
+dispatch eagerly.
+
+**F2 — split out as SCRUM-225** (deferred REVERSE recovery held by the period
+gate). Verified pre-existing on `bf5769ed1`, where `drainEntries:1121` ran the
+identical `checkPostingAllowed` ahead of the `kind === "POST"` branch at `:1135`.
+
 ## Gates
 
-| gate | result |
-|---|---|
-| `tsc -p convex/tsconfig.json --noEmit` | clean |
-| `eslint` on changed files | exit 0, no errors (`any` warnings only, matching neighbours) |
-| full `convex` suite | see run below |
-| §4.2 real-runtime gate | PASS (twice: Stage A and Stage B) |
-| generation-guard mutation | PASS (guard removed → tests fail) |
+⚠️ **Both typecheck gates are required, and the round-1 evidence cited only one.**
+The repository has no total typecheck: the root project excludes `convex`, and the
+convex project excludes `components`. Whichever one you run is blind to the other
+side of the call.
 
-⚠️ **Three suites (`expoPush`, `scrum121Characterization`, `collections`) failed
-once under full-suite parallelism and passed in isolation and on re-run.** They
-are load-dependent flakes of the class `accountingOutboxSweep.test.ts:99-114`
-documents; none touches the outbox. Recorded rather than silently re-run until
-green.
+Coverage of the changed surfaces is total between the two, and checked rather
+than assumed: `convex/tsconfig.json` pulls in `../test-utils/**/*` explicitly
+(root excludes it), so the new harness helpers are typechecked by the convex
+project rather than by nothing.
+
+| gate | command | result |
+|---|---|---|
+| root / web typecheck | `pnpm typecheck` | **0 errors** — the gate B01 was hiding behind; it reported 6 × `TS2339` before the fix |
+| convex typecheck (incl. `test-utils/`) | `pnpm typecheck:convex` | **0 errors** |
+| lint, changed files | `npx eslint <8 files>` | **0 errors** (166 `any` warnings, matching neighbours) |
+| full convex suite | `npx vitest run convex/` | **3500 tests · 3478 passed · 0 failed · 22 skipped · 189/189 files · `success: true`** (JSON reporter) |
+| i18n key coverage | `npx vitest run lib/i18n/keyCoverage.test.ts` | 8/8 |
+| tenant write-guard | `npx vitest run scripts/tenantWriteGuard.test.ts` | 8/8 after re-pinning (see below) |
+| §4.2 real-runtime gate | cloud DEV `scrum222-gate` | PASS (twice: Stage A and Stage B) |
+| generation-guard mutation | guard lines removed | PASS — both tests flip `SUPERSEDED` → `POSTED` |
+| B02 absence mutant | schedule removed | PASS — `[B02]` fails on **both** assertions independently (`expected [] to have a length of 1`; `expected 'PENDING' to be 'POSTED'`), while the pre-existing `[GREEN]` test **passes against the mutant**, which is the blindness itself |
+
+⚠️ **The round-1 figure "3494 passed / 22 skipped" is not reproducible from
+`npx vitest run convex/` and is not carried forward.** That command collects 189
+files and 3500 tests on this tree (3499 before the `[B02]` test was added), all
+189 accounted for against disk. The earlier number came from a scope I have not
+been able to reconstruct, so it is restated from measurement rather than quoted.
+
+### Two gates that were never run in round 1, and what they found
+
+**`scripts/tenantWriteGuard.test.ts` was RED and nobody had looked.** Stage B
+added four registered mutations, so the pinned coverage counts moved
+`totalMutations` 481→485 and `skippedNoOrgId` 151→155. **`analysed` is unchanged
+at 315 and the security assertion itself — "every mutation that takes an `orgId`
+proves ownership before writing a caller-supplied id" — passed throughout.** The
+four (`dispatchDueOutboxWork`, `claimOutboxRow`, `postOutboxRow`,
+`observeOutboxAttempt`) take a `rowId` or nothing rather than an `orgId`, which
+is the same shape SCRUM-208's authority half already justified in that file, and
+they are `internalMutation`s with no public entry point. Re-pinned with the
+per-mutation reasoning the file's own convention requires. *The pin did exactly
+its job: it refuses to let new mutations land without someone stating why they
+are out of the analysed surface.*
+
+**`scripts/releaseEntrypoints.test.ts` — one test UNAVAILABLE locally, not
+passing.** "the deploy step's own shell REFUSES when main has moved" spawns
+`/bin/bash` with a Windows temp path whose separators are stripped
+(`C:Users123AppDataLocal…step.sh: No such file or directory`, exit **127**) — the
+same broken-bash environment that made the Bash tool unusable for this entire
+session. It cannot be caused by this branch: `git diff --name-only
+bf5769ed1..HEAD -- scripts/ .github/` is **empty**. Recorded as unavailable
+rather than counted as a pass.
+
+⚠️ **Load-dependent flakes, recorded rather than re-run until green.** Across
+three full-suite runs, exactly one test failed in each of the first two — a
+5000 ms timeout in `socialInbox.test.ts`, then a `finishAllScheduledFunctions`
+pump exhaustion in `collections.test.ts` — *different files each time*, both
+green in isolation (23/23 in 2.75 s; 24/24 in 3.22 s), and neither touches the
+outbox. The third run was clean. They are the class
+`accountingOutboxSweep.test.ts:99-114` documents.
 
 ## Evidence boundary
 

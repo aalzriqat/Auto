@@ -135,10 +135,13 @@ export function AccountingSetupTab() {
           void runSetupAction(
             "redrive",
             () => redriveOutbox({ orgId: activeOrgId }),
+            // Queued, never posted. Posting is asynchronous (SCRUM-222), so
+            // this transaction cannot know a posted/failed split — reporting
+            // one would put back, one layer up, the false success the outbox
+            // itself stopped making.
             (outcome) =>
               t("AccountingOutboxRedrivenResult" as any)
-                .replace("{posted}", String(outcome.posted))
-                .replace("{failed}", String(outcome.failed))
+                .replace("{scheduled}", String(outcome.scheduled))
           );
         }}
         periodDialog={

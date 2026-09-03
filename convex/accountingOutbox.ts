@@ -47,6 +47,25 @@ import { requireFeature } from "./subscriptions";
 
 // ─── Enqueue helpers (called from workflow hooks) ─────────────────────────────
 
+/**
+ * ⚠️ THESE INSERT AND NOTHING ELSE — NO EAGER DISPATCH. Deliberate, and ruled by
+ * the owner (`c17371`) rather than merely left undone.
+ *
+ * Scheduling a claim from here would shave up to one cron tick off the posting
+ * latency, and would buy it by making a SALE, a RECEIPT or a DEPOSIT depend on
+ * `ctx.scheduler.runAfter` being available: `runAfter` can reject, nothing here
+ * may catch it (a caught exception in Convex commits the writes already made),
+ * so a scheduler hiccup would abort the domain transaction that called this.
+ * Trading "the sale fails" for "the posting starts ≤60s sooner" is the wrong way
+ * round.
+ *
+ * The order is therefore: durable outbox row first, the bounded
+ * `dispatch-outbox-work` cron owns liveness, and the isolated exact-row worker
+ * owns atomicity. Operator-initiated doors (`redrive`, `retryFailed`,
+ * `redriveScheduleEvents`) DO schedule eagerly — there the caller is a person
+ * waiting on a button, not a financial transaction, and a rejection costs them a
+ * retry rather than a sale.
+ */
 export async function enqueuePendingPost(
   ctx: MutationCtx,
   cmd: PostCommand,
@@ -1767,10 +1786,20 @@ export const redrive = mutation({
  * MAX_ATTEMPTS has been fixed (e.g. the chart of accounts is now initialized).
  *
  * ⚠️ IT DOES NOT POST, AND IT MUST NOT SAY THAT IT DID. It returns
- * `{ retryQueued: true }` — the honest description of what this transaction
- * achieved. The row is picked up by the due-work sweep, or sooner by an eager
- * drain. (This doc used to name the per-org drain helper SCRUM-222 retired;
- * liveness no longer depends on anyone calling anything.)
+ * `{ retryQueued: true }` — but only AFTER it has scheduled the claim for this
+ * exact row, which is the thing "queued" names. The first version of this
+ * mutation revived the row and scheduled nothing, so `retryQueued: true`
+ * described work nobody had queued: the row sat until the next cron tick while
+ * the operator was told it was already moving. Replacing a false "posted" with
+ * a false "queued" relocates the lie rather than removing it (owner ruling
+ * c17371).
+ *
+ * ⚠️ NOTHING CATCHES THE SCHEDULE. If `runAfter` rejects, the uncaught throw
+ * rolls this whole transaction back — the revival with it — so the row stays
+ * FAILED and the operator sees an error rather than an empty queue. That is the
+ * right trade: a manual retry REQUEST is not an economic fact, so losing one
+ * costs nothing and the operator can click again, whereas a revived-but-
+ * unscheduled row is invisible work that claims to be in flight.
  *
  * ⚠️ IT MUST ALSO ADVANCE THE GENERATION AND CLEAR STALE CLAIM METADATA. A row
  * that dead-lettered while claimed still carries `dispatchState: "DISPATCHED"`
@@ -1793,7 +1822,19 @@ export const retryFailed = mutation({
       throw new ConvexError(`Only a FAILED event can be retried (current status: ${event.status}).`);
     }
 
-    await reviveFailedEntry(ctx, event);
+    const revived = await reviveFailedEntry(ctx, event);
+    // Unreachable behind the FAILED guard above, and deliberately fatal rather
+    // than reported as queued: `retryQueued` must never outrun the revival.
+    if (!revived) {
+      throw new ConvexError("Pending accounting event could not be revived for retry.");
+    }
+
+    // THE EXACT ROW, not a sweep. `claimOutboxRow` re-reads it, mints the
+    // attempt and schedules the worker. A duplicate schedule is refused by its
+    // own `dispatchState` check, so this races the cron safely.
+    await ctx.scheduler.runAfter(0, internal.accountingOutbox.claimOutboxRow, {
+      rowId: event._id,
+    });
 
     return { retryQueued: true as const };
   },
