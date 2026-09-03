@@ -1,3 +1,10 @@
+> 🛑 **FAILED DESIGN-REVIEW EVIDENCE — superseded by `02-contract.md`**
+> (owner-proxy `c17356`). Both seats BLOCKED this revision at `7232f95916`:
+> 3 bounded HIGH, 2 MEDIUM, 3 LOW — 0 CRITICAL, 0 architecture-wrong.
+> **Preserve for forensics. DO NOT implement from it.** Its I3 (applied to both
+> kinds), its three-caller enumeration, and its observer branch list are what
+> `02-contract.md` corrects.
+
 # SCRUM-222 — outbox posting atomicity (revision 1)
 
 **Authorized** by owner-proxy `c17353` — exactly **one** bounded contract-only
