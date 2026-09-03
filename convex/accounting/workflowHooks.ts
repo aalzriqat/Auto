@@ -1378,7 +1378,7 @@ export async function isEventQueued(
  *
  * The distinction is the difference between a message that helps and one that
  * misleads. A PENDING entry really is waiting for its period to open. A FAILED
- * one has exhausted its retries: `drainPendingForOrg` reads only PENDING rows,
+ * one has exhausted its retries: the due-work sweep selects only PENDING rows,
  * so opening a period does nothing for it, and telling someone to do that sends
  * them somewhere they cannot fix it.
  */

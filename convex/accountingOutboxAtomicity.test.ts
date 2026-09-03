@@ -29,7 +29,7 @@
  * written.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { drainEntries, enqueuePendingReversal } from "./accountingOutbox";
@@ -166,23 +166,62 @@ async function queueExpense(t: any, orgId: any, userId: any, accountingDate: num
   });
 }
 
+/** Runs the scheduler chain to a fixed point. */
+async function pump(t: any) {
+  for (let pass = 0; pass < 10; pass += 1) {
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    const queued = (
+      await t.run(async (ctx: any) => await ctx.db.system.query("_scheduled_functions").collect())
+    ).filter((f: any) => f.state.kind === "pending" || f.state.kind === "inProgress").length;
+    if (queued === 0) break;
+  }
+}
+
 /**
- * Drives EXACTLY ONE drain pass over the org's PENDING rows.
+ * Drives EXACTLY ONE attempt per row, all the way to a settled outcome.
  *
- * Deliberately calls the exported `drainEntries` rather than the scheduled
- * `drainPendingAccountingEvents`: chart initialization and period opening each
- * schedule their own drains, so going through the scheduler makes the number of
- * attempts depend on how many of those happen to have fired. This is the same
- * function that carries the defect (`accountingOutbox.ts:1101`), invoked once.
+ * SCRUM-222 split one transaction into four, so "one drain pass" is now a
+ * chain: dispatch schedules a claim, the claim schedules a worker, the worker
+ * performs the financial writes, and the OBSERVER — a separate transaction —
+ * records what became of it.
+ *
+ * ⚠️ THE OBSERVER STEP IS NOT OPTIONAL IN A TEST, and forgetting it is a real
+ * trap: a worker that throws rolls back completely and writes NOTHING, so
+ * without an observation the row's attempt counter never moves and a failing
+ * row looks untouched rather than failed. Production runs this from the
+ * one-minute cron once `nextActionAt` passes; driving it directly here proves
+ * the same path without sleeping a minute.
+ *
+ * Still deliberately NOT going through `drainPendingAccountingEvents`: chart
+ * initialization and period opening each schedule their own drains, so that
+ * route makes the number of attempts depend on which of those happened to fire.
  */
 async function drainOnce(t: any, orgId: any) {
-  return await t.run(async (ctx: any) => {
-    const pending = await ctx.db
-      .query("pendingAccountingEvents")
-      .withIndex("by_org_status", (q: any) => q.eq("orgId", orgId).eq("status", "PENDING"))
-      .take(50);
-    return await drainEntries(ctx, pending);
-  });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+  try {
+    await t.run(async (ctx: any) => {
+      const pending = await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_status", (q: any) => q.eq("orgId", orgId).eq("status", "PENDING"))
+        .take(50);
+      return await drainEntries(ctx, pending);
+    });
+    await pump(t);
+
+    // Observe whatever is still claimed — exactly what the cron does once the
+    // observation deadline passes.
+    const claimed: any[] = await t.run(async (ctx: any) =>
+      (await ctx.db.query("pendingAccountingEvents").collect())
+        .filter((r: any) => String(r.orgId) === String(orgId) && r.dispatchState === "DISPATCHED")
+        .map((r: any) => r._id)
+    );
+    for (const rowId of claimed) {
+      await t.mutation(internal.accountingOutbox.observeOutboxAttempt, { rowId });
+    }
+    await pump(t);
+  } finally {
+    vi.useRealTimers();
+  }
 }
 
 describe("SCRUM-222 — a failed posting must leave NO GL footprint", () => {
@@ -500,6 +539,192 @@ describe("SCRUM-222 §5.2 — a revived row is immediately eligible", () => {
 });
 
 /**
+ * SCRUM-222 §3.4 / §5 — THE ROW CAN ALWAYS BE RECOVERED.
+ *
+ * These cover the two ways a claimed row could be stranded forever, which is
+ * the failure mode this design creates and therefore has to close explicitly:
+ * an observation that can never conclude, and a sweep that cannot see claimed
+ * work at all.
+ */
+describe("SCRUM-222 — a claimed row is never stranded", () => {
+  test("[fixture 18] a MISSING scheduler record is observed failure, not silence", async () => {
+    // ⚠️ THIS BRANCH WAS ABSENT FROM AN EARLIER REVISION OF THE DESIGN, and its
+    // absence was invisible: §5 says an unknown outcome is re-observed and never
+    // re-dispatched, so a lost or expired scheduler record would have been
+    // re-observed forever and the row stranded permanently — a queue that looks
+    // busy and is dead. The precedent already had it
+    // (`observeAuthorityAttempt:707-741`); I under-copied the pattern I cited.
+    const { t, orgId, userId, asAdmin } = await seedOrgWithChart("lostrec");
+    const year = new Date().getUTCFullYear();
+    await openCurrentYearPeriod(asAdmin, orgId, year);
+    await queueExpense(t, orgId, userId, Date.UTC(year, 5, 10), "lost_record");
+
+    const rowId = (await outboxRow(t, orgId, "lost_record"))._id;
+    await t.mutation(internal.accountingOutbox.claimOutboxRow, { rowId });
+
+    // The scheduler record is gone — expired, or never recorded.
+    await t.run(async (ctx: any) => {
+      await ctx.db.patch(rowId, { scheduledFunctionId: undefined });
+    });
+
+    const result = await t.mutation(internal.accountingOutbox.observeOutboxAttempt, { rowId });
+
+    expect(result.transition, "an unreadable attempt is a FAILED attempt").toBe("RETRY");
+    const row = await outboxRow(t, orgId, "lost_record");
+    expect(row.dispatchState, "the claim is released so a fresh generation can run").toBeUndefined();
+    expect(row.activeAttemptId).toBeUndefined();
+    expect(row.attempts, "and it costs exactly one attempt, so it dead-letters eventually").toBe(1);
+    expect(row.nextActionAt, "released with a backoff, not immediately due").toBeGreaterThan(Date.now());
+    expect(row.status, "still retryable").toBe("PENDING");
+  });
+
+  test("[fixture 16] the due sweep RE-OBSERVES a claimed row rather than re-dispatching it", async () => {
+    // If the sweep only ever selected unclaimed rows, a worker that died would
+    // leave its row claimed with nobody left to ask about it. And if it
+    // re-CLAIMED instead of observing, one obligation could have two live
+    // workers — the duplicate-journal risk the generation guard exists for.
+    const { t, orgId, userId, asAdmin } = await seedOrgWithChart("lostobs");
+    const year = new Date().getUTCFullYear();
+    await openCurrentYearPeriod(asAdmin, orgId, year);
+    await queueExpense(t, orgId, userId, Date.UTC(year, 5, 10), "lost_observer");
+
+    const rowId = (await outboxRow(t, orgId, "lost_observer"))._id;
+    const claim = await t.mutation(internal.accountingOutbox.claimOutboxRow, { rowId });
+
+    // The observation deadline passes with the worker's fate unknown.
+    await t.run(async (ctx: any) => await ctx.db.patch(rowId, { nextActionAt: Date.now() - 1000 }));
+
+    const due = await t.query(internal.accountingOutbox.selectDueOutboxWork, {});
+    expect(
+      due.awaitingObservation.map((r: any) => r.idempotencyKey),
+      "a claimed, overdue row is offered for OBSERVATION"
+    ).toEqual(["lost_observer"]);
+    expect(
+      due.unclaimed.map((r: any) => r.idempotencyKey),
+      "and never as fresh work — that would be a second worker on one obligation"
+    ).toEqual([]);
+
+    // The sweep itself must not mint a new claim over the live one.
+    await t.mutation(internal.accountingOutbox.dispatchDueOutboxWork, {});
+    const row = await outboxRow(t, orgId, "lost_observer");
+    expect(row.generation, "the sweep did not re-claim").toBe(claim.generation);
+    expect(row.activeAttemptId).toBe(claim.attemptId);
+  });
+});
+
+/**
+ * SCRUM-222 GATE 2 — A STALE GENERATION MAY NOT TOUCH ANYTHING.
+ *
+ * Required by owner ruling `c17365`: given a stale generation N while the row is
+ * owned by N+1, N must not post, must not reverse, must not complete or release
+ * N+1, and must produce zero accounting delta.
+ *
+ * ⚠️ THE STALE STATE IS BUILT THROUGH REAL DOORS, NOT FABRICATED. The first
+ * claim is issued by `claimOutboxRow`, its scheduled worker is CANCELLED so the
+ * real observer sees a genuinely dead execution and releases the claim, and the
+ * second claim is issued by the same production dispatcher. So the identities N
+ * and N+1 are the ones production actually mints. A test that invented its own
+ * attempt id would never exercise the guard — that exact mistake is recorded in
+ * `test-utils/authorityWork.ts:12-16`.
+ *
+ * ⚠️ AND THIS IS THE CASE THAT CANNOT FAIL ON UNPATCHED MAIN, because neither
+ * the generation nor the worker exists there. Its value comes from the mutation
+ * proof: delete the two guard lines in `postOutboxRow` and this test must fail.
+ * That run is recorded in the Stage B evidence rather than left as an assertion
+ * about an assertion.
+ */
+describe("SCRUM-222 — a superseded worker writes nothing", () => {
+  async function claimTwice(t: any, orgId: any, key: string) {
+    // First claim: generation N.
+    const rowId = (await outboxRow(t, orgId, key))._id;
+    const first = await t.mutation(internal.accountingOutbox.claimOutboxRow, { rowId });
+    expect(first.claimed).toBe(true);
+
+    // Kill its worker for real, so the observer reads a dead execution rather
+    // than a state the test fabricated.
+    await t.run(async (ctx: any) => {
+      const row = await ctx.db.get(rowId);
+      await ctx.scheduler.cancel(row.scheduledFunctionId);
+    });
+    await t.mutation(internal.accountingOutbox.observeOutboxAttempt, { rowId });
+
+    // The observer released the claim with a backoff; move the clock as the
+    // one-minute cron would, then let the dispatcher mint generation N+1.
+    await t.run(async (ctx: any) => await ctx.db.patch(rowId, { nextActionAt: undefined }));
+    const second = await t.mutation(internal.accountingOutbox.claimOutboxRow, { rowId });
+    expect(second.claimed).toBe(true);
+    expect(second.generation).toBeGreaterThan(first.generation);
+
+    return { rowId, stale: first, active: second };
+  }
+
+  test("[POST] generation N cannot post while N+1 owns the row", async () => {
+    const { t, orgId, userId, asAdmin } = await seedOrgWithChart("staleposta");
+    const year = new Date().getUTCFullYear();
+    await openCurrentYearPeriod(asAdmin, orgId, year);
+    const accountingDate = Date.UTC(year, 5, 10);
+
+    await queueExpense(t, orgId, userId, accountingDate, "stale_post");
+    const { rowId, stale, active } = await claimTwice(t, orgId, "stale_post");
+
+    const before = await glFootprint(t, orgId);
+
+    // The stale worker arrives late, carrying a perfectly valid-looking
+    // identity that is simply no longer the active one.
+    const result = await t.mutation(internal.accountingOutbox.postOutboxRow, {
+      rowId,
+      attemptId: stale.attemptId,
+      generation: stale.generation,
+    });
+
+    expect(result.outcome, "a superseded execution is history, not a failure").toBe("SUPERSEDED");
+    // ZERO ACCOUNTING DELTA.
+    expect(await glFootprint(t, orgId)).toEqual(before);
+
+    // ...and it did not complete or release the live attempt either.
+    const row = await outboxRow(t, orgId, "stale_post");
+    expect(row.status, "N did not terminalize the row").toBe("PENDING");
+    expect(row.dispatchState, "N+1 still owns the claim").toBe("DISPATCHED");
+    expect(row.activeAttemptId).toBe(active.attemptId);
+    expect(row.generation).toBe(active.generation);
+  });
+
+  test("[REVERSE] generation N cannot reverse while N+1 owns the row", async () => {
+    const { t, orgId, userId, asAdmin } = await seedOrgWithChart("stalerev");
+    const year = new Date().getUTCFullYear();
+    await openCurrentYearPeriod(asAdmin, orgId, year);
+    const accountingDate = Date.UTC(year, 5, 10);
+
+    const originalEventId = await postExpenseCleanly(
+      t, orgId, userId, accountingDate, "stale_rev_source"
+    );
+    await queueReversal(t, orgId, userId, originalEventId, accountingDate, "stale_rev");
+    const { rowId, stale, active } = await claimTwice(t, orgId, "stale_rev");
+
+    const before = await glFootprint(t, orgId);
+
+    const result = await t.mutation(internal.accountingOutbox.postOutboxRow, {
+      rowId,
+      attemptId: stale.attemptId,
+      generation: stale.generation,
+    });
+
+    expect(result.outcome).toBe("SUPERSEDED");
+    // No reversal journal, and the original is untouched — the REVERSE path
+    // writes more than POST does (authority work, deposit applications), so a
+    // stale reversal is the more expensive mistake.
+    expect(await glFootprint(t, orgId)).toEqual(before);
+    const original = await t.run(async (ctx: any) => await ctx.db.get(originalEventId));
+    expect(original.status, "the original was not reversed by a stale worker").toBe("POSTED");
+
+    const row = await outboxRow(t, orgId, "stale_rev");
+    expect(row.dispatchState).toBe("DISPATCHED");
+    expect(row.activeAttemptId).toBe(active.attemptId);
+    expect(row.generation).toBe(active.generation);
+  });
+});
+
+/**
  * SCRUM-222 STAGE A — the EXACT selector, run locally before the runtime gate.
  *
  * ⚠️ THIS TESTS A DIFFERENT QUERY FROM THE PROBE BELOW, AND THE DIFFERENCE IS
@@ -613,6 +838,48 @@ describe("SCRUM-222 §4.2 — the exact due-work selector, locally", () => {
  * on a real non-production Convex deployment — is what certifies that, and this
  * test does not substitute for it.
  */
+/**
+ * SCRUM-222 §3.5 — THE FALSIFIER FOR THE CALLEE-DERIVED ENUMERATION.
+ *
+ * ⚠️ THIS EXISTS BECAUSE I GOT THE ENUMERATION WRONG ONCE. An earlier revision
+ * listed the `drainEntries` callers a REVIEW had named and asserted the list was
+ * exhaustive; the next round found a fourth — the per-org drain helper, which had no
+ * cursor and no pass budget and therefore none of the starvation fixes. The
+ * lesson was about the DIRECTION of the search: enumerate from the callee, never
+ * from someone else's findings list. A prose claim of exhaustiveness cannot be
+ * re-run. This can.
+ */
+describe("SCRUM-222 §3.5 — the retired drain door stays retired", () => {
+  test("[fixture 20] the retired per-org drain helper has no definition and no caller", async () => {
+    const { readdirSync, readFileSync, statSync } = await import("node:fs");
+    const { join, dirname } = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+
+    // Assembled from parts so this file does not match its own search — which
+    // is cheaper and less brittle than special-casing an exclusion path.
+    const RETIRED = "drainPending" + "ForOrg";
+
+    const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const hits: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir)) {
+        if (entry === "node_modules" || entry === ".git" || entry === "_generated") continue;
+        const full = join(dir, entry);
+        if (statSync(full).isDirectory()) {
+          walk(full);
+          continue;
+        }
+        if (!/\.(ts|tsx)$/.test(entry)) continue;
+        if (readFileSync(full, "utf8").includes(RETIRED)) hits.push(full);
+      }
+    };
+    walk(join(repoRoot, "convex"));
+    walk(join(repoRoot, "test-utils"));
+
+    expect(hits, `the retired drain helper is still referenced in: ${hits.join(", ")}`).toEqual([]);
+  });
+});
+
 describe("SCRUM-222 §4.2 — an absent optional field must stay index-visible", () => {
   test("a row with the indexed optional field ABSENT is matched by eq(field, undefined)", async () => {
     const { t, orgId, userId } = await seedOrgWithChart("selector");
@@ -655,3 +922,4 @@ describe("SCRUM-222 §4.2 — an absent optional field must stay index-visible",
     expect(absentOnly).toEqual(["selector_legacy_1", "selector_legacy_2"]);
   });
 });
+

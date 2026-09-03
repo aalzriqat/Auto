@@ -1,12 +1,12 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { getReceivableOutstandingMinor } from "./subledger";
-import { drainPendingForOrg } from "./accountingOutbox";
 import { postAccountingEvent } from "./accounting/postingEngine";
+import { settleOutbox } from "../test-utils/outboxWork";
 
 /**
  * SCRUM-51 / 237-A — Claims is retired as a finance-company AR authority.
@@ -328,14 +328,21 @@ describe("SCRUM-51 — a queued claim event can never post, however it got queue
         })
       );
 
-      const result = await s.t.run((ctx) =>
-        drainPendingForOrg(ctx as unknown as MutationCtx, s.orgId)
-      );
+      await settleOutbox(s.t, s.orgId);
 
-      // Failed, not posted. A retired event will never become postable, so
-      // holding it would retry forever and describe a wait that never ends.
-      expect(result.posted).toBe(0);
-      expect(result.failed).toBe(1);
+      // Failed, not posted, and NOT held. A retired event will never become
+      // postable, so holding it would retry forever and describe a wait that
+      // never ends. The distinction now lives in durable state rather than in a
+      // returned counter: a HELD row burns zero attempts, a FAILED one burns
+      // exactly the attempt it just spent.
+      const queued = await s.t.run(async (ctx: any) =>
+        (await ctx.db.query("pendingAccountingEvents").collect()).filter(
+          (r: any) => String(r.orgId) === String(s.orgId)
+        )
+      );
+      expect(queued).toHaveLength(1);
+      expect(queued[0].status).not.toBe("POSTED");
+      expect(queued[0].attempts, "failed, not held — a held row spends nothing").toBeGreaterThanOrEqual(1);
 
       // The assertion that matters is in the ledger, not in the counters.
       const events = await s.t.run((ctx) => ctx.db.query("accountingEvents").collect());

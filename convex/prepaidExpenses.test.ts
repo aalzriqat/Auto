@@ -22,6 +22,8 @@ import { recognizedThroughMonthsMinor, monthAmountMinor } from "./utils/expenseA
 import { computePrepaidRecognitionShortfall } from "./accountingReports";
 import { toYearMonth } from "./prepaidExpenses";
 
+import { settleOutbox, heldRows, makeDue } from "../test-utils/outboxWork";
+
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),
@@ -1374,8 +1376,12 @@ describe("Phase 3 — redriveScheduleEvents", () => {
     const result = await asOwner.mutation(api.prepaidExpenses.redriveScheduleEvents, {
       orgId, scheduleId: schedule!._id,
     });
-    expect(result.posted).toBe(1);
-    expect(result.failed).toBe(0);
+    // ⚠️ THE BUTTON REPORTS WHAT IT QUEUED, NOT WHAT IT POSTED (SCRUM-222).
+    // Posting now happens in the worker's own transaction, so this mutation
+    // cannot know the outcome; claiming one would be a false success on a money
+    // path. Whether the work actually posted is asserted below, from the row.
+    expect(result.scheduled).toBeGreaterThanOrEqual(1);
+    await settleOutbox(t, orgId);
 
     const targetRow = await t.run((ctx) =>
       ctx.db
@@ -1408,7 +1414,10 @@ describe("Phase 3 — redriveScheduleEvents", () => {
     const result = await asOwner.mutation(api.prepaidExpenses.redriveScheduleEvents, {
       orgId, scheduleId: schedule!._id,
     });
-    expect(result).toEqual({ posted: 0, failed: 0, held: 0 });
+    // Nothing to revive and nothing to queue. Under SCRUM-222 the button
+    // reports what it QUEUED rather than what it posted, so "did nothing"
+    // reads as zeroes on both of those, not on posted/failed/held.
+    expect(result).toEqual({ revived: 0, scheduled: 0 });
   });
 });
 
@@ -2159,15 +2168,13 @@ describe("prepaid corrections — the outbox refuses to post them against an unb
     const { t, orgId, userId } = await seedDealer("drain-legacy");
     const { writeOffId } = await seedLegacyQueuedCorrection(t, orgId, userId);
 
-    const result = await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    await settleOutbox(t, orgId);
 
     // Both queued entries are held, for different reasons: the write-off by the
     // prepaid guard (its asset debit hasn't posted), and the 2025-dated asset
     // debit itself because no period covers 2025 in this org. Neither is
     // failing, so neither burns a retry attempt.
-    expect(result.held).toBe(2);
-    expect(result.posted).toBe(0);
-    expect(result.failed).toBe(0);
+    expect(await heldRows(t, orgId)).toHaveLength(2);
     // Prepaid Expenses is untouched: no credit without its debit.
     expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(0);
     expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(0);
@@ -2179,9 +2186,9 @@ describe("prepaid corrections — the outbox refuses to post them against an unb
     const { t, orgId, userId } = await seedDealer("drain-held-state");
     const { writeOffId } = await seedLegacyQueuedCorrection(t, orgId, userId);
 
-    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
-    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
-    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    await settleOutbox(t, orgId);
+    await settleOutbox(t, orgId);
+    await settleOutbox(t, orgId);
 
     const row = await t.run((ctx) => ctx.db.get(writeOffId));
     expect(row!.status).toBe("PENDING");
@@ -2195,7 +2202,7 @@ describe("prepaid corrections — the outbox refuses to post them against an unb
     const { t, orgId, userId } = await seedDealer("drain-unblocks");
     const { expenseId, scheduleId } = await seedLegacyQueuedCorrection(t, orgId, userId);
 
-    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    await settleOutbox(t, orgId);
     expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(0);
 
     // The source expense's own month finally posts.
@@ -2209,7 +2216,10 @@ describe("prepaid corrections — the outbox refuses to post them against an unb
       })
     );
 
-    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    // The hold carries a backoff, so the row is not due again yet — advancing
+    // the clock is what the one-minute cron does for free in production.
+    await makeDue(t, orgId);
+    await settleOutbox(t, orgId);
 
     // Now the credit lands, with its debit already in place.
     expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(300_000);
@@ -2255,8 +2265,8 @@ describe("prepaid corrections — the outbox refuses to post them against an unb
       })
     );
 
-    const result = await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
-    expect(result.held).toBe(1);
+    await settleOutbox(t, orgId);
+    expect(await heldRows(t, orgId)).toHaveLength(1);
     expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(0);
   });
 
@@ -2281,7 +2291,7 @@ describe("prepaid corrections — the outbox refuses to post them against an unb
       })
     );
 
-    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    await settleOutbox(t, orgId);
 
     // End state, not the drain's counters: opening a period schedules its own
     // background drain, so which call actually posts the row is a race. What
@@ -2312,10 +2322,9 @@ describe("prepaid corrections — the outbox refuses to post them against an unb
       })
     );
 
-    const result = await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    await settleOutbox(t, orgId);
 
-    expect(result.held).toBe(1);
-    expect(result.posted).toBe(0);
+    expect(await heldRows(t, orgId)).toHaveLength(1);
     expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(0);
     expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(0);
   });
@@ -2350,9 +2359,9 @@ describe("prepaid corrections — the outbox refuses to post them against an unb
       })
     );
 
-    const result = await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    await settleOutbox(t, orgId);
 
-    expect(result.held).toBe(1);
+    expect(await heldRows(t, orgId)).toHaveLength(1);
     expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(0);
   });
 
@@ -2372,6 +2381,11 @@ describe("prepaid corrections — the outbox refuses to post them against an unb
     await asOwner.mutation(api.accountingPeriods.open, { orgId, periodId: p2025._id });
 
     await asOwner.mutation(api.prepaidExpenses.redriveScheduleEvents, { orgId, scheduleId });
+    // The button queues the work; the worker does it. Two settles because the
+    // write-off is guarded until its own source debit has actually POSTED, so
+    // the second pass is the one that can see the first pass's result.
+    await settleOutbox(t, orgId);
+    await settleOutbox(t, orgId);
 
     // Both rows go: the debit first, then the write-off that depends on it.
     // Asserted as end state — opening the 2025 period above schedules its own
@@ -2433,3 +2447,4 @@ describe("prepaid corrections — non-finite money inputs", () => {
     expect(Number.isFinite(after!.totalMinor)).toBe(true);
   });
 });
+
