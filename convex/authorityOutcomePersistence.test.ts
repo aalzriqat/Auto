@@ -609,8 +609,13 @@ describe("a rejected eager dispatch after the row is POSTED", () => {
     // QUEUED. The understatement caveat is moot and the `failed` lie has
     // nowhere left to live, because there is no failure counter here to be
     // wrong about.
+    // `alreadyInFlight: 0` is part of the contract, not padding (c17375): this
+    // row was queued by THIS drain, so nothing about it was already in flight.
+    // The two counts answer different questions and a caller must be able to
+    // tell them apart.
     expect(counters, "the drain reports what it queued, not what it posted").toEqual({
       scheduled: 1,
+      alreadyInFlight: 0,
     });
 
     // The journal was not duplicated by the failure.

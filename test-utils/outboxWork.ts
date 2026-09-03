@@ -171,6 +171,53 @@ export async function makeDue(
 }
 
 /**
+ * Drain every scheduled function the FIXTURE left behind, and PROVE none
+ * remains — under real timers, before any freeze.
+ *
+ * ⚠️ THIS EXISTS BECAUSE FIXTURE SETUP SCHEDULES WORK OF ITS OWN, AND THAT WORK
+ * CAN DO THE SYSTEM'S JOB FOR IT. `chartOfAccounts.initialize` and
+ * `accountingPeriods.open` each call
+ * `runAfter(0, drainPendingAccountingEvents)` UNCONDITIONALLY. A leftover drain
+ * that fires later — inside the frozen block of a test asserting that some
+ * action scheduled a claim — would schedule that claim itself, and the
+ * assertion would pass against an implementation that scheduled nothing. Both
+ * review seats found this independently (owner ruling c17375).
+ *
+ * ⚠️ AND `finishAllScheduledFunctions` CANNOT CLOSE IT. It waits for executions
+ * that have already STARTED; it has no way to force a real `setTimeout` that has
+ * not yet fired, and `vi.runAllTimers()` only reaches timers registered under a
+ * fake clock installed beforehand. The only way to know a real timer has fired
+ * is to let the real event loop turn and re-read the queue.
+ *
+ * Throws rather than returning quietly when work is still outstanding: a test
+ * that proceeds from a contaminated fixture is measuring the fixture.
+ */
+export async function quiesceScheduler(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  t: any,
+  maxPasses = 25
+): Promise<void> {
+  for (let pass = 0; pass < maxPasses; pass += 1) {
+    // Yield to the REAL loop so any pending real timer fires and its mutation
+    // runs to completion before we look again.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const outstanding: number = await t.run(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async (ctx: any) =>
+        (await ctx.db.system.query("_scheduled_functions").collect()).filter(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (f: any) => f.state.kind === "pending" || f.state.kind === "inProgress"
+        ).length
+    );
+    if (outstanding === 0) return;
+  }
+  throw new Error(
+    "quiesceScheduler: fixture scheduled work is still outstanding after " +
+      `${maxPasses} passes — this test would be measuring the fixture, not the code under test`
+  );
+}
+
+/**
  * Run `body` with the scheduler frozen, so nothing scheduled inside it can run
  * until the test says so.
  *

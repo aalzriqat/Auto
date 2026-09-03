@@ -139,9 +139,22 @@ export function AccountingSetupTab() {
             // this transaction cannot know a posted/failed split — reporting
             // one would put back, one layer up, the false success the outbox
             // itself stopped making.
-            (outcome) =>
-              t("AccountingOutboxRedrivenResult" as any)
-                .replace("{scheduled}", String(outcome.scheduled))
+            //
+            // Three states, every one of them read from the backend's own
+            // counts (owner ruling c17375): queued now, already in flight, or
+            // genuinely nothing left. "Already posting" is NOT an empty result,
+            // and collapsing it into one would be the same false claim again.
+            (outcome) => {
+              if (outcome.scheduled > 0) {
+                return t("AccountingOutboxRedrivenResult" as any)
+                  .replace("{scheduled}", String(outcome.scheduled));
+              }
+              if (outcome.alreadyInFlight > 0) {
+                return t("AccountingOutboxRedriveInFlight" as any)
+                  .replace("{inFlight}", String(outcome.alreadyInFlight));
+              }
+              return t("AccountingOutboxRedriveNothing" as any);
+            }
           );
         }}
         periodDialog={

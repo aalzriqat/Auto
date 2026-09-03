@@ -1417,7 +1417,82 @@ describe("Phase 3 — redriveScheduleEvents", () => {
     // Nothing to revive and nothing to queue. Under SCRUM-222 the button
     // reports what it QUEUED rather than what it posted, so "did nothing"
     // reads as zeroes on both of those, not on posted/failed/held.
-    expect(result).toEqual({ revived: 0, scheduled: 0 });
+    //
+    // ⚠️ AND `alreadyInFlight: 0` IS LOAD-BEARING HERE, not noise. This is the
+    // GENUINELY-nothing case; the test below is the case that used to be
+    // indistinguishable from it.
+    expect(result).toEqual({ revived: 0, scheduled: 0, alreadyInFlight: 0 });
+  });
+
+  /**
+   * L01 (owner ruling `c17375`) — A ROW A WORKER IS ALREADY POSTING IS NOT AN
+   * EMPTY RESULT.
+   *
+   * `drainEntries` skips a row that already carries an outstanding attempt,
+   * which is correct — re-dispatching it is exactly the duplicate this ticket
+   * exists to prevent. But every count it returned folded that skip into the
+   * same zero as "there was nothing here", so this button answered "nothing
+   * queued for this schedule" on the very schedule a worker was mid-post on.
+   * Reporting a skip as an absence is the same false claim as reporting a queue
+   * as a post, one refusal further along.
+   *
+   * The state is built through the REAL claim door, with timers frozen so the
+   * worker cannot run and release it — precisely what an accountant hits when
+   * they press redrive while an attempt is in flight.
+   */
+  test("[L01] rows a worker is already posting report as IN FLIGHT, never as nothing to do", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("redrive-inflight");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+
+    // A queued amortization row for THIS schedule, in the shape the drain
+    // selects on. `amortize` posts inline rather than through the outbox, so it
+    // cannot produce the queued row this case needs.
+    await t.run((ctx) =>
+      ctx.db.insert("pendingAccountingEvents", {
+        orgId, kind: "POST", status: "PENDING",
+        idempotencyKey: `prepaid_amort_${schedule!._id}_2026-03`,
+        accountingDate: Date.UTC(2026, 2, 1), actorId: userId, attempts: 0, createdAt: Date.now(),
+        eventType: "PREPAID_EXPENSE_AMORTIZED", sourceType: "prepaidExpenseSchedules", currency: "JOD",
+        sourceId: `prepaid_amort_${schedule!._id}_2026-03`,
+        payload: {
+          scheduleId: schedule!._id.toString(), amountMinor: 100_000, currency: "JOD",
+          expenseSystemKey: "PROFESSIONAL_FEES_EXPENSE", yearMonth: "2026-03",
+        },
+      })
+    );
+
+    // Claim EVERY pending row, so the schedule's own source-expense row cannot
+    // land in `scheduled` and blunt the assertion below.
+    const pendingIds = await t.run(async (ctx) =>
+      (await ctx.db.query("pendingAccountingEvents").collect())
+        .filter((r) => r.status === "PENDING")
+        .map((r) => r._id)
+    );
+    expect(pendingIds.length).toBeGreaterThan(0);
+
+    let result;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      for (const rowId of pendingIds) {
+        const claim = await t.mutation(internal.accountingOutbox.claimOutboxRow, { rowId });
+        expect(claim.claimed).toBe(true);
+      }
+      result = await asOwner.mutation(api.prepaidExpenses.redriveScheduleEvents, {
+        orgId, scheduleId: schedule!._id,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // Nothing was revived and nothing could be queued — but that is NOT the
+    // same answer as the clean-schedule case above, and the caller can now tell.
+    expect(result!.revived).toBe(0);
+    expect(result!.scheduled).toBe(0);
+    expect(result!.alreadyInFlight).toBeGreaterThanOrEqual(1);
   });
 });
 

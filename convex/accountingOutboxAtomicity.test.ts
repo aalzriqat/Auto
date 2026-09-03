@@ -34,6 +34,7 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { drainEntries, enqueuePendingReversal } from "./accountingOutbox";
 import {
+  quiesceScheduler,
   scheduledClaimsFor,
   settleScheduledOnly,
   withFrozenScheduler,
@@ -574,10 +575,18 @@ describe("SCRUM-222 §5.2 — a revived row is immediately eligible", () => {
     await openCurrentYearPeriod(asAdmin, orgId, year);
     const accountingDate = Date.UTC(year, 5, 10);
 
-    // Chart initialization and period opening each schedule their own drains.
-    // Flush them, or a leftover sweep would dispatch the row below and this test
-    // would be measuring the fixture instead of `retryFailed`.
-    await withFrozenScheduler(() => settleScheduledOnly(t, orgId));
+    // Chart initialization and period opening each schedule their own drains,
+    // UNCONDITIONALLY, on real timers before any freeze exists. `quiesceScheduler`
+    // drains them and PROVES the queue is empty — it throws rather than
+    // proceeding, because a leftover drain firing inside the frozen block below
+    // would schedule the claim in `retryFailed`'s place and this test would pass
+    // against an implementation that scheduled nothing.
+    //
+    // An earlier version flushed with `withFrozenScheduler(settleScheduledOnly)`,
+    // which could not close the hole: freezing AFTER the fixture scheduled its
+    // work leaves those real timers unreachable by the pump, and nothing
+    // asserted the queue was actually empty.
+    await quiesceScheduler(t);
 
     const pendingEventId = await t.run(async (ctx: any) =>
       await ctx.db.insert("pendingAccountingEvents", {

@@ -708,8 +708,15 @@ export const redriveScheduleEvents = mutation({
     // ⚠️ REPORTS WHAT WAS QUEUED, NOT WHAT WAS POSTED. Posting is asynchronous
     // now, so this transaction cannot know how many rows posted; saying so
     // would be a false success on a money path.
-    const { scheduled } = await drainEntries(ctx, stored);
-    return { revived, scheduled };
+    //
+    // ⚠️ AND IT DISTINGUISHES "NOTHING TO DO" FROM "ALREADY DOING IT" (owner
+    // ruling c17375). `alreadyInFlight` counts this schedule's rows that a
+    // worker is posting right now. Folding those into a zero made the button
+    // answer "nothing queued for this schedule" on the very schedule it was
+    // actively posting — so the caller gets all three states and does not have
+    // to infer one from the schedule's own totals.
+    const { scheduled, alreadyInFlight } = await drainEntries(ctx, stored);
+    return { revived, scheduled, alreadyInFlight };
   },
 });
 

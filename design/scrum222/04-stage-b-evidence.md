@@ -143,6 +143,52 @@ dispatch eagerly.
 gate). Verified pre-existing on `bf5769ed1`, where `drainEntries:1121` ran the
 identical `checkPostingAllowed` ahead of the `kind === "POST"` branch at `:1135`.
 
+## Round 3 — the bounded LOW closure (owner ruling `c17371` → `c17375`)
+
+Both seats APPROVED `f465d473f` (Sonnet MAX 0/0/0 + 3 LOW; Codex `xhigh` 0/0/0 +
+3 LOW). That SHA is preserved as approved implementation evidence. The owner then
+authorised a bounded LOW closure — **and ruled explicitly that the approvals do
+NOT carry forward across the SHA change**, so this successor needs fresh
+exact-head review from both seats.
+
+**L01 — a skip is not an absence.** `drainEntries` correctly refuses to
+re-dispatch a row that already carries an outstanding attempt; that refusal is
+the duplicate-prevention this whole ticket is for. But every count it returned
+folded that skip into the same zero as *"there was nothing here"*, so the prepaid
+redrive button answered **"nothing queued for this schedule" on the very schedule
+a worker was mid-post on**. Reporting a skip as an absence is the same false
+claim as reporting a queue as a post, one refusal further along — the third
+appearance of this ticket's own bug, after the backend counts (Stage B) and the
+UI copy (B01).
+
+The fix is in the backend, per the ruling: `drainEntries` now returns
+`{ scheduled, alreadyInFlight }`, `drainPageAndContinue` and
+`redriveScheduleEvents` propagate it, and **both** redrive surfaces render three
+distinct states — queued now / already in progress / genuinely nothing left —
+each read from the backend's own counts. **No client-side inference from
+`pendingMinor`**, which was the specific thing the owner prohibited.
+
+**B02 test hardening.** The old flush (`withFrozenScheduler(settleScheduledOnly)`)
+could not close the hole both seats found: `chartOfAccounts.initialize` and
+`accountingPeriods.open` each schedule a drain *unconditionally* on real timers
+before any freeze exists, and `finishAllScheduledFunctions` waits only for
+executions that have already **started** — it cannot force a real timer that has
+not fired, and `vi.runAllTimers()` reaches only timers registered under a fake
+clock installed beforehand. `quiesceScheduler` yields to the real event loop and
+re-reads `_scheduled_functions` until the queue is empty, and **throws** if it
+never empties, so a contaminated fixture fails loudly instead of quietly
+measuring itself.
+
+Deferred by the same ruling, deliberately untouched: `any` types in the harness,
+naming, and the dead `markEntryFailed` / `markEntryHeld` cosmetics. **SCRUM-226**
+(Medium) carries the pre-existing product gap — `retryFailed` is the documented
+dead-letter recovery door and has no UI entry point at all.
+
+| mutant | result |
+|---|---|
+| L01 — fold `alreadyInFlight` back into a bare `continue` | **killed**: `expected 0 to be greater than or equal to 1` |
+| B02 — remove the schedule from `retryFailed` | **killed 6/6 full-file runs, every one on the FIRST assertion** (`expected [] to have a length of 1`), which is what the ruling required |
+
 ## Gates
 
 ⚠️ **Both typecheck gates are required, and the round-1 evidence cited only one.**
@@ -159,13 +205,41 @@ project rather than by nothing.
 |---|---|---|
 | root / web typecheck | `pnpm typecheck` | **0 errors** — the gate B01 was hiding behind; it reported 6 × `TS2339` before the fix |
 | convex typecheck (incl. `test-utils/`) | `pnpm typecheck:convex` | **0 errors** |
-| lint, changed files | `npx eslint <8 files>` | **0 errors** (166 `any` warnings, matching neighbours) |
-| full convex suite | `npx vitest run convex/` | **3500 tests · 3478 passed · 0 failed · 22 skipped · 189/189 files · `success: true`** (JSON reporter) |
+| repo lint | `pnpm lint` | **0 errors** |
+| production build | `pnpm build` | **exit 0** |
+| full convex suite | `npx vitest run convex/` | **3501 tests · 3479 passed · 0 failed · 22 skipped · 189/189 files · `success: true`** (JSON reporter) |
 | i18n key coverage | `npx vitest run lib/i18n/keyCoverage.test.ts` | 8/8 |
-| tenant write-guard | `npx vitest run scripts/tenantWriteGuard.test.ts` | 8/8 after re-pinning (see below) |
+| tenant write-guard | `npx vitest run scripts/tenantWriteGuard.test.ts` | 8/8 (pin unchanged this round — no new mutations) |
 | §4.2 real-runtime gate | cloud DEV `scrum222-gate` | PASS (twice: Stage A and Stage B) |
 | generation-guard mutation | guard lines removed | PASS — both tests flip `SUPERSEDED` → `POSTED` |
-| B02 absence mutant | schedule removed | PASS — `[B02]` fails on **both** assertions independently (`expected [] to have a length of 1`; `expected 'PENDING' to be 'POSTED'`), while the pre-existing `[GREEN]` test **passes against the mutant**, which is the blindness itself |
+| B02 absence mutant | schedule removed | PASS — killed **6/6 full-file runs on the FIRST assertion** after hardening, as the ruling required |
+| L01 absence mutant | `alreadyInFlight` folded back into a bare `continue` | PASS — `expected 0 to be greater than or equal to 1` |
+
+### One real regression this round, caught by a shape pin — and how it hid
+
+`authorityOutcomePersistence.test.ts` asserts `toEqual({ scheduled: 1 })` on the
+drain's counters. Adding `alreadyInFlight` broke it, correctly. **Neither of my
+two safety nets could see it:** `toEqual` on an object literal is an exact-shape
+assertion, so *adding* a field breaks it — but the field name never appears as a
+property access, so a `\.scheduled` grep does not list it, and `toEqual` accepts a
+wider type, so `tsc` reports nothing.
+
+> For a return-shape change, grep the **key in an object literal**
+> (`scheduled:`) and every `toEqual` / `toMatchObject` on that function's result —
+> not just `.property` reads. **The test run is the only total consumer check
+> that exists.**
+
+### A pre-existing failure, proven pre-existing rather than assumed
+
+`subscriptionGates.test.ts > professional plans allow professional gates but not
+enterprise gates` failed with `finishAllScheduledFunctions: scheduled function
+did not complete after 10000 timer pumps` — and, unlike the load flakes, it
+reproduced **in isolation**. So it got a real control rather than a label: the
+working tree was reverted to exactly `f465d473f`, verified clean by
+`git status --porcelain`, and **the same test failed identically there**. Not
+caused by this round. (Round-3 work was preserved as a verbatim file copy plus a
+patch, and the restored tree was confirmed byte-identical by hashing the
+before/after diffs — no `git stash`, which is shared across worktrees here.)
 
 ⚠️ **The round-1 figure "3494 passed / 22 skipped" is not reproducible from
 `npx vitest run convex/` and is not carried forward.** That command collects 189

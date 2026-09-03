@@ -1527,19 +1527,30 @@ export const observeOutboxAttempt = internalMutation({
 export async function drainEntries(
   ctx: MutationCtx,
   entries: Doc<"pendingAccountingEvents">[]
-): Promise<{ scheduled: number }> {
+): Promise<{ scheduled: number; alreadyInFlight: number }> {
   let scheduled = 0;
+  let alreadyInFlight = 0;
   for (const p of entries) {
     // Terminal rows and rows already carrying an outstanding attempt are not
     // re-dispatched. A row whose `nextActionAt` is still in the future is
     // refused by `claimOutboxRow` itself, so an eager drain cannot short-circuit
     // a backoff or un-hold a held row early.
     if (p.status !== "PENDING") continue;
-    if (p.dispatchState === "DISPATCHED") continue;
+    // ⚠️ SKIPPED IS NOT THE SAME AS ABSENT, AND THE CALLER MUST BE ABLE TO TELL
+    // (owner ruling c17375). A row already carrying an outstanding attempt is
+    // REAL WORK IN FLIGHT, not an empty result — but every count this function
+    // returned made it indistinguishable from "there was nothing here", so an
+    // operator re-driving a schedule whose rows were mid-post was told "nothing
+    // queued" while a worker was posting them. Reporting a skip as an absence is
+    // the same false claim this ticket exists to remove, one refusal further on.
+    if (p.dispatchState === "DISPATCHED") {
+      alreadyInFlight += 1;
+      continue;
+    }
     await ctx.scheduler.runAfter(0, internal.accountingOutbox.claimOutboxRow, { rowId: p._id });
     scheduled += 1;
   }
-  return { scheduled };
+  return { scheduled, alreadyInFlight };
 }
 
 
@@ -1575,7 +1586,7 @@ async function drainPageAndContinue(
   limit: number,
   cursor: string | null,
   pass: number
-): Promise<{ scheduled: number }> {
+): Promise<{ scheduled: number; alreadyInFlight: number }> {
   const page = await ctx.db
     .query("pendingAccountingEvents")
     .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
@@ -1584,7 +1595,7 @@ async function drainPageAndContinue(
   const result = await drainEntries(ctx, page.page);
 
   console.log(
-    `[outbox-drain] org ${orgId} pass ${pass}: scheduled ${result.scheduled}`
+    `[outbox-drain] org ${orgId} pass ${pass}: scheduled ${result.scheduled}, already in flight ${result.alreadyInFlight}`
   );
 
   if (!page.isDone) {
