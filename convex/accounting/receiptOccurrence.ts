@@ -154,10 +154,18 @@ export const RECEIPT_PAYLOAD_VERSION = 2 as const;
  *
  * These are the EXACT prefixes already written to production rows by the
  * ACCOUNTING producers — `makeCollectionHook`'s
- * `idempotencyKey: \`${keyPrefix}_${paymentId}\`` at `workflowHooks.ts:943`,
- * instantiated as `hookCollectionPayment` at `workflowHooks.ts:957` and called
- * from `collections.ts:1099` and `collections.ts:1404`; and
+ * `idempotencyKey: \`${keyPrefix}_${paymentId}\``, instantiated as
+ * `hookCollectionPayment` (both in `workflowHooks.ts`) and called from
+ * `recordPayment` and `clearCheque` in `collections.ts`; and
  * `hookPaymentLinkReceived`'s `payment_link_received_<intentId>`.
+ *
+ * Cited by SYMBOL, deliberately, with no line numbers. The previous revision
+ * cited `workflowHooks.ts:943` and `:957`; the fix that added the ambiguity
+ * refusal earlier in that file shifted every line below it by +20, so the
+ * citation was stale again within one commit — and the stale numbers had
+ * already propagated into the PR description, a reviewer brief and two Jira
+ * comments before the Sonnet seat caught them. A line number is a claim with a
+ * short shelf life; a symbol name is one a reader can actually verify.
  *
  * NOT `collections.ts:474`. That line builds an identically-spelled key for
  * `createCanonicalPayment` — a `canonicalPayments` row, which this very file
@@ -177,22 +185,68 @@ const CHANNEL_KEY_PREFIX: Record<ReceiptChannel, string> = {
 };
 
 /**
- * The namespace that separates repeat-occurrence keys from legacy v1 keys.
+ * The two reserved namespaces: repeat FORWARD posts, and every REVERSAL.
  *
- * Disjointness is what makes the two key spaces non-colliding, so it is checked
- * at module load rather than left as a comment: adding a channel whose prefix
- * began with `occv` would silently reintroduce the collision this exists to
- * remove. A module-load throw is loud, immediate and impossible to miss.
+ * `occv` and `occr` are the same length and differ at index 3, so neither is a
+ * prefix of the other. Every key this module mints therefore begins with
+ * exactly one of: a channel prefix (legacy v1 forward), `occv` (repeat forward),
+ * or `occr` (reversal) — three spaces that cannot overlap.
  */
-const REPEAT_KEY_NAMESPACE = "occv";
+const POST_KEY_NAMESPACE = "occv";
+const REVERSAL_KEY_NAMESPACE = "occr";
+const RESERVED_NAMESPACES = [POST_KEY_NAMESPACE, REVERSAL_KEY_NAMESPACE] as const;
 
-for (const [channel, prefix] of Object.entries(CHANNEL_KEY_PREFIX)) {
-  if (prefix.startsWith(REPEAT_KEY_NAMESPACE)) {
-    throw new Error(
-      `channel ${channel} prefix "${prefix}" collides with the repeat-occurrence namespace "${REPEAT_KEY_NAMESPACE}"`
-    );
+/**
+ * Every property that keeps the LEGACY v1 forward branch injective, asserted
+ * rather than assumed.
+ *
+ * The v1 branch is `${prefix}_${sourceId}` and CANNOT be length-framed — it must
+ * stay byte-identical to rows already in production. Its safety therefore rests
+ * entirely on the prefix set, which makes the prefix set a load-bearing
+ * invariant rather than a naming choice.
+ *
+ * Two ways a future channel breaks it, both checked here:
+ *
+ *  1. A prefix inside a reserved namespace. `occv…` or `occr…` as a channel
+ *     prefix would let a v1 forward key impersonate a repeat or a reversal.
+ *
+ *  2. A prefix that is a prefix of another prefix — the case both review seats
+ *     independently raised. Adding `collection_payment_reissue` alongside
+ *     `collection_payment` collides with NO exotic characters at all:
+ *
+ *       "collection_payment_"         + "reissue_abc"  ==
+ *       "collection_payment_reissue_" + "abc"
+ *
+ *     `postOrEnqueue`'s `by_org_idempotency` short-circuit compares the string
+ *     key BEFORE `postAccountingEvent` ever compares the tuple, so the second
+ *     receipt is absorbed silently — the same mechanism as the original
+ *     injectivity defect, reached from a different direction.
+ *
+ * Exported so the property can be tested directly against a deliberately
+ * colliding pair, instead of only indirectly through module-load behaviour.
+ */
+export function assertChannelPrefixesUnambiguous(prefixes: readonly string[]): void {
+  for (const prefix of prefixes) {
+    for (const reserved of RESERVED_NAMESPACES) {
+      if (prefix.startsWith(reserved)) {
+        throw new Error(
+          `channel prefix "${prefix}" collides with the reserved namespace "${reserved}"`
+        );
+      }
+    }
+  }
+  for (const a of prefixes) {
+    for (const b of prefixes) {
+      if (a !== b && b.startsWith(a)) {
+        throw new Error(
+          `channel prefix "${a}" is a prefix of "${b}"; v1 keys built from them are not injective`
+        );
+      }
+    }
   }
 }
+
+assertChannelPrefixesUnambiguous(Object.values(CHANNEL_KEY_PREFIX));
 
 /**
  * `eventVersion` is typed `number`, which admits 0, negatives, fractions, NaN
@@ -315,20 +369,23 @@ export function paymentLinkReceipt(args: {
  * ## Backward compatibility
  *
  * For `eventVersion === 1` this returns byte-identical keys to those already
- * stored (`collection_payment_<paymentId>` from the hook factory at
- * `workflowHooks.ts:943`, `payment_link_received_<intentId>` from
- * `hookPaymentLinkReceived`), so existing POSTED events keep matching their own
- * replay check. Only the repeat-occurrence form changed, and nothing has ever
- * posted through it — the facade is unused — so the change carries no
- * migration.
+ * stored (`collection_payment_<paymentId>` from `makeCollectionHook`,
+ * `payment_link_received_<intentId>` from `hookPaymentLinkReceived`), so
+ * existing POSTED events keep matching their own replay check. Only the
+ * repeat-occurrence and reversal forms changed, and nothing has ever posted
+ * through either — the facade is unused — so the change carries no migration.
  *
  * `RECEIPT_PAYLOAD_VERSION` is deliberately absent from this computation.
  */
+function framedKey(namespace: string, id: ReceiptOccurrenceIdentity): string {
+  const prefix = CHANNEL_KEY_PREFIX[id.channel];
+  return `${namespace}${id.eventVersion}:${prefix.length}:${prefix}:${id.sourceId.length}:${id.sourceId}`;
+}
+
 export function occurrenceIdempotencyKey(id: ReceiptOccurrenceIdentity): string {
   assertOccurrence(id.eventVersion);
-  const prefix = CHANNEL_KEY_PREFIX[id.channel];
-  if (id.eventVersion === 1) return `${prefix}_${id.sourceId}`;
-  return `${REPEAT_KEY_NAMESPACE}${id.eventVersion}:${prefix.length}:${prefix}:${id.sourceId.length}:${id.sourceId}`;
+  if (id.eventVersion === 1) return `${CHANNEL_KEY_PREFIX[id.channel]}_${id.sourceId}`;
+  return framedKey(POST_KEY_NAMESPACE, id);
 }
 
 /**
@@ -340,9 +397,42 @@ export function occurrenceIdempotencyKey(id: ReceiptOccurrenceIdentity): string 
  * disagree, `cancelPendingPostByKey` cancels nothing and an unposted forward
  * entry survives a reversal that reported NOT_POSTED. Deriving both from the
  * one identity removes the opportunity.
+ *
+ * ## Why the role is INSIDE the encoding, not a suffix
+ *
+ * This was `${occurrenceIdempotencyKey(id)}_reversal` — an unframed suffix, i.e.
+ * exactly the defect that had just been removed from the version axis, left
+ * standing one axis over. The Codex seat found it at `45dd608b0`:
+ *
+ *     reverseKey(sourceId = "X")           ->  collection_payment_X_reversal
+ *     forwardKey(sourceId = "X_reversal")  ->  collection_payment_X_reversal
+ *
+ * Two distinct operations, one key. Both `accountingEvents` and
+ * `pendingAccountingEvents` dedupe through `by_org_idempotency`, so that could
+ * report REVERSED while the original stayed POSTED, silently discard a forward
+ * post, or skip enqueueing a reversal.
+ *
+ * The role now lives in the encoder rather than in a convention about suffixes,
+ * because fixing one axis and leaving another is how this defect recurred:
+ *
+ *   forward v1   ->  `${prefix}_${sourceId}`                       (legacy, exact)
+ *   forward v>1  ->  `occv${v}:${p.length}:${p}:${id.length}:${id}`
+ *   reversal ANY ->  `occr${v}:${p.length}:${p}:${id.length}:${id}`
+ *
+ * Reversals are framed at EVERY version, including v1. Unlike the forward key,
+ * this carries no backward-compatibility constraint: no production reversal key
+ * of this shape has ever been written. Verified rather than assumed — reversal
+ * keys today are per-hook literals built by `makeReversalHook` (e.g.
+ * `sale_cancelled_${saleId}`) or the `reversed_${key}` prefix form, and NO
+ * reversal hook exists for `COLLECTION_PAYMENT` at all.
+ *
+ * Note the existing `reversed_${key}` prefix form was already safe, because a
+ * forward key always begins with a channel prefix. Choosing a suffix instead
+ * was a deviation from a convention that worked.
  */
 export function occurrenceReversalIdempotencyKey(id: ReceiptOccurrenceIdentity): string {
-  return `${occurrenceIdempotencyKey(id)}_reversal`;
+  assertOccurrence(id.eventVersion);
+  return framedKey(REVERSAL_KEY_NAMESPACE, id);
 }
 
 /**

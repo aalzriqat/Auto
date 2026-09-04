@@ -27,6 +27,7 @@ import {
   occurrenceReversalIdempotencyKey,
   occurrenceIndexRange,
   describeOccurrence,
+  assertChannelPrefixesUnambiguous,
   RECEIPT_PAYLOAD_VERSION,
 } from "./accounting/receiptOccurrence";
 import {
@@ -69,14 +70,17 @@ describe("SCRUM-237 §1 — the identity map matches the owner-proxy ruling", ()
 
 describe("SCRUM-237 §2 — the derived key is byte-identical to what production stores", () => {
   // This is the compatibility floor. The live ACCOUNTING producers write
-  // `collection_payment_<paymentId>` — `makeCollectionHook` at
-  // workflowHooks.ts:943, instantiated at :957, called from collections.ts:1099
-  // and :1404 — and `payment_link_received_<intentId>` from
-  // hookPaymentLinkReceived. NOT collections.ts:474: that builds an
-  // identically-spelled key for a `canonicalPayments` row, a different table
-  // and a different job. If the derivation drifts from these literals, every
-  // already-POSTED event stops matching its own replay check in `postOrEnqueue`
-  // and would re-post.
+  // `collection_payment_<paymentId>` — `makeCollectionHook`, instantiated as
+  // `hookCollectionPayment` (workflowHooks.ts), called from `recordPayment` and
+  // `clearCheque` (collections.ts) — and `payment_link_received_<intentId>`
+  // from `hookPaymentLinkReceived`. NOT `mirrorCollectionPaymentToCanonical`:
+  // that builds an identically-spelled key for a `canonicalPayments` row, a
+  // different table and a different job. If the derivation drifts from these
+  // literals, every already-POSTED event stops matching its own replay check in
+  // `postOrEnqueue` and would re-post.
+  //
+  // Cited by symbol, not line number: the previous revision's numbers went stale
+  // within one commit when an earlier fix shifted the file by +20 lines.
   test("direct collection reproduces collection_payment_<paymentId> exactly", () => {
     const id = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
     expect(occurrenceIdempotencyKey(id)).toBe("collection_payment_pay_abc");
@@ -308,9 +312,29 @@ describe("SCRUM-237 §8 — c17593 evidence: legacy tokens and channel confusion
     const b = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
     expect(occurrenceIdempotencyKey(a)).toBe(occurrenceIdempotencyKey(b));
     expect(occurrenceReversalIdempotencyKey(a)).toBe(occurrenceReversalIdempotencyKey(b));
-    // And the reversal key is derived from the SAME base, so a reversal can
-    // never be pointed at a different occurrence than its forward post.
-    expect(occurrenceReversalIdempotencyKey(a)).toBe(`${occurrenceIdempotencyKey(a)}_reversal`);
+
+    // Runtime determinism is necessary but NOT sufficient, as the Codex seat
+    // pointed out: it would still pass if someone added an optional
+    // caller-supplied key parameter and simply never passed it here. The real
+    // guard is a COMPILE error. An unused @ts-expect-error is ts(2578), so these
+    // fail loudly the day a second parameter appears.
+    // @ts-expect-error a second argument must not exist on the forward key
+    occurrenceIdempotencyKey(a, "caller-supplied-key");
+    // @ts-expect-error a second argument must not exist on the reversal key
+    occurrenceReversalIdempotencyKey(a, "caller-supplied-key");
+
+    // The reversal key tracks the SAME identity as its forward post — change any
+    // identity field and it moves — while living in a namespace disjoint from
+    // every forward key, so it can never BE one.
+    //
+    // This previously asserted the literal shape `${forwardKey}_reversal`, which
+    // is an assertion about the patch rather than the property: it passed
+    // against the very encoding that made a reversal key collide with another
+    // occurrence's forward key.
+    const other = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT, occurrence: 2 });
+    expect(occurrenceReversalIdempotencyKey(a)).not.toBe(occurrenceReversalIdempotencyKey(other));
+    expect(occurrenceReversalIdempotencyKey(a)).not.toBe(occurrenceIdempotencyKey(a));
+    expect(occurrenceReversalIdempotencyKey(a)).not.toBe(occurrenceIdempotencyKey(other));
   });
 });
 
@@ -331,12 +355,12 @@ describe("SCRUM-237 §8 — c17593 evidence: legacy tokens and channel confusion
  * source-family type live at every call site in this file.
  */
 async function seedCollectionPayment(
-  t: any,
+  t: TestHarness,
   orgId: Id<"organizations">,
   customerId: Id<"customers">,
   userId: Id<"users">
 ): Promise<Id<"collectionPayments">> {
-  return (await t.run((ctx: any) =>
+  return (await t.run((ctx) =>
     ctx.db.insert("collectionPayments", {
       orgId, customerId, direction: "IN", method: "CASH",
       amount: 5000, paymentDate: Date.now(), status: "POSTED", cashierId: userId,
@@ -397,9 +421,15 @@ function receiptPayload(paymentId: string, customerId: string, amountMinor: numb
   return { paymentId, customerId, amountMinor, currency: "USD", paymentMethod: "CASH" };
 }
 
-async function eventsFor(t: any, orgId: any) {
-  return await t.run(async (ctx: any) =>
-    ctx.db.query("accountingEvents").withIndex("by_org", (q: any) => q.eq("orgId", orgId)).collect()
+// Pinned to `typeof schema`. The bare `ReturnType<typeof convexTestWithComponents>`
+// drops the Schema generic, which collapses ctx.db to the system data model and
+// makes `withIndex("by_org", ...)` a type error — the reason a helper like this
+// is usually written with `t: any`, which then erases the row types too.
+type TestHarness = ReturnType<typeof convexTestWithComponents<typeof schema>>;
+
+async function eventsFor(t: TestHarness, orgId: Id<"organizations">) {
+  return await t.run(async (ctx) =>
+    ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
   );
 }
 
@@ -409,7 +439,7 @@ describe("SCRUM-237 §9 — the forward, causal and reversal addresses are ONE f
     const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
     const identity = directCollectionReceipt({ orgId, paymentId });
 
-    await t.run(async (ctx: any) => {
+    await t.run(async (ctx) => {
       await postReceiptOccurrence(ctx, {
         identity,
         currency: "USD",
@@ -434,7 +464,7 @@ describe("SCRUM-237 §9 — the forward, causal and reversal addresses are ONE f
     expect(persisted.status).toBe("POSTED");
 
     // And the causal lookup addressed by the SAME identity returns that row.
-    const found = await t.run(async (ctx: any) => findPostedReceiptOccurrence(ctx, identity));
+    const found = await t.run(async (ctx) => findPostedReceiptOccurrence(ctx, identity));
     expect(found?._id).toBe(persisted._id);
   });
 
@@ -442,7 +472,7 @@ describe("SCRUM-237 §9 — the forward, causal and reversal addresses are ONE f
     const { t, orgId, userId, customerId } = await seedPostableOrg("ev7");
     const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
     const identity = directCollectionReceipt({ orgId, paymentId });
-    await t.run(async (ctx: any) => {
+    await t.run(async (ctx) => {
       await postReceiptOccurrence(ctx, {
         identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
         payload: receiptPayload(paymentId, customerId, 5000),
@@ -450,13 +480,13 @@ describe("SCRUM-237 §9 — the forward, causal and reversal addresses are ONE f
     });
 
     // Present under its own identity.
-    expect(await t.run(async (ctx: any) => findPostedReceiptOccurrence(ctx, identity))).not.toBeNull();
+    expect(await t.run(async (ctx) => findPostedReceiptOccurrence(ctx, identity))).not.toBeNull();
 
     // eventVersion differs -> MISS. This is the field a key-only match would
     // ignore: `collection_payment_<id>` is a prefix of the v2 key's base, so a
     // lookup that fell back to the key could plausibly return the v1 row.
     const otherOccurrence = directCollectionReceipt({ orgId, paymentId, occurrence: 2 });
-    expect(await t.run(async (ctx: any) => findPostedReceiptOccurrence(ctx, otherOccurrence))).toBeNull();
+    expect(await t.run(async (ctx) => findPostedReceiptOccurrence(ctx, otherOccurrence))).toBeNull();
 
     // eventType + sourceType differ (a payment-link identity carrying the SAME
     // raw id) -> MISS. Nothing about the shared id may make these match.
@@ -464,12 +494,12 @@ describe("SCRUM-237 §9 — the forward, causal and reversal addresses are ONE f
       orgId,
       intentId: paymentId as unknown as Id<"paymentIntents">,
     });
-    expect(await t.run(async (ctx: any) => findPostedReceiptOccurrence(ctx, crossChannel))).toBeNull();
+    expect(await t.run(async (ctx) => findPostedReceiptOccurrence(ctx, crossChannel))).toBeNull();
 
     // sourceId differs -> MISS.
     const otherPaymentId = await seedCollectionPayment(t, orgId, customerId, userId);
     const otherSource = directCollectionReceipt({ orgId, paymentId: otherPaymentId });
-    expect(await t.run(async (ctx: any) => findPostedReceiptOccurrence(ctx, otherSource))).toBeNull();
+    expect(await t.run(async (ctx) => findPostedReceiptOccurrence(ctx, otherSource))).toBeNull();
   });
 
   test("EV8 — a v1 and a v2 payload for ONE occurrence cannot both post", async () => {
@@ -493,7 +523,7 @@ describe("SCRUM-237 §9 — the forward, causal and reversal addresses are ONE f
     const identity = directCollectionReceipt({ orgId, paymentId });
 
     // v1-shaped gross payload.
-    await t.run(async (ctx: any) => {
+    await t.run(async (ctx) => {
       await postReceiptOccurrence(ctx, {
         identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
         payload: receiptPayload(paymentId, customerId, 5000),
@@ -502,7 +532,7 @@ describe("SCRUM-237 §9 — the forward, causal and reversal addresses are ONE f
     // v2-shaped payload for the SAME economic occurrence, carrying a DIFFERENT
     // amount. If the payload version could reach the key, this would mint a
     // second occurrence and the ledger would carry both.
-    await t.run(async (ctx: any) => {
+    await t.run(async (ctx) => {
       await postReceiptOccurrence(ctx, {
         identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
         payload: { ...receiptPayload(paymentId, customerId, 9999), receiptPayloadVersion: RECEIPT_PAYLOAD_VERSION },
@@ -513,8 +543,8 @@ describe("SCRUM-237 §9 — the forward, causal and reversal addresses are ONE f
     expect(events).toHaveLength(1);
     expect(events[0].idempotencyKey).toBe(occurrenceIdempotencyKey(identity));
 
-    const journals = await t.run(async (ctx: any) =>
-      ctx.db.query("journalEntries").withIndex("by_org", (q: any) => q.eq("orgId", orgId)).collect()
+    const journals = await t.run(async (ctx) =>
+      ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
     );
     expect(journals).toHaveLength(1);
   });
@@ -523,14 +553,14 @@ describe("SCRUM-237 §9 — the forward, causal and reversal addresses are ONE f
     const { t, orgId, userId, customerId } = await seedPostableOrg("ev6b");
     const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
     const identity = directCollectionReceipt({ orgId, paymentId });
-    await t.run(async (ctx: any) => {
+    await t.run(async (ctx) => {
       await postReceiptOccurrence(ctx, {
         identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
         payload: receiptPayload(paymentId, customerId, 5000),
       });
     });
 
-    const outcome = await t.run(async (ctx: any) =>
+    const outcome = await t.run(async (ctx) =>
       reverseReceiptOccurrence(ctx, {
         identity, reason: "SCRUM-237 contract test", actorId: userId, reversalDate: Date.now(),
       })
@@ -539,7 +569,7 @@ describe("SCRUM-237 §9 — the forward, causal and reversal addresses are ONE f
 
     // The causal check must now refuse it: REVERSED is not POSTED, and c17593
     // §7 makes POSTED the only eligible status.
-    const found = await t.run(async (ctx: any) => findPostedReceiptOccurrence(ctx, identity));
+    const found = await t.run(async (ctx) => findPostedReceiptOccurrence(ctx, identity));
     expect(found).toBeNull();
   });
 });
@@ -568,7 +598,7 @@ describe("SCRUM-237 §10 — occurrence and reversal branches the first suite mi
     const second = directCollectionReceipt({ orgId, paymentId, occurrence: 2 });
 
     for (const identity of [first, second]) {
-      await t.run(async (ctx: any) => {
+      await t.run(async (ctx) => {
         await postReceiptOccurrence(ctx, {
           identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
           payload: receiptPayload(paymentId, customerId, 5000),
@@ -578,12 +608,12 @@ describe("SCRUM-237 §10 — occurrence and reversal branches the first suite mi
 
     const events = await eventsFor(t, orgId);
     expect(events).toHaveLength(2);
-    expect([...events.map((e: any) => e.eventVersion)].sort()).toEqual([1, 2]);
-    expect(new Set(events.map((e: any) => e.idempotencyKey)).size).toBe(2);
+    expect([...events.map((e) => e.eventVersion)].sort()).toEqual([1, 2]);
+    expect(new Set(events.map((e) => e.idempotencyKey)).size).toBe(2);
 
     // And each is independently addressable by its own identity.
-    const foundFirst = await t.run(async (ctx: any) => findPostedReceiptOccurrence(ctx, first));
-    const foundSecond = await t.run(async (ctx: any) => findPostedReceiptOccurrence(ctx, second));
+    const foundFirst = await t.run(async (ctx) => findPostedReceiptOccurrence(ctx, first));
+    const foundSecond = await t.run(async (ctx) => findPostedReceiptOccurrence(ctx, second));
     expect(foundFirst?.eventVersion).toBe(1);
     expect(foundSecond?.eventVersion).toBe(2);
     expect(foundFirst?._id).not.toBe(foundSecond?._id);
@@ -601,7 +631,7 @@ describe("SCRUM-237 §10 — occurrence and reversal branches the first suite mi
     const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
     const identity = directCollectionReceipt({ orgId, paymentId });
 
-    await t.run(async (ctx: any) => {
+    await t.run(async (ctx) => {
       await postReceiptOccurrence(ctx, {
         identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
         payload: receiptPayload(paymentId, customerId, 5000),
@@ -609,10 +639,10 @@ describe("SCRUM-237 §10 — occurrence and reversal branches the first suite mi
     });
 
     const pendingRows = async () =>
-      await t.run(async (ctx: any) =>
+      await t.run(async (ctx) =>
         ctx.db
           .query("pendingAccountingEvents")
-          .withIndex("by_org_status", (q: any) => q.eq("orgId", orgId).eq("status", "PENDING"))
+          .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
           .collect()
       );
 
@@ -623,7 +653,7 @@ describe("SCRUM-237 §10 — occurrence and reversal branches the first suite mi
     expect(queuedBefore[0].idempotencyKey).toBe(occurrenceIdempotencyKey(identity));
     expect(await eventsFor(t, orgId)).toHaveLength(0);
 
-    const outcome = await t.run(async (ctx: any) =>
+    const outcome = await t.run(async (ctx) =>
       reverseReceiptOccurrence(ctx, {
         identity, reason: "SCRUM-237 §10", actorId: userId, reversalDate: Date.now(),
       })
@@ -645,17 +675,17 @@ describe("SCRUM-237 §10 — occurrence and reversal branches the first suite mi
     const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
     const identity = directCollectionReceipt({ orgId, paymentId });
 
-    await t.run(async (ctx: any) => {
+    await t.run(async (ctx) => {
       await postReceiptOccurrence(ctx, {
         identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
         payload: receiptPayload(paymentId, customerId, 5000),
       });
     });
-    expect(await t.run(async (ctx: any) => findPostedReceiptOccurrence(ctx, identity))).not.toBeNull();
+    expect(await t.run(async (ctx) => findPostedReceiptOccurrence(ctx, identity))).not.toBeNull();
 
     // A reversal dated into a year with no open period.
     const outsideOpenPeriod = Date.UTC(new Date().getUTCFullYear() - 3, 5, 1);
-    const outcome = await t.run(async (ctx: any) =>
+    const outcome = await t.run(async (ctx) =>
       reverseReceiptOccurrence(ctx, {
         identity, reason: "SCRUM-237 §10", actorId: userId, reversalDate: outsideOpenPeriod,
       })
@@ -663,7 +693,7 @@ describe("SCRUM-237 §10 — occurrence and reversal branches the first suite mi
     expect(outcome).toBe("DEFERRED");
 
     // Still POSTED — the defining property of DEFERRED.
-    const stillPosted = await t.run(async (ctx: any) => findPostedReceiptOccurrence(ctx, identity));
+    const stillPosted = await t.run(async (ctx) => findPostedReceiptOccurrence(ctx, identity));
     expect(stillPosted).not.toBeNull();
     expect(stillPosted?.status).toBe("POSTED");
   });
@@ -680,7 +710,7 @@ describe("SCRUM-237 §10 — occurrence and reversal branches the first suite mi
     const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
     const identity = directCollectionReceipt({ orgId, paymentId });
 
-    await t.run(async (ctx: any) => {
+    await t.run(async (ctx) => {
       await postReceiptOccurrence(ctx, {
         identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
         payload: receiptPayload(paymentId, customerId, 5000),
@@ -690,13 +720,149 @@ describe("SCRUM-237 §10 — occurrence and reversal branches the first suite mi
     expect(original.status).toBe("POSTED");
 
     // Forge the corruption: a second row on the identical economic tuple.
-    await t.run(async (ctx: any) => {
+    await t.run(async (ctx) => {
       const { _id, _creationTime, ...rest } = original;
       await ctx.db.insert("accountingEvents", { ...rest, status: "REVERSED" });
     });
 
     await expect(
-      t.run(async (ctx: any) => findPostedReceiptOccurrence(ctx, identity))
+      t.run(async (ctx) => findPostedReceiptOccurrence(ctx, identity))
+    ).rejects.toThrow(/ambiguous receipt occurrence/);
+  });
+});
+
+describe("SCRUM-237 §11 — the key mapping must be injective over ROLE, not only version", () => {
+  // Found by the Codex seat at 45dd608b0, reproduced here before fixing.
+  //
+  // §3 closed the VERSION axis by replacing an unframed `_occ${v}` suffix with a
+  // length-prefixed disjoint namespace. The ROLE axis kept exactly the defect
+  // that was just removed: the reversal key was `${forwardKey}_reversal`, an
+  // unframed suffix, so a sourceId ending in `_reversal` re-creates the same
+  // collision one axis over.
+  //
+  // Reachability is honest: a real Convex id cannot contain `_reversal`, so this
+  // is not reachable through today's producers. It is fixed because the contract
+  // ASSERTS injectivity for arbitrary `sourceId` — and a sibling elsewhere in the
+  // codebase already builds a composite sourceId (`${vehicleId}_${editToken}`),
+  // so the assumption that source ids are opaque Convex ids is not one this
+  // module is entitled to make.
+
+  test("R1 — a reversal key cannot equal the FORWARD key of a different occurrence", () => {
+    const a = directCollectionReceipt({
+      orgId: ORG,
+      paymentId: "X" as unknown as Id<"collectionPayments">,
+    });
+    const b = directCollectionReceipt({
+      orgId: ORG,
+      paymentId: "X_reversal" as unknown as Id<"collectionPayments">,
+    });
+    expect(a.sourceId).not.toBe(b.sourceId);
+    // Both were "collection_payment_X_reversal". Both accountingEvents and
+    // pendingAccountingEvents dedupe on by_org_idempotency, so this could report
+    // REVERSED while the original stayed POSTED, discard a forward post, or skip
+    // enqueueing a reversal.
+    expect(occurrenceReversalIdempotencyKey(a)).not.toBe(occurrenceIdempotencyKey(b));
+  });
+
+  test("R1 — a reversal key cannot equal another occurrence's REVERSAL key", () => {
+    const a = directCollectionReceipt({
+      orgId: ORG,
+      paymentId: "Y" as unknown as Id<"collectionPayments">,
+      occurrence: 2,
+    });
+    const b = directCollectionReceipt({
+      orgId: ORG,
+      paymentId: "Y" as unknown as Id<"collectionPayments">,
+      occurrence: 3,
+    });
+    expect(occurrenceReversalIdempotencyKey(a)).not.toBe(occurrenceReversalIdempotencyKey(b));
+  });
+
+  test("the mapping is INJECTIVE over ROLE x sourceId x eventVersion together", () => {
+    // The §3 sweep covered sourceId x version and missed the role axis entirely —
+    // a sweep shaped like the claim it was written for rather than like the
+    // property. This one sweeps all three.
+    const sourceIds = ["X", "X_reversal", "reversal", "", "a:b", "occv2:1:a:1:b", "X_occ2", "_reversal"];
+    const versions = [1, 2, 3, 12, 23];
+    const keys = new Set<string>();
+    let minted = 0;
+    for (const sourceId of sourceIds) {
+      for (const occurrence of versions) {
+        const id = directCollectionReceipt({
+          orgId: ORG,
+          paymentId: sourceId as unknown as Id<"collectionPayments">,
+          occurrence,
+        });
+        keys.add(occurrenceIdempotencyKey(id));
+        keys.add(occurrenceReversalIdempotencyKey(id));
+        minted += 2;
+      }
+    }
+    expect(minted).toBe(sourceIds.length * versions.length * 2);
+    expect(keys.size).toBe(minted);
+  });
+
+  test("a future channel prefix that is a PREFIX of another is refused", () => {
+    // Raised independently by both seats. The v1 forward branch cannot be
+    // length-framed (byte-compat), so its injectivity rests entirely on the
+    // prefix set — which makes the prefix set an invariant, not a naming choice.
+    //
+    //   "collection_payment_"         + "reissue_abc"  ==
+    //   "collection_payment_reissue_" + "abc"
+    //
+    // No exotic characters required. Same absorption mechanism as the original
+    // injectivity defect, reached from the channel axis instead.
+    expect(() =>
+      assertChannelPrefixesUnambiguous(["collection_payment", "collection_payment_reissue"])
+    ).toThrow(/is a prefix of/);
+    expect(() =>
+      assertChannelPrefixesUnambiguous(["payment_link_received", "payment_link"])
+    ).toThrow(/is a prefix of/);
+  });
+
+  test("a future channel prefix inside a RESERVED namespace is refused", () => {
+    expect(() => assertChannelPrefixesUnambiguous(["occv_channel"])).toThrow(/reserved namespace/);
+    expect(() => assertChannelPrefixesUnambiguous(["occr_channel"])).toThrow(/reserved namespace/);
+  });
+
+  test("the REAL channel prefix set satisfies the property", () => {
+    expect(() =>
+      assertChannelPrefixesUnambiguous(["collection_payment", "payment_link_received"])
+    ).not.toThrow();
+  });
+
+  test("R2 — reversing an AMBIGUOUS exact tuple REFUSES instead of reporting REVERSED", async () => {
+    // findPostedReceiptOccurrence (the READ path) already refuses ambiguity.
+    // reverseReceiptOccurrence (the MUTATING path) did not: reverseEventIfPosted's
+    // exact-version branch filters POSTED and takes .first(), so it reversed one
+    // of two duplicate rows and reported REVERSED while the other stayed POSTED.
+    // A mutating consumer laxer than the read guarding it is the wrong way round.
+    const { t, orgId, userId, customerId } = await seedPostableOrg("r2");
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const identity = directCollectionReceipt({ orgId, paymentId });
+
+    await t.run(async (ctx) => {
+      await postReceiptOccurrence(ctx, {
+        identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
+        payload: receiptPayload(paymentId, customerId, 5000),
+      });
+    });
+    const [original] = await eventsFor(t, orgId);
+    expect(original.status).toBe("POSTED");
+
+    // Two rows on the identical economic tuple, both POSTED. Convex has no
+    // unique indexes, so nothing in the schema prevents this.
+    await t.run(async (ctx) => {
+      const { _id, _creationTime, ...rest } = original;
+      await ctx.db.insert("accountingEvents", { ...rest });
+    });
+
+    await expect(
+      t.run(async (ctx) =>
+        reverseReceiptOccurrence(ctx, {
+          identity, reason: "SCRUM-237 §11 R2", actorId: userId, reversalDate: Date.now(),
+        })
+      )
     ).rejects.toThrow(/ambiguous receipt occurrence/);
   });
 });

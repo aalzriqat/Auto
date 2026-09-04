@@ -395,17 +395,43 @@ export async function findPostedReceiptOccurrence(
  *    `by_org_source` scan with `.first()` when it is undefined, which reverses
  *    whichever event happens to come first — for a source with several
  *    occurrences that is a reversal aimed at one receipt landing on another.
- *    Carrying the identity makes the exact-address branch unconditional.
+ *    Carrying the identity makes the exact-address branch unconditional FOR
+ *    THIS FACADE'S OWN CALLS. It does not make that fallback dead code: the
+ *    generic `makeReversalHook` factory in this file still omits `eventVersion`
+ *    for other event families, and that is out of scope here.
  * 2. `pendingPostIdempotencyKey` is derived from the SAME identity as the
  *    forward post, so `cancelPendingPostByKey` cancels the entry that forward
  *    post actually enqueued. Supplied independently, a mismatch cancels nothing
  *    and leaves an unposted forward entry alive behind a NOT_POSTED result.
+ * 3. Cardinality is refused BEFORE anything mutates.
+ *
+ * On (3), which the Codex seat found at `45dd608b0`: pinning `eventVersion`
+ * addresses the right ROW RANGE but says nothing about how many rows are in it.
+ * `reverseEventIfPosted`'s exact-version branch filters POSTED and takes
+ * `.first()`, so against two rows sharing one exact economic tuple it reverses
+ * one, leaves the other POSTED, and returns REVERSED. Convex has no unique
+ * indexes, so nothing in the schema prevents that pair from existing.
+ *
+ * The read path (`findPostedReceiptOccurrence`) already refused this. The
+ * MUTATING path did not — the wrong way round, since the read merely reports
+ * while the write moves money. Calling the read guard first reuses the exact
+ * same cardinality assertion and makes the refusal happen before any write.
+ *
+ * The `.first()` in `reverseEventIfPosted` itself is deliberately NOT changed:
+ * it is pre-existing, shared with `reverseDepositApplication`, and outside this
+ * change's frozen scope. Closing it at the facade removes the path this diff
+ * makes reachable; the generic helper's own cardinality behaviour is recorded
+ * as follow-up rather than widened into this PR.
  */
 export async function reverseReceiptOccurrence(
   ctx: MutationCtx,
   args: ReverseReceiptOccurrenceArgs
 ): Promise<ReversalOutcome> {
   const id = args.identity;
+  // Throws on an ambiguous exact tuple. Its return value is deliberately
+  // unused: NOT_POSTED is a legitimate outcome that reverseEventIfPosted below
+  // determines for itself, so this call is here purely for its refusal.
+  await findPostedReceiptOccurrence(ctx, id);
   return await reverseEventIfPosted(ctx, {
     orgId: id.orgId,
     sourceType: id.sourceType,
