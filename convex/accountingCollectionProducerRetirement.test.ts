@@ -18,7 +18,8 @@
  *      claimed to write nothing — `requireTenantAuth` runs first and may
  *      legitimately write a security audit row.
  *  §9  The returned `retired` counter is truthful.
- *  §10 `migrationGapAnalysis.migrationProgress` is depressed by a retired row.
+ *  §10 `migrationGapAnalysis.migrationProgress` stays at 0 for a retired row
+ *      that carries no pre-existing `transactions`-sourced event.
  *
  * §5 of the contract — "retirement is not migration proof and not sign-off
  * proof" — is NOT evidenced in this file. It lives in
@@ -27,15 +28,20 @@
  * refuses. An earlier revision of this header listed §5 here and omitted §3,
  * which described neither file accurately.
  *
- * ⚠️ On §10, precisely. `migrationGapAnalysis` does NOT filter on POSTED:
- * `glEventCount` counts events sourced from `transactions` at any status
- * (`accountingMigration.ts:275-282`), and `migrationProgress` rounds and is
- * capped at 100. So a retired row lowers the ratio but does not guarantee a
- * sub-100 reading — 999 migrated rows beside one retired row still round to
- * 100. The §10 test below pins the single-row case only, and must not be read
- * as proving a general "cannot reach 100%" property. `signOffCutover` is the
- * one that filters `status === "POSTED"` (`accountingCutover.ts:824-827`);
- * these two counts are deliberately different and only one is a gate.
+ * ⚠️ On §10, precisely. `migrationProgress`'s numerator is UNCORRELATED with
+ * its denominator: `glEventCount` (`accountingMigration.ts:275-282`) counts
+ * every event sourced from `transactions` — no status filter, no dedup by
+ * `sourceId`, no check that the event belongs to a row still counted as
+ * legacy. Retirement only means retirement MINTS NO NEW EVENT; a row retired
+ * today may already carry a POSTED event from the pre-retirement producer, and
+ * the §9 fixture at :387 below builds precisely that org — one legacy row, one
+ * historical event, progress 100, still classified RETIRED_COLLECTION. Rounding
+ * and the Math.min cap hide it from the other side as well (999 migrated rows
+ * beside one retired row round to 100). So the §10 test pins the single-row,
+ * no-historical-event case ONLY, and proves nothing general about retired rows
+ * in either direction. `signOffCutover` is the one that filters
+ * `status === "POSTED"` (`accountingCutover.ts:824-827`); these two counts are
+ * deliberately different and only one of them is a gate.
  *
  * ⚠️ On the §6 tests specifically. An earlier revision asserted only that the
  * migration added no journal (a before/after delta). Codex refuted that as
@@ -307,10 +313,29 @@ describe("SCRUM-223 §2 — migration and audit report the same retirement truth
     // Pin the disposition VALUES, not merely their agreement. Before
     // `disposition` existed on either side, the row-for-row loop below
     // compared `undefined` with `undefined` and passed — a parity assertion
-    // inherits nothing if both sides are permitted to be empty. These three
-    // values are exactly the three seeded categories: EXPENSE -> MAPPED,
-    // CLAIM_PAYMENT -> UNMAPPED, COLLECTION_PAYMENT -> RETIRED_COLLECTION.
+    // inherits nothing if both sides are permitted to be empty.
+    //
+    // SCOPE, precisely: sorting pins the MULTISET of dispositions, not which
+    // row got which. A transposition between two already-valid categories
+    // (EXPENSE <-> CLAIM_PAYMENT) would survive this line, because audit and
+    // migration read the SAME classifier and would transpose together, leaving
+    // the row-for-row check below still true. The mapping this ticket actually
+    // guarantees — COLLECTION_PAYMENT -> RETIRED_COLLECTION — is pinned
+    // per-row by §1 and by §9's `posted === 1`, not here.
     expect([...auditByTx.values()].sort()).toEqual([
+      "MAPPED",
+      "RETIRED_COLLECTION",
+      "UNMAPPED",
+    ]);
+
+    // Pin the MIGRATION side independently, not just its agreement with audit.
+    // Asserting length + definedness + lookup equality alone is still satisfied
+    // by a migration that returns one row three times: every lookup agrees with
+    // itself and two seeded rows vanish silently. Keying by transactionId makes
+    // the map collapse to size 1 under exactly that mutant.
+    const migrationByTx = new Map(migration.results.map((r) => [r.transactionId, r.disposition]));
+    expect(migrationByTx.size).toBe(3);
+    expect([...migrationByTx.values()].sort()).toEqual([
       "MAPPED",
       "RETIRED_COLLECTION",
       "UNMAPPED",
