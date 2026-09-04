@@ -11,15 +11,31 @@
  *      action/error `reason` channel.
  *  §2  `migrateUnpostedTransactions` and `auditLegacyTransactions` report the
  *      same retirement truth, because they consume the same classifier.
- *  §5  Retirement is not migration proof and not sign-off proof.
+ *  §3  The retired producer mints no COLLECTION_PAYMENT authority at all.
  *  §6  Cross-ticket: a modern receipt from EITHER collection producer does not
  *      gain a second journal when the legacy migration subsequently runs.
  *  §7  Dry-run creates no migration/accounting economic effect. It is NOT
  *      claimed to write nothing — `requireTenantAuth` runs first and may
  *      legitimately write a security audit row.
  *  §9  The returned `retired` counter is truthful.
- *  §10 `migrationGapAnalysis.migrationProgress` moves, because retired rows
- *      never become POSTED events sourced from `transactions`.
+ *  §10 `migrationGapAnalysis.migrationProgress` is depressed by a retired row.
+ *
+ * §5 of the contract — "retirement is not migration proof and not sign-off
+ * proof" — is NOT evidenced in this file. It lives in
+ * `accountingPhase17.test.ts:360`, which runs the migration to completion,
+ * asserts `retired: 1 / posted: 0`, and then asserts `signOffCutover` still
+ * refuses. An earlier revision of this header listed §5 here and omitted §3,
+ * which described neither file accurately.
+ *
+ * ⚠️ On §10, precisely. `migrationGapAnalysis` does NOT filter on POSTED:
+ * `glEventCount` counts events sourced from `transactions` at any status
+ * (`accountingMigration.ts:275-282`), and `migrationProgress` rounds and is
+ * capped at 100. So a retired row lowers the ratio but does not guarantee a
+ * sub-100 reading — 999 migrated rows beside one retired row still round to
+ * 100. The §10 test below pins the single-row case only, and must not be read
+ * as proving a general "cannot reach 100%" property. `signOffCutover` is the
+ * one that filters `status === "POSTED"` (`accountingCutover.ts:824-827`);
+ * these two counts are deliberately different and only one is a gate.
  *
  * ⚠️ On the §6 tests specifically. An earlier revision asserted only that the
  * migration added no journal (a before/after delta). Codex refuted that as
@@ -287,7 +303,22 @@ describe("SCRUM-223 §2 — migration and audit report the same retirement truth
 
     const auditByTx = new Map(audit.rows.map((r) => [r.id, r.disposition]));
     expect(auditByTx.size).toBe(3);
+
+    // Pin the disposition VALUES, not merely their agreement. Before
+    // `disposition` existed on either side, the row-for-row loop below
+    // compared `undefined` with `undefined` and passed — a parity assertion
+    // inherits nothing if both sides are permitted to be empty. These three
+    // values are exactly the three seeded categories: EXPENSE -> MAPPED,
+    // CLAIM_PAYMENT -> UNMAPPED, COLLECTION_PAYMENT -> RETIRED_COLLECTION.
+    expect([...auditByTx.values()].sort()).toEqual([
+      "MAPPED",
+      "RETIRED_COLLECTION",
+      "UNMAPPED",
+    ]);
+
+    expect(migration.results).toHaveLength(3);
     for (const r of migration.results) {
+      expect(r.disposition).toBeDefined();
       expect(auditByTx.get(r.transactionId)).toBe(r.disposition);
     }
   });
@@ -446,10 +477,15 @@ describe("SCRUM-223 §10 — migrationGapAnalysis reflects retirement", () => {
 
     const gap = await asUser.query(api.accountingMigration.migrationGapAnalysis, { orgId });
     expect(gap.legacy.transactions).toBe(1);
-    // migrationProgress counts POSTED events sourced from `transactions`.
-    // A retired row never becomes one, so progress stays at 0 — this is the
-    // honest reading, not a regression: the row is not migrated and must not
-    // be reported as if it were.
+    // `migrationProgress` counts events sourced from `transactions` at ANY
+    // status — there is no POSTED filter (accountingMigration.ts:275-282).
+    // A retired row never becomes one, so for this single-row org progress
+    // stays at 0: the row is not migrated and must not be reported as if it
+    // were.
+    //
+    // SCOPE — this pins the single-row case ONLY. `migrationProgress` rounds
+    // and is capped at 100, so it is not a general detector of retired rows
+    // and this test must not be cited as proving one. See the file header.
     expect(gap.gl.events).toBe(0);
     expect(gap.migrationProgress).toBe(0);
   });
