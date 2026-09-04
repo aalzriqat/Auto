@@ -17,7 +17,24 @@ overrides:
   # minimumReleaseAge (<24h) gate that originally forced the older pin. Still
   # pinned exact, for the same reason as postcss above.
   nanoid: 3.3.18
-  fast-uri: ">=4.1.2"
+  # Four HIGH advisories, all patched in the same release (>=4.1.3):
+  #   GHSA-5jgf-p345-68v8  host confusion, skipped IDN canonicalization
+  #   GHSA-f65p-4m7j-42xc  SSRF, malformed IPv6 normalization
+  #   GHSA-fph4-wmhf-6fwf  SSRF, repeated hostname percent-decoding
+  #   GHSA-jqff-g426-hqxp  host confusion, percent-encoded scheme normalization
+  # Reached only transitively, via
+  #   @sentry/nextjs > @sentry/webpack-plugin > webpack > schema-utils > ajv.
+  #
+  # Same failure mode as the nanoid pin above: the earlier >=4.1.2 floor was
+  # correct when written and became insufficient with no repository change at
+  # all, because these advisories landed afterwards. Advisory-database drift,
+  # not a bad floor — the defence is periodic re-verification.
+  #
+  # Left as a RANGE rather than pinned exact: >=4.1.3 resolves to 4.1.4
+  # (published 2026-09-02), which clears the CI minimumReleaseAge (<24h)
+  # supply-chain gate comfortably, so the reason that forced exact pins on
+  # postcss/nanoid/browserslist does not apply here.
+  fast-uri: ">=4.1.3"
   ip-address: ">=10.3.1"
   "js-yaml@>=4.0.0 <4.3.0": ">=4.3.0 <5.0.0"
   # GHSA-5p4m-2wfm-xmqj (CVE-2026-59870): quadratic CPU consumption in !!omap.
