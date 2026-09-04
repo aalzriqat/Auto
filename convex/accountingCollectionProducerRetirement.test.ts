@@ -20,11 +20,21 @@
  *  §9  The returned `retired` counter is truthful.
  *  §10 `migrationGapAnalysis.migrationProgress` moves, because retired rows
  *      never become POSTED events sourced from `transactions`.
+ *
+ * ⚠️ On the §6 tests specifically. An earlier revision asserted only that the
+ * migration added no journal (a before/after delta). Codex refuted that as
+ * vacuous: the delta also holds if the modern producer posts nothing, or if it
+ * stops writing its legacy row so migration never scans it. A regression in the
+ * precondition would have gone undetected. Each §6 test now proves the whole
+ * causal chain — the named producer posted exactly one receipt event with a
+ * journal, wrote exactly one legacy COLLECTION_PAYMENT row, and migration
+ * classified THAT EXACT row as retired and added nothing.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
+import { Doc, Id } from "./_generated/dataModel";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -36,6 +46,10 @@ vi.mock("./rateLimit", () => ({
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
+/** Resolves the harness generics concretely so no helper needs `any`. */
+const makeHarness = () => convexTestWithComponents(schema, MODULE_GLOB);
+type Harness = ReturnType<typeof makeHarness>;
+
 const PERMS = [
   "view:sales", "create:sales", "edit:sales",
   "view:expenses", "create:expenses", "edit:expenses",
@@ -46,7 +60,7 @@ const PERMS = [
 ];
 
 async function seedDealer(tag: string) {
-  const t = convexTestWithComponents(schema, MODULE_GLOB);
+  const t = makeHarness();
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: `Retire ${tag}`, createdAt: Date.now() })
   );
@@ -90,14 +104,17 @@ async function seedDealer(tag: string) {
   return { t, orgId, userId, asUser, customerId };
 }
 
+/** Derived from the schema so this test cannot drift from the real category set. */
+type LegacyCategory = Doc<"transactions">["category"];
+
 /** Legacy `transactions` row, inserted directly — the shape migration scans. */
 async function seedLegacyRow(
-  t: any,
-  orgId: string,
-  category: string,
+  t: Harness,
+  orgId: Id<"organizations">,
+  category: LegacyCategory,
   opts: { type?: "IN" | "OUT"; amount?: number; description?: string } = {}
 ) {
-  return t.run((ctx: any) =>
+  return t.run((ctx) =>
     ctx.db.insert("transactions", {
       orgId,
       type: opts.type ?? "IN",
@@ -110,27 +127,55 @@ async function seedLegacyRow(
 }
 
 /** The migration result row for one transaction, or a loud failure. */
-function rowFor(results: any[], transactionId: string) {
-  const row = results.find((r: any) => r.transactionId === transactionId);
+function rowFor<R extends { transactionId: string }>(results: R[], transactionId: string): R {
+  const row = results.find((r) => r.transactionId === transactionId);
   if (!row) throw new Error(`no migration result row for transaction ${transactionId}`);
   return row;
 }
 
-async function journalCount(t: any, orgId: string) {
-  const rows = await t.run((ctx: any) =>
-    ctx.db.query("journalEntries").withIndex("by_org", (q: any) => q.eq("orgId", orgId)).collect()
+async function journalCount(t: Harness, orgId: Id<"organizations">) {
+  const rows = await t.run((ctx) =>
+    ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
   );
   return rows.length;
 }
 
 /** Accounting events minted from the legacy `transactions` table specifically. */
-async function migratedEvents(t: any, orgId: string) {
-  return t.run((ctx: any) =>
+async function migratedEvents(t: Harness, orgId: Id<"organizations">) {
+  return t.run((ctx) =>
     ctx.db
       .query("accountingEvents")
-      .withIndex("by_org_source", (q: any) => q.eq("orgId", orgId).eq("sourceType", "transactions"))
+      .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "transactions"))
       .collect()
   );
+}
+
+/** Every legacy `transactions` row in the org carrying the given category. */
+async function legacyRowsWithCategory(t: Harness, orgId: Id<"organizations">, category: LegacyCategory) {
+  const rows = await t.run((ctx) =>
+    ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+  );
+  return rows.filter((r) => r.category === category);
+}
+
+/**
+ * Proves the modern producer really did originate the receipt: exactly one
+ * POSTED COLLECTION_PAYMENT event sourced from `collectionPayments/<paymentId>`,
+ * carrying a journal entry. Without this the §6 delta assertion is vacuous.
+ */
+async function assertModernReceiptPosted(t: Harness, orgId: Id<"organizations">, paymentId: string) {
+  const events = await t.run((ctx) =>
+    ctx.db
+      .query("accountingEvents")
+      .withIndex("by_org_source", (q) =>
+        q.eq("orgId", orgId).eq("sourceType", "collectionPayments").eq("sourceId", paymentId)
+      )
+      .collect()
+  );
+  expect(events).toHaveLength(1);
+  expect(events[0].eventType).toBe("COLLECTION_PAYMENT");
+  expect(events[0].status).toBe("POSTED");
+  expect(events[0].journalEntryId).toBeTruthy();
 }
 
 // ─── §1 / §2 — classification truth, and both consumers agreeing on it ────────
@@ -212,7 +257,7 @@ describe("SCRUM-223 §2 — migration and audit report the same retirement truth
       orgId, dryRun: true, limit: 10,
     });
 
-    const auditByTx = new Map(audit.rows.map((r: any) => [r.id, r.disposition]));
+    const auditByTx = new Map(audit.rows.map((r) => [r.id, r.disposition]));
     expect(auditByTx.size).toBe(3);
     for (const r of migration.results) {
       expect(auditByTx.get(r.transactionId)).toBe(r.disposition);
@@ -274,10 +319,50 @@ describe("SCRUM-223 §9 — the retired counter", () => {
       orgId, dryRun: false, limit: 10,
     });
 
-    const retiredRows = result.results.filter((r: any) => r.disposition === "RETIRED_COLLECTION");
+    const retiredRows = result.results.filter((r) => r.disposition === "RETIRED_COLLECTION");
     expect(result.retired).toBe(retiredRows.length);
     expect(result.retired).toBe(1);
     expect(result.posted).toBe(1); // the EXPENSE row still migrates
+  });
+
+  test("a retired row already carrying a pre-fix event stays classified retired, and says why it was skipped", async () => {
+    const { t, orgId, userId, asUser } = await seedDealer("hist");
+    const txId = await seedLegacyRow(t, orgId, "COLLECTION_PAYMENT");
+
+    // Simulates the historical artefact of the very defect this ticket fixes:
+    // a legacy collection row that the PRE-FIX migration already posted.
+    await t.run((ctx) =>
+      ctx.db.insert("accountingEvents", {
+        orgId,
+        eventType: "COLLECTION_PAYMENT",
+        sourceType: "transactions",
+        sourceId: txId.toString(),
+        eventVersion: 1,
+        accountingDate: Date.now(),
+        occurredAt: Date.now(),
+        currency: "JOD",
+        idempotencyKey: `migrate_${txId}`,
+        payload: {},
+        status: "POSTED",
+        createdBy: userId,
+        createdAt: Date.now(),
+      })
+    );
+
+    const result = await asUser.mutation(api.accountingMigration.migrateUnpostedTransactions, {
+      orgId, dryRun: false, limit: 10,
+    });
+    const row = rowFor(result.results, txId.toString());
+
+    // Classification is computed for every scanned row, so the disposition
+    // stays truthful even when the row short-circuits on already_posted.
+    // `retired` therefore counts "rows classified retired", which includes this
+    // one — pinned here so the counter's meaning is evidence, not inference.
+    expect(row.disposition).toBe("RETIRED_COLLECTION");
+    expect(row.action).toBe("SKIP");
+    expect(row.reason).toBe("already_posted");
+    expect(result.retired).toBe(1);
+    expect(result.posted).toBe(0);
   });
 });
 
@@ -354,24 +439,37 @@ describe("SCRUM-223 §6 — a modern receipt gains no second journal from legacy
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
 
-    await asUser.mutation(api.collections.recordPayment, {
+    const paymentId = await asUser.mutation(api.collections.recordPayment, {
       orgId, receivableId, amount: 400, method: "CASH",
       paymentDate: Date.now(), idempotencyKey: "rp_pay_1",
     });
 
-    // The modern producer posted this receipt to the GL and ALSO wrote a
-    // legacy `transactions` row (collections.ts, category COLLECTION_PAYMENT).
-    // The migration's dedupe probe looks for sourceType "transactions" and
-    // therefore cannot see the hook's event.
-    //
-    // The invariant is a delta, not an absolute: the receivable lineage
-    // legitimately posts its own journals, so what must be zero is the number
-    // migration ADDS.
+    // PRECONDITION 1 — the modern producer really originated this receipt.
+    // Without this the delta below is vacuous: it also holds when the producer
+    // posts nothing at all.
+    await assertModernReceiptPosted(t, orgId, paymentId.toString());
+
+    // PRECONDITION 2 — and it also wrote the legacy row that migration scans
+    // (collections.ts, category COLLECTION_PAYMENT). Without this, migration
+    // would have nothing to examine and the delta would hold for the wrong
+    // reason.
+    const legacyRows = await legacyRowsWithCategory(t, orgId, "COLLECTION_PAYMENT");
+    expect(legacyRows).toHaveLength(1);
+    const legacyId = legacyRows[0]._id.toString();
+
     const beforeMigration = await journalCount(t, orgId);
 
-    await asUser.mutation(api.accountingMigration.migrateUnpostedTransactions, {
+    const migration = await asUser.mutation(api.accountingMigration.migrateUnpostedTransactions, {
       orgId, dryRun: false, limit: 10,
     });
+
+    // THE CLAIM — migration examined THAT EXACT row and retired it.
+    const row = rowFor(migration.results, legacyId);
+    expect(row.disposition).toBe("RETIRED_COLLECTION");
+    expect(row.action).toBe("SKIP");
+    expect(row.eventType).toBeNull();
+    expect(migration.retired).toBe(1);
+    expect(migration.posted).toBe(0);
 
     // Without retirement migration adds one: one economic receipt, two journals.
     expect(await journalCount(t, orgId)).toBe(beforeMigration);
@@ -390,20 +488,84 @@ describe("SCRUM-223 §6 — a modern receipt gains no second journal from legacy
       orgId, receivableId, customerId, bank: "ABC Bank", chequeNumber: "CHQ-223",
       chequeDate: Date.now(), amount: 1000,
     });
-    await asUser.mutation(api.collections.clearCheque, {
+    const paymentId = await asUser.mutation(api.collections.clearCheque, {
       orgId, chequeId, idempotencyKey: `clear_${chequeId}`,
     });
 
+    // clearCheque carries the identical dual write to recordPayment, so it
+    // carries the identical exposure — and therefore owes the identical
+    // preconditions. Naming only one of the two producers is how this was
+    // missed before.
+    await assertModernReceiptPosted(t, orgId, paymentId.toString());
+
+    const legacyRows = await legacyRowsWithCategory(t, orgId, "COLLECTION_PAYMENT");
+    expect(legacyRows).toHaveLength(1);
+    const legacyId = legacyRows[0]._id.toString();
+
     const beforeMigration = await journalCount(t, orgId);
 
-    await asUser.mutation(api.accountingMigration.migrateUnpostedTransactions, {
+    const migration = await asUser.mutation(api.accountingMigration.migrateUnpostedTransactions, {
       orgId, dryRun: false, limit: 10,
     });
 
-    // clearCheque carries the identical dual write to recordPayment, so it
-    // carries the identical exposure. Both producers are covered because
-    // naming only one of them is how this was missed before.
+    const row = rowFor(migration.results, legacyId);
+    expect(row.disposition).toBe("RETIRED_COLLECTION");
+    expect(row.action).toBe("SKIP");
+    expect(row.eventType).toBeNull();
+    expect(migration.retired).toBe(1);
+    expect(migration.posted).toBe(0);
+
     expect(await journalCount(t, orgId)).toBe(beforeMigration);
     expect(await migratedEvents(t, orgId)).toHaveLength(0);
+  });
+});
+
+// ─── Sonnet F2 — the retirement is enforced at the posting chokepoint too ─────
+
+describe("SCRUM-223 — COLLECTION_PAYMENT from `transactions` is refused at the posting engine", () => {
+  test("the forbidden (eventType, sourceType) pair cannot post, whatever calls it", async () => {
+    const { orgId, asUser } = await seedDealer("choke");
+    const now = Date.now();
+
+    // The type narrowing in accountingMigration.ts protects one file's flow.
+    // PostCommand.eventType is a bare `string`, so any other caller can still
+    // construct this pair — `accountingLedger.post` takes arbitrary strings.
+    // SCRUM-51 learned the same lesson the hard way and put its retirement at
+    // the posting engine, which every ORIGINATING path reaches. (Reversal rows
+    // are inserted directly by reversals.ts and deliberately bypass it, so a
+    // historical migration-sourced event stays reversible.)
+    await expect(
+      asUser.mutation(internal.accountingLedger.post, {
+        orgId,
+        eventType: "COLLECTION_PAYMENT",
+        sourceType: "transactions",
+        sourceId: "forged_tx_1",
+        eventVersion: 1,
+        accountingDate: now,
+        occurredAt: now,
+        currency: "JOD",
+        idempotencyKey: "forged_migrate_1",
+        payload: { paymentId: "forged_tx_1", amountMinor: 10_000, currency: "JOD", paymentMethod: "CASH" },
+      })
+    ).rejects.toThrow(/retired/i);
+  });
+
+  test("the legitimate modern producer is untouched by that refusal", async () => {
+    const { t, orgId, asUser, customerId } = await seedDealer("choke2");
+
+    const receivableId = await asUser.mutation(api.collections.createReceivable, {
+      orgId, customerId, sourceType: "CHEQUE", title: "Receivable",
+      amount: 1000, dueDate: Date.now() + 86_400_000,
+      creditSystemKey: "MISCELLANEOUS_INCOME",
+    });
+    const paymentId = await asUser.mutation(api.collections.recordPayment, {
+      orgId, receivableId, amount: 250, method: "CASH",
+      paymentDate: Date.now(), idempotencyKey: "choke2_pay",
+    });
+
+    // The guard is scoped to the (eventType, sourceType) PAIR, not the event
+    // type alone — COLLECTION_PAYMENT sourced from `collectionPayments` is the
+    // live, correct producer and must keep posting.
+    await assertModernReceiptPosted(t, orgId, paymentId.toString());
   });
 });

@@ -492,7 +492,7 @@ Status: Implemented. All Phase 6 acceptance gates pass.
 ## Acceptance Gates Passed
 
 - `migrationGapAnalysis` reports correct progress before and after migration. ✓
-- Dry-run produces no writes. ✓
+- Dry-run produces no migration/domain/accounting economic rows and no GL effect. ✓ (Not "no writes": `requireTenantAuth` runs before `dryRun` is computed, so an impersonated call still writes its mandatory `impersonated-write:*` security audit row.)
 - Live migration is idempotent; second run skips already-posted rows. ✓
 - `duplicateEventCheck` correctly identifies idempotency-key collisions. ✓
 
@@ -504,6 +504,9 @@ Status: Implemented. All Phase 6 acceptance gates pass.
 - **SCRUM-223 — the `COLLECTION_PAYMENT` migration producer is retired.** A legacy collection row is `SKIP`-ped with disposition `RETIRED_COLLECTION` and `classificationReason: "collection_producer_retired"`. This is deliberately a *different* disposition from `UNMAPPED`: the category is not merely unmapped, its authority to originate a receipt has been withdrawn, because the modern producers already post the receipt sourced from `collectionPayments` and the migration's duplicate probe (which looks for `sourceType: "transactions"`) cannot see that event. Migrating such a row minted a second journal for one economic receipt.
   - Consequence for `migrationGapAnalysis.migrationProgress`: it is the ratio of accounting events sourced from `transactions` to legacy rows, and a retired row never becomes one. An org holding legacy `COLLECTION_PAYMENT` rows therefore **cannot reach 100%**, and that is the honest reading — the row is not migrated and must not be reported as if it were.
   - `accountingCutover.signOffCutover` is deliberately *not* taught that `RETIRED_COLLECTION` counts as migrated. It keeps its own independent POSTED-event evidence and still refuses. That independence is defence in depth, not an oversight.
+  - ⚠️ **Consequence, stated plainly rather than left implied: `signOffCutover` and `compareLegacyToGL` cannot reach a passing state for an org holding permanently-unmigratable legacy rows.** `signOffCutover` throws while `unmigratedTransactionCount > 0`, and a retired row can never acquire a POSTED event sourced from `transactions` — that is precisely what retirement means. This is **not new with SCRUM-223**: `collections.ts` already writes an ongoing `category: "REFUND"` legacy row that no mapping covers, so any org that has processed one refund is already permanently blocked on protected main today. What SCRUM-223 changes is the size of the affected population, because collection receipts are far more common than refunds.
+    - Before retirement such an org could pass sign-off, but **only by double-posting every receipt** — the gate was reporting success on the strength of the very defect this ticket removes. An honest refusal is the correct state; the dead-end is real and pre-existing, and it is a reconciliation gap to be closed, not a reason to keep the false pass.
+    - It is deliberately **not** closed here. The obvious fix — excluding retired rows from the unmigrated count — would let a genuinely orphaned legacy collection row (one with no `collectionPayments` counterpart) be silently excused, turning a workflow dead-end into a false attestation on a financial gate, which is worse. Closing it safely requires positively verifying that each retired row's economic effect is captured elsewhere, and there is no stored link between a legacy `transactions` row and its `collectionPayments` counterpart today. That correlation is the canonical occurrence identity owned by SCRUM-237, so this is tracked as follow-up rather than patched here.
 
 ---
 

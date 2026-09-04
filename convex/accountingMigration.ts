@@ -3,8 +3,13 @@
  *
  * Tools for detecting duplicate/gap between the legacy transactions table and
  * the new GL (journalLines), classifying legacy records, and producing dry-run
- * migration plans.  No data is mutated unless `dryRun: false` is explicitly
- * passed.
+ * migration plans.
+ *
+ * A dry run produces no migration/domain/accounting economic rows and no GL
+ * effect. It is NOT "writes nothing": `requireTenantAuth` runs before `dryRun`
+ * is even computed, and under an impersonation session it legitimately writes
+ * the mandatory `impersonated-write:*` security audit row. That audit is not
+ * suppressed to make the narrower claim true.
  */
 import { v } from "convex/values";
 import { query } from "./_generated/server";

@@ -350,7 +350,10 @@ provable production cutover.
 - Widen-migrate-narrow each legacy money table via `@convex-dev/migrations`:
   `fixedAssets`, `partnerEquity`, `claims`, and any other `v.number()` money fields.
 - Extend `convex/accountingMigration.ts` posting rules to cover the previously
-  skipped `PARTNER_DRAW` and `CLAIM_PAYMENT` categories (unblocked by 12 and 13).
+  skipped `PARTNER_DRAW` category (unblocked by 12). **`CLAIM_PAYMENT` is NOT
+  covered and must not be:** SCRUM-51 retired the claims lifecycle because it
+  credited finance-company receivables with no originating debit, and
+  `postingEngine.ts` now refuses `CLAIM_SETTLED` outright. It stays `UNMAPPED`.
 - Add an opening-balance journal workflow plus an accountant reconciliation sign-off
   record (approval + snapshot).
 - Add a parallel-reporting comparison query (legacy operational totals vs GL) for the
