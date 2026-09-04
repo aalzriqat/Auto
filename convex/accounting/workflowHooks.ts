@@ -23,6 +23,14 @@ import {
   cancelPendingPostByKey,
   cancelPendingPostsBySource,
 } from "../accountingOutbox";
+import {
+  ReceiptOccurrenceIdentity,
+  PostReceiptOccurrenceArgs,
+  ReverseReceiptOccurrenceArgs,
+  occurrenceIdempotencyKey,
+  occurrenceReversalIdempotencyKey,
+  occurrenceIndexRange,
+} from "./receiptOccurrence";
 
 export async function getOrgCurrency(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">): Promise<string> {
   const settings = await ctx.db
@@ -272,6 +280,124 @@ async function reverseEventIfPosted(
   // it so it never posts (net GL effect of the round trip is zero).
   await cancelPendingPostByKey(ctx, args.orgId, args.pendingPostIdempotencyKey);
   return "NOT_POSTED";
+}
+
+/* ------------------------------------------------------------------------- *
+ * SCRUM-237 — the v2 receipt occurrence facade (owner-proxy c17593 §6)
+ *
+ * The three generic helpers above take `sourceType`, `sourceId`, `eventType`,
+ * `eventVersion` and the idempotency keys as INDEPENDENT arguments. That is the
+ * defect: one receipt's identity is assembled separately at each call site, so
+ * the forward post, the outbox key, the causal check and the reversal can drift
+ * apart and nothing fails when they do.
+ *
+ * These three entry points take the identity as ONE value and derive every one
+ * of those fields from it, so a v2 receipt producer has no parameter through
+ * which to re-split the tuple. The generic helpers stay exactly as they are for
+ * the unrelated event families that still use them.
+ *
+ * Nothing calls these yet, by design. SCRUM-236 rewires `recordPayment` /
+ * `clearCheque` onto them and removes the old `hookCollectionPayment`;
+ * SCRUM-218-C persists and consumes the identity. This commit defines the
+ * surface those two build against and changes no production behavior.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Post — or durably enqueue — the receipt occurrence named by `identity`.
+ *
+ * The idempotency key is DERIVED here rather than accepted, which is what makes
+ * `postOrEnqueue`'s POSTED short-circuit (keyed by `by_org_idempotency`) and
+ * `postAccountingEvent`'s dedupe (keyed by the economic tuple) the same fact
+ * instead of two conventions that happen to agree today.
+ */
+export async function postReceiptOccurrence(
+  ctx: MutationCtx,
+  args: PostReceiptOccurrenceArgs
+): Promise<void> {
+  const id = args.identity;
+  await postOrEnqueue(ctx, {
+    orgId: id.orgId,
+    eventType: id.eventType,
+    sourceType: id.sourceType,
+    sourceId: id.sourceId,
+    eventVersion: id.eventVersion,
+    accountingDate: args.occurredAt,
+    occurredAt: args.occurredAt,
+    currency: args.currency,
+    idempotencyKey: occurrenceIdempotencyKey(id),
+    payload: args.payload,
+    actorId: args.actorId,
+  });
+}
+
+/**
+ * The causal check: is THIS occurrence on the books?
+ *
+ * Eligibility is exactly what c17593 §7 fixes it at — the exact
+ * `accountingEvents` occurrence exists AND its status is POSTED. An outbox row
+ * marked POSTED, a matching idempotency key, or a legacy `transactions` token
+ * is never a substitute, and REVERSED / FAILED / PENDING / missing are all
+ * ineligible.
+ *
+ * Addressed through `occurrenceIndexRange`, so every economic field must match.
+ * There is deliberately no key-only fallback: a lookup whose identity is wrong
+ * in any field must MISS, not quietly match something else.
+ *
+ * Convex has no unique indexes, so this returns the first POSTED row in the
+ * range rather than asserting the range holds one. Callers that need
+ * cardinality must assert it themselves — it cannot be inferred from the schema.
+ */
+export async function findPostedReceiptOccurrence(
+  ctx: MutationCtx,
+  identity: ReceiptOccurrenceIdentity
+): Promise<Doc<"accountingEvents"> | null> {
+  const range = occurrenceIndexRange(identity);
+  return await ctx.db
+    .query("accountingEvents")
+    .withIndex(range.index, (q) =>
+      q
+        .eq("orgId", range.orgId)
+        .eq("eventType", range.eventType)
+        .eq("sourceType", range.sourceType)
+        .eq("sourceId", range.sourceId)
+        .eq("eventVersion", range.eventVersion)
+    )
+    .filter((q) => q.eq(q.field("status"), "POSTED"))
+    .first();
+}
+
+/**
+ * Reverse the receipt occurrence named by `identity`.
+ *
+ * Two things this closes that the generic helper leaves open:
+ *
+ * 1. `eventVersion` is ALWAYS supplied. `reverseEventIfPosted` falls back to a
+ *    `by_org_source` scan with `.first()` when it is undefined, which reverses
+ *    whichever event happens to come first — for a source with several
+ *    occurrences that is a reversal aimed at one receipt landing on another.
+ *    Carrying the identity makes the exact-address branch unconditional.
+ * 2. `pendingPostIdempotencyKey` is derived from the SAME identity as the
+ *    forward post, so `cancelPendingPostByKey` cancels the entry that forward
+ *    post actually enqueued. Supplied independently, a mismatch cancels nothing
+ *    and leaves an unposted forward entry alive behind a NOT_POSTED result.
+ */
+export async function reverseReceiptOccurrence(
+  ctx: MutationCtx,
+  args: ReverseReceiptOccurrenceArgs
+): Promise<ReversalOutcome> {
+  const id = args.identity;
+  return await reverseEventIfPosted(ctx, {
+    orgId: id.orgId,
+    sourceType: id.sourceType,
+    sourceId: id.sourceId,
+    eventType: id.eventType,
+    eventVersion: id.eventVersion,
+    reason: args.reason,
+    actorId: args.actorId,
+    reversalDate: args.reversalDate,
+    reversalIdempotencyKey: occurrenceReversalIdempotencyKey(id),
+    pendingPostIdempotencyKey: occurrenceIdempotencyKey(id),
+  });
 }
 
 export async function hookDepositReceived(
