@@ -350,7 +350,10 @@ provable production cutover.
 - Widen-migrate-narrow each legacy money table via `@convex-dev/migrations`:
   `fixedAssets`, `partnerEquity`, `claims`, and any other `v.number()` money fields.
 - Extend `convex/accountingMigration.ts` posting rules to cover the previously
-  skipped `PARTNER_DRAW` and `CLAIM_PAYMENT` categories (unblocked by 12 and 13).
+  skipped `PARTNER_DRAW` category (unblocked by 12). **`CLAIM_PAYMENT` is NOT
+  covered and must not be:** SCRUM-51 retired the claims lifecycle because it
+  credited finance-company receivables with no originating debit, and
+  `postingEngine.ts` now refuses `CLAIM_SETTLED` outright. It stays `UNMAPPED`.
 - Add an opening-balance journal workflow plus an accountant reconciliation sign-off
   record (approval + snapshot).
 - Add a parallel-reporting comparison query (legacy operational totals vs GL) for the
@@ -359,7 +362,7 @@ provable production cutover.
 ## Acceptance Gates (target)
 
 - No operational money table stores a JS `number` amount.
-- Migration covers all legacy categories with no permanent `no_rule_for_category` skips.
+- Migration covers every legacy category that it is still permitted to originate, with no permanent `UNMAPPED` / `no_rule_for_category` skips. `COLLECTION_PAYMENT` is excluded from this gate by design: SCRUM-223 retired that producer, so such rows are permanently skipped as `RETIRED_COLLECTION`. A permanent retirement is not an unmet migration gate.
 - An opening balance is posted, approved, and reconciled with a recorded sign-off.
 
 ## Tests to Add

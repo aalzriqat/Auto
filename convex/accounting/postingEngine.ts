@@ -55,6 +55,33 @@ export interface PostResult {
  */
 const RETIRED_EVENT_TYPES = new Set<string>(["CLAIM_SETTLED", "CLAIM_WRITTEN_OFF"]);
 
+/**
+ * `${eventType}|${sourceType}` pairs that may never post again.
+ *
+ * PAIR-scoped, unlike `RETIRED_EVENT_TYPES`, because the event type itself is
+ * still very much alive. SCRUM-223 retired the legacy migration's authority to
+ * originate a collection receipt from a `transactions` row — the modern
+ * producers post the same event type sourced from `collectionPayments` and must
+ * keep doing so. Retiring the event type outright would silence the live
+ * producer; retiring the pair removes only the withdrawn authority.
+ *
+ * The migration's own classifier already refuses to construct this, and its
+ * `eventType` is narrowed to a union that excludes COLLECTION_PAYMENT. But that
+ * protects one file's control flow, and `PostCommand.eventType` is a bare
+ * `string` — any other caller, including `accountingLedger.post`, can still
+ * name the pair. SCRUM-51's comment below is the precedent and the warning:
+ * closing the door in the producer was the patch that had to be made twice.
+ *
+ * SCOPE, stated exactly: this refuses ORIGINATION. `reverseAccountingEvent`
+ * inserts its reversal row into `accountingEvents` directly (reversals.ts) and
+ * never passes through here, so a historical, already-posted migration-sourced
+ * collection event remains reversible. That is the intended boundary — a
+ * reversal unwinds authority that already exists rather than minting new
+ * authority — but it does mean this function is not literally every write to
+ * `accountingEvents`.
+ */
+const RETIRED_EVENT_SOURCE_PAIRS = new Set<string>(["COLLECTION_PAYMENT|transactions"]);
+
 export async function postAccountingEvent(
   ctx: MutationCtx,
   cmd: PostCommand
@@ -89,6 +116,13 @@ export async function postAccountingEvent(
   if (RETIRED_EVENT_TYPES.has(cmd.eventType)) {
     throw new ConvexError(
       `The ${cmd.eventType} accounting event is retired and can no longer post. Finance-company receivables are originated and settled through the Finance Application, which is the only authority for them.`
+    );
+  }
+
+  // Same invariant, one level finer — SCRUM-223. See RETIRED_EVENT_SOURCE_PAIRS.
+  if (RETIRED_EVENT_SOURCE_PAIRS.has(`${cmd.eventType}|${cmd.sourceType}`)) {
+    throw new ConvexError(
+      `The ${cmd.eventType} accounting event is retired for sourceType "${cmd.sourceType}" and can no longer post from there. A collection receipt is originated by the collection producers and posts sourced from "collectionPayments"; the legacy migration is not an authority for it.`
     );
   }
 
