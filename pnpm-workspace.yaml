@@ -17,7 +17,37 @@ overrides:
   # minimumReleaseAge (<24h) gate that originally forced the older pin. Still
   # pinned exact, for the same reason as postcss above.
   nanoid: 3.3.18
-  fast-uri: ">=4.1.2"
+  # Four HIGH advisories, all patched in the same release (>=4.1.3):
+  #   GHSA-5jgf-p345-68v8  host confusion, skipped IDN canonicalization
+  #   GHSA-f65p-4m7j-42xc  SSRF, malformed IPv6 normalization
+  #   GHSA-fph4-wmhf-6fwf  SSRF, repeated hostname percent-decoding
+  #   GHSA-jqff-g426-hqxp  host confusion, percent-encoded scheme normalization
+  # GitHub's advisory database lists NINE fast-uri advisories in total; the
+  # other five are patched at or below 4.1.2 and so did not fire here. The
+  # highest 4.x patched floor across all nine is 4.1.3 — there is no advisory
+  # requiring 4.1.4.
+  #
+  # Reached through ajv by TWO independent paths. `pnpm why fast-uri -r`
+  # resolves ONE instance, not two, so this is a documentation point, not a
+  # second exposure:
+  #   @sentry/nextjs > @sentry/webpack-plugin > webpack > schema-utils > ajv
+  #   shadcn > @modelcontextprotocol/sdk > ajv
+  #
+  # Same failure mode as the nanoid pin above: the earlier >=4.1.2 floor was
+  # correct when written and became insufficient with no repository change at
+  # all, because these advisories landed afterwards. Advisory-database drift,
+  # not a bad floor — the defence is periodic re-verification.
+  #
+  # Pinned EXACT, like postcss/nanoid/browserslist above, but for a sharper
+  # reason than the one written against those. minimumReleaseAge (<24h) is
+  # pnpm's own RESOLUTION-time policy, and every install in .github/workflows
+  # is `pnpm install --frozen-lockfile` (8x) or `npm ci` (2x) — none of which
+  # resolves anything. So CI never exercises that gate and cannot be what
+  # protects a floating range; the only protection would be whoever regenerates
+  # the lockfile happening to run a pnpm that enforces it. An exact pin does
+  # not depend on that, and costs nothing here: 4.1.4 is already exactly what
+  # >=4.1.3 resolved to, so this moves no package.
+  fast-uri: 4.1.4
   ip-address: ">=10.3.1"
   "js-yaml@>=4.0.0 <4.3.0": ">=4.3.0 <5.0.0"
   # GHSA-5p4m-2wfm-xmqj (CVE-2026-59870): quadratic CPU consumption in !!omap.
