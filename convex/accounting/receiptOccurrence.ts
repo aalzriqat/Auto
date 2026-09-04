@@ -152,9 +152,20 @@ export const RECEIPT_PAYLOAD_VERSION = 2 as const;
 /**
  * The stored idempotency-key prefix per channel.
  *
- * These are the EXACT prefixes already written to production rows
- * (`collection_payment_<id>` from the collection hook factory,
- * `payment_link_received_<id>` from the payment-link hook). They are spelled
+ * These are the EXACT prefixes already written to production rows by the
+ * ACCOUNTING producers — `makeCollectionHook`'s
+ * `idempotencyKey: \`${keyPrefix}_${paymentId}\`` at `workflowHooks.ts:943`,
+ * instantiated as `hookCollectionPayment` at `workflowHooks.ts:957` and called
+ * from `collections.ts:1099` and `collections.ts:1404`; and
+ * `hookPaymentLinkReceived`'s `payment_link_received_<intentId>`.
+ *
+ * NOT `collections.ts:474`. That line builds an identically-spelled key for
+ * `createCanonicalPayment` — a `canonicalPayments` row, which this very file
+ * disclaims above as a different job. The strings coincide, which is precisely
+ * why citing it looked right; it is the wrong table's key and a future engineer
+ * re-verifying the claim there would find nothing to do with `accountingEvents`.
+ *
+ * They are spelled
  * out rather than derived from `eventType.toLowerCase()` — which would happen
  * to produce the same two strings today — because a silent change to this
  * value orphans every already-posted event from its own replay check, and a
@@ -165,9 +176,42 @@ const CHANNEL_KEY_PREFIX: Record<ReceiptChannel, string> = {
   PAYMENT_LINK: "payment_link_received",
 };
 
+/**
+ * The namespace that separates repeat-occurrence keys from legacy v1 keys.
+ *
+ * Disjointness is what makes the two key spaces non-colliding, so it is checked
+ * at module load rather than left as a comment: adding a channel whose prefix
+ * began with `occv` would silently reintroduce the collision this exists to
+ * remove. A module-load throw is loud, immediate and impossible to miss.
+ */
+const REPEAT_KEY_NAMESPACE = "occv";
+
+for (const [channel, prefix] of Object.entries(CHANNEL_KEY_PREFIX)) {
+  if (prefix.startsWith(REPEAT_KEY_NAMESPACE)) {
+    throw new Error(
+      `channel ${channel} prefix "${prefix}" collides with the repeat-occurrence namespace "${REPEAT_KEY_NAMESPACE}"`
+    );
+  }
+}
+
+/**
+ * `eventVersion` is typed `number`, which admits 0, negatives, fractions, NaN
+ * and Infinity. None of those is a meaningful economic occurrence, and each
+ * would silently become part of a stored idempotency key (`_occNaN`, `_occ0`).
+ * Refuse at construction so a bad value cannot reach the ledger at all.
+ */
+function assertOccurrence(eventVersion: number): void {
+  if (!Number.isSafeInteger(eventVersion) || eventVersion < 1) {
+    throw new Error(
+      `receipt occurrence must be a safe integer >= 1, received ${String(eventVersion)}`
+    );
+  }
+}
+
 function identity(
   parts: Omit<ReceiptOccurrenceIdentity, typeof RECEIPT_OCCURRENCE_BRAND>
 ): ReceiptOccurrenceIdentity {
+  assertOccurrence(parts.eventVersion);
   return parts as ReceiptOccurrenceIdentity;
 }
 
@@ -234,33 +278,57 @@ export function paymentLinkReceipt(args: {
  * from `paymentId`, which is a convention of one call site, not an invariant.
  * Deriving the key from the identity makes them the same fact by construction.
  *
- * ## Injectivity over every representable eventVersion
+ * ## Injectivity — and the naive form that is NOT injective
  *
- * The mapping is injective across the whole domain the type permits, which is
- * the property c17593 §3 requires: v1 returns the bare base, and every other
- * version appends its own discriminator, so no two distinct identities share a
- * key. Supporting `eventVersion > 1` in the type while deriving a key that
- * ignored it is exactly the trap this avoids.
+ * An earlier revision of this function derived `${base}_occ${eventVersion}`.
+ * That is NOT injective, and two independent reviewers produced the same
+ * counterexample:
  *
- * ## Backward compatibility, and one latent trap it closes
+ *   sourceId "X_occ2" at eventVersion 1  ->  "collection_payment_X_occ2"
+ *   sourceId "X"       at eventVersion 2  ->  "collection_payment_X_occ2"
+ *
+ * Two DISTINCT economic tuples, one key. Because `postOrEnqueue` short-circuits
+ * on a POSTED row found by that key BEFORE `postAccountingEvent` ever compares
+ * the tuple, the second receipt would be silently absorbed — recorded in the
+ * subledger, absent from the ledger. The claim that the old form was "injective
+ * across the whole domain the type permits" was simply false: it swept
+ * `eventVersion` for a FIXED `sourceId` and never the two-dimensional space
+ * where the collision lives.
+ *
+ * The fix is a disjoint namespace plus length-prefixed fields:
+ *
+ *   v == 1   ->  `${prefix}_${sourceId}`                       (legacy, exact)
+ *   v  > 1   ->  `occv${v}:${p.length}:${p}:${id.length}:${id}`
+ *
+ * A v1 key always begins with a channel prefix; a repeat key always begins with
+ * `occv`. No channel prefix may begin with `occv` — asserted below, not assumed.
+ * Within the repeat namespace every variable-length field carries its own
+ * length, so the string is uniquely decodable and therefore injective for ANY
+ * `sourceId`, including one containing the delimiters.
+ *
+ * This does not rest on Convex ids being base-32 and free of `_` or `:`. That
+ * happens to be true today, but `sourceId` is typed `string`, this file already
+ * has a sibling elsewhere in the codebase that builds a COMPOSITE sourceId
+ * (`${vehicleId}_${editToken}`), and a property that holds only by convention
+ * is not a property.
+ *
+ * ## Backward compatibility
  *
  * For `eventVersion === 1` this returns byte-identical keys to those already
- * stored, so existing POSTED events keep matching their own replay check.
- *
- * For a repeat occurrence it appends the discriminator. The current producers
- * omit `eventVersion` from the key entirely, so a second economic occurrence
- * against the same source would carry the SAME key as the first, and
- * `postOrEnqueue`'s POSTED short-circuit would silently return without
- * posting — a receipt recorded in the subledger and absent from the ledger.
- * Neither live channel can reach that today (both key on a per-row id that
- * occurs once), so this is a trap closed before it is sprung, not a live
- * defect being repaired.
+ * stored (`collection_payment_<paymentId>` from the hook factory at
+ * `workflowHooks.ts:943`, `payment_link_received_<intentId>` from
+ * `hookPaymentLinkReceived`), so existing POSTED events keep matching their own
+ * replay check. Only the repeat-occurrence form changed, and nothing has ever
+ * posted through it — the facade is unused — so the change carries no
+ * migration.
  *
  * `RECEIPT_PAYLOAD_VERSION` is deliberately absent from this computation.
  */
 export function occurrenceIdempotencyKey(id: ReceiptOccurrenceIdentity): string {
-  const base = `${CHANNEL_KEY_PREFIX[id.channel]}_${id.sourceId}`;
-  return id.eventVersion === 1 ? base : `${base}_occ${id.eventVersion}`;
+  assertOccurrence(id.eventVersion);
+  const prefix = CHANNEL_KEY_PREFIX[id.channel];
+  if (id.eventVersion === 1) return `${prefix}_${id.sourceId}`;
+  return `${REPEAT_KEY_NAMESPACE}${id.eventVersion}:${prefix.length}:${prefix}:${id.sourceId.length}:${id.sourceId}`;
 }
 
 /**

@@ -30,6 +30,7 @@ import {
   occurrenceIdempotencyKey,
   occurrenceReversalIdempotencyKey,
   occurrenceIndexRange,
+  describeOccurrence,
 } from "./receiptOccurrence";
 
 export async function getOrgCurrency(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">): Promise<string> {
@@ -343,16 +344,29 @@ export async function postReceiptOccurrence(
  * There is deliberately no key-only fallback: a lookup whose identity is wrong
  * in any field must MISS, not quietly match something else.
  *
- * Convex has no unique indexes, so this returns the first POSTED row in the
- * range rather than asserting the range holds one. Callers that need
- * cardinality must assert it themselves — it cannot be inferred from the schema.
+ * ## Ambiguity REFUSES rather than choosing
+ *
+ * Convex has no unique indexes, so nothing in the schema guarantees this exact
+ * range holds at most one row. An earlier revision filtered to POSTED and took
+ * `.first()`, which meant a corrupt pair — the same exact tuple present twice,
+ * one POSTED and one REVERSED — would be reported as a live POSTED occurrence,
+ * choosing the favourable row and hiding the corruption. `postAccountingEvent`
+ * reads the same tuple with `.unique()` and therefore fails closed; a causal
+ * check that is laxer than the writer it guards is worse than no check.
+ *
+ * So the range is read WITHOUT the status filter and refuses on more than one
+ * row. That converts silent corruption into an explicit operational error, and
+ * a caller cannot obtain an eligible occurrence it should not have. Status is
+ * applied afterwards: only POSTED is eligible — REVERSED, FAILED, PENDING and
+ * missing are all ineligible, and an outbox POSTED row or a matching
+ * idempotency key is never a substitute.
  */
 export async function findPostedReceiptOccurrence(
   ctx: MutationCtx,
   identity: ReceiptOccurrenceIdentity
 ): Promise<Doc<"accountingEvents"> | null> {
   const range = occurrenceIndexRange(identity);
-  return await ctx.db
+  const rows = await ctx.db
     .query("accountingEvents")
     .withIndex(range.index, (q) =>
       q
@@ -362,8 +376,14 @@ export async function findPostedReceiptOccurrence(
         .eq("sourceId", range.sourceId)
         .eq("eventVersion", range.eventVersion)
     )
-    .filter((q) => q.eq(q.field("status"), "POSTED"))
-    .first();
+    .take(2);
+  if (rows.length > 1) {
+    throw new Error(
+      `ambiguous receipt occurrence ${describeOccurrence(identity)}: more than one accountingEvents row shares this exact economic tuple`
+    );
+  }
+  const row = rows[0];
+  return row && row.status === "POSTED" ? row : null;
 }
 
 /**
