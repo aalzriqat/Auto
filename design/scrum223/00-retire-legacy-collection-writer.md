@@ -1,5 +1,12 @@
 # SCRUM-223 — Retire the legacy collection-payment migration writer
 
+> ⛔ **SUPERSEDED — FROZEN FAILED DESIGN EVIDENCE.** This round-1 packet failed independent Sonnet MAX
+> + Codex HIGH review (`c17418`) and is preserved unchanged at `39753c802` / tag
+> `scrum223-design-r1` by owner-proxy ruling `c17421`. **Do not implement from it.** Its §5 `RETIRED`
+> split introduced a migration-liveness HIGH, its §6/K2 completeness claim was overclaimed and
+> self-contradicting, and its §1 misattributed the `MIGRATE_TRANSACTION` write at `:831`.
+> **The current contract is [`01-retire-legacy-collection-writer-r2.md`](./01-retire-legacy-collection-writer-r2.md).**
+
 **Design packet, round 1.** Authorized by owner-proxy `c17413`.
 
 | | |
