@@ -359,7 +359,7 @@ provable production cutover.
 ## Acceptance Gates (target)
 
 - No operational money table stores a JS `number` amount.
-- Migration covers all legacy categories with no permanent `no_rule_for_category` skips.
+- Migration covers every legacy category that it is still permitted to originate, with no permanent `UNMAPPED` / `no_rule_for_category` skips. `COLLECTION_PAYMENT` is excluded from this gate by design: SCRUM-223 retired that producer, so such rows are permanently skipped as `RETIRED_COLLECTION`. A permanent retirement is not an unmet migration gate.
 - An opening balance is posted, approved, and reconciled with a recorded sign-off.
 
 ## Tests to Add

@@ -26,6 +26,39 @@ import { hasVehicleAcquisitionAccountingExposure } from "./vehicles";
 
 // ─── Snapshot / classification helpers ───────────────────────────────────────
 
+/**
+ * Event types this migration is still permitted to originate.
+ *
+ * COLLECTION_PAYMENT is deliberately absent — see `classifyLegacyCategory`.
+ * Its absence is the retirement: the payload branch and the `postAccountingEvent`
+ * call below are typed against this union, so a collection receipt cannot be
+ * constructed here even by a future edit that forgets why. A comment describing
+ * a guard is not the guard; the type is.
+ */
+type MigratableEventType =
+  | "SALE_COMPLETED"
+  | "VEHICLE_ACQUIRED"
+  | "DEPOSIT_RECEIVED"
+  | "DEPOSIT_REFUNDED"
+  | "EXPENSE_POSTED"
+  | "PARTNER_DREW"
+  | "CAPITAL_CONTRIBUTED";
+
+type LegacyDisposition = "MAPPED" | "RETIRED_COLLECTION" | "UNMAPPED";
+
+/**
+ * The classification of one legacy row, as a discriminated union.
+ *
+ * Only the MAPPED variant carries an `eventType`, and only the non-mapped
+ * variants carry a `classificationReason`. A contradictory combination — a
+ * retired row that also names an event type — is therefore not representable,
+ * rather than merely not produced.
+ */
+type LegacyClassification =
+  | { disposition: "MAPPED"; eventType: MigratableEventType }
+  | { disposition: "RETIRED_COLLECTION"; classificationReason: "collection_producer_retired" }
+  | { disposition: "UNMAPPED"; classificationReason: "no_rule_for_category" };
+
 interface LegacyTransactionRow {
   id: string;
   type: string;
@@ -36,21 +69,40 @@ interface LegacyTransactionRow {
   vehicleId: string | undefined;
   hasJournalEntry: boolean;
   eventType: string | null;
+  disposition: LegacyDisposition;
+  classificationReason: string | null;
 }
 
-function mapCategoryToEventType(category: string, type: string): string | null {
-  if (category === "VEHICLE_SALE") return "SALE_COMPLETED";
+function classifyLegacyCategory(category: string, type: string): LegacyClassification {
+  if (category === "VEHICLE_SALE") return { disposition: "MAPPED", eventType: "SALE_COMPLETED" };
   // Only created going forward by vehicles.create (vehicle acquisition
   // capitalization) — legacy rows predating that never exist with this category.
-  if (category === "VEHICLE_PURCHASE") return "VEHICLE_ACQUIRED";
-  if (category === "DEPOSIT") return type === "IN" ? "DEPOSIT_RECEIVED" : "DEPOSIT_REFUNDED";
-  if (category === "COLLECTION_PAYMENT") return "COLLECTION_PAYMENT";
-  if (category === "EXPENSE") return "EXPENSE_POSTED";
+  if (category === "VEHICLE_PURCHASE") return { disposition: "MAPPED", eventType: "VEHICLE_ACQUIRED" };
+  if (category === "DEPOSIT") {
+    return { disposition: "MAPPED", eventType: type === "IN" ? "DEPOSIT_RECEIVED" : "DEPOSIT_REFUNDED" };
+  }
+  if (category === "EXPENSE") return { disposition: "MAPPED", eventType: "EXPENSE_POSTED" };
   // GL Phase 12 closed the equity skip gap: these post through the partner
   // equity rules without a partnerId (legacy rows never recorded which
   // partner — the rules treat it as optional metadata).
-  if (category === "PARTNER_DRAW") return "PARTNER_DREW";
-  if (category === "CAPITAL_INJECTION") return "CAPITAL_CONTRIBUTED";
+  if (category === "PARTNER_DRAW") return { disposition: "MAPPED", eventType: "PARTNER_DREW" };
+  if (category === "CAPITAL_INJECTION") return { disposition: "MAPPED", eventType: "CAPITAL_CONTRIBUTED" };
+
+  // ⚠️ COLLECTION_PAYMENT IS RETIRED, NOT UNMAPPED — SCRUM-223.
+  //
+  // A collection receipt is already originated by the modern producers, which
+  // post it sourced from `collectionPayments`. This migration's duplicate probe
+  // looks for `sourceType: "transactions"`, so it cannot see that event, and it
+  // would mint a SECOND journal for one economic receipt (SCRUM-234).
+  //
+  // Retirement is a distinct disposition from UNMAPPED on purpose. Folding it
+  // into the generic `no_rule_for_category` bucket would make a deliberate
+  // withdrawal of authority indistinguishable from a category nobody has
+  // mapped yet, which is precisely the distinguishable reason this ticket owes.
+  if (category === "COLLECTION_PAYMENT") {
+    return { disposition: "RETIRED_COLLECTION", classificationReason: "collection_producer_retired" };
+  }
+
   // ⚠️ CLAIM_PAYMENT IS DELIBERATELY UNMAPPED — SCRUM-51.
   //
   // GL Phase 13 mapped it to CLAIM_SETTLED, whose posting rule credits
@@ -60,12 +112,22 @@ function mapCategoryToEventType(category: string, type: string): string | null {
   // SCRUM-51 exists to remove, reached through the migration instead of
   // through `claims.add`. Both review seats found it independently.
   //
-  // Returning null leaves the legacy row unposted, which is the safe answer
-  // and is consistent with the owner ruling that current data is disposable.
-  // Finance-company AR is originated and settled by the Finance Application
-  // alone. Recording a genuinely historical claim receipt is a cutover
-  // question for SCRUM-4, not something to infer from a category string.
-  return null;
+  // Leaving the legacy row unposted is the safe answer and is consistent with
+  // the owner ruling that current data is disposable. Finance-company AR is
+  // originated and settled by the Finance Application alone. Recording a
+  // genuinely historical claim receipt is a cutover question for SCRUM-4, not
+  // something to infer from a category string.
+  return { disposition: "UNMAPPED", classificationReason: "no_rule_for_category" };
+}
+
+/** The event type a classification permits, or null when it permits none. */
+function eventTypeOf(c: LegacyClassification): MigratableEventType | null {
+  return c.disposition === "MAPPED" ? c.eventType : null;
+}
+
+/** The classification reason, or null for a mapped row (which has no reason). */
+function classificationReasonOf(c: LegacyClassification): string | null {
+  return c.disposition === "MAPPED" ? null : c.classificationReason;
 }
 
 async function classifyLegacyTransaction(
@@ -83,7 +145,10 @@ async function classifyLegacyTransaction(
     )
     .first();
 
-  const eventType = mapCategoryToEventType(tx.category, tx.type);
+  // The audit and the migration mutation consume this same classifier, so the
+  // retirement truth they report cannot diverge.
+  const classification = classifyLegacyCategory(tx.category, tx.type);
+  const eventType = eventTypeOf(classification);
 
   // VEHICLE_ACQUIRED never posts sourced from "transactions" — vehicles.ts's
   // postVehicleAcquisitionIfOwned posts it sourced from "vehicles" (see
@@ -105,6 +170,8 @@ async function classifyLegacyTransaction(
     // Only consider an event as posted if it is in POSTED status with a journal entry linked
     hasJournalEntry: (existing?.status === "POSTED" && !!existing.journalEntryId) || alreadyAccountedViaVehicle,
     eventType,
+    disposition: classification.disposition,
+    classificationReason: classificationReasonOf(classification),
   };
 }
 
@@ -287,10 +354,25 @@ export const migrateUnpostedTransactions = mutation({
       await ensurePartnerEquityAccounts(ctx, args.orgId, user._id);
       await ensureClaimAccounts(ctx, args.orgId, user._id);
     }
-    const results: Array<{ transactionId: string; action: string; eventType: string | null; reason?: string }> = [];
+    const results: Array<{
+      transactionId: string;
+      action: string;
+      eventType: string | null;
+      disposition: LegacyDisposition;
+      classificationReason?: string;
+      reason?: string;
+    }> = [];
 
     for (const tx of txns) {
       if (results.filter((r) => r.action !== "SKIP").length >= limit) break;
+
+      // Classification is pure and cheap, so it is computed for every scanned
+      // row — including rows that short-circuit below on `already_posted`.
+      // That keeps `disposition` truthful on every result row rather than only
+      // on the rows that reach the classification branch.
+      const classification = classifyLegacyCategory(tx.category, tx.type);
+      const disposition = classification.disposition;
+      const classificationReason = classificationReasonOf(classification) ?? undefined;
 
       // Check if already posted
       const existing = await ctx.db
@@ -304,16 +386,25 @@ export const migrateUnpostedTransactions = mutation({
         .first();
 
       if (existing) {
-        results.push({ transactionId: tx._id.toString(), action: "SKIP", eventType: null, reason: "already_posted" });
+        results.push({
+          transactionId: tx._id.toString(), action: "SKIP", eventType: null,
+          disposition, classificationReason, reason: "already_posted",
+        });
         continue;
       }
 
-      const eventType = mapCategoryToEventType(tx.category, tx.type);
-
-      if (!eventType) {
-        results.push({ transactionId: tx._id.toString(), action: "SKIP", eventType: null, reason: "no_rule_for_category" });
+      if (classification.disposition !== "MAPPED") {
+        // The classification reason travels in its own field. `reason` stays
+        // reserved for action/error outcomes (`already_posted`, a thrown
+        // message) so the two channels cannot drift into each other.
+        results.push({
+          transactionId: tx._id.toString(), action: "SKIP", eventType: null,
+          disposition, classificationReason,
+        });
         continue;
       }
+
+      const eventType = classification.eventType;
 
       // VEHICLE_ACQUIRED for a VEHICLE_PURCHASE row posts sourced from
       // "vehicles" (see postVehicleAcquisitionIfOwned), not "transactions" —
@@ -321,7 +412,10 @@ export const migrateUnpostedTransactions = mutation({
       // this loop would post a genuine duplicate VEHICLE_ACQUIRED event,
       // double-debiting Vehicle Inventory.
       if (eventType === "VEHICLE_ACQUIRED" && tx.vehicleId && await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, tx.vehicleId)) {
-        results.push({ transactionId: tx._id.toString(), action: "SKIP", eventType, reason: "already_posted_via_vehicle" });
+        results.push({
+          transactionId: tx._id.toString(), action: "SKIP", eventType,
+          disposition, reason: "already_posted_via_vehicle",
+        });
         continue;
       }
 
@@ -329,7 +423,7 @@ export const migrateUnpostedTransactions = mutation({
       const idempotencyKey = `migrate_${tx._id}`;
 
       if (dryRun) {
-        results.push({ transactionId: tx._id.toString(), action: "WOULD_POST", eventType });
+        results.push({ transactionId: tx._id.toString(), action: "WOULD_POST", eventType, disposition });
         continue;
       }
 
@@ -343,9 +437,6 @@ export const migrateUnpostedTransactions = mutation({
 
         if (eventType === "EXPENSE_POSTED") {
           payload.expenseId = tx.expenseId?.toString() ?? tx._id.toString();
-        } else if (eventType === "COLLECTION_PAYMENT") {
-          payload.paymentId = tx._id.toString();
-          payload.paymentMethod = "CASH";
         } else if (eventType === "DEPOSIT_RECEIVED" || eventType === "DEPOSIT_REFUNDED") {
           payload.depositId = tx._id.toString();
           payload.paymentMethod = "CASH";
@@ -354,9 +445,12 @@ export const migrateUnpostedTransactions = mutation({
           payload.saleAmountMinor = amountMinor;
         } else if (eventType === "PARTNER_DREW" || eventType === "CAPITAL_CONTRIBUTED") {
           payload.paymentMethod = "CASH";
-        } else if (eventType === "CLAIM_SETTLED") {
-          payload.claimId = tx._id.toString();
-          payload.paymentMethod = "CASH";
+        // The CLAIM_SETTLED branch that stood here was already unreachable —
+        // CLAIM_PAYMENT has classified as unmapped since SCRUM-51. Narrowing
+        // `eventType` to MigratableEventType turns that dormant branch into a
+        // compile error, so it is removed rather than left as dead
+        // authority-bearing code. This is a consequence of the type, not a
+        // separate decision.
         } else if (eventType === "VEHICLE_ACQUIRED") {
           payload.costMinor = amountMinor;
           payload.paymentMethod = "CASH";
@@ -364,7 +458,10 @@ export const migrateUnpostedTransactions = mutation({
 
         await postAccountingEvent(ctx, {
           orgId: args.orgId,
-          eventType: eventType as "EXPENSE_POSTED" | "COLLECTION_PAYMENT" | "DEPOSIT_RECEIVED" | "DEPOSIT_REFUNDED" | "SALE_COMPLETED" | "PARTNER_DREW" | "CAPITAL_CONTRIBUTED" | "CLAIM_SETTLED" | "VEHICLE_ACQUIRED",
+          // No cast: `eventType` is already MigratableEventType, which excludes
+          // COLLECTION_PAYMENT by construction. A cast here would be a hole
+          // straight through the retirement.
+          eventType,
           sourceType: "transactions",
           sourceId: tx._id.toString(),
           eventVersion: 1,
@@ -375,10 +472,13 @@ export const migrateUnpostedTransactions = mutation({
           payload,
           actorId: user._id,
         });
-        results.push({ transactionId: tx._id.toString(), action: "POSTED", eventType });
+        results.push({ transactionId: tx._id.toString(), action: "POSTED", eventType, disposition });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        results.push({ transactionId: tx._id.toString(), action: "FAILED", eventType, reason: message });
+        results.push({
+          transactionId: tx._id.toString(), action: "FAILED", eventType,
+          disposition, reason: message,
+        });
       }
     }
 
@@ -386,8 +486,12 @@ export const migrateUnpostedTransactions = mutation({
     const wouldPost = results.filter((r) => r.action === "WOULD_POST").length;
     const skipped = results.filter((r) => r.action === "SKIP").length;
     const failed = results.filter((r) => r.action === "FAILED").length;
+    // Derived from the same classification the rows carry, so the counter and
+    // the rows cannot disagree. A retired row is also a skipped row; both
+    // counts include it, which is stated here rather than left to inference.
+    const retired = results.filter((r) => r.disposition === "RETIRED_COLLECTION").length;
 
-    return { dryRun, posted, wouldPost, skipped, failed, results };
+    return { dryRun, posted, wouldPost, skipped, retired, failed, results };
   },
 });
 

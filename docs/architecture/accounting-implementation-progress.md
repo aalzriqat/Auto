@@ -470,7 +470,7 @@ Status: Implemented. All Phase 6 acceptance gates pass.
   - `auditLegacyTransactions`: classifies each legacy `transactions` row by whether it has a POSTED `accountingEvent`; returns `scannedCount`, `hasMore`, `postedCount`, `unpostedCount`, `rows`; optional `onlyUnposted` filter uses `scanLimit = limit * 5` to work past posted rows.
   - `duplicateEventCheck`: queries `accountingEvents` by `eventType` and detects idempotency-key collisions; returns `totalEvents`, `uniqueKeys`, `duplicateCount`, `duplicates` list.
   - `migrationGapAnalysis`: counts legacy transactions, GL events sourced from `transactions`, journal entries, journal lines, receivables, payments, allocations; computes `migrationProgress` percentage (capped at 100); all table reads capped at 10,000.
-  - `migrateUnpostedTransactions`: scans `limit * 10` rows past already-posted entries; maps legacy category to event type (`EXPENSE`, `VEHICLE_SALE`, `DEPOSIT`, `COLLECTION_PAYMENT`); dry-run mode returns `WOULD_POST` actions without writing; live mode calls `postAccountingEvent`; returns `{ dryRun, posted, wouldPost, skipped, failed, results }`.
+  - `migrateUnpostedTransactions`: scans `limit * 10` rows past already-posted entries; classifies each legacy category as `MAPPED` (`EXPENSE`, `VEHICLE_SALE`, `VEHICLE_PURCHASE`, `DEPOSIT`, `PARTNER_DRAW`, `CAPITAL_INJECTION`), `RETIRED_COLLECTION` (`COLLECTION_PAYMENT` — see SCRUM-223 below) or `UNMAPPED`; dry-run mode returns `WOULD_POST` actions and produces no migration/accounting economic effect; live mode calls `postAccountingEvent`; returns `{ dryRun, posted, wouldPost, skipped, retired, failed, results }`.
 - `classifyLegacyTransaction`: internal helper checking `accountingEvents` by `by_org_source` index; `hasJournalEntry` requires `status === "POSTED" && !!journalEntryId`.
 
 ## Files Changed
@@ -500,7 +500,10 @@ Status: Implemented. All Phase 6 acceptance gates pass.
 
 - `migrateUnpostedTransactions.dryRun` defaults to `true` (safe by default); callers must explicitly pass `dryRun: false` to write.
 - `glEventCount` in gap analysis counts only events with `sourceType = "transactions"`, not all GL events, to measure legacy-migration progress specifically.
-- Unmappable transaction categories (e.g., `PARTNER_DRAW`, `CLAIM_PAYMENT`) are `SKIP`-ped with reason `no_rule_for_category`; they require manual journals or new event types.
+- Unmapped transaction categories (e.g. `CLAIM_PAYMENT`) are `SKIP`-ped with disposition `UNMAPPED` and `classificationReason: "no_rule_for_category"`; they require manual journals or new event types.
+- **SCRUM-223 — the `COLLECTION_PAYMENT` migration producer is retired.** A legacy collection row is `SKIP`-ped with disposition `RETIRED_COLLECTION` and `classificationReason: "collection_producer_retired"`. This is deliberately a *different* disposition from `UNMAPPED`: the category is not merely unmapped, its authority to originate a receipt has been withdrawn, because the modern producers already post the receipt sourced from `collectionPayments` and the migration's duplicate probe (which looks for `sourceType: "transactions"`) cannot see that event. Migrating such a row minted a second journal for one economic receipt.
+  - Consequence for `migrationGapAnalysis.migrationProgress`: it is the ratio of accounting events sourced from `transactions` to legacy rows, and a retired row never becomes one. An org holding legacy `COLLECTION_PAYMENT` rows therefore **cannot reach 100%**, and that is the honest reading — the row is not migrated and must not be reported as if it were.
+  - `accountingCutover.signOffCutover` is deliberately *not* taught that `RETIRED_COLLECTION` counts as migrated. It keeps its own independent POSTED-event evidence and still refuses. That independence is defence in depth, not an oversight.
 
 ---
 
