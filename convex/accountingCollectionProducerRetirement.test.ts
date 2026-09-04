@@ -159,11 +159,23 @@ async function legacyRowsWithCategory(t: Harness, orgId: Id<"organizations">, ca
 }
 
 /**
- * Proves the modern producer really did originate the receipt: exactly one
- * POSTED COLLECTION_PAYMENT event sourced from `collectionPayments/<paymentId>`,
- * carrying a journal entry. Without this the §6 delta assertion is vacuous.
+ * Proves the modern producer really did originate the receipt, and originated
+ * it exactly once: one POSTED COLLECTION_PAYMENT event sourced from
+ * `collectionPayments/<paymentId>`, and exactly ONE journal, which is the one
+ * that event names.
+ *
+ * `journalsBefore` is the org's journal count captured immediately before the
+ * producer ran. Asserting the +1 is what closes the last vacuity: checking only
+ * that one *event* exists would still pass if the producer emitted a second
+ * journal for the same receipt, because that duplicate would land in the
+ * migration baseline and the later delta would stay flat.
  */
-async function assertModernReceiptPosted(t: Harness, orgId: Id<"organizations">, paymentId: string) {
+async function assertModernReceiptPosted(
+  t: Harness,
+  orgId: Id<"organizations">,
+  paymentId: string,
+  journalsBefore: number
+) {
   const events = await t.run((ctx) =>
     ctx.db
       .query("accountingEvents")
@@ -173,9 +185,25 @@ async function assertModernReceiptPosted(t: Harness, orgId: Id<"organizations">,
       .collect()
   );
   expect(events).toHaveLength(1);
-  expect(events[0].eventType).toBe("COLLECTION_PAYMENT");
-  expect(events[0].status).toBe("POSTED");
-  expect(events[0].journalEntryId).toBeTruthy();
+  const event = events[0];
+  expect(event.eventType).toBe("COLLECTION_PAYMENT");
+  expect(event.status).toBe("POSTED");
+  expect(event.journalEntryId).toBeTruthy();
+
+  // The producer added exactly one journal — not zero, and not two.
+  expect(await journalCount(t, orgId)).toBe(journalsBefore + 1);
+
+  // And exactly one journal is linked to that event, and it is the one the
+  // event points at. `by_accounting_event` is not a unique index (Convex has
+  // none), so this is a real assertion rather than a restatement of the schema.
+  const linked = await t.run((ctx) =>
+    ctx.db
+      .query("journalEntries")
+      .withIndex("by_accounting_event", (q) => q.eq("accountingEventId", event._id))
+      .collect()
+  );
+  expect(linked).toHaveLength(1);
+  expect(linked[0]._id).toBe(event.journalEntryId);
 }
 
 // ─── §1 / §2 — classification truth, and both consumers agreeing on it ────────
@@ -439,15 +467,19 @@ describe("SCRUM-223 §6 — a modern receipt gains no second journal from legacy
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
 
+    // Captured before the producer runs so its journal cardinality can be
+    // asserted exactly, not just its existence.
+    const journalsBeforeProducer = await journalCount(t, orgId);
+
     const paymentId = await asUser.mutation(api.collections.recordPayment, {
       orgId, receivableId, amount: 400, method: "CASH",
       paymentDate: Date.now(), idempotencyKey: "rp_pay_1",
     });
 
-    // PRECONDITION 1 — the modern producer really originated this receipt.
-    // Without this the delta below is vacuous: it also holds when the producer
-    // posts nothing at all.
-    await assertModernReceiptPosted(t, orgId, paymentId.toString());
+    // PRECONDITION 1 — the modern producer really originated this receipt, and
+    // originated it exactly once. Without this the delta below is vacuous: it
+    // also holds when the producer posts nothing, and when it posts twice.
+    await assertModernReceiptPosted(t, orgId, paymentId.toString(), journalsBeforeProducer);
 
     // PRECONDITION 2 — and it also wrote the legacy row that migration scans
     // (collections.ts, category COLLECTION_PAYMENT). Without this, migration
@@ -488,6 +520,8 @@ describe("SCRUM-223 §6 — a modern receipt gains no second journal from legacy
       orgId, receivableId, customerId, bank: "ABC Bank", chequeNumber: "CHQ-223",
       chequeDate: Date.now(), amount: 1000,
     });
+    const journalsBeforeProducer = await journalCount(t, orgId);
+
     const paymentId = await asUser.mutation(api.collections.clearCheque, {
       orgId, chequeId, idempotencyKey: `clear_${chequeId}`,
     });
@@ -496,7 +530,7 @@ describe("SCRUM-223 §6 — a modern receipt gains no second journal from legacy
     // carries the identical exposure — and therefore owes the identical
     // preconditions. Naming only one of the two producers is how this was
     // missed before.
-    await assertModernReceiptPosted(t, orgId, paymentId.toString());
+    await assertModernReceiptPosted(t, orgId, paymentId.toString(), journalsBeforeProducer);
 
     const legacyRows = await legacyRowsWithCategory(t, orgId, "COLLECTION_PAYMENT");
     expect(legacyRows).toHaveLength(1);
@@ -558,6 +592,8 @@ describe("SCRUM-223 — COLLECTION_PAYMENT from `transactions` is refused at the
       amount: 1000, dueDate: Date.now() + 86_400_000,
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
+    const journalsBeforeProducer = await journalCount(t, orgId);
+
     const paymentId = await asUser.mutation(api.collections.recordPayment, {
       orgId, receivableId, amount: 250, method: "CASH",
       paymentDate: Date.now(), idempotencyKey: "choke2_pay",
@@ -566,6 +602,6 @@ describe("SCRUM-223 — COLLECTION_PAYMENT from `transactions` is refused at the
     // The guard is scoped to the (eventType, sourceType) PAIR, not the event
     // type alone — COLLECTION_PAYMENT sourced from `collectionPayments` is the
     // live, correct producer and must keep posting.
-    await assertModernReceiptPosted(t, orgId, paymentId.toString());
+    await assertModernReceiptPosted(t, orgId, paymentId.toString(), journalsBeforeProducer);
   });
 });
