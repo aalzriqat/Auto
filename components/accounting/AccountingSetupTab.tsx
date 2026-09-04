@@ -135,10 +135,26 @@ export function AccountingSetupTab() {
           void runSetupAction(
             "redrive",
             () => redriveOutbox({ orgId: activeOrgId }),
-            (outcome) =>
-              t("AccountingOutboxRedrivenResult" as any)
-                .replace("{posted}", String(outcome.posted))
-                .replace("{failed}", String(outcome.failed))
+            // Queued, never posted. Posting is asynchronous (SCRUM-222), so
+            // this transaction cannot know a posted/failed split — reporting
+            // one would put back, one layer up, the false success the outbox
+            // itself stopped making.
+            //
+            // Three states, every one of them read from the backend's own
+            // counts (owner ruling c17375): queued now, already in flight, or
+            // genuinely nothing left. "Already posting" is NOT an empty result,
+            // and collapsing it into one would be the same false claim again.
+            (outcome) => {
+              if (outcome.scheduled > 0) {
+                return t("AccountingOutboxRedrivenResult" as any)
+                  .replace("{scheduled}", String(outcome.scheduled));
+              }
+              if (outcome.alreadyInFlight > 0) {
+                return t("AccountingOutboxRedriveInFlight" as any)
+                  .replace("{inFlight}", String(outcome.alreadyInFlight));
+              }
+              return t("AccountingOutboxRedriveNothing" as any);
+            }
           );
         }}
         periodDialog={

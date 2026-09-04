@@ -16,6 +16,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
+import { settleOutbox } from "../test-utils/outboxWork";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -178,9 +179,13 @@ describe("the outbox drain sweeps past held rows", () => {
       });
     });
 
-    // One sweep only — no scheduler drain, because a single page is all this
-    // needs and the point is how many attempts ONE sweep costs.
-    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    // One sweep only, driven to a settled outcome. The point is still how many
+    // attempts ONE sweep costs — but under SCRUM-222 the attempt is recorded by
+    // the OBSERVER, in its own transaction, because a worker that throws rolls
+    // back completely and so cannot write down its own failure. `settleOutbox`
+    // runs dispatch, worker and observation exactly once each, which is what
+    // the one-minute cron does in production.
+    await settleOutbox(t, orgId);
 
     const row = await t.run(async (ctx: any) =>
       await ctx.db
