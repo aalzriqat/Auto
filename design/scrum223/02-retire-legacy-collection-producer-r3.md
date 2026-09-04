@@ -3,6 +3,25 @@
 **Bounded closure design under owner-proxy `c17498` (clean-slate re-narrowing).**
 `c17498` supersedes the `c17421` six-point contract wherever the two differ.
 
+> ## ⚠️ SUPERSEDED — read `03-retire-legacy-collection-producer-r4.md` instead
+>
+> Frozen failed evidence at `38d69007071a4d25a911d9e1e17cb36e4d1b7ea3`. Sonnet MAX returned
+> 1 CRITICAL / 1 HIGH / 1 factual error; Codex `high` returned 2 MEDIUM / 3 LOW / 1 INFO. Superseded
+> by owner-proxy `c17513`. **Do not implement from this document.**
+>
+> | This document | Status | Corrected in r4 |
+> |---|---|---|
+> | §2 "the same structural retirement `CLAIM_PAYMENT` already received" | **wrong** — `CLAIM_PAYMENT` returns `null` into the *generic* bucket, the opposite of a distinguishable reason | r4 §1 |
+> | §3.1 traversal/return shape "byte-unchanged" | **wrong** — traversal length, result rows and the collection counters all move, intentionally | r4 §3.2 |
+> | §5 reseed BOTH Phase-17 fixtures with EXPENSE | **wrong** — leaves no retired row anywhere, so mutant M4 survives and §7's "M4 → E7 fails" is false | r4 §5 |
+> | §7 E4 "cannot starve anything" | too broad — the fixed `limit * 10` window can still hide later mapped rows | r4 §3.3 |
+> | §8 "six files call this mutation" | **wrong** — five files, ten call sites | r4 §8.1 |
+> | §3.2 dual derivation | not type-coupled; `eventType` / disposition / reason / counter can drift | r4 §2 |
+> | §4 "zero GL/economic effect" | eager chart setup precedes classification — a live retired-only call can still write chart rows or throw | r4 §4, routed to **SCRUM-235** |
+>
+> The retirement's core shape — `action: "SKIP"` preserved, distinguished only by a field the budget
+> does not read — **survives review unchanged** and is carried into r4.
+
 | | |
 |---|---|
 | Branch | `agent/scrum-223-retire-legacy-collection-writer` |
