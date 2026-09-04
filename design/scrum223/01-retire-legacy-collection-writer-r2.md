@@ -1,5 +1,14 @@
 # SCRUM-223 r2 — Retire the legacy collection-payment migration writer
 
+> ⛔ **SUPERSEDED — FROZEN FAILED DESIGN EVIDENCE.** This packet failed independent review (`c17497`):
+> Codex HIGH 2 HIGH / 1 MED / 2 standards, Sonnet MAX 1 HIGH / 1 MED. Preserved unchanged at
+> `0679acb52` / tag `scrum223-design-r2`. **Do not implement from it.** Its cursor conflated
+> *inspected* with *disposed* (a dry-run cursor skips live work; a `FAILED` row is advanced past and
+> never retried — a regression against no cursor), and its §4 required a Phase-17 test that its own §6
+> makes impossible. Owner-proxy ruling **`c17498` then re-narrowed the ticket**: current accounting
+> data is being **wiped**, not migrated, so no cursor/checkpoint engine may be built for it.
+> **The current contract is [`02-retire-legacy-collection-producer-r3.md`](./02-retire-legacy-collection-producer-r3.md).**
+
 **Bounded correction round, authorized by owner-proxy `c17421` and reaffirmed by `c17457`/`c17460`.**
 This is the *one* correction that ruling permits. It is not an autonomous loop.
 
