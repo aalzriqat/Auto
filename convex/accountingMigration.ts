@@ -346,6 +346,24 @@ export const migrateUnpostedTransactions = mutation({
         } else if (eventType === "COLLECTION_PAYMENT") {
           payload.paymentId = tx._id.toString();
           payload.paymentMethod = "CASH";
+          // SCRUM-218-C — reproduce the journal this legacy row ALREADY produced,
+          // and assert nothing further.
+          //
+          // The v2 rule needs received/applied/unapplied, and a legacy
+          // `transactions` row records none of that split: it has one amount and
+          // it credited Customer AR in full. Booking `applied = received` is
+          // therefore the NO-RESTATEMENT choice — byte-identical to the entry
+          // this migration wrote before — and it deliberately never touches 2110.
+          //
+          // ⚠️ This is NOT a claim that the legacy receipt discharged a
+          // receivable. It is a refusal to invent a retained liability for a row
+          // that never recorded one; guessing the other way would mint 2110
+          // credits out of historical data, which is exactly the legacy-data
+          // reconstruction this ticket is forbidden to do. Retiring this writer
+          // altogether remains SCRUM-223's.
+          payload.receivedMinor = amountMinor;
+          payload.appliedMinor = amountMinor;
+          payload.unappliedMinor = 0;
         } else if (eventType === "DEPOSIT_RECEIVED" || eventType === "DEPOSIT_REFUNDED") {
           payload.depositId = tx._id.toString();
           payload.paymentMethod = "CASH";

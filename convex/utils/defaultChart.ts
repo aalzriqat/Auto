@@ -8,6 +8,25 @@ export const SYSTEM_KEYS = {
   RECEIVABLE_FROM_SUPPLIERS: "RECEIVABLE_FROM_SUPPLIERS",
   CONSIGNMENT_COMMISSION_REVENUE: "CONSIGNMENT_COMMISSION_REVENUE",
   UNAPPLIED_CUSTOMER_CASH: "UNAPPLIED_CUSTOMER_CASH",
+  /**
+   * 2110 — customer money received that no receivable has yet absorbed
+   * (SCRUM-218-C; owner-proxy c17653).
+   *
+   * ⚠️ DECLARED HERE, SEEDED BY SCRUM-231, AND THAT SPLIT IS DELIBERATE. The key
+   * is a name the posting rules may reference; the account row is a cutover
+   * artifact this ticket must never create, adopt, reclassify or substitute. It
+   * is therefore absent from `DEFAULT_CHART` and from `REQUIRED_SYSTEM_KEYS` on
+   * purpose: an org whose chart lacks it must leave the receipt committed with
+   * ZERO GL and hand the obligation to the SCRUM-222 worker, not self-heal the
+   * way GENERAL_EXPENSE does. Seeding it here would silently make every existing
+   * org's chart claim a liability account nobody classified.
+   *
+   * ⚠️ NOT `UNAPPLIED_CUSTOMER_CASH` above. That is 1220, ASSET / DEBIT — the
+   * wrong side of the balance sheet for money the dealership OWES back. The two
+   * names are one word apart and mean opposite things, which is exactly why the
+   * substitution has to be prohibited rather than merely discouraged.
+   */
+  UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY: "UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY",
   CUSTOMER_DEPOSITS_LIABILITY: "CUSTOMER_DEPOSITS_LIABILITY",
   CHEQUES_IN_HAND: "CHEQUES_IN_HAND",
   CHEQUES_UNDER_COLLECTION: "CHEQUES_UNDER_COLLECTION",

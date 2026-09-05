@@ -81,6 +81,7 @@
  */
 import { Id } from "../_generated/dataModel";
 import { EventType } from "./postingRules";
+import type { SystemKey } from "../utils/defaultChart";
 
 /**
  * Compile-time speed bump. **NOT authority** — see `TRUSTED_OCCURRENCES`.
@@ -735,6 +736,13 @@ export type PostReceiptOccurrenceArgs = {
   occurredAt: number;
   actorId: Id<"users">;
   payload: Record<string, unknown>;
+  /**
+   * System accounts whose absence must DEFER this posting rather than fail it
+   * (SCRUM-218-C). Not part of the occurrence tuple and not persisted — it is a
+   * routing precondition, so adding it does not weaken the absence contract
+   * above. See `postOrEnqueue` for why the coarse chart check is not enough.
+   */
+  requiredSystemKeys?: readonly SystemKey[];
 };
 
 /**

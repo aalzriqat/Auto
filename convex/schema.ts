@@ -3672,6 +3672,161 @@ export default defineSchema({
     .index("by_org_event_key", ["orgId", "eventIdempotencyKey"])
     .index("by_org_customer", ["orgId", "customerId"]),
 
+  /* ─────────────────────────────────────────────────────────────────────────
+   * SCRUM-218-C — the direct-collection receipt movement model.
+   *
+   * Three tables, one job each, deliberately domain-local rather than another
+   * shared authority kernel (owner-proxy c17412 / c17653):
+   *
+   *   receiptMovements          what a receipt WAS, sealed once, never patched
+   *   receiptRetainedPositions  what is still owed back, server-owned, contended
+   *   receiptApplications       each later discharge, append-only
+   *
+   * The split exists because receipt disposition is an economic fact created by
+   * a movement. Reconstructing it later from `payment.amountMinor − Σ ACTIVE
+   * allocations` is what every earlier round was rejected for: a refund reverses
+   * allocations, so refunded money reappears as "available", and a customer
+   * DEPOSIT is also a settled payment with no allocation. "Unallocated" does not
+   * identify "unapplied receipt".
+   * ──────────────────────────────────────────────────────────────────────── */
+
+  /**
+   * One immutable row per direct-collection receipt occurrence.
+   *
+   * Every amount here is derived by the server inside the same transaction that
+   * created the payment and its allocations, from rows it re-read itself. No
+   * caller supplies `receivedMinor`, `initialAppliedMinor` or
+   * `initialUnappliedMinor`, and no field is a residual over mutable tables.
+   *
+   * ⚠️ "IMMUTABLE" MEANS THE ECONOMIC CONTENT, NOT EVERY BYTE. A customer merge
+   * re-points `customerId` at the surviving record, and that is an identity
+   * correction rather than a restatement — the amounts, the occurrence snapshot,
+   * the lineage and the liability treatment are never rewritten. Saying so
+   * explicitly, because the alternative reading (leave the row alone) strands a
+   * live retained credit against a customer record that no longer exists.
+   */
+  receiptMovements: defineTable({
+    orgId: v.id("organizations"),
+    collectionPaymentId: v.id("collectionPayments"),
+    canonicalPaymentId: v.id("canonicalPayments"),
+    customerId: v.id("customers"),
+    currency: v.string(),
+    receivedMinor: v.number(),
+    initialAppliedMinor: v.number(),
+    initialUnappliedMinor: v.number(),
+    /**
+     * The EXACT allocation rows this movement created — recorded from what
+     * `allocatePaymentToReceivable` returned, not recovered by set-difference.
+     * `_creationTime` cannot separate a movement's own writes from pre-existing
+     * rows, because every write in one Convex transaction shares an instant.
+     * An empty array is legitimate: it is the no-receivable receipt.
+     */
+    initialAllocationIds: v.array(v.id("paymentAllocations")),
+    /**
+     * The persisted SCRUM-237 occurrence snapshot. Stored as plain data with no
+     * brand and no trust registry entry; `rehydrateReceiptOccurrence` is the
+     * only door back to runtime authority. `orgId` is deliberately NOT inside
+     * this object — the tenant comes from the authenticated context at
+     * rehydration, so a snapshot copied between rows cannot carry a foreign
+     * tenant in with it.
+     */
+    occurrence: v.object({
+      eventType: v.string(),
+      sourceType: v.string(),
+      sourceId: v.string(),
+      eventVersion: v.number(),
+    }),
+    /** `RECEIPT_PAYLOAD_VERSION` as of sealing. NOT the economic eventVersion. */
+    receiptPayloadVersion: v.number(),
+    /**
+     * Which liability the residue belongs to, stated rather than inferred.
+     * NONE when the receipt fully discharged a receivable; a reader must never
+     * conclude "no allocation, therefore unapplied credit" — that is exactly the
+     * inference that mistakes a customer deposit for a retained receipt.
+     */
+    liabilityTreatment: v.union(
+      v.literal("NONE"),
+      v.literal("UNAPPLIED_CUSTOMER_RECEIPTS")
+    ),
+    actorId: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_payment", ["orgId", "collectionPaymentId"])
+    .index("by_org_customer", ["orgId", "customerId"]),
+
+  /**
+   * The authoritative remaining retained credit for one movement.
+   *
+   *   0 <= remainingUnappliedMinor <= initialUnappliedMinor
+   *
+   * Changes ONLY in the same transaction as a persisted application child. A
+   * naked patch is forbidden. Concurrent consumers contend on this single row,
+   * so Convex's OCC is what prevents two applications from overdrawing one
+   * retained credit — the exclusivity is the row, not a lock we invented.
+   */
+  receiptRetainedPositions: defineTable({
+    orgId: v.id("organizations"),
+    receiptMovementId: v.id("receiptMovements"),
+    customerId: v.id("customers"),
+    currency: v.string(),
+    initialUnappliedMinor: v.number(),
+    remainingUnappliedMinor: v.number(),
+    /** Monotonic count of applications, and the source of the next `sequence`. */
+    applicationCount: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_movement", ["orgId", "receiptMovementId"])
+    .index("by_org_customer", ["orgId", "customerId"]),
+
+  /**
+   * One append-only row per later application of retained credit.
+   *
+   * `sequence` is part of the ACCOUNTING identity, not decoration: applications
+   * #1 and #2 against one receipt are two legitimate economic occurrences, and a
+   * dedup tuple that ignored the sequence would swallow the second one — the
+   * subledger showing two discharges and the ledger one.
+   */
+  receiptApplications: defineTable({
+    orgId: v.id("organizations"),
+    receiptMovementId: v.id("receiptMovements"),
+    sequence: v.number(),
+    customerId: v.id("customers"),
+    receivableId: v.id("receivables"),
+    receivableDocumentId: v.id("receivableDocuments"),
+    allocationId: v.id("paymentAllocations"),
+    amountMinor: v.number(),
+    currency: v.string(),
+    /** The application event's own occurrence identity, exactly as posted. */
+    occurrence: v.object({
+      eventType: v.string(),
+      sourceType: v.string(),
+      sourceId: v.string(),
+      eventVersion: v.number(),
+    }),
+    eventIdempotencyKey: v.string(),
+    /**
+     * ⚠️ NOTHING WRITES `REVERSED` YET, AND THAT IS DECLARED RATHER THAN LEFT TO
+     * BE DISCOVERED. Unwinding an application belongs to SCRUM-130's
+     * cleared-cheque return, which needs exactly the lineage above to know which
+     * applications to reverse and how much AR each reopens. The member is inert
+     * today: no production writer sets it and no reader branches on it, so it
+     * cannot silently mean something. It is here so 130 consumes a stable shape
+     * instead of migrating one.
+     */
+    status: v.union(v.literal("APPLIED"), v.literal("REVERSED")),
+    actorId: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_movement", ["orgId", "receiptMovementId"])
+    .index("by_org_movement_sequence", ["orgId", "receiptMovementId", "sequence"])
+    .index("by_org_event_key", ["orgId", "eventIdempotencyKey"])
+    // Required by the customer-merge registry, which fails CI for any table
+    // carrying a `customerId` that is neither rewritten nor declared derived.
+    .index("by_org_customer", ["orgId", "customerId"]),
+
   // Receipt voucher (سند قبض) auto-generated as proof of payment whenever a
   // deposit is recorded — one per deposit.
   paymentVouchers: defineTable({

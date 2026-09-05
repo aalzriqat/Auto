@@ -495,8 +495,26 @@ async function seedPostableOrg(suffix: string, openPeriod = true) {
   return { t, orgId, userId, customerId };
 }
 
+/**
+ * SCRUM-218-C replaced the gross `amountMinor` with received/applied/unapplied,
+ * and `ruleCollectionPayment` now REFUSES a payload lacking the split.
+ *
+ * Mapped to the fully-applied shape deliberately: this suite is about
+ * occurrence IDENTITY, not receipt economics, so it should exercise the branch
+ * that needs no 2110 mapping. Using the retained-credit shape here would make
+ * every test in the file depend on a chart account SCRUM-231 has not seeded yet
+ * — a dependency that says nothing about identity.
+ */
 function receiptPayload(paymentId: string, customerId: string, amountMinor: number) {
-  return { paymentId, customerId, amountMinor, currency: "USD", paymentMethod: "CASH" };
+  return {
+    paymentId,
+    customerId,
+    receivedMinor: amountMinor,
+    appliedMinor: amountMinor,
+    unappliedMinor: 0,
+    currency: "USD",
+    paymentMethod: "CASH",
+  };
 }
 
 // Pinned to `typeof schema`. The bare `ReturnType<typeof convexTestWithComponents>`

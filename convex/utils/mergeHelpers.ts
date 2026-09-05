@@ -26,6 +26,40 @@ export const CUSTOMER_REFERENCING_TABLES = [
         .collect(),
   },
   {
+    // SCRUM-218-C: a receipt movement records WHO paid. Re-pointing it at the
+    // surviving customer is an IDENTITY correction, not an economic one — the
+    // amounts, occurrence snapshot and liability treatment are untouched, which
+    // is what "sealed once" actually protects.
+    //
+    // Leaving it out would be the damaging choice: the retained position below
+    // hangs off this movement, so a merged-away customer would keep a live
+    // credit balance nobody can find under the surviving record.
+    table: "receiptMovements" as const,
+    find: (ctx: QueryCtx, orgId: Id<"organizations">, customerId: Id<"customers">) =>
+      ctx.db
+        .query("receiptMovements")
+        .withIndex("by_org_customer", (q) => q.eq("orgId", orgId).eq("customerId", customerId))
+        .collect(),
+  },
+  {
+    // The retained credit itself. If this were missed, money the dealership owes
+    // back would be stranded against a customer record that no longer exists.
+    table: "receiptRetainedPositions" as const,
+    find: (ctx: QueryCtx, orgId: Id<"organizations">, customerId: Id<"customers">) =>
+      ctx.db
+        .query("receiptRetainedPositions")
+        .withIndex("by_org_customer", (q) => q.eq("orgId", orgId).eq("customerId", customerId))
+        .collect(),
+  },
+  {
+    table: "receiptApplications" as const,
+    find: (ctx: QueryCtx, orgId: Id<"organizations">, customerId: Id<"customers">) =>
+      ctx.db
+        .query("receiptApplications")
+        .withIndex("by_org_customer", (q) => q.eq("orgId", orgId).eq("customerId", customerId))
+        .collect(),
+  },
+  {
     table: "journalLines" as const,
     find: (ctx: QueryCtx, orgId: Id<"organizations">, customerId: Id<"customers">) =>
       ctx.db

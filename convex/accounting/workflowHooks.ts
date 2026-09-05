@@ -13,10 +13,11 @@ import { ConvexError } from "convex/values";
 import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 import { postAccountingEvent, PostCommand } from "./postingEngine";
-import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting, type FinancedSalePlanPayload } from "./postingRules";
+import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting, RECEIPT_CREDIT_APPLIED_EVENT_TYPE, RECEIPT_CREDIT_APPLIED_SOURCE_TYPE, type FinancedSalePlanPayload } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate, checkPostingAllowed } from "../accountingPeriods";
-import { isChartInitialized, ensureCommissionAccounts, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureConsignmentAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount, ensurePayrollAccounts, ensureFinancedSettlementAccounts } from "../chartOfAccounts";
+import { SYSTEM_KEYS, type SystemKey } from "../utils/defaultChart";
+import { isChartInitialized, isSystemAccountMapped, ensureCommissionAccounts, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureConsignmentAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount, ensurePayrollAccounts, ensureFinancedSettlementAccounts } from "../chartOfAccounts";
 import {
   enqueuePendingPost,
   enqueuePendingReversal,
@@ -78,7 +79,28 @@ export async function isPostableNow(
  * to the durable outbox for retry. This is the single choke point that replaced
  * the previous "silently return if not postable" behavior.
  */
-async function postOrEnqueue(ctx: MutationCtx, cmd: PostCommand): Promise<void> {
+async function postOrEnqueue(
+  ctx: MutationCtx,
+  cmd: PostCommand,
+  /**
+   * System accounts this event's journal cannot be written without (SCRUM-218-C).
+   *
+   * ⚠️ A PRECONDITION, NOT A SELF-HEAL. `shouldPost` below only asks whether the
+   * org has a chart AT ALL, which is too coarse for an event needing a specific
+   * account: an org with a chart but no 2110 passes that check, posts
+   * synchronously, and `resolveSystemAccount` throws INSIDE the caller's
+   * transaction. Nothing catches it, so Convex rolls back the confirmed receipt
+   * — the customer's money vanishes because an account was unmapped. Naming the
+   * requirement here routes the event to the durable outbox instead, where the
+   * SCRUM-222 worker retries it and fails VISIBLY.
+   *
+   * Deliberately NOT an `ensure*Account` call. Those exist for keys with a known
+   * correct definition that a legacy chart merely lacks; 2110's classification
+   * is a SCRUM-231 cutover decision with no reclassification door afterwards, so
+   * inventing one at runtime is exactly the substitution c17653 prohibits.
+   */
+  opts?: { requiredSystemKeys?: readonly SystemKey[] }
+): Promise<void> {
   // Period integrity: if this exact domain event is already captured but not yet
   // posted in the outbox, it will post with ITS ORIGINAL accounting date once the
   // period opens. A second hook call for the same event (e.g. a commission
@@ -123,6 +145,19 @@ async function postOrEnqueue(ctx: MutationCtx, cmd: PostCommand): Promise<void> 
   if (await isChartInitialized(ctx, cmd.orgId)) {
     await ensureGeneralExpenseAccount(ctx, cmd.orgId, cmd.actorId);
     await ensureSupplierAPAccount(ctx, cmd.orgId, cmd.actorId);
+  }
+  // Checked BEFORE shouldPost, because an unmapped required account is a reason
+  // to queue even when the chart exists and the period is open — the two
+  // conditions are independent and only one of them is what `shouldPost` sees.
+  for (const key of opts?.requiredSystemKeys ?? []) {
+    if (!(await isSystemAccountMapped(ctx, cmd.orgId, key))) {
+      await enqueuePendingPost(
+        ctx,
+        cmd,
+        `System account "${key}" is not mapped for this organization at operation time`
+      );
+      return;
+    }
   }
   if (await shouldPost(ctx, cmd.orgId, cmd.accountingDate)) {
     await postAccountingEvent(ctx, cmd);
@@ -367,7 +402,7 @@ export async function postReceiptOccurrence(
     idempotencyKey: occurrenceIdempotencyKey(id),
     payload: args.payload,
     actorId: args.actorId,
-  });
+  }, { requiredSystemKeys: args.requiredSystemKeys });
 }
 
 /**
@@ -489,6 +524,68 @@ export async function reverseReceiptOccurrence(
     reversalIdempotencyKey: occurrenceReversalIdempotencyKey(id),
     pendingPostIdempotencyKey: occurrenceIdempotencyKey(id),
   });
+}
+
+/**
+ * SCRUM-218-C — one later application of retained customer credit.
+ *
+ * ⚠️ NOT A SECOND RECEIPT. The cash arrived and was banked when the
+ * COLLECTION_PAYMENT posted; this event only converts an existing 2110 liability
+ * into relief of a receivable. `ruleReceiptCreditApplied` therefore writes no
+ * cash or bank line at all.
+ *
+ * `sourceId` and `idempotencyKey` are both derived by `receiptMovement` from
+ * (movement, sequence) and passed through unchanged — the sequence is part of
+ * the accounting identity, so application #2 can never be swallowed by #1's
+ * dedup tuple.
+ *
+ * 2110 is required rather than optional here: it is the DEBIT of this journal,
+ * so without it there is no entry to write. If the mapping has been removed
+ * since the receipt posted, the application defers to the outbox and surfaces
+ * there instead of throwing inside the caller's money transaction.
+ */
+export async function hookReceiptCreditApplied(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    sourceId: string;
+    idempotencyKey: string;
+    receiptMovementId: string;
+    applicationId: string;
+    sequence: number;
+    amountMinor: number;
+    currency: string;
+    customerId: string;
+    receivableDocumentId: string;
+    occurredAt: number;
+    actorId: Id<"users">;
+  }
+): Promise<void> {
+  await postOrEnqueue(
+    ctx,
+    {
+      orgId: args.orgId,
+      eventType: RECEIPT_CREDIT_APPLIED_EVENT_TYPE,
+      sourceType: RECEIPT_CREDIT_APPLIED_SOURCE_TYPE,
+      sourceId: args.sourceId,
+      eventVersion: 1,
+      accountingDate: args.occurredAt,
+      occurredAt: args.occurredAt,
+      currency: args.currency,
+      idempotencyKey: args.idempotencyKey,
+      payload: {
+        receiptMovementId: args.receiptMovementId,
+        applicationId: args.applicationId,
+        sequence: args.sequence,
+        amountMinor: args.amountMinor,
+        currency: args.currency,
+        customerId: args.customerId,
+        receivableDocumentId: args.receivableDocumentId,
+      },
+      actorId: args.actorId,
+    },
+    { requiredSystemKeys: [SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY] }
+  );
 }
 
 export async function hookDepositReceived(
