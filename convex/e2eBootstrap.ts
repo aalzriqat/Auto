@@ -324,6 +324,15 @@ async function readMarker(ctx: QueryCtx | MutationCtx): Promise<Doc<"e2ePreviewB
 async function requireMarker(
   ctx: QueryCtx | MutationCtx
 ): Promise<Doc<"e2ePreviewBootstrap">> {
+  // ⚠️ BEFORE the marker is read, not after. A marker is evidence about the
+  // moment it was minted; this is the only check here that speaks to the
+  // deployment as it is NOW. Ordering it first also means a deployment that has
+  // since become a configured real one is refused with the reason that is
+  // actually true of it, rather than with a marker-shaped one.
+  assertNotConfiguredLikeARealDeployment(
+    "refusing to honour a preview bootstrap marker on this deployment"
+  );
+
   const marker = await readMarker(ctx);
   if (!marker) {
     throw new ConvexError(
@@ -383,16 +392,45 @@ function assertMarkerBelongsToThisDeployment(marker: Doc<"e2ePreviewBootstrap">)
  * deployment TYPE, because Convex exposes no such signal to a function — see
  * the file header.
  */
-async function assertDeploymentLooksDisposable(ctx: MutationCtx): Promise<void> {
+/**
+ * The half of the disposability evidence that is CONFIGURATION rather than
+ * STATE — and therefore the half that can honestly be re-checked later.
+ *
+ * ⚠️ THIS IS SPLIT OUT BECAUSE THE MARKER WAS A ONE-TIME ATTESTATION.
+ * `markPreviewDeployment` returned ALREADY_MARKED before re-running any guard,
+ * and `requireMarker` only ever checked that a marker existed and named this
+ * deployment. So a deployment that was empty and unconfigured at the moment it
+ * was marked stayed authorized forever, even after it acquired every marker of
+ * a real deployment. Nothing revalidated it. Codex found this on the bounded
+ * re-review of ab0c1fdb7 (SCRUM-143-RR-1) and it is correct.
+ *
+ * The two halves are not interchangeable, which is why only this one moves:
+ *
+ * - **Row emptiness is STATE.** It is true only before the seed runs, and the
+ *   seed legitimately falsifies it. It cannot be a consume-time check.
+ * - **These environment variables are CONFIGURATION.** A preview never grows
+ *   them, and a real deployment never loses them for long. Re-reading them
+ *   costs nothing and is meaningful at every call.
+ *
+ * ⚠️ It reads `process.env` BY NAME. `process.env` in the Convex function
+ * runtime resolves by name and enumerates to nothing, so an implementation
+ * that intersected `Object.keys(process.env)` with this list would find
+ * nothing on every deployment and fail OPEN everywhere.
+ */
+function assertNotConfiguredLikeARealDeployment(refusal: string): void {
   const configured = presentRealDeploymentMarkers();
   if (configured.length > 0) {
     throw new ConvexError(
-      `${ERR}: refusing to mark this deployment — it carries environment variables that only a configured ` +
+      `${ERR}: ${refusal} — it carries environment variables that only a configured ` +
         `production or dev deployment has (${configured.join(", ")}). A freshly-claimed preview has none of them. ` +
         `If one of these was legitimately added to the project's PREVIEW default environment variables, remove it from ` +
         `REAL_DEPLOYMENT_ENV_MARKERS in convex/e2eBootstrap.ts.`
     );
   }
+}
+
+async function assertDeploymentLooksDisposable(ctx: MutationCtx): Promise<void> {
+  assertNotConfiguredLikeARealDeployment("refusing to mark this deployment");
 
   const org = await ctx.db.query("organizations").first();
   if (org) {
@@ -427,6 +465,12 @@ async function assertDeploymentLooksDisposable(ctx: MutationCtx): Promise<void> 
 export const markPreviewDeployment = internalMutation({
   args: {},
   handler: async (ctx) => {
+    // ⚠️ AHEAD OF THE EARLY RETURN. This used to sit only inside
+    // `assertDeploymentLooksDisposable`, which the ALREADY_MARKED branch skips
+    // entirely — so re-minting on a deployment that had since acquired every
+    // marker of a real one quietly succeeded and re-confirmed the authorization.
+    assertNotConfiguredLikeARealDeployment("refusing to mark this deployment");
+
     const existing = await readMarker(ctx);
     if (existing) {
       assertMarkerBelongsToThisDeployment(existing);
@@ -825,6 +869,16 @@ export const assertE2EBootstrap = internalQuery({
     expectedCloudUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // ⚠️ THE SAME CONFIGURATION GATE AS `requireMarker`, deliberately repeated.
+    // This query reads the marker itself rather than going through
+    // `requireMarker`, because its marker-absence message is a preflight
+    // diagnostic ("nothing has been seeded here") rather than a refusal to
+    // seed. That divergence is exactly how the two readers came to enforce
+    // different rules, so the gate they must share is stated in both.
+    assertNotConfiguredLikeARealDeployment(
+      "refusing to honour a preview bootstrap marker on this deployment"
+    );
+
     const deploymentIdentity = checkDeploymentIdentity(args.expectedCloudUrl);
     const marker = await readMarker(ctx);
     if (!marker) {

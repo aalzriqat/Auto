@@ -674,3 +674,108 @@ describe("assertE2EBootstrap — the preflight", () => {
     ).rejects.toThrow(/separation of duties/);
   });
 });
+
+/**
+ * SCRUM-143-RR-1 — Codex, bounded re-review of `ab0c1fdb7`.
+ *
+ * The marker was a ONE-TIME attestation. `markPreviewDeployment` returned
+ * ALREADY_MARKED before re-running any guard, and `requireMarker` only checked
+ * that a marker existed and named this deployment. So a deployment marked while
+ * it was empty and unconfigured stayed authorized **forever** — including after
+ * it acquired every environment marker of a real deployment. Nothing
+ * revalidated it.
+ *
+ * Codex rated it production-reachable via a privileged hand-run outside
+ * `scripts/e2ePreviewBootstrap.mjs`. I could not reproduce the specific
+ * SCRUM-231 framing — a wipe deletes rows, not environment variables, so an
+ * emptied production deployment still trips the configuration check at mint
+ * time. The window that IS real is narrower and entirely mechanical: marked
+ * while unconfigured, configured afterwards. These tests close it.
+ *
+ * Each fails against the code as it stood at `ab0c1fdb7`.
+ */
+describe("SCRUM-143-RR-1 — authorization is revalidated, not remembered", () => {
+  test("re-minting is refused once the deployment is configured like a real one", async () => {
+    const t = await markedDeployment();
+
+    vi.stubEnv("SUPER_ADMIN_EMAILS", "owner@example.com");
+
+    await expect(t.mutation(internal.e2eBootstrap.markPreviewDeployment, {})).rejects.toThrow(
+      /only a configured production or dev deployment has \(SUPER_ADMIN_EMAILS\)/,
+    );
+  });
+
+  test("a valid marker does NOT authorize seeding once the deployment is configured", async () => {
+    const t = await markedDeployment();
+
+    vi.stubEnv("RESEND_API_KEY", "re_something");
+
+    await expect(
+      t.mutation(internal.e2eBootstrap.bootstrapE2EOrganization, {
+        primary: PRIMARY,
+        approver: APPROVER,
+        expectedCloudUrl: CLOUD_URL,
+      }),
+    ).rejects.toThrow(/refusing to honour a preview bootstrap marker/);
+  });
+
+  test("and writes nothing when it refuses", async () => {
+    const t = await markedDeployment();
+
+    vi.stubEnv("STRIPE_WEBHOOK_SECRET", "whsec_something");
+
+    await expect(
+      t.mutation(internal.e2eBootstrap.bootstrapE2EOrganization, {
+        primary: PRIMARY,
+        approver: APPROVER,
+        expectedCloudUrl: CLOUD_URL,
+      }),
+    ).rejects.toThrow();
+
+    const [orgs, users, memberships] = await t.run(async (ctx) => [
+      await ctx.db.query("organizations").collect(),
+      await ctx.db.query("users").collect(),
+      await ctx.db.query("memberships").collect(),
+    ]);
+    expect(orgs).toEqual([]);
+    expect(users).toEqual([]);
+    expect(memberships).toEqual([]);
+  });
+
+  test("the preflight refuses too, rather than vouching for a configured deployment", async () => {
+    const t = await markedDeployment();
+    await bootstrap(t);
+
+    vi.stubEnv("CLERK_WEBHOOK_SECRET", "whsec_clerk");
+
+    await expect(
+      t.query(internal.e2eBootstrap.assertE2EBootstrap, {
+        primaryClerkUserId: PRIMARY.clerkUserId,
+        approverClerkUserId: APPROVER.clerkUserId,
+        expectedCloudUrl: CLOUD_URL,
+      }),
+    ).rejects.toThrow(/refusing to honour a preview bootstrap marker/);
+  });
+
+  /**
+   * The control for all four: the same calls on the same deployment, with no
+   * real-deployment variable set, still succeed. Without this the tests above
+   * would pass just as well against a function that refused everything.
+   */
+  test("CONTROL — an unconfigured preview is unaffected by any of this", async () => {
+    const t = await markedDeployment();
+    await bootstrap(t);
+
+    await expect(
+      t.mutation(internal.e2eBootstrap.markPreviewDeployment, {}),
+    ).resolves.toMatchObject({ status: "ALREADY_MARKED" });
+
+    await expect(
+      t.query(internal.e2eBootstrap.assertE2EBootstrap, {
+        primaryClerkUserId: PRIMARY.clerkUserId,
+        approverClerkUserId: APPROVER.clerkUserId,
+        expectedCloudUrl: CLOUD_URL,
+      }),
+    ).resolves.toMatchObject({ orgName: E2E_ORGANIZATION_NAME });
+  });
+});
