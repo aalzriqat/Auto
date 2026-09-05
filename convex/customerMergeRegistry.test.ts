@@ -38,22 +38,48 @@ describe("customer merge registry", () => {
 
     expect(mergeTables).toEqual(schemaTables);
   });
+});
 
-  /**
-   * SCRUM-218-C / owner blocker c17675. The test above is satisfied by ANY
-   * single classification, so it would happily accept a receipt-authority table
-   * being MOVED from the non-reassignable list back into the rewriting
-   * registry. That move is precisely the defect, so it gets its own assertion
-   * rather than relying on a check that cannot see it.
-   */
-  test("never lets sealed receipt authority into the rewriting registry", () => {
+/**
+ * ⚠️ A FIXED LITERAL ORACLE, DELIBERATELY NOT DERIVED FROM
+ * `CUSTOMER_NON_REASSIGNABLE_TABLES`.
+ *
+ * The first version of the guard below iterated that constant, which made it
+ * SELF-REFERENTIAL: deleting a table from the list also deleted it from the
+ * check. Codex demonstrated the bypass — move `receiptRetainedPositions` out of
+ * the sealed list and into the rewriting registry with a finder that selects
+ * only `applicationCount === 0`, and all 38 tests passed while a merge
+ * raw-patched sealed authority. The union check below could not see it either,
+ * because a clean MOVE keeps every table classified exactly once.
+ *
+ * These three names are the protected set. Changing this array is the explicit,
+ * reviewable act of changing what is protected — it cannot happen as a side
+ * effect of editing a registry.
+ */
+const SEALED_RECEIPT_AUTHORITY = [
+  "receiptMovements",
+  "receiptRetainedPositions",
+  "receiptApplications",
+] as const;
+
+describe("customer merge registry — sealed receipt authority", () => {
+  test("no sealed receipt table is ever in the rewriting registry", () => {
     const rewritten = new Set<string>(CUSTOMER_REFERENCING_TABLES.map((entry) => entry.table));
-    for (const table of CUSTOMER_NON_REASSIGNABLE_TABLES) {
+    for (const table of SEALED_RECEIPT_AUTHORITY) {
       expect(
         rewritten.has(table),
         `"${table}" carries sealed economic provenance: a merge must not raw-patch ` +
-          `its customerId. Deciding what a merge should do instead is SCRUM-250.`
+          `its customerId, not even selectively. Deciding what a merge should do ` +
+          `instead is SCRUM-250.`
       ).toBe(false);
     }
+  });
+
+  test("the sealed list still declares exactly the protected set", () => {
+    // Catches SILENT REMOVAL. Without this, dropping a table from
+    // CUSTOMER_NON_REASSIGNABLE_TABLES and adding it to the rewriting registry
+    // satisfies the union check (still classified once) and, before the oracle
+    // above existed, satisfied the guard too.
+    expect([...CUSTOMER_NON_REASSIGNABLE_TABLES].sort()).toEqual([...SEALED_RECEIPT_AUTHORITY].sort());
   });
 });

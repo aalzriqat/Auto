@@ -1237,20 +1237,27 @@ describe("SCRUM-218-C §9 — runtime authority is never persisted or cached", (
  * foreign key. `customers.mergeCustomers` patches `customerId` on every table
  * in `CUSTOMER_REFERENCING_TABLES`, so listing these three there let a merge
  * rewrite whose money a posted receipt represents, with no persisted movement
- * explaining the change, while the canonical payment, the accounting occurrence
- * and the allocations all kept the original lineage.
+ * explaining the change.
+ *
+ * The rest of the lineage is NOT frozen and never was: a merge repoints
+ * `canonicalPayments` (the movement's own `canonicalPaymentId` target),
+ * `journalLines`, `receivableDocuments` and `receivables`. See
+ * `CUSTOMER_NON_REASSIGNABLE_TABLES` for the full split.
  *
  * ⚠️ SCOPE, STATED HONESTLY: THIS DOES NOT ASSERT THAT THE MERGE REFUSES, AND
  * IT DOES NOT REFUSE. A losing customer holding retained credit is still merged
  * away, and the credit is left pointing at the merged-away record. Closing that
  * is SCRUM-250, which owns the pre-write runtime fence and its own evidence
  * floor. Pinning the stranding here would freeze today's incomplete behaviour
- * as though it were the intended one, and would have to be deleted the moment
- * 250 lands.
+ * as though it were the intended one.
  *
- * The invariant below survives 250 in either of its declared shapes: whether it
- * refuses the merge or performs a specified authority transfer, the GENERIC
- * loop must still never be the thing that rewrites these rows.
+ * ⚠️ THE INVARIANT SURVIVES SCRUM-250; THESE TESTS DO NOT, AND THAT IS NOT THE
+ * SAME CLAIM. The invariant — a GENERIC loop must never be what rewrites these
+ * rows — holds under either of 250's declared shapes. The tests below are
+ * INTERIM CHARACTERISATION: they call `mergeCustomers` and expect it to
+ * succeed, so a refusal fence would fail them at the merge call, and a
+ * specified authority transfer would fail their loser-id assertions. Both are
+ * correct outcomes that 250 must update these tests for — not regressions.
  */
 async function grantMerger(t: TestHarness, orgId: Id<"organizations">, suffix: string) {
   const userId = await t.run((ctx) =>
@@ -1349,5 +1356,11 @@ describe("SCRUM-218-C §11 — a customer merge cannot repoint sealed receipt au
     const position = await positionFor(t, orgId, movement._id);
     expect(position!.remainingUnappliedMinor).toBe(movement.initialUnappliedMinor);
     expect(position!.applicationCount).toBe(0);
+    // ⚠️ AND ITS customerId IS STILL THE PAYER'S. Without this line the whole
+    // test passes while a merge raw-patches this exact row: Codex demonstrated a
+    // registry entry selecting only `applicationCount === 0`, which leaves the
+    // MOVEMENT on the loser — so the refusal above still fires — while silently
+    // repointing the position. The amounts alone cannot see that.
+    expect(position!.customerId).toBe(customerId);
   });
 });

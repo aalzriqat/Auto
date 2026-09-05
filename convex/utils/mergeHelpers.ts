@@ -258,8 +258,15 @@ export const CUSTOMER_DERIVED_TABLES = ["socialConversations"] as const;
  * WOULD BE FALSE. `canonicalPayments` — the very row a movement points at via
  * `canonicalPaymentId` — is in the rewriting registry above, as are
  * `journalLines` and `receivableDocuments`. A merge DOES repoint all three.
- * (`paymentAllocations` and `accountingEvents` carry no `customerId` at all,
- * which the exhaustiveness test proves by their absence from all three lists.)
+ *
+ * `paymentAllocations` and `accountingEvents` declare no TOP-LEVEL `customerId`
+ * field, which is all their absence from these three lists proves. It does NOT
+ * mean they carry no customer identity: `accountingEvents.payload` is `v.any()`
+ * and the receipt hooks put `customerId` inside it (`workflowHooks.ts`), where
+ * `postingRules.ts` reads it into journal-line dimensions. A merge does not
+ * rewrite that payload, so whether a journal line's customer dimension follows
+ * the survivor depends on whether the event had already POSTED when the merge
+ * ran. That timing question is real and belongs to SCRUM-250, not here.
  *
  * So after a merge the movement names the loser while its own canonical payment
  * names the survivor. That divergence is deliberate, and it has one concrete
@@ -280,9 +287,13 @@ export const CUSTOMER_DERIVED_TABLES = ["socialConversations"] as const;
  * that no generic loop can raw-reassign this authority, and 250's is deciding
  * what a merge should do instead.
  *
- * Not reachable in production today — these tables exist only on the unmerged,
- * undeployed SCRUM-218-C branch (verified against `origin/main`), so the window
- * between this change and SCRUM-250 is not a live exposure.
+ * ⚠️ DO NOT INFER "NOT DEPLOYED" FROM "NOT ON `origin/main`". These tables are
+ * absent from `origin/main` (verified), which proves the branch is UNMERGED —
+ * nothing more. `AGENTS.md` records that a production deploy key still exists on
+ * a developer workstation where `npx convex deploy` reaches production
+ * directly, so Git state cannot establish deployment state. Production
+ * reachability here is NOT ESTABLISHED, in either direction, and would need
+ * deployment evidence rather than a repository check.
  */
 export const CUSTOMER_NON_REASSIGNABLE_TABLES = [
   "receiptMovements",
