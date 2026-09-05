@@ -182,12 +182,44 @@ async function postDomainEvent(
  *    entry is STILL POSTED until the outbox drains, and anything that treats
  *    the amount as recovered before then is spending money the ledger still
  *    shows as spent.
- *  - NOT_POSTED — there was nothing to reverse (the forward entry never posted,
- *    and any queued copy of it has been cancelled).
+ *  - NOT_POSTED — no live POSTED forward occurrence remains, and no queued
+ *    forward post survives. An OPERATIONAL statement about the ledger NOW,
+ *    never a claim about history.
  *
  * Returned rather than swallowed because the caller has to tell DEFERRED from
  * REVERSED. Collapsing the two is what let a slice be refunded in cash while
  * its original application was still live in the general ledger.
+ *
+ * ## Why NOT_POSTED is operational and not historical (owner ruling c17613 §1)
+ *
+ * This used to read "the forward entry never posted, and any queued copy of it
+ * has been cancelled" — a claim about history, and a FALSE one in a case the
+ * suite deliberately accepts. `clearCheque`'s return path in `collections.ts`
+ * reverses a `collectionPayments` occurrence under
+ * `cheque_return_after_clear_<chequeId>`, a key this module can never mint. An
+ * occurrence reversed that way DID post; asked afterwards, the helpers below
+ * find no POSTED row and answer NOT_POSTED. Reproduced through the real outbox
+ * worker in `accountingReceiptOccurrenceIdentity.test.ts` §12 OB2.
+ *
+ * The already-reversed case is NOT given an outcome of its own, because no
+ * consumer needs the distinction. The enumeration, current and planned:
+ *
+ *   - `utils/depositApplications.ts` `reverseDepositApplicationsForSale` is the
+ *     ONLY production branch on this type at all: `journalReversed = outcome
+ *     !== "DEFERRED"`. Downstream (`utils/saleCancellation.ts`) reads that
+ *     boolean and never the outcome. It asks "is a forward journal still
+ *     standing?" — for which never-posted and already-reversed are one answer.
+ *   - `reverseReceiptOccurrence` has NO production caller; the facade is
+ *     interface-only at this revision.
+ *   - SCRUM-236 needs proof that one producer owns an occurrence identity.
+ *   - SCRUM-130 needs the cheque's GL reversal and its debt reopening to move
+ *     together, and the reopening to use the outstanding balance.
+ *
+ * None of the four needs the history. Add a fourth outcome when a consumer
+ * actually requires it — and note that `depositApplications`' own comment
+ * already records the stronger lesson: that guard was rewritten to read the
+ * LEDGER rather than the caller's `ReversalOutcome`, precisely because an
+ * outcome describes one branch's path and not the state of the books.
  */
 export type ReversalOutcome = "REVERSED" | "DEFERRED" | "NOT_POSTED";
 

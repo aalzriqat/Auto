@@ -205,12 +205,21 @@ const RESERVED_NAMESPACES = [POST_KEY_NAMESPACE, REVERSAL_KEY_NAMESPACE] as cons
  * entirely on the prefix set, which makes the prefix set a load-bearing
  * invariant rather than a naming choice.
  *
- * Two ways a future channel breaks it, both checked here:
+ * Three ways a future channel breaks it, all checked here. Each round of review
+ * has found one the previous guard's SHAPE could not express, so the count is
+ * the current floor, not a proof of exhaustiveness:
  *
  *  1. A prefix inside a reserved namespace. `occv…` or `occr…` as a channel
  *     prefix would let a v1 forward key impersonate a repeat or a reversal.
  *
- *  2. A prefix that is a prefix of another prefix — the case both review seats
+ *  2. Two channels carrying the IDENTICAL prefix — found independently by both
+ *     review seats at `acfd58429`. The pairwise loop below guarded on `a !== b`,
+ *     which compares VALUES, so a duplicated string was never compared against
+ *     itself and passed silently: one key for two distinct economic tuples,
+ *     exactly what this module exists to make unrepresentable. Checked first,
+ *     because the pairwise loop structurally cannot see it.
+ *
+ *  3. A prefix that is a prefix of another prefix — the case both review seats
  *     independently raised. Adding `collection_payment_reissue` alongside
  *     `collection_payment` collides with NO exotic characters at all:
  *
@@ -431,10 +440,26 @@ export function occurrenceIdempotencyKey(id: ReceiptOccurrenceIdentity): string 
  *
  * Reversals are framed at EVERY version, including v1. Unlike the forward key,
  * this carries no backward-compatibility constraint: no production reversal key
- * of this shape has ever been written. Verified rather than assumed — reversal
- * keys today are per-hook literals built by `makeReversalHook` (e.g.
- * `sale_cancelled_${saleId}`) or the `reversed_${key}` prefix form, and NO
- * reversal hook exists for `COLLECTION_PAYMENT` at all.
+ * OF THIS FRAMED SHAPE has ever been written. Reversal keys today are per-hook
+ * literals built by `makeReversalHook` (e.g. `sale_cancelled_${saleId}`), the
+ * `reversed_${key}` prefix form, or a literal built at the call site.
+ *
+ * ⚠️ THE EARLIER VERSION OF THIS PARAGRAPH ALSO SAID "NO reversal hook exists
+ * for `COLLECTION_PAYMENT` at all". THAT WAS FALSE, and it is retracted here
+ * rather than only where it was first corrected. `clearCheque`'s return path in
+ * `collections.ts` builds `cheque_return_after_clear_<chequeId>` and calls
+ * `reverseAccountingEvent` DIRECTLY on a `collectionPayments`-sourced event. It
+ * uses neither `makeReversalHook` nor a `_reversal` suffix, which is why a grep
+ * over those two spellings missed it — an absence asserted from a search of two
+ * spellings rather than of the space. The Codex seat disproved it at
+ * `acfd58429`; it survived here, in the contract file, for two commits after
+ * the commit message, the PR body, the test prose and Jira had all been fixed.
+ *
+ * The consequence is real and is NOT guarded against: a legacy reversal key for
+ * a receipt occurrence exists, the framed `occr…` key can never equal it, and
+ * the ledger is protected by `reverseAccountingEvent` patching the original to
+ * REVERSED rather than by the key. See §12 of the identity suite for what that
+ * coexistence does and does not cover.
  *
  * Note the existing `reversed_${key}` prefix form was already safe, because a
  * forward key always begins with a channel prefix. Choosing a suffix instead

@@ -36,6 +36,8 @@ import {
   reverseReceiptOccurrence,
 } from "./accounting/workflowHooks";
 import { reverseAccountingEvent } from "./accounting/reversals";
+import { enqueuePendingReversal } from "./accountingOutbox";
+import { quiesceScheduler, settleOutbox, outboxRows } from "../test-utils/outboxWork";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -286,8 +288,9 @@ describe("SCRUM-237 §8 — c17593 evidence: legacy tokens and channel confusion
     // take one argument and no `ctx`/database handle, so a legacy token sitting
     // in a row is not merely unused — it is unreachable. What actually holds
     // that line is EV3's two `@ts-expect-error` excess-argument controls, which
-    // fail with ts(2578) the day a second parameter of any kind is admitted,
-    // plus the §6 compile-time negative controls on the constructors.
+    // fail with ts(2578) the day a second parameter A STRING CAN SATISFY is
+    // admitted — see EV3 for why they reach no further than that — plus the §6
+    // compile-time negative controls on the constructors.
     const id = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
     const derived = occurrenceIdempotencyKey(id);
 
@@ -329,7 +332,15 @@ describe("SCRUM-237 §8 — c17593 evidence: legacy tokens and channel confusion
     // pointed out: it would still pass if someone added an optional
     // caller-supplied key parameter and simply never passed it here. The real
     // guard is a COMPILE error. An unused @ts-expect-error is ts(2578), so these
-    // fail loudly the day a second parameter appears.
+    // fail loudly the day a second parameter a STRING can satisfy appears —
+    // which is the caller-supplied-key shape c17593 §3 actually forbids.
+    //
+    // ⚠️ NOT "a second parameter of any kind", which is what this comment used
+    // to claim (Codex seat, `0280f185f`). A second parameter of an unrelated
+    // type — a `MutationCtx`, say — would still make this call a type error, so
+    // the @ts-expect-error stays USED, no ts(2578) is raised, and the control
+    // keeps passing while the property it guards has changed. The controls are
+    // as wide as the argument they pass, and no wider.
     // @ts-expect-error a second argument must not exist on the forward key
     occurrenceIdempotencyKey(a, "caller-supplied-key");
     // @ts-expect-error a second argument must not exist on the reversal key
@@ -1006,5 +1017,249 @@ describe("SCRUM-237 §11 — the key mapping must be injective over ROLE, not on
         })
       )
     ).rejects.toThrow(/ambiguous receipt occurrence/);
+  });
+});
+
+/* ------------------------------------------------------------------------- *
+ * SCRUM-237 §12 — THE REAL DEFERRED-REVERSAL OUTBOX PATH, NOT A SIMULATION
+ * (owner-proxy c17613 §2, reaffirmed by c17617)
+ *
+ * §11's two R1-COMPAT controls call `reverseAccountingEvent` directly where a
+ * deferred legacy reversal would. That proves JOURNAL idempotency and nothing
+ * else: it skips the outbox's own completion bookkeeping entirely, which is the
+ * half the key mismatch could actually damage. The row the legacy producer
+ * writes is keyed `cheque_return_after_clear_<chequeId>`, while the event the
+ * facade already created is keyed `occr…` — so the pending row's key and its
+ * own result event's key DISAGREE, and a direct call never exercises what the
+ * completion does with that.
+ *
+ * These two drive the production chain end to end:
+ *
+ *     enqueuePendingReversal            (the legacy producer's own helper)
+ *     -> drainPendingAccountingEvents   (the sweep)
+ *     -> claimOutboxRow                 (mints the generation + attempt id)
+ *     -> postOutboxRow                  (the worker; reversePendingEntry ->
+ *                                        reverseAccountingEvent -> markEntryPosted)
+ *     -> observeOutboxAttempt           (a SEPARATE transaction, records the outcome)
+ *
+ * via `test-utils/outboxWork`, which calls the real registered mutations and
+ * fabricates no claim, generation or attempt identity of its own.
+ *
+ * ⚠️ `quiesceScheduler` BEFORE THE ROW EXISTS, DELIBERATELY. `chartOfAccounts.
+ * initialize` and `accountingPeriods.open` each schedule a drain of their own.
+ * A leftover fixture drain firing after the row was written would settle it,
+ * and the assertions below would then be measuring the fixture rather than the
+ * path under test.
+ *
+ * ⚠️ WHAT THESE TWO DO **NOT** COVER, STATED SO NOBODY READS MORE INTO THEM.
+ *
+ * Both fix ONE reversal date, so both exercise coexistence where every row can
+ * actually post. The case they do not reach is TWO DIFFERENT DATES: the legacy
+ * row queued for `d1` and the facade row for `d2`, with only `d2`'s period ever
+ * opened. `postOutboxRow` runs `checkPostingAllowed(row.accountingDate)` BEFORE
+ * it branches on `kind`, so the legacy row never reaches
+ * `reverseAccountingEvent`'s already-REVERSED recovery: `holdOutboxRow` returns
+ * it to PENDING having burned ZERO attempts, so it cannot dead-letter either,
+ * and the cron re-offers it for as long as `d1` has no period — while the
+ * original is already validly REVERSED and the ledger is correct.
+ *
+ * That is the Codex seat's R1-PENDING-ALIAS at this SHA. It REPRODUCES: the
+ * facade row reaches POSTED, the legacy row sits PENDING/attempts 0/"Waiting to
+ * post: No accounting period found for date 2027-06-15", the original reads
+ * REVERSED, and events and journals both stay at 2 — no double post, a stranded
+ * obligation. Its control is the causal half: give both enqueues the SAME key
+ * and `enqueuePendingReversal` dedupes through `by_org_idempotency`, so only one
+ * row exists and nothing strands. The mismatch is therefore what allows two
+ * obligations against one original.
+ *
+ * It is NOT fixed here, and no test asserting either the current or the desired
+ * behaviour is committed for it. The gap is in the outbox worker's ordering,
+ * not in this identity contract; the owner ruling that authorised this successor
+ * requires the defect to be REPORTED before any compatibility mechanism is
+ * designed. The reproduction is preserved outside the repository.
+ * ------------------------------------------------------------------------- */
+describe("SCRUM-237 §12 — the legacy deferred reversal drains through the REAL outbox", () => {
+  test("OB1 — a legacy-keyed pending REVERSE reaches terminal against a facade-reversed original", async () => {
+    const { t, orgId, userId, customerId } = await seedPostableOrg("ob1");
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const identity = directCollectionReceipt({ orgId, paymentId });
+    const legacyKey = `cheque_return_after_clear_${paymentId}`;
+
+    await t.run(async (ctx) => {
+      await postReceiptOccurrence(ctx, {
+        identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
+        payload: receiptPayload(paymentId, customerId, 5000),
+      });
+    });
+    const [original] = await eventsFor(t, orgId);
+    expect(original.status).toBe("POSTED");
+
+    // The facade reverses FIRST — the exact window c17613 §2 named: the legacy
+    // row is already queued in production, and its worker will arrive later to
+    // find an original that is no longer POSTED.
+    const facadeOutcome = await t.run(async (ctx) =>
+      reverseReceiptOccurrence(ctx, {
+        identity, reason: "facade first", actorId: userId, reversalDate: Date.now(),
+      })
+    );
+    expect(facadeOutcome).toBe("REVERSED");
+
+    await quiesceScheduler(t);
+
+    await t.run(async (ctx) => {
+      await enqueuePendingReversal(ctx, {
+        orgId,
+        originalEventId: original._id,
+        reversalDate: Date.now(),
+        reason: "Cheque returned after clearing",
+        actorId: userId,
+        idempotencyKey: legacyKey,
+        sourceType: "collectionPayments",
+        sourceId: paymentId.toString(),
+      });
+    });
+
+    await settleOutbox(t, orgId);
+
+    const events = await eventsFor(t, orgId);
+    const forward = events.find((e) => e._id === original._id);
+    const reversals = events.filter((e) => e._id !== original._id);
+    const journals = await t.run(async (ctx) =>
+      ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+
+    // (1) EXACTLY ONE REVERSAL JOURNAL. The receipt and one reversal, no more.
+    expect(journals).toHaveLength(2);
+    expect(reversals).toHaveLength(1);
+    expect(events).toHaveLength(2);
+
+    // (2) THE ORIGINAL OCCURRENCE ENDS REVERSED, linked to that one reversal.
+    expect(forward?.status).toBe("REVERSED");
+    expect(forward?.reversedByEventId).toBe(reversals[0]._id);
+
+    // (3) THE LEGACY PENDING ROW IS TERMINAL, with no PENDING/FAILED residue —
+    // and its claim is cleared, so no observer can read it as an attempt still
+    // outstanding against a worker that already finished.
+    const rows = await outboxRows(t, orgId);
+    expect(rows).toHaveLength(1);
+    const row = rows[0];
+    expect(row.status).toBe("POSTED");
+    expect(row.resolvedAt).toBeDefined();
+    expect(row.dispatchState).toBeUndefined();
+    expect(row.activeAttemptId).toBeUndefined();
+    expect(rows.filter((r) => r.status === "PENDING" || r.status === "FAILED")).toHaveLength(0);
+
+    // (4) `resultEventId` RESOLVES TO THE SINGLE REAL REVERSAL EVENT — the one
+    // the facade minted, not a second one and not a dangling id.
+    expect(row.resultEventId).toBe(reversals[0]._id);
+    const resolved = await t.run(async (ctx) => ctx.db.get(row.resultEventId));
+    expect(resolved?._id).toBe(reversals[0]._id);
+
+    // (5) THE KEY MISMATCH IS REAL, AND THE COMPLETION ABSORBS IT. This is the
+    // property being accepted rather than guarded against: the row completes
+    // carrying a key that its own result event does not share.
+    expect(row.idempotencyKey).toBe(legacyKey);
+    expect(reversals[0].idempotencyKey).toBe(occurrenceReversalIdempotencyKey(identity));
+    expect(row.idempotencyKey).not.toBe(reversals[0].idempotencyKey);
+
+    // ...and no deferred authority consumer is left owed or inconsistent BY
+    // that mismatch. The reason is structural, not a fixture artifact:
+    // `markEntryPosted` completes deferred authority through
+    // `resolveDeferredReversalSources`, which recognises ONLY keys prefixed
+    // `reversed_` and returns NOTHING_TO_COMPLETE for anything else. Both keys
+    // in play here live outside that namespace, so neither could mint an
+    // obligation for the other to strand. Asserted, not assumed.
+    expect(row.idempotencyKey.startsWith("reversed_")).toBe(false);
+    expect(reversals[0].idempotencyKey.startsWith("reversed_")).toBe(false);
+    const authorityWork = await t.run(async (ctx) =>
+      ctx.db.query("commitmentAuthorityWork").collect()
+    );
+    expect(authorityWork).toHaveLength(0);
+    const applications = await t.run(async (ctx) =>
+      ctx.db.query("depositApplications").collect()
+    );
+    expect(applications).toHaveLength(0);
+
+    // (6) A SUBSEQUENT DRAIN/RETRY IS IDEMPOTENT. Nothing new posts, and the
+    // row's recorded result does not move.
+    await settleOutbox(t, orgId);
+    const journalsAfter = await t.run(async (ctx) =>
+      ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(journalsAfter).toHaveLength(2);
+    expect(await eventsFor(t, orgId)).toHaveLength(2);
+    const rowsAfter = await outboxRows(t, orgId);
+    expect(rowsAfter).toHaveLength(1);
+    expect(rowsAfter[0].status).toBe("POSTED");
+    expect(rowsAfter[0].resultEventId).toBe(reversals[0]._id);
+  });
+
+  test("OB2 — the legacy row drains FIRST, and the facade then reports the already-reversed case", async () => {
+    // The other ordering, also through the real worker. This is the one that
+    // produces the outcome the contract wording had to be corrected for: the
+    // occurrence DID post and HAS been reversed, by a key this module can never
+    // mint, and the facade answers NOT_POSTED.
+    const { t, orgId, userId, customerId } = await seedPostableOrg("ob2");
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const identity = directCollectionReceipt({ orgId, paymentId });
+    const legacyKey = `cheque_return_after_clear_${paymentId}`;
+
+    await t.run(async (ctx) => {
+      await postReceiptOccurrence(ctx, {
+        identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
+        payload: receiptPayload(paymentId, customerId, 5000),
+      });
+    });
+    const [original] = await eventsFor(t, orgId);
+
+    await quiesceScheduler(t);
+
+    await t.run(async (ctx) => {
+      await enqueuePendingReversal(ctx, {
+        orgId,
+        originalEventId: original._id,
+        reversalDate: Date.now(),
+        reason: "Cheque returned after clearing",
+        actorId: userId,
+        idempotencyKey: legacyKey,
+        sourceType: "collectionPayments",
+        sourceId: paymentId.toString(),
+      });
+    });
+
+    await settleOutbox(t, orgId);
+
+    const afterDrain = await eventsFor(t, orgId);
+    const legacyReversal = afterDrain.find((e) => e._id !== original._id);
+    expect(afterDrain).toHaveLength(2);
+    // The worker minted this one, so it carries the LEGACY key.
+    expect(legacyReversal?.idempotencyKey).toBe(legacyKey);
+    const drainedRow = (await outboxRows(t, orgId))[0];
+    expect(drainedRow.status).toBe("POSTED");
+    expect(drainedRow.resultEventId).toBe(legacyReversal?._id);
+
+    // Now the facade runs against an occurrence that posted and is already
+    // reversed. NOT_POSTED is the truthful OPERATIONAL answer — no live POSTED
+    // forward occurrence remains — and it is NOT the historical claim the
+    // predecessor doc-comment made ("the forward entry never posted").
+    const outcome = await t.run(async (ctx) =>
+      reverseReceiptOccurrence(ctx, {
+        identity, reason: "facade after the legacy drain", actorId: userId,
+        reversalDate: Date.now(),
+      })
+    );
+    expect(outcome).toBe("NOT_POSTED");
+
+    const journals = await t.run(async (ctx) =>
+      ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(journals).toHaveLength(2);
+    expect(await eventsFor(t, orgId)).toHaveLength(2);
+    // The row stays exactly where the worker left it — the facade's
+    // `cancelPendingPostByKey` addresses the FORWARD key and cannot touch it.
+    const rowsAfter = await outboxRows(t, orgId);
+    expect(rowsAfter).toHaveLength(1);
+    expect(rowsAfter[0].status).toBe("POSTED");
+    expect(rowsAfter[0].resultEventId).toBe(legacyReversal?._id);
   });
 });
