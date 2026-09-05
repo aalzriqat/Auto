@@ -35,6 +35,7 @@ import {
   findPostedReceiptOccurrence,
   reverseReceiptOccurrence,
 } from "./accounting/workflowHooks";
+import { reverseAccountingEvent } from "./accounting/reversals";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -272,10 +273,21 @@ describe("SCRUM-237 §8 — c17593 evidence: legacy tokens and channel confusion
     // that correlates to NOTHING — worse than an absence, because an absence is
     // detectable and a false positive is not.
     //
-    // The enforcement is structural: there is no parameter on any function in
-    // the module through which such a token could arrive. The derived key is a
-    // function of the identity alone, so a legacy token sitting in the database
-    // cannot reach it.
+    // ⚠️ WHAT THIS TEST IS AND IS NOT — flagged by the Sonnet seat at acfd58429,
+    // and the criticism is correct. The assertions below construct no
+    // `transactions` row, retag nothing, and pass no legacy token anywhere.
+    // They would hold for ANY deterministic string function, so they are
+    // ILLUSTRATIVE OF THE RULE, NOT EVIDENCE FOR IT. Left in place because the
+    // rule is worth stating at the point a reader looks for it, but it must not
+    // be counted as coverage.
+    //
+    // The property is enforced STRUCTURALLY, and is visible from the signature
+    // alone: `occurrenceIdempotencyKey` and `occurrenceReversalIdempotencyKey`
+    // take one argument and no `ctx`/database handle, so a legacy token sitting
+    // in a row is not merely unused — it is unreachable. What actually holds
+    // that line is EV3's two `@ts-expect-error` excess-argument controls, which
+    // fail with ts(2578) the day a second parameter of any kind is admitted,
+    // plus the §6 compile-time negative controls on the constructors.
     const id = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
     const derived = occurrenceIdempotencyKey(id);
 
@@ -820,6 +832,21 @@ describe("SCRUM-237 §11 — the key mapping must be injective over ROLE, not on
     ).toThrow(/is a prefix of/);
   });
 
+  test("two channels sharing the IDENTICAL prefix are refused", () => {
+    // Found independently by BOTH seats at acfd58429. The pairwise loop guards
+    // `a !== b`, which compares VALUES — so two channels whose prefixes are the
+    // same string are never compared against each other at all, and the
+    // duplicate passes. That is the most basic way the prefix set can break:
+    // two distinct economic tuples minting one identical key.
+    expect(() =>
+      assertChannelPrefixesUnambiguous([
+        "collection_payment",
+        "payment_link_received",
+        "collection_payment",
+      ])
+    ).toThrow(/duplicate/i);
+  });
+
   test("a future channel prefix inside a RESERVED namespace is refused", () => {
     expect(() => assertChannelPrefixesUnambiguous(["occv_channel"])).toThrow(/reserved namespace/);
     expect(() => assertChannelPrefixesUnambiguous(["occr_channel"])).toThrow(/reserved namespace/);
@@ -829,6 +856,121 @@ describe("SCRUM-237 §11 — the key mapping must be injective over ROLE, not on
     expect(() =>
       assertChannelPrefixesUnambiguous(["collection_payment", "payment_link_received"])
     ).not.toThrow();
+  });
+
+  test("R1-COMPAT — a LEGACY-keyed reversal already applied cannot be double-reversed via the facade", async () => {
+    // The Codex seat raised this against acfd58429, and it corrected a FALSE
+    // claim of mine: I had written that no COLLECTION_PAYMENT reversal exists.
+    // It does. `clearCheque`'s return path in collections.ts builds
+    // `cheque_return_after_clear_<chequeId>` and calls `reverseAccountingEvent`
+    // DIRECTLY on a `sourceType: "collectionPayments"` event. It uses neither
+    // `makeReversalHook` nor a `_reversal` suffix, which is exactly why my grep
+    // over those two patterns missed it.
+    //
+    // So a legacy reversal key for a receipt occurrence DOES exist in
+    // production shape, and the facade's `occr…` key can never match it.
+    //
+    // This test pins what actually protects the ledger, which is NOT the key:
+    // `reverseAccountingEvent` patches the ORIGINAL event to REVERSED, and
+    // refuses when it already is. The facade therefore sees no POSTED
+    // occurrence and reports NOT_POSTED instead of minting a second journal.
+    const { t, orgId, userId, customerId } = await seedPostableOrg("r1compat");
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const identity = directCollectionReceipt({ orgId, paymentId });
+
+    await t.run(async (ctx) => {
+      await postReceiptOccurrence(ctx, {
+        identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
+        payload: receiptPayload(paymentId, customerId, 5000),
+      });
+    });
+    const [original] = await eventsFor(t, orgId);
+    expect(original.status).toBe("POSTED");
+
+    await t.run(async (ctx) => {
+      await reverseAccountingEvent(ctx, {
+        orgId,
+        originalEventId: original._id,
+        reversalDate: Date.now(),
+        reason: "Cheque returned after clearing",
+        actorId: userId,
+        idempotencyKey: `cheque_return_after_clear_${paymentId}`,
+      });
+    });
+
+    const afterLegacy = await t.run(async (ctx) =>
+      ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(afterLegacy).toHaveLength(2); // the receipt + its legacy reversal
+
+    const outcome = await t.run(async (ctx) =>
+      reverseReceiptOccurrence(ctx, {
+        identity, reason: "facade reversal after a legacy one", actorId: userId,
+        reversalDate: Date.now(),
+      })
+    );
+    expect(outcome).toBe("NOT_POSTED");
+
+    const afterFacade = await t.run(async (ctx) =>
+      ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    // THE ASSERTION THAT MATTERS: still two. No second reversal journal.
+    expect(afterFacade).toHaveLength(2);
+  });
+
+  test("R1-COMPAT (reverse order) — a legacy-keyed reversal arriving AFTER the facade cannot double-post", async () => {
+    // The other ordering, which the first control does not cover. This is the
+    // deferred case: `clearCheque` with no open period calls
+    // `enqueuePendingReversal` with the legacy key, so the ORIGINAL stays POSTED
+    // and the legacy reversal executes later. If the facade reverses during that
+    // window, the legacy entry drains afterwards against an already-REVERSED
+    // original.
+    //
+    // Draining the outbox is simulated by calling `reverseAccountingEvent` with
+    // the legacy key directly, which is exactly what the drain does.
+    const { t, orgId, userId, customerId } = await seedPostableOrg("r1compat2");
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const identity = directCollectionReceipt({ orgId, paymentId });
+
+    await t.run(async (ctx) => {
+      await postReceiptOccurrence(ctx, {
+        identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
+        payload: receiptPayload(paymentId, customerId, 5000),
+      });
+    });
+    const [original] = await eventsFor(t, orgId);
+
+    const outcome = await t.run(async (ctx) =>
+      reverseReceiptOccurrence(ctx, {
+        identity, reason: "facade first", actorId: userId, reversalDate: Date.now(),
+      })
+    );
+    expect(outcome).toBe("REVERSED");
+
+    const afterFacade = await t.run(async (ctx) =>
+      ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(afterFacade).toHaveLength(2);
+
+    // The legacy reversal now drains, under a key the facade can never mint.
+    await t.run(async (ctx) => {
+      await reverseAccountingEvent(ctx, {
+        orgId,
+        originalEventId: original._id,
+        reversalDate: Date.now(),
+        reason: "Cheque returned after clearing",
+        actorId: userId,
+        idempotencyKey: `cheque_return_after_clear_${paymentId}`,
+      });
+    });
+
+    const afterLegacy = await t.run(async (ctx) =>
+      ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    // Still two. reverseAccountingEvent refuses an already-REVERSED original,
+    // so the key mismatch cannot produce a second reversal journal in EITHER
+    // ordering.
+    expect(afterLegacy).toHaveLength(2);
   });
 
   test("R2 — reversing an AMBIGUOUS exact tuple REFUSES instead of reporting REVERSED", async () => {

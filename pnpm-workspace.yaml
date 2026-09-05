@@ -17,9 +17,12 @@ overrides:
   # minimumReleaseAge (<24h) gate that originally forced the older pin. Still
   # pinned exact, for the same reason as postcss above.
   nanoid: 3.3.18
-  # SIX HIGH advisories affect the 4.x line this tree resolves, in two groups.
+  # SIX HIGH advisories affected 4.x versions that the successive >=4.1.2 and
+  # >=4.1.3 floors ADMITTED. The pinned 4.1.4 is affected by none of them — that
+  # is the point of the pin, not an accident. (fastify/fast-uri lists ELEVEN
+  # advisories overall; the other five are patched at or below 4.1.2.)
   #
-  # Patched at 4.1.3 — visible to `pnpm audit`, and what the >=4.1.2 floor missed:
+  # Patched at 4.1.3 — visible to `pnpm audit`, and what the >=4.1.2 floor admitted:
   #   GHSA-5jgf-p345-68v8  host confusion, skipped IDN canonicalization
   #   GHSA-f65p-4m7j-42xc  SSRF, malformed IPv6 normalization
   #   GHSA-fph4-wmhf-6fwf  SSRF, repeated hostname percent-decoding

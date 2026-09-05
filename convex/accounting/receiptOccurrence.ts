@@ -167,7 +167,7 @@ export const RECEIPT_PAYLOAD_VERSION = 2 as const;
  * comments before the Sonnet seat caught them. A line number is a claim with a
  * short shelf life; a symbol name is one a reader can actually verify.
  *
- * NOT `collections.ts:474`. That line builds an identically-spelled key for
+ * NOT `mirrorCollectionPaymentToCanonical`. That builds an identically-spelled key for
  * `createCanonicalPayment` — a `canonicalPayments` row, which this very file
  * disclaims above as a different job. The strings coincide, which is precisely
  * why citing it looked right; it is the wrong table's key and a future engineer
@@ -226,6 +226,16 @@ const RESERVED_NAMESPACES = [POST_KEY_NAMESPACE, REVERSAL_KEY_NAMESPACE] as cons
  * colliding pair, instead of only indirectly through module-load behaviour.
  */
 export function assertChannelPrefixesUnambiguous(prefixes: readonly string[]): void {
+  // The most basic break, and the one the pairwise loop below CANNOT catch:
+  // two channels whose prefixes are the same string. That loop guards on
+  // `a !== b`, which compares VALUES, so a duplicate is never compared against
+  // itself and passes silently — while minting one identical key for two
+  // distinct economic tuples. Found independently by both review seats.
+  if (new Set(prefixes).size !== prefixes.length) {
+    throw new Error(
+      `duplicate channel prefix in ${JSON.stringify(prefixes)}; two channels cannot share one key space`
+    );
+  }
   for (const prefix of prefixes) {
     for (const reserved of RESERVED_NAMESPACES) {
       if (prefix.startsWith(reserved)) {
