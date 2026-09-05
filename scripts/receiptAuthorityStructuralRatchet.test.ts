@@ -30,7 +30,14 @@
  */
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
+
+// The real-repository controls parse every module under convex/. The first
+// (cold) computation is measured in seconds under CI's V8 coverage
+// instrumentation, which exceeds vitest's 5s default and then makes every later
+// test restart the aborted scan. The work is real, so the limit is raised rather
+// than the work faked.
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 import {
   AUTHORITY_INSERT_FIXTURE_EXCLUSIONS,
   AUTHORITY_OWNER_MODULE,

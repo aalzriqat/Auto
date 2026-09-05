@@ -548,7 +548,22 @@ export interface AuthorityInsertSite {
  * the literal wherever it is written. The literal is the whole evidence — this
  * function makes no claim about writes that do not name the table in source.
  */
+const insertScanCache = new Map<string, AuthorityInsertSite[]>();
+
 export function findAuthorityInserts(source: string, file: string): AuthorityInsertSite[] {
+  // Pure function of (file, source), so its result is memoized on exactly those
+  // two inputs. Every control in the test suite overlays one or two files and
+  // re-runs the whole check; without this, each run re-parses all ~400 convex
+  // modules, which is slow enough under CI coverage instrumentation to blow the
+  // per-test timeout. The key is the FULL text, never a hash: a hash collision
+  // would silently return another file's findings.
+  const key = `${file} ${source}`;
+  const cached = insertScanCache.get(key);
+  if (cached !== undefined) return cached;
+  // Bounded so a long-lived process cannot grow it without limit. Dropping
+  // entries costs cache hits only, never correctness.
+  if (insertScanCache.size > 5000) insertScanCache.clear();
+
   const sourceFile = parseModule(source, file);
   const sites: AuthorityInsertSite[] = [];
   const authority = new Set<string>(AUTHORITY_TABLES);
@@ -572,6 +587,7 @@ export function findAuthorityInserts(source: string, file: string): AuthorityIns
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
+  insertScanCache.set(key, sites);
   return sites;
 }
 
