@@ -70,9 +70,20 @@
  *
  * **Control 5 is what closes it**, and it is the only POSITIVE proof of
  * deployment type this module has: the deployment says what it is, in a
- * variable no caller can supply and no wipe can restore, because it lives in
- * project settings scoped to Preview rather than in the database. Provisioned
- * by the owner under SCRUM-143 c17727.
+ * variable this workflow never supplies and no wipe can restore, because it
+ * lives in project settings scoped to Preview rather than in the database.
+ * Provisioned by the owner under SCRUM-143 c17727 / c17730.
+ *
+ * ⚠️ THE ACCURATE BOUNDARY — BECAUSE THE FIRST VERSION OF THIS SENTENCE
+ * OVERCLAIMED. It read "a variable no caller can supply", and that is false:
+ * `convex env set --preview-name` is valid with a PREVIEW deploy key, so a
+ * holder of that key can set this on a preview. What is true, and is all the
+ * control needs, is narrower on both sides: **CI never supplies it** — and
+ * must never be changed to, because a CI-manufactured class is caller-supplied
+ * and destroys the independence this control exists for — and **a caller
+ * without deployment-admin authority for a deployment cannot set it there.**
+ * On production that authority is a production key, at which point every other
+ * control in this file is moot as well.
  *
  * ⚠️ THE REMAINING RESIDUAL IS THE SCOPE OF THAT SETTING — AND IT IS NOW A
  * MISCONFIGURATION RATHER THAN A COINCIDENCE. Were `AUTOFLOW_DEPLOYMENT_CLASS`
@@ -443,9 +454,15 @@ function assertMarkerBelongsToThisDeployment(marker: Doc<"e2ePreviewBootstrap">)
  * Every other control is an absence: no tenant rows, no production secrets, no
  * foreign URL. Absences are satisfiable by accident — an emptied, deconfigured
  * production deployment satisfies all of them — which is the residual both
- * adversarial reviewers found on PR #278. This one cannot be satisfied by
- * accident, because a caller cannot supply it and a wipe cannot restore it: it
- * lives in project settings scoped to Preview, not in the database.
+ * adversarial reviewers found on PR #278. This one is not satisfiable by
+ * ACCIDENT: it has to be configured deliberately, by someone holding
+ * deployment-admin authority, and it lives in project settings scoped to
+ * Preview rather than in the database, so no wipe restores it.
+ *
+ * ⚠️ NOT "no caller can supply it" — that is what this comment claimed first
+ * and it is wrong: `convex env set --preview-name` works with a preview deploy
+ * key. The claim that survives is about accident and about CI, never about
+ * impossibility. See the module header.
  *
  * ⚠️ RE-READ AT EVERY BOUNDARY, NEVER REMEMBERED. A marker is evidence about
  * the instant it was minted. This is the current environment. A deployment that
