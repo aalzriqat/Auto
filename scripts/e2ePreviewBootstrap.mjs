@@ -310,11 +310,18 @@ export async function resolveClerkUserId({ email, secretKey, fetchImpl = fetch }
  * every real value and removes the class outright.
  *
  * `*` is in the kept set because `maskEmail` produces one per redacted
- * character. Collapsing that run made both configured addresses render
- * identically as `au?@example.com` on the real fresh-preview run at
- * fd55c827c, which is the opposite of what this line is for — it is the
- * diagnostic naming which identity was bound to which Clerk id. A `*`
- * cannot forge a log line.
+ * character, and collapsing that run threw away the mask's own shape: on the
+ * fresh-preview run at fd55c827c every address printed as `au?@example.com`.
+ * Keeping it prints `au****…@example.com`, which shows the value was MASKED
+ * rather than mangled, and preserves the local-part length.
+ *
+ * ⚠️ IT DOES NOT MAKE THE TWO SEATS DISTINGUISHABLE, and the commit that
+ * introduced it said it did. Observed at c4b54c42c: both configured
+ * addresses print as `au` + 26 `*` + `@example.com`, because they share a
+ * local-part length and a domain. Masking is why — no change to this
+ * function can separate them without unmasking them. What identifies each
+ * seat on that line is its POSITION and the Clerk id beside it, which do
+ * differ. A `*` cannot forge a log line.
  */
 export function safeForLog(value) {
   return String(value ?? "").replace(/[^\w.:@/*-]+/g, "?").slice(0, 200);
