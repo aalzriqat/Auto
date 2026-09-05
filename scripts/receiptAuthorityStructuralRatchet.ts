@@ -144,6 +144,20 @@ export interface SourceProvider {
   listConvexModules(): string[];
 }
 
+/**
+ * A deterministic, locale-INDEPENDENT string order.
+ *
+ * A bare `sort()` is reported as unreliable, and the usual remedy —
+ * `localeCompare` — makes the order depend on the runner's locale. These lists
+ * are file paths and table names that get PRINTED as the evidence for a
+ * verdict, so the order has to be byte-identical on every machine. Comparing
+ * with `<`/`>` is the same UTF-16 code-unit order the default already used, now
+ * stated explicitly instead of implied.
+ */
+function byCodeUnit(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 export function fileSystemSource(repoRoot: string): SourceProvider {
   return {
     describe: () => repoRoot,
@@ -169,7 +183,7 @@ export function fileSystemSource(repoRoot: string): SourceProvider {
         }
       };
       walk(convexRoot);
-      return out.sort();
+      return out.sort(byCodeUnit);
     },
   };
 }
@@ -197,7 +211,7 @@ export function overlaySource(
         if (content === null) listed.delete(file);
         else listed.add(file);
       }
-      return [...listed].sort();
+      return [...listed].sort(byCodeUnit);
     },
   };
 }
@@ -710,9 +724,10 @@ function dormantOrUndecided(
 /** Turns a failed manifest read into a violation. A manifest we cannot read is
  * never a pass: absence of evidence is not evidence of absence. */
 function manifestFailure(read: Exclude<ManifestRead, { kind: "ok" }>): string {
-  return read.kind === "missing"
-    ? `cannot prove the property: ${read.reason}`
-    : `cannot prove the property: ${read.reason}`;
+  // "missing" and "unparsable" both mean the same thing to a caller: the
+  // property could not be established from this manifest. The distinction is
+  // already carried in `reason`, so it is not re-branched on here.
+  return `cannot prove the property: ${read.reason}`;
 }
 
 export function checkStructuralRatchet(source: SourceProvider): RatchetReport {
@@ -866,7 +881,7 @@ export function checkStructuralRatchet(source: SourceProvider): RatchetReport {
         violations.push(`"${entry.label}" ${problem}`);
       }
       if (entry.problems.length > 0) continue;
-      const queried = [...new Set(entry.queryLiterals)].sort();
+      const queried = [...new Set(entry.queryLiterals)].sort(byCodeUnit);
       if (queried.length === 0) {
         violations.push(
           `"${entry.label}" (line ${entry.line}): finder contains no literal .query("...") — its table is not provable from source`
