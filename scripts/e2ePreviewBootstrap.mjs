@@ -191,6 +191,60 @@ export function buildConvexRunArgs({ functionName, argsJson, previewName, deploy
 const CLERK_API = "https://api.clerk.com/v1";
 
 /**
+ * The only alphabet a Clerk user id is drawn from — and, below, the only
+ * alphabet the value this script passes on can be drawn from.
+ */
+const CLERK_ID_PREFIX = "user_";
+const CLERK_ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+const CLERK_ID_MAX_BODY = 64;
+
+/**
+ * A Clerk user id, re-emitted from a hard-coded alphabet.
+ *
+ * ⚠️ THE RESPONSE BODY IS THE ONE INPUT HERE THIS REPOSITORY DOES NOT OWN.
+ * Everything else the seed step handles comes from the workflow environment;
+ * this one value arrives over the network and is then (a) embedded in the JSON
+ * argv of a subprocess and (b) written to the job log. Neither sink runs a
+ * shell and `runConvex` already refuses option-shaped arguments, so no concrete
+ * exploit is claimed — but "no shell today" is a property of the caller, and
+ * this is the boundary where the value stops being external.
+ *
+ * The check and the output share one source of truth: a character is accepted
+ * because it is in `CLERK_ID_ALPHABET`, and the character appended is the one
+ * read back out of `CLERK_ID_ALPHABET`. There is no branch in which a byte of
+ * the response reaches the returned string, so the returned string is `user_`
+ * followed by letters and digits by construction rather than by assertion —
+ * no whitespace, no quote, no CR or LF, no leading `-`.
+ *
+ * @param {unknown} raw the `id` field of the Clerk user object
+ * @param {string} email only for the error message, and masked there
+ * @returns {string}
+ */
+export function toVerifiedClerkUserId(raw, email) {
+  const value = String(raw ?? "");
+  const body = value.slice(CLERK_ID_PREFIX.length);
+  if (!value.startsWith(CLERK_ID_PREFIX) || body.length === 0 || body.length > CLERK_ID_MAX_BODY) {
+    throw new PreviewTargetingError(
+      `Clerk returned an id for ${maskEmail(email)} that is not shaped like a user id ` +
+        `("${CLERK_ID_PREFIX}" followed by 1-${CLERK_ID_MAX_BODY} letters or digits). It is not passed on.`,
+    );
+  }
+
+  let verified = CLERK_ID_PREFIX;
+  for (let i = 0; i < body.length; i += 1) {
+    const index = CLERK_ID_ALPHABET.indexOf(body.charAt(i));
+    if (index < 0) {
+      throw new PreviewTargetingError(
+        `Clerk returned an id for ${maskEmail(email)} containing a character that is not a letter or a digit. ` +
+          "A user id never does, and this one is about to become a subprocess argument, so it is refused.",
+      );
+    }
+    verified += CLERK_ID_ALPHABET.charAt(index);
+  }
+  return verified;
+}
+
+/**
  * Email address -> Clerk user id, against the instance the app itself
  * authenticates with.
  *
@@ -241,7 +295,7 @@ export async function resolveClerkUserId({ email, secretKey, fetchImpl = fetch }
       `Clerk returned a user for ${maskEmail(email)} with no id, which this cannot bind a membership to.`,
     );
   }
-  return id;
+  return toVerifiedClerkUserId(id, email);
 }
 
 /**

@@ -22,6 +22,7 @@ import {
   runConvex,
   safeForLog,
   sanitizePreviewName,
+  toVerifiedClerkUserId,
 } from "./e2ePreviewBootstrap.mjs";
 
 /**
@@ -567,5 +568,108 @@ describe("runConvex — argv re-validation at the call site", () => {
     });
 
     expect(() => runConvex(args, "e2eBootstrap:assertE2EBootstrap", spawn)).not.toThrow();
+  });
+});
+
+describe("toVerifiedClerkUserId", () => {
+  /**
+   * The Clerk response is the one input the seed step does not own, and it
+   * lands in two places that matter: the argv of a subprocess and the CI job
+   * log. These cases are the shapes that would be interesting in either.
+   */
+  test.each([
+    ["a newline", "user_abc\nfake"],
+    ["a carriage return", "user_abc\rfake"],
+    ["a space", "user_abc def"],
+    ["a single quote", "user_abc'"],
+    ["a double quote", 'user_abc"'],
+    ["a backtick", "user_abc`id`"],
+    ["a shell metacharacter", "user_abc;rm -rf /"],
+    ["a dollar sign", "user_abc$(id)"],
+    ["a hyphen", "user_abc-def"],
+    ["an underscore past the prefix", "user_abc_def"],
+    ["a NUL", "user_abc\u0000"],
+  ])("refuses an id containing %s", (_label, hostile) => {
+    expect(() => toVerifiedClerkUserId(hostile, "qa@example.com")).toThrow(
+      /not a letter or a digit/,
+    );
+  });
+
+  test.each([
+    ["an option-shaped value", "--prod"],
+    ["a different Clerk object type", "org_2NNEqL2nrIRdJ194ndJqAHwEfxC"],
+    ["an empty body", "user_"],
+    ["an empty string", ""],
+    ["null", null],
+    ["undefined", undefined],
+    ["a body longer than any Clerk id", `user_${"a".repeat(65)}`],
+  ])("refuses %s outright", (_label, hostile) => {
+    expect(() => toVerifiedClerkUserId(hostile, "qa@example.com")).toThrow(/not shaped like a user id/);
+  });
+
+  test("returns a real Clerk id unchanged", () => {
+    expect(toVerifiedClerkUserId("user_2NNEqL2nrIRdJ194ndJqAHwEfxC", "qa@example.com")).toBe(
+      "user_2NNEqL2nrIRdJ194ndJqAHwEfxC",
+    );
+  });
+
+  test("accepts a body of exactly the maximum length", () => {
+    const id = `user_${"a".repeat(64)}`;
+    expect(toVerifiedClerkUserId(id, "qa@example.com")).toBe(id);
+  });
+
+  /** The address is a repository secret; a refusal must not print it. */
+  test("masks the address in every refusal", () => {
+    const error = (() => {
+      try {
+        toVerifiedClerkUserId("user_a b", "qa-secret@example.com");
+        return null;
+      } catch (caught) {
+        return caught as Error;
+      }
+    })();
+
+    expect(error?.message).not.toContain("qa-secret@example.com");
+    expect(error?.message).toContain("qa****");
+  });
+
+  /**
+   * The property the fix rests on, stated as a test rather than as a comment:
+   * every returned character is one this file hard-codes, so no byte of the
+   * response reaches a subprocess argument or a log line.
+   */
+  test("returns only characters drawn from the hard-coded alphabet", () => {
+    const out = toVerifiedClerkUserId("user_aZ09", "qa@example.com");
+    expect(out).toMatch(/^user_[A-Za-z0-9]+$/);
+  });
+});
+
+describe("resolveClerkUserId — the response body is not trusted", () => {
+  function jsonResponse(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  /**
+   * Failing-first evidence for the boundary: before the verifier existed this
+   * returned the hostile id verbatim, and `main` embedded it in the argv of
+   * `convex run` and printed it to the job log.
+   */
+  test("refuses a hostile id even though the lookup itself succeeded", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse([{ id: "user_abc\nfake: seeded" }]));
+
+    await expect(
+      resolveClerkUserId({ email: "qa@example.com", secretKey: "sk_test_x", fetchImpl }),
+    ).rejects.toThrow(/not a letter or a digit/);
+  });
+
+  test("refuses an id that is not a user id at all", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse([{ id: "--preview-name" }]));
+
+    await expect(
+      resolveClerkUserId({ email: "qa@example.com", secretKey: "sk_test_x", fetchImpl }),
+    ).rejects.toThrow(/not shaped like a user id/);
   });
 });
