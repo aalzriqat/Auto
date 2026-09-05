@@ -22,12 +22,14 @@
  *
  * ## ⚠️ WHAT A GREEN RUN OF THIS FILE DOES *NOT* MEAN
  *
- * `RECEIPT_AUTHORITY_DECLARATION` is EMPTY at this commit, because SCRUM-218-C
- * has not frozen its table names. So a green run proves the mechanism works and
- * that every database write in the backend has a statically provable target
- * table. It does **not** prove receipt authority is enforced — nothing is
- * declared yet. `the shipped declaration is unbound` below asserts exactly that,
- * so the distinction cannot be lost by reading only the exit code.
+ * `RECEIPT_AUTHORITY_DECLARATION` names three tables and their owner, but those
+ * tables DO NOT EXIST on this branch — SCRUM-218-C creates them. The binding
+ * report therefore reads `PENDING_218C_INTEGRATION`, and a green run proves the
+ * mechanism works and that every database write in the backend has a statically
+ * provable target table. It does **not** prove receipt authority is enforced,
+ * because there is nothing here to enforce it against. The binding test below
+ * asserts that state explicitly, so the distinction cannot be lost by reading
+ * only the exit code.
  */
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -71,27 +73,40 @@ const FIXTURE_DECLARATION: readonly AuthorityDeclaration[] = [
 ];
 
 /**
- * A writer shaped exactly like Convex's, declared locally.
+ * ⚠️ THE FIXTURES IMPORT THE REAL `convex` TYPES. THIS IS NOT OPTIONAL ANY MORE.
  *
- * `Id<T> = string & { __tableName: T }` is Convex's real definition
- * (`convex/dist/esm-types/values/value.d.ts`), reproduced rather than imported
- * so a fixture program needs no module resolution into `node_modules` and no
- * generated data model. `Writer` is not named `…DatabaseWriter`, which is
- * deliberate: it forces these fixtures through the STRUCTURAL receiver check
- * rather than the symbol-name shortcut. The symbol-name path is exercised by
- * the real backend in half two.
+ * The previous suite reproduced a Convex-shaped `Writer` and `Id` locally, so
+ * that a fixture program needed no module resolution. Under the architecture
+ * ruled in `SCRUM-238 c17726` that would prove the OPPOSITE of what it claims:
+ * recognition is by DECLARATION SITE, and a locally declared look-alike writer
+ * is correctly refused. Fixtures built that way would exercise no recognition
+ * path at all and every one of them would pass while proving nothing.
+ *
+ * So `ctx` is a real `GenericMutationCtx`, `ctx.db` is a real
+ * `GenericDatabaseWriter`, and both halves of this suite now ask the analyzer
+ * exactly the same question — which is what the earlier mutation battery said
+ * to insist on, after a mutant survived only because fixtures and real source
+ * took different code paths.
  */
 const PREAMBLE = [
-  'type Id<TableName extends string> = string & { __tableName: TableName };',
+  'import type { GenericDatabaseWriter, GenericMutationCtx } from "convex/server";',
+  'import type { GenericId } from "convex/values";',
+  "type Fields<D> = {",
+  "  document: D;",
+  "  fieldPaths: string;",
+  "  indexes: Record<string, string[]>;",
+  "  searchIndexes: Record<string, never>;",
+  "  vectorIndexes: Record<string, never>;",
+  "};",
+  "type FixtureDataModel = {",
+  '  receiptMovements: Fields<{ _id: GenericId<"receiptMovements">; _creationTime: number; amountMinor: number }>;',
+  '  receiptApplications: Fields<{ _id: GenericId<"receiptApplications">; _creationTime: number; amountMinor: number }>;',
+  '  vehicles: Fields<{ _id: GenericId<"vehicles">; _creationTime: number; amountMinor: number }>;',
+  "};",
+  "type Id<TableName extends string> = GenericId<TableName>;",
+  "type Writer = GenericDatabaseWriter<FixtureDataModel>;",
+  "type Ctx = GenericMutationCtx<FixtureDataModel>;",
   "interface Doc<TableName extends string> { _id: Id<TableName>; amountMinor: number }",
-  "interface Writer {",
-  "  insert<T extends string>(table: T, value: Record<string, unknown>): Promise<Id<T>>;",
-  "  patch<T extends string>(id: Id<T>, value: Record<string, unknown>): Promise<void>;",
-  "  replace<T extends string>(id: Id<T>, value: Record<string, unknown>): Promise<void>;",
-  "  delete<T extends string>(id: Id<T>): Promise<void>;",
-  "  get<T extends string>(id: Id<T>): Promise<Doc<T> | null>;",
-  "}",
-  "interface Ctx { db: Writer }",
   "declare const ctx: Ctx;",
   'declare const movementId: Id<"receiptMovements">;',
   'declare const vehicleId: Id<"vehicles">;',
@@ -106,7 +121,7 @@ function auditFixture(
   files: Readonly<Record<string, string>>,
   declaration: readonly AuthorityDeclaration[] = FIXTURE_DECLARATION
 ): AuthorityAuditResult {
-  return auditAuthorityWrites(createVirtualAnalyzerProgram(files), declaration);
+  return auditAuthorityWrites(createVirtualAnalyzerProgram(files, REPO_ROOT), declaration);
 }
 
 /** One rogue module holding `body`, plus the (empty) declared owner module. */
@@ -115,6 +130,26 @@ function auditRogue(...body: string[]): AuthorityAuditResult {
     "/virtual/rogue.ts": fixture(...body),
     [OWNER_MODULE]: fixture("export {};"),
   });
+}
+
+/**
+ * ⚠️ THE TWO REPORTS ARE SEPARATED HERE ON PURPOSE.
+ *
+ * The analyzer answers two different questions — "is this call a Convex
+ * write?" and "did a root-derived writer just leave a convex-declared type?"
+ * — and one construct can legitimately answer both. Folding them into a
+ * single count would let a test pass because the OTHER report happened to fire,
+ * so every assertion below names which one it means.
+ */
+const isErasure = (finding: SiteFinding): boolean =>
+  finding.verdict.verdict === "UNPROVEN" && finding.verdict.form === "writer-provenance-erased";
+
+function callFindings(findings: readonly SiteFinding[]): SiteFinding[] {
+  return findings.filter((finding) => !isErasure(finding));
+}
+
+function erasureFindings(findings: readonly SiteFinding[]): SiteFinding[] {
+  return findings.filter(isErasure);
 }
 
 function methodsOf(findings: readonly SiteFinding[]): string[] {
@@ -149,7 +184,7 @@ describe("the fixture harness itself", () => {
       ),
       [OWNER_MODULE]: fixture("export {};"),
     };
-    const analyzer = createVirtualAnalyzerProgram(files);
+    const analyzer = createVirtualAnalyzerProgram(files, REPO_ROOT);
     const diagnostics = analyzer.analysed.flatMap(([sourceFile]) =>
       analyzer.program.getSemanticDiagnostics(sourceFile)
     );
@@ -496,14 +531,21 @@ describe("dynamic and indirect forms — resolved where possible, named where no
       "  await (ctx.db as any).delete(movementId);",
       "}"
     );
-    expect(result.coverage.writeSites).toBe(1);
-    expect(result.unproven).toHaveLength(1);
-    expect(result.unproven[0].verdict).toEqual({
+    expect(callFindings(result.unproven)).toHaveLength(1);
+    expect(callFindings(result.unproven)[0].verdict).toEqual({
       verdict: "UNPROVEN",
       form: "receiver-type-not-statically-known",
     });
+    // `as any` is also a conversion OUT of a convex-declared type.
+    expect(erasureFindings(result.unproven)).toHaveLength(1);
   });
 
+  /**
+   * ⚠️ AN `any` ANNOTATION DOES NOT BREAK ROOT TRACKING, AND THAT IS THE POINT.
+   * The alias is followed through its initializer, so the write still RESOLVES
+   * to its table and is convicted rather than merely refused — while the
+   * annotation itself is separately reported as an erasure.
+   */
   it("refuses a write through an `any`-typed writer binding", () => {
     const result = auditRogue(
       "export async function rogue() {",
@@ -511,11 +553,9 @@ describe("dynamic and indirect forms — resolved where possible, named where no
       '  await writer.insert("receiptMovements", { amountMinor: 1 });',
       "}"
     );
-    expect(result.unproven).toHaveLength(1);
-    expect(result.unproven[0].verdict).toEqual({
-      verdict: "UNPROVEN",
-      form: "receiver-type-not-statically-known",
-    });
+    expect(methodsOf(result.violations)).toEqual(["insert"]);
+    expect(erasureFindings(result.unproven)).toHaveLength(1);
+    expect(callFindings(result.unproven)).toEqual([]);
   });
 
   /**
@@ -523,14 +563,19 @@ describe("dynamic and indirect forms — resolved where possible, named where no
    * not one of the four clears the call whatever its receiver is. Without this
    * the fail-closed rule would flag every `(x as any).get(…)` in the codebase.
    */
-  it("does not refuse a READ through an erased receiver", () => {
+  it("does not refuse the READ ITSELF through an erased receiver", () => {
     const result = auditRogue(
       "export async function rogue() {",
       "  await (ctx.db as any).get(movementId);",
       '  await (ctx.db as any)["get"](movementId);',
       "}"
     );
-    expect(result.coverage.writeSites).toBe(0);
+    // Neither `get` is reported: a statically known non-write name is cleared
+    // whatever its receiver is. The two CASTS remain erasures, because
+    // `ctx.db as any` destroys the proof regardless of what is called next.
+    expect(callFindings(result.unproven)).toEqual([]);
+    expect(result.violations).toEqual([]);
+    expect(erasureFindings(result.unproven)).toHaveLength(2);
   });
 
   /**
@@ -553,6 +598,9 @@ describe("dynamic and indirect forms — resolved where possible, named where no
       form: "write-method-reference-escapes",
     });
     expect(result.unproven[0].site.method).toBe("delete");
+    // Destructuring is a FOLLOWED boundary, inspected key by key, so it is not
+    // reported as an erasure as well. One construct, one finding.
+    expect(erasureFindings(result.unproven)).toEqual([]);
   });
 
   it("refuses a write method handed to call, bind or Reflect.apply", () => {
@@ -564,10 +612,16 @@ describe("dynamic and indirect forms — resolved where possible, named where no
       "  await Reflect.apply(ctx.db.delete, ctx.db, [movementId]);",
       "}"
     );
-    expect(result.unproven.length).toBeGreaterThanOrEqual(3);
+    expect(callFindings(result.unproven).length).toBeGreaterThanOrEqual(3);
+    // `Reflect.apply` is caught by the reflection report rather than the member
+    // escape, so both forms are legitimate here — what matters is that no
+    // spelling leaves without a finding.
     expect(
-      result.unproven.every(
-        (f) => f.verdict.verdict === "UNPROVEN" && f.verdict.form === "write-method-reference-escapes"
+      callFindings(result.unproven).every(
+        (f) =>
+          f.verdict.verdict === "UNPROVEN" &&
+          (f.verdict.form === "write-method-reference-escapes" ||
+            f.verdict.form === "reflective-write-member-access")
       )
     ).toBe(true);
   });
@@ -611,11 +665,22 @@ describe("dynamic and indirect forms — resolved where possible, named where no
   });
 
   /** Ticket evidence item 6, refusal half. Named form, not a silent skip. */
+  /**
+   * ⚠️ THE FIXTURE USES `GenericDataModel` BECAUSE THE REAL TYPES FORBID THE
+   * OBVIOUS SPELLING. Against a concrete data model Convex constrains the table
+   * argument to a literal union, so a runtime-computed name does not compile at
+   * all — the template-literal version of this fixture carried a real type
+   * error while still appearing to pass. A helper written over
+   * `GenericDataModel` has `TableNamesInDataModel = string`, which is how this
+   * form is genuinely reachable in a repository.
+   */
   it("refuses an insert whose table name is computed at runtime", () => {
     const result = auditRogue(
+      'import type { GenericDataModel, GenericDatabaseWriter as GDW } from "convex/server";',
+      "declare const generic: GDW<GenericDataModel>;",
       "declare const suffix: string;",
       "export async function rogue() {",
-      "  await ctx.db.insert(`receipt${suffix}`, { amountMinor: 1 });",
+      "  await generic.insert(suffix, { amountMinor: 1 });",
       "}"
     );
     expect(result.violations).toEqual([]);
@@ -766,6 +831,16 @@ describe("the c17676 family — writes that used to vanish entirely", () => {
     expect(methodsOf(result.violations)).toEqual(["delete"]);
   });
 
+  /**
+   * ⚠️ REFUSED, NOT CONVICTED — AND THE DIFFERENCE IS THE ARCHITECTURE.
+   *
+   * `DeleteOnly` is declared in the fixture, so nothing proves it IS Convex's
+   * writer. The previous architecture answered that question from the member's
+   * SHAPE, called it a violation, and paid for it by reporting
+   * `new Set<Id<"receiptMovements">>().delete(id)` as an authority violation
+   * too. Shape may now raise suspicion and nothing more: the site is UNPROVEN,
+   * which still fails the guard, without asserting something unproven.
+   */
   it("refuses a write through a view that exposes only one of the four", () => {
     const result = auditRogue(
       "interface DeleteOnly { delete<T extends string>(id: Id<T>): Promise<void> }",
@@ -775,19 +850,43 @@ describe("the c17676 family — writes that used to vanish entirely", () => {
       "}"
     );
     expect(result.coverage.writeSites).toBe(1);
-    expect(methodsOf(result.violations)).toEqual(["delete"]);
+    expect(result.violations).toEqual([]);
+    expect(result.unproven[0].verdict).toEqual({
+      verdict: "UNPROVEN",
+      form: "writer-provenance-not-established",
+    });
   });
 
-  it("refuses a write through a union receiver", () => {
+  it("refuses a write through a union receiver it cannot vouch for", () => {
     const result = auditRogue(
-      "interface DeleteOnly { delete<T extends string>(id: Id<T>): Promise<void> }",
+      'interface DeleteOnly { delete(id: Id<"receiptMovements">): Promise<void> }',
       "declare const either: Writer | DeleteOnly;",
       "export async function rogue() {",
       "  await either.delete(movementId);",
       "}"
     );
     expect(result.coverage.writeSites).toBe(1);
+    expect(result.unproven[0].verdict).toEqual({
+      verdict: "UNPROVEN",
+      form: "writer-provenance-not-established",
+    });
+  });
+
+  /**
+   * The same union shape, but every constituent is Convex's own type — so it
+   * RESOLVES rather than being refused. Without this control the test above
+   * would pass just as well against an analyzer that refused every union.
+   */
+  it("still resolves a union whose constituents are all Convex's own", () => {
+    const result = auditRogue(
+      'declare const either: Writer | Pick<Writer, "delete">;',
+      "export async function rogue() {",
+      "  await either.delete(movementId);",
+      "}"
+    );
+    expect(result.unproven).toEqual([]);
     expect(methodsOf(result.violations)).toEqual(["delete"]);
+    expect(tablesOf(result.violations[0].site)).toEqual(["receiptMovements"]);
   });
 
   it("refuses a write method taken off an erased receiver", () => {
@@ -797,11 +896,12 @@ describe("the c17676 family — writes that used to vanish entirely", () => {
       "  await remove(movementId);",
       "}"
     );
-    expect(result.unproven).toHaveLength(1);
-    expect(result.unproven[0].verdict).toEqual({
+    expect(callFindings(result.unproven)).toHaveLength(1);
+    expect(callFindings(result.unproven)[0].verdict).toEqual({
       verdict: "UNPROVEN",
       form: "receiver-type-not-statically-known",
     });
+    expect(erasureFindings(result.unproven)).toHaveLength(1);
   });
 
   /** `delete` is a reserved word, so a computed key is an ordinary spelling. */
@@ -922,17 +1022,19 @@ describe("precision — the redesign must not start flagging these", () => {
  * for using valid Convex syntax. The id is found by its brand instead.
  */
 describe("Convex's other writer shapes", () => {
-  it("finds the id by its brand rather than by its position", () => {
+  /**
+   * Convex's OTHER writer, `db.table(name)`, reached through the real
+   * `GenericDatabaseWriterWithTable` rather than a hand-written imitation of
+   * it. `patch` and `delete` take the id first here as well, but `insert(value)`
+   * names no table anywhere in the call.
+   */
+  it("resolves patch and delete through Convex's table-scoped writer", () => {
     const result = auditRogue(
-      "interface WriterWithTable {",
-      "  insert<T extends string>(table: T, value: Record<string, unknown>): Promise<Id<T>>;",
-      "  patch<T extends string>(table: T, id: Id<T>, value: Record<string, unknown>): Promise<void>;",
-      "  delete<T extends string>(table: T, id: Id<T>): Promise<void>;",
-      "}",
-      "declare const scoped: WriterWithTable;",
+      'import type { GenericDatabaseWriterWithTable } from "convex/server";',
+      "declare const scoped: GenericDatabaseWriterWithTable<FixtureDataModel>;",
       "export async function rogue() {",
-      '  await scoped.delete("receiptMovements", movementId);',
-      '  await scoped.patch("receiptMovements", movementId, { amountMinor: 1 });',
+      '  await scoped.table("receiptMovements").delete(movementId);',
+      '  await scoped.table("receiptMovements").patch(movementId, { amountMinor: 1 });',
       "}"
     );
     expect(result.unproven).toEqual([]);
@@ -941,16 +1043,15 @@ describe("Convex's other writer shapes", () => {
 
   it("resolves a table-scoped insert from what it returns", () => {
     const result = auditRogue(
-      "interface TableWriter<T extends string> {",
-      "  insert(value: Record<string, unknown>): Promise<Id<T>>;",
-      "}",
-      'declare const scoped: TableWriter<"receiptMovements">;',
+      'import type { GenericDatabaseWriterWithTable } from "convex/server";',
+      "declare const scoped: GenericDatabaseWriterWithTable<FixtureDataModel>;",
       "export async function rogue() {",
-      "  await scoped.insert({ amountMinor: 1 });",
+      '  await scoped.table("receiptMovements").insert({ amountMinor: 1 });',
       "}"
     );
     expect(result.unproven).toEqual([]);
     expect(methodsOf(result.violations)).toEqual(["insert"]);
+    expect(tablesOf(result.violations[0].site)).toEqual(["receiptMovements"]);
   });
 });
 
@@ -1047,14 +1148,59 @@ describe("lifecycle exceptions", () => {
   });
 
   /**
-   * ⚠️ THE FAIL-CLOSED READING OF "exact-table", AND THE ONE THE BINDING STEP
-   * MUST RULE ON. A sweep deleting through `Id<TableNames>` resolves to every
-   * table in the schema; that is not an exact-table write, so the exception
-   * does not cover it. Both real sweep sites are of exactly this shape.
+   * ⚠️ RULED IN `SCRUM-238 c17726`, AND IT REVERSES THE PREVIOUS BEHAVIOUR.
+   *
+   * A lifecycle sweep deletes through a generic `Id<TableNames>` that resolves
+   * to EVERY table in the schema. The earlier guard required
+   * `resolvedTables.length === 1` and so refused those sweeps — which was
+   * fail-closed and still wrong, because those sweeps are the only non-owner
+   * writes to these tables, and the granted exception therefore covered
+   * nothing at all.
+   *
+   * Permission is `table + module + operation`. The set is intersected with the
+   * declaration and each authority table in it is judged on its own.
    */
-  it("refuses an excepted delete whose id resolves to a SET of tables", () => {
+  it("permits an excepted delete whose id resolves to a SET of tables", () => {
     expect(
       classifyWriteSite(site(RESET, "delete", ["receiptMovements", "vehicles"]), DECLARATION)
+    ).toEqual({ verdict: "AUTHORIZED", tables: ["receiptMovements"] });
+  });
+
+  /**
+   * ⚠️ THE NEGATIVE CONTROL THAT KEEPS THE ABOVE FROM BEING A WILDCARD.
+   *
+   * The identical generic sweep, against a FOURTH declared authority table
+   * whose declaration grants this module nothing. If the exception had become
+   * module-wide, this would pass silently — which is precisely the outcome the
+   * ruling forbids.
+   */
+  it("refuses that same sweep for a declared table with no exception of its own", () => {
+    const withFourth: readonly AuthorityDeclaration[] = [
+      ...DECLARATION,
+      { table: "receiptRetainedPositions", ownerModule: OWNED },
+    ];
+    expect(
+      classifyWriteSite(
+        site(RESET, "delete", ["receiptMovements", "receiptRetainedPositions", "vehicles"]),
+        withFourth
+      )
+    ).toEqual({ verdict: "VIOLATION", tables: ["receiptRetainedPositions"] });
+  });
+
+  /** The grant is per operation as well as per table: a sweep may not PATCH. */
+  it("refuses a generic PATCH from a module granted only DELETE", () => {
+    expect(
+      classifyWriteSite(site(RESET, "patch", ["receiptMovements", "vehicles"]), DECLARATION)
+    ).toEqual({ verdict: "VIOLATION", tables: ["receiptMovements"] });
+  });
+
+  /** `convex/customers.ts` holds no exception, generic or otherwise. */
+  it("refuses a generic PATCH from the customer-merge module", () => {
+    expect(
+      classifyWriteSite(
+        site("convex/customers.ts", "patch", ["customers", "receiptMovements", "vehicles"]),
+        DECLARATION
+      )
     ).toEqual({ verdict: "VIOLATION", tables: ["receiptMovements"] });
   });
 
@@ -1097,6 +1243,325 @@ describe("classification is decided on the worst table of a resolved set", () =>
   it("clears a union with no authority table in it", () => {
     expect(classifyWriteSite(site("/virtual/rogue.ts", ["vehicles", "leads"]), FIXTURE_DECLARATION))
       .toEqual({ verdict: "UNRELATED" });
+  });
+});
+
+describe("the c17717 family — the three findings that ended the shape architecture", () => {
+  /**
+   * ⚠️ A — STRUCTURAL WIDENING. NO CAST, NO DIAGNOSTIC, NO SITE.
+   *
+   * `WeakDelete` is a repository interface, so the later call is not
+   * recognisable as Convex's by any honest test — the previous architecture
+   * reported NOTHING here. The conversion is where the proof stops, so the
+   * conversion is what is refused.
+   */
+  it("A — reports plain structural widening at the conversion", () => {
+    const result = auditRogue(
+      "interface WeakDelete { delete(id: string): Promise<void> }",
+      "export async function rogue() {",
+      "  const writer: WeakDelete = ctx.db;",
+      "  await writer.delete(movementId);",
+      "}"
+    );
+    expect(erasureFindings(result.unproven)).toHaveLength(1);
+    expect(erasureFindings(result.unproven)[0].site.file).toBe("/virtual/rogue.ts");
+  });
+
+  it("A — reports the same erasure through a parameter, a return, a property and a cast", () => {
+    const result = auditRogue(
+      "interface WeakDelete { delete(id: string): Promise<void> }",
+      "declare function take(writer: WeakDelete): void;",
+      "export function viaParameter() { take(ctx.db); }",
+      "export function viaReturn(): WeakDelete { return ctx.db; }",
+      "export function viaProperty(): { writer: WeakDelete } { return { writer: ctx.db }; }",
+      "export function viaCast() { return ctx.db as WeakDelete; }"
+    );
+    expect(erasureFindings(result.unproven)).toHaveLength(4);
+  });
+
+  /**
+   * ⚠️ THE CONTROL THAT STOPS THE ABOVE PASSING FOR THE WRONG REASON.
+   *
+   * The same four flows, into Convex's OWN writer type, must all stay silent.
+   * Without this, an analyzer that reported every use of `ctx.db` would satisfy
+   * the erasure tests perfectly — and would redden every mutation in the
+   * repository.
+   */
+  it("A — control: the same four flows into Convex's own type are not erasures", () => {
+    const result = auditRogue(
+      "declare function take(writer: Writer): void;",
+      "export function viaParameter() { take(ctx.db); }",
+      "export function viaReturn(): Writer { return ctx.db; }",
+      "export function viaProperty(): { writer: Writer } { return { writer: ctx.db }; }",
+      "export function viaCast() { return ctx.db as Writer; }"
+    );
+    expect(result.unproven).toEqual([]);
+  });
+
+  /**
+   * ⚠️ B — A MEMBER BEHIND AN INDEX SIGNATURE. `getPropertyOfType` returns no
+   * symbol for it, and the previous architecture read "no symbol" as "not a
+   * writer" and dropped the call entirely.
+   */
+  it("B — sees a write member reached through an index signature", () => {
+    const result = auditRogue(
+      'declare const bag: Record<string, Writer["delete"]>;',
+      "export async function rogue() {",
+      '  await bag["delete"](movementId);',
+      "}"
+    );
+    expect(methodsOf(result.violations)).toEqual(["delete"]);
+    expect(tablesOf(result.violations[0].site)).toEqual(["receiptMovements"]);
+  });
+
+  /**
+   * ⚠️ C — THE FALSE POSITIVE, AND THE ONE THAT CHANGED THE ARGUMENT.
+   *
+   * `Set<T>.delete(value: T)` is a member named `delete` whose parameter
+   * carries the `Id` brand, so it satisfied the previous recognition rule
+   * exactly. The moment 218-C's tables were declared, an ordinary in-memory
+   * `Set` would have failed CI as an unauthorized authority write. It clears
+   * here positively, because `Set.prototype.delete` is declared in a TypeScript
+   * standard library — not because anything about its shape was re-examined.
+   */
+  it("C — positively clears an ordinary Set of authority ids", () => {
+    const result = auditRogue(
+      "export function rogue() {",
+      '  const seen = new Set<Id<"receiptMovements">>();',
+      "  seen.delete(movementId);",
+      "}"
+    );
+    expect(result.coverage.writeSites).toBe(0);
+  });
+
+  it("C — positively clears an ordinary Map keyed by authority ids", () => {
+    const result = auditRogue(
+      "export function rogue() {",
+      '  const seen = new Map<Id<"receiptMovements">, number>();',
+      "  seen.delete(movementId);",
+      "}"
+    );
+    expect(result.coverage.writeSites).toBe(0);
+  });
+
+  /**
+   * ⚠️ THE CONTROL WITHOUT WHICH THE TWO ABOVE PROVE NOTHING. An analyzer that
+   * had simply stopped working would clear the `Set` too. A real write in the
+   * same module, in the same run, must still be convicted.
+   */
+  it("C — control: a real write in the same module is still convicted", () => {
+    const result = auditRogue(
+      "export async function rogue() {",
+      '  const seen = new Set<Id<"receiptMovements">>();',
+      "  seen.delete(movementId);",
+      "  await ctx.db.delete(movementId);",
+      "}"
+    );
+    expect(result.coverage.writeSites).toBe(1);
+    expect(methodsOf(result.violations)).toEqual(["delete"]);
+  });
+
+  /**
+   * ⚠️ THE EVASION THAT THE ERASURE REPORT EXISTS TO CLOSE.
+   *
+   * Laundering a real writer into a builtin type would otherwise be cleared by
+   * the very declaration test that fixes C: at the call, this IS
+   * `Set.prototype.delete`. It is refused at the double cast instead, which is
+   * the only place the truth is still visible.
+   */
+  it("C — refuses laundering a writer into a builtin with `as unknown as`", () => {
+    const result = auditRogue(
+      "export function rogue() {",
+      '  const laundered = ctx.db as unknown as Set<Id<"receiptMovements">>;',
+      "  laundered.delete(movementId);",
+      "}"
+    );
+    expect(erasureFindings(result.unproven)).toHaveLength(1);
+  });
+});
+
+describe("laundering — a writer moved through a path root tracking does not follow", () => {
+  /**
+   * ⚠️ FOUND BY ATTACKING MY OWN ARCHITECTURE, BEFORE FREEZING A SHA.
+   *
+   * Each of these widens a real writer into `{ delete(id: string) }` — a member
+   * whose signature mentions no `Id`, so member suspicion clears it — through an
+   * intermediate that root tracking does not follow. All four produced ZERO
+   * sites: not a violation, not even unproven. The header claimed the erasure
+   * report made clearing repository-declared methods sound, and that claim was
+   * false for exactly these four shapes.
+   *
+   * They are refused now because the CALL still hands a branded `Id` to
+   * something named `delete`. UNPROVEN rather than VIOLATION: handing an id to
+   * a `delete` is suspicious, not proof.
+   */
+  const WEAK = "interface WeakDelete { delete(id: string): Promise<void> }";
+
+  const cases: ReadonlyArray<readonly [string, readonly string[]]> = [
+    ["an array element", ["  const holder = [ctx.db];", "  const w: WeakDelete = holder[0];"]],
+    ["an object property", ["  const holder = { inner: ctx.db };", "  const w: WeakDelete = holder.inner;"]],
+    ["a let binding", ["  let held = ctx.db;", "  const w: WeakDelete = held;"]],
+  ];
+
+  for (const [label, lines] of cases) {
+    it(`refuses a writer laundered through ${label}`, () => {
+      const result = auditRogue(
+        WEAK,
+        "export async function rogue() {",
+        ...lines,
+        "  await w.delete(movementId);",
+        "}"
+      );
+      expect(callFindings(result.unproven)).toHaveLength(1);
+      expect(callFindings(result.unproven)[0].verdict).toEqual({
+        verdict: "UNPROVEN",
+        form: "writer-provenance-not-established",
+      });
+    });
+  }
+
+  it("refuses a writer laundered through a function whose return type is inferred", () => {
+    const result = auditRogue(
+      WEAK,
+      "function give() { return ctx.db; }",
+      "export async function rogue() {",
+      "  const w: WeakDelete = give();",
+      "  await w.delete(movementId);",
+      "}"
+    );
+    expect(callFindings(result.unproven)).toHaveLength(1);
+    expect(callFindings(result.unproven)[0].verdict).toEqual({
+      verdict: "UNPROVEN",
+      form: "writer-provenance-not-established",
+    });
+  });
+
+  /**
+   * ⚠️ THE CONTROL THAT KEEPS ARGUMENT SUSPICION FROM BECOMING A BLANKET.
+   *
+   * An ordinary `Set` is handed the very same branded id, by the very same
+   * method name, and must still clear — because `Set.prototype.delete` is
+   * declared in a TypeScript standard library and that test runs FIRST. If
+   * argument suspicion ever moved above the declaration tests, this fails.
+   */
+  it("control: argument suspicion does not resurrect the Set false positive", () => {
+    const result = auditRogue(
+      "export function rogue() {",
+      '  const seen = new Set<Id<"receiptMovements">>();',
+      "  seen.delete(movementId);",
+      "}"
+    );
+    expect(result.coverage.writeSites).toBe(0);
+  });
+
+  /**
+   * A repository method named `delete` that is handed something which is NOT a
+   * Convex id stays cleared — otherwise every cache and every `Map`-like helper
+   * in the repository would redden CI.
+   */
+  it("control: a repository delete handed a plain string is still cleared", () => {
+    const result = auditRogue(
+      "interface Cache { delete(key: string): void }",
+      "declare const cache: Cache;",
+      "export function rogue() {",
+      '  cache.delete("some-key");',
+      "}"
+    );
+    expect(result.coverage.writeSites).toBe(0);
+  });
+});
+
+describe("provenance, positively", () => {
+  /**
+   * ⚠️ THIS SHAPE IS NOT HYPOTHETICAL — IT IS ELEVEN REAL WRITES.
+   *
+   * `convex/aggregates.ts` and `convex/utils/materialization.ts` declare helper
+   * parameters as `ctx: { db: GenericDatabaseWriter<DataModel> }` and write
+   * through them. There is no `ctx.db` ROOT anywhere in those functions, so
+   * root provenance alone would miss every one of them. They are recognised
+   * because the member resolves into the convex package.
+   */
+  it("recognises a write through a helper parameter with no ctx root in sight", () => {
+    const result = auditRogue(
+      "export async function helper(local: { db: Writer }) {",
+      "  await local.db.delete(movementId);",
+      "}"
+    );
+    expect(methodsOf(result.violations)).toEqual(["delete"]);
+    expect(result.unproven).toEqual([]);
+  });
+
+  it("follows a const alias of a root", () => {
+    const result = auditRogue(
+      "export async function rogue() {",
+      "  const db = ctx.db;",
+      "  await db.delete(movementId);",
+      "}"
+    );
+    expect(methodsOf(result.violations)).toEqual(["delete"]);
+    expect(result.unproven).toEqual([]);
+  });
+
+  /**
+   * `"insert" in ctx.db` occurs in `convex/utils/tenancy.ts`. Neither operand
+   * position can reach a member, so both are cleared positively rather than
+   * refused — which is what keeps the erasure report affordable on real source.
+   */
+  it("clears the two uses of a root that cannot reach a member", () => {
+    const result = auditRogue(
+      "export function rogue() {",
+      '  const present = "insert" in ctx.db;',
+      "  const kind = typeof ctx.db;",
+      "  void present;",
+      "  void kind;",
+      "}"
+    );
+    expect(result.coverage.writeSites).toBe(0);
+  });
+
+  /**
+   * ⚠️ THE ONE CASE ARGUMENT SUSPICION CANNOT SEE, AND WHY THE MEMBER TEST STAYS.
+   *
+   * A table-scoped `insert(value)` names no table and takes no id — its only
+   * Convex brand is in its RETURN type. Argument suspicion finds nothing here,
+   * so without the member test this call would be cleared in silence. Found by
+   * a surviving mutant: removing member suspicion killed no test, which meant a
+   * gap in the suite rather than dead code.
+   */
+  it("refuses an unvouched scoped insert whose only brand is its return type", () => {
+    const result = auditRogue(
+      'interface ScopedInsert { insert(value: { amountMinor: number }): Promise<Id<"receiptMovements">> }',
+      "declare const scoped: ScopedInsert;",
+      "export async function rogue() {",
+      "  await scoped.insert({ amountMinor: 1 });",
+      "}"
+    );
+    expect(result.violations).toEqual([]);
+    expect(result.unproven).toHaveLength(1);
+    expect(result.unproven[0].verdict).toEqual({
+      verdict: "UNPROVEN",
+      form: "writer-provenance-not-established",
+    });
+  });
+
+  /**
+   * ⚠️ A LOOK-ALIKE DECLARED IN THE REPOSITORY IS NOT PROMOTED TO A ROOT.
+   * It is not cleared either — it is refused, which is the ruling's rule for
+   * anything whose provenance cannot be established.
+   */
+  it("does not promote a repository look-alike to a writer root", () => {
+    const result = auditRogue(
+      "interface FakeWriter { delete<T extends string>(id: Id<T>): Promise<void> }",
+      "declare const fake: { db: FakeWriter };",
+      "export async function rogue() {",
+      "  await fake.db.delete(movementId);",
+      "}"
+    );
+    expect(result.violations).toEqual([]);
+    expect(result.unproven[0].verdict).toEqual({
+      verdict: "UNPROVEN",
+      form: "writer-provenance-not-established",
+    });
   });
 });
 
@@ -1171,7 +1636,7 @@ describe("the analyzer against the real convex backend", () => {
    * which the type-aware pass resolves and the syntactic pass cannot see at
    * all. Under equality, CORRECT analyzer behaviour would have failed CI on an
    * unrelated pull request. Containment still kills a total detection failure:
-   * 848 syntactic sites against 0 type-aware ones is not a subset.
+   * 853 syntactic sites against 0 type-aware ones is not a subset.
    */
   it("sees every call site a type-free syntactic pass can see", () => {
     // Sorted with the guard's own comparator on both sides: the property under
@@ -1197,6 +1662,31 @@ describe("the analyzer against the real convex backend", () => {
   }, 60_000);
 
   /**
+   * ⚠️ THE MEASURED BASIS FOR CLEARING NON-CONVEX METHODS AT THE CALL.
+   *
+   * The analyzer clears a call whose method is declared outside the convex
+   * package, and that is sound only because a root-derived writer cannot reach
+   * such a method without passing a conversion this report refuses. The cost of
+   * that report on real source is therefore load-bearing evidence, not trivia:
+   * every one of the 2746 root uses in the backend is either a direct call, a
+   * `const` alias, or one of the two positively harmless forms.
+   *
+   * The single interesting case is `convex/aggregates.ts`, which returns
+   * `{ db: wrapped.db }` from a module-private helper. It is NOT an erasure,
+   * because the property it flows into is declared as Convex's own
+   * `GenericDatabaseWriter` — and the writes made through it downstream are
+   * recognised by the member-declaration rule. If either half of that stopped
+   * being true, this would fail.
+   */
+  it("finds no point in the backend where writer provenance is erased", () => {
+    const erased = sites.filter(
+      (site) =>
+        site.resolution.kind === "UNPROVEN" && site.resolution.form === "writer-provenance-erased"
+    );
+    expect(erased.map((site) => `${site.file}:${site.line}`)).toEqual([]);
+  }, 60_000);
+
+  /**
    * ⚠️ THE HONESTY RATCHET FOR `replace`.
    *
    * The guard's header states that `ctx.db.replace` has zero production call
@@ -1210,11 +1700,11 @@ describe("the analyzer against the real convex backend", () => {
   }, 60_000);
 
   /**
-   * ⚠️ POSITIVE CONTROL — REAL CONVEX TYPES, NOT THE FIXTURES' HAND-ROLLED ONE.
+   * ⚠️ POSITIVE CONTROL — THE REAL GENERATED DATA MODEL.
    *
-   * The fixtures declare their own `Id<T> = string & { __tableName: T }`. This
-   * runs the same classification against the real `GenericId` from
-   * `convex/values` flowing through the generated data model, using a
+   * The fixtures import the real `GenericId` and the real writer, but they
+   * declare their own small data model. This runs the same classification
+   * against `GenericId` flowing through the GENERATED data model, using a
    * TEST-LOCAL declaration over an existing table. Nothing is declared in the
    * shipped guard by this test, and no production behaviour is asserted about
    * `memberships` — it is a carrier for the mechanism.

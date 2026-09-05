@@ -1,13 +1,13 @@
 /**
- * SCRUM-238 (SCRUM-218-E) — TYPE-AWARE structural guard for direct writes to
- * declared authority tables.
+ * SCRUM-238 (SCRUM-218-E) — structural guard for writes to declared authority
+ * tables, recognised by DECLARATION PROVENANCE.
  *
  * ## Why this file exists at all
  *
- * SCRUM-218's final closure `6d2fb9e9e` promised repository-structural
- * enforcement for unauthorized `insert`/`patch`/`replace`/`delete` writes to
- * receipt authority, and independent review (`SCRUM-218 c17516`) proved the
- * proposed source-text analyzer could not express the delete case:
+ * SCRUM-218's closure `6d2fb9e9e` promised repository-structural enforcement
+ * for unauthorized `insert`/`patch`/`replace`/`delete` writes to receipt
+ * authority, and review (`SCRUM-218 c17516`) proved a source-text analyzer
+ * could not express the delete case:
  *
  * ```ts
  * ctx.db.delete(id);   // contains no table name, anywhere, in any spelling
@@ -19,119 +19,148 @@
  * type Id<TableName extends string> = string & { __tableName: TableName };
  * ```
  *
- * so the target table is recoverable — but only from a real `ts.Program` and
- * `TypeChecker`, never from a regex and never from a bare `ts.createSourceFile`
- * syntax tree.
+ * so the table is recoverable — but only from a real `ts.Program` and
+ * `TypeChecker`. This is that work. It does not modify, replace or subsume
+ * `scripts/commitmentWriteGuard.ts` or `scripts/tenantWriteGuard.ts`.
  *
- * `scripts/commitmentWriteGuard.ts` says this in its own header, about itself:
+ * ## ⚠️ THIS IS THE THIRD RECOGNITION ARCHITECTURE. THE FIRST TWO FAILED.
  *
- * > "A SOUND version of this check needs the target table resolved from the
- * > id's `Id<Table>` type, which needs a TypeScript program rather than a
- * > source-text pass. That is real work and it is not this file."
+ * Both earlier versions asked a question about the LOCAL TYPE SHAPE of the
+ * receiver, and both were defeated — in opposite directions — because under
+ * TypeScript's structural typing, shape does not determine identity:
  *
- * This is that work. It does not modify, replace or subsume that guard or
- * `scripts/tenantWriteGuard.ts`; all three answer different questions and all
- * three keep their own suites.
+ * - "the receiver exposes all four write methods" was defeated by
+ *   `Pick<Writer, "delete">`, a delete-only view and a `Writer | DeleteOnly`
+ *   union. FALSE NEGATIVES.
+ * - "the member's signature handles an `Id`" was defeated by
+ *   `const w: WeakDelete = ctx.db` — plain widening, no cast, no diagnostic —
+ *   and by a member behind an index signature. FALSE NEGATIVES.
+ * - the same rule reported `new Set<Id<"receiptMovements">>().delete(id)` as an
+ *   unauthorized authority write, because `Set<T>.delete(value: T)` is a member
+ *   named `delete` whose parameter carries the brand. A FALSE POSITIVE.
  *
- * ## What this analyzer claims, precisely
+ * A brand can be ERASED by an ordinary assignment TypeScript accepts silently,
+ * and CARRIED by something that is not a database at all. Eleven zero-site
+ * spellings were reproduced across three review rounds and the convergence
+ * breaker fired twice. Owner ruling `SCRUM-238 c17726` authorized one
+ * architecture reset, which is this file.
  *
- * ⚠️ IT LOOKS FOR CANDIDATES AND REFUSES WHAT IT CANNOT CLEAR. It does not look
- * for writes and skip what it fails to recognise. That inversion is the whole
- * lesson of two review rounds: the previous design had MANY quiet exits —
- * receiver not structurally a writer, escape not a known write method,
- * destructuring key not an identifier, no member access at all — and every hole
- * found in those rounds was one of them. Eleven distinct spellings produced no
- * site whatsoever, each with zero compiler diagnostics.
+ * ## What it asks instead: WHERE IS THIS DECLARED?
  *
- * **There is now exactly one quiet exit: a member name POSITIVELY PROVEN not to
- * be one of the four.** A statically known name that is not `insert`, `patch`,
- * `replace` or `delete`; or a numeric, bigint or symbol index, which cannot name
- * one of them. Everything else becomes a site, and every uncertainty in a site
- * becomes UNPROVEN.
+ * Recognition is grounded in declaration sites, which a repository author
+ * cannot imitate. Writer recognition and table resolution are separate proofs
+ * and are never combined again.
  *
- * **A database write member is recognised by its SIGNATURE, not by its object.**
- * The question is asked of the member — is it one of the four names, and does
- * its signature actually handle a Convex `Id`, in a parameter or as what it
- * returns? That is what a Convex write *is*. It survives every narrowing, so
- * `Pick<Writer, "delete">` from a capability helper, a delete-only view, and each
- * constituent of a `Writer | DeleteOnly` union are all caught — none of which
- * the old "does the receiver expose all four methods" test could see. It also
- * keeps `Map.delete(key: string)` and a cache out for a reason rather than by
- * luck: they name one of the four but never touch an `Id`.
+ * **Proof 1 — is this call a Convex database write?** Two positive answers:
  *
- * The table is then resolved:
+ * - **P1, member provenance.** `checker.getResolvedSignature(call)` resolves to
+ *   a declaration inside the `convex` package. That is what a Convex write IS,
+ *   and it survives every narrowing, alias and structural view, because
+ *   narrowing does not move a declaration. It is also what catches the eleven
+ *   writes in `convex/aggregates.ts` and `convex/utils/materialization.ts`
+ *   whose helper parameters are spelled
+ *   `ctx: { db: GenericDatabaseWriter<DataModel> }` — real writes with no
+ *   `ctx.db` root anywhere in the function.
+ * - **P2, root provenance.** The receiver is `ctx.db` / `ctx.storage` whose
+ *   PROPERTY SYMBOL is declared in the `convex` package, or a `const` alias of
+ *   one.
  *
- * - `insert` — from the first argument's static string-literal type (a plain
- *              literal, a `const`-bound name, or a union of literals), falling
- *              back to the call's own `Promise<Id<T>>` return type, which is how
- *              a table-scoped writer's `insert(value)` names its table.
- * - `patch` / `replace` / `delete` — from the `__tableName` brand carried by
- *              whichever ARGUMENT has one. By brand, not by position: Convex
- *              also ships table-name-first overloads, and assuming argument 0
- *              reported every one of them as unprovable.
+ * **The quiet exits, all three positive:**
  *
- * The operation is resolved the same way. `ctx.db["delete"](id)` is legal
- * TypeScript that compiles identically and is invisible to any analyzer reading
- * only property accesses; the bracket is read from its type, so a `const`
- * binding resolves as well as a literal. A bracket naming more than one method
- * is UNPROVEN.
+ * - a statically known member name that is not one of the four;
+ * - a numeric, bigint or symbol index, which cannot name one of the four;
+ * - a resolved signature declared in a TypeScript standard library
+ *   (`lib.*.d.ts`). That is what clears `Set<Id<T>>.delete`, `Map.delete` and
+ *   the 79 `String.replace` calls in the analysed set — positively, by where
+ *   `Set.prototype.delete` is declared, not by inspecting its signature.
  *
- * An unreadable RECEIVER — `(ctx.db as any).delete(id)` — is UNPROVEN, never
- * dropped. And a write method taken as a VALUE (a rename or computed
- * destructure, an assignment destructure, `.call`, `.bind`, a higher-order
- * helper, `Reflect.get`) has no member access at its eventual call site at all;
- * following it needs dataflow this guard does not do, so the ESCAPE itself is
- * reported. The reference is where the proof stops, and stopping is refused.
+ * **Proof 2 — which table.** Only once a call is a proven Convex write:
+ * `insert` from its first argument's string-literal type, falling back to the
+ * call's own `Promise<Id<T>>`; `patch`/`replace`/`delete` from the
+ * `__tableName` brand carried by whichever ARGUMENT has one — by brand rather
+ * than by a fixed argument position, which also resolves Convex's table-scoped
+ * `db.table(name)` writer, whose `insert(value)` names no table at all and is
+ * recovered from its `Promise<GenericId<T>>` return type instead.
  *
- * It then classifies each resolved site against the declaration below: a write
- * to a declared authority table from any module other than that table's owner
- * is a VIOLATION, unless a narrow lifecycle exception names that module, that
- * operation, and resolves to that exact table.
+ * ## ⚠️ WHAT LETS A REPOSITORY-DECLARED METHOD BE CLEARED
+ *
+ * A method declared OUTSIDE the convex package is cleared at the call, and two
+ * independent things have to hold before that is safe.
+ *
+ * **1. The erasure report.** A conversion of a root-derived value into a type
+ * the convex package does not declare is reported where it happens:
+ *
+ * ```ts
+ * const w: WeakDelete = ctx.db;   // reported HERE, at the widening
+ * await w.delete(id);             // the call itself is not recognisable
+ * ```
+ *
+ * **2. Suspicion at the call, from the member AND from the arguments.**
+ *
+ * ⚠️ THE FIRST DRAFT CLAIMED (1) ALONE WAS SUFFICIENT, AND THAT WAS FALSE.
+ * Root tracking follows `const` alias chains; it does not follow an array
+ * element, an object property, an inferred return or a `let`. I reproduced all
+ * four laundering the same writer into `{ delete(id: string) }` and producing
+ * **zero sites** — no violation, not even unproven — with the justification for
+ * clearing sitting in this header the whole time.
+ *
+ * What the analyzer could always see is the CALL: `w.delete(movementId)` hands
+ * a branded Convex `Id` to something named `delete`. So a repository-declared
+ * member is cleared only when neither its signature nor any argument involves a
+ * Convex id. That is not proof of a write, so such a call is UNPROVEN rather
+ * than a violation — but it is never silence.
+ *
+ * The two are deliberately not the same test. (1) fires on the conversion even
+ * when no write follows; (2) fires on the call even when the conversion was
+ * invisible.
+ *
+ * Two non-invoking uses of a root are cleared positively, because neither can
+ * reach a member: the right operand of `in` (`"insert" in ctx.db`, which occurs
+ * in `convex/utils/tenancy.ts`) and `typeof`.
+ *
+ * A write method taken as a VALUE — a rename or computed destructure, an
+ * assignment destructure, `.call`, `.bind`, a higher-order helper,
+ * `Reflect.get` — has no member access at its eventual call site. Following it
+ * needs dataflow this guard does not do, so the ESCAPE itself is reported.
  *
  * ## ⚠️ IT IS FAIL-CLOSED, AND THERE IS DELIBERATELY NO ALLOWLIST
  *
- * A site whose table cannot be proven is reported as UNPROVEN and fails the
- * guard. It is not skipped, and it is not silently counted as safe.
+ * A site whose table cannot be proven is UNPROVEN and fails the guard. It is
+ * not skipped and not counted as safe.
  *
- * That policy was MEASURED before it was chosen, not assumed affordable. At
- * `bf5769ed1` the analysed set is 228 non-generated, non-test modules holding
- * 853 write sites (patch 499, insert 291, delete 63, replace 0), and every
- * single one resolves to a concrete table: zero unproven, zero unreadable
- * receivers, zero escaping method references, zero reflective retrievals. So
- * fail-closed costs nothing today and a NEW unresolvable form fails CI rather
+ * That policy was MEASURED before it was chosen. At `bf5769ed1` the analysed
+ * set is 228 non-generated, non-test modules. Of the 853 calls named one of the
+ * four, 842 have a root receiver and 11 do not but still resolve into the
+ * convex package; 79 further calls resolve into a TypeScript lib and are
+ * cleared; ZERO resolve into repository code, another package, or nowhere. All
+ * 853 resolve to a concrete table, and no root use is an erasure. So
+ * fail-closed costs nothing today, and a NEW unresolvable form fails CI rather
  * than quietly shrinking the analysed surface.
  *
- * Five of those 63 deletes are `ctx.storage.delete(id)`. Storage is not a table
+ * Five of the 63 deletes are `ctx.storage.delete(id)`. Storage is not a table
  * write, but its id IS an `Id<"_storage">`, so the same rule resolves it and it
- * is reported rather than special-cased. Pinned by a test, because a surprise in
- * a coverage number should be read, not absorbed.
- *
- * No burn-down allowlist is provided on purpose. A green result from this file
- * is an AUTHORIZATION, and an allowlist is the mechanism by which such a
- * result stops meaning anything. If a genuinely dynamic write is ever needed,
- * that is a deliberate amendment to this guard with its own review — not an
- * entry someone adds to make a build pass.
+ * is reported rather than special-cased. Pinned by a test.
  *
  * ## ⚠️ RECORDED SCOPE BOUNDARIES — read these before quoting a green run
  *
- * 1. `**\/*.test.ts`, `convex/_generated/**` and `test-utils/**` are NOT
- *    analysed. A test that inserts an authority row directly is fixture setup,
- *    not a production authority violation, and `test-utils/**` is the harness
- *    that does it — verified, not assumed, to be imported by no non-test module
- *    under `convex/`. Everything else the program contains IS analysed,
- *    including `lib/**` and `packages/**`: the earlier `convex/`-only filter
- *    made a write in a shared helper invisible, which was a hole rather than a
- *    boundary.
+ * 1. Test files, `convex/_generated` and `test-utils` are NOT analysed. A test
+ *    that inserts an authority row directly is fixture setup, not a production
+ *    authority violation. Everything else the program contains IS analysed,
+ *    including `lib/` and `packages/`.
  * 2. This is REPOSITORY/TOOLING enforcement. It is not a database capability,
  *    it grants nothing at runtime, and it cannot stop a write that reaches the
- *    database by any path other than a `ctx.db.*` call in analysed source —
- *    a registered generic posting entrypoint, for instance, is a different
- *    control and belongs to SCRUM-249.
+ *    database by any path other than a call in analysed source — a registered
+ *    generic posting entrypoint is a different control and belongs to
+ *    SCRUM-249; runtime row identity belongs to SCRUM-250.
  * 3. It is not flow-sensitive and makes no reachability claim. A write inside
  *    dead code is still a write.
- * 4. `ctx.db.replace` has ZERO call sites in the backend at `bf5769ed1`. Its
- *    detection is proven by fixture programs only. That is stated rather than
- *    folded into a single "all four operations covered" sentence, because it
+ * 4. Root tracking follows `const` alias chains, NOT arbitrary dataflow — not
+ *    an array element, an object property, an inferred return or a `let`. A
+ *    writer laundered through one of those is not reported at a conversion; it
+ *    is caught at the call by argument suspicion instead, as UNPROVEN. This is
+ *    a stated limit of the erasure report, not a claim that it is complete.
+ * 5. `ctx.db.replace` has ZERO call sites in the backend at `bf5769ed1`. Its
+ *    detection is proven by fixture programs only. Stated separately because it
  *    is a real difference in the evidence.
  */
 import path from "node:path";
@@ -293,7 +322,11 @@ export type UnsupportedForm =
   /** A write method was taken as a VALUE; its eventual call site is unknown. */
   | "write-method-reference-escapes"
   /** `Reflect.get(writer, …)` — retrieval this analyzer cannot follow. */
-  | "reflective-write-member-access";
+  | "reflective-write-member-access"
+  /** A root-derived writer was converted to a type the convex package does not declare. */
+  | "writer-provenance-erased"
+  /** The call names a write, and nothing positively identifies what it is. */
+  | "writer-provenance-not-established";
 
 export type TableResolution =
   | { readonly kind: "RESOLVED"; readonly tables: readonly string[] }
@@ -405,8 +438,20 @@ export function createConvexAnalyzerProgram(repoRoot: string): AnalyzerProgram {
  * fixture can prove cross-module resolution (a helper in one file returning an
  * `Id` that another file deletes).
  */
+/**
+ * Real `convex` package declarations are shared across fixture programs.
+ *
+ * ⚠️ NOT AN OPTIMIZATION ONLY. Every fixture program must see the SAME
+ * `convex/server` declaration files as the real backend does, or declaration
+ * provenance would be answering a different question in each half of the suite
+ * — which is exactly the fixture/real asymmetry a previous mutation battery
+ * caught and this design must not reintroduce.
+ */
+const sharedLibrarySources = new Map<string, ts.SourceFile | undefined>();
+
 export function createVirtualAnalyzerProgram(
-  files: Readonly<Record<string, string>>
+  files: Readonly<Record<string, string>>,
+  repoRoot: string = process.cwd()
 ): AnalyzerProgram {
   const options: ts.CompilerOptions = {
     strict: true,
@@ -427,31 +472,63 @@ export function createVirtualAnalyzerProgram(
     if (virtual !== undefined) {
       return ts.createSourceFile(fileName, virtual, languageVersion, true, ts.ScriptKind.TS);
     }
-    return baseGetSourceFile(fileName, languageVersion, onError, shouldCreate);
+    if (!sharedLibrarySources.has(fileName)) {
+      sharedLibrarySources.set(
+        fileName,
+        baseGetSourceFile(fileName, languageVersion, onError, shouldCreate)
+      );
+    }
+    return sharedLibrarySources.get(fileName);
   };
   host.fileExists = (fileName) => fileName in files || baseFileExists(fileName);
   host.readFile = (fileName) => files[fileName] ?? baseReadFile(fileName);
   host.useCaseSensitiveFileNames = () => true;
   host.getCanonicalFileName = (fileName) => fileName;
 
-  host.resolveModuleNameLiterals = (literals, containingFile) =>
-    literals.map((literal) => {
+  // ⚠️ ONLY A VIRTUAL FILE'S OWN RELATIVE IMPORTS ARE RESOLVED VIRTUALLY.
+  //
+  // An earlier version intercepted every module literal in the program, which
+  // included `export * from "./database.js"` INSIDE `convex/server/index.d.ts`.
+  // That re-export silently resolved to nothing, so `GenericDatabaseWriter`
+  // appeared not to exist and every fixture failed to typecheck — a resolver
+  // bug that looks exactly like a missing package.
+  const resolutionHost: ts.ModuleResolutionHost = {
+    fileExists: baseFileExists,
+    readFile: baseReadFile,
+    directoryExists: host.directoryExists?.bind(host),
+    getDirectories: host.getDirectories?.bind(host),
+    realpath: host.realpath?.bind(host),
+    getCurrentDirectory: () => repoRoot,
+  };
+
+  host.resolveModuleNameLiterals = (literals, containingFile) => {
+    const virtualContainer = containingFile in files;
+    return literals.map((literal) => {
       const request = literal.text;
-      if (!request.startsWith(".")) return { resolvedModule: undefined };
-      const base = path.posix.join(path.posix.dirname(containingFile), request);
-      for (const candidate of [base, `${base}.ts`, base.replace(/\.js$/, ".ts")]) {
-        if (candidate in files) {
-          return {
-            resolvedModule: {
-              resolvedFileName: candidate,
-              extension: ts.Extension.Ts,
-              isExternalLibraryImport: false,
-            },
-          };
+      if (virtualContainer && request.startsWith(".")) {
+        const base = path.posix.join(path.posix.dirname(containingFile), request);
+        for (const candidate of [base, `${base}.ts`, base.replace(/\.js$/, ".ts")]) {
+          if (candidate in files) {
+            return {
+              resolvedModule: {
+                resolvedFileName: candidate,
+                extension: ts.Extension.Ts,
+                isExternalLibraryImport: false,
+              },
+            };
+          }
         }
+        return { resolvedModule: undefined };
       }
-      return { resolvedModule: undefined };
+      // A fixture has no location on disk, so package requests are resolved as
+      // if made from the repository root — which is where `node_modules` is.
+      const anchor = virtualContainer ? path.join(repoRoot, "__fixture__.ts") : containingFile;
+      return {
+        resolvedModule: ts.resolveModuleName(request, anchor, options, resolutionHost)
+          .resolvedModule,
+      };
     });
+  };
 
   const rootNames = Object.keys(files);
   const program = ts.createProgram({ rootNames, options, host });
@@ -496,56 +573,116 @@ function carriesIdBrand(checker: ts.TypeChecker, type: ts.Type, depth = 0): bool
   }
   return typeArgumentsOf(checker, type).some((t) => carriesIdBrand(checker, t, depth + 1));
 }
+/* ------------------------------------------------------------------------- *
+ * Provenance — the only thing this analyzer trusts
+ * ------------------------------------------------------------------------- */
 
 /**
- * Is `member` on `type` a DATABASE WRITE MEMBER?
+ * ⚠️ THESE TWO PATTERNS ARE THE WHOLE RECOGNITION BASIS.
  *
- * ⚠️ THIS REPLACED "does the receiver expose all four methods", AND THAT
- * REPLACEMENT IS THE POINT OF THIS ROUND.
- *
- * The all-four test was a property of the whole object, so every narrowing of
- * a writer escaped it: `Pick<Writer, "delete">` returned by a capability
- * helper, a delete-only view, and each constituent of a `Writer | DeleteOnly`
- * union all answered "not a writer" and their writes were dropped entirely —
- * eight such spellings were reproduced with zero compiler diagnostics.
- *
- * The question is asked of the MEMBER instead: is this one of the four names,
- * and does its signature actually handle a Convex `Id` — in a parameter, or as
- * what it returns? That is what a database write *is*. It survives every
- * narrowing, because narrowing does not change the member's signature.
- *
- * It also keeps the negatives out for a reason rather than by luck:
- * `Map.delete(key: string): boolean` and a cache's `delete(key: string)` name
- * one of the four but never touch an `Id`.
- *
- * ⚠️ The `…DatabaseWriter` symbol-name shortcut is GONE. It made the real
- * backend pass through a different code path from every fixture, so a break in
- * the shape test would have been invisible on real source while fixtures
- * caught it — the mutation battery showed exactly that asymmetry. One
- * mechanism now, exercised identically by both.
+ * A repository author can imitate any TYPE SHAPE — that is what structural
+ * typing means, and it is what defeated both previous architectures in both
+ * directions. What cannot be imitated is WHERE A DECLARATION LIVES. A method
+ * declared in `node_modules/convex` is Convex's; one declared in
+ * `node_modules/typescript/lib/lib.*.d.ts` is a JavaScript builtin. Neither
+ * answer can be forged by writing a cleverly shaped interface in `convex/`.
  */
-function isDatabaseWriteMember(
-  checker: ts.TypeChecker,
-  type: ts.Type,
-  member: DbWriteMethod
+const CONVEX_PACKAGE_DECLARATION = /[\\/]node_modules[\\/]convex[\\/]/;
+const TYPESCRIPT_LIB_DECLARATION =
+  /[\\/]node_modules[\\/]typescript[\\/]lib[\\/]lib\.[^\\/]*\.d\.ts$/;
+
+function declaredIn(
+  declarations: readonly ts.Declaration[] | undefined,
+  where: RegExp
 ): boolean {
-  const symbol = checker.getPropertyOfType(type, member);
-  if (!symbol) return false;
-  return checker
-    .getTypeOfSymbol(symbol)
-    .getCallSignatures()
-    .some(
-      (signature) =>
-        signature
-          .getParameters()
-          .some((parameter) => carriesIdBrand(checker, checker.getTypeOfSymbol(parameter))) ||
-        carriesIdBrand(checker, signature.getReturnType())
-    );
+  return (declarations ?? []).some((declaration) =>
+    where.test(declaration.getSourceFile().fileName)
+  );
 }
 
-/** Does this type expose ANY database write member? */
-function hasAnyDatabaseWriteMember(checker: ts.TypeChecker, type: ts.Type): boolean {
-  return DB_WRITE_METHODS.some((member) => isDatabaseWriteMember(checker, type, member));
+/**
+ * Is this type one the `convex` package itself declares?
+ *
+ * ⚠️ THIS ONE PREDICATE DECIDES BOTH HALVES OF THE ANALYZER, which is why they
+ * cannot drift apart. A call on a convex-declared type is recognised by P1; the
+ * moment a root-derived value stops being described by a convex-declared type,
+ * that conversion is reported. There is no gap between the two because the
+ * boundary is the same question.
+ *
+ * The alias symbol is consulted as well as the type's own symbol, so
+ * `type W = GenericDatabaseWriter<DataModel>` stays convex-declared while
+ * `type W = Pick<GenericDatabaseWriter<DataModel>, "delete">` does not — a
+ * `Pick` is a mapped type declared in `lib.es5.d.ts`, and narrowing a writer
+ * down to one method is exactly the erasure worth reporting.
+ *
+ * A union must be convex-declared in EVERY constituent. `Writer | WeakDelete`
+ * can hold either, so it does not preserve the proof.
+ */
+function isConvexDeclaredType(type: ts.Type, depth = 0): boolean {
+  if (depth > 3) return false;
+  if (type.isUnion() || type.isIntersection()) {
+    return type.types.length > 0 && type.types.every((t) => isConvexDeclaredType(t, depth + 1));
+  }
+  // ⚠️ BOTH SYMBOLS ARE ASKED, NOT ONE IN PREFERENCE TO THE OTHER.
+  // `type Writer = GenericDatabaseWriter<DataModel>` has a repository alias
+  // symbol AND convex's interface symbol. An earlier draft consulted
+  // `aliasSymbol ?? getSymbol()`, so the alias hid the interface and every
+  // ordinary `f(ctx.db)` through such an alias was reported as an erasure.
+  if (declaredIn(type.getSymbol()?.getDeclarations(), CONVEX_PACKAGE_DECLARATION)) return true;
+  return declaredIn(type.aliasSymbol?.getDeclarations(), CONVEX_PACKAGE_DECLARATION);
+}
+
+/**
+ * A CONVEX WRITER ROOT: `ctx.db` or `ctx.storage` whose property symbol is
+ * declared inside the `convex` package.
+ *
+ * ⚠️ THE NAME CHECK IS A NARROWING, NOT THE PROOF — the proof is the
+ * declaration site. It is safe to narrow to these two because roots exist only
+ * to drive the ERASURE report: any call on any convex-declared writer member is
+ * recognised by P1 regardless of which property it came from. So a Convex
+ * context property this list does not know about cannot hide a write; it can
+ * only fail to have its widening reported.
+ */
+function isConvexWriterRoot(checker: ts.TypeChecker, node: ts.Node): boolean {
+  if (!ts.isPropertyAccessExpression(node)) return false;
+  const name = node.name.text;
+  if (name !== "db" && name !== "storage") return false;
+  return declaredIn(
+    checker.getSymbolAtLocation(node.name)?.getDeclarations(),
+    CONVEX_PACKAGE_DECLARATION
+  );
+}
+
+/** `(expr)` and `expr!` carry a value through unchanged. */
+function unwrapTransparent(node: ts.Node): ts.Node {
+  let current = node;
+  while (ts.isParenthesizedExpression(current) || ts.isNonNullExpression(current)) {
+    current = current.expression;
+  }
+  return current;
+}
+
+/**
+ * Is this expression a root, or a `const` alias chain ending at one?
+ *
+ * `const db = ctx.db; await db.delete(id)` is ordinary and must stay proven.
+ * The chain is bounded and only follows `const` declarations with an
+ * initializer: a `let` can be reassigned, so its later value is not this one.
+ */
+function isRootDerived(checker: ts.TypeChecker, node: ts.Node, depth = 0): boolean {
+  if (depth > 4) return false;
+  const expression = unwrapTransparent(node);
+  if (isConvexWriterRoot(checker, expression)) return true;
+  if (!ts.isIdentifier(expression)) return false;
+
+  const declarations = checker.getSymbolAtLocation(expression)?.getDeclarations() ?? [];
+  return declarations.some((declaration) => {
+    if (!ts.isVariableDeclaration(declaration) || !declaration.initializer) return false;
+    const list = declaration.parent;
+    if (!ts.isVariableDeclarationList(list)) return false;
+    if ((list.flags & ts.NodeFlags.Const) === 0) return false;
+    return isRootDerived(checker, declaration.initializer, depth + 1);
+  });
 }
 
 /**
@@ -701,43 +838,146 @@ function resolveWriteMethod(
 }
 
 /**
- * What the receiver of a write-named access is, as far as the checker can tell.
+ * Is this CALL a Convex database write?
  *
- * ⚠️ `UNREADABLE` IS THE WHOLE REASON THIS IS NOT A BOOLEAN. A receiver typed
- * `any` — `(ctx.db as any).delete(id)`, or `const writer: any = ctx.db` —
- * answers "is this a database writer?" with neither yes nor no, and a boolean
- * version read that as "no" and DROPPED the access. Nothing was reported at
- * all: not a violation, not even unproven. `as any` is the canonical escape
- * hatch in TypeScript, so it is precisely the spelling a guard whose green
- * result is an authorization must refuse rather than ignore.
+ * ⚠️ THE FIRST QUESTION IS WHERE THE RESOLVED SIGNATURE IS DECLARED, NOT WHAT
+ * THE RECEIVER LOOKS LIKE. `checker.getResolvedSignature` names the exact
+ * overload TypeScript picked, and its declaration's file answers the question
+ * positively in both directions:
+ *
+ * - declared in the `convex` package -> this IS a Convex write. Survives
+ *   `Pick<Writer, "delete">`, a delete-only view, a union constituent, an index
+ *   signature and a structurally-typed helper parameter, because none of them
+ *   move the declaration.
+ * - declared in a TypeScript standard library -> it is a builtin.
+ *   `new Set<Id<"receiptMovements">>().delete(id)` clears HERE, positively,
+ *   because `Set.prototype.delete` is declared in `lib.es2015.collection.d.ts`.
+ *   The previous architecture reported that call as an authority VIOLATION.
+ *
+ * ⚠️ A METHOD DECLARED SOMEWHERE ELSE IS CLEARED, AND THAT IS ONLY SOUND
+ * BECAUSE OF THE ERASURE REPORT. A repository-declared `delete(id)` can be a
+ * real Convex writer only if a root was assigned into it, and that assignment
+ * is a conversion out of a convex-declared type — which `recordErasure` refuses
+ * at the conversion. Remove that report and this clearing becomes a hole; the
+ * two are a pair and the mutation battery tests them as one.
+ *
+ * An unresolved signature is refused rather than cleared: it is the one answer
+ * that is neither positive nor negative.
  */
-type ReceiverVerdict = "WRITER" | "NOT_A_WRITER" | "UNREADABLE";
-
-function classifyReceiver(
+/**
+ * Does this member's signature handle a Convex `Id`?
+ *
+ * ⚠️ SUSPICION ONLY. THIS IS THE PREDICATE THAT FAILED AS A RECOGNITION RULE,
+ * AND IT IS DELIBERATELY KEPT AWAY FROM THAT JOB. It may not clear anything and
+ * it may not convict anything; its single use is to turn "declared somewhere I
+ * do not recognise, and shaped like a writer" into UNPROVEN instead of silence.
+ *
+ * As a recognition rule it produced a FALSE POSITIVE on
+ * `new Set<Id<"receiptMovements">>().delete(id)`, because `Set<T>.delete` is a
+ * member named `delete` whose parameter carries the brand. That call never
+ * reaches here: it is cleared earlier, positively, by the fact that
+ * `Set.prototype.delete` is declared in a TypeScript standard library. Order is
+ * what makes this safe, so do not reorder it above the declaration tests.
+ */
+function memberHandlesAConvexId(
   checker: ts.TypeChecker,
+  type: ts.Type,
+  member: DbWriteMethod
+): boolean {
+  const symbol = checker.getPropertyOfType(type, member);
+  if (!symbol) return false;
+  return checker
+    .getTypeOfSymbol(symbol)
+    .getCallSignatures()
+    .some(
+      (signature) =>
+        signature
+          .getParameters()
+          .some((parameter) => carriesIdBrand(checker, checker.getTypeOfSymbol(parameter))) ||
+        carriesIdBrand(checker, signature.getReturnType())
+    );
+}
+
+type WriteCallProvenance =
+  | { readonly kind: "CONVEX_WRITE" }
+  | { readonly kind: "NOT_CONVEX" }
+  | { readonly kind: "UNPROVEN"; readonly form: UnsupportedForm };
+
+function classifyCallProvenance(
+  checker: ts.TypeChecker,
+  call: ts.CallExpression,
   receiver: ts.Expression,
   method: ResolvedWriteMethod
-): ReceiverVerdict {
-  const type = checker.getTypeAtLocation(receiver);
-  if (isAnyOrUnknown(type)) return "UNREADABLE";
-  const isWriter =
+): WriteCallProvenance {
+  const declarationFile = checker
+    .getResolvedSignature(call)
+    ?.declaration?.getSourceFile().fileName;
+
+  if (declarationFile !== undefined) {
+    if (CONVEX_PACKAGE_DECLARATION.test(declarationFile)) return { kind: "CONVEX_WRITE" };
+    if (TYPESCRIPT_LIB_DECLARATION.test(declarationFile)) return { kind: "NOT_CONVEX" };
+  }
+
+  // P2. A root receiver proves the write even where the signature does not
+  // resolve into the package — a table-scoped writer obtained from a helper,
+  // for instance.
+  if (isRootDerived(checker, receiver)) return { kind: "CONVEX_WRITE" };
+
+  const receiverType = checker.getTypeAtLocation(receiver);
+
+  // ⚠️ `(ctx.db as any).delete(id)` ANSWERS NEITHER YES NOR NO. `as any` is the
+  // canonical TypeScript escape hatch, so it is precisely the spelling a guard
+  // whose green result is an authorization must refuse rather than ignore.
+  if (isAnyOrUnknown(receiverType)) {
+    return { kind: "UNPROVEN", form: "receiver-type-not-statically-known" };
+  }
+
+  if (isConvexDeclaredType(receiverType)) return { kind: "CONVEX_WRITE" };
+
+  // ⚠️ DECLARED SOMEWHERE THIS ANALYZER CANNOT VOUCH FOR. It is not Convex's
+  // and it is not a builtin, so neither positive answer is available. A
+  // `DeleteOnly` view handed in as a parameter with no root in sight lands
+  // here: nothing proves it IS a writer, and nothing proves it is not. The
+  // ruling is explicit that such a value "is not cleared", so it is refused —
+  // as UNPROVEN, never as a violation, because suspicion is not proof.
+  const memberLooksLikeAWrite =
     method.kind === "WRITE"
-      ? isDatabaseWriteMember(checker, type, method.method)
-      : hasAnyDatabaseWriteMember(checker, type);
-  return isWriter ? "WRITER" : "NOT_A_WRITER";
+      ? memberHandlesAConvexId(checker, receiverType, method.method)
+      : DB_WRITE_METHODS.some((name) => memberHandlesAConvexId(checker, receiverType, name));
+
+  // ⚠️ THE ARGUMENTS ARE ASKED TOO, AND THAT IS WHAT CLOSES LAUNDERING.
+  //
+  // A writer widened to `{ delete(id: string) }` has a member signature that
+  // mentions no `Id` at all, so the member test above clears it — and if the
+  // widening happened through an array element, an object property, an inferred
+  // return or a `let`, the conversion is not one this analyzer followed either.
+  // I reproduced all four producing ZERO sites before this line existed.
+  //
+  // The call itself still gives it away: `w.delete(movementId)` hands a branded
+  // Convex `Id` to something named `delete`. That is not proof of a write, so
+  // it is UNPROVEN rather than a violation — but it is not silence.
+  const argumentCarriesAConvexId = call.arguments.some((argument) =>
+    carriesIdBrand(checker, checker.getTypeAtLocation(argument))
+  );
+
+  if (memberLooksLikeAWrite || argumentCarriesAConvexId) {
+    return { kind: "UNPROVEN", form: "writer-provenance-not-established" };
+  }
+
+  if (declarationFile !== undefined) return { kind: "NOT_CONVEX" };
+  return { kind: "UNPROVEN", form: "writer-provenance-not-established" };
 }
 
 /**
  * The table(s) a resolved write addresses.
  *
- * ⚠️ THE ID IS FOUND BY ITS BRAND, NOT BY ITS POSITION. Convex ships two
- * writer shapes: the classic `delete(id)` and a table-first `delete(table, id)`
- * overload, and a table-scoped writer whose `insert(value)` names no table at
- * all. Hard-coding "argument 0 is the id" reported every table-first call as
- * unprovable — fail-closed, but noisy enough to redden an unrelated pull
- * request for using valid Convex syntax. Scanning for the branded argument
- * resolves all of them, and falls back to the call's own return type for the
- * scoped insert, whose `Promise<Id<T>>` carries the brand.
+ * ⚠️ THE ID IS FOUND BY ITS BRAND, NOT BY ITS POSITION. Convex ships two writer
+ * shapes: `GenericDatabaseWriter`, whose `delete(id)` takes the id first, and
+ * `GenericDatabaseWriterWithTable`, whose `db.table(name)` yields a scoped
+ * writer whose `insert(value)` names no table at all. Scanning for the branded
+ * argument resolves both without assuming an argument position, and falls back
+ * to the call's own return type for the scoped insert, whose
+ * `Promise<GenericId<T>>` carries the brand.
  */
 function resolveTargetTables(
   checker: ts.TypeChecker,
@@ -802,15 +1042,16 @@ function snippetOf(node: ts.Node): string {
 const REFLECTIVE_RETRIEVERS = new Set(["get", "apply", "getOwnPropertyDescriptor"]);
 
 /**
- * Every database write in the analysed set, with its target table resolved.
+ * Every Convex database write in the analysed set, with its table resolved,
+ * plus every point at which a root-derived writer left this analyzer's reach.
  *
- * The traversal is over the whole file, at every depth: a write nested inside
- * a callback, a conditional, a loop or a nested function is still a write.
+ * The traversal is over the whole file at every depth: a write nested inside a
+ * callback, a conditional, a loop or a nested function is still a write.
  *
- * ⚠️ THE SHAPE OF THIS FUNCTION IS THE LESSON OF TWO REVIEW ROUNDS. It does not
- * look for writes and skip what it does not recognise; it looks for CANDIDATES
- * and refuses what it cannot clear. A candidate leaves without a site in one
- * case only — a statically known member name that is not one of the four.
+ * ⚠️ TWO REPORTS, ONE INVARIANT. Calls are recognised by declaration
+ * provenance; conversions that destroy that provenance are refused where they
+ * happen. Neither is complete alone, and the boundary between them is the same
+ * predicate, so a value cannot slip between the two.
  */
 export function collectDbWriteSites(analyzer: AnalyzerProgram): DbWriteSite[] {
   const { checker } = analyzer;
@@ -830,8 +1071,33 @@ export function collectDbWriteSites(analyzer: AnalyzerProgram): DbWriteSite[] {
     const methodLabel = (resolved: ResolvedWriteMethod): DbWriteSite["method"] =>
       resolved.kind === "WRITE" ? resolved.method : "unknown";
 
-    // ⚠️ THE METHOD IS RESOLVED BEFORE THE RECEIVER, AND THAT ORDER MATTERS.
-    // A statically known name that is not one of the four clears the access
+    /**
+     * Is taking THIS member off THIS holder an escape worth refusing?
+     *
+     * ⚠️ THE MEMBER'S DECLARATION SITE IS THE TEST, exactly as it is for calls.
+     * An earlier draft asked whether the HOLDER's type was convex-declared, and
+     * that reported `args.patch` in `convex/adminData.ts` three times: a
+     * mutation's `args` object is built from Convex's own validator generics,
+     * so its type is convex-declared while its `patch` field is an ordinary
+     * caller-supplied patch payload. Asking where the MEMBER is declared
+     * separates the two without consulting any shape.
+     *
+     * A `null` member name means the key could not be read at all, which only
+     * matters when the holder is itself suspect.
+     */
+    const escapeIsSuspect = (holder: ts.Expression, member: string | null): boolean => {
+      const type = checker.getTypeAtLocation(holder);
+      if (isAnyOrUnknown(type)) return true;
+      if (isRootDerived(checker, holder)) return true;
+      if (member === null) return false;
+      return declaredIn(
+        checker.getPropertyOfType(type, member)?.getDeclarations(),
+        CONVEX_PACKAGE_DECLARATION
+      );
+    };
+
+    // ⚠️ THE METHOD IS RESOLVED BEFORE THE PROVENANCE, AND THAT ORDER MATTERS.
+    // A statically known name that is not one of the four clears the call
     // whatever its receiver is — so `(anything as any)["get"](id)` stays out,
     // while `(ctx.db as any).delete(id)` cannot be cleared and is refused.
     const record = (call: ts.CallExpression): void => {
@@ -841,13 +1107,10 @@ export function collectDbWriteSites(analyzer: AnalyzerProgram): DbWriteSite[] {
       const resolved = resolveWriteMethod(checker, callee);
       if (resolved.kind === "NOT_A_WRITE") return;
 
-      const receiver = classifyReceiver(checker, callee.expression, resolved);
-      if (receiver === "NOT_A_WRITER") return;
-      if (receiver === "UNREADABLE") {
-        at(call, methodLabel(resolved), {
-          kind: "UNPROVEN",
-          form: "receiver-type-not-statically-known",
-        });
+      const provenance = classifyCallProvenance(checker, call, callee.expression, resolved);
+      if (provenance.kind === "NOT_CONVEX") return;
+      if (provenance.kind === "UNPROVEN") {
+        at(call, methodLabel(resolved), { kind: "UNPROVEN", form: provenance.form });
         return;
       }
 
@@ -858,6 +1121,81 @@ export function collectDbWriteSites(analyzer: AnalyzerProgram): DbWriteSite[] {
           ? { kind: "UNPROVEN", form: "write-method-not-statically-known" }
           : resolveTargetTables(checker, call, resolved.method)
       );
+    };
+
+    /**
+     * ⚠️ THE CONVERSION IS THE FINDING, NOT THE CALL THAT FOLLOWS IT.
+     *
+     * ```ts
+     * const w: WeakDelete = ctx.db;   // <- reported here
+     * await w.delete(id);             // <- cleared, and correctly so
+     * ```
+     *
+     * `WeakDelete` is repository-declared, so the later call is not recognisable
+     * as Convex's by any honest test — that is exactly what defeated the
+     * previous architecture, which tried to recognise the call and reported
+     * nothing at all. Widening, a helper parameter, a return, a property store,
+     * a cast and `as unknown as X` all pass through a position with a
+     * contextual type, and every one of them is refused here when that type is
+     * not Convex's own.
+     *
+     * Two uses are cleared positively because neither can reach a member: the
+     * right operand of `in`, and `typeof`.
+     */
+    const recordErasure = (expression: ts.Expression): void => {
+      const parent = expression.parent;
+
+      // A member access is the call/escape path, not a conversion.
+      if (
+        (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) &&
+        parent.expression === expression
+      ) {
+        return;
+      }
+
+      if (
+        ts.isBinaryExpression(parent) &&
+        parent.operatorToken.kind === ts.SyntaxKind.InKeyword &&
+        parent.right === expression
+      ) {
+        return;
+      }
+      if (ts.isTypeOfExpression(parent)) return;
+
+      // ⚠️ DESTRUCTURING IS NOT A LOST BOUNDARY — IT IS A FOLLOWED ONE.
+      // `recordEscape` inspects every binding element of `const { … } = ctx.db`
+      // and refuses each key that is, or might be, one of the four. The proof
+      // does not stop here, so reporting an erasure as well would be a second
+      // finding for one construct and would redden `const { get } = ctx.db`.
+      if (ts.isVariableDeclaration(parent) && ts.isObjectBindingPattern(parent.name)) return;
+      if (
+        ts.isBinaryExpression(parent) &&
+        parent.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        parent.right === expression &&
+        ts.isObjectLiteralExpression(parent.left)
+      ) {
+        return;
+      }
+
+      // `(expr)` and `expr!` carry the value on; judge what encloses them.
+      if (ts.isParenthesizedExpression(parent) || ts.isNonNullExpression(parent)) {
+        recordErasure(parent);
+        return;
+      }
+
+      const asserted =
+        (ts.isAsExpression(parent) ||
+          ts.isSatisfiesExpression(parent) ||
+          ts.isTypeAssertionExpression(parent)) &&
+        parent.expression === expression
+          ? checker.getTypeFromTypeNode(parent.type)
+          : undefined;
+
+      const target = asserted ?? checker.getContextualType(expression);
+      if (target === undefined) return;
+      if (isConvexDeclaredType(target)) return;
+
+      at(expression, "unknown", { kind: "UNPROVEN", form: "writer-provenance-erased" });
     };
 
     /**
@@ -872,8 +1210,7 @@ export function collectDbWriteSites(analyzer: AnalyzerProgram): DbWriteSite[] {
      * all escape the same way, and all were reproduced producing zero sites.
      *
      * Following the value to its eventual call sites needs dataflow this guard
-     * does not do. So the ESCAPE itself is reported: the reference is where the
-     * proof stops, and stopping is refused rather than skipped.
+     * does not do. So the ESCAPE itself is reported.
      */
     const recordEscape = (node: ts.Node): void => {
       if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
@@ -881,23 +1218,31 @@ export function collectDbWriteSites(analyzer: AnalyzerProgram): DbWriteSite[] {
         if (ts.isCallExpression(parent) && parent.expression === node) return;
         const resolved = resolveWriteMethod(checker, node);
         if (resolved.kind === "NOT_A_WRITE") return;
-        const receiver = classifyReceiver(checker, node.expression, resolved);
-        if (receiver === "NOT_A_WRITER") return;
+        const spelled = resolved.kind === "WRITE" ? resolved.method : null;
+        if (!escapeIsSuspect(node.expression, spelled)) return;
+        const unreadable = isAnyOrUnknown(checker.getTypeAtLocation(node.expression));
         at(node, methodLabel(resolved), {
           kind: "UNPROVEN",
-          form:
-            receiver === "UNREADABLE"
-              ? "receiver-type-not-statically-known"
-              : "write-method-reference-escapes",
+          form: unreadable
+            ? "receiver-type-not-statically-known"
+            : "write-method-reference-escapes",
         });
         return;
       }
 
       // `const { delete: rm } = ctx.db` and `const { [op]: rm } = ctx.db`
       if (ts.isObjectBindingPattern(node)) {
-        recordDestructuredMembers(node, checker.getTypeAtLocation(node), (element) =>
-          element.propertyName ?? element.name
-        );
+        const declaration = node.parent;
+        const source =
+          ts.isVariableDeclaration(declaration) && declaration.initializer
+            ? declaration.initializer
+            : undefined;
+        for (const element of node.elements) {
+          const key = element.propertyName ?? element.name;
+          const spelled = ts.isIdentifier(key) || ts.isStringLiteral(key) ? key.text : null;
+          if (source && !escapeIsSuspect(source, spelled)) continue;
+          reportMemberKey(element, key);
+        }
         return;
       }
 
@@ -908,30 +1253,19 @@ export function collectDbWriteSites(analyzer: AnalyzerProgram): DbWriteSite[] {
         node.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
         node.parent.left === node
       ) {
-        const source = checker.getTypeAtLocation(node.parent.right);
-        if (isAnyOrUnknown(source) || hasAnyDatabaseWriteMember(checker, source)) {
-          for (const property of node.properties) {
-            reportMemberKey(property, property.name);
-          }
+        for (const property of node.properties) {
+          const key = property.name;
+          const spelled =
+            key && (ts.isIdentifier(key) || ts.isStringLiteral(key)) ? key.text : null;
+          if (!escapeIsSuspect(node.parent.right, spelled)) continue;
+          reportMemberKey(property, key);
         }
       }
     };
 
-    function recordDestructuredMembers(
-      pattern: ts.ObjectBindingPattern,
-      sourceType: ts.Type,
-      keyOf: (element: ts.BindingElement) => ts.Node | undefined
-    ): void {
-      if (!isAnyOrUnknown(sourceType) && !hasAnyDatabaseWriteMember(checker, sourceType)) return;
-      for (const element of pattern.elements) {
-        reportMemberKey(element, keyOf(element));
-      }
-    }
-
     /** One destructured key: refuse it unless its name proves it harmless. */
     function reportMemberKey(node: ts.Node, key: ts.Node | undefined): void {
-      const spelled =
-        key && (ts.isIdentifier(key) || ts.isStringLiteral(key)) ? key.text : null;
+      const spelled = key && (ts.isIdentifier(key) || ts.isStringLiteral(key)) ? key.text : null;
       if (spelled !== null && !(DB_WRITE_METHODS as readonly string[]).includes(spelled)) return;
       at(node, (spelled as DbWriteMethod | null) ?? "unknown", {
         kind: "UNPROVEN",
@@ -946,10 +1280,33 @@ export function collectDbWriteSites(analyzer: AnalyzerProgram): DbWriteSite[] {
       if (!REFLECTIVE_RETRIEVERS.has(callee.name.text)) return;
       const target = call.arguments[0];
       if (!target) return;
-      const type = checker.getTypeAtLocation(target);
-      if (isAnyOrUnknown(type) || !hasAnyDatabaseWriteMember(checker, type)) return;
+      // Deliberately NOT `couldHoldAWriter`: an `any` first argument is the
+      // ordinary shape of `map.get(x)`, and an `any` that really holds a writer
+      // was reported at the conversion that made it `any`.
+      if (!isRootDerived(checker, target) && !isConvexDeclaredType(checker.getTypeAtLocation(target))) {
+        return;
+      }
       at(call, "unknown", { kind: "UNPROVEN", form: "reflective-write-member-access" });
     };
+
+    // ⚠️ ROOT ALIASES ARE COLLECTED BY NAME FIRST, PURELY FOR COST. Asking
+    // `isRootDerived` of every identifier in 228 modules resolves a symbol per
+    // identifier; asking it only of names actually bound to a root in this file
+    // is the same answer for a fraction of the work, because a same-named
+    // unrelated binding is rejected by `isRootDerived` anyway.
+    const aliasNames = new Set<string>();
+    const collectAliases = (node: ts.Node): void => {
+      if (
+        ts.isVariableDeclaration(node) &&
+        node.initializer &&
+        ts.isIdentifier(node.name) &&
+        isRootDerived(checker, node.initializer)
+      ) {
+        aliasNames.add(node.name.text);
+      }
+      ts.forEachChild(node, collectAliases);
+    };
+    collectAliases(sourceFile);
 
     const visit = (node: ts.Node): void => {
       if (ts.isCallExpression(node)) {
@@ -958,6 +1315,18 @@ export function collectDbWriteSites(analyzer: AnalyzerProgram): DbWriteSite[] {
       } else {
         recordEscape(node);
       }
+
+      if (isConvexWriterRoot(checker, node)) {
+        recordErasure(node as ts.Expression);
+      } else if (
+        ts.isIdentifier(node) &&
+        aliasNames.has(node.text) &&
+        !(ts.isVariableDeclaration(node.parent) && node.parent.name === node) &&
+        isRootDerived(checker, node)
+      ) {
+        recordErasure(node);
+      }
+
       ts.forEachChild(node, visit);
     };
     visit(sourceFile);
@@ -1009,39 +1378,40 @@ export function syntacticDbWriteCallSites(analyzer: AnalyzerProgram): string[] {
  * ------------------------------------------------------------------------- */
 
 /**
- * ⚠️ A SITE THAT RESOLVES TO SEVERAL TABLES IS JUDGED ON THE WORST OF THEM.
+ * ⚠️ A SITE THAT RESOLVES TO SEVERAL TABLES IS JUDGED ON EACH OF THEM.
  *
- * `Id<"a"> | Id<"b">` and a generic `Id<TableNames>` both resolve to a SET.
- * If any member is a declared authority table, this call can address authority
- * data, and a non-owner module holding it is a violation — the union is not a
- * reason to clear it.
+ * `Id<"a"> | Id<"b">` and a generic `Id<TableNames>` both resolve to a SET. The
+ * set is not a reason to clear the site, and it is not a reason to condemn it
+ * wholesale either: each declared authority table in the set is authorized or
+ * refused on its own.
  */
 /**
  * Is this exact write permitted on this exact table?
  *
- * The owner module may do anything. Everyone else needs a lifecycle exception
- * naming their module AND this operation — and it must be an EXACT-TABLE write.
+ * The owner module may do anything. Every other module needs a lifecycle
+ * exception naming that module AND that operation, on THIS table's declaration.
  *
- * ⚠️ A SITE THAT RESOLVES TO A SET OF TABLES IS NOT AN EXACT-TABLE WRITE, AND
- * THAT IS THE FAIL-CLOSED READING OF "exact-table DELETE-only". The generic
- * sweeps in `orgFinancialReset` and `adminOrgs` delete through an
- * `Id<TableNames>` that resolves to every table in the schema, so under this
- * reading their exception does not cover those sites and they are reported.
- * That is a real question for the owner at binding time, not a decision this
- * analyzer should take quietly — so it is fail-closed here, visible in the
- * suite, and a one-line change if ruled otherwise.
+ * ⚠️ THE EFFECTIVE PERMISSION IS `table + module + operation`, RULED IN
+ * `SCRUM-238 c17726`. An exception is attached to one authority declaration, so
+ * it can never become a module-wide wildcard: `adminOrgs.ts` may DELETE through
+ * a generic `Id<TableNames>` sweep because all three receipt declarations grant
+ * it that, and a fourth declared table without its own grant makes the very
+ * same sweep a violation for that table alone.
+ *
+ * ⚠️ THE PREVIOUS `resolvedTables.length === 1` CONDITION IS DELIBERATELY GONE.
+ * It read "exact-table" as a property of the CALL rather than of the
+ * permission, so a generic sweep matched no exception at all and the two
+ * approved lifecycle modules were reported anyway — which made the granted
+ * exception cover nothing, since those sweeps are the only non-owner writes to
+ * these tables. Being fail-closed did not make it correct.
  */
-function permits(
-  entry: AuthorityDeclaration,
-  site: DbWriteSite,
-  resolvedTables: readonly string[]
-): boolean {
+function permits(entry: AuthorityDeclaration, site: DbWriteSite): boolean {
   if (entry.ownerModule === site.file) return true;
   const exception = entry.lifecycleExceptions?.find((granted) => granted.module === site.file);
   if (!exception) return false;
+  // An unresolved operation could be any of the four, so no grant covers it.
   if (site.method === "unknown") return false;
-  if (!exception.operations.includes(site.method)) return false;
-  return resolvedTables.length === 1;
+  return exception.operations.includes(site.method);
 }
 
 export function classifyWriteSite(
@@ -1054,7 +1424,7 @@ export function classifyWriteSite(
   const matched = declaration.filter((entry) => resolution.tables.includes(entry.table));
   if (matched.length === 0) return { verdict: "UNRELATED" };
 
-  const unauthorized = matched.filter((entry) => !permits(entry, site, resolution.tables));
+  const unauthorized = matched.filter((entry) => !permits(entry, site));
   return unauthorized.length > 0
     ? { verdict: "VIOLATION", tables: unauthorized.map((entry) => entry.table).sort(compareStrings) }
     : { verdict: "AUTHORIZED", tables: matched.map((entry) => entry.table).sort(compareStrings) };
