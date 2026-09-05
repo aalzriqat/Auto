@@ -11,6 +11,7 @@
 import type * as accounting_accountSnapshots from "../accounting/accountSnapshots.js";
 import type * as accounting_postingEngine from "../accounting/postingEngine.js";
 import type * as accounting_postingRules from "../accounting/postingRules.js";
+import type * as accounting_receiptOccurrence from "../accounting/receiptOccurrence.js";
 import type * as accounting_reversals from "../accounting/reversals.js";
 import type * as accounting_workflowHooks from "../accounting/workflowHooks.js";
 import type * as accountingCutover from "../accountingCutover.js";
@@ -234,6 +235,7 @@ declare const fullApi: ApiFromModules<{
   "accounting/accountSnapshots": typeof accounting_accountSnapshots;
   "accounting/postingEngine": typeof accounting_postingEngine;
   "accounting/postingRules": typeof accounting_postingRules;
+  "accounting/receiptOccurrence": typeof accounting_receiptOccurrence;
   "accounting/reversals": typeof accounting_reversals;
   "accounting/workflowHooks": typeof accounting_workflowHooks;
   accountingCutover: typeof accountingCutover;

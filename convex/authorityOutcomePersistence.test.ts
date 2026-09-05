@@ -21,6 +21,7 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { acquireVehicle, consumeRootForSale } from "./commitments";
+import { observeClaimed, makeDue } from "../test-utils/outboxWork";
 import { COMMITMENT_AUTHORITY_V1 } from "./utils/commitmentKernel";
 
 vi.mock("./rateLimit", () => ({
@@ -129,22 +130,33 @@ async function sweepDueAuthorityWork(seed: Seed) {
   }
 }
 
+/**
+ * ⚠️ THIS DRIVES THE OBSERVER TOO (SCRUM-222). A worker that throws rolls back
+ * completely and so cannot write down its own failure; until something observes
+ * the attempt, a failing row's counter never moves and the row looks untouched
+ * rather than failed. Production runs the observation from the one-minute cron.
+ */
 async function drain(seed: Seed) {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
-  let counters: { posted: number; failed: number; held: number } | undefined;
+  let counters: { scheduled: number } | undefined;
   try {
     counters = await seed.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, {
       orgId: seed.orgId,
     });
-    for (let pass = 0; pass < 10; pass += 1) {
-      await seed.t.finishAllScheduledFunctions(vi.runAllTimers);
-      const queued = (
-        await seed.t.run(async (ctx: any) =>
-          await ctx.db.system.query("_scheduled_functions").collect()
-        )
-      ).filter((f: any) => f.state.kind === "pending" || f.state.kind === "inProgress").length;
-      if (queued === 0) break;
-    }
+    const pump = async () => {
+      for (let pass = 0; pass < 10; pass += 1) {
+        await seed.t.finishAllScheduledFunctions(vi.runAllTimers);
+        const queued = (
+          await seed.t.run(async (ctx: any) =>
+            await ctx.db.system.query("_scheduled_functions").collect()
+          )
+        ).filter((f: any) => f.state.kind === "pending" || f.state.kind === "inProgress").length;
+        if (queued === 0) break;
+      }
+    };
+    await pump();
+    await observeClaimed(seed.t, seed.orgId);
+    await pump();
   } finally {
     vi.useRealTimers();
   }
@@ -474,6 +486,9 @@ describe("a failure while recording owed authority cannot consume the reversal",
       await ctx.db.delete(dupA);
       await ctx.db.delete(dupB);
     });
+    // The failed attempt applied a backoff, so the row is not due yet. Moving
+    // the clock is what the one-minute cron does for free in production.
+    await makeDue(seed.t, seed.orgId);
     await drain(seed);
 
     const settled = await seed.t.run(async (ctx: any) => await ctx.db.get(entryId));
@@ -531,7 +546,7 @@ describe("a rejected eager dispatch after the row is POSTED", () => {
     await seed.t.run(async (ctx: any) => await ctx.db.patch(entryId, { attempts: 9 }));
 
     injectSchedule.fail = true;
-    let counters: { posted: number; failed: number; held: number } | undefined;
+    let counters: { scheduled: number } | undefined;
     try {
       counters = await drain(seed);
     } finally {
@@ -540,61 +555,96 @@ describe("a rejected eager dispatch after the row is POSTED", () => {
 
     const entry = await seed.t.run(async (ctx: any) => await ctx.db.get(entryId));
 
-    // 1-2. The accounting result is durable and stays truthful.
-    expect(entry.status, "a failed latency optimisation must not fail the accounting").toBe(
-      "POSTED"
-    );
-    expect(entry.resolvedAt, "and it stays resolved").toBeGreaterThan(0);
+    // ⚠️ SCRUM-222 CHANGED THIS TEST'S EXPECTED OUTCOME, DELIBERATELY, AND THE
+    // CHANGE IS A REAL BEHAVIOUR CHANGE — NOT A TEST FIX.
+    //
+    // Previously the drain's per-row `try`/`catch` absorbed this injected
+    // scheduler rejection, so the accounting row stayed POSTED and only the
+    // eager latency dispatch was lost. That catch is exactly what this ticket
+    // removes: it is the same catch that let a partial, unbalanced GL journal
+    // commit. A worker that must not catch cannot selectively keep catching
+    // the one throw we happen to find convenient.
+    //
+    // So a throw anywhere in the worker — including from the eager dispatch at
+    // the very end of `markEntryPosted` — now rolls the whole transaction back.
+    // That is SAFE rather than merely acceptable: nothing partial is written,
+    // the row stays PENDING and retryable, and the re-run re-posts idempotently
+    // (`postAccountingEvent` / `reverseAccountingEvent` dedupe by idempotency
+    // key). The cost is one spent attempt, not a lost or duplicated journal.
+    //
+    // ⚠️ In production this path is essentially unreachable: the seam exists
+    // only so a test can make it reject, and `ctx.scheduler.runAfter` inside a
+    // mutation is transactional. Flagged to the owner rather than absorbed
+    // silently, because "a transport hiccup now discards completed accounting
+    // work and retries it" is a trade someone else should get to see.
+    //
+    // FAILED rather than PENDING here only because this fixture deliberately
+    // seeds `attempts: 9` — one below MAX_ATTEMPTS — so the observer's single
+    // recorded attempt lands exactly on the cap and dead-letters. That is the
+    // designed end of the retry budget, not an extra failure mode: the row is
+    // still durable, still carries its reason, and `retryFailed` can revive it.
+    expect(entry.status, "the worker rolled back and the budget ran out").toBe("FAILED");
+    expect(entry.attempts, "the cap was reached, not exceeded").toBe(10);
+    expect(entry.resolvedAt, "nothing was resolved, so nothing claims to be").toBeUndefined();
+    expect(entry.dispatchState, "a dead-lettered row holds no claim").toBeUndefined();
 
-    // 3. The obligation is still durable and discoverable by the cron.
+    // The obligation was rolled back WITH the accounting, so there is no
+    // orphaned authority work item describing a reversal that did not commit.
     const work = await seed.t.run(async (ctx: any) =>
       (await ctx.db.query("commitmentAuthorityWork").collect()).filter(
         (w: any) => String(w.orgId) === String(seed.orgId)
       )
     );
-    expect(work, "the work item survives the transport failure").toHaveLength(1);
+    expect(work, "no half-written obligation survives the rollback").toHaveLength(0);
 
-    // ⚠️ THE DRAIN'S OWN COUNTERS, PINNED IN FULL — BOTH HALVES DELIBERATE.
+    // ⚠️ THE COUNTER LIE THIS ONCE PINNED IS NOW STRUCTURALLY IMPOSSIBLE.
     //
-    // `failed: 0` is the contract this assertion exists for. `markEntryFailed`
-    // refuses to write onto a row that is no longer failable, so the entry
-    // stayed POSTED — and the unconditional `failed++` this replaced reported
-    // that completed row as failed. Durable state right, operator-facing
-    // summary wrong, which is the harder kind to notice.
+    // The original assertion pinned `{posted: 0, failed: 0, held: 0}`:
+    // `failed: 0` was the real contract (the unconditional `failed++` it
+    // replaced reported a COMPLETED row as failed), while `posted: 0` was a
+    // stated understatement, pinned so it could not drift silently.
     //
-    // `posted: 0` is NOT a second bug being blessed; it is a known and stated
-    // understatement, pinned so it cannot drift silently. The eager dispatch
-    // throws from inside `markEntryPosted`, after the row is durably POSTED but
-    // before `posted++` runs. So this drain did real, committed work and
-    // reports none of it. Silence understates; it does not assert anything
-    // false, which is why it is strictly better than the old `failed: 1` lie.
-    //
-    // Making it say `posted: 1` means stopping the scheduler rejection
-    // propagating at all — a change to the eager-dispatch design that c15892
-    // ruled on and BOTH review seats confirmed as correct. That is a separate
-    // decision, not a fix to smuggle in here. Recorded as follow-up instead.
-    expect(counters, "suppressed rejection: nothing failed, and nothing is claimed").toEqual({
-      posted: 0,
-      failed: 0,
-      held: 0,
+    // The drain no longer reports postings at all — posting happens in the
+    // worker's own transaction, so this one truthfully reports only what it
+    // QUEUED. The understatement caveat is moot and the `failed` lie has
+    // nowhere left to live, because there is no failure counter here to be
+    // wrong about.
+    // `alreadyInFlight: 0` is part of the contract, not padding (c17375): this
+    // row was queued by THIS drain, so nothing about it was already in flight.
+    // The two counts answer different questions and a caller must be able to
+    // tell them apart.
+    expect(counters, "the drain reports what it queued, not what it posted").toEqual({
+      scheduled: 1,
+      alreadyInFlight: 0,
     });
-    expect(["READY", "DISPATCHED"]).toContain(work[0].status);
 
-    // 4. The journal was not duplicated by the failure.
+    // The journal was not duplicated by the failure.
     const reversals = await seed.t.run(async (ctx: any) =>
       (await ctx.db.query("accountingEvents").collect()).filter((e: any) => e.reversesEventId)
     );
     expect(reversals.length, "no second reversal is created").toBeLessThanOrEqual(1);
 
-    // 5. And settlement still completes once the transport recovers.
+    // 5. And the whole thing completes once the transport recovers.
+    //
+    // ⚠️ RECOVERY NOW MEANS RE-POSTING, NOT JUST RE-SETTLING (SCRUM-222). The
+    // worker rolled its transaction back, so there is no half-finished state to
+    // resume from — the row must post from scratch. It dead-lettered on this
+    // fixture's deliberately exhausted budget, so recovery goes through the
+    // operator's own door, `retryFailed`, which is exactly what that door is
+    // for: the blocker is gone, so give the row its retries back.
+    await seed.asAdmin.mutation(api.accountingOutbox.retryFailed, {
+      orgId: seed.orgId,
+      pendingEventId: entryId,
+    });
+    await makeDue(seed.t, seed.orgId);
+    await drain(seed);
     await sweepDueAuthorityWork(seed);
     const settled = await seed.t.run(async (ctx: any) => await ctx.db.get(entryId));
-    expect(settled.status, "still POSTED after recovery").toBe("POSTED");
+    expect(settled.status, "the retry posts cleanly once the fault is gone").toBe("POSTED");
 
-    // ⚠️ "STILL POSTED" IS NOT "SETTLEMENT COMPLETED". The row was already
-    // POSTED before the recovery drain, so re-asserting it alone would pass
-    // just as happily against a work item that never settled at all — an
-    // outcome-shaped assertion weaker than the sentence above it. What the
+    // ⚠️ "POSTED" IS NOT "SETTLEMENT COMPLETED". Asserting the status alone
+    // would pass just as happily against a work item that never settled at all
+    // — an outcome-shaped assertion weaker than the sentence above it. What the
     // step actually claims is that the authority work reached a truthful
     // terminal result, so assert THAT, against the same terminal state the
     // CONTROL pins for an uninterrupted drain.
@@ -638,3 +688,4 @@ describe("a rejected eager dispatch after the row is POSTED", () => {
     expect(entry.authorityOutcome).toBe("RESTORED");
   });
 });
+
