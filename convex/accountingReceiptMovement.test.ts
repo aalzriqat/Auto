@@ -40,6 +40,7 @@ import {
   rehydrateReceiptOccurrence,
   toReceiptOccurrenceSnapshot,
   directCollectionReceipt,
+  occurrenceIdempotencyKey,
   RECEIPT_PAYLOAD_VERSION,
 } from "./accounting/receiptOccurrence";
 
@@ -733,7 +734,7 @@ describe("SCRUM-218-C §7 — 1220 and deposit lineage are not 2110 authority", 
 
 describe("SCRUM-218-C §8 — the stored snapshot is data, and rehydration is the only door", () => {
   test("the persisted occurrence rehydrates to the identity that posted it", async () => {
-    const { t, orgId, movement, paymentId } = await retainedCreditFixture("s8");
+    const { orgId, movement, paymentId } = await retainedCreditFixture("s8");
     const stored = movement.occurrence;
     expect(Object.keys(stored).sort()).toEqual(
       ["eventType", "eventVersion", "sourceId", "sourceType"]
@@ -742,7 +743,12 @@ describe("SCRUM-218-C §8 — the stored snapshot is data, and rehydration is th
     const rehydrated = rehydrateReceiptOccurrence({ orgId, snapshot: stored });
     const minted = directCollectionReceipt({ orgId, paymentId });
     expect(toReceiptOccurrenceSnapshot(rehydrated)).toEqual(toReceiptOccurrenceSnapshot(minted));
-    expect(await t.run(async () => true)).toBe(true);
+    // The rehydrated identity is TRUSTED, not merely shaped like one. Every key
+    // derivation calls `assertTrustedOccurrence`, so deriving through one proves
+    // membership in the trust registry — which comparing snapshots alone does
+    // not, since a hand-built object of the same shape would compare equal and
+    // then throw here.
+    expect(occurrenceIdempotencyKey(rehydrated)).toBe(occurrenceIdempotencyKey(minted));
   });
 
   test("a tampered snapshot is refused rather than repaired", async () => {
@@ -1040,7 +1046,17 @@ describe("SCRUM-218-C §10 R04 — retained credit is discoverable through a sup
     expect(listed.page).toHaveLength(1);
     expect(listed.page[0].remainingUnappliedMinor).toBe(4500);
     expect(listed.page[0].receiptPosted).toBe(false);
-    expect(await t.run(async () => true)).toBe(true);
+    // ...and it is genuinely not applicable, not merely flagged: the discharge
+    // mutation refuses for the same reason the flag reports.
+    const receivableId = await makeReceivable(asAdmin, orgId, customerId, 10);
+    await expect(
+      asAdmin.mutation(api.collections.applyRetainedCredit, {
+        orgId, receiptMovementId: listed.page[0].receiptMovementId, receivableId, requestedAmount: 10,
+      })
+    ).rejects.toThrow(/has not reached the general ledger/i);
+    expect(await t.run(async (ctx) =>
+      (await ctx.db.query("receiptApplications").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).length
+    )).toBe(0);
   });
 
   /**

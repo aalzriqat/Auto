@@ -781,7 +781,16 @@ export const listRetainedCredits = query({
   args: {
     orgId: v.id("organizations"),
     customerId: v.optional(v.id("customers")),
-    /** Omit or pass false to include positions already drawn to zero. */
+    /**
+     * Omit or pass false to include positions already drawn to zero.
+     *
+     * ⚠️ THIS FILTERS THE PAGE, NOT THE QUERY, so a page can come back shorter
+     * than `numItems` — even empty — while `isDone` is still false. A caller
+     * must loop on `continueCursor` / `isDone` and never treat
+     * `page.length < numItems` as the end of the results. Filtering inside the
+     * paginated range is the alternative and it is worse: it would make the
+     * cursor's meaning depend on a boolean argument.
+     */
     onlyRemaining: v.optional(v.boolean()),
     paginationOpts: paginationOptsValidator,
   },
