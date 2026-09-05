@@ -20,6 +20,7 @@ import {
   previewNameForRef,
   resolveClerkUserId,
   runConvex,
+  safeForLog,
   sanitizePreviewName,
 } from "./e2ePreviewBootstrap.mjs";
 
@@ -480,5 +481,91 @@ describe("main", () => {
       /cannot be checked against the one the browser will drive/,
     );
     expect(d.run).not.toHaveBeenCalled();
+  });
+});
+
+describe("safeForLog", () => {
+  /**
+   * Three of the values this script prints do not originate in it: the deploy
+   * step's URL and both Clerk user ids, which come back from an external API. A
+   * CR or LF in any of them writes a line of the caller's choosing into the CI
+   * job log, which humans and tooling both read as fact.
+   */
+  test.each([
+    ["a newline", "user_abc\nfake: everything is fine"],
+    ["a carriage return", "user_abc\rfake"],
+    ["an ANSI escape", "user_abc[31mred"],
+  ])("strips %s", (_label, hostile) => {
+    const out = safeForLog(hostile);
+    expect(out).not.toContain("\n");
+    expect(out).not.toContain("\r");
+    expect(out).not.toContain("");
+  });
+
+  test("leaves a legitimate value readable", () => {
+    expect(safeForLog("user_3FwBC2BQVaxyz")).toBe("user_3FwBC2BQVaxyz");
+    expect(safeForLog("https://impressive-ox-948.convex.cloud")).toBe(
+      "https://impressive-ox-948.convex.cloud",
+    );
+    expect(safeForLog("au****@example.com")).toBe("au?@example.com");
+  });
+
+  test("bounds the length so one value cannot flood the log", () => {
+    expect(safeForLog("a".repeat(5000)).length).toBe(200);
+  });
+
+  test("survives null and undefined", () => {
+    expect(safeForLog(undefined)).toBe("");
+    expect(safeForLog(null)).toBe("");
+  });
+});
+
+describe("runConvex — argv re-validation at the call site", () => {
+  const ok = () => ({ status: 0, error: undefined });
+
+  /**
+   * `buildConvexRunArgs` is the only intended producer and validates every
+   * element, but this is the line that actually starts a process. A second
+   * producer added later inherits no guarantee from the first, so the check is
+   * repeated where the risk actually is.
+   */
+  test("refuses an option-shaped argument that is not the one allowed flag", () => {
+    const spawn = vi.fn(ok);
+
+    expect(() => runConvex(["exec", "convex", "run", "--prod"], "label", spawn)).toThrow(
+      /unexpected option-shaped argument/,
+    );
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  test("refuses a non-string argument rather than letting the CLI coerce it", () => {
+    const spawn = vi.fn(ok);
+
+    expect(() => runConvex(["exec", 42 as unknown as string], "label", spawn)).toThrow(
+      /non-string argument/,
+    );
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  test("permits the one flag this command legitimately passes", () => {
+    const spawn = vi.fn(ok);
+
+    expect(() =>
+      runConvex(["exec", "convex", "run", "m:f", "{}", "--preview-name", "e2e-x"], "label", spawn),
+    ).not.toThrow();
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  /** Everything buildConvexRunArgs produces must survive its own re-validation. */
+  test("accepts exactly what buildConvexRunArgs builds", () => {
+    const spawn = vi.fn(ok);
+    const args = buildConvexRunArgs({
+      functionName: "e2eBootstrap:assertE2EBootstrap",
+      argsJson: JSON.stringify({ primaryClerkUserId: "user_a" }),
+      previewName: "e2e-pr-278-0123456789",
+      deployKey: PREVIEW_KEY,
+    });
+
+    expect(() => runConvex(args, "e2eBootstrap:assertE2EBootstrap", spawn)).not.toThrow();
   });
 });

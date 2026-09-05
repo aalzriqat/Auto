@@ -60,6 +60,9 @@ export function isPreviewDeployKey(deployKey) {
  * unsanitised value could otherwise smuggle a leading `-` that the CLI would
  * read as another flag.
  */
+// ⚠️ Deliberately lowercase-only. `[\w.-]` would be "more concise" and would
+// also start accepting uppercase, which `sanitizePreviewName` never produces —
+// a validator that admits more than the producer emits is not a validator.
 const PREVIEW_NAME_PATTERN = /^[a-z0-9][a-z0-9._-]{0,60}$/;
 
 export function sanitizePreviewName(raw) {
@@ -167,7 +170,7 @@ export function assertPreviewTargeting({ deployKey, previewName, env = {} }) {
  */
 export function buildConvexRunArgs({ functionName, argsJson, previewName, deployKey, env = {} }) {
   assertPreviewTargeting({ deployKey, previewName, env });
-  if (!functionName || !/^[A-Za-z0-9_/]+:[A-Za-z0-9_]+$/.test(functionName)) {
+  if (!functionName || !/^[\w/]+:\w+$/.test(functionName)) {
     throw new PreviewTargetingError(
       `Refusing to run ${JSON.stringify(functionName)}: expected a "module:function" reference.`,
     );
@@ -241,6 +244,21 @@ export async function resolveClerkUserId({ email, secretKey, fetchImpl = fetch }
   return id;
 }
 
+/**
+ * Anything interpolated into a log line, reduced to characters that cannot
+ * forge one.
+ *
+ * A CI log is parsed by humans and by tooling, and three of the values this
+ * script prints do not originate here: `NEXT_PUBLIC_CONVEX_URL` comes from the
+ * deploy step's environment, and both Clerk user ids come back from an external
+ * API. A CR or LF in any of them writes a line of its own choosing into the job
+ * log. None of them can legitimately contain one, so stripping is lossless for
+ * every real value and removes the class outright.
+ */
+export function safeForLog(value) {
+  return String(value ?? "").replace(/[^\w.:@/-]+/g, "?").slice(0, 200);
+}
+
 /** Same reasoning as the backend's: an E2E address is a repository secret. */
 export function maskEmail(email) {
   const at = String(email ?? "").indexOf("@");
@@ -279,6 +297,25 @@ export function maskEmail(email) {
  *        the seam the failure-path tests drive; only `status` and `error` are read
  */
 export function runConvex(args, label, spawn = spawnSync) {
+  // ⚠️ RE-VALIDATED AT THE CALL SITE, not merely where the argv was built.
+  // `buildConvexRunArgs` is the only intended producer and it validates every
+  // element, but this is the line that actually executes a process, and a
+  // second producer added later would inherit no guarantee from the first. An
+  // argument that is not a string, or that opens with `-` without being one of
+  // the two flags this command legitimately passes, is refused rather than
+  // handed to the CLI as an option.
+  const ALLOWED_FLAGS = new Set(["--preview-name"]);
+  for (const arg of args) {
+    if (typeof arg !== "string") {
+      throw new PreviewTargetingError(`Refusing to run ${label}: a non-string argument was supplied.`);
+    }
+    if (arg.startsWith("-") && !ALLOWED_FLAGS.has(arg)) {
+      throw new PreviewTargetingError(
+        `Refusing to run ${label}: unexpected option-shaped argument. Only ${[...ALLOWED_FLAGS].join(", ")} may be passed.`,
+      );
+    }
+  }
+
   const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
   const result = spawn(pnpm, args, { stdio: "inherit" });
   if (result.error) {
@@ -333,9 +370,9 @@ export async function main(env = process.env, deps = {}) {
   const expectedCloudUrl = env.NEXT_PUBLIC_CONVEX_URL;
 
   log(
-    `Seeding preview "${previewName}" at ${expectedCloudUrl ?? "<no URL supplied>"}: ` +
-      `${maskEmail(primaryEmail)} -> ${primaryClerkUserId}, ` +
-      `${maskEmail(approverEmail)} -> ${approverClerkUserId}`,
+    `Seeding preview "${safeForLog(previewName)}" at ${safeForLog(expectedCloudUrl)}: ` +
+      `${safeForLog(maskEmail(primaryEmail))} -> ${safeForLog(primaryClerkUserId)}, ` +
+      `${safeForLog(maskEmail(approverEmail))} -> ${safeForLog(approverClerkUserId)}`,
   );
 
   if (!expectedCloudUrl) {

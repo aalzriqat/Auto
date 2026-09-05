@@ -197,7 +197,7 @@ function deploymentNameFromUrl(url: string | null): string | null {
   try {
     const host = new URL(url).hostname;
     const [name] = host.split(".");
-    return name && name.trim() ? name : null;
+    return name?.trim() ? name : null;
   } catch {
     return null;
   }
@@ -872,9 +872,11 @@ export const assertE2EBootstrap = internalQuery({
        * only: `CONVEX_*` names are already public in `convex/utils/env.ts`, so
        * this discloses nothing a reader of the repository lacks.
        */
+      // `localeCompare`, not a bare `.sort()`: the default comparator sorts by
+      // UTF-16 code unit, which is not the alphabetical order this is read as.
       convexEnvNames: Object.keys(process.env)
         .filter((name) => name.startsWith("CONVEX_"))
-        .sort(),
+        .sort((a, b) => a.localeCompare(b)),
       primary: { userId: primary.userId, roleName: primary.roleName },
       approver: { userId: approver.userId, roleName: approver.roleName },
     };

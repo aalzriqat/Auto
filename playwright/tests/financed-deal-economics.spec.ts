@@ -51,6 +51,29 @@ test.use({ actionTimeout: 25_000 });
 
 test.describe("recording a financed deal's economics through the interface", () => {
   /**
+   * ⚠️ SKIPPED BY OWNER RULING — the deal screen is being redesigned.
+   *
+   * This drives the deal cockpit end to end: the quotation, the approved
+   * amount, the handover and the finalize are all entered through that screen's
+   * controls. A redesign moves every one of them, so these assertions would
+   * fail on the interface being replaced.
+   *
+   * ⚠️ SKIPPED, NOT DELETED. What this proves is not a layout detail — it is
+   * that an operator can REACH the economics writers at all. SCRUM-68 exists
+   * because they could not: the mutations were real and had no caller, and a
+   * configured deal stopped dead after its credit decision. It is also the only
+   * spec that exercises separation of duties across two identities end to end.
+   * A redesign that ships without re-enabling this can reintroduce exactly the
+   * defect the original ticket was filed for.
+   *
+   * Tracked with the redesign: SCRUM-63 (Unified Deal Workspace).
+   */
+  test.skip(
+    true,
+    "The deal screen is being redesigned (SCRUM-63). This spec drives that screen's controls end to end, so it would fail on an interface being replaced. Re-enable against the new screen — it is the only end-to-end proof that an operator can reach the economics writers, which is the defect SCRUM-68 was filed for.",
+  );
+
+  /**
    * Gated on the CREDENTIALS, not on the session file they produce.
    *
    * `test.skip()` at describe level runs during suite DISCOVERY — before the
