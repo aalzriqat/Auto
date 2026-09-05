@@ -489,12 +489,26 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // `sweepAuthorityWork`, which took an `orgId` and was analysed, was deleted
   // with the drain-riding retry it implemented; the three replacements above
   // are all `workId`-only and the cron selector takes nothing.
+  //
+  // `e2eBootstrap.markPreviewDeployment` / `.bootstrapE2EOrganization`
+  // (SCRUM-143) — the fifth stated reason, and the two mutations that take
+  // `skippedNoOrgId` from 151 to 153:
+  //
+  // Neither takes an `orgId` because on the deployment they are allowed to run
+  // on there is no tenant to name. `markPreviewDeployment` refuses unless the
+  // deployment holds NO organization, membership or user at all;
+  // `bootstrapE2EOrganization` creates the single organization it then works
+  // inside and refuses to proceed beside one it did not create. So there is no
+  // caller-supplied organization for a caller to get wrong or to forge, and the
+  // ids they do write are ones the same transaction just minted. Both are
+  // `internalMutation`s with no public entry point, reachable only through an
+  // admin/deploy key.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 481,
+      totalMutations: 483,
       analysed: 315,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 151,
+      skippedNoOrgId: 153,
     });
   });
 });

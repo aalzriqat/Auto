@@ -195,10 +195,20 @@ describe("commitment liveness writes go through the choke", () => {
       // while silently minting LEGACY dealerships whose every deferred
       // reversal terminalizes AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE
       // forever. Counting SITES is the only shape that catches an absence.
+      //
+      // ⚠️ SCRUM-143 MOVED THIS SITE AND DELIBERATELY DID NOT ADD ONE. The E2E
+      // preview bootstrap has to seed a dealership with no authenticated
+      // caller, and the obvious way to do that — a second
+      // `ctx.db.insert("organizations", …)` in `e2eBootstrap.ts` — is precisely
+      // the second creator this assertion exists to refuse. So the body was
+      // EXTRACTED into `createOrganizationWithDefaultRoles` and the seed calls
+      // it. The list is still one entry long; only the enclosing function's
+      // name changed. A `e2eBootstrap.ts` row appearing here would mean the
+      // extraction was undone and the copy came back.
       expect(auditOrganizationInserts(CONVEX_ROOT)).toEqual([
         {
           file: "organizations.ts",
-          enclosingFunction: "create",
+          enclosingFunction: "createOrganizationWithDefaultRoles",
           initializesAuthorityVersion: true,
         },
       ]);
