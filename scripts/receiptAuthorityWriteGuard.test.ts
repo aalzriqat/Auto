@@ -35,6 +35,7 @@ import {
   auditAuthorityWrites,
   classifyWriteSite,
   collectDbWriteSites,
+  compareStrings,
   createConvexAnalyzerProgram,
   createVirtualAnalyzerProgram,
   declarationStatus,
@@ -116,7 +117,7 @@ function auditRogue(...body: string[]): AuthorityAuditResult {
 }
 
 function methodsOf(findings: readonly SiteFinding[]): string[] {
-  return findings.map((f) => f.site.method).sort();
+  return findings.map((f) => f.site.method).sort(compareStrings);
 }
 
 function tablesOf(site: DbWriteSite): readonly string[] {
@@ -152,7 +153,9 @@ describe("the fixture harness itself", () => {
       analyzer.program.getSemanticDiagnostics(sourceFile)
     );
     expect(diagnostics.map((d) => `${d.file?.fileName}: ${d.messageText}`)).toEqual([]);
-    expect(analyzer.analysed.map(([, name]) => name).sort()).toEqual(Object.keys(files).sort());
+    expect(analyzer.analysed.map(([, name]) => name).sort(compareStrings)).toEqual(
+      Object.keys(files).sort(compareStrings)
+    );
   });
 
   it("distinguishes two ids that are textually identical and differ only by type", () => {
@@ -587,6 +590,32 @@ describe("the failure report", () => {
   });
 });
 
+/**
+ * ⚠️ THE COMPARATOR IS LOAD-BEARING, SO IT GETS ITS OWN CONTROL.
+ *
+ * Every ordered result this guard produces is compared against another ordered
+ * result. Sonar flagged the bare `.sort()` calls and suggested `localeCompare`;
+ * `localeCompare` orders by the runner's ICU collation, which can differ
+ * between a developer machine and a CI image, so the guard could disagree with
+ * itself across environments. This asserts code-unit order specifically — the
+ * expectation below is one `localeCompare` would not produce.
+ */
+describe("string ordering", () => {
+  it("orders by code unit rather than by locale", () => {
+    expect(["b", "a", "B", "A", "_x", "-y"].sort(compareStrings)).toEqual([
+      "-y",
+      "A",
+      "B",
+      "_x",
+      "a",
+      "b",
+    ]);
+    expect(compareStrings("same", "same")).toBe(0);
+    expect(compareStrings("a", "b")).toBeLessThan(0);
+    expect(compareStrings("b", "a")).toBeGreaterThan(0);
+  });
+});
+
 describe("classification is decided on the worst table of a resolved set", () => {
   const site = (file: string, tables: string[]): DbWriteSite => ({
     file,
@@ -661,7 +690,10 @@ describe("the analyzer against the real convex backend", () => {
    * It is self-updating, so it does not churn on unrelated pull requests.
    */
   it("resolves exactly the call sites a type-free syntactic pass can see", () => {
-    const typeAware = sites.map((s) => `${s.file}:${s.line}:${s.method}`).sort();
+    // Sorted with the guard's own comparator on both sides: the property under
+    // test is set equality, and an ordering difference must not be able to
+    // masquerade as one.
+    const typeAware = sites.map((s) => `${s.file}:${s.line}:${s.method}`).sort(compareStrings);
     expect(typeAware).toEqual(syntacticDbWriteCallSites(backend));
   });
 

@@ -240,7 +240,7 @@ export function createConvexAnalyzerProgram(repoRoot: string): AnalyzerProgram {
     if (name.endsWith(".test.ts")) continue;
     analysed.push([sf, name]);
   }
-  analysed.sort((a, b) => a[1].localeCompare(b[1]));
+  analysed.sort((a, b) => compareStrings(a[1], b[1]));
 
   return { program, checker: program.getTypeChecker(), analysed };
 }
@@ -338,8 +338,24 @@ export function createVirtualAnalyzerProgram(
  */
 function isDatabaseWriterType(checker: ts.TypeChecker, type: ts.Type): boolean {
   const symbolName = type.getSymbol()?.getName() ?? "";
-  if (/DatabaseWriter$/.test(symbolName)) return true;
+  if (symbolName.endsWith("DatabaseWriter")) return true;
   return DB_WRITE_METHODS.every((m) => checker.getPropertyOfType(type, m) !== undefined);
+}
+
+/**
+ * Deterministic, locale-independent string ordering.
+ *
+ * ⚠️ DELIBERATELY NOT `localeCompare`, WHICH SONAR SUGGESTS. Every ordered
+ * result this guard produces is compared against another ordered result — the
+ * type-aware site set against the syntactic one, the pinned generic-writer map
+ * against the measured one. `localeCompare` orders by the runner's ICU
+ * collation, which can differ between a developer machine and a CI image, so a
+ * guard that sorted that way could disagree with itself across environments.
+ * Code-unit order is the same everywhere.
+ */
+export function compareStrings(a: string, b: string): number {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
 }
 
 /** Every string-literal constituent of a type, or `null` if any is not one. */
@@ -353,7 +369,7 @@ function stringLiteralsOf(type: ts.Type): string[] | null {
     }
     return false;
   };
-  return visit(type) && out.size > 0 ? [...out].sort() : null;
+  return visit(type) && out.size > 0 ? [...out].sort(compareStrings) : null;
 }
 
 /**
@@ -389,7 +405,7 @@ function tablesFromIdType(checker: ts.TypeChecker, type: ts.Type): TableResoluti
     if (!literals) return { kind: "UNPROVEN", form: "id-table-brand-not-statically-known" };
     for (const literal of literals) tables.add(literal);
   }
-  return { kind: "RESOLVED", tables: [...tables].sort() };
+  return { kind: "RESOLVED", tables: [...tables].sort(compareStrings) };
 }
 
 /**
@@ -450,6 +466,48 @@ function resolveWriteMethod(
   return names.length === 1 ? { kind: "WRITE", method: writes[0] as DbWriteMethod } : { kind: "UNKNOWN" };
 }
 
+/**
+ * Is this call worth typing further — is its receiver a Convex database writer?
+ *
+ * The property-access pre-filter is a cost decision, not a correctness one: a
+ * named property that is not one of the four cannot be a write, and typing
+ * every `foo.bar()` in the backend is not free. A BRACKET access has no name in
+ * the text, so it is always typed.
+ */
+function isWriterCallee(
+  checker: ts.TypeChecker,
+  callee: ts.PropertyAccessExpression | ts.ElementAccessExpression
+): boolean {
+  if (
+    ts.isPropertyAccessExpression(callee) &&
+    !(DB_WRITE_METHODS as readonly string[]).includes(callee.name.text)
+  ) {
+    return false;
+  }
+  return isDatabaseWriterType(checker, checker.getTypeAtLocation(callee.expression));
+}
+
+/** The table(s) a write addresses, or the named form that stops it resolving. */
+function resolveTargetTables(
+  checker: ts.TypeChecker,
+  method: DbWriteMethod,
+  argument: ts.Expression | undefined
+): TableResolution {
+  if (!argument) return { kind: "UNPROVEN", form: "no-argument" };
+  if (method === "insert") return tablesFromInsertArgument(checker, argument);
+  return tablesFromIdType(checker, checker.getTypeAtLocation(argument));
+}
+
+/** The method name a callee SPELLS, with no type information consulted. */
+function spelledMethodName(
+  callee: ts.PropertyAccessExpression | ts.ElementAccessExpression
+): string {
+  if (ts.isPropertyAccessExpression(callee)) return callee.name.text;
+  return ts.isStringLiteralLike(callee.argumentExpression)
+    ? callee.argumentExpression.text
+    : "unknown";
+}
+
 function snippetOf(node: ts.Node): string {
   return node.getText().replace(/\s+/g, " ").slice(0, 120);
 }
@@ -465,39 +523,31 @@ export function collectDbWriteSites(analyzer: AnalyzerProgram): DbWriteSite[] {
   const sites: DbWriteSite[] = [];
 
   for (const [sourceFile, name] of analyzer.analysed) {
-    const visit = (node: ts.Node): void => {
-      const callee = ts.isCallExpression(node) ? node.expression : undefined;
-      if (
-        callee &&
-        (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) &&
-        // Cheap pre-filter: a named property that is not one of the four cannot
-        // be a write, and typing every `foo.bar()` in the backend is not free.
-        // An ELEMENT access has to be typed, because its name is not in the text.
-        (ts.isElementAccessExpression(callee) ||
-          (DB_WRITE_METHODS as readonly string[]).includes(callee.name.text)) &&
-        isDatabaseWriterType(checker, checker.getTypeAtLocation(callee.expression))
-      ) {
-        const resolvedMethod = resolveWriteMethod(checker, callee);
-        if (resolvedMethod.kind !== "NOT_A_WRITE") {
-          const argument = (node as ts.CallExpression).arguments[0];
-          const resolution: TableResolution =
-            resolvedMethod.kind === "UNKNOWN"
-              ? { kind: "UNPROVEN", form: "write-method-not-statically-known" }
-              : !argument
-                ? { kind: "UNPROVEN", form: "no-argument" }
-                : resolvedMethod.method === "insert"
-                  ? tablesFromInsertArgument(checker, argument)
-                  : tablesFromIdType(checker, checker.getTypeAtLocation(argument));
+    const record = (call: ts.CallExpression): void => {
+      const callee = call.expression;
+      if (!ts.isPropertyAccessExpression(callee) && !ts.isElementAccessExpression(callee)) return;
+      if (!isWriterCallee(checker, callee)) return;
 
-          sites.push({
-            file: name,
-            line: sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1,
-            method: resolvedMethod.kind === "UNKNOWN" ? "unknown" : resolvedMethod.method,
-            resolution,
-            snippet: snippetOf(node),
-          });
-        }
-      }
+      const resolved = resolveWriteMethod(checker, callee);
+      if (resolved.kind === "NOT_A_WRITE") return;
+
+      const at = (method: DbWriteSite["method"], resolution: TableResolution): DbWriteSite => ({
+        file: name,
+        line: sourceFile.getLineAndCharacterOfPosition(call.getStart()).line + 1,
+        method,
+        resolution,
+        snippet: snippetOf(call),
+      });
+
+      sites.push(
+        resolved.kind === "UNKNOWN"
+          ? at("unknown", { kind: "UNPROVEN", form: "write-method-not-statically-known" })
+          : at(resolved.method, resolveTargetTables(checker, resolved.method, call.arguments[0]))
+      );
+    };
+
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node)) record(node);
       ts.forEachChild(node, visit);
     };
     visit(sourceFile);
@@ -528,11 +578,7 @@ export function syntacticDbWriteCallSites(analyzer: AnalyzerProgram): string[] {
       if (callee && (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee))) {
         // Bracket calls are read here too, so the two passes stay comparable:
         // a literal names its method, anything else is `unknown`.
-        const method = ts.isPropertyAccessExpression(callee)
-          ? callee.name.text
-          : ts.isStringLiteralLike(callee.argumentExpression)
-            ? callee.argumentExpression.text
-            : "unknown";
+        const method = spelledMethodName(callee);
         const receiver = callee.expression.getText().trim();
         const isWriteName =
           (DB_WRITE_METHODS as readonly string[]).includes(method) || method === "unknown";
@@ -545,7 +591,7 @@ export function syntacticDbWriteCallSites(analyzer: AnalyzerProgram): string[] {
     };
     visit(sourceFile);
   }
-  return found.sort();
+  return found.sort(compareStrings);
 }
 
 /* ------------------------------------------------------------------------- *
@@ -572,8 +618,8 @@ export function classifyWriteSite(
 
   const unauthorized = matched.filter((entry) => entry.ownerModule !== site.file);
   return unauthorized.length > 0
-    ? { verdict: "VIOLATION", tables: unauthorized.map((entry) => entry.table).sort() }
-    : { verdict: "AUTHORIZED", tables: matched.map((entry) => entry.table).sort() };
+    ? { verdict: "VIOLATION", tables: unauthorized.map((entry) => entry.table).sort(compareStrings) }
+    : { verdict: "AUTHORIZED", tables: matched.map((entry) => entry.table).sort(compareStrings) };
 }
 
 export interface AuthorityAuditCoverage {
