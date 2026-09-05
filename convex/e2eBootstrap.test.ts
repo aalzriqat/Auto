@@ -537,6 +537,10 @@ describe("assertE2EBootstrap — the preflight", () => {
 
     expect(verdict.orgId).toBe(orgId);
     expect(verdict.primary.roleName).toBe(E2E_PRIMARY_ROLE_NAME);
+    // Probed by NAME. `process.env` is not enumerable in the Convex runtime —
+    // the real preview answered [] to Object.keys() in the same call whose
+    // deploymentIdentity was VERIFIED, which requires CONVEX_CLOUD_URL to be set.
+    expect(verdict.convexEnvProbe).toContain("CONVEX_CLOUD_URL");
     expect(verdict.approver.roleName).toBe(E2E_APPROVER_ROLE_NAME);
   });
 

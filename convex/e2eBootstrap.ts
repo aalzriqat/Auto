@@ -285,6 +285,24 @@ const REAL_DEPLOYMENT_ENV_MARKERS = [
   "WHATSAPP_APP_SECRET",
 ] as const;
 
+/**
+ * Names a deployment-type signal would plausibly arrive under, probed one by
+ * one because `process.env` cannot be enumerated in this runtime.
+ *
+ * Today every one of these is absent on a real preview, which is the evidence
+ * behind the module header's claim that Convex exposes no deployment-type
+ * signal to a function. It is a probe, not a guard — nothing branches on it.
+ */
+const DEPLOYMENT_SIGNAL_CANDIDATES = [
+  "CONVEX_CLOUD_URL",
+  "CONVEX_SITE_URL",
+  "CONVEX_DEPLOYMENT",
+  "CONVEX_DEPLOYMENT_NAME",
+  "CONVEX_DEPLOYMENT_TYPE",
+  "CONVEX_ENVIRONMENT",
+  "CONVEX_PREVIEW_NAME",
+] as const;
+
 function presentRealDeploymentMarkers(): string[] {
   return REAL_DEPLOYMENT_ENV_MARKERS.filter((name) => {
     const value = process.env[name];
@@ -872,11 +890,29 @@ export const assertE2EBootstrap = internalQuery({
        * only: `CONVEX_*` names are already public in `convex/utils/env.ts`, so
        * this discloses nothing a reader of the repository lacks.
        */
-      // `localeCompare`, not a bare `.sort()`: the default comparator sorts by
-      // UTF-16 code unit, which is not the alphabetical order this is read as.
-      convexEnvNames: Object.keys(process.env)
-        .filter((name) => name.startsWith("CONVEX_"))
-        .sort((a, b) => a.localeCompare(b)),
+      /**
+       * ⚠️ PROBED BY NAME, BECAUSE `process.env` IS NOT ENUMERABLE HERE.
+       *
+       * An earlier version of this line returned
+       * `Object.keys(process.env).filter(n => n.startsWith("CONVEX_"))` and the
+       * real preview answered `[]` — in the SAME call whose
+       * `deploymentIdentity` came back `VERIFIED`, which is only reachable when
+       * `process.env.CONVEX_CLOUD_URL` holds a URL. Direct access works;
+       * enumeration returns nothing. So the empty array did not mean "this
+       * deployment has no CONVEX_ variables", it meant "this question cannot be
+       * asked that way" — and it read as the former.
+       *
+       * That matters beyond the diagnostic: any future guard here must read
+       * `process.env.NAME` directly. `REAL_DEPLOYMENT_ENV_MARKERS` already does.
+       *
+       * The list is probed rather than enumerated, and it answers the one
+       * question the module header leaves open — whether Convex gives a
+       * function any signal of its deployment's TYPE. If a future release adds
+       * one, add its name here and it will show up in the CI log.
+       */
+      convexEnvProbe: DEPLOYMENT_SIGNAL_CANDIDATES.filter(
+        (name) => (process.env[name] ?? "").trim().length > 0,
+      ),
       primary: { userId: primary.userId, roleName: primary.roleName },
       approver: { userId: approver.userId, roleName: approver.roleName },
     };
