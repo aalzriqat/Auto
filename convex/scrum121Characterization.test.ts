@@ -731,7 +731,20 @@ async function accountingCommands(
       .map((r) => ({
         eventType: r.eventType,
         sourceType: r.sourceType,
-        amountMinor: (r.payload as { amountMinor?: number })?.amountMinor ?? null,
+        // SCRUM-218-C split the COLLECTION_PAYMENT payload's single gross
+        // `amountMinor` into received/applied/unapplied, so this extractor reads
+        // `receivedMinor` when the newer shape is present.
+        //
+        // ⚠️ THE BASELINES BELOW ARE DELIBERATELY NOT RENUMBERED. What these
+        // tests pin is the MONEY THAT ARRIVED, and 218-C does not change that by
+        // one minor unit — it changes which account the money is credited to.
+        // Rewriting the expected amounts would quietly retire the guarantee;
+        // teaching the extractor the new field keeps it enforced across the
+        // change, which is the whole point of a golden baseline.
+        amountMinor:
+          (r.payload as { amountMinor?: number })?.amountMinor ??
+          (r.payload as { receivedMinor?: number })?.receivedMinor ??
+          null,
         currency: r.currency,
       }))
       .sort((a, b) =>
@@ -1239,10 +1252,25 @@ describe("SCRUM-121 — Codex findings, validated independently", () => {
       // The GL command carries the GROSS 100, not the applied 40.
       expect((linkEvent?.payload as { amountMinor?: number } | undefined)?.amountMinor).toBe(100_000);
 
+      // What each event will actually credit to Customer AR.
+      //
+      // ⚠️ THE TWO PATHS NOW ANSWER DIFFERENTLY, AND THAT IS THE POINT.
+      // SCRUM-218-C made a direct collection credit AR by `appliedMinor` only —
+      // so this must read that field, not the gross, or it would measure a claim
+      // the direct path no longer makes. `PAYMENT_LINK_RECEIVED` still credits
+      // its gross `amountMinor`, because Payment Links are DEFERRED and 218-C
+      // deliberately did not touch them.
       const arCredited = queued
         .filter((e) => e.eventType === "COLLECTION_PAYMENT" || e.eventType === "PAYMENT_LINK_RECEIVED")
-        .reduce((s, e) => s + ((e.payload as { amountMinor?: number })?.amountMinor ?? 0), 0);
-      // AR will be credited 60 + 100 = 160 against a debt of 100.
+        .reduce((s, e) => {
+          const p = e.payload as { amountMinor?: number; appliedMinor?: number };
+          return s + (e.eventType === "COLLECTION_PAYMENT" ? (p?.appliedMinor ?? 0) : (p?.amountMinor ?? 0));
+        }, 0);
+      // AR is STILL credited 60 + 100 = 160 against a debt of 100. CODEX-01 is
+      // not fixed by 218-C and this test must keep reproducing it: the surviving
+      // half is the payment-link gross credit, which belongs to the deferred
+      // Payment-Link scope. If this ever drops to 60, Payment Links have been
+      // brought in scope without a ruling.
       expect(arCredited).toBe(160_000);
     });
   });

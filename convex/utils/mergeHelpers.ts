@@ -2,10 +2,15 @@ import { Id } from "../_generated/dataModel";
 import { QueryCtx } from "../_generated/server";
 
 /**
- * Every table with a `customerId` foreign key, scoped to a single explicit
- * list (mirroring `ORG_SCOPED_TABLES` in adminOrgs.ts) rather than a dynamic
- * reflection-based scan — merges are rare, audited, destructive operations
- * where an explicit list is safer than "discover tables automatically."
+ * The tables whose `customerId` a merge REWRITES to the survivor, as a single
+ * explicit list (mirroring `ORG_SCOPED_TABLES` in adminOrgs.ts) rather than a
+ * dynamic reflection-based scan — merges are rare, audited, destructive
+ * operations where an explicit list is safer than "discover tables
+ * automatically."
+ *
+ * This is NOT every table carrying a `customerId`. Two other classifications
+ * exist and are enforced by `customerMergeRegistry.test.ts`:
+ * `CUSTOMER_DERIVED_TABLES` and `CUSTOMER_NON_REASSIGNABLE_TABLES` below.
  */
 export const CUSTOMER_REFERENCING_TABLES = [
   {
@@ -234,7 +239,64 @@ export const CUSTOMER_REFERENCING_TABLES = [
  *
  * Kept as an explicit list rather than an exception in the test so the
  * exhaustiveness check stays exhaustive: every table with a `customerId` must
- * appear in exactly one of these two lists, and adding a column without
- * deciding which is a build failure.
+ * appear in exactly one of the three lists in this file, and adding a column
+ * without deciding which is a build failure.
  */
 export const CUSTOMER_DERIVED_TABLES = ["socialConversations"] as const;
+
+/**
+ * Sealed financial authority: tables whose `customerId` the merge must NOT
+ * rewrite, because it is part of the row's economic provenance rather than a
+ * pointer the row happens to hold.
+ *
+ * A receipt movement, its retained position and each application record WHOSE
+ * money a posted receipt represents. Patching `customerId` here would move a
+ * retained credit onto a different customer with no persisted movement
+ * explaining it — a restatement of settled money.
+ *
+ * ⚠️ THE REST OF THE RECEIPT'S LINEAGE IS *NOT* SEALED, AND SAYING OTHERWISE
+ * WOULD BE FALSE. `canonicalPayments` — the very row a movement points at via
+ * `canonicalPaymentId` — is in the rewriting registry above, as are
+ * `journalLines` and `receivableDocuments`. A merge DOES repoint all three.
+ *
+ * `paymentAllocations` and `accountingEvents` declare no TOP-LEVEL `customerId`
+ * field, which is all their absence from these three lists proves. It does NOT
+ * mean they carry no customer identity: `accountingEvents.payload` is `v.any()`
+ * and the receipt hooks put `customerId` inside it (`workflowHooks.ts`), where
+ * `postingRules.ts` reads it into journal-line dimensions. A merge does not
+ * rewrite that payload, so whether a journal line's customer dimension follows
+ * the survivor depends on whether the event had already POSTED when the merge
+ * ran. That timing question is real and belongs to SCRUM-250, not here.
+ *
+ * So after a merge the movement names the loser while its own canonical payment
+ * names the survivor. That divergence is deliberate, and it has one concrete
+ * consequence worth stating rather than leaving to be discovered:
+ * `applyRetainedCredit` refuses when `receivable.customerId !==
+ * movement.customerId` (collections.ts), and a merge repoints `receivables`.
+ * **A merged-away customer's retained credit therefore becomes permanently
+ * UNAPPLIABLE, not merely hard to find.** It fails CLOSED — no money moves to
+ * the wrong party and the 2110 liability stays correctly on the books — which
+ * is the safe direction, but it is a freeze, and SCRUM-250 must design for it.
+ *
+ * ⚠️ THIS LIST ONLY REMOVES THE GENERIC WRITE PATH. IT IS NOT A RUNTIME FENCE.
+ * `customers.mergeCustomers` does not refuse a losing customer who holds live
+ * retained credit; it merges, and the credit is left addressed to the
+ * merged-away record. That gap is SCRUM-250, which owns the pre-write refusal
+ * (or a specified authority-transfer operation) together with its own evidence
+ * floor. It is deliberately NOT implemented here: SCRUM-218-C's obligation is
+ * that no generic loop can raw-reassign this authority, and 250's is deciding
+ * what a merge should do instead.
+ *
+ * ⚠️ DO NOT INFER "NOT DEPLOYED" FROM "NOT ON `origin/main`". These tables are
+ * absent from `origin/main` (verified), which proves the branch is UNMERGED —
+ * nothing more. `AGENTS.md` records that a production deploy key still exists on
+ * a developer workstation where `npx convex deploy` reaches production
+ * directly, so Git state cannot establish deployment state. Production
+ * reachability here is NOT ESTABLISHED, in either direction, and would need
+ * deployment evidence rather than a repository check.
+ */
+export const CUSTOMER_NON_REASSIGNABLE_TABLES = [
+  "receiptMovements",
+  "receiptRetainedPositions",
+  "receiptApplications",
+] as const;

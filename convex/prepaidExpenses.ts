@@ -49,7 +49,7 @@ import { auditLog } from "./financialAudit";
 import { notifyFinanceManagers, notifyUser, getActorName } from "./utils/notifications";
 import { paymentMethodValidator, type PaymentMethod } from "./utils/paymentMethods";
 import { runWithIdempotency } from "./utils/idempotency";
-import { drainEntries } from "./accountingOutbox";
+import { drainEntries, reviveFailedEntry } from "./accountingOutbox";
 import { postedSourceExpenseEvent } from "./utils/prepaidSourceLedger";
 import { toMinorUnits, assertValidMinorAmount } from "./utils/money";
 
@@ -638,7 +638,7 @@ export const runAmortizationNow = action({
  * cron/period-open re-drive, for a schedule stuck behind a since-resolved
  * blocker (chart just initialized, period just reopened) without waiting for
  * the next org-wide drain. Shares accountingOutbox.drainEntries with
- * drainPendingForOrg, so posting/retry/dead-letter behavior is identical.
+ * the org-wide sweep, so dispatch/retry/dead-letter behavior is identical.
  */
 export const redriveScheduleEvents = mutation({
   args: { orgId: v.id("organizations"), scheduleId: v.id("prepaidExpenseSchedules") },
@@ -683,11 +683,40 @@ export const redriveScheduleEvents = mutation({
     const matches = sourceRow ? [sourceRow, ...scheduleRows] : scheduleRows;
 
     // A dead-lettered row's attempts counter is already at/above the retry
-    // threshold — reset it so drainEntries gives it a real attempt instead of
-    // immediately re-dead-lettering on what looks like an already-exhausted try.
-    const toDrain = matches.map((row) => (row.status === "FAILED" ? { ...row, attempts: 0 } : row));
+    // threshold, so it must be revived before it can be dispatched again.
+    //
+    // ⚠️ THE REVIVAL IS PERSISTED, NOT CLONED (SCRUM-222 §3.5.1). This used to
+    // map `matches` into in-memory copies carrying `attempts: 0` and hand those
+    // to `drainEntries`. That worked only while posting was inline and read the
+    // object it was handed. The worker now re-reads the STORED row by id, so an
+    // in-memory reset would be invisible: the row would stay FAILED, dispatch
+    // would skip it, and this button would report success having done nothing
+    // — on the very schedule the accountant is trying to rescue.
+    let revived = 0;
+    for (const row of matches) {
+      if (await reviveFailedEntry(ctx, row)) revived += 1;
+    }
 
-    return await drainEntries(ctx, toDrain);
+    // Re-read: `matches` was captured before the revivals above, so dispatching
+    // from it would test the pre-revival status.
+    const stored: Doc<"pendingAccountingEvents">[] = [];
+    for (const row of matches) {
+      const fresh = await ctx.db.get(row._id);
+      if (fresh) stored.push(fresh);
+    }
+
+    // ⚠️ REPORTS WHAT WAS QUEUED, NOT WHAT WAS POSTED. Posting is asynchronous
+    // now, so this transaction cannot know how many rows posted; saying so
+    // would be a false success on a money path.
+    //
+    // ⚠️ AND IT DISTINGUISHES "NOTHING TO DO" FROM "ALREADY DOING IT" (owner
+    // ruling c17375). `alreadyInFlight` counts this schedule's rows that a
+    // worker is posting right now. Folding those into a zero made the button
+    // answer "nothing queued for this schedule" on the very schedule it was
+    // actively posting — so the caller gets all three states and does not have
+    // to infer one from the schedule's own totals.
+    const { scheduled, alreadyInFlight } = await drainEntries(ctx, stored);
+    return { revived, scheduled, alreadyInFlight };
   },
 });
 

@@ -61,6 +61,20 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "pendingAccountingEvents", index: "by_org_status" },
   { kind: "orgRows", table: "journalLines", index: "by_org" },
   { kind: "orgRows", table: "journalEntries", index: "by_org" },
+  // ⚠️ SCRUM-218-C — RECEIPT AUTHORITY, IN DEPENDENCY ORDER, AND BEFORE THE ROWS
+  // IT POINTS AT. An application names its movement, its allocation and its
+  // receivable document; a position names its movement; a movement names the
+  // collection payment and the canonical payment. Deleting a referent first
+  // would leave these pointing at nothing for the length of the step sequence.
+  //
+  // Leaving them out entirely is the failure `scripts/orgDeletionCoverage.test.ts`
+  // exists to catch, and it caught exactly this: `hardDeleteOrg` would have
+  // reported SUCCESS while a customer's retained credit outlived the tenant it
+  // belonged to. An earlier round of this ticket was told the same thing about
+  // an earlier design — authority must not outlive its organization.
+  { kind: "orgRows", table: "receiptApplications", index: "by_org" },
+  { kind: "orgRows", table: "receiptRetainedPositions", index: "by_org" },
+  { kind: "orgRows", table: "receiptMovements", index: "by_org" },
   { kind: "orgRows", table: "paymentAllocations", index: "by_org" },
   { kind: "orgRows", table: "canonicalPayments", index: "by_org" },
   { kind: "orgRows", table: "receivableDocuments", index: "by_org" },

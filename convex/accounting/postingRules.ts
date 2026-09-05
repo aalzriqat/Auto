@@ -12,6 +12,9 @@ export type EventType =
   | "SALE_CANCELLED"
   | "COLLECTION_PAYMENT"
   | "COLLECTION_REFUND"
+  // SCRUM-218-C: a later application of retained customer credit. NOT a second
+  // receipt — no cash moves, the money arrived when COLLECTION_PAYMENT posted.
+  | "RECEIPT_CREDIT_APPLIED"
   | "EXPENSE_POSTED"
   | "CHEQUE_RECEIVED"
   | "CHEQUE_DEPOSITED"
@@ -56,7 +59,8 @@ export type EventType =
 export const ALL_EVENT_TYPES = new Set<string>([
   "DEPOSIT_RECEIVED", "DEPOSIT_APPLIED", "DEPOSIT_APPLIED_TO_SETTLEMENT",
   "DEPOSIT_REFUNDED", "DEPOSIT_FORFEITED",
-  "SALE_COMPLETED", "SALE_CANCELLED", "COLLECTION_PAYMENT", "COLLECTION_REFUND", "EXPENSE_POSTED",
+  "SALE_COMPLETED", "SALE_CANCELLED", "COLLECTION_PAYMENT", "COLLECTION_REFUND",
+  "RECEIPT_CREDIT_APPLIED", "EXPENSE_POSTED",
   "CHEQUE_RECEIVED", "CHEQUE_DEPOSITED", "CHEQUE_CLEARED", "CHEQUE_RETURNED",
   "COMMISSION_ACCRUED", "COMMISSION_ADJUSTED", "COMMISSION_PAID",
   "FINANCE_DISBURSED", "FINANCE_CASH_RECEIVED", "PAYMENT_LINK_RECEIVED",
@@ -390,12 +394,58 @@ export interface SupplierPaymentSettledPayload {
   costOrigin?: "COGS" | "VEHICLE_INVENTORY";
 }
 
+/**
+ * A direct-collection receipt, split into what ARRIVED and what it DISCHARGED
+ * (SCRUM-218-C; owner-proxy c17653).
+ *
+ * ⚠️ `amountMinor` IS GONE, AND ITS ABSENCE IS THE FIX. One gross number could
+ * only ever credit one account, so the rule credited Customer AR by the whole
+ * receipt even when no receivable existed — booking relief of a debt that was
+ * never raised and driving the AR control account credit-negative.
+ *
+ * The three fields are NOT independent. `receivedMinor` is what the customer
+ * handed over; `appliedMinor` is what a proven live receivable absorbed;
+ * `unappliedMinor` is the remainder the dealership now owes back. Conservation
+ * is checked in the rule rather than trusted, because this payload crosses a
+ * serialization boundary (the outbox) and comes back as data, not as authority.
+ */
 export interface CollectionPaymentPayload {
   paymentId: string;
-  amountMinor: number;
+  receivedMinor: number;
+  appliedMinor: number;
+  unappliedMinor: number;
   currency: string;
   customerId: string;
   paymentMethod?: string;
+}
+
+/**
+ * The application event's classifying columns, defined HERE so that
+ * `workflowHooks` (which posts it) and `receiptMovement` (which persists it)
+ * read the same two constants instead of each spelling their own literal.
+ *
+ * They cannot live in `receiptMovement` without an import cycle, and the
+ * alternative — exporting the generic `postOrEnqueue` so the domain module could
+ * post directly — would open exactly the kind of caller-supplied posting ingress
+ * SCRUM-249 exists to close.
+ */
+export const RECEIPT_CREDIT_APPLIED_EVENT_TYPE = "RECEIPT_CREDIT_APPLIED" as const;
+export const RECEIPT_CREDIT_APPLIED_SOURCE_TYPE = "receiptApplications" as const;
+
+/**
+ * A later application of retained customer credit (SCRUM-218-C).
+ *
+ * `sequence` is carried for audit only — it is part of the EVENT IDENTITY,
+ * assigned by the persisted application row, and is not re-derived here.
+ */
+export interface ReceiptCreditAppliedPayload {
+  receiptMovementId: string;
+  applicationId: string;
+  sequence: number;
+  amountMinor: number;
+  currency: string;
+  customerId: string;
+  receivableDocumentId: string;
 }
 
 export interface CollectionRefundPayload {
@@ -1457,14 +1507,103 @@ export function ruleSupplierReceivableCollected(p: SupplierReceivableCollectedPa
   };
 }
 
+/**
+ * Conservation, checked rather than trusted (SCRUM-218-C).
+ *
+ * This payload is read back out of `pendingAccountingEvents` on the outbox path,
+ * so by the time the rule sees it it is DATA, not something a caller vouched
+ * for. `receivedMinor = appliedMinor + unappliedMinor` is the whole economic
+ * claim of the split; a payload that violates it would otherwise mint a balanced
+ * journal describing money that never arrived, or lose money that did.
+ *
+ * ⚠️ A LEGACY `amountMinor` PAYLOAD FAILS HERE, DELIBERATELY.
+ * `accountingMigration` still builds `{ amountMinor, paymentId, paymentMethod }`
+ * for a COLLECTION_PAYMENT event, and that writer is SCRUM-223's to retire.
+ * Refusing it is a STATED behavior change and it is the safe direction: the old
+ * shape's only possible journal is the gross-to-AR credit this ticket exists to
+ * stop. A visible failure the SCRUM-222 worker surfaces beats a silent
+ * misstatement that reconciles.
+ */
+function assertReceiptSplit(p: CollectionPaymentPayload): void {
+  for (const [name, value] of [
+    ["receivedMinor", p.receivedMinor],
+    ["appliedMinor", p.appliedMinor],
+    ["unappliedMinor", p.unappliedMinor],
+  ] as const) {
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+      throw new Error(
+        `COLLECTION_PAYMENT payload ${name} must be a non-negative safe integer, got ${String(value)}. ` +
+          "A payload carrying only the legacy gross amountMinor is refused rather than posted (SCRUM-218-C)."
+      );
+    }
+  }
+  if (p.receivedMinor === 0) {
+    throw new Error("COLLECTION_PAYMENT receivedMinor must be greater than zero; a receipt of nothing is not a receipt");
+  }
+  if (p.receivedMinor !== p.appliedMinor + p.unappliedMinor) {
+    throw new Error(
+      `COLLECTION_PAYMENT conservation violated: received ${p.receivedMinor} != applied ${p.appliedMinor} + unapplied ${p.unappliedMinor}`
+    );
+  }
+}
+
+/**
+ * DR cash / CR Customer AR for what a receivable absorbed / CR 2110 for the rest.
+ *
+ * ⚠️ A ZERO LEG IS OMITTED, NEVER EMITTED. `validateBalance` rejects a 0/0 line,
+ * so a no-receivable receipt that emitted `CR AR 0` would throw, dead-letter in
+ * the outbox, and never reach POSTED — which would then make every later
+ * application of that credit permanently ineligible, because eligibility is
+ * "the receipt occurrence is POSTED". The ticket's own central case would be
+ * unpostable. This file already omits-rather-than-emits for the zero-margin sale
+ * and the no-effect settlement; this is the same rule, not a special case.
+ */
 export function ruleCollectionPayment(p: CollectionPaymentPayload): RuleResult {
+  assertReceiptSplit(p);
   const cashKey = cashAccountKey(p.paymentMethod);
+  const lines = [line(cashKey, p.receivedMinor, 0, "Payment received", { customerId: p.customerId })];
+  if (p.appliedMinor > 0) {
+    lines.push(
+      line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, 0, p.appliedMinor, "AR settled", { customerId: p.customerId })
+    );
+  }
+  if (p.unappliedMinor > 0) {
+    lines.push(
+      line(SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY, 0, p.unappliedMinor, "Unapplied customer receipt", {
+        customerId: p.customerId,
+      })
+    );
+  }
+  return {
+    lines,
+    memo: "Collection payment received",
+    category: "SYSTEM",
+  };
+}
+
+/**
+ * Retained customer credit discharging a receivable — DR 2110 / CR Customer AR.
+ *
+ * ⚠️ NO CASH LINE. The money arrived when the COLLECTION_PAYMENT posted and was
+ * banked then; this event only reclassifies an existing liability into relief of
+ * a debt. A cash or bank line here would record the customer paying twice.
+ */
+export function ruleReceiptCreditApplied(p: ReceiptCreditAppliedPayload): RuleResult {
+  if (!Number.isSafeInteger(p.amountMinor) || p.amountMinor <= 0) {
+    throw new Error(
+      `RECEIPT_CREDIT_APPLIED amountMinor must be a positive safe integer, got ${String(p.amountMinor)}`
+    );
+  }
   return {
     lines: [
-      line(cashKey, p.amountMinor, 0, "Payment received", { customerId: p.customerId }),
-      line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, 0, p.amountMinor, "AR settled", { customerId: p.customerId }),
+      line(SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY, p.amountMinor, 0, "Retained credit applied", {
+        customerId: p.customerId,
+      }),
+      line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, 0, p.amountMinor, "AR settled from retained credit", {
+        customerId: p.customerId,
+      }),
     ],
-    memo: "Collection payment received",
+    memo: `Retained customer credit applied (#${p.sequence})`,
     category: "SYSTEM",
   };
 }
@@ -2479,6 +2618,7 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "SALE_CANCELLED": return ruleSaleCancelled(payload as unknown as SaleCancelledPayload);
     case "CHEQUE_DEPOSITED": return ruleChequeDeposited(payload as unknown as ChequeDepositedPayload);
     case "COLLECTION_PAYMENT": return ruleCollectionPayment(payload as unknown as CollectionPaymentPayload);
+    case "RECEIPT_CREDIT_APPLIED": return ruleReceiptCreditApplied(payload as unknown as ReceiptCreditAppliedPayload);
     case "COLLECTION_REFUND": return ruleCollectionRefund(payload as unknown as CollectionRefundPayload);
     case "EXPENSE_POSTED": return ruleExpensePosted(payload as unknown as ExpensePostedPayload);
     case "CHEQUE_RECEIVED": return ruleChequeReceived(payload as unknown as ChequeReceivedPayload);

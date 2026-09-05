@@ -16,6 +16,7 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
+import { settleOutbox } from "../test-utils/outboxWork";
 import { api } from "./_generated/api";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 
@@ -451,6 +452,9 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     expect(priorPeriod).toBeTruthy();
     await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: priorPeriod!._id });
     await asUser.mutation(api.accountingOutbox.redrive, { orgId });
+    // The redrive queues the work; the worker performs it in its own
+    // transaction, which is what makes a failure roll back (SCRUM-222).
+    await settleOutbox(t, orgId);
 
     const invoiceMinor = jod(23_200);
     const arDebitMinor = await netOnAccount(t, orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS);
@@ -498,3 +502,4 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     expect(await netOnAccount(t, orgId, SYSTEM_KEYS.SALES_REVENUE)).toBe(-jod(20_000));
   });
 });
+
