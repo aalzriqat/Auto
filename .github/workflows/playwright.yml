@@ -148,6 +148,40 @@ jobs:
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
 
+      # ── SCRUM-143 DIAGNOSTIC — THIS BRANCH IS NOT FOR MERGE ────────────────
+      # Answers the one question the c17727 ruling needs and that no repository
+      # artifact can: run 33978210481 proved the Preview-scoped default
+      # AUTOFLOW_DEPLOYMENT_CLASS is NOT visible to `--preview-run` at mint time
+      # (five consecutive fresh previews, all refused). Two causes remain, and
+      # they point at opposite decisions:
+      #
+      #   H1 the variable never reaches a preview deployment at all (wrong
+      #      scope, wrong name, not saved) -> moving attestation to the script
+      #      phase would fail exactly the same way, so that alternative is dead;
+      #   H2 it reaches the deployment but not the runtime snapshot the
+      #      `--preview-run` hook executes in -> the script phase is viable.
+      #
+      # This WEAKENS NOTHING. It calls the UNMODIFIED, fully-gated preflight and
+      # reads which refusal comes back:
+      #   "declares no class at all"    -> H1
+      #   "no preview bootstrap marker" -> the class gate PASSED -> H2
+      # Neither path prints an environment value. `convex env list` would have
+      # answered this too and is deliberately NOT used: it prints VALUES, which
+      # would put TURNSTILE_SECRET_KEY and the Clerk defaults in a public log.
+      - name: DIAGNOSTIC — is the deployment class visible after the deploy?
+        if: always()
+        continue-on-error: true
+        run: |
+          set +e
+          pnpm exec convex run \
+            --preview-name "$CONVEX_PREVIEW_NAME" \
+            e2eBootstrap:assertE2EBootstrap \
+            '{"primaryClerkUserId":"probe_primary","approverClerkUserId":"probe_approver"}'
+          echo "DIAGNOSTIC_EXIT=$?"
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}
+
       - name: Seed the QA dealership on that preview
         # Resolves both configured Clerk identities to their stable user ids,
         # seeds one QA organization with the product's own default roles, seats
