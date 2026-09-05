@@ -57,6 +57,10 @@ async function bootstrap(t: ReturnType<typeof newDeployment>) {
  */
 beforeEach(() => {
   vi.stubEnv("CONVEX_CLOUD_URL", CLOUD_URL);
+  // Control 5, exactly as the Preview-scoped Convex project default supplies it.
+  // Tests that need the declaration absent or wrong override it deliberately —
+  // see the last describe in this file.
+  vi.stubEnv("AUTOFLOW_DEPLOYMENT_CLASS", "preview");
 });
 
 afterEach(() => {
@@ -133,7 +137,7 @@ describe("markPreviewDeployment — the preview attestation", () => {
    * An emptied PRODUCTION deployment passes every row check — SCRUM-231 plans
    * exactly such a wipe — but it still carries the integration secrets a real
    * deployment is configured with. A freshly-claimed preview carries only the
-   * four the project sets as Preview defaults.
+   * five the project sets as Preview defaults.
    */
   test.each([
     ["SUPER_ADMIN_EMAILS", "owner@example.com"],
@@ -777,5 +781,167 @@ describe("SCRUM-143-RR-1 — authorization is revalidated, not remembered", () =
         expectedCloudUrl: CLOUD_URL,
       }),
     ).resolves.toMatchObject({ orgName: E2E_ORGANIZATION_NAME });
+  });
+});
+
+/**
+ * SCRUM-143, owner ruling c17727 — CONTROL 5.
+ *
+ * The four controls that came before are all ABSENCES: no tenant rows, no
+ * production secrets, no foreign URL, no missing marker. An emptied and
+ * deconfigured production deployment satisfies every one of them, which is the
+ * residual both adversarial reviewers independently found on PR #278 and which
+ * SCRUM-231 turns from theory into a scheduled event.
+ *
+ * `AUTOFLOW_DEPLOYMENT_CLASS=preview`, set as a Convex project Default
+ * Environment Variable scoped to Preview only, is the first POSITIVE proof of
+ * deployment type this module has. These tests hold two properties:
+ *
+ * 1. exactly the value `preview` is accepted — absent, different, or merely
+ *    similar all refuse, at every boundary, before anything is written;
+ * 2. it is re-proved from the CURRENT environment, so a marker minted while the
+ *    declaration held is worthless once it is gone. That is the property a
+ *    marker cannot carry, and the one the RR-1 round showed this module had
+ *    been getting wrong in the other direction.
+ *
+ * Each boundary is exercised in isolation — the mint on a bare deployment, the
+ * write-consumer on a marked one, the read-consumer on a seeded one — so that
+ * removing the check from any single site fails a test that removing it from
+ * the other two does not.
+ */
+describe("SCRUM-143 — the deployment class is re-proved, never remembered", () => {
+  /** Every one of these is NOT the string `preview`, and `===` is the whole check. */
+  const NOT_PREVIEW: Array<[string, string | undefined]> = [
+    ["absent entirely", undefined],
+    ["empty", ""],
+    ["production", "production"],
+    ["dev", "dev"],
+    ["prod", "prod"],
+    ["capitalised", "Preview"],
+    ["shouted", "PREVIEW"],
+    ["space-padded on the left", " preview"],
+    ["space-padded on the right", "preview "],
+    ["pluralised", "previews"],
+    ["a list that contains it", "preview,dev"],
+    ["a sentence that contains it", "this is a preview"],
+  ];
+
+  test.each(NOT_PREVIEW)(
+    "the mint refuses, and writes nothing, when the class is %s",
+    async (_label, value) => {
+      const t = newDeployment();
+      vi.stubEnv("AUTOFLOW_DEPLOYMENT_CLASS", value);
+
+      await expect(
+        t.mutation(internal.e2eBootstrap.markPreviewDeployment, {}),
+      ).rejects.toThrow(/may mint or honour a preview bootstrap marker/);
+
+      // Refused BEFORE the write, not rolled back after it: no marker at all.
+      const markers = await t.run(async (ctx) =>
+        ctx.db.query("e2ePreviewBootstrap").collect(),
+      );
+      expect(markers).toEqual([]);
+    },
+  );
+
+  test("the mint distinguishes an absent declaration from a wrong one", async () => {
+    const absent = newDeployment();
+    vi.stubEnv("AUTOFLOW_DEPLOYMENT_CLASS", undefined);
+    await expect(
+      absent.mutation(internal.e2eBootstrap.markPreviewDeployment, {}),
+    ).rejects.toThrow(/declares no class at all/);
+
+    const wrong = newDeployment();
+    vi.stubEnv("AUTOFLOW_DEPLOYMENT_CLASS", "production");
+    await expect(
+      wrong.mutation(internal.e2eBootstrap.markPreviewDeployment, {}),
+    ).rejects.toThrow(/declares a different class/);
+  });
+
+  /**
+   * The refusal reaches a CI log. Interpolating the observed value into it is
+   * the same taint class (`jssecurity:S5145`) already fixed once on this branch
+   * — and by definition the value here is one this deployment should not hold.
+   */
+  test("the refusal never prints the value it rejected", async () => {
+    const sentinel = "prod-cluster-7-do-not-print-me";
+    const t = newDeployment();
+    vi.stubEnv("AUTOFLOW_DEPLOYMENT_CLASS", sentinel);
+
+    let message = "";
+    try {
+      await t.mutation(internal.e2eBootstrap.markPreviewDeployment, {});
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    // Non-empty AND matching, so a mutation that stopped throwing fails here.
+    expect(message).toMatch(/declares a different class/);
+    expect(message).not.toContain(sentinel);
+  });
+
+  test("a marker minted under `preview` is worthless once the class is gone", async () => {
+    const t = await markedDeployment();
+    vi.stubEnv("AUTOFLOW_DEPLOYMENT_CLASS", undefined);
+
+    await expect(bootstrap(t)).rejects.toThrow(/declares no class at all/);
+
+    const [orgs, users, memberships] = await t.run(async (ctx) => [
+      await ctx.db.query("organizations").collect(),
+      await ctx.db.query("users").collect(),
+      await ctx.db.query("memberships").collect(),
+    ]);
+    expect(orgs).toEqual([]);
+    expect(users).toEqual([]);
+    expect(memberships).toEqual([]);
+  });
+
+  test("and once the class changes to something else", async () => {
+    const t = await markedDeployment();
+    vi.stubEnv("AUTOFLOW_DEPLOYMENT_CLASS", "production");
+
+    await expect(bootstrap(t)).rejects.toThrow(/declares a different class/);
+  });
+
+  /**
+   * Boundary 3 in isolation: the deployment was a preview when it was marked
+   * AND when it was seeded, so neither of the other two checks is what refuses
+   * here. A preflight that vouched for a deployment the seed would refuse is a
+   * green light for a red door.
+   */
+  test("the preflight refuses on the same evidence, not on the marker", async () => {
+    const t = await markedDeployment();
+    await bootstrap(t);
+
+    vi.stubEnv("AUTOFLOW_DEPLOYMENT_CLASS", "dev");
+
+    await expect(
+      t.query(internal.e2eBootstrap.assertE2EBootstrap, {
+        primaryClerkUserId: PRIMARY.clerkUserId,
+        approverClerkUserId: APPROVER.clerkUserId,
+        expectedCloudUrl: CLOUD_URL,
+      }),
+    ).rejects.toThrow(/declares a different class/);
+  });
+
+  /**
+   * The control for all of the above. Without it every test here would pass
+   * just as well against a module that refused everything unconditionally —
+   * and it also pins the runtime evidence field, which exists because a
+   * fail-closed check that never runs looks exactly like one that always passes.
+   */
+  test("CONTROL — under an exact `preview` declaration, the whole path still works", async () => {
+    const t = await markedDeployment();
+
+    const seeded = await bootstrap(t);
+    expect(seeded.organizationCreated).toBe(true);
+
+    const preflight = await t.query(internal.e2eBootstrap.assertE2EBootstrap, {
+      primaryClerkUserId: PRIMARY.clerkUserId,
+      approverClerkUserId: APPROVER.clerkUserId,
+      expectedCloudUrl: CLOUD_URL,
+    });
+    expect(preflight.orgName).toBe(E2E_ORGANIZATION_NAME);
+    expect(preflight.deploymentClass).toBe("VERIFIED — declared preview");
   });
 });

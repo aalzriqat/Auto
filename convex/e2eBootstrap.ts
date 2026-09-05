@@ -44,29 +44,45 @@
  *    both entry points re-check it against the URL the browser will drive, so
  *    a marker carried in by a snapshot import cannot authorize the deployment
  *    it landed on and a command aimed at one preview cannot seed another.
+ * 5. **The deployment declares its own class, and the declaration is re-read
+ *    every time.** A Convex project Default Environment Variable scoped to
+ *    PREVIEW ONLY carries `AUTOFLOW_DEPLOYMENT_CLASS=preview`. Every boundary
+ *    that mints or honours the marker requires exactly that value, read from
+ *    the deployment's CURRENT environment rather than from marker history —
+ *    so a marker minted while the declaration held stops being sufficient the
+ *    moment the declaration is gone. See `assertPreviewDeploymentClass`.
  *
- * ## ⚠️ WHAT CONTROL 3 DOES NOT PROVE — READ THIS BEFORE TRUSTING IT
+ * ## ⚠️ WHAT EACH CONTROL PROVES — READ THIS BEFORE TRUSTING IT
  *
- * Convex exposes **no deployment-type signal** to a running function. There is
- * `CONVEX_CLOUD_URL` and `CONVEX_SITE_URL`, and both are opaque hostnames. So
- * nothing here can *prove* "this is a preview". What controls 3 and 4 actually
- * establish is narrower, and the difference matters:
+ * Convex exposes **no deployment-type signal of its own** to a running
+ * function. There is `CONVEX_CLOUD_URL` and `CONVEX_SITE_URL`, and both are
+ * opaque hostnames — probed by name on real previews, see
+ * `DEPLOYMENT_SIGNAL_CANDIDATES`. So controls 3 and 4 alone establish only
+ * this, and the difference matters:
  *
  *   > this deployment holds no tenant rows, is not configured like a real
  *   > deployment, and is the one the caller aimed at.
  *
  * A **production deployment that had been emptied and stripped of its
- * integration secrets** would still satisfy that. That is not hypothetical for
- * this repository — SCRUM-231 plans exactly such a wipe — which is why this
- * paragraph exists instead of a comment claiming the case is closed. Both
- * adversarial reviewers reached this independently on PR #278.
+ * integration secrets** satisfies every word of that. Not hypothetical for this
+ * repository — SCRUM-231 plans exactly such a wipe — and both adversarial
+ * reviewers on PR #278 reached it independently.
  *
- * Closing it properly needs a signal the deployment itself carries and a
- * caller cannot supply: a **Preview-scoped Convex Default Environment
- * Variable**, the same mechanism `.github/workflows/playwright.yml` already
- * relies on for `CLERK_JWT_ISSUER_DOMAIN` and three others. That is a one-time
- * project-settings action, tracked as the follow-up on SCRUM-143. Until it
- * exists, the residual is stated here rather than papered over.
+ * **Control 5 is what closes it**, and it is the only POSITIVE proof of
+ * deployment type this module has: the deployment says what it is, in a
+ * variable no caller can supply and no wipe can restore, because it lives in
+ * project settings scoped to Preview rather than in the database. Provisioned
+ * by the owner under SCRUM-143 c17727.
+ *
+ * ⚠️ THE REMAINING RESIDUAL IS THE SCOPE OF THAT SETTING — AND IT IS NOW A
+ * MISCONFIGURATION RATHER THAN A COINCIDENCE. Were `AUTOFLOW_DEPLOYMENT_CLASS`
+ * ever set to `preview` on the production or dev deployment, control 5 would
+ * pass there. Control 3 would still refuse, because a real deployment carries
+ * `REAL_DEPLOYMENT_ENV_MARKERS`. The two are complementary by construction: 5
+ * is a positive assertion that can be wrongly GRANTED, 3 is a negative
+ * heuristic that cannot be wrongly withdrawn without deconfiguring the
+ * deployment first. Both must hold, at every boundary, on every call.
+ * **Never set this variable outside Preview scope.**
  *
  * And on the caller's side, `scripts/e2ePreviewBootstrap.mjs` refuses to
  * invoke either function unless `CONVEX_DEPLOY_KEY` is a *preview* deploy key
@@ -264,12 +280,15 @@ function checkDeploymentIdentity(expectedCloudUrl: string | undefined): string {
  * carries `SUPER_ADMIN_EMAILS`, `RESEND_API_KEY` and its webhook secrets long
  * after its tables are cleared.
  *
- * ⚠️ DELIBERATELY EXCLUDES the four variables the project sets as Preview
+ * ⚠️ DELIBERATELY EXCLUDES the five variables the project sets as Preview
  * defaults — `CLERK_JWT_ISSUER_DOMAIN`, `CLERK_DEV_JWT_ISSUER_DOMAIN`,
- * `TURNSTILE_SECRET_KEY`, `NEXT_PUBLIC_APP_URL` — because a legitimate preview
- * has exactly those. If a future default is added to the Preview scope and also
- * appears here, marking fails closed and names the variable, which is the safe
- * direction and a one-line fix.
+ * `TURNSTILE_SECRET_KEY`, `NEXT_PUBLIC_APP_URL` and
+ * `AUTOFLOW_DEPLOYMENT_CLASS` — because a legitimate preview has exactly
+ * those. The last one would be actively self-defeating here: the variable
+ * control 5 REQUIRES would become the variable control 3 REFUSES, and no
+ * deployment on earth could satisfy both. If a future default is added to the
+ * Preview scope and also appears here, marking fails closed and names the
+ * variable, which is the safe direction and a one-line fix.
  */
 const REAL_DEPLOYMENT_ENV_MARKERS = [
   "SUPER_ADMIN_EMAILS",
@@ -284,6 +303,19 @@ const REAL_DEPLOYMENT_ENV_MARKERS = [
   "FACEBOOK_APP_SECRET",
   "WHATSAPP_APP_SECRET",
 ] as const;
+
+/**
+ * The deployment's own declaration of what it is.
+ *
+ * Set as a Convex project **Default Environment Variable scoped to Preview
+ * only**, so every newly-claimed preview carries it and neither production nor
+ * dev does. It is not a secret — the safety property is the SCOPE, not the
+ * value, which is why the value is a plain word and appears in this file.
+ */
+const DEPLOYMENT_CLASS_ENV_VAR = "AUTOFLOW_DEPLOYMENT_CLASS";
+
+/** The one accepted value. Compared with `===`; nothing is trimmed or folded. */
+const PREVIEW_DEPLOYMENT_CLASS = "preview";
 
 /**
  * Names a deployment-type signal would plausibly arrive under, probed one by
@@ -325,10 +357,13 @@ async function requireMarker(
   ctx: QueryCtx | MutationCtx
 ): Promise<Doc<"e2ePreviewBootstrap">> {
   // ⚠️ BEFORE the marker is read, not after. A marker is evidence about the
-  // moment it was minted; this is the only check here that speaks to the
-  // deployment as it is NOW. Ordering it first also means a deployment that has
-  // since become a configured real one is refused with the reason that is
+  // moment it was minted; these two are the only checks here that speak to the
+  // deployment as it is NOW. Ordering them first also means a deployment that
+  // has since become a configured real one is refused with the reason that is
   // actually true of it, rather than with a marker-shaped one.
+  assertPreviewDeploymentClass(
+    "refusing to honour a preview bootstrap marker on this deployment"
+  );
   assertNotConfiguredLikeARealDeployment(
     "refusing to honour a preview bootstrap marker on this deployment"
   );
@@ -401,6 +436,51 @@ function assertMarkerBelongsToThisDeployment(marker: Doc<"e2ePreviewBootstrap">)
  * that intersected `Object.keys(process.env)` with this list would find
  * nothing on every deployment and fail OPEN everywhere.
  */
+/**
+ * CONTROL 5 — the deployment must declare itself a preview, right now.
+ *
+ * ⚠️ THIS IS THE ONLY POSITIVE PROOF OF DEPLOYMENT TYPE IN THIS MODULE.
+ * Every other control is an absence: no tenant rows, no production secrets, no
+ * foreign URL. Absences are satisfiable by accident — an emptied, deconfigured
+ * production deployment satisfies all of them — which is the residual both
+ * adversarial reviewers found on PR #278. This one cannot be satisfied by
+ * accident, because a caller cannot supply it and a wipe cannot restore it: it
+ * lives in project settings scoped to Preview, not in the database.
+ *
+ * ⚠️ RE-READ AT EVERY BOUNDARY, NEVER REMEMBERED. A marker is evidence about
+ * the instant it was minted. This is the current environment. A deployment that
+ * was a preview when marked and is not one now must refuse, so this is called
+ * by the mint AND by both consumers rather than being folded into the marker.
+ *
+ * ⚠️ READS `process.env` BY NAME. `process.env` in the Convex function
+ * runtime resolves by name and enumerates to nothing — measured, see
+ * `convexEnvProbe`. Any version of this written as a scan of `Object.keys`
+ * would find nothing on every deployment and fail OPEN everywhere.
+ *
+ * ⚠️ THE OBSERVED VALUE IS NEVER PRINTED. The refusal says whether a
+ * declaration was absent or merely different, and stops there. Interpolating an
+ * environment value into a message that reaches a CI log is the same taint
+ * class (`jssecurity:S5145`) already fixed once on this branch, and the value
+ * here is by definition one this deployment was not supposed to hold.
+ */
+function assertPreviewDeploymentClass(refusal: string): void {
+  const declared = process.env[DEPLOYMENT_CLASS_ENV_VAR];
+  if (declared === PREVIEW_DEPLOYMENT_CLASS) {
+    return;
+  }
+  const observed =
+    typeof declared === "string" && declared.length > 0
+      ? "it declares a different class"
+      : "it declares no class at all";
+  throw new ConvexError(
+    `${ERR}: ${refusal} — ${observed}. Only a deployment that declares ` +
+      `${DEPLOYMENT_CLASS_ENV_VAR}="${PREVIEW_DEPLOYMENT_CLASS}" may mint or honour a preview bootstrap marker, and the ` +
+      `declaration is re-read on every call rather than taken from the marker. That variable is a Convex project Default ` +
+      `Environment Variable scoped to PREVIEW ONLY; it must never be set on production or dev. The observed value is ` +
+      `deliberately not printed.`
+  );
+}
+
 function assertNotConfiguredLikeARealDeployment(refusal: string): void {
   const configured = presentRealDeploymentMarkers();
   if (configured.length > 0) {
@@ -465,10 +545,15 @@ async function assertDeploymentLooksDisposable(ctx: MutationCtx): Promise<void> 
 export const markPreviewDeployment = internalMutation({
   args: {},
   handler: async (ctx) => {
-    // ⚠️ AHEAD OF THE EARLY RETURN. This used to sit only inside
+    // ⚠ BOTH GATES AHEAD OF THE EARLY RETURN. They used to sit only inside
     // `assertDeploymentLooksDisposable`, which the ALREADY_MARKED branch skips
     // entirely — so re-minting on a deployment that had since acquired every
     // marker of a real one quietly succeeded and re-confirmed the authorization.
+    //
+    // The class check is ordered FIRST at every boundary: it is positive proof
+    // of deployment type, the other is a negative heuristic, and refusing on the
+    // stronger property gives an operator the reason that is actually true.
+    assertPreviewDeploymentClass("refusing to mark this deployment");
     assertNotConfiguredLikeARealDeployment("refusing to mark this deployment");
 
     const existing = await readMarker(ctx);
@@ -869,12 +954,17 @@ export const assertE2EBootstrap = internalQuery({
     expectedCloudUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    // ⚠️ THE SAME CONFIGURATION GATE AS `requireMarker`, deliberately repeated.
+    // ⚠️ THE SAME TWO GATES AS `requireMarker`, deliberately repeated.
     // This query reads the marker itself rather than going through
     // `requireMarker`, because its marker-absence message is a preflight
     // diagnostic ("nothing has been seeded here") rather than a refusal to
     // seed. That divergence is exactly how the two readers came to enforce
-    // different rules, so the gate they must share is stated in both.
+    // different rules, so every gate they must share is stated in both. A
+    // preflight that vouched for a deployment the seed would refuse is worse
+    // than no preflight: it is a green light for a red door.
+    assertPreviewDeploymentClass(
+      "refusing to honour a preview bootstrap marker on this deployment"
+    );
     assertNotConfiguredLikeARealDeployment(
       "refusing to honour a preview bootstrap marker on this deployment"
     );
@@ -934,17 +1024,29 @@ export const assertE2EBootstrap = internalQuery({
       orgName: org.name,
       deploymentIdentity,
       /**
-       * Diagnostic, deliberately narrow: the NAMES (never the values) of the
-       * `CONVEX_*` variables this deployment exposes.
+       * CONTROL 5, OBSERVED FROM THE REAL RUNTIME.
        *
-       * It answers one open question cheaply and from the real runtime — does
-       * Convex give a function any signal of its deployment's TYPE? Today the
-       * answer is no, which is why the file header's residual exists; if a
-       * future Convex release adds one, this line is where it shows up. Names
-       * only: `CONVEX_*` names are already public in `convex/utils/env.ts`, so
-       * this discloses nothing a reader of the repository lacks.
+       * A constant, not the environment value — and reachable only because
+       * `assertPreviewDeploymentClass` did not throw at the top of this
+       * handler. So it says exactly one thing, which is the thing worth
+       * saying: on this deployment, at this moment, the declaration matched.
+       * It exists because a fail-closed check that never runs is
+       * indistinguishable from one that always passes, and a CI log that shows
+       * only the absence of a refusal cannot tell them apart.
        */
+      deploymentClass: `VERIFIED — declared ${PREVIEW_DEPLOYMENT_CLASS}`,
       /**
+       * Diagnostic, deliberately narrow: the NAMES (never the values) of the
+       * `CONVEX_*` variables this deployment exposes. Names only — `CONVEX_*`
+       * names are already public in `convex/utils/env.ts`, so this discloses
+       * nothing a reader of the repository lacks.
+       *
+       * It answers one question cheaply and from the real runtime: does Convex
+       * give a function any signal of its deployment's TYPE? The answer is no,
+       * which is why control 5 has to be configured rather than read off the
+       * platform. If a future Convex release adds one, add its name to
+       * `DEPLOYMENT_SIGNAL_CANDIDATES` and it will show up in the CI log.
+       *
        * ⚠️ PROBED BY NAME, BECAUSE `process.env` IS NOT ENUMERABLE HERE.
        *
        * An earlier version of this line returned
@@ -957,12 +1059,8 @@ export const assertE2EBootstrap = internalQuery({
        * asked that way" — and it read as the former.
        *
        * That matters beyond the diagnostic: any future guard here must read
-       * `process.env.NAME` directly. `REAL_DEPLOYMENT_ENV_MARKERS` already does.
-       *
-       * The list is probed rather than enumerated, and it answers the one
-       * question the module header leaves open — whether Convex gives a
-       * function any signal of its deployment's TYPE. If a future release adds
-       * one, add its name here and it will show up in the CI log.
+       * `process.env.NAME` directly. `REAL_DEPLOYMENT_ENV_MARKERS` and
+       * `assertPreviewDeploymentClass` both already do.
        */
       convexEnvProbe: DEPLOYMENT_SIGNAL_CANDIDATES.filter(
         (name) => (process.env[name] ?? "").trim().length > 0,
