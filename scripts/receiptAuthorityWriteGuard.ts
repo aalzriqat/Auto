@@ -57,6 +57,17 @@
  * A bracket that does not name exactly one method is UNPROVEN, because on a
  * database writer an unreadable method name may be any of the four.
  *
+ * So is the RECEIVER. `(ctx.db as any).delete(id)` answers "is this a database
+ * writer?" with neither yes nor no, and a boolean answer there reads it as "no"
+ * and drops the call entirely. An unreadable receiver is UNPROVEN.
+ *
+ * And a write method taken as a VALUE — `const { delete: removeRow } = ctx.db`,
+ * `ctx.db.delete.call(…)`, `.bind(…)`, `Reflect.apply(ctx.db.delete, …)`, or
+ * the method handed to a higher-order helper — has no property access at its
+ * eventual call site at all. Following it there needs dataflow this guard does
+ * not do, so the ESCAPE is reported instead: the reference is where the proof
+ * stops, and stopping is refused rather than skipped.
+ *
  * It then classifies each resolved site against the declaration below:
  * a write to a declared authority table from any module other than that
  * table's declared owner is a VIOLATION.
@@ -67,11 +78,11 @@
  * guard. It is not skipped, and it is not silently counted as safe.
  *
  * That policy was MEASURED before it was chosen, not assumed affordable. At
- * `bf5769ed1` the backend contains 848 database write sites across 218
- * non-generated non-test modules (patch 499, insert 291, delete 58,
- * replace 0), and every single one resolves to a concrete table. Zero
- * unproven, zero `any`/`unknown` receivers. So fail-closed costs nothing today
- * and a NEW unresolvable form fails CI rather than quietly shrinking the
+ * `bf5769ed1` the analysed set is 228 non-generated, non-test modules holding
+ * 848 database write sites (patch 499, insert 291, delete 58, replace 0), and
+ * every single one resolves to a concrete table: zero unproven, zero unreadable
+ * receivers, zero escaping method references. So fail-closed costs nothing
+ * today and a NEW unresolvable form fails CI rather than quietly shrinking the
  * analysed surface.
  *
  * No burn-down allowlist is provided on purpose. A green result from this file
@@ -82,9 +93,14 @@
  *
  * ## ⚠️ RECORDED SCOPE BOUNDARIES — read these before quoting a green run
  *
- * 1. `**\/*.test.ts` and `convex/_generated/**` are NOT analysed, matching both
- *    existing write guards. A test that inserts an authority row directly is
- *    fixture setup, not a production authority violation.
+ * 1. `**\/*.test.ts`, `convex/_generated/**` and `test-utils/**` are NOT
+ *    analysed. A test that inserts an authority row directly is fixture setup,
+ *    not a production authority violation, and `test-utils/**` is the harness
+ *    that does it — verified, not assumed, to be imported by no non-test module
+ *    under `convex/`. Everything else the program contains IS analysed,
+ *    including `lib/**` and `packages/**`: the earlier `convex/`-only filter
+ *    made a write in a shared helper invisible, which was a hole rather than a
+ *    boundary.
  * 2. This is REPOSITORY/TOOLING enforcement. It is not a database capability,
  *    it grants nothing at runtime, and it cannot stop a write that reaches the
  *    database by any path other than a `ctx.db.*` call in analysed source —
@@ -161,7 +177,11 @@ export type UnsupportedForm =
   /** The `__tableName` brand exists but is not a string-literal type. */
   | "id-table-brand-not-statically-known"
   /** `writer[<expr>](…)` where `<expr>` does not name one method statically. */
-  | "write-method-not-statically-known";
+  | "write-method-not-statically-known"
+  /** The RECEIVER's type is `any`/`unknown`, so it cannot be cleared. */
+  | "receiver-type-not-statically-known"
+  /** A write method was taken as a VALUE; its eventual call site is unknown. */
+  | "write-method-reference-escapes";
 
 export type TableResolution =
   | { readonly kind: "RESOLVED"; readonly tables: readonly string[] }
@@ -228,16 +248,31 @@ export function createConvexAnalyzerProgram(repoRoot: string): AnalyzerProgram {
   if (!parsed) throw new Error(`could not read ${configPath}`);
 
   const program = ts.createProgram({ rootNames: parsed.fileNames, options: parsed.options });
-  const convexRoot = path.join(repoRoot, "convex");
+  const root = path.resolve(repoRoot) + path.sep;
+  const nodeModules = `${path.sep}node_modules${path.sep}`;
 
   const analysed: (readonly [ts.SourceFile, string])[] = [];
   for (const sf of program.getSourceFiles()) {
     if (sf.isDeclarationFile) continue;
     const absolute = path.resolve(sf.fileName);
-    if (!absolute.startsWith(path.resolve(convexRoot) + path.sep)) continue;
+    // ⚠️ EVERY REPOSITORY FILE IN THE PROGRAM, NOT ONLY `convex/`.
+    //
+    // This filter used to require the `convex/` prefix, and that was a hole
+    // rather than a scope choice: a helper in `lib/` taking a `MutationCtx` and
+    // calling `ctx.db.delete(id)` is compiled into this very program,
+    // typechecks with zero diagnostics, and was invisible to the guard. Not a
+    // hypothetical refactor either — ten `lib/` and `packages/shared` modules
+    // are already imported by `convex/` today. None contains a database write
+    // at this head, which is exactly why widening is free to do now.
+    if (!absolute.startsWith(root) || absolute.includes(nodeModules)) continue;
     const name = path.relative(repoRoot, absolute).split(path.sep).join("/");
     if (name.includes("/_generated/")) continue;
     if (name.endsWith(".test.ts")) continue;
+    // `test-utils/**` is test infrastructure — `convex/tsconfig.json` pulls it
+    // in so the harness is typechecked, and it seeds rows the way a fixture
+    // does. Verified rather than assumed: no non-test module under `convex/`
+    // imports it. Named here so the exclusion is a decision, not an accident.
+    if (name.startsWith("test-utils/")) continue;
     analysed.push([sf, name]);
   }
   analysed.sort((a, b) => compareStrings(a[1], b[1]));
@@ -467,24 +502,32 @@ function resolveWriteMethod(
 }
 
 /**
- * Is this call worth typing further — is its receiver a Convex database writer?
+ * What the receiver of a write-named call is, as far as the checker can tell.
  *
- * The property-access pre-filter is a cost decision, not a correctness one: a
- * named property that is not one of the four cannot be a write, and typing
- * every `foo.bar()` in the backend is not free. A BRACKET access has no name in
- * the text, so it is always typed.
+ * ⚠️ `UNREADABLE` IS THE WHOLE REASON THIS IS NOT A BOOLEAN. A receiver typed
+ * `any` — `(ctx.db as any).delete(id)`, or `const writer: any = ctx.db` —
+ * answers "is this a database writer?" with neither yes nor no, and the earlier
+ * boolean version read that as "no" and DROPPED the call. The guard then
+ * reported no site at all: not a violation, not even unproven, contradicting
+ * its own header promise that nothing is silently skipped. `as any` is the
+ * canonical escape hatch in TypeScript, so it is precisely the spelling a guard
+ * whose green result is an authorization must refuse rather than ignore.
+ *
+ * Found by two independent reviewers at `1b53ffd94`, reproduced with a positive
+ * control before being fixed. Measured cost at this head: ZERO calls in the
+ * analysed set have an `any`/`unknown` receiver under a write-shaped member.
  */
-function isWriterCallee(
+type ReceiverVerdict = "WRITER" | "NOT_A_WRITER" | "UNREADABLE";
+
+function classifyReceiver(
   checker: ts.TypeChecker,
   callee: ts.PropertyAccessExpression | ts.ElementAccessExpression
-): boolean {
-  if (
-    ts.isPropertyAccessExpression(callee) &&
-    !(DB_WRITE_METHODS as readonly string[]).includes(callee.name.text)
-  ) {
-    return false;
+): ReceiverVerdict {
+  const type = checker.getTypeAtLocation(callee.expression);
+  if ((type.flags & ts.TypeFlags.Any) !== 0 || (type.flags & ts.TypeFlags.Unknown) !== 0) {
+    return "UNREADABLE";
   }
-  return isDatabaseWriterType(checker, checker.getTypeAtLocation(callee.expression));
+  return isDatabaseWriterType(checker, type) ? "WRITER" : "NOT_A_WRITER";
 }
 
 /** The table(s) a write addresses, or the named form that stops it resolving. */
@@ -523,31 +566,87 @@ export function collectDbWriteSites(analyzer: AnalyzerProgram): DbWriteSite[] {
   const sites: DbWriteSite[] = [];
 
   for (const [sourceFile, name] of analyzer.analysed) {
+    const at = (node: ts.Node, method: DbWriteSite["method"], resolution: TableResolution): void => {
+      sites.push({
+        file: name,
+        line: sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1,
+        method,
+        resolution,
+        snippet: snippetOf(node),
+      });
+    };
+
+    // ⚠️ THE METHOD IS RESOLVED BEFORE THE RECEIVER, AND THAT ORDER MATTERS.
+    // A statically known name that is not one of the four clears the call
+    // whatever its receiver is — so `(anything as any)["get"](id)` stays out,
+    // while `(ctx.db as any).delete(id)` cannot be cleared and is refused.
     const record = (call: ts.CallExpression): void => {
       const callee = call.expression;
       if (!ts.isPropertyAccessExpression(callee) && !ts.isElementAccessExpression(callee)) return;
-      if (!isWriterCallee(checker, callee)) return;
 
       const resolved = resolveWriteMethod(checker, callee);
       if (resolved.kind === "NOT_A_WRITE") return;
+      const method = resolved.kind === "UNKNOWN" ? "unknown" : resolved.method;
 
-      const at = (method: DbWriteSite["method"], resolution: TableResolution): DbWriteSite => ({
-        file: name,
-        line: sourceFile.getLineAndCharacterOfPosition(call.getStart()).line + 1,
+      const receiver = classifyReceiver(checker, callee);
+      if (receiver === "NOT_A_WRITER") return;
+      if (receiver === "UNREADABLE") {
+        at(call, method, { kind: "UNPROVEN", form: "receiver-type-not-statically-known" });
+        return;
+      }
+
+      at(
+        call,
         method,
-        resolution,
-        snippet: snippetOf(call),
-      });
-
-      sites.push(
         resolved.kind === "UNKNOWN"
-          ? at("unknown", { kind: "UNPROVEN", form: "write-method-not-statically-known" })
-          : at(resolved.method, resolveTargetTables(checker, resolved.method, call.arguments[0]))
+          ? { kind: "UNPROVEN", form: "write-method-not-statically-known" }
+          : resolveTargetTables(checker, resolved.method, call.arguments[0])
       );
+    };
+
+    /**
+     * ⚠️ A WRITE METHOD TAKEN AS A VALUE NEVER REACHES `record`.
+     *
+     * `const { delete: removeRow } = ctx.db; await removeRow(id)` calls an
+     * IDENTIFIER, so there is no property access at the call site to detect —
+     * and because `delete` is a reserved word, that rename-destructure is the
+     * ordinary way to hold a reference to it. `ctx.db.delete.call(…)`,
+     * `.bind(…)`, `Reflect.apply(ctx.db.delete, …)` and handing the method to a
+     * higher-order helper all escape the same way.
+     *
+     * Following the value to its eventual call sites needs dataflow this guard
+     * does not do. So the ESCAPE itself is reported: the reference is where the
+     * proof stops, and stopping is refused rather than skipped. Measured cost
+     * at this head: ZERO such references in the analysed set.
+     */
+    const recordEscape = (node: ts.Node): void => {
+      if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+        const parent = node.parent;
+        if (ts.isCallExpression(parent) && parent.expression === node) return;
+        const resolved = resolveWriteMethod(checker, node);
+        if (resolved.kind !== "WRITE") return;
+        if (classifyReceiver(checker, node) !== "WRITER") return;
+        at(node, resolved.method, { kind: "UNPROVEN", form: "write-method-reference-escapes" });
+        return;
+      }
+      if (ts.isObjectBindingPattern(node)) {
+        if (!isDatabaseWriterType(checker, checker.getTypeAtLocation(node))) return;
+        for (const element of node.elements) {
+          const key = element.propertyName ?? element.name;
+          const spelled = ts.isIdentifier(key) || ts.isStringLiteral(key) ? key.text : null;
+          if (spelled && (DB_WRITE_METHODS as readonly string[]).includes(spelled)) {
+            at(element, spelled as DbWriteMethod, {
+              kind: "UNPROVEN",
+              form: "write-method-reference-escapes",
+            });
+          }
+        }
+      }
     };
 
     const visit = (node: ts.Node): void => {
       if (ts.isCallExpression(node)) record(node);
+      else recordEscape(node);
       ts.forEachChild(node, visit);
     };
     visit(sourceFile);

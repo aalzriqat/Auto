@@ -480,6 +480,135 @@ describe("dynamic and indirect forms — resolved where possible, named where no
     expect(result.coverage.writeSites).toBe(0);
   });
 
+  /**
+   * ⚠️ REGRESSION CONTROL — `as any` USED TO MAKE A WRITE VANISH ENTIRELY.
+   *
+   * Not a violation, not unproven: no site at all, which contradicted the
+   * guard's own promise that nothing is silently skipped. `as any` is the
+   * canonical TypeScript escape hatch, so it is the first thing anyone reaches
+   * for. Found by two independent reviewers and reproduced with a positive
+   * control (the same write spelled directly is still flagged) before the fix.
+   */
+  it("refuses a write whose receiver type is erased to `any`", () => {
+    const result = auditRogue(
+      "export async function rogue() {",
+      "  await (ctx.db as any).delete(movementId);",
+      "}"
+    );
+    expect(result.coverage.writeSites).toBe(1);
+    expect(result.unproven).toHaveLength(1);
+    expect(result.unproven[0].verdict).toEqual({
+      verdict: "UNPROVEN",
+      form: "receiver-type-not-statically-known",
+    });
+  });
+
+  it("refuses a write through an `any`-typed writer binding", () => {
+    const result = auditRogue(
+      "export async function rogue() {",
+      "  const writer: any = ctx.db;",
+      '  await writer.insert("receiptMovements", { amountMinor: 1 });',
+      "}"
+    );
+    expect(result.unproven).toHaveLength(1);
+    expect(result.unproven[0].verdict).toEqual({
+      verdict: "UNPROVEN",
+      form: "receiver-type-not-statically-known",
+    });
+  });
+
+  /**
+   * The precision half of the same fix: a statically known method name that is
+   * not one of the four clears the call whatever its receiver is. Without this
+   * the fail-closed rule would flag every `(x as any).get(…)` in the codebase.
+   */
+  it("does not refuse a READ through an erased receiver", () => {
+    const result = auditRogue(
+      "export async function rogue() {",
+      "  await (ctx.db as any).get(movementId);",
+      '  await (ctx.db as any)["get"](movementId);',
+      "}"
+    );
+    expect(result.coverage.writeSites).toBe(0);
+  });
+
+  /**
+   * ⚠️ REGRESSION CONTROL — A WRITE METHOD TAKEN AS A VALUE HAS NO PROPERTY
+   * ACCESS AT ITS CALL SITE, SO IT USED TO VANISH TOO.
+   *
+   * `delete` is a reserved word, so the rename-destructure below is the
+   * ORDINARY way to hold a reference to it — this is not an exotic spelling.
+   */
+  it("refuses a write method pulled out by a renaming destructure", () => {
+    const result = auditRogue(
+      "export async function rogue() {",
+      "  const { delete: removeRow } = ctx.db;",
+      "  await removeRow(movementId);",
+      "}"
+    );
+    expect(result.unproven).toHaveLength(1);
+    expect(result.unproven[0].verdict).toEqual({
+      verdict: "UNPROVEN",
+      form: "write-method-reference-escapes",
+    });
+    expect(result.unproven[0].site.method).toBe("delete");
+  });
+
+  it("refuses a write method handed to call, bind or Reflect.apply", () => {
+    const result = auditRogue(
+      "export async function rogue() {",
+      "  await ctx.db.delete.call(ctx.db, movementId);",
+      "  const bound = ctx.db.delete.bind(ctx.db);",
+      "  await bound(movementId);",
+      "  await Reflect.apply(ctx.db.delete, ctx.db, [movementId]);",
+      "}"
+    );
+    expect(result.unproven.length).toBeGreaterThanOrEqual(3);
+    expect(
+      result.unproven.every(
+        (f) => f.verdict.verdict === "UNPROVEN" && f.verdict.form === "write-method-reference-escapes"
+      )
+    ).toBe(true);
+  });
+
+  it("refuses a write method passed to a higher-order helper", () => {
+    const result = auditRogue(
+      "declare function callWith<T extends string>(",
+      "  fn: (id: Id<T>) => Promise<void>,",
+      "  id: Id<T>",
+      "): Promise<void>;",
+      "export async function rogue() {",
+      "  await callWith(ctx.db.delete, movementId);",
+      "}"
+    );
+    expect(result.unproven).toHaveLength(1);
+    expect(result.unproven[0].verdict).toEqual({
+      verdict: "UNPROVEN",
+      form: "write-method-reference-escapes",
+    });
+  });
+
+  /**
+   * The precision half again: an ordinary direct call must be counted ONCE, as
+   * a violation, and must not also be reported as an escaping reference.
+   */
+  it("does not report an ordinary direct call as an escaping reference", () => {
+    const result = auditRogue("export async function rogue() {", "  await ctx.db.delete(movementId);", "}");
+    expect(result.coverage.writeSites).toBe(1);
+    expect(result.unproven).toEqual([]);
+    expect(methodsOf(result.violations)).toEqual(["delete"]);
+  });
+
+  it("treats an optional call as the write it is", () => {
+    const result = auditRogue(
+      "export async function rogue() {",
+      "  await ctx.db?.delete(movementId);",
+      "}"
+    );
+    expect(methodsOf(result.violations)).toEqual(["delete"]);
+    expect(result.unproven).toEqual([]);
+  });
+
   /** Ticket evidence item 6, refusal half. Named form, not a silent skip. */
   it("refuses an insert whose table name is computed at runtime", () => {
     const result = auditRogue(
@@ -670,14 +799,31 @@ describe("the analyzer against the real convex backend", () => {
     expect(byMethod.insert).toBeGreaterThanOrEqual(250);
     expect(byMethod.patch).toBeGreaterThanOrEqual(450);
     expect(byMethod.delete).toBeGreaterThanOrEqual(50);
-  });
+  }, 60_000);
 
-  it("excludes generated code and test files from the analysed set", () => {
+  /**
+   * ⚠️ REGRESSION CONTROL FOR THE `convex/`-ONLY FILE FILTER.
+   *
+   * The analysed set used to require the `convex/` prefix, which meant a helper
+   * in `lib/` taking a `MutationCtx` and calling `ctx.db.delete(id)` was
+   * compiled into this program, typechecked clean, and was invisible to the
+   * guard. Reproduced against the real repository with a positive control
+   * before being fixed.
+   *
+   * This can only be asserted here. A virtual fixture program has no directory
+   * boundary at all, so no fixture — present or future — can express this
+   * failure mode.
+   */
+  it("analyses every repository module in the program, not only convex/", () => {
     const names = backend.analysed.map(([, name]) => name);
-    expect(names.every((name) => name.startsWith("convex/"))).toBe(true);
+    expect(names.some((name) => name.startsWith("convex/"))).toBe(true);
+    expect(names.some((name) => name.startsWith("lib/"))).toBe(true);
+    // The named exclusions, each a decision rather than an accident.
     expect(names.some((name) => name.includes("/_generated/"))).toBe(false);
     expect(names.some((name) => name.endsWith(".test.ts"))).toBe(false);
-  });
+    expect(names.some((name) => name.startsWith("test-utils/"))).toBe(false);
+    expect(names.some((name) => name.includes("node_modules"))).toBe(false);
+  }, 60_000);
 
   /**
    * ⚠️ THE CONTROL THAT CATCHES THE QUIET FAILURE.
@@ -693,9 +839,19 @@ describe("the analyzer against the real convex backend", () => {
     // Sorted with the guard's own comparator on both sides: the property under
     // test is set equality, and an ordering difference must not be able to
     // masquerade as one.
-    const typeAware = sites.map((s) => `${s.file}:${s.line}:${s.method}`).sort(compareStrings);
+    // Escape sites are references, not calls, so they are excluded from a
+    // comparison against a detector that only looks at call sites. There are
+    // none in the backend today; the filter states the property precisely
+    // rather than relying on that staying true.
+    const typeAware = sites
+      .filter(
+        (s) =>
+          !(s.resolution.kind === "UNPROVEN" && s.resolution.form === "write-method-reference-escapes")
+      )
+      .map((s) => `${s.file}:${s.line}:${s.method}`)
+      .sort(compareStrings);
     expect(typeAware).toEqual(syntacticDbWriteCallSites(backend));
-  });
+  }, 60_000);
 
   /**
    * The measured basis for the fail-closed policy, asserted rather than
@@ -705,7 +861,7 @@ describe("the analyzer against the real convex backend", () => {
   it("proves the target table of every write in the backend", () => {
     const unresolved = sites.filter((s) => s.resolution.kind !== "RESOLVED");
     expect(unresolved.map((s) => `${s.file}:${s.line} ${s.method}`)).toEqual([]);
-  });
+  }, 60_000);
 
   /**
    * ⚠️ THE HONESTY RATCHET FOR `replace`.
@@ -718,7 +874,7 @@ describe("the analyzer against the real convex backend", () => {
    */
   it("has no production `replace` call site, exactly as the guard's header claims", () => {
     expect(sites.filter((s) => s.method === "replace")).toEqual([]);
-  });
+  }, 60_000);
 
   /**
    * ⚠️ THE FINDING 218-C AND 231 NEED, PINNED AS A RATCHET.
@@ -752,7 +908,7 @@ describe("the analyzer against the real convex backend", () => {
       "convex/customers.ts::patch": 1,
       "convex/orgFinancialReset.ts::delete": 1,
     });
-  });
+  }, 60_000);
 
   /**
    * ⚠️ POSITIVE CONTROL — REAL CONVEX TYPES, NOT THE FIXTURES' HAND-ROLLED ONE.
@@ -784,7 +940,7 @@ describe("the analyzer against the real convex backend", () => {
 
     expect(result.violations.some((f) => f.site.method === "insert")).toBe(true);
     expect(result.violations.some((f) => f.site.method === "patch")).toBe(true);
-  });
+  }, 60_000);
 
   /**
    * ⚠️ THE ONE THING THIS SUITE MUST NOT BE READ AS SAYING.
@@ -806,11 +962,11 @@ describe("the analyzer against the real convex backend", () => {
     expect(result.authorized).toEqual([]);
     expect(result.violations).toEqual([]);
     expect(result.coverage.writeSites).toBeGreaterThanOrEqual(800);
-  });
+  }, 60_000);
 
   /** What CI actually asserts today: fail-closed holds across the backend. */
   it("passes the shipped audit", () => {
     const result = auditAuthorityWrites(backend);
     expect(formatAuthorityAuditFailure(result)).toBe("");
-  });
+  }, 60_000);
 });
