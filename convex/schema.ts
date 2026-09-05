@@ -296,9 +296,42 @@ export default defineSchema({
     // REVERSE shape
     originalEventId: v.optional(v.id("accountingEvents")),
     resultEventId: v.optional(v.id("accountingEvents")),
+
+    // ─── SCRUM-222 — EXECUTION METADATA IS NOT AN ACCOUNTING OUTCOME ────────
+    //
+    // `status` above stays exactly PENDING / POSTED / FAILED. A row claimed by
+    // a worker is STILL `PENDING`, because period close, cancellation hooks,
+    // reporting projections and evidence checks all read that field and were
+    // written when three values existed. An earlier revision of this design put
+    // the claim in `status`; its sharpest consequence was not a stale control
+    // but a WRONG GL ENTRY — a claimed prepaid amortization row no longer
+    // matched `hookPrepaidExpenseAmortizationsReversed` (which enumerates only
+    // PENDING/FAILED), so the worker posted an amortization for a REVERSED
+    // prepayment. Fourteen exact-status readers would have had to learn a
+    // fourth literal, and a fifteenth proved absent. These fields make that set
+    // empty by construction.
+    //
+    // ⚠️ ALL OPTIONAL AND ADDITIVE, AND THE ABSENCE IS LOAD-BEARING. Every
+    // pre-SCRUM-222 row is valid unchanged, and an absent `nextActionAt` means
+    // "due now" rather than "invisible" — which is what a legacy backlog must
+    // mean. That the index actually behaves that way is not assumed here; it is
+    // proved against a real deployment (contract §4.2).
+    /** Present only while a worker attempt is outstanding. Absent = unclaimed. */
+    dispatchState: v.optional(v.literal("DISPATCHED")),
+    /** Bumped on every claim and every manual revive; a stale worker loses. */
+    generation: v.optional(v.number()),
+    activeAttemptId: v.optional(v.string()),
+    scheduledFunctionId: v.optional(v.id("_scheduled_functions")),
+    /** When this row next becomes selectable. Absent = immediately due. */
+    nextActionAt: v.optional(v.number()),
   })
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_idempotency", ["orgId", "idempotencyKey"])
+    // SCRUM-222 — the due-work index, mirroring `commitmentAuthorityWork`'s
+    // `by_status_next_action` (:464). One index serves both selector ranges:
+    // unclaimed work (`dispatchState` absent) and claimed work awaiting
+    // observation (`DISPATCHED`), each bounded by `nextActionAt`.
+    .index("by_dispatch_next_action", ["status", "dispatchState", "nextActionAt"])
     // Lets a cancelled/voided source (e.g. a warranty/GAP deferral whose sale
     // was cancelled) sweep every one of its own not-yet-posted queued POSTs in
     // one query, not just the one idempotencyKey it happens to know about —

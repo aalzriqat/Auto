@@ -23,6 +23,16 @@ import {
   cancelPendingPostByKey,
   cancelPendingPostsBySource,
 } from "../accountingOutbox";
+import {
+  ReceiptOccurrenceIdentity,
+  PostReceiptOccurrenceArgs,
+  ReverseReceiptOccurrenceArgs,
+  assertTrustedOccurrence,
+  occurrenceIdempotencyKey,
+  occurrenceReversalIdempotencyKey,
+  occurrenceIndexRange,
+  describeOccurrence,
+} from "./receiptOccurrence";
 
 export async function getOrgCurrency(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">): Promise<string> {
   const settings = await ctx.db
@@ -173,12 +183,44 @@ async function postDomainEvent(
  *    entry is STILL POSTED until the outbox drains, and anything that treats
  *    the amount as recovered before then is spending money the ledger still
  *    shows as spent.
- *  - NOT_POSTED — there was nothing to reverse (the forward entry never posted,
- *    and any queued copy of it has been cancelled).
+ *  - NOT_POSTED — no live POSTED forward occurrence remains, and no queued
+ *    forward post survives. An OPERATIONAL statement about the ledger NOW,
+ *    never a claim about history.
  *
  * Returned rather than swallowed because the caller has to tell DEFERRED from
  * REVERSED. Collapsing the two is what let a slice be refunded in cash while
  * its original application was still live in the general ledger.
+ *
+ * ## Why NOT_POSTED is operational and not historical (owner ruling c17613 §1)
+ *
+ * This used to read "the forward entry never posted, and any queued copy of it
+ * has been cancelled" — a claim about history, and a FALSE one in a case the
+ * suite deliberately accepts. `clearCheque`'s return path in `collections.ts`
+ * reverses a `collectionPayments` occurrence under
+ * `cheque_return_after_clear_<chequeId>`, a key this module can never mint. An
+ * occurrence reversed that way DID post; asked afterwards, the helpers below
+ * find no POSTED row and answer NOT_POSTED. Reproduced through the real outbox
+ * worker in `accountingReceiptOccurrenceIdentity.test.ts` §12 OB2.
+ *
+ * The already-reversed case is NOT given an outcome of its own, because no
+ * consumer needs the distinction. The enumeration, current and planned:
+ *
+ *   - `utils/depositApplications.ts` `reverseDepositApplicationsForSale` is the
+ *     ONLY production branch on this type at all: `journalReversed = outcome
+ *     !== "DEFERRED"`. Downstream (`utils/saleCancellation.ts`) reads that
+ *     boolean and never the outcome. It asks "is a forward journal still
+ *     standing?" — for which never-posted and already-reversed are one answer.
+ *   - `reverseReceiptOccurrence` has NO production caller; the facade is
+ *     interface-only at this revision.
+ *   - SCRUM-236 needs proof that one producer owns an occurrence identity.
+ *   - SCRUM-130 needs the cheque's GL reversal and its debt reopening to move
+ *     together, and the reopening to use the outstanding balance.
+ *
+ * None of the four needs the history. Add a fourth outcome when a consumer
+ * actually requires it — and note that `depositApplications`' own comment
+ * already records the stronger lesson: that guard was rewritten to read the
+ * LEDGER rather than the caller's `ReversalOutcome`, precisely because an
+ * outcome describes one branch's path and not the state of the books.
  */
 export type ReversalOutcome = "REVERSED" | "DEFERRED" | "NOT_POSTED";
 
@@ -272,6 +314,181 @@ async function reverseEventIfPosted(
   // it so it never posts (net GL effect of the round trip is zero).
   await cancelPendingPostByKey(ctx, args.orgId, args.pendingPostIdempotencyKey);
   return "NOT_POSTED";
+}
+
+/* ------------------------------------------------------------------------- *
+ * SCRUM-237 — the v2 receipt occurrence facade (owner-proxy c17593 §6)
+ *
+ * The three generic helpers above take `sourceType`, `sourceId`, `eventType`,
+ * `eventVersion` and the idempotency keys as INDEPENDENT arguments. That is the
+ * defect: one receipt's identity is assembled separately at each call site, so
+ * the forward post, the outbox key, the causal check and the reversal can drift
+ * apart and nothing fails when they do.
+ *
+ * These three entry points take the identity as ONE value and derive every one
+ * of those fields from it, so a v2 receipt producer has no parameter through
+ * which to re-split the tuple. The generic helpers stay exactly as they are for
+ * the unrelated event families that still use them.
+ *
+ * Nothing calls these yet, by design. SCRUM-236 rewires `recordPayment` /
+ * `clearCheque` onto them and removes the old `hookCollectionPayment`;
+ * SCRUM-218-C persists and consumes the identity. This commit defines the
+ * surface those two build against and changes no production behavior.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Post — or durably enqueue — the receipt occurrence named by `identity`.
+ *
+ * The idempotency key is DERIVED here rather than accepted, which is what makes
+ * `postOrEnqueue`'s POSTED short-circuit (keyed by `by_org_idempotency`) and
+ * `postAccountingEvent`'s dedupe (keyed by the economic tuple) the same fact
+ * instead of two conventions that happen to agree today.
+ */
+export async function postReceiptOccurrence(
+  ctx: MutationCtx,
+  args: PostReceiptOccurrenceArgs
+): Promise<void> {
+  const id = args.identity;
+  // ⚠️ REFUSE AN UNMINTED IDENTITY BEFORE THE FIRST WRITE (c17632). This is the
+  // door B237-HEAD-01 walked through: a spread clone carrying a forged
+  // `eventType` selected a different posting rule and put a cash receipt in the
+  // bank account, while `postOrEnqueue`'s key-only short-circuit later absorbed
+  // the genuine post. The tuple below is only trustworthy because of this line.
+  assertTrustedOccurrence(id);
+  await postOrEnqueue(ctx, {
+    orgId: id.orgId,
+    eventType: id.eventType,
+    sourceType: id.sourceType,
+    sourceId: id.sourceId,
+    eventVersion: id.eventVersion,
+    accountingDate: args.occurredAt,
+    occurredAt: args.occurredAt,
+    currency: args.currency,
+    idempotencyKey: occurrenceIdempotencyKey(id),
+    payload: args.payload,
+    actorId: args.actorId,
+  });
+}
+
+/**
+ * The causal check: is THIS occurrence on the books?
+ *
+ * Eligibility is exactly what c17593 §7 fixes it at — the exact
+ * `accountingEvents` occurrence exists AND its status is POSTED. An outbox row
+ * marked POSTED, a matching idempotency key, or a legacy `transactions` token
+ * is never a substitute, and REVERSED / FAILED / PENDING / missing are all
+ * ineligible.
+ *
+ * Addressed through `occurrenceIndexRange`, so every economic field must match.
+ * There is deliberately no key-only fallback: a lookup whose identity is wrong
+ * in any field must MISS, not quietly match something else.
+ *
+ * ## Ambiguity REFUSES rather than choosing
+ *
+ * Convex has no unique indexes, so nothing in the schema guarantees this exact
+ * range holds at most one row. An earlier revision filtered to POSTED and took
+ * `.first()`, which meant a corrupt pair — the same exact tuple present twice,
+ * one POSTED and one REVERSED — would be reported as a live POSTED occurrence,
+ * choosing the favourable row and hiding the corruption. `postAccountingEvent`
+ * reads the same tuple with `.unique()` and therefore fails closed; a causal
+ * check that is laxer than the writer it guards is worse than no check.
+ *
+ * So the range is read WITHOUT the status filter and refuses on more than one
+ * row. That converts silent corruption into an explicit operational error, and
+ * a caller cannot obtain an eligible occurrence it should not have. Status is
+ * applied afterwards: only POSTED is eligible — REVERSED, FAILED, PENDING and
+ * missing are all ineligible, and an outbox POSTED row or a matching
+ * idempotency key is never a substitute.
+ */
+export async function findPostedReceiptOccurrence(
+  ctx: MutationCtx,
+  identity: ReceiptOccurrenceIdentity
+): Promise<Doc<"accountingEvents"> | null> {
+  const range = occurrenceIndexRange(identity);
+  const rows = await ctx.db
+    .query("accountingEvents")
+    .withIndex(range.index, (q) =>
+      q
+        .eq("orgId", range.orgId)
+        .eq("eventType", range.eventType)
+        .eq("sourceType", range.sourceType)
+        .eq("sourceId", range.sourceId)
+        .eq("eventVersion", range.eventVersion)
+    )
+    .take(2);
+  if (rows.length > 1) {
+    throw new Error(
+      `ambiguous receipt occurrence ${describeOccurrence(identity)}: more than one accountingEvents row shares this exact economic tuple`
+    );
+  }
+  const row = rows[0];
+  return row && row.status === "POSTED" ? row : null;
+}
+
+/**
+ * Reverse the receipt occurrence named by `identity`.
+ *
+ * Two things this closes that the generic helper leaves open:
+ *
+ * 1. `eventVersion` is ALWAYS supplied. `reverseEventIfPosted` falls back to a
+ *    `by_org_source` scan with `.first()` when it is undefined, which reverses
+ *    whichever event happens to come first — for a source with several
+ *    occurrences that is a reversal aimed at one receipt landing on another.
+ *    Carrying the identity makes the exact-address branch unconditional FOR
+ *    THIS FACADE'S OWN CALLS. It does not make that fallback dead code: the
+ *    generic `makeReversalHook` factory in this file still omits `eventVersion`
+ *    for other event families, and that is out of scope here.
+ * 2. `pendingPostIdempotencyKey` is derived from the SAME identity as the
+ *    forward post, so `cancelPendingPostByKey` cancels the entry that forward
+ *    post actually enqueued. Supplied independently, a mismatch cancels nothing
+ *    and leaves an unposted forward entry alive behind a NOT_POSTED result.
+ * 3. Cardinality is refused BEFORE anything mutates.
+ *
+ * On (3), which the Codex seat found at `45dd608b0`: pinning `eventVersion`
+ * addresses the right ROW RANGE but says nothing about how many rows are in it.
+ * `reverseEventIfPosted`'s exact-version branch filters POSTED and takes
+ * `.first()`, so against two rows sharing one exact economic tuple it reverses
+ * one, leaves the other POSTED, and returns REVERSED. Convex has no unique
+ * indexes, so nothing in the schema prevents that pair from existing.
+ *
+ * The read path (`findPostedReceiptOccurrence`) already refused this. The
+ * MUTATING path did not — the wrong way round, since the read merely reports
+ * while the write moves money. Calling the read guard first reuses the exact
+ * same cardinality assertion and makes the refusal happen before any write.
+ *
+ * The `.first()` in `reverseEventIfPosted` itself is deliberately NOT changed:
+ * it is pre-existing, shared with `reverseDepositApplication`, and outside this
+ * change's frozen scope. Closing it at the facade removes the path this diff
+ * makes reachable; the generic helper's own cardinality behaviour is recorded
+ * as follow-up rather than widened into this PR.
+ */
+export async function reverseReceiptOccurrence(
+  ctx: MutationCtx,
+  args: ReverseReceiptOccurrenceArgs
+): Promise<ReversalOutcome> {
+  const id = args.identity;
+  // ⚠️ OBTAINABILITY BEFORE ANYTHING ELSE (c17632). Refuse a value this process
+  // did not mint — a spread clone, a JSON round trip, a hand-built object —
+  // before a single read, let alone a write. The key derivations assert this
+  // too; asserting at the door as well means a facade that later grows a write
+  // before its first key derivation cannot lose the check by accident.
+  assertTrustedOccurrence(id);
+  // Throws on an ambiguous exact tuple. Its return value is deliberately
+  // unused: NOT_POSTED is a legitimate outcome that reverseEventIfPosted below
+  // determines for itself, so this call is here purely for its refusal.
+  await findPostedReceiptOccurrence(ctx, id);
+  return await reverseEventIfPosted(ctx, {
+    orgId: id.orgId,
+    sourceType: id.sourceType,
+    sourceId: id.sourceId,
+    eventType: id.eventType,
+    eventVersion: id.eventVersion,
+    reason: args.reason,
+    actorId: args.actorId,
+    reversalDate: args.reversalDate,
+    reversalIdempotencyKey: occurrenceReversalIdempotencyKey(id),
+    pendingPostIdempotencyKey: occurrenceIdempotencyKey(id),
+  });
 }
 
 export async function hookDepositReceived(
@@ -1378,7 +1595,7 @@ export async function isEventQueued(
  *
  * The distinction is the difference between a message that helps and one that
  * misleads. A PENDING entry really is waiting for its period to open. A FAILED
- * one has exhausted its retries: `drainPendingForOrg` reads only PENDING rows,
+ * one has exhausted its retries: the due-work sweep selects only PENDING rows,
  * so opening a period does nothing for it, and telling someone to do that sends
  * them somewhere they cannot fix it.
  */

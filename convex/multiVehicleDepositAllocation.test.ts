@@ -27,6 +27,7 @@ import { join } from "node:path";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
+import { settleOutbox } from "../test-utils/outboxWork";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { COMMITMENT_AUTHORITY_V1 } from "./utils/commitmentKernel";
@@ -1532,9 +1533,7 @@ describe("a reversal that has to wait for an accounting period", () => {
       periodId: period._id,
       reason: "Backdated cancellation needs its reversal posted",
     });
-    await s.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, {
-      orgId: s.orgId,
-    });
+    await settleOutbox(s.t, s.orgId);
 
     const application = await s.t.run(async (ctx) =>
       (await ctx.db.query("depositApplications").collect()).find(
@@ -2902,3 +2901,4 @@ describe("a zero share whose sale is cancelled", () => {
     expect(roots.length, "the funded car has a commitment history at all").toBeGreaterThan(0);
   });
 });
+
