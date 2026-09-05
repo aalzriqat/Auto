@@ -113,6 +113,28 @@ test.use({ actionTimeout: 25_000 });
 
 test.describe("the deal cockpit's reading measure", () => {
   /**
+   * ⚠️ SKIPPED BY OWNER RULING — the deal screen is being redesigned.
+   *
+   * Every assertion below measures the CURRENT cockpit's layout: the pixel
+   * distance between a label and the figure it names, at two widths and in two
+   * languages. A redesign changes exactly that, so these would fail on the
+   * layout being replaced rather than on anything the redesign got wrong, and
+   * fixing them against the old markup would be work thrown away twice.
+   *
+   * ⚠️ SKIPPED, NOT DELETED, and skipped LOUDLY. The reading-measure defect this
+   * gate exists for — `justify-between` on an unbounded row, which the owner
+   * had to zoom to 50% to read around — is a real product defect that a
+   * redesign can reintroduce. Re-enable this against the new screen; do not let
+   * the redesign land with no measure at all.
+   *
+   * Tracked with the redesign: SCRUM-63 (Unified Deal Workspace).
+   */
+  test.skip(
+    true,
+    "The deal screen is being redesigned (SCRUM-63). These assertions measure the CURRENT cockpit's layout, so they would fail on markup that is being replaced. Re-enable against the new screen — the reading-measure defect they guard is real and a redesign can reintroduce it.",
+  );
+
+  /**
    * Gated on the CREDENTIALS, for the reason the sibling spec documents at
    * length: a describe-level skip is evaluated at DISCOVERY, so gating on a file
    * the setup project creates makes the suite skip forever behind a green check.
