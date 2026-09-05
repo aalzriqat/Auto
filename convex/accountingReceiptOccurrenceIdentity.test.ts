@@ -606,16 +606,26 @@ describe("SCRUM-237 §9 — the forward, causal and reversal addresses are ONE f
     // two keys and two journals. Posting twice with materially different
     // payloads must leave exactly ONE event and ONE journal.
     //
-    // ⚠️ SCOPE, precisely. c17593 §2 requires two things of this case: that the
-    // two commands COLLIDE on one occurrence, and that the second then FAIL
-    // SEMANTIC REPLAY because the payload/authority contradicts. This test pins
-    // the FIRST only. The second is not implemented and cannot be yet: refusing
-    // requires comparing the incoming payload version against the one stored on
-    // the occurrence, and nothing persists `receiptPayloadVersion` until
-    // SCRUM-218-C. Today the second command is silently ABSORBED by
-    // `postOrEnqueue`'s POSTED short-circuit — no second journal, but also no
-    // refusal. Collision is the precondition for refusal, so this is the half
-    // that had to land first; do not read it as the whole requirement.
+    // ⚠️ SCOPE, UPDATED BY SCRUM-249 — BOTH HALVES NOW LAND.
+    //
+    // c17593 §2 requires two things of this case: that the two commands COLLIDE
+    // on one occurrence, and that the second then FAIL SEMANTIC REPLAY because
+    // the payload/authority contradicts. This test used to pin the FIRST only,
+    // and said so: "the second is not implemented and cannot be yet... today the
+    // second command is silently ABSORBED by `postOrEnqueue`'s POSTED
+    // short-circuit — no second journal, but also no refusal."
+    //
+    // SCRUM-249 landed the second half, and NOT via the route this comment
+    // predicted. It does not compare a persisted `receiptPayloadVersion`; it
+    // compares the occurrence's stored `payloadHash` at the posting boundary,
+    // for an authorized reserved post only. That comparator already existed on
+    // the row, so completing the requirement added no new persisted state — and
+    // it works whether or not the divergence is spelled as a version.
+    //
+    // The collision half is not weakened by the refusal; it is what MAKES the
+    // refusal possible. A command that had minted a second key would have posted
+    // happily and left two journals, which is the outcome this test exists to
+    // exclude. Both are asserted below.
     const { t, orgId, userId, customerId } = await seedPostableOrg("ev8");
     const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
     const identity = directCollectionReceipt({ orgId, paymentId });
@@ -629,22 +639,39 @@ describe("SCRUM-237 §9 — the forward, causal and reversal addresses are ONE f
     });
     // v2-shaped payload for the SAME economic occurrence, carrying a DIFFERENT
     // amount. If the payload version could reach the key, this would mint a
-    // second occurrence and the ledger would carry both.
-    await t.run(async (ctx) => {
-      await postReceiptOccurrence(ctx, {
-        identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
-        payload: { ...receiptPayload(paymentId, customerId, 9999), receiptPayloadVersion: RECEIPT_PAYLOAD_VERSION },
-      });
-    });
+    // second occurrence and the ledger would carry both. It collides instead —
+    // and now REFUSES rather than being absorbed as if equivalent.
+    await expect(
+      t.run(async (ctx) => {
+        await postReceiptOccurrence(ctx, {
+          identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
+          payload: { ...receiptPayload(paymentId, customerId, 9999), receiptPayloadVersion: RECEIPT_PAYLOAD_VERSION },
+        });
+      })
+    ).rejects.toThrow(/payload economics differ/);
 
     const events = await eventsFor(t, orgId);
     expect(events).toHaveLength(1);
     expect(events[0].idempotencyKey).toBe(occurrenceIdempotencyKey(identity));
+    // The survivor is the FIRST post, unchanged — a refusal must not rewrite the
+    // occurrence it refused to replace.
+    expect((events[0].payload as { receivedMinor: number }).receivedMinor).toBe(5000);
 
     const journals = await t.run(async (ctx) =>
       ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
     );
     expect(journals).toHaveLength(1);
+
+    // ...and the collision half, isolated from the divergence: the SAME payload
+    // posted again still absorbs silently, so the refusal above is caused by the
+    // contradiction and not merely by "a second call happened".
+    await t.run(async (ctx) => {
+      await postReceiptOccurrence(ctx, {
+        identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
+        payload: receiptPayload(paymentId, customerId, 5000),
+      });
+    });
+    expect(await eventsFor(t, orgId)).toHaveLength(1);
   });
 
   test("EV6b — the reversal addresses the same occurrence the forward post created", async () => {

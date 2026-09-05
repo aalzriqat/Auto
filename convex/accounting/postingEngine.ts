@@ -14,6 +14,13 @@ import {
 } from "./postingRules";
 import { auditLog } from "../financialAudit";
 import { incrementAccountSnapshot } from "./accountSnapshots";
+import {
+  ReceiptOccurrenceIdentity,
+  assertOccurrenceAuthorizes,
+  isReservedReceiptKey,
+  isReservedReceiptTuple,
+  reservedOccurrenceRefusal,
+} from "./receiptOccurrence";
 
 export interface PostCommand {
   orgId: Id<"organizations">;
@@ -28,6 +35,25 @@ export interface PostCommand {
   idempotencyKey: string;
   payload: Record<string, unknown>;
   actorId: Id<"users">;
+  /**
+   * Proof that this command may address the reserved receipt occurrence
+   * (SCRUM-249). Absent on every other posting, and absent is the default.
+   *
+   * ⚠️ THIS IS A RUNTIME CAPABILITY, NOT A TYPE. Its authority is membership of
+   * `receiptOccurrence`'s module-private `WeakSet` — object identity — which is
+   * why a registered mutation cannot supply one: arguments crossing the Convex
+   * function boundary are deserialized, so an operator's JSON is a different
+   * object however exactly it copies the shape. `accountingLedger.post`'s
+   * validator also declares no such argument, but that is the second line of
+   * defence, not the first; a field name is a convention and object identity is
+   * a fact.
+   *
+   * ⚠️ IT MUST NEVER BE PERSISTED. `enqueuePendingPost` enumerates the columns
+   * it stores rather than spreading the command, so this cannot reach the
+   * database by accident — asserted in the SCRUM-249 suite rather than left to
+   * hold by inspection, because a later `...cmd` would silently break it.
+   */
+  receiptAuthority?: ReceiptOccurrenceIdentity;
 }
 
 export interface PostResult {
@@ -54,6 +80,106 @@ export interface PostResult {
  * ability to post a NEW one.
  */
 const RETIRED_EVENT_TYPES = new Set<string>(["CLAIM_SETTLED", "CLAIM_WRITTEN_OFF"]);
+
+/**
+ * SCRUM-249 — a generic posting ingress may not claim the reserved receipt
+ * occurrence, and may not take its idempotency key from outside it either.
+ *
+ * Exported so the two `postOrEnqueue` short-circuits enforce the same predicate
+ * rather than a lookalike. They matter because one of them fires EARLIER than
+ * this function: `postOrEnqueue`'s `alreadyPosted` check returns silently on a
+ * key match, so a guard that lived only here would be reached after the receipt
+ * had already been dropped.
+ *
+ * Returns the proven identity when the command is reserved and authorized, and
+ * `null` when the command has nothing to do with the reserved domain — so a
+ * caller can tell "authorized reserved post" from "ordinary post" without
+ * re-deriving the classification.
+ */
+export function proveReservedReceiptAuthority(
+  cmd: PostCommand
+): ReceiptOccurrenceIdentity | null {
+  const reserved =
+    isReservedReceiptTuple(cmd.eventType, cmd.sourceType) ||
+    isReservedReceiptKey(cmd.idempotencyKey);
+  if (!reserved) {
+    // An authority carried on a non-reserved command would mean the tuple and
+    // the identity disagree, which `assertOccurrenceAuthorizes` would catch —
+    // but reaching here at all is a programming error, not a caller's, so say
+    // so rather than letting it look like a refused attack.
+    if (cmd.receiptAuthority) {
+      throw new Error(
+        `receipt occurrence authority supplied for a non-reserved posting ` +
+          `(${cmd.eventType}/${cmd.sourceType}, key ${cmd.idempotencyKey}). ` +
+          "The authority and the command disagree about what is being posted."
+      );
+    }
+    return null;
+  }
+  if (!cmd.receiptAuthority) {
+    throw new ConvexError(reservedOccurrenceRefusal(cmd));
+  }
+  assertOccurrenceAuthorizes(cmd.receiptAuthority, cmd);
+  return cmd.receiptAuthority;
+}
+
+/**
+ * A key match is NOT an occurrence match, and treating it as one is the
+ * absorption defect itself (SCRUM-249).
+ *
+ * `postAccountingEvent` short-circuits on `by_org_idempotency` before it has
+ * compared a single economic column. For an ordinary event family that is the
+ * long-standing behaviour and this change does not touch it. For the reserved
+ * receipt occurrence it is not acceptable: returning a prior row as
+ * `alreadyPosted` asserts the two are the same fact, and if the stored tuple or
+ * the stored economics differ, that assertion is false and the certified
+ * receipt is silently discarded.
+ *
+ * So an authorized reserved post refuses on divergence instead of absorbing it.
+ * An EXACT retry — same tuple, same payload — still returns the prior event,
+ * which is what keeps the drain and every legitimate retry idempotent.
+ *
+ * Scoped deliberately to the reserved domain. Widening it to every event family
+ * would newly refuse producers that legitimately reuse one key across tuples
+ * (`hookDepositApplied` varies `sourceType` behind a fixed key), and SCRUM-249
+ * does not own those.
+ */
+export function assertExistingRowIsSameOccurrence(
+  existing: {
+    eventType?: string;
+    sourceType: string;
+    sourceId: string;
+    eventVersion?: number;
+    payloadHash?: string;
+  },
+  cmd: PostCommand,
+  cmdPayloadHash: string
+): void {
+  const divergent: string[] = [];
+  if (existing.eventType !== undefined && existing.eventType !== cmd.eventType) {
+    divergent.push(`eventType ${existing.eventType} != ${cmd.eventType}`);
+  }
+  if (existing.sourceType !== cmd.sourceType) {
+    divergent.push(`sourceType ${existing.sourceType} != ${cmd.sourceType}`);
+  }
+  if (existing.sourceId !== cmd.sourceId) {
+    divergent.push(`sourceId ${existing.sourceId} != ${cmd.sourceId}`);
+  }
+  if (existing.eventVersion !== undefined && existing.eventVersion !== cmd.eventVersion) {
+    divergent.push(`eventVersion ${existing.eventVersion} != ${cmd.eventVersion}`);
+  }
+  if (existing.payloadHash !== undefined && existing.payloadHash !== cmdPayloadHash) {
+    divergent.push("payload economics differ");
+  }
+  if (divergent.length > 0) {
+    throw new ConvexError(
+      `Refusing to absorb a reserved receipt occurrence into a conflicting existing row ` +
+        `under idempotency key "${cmd.idempotencyKey}" (SCRUM-249): ${divergent.join("; ")}. ` +
+        "A shared key is not evidence that two postings are the same economic fact, and " +
+        "returning the earlier one would report them as equivalent."
+    );
+  }
+}
 
 export async function postAccountingEvent(
   ctx: MutationCtx,
@@ -92,9 +218,35 @@ export async function postAccountingEvent(
     );
   }
 
+  // ⚠️ 1c. THE RESERVED RECEIPT OCCURRENCE IS PROVEN HERE — SCRUM-249.
+  //
+  // Placed BEFORE every idempotency lookup below, and that ordering is the
+  // whole point rather than a detail. The defect was never "a caller can choose
+  // a bad key"; it was that the key is compared before anything else, so
+  // whoever reaches a key first owns the occurrence and the certified payload
+  // is never compared to what is already there. A guard placed after the
+  // `alreadyPosted` short-circuit would run only in the cases that had already
+  // gone wrong.
+  //
+  // It also sits before `assertPostingAllowed`, the posting rules and every
+  // insert, so a refusal costs zero journal, event, journal line, snapshot or
+  // outbox row — measured, not assumed (SCRUM-249 §1 R2).
+  //
+  // Authority is a runtime capability minted in `receiptOccurrence`, so the
+  // registered generic ingress cannot produce one; the outbox drain, which
+  // holds no in-process value, re-establishes it from its persisted row through
+  // the one sanctioned rehydration door.
+  const reservedAuthority = proveReservedReceiptAuthority(cmd);
+
   // 2. Validate currency
   const currency = cmd.currency.toUpperCase();
   const scale = scaleForCurrency(currency);
+
+  // Computed early ONLY for the reserved comparison below — the general path
+  // still hashes at step 9. `simplePayloadHash` canonicalizes before hashing,
+  // so a payload that round-tripped through the outbox row hashes identically
+  // to the one the producer built.
+  const reservedPayloadHash = reservedAuthority ? await simplePayloadHash(cmd.payload) : "";
 
   // 3. Idempotency: check for existing event with same key
   const existingByKey = await ctx.db
@@ -106,6 +258,11 @@ export async function postAccountingEvent(
 
   if (existingByKey) {
     if (existingByKey.status === "POSTED" && existingByKey.journalEntryId) {
+      // The key found something. For the reserved occurrence, prove it is the
+      // SAME occurrence with the SAME economics before reporting equivalence.
+      if (reservedAuthority) {
+        assertExistingRowIsSameOccurrence(existingByKey, cmd, reservedPayloadHash);
+      }
       return {
         eventId: existingByKey._id,
         journalEntryId: existingByKey.journalEntryId,
@@ -131,6 +288,12 @@ export async function postAccountingEvent(
     .unique();
 
   if (existingBySource && existingBySource.status === "POSTED" && existingBySource.journalEntryId) {
+    // Same occurrence by construction here — the index range IS the tuple — so
+    // only the economics can still differ. A repost of one receipt with a
+    // different split is not the same fact, whichever index found it.
+    if (reservedAuthority) {
+      assertExistingRowIsSameOccurrence(existingBySource, cmd, reservedPayloadHash);
+    }
     return {
       eventId: existingBySource._id,
       journalEntryId: existingBySource.journalEntryId,
@@ -193,7 +356,7 @@ export async function postAccountingEvent(
 
   // 9. Create accounting event record
   const now = Date.now();
-  const payloadHash = await simplePayloadHash(cmd.payload);
+  const payloadHash = reservedAuthority ? reservedPayloadHash : await simplePayloadHash(cmd.payload);
 
   const eventId = await ctx.db.insert("accountingEvents", {
     orgId: cmd.orgId,

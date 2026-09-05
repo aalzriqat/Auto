@@ -12,8 +12,13 @@
 import { ConvexError } from "convex/values";
 import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
-import { postAccountingEvent, PostCommand } from "./postingEngine";
-import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting, RECEIPT_CREDIT_APPLIED_EVENT_TYPE, RECEIPT_CREDIT_APPLIED_SOURCE_TYPE, type FinancedSalePlanPayload } from "./postingRules";
+import {
+  postAccountingEvent,
+  PostCommand,
+  proveReservedReceiptAuthority,
+  assertExistingRowIsSameOccurrence,
+} from "./postingEngine";
+import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting, simplePayloadHash, RECEIPT_CREDIT_APPLIED_EVENT_TYPE, RECEIPT_CREDIT_APPLIED_SOURCE_TYPE, type FinancedSalePlanPayload } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate, checkPostingAllowed } from "../accountingPeriods";
 import { SYSTEM_KEYS, type SystemKey } from "../utils/defaultChart";
@@ -111,6 +116,15 @@ async function postOrEnqueue(
   // no-op; the queued original is the source of truth. (postAccountingEvent only
   // dedupes against POSTED events, so this pending-side guard is the only thing
   // that prevents the cross-period duplicate.)
+  //
+  // ⚠️ SCRUM-249 — THIS SHORT-CIRCUIT IS KEY-ONLY, AND IT FIRES BEFORE THE
+  // POSTING ENGINE IS REACHED AT ALL. For an ordinary event family that is
+  // exactly the intended behaviour and nothing below changes it. For the
+  // reserved receipt occurrence it is a silent-drop surface: a row queued under
+  // this key by something that is NOT this occurrence would make the certified
+  // receipt return here having posted nothing and raised nothing. Prove the
+  // reservation first, then prove the row found is really this occurrence.
+  const reservedAuthority = proveReservedReceiptAuthority(cmd);
   const queued = await ctx.db
     .query("pendingAccountingEvents")
     .withIndex("by_org_idempotency", (q) =>
@@ -118,7 +132,18 @@ async function postOrEnqueue(
     )
     .filter((q) => q.and(q.eq(q.field("kind"), "POST"), q.neq(q.field("status"), "POSTED")))
     .first();
-  if (queued) return;
+  if (queued) {
+    if (reservedAuthority) {
+      // A queued row carries its own payload, so "the same work is already
+      // waiting" is checkable rather than assumed.
+      assertExistingRowIsSameOccurrence(
+        { ...queued, payloadHash: await simplePayloadHash((queued.payload ?? {}) as Record<string, unknown>) },
+        cmd,
+        await simplePayloadHash(cmd.payload)
+      );
+    }
+    return;
+  }
 
   // Already on the books? Then there is nothing to queue. postAccountingEvent
   // dedupes on this key, so the enqueued row could never post anything — it
@@ -136,7 +161,21 @@ async function postOrEnqueue(
     )
     .filter((q) => q.eq(q.field("status"), "POSTED"))
     .first();
-  if (alreadyPosted) return;
+  if (alreadyPosted) {
+    // ⚠️ SCRUM-249 §3 K1 REPRODUCED HERE. Before this check existed, a POSTED
+    // row holding the receipt's derived key under a DIFFERENT tuple made the
+    // genuine receipt return from this line: nothing posted, nothing queued,
+    // nothing thrown, and `findPostedReceiptOccurrence` reporting null forever
+    // after. The engine's own guard could not help — it is never reached.
+    if (reservedAuthority) {
+      assertExistingRowIsSameOccurrence(
+        alreadyPosted,
+        cmd,
+        await simplePayloadHash(cmd.payload)
+      );
+    }
+    return;
+  }
 
   // Self-heal: make sure the GENERAL_EXPENSE system account is mapped for this
   // org before the engine tries to resolve it (older charts lack the key).
@@ -402,6 +441,11 @@ export async function postReceiptOccurrence(
     idempotencyKey: occurrenceIdempotencyKey(id),
     payload: args.payload,
     actorId: args.actorId,
+    // SCRUM-249 — the capability that distinguishes this producer from the
+    // generic ingress. Carried, never persisted: `enqueuePendingPost` stores an
+    // explicit column list, and the drain re-establishes authority from that
+    // stored row instead of from anything held in memory.
+    receiptAuthority: id,
   }, { requiredSystemKeys: args.requiredSystemKeys });
 }
 

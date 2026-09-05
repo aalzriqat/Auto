@@ -20,6 +20,11 @@ import { MutationCtx, QueryCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { PostCommand, postAccountingEvent } from "./accounting/postingEngine";
+import {
+  isReservedReceiptKey,
+  isReservedReceiptTuple,
+  rehydrateReceiptOccurrence,
+} from "./accounting/receiptOccurrence";
 import { prepaidPostingBlockedReason } from "./utils/prepaidSourceLedger";
 import { payrollPostingBlockedReason } from "./utils/payrollSourceLedger";
 import { commissionPostingBlockedReason } from "./utils/commissionSourceLedger";
@@ -215,19 +220,56 @@ async function postPendingEntry(
 ): Promise<Id<"accountingEvents"> | null> {
   if (!p.eventType) throw new Error("Pending POST record missing eventType");
   if (!p.currency) throw new Error("Pending POST record missing currency");
+  const eventVersion = p.eventVersion ?? 1;
+
+  // ⚠️ SCRUM-249 — WHERE THE DEFERRED ARM GETS ITS AUTHORITY.
+  //
+  // The drain holds no in-process identity: it rebuilds the command from a row
+  // written in some earlier transaction, possibly minutes ago and certainly in
+  // a different mutation. So the authority cannot be a value it was handed —
+  // it has to be re-established from persisted state, which is exactly the
+  // boundary SCRUM-237 already defined and certified.
+  //
+  // What makes this row itself the evidence: `pendingAccountingEvents` has two
+  // production writers, `enqueuePendingPost` and `enqueuePendingReversal`, both
+  // in this file. `enqueuePendingPost` is called only from inside
+  // `postOrEnqueue`, and for the reserved occurrence `postOrEnqueue` is reached
+  // only from `postReceiptOccurrence`, which has already proven a trusted
+  // identity. `accountingLedger.post` calls `postAccountingEvent` DIRECTLY and
+  // can never enqueue, and this table is not among `adminData`'s browsable
+  // tables, so the super-admin raw editor cannot mint one either. A reserved
+  // POST row existing here therefore means the certified producer created it.
+  //
+  // Fail-closed on a row that should not exist: if the key is reserved but the
+  // tuple is not, `rehydrateReceiptOccurrence` refuses across families rather
+  // than manufacturing an identity for it.
+  const receiptAuthority =
+    isReservedReceiptTuple(p.eventType, p.sourceType) || isReservedReceiptKey(p.idempotencyKey)
+      ? rehydrateReceiptOccurrence({
+          orgId: p.orgId,
+          snapshot: {
+            eventType: p.eventType,
+            sourceType: p.sourceType,
+            sourceId: p.sourceId,
+            eventVersion,
+          },
+        })
+      : undefined;
+
   const res = await postAccountingEvent(ctx, {
     orgId: p.orgId,
     branchId: p.branchId,
     eventType: p.eventType,
     sourceType: p.sourceType,
     sourceId: p.sourceId,
-    eventVersion: p.eventVersion ?? 1,
+    eventVersion,
     accountingDate: p.accountingDate,
     occurredAt: p.occurredAt ?? p.accountingDate,
     currency: p.currency,
     idempotencyKey: p.idempotencyKey,
     payload: (p.payload ?? {}) as Record<string, unknown>,
     actorId: p.actorId,
+    receiptAuthority,
   });
   return res.eventId;
 }
