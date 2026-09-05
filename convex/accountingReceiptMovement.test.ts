@@ -904,14 +904,26 @@ describe("SCRUM-218-C §10 R02 — a batched financial reset never orphans recei
     ).toHaveLength(2);
 
     // One row per table per pass — the adversarial batch size.
-    for (let pass = 0; pass < 25; pass += 1) {
-      await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
+    //
+    // ⚠️ THE ASSERTION RUNS AFTER EVERY COMMITTED PASS, AND IT CHECKS BOTH
+    // DIRECTIONS. Checking only that applications keep their movement caught the
+    // first defect; it did NOT catch that a *blocked* movement could outlive its
+    // own collection and canonical payments, because blocking did not propagate
+    // upward. An orphan that moves up a level is still an orphan.
+    // The cap is generous because `batchSize: 1` clears ONE row per table per
+    // pass and a seeded org carries a full chart of accounts — reaching zero is
+    // dominated by unrelated tables, not by the receipt graph. The monotonic
+    // `remaining` check below is what proves progress; this bound only stops a
+    // genuine deadlock from hanging the suite.
+    let lastRemaining = Number.POSITIVE_INFINITY;
+    let settled = false;
+    for (let pass = 0; pass < 400; pass += 1) {
+      const result = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
         orgId, dryRun: false, batchSize: 1,
       });
 
-      // The invariant, checked after EVERY committed pass rather than only at
-      // the end: no surviving application may reference a vanished parent.
       await t.run(async (ctx) => {
+        // Downward: no application may outlive what it points at.
         const applications = await ctx.db
           .query("receiptApplications")
           .withIndex("by_org", (q) => q.eq("orgId", orgId))
@@ -933,8 +945,56 @@ describe("SCRUM-218-C §10 R02 — a batched financial reset never orphans recei
             `pass ${pass}: application outlived its canonical allocation`
           ).not.toBeNull();
         }
+
+        // Upward: no surviving movement may reference a vanished payment. This
+        // is the direction the first repair broke.
+        const movements = await ctx.db
+          .query("receiptMovements")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect();
+        for (const movement of movements) {
+          expect(
+            await ctx.db.get(movement.collectionPaymentId),
+            `pass ${pass}: movement ${movement._id} outlived its collection payment`
+          ).not.toBeNull();
+          expect(
+            await ctx.db.get(movement.canonicalPaymentId),
+            `pass ${pass}: movement ${movement._id} outlived its canonical payment`
+          ).not.toBeNull();
+        }
+
+        // ...and no position may outlive its movement either.
+        const positions = await ctx.db
+          .query("receiptRetainedPositions")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect();
+        for (const position of positions) {
+          expect(
+            await ctx.db.get(position.receiptMovementId),
+            `pass ${pass}: position outlived its movement`
+          ).not.toBeNull();
+        }
       });
+
+      // Measurable progress: a propagation bug that blocked everything forever
+      // would satisfy every orphan assertion above while never terminating.
+      expect(result.remaining, `pass ${pass}: reset made no progress`).toBeLessThanOrEqual(lastRemaining);
+      lastRemaining = result.remaining;
+      if (result.remaining === 0) { settled = true; break; }
     }
+
+    expect(settled, "reset never reached remaining === 0").toBe(true);
+
+    // And it actually finished the job rather than blocking its way to quiet.
+    await t.run(async (ctx) => {
+      for (const table of ["receiptApplications", "receiptRetainedPositions", "receiptMovements"] as const) {
+        const left = await ctx.db
+          .query(table)
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect();
+        expect(left, `${table} still holds rows after the reset settled`).toHaveLength(0);
+      }
+    });
   });
 });
 

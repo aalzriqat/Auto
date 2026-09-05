@@ -265,7 +265,26 @@ export const resetOrgFinancialData = internalMutation({
         stillPopulated.has(child)
       );
       if (blockedBy.length > 0) {
-        if (rows.length > 0) remaining += rows.length;
+        if (rows.length > 0) {
+          remaining += rows.length;
+          // ⚠️ BLOCKING MUST PROPAGATE, OR THE ORPHAN JUST MOVES UP A LEVEL
+          // (review R05). A blocked table that still holds rows has to block ITS
+          // parents too. Without this line the graph is only one level deep: a
+          // surviving `receiptMovements` row was invisible to
+          // `collectionPayments` and `canonicalPayments`, which then deleted
+          // themselves — leaving the movement alive with dangling
+          // `collectionPaymentId` and `canonicalPaymentId` references.
+          //
+          // That was strictly a consequence of ADDING the multi-level receipt
+          // edges: before them every dependency here was one level deep, so
+          // skip-without-propagation was indistinguishable from correct. The
+          // first fix relocated the orphan from the child to the parent rather
+          // than removing it.
+          //
+          // Guarded on `rows.length > 0` deliberately: an empty table cannot
+          // orphan anything, so it must not block its parents and stall the run.
+          stillPopulated.add(table);
+        }
         continue;
       }
 
