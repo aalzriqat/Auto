@@ -64,8 +64,13 @@ const RESET_TABLES = [
   // A reset that cleared `collectionPayments`, `canonicalPayments` and
   // `paymentAllocations` while leaving these behind would strand a customer's
   // retained credit — a live liability position pointing at payments that no
-  // longer exist, on an otherwise fresh ledger. Children before the rows they
-  // reference, per this list's own ordering rule.
+  // longer exist, on an otherwise fresh ledger.
+  //
+  // ⚠️ THE ORDER BELOW IS A READABILITY AID, NOT THE SAFETY PROPERTY. An earlier
+  // revision of this comment claimed ordering was the guarantee "per this list's
+  // own ordering rule" — which inverts what the constant above actually says.
+  // Each table is batched independently, so ordering alone orphans children at
+  // small batch sizes. The dependency edges in CHILD_TABLES are the guarantee.
   "receiptApplications",
   "receiptRetainedPositions",
   "receiptMovements",
@@ -122,6 +127,23 @@ const CHILD_TABLES: Partial<Record<(typeof RESET_TABLES)[number], readonly strin
     "financeDealCustody",
     "applicationStatusLog",
   ],
+  // ⚠️ SCRUM-218-C receipt authority. LISTING ORDER IS NOT THE GUARANTEE — this
+  // map is (Codex R01/R02 on the 218-C review). Every table is batched
+  // independently within one invocation, so with a small `batchSize` the reset
+  // can delete a movement and its position while an application child still
+  // survives, committing an orphan whose immutable occurrence can never be
+  // reconstructed. An earlier revision of this change relied on list order
+  // alone and said so in a comment; the comment was wrong and this map is why.
+  receiptMovements: ["receiptApplications", "receiptRetainedPositions"],
+  receiptRetainedPositions: ["receiptApplications"],
+  // The rows a receipt movement and its applications POINT AT. Deleting these
+  // first would leave live receipt authority referring to payments,
+  // allocations and receivables that no longer exist.
+  collectionPayments: ["receiptMovements"],
+  canonicalPayments: ["receiptMovements"],
+  paymentAllocations: ["receiptApplications"],
+  receivableDocuments: ["receiptApplications"],
+  receivables: ["receiptApplications"],
 };
 
 /**

@@ -436,7 +436,11 @@ export async function postReceiptOccurrence(
  * idempotency key is never a substitute.
  */
 export async function findPostedReceiptOccurrence(
-  ctx: MutationCtx,
+  // Read-only, so it accepts a QueryCtx too (SCRUM-218-C). Widened rather than
+  // cast at the call site: `listRetainedCredits` needs the same causal check a
+  // mutation does, and casting a QueryCtx to a MutationCtx to get it would be a
+  // type lie that happens to work only because this function never writes.
+  ctx: QueryCtx | MutationCtx,
   identity: ReceiptOccurrenceIdentity
 ): Promise<Doc<"accountingEvents"> | null> {
   const range = occurrenceIndexRange(identity);

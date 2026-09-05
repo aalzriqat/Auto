@@ -9,8 +9,8 @@ import { PERMISSIONS } from "./utils/permissions";
 import { getActorName, notifyManagers, notifyUser } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
-import { postReceiptOccurrence, hookCollectionRefund, hookExpensePosted, hookReceivableCreated, hookReceivableCancelled, hookReceiptCreditApplied, getOrgCurrency } from "./accounting/workflowHooks";
-import { directCollectionReceipt } from "./accounting/receiptOccurrence";
+import { postReceiptOccurrence, hookCollectionRefund, hookExpensePosted, hookReceivableCreated, hookReceivableCancelled, hookReceiptCreditApplied, findPostedReceiptOccurrence, getOrgCurrency } from "./accounting/workflowHooks";
+import { directCollectionReceipt, rehydrateReceiptOccurrence } from "./accounting/receiptOccurrence";
 import {
   sealReceiptMovement,
   loadRetainedPosition,
@@ -22,7 +22,7 @@ import {
 } from "./accounting/receiptMovement";
 import { ReceivableCreditKey } from "./accounting/postingRules";
 import { reverseAccountingEvent } from "./accounting/reversals";
-import { getOpenPeriodForDate } from "./accountingPeriods";
+import { getOpenPeriodForDate, assertValidAccountingDate } from "./accountingPeriods";
 import { enqueuePendingReversal, cancelPendingPostByKey } from "./accountingOutbox";
 import { toMinorUnits, fromMinorUnits, scaleForCurrency } from "./utils/money";
 import {
@@ -760,6 +760,85 @@ export const listPayments = query({
   },
 });
 
+/**
+ * SCRUM-218-C — the retained customer credit an organization still owes back.
+ *
+ * ⚠️ THIS EXISTS BECAUSE THE LIABILITY WAS OTHERWISE UNREACHABLE (Codex R04).
+ * `recordPayment` returns only the collection payment id and `listPayments`
+ * exposes neither the movement nor the position, so `applyRetainedCredit` — which
+ * needs a `receiptMovementId` — had no supported way for an operator to obtain
+ * its own argument. A retained liability with no discoverable discharge path is
+ * functionally the "ship A without C" outcome the owner refused, reached by a
+ * different route. My own tests hid the gap by reading the movement id straight
+ * out of the database, which is exactly why it stayed invisible.
+ *
+ * Reads positions rather than movements: a position exists only where credit was
+ * actually retained, so "no row" and "drawn down to zero" stay distinguishable.
+ * `VIEW_FINANCE` rather than `MANAGE_FINANCE` — seeing what the dealership owes
+ * a customer is a reporting act; only applying it moves money.
+ */
+export const listRetainedCredits = query({
+  args: {
+    orgId: v.id("organizations"),
+    customerId: v.optional(v.id("customers")),
+    /** Omit or pass false to include positions already drawn to zero. */
+    onlyRemaining: v.optional(v.boolean()),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+
+    // Tenant scoping is the INDEX, not a post-filter: both ranges are rooted at
+    // this org, so a foreign row is unreachable rather than merely excluded.
+    const result = args.customerId
+      ? await ctx.db
+          .query("receiptRetainedPositions")
+          .withIndex("by_org_customer", (q) =>
+            q.eq("orgId", args.orgId).eq("customerId", args.customerId!)
+          )
+          .order("desc")
+          .paginate(args.paginationOpts)
+      : await ctx.db
+          .query("receiptRetainedPositions")
+          .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+          .order("desc")
+          .paginate(args.paginationOpts);
+
+    const page = await Promise.all(
+      result.page.map(async (position) => {
+        const movement = await ctx.db.get(position.receiptMovementId);
+        const customer = await ctx.db.get(position.customerId);
+        return {
+          receiptMovementId: position.receiptMovementId,
+          customerId: position.customerId,
+          customerName: customer ? `${customer.firstName} ${customer.lastName}`.trim() : undefined,
+          currency: position.currency,
+          initialUnappliedMinor: position.initialUnappliedMinor,
+          remainingUnappliedMinor: position.remainingUnappliedMinor,
+          applicationCount: position.applicationCount,
+          // Whether `applyRetainedCredit` would currently accept it. The receipt
+          // must be POSTED, so a credit whose own journal is still queued behind
+          // an unmapped 2110 is visible but explicitly not yet applicable —
+          // rather than failing at the point of use with no explanation.
+          receiptPosted:
+            movement !== null &&
+            (await findPostedReceiptOccurrence(
+              ctx,
+              rehydrateReceiptOccurrence({ orgId: args.orgId, snapshot: movement.occurrence })
+            )) !== null,
+          collectionPaymentId: movement?.collectionPaymentId,
+          createdAt: movement?.createdAt,
+        };
+      })
+    );
+
+    return {
+      ...result,
+      page: args.onlyRemaining ? page.filter((p) => p.remainingUnappliedMinor > 0) : page,
+    };
+  },
+});
+
 export const createReceivable = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -1226,6 +1305,17 @@ export const applyRetainedCredit = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    // ⚠️ BEFORE runWithIdempotency, AND BEFORE THE FIRST WRITE (Codex R01).
+    //
+    // `v.number()` admits NaN, ±Infinity and any finite double, including dates
+    // outside the `Date` domain. Such a value matches no accounting period, so
+    // the command ENQUEUES and every monetary write in this mutation COMMITS —
+    // then the outbox drain throws `RangeError` formatting the date, retries,
+    // and dead-letters. The money would have moved with no journal, and no
+    // replay could repair it. Refusing here is the only point that helps.
+    if (args.appliedAt !== undefined) {
+      assertValidAccountingDate(args.appliedAt, "Application date");
+    }
     return await runWithIdempotency(
       ctx,
       {
@@ -1236,10 +1326,17 @@ export const applyRetainedCredit = mutation({
         // Every input that changes what money does. Replaying one key against a
         // different receipt, receivable or amount is a contradiction, not a
         // retry, and must not quietly return the first application's result.
+        //
+        // `appliedAt` is included because it selects the ACCOUNTING PERIOD, so
+        // the same key with a different date is a different economic claim.
+        // `null` — not `Date.now()` — encodes "omitted": folding in the server
+        // clock would make every retry of an omitted-date call disagree with
+        // itself and refuse a legitimate replay.
         fingerprint: JSON.stringify([
           args.receiptMovementId.toString(),
           args.receivableId.toString(),
           args.requestedAmount,
+          args.appliedAt ?? null,
         ]),
       },
       async () => {
@@ -1850,6 +1947,56 @@ export const returnClearedCheque = mutation({
           .withIndex("by_cheque", (q) => q.eq("chequeId", args.chequeId))
           .filter((q) => q.eq(q.field("status"), "POSTED"))
           .first();
+
+        // 🔴 SCRUM-218-C / review RM-01 — REFUSE RATHER THAN SILENTLY MISSTATE 2110.
+        //
+        // This handler reverses the clearing event and reopens the cheque's own
+        // receivable. It knows nothing about retained credit. So when a
+        // no-receivable cheque created a retained position and that credit was
+        // already applied to a DIFFERENT receivable, returning the cheque
+        // reverses the full CR 2110 while the application's DR 2110 stands:
+        //
+        //     CR 2110  100000   original clearing
+        //     DR 2110   40000   retained credit applied elsewhere
+        //     DR 2110  100000   cheque-return reversal
+        //     ------------------------------------------------
+        //     net       40000 DEBIT on a LIABILITY control account
+        //
+        // and the other receivable stays PAID on money the bank took back. A
+        // reviewer reproduced exactly those numbers against this code.
+        //
+        // Unwinding an application — reopening the right receivable, reversing
+        // the RECEIPT_CREDIT_APPLIED journal, restoring the position, and
+        // deciding which application to reverse when the amounts differ — is
+        // SCRUM-130's charter, not this ticket's. Refusing converts a silent,
+        // signal-free corruption into a visible stop an accountant can act on,
+        // and it follows the convention this file already sets: a
+        // partially-refunded cleared cheque likewise cannot be auto-returned.
+        //
+        // Placed BEFORE the first write. Everything above is a read.
+        if (clearedPayment) {
+          const movement = await ctx.db
+            .query("receiptMovements")
+            .withIndex("by_org_payment", (q) =>
+              q.eq("orgId", args.orgId).eq("collectionPaymentId", clearedPayment._id)
+            )
+            .unique();
+          if (movement) {
+            const position = await ctx.db
+              .query("receiptRetainedPositions")
+              .withIndex("by_org_movement", (q) =>
+                q.eq("orgId", args.orgId).eq("receiptMovementId", movement._id)
+              )
+              .unique();
+            if (position && position.applicationCount > 0) {
+              throw new ConvexError(
+                "This cheque's retained customer credit has already been applied to another receivable, " +
+                  "so returning it automatically would leave the customer-credit liability misstated. " +
+                  "Reverse the applied credit in Accounting first."
+              );
+            }
+          }
+        }
 
         // Reverse the GL impact of the original clearing.
         if (clearedPayment) {

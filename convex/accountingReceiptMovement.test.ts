@@ -33,7 +33,7 @@ import { describe, expect, test } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import {
@@ -762,6 +762,360 @@ describe("SCRUM-218-C §8 — the stored snapshot is data, and rehydration is th
         snapshot: { ...movement.occurrence, channel: "DIRECT" },
       })
     ).toThrow(/unrecognised field/i);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * §10 — REGRESSIONS FOR VALIDATED REVIEW FINDINGS (Codex, exact head 89c95531a)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+describe("SCRUM-218-C §10 R01 — an unpostable accounting date is refused before any write", () => {
+  /**
+   * The defect: `v.number()` admits NaN, ±Infinity and finite doubles outside
+   * the `Date` domain. Such a date matches no accounting period, so the command
+   * ENQUEUES and every monetary write COMMITS — then the outbox drain formats
+   * the date with `new Date(d).toISOString()` in `checkPostingAllowed`, throws
+   * `RangeError` on every retry, and dead-letters. Money moved, no journal, and
+   * no replay can repair it.
+   *
+   * Fails without the guard: each of these currently commits an allocation, an
+   * application row and a position drawdown.
+   */
+  const UNPOSTABLE = [
+    ["just past the Date domain", 8_640_000_000_000_001],
+    ["negative, just past the Date domain", -8_640_000_000_000_001],
+    ["NaN", Number.NaN],
+    ["positive infinity", Number.POSITIVE_INFINITY],
+    ["fractional milliseconds", 1_700_000_000_000.5],
+  ] as const;
+
+  for (const [label, appliedAt] of UNPOSTABLE) {
+    test(`refuses ${label}, leaving no allocation, application or drawdown`, async () => {
+      const { t, asAdmin, orgId, customerId, movement } = await retainedCreditFixture(
+        `r01-${String(appliedAt).replace(/[^a-z0-9]/gi, "")}`
+      );
+      const receivableId = await makeReceivable(asAdmin, orgId, customerId, 30);
+      const allocationsBefore = await t.run((ctx) =>
+        ctx.db.query("paymentAllocations").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+      );
+
+      await expect(
+        asAdmin.mutation(api.collections.applyRetainedCredit, {
+          orgId, receiptMovementId: movement._id, receivableId, requestedAmount: 30, appliedAt,
+        })
+      ).rejects.toThrow();
+
+      const applications = await t.run((ctx) =>
+        ctx.db
+          .query("receiptApplications")
+          .withIndex("by_org_movement", (q) => q.eq("orgId", orgId).eq("receiptMovementId", movement._id))
+          .collect()
+      );
+      expect(applications).toHaveLength(0);
+
+      const allocationsAfter = await t.run((ctx) =>
+        ctx.db.query("paymentAllocations").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+      );
+      expect(allocationsAfter).toHaveLength(allocationsBefore.length);
+
+      const position = await positionFor(t, orgId, movement._id);
+      expect(position!.remainingUnappliedMinor).toBe(movement.initialUnappliedMinor);
+
+      // And nothing was queued that could later dead-letter.
+      const queued = await t.run((ctx) =>
+        ctx.db
+          .query("pendingAccountingEvents")
+          .withIndex("by_org_status", (q) => q.eq("orgId", orgId))
+          .collect()
+      );
+      expect(queued.filter((r) => r.eventType === "RECEIPT_CREDIT_APPLIED")).toHaveLength(0);
+    });
+  }
+
+  test("POSITIVE CONTROL — a valid explicit date on the same path applies normally", async () => {
+    const { t, asAdmin, orgId, customerId, movement } = await retainedCreditFixture("r01pc");
+    const receivableId = await makeReceivable(asAdmin, orgId, customerId, 30);
+    const result = await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      orgId, receiptMovementId: movement._id, receivableId, requestedAmount: 30,
+      appliedAt: Date.now(),
+    });
+    expect(result.appliedMinor).toBe(3000);
+    expect((await positionFor(t, orgId, movement._id))!.applicationCount).toBe(1);
+  });
+
+  /**
+   * `appliedAt` selects the accounting PERIOD, so one key replayed with a
+   * different date is a different economic claim, not a retry. Without it in
+   * the fingerprint this silently returns the first application's result.
+   */
+  test("the same idempotency key with a different accounting date is refused", async () => {
+    const { asAdmin, orgId, customerId, movement } = await retainedCreditFixture("r01fp");
+    const receivableId = await makeReceivable(asAdmin, orgId, customerId, 30);
+    const base = {
+      orgId, receiptMovementId: movement._id, receivableId,
+      requestedAmount: 30, idempotencyKey: "same-key-different-date",
+    };
+    await asAdmin.mutation(api.collections.applyRetainedCredit, { ...base, appliedAt: 1_700_000_000_000 });
+    await expect(
+      asAdmin.mutation(api.collections.applyRetainedCredit, { ...base, appliedAt: 1_700_000_086_400 })
+    ).rejects.toThrow();
+  });
+
+  /** ...while an omitted date stays a stable retry, not a self-conflict. */
+  test("an omitted date replays as one effect rather than conflicting with itself", async () => {
+    const { t, asAdmin, orgId, customerId, movement } = await retainedCreditFixture("r01omit");
+    const receivableId = await makeReceivable(asAdmin, orgId, customerId, 30);
+    const call = {
+      orgId, receiptMovementId: movement._id, receivableId,
+      requestedAmount: 30, idempotencyKey: "omitted-date-retry",
+    };
+    const first = await asAdmin.mutation(api.collections.applyRetainedCredit, call);
+    const second = await asAdmin.mutation(api.collections.applyRetainedCredit, call);
+    expect(second.applicationId).toBe(first.applicationId);
+    expect((await positionFor(t, orgId, movement._id))!.applicationCount).toBe(1);
+  });
+});
+
+describe("SCRUM-218-C §10 R02 — a batched financial reset never orphans receipt authority", () => {
+  /**
+   * Every table in `RESET_TABLES` is batched INDEPENDENTLY within one
+   * invocation, so listing children first does not protect them: at
+   * `batchSize: 1` the reset could delete a movement and its position while an
+   * application child survived, committing an orphan whose immutable occurrence
+   * can never be reconstructed. `CHILD_TABLES` is the actual guarantee.
+   *
+   * Fails without the receipt edges in `CHILD_TABLES`.
+   */
+  test("no pass leaves an application whose movement or position is gone", async () => {
+    const { t, asAdmin, orgId, customerId, movement } = await retainedCreditFixture("r02", 100);
+    for (const amount of [10, 20]) {
+      const receivableId = await makeReceivable(asAdmin, orgId, customerId, amount);
+      await asAdmin.mutation(api.collections.applyRetainedCredit, {
+        orgId, receiptMovementId: movement._id, receivableId, requestedAmount: amount,
+      });
+    }
+    expect(
+      await t.run((ctx) =>
+        ctx.db
+          .query("receiptApplications")
+          .withIndex("by_org_movement", (q) => q.eq("orgId", orgId).eq("receiptMovementId", movement._id))
+          .collect()
+      )
+    ).toHaveLength(2);
+
+    // One row per table per pass — the adversarial batch size.
+    for (let pass = 0; pass < 25; pass += 1) {
+      await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
+        orgId, dryRun: false, batchSize: 1,
+      });
+
+      // The invariant, checked after EVERY committed pass rather than only at
+      // the end: no surviving application may reference a vanished parent.
+      await t.run(async (ctx) => {
+        const applications = await ctx.db
+          .query("receiptApplications")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect();
+        for (const application of applications) {
+          expect(
+            await ctx.db.get(application.receiptMovementId),
+            `pass ${pass}: application ${application._id} outlived its movement`
+          ).not.toBeNull();
+          const positions = await ctx.db
+            .query("receiptRetainedPositions")
+            .withIndex("by_org_movement", (q) =>
+              q.eq("orgId", orgId).eq("receiptMovementId", application.receiptMovementId)
+            )
+            .collect();
+          expect(positions.length, `pass ${pass}: application outlived its retained position`).toBe(1);
+          expect(
+            await ctx.db.get(application.allocationId),
+            `pass ${pass}: application outlived its canonical allocation`
+          ).not.toBeNull();
+        }
+      });
+    }
+  });
+});
+
+describe("SCRUM-218-C §10 R04 — retained credit is discoverable through a supported query", () => {
+  /**
+   * `applyRetainedCredit` needs a `receiptMovementId`, and before this query no
+   * production surface returned one — the tests reached it by reading the
+   * database directly, which is exactly how the gap stayed invisible. A retained
+   * liability with no discoverable discharge path is the "ship A without C"
+   * outcome by another route.
+   */
+  test("lists the movement id, amounts and posting readiness for the org", async () => {
+    const { asAdmin, orgId, customerId, movement } = await retainedCreditFixture("r04", 80);
+
+    const listed = await asAdmin.query(api.collections.listRetainedCredits, {
+      orgId, paginationOpts: { numItems: 10, cursor: null },
+    });
+    expect(listed.page).toHaveLength(1);
+    const row = listed.page[0];
+    expect(row.receiptMovementId).toBe(movement._id);
+    expect(row.customerId).toBe(customerId);
+    expect(row.initialUnappliedMinor).toBe(8000);
+    expect(row.remainingUnappliedMinor).toBe(8000);
+    expect(row.receiptPosted).toBe(true);
+
+    // The id it returns is exactly the argument the discharge mutation needs.
+    const receivableId = await makeReceivable(asAdmin, orgId, customerId, 80);
+    const applied = await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      orgId, receiptMovementId: row.receiptMovementId, receivableId, requestedAmount: 80,
+    });
+    expect(applied.appliedMinor).toBe(8000);
+  });
+
+  test("a credit whose receipt has not posted is listed but flagged not applicable", async () => {
+    // No 2110, so the receipt's own event never reaches POSTED.
+    const { t, asAdmin, orgId, customerId } = await seedOrg("r04np");
+    await asAdmin.mutation(api.collections.recordPayment, {
+      orgId, customerId, amount: 45, method: "CASH", paymentDate: Date.now(),
+    });
+    const listed = await asAdmin.query(api.collections.listRetainedCredits, {
+      orgId, paginationOpts: { numItems: 10, cursor: null },
+    });
+    expect(listed.page).toHaveLength(1);
+    expect(listed.page[0].remainingUnappliedMinor).toBe(4500);
+    expect(listed.page[0].receiptPosted).toBe(false);
+    expect(await t.run(async () => true)).toBe(true);
+  });
+
+  /**
+   * ⚠️ THE FOREIGN ORG MUST LIVE IN THE SAME HARNESS. An earlier version of this
+   * test built a second org via a second `convexTestWithComponents` instance and
+   * asserted its movement id was absent — which proved nothing, because each
+   * harness is an independent in-memory database that hands out the SAME
+   * deterministic id sequence. The two "different" ids were the identical
+   * string, so the assertion failed for a reason that had nothing to do with
+   * tenancy. It only surfaced because the check happened to be written as an
+   * inequality; a `toHaveLength(1)` alone would have passed and proved nothing.
+   */
+  test("another org's retained credit is not reachable", async () => {
+    const { t, asAdmin, orgId, movement } = await retainedCreditFixture("r04x", 50);
+
+    const foreignOrgId = (await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Foreign", createdAt: Date.now() })
+    )) as Id<"organizations">;
+    const foreignCustomerId = (await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId: foreignOrgId, firstName: "Foreign", lastName: "Customer", createdAt: Date.now(),
+      })
+    )) as Id<"customers">;
+    const foreignMovementId = (await t.run((ctx) =>
+      ctx.db.insert("receiptMovements", {
+        orgId: foreignOrgId,
+        collectionPaymentId: movement.collectionPaymentId,
+        canonicalPaymentId: movement.canonicalPaymentId,
+        customerId: foreignCustomerId,
+        currency: "USD",
+        receivedMinor: 9900, initialAppliedMinor: 0, initialUnappliedMinor: 9900,
+        initialAllocationIds: [],
+        occurrence: movement.occurrence,
+        receiptPayloadVersion: movement.receiptPayloadVersion,
+        liabilityTreatment: "UNAPPLIED_CUSTOMER_RECEIPTS",
+        actorId: movement.actorId,
+        createdAt: Date.now(),
+      })
+    )) as Id<"receiptMovements">;
+    await t.run((ctx) =>
+      ctx.db.insert("receiptRetainedPositions", {
+        orgId: foreignOrgId,
+        receiptMovementId: foreignMovementId,
+        customerId: foreignCustomerId,
+        currency: "USD",
+        initialUnappliedMinor: 9900, remainingUnappliedMinor: 9900,
+        applicationCount: 0, updatedAt: Date.now(),
+      })
+    );
+
+    const listed = await asAdmin.query(api.collections.listRetainedCredits, {
+      orgId, paginationOpts: { numItems: 10, cursor: null },
+    });
+    // Now a genuine cross-tenant assertion: two distinct positions exist in one
+    // database and only this org's is visible.
+    expect(listed.page).toHaveLength(1);
+    expect(listed.page[0].receiptMovementId).toBe(movement._id);
+    expect(listed.page.some((r) => r.receiptMovementId === foreignMovementId)).toBe(false);
+    expect(listed.page.some((r) => r.remainingUnappliedMinor === 9900)).toBe(false);
+  });
+});
+
+describe("SCRUM-218-C §10 RM-01 — a bounced cheque cannot silently strand spent retained credit", () => {
+  /**
+   * Reproduced by the Claude review seat against this code, numerically:
+   *
+   *     CR 2110  100000   cheque clears with no receivable
+   *     DR 2110   40000   retained credit applied to ANOTHER receivable
+   *     DR 2110  100000   cheque returned, clearing reversed
+   *     ---------------------------------------------------------------
+   *     net       40000 DEBIT on a LIABILITY control account
+   *
+   * ...while the other receivable stays PAID on money the bank took back, the
+   * application stays APPLIED and the position keeps its remaining balance.
+   * `returnClearedCheque` reverses the clearing and reopens the cheque's own
+   * receivable; it knows nothing about retained credit.
+   *
+   * Fails without the guard: the return currently succeeds.
+   */
+  async function clearedChequeWithRetainedCredit(suffix: string, amount: number) {
+    const seeded = await seedOrg(suffix);
+    await seedRetainedCreditAccount(seeded.t, seeded.orgId);
+    const chequeId = (await seeded.asAdmin.mutation(api.collections.registerCheque, {
+      orgId: seeded.orgId, customerId: seeded.customerId,
+      bank: "Bank", chequeNumber: `C-${suffix}`, chequeDate: Date.now(), amount,
+    })) as Id<"postDatedCheques">;
+    const paymentId = (await seeded.asAdmin.mutation(api.collections.clearCheque, {
+      orgId: seeded.orgId, chequeId,
+    })) as Id<"collectionPayments">;
+    const movement = (await movementFor(seeded.t, seeded.orgId, paymentId))!;
+    return { ...seeded, chequeId, movement };
+  }
+
+  test("refuses the return once the retained credit has been applied elsewhere", async () => {
+    const { t, asAdmin, orgId, customerId, chequeId, movement } =
+      await clearedChequeWithRetainedCredit("rm01", 1000);
+    expect(movement.initialUnappliedMinor).toBe(100000);
+
+    const otherReceivable = await makeReceivable(asAdmin, orgId, customerId, 400);
+    await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      orgId, receiptMovementId: movement._id, receivableId: otherReceivable, requestedAmount: 400,
+    });
+
+    await expect(
+      asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId })
+    ).rejects.toThrow(/already been applied to another receivable/i);
+
+    // The refusal escapes, so nothing partial committed: the cheque is still
+    // CLEARED and no reversal journal exists.
+    const cheque = await t.run((ctx) => ctx.db.get(chequeId));
+    expect(cheque!.status).toBe("CLEARED");
+    const reversals = await t.run((ctx) =>
+      ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .filter((q) => q.eq(q.field("eventType"), "JOURNAL_REVERSAL"))
+        .collect()
+    );
+    expect(reversals).toHaveLength(0);
+  });
+
+  /**
+   * POSITIVE CONTROL — the refusal must be narrow. An untouched retained credit
+   * still returns exactly as before, or the guard would have broken the common
+   * case to fix the rare one.
+   */
+  test("still returns normally when no retained credit has been applied", async () => {
+    const { t, asAdmin, orgId, chequeId, movement } =
+      await clearedChequeWithRetainedCredit("rm01pc", 1000);
+    expect((await positionFor(t, orgId, movement._id))!.applicationCount).toBe(0);
+
+    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+
+    const cheque = await t.run((ctx) => ctx.db.get(chequeId));
+    expect(cheque!.status).toBe("RETURNED");
   });
 });
 
