@@ -3698,12 +3698,17 @@ export default defineSchema({
    * caller supplies `receivedMinor`, `initialAppliedMinor` or
    * `initialUnappliedMinor`, and no field is a residual over mutable tables.
    *
-   * ⚠️ "IMMUTABLE" MEANS THE ECONOMIC CONTENT, NOT EVERY BYTE. A customer merge
-   * re-points `customerId` at the surviving record, and that is an identity
-   * correction rather than a restatement — the amounts, the occurrence snapshot,
-   * the lineage and the liability treatment are never rewritten. Saying so
-   * explicitly, because the alternative reading (leave the row alone) strands a
-   * live retained credit against a customer record that no longer exists.
+   * ⚠️ `customerId` IS PART OF WHAT IS SEALED. It records whose money this
+   * receipt represents, and the canonical payment, the accounting occurrence and
+   * the allocations all carry that same lineage. A customer merge therefore does
+   * NOT repoint it — `CUSTOMER_NON_REASSIGNABLE_TABLES` holds this table out of
+   * the generic rewriting registry, so no merge loop can raw-reassign settled
+   * money to a different customer.
+   *
+   * Removing that write path is not by itself a fence. A merge still SUCCEEDS
+   * and leaves any retained credit addressed to the merged-away record.
+   * Deciding what a merge must do instead — refuse before it writes, or perform
+   * a specified authority transfer — is SCRUM-250, with its own evidence floor.
    */
   receiptMovements: defineTable({
     orgId: v.id("organizations"),
@@ -3753,6 +3758,11 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_org_payment", ["orgId", "collectionPaymentId"])
+    // NO READER TODAY, and that is stated rather than left to be discovered.
+    // `customerId` here is sealed provenance, not a pointer the merge rewrites,
+    // so nothing resolves a movement this way yet. Declared for SCRUM-250's
+    // "does this customer hold live receipt authority?" lookup, which needs it
+    // under either of that ticket's shapes (refuse, or transfer).
     .index("by_org_customer", ["orgId", "customerId"]),
 
   /**
@@ -3823,8 +3833,10 @@ export default defineSchema({
     .index("by_org_movement", ["orgId", "receiptMovementId"])
     .index("by_org_movement_sequence", ["orgId", "receiptMovementId", "sequence"])
     .index("by_org_event_key", ["orgId", "eventIdempotencyKey"])
-    // Required by the customer-merge registry, which fails CI for any table
-    // carrying a `customerId` that is neither rewritten nor declared derived.
+    // NO READER TODAY — same status as the `by_org_customer` on
+    // `receiptMovements`, and for the same reason: a merge does not rewrite this
+    // `customerId`, so nothing looks an application up by customer. Declared for
+    // SCRUM-250, in the same spirit as the inert `REVERSED` above.
     .index("by_org_customer", ["orgId", "customerId"]),
 
   // Receipt voucher (سند قبض) auto-generated as proof of payment whenever a

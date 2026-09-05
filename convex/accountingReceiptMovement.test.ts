@@ -1225,3 +1225,87 @@ describe("SCRUM-218-C §9 — runtime authority is never persisted or cached", (
     expect("orgId" in movement.occurrence).toBe(false);
   });
 });
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * §11 — OWNER BLOCKER c17675: a customer merge must not raw-repoint sealed
+ *        receipt authority
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * `customerId` on a receipt movement, on its retained position and on every
+ * application is part of the SEALED ECONOMIC PROVENANCE — not an ordinary
+ * foreign key. `customers.mergeCustomers` patches `customerId` on every table
+ * in `CUSTOMER_REFERENCING_TABLES`, so listing these three there let a merge
+ * rewrite whose money a posted receipt represents, with no persisted movement
+ * explaining the change, while the canonical payment, the accounting occurrence
+ * and the allocations all kept the original lineage.
+ *
+ * ⚠️ SCOPE, STATED HONESTLY: THIS DOES NOT ASSERT THAT THE MERGE REFUSES, AND
+ * IT DOES NOT REFUSE. A losing customer holding retained credit is still merged
+ * away, and the credit is left pointing at the merged-away record. Closing that
+ * is SCRUM-250, which owns the pre-write runtime fence and its own evidence
+ * floor. Pinning the stranding here would freeze today's incomplete behaviour
+ * as though it were the intended one, and would have to be deleted the moment
+ * 250 lands.
+ *
+ * The invariant below survives 250 in either of its declared shapes: whether it
+ * refuses the merge or performs a specified authority transfer, the GENERIC
+ * loop must still never be the thing that rewrites these rows.
+ */
+async function grantMerger(t: TestHarness, orgId: Id<"organizations">, suffix: string) {
+  const userId = await t.run((ctx) =>
+    ctx.db.insert("users", { clerkId: `mrg_${suffix}`, email: `mrg_${suffix}@rm.com`, name: "Merger" })
+  );
+  const roleId = await t.run((ctx) =>
+    ctx.db.insert("roles", {
+      orgId,
+      name: "MANAGER",
+      permissions: ["merge:customers", "view:customers"],
+    })
+  );
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+  return t.withIdentity({ subject: `mrg_${suffix}`, clerkId: `mrg_${suffix}` });
+}
+
+describe("SCRUM-218-C §11 — a customer merge cannot repoint sealed receipt authority", () => {
+  test("movement, retained position and application all keep their original customer", async () => {
+    const { t, asAdmin, orgId, customerId, movement } = await retainedCreditFixture("s11");
+
+    // Give the movement a real application child, so all three authority tables
+    // hold a row for the customer that is about to be merged away.
+    const receivableId = await makeReceivable(asAdmin, orgId, customerId, 30);
+    await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      orgId, receiptMovementId: movement._id, receivableId, requestedAmount: 30,
+    });
+
+    const survivorId = (await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId, firstName: "Surviving", lastName: "Record", createdAt: Date.now(),
+      })
+    )) as Id<"customers">;
+
+    const asMerger = await grantMerger(t, orgId, "s11");
+    await asMerger.mutation(api.customers.mergeCustomers, {
+      orgId, survivorId, loserId: customerId,
+    });
+
+    // POSITIVE CONTROL, both halves. The merge really ran...
+    expect((await t.run((ctx) => ctx.db.get(customerId)))!.isDeleted).toBe(true);
+    // ...and its registry loop really reached this org's rows, so the three
+    // "unchanged" assertions below cannot pass merely because nothing happened.
+    expect((await t.run((ctx) => ctx.db.get(receivableId)))!.customerId).toBe(survivorId);
+
+    // The sealed authority still names the customer who actually paid.
+    expect((await t.run((ctx) => ctx.db.get(movement._id)))!.customerId).toBe(customerId);
+    expect((await positionFor(t, orgId, movement._id))!.customerId).toBe(customerId);
+
+    const applications = await t.run((ctx) =>
+      ctx.db
+        .query("receiptApplications")
+        .withIndex("by_org_movement", (q) => q.eq("orgId", orgId).eq("receiptMovementId", movement._id))
+        .collect()
+    );
+    expect(applications).toHaveLength(1);
+    expect(applications[0].customerId).toBe(customerId);
+  });
+});

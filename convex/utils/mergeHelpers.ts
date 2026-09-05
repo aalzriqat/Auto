@@ -2,10 +2,15 @@ import { Id } from "../_generated/dataModel";
 import { QueryCtx } from "../_generated/server";
 
 /**
- * Every table with a `customerId` foreign key, scoped to a single explicit
- * list (mirroring `ORG_SCOPED_TABLES` in adminOrgs.ts) rather than a dynamic
- * reflection-based scan — merges are rare, audited, destructive operations
- * where an explicit list is safer than "discover tables automatically."
+ * The tables whose `customerId` a merge REWRITES to the survivor, as a single
+ * explicit list (mirroring `ORG_SCOPED_TABLES` in adminOrgs.ts) rather than a
+ * dynamic reflection-based scan — merges are rare, audited, destructive
+ * operations where an explicit list is safer than "discover tables
+ * automatically."
+ *
+ * This is NOT every table carrying a `customerId`. Two other classifications
+ * exist and are enforced by `customerMergeRegistry.test.ts`:
+ * `CUSTOMER_DERIVED_TABLES` and `CUSTOMER_NON_REASSIGNABLE_TABLES` below.
  */
 export const CUSTOMER_REFERENCING_TABLES = [
   {
@@ -22,40 +27,6 @@ export const CUSTOMER_REFERENCING_TABLES = [
     find: (ctx: QueryCtx, orgId: Id<"organizations">, customerId: Id<"customers">) =>
       ctx.db
         .query("commitmentRoots")
-        .withIndex("by_org_customer", (q) => q.eq("orgId", orgId).eq("customerId", customerId))
-        .collect(),
-  },
-  {
-    // SCRUM-218-C: a receipt movement records WHO paid. Re-pointing it at the
-    // surviving customer is an IDENTITY correction, not an economic one — the
-    // amounts, occurrence snapshot and liability treatment are untouched, which
-    // is what "sealed once" actually protects.
-    //
-    // Leaving it out would be the damaging choice: the retained position below
-    // hangs off this movement, so a merged-away customer would keep a live
-    // credit balance nobody can find under the surviving record.
-    table: "receiptMovements" as const,
-    find: (ctx: QueryCtx, orgId: Id<"organizations">, customerId: Id<"customers">) =>
-      ctx.db
-        .query("receiptMovements")
-        .withIndex("by_org_customer", (q) => q.eq("orgId", orgId).eq("customerId", customerId))
-        .collect(),
-  },
-  {
-    // The retained credit itself. If this were missed, money the dealership owes
-    // back would be stranded against a customer record that no longer exists.
-    table: "receiptRetainedPositions" as const,
-    find: (ctx: QueryCtx, orgId: Id<"organizations">, customerId: Id<"customers">) =>
-      ctx.db
-        .query("receiptRetainedPositions")
-        .withIndex("by_org_customer", (q) => q.eq("orgId", orgId).eq("customerId", customerId))
-        .collect(),
-  },
-  {
-    table: "receiptApplications" as const,
-    find: (ctx: QueryCtx, orgId: Id<"organizations">, customerId: Id<"customers">) =>
-      ctx.db
-        .query("receiptApplications")
         .withIndex("by_org_customer", (q) => q.eq("orgId", orgId).eq("customerId", customerId))
         .collect(),
   },
@@ -272,3 +243,35 @@ export const CUSTOMER_REFERENCING_TABLES = [
  * deciding which is a build failure.
  */
 export const CUSTOMER_DERIVED_TABLES = ["socialConversations"] as const;
+
+/**
+ * Sealed financial authority: tables whose `customerId` the merge must NOT
+ * rewrite, because it is part of the row's economic provenance rather than a
+ * pointer the row happens to hold.
+ *
+ * A receipt movement, its retained position and each application record WHOSE
+ * money a posted receipt represents. The canonical payment, the accounting
+ * occurrence and the allocations all carry that same lineage, and none of them
+ * is rewritten by a merge. Patching `customerId` here would therefore move a
+ * retained credit onto a different customer while every other surface kept
+ * saying it belonged to the original one — a restatement of settled money with
+ * no persisted movement explaining it.
+ *
+ * ⚠️ THIS LIST ONLY REMOVES THE GENERIC WRITE PATH. IT IS NOT A RUNTIME FENCE.
+ * `customers.mergeCustomers` does not refuse a losing customer who holds live
+ * retained credit; it merges, and the credit is left addressed to the
+ * merged-away record. That gap is SCRUM-250, which owns the pre-write refusal
+ * (or a specified authority-transfer operation) together with its own evidence
+ * floor. It is deliberately NOT implemented here: SCRUM-218-C's obligation is
+ * that no generic loop can raw-reassign this authority, and 250's is deciding
+ * what a merge should do instead.
+ *
+ * Not reachable in production today — these tables exist only on the unmerged,
+ * undeployed SCRUM-218-C branch (verified against `origin/main`), so the window
+ * between this change and SCRUM-250 is not a live exposure.
+ */
+export const CUSTOMER_NON_REASSIGNABLE_TABLES = [
+  "receiptMovements",
+  "receiptRetainedPositions",
+  "receiptApplications",
+] as const;
