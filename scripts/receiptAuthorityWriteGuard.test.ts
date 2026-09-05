@@ -38,10 +38,11 @@ import {
   compareStrings,
   createConvexAnalyzerProgram,
   createVirtualAnalyzerProgram,
-  declarationStatus,
+  describeBinding,
   formatAuthorityAuditFailure,
   syntacticDbWriteCallSites,
   RECEIPT_AUTHORITY_DECLARATION,
+  DB_WRITE_METHODS,
   type AnalyzerProgram,
   type AuthorityAuditResult,
   type AuthorityDeclaration,
@@ -661,7 +662,23 @@ describe("dynamic and indirect forms — resolved where possible, named where no
     });
   });
 
-  it("refuses a write through a writer whose ids are unbranded strings", () => {
+  /**
+   * ⚠️ A DELIBERATE SEMANTIC CHANGE FROM `1ed1adff5`, RECORDED RATHER THAN
+   * QUIETLY MADE.
+   *
+   * This object has all four method names and no `Id` anywhere. The old
+   * detector refused it, because it recognised a writer by "has all four
+   * names" — and that same heuristic is exactly what let `Pick<Writer,
+   * "delete">` and a delete-only view escape entirely, which was the worse
+   * failure by far. Recognition is now by whether the MEMBER handles a Convex
+   * `Id`, so an object that merely shares the names is indistinguishable from a
+   * cache and is cleared.
+   *
+   * The trade is stated plainly: a hand-rolled store with `string` ids is no
+   * longer refused. It also cannot perform a Convex database write, which is
+   * the only thing this guard is about.
+   */
+  it("ignores a look-alike whose members never handle a Convex id", () => {
     const result = auditRogue(
       "interface LooseWriter {",
       "  insert(table: string, value: unknown): Promise<void>;",
@@ -674,11 +691,23 @@ describe("dynamic and indirect forms — resolved where possible, named where no
       '  await loose.delete("someRowId");',
       "}"
     );
-    expect(result.unproven).toHaveLength(1);
-    expect(result.unproven[0].verdict).toEqual({
-      verdict: "UNPROVEN",
-      form: "id-type-carries-no-table-brand",
-    });
+    expect(result.coverage.writeSites).toBe(0);
+  });
+
+  /**
+   * The second form of the one quiet exit: an index that POSITIVELY cannot name
+   * one of the four. Without it the guard reported `convJson.data?.[0]` — an
+   * array index into parsed JSON — as an unreadable write on the real backend.
+   */
+  it("ignores a numeric index, which cannot name a write member", () => {
+    const result = auditRogue(
+      "declare const parsed: any;",
+      "export function rogue() {",
+      "  void parsed.data?.[0];",
+      "  void parsed.rows?.[1];",
+      "}"
+    );
+    expect(result.coverage.writeSites).toBe(0);
   });
 
   /**
@@ -700,9 +729,228 @@ describe("dynamic and indirect forms — resolved where possible, named where no
       },
       []
     );
-    expect(empty.declarationStatus).toBe("PENDING_218C_TABLE_FREEZE");
+    expect(empty.binding.status).toBe("NOTHING_DECLARED");
     expect(empty.unproven).toHaveLength(1);
     expect(formatAuthorityAuditFailure(empty)).toContain("cannot be proven");
+  });
+});
+
+/**
+ * ⚠️ THE c17676 FAMILY — EVERY ONE OF THESE PRODUCED NO SITE AT ALL.
+ *
+ * Not a violation, not even an unproven one: the analyzer returned an empty set
+ * and a clean exit. Two independent review seats found them, each spelling was
+ * reproduced with ZERO compiler diagnostics, and the same write spelled
+ * directly is still flagged — so the difference is the analyzer, not the
+ * fixture.
+ *
+ * They are grouped because they share one cause. The old detector had MANY
+ * quiet exits — receiver not structurally a writer, escape not a known write
+ * method, destructuring key not an identifier, no member access at all — and
+ * every hole found across two review rounds was one of them. The redesign
+ * leaves exactly one: a statically known member name that is not one of the
+ * four. Everything else becomes UNPROVEN.
+ *
+ * These tests were written RED against `1ed1adff5` and failed there, which is
+ * the point of keeping that SHA as evidence rather than patching it.
+ */
+describe("the c17676 family — writes that used to vanish entirely", () => {
+  it("refuses a write through a narrowed writer view", () => {
+    const result = auditRogue(
+      'declare function capability(writer: Writer): Pick<Writer, "delete">;',
+      "export async function rogue() {",
+      "  await capability(ctx.db).delete(movementId);",
+      "}"
+    );
+    expect(result.coverage.writeSites).toBe(1);
+    expect(methodsOf(result.violations)).toEqual(["delete"]);
+  });
+
+  it("refuses a write through a view that exposes only one of the four", () => {
+    const result = auditRogue(
+      "interface DeleteOnly { delete<T extends string>(id: Id<T>): Promise<void> }",
+      "declare const view: DeleteOnly;",
+      "export async function rogue() {",
+      "  await view.delete(movementId);",
+      "}"
+    );
+    expect(result.coverage.writeSites).toBe(1);
+    expect(methodsOf(result.violations)).toEqual(["delete"]);
+  });
+
+  it("refuses a write through a union receiver", () => {
+    const result = auditRogue(
+      "interface DeleteOnly { delete<T extends string>(id: Id<T>): Promise<void> }",
+      "declare const either: Writer | DeleteOnly;",
+      "export async function rogue() {",
+      "  await either.delete(movementId);",
+      "}"
+    );
+    expect(result.coverage.writeSites).toBe(1);
+    expect(methodsOf(result.violations)).toEqual(["delete"]);
+  });
+
+  it("refuses a write method taken off an erased receiver", () => {
+    const result = auditRogue(
+      "export async function rogue() {",
+      "  const remove = (ctx.db as any).delete;",
+      "  await remove(movementId);",
+      "}"
+    );
+    expect(result.unproven).toHaveLength(1);
+    expect(result.unproven[0].verdict).toEqual({
+      verdict: "UNPROVEN",
+      form: "receiver-type-not-statically-known",
+    });
+  });
+
+  /** `delete` is a reserved word, so a computed key is an ordinary spelling. */
+  it("refuses a computed destructuring key on a writer", () => {
+    const result = auditRogue(
+      'declare const operation: "delete";',
+      "export async function rogue() {",
+      "  const { [operation]: removeRow } = ctx.db;",
+      "  await removeRow(movementId);",
+      "}"
+    );
+    expect(result.unproven).toHaveLength(1);
+    expect(result.unproven[0].verdict).toEqual({
+      verdict: "UNPROVEN",
+      form: "write-method-reference-escapes",
+    });
+  });
+
+  it("refuses an assignment destructuring, which declares nothing", () => {
+    const result = auditRogue(
+      "export async function rogue() {",
+      '  let removeRow!: Writer["delete"];',
+      "  ({ delete: removeRow } = ctx.db);",
+      "  await removeRow(movementId);",
+      "}"
+    );
+    expect(result.unproven).toHaveLength(1);
+    expect(result.unproven[0].verdict).toEqual({
+      verdict: "UNPROVEN",
+      form: "write-method-reference-escapes",
+    });
+  });
+
+  it("refuses an escaping bracket whose method name is a union of writes", () => {
+    const result = auditRogue(
+      'declare const operation: "patch" | "replace";',
+      "declare function take(value: unknown): void;",
+      "export function rogue() {",
+      "  take(ctx.db[operation]);",
+      "}"
+    );
+    expect(result.unproven).toHaveLength(1);
+    expect(result.unproven[0].site.method).toBe("unknown");
+  });
+
+  /**
+   * Reflective retrieval leaves no member access to find. It is refused by
+   * name as a bounded unsupported form rather than followed — the ticket
+   * permits a narrowly stated refusal, not a silent one.
+   */
+  it("refuses reflective retrieval of a write member", () => {
+    const result = auditRogue(
+      "export async function rogue() {",
+      '  const remove = Reflect.get(ctx.db, "delete") as Writer["delete"];',
+      "  await remove(movementId);",
+      "}"
+    );
+    expect(result.unproven.length).toBeGreaterThanOrEqual(1);
+    expect(
+      result.unproven.some(
+        (f) => f.verdict.verdict === "UNPROVEN" && f.verdict.form === "reflective-write-member-access"
+      )
+    ).toBe(true);
+  });
+});
+
+/**
+ * ⚠️ THE OTHER HALF OF THE REDESIGN. Widening detection is only safe if these
+ * stay out — a guard that flags everything enforces nothing, and the fail-closed
+ * rule is affordable exactly because it costs zero false positives here.
+ */
+describe("precision — the redesign must not start flagging these", () => {
+  it("ignores containers that merely share the method names", () => {
+    const result = auditRogue(
+      "interface Cache { delete(key: string): void; get(key: string): unknown }",
+      "declare const cache: Cache;",
+      "declare const bag: Map<string, number>;",
+      "declare const seen: Set<string>;",
+      "declare const list: { insert(value: number): void };",
+      "export function noise() {",
+      '  cache.delete("receiptMovements");',
+      '  bag.delete("k");',
+      '  seen.delete("k");',
+      "  list.insert(1);",
+      "}"
+    );
+    expect(result.coverage.writeSites).toBe(0);
+  });
+
+  it("ignores a known non-write destructuring key on a writer", () => {
+    const result = auditRogue(
+      "export function rogue() {",
+      "  const { get } = ctx.db;",
+      "  void get;",
+      "}"
+    );
+    expect(result.coverage.writeSites).toBe(0);
+  });
+
+  it("ignores destructuring a writer OFF something, rather than out of it", () => {
+    const result = auditRogue(
+      "export async function rogue() {",
+      "  const { db } = ctx;",
+      "  await db.delete(movementId);",
+      "}"
+    );
+    expect(result.coverage.writeSites).toBe(1);
+    expect(methodsOf(result.violations)).toEqual(["delete"]);
+  });
+});
+
+/**
+ * ⚠️ CONVEX SHIPS MORE THAN ONE WRITER SHAPE, AND THIS REPOSITORY'S IS ONLY ONE
+ * OF THEM. Convex 1.42 also declares table-name-first `patch`/`replace`/`delete`
+ * overloads and a table-scoped writer whose `insert(value)` names no table at
+ * all. Hard-coding "argument 0 is the id" reported every one of those as
+ * unprovable — fail-closed, but noisy enough to redden an unrelated pull request
+ * for using valid Convex syntax. The id is found by its brand instead.
+ */
+describe("Convex's other writer shapes", () => {
+  it("finds the id by its brand rather than by its position", () => {
+    const result = auditRogue(
+      "interface WriterWithTable {",
+      "  insert<T extends string>(table: T, value: Record<string, unknown>): Promise<Id<T>>;",
+      "  patch<T extends string>(table: T, id: Id<T>, value: Record<string, unknown>): Promise<void>;",
+      "  delete<T extends string>(table: T, id: Id<T>): Promise<void>;",
+      "}",
+      "declare const scoped: WriterWithTable;",
+      "export async function rogue() {",
+      '  await scoped.delete("receiptMovements", movementId);',
+      '  await scoped.patch("receiptMovements", movementId, { amountMinor: 1 });',
+      "}"
+    );
+    expect(result.unproven).toEqual([]);
+    expect(methodsOf(result.violations)).toEqual(["delete", "patch"]);
+  });
+
+  it("resolves a table-scoped insert from what it returns", () => {
+    const result = auditRogue(
+      "interface TableWriter<T extends string> {",
+      "  insert(value: Record<string, unknown>): Promise<Id<T>>;",
+      "}",
+      'declare const scoped: TableWriter<"receiptMovements">;',
+      "export async function rogue() {",
+      "  await scoped.insert({ amountMinor: 1 });",
+      "}"
+    );
+    expect(result.unproven).toEqual([]);
+    expect(methodsOf(result.violations)).toEqual(["insert"]);
   });
 });
 
@@ -742,6 +990,88 @@ describe("string ordering", () => {
     expect(compareStrings("same", "same")).toBe(0);
     expect(compareStrings("a", "b")).toBeLessThan(0);
     expect(compareStrings("b", "a")).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * ⚠️ THE OWNER RULED TWO NARROW EXCEPTIONS AND NO OTHERS (`c17710`).
+ *
+ * `orgFinancialReset.ts` and `adminOrgs.ts` may DELETE an authority row during
+ * a lifecycle sweep. Neither may create, patch or replace one, so a receipt
+ * movement can never be EDITED from outside its owner — only destroyed with its
+ * org. `customers.ts` was named explicitly as getting no exception at all.
+ */
+describe("lifecycle exceptions", () => {
+  const RESET = "convex/orgFinancialReset.ts";
+  const OWNED = "convex/accounting/receiptMovement.ts";
+  const DECLARATION: readonly AuthorityDeclaration[] = [
+    {
+      table: "receiptMovements",
+      ownerModule: OWNED,
+      lifecycleExceptions: [{ module: RESET, operations: ["delete"] }],
+    },
+  ];
+
+  const site = (
+    file: string,
+    method: DbWriteSite["method"],
+    tables: string[]
+  ): DbWriteSite => ({
+    file,
+    line: 1,
+    method,
+    resolution: { kind: "RESOLVED", tables },
+    snippet: "ctx.db.delete(id)",
+  });
+
+  it("permits the excepted module its one operation on that exact table", () => {
+    expect(classifyWriteSite(site(RESET, "delete", ["receiptMovements"]), DECLARATION)).toEqual({
+      verdict: "AUTHORIZED",
+      tables: ["receiptMovements"],
+    });
+  });
+
+  it("refuses the excepted module any OTHER operation", () => {
+    for (const method of ["insert", "patch", "replace"] as const) {
+      expect(classifyWriteSite(site(RESET, method, ["receiptMovements"]), DECLARATION)).toEqual({
+        verdict: "VIOLATION",
+        tables: ["receiptMovements"],
+      });
+    }
+  });
+
+  it("refuses a module that holds no exception", () => {
+    expect(
+      classifyWriteSite(site("convex/customers.ts", "delete", ["receiptMovements"]), DECLARATION)
+    ).toEqual({ verdict: "VIOLATION", tables: ["receiptMovements"] });
+  });
+
+  /**
+   * ⚠️ THE FAIL-CLOSED READING OF "exact-table", AND THE ONE THE BINDING STEP
+   * MUST RULE ON. A sweep deleting through `Id<TableNames>` resolves to every
+   * table in the schema; that is not an exact-table write, so the exception
+   * does not cover it. Both real sweep sites are of exactly this shape.
+   */
+  it("refuses an excepted delete whose id resolves to a SET of tables", () => {
+    expect(
+      classifyWriteSite(site(RESET, "delete", ["receiptMovements", "vehicles"]), DECLARATION)
+    ).toEqual({ verdict: "VIOLATION", tables: ["receiptMovements"] });
+  });
+
+  it("refuses an excepted delete whose operation could not be read", () => {
+    expect(classifyWriteSite(site(RESET, "unknown", ["receiptMovements"]), DECLARATION)).toEqual({
+      verdict: "VIOLATION",
+      tables: ["receiptMovements"],
+    });
+  });
+
+  it("still lets the owner module do anything", () => {
+    for (const method of DB_WRITE_METHODS) {
+      expect(classifyWriteSite(site(OWNED, method, ["receiptMovements"]), DECLARATION)).toEqual({
+        verdict: "AUTHORIZED",
+        tables: ["receiptMovements"],
+      });
+    }
   });
 });
 
@@ -834,8 +1164,16 @@ describe("the analyzer against the real convex backend", () => {
    * count-based check would not, and where every fixture test would still pass.
    *
    * It is self-updating, so it does not churn on unrelated pull requests.
+   *
+   * ⚠️ CONTAINMENT, NOT EQUALITY, AND THE DIFFERENCE IS A REAL DEFECT I SHIPPED.
+   * The type-aware pass legitimately sees MORE than a text scan can — Codex
+   * demonstrated `const writer = ctx.db satisfies Writer; writer.delete(id)`,
+   * which the type-aware pass resolves and the syntactic pass cannot see at
+   * all. Under equality, CORRECT analyzer behaviour would have failed CI on an
+   * unrelated pull request. Containment still kills a total detection failure:
+   * 848 syntactic sites against 0 type-aware ones is not a subset.
    */
-  it("resolves exactly the call sites a type-free syntactic pass can see", () => {
+  it("sees every call site a type-free syntactic pass can see", () => {
     // Sorted with the guard's own comparator on both sides: the property under
     // test is set equality, and an ordering difference must not be able to
     // masquerade as one.
@@ -843,14 +1181,9 @@ describe("the analyzer against the real convex backend", () => {
     // comparison against a detector that only looks at call sites. There are
     // none in the backend today; the filter states the property precisely
     // rather than relying on that staying true.
-    const typeAware = sites
-      .filter(
-        (s) =>
-          !(s.resolution.kind === "UNPROVEN" && s.resolution.form === "write-method-reference-escapes")
-      )
-      .map((s) => `${s.file}:${s.line}:${s.method}`)
-      .sort(compareStrings);
-    expect(typeAware).toEqual(syntacticDbWriteCallSites(backend));
+    const typeAware = new Set(sites.map((s) => `${s.file}:${s.line}:${s.method}`));
+    const unseen = syntacticDbWriteCallSites(backend).filter((site) => !typeAware.has(site));
+    expect(unseen).toEqual([]);
   }, 60_000);
 
   /**
@@ -874,40 +1207,6 @@ describe("the analyzer against the real convex backend", () => {
    */
   it("has no production `replace` call site, exactly as the guard's header claims", () => {
     expect(sites.filter((s) => s.method === "replace")).toEqual([]);
-  }, 60_000);
-
-  /**
-   * ⚠️ THE FINDING 218-C AND 231 NEED, PINNED AS A RATCHET.
-   *
-   * Six write sites resolve to a SET of tables rather than one, because their
-   * id is a generic `Id<TableNames>` or a union: the super-admin raw record
-   * editor, the org hard-delete sweep, the customer-merge re-pointer and the
-   * org financial reset sweep.
-   *
-   * These are the sites that will be flagged the moment ANY receipt-authority
-   * table is declared, and they are not false positives — a generic
-   * cross-table writer really can insert, patch and delete a row in a table it
-   * knows nothing about, which is precisely the single-owner property being
-   * asserted. Closing them is not this ticket's decision to take.
-   *
-   * Compared exactly, in both directions: a seventh generic writer fails CI,
-   * and removing one without updating this map fails too, so the surface
-   * cannot be quietly re-hidden after it is dealt with.
-   */
-  it("pins the generic cross-table writers that any declaration will collide with", () => {
-    const grouped: Record<string, number> = {};
-    for (const site of sites) {
-      if (site.resolution.kind !== "RESOLVED" || site.resolution.tables.length < 2) continue;
-      const key = `${site.file}::${site.method}`;
-      grouped[key] = (grouped[key] ?? 0) + 1;
-    }
-    expect(grouped).toEqual({
-      "convex/adminData.ts::patch": 2,
-      "convex/adminData.ts::delete": 1,
-      "convex/adminOrgs.ts::delete": 1,
-      "convex/customers.ts::patch": 1,
-      "convex/orgFinancialReset.ts::delete": 1,
-    });
   }, 60_000);
 
   /**
@@ -953,15 +1252,80 @@ describe("the analyzer against the real convex backend", () => {
    * When 218-C freezes its names this test changes with the declaration, and
    * changing it is the deliberate act of binding the guard.
    */
-  it("ships an unbound declaration, and says so instead of reporting a hollow green", () => {
-    expect(RECEIPT_AUTHORITY_DECLARATION).toEqual([]);
-    expect(declarationStatus()).toBe("PENDING_218C_TABLE_FREEZE");
+  /**
+   * ⚠️ THE ONE THING THIS SUITE MUST NOT BE READ AS SAYING.
+   *
+   * The declaration is real and fixed by owner ruling `c17710`, but the three
+   * tables and their owner module are created by SCRUM-218-C and do not exist
+   * on this tooling-only branch. A declaration naming absent modules produces no
+   * violations for the same reason an empty one does, and the two are
+   * indistinguishable from an exit code — so the binding report says which.
+   *
+   * When 218-C's corrected successor lands, this expectation changes in a
+   * temporary integration worktree, and changing it is the deliberate act of
+   * binding the guard.
+   */
+  it("declares real tables that are not in this program yet, and says so", () => {
+    expect(RECEIPT_AUTHORITY_DECLARATION.map((entry) => entry.table)).toEqual([
+      "receiptMovements",
+      "receiptRetainedPositions",
+      "receiptApplications",
+    ]);
+
+    const binding = describeBinding(backend);
+    expect(binding.status).toBe("PENDING_218C_INTEGRATION");
+    expect(binding.ownerModulesMissing).toEqual(["convex/accounting/receiptMovement.ts"]);
+    expect(binding.ownerModulesPresent).toEqual([]);
+    expect(binding.declaredTablesWritten).toEqual([]);
 
     const result = auditAuthorityWrites(backend);
-    expect(result.declaredTables).toBe(0);
-    expect(result.authorized).toEqual([]);
     expect(result.violations).toEqual([]);
+    expect(result.authorized).toEqual([]);
     expect(result.coverage.writeSites).toBeGreaterThanOrEqual(800);
+  }, 60_000);
+
+  /**
+   * ⚠️ RECORDED FOR THE BINDING STEP, WITH THE EXACT SITES.
+   *
+   * These six writes resolve to a SET of tables because their id is a generic
+   * `Id<TableNames>` or a union. Under the fail-closed reading of "exact-table
+   * DELETE-only", a set is not an exact table, so the `orgFinancialReset` and
+   * `adminOrgs` exceptions will NOT cover their sweep sites — and `adminData`
+   * and `customers` have no exception at all. Every one of these becomes a
+   * violation the moment the declaration resolves.
+   *
+   * That is the single-owner property working as specified. Whether the sweeps
+   * should be covered anyway is an owner decision at binding time, not one this
+   * analyzer takes quietly.
+   */
+  it("pins the generic sweeps that will be reported when the declaration binds", () => {
+    const grouped: Record<string, number> = {};
+    for (const site of sites) {
+      if (site.resolution.kind !== "RESOLVED" || site.resolution.tables.length < 2) continue;
+      const key = `${site.file}::${site.method}`;
+      grouped[key] = (grouped[key] ?? 0) + 1;
+    }
+    expect(grouped).toEqual({
+      "convex/adminData.ts::patch": 2,
+      "convex/adminData.ts::delete": 1,
+      "convex/adminOrgs.ts::delete": 1,
+      "convex/customers.ts::patch": 1,
+      "convex/orgFinancialReset.ts::delete": 1,
+    });
+  }, 60_000);
+
+  /**
+   * `ctx.storage.delete(id)` takes an `Id<"_storage">`, so the redesigned
+   * detector resolves it like any other branded delete. Five such calls exist.
+   * Pinned because it widens what "a write site" means, and a surprise in the
+   * count should be read, not absorbed.
+   */
+  it("resolves storage deletes too, because they are addressed by an Id", () => {
+    const storage = sites.filter(
+      (site) => site.resolution.kind === "RESOLVED" && site.resolution.tables.includes("_storage")
+    );
+    expect(storage.length).toBeGreaterThanOrEqual(5);
+    expect(storage.every((site) => site.method === "delete")).toBe(true);
   }, 60_000);
 
   /** What CI actually asserts today: fail-closed holds across the backend. */

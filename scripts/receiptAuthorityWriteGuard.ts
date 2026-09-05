@@ -35,42 +35,58 @@
  *
  * ## What this analyzer claims, precisely
  *
- * For every call in the analysed source set whose receiver's TYPE is a Convex
- * database writer and whose method is `insert`/`patch`/`replace`/`delete`, it
- * resolves the target table:
+ * ⚠️ IT LOOKS FOR CANDIDATES AND REFUSES WHAT IT CANNOT CLEAR. It does not look
+ * for writes and skip what it fails to recognise. That inversion is the whole
+ * lesson of two review rounds: the previous design had MANY quiet exits —
+ * receiver not structurally a writer, escape not a known write method,
+ * destructuring key not an identifier, no member access at all — and every hole
+ * found in those rounds was one of them. Eleven distinct spellings produced no
+ * site whatsoever, each with zero compiler diagnostics.
  *
- * - `insert`  — from the first argument's static string-literal type. That
- *               covers a plain literal, a `const`-bound name, and a union of
- *               literals; it does NOT cover a value whose type widens to
- *               `string` (a template with a substitution, a runtime-computed
- *               name), which is reported as UNPROVEN.
+ * **There is now exactly one quiet exit: a member name POSITIVELY PROVEN not to
+ * be one of the four.** A statically known name that is not `insert`, `patch`,
+ * `replace` or `delete`; or a numeric, bigint or symbol index, which cannot name
+ * one of them. Everything else becomes a site, and every uncertainty in a site
+ * becomes UNPROVEN.
+ *
+ * **A database write member is recognised by its SIGNATURE, not by its object.**
+ * The question is asked of the member — is it one of the four names, and does
+ * its signature actually handle a Convex `Id`, in a parameter or as what it
+ * returns? That is what a Convex write *is*. It survives every narrowing, so
+ * `Pick<Writer, "delete">` from a capability helper, a delete-only view, and each
+ * constituent of a `Writer | DeleteOnly` union are all caught — none of which
+ * the old "does the receiver expose all four methods" test could see. It also
+ * keeps `Map.delete(key: string)` and a cache out for a reason rather than by
+ * luck: they name one of the four but never touch an `Id`.
+ *
+ * The table is then resolved:
+ *
+ * - `insert` — from the first argument's static string-literal type (a plain
+ *              literal, a `const`-bound name, or a union of literals), falling
+ *              back to the call's own `Promise<Id<T>>` return type, which is how
+ *              a table-scoped writer's `insert(value)` names its table.
  * - `patch` / `replace` / `delete` — from the `__tableName` brand carried by
- *               the first argument's type. Because that is a property of the
- *               type rather than of the spelling, it resolves through
- *               intermediate bindings, aliases, helper return values,
- *               `Doc<T>["_id"]`, and unions of ids.
+ *              whichever ARGUMENT has one. By brand, not by position: Convex
+ *              also ships table-name-first overloads, and assuming argument 0
+ *              reported every one of them as unprovable.
  *
- * The operation itself is resolved the same way. A bracket call —
- * `ctx.db["delete"](id)` — is legal TypeScript, compiles identically, and is
- * invisible to any analyzer that only reads property accesses; it is read here
- * from the bracket's type, so a `const` binding resolves as well as a literal.
- * A bracket that does not name exactly one method is UNPROVEN, because on a
- * database writer an unreadable method name may be any of the four.
+ * The operation is resolved the same way. `ctx.db["delete"](id)` is legal
+ * TypeScript that compiles identically and is invisible to any analyzer reading
+ * only property accesses; the bracket is read from its type, so a `const`
+ * binding resolves as well as a literal. A bracket naming more than one method
+ * is UNPROVEN.
  *
- * So is the RECEIVER. `(ctx.db as any).delete(id)` answers "is this a database
- * writer?" with neither yes nor no, and a boolean answer there reads it as "no"
- * and drops the call entirely. An unreadable receiver is UNPROVEN.
+ * An unreadable RECEIVER — `(ctx.db as any).delete(id)` — is UNPROVEN, never
+ * dropped. And a write method taken as a VALUE (a rename or computed
+ * destructure, an assignment destructure, `.call`, `.bind`, a higher-order
+ * helper, `Reflect.get`) has no member access at its eventual call site at all;
+ * following it needs dataflow this guard does not do, so the ESCAPE itself is
+ * reported. The reference is where the proof stops, and stopping is refused.
  *
- * And a write method taken as a VALUE — `const { delete: removeRow } = ctx.db`,
- * `ctx.db.delete.call(…)`, `.bind(…)`, `Reflect.apply(ctx.db.delete, …)`, or
- * the method handed to a higher-order helper — has no property access at its
- * eventual call site at all. Following it there needs dataflow this guard does
- * not do, so the ESCAPE is reported instead: the reference is where the proof
- * stops, and stopping is refused rather than skipped.
- *
- * It then classifies each resolved site against the declaration below:
- * a write to a declared authority table from any module other than that
- * table's declared owner is a VIOLATION.
+ * It then classifies each resolved site against the declaration below: a write
+ * to a declared authority table from any module other than that table's owner
+ * is a VIOLATION, unless a narrow lifecycle exception names that module, that
+ * operation, and resolves to that exact table.
  *
  * ## ⚠️ IT IS FAIL-CLOSED, AND THERE IS DELIBERATELY NO ALLOWLIST
  *
@@ -79,11 +95,16 @@
  *
  * That policy was MEASURED before it was chosen, not assumed affordable. At
  * `bf5769ed1` the analysed set is 228 non-generated, non-test modules holding
- * 848 database write sites (patch 499, insert 291, delete 58, replace 0), and
- * every single one resolves to a concrete table: zero unproven, zero unreadable
- * receivers, zero escaping method references. So fail-closed costs nothing
- * today and a NEW unresolvable form fails CI rather than quietly shrinking the
- * analysed surface.
+ * 853 write sites (patch 499, insert 291, delete 63, replace 0), and every
+ * single one resolves to a concrete table: zero unproven, zero unreadable
+ * receivers, zero escaping method references, zero reflective retrievals. So
+ * fail-closed costs nothing today and a NEW unresolvable form fails CI rather
+ * than quietly shrinking the analysed surface.
+ *
+ * Five of those 63 deletes are `ctx.storage.delete(id)`. Storage is not a table
+ * write, but its id IS an `Id<"_storage">`, so the same rule resolves it and it
+ * is reported rather than special-cased. Pinned by a test, because a surprise in
+ * a coverage number should be read, not absorbed.
  *
  * No burn-down allowlist is provided on purpose. A green result from this file
  * is an AUTHORIZATION, and an allowlist is the mechanism by which such a
@@ -121,7 +142,21 @@ export const DB_WRITE_METHODS = ["insert", "patch", "replace", "delete"] as cons
 export type DbWriteMethod = (typeof DB_WRITE_METHODS)[number];
 
 /**
- * One authority table and the single module allowed to write it.
+ * A module granted ONE named operation on ONE authority table, and nothing else.
+ *
+ * The owner ruling (`SCRUM-238 c17710`) grants exactly two: `orgFinancialReset`
+ * and `adminOrgs` may DELETE. Neither may insert, patch or replace, and no
+ * other module — `customers.ts` explicitly included — gets any exception.
+ */
+export interface LifecycleException {
+  /** Repository-relative POSIX path, compared exactly. */
+  readonly module: string;
+  readonly operations: readonly DbWriteMethod[];
+}
+
+/**
+ * One authority table, the single module allowed to write it, and the narrow
+ * lifecycle exceptions to that rule.
  *
  * `ownerModule` is a repository-relative POSIX path, compared exactly. A path
  * is used rather than a basename because two modules in different directories
@@ -130,40 +165,115 @@ export type DbWriteMethod = (typeof DB_WRITE_METHODS)[number];
 export interface AuthorityDeclaration {
   readonly table: string;
   readonly ownerModule: string;
+  readonly lifecycleExceptions?: readonly LifecycleException[];
+}
+
+/** SCRUM-218-C's declared owner of receipt/retained-position authority. */
+const RECEIPT_AUTHORITY_OWNER = "convex/accounting/receiptMovement.ts";
+
+/**
+ * ⚠️ EXACT-TABLE DELETE, AND NOTHING ELSE.
+ *
+ * Org reset and org hard-delete legitimately remove rows during a lifecycle
+ * sweep. They may not create, patch or replace one, so a receipt movement can
+ * never be edited from outside its owner — only destroyed with its org.
+ */
+const LIFECYCLE_DELETE_ONLY: readonly LifecycleException[] = [
+  { module: "convex/orgFinancialReset.ts", operations: ["delete"] },
+  { module: "convex/adminOrgs.ts", operations: ["delete"] },
+];
+
+/**
+ * ⚠️ THE TABLES ARE THE OWNER'S, NOT MINE, AND THEY DO NOT EXIST HERE YET.
+ *
+ * Fixed by owner ruling `SCRUM-238 c17710`. SCRUM-218-C creates these three
+ * tables and `convex/accounting/receiptMovement.ts`; none of them exists on
+ * this tooling-only branch, and 218-C production code is deliberately NOT
+ * copied into this pull request.
+ *
+ * So the declaration is REAL but not yet RESOLVABLE here, and that distinction
+ * is reported rather than left to be misread — `describeBinding` returns
+ * `PENDING_218C_INTEGRATION` while the owner module is absent from the analysed
+ * program. A green run of this guard on this branch therefore proves the
+ * mechanism and proves every database write in the repository has a provable
+ * target table. It does NOT prove receipt authority is enforced, because the
+ * tables it names are not here to be written.
+ *
+ * Binding is verified in a temporary integration worktree against the corrected
+ * 218-C successor, per the same ruling.
+ */
+export const RECEIPT_AUTHORITY_DECLARATION: readonly AuthorityDeclaration[] = [
+  {
+    table: "receiptMovements",
+    ownerModule: RECEIPT_AUTHORITY_OWNER,
+    lifecycleExceptions: LIFECYCLE_DELETE_ONLY,
+  },
+  {
+    table: "receiptRetainedPositions",
+    ownerModule: RECEIPT_AUTHORITY_OWNER,
+    lifecycleExceptions: LIFECYCLE_DELETE_ONLY,
+  },
+  {
+    table: "receiptApplications",
+    ownerModule: RECEIPT_AUTHORITY_OWNER,
+    lifecycleExceptions: LIFECYCLE_DELETE_ONLY,
+  },
+];
+
+export type BindingStatus = "BOUND" | "PENDING_218C_INTEGRATION" | "NOTHING_DECLARED";
+
+export interface BindingReport {
+  readonly status: BindingStatus;
+  readonly declaredTables: readonly string[];
+  /** Declared owner modules that ARE in the analysed program. */
+  readonly ownerModulesPresent: readonly string[];
+  /** Declared owner modules that are NOT — the reason binding is pending. */
+  readonly ownerModulesMissing: readonly string[];
+  /** Declared tables that some analysed module actually writes. */
+  readonly declaredTablesWritten: readonly string[];
 }
 
 /**
- * ⚠️ EMPTY, ON PURPOSE, AND NOT BECAUSE THE WORK IS UNFINISHED.
+ * Is the declaration actually pointed at anything in THIS program?
  *
- * The receipt/retained-position authority tables do not exist yet on ANY head,
- * including the certified `9ea7ea9e4`. SCRUM-218-C creates them, and its
- * SOL-GATE (`SCRUM-218 c17652`) is unruled at the time this guard was written.
- * Guessing `receiptMovements` here and then requiring 218-C to conform is
- * exactly the coupling the owner-proxy told this ticket not to create.
- *
- * So the MECHANISM ships proven and the DECLARATION ships unbound. Binding is
- * a one-entry edit to this array plus a full re-run of the suite.
- *
- * Until then `declarationStatus()` reports `PENDING_218C_TABLE_FREEZE` and
- * `auditAuthorityWrites` reports zero authority coverage. A green run of this
- * guard today proves that every database write in the backend has a provable
- * target table. It does NOT prove that receipt authority is enforced, because
- * nothing is declared yet, and this comment exists so that distinction cannot
- * be lost by someone reading only the exit code.
+ * ⚠️ THIS EXISTS SO A GREEN RUN CANNOT BE QUOTED AS ENFORCEMENT. A declaration
+ * naming modules and tables that are absent produces no violations for the same
+ * reason an empty declaration does — nothing to match — and the two are
+ * indistinguishable from the exit code alone. This says which one it is.
  */
-export const RECEIPT_AUTHORITY_DECLARATION: readonly AuthorityDeclaration[] = [];
+export function describeBinding(
+  analyzer: AnalyzerProgram,
+  declaration: readonly AuthorityDeclaration[] = RECEIPT_AUTHORITY_DECLARATION,
+  sites?: readonly DbWriteSite[]
+): BindingReport {
+  const analysed = new Set(analyzer.analysed.map(([, name]) => name));
+  const owners = [...new Set(declaration.map((entry) => entry.ownerModule))].sort(compareStrings);
+  const present = owners.filter((module) => analysed.has(module));
+  const missing = owners.filter((module) => !analysed.has(module));
 
-export type DeclarationStatus = "BOUND" | "PENDING_218C_TABLE_FREEZE";
+  const declaredTables = declaration.map((entry) => entry.table).sort(compareStrings);
+  const written = new Set<string>();
+  for (const site of sites ?? collectDbWriteSites(analyzer)) {
+    if (site.resolution.kind !== "RESOLVED") continue;
+    for (const table of site.resolution.tables) {
+      if (declaredTables.includes(table)) written.add(table);
+    }
+  }
 
-/**
- * Derived, never stored. A stored status constant is a second source of truth
- * that can disagree with the array it describes, and this programme has
- * repeatedly shipped comments that outlived the belief behind them.
- */
-export function declarationStatus(
-  declaration: readonly AuthorityDeclaration[] = RECEIPT_AUTHORITY_DECLARATION
-): DeclarationStatus {
-  return declaration.length === 0 ? "PENDING_218C_TABLE_FREEZE" : "BOUND";
+  const status: BindingStatus =
+    declaration.length === 0
+      ? "NOTHING_DECLARED"
+      : missing.length > 0
+        ? "PENDING_218C_INTEGRATION"
+        : "BOUND";
+
+  return {
+    status,
+    declaredTables,
+    ownerModulesPresent: present,
+    ownerModulesMissing: missing,
+    declaredTablesWritten: [...written].sort(compareStrings),
+  };
 }
 
 /** The named forms this analyzer refuses rather than pretends to understand. */
@@ -181,7 +291,9 @@ export type UnsupportedForm =
   /** The RECEIVER's type is `any`/`unknown`, so it cannot be cleared. */
   | "receiver-type-not-statically-known"
   /** A write method was taken as a VALUE; its eventual call site is unknown. */
-  | "write-method-reference-escapes";
+  | "write-method-reference-escapes"
+  /** `Reflect.get(writer, …)` — retrieval this analyzer cannot follow. */
+  | "reflective-write-member-access";
 
 export type TableResolution =
   | { readonly kind: "RESOLVED"; readonly tables: readonly string[] }
@@ -355,26 +467,85 @@ export function createVirtualAnalyzerProgram(
  * ------------------------------------------------------------------------- */
 
 /**
- * Is this expression's type a Convex database WRITER?
- *
- * Two accepted proofs, deliberately:
- *
- * 1. the type's symbol is named `…DatabaseWriter` — the real
- *    `GenericDatabaseWriter<DataModel>` behind `ctx.db`; or
- * 2. it structurally exposes all four write methods.
- *
- * (2) is what makes the check independent of Convex's internal naming and lets
- * an in-memory fixture declare its own minimal writer interface. It also keeps
- * `Map.delete`, `Set.delete` and every `.insert`-named method on an unrelated
- * object out — none of them carry all four.
- *
- * A READER (`ctx.db` inside a query) has no `insert`/`patch`/`replace`/`delete`
- * and so is correctly invisible: a query cannot write.
+ * Convex's `Id<T>` is `string & { __tableName: T }`. This property IS the brand.
  */
-function isDatabaseWriterType(checker: ts.TypeChecker, type: ts.Type): boolean {
-  const symbolName = type.getSymbol()?.getName() ?? "";
-  if (symbolName.endsWith("DatabaseWriter")) return true;
-  return DB_WRITE_METHODS.every((m) => checker.getPropertyOfType(type, m) !== undefined);
+const TABLE_BRAND = "__tableName";
+
+function isAnyOrUnknown(type: ts.Type): boolean {
+  return (type.flags & ts.TypeFlags.Any) !== 0 || (type.flags & ts.TypeFlags.Unknown) !== 0;
+}
+
+function typeArgumentsOf(checker: ts.TypeChecker, type: ts.Type): readonly ts.Type[] {
+  if ((type.flags & ts.TypeFlags.Object) === 0) return [];
+  const object = type as ts.ObjectType;
+  if ((object.objectFlags & ts.ObjectFlags.Reference) === 0) return [];
+  return checker.getTypeArguments(object as ts.TypeReference);
+}
+
+/**
+ * Does this type carry the `Id` brand anywhere a signature could put it?
+ *
+ * Directly (`Id<"x">`), inside a union, or wrapped — `Promise<Id<"x">>` is how
+ * `insert` returns one. Bounded depth, because a type graph can be cyclic.
+ */
+function carriesIdBrand(checker: ts.TypeChecker, type: ts.Type, depth = 0): boolean {
+  if (depth > 3) return false;
+  if (checker.getPropertyOfType(type, TABLE_BRAND) !== undefined) return true;
+  if (type.isUnion() || type.isIntersection()) {
+    return type.types.some((t) => carriesIdBrand(checker, t, depth + 1));
+  }
+  return typeArgumentsOf(checker, type).some((t) => carriesIdBrand(checker, t, depth + 1));
+}
+
+/**
+ * Is `member` on `type` a DATABASE WRITE MEMBER?
+ *
+ * ⚠️ THIS REPLACED "does the receiver expose all four methods", AND THAT
+ * REPLACEMENT IS THE POINT OF THIS ROUND.
+ *
+ * The all-four test was a property of the whole object, so every narrowing of
+ * a writer escaped it: `Pick<Writer, "delete">` returned by a capability
+ * helper, a delete-only view, and each constituent of a `Writer | DeleteOnly`
+ * union all answered "not a writer" and their writes were dropped entirely —
+ * eight such spellings were reproduced with zero compiler diagnostics.
+ *
+ * The question is asked of the MEMBER instead: is this one of the four names,
+ * and does its signature actually handle a Convex `Id` — in a parameter, or as
+ * what it returns? That is what a database write *is*. It survives every
+ * narrowing, because narrowing does not change the member's signature.
+ *
+ * It also keeps the negatives out for a reason rather than by luck:
+ * `Map.delete(key: string): boolean` and a cache's `delete(key: string)` name
+ * one of the four but never touch an `Id`.
+ *
+ * ⚠️ The `…DatabaseWriter` symbol-name shortcut is GONE. It made the real
+ * backend pass through a different code path from every fixture, so a break in
+ * the shape test would have been invisible on real source while fixtures
+ * caught it — the mutation battery showed exactly that asymmetry. One
+ * mechanism now, exercised identically by both.
+ */
+function isDatabaseWriteMember(
+  checker: ts.TypeChecker,
+  type: ts.Type,
+  member: DbWriteMethod
+): boolean {
+  const symbol = checker.getPropertyOfType(type, member);
+  if (!symbol) return false;
+  return checker
+    .getTypeOfSymbol(symbol)
+    .getCallSignatures()
+    .some(
+      (signature) =>
+        signature
+          .getParameters()
+          .some((parameter) => carriesIdBrand(checker, checker.getTypeOfSymbol(parameter))) ||
+        carriesIdBrand(checker, signature.getReturnType())
+    );
+}
+
+/** Does this type expose ANY database write member? */
+function hasAnyDatabaseWriteMember(checker: ts.TypeChecker, type: ts.Type): boolean {
+  return DB_WRITE_METHODS.some((member) => isDatabaseWriteMember(checker, type, member));
 }
 
 /**
@@ -408,7 +579,7 @@ function stringLiteralsOf(type: ts.Type): string[] | null {
 }
 
 /**
- * The table(s) an `Id`-typed expression can address.
+ * The table(s) an `Id`-branded type can address.
  *
  * ⚠️ THIS IS THE WHOLE POINT OF THE TICKET. `ctx.db.delete(id)` names no
  * table; `Id<"x">` is `string & { __tableName: "x" }`, so the table is the
@@ -427,7 +598,7 @@ function tablesFromIdType(checker: ts.TypeChecker, type: ts.Type): TableResoluti
   const brands: ts.Type[] = [];
   const collectBrand = (t: ts.Type): boolean => {
     if (t.isUnion()) return t.types.every(collectBrand);
-    const brand = checker.getPropertyOfType(t, "__tableName");
+    const brand = checker.getPropertyOfType(t, TABLE_BRAND);
     if (!brand) return false;
     brands.push(checker.getTypeOfSymbol(brand));
     return true;
@@ -464,13 +635,26 @@ function tablesFromInsertArgument(
     : { kind: "UNPROVEN", form: "insert-table-name-not-statically-known" };
 }
 
+/**
+ * Can this index type be ruled out as a member name outright?
+ *
+ * A number, bigint or symbol index may well name a member — it just cannot name
+ * one of the four. That is a POSITIVE proof of harmlessness, which is what the
+ * invariant requires before anything exits quietly.
+ */
+function cannotNameAWriteMember(type: ts.Type): boolean {
+  const constituents = type.isUnion() ? type.types : [type];
+  const notAName = ts.TypeFlags.NumberLike | ts.TypeFlags.BigIntLike | ts.TypeFlags.ESSymbolLike;
+  return constituents.length > 0 && constituents.every((t) => (t.flags & notAName) !== 0);
+}
+
 type ResolvedWriteMethod =
   | { readonly kind: "WRITE"; readonly method: DbWriteMethod }
   | { readonly kind: "NOT_A_WRITE" }
   | { readonly kind: "UNKNOWN" };
 
 /**
- * Which of the four operations is being called — including through a bracket.
+ * Which of the four operations a member access names — including a bracket.
  *
  * ⚠️ `ctx.db["delete"](id)` IS A DELETE, AND A PROPERTY-ACCESS-ONLY ANALYZER
  * CANNOT SEE IT. That spelling is legal TypeScript, compiles identically, and
@@ -481,7 +665,13 @@ type ResolvedWriteMethod =
  * The bracket's contents are read from the TYPE, so a `const` binding resolves
  * as well as a literal. Anything that does not name exactly one method — a
  * conditional, a `string`-typed variable — is UNKNOWN and therefore refused:
- * on a database writer, an unreadable method name may be any of the four.
+ * on a database writer, an unreadable member name may be any of the four.
+ *
+ * ⚠️ `NOT_A_WRITE` IS THE ONLY QUIET EXIT IN THIS ANALYZER. A statically known
+ * name that is not one of the four is the single case that leaves without a
+ * site. Every other uncertainty becomes UNPROVEN. That rule exists because the
+ * previous design had many quiet exits and every hole found in two review
+ * rounds was one of them.
  */
 function resolveWriteMethod(
   checker: ts.TypeChecker,
@@ -494,54 +684,107 @@ function resolveWriteMethod(
       : { kind: "NOT_A_WRITE" };
   }
 
-  const names = stringLiteralsOf(checker.getTypeAtLocation(callee.argumentExpression));
-  if (!names) return { kind: "UNKNOWN" };
+  const indexType = checker.getTypeAtLocation(callee.argumentExpression);
+  const names = stringLiteralsOf(indexType);
+  if (!names) {
+    // ⚠️ THE ONLY QUIET EXIT, IN ITS SECOND FORM. A numeric, bigint or symbol
+    // index POSITIVELY cannot name `insert`/`patch`/`replace`/`delete`, so it
+    // is proven harmless rather than merely unrecognised. Without this the
+    // guard reported `convJson.data?.[0]` — an array index into parsed JSON —
+    // as an unreadable write, which is the kind of false positive that makes a
+    // fail-closed rule unaffordable and gets it deleted.
+    return cannotNameAWriteMember(indexType) ? { kind: "NOT_A_WRITE" } : { kind: "UNKNOWN" };
+  }
   const writes = names.filter((name) => (DB_WRITE_METHODS as readonly string[]).includes(name));
   if (writes.length === 0) return { kind: "NOT_A_WRITE" };
   return names.length === 1 ? { kind: "WRITE", method: writes[0] as DbWriteMethod } : { kind: "UNKNOWN" };
 }
 
 /**
- * What the receiver of a write-named call is, as far as the checker can tell.
+ * What the receiver of a write-named access is, as far as the checker can tell.
  *
  * ⚠️ `UNREADABLE` IS THE WHOLE REASON THIS IS NOT A BOOLEAN. A receiver typed
  * `any` — `(ctx.db as any).delete(id)`, or `const writer: any = ctx.db` —
- * answers "is this a database writer?" with neither yes nor no, and the earlier
- * boolean version read that as "no" and DROPPED the call. The guard then
- * reported no site at all: not a violation, not even unproven, contradicting
- * its own header promise that nothing is silently skipped. `as any` is the
- * canonical escape hatch in TypeScript, so it is precisely the spelling a guard
- * whose green result is an authorization must refuse rather than ignore.
- *
- * Found by two independent reviewers at `1b53ffd94`, reproduced with a positive
- * control before being fixed. Measured cost at this head: ZERO calls in the
- * analysed set have an `any`/`unknown` receiver under a write-shaped member.
+ * answers "is this a database writer?" with neither yes nor no, and a boolean
+ * version read that as "no" and DROPPED the access. Nothing was reported at
+ * all: not a violation, not even unproven. `as any` is the canonical escape
+ * hatch in TypeScript, so it is precisely the spelling a guard whose green
+ * result is an authorization must refuse rather than ignore.
  */
 type ReceiverVerdict = "WRITER" | "NOT_A_WRITER" | "UNREADABLE";
 
 function classifyReceiver(
   checker: ts.TypeChecker,
-  callee: ts.PropertyAccessExpression | ts.ElementAccessExpression
+  receiver: ts.Expression,
+  method: ResolvedWriteMethod
 ): ReceiverVerdict {
-  const type = checker.getTypeAtLocation(callee.expression);
-  if ((type.flags & ts.TypeFlags.Any) !== 0 || (type.flags & ts.TypeFlags.Unknown) !== 0) {
-    return "UNREADABLE";
-  }
-  return isDatabaseWriterType(checker, type) ? "WRITER" : "NOT_A_WRITER";
+  const type = checker.getTypeAtLocation(receiver);
+  if (isAnyOrUnknown(type)) return "UNREADABLE";
+  const isWriter =
+    method.kind === "WRITE"
+      ? isDatabaseWriteMember(checker, type, method.method)
+      : hasAnyDatabaseWriteMember(checker, type);
+  return isWriter ? "WRITER" : "NOT_A_WRITER";
 }
 
-/** The table(s) a write addresses, or the named form that stops it resolving. */
+/**
+ * The table(s) a resolved write addresses.
+ *
+ * ⚠️ THE ID IS FOUND BY ITS BRAND, NOT BY ITS POSITION. Convex ships two
+ * writer shapes: the classic `delete(id)` and a table-first `delete(table, id)`
+ * overload, and a table-scoped writer whose `insert(value)` names no table at
+ * all. Hard-coding "argument 0 is the id" reported every table-first call as
+ * unprovable — fail-closed, but noisy enough to redden an unrelated pull
+ * request for using valid Convex syntax. Scanning for the branded argument
+ * resolves all of them, and falls back to the call's own return type for the
+ * scoped insert, whose `Promise<Id<T>>` carries the brand.
+ */
 function resolveTargetTables(
   checker: ts.TypeChecker,
-  method: DbWriteMethod,
-  argument: ts.Expression | undefined
+  call: ts.CallExpression,
+  method: DbWriteMethod
 ): TableResolution {
-  if (!argument) return { kind: "UNPROVEN", form: "no-argument" };
-  if (method === "insert") return tablesFromInsertArgument(checker, argument);
-  return tablesFromIdType(checker, checker.getTypeAtLocation(argument));
+  if (method === "insert") {
+    const first = call.arguments[0];
+    if (first) {
+      const fromArgument = tablesFromInsertArgument(checker, first);
+      if (fromArgument.kind === "RESOLVED") return fromArgument;
+    }
+    const returned = tablesFromIdType(checker, unwrapAwaited(checker, checker.getTypeAtLocation(call)));
+    if (returned.kind === "RESOLVED") return returned;
+    return first
+      ? { kind: "UNPROVEN", form: "insert-table-name-not-statically-known" }
+      : { kind: "UNPROVEN", form: "no-argument" };
+  }
+
+  if (call.arguments.length === 0) return { kind: "UNPROVEN", form: "no-argument" };
+
+  // ⚠️ EVERY ARGUMENT IS ASKED, AND THE ASKING IS THE FILTER.
+  //
+  // An earlier version pre-checked `carriesIdBrand` and only then called
+  // `tablesFromIdType`, which duplicated the "no brand here" answer in two
+  // places and left the one inside `tablesFromIdType` UNREACHABLE — a mutation
+  // that deleted it killed nothing, which is how the dead branch was found.
+  // Asking directly removes the duplicate and keeps the refusal live.
+  let unreadableBrand: TableResolution | null = null;
+  for (const argument of call.arguments) {
+    const resolution = tablesFromIdType(checker, checker.getTypeAtLocation(argument));
+    if (resolution.kind === "RESOLVED") return resolution;
+    // This argument IS the id — it carries a brand — but the brand does not
+    // name a table statically. That is a more specific answer than "no
+    // argument carried a brand", so it wins if nothing later resolves.
+    if (resolution.form === "id-table-brand-not-statically-known") unreadableBrand = resolution;
+  }
+  return unreadableBrand ?? { kind: "UNPROVEN", form: "id-type-carries-no-table-brand" };
 }
 
-/** The method name a callee SPELLS, with no type information consulted. */
+/** `Promise<T>` -> `T`, once. Enough for a Convex write's return type. */
+function unwrapAwaited(checker: ts.TypeChecker, type: ts.Type): ts.Type {
+  if (type.getSymbol()?.getName() !== "Promise") return type;
+  return typeArgumentsOf(checker, type)[0] ?? type;
+}
+
+/** The method name a member access SPELLS, with no type information consulted. */
 function spelledMethodName(
   callee: ts.PropertyAccessExpression | ts.ElementAccessExpression
 ): string {
@@ -555,11 +798,19 @@ function snippetOf(node: ts.Node): string {
   return node.getText().replace(/\s+/g, " ").slice(0, 120);
 }
 
+/** `Reflect.get(writer, "delete")` and friends — retrieval this cannot follow. */
+const REFLECTIVE_RETRIEVERS = new Set(["get", "apply", "getOwnPropertyDescriptor"]);
+
 /**
  * Every database write in the analysed set, with its target table resolved.
  *
  * The traversal is over the whole file, at every depth: a write nested inside
  * a callback, a conditional, a loop or a nested function is still a write.
+ *
+ * ⚠️ THE SHAPE OF THIS FUNCTION IS THE LESSON OF TWO REVIEW ROUNDS. It does not
+ * look for writes and skip what it does not recognise; it looks for CANDIDATES
+ * and refuses what it cannot clear. A candidate leaves without a site in one
+ * case only — a statically known member name that is not one of the four.
  */
 export function collectDbWriteSites(analyzer: AnalyzerProgram): DbWriteSite[] {
   const { checker } = analyzer;
@@ -576,8 +827,11 @@ export function collectDbWriteSites(analyzer: AnalyzerProgram): DbWriteSite[] {
       });
     };
 
+    const methodLabel = (resolved: ResolvedWriteMethod): DbWriteSite["method"] =>
+      resolved.kind === "WRITE" ? resolved.method : "unknown";
+
     // ⚠️ THE METHOD IS RESOLVED BEFORE THE RECEIVER, AND THAT ORDER MATTERS.
-    // A statically known name that is not one of the four clears the call
+    // A statically known name that is not one of the four clears the access
     // whatever its receiver is — so `(anything as any)["get"](id)` stays out,
     // while `(ctx.db as any).delete(id)` cannot be cleared and is refused.
     const record = (call: ts.CallExpression): void => {
@@ -586,21 +840,23 @@ export function collectDbWriteSites(analyzer: AnalyzerProgram): DbWriteSite[] {
 
       const resolved = resolveWriteMethod(checker, callee);
       if (resolved.kind === "NOT_A_WRITE") return;
-      const method = resolved.kind === "UNKNOWN" ? "unknown" : resolved.method;
 
-      const receiver = classifyReceiver(checker, callee);
+      const receiver = classifyReceiver(checker, callee.expression, resolved);
       if (receiver === "NOT_A_WRITER") return;
       if (receiver === "UNREADABLE") {
-        at(call, method, { kind: "UNPROVEN", form: "receiver-type-not-statically-known" });
+        at(call, methodLabel(resolved), {
+          kind: "UNPROVEN",
+          form: "receiver-type-not-statically-known",
+        });
         return;
       }
 
       at(
         call,
-        method,
+        methodLabel(resolved),
         resolved.kind === "UNKNOWN"
           ? { kind: "UNPROVEN", form: "write-method-not-statically-known" }
-          : resolveTargetTables(checker, resolved.method, call.arguments[0])
+          : resolveTargetTables(checker, call, resolved.method)
       );
     };
 
@@ -608,45 +864,100 @@ export function collectDbWriteSites(analyzer: AnalyzerProgram): DbWriteSite[] {
      * ⚠️ A WRITE METHOD TAKEN AS A VALUE NEVER REACHES `record`.
      *
      * `const { delete: removeRow } = ctx.db; await removeRow(id)` calls an
-     * IDENTIFIER, so there is no property access at the call site to detect —
+     * IDENTIFIER, so there is no member access at the call site to detect —
      * and because `delete` is a reserved word, that rename-destructure is the
      * ordinary way to hold a reference to it. `ctx.db.delete.call(…)`,
-     * `.bind(…)`, `Reflect.apply(ctx.db.delete, …)` and handing the method to a
-     * higher-order helper all escape the same way.
+     * `.bind(…)`, `Reflect.get(ctx.db, "delete")`, a computed binding key, an
+     * assignment destructure and passing the method to a higher-order helper
+     * all escape the same way, and all were reproduced producing zero sites.
      *
      * Following the value to its eventual call sites needs dataflow this guard
      * does not do. So the ESCAPE itself is reported: the reference is where the
-     * proof stops, and stopping is refused rather than skipped. Measured cost
-     * at this head: ZERO such references in the analysed set.
+     * proof stops, and stopping is refused rather than skipped.
      */
     const recordEscape = (node: ts.Node): void => {
       if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
         const parent = node.parent;
         if (ts.isCallExpression(parent) && parent.expression === node) return;
         const resolved = resolveWriteMethod(checker, node);
-        if (resolved.kind !== "WRITE") return;
-        if (classifyReceiver(checker, node) !== "WRITER") return;
-        at(node, resolved.method, { kind: "UNPROVEN", form: "write-method-reference-escapes" });
+        if (resolved.kind === "NOT_A_WRITE") return;
+        const receiver = classifyReceiver(checker, node.expression, resolved);
+        if (receiver === "NOT_A_WRITER") return;
+        at(node, methodLabel(resolved), {
+          kind: "UNPROVEN",
+          form:
+            receiver === "UNREADABLE"
+              ? "receiver-type-not-statically-known"
+              : "write-method-reference-escapes",
+        });
         return;
       }
+
+      // `const { delete: rm } = ctx.db` and `const { [op]: rm } = ctx.db`
       if (ts.isObjectBindingPattern(node)) {
-        if (!isDatabaseWriterType(checker, checker.getTypeAtLocation(node))) return;
-        for (const element of node.elements) {
-          const key = element.propertyName ?? element.name;
-          const spelled = ts.isIdentifier(key) || ts.isStringLiteral(key) ? key.text : null;
-          if (spelled && (DB_WRITE_METHODS as readonly string[]).includes(spelled)) {
-            at(element, spelled as DbWriteMethod, {
-              kind: "UNPROVEN",
-              form: "write-method-reference-escapes",
-            });
+        recordDestructuredMembers(node, checker.getTypeAtLocation(node), (element) =>
+          element.propertyName ?? element.name
+        );
+        return;
+      }
+
+      // `({ delete: rm } = ctx.db)` — an assignment target, not a declaration.
+      if (
+        ts.isObjectLiteralExpression(node) &&
+        ts.isBinaryExpression(node.parent) &&
+        node.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        node.parent.left === node
+      ) {
+        const source = checker.getTypeAtLocation(node.parent.right);
+        if (isAnyOrUnknown(source) || hasAnyDatabaseWriteMember(checker, source)) {
+          for (const property of node.properties) {
+            reportMemberKey(property, property.name);
           }
         }
       }
     };
 
+    function recordDestructuredMembers(
+      pattern: ts.ObjectBindingPattern,
+      sourceType: ts.Type,
+      keyOf: (element: ts.BindingElement) => ts.Node | undefined
+    ): void {
+      if (!isAnyOrUnknown(sourceType) && !hasAnyDatabaseWriteMember(checker, sourceType)) return;
+      for (const element of pattern.elements) {
+        reportMemberKey(element, keyOf(element));
+      }
+    }
+
+    /** One destructured key: refuse it unless its name proves it harmless. */
+    function reportMemberKey(node: ts.Node, key: ts.Node | undefined): void {
+      const spelled =
+        key && (ts.isIdentifier(key) || ts.isStringLiteral(key)) ? key.text : null;
+      if (spelled !== null && !(DB_WRITE_METHODS as readonly string[]).includes(spelled)) return;
+      at(node, (spelled as DbWriteMethod | null) ?? "unknown", {
+        kind: "UNPROVEN",
+        form: "write-method-reference-escapes",
+      });
+    }
+
+    /** `Reflect.get(ctx.db, "delete")` — a retrieval with no member access. */
+    const recordReflection = (call: ts.CallExpression): void => {
+      const callee = call.expression;
+      if (!ts.isPropertyAccessExpression(callee)) return;
+      if (!REFLECTIVE_RETRIEVERS.has(callee.name.text)) return;
+      const target = call.arguments[0];
+      if (!target) return;
+      const type = checker.getTypeAtLocation(target);
+      if (isAnyOrUnknown(type) || !hasAnyDatabaseWriteMember(checker, type)) return;
+      at(call, "unknown", { kind: "UNPROVEN", form: "reflective-write-member-access" });
+    };
+
     const visit = (node: ts.Node): void => {
-      if (ts.isCallExpression(node)) record(node);
-      else recordEscape(node);
+      if (ts.isCallExpression(node)) {
+        record(node);
+        recordReflection(node);
+      } else {
+        recordEscape(node);
+      }
       ts.forEachChild(node, visit);
     };
     visit(sourceFile);
@@ -705,6 +1016,34 @@ export function syntacticDbWriteCallSites(analyzer: AnalyzerProgram): string[] {
  * data, and a non-owner module holding it is a violation — the union is not a
  * reason to clear it.
  */
+/**
+ * Is this exact write permitted on this exact table?
+ *
+ * The owner module may do anything. Everyone else needs a lifecycle exception
+ * naming their module AND this operation — and it must be an EXACT-TABLE write.
+ *
+ * ⚠️ A SITE THAT RESOLVES TO A SET OF TABLES IS NOT AN EXACT-TABLE WRITE, AND
+ * THAT IS THE FAIL-CLOSED READING OF "exact-table DELETE-only". The generic
+ * sweeps in `orgFinancialReset` and `adminOrgs` delete through an
+ * `Id<TableNames>` that resolves to every table in the schema, so under this
+ * reading their exception does not cover those sites and they are reported.
+ * That is a real question for the owner at binding time, not a decision this
+ * analyzer should take quietly — so it is fail-closed here, visible in the
+ * suite, and a one-line change if ruled otherwise.
+ */
+function permits(
+  entry: AuthorityDeclaration,
+  site: DbWriteSite,
+  resolvedTables: readonly string[]
+): boolean {
+  if (entry.ownerModule === site.file) return true;
+  const exception = entry.lifecycleExceptions?.find((granted) => granted.module === site.file);
+  if (!exception) return false;
+  if (site.method === "unknown") return false;
+  if (!exception.operations.includes(site.method)) return false;
+  return resolvedTables.length === 1;
+}
+
 export function classifyWriteSite(
   site: DbWriteSite,
   declaration: readonly AuthorityDeclaration[]
@@ -715,7 +1054,7 @@ export function classifyWriteSite(
   const matched = declaration.filter((entry) => resolution.tables.includes(entry.table));
   if (matched.length === 0) return { verdict: "UNRELATED" };
 
-  const unauthorized = matched.filter((entry) => entry.ownerModule !== site.file);
+  const unauthorized = matched.filter((entry) => !permits(entry, site, resolution.tables));
   return unauthorized.length > 0
     ? { verdict: "VIOLATION", tables: unauthorized.map((entry) => entry.table).sort(compareStrings) }
     : { verdict: "AUTHORIZED", tables: matched.map((entry) => entry.table).sort(compareStrings) };
@@ -732,7 +1071,7 @@ export interface AuthorityAuditCoverage {
 }
 
 export interface AuthorityAuditResult {
-  readonly declarationStatus: DeclarationStatus;
+  readonly binding: BindingReport;
   readonly declaredTables: number;
   readonly sites: readonly DbWriteSite[];
   readonly violations: readonly SiteFinding[];
@@ -773,7 +1112,7 @@ export function auditAuthorityWrites(
   }
 
   return {
-    declarationStatus: declarationStatus(declaration),
+    binding: describeBinding(analyzer, declaration, sites),
     declaredTables: declaration.length,
     sites,
     violations,
