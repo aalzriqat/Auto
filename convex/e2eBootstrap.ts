@@ -377,22 +377,6 @@ function assertMarkerBelongsToThisDeployment(marker: Doc<"e2ePreviewBootstrap">)
 }
 
 /**
- * The deployment holds no tenant data AND is not configured like a real one.
- *
- * ⚠️ NAMED FOR WHAT IT PROVES. This was called `assertDeploymentIsPristine`,
- * and both adversarial reviewers on PR #278 landed on the same objection: the
- * name and its surrounding comments claimed the marker "cannot be minted on a
- * deployment that holds real tenants", while the code only ever established
- * "no rows exist in three tables at this instant" — a strictly weaker, purely
- * temporal condition. The gap is not academic for this repository, where
- * SCRUM-231 plans to empty production.
- *
- * Every check here is read from server state a caller cannot influence: loaded
- * rows and the deployment's own environment. None of them is a proof of
- * deployment TYPE, because Convex exposes no such signal to a function — see
- * the file header.
- */
-/**
  * The half of the disposability evidence that is CONFIGURATION rather than
  * STATE — and therefore the half that can honestly be re-checked later.
  *
@@ -429,6 +413,22 @@ function assertNotConfiguredLikeARealDeployment(refusal: string): void {
   }
 }
 
+/**
+ * The deployment holds no tenant data AND is not configured like a real one.
+ *
+ * ⚠️ NAMED FOR WHAT IT PROVES. This was called `assertDeploymentIsPristine`,
+ * and both adversarial reviewers on PR #278 landed on the same objection: the
+ * name and its surrounding comments claimed the marker "cannot be minted on a
+ * deployment that holds real tenants", while the code only ever established
+ * "no rows exist in three tables at this instant" — a strictly weaker, purely
+ * temporal condition. The gap is not academic for this repository, where
+ * SCRUM-231 plans to empty production.
+ *
+ * Every check here is read from server state a caller cannot influence: loaded
+ * rows and the deployment's own environment. None of them is a proof of
+ * deployment TYPE, because Convex exposes no such signal to a function — see
+ * the file header.
+ */
 async function assertDeploymentLooksDisposable(ctx: MutationCtx): Promise<void> {
   assertNotConfiguredLikeARealDeployment("refusing to mark this deployment");
 
