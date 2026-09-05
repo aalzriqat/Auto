@@ -155,9 +155,24 @@ export function assertExistingRowIsSameOccurrence(
   cmd: PostCommand,
   cmdPayloadHash: string
 ): void {
+  // ⚠️ AN ABSENT COLUMN IS DIVERGENCE, NOT A MATCH.
+  //
+  // `eventType`, `eventVersion` and `payloadHash` are optional on the pending
+  // row's schema, so the obvious spelling is `!== undefined && !== cmd.x` — and
+  // that fails OPEN: a row missing the very column being compared would be
+  // reported as the same occurrence. Comparing directly makes `undefined`
+  // unequal to any real value, so an incomplete row refuses.
+  //
+  // Stated honestly: this branch is UNREACHABLE through the current writers.
+  // `enqueuePendingPost` sets all four economic columns and `postAccountingEvent`
+  // always writes a `payloadHash`, so no reserved POST row can be missing one.
+  // It is written fail-closed anyway because the cost is nothing and the
+  // alternative is a guard whose default answer on unexpected data is "equivalent".
+  // For the same reason there is no mutant for it — an unreachable branch would
+  // survive, and a survivor that means "unreachable" is not evidence of a gap.
   const divergent: string[] = [];
-  if (existing.eventType !== undefined && existing.eventType !== cmd.eventType) {
-    divergent.push(`eventType ${existing.eventType} != ${cmd.eventType}`);
+  if (existing.eventType !== cmd.eventType) {
+    divergent.push(`eventType ${String(existing.eventType)} != ${cmd.eventType}`);
   }
   if (existing.sourceType !== cmd.sourceType) {
     divergent.push(`sourceType ${existing.sourceType} != ${cmd.sourceType}`);
@@ -165,10 +180,10 @@ export function assertExistingRowIsSameOccurrence(
   if (existing.sourceId !== cmd.sourceId) {
     divergent.push(`sourceId ${existing.sourceId} != ${cmd.sourceId}`);
   }
-  if (existing.eventVersion !== undefined && existing.eventVersion !== cmd.eventVersion) {
-    divergent.push(`eventVersion ${existing.eventVersion} != ${cmd.eventVersion}`);
+  if (existing.eventVersion !== cmd.eventVersion) {
+    divergent.push(`eventVersion ${String(existing.eventVersion)} != ${cmd.eventVersion}`);
   }
-  if (existing.payloadHash !== undefined && existing.payloadHash !== cmdPayloadHash) {
+  if (existing.payloadHash !== cmdPayloadHash) {
     divergent.push("payload economics differ");
   }
   if (divergent.length > 0) {
