@@ -239,8 +239,8 @@ export const CUSTOMER_REFERENCING_TABLES = [
  *
  * Kept as an explicit list rather than an exception in the test so the
  * exhaustiveness check stays exhaustive: every table with a `customerId` must
- * appear in exactly one of these two lists, and adding a column without
- * deciding which is a build failure.
+ * appear in exactly one of the three lists in this file, and adding a column
+ * without deciding which is a build failure.
  */
 export const CUSTOMER_DERIVED_TABLES = ["socialConversations"] as const;
 
@@ -250,12 +250,26 @@ export const CUSTOMER_DERIVED_TABLES = ["socialConversations"] as const;
  * pointer the row happens to hold.
  *
  * A receipt movement, its retained position and each application record WHOSE
- * money a posted receipt represents. The canonical payment, the accounting
- * occurrence and the allocations all carry that same lineage, and none of them
- * is rewritten by a merge. Patching `customerId` here would therefore move a
- * retained credit onto a different customer while every other surface kept
- * saying it belonged to the original one — a restatement of settled money with
- * no persisted movement explaining it.
+ * money a posted receipt represents. Patching `customerId` here would move a
+ * retained credit onto a different customer with no persisted movement
+ * explaining it — a restatement of settled money.
+ *
+ * ⚠️ THE REST OF THE RECEIPT'S LINEAGE IS *NOT* SEALED, AND SAYING OTHERWISE
+ * WOULD BE FALSE. `canonicalPayments` — the very row a movement points at via
+ * `canonicalPaymentId` — is in the rewriting registry above, as are
+ * `journalLines` and `receivableDocuments`. A merge DOES repoint all three.
+ * (`paymentAllocations` and `accountingEvents` carry no `customerId` at all,
+ * which the exhaustiveness test proves by their absence from all three lists.)
+ *
+ * So after a merge the movement names the loser while its own canonical payment
+ * names the survivor. That divergence is deliberate, and it has one concrete
+ * consequence worth stating rather than leaving to be discovered:
+ * `applyRetainedCredit` refuses when `receivable.customerId !==
+ * movement.customerId` (collections.ts), and a merge repoints `receivables`.
+ * **A merged-away customer's retained credit therefore becomes permanently
+ * UNAPPLIABLE, not merely hard to find.** It fails CLOSED — no money moves to
+ * the wrong party and the 2110 liability stays correctly on the books — which
+ * is the safe direction, but it is a freeze, and SCRUM-250 must design for it.
  *
  * ⚠️ THIS LIST ONLY REMOVES THE GENERIC WRITE PATH. IT IS NOT A RUNTIME FENCE.
  * `customers.mergeCustomers` does not refuse a losing customer who holds live

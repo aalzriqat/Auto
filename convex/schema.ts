@@ -3699,16 +3699,24 @@ export default defineSchema({
    * `initialUnappliedMinor`, and no field is a residual over mutable tables.
    *
    * ⚠️ `customerId` IS PART OF WHAT IS SEALED. It records whose money this
-   * receipt represents, and the canonical payment, the accounting occurrence and
-   * the allocations all carry that same lineage. A customer merge therefore does
-   * NOT repoint it — `CUSTOMER_NON_REASSIGNABLE_TABLES` holds this table out of
-   * the generic rewriting registry, so no merge loop can raw-reassign settled
-   * money to a different customer.
+   * receipt represents, so a customer merge does NOT repoint it —
+   * `CUSTOMER_NON_REASSIGNABLE_TABLES` holds this table out of the generic
+   * rewriting registry, and no merge loop can raw-reassign settled money to a
+   * different customer.
    *
-   * Removing that write path is not by itself a fence. A merge still SUCCEEDS
-   * and leaves any retained credit addressed to the merged-away record.
-   * Deciding what a merge must do instead — refuse before it writes, or perform
-   * a specified authority transfer — is SCRUM-250, with its own evidence floor.
+   * The rest of the lineage is NOT sealed: a merge DOES repoint
+   * `canonicalPayments` (this row's own `canonicalPaymentId` target),
+   * `journalLines` and `receivableDocuments`. After a merge the movement
+   * therefore names the loser while its canonical payment names the survivor.
+   *
+   * Removing that write path is not by itself a fence. A merge still SUCCEEDS,
+   * and because `applyRetainedCredit` requires
+   * `receivable.customerId === movement.customerId` while a merge repoints
+   * `receivables`, the merged-away customer's retained credit becomes
+   * permanently UNAPPLIABLE. It fails closed — no money reaches the wrong party
+   * and this liability stays on the books — but it is a freeze. Deciding what a
+   * merge must do instead (refuse before writing, or perform a specified
+   * authority transfer) is SCRUM-250, with its own evidence floor.
    */
   receiptMovements: defineTable({
     orgId: v.id("organizations"),

@@ -1308,4 +1308,46 @@ describe("SCRUM-218-C §11 — a customer merge cannot repoint sealed receipt au
     expect(applications).toHaveLength(1);
     expect(applications[0].customerId).toBe(customerId);
   });
+
+  /**
+   * The positive safety statement of the whole change, and one of SCRUM-250's
+   * own evidence-floor bullets: "survivor cannot acquire another customer's
+   * retained balance through a raw patch."
+   *
+   * ⚠️ This also pins the COST, which is real and must not be discovered later.
+   * `applyRetainedCredit` requires `receivable.customerId === movement.customerId`
+   * and a merge repoints `receivables` to the survivor, so freezing the movement
+   * makes the credit permanently UNAPPLIABLE — not merely hard to find. That
+   * fails CLOSED (no money reaches the wrong party, and the 2110 liability stays
+   * on the books), which is the safe direction, but SCRUM-250 must design for a
+   * freeze rather than for a cosmetic orphan.
+   */
+  test("the survivor cannot spend the merged-away customer's retained credit", async () => {
+    const { t, asAdmin, orgId, customerId, movement } = await retainedCreditFixture("s11spend");
+
+    const survivorId = (await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId, firstName: "Surviving", lastName: "Record", createdAt: Date.now(),
+      })
+    )) as Id<"customers">;
+
+    const asMerger = await grantMerger(t, orgId, "s11spend");
+    await asMerger.mutation(api.customers.mergeCustomers, {
+      orgId, survivorId, loserId: customerId,
+    });
+
+    // A debt raised against the SURVIVOR after the merge.
+    const survivorDebt = await makeReceivable(asAdmin, orgId, survivorId, 40);
+
+    await expect(
+      asAdmin.mutation(api.collections.applyRetainedCredit, {
+        orgId, receiptMovementId: movement._id, receivableId: survivorDebt, requestedAmount: 40,
+      })
+    ).rejects.toThrow(/belongs to a different customer/i);
+
+    // Nothing moved: the position is untouched and no application exists.
+    const position = await positionFor(t, orgId, movement._id);
+    expect(position!.remainingUnappliedMinor).toBe(movement.initialUnappliedMinor);
+    expect(position!.applicationCount).toBe(0);
+  });
 });
