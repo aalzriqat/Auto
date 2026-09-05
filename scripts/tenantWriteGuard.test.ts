@@ -506,10 +506,17 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // is scoped by it, so there is no caller-supplied organization for a caller to
   // get wrong or to forge. All four are `internalMutation`s reachable only from
   // the scheduler or the `dispatch-outbox-work` cron, with no public entry point.
+  // Then 485→486 / analysed 315→316, by the one SCRUM-218-C mutation:
+  //
+  // `collections.applyRetainedCredit` — applies retained customer credit to a
+  // receivable. It takes an explicit `orgId` and is therefore ANALYSED rather
+  // than skipped, which is the outcome to want: every row it touches (the
+  // movement, its retained position, the receivable and the canonical
+  // allocation) is re-read and checked against that tenant before any write.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 485,
-      analysed: 315,
+      totalMutations: 486,
+      analysed: 316,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 155,
     });

@@ -54,6 +54,21 @@ const RESET_TABLES = [
   "accountBalanceSnapshots",
   "chartOfAccounts",
   // Money movement
+  //
+  // ⚠️ SCRUM-218-C receipt authority FIRST, and it is here because the comment
+  // above told me to look. A repository guard failed on the organization
+  // hard-delete for exactly these three tables; the lesson recorded above is
+  // that fixing the guard that fired and not asking which OTHER destructive path
+  // has the same gap is how the second one survives. It did have the same gap.
+  //
+  // A reset that cleared `collectionPayments`, `canonicalPayments` and
+  // `paymentAllocations` while leaving these behind would strand a customer's
+  // retained credit — a live liability position pointing at payments that no
+  // longer exist, on an otherwise fresh ledger. Children before the rows they
+  // reference, per this list's own ordering rule.
+  "receiptApplications",
+  "receiptRetainedPositions",
+  "receiptMovements",
   "transactions",
   "deposits",
   "collectionPayments",
