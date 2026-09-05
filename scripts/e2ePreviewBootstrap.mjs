@@ -308,9 +308,16 @@ export async function resolveClerkUserId({ email, secretKey, fetchImpl = fetch }
  * API. A CR or LF in any of them writes a line of its own choosing into the job
  * log. None of them can legitimately contain one, so stripping is lossless for
  * every real value and removes the class outright.
+ *
+ * `*` is in the kept set because `maskEmail` produces one per redacted
+ * character. Collapsing that run made both configured addresses render
+ * identically as `au?@example.com` on the real fresh-preview run at
+ * fd55c827c, which is the opposite of what this line is for — it is the
+ * diagnostic naming which identity was bound to which Clerk id. A `*`
+ * cannot forge a log line.
  */
 export function safeForLog(value) {
-  return String(value ?? "").replace(/[^\w.:@/-]+/g, "?").slice(0, 200);
+  return String(value ?? "").replace(/[^\w.:@/*-]+/g, "?").slice(0, 200);
 }
 
 /** Same reasoning as the backend's: an E2E address is a repository secret. */

@@ -508,7 +508,9 @@ describe("safeForLog", () => {
     expect(safeForLog("https://impressive-ox-948.convex.cloud")).toBe(
       "https://impressive-ox-948.convex.cloud",
     );
-    expect(safeForLog("au****@example.com")).toBe("au?@example.com");
+    // A masked address must survive intact: collapsing the run of `*` made the
+    // two configured seats indistinguishable in the job log.
+    expect(safeForLog("au****@example.com")).toBe("au****@example.com");
   });
 
   test("bounds the length so one value cannot flood the log", () => {
