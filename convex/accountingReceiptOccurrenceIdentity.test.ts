@@ -20,14 +20,20 @@ import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
+import * as receiptOccurrenceModule from "./accounting/receiptOccurrence";
 import {
   directCollectionReceipt,
-  paymentLinkReceipt,
+  RECEIPT_EVENT_TYPE,
+  RECEIPT_SOURCE_TYPE,
+  assertTrustedOccurrence,
+  toReceiptOccurrenceSnapshot,
+  rehydrateReceiptOccurrence,
+  ReceiptOccurrenceIdentity,
   occurrenceIdempotencyKey,
   occurrenceReversalIdempotencyKey,
   occurrenceIndexRange,
   describeOccurrence,
-  assertChannelPrefixesUnambiguous,
+  assertKeyPrefixesUnambiguous,
   RECEIPT_PAYLOAD_VERSION,
 } from "./accounting/receiptOccurrence";
 import {
@@ -43,7 +49,6 @@ const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
 const ORG = "org_123" as unknown as Id<"organizations">;
 const PAYMENT = "pay_abc" as unknown as Id<"collectionPayments">;
-const INTENT = "int_xyz" as unknown as Id<"paymentIntents">;
 
 describe("SCRUM-237 §1 — the identity map matches the owner-proxy ruling", () => {
   test("direct collection is COLLECTION_PAYMENT / collectionPayments / <paymentId>", () => {
@@ -54,20 +59,31 @@ describe("SCRUM-237 §1 — the identity map matches the owner-proxy ruling", ()
     expect(id.eventVersion).toBe(1);
   });
 
-  test("payment link is PAYMENT_LINK_RECEIVED / paymentIntents / <intentId>", () => {
-    const id = paymentLinkReceipt({ orgId: ORG, intentId: INTENT });
-    expect(id.eventType).toBe("PAYMENT_LINK_RECEIVED");
-    expect(id.sourceType).toBe("paymentIntents");
-    expect(id.sourceId).toBe("int_xyz");
+  test("the classifying columns are SERVER CONSTANTS, not caller inputs", () => {
+    // c17632 requirement 2. `directCollectionReceipt` takes an org, a payment id
+    // and an occurrence number — there is no argument for eventType or
+    // sourceType, so the two columns that select a posting rule cannot be
+    // steered from a call site. This is what makes the forged-eventType chain
+    // (B237-HEAD-01) unreachable through the sanctioned door.
+    const id = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
+    expect(id.eventType).toBe(RECEIPT_EVENT_TYPE);
+    expect(id.sourceType).toBe(RECEIPT_SOURCE_TYPE);
   });
 
-  test("payment link sources from the INTENT, never from the collectionPayments row", () => {
-    // The payment-link mutation writes a `collectionPayments` row in the same
-    // transaction as it books its economics. That row is operational lineage.
-    // If this ever reads "collectionPayments", payment-link receipts have
-    // acquired a second occurrence identity beside the one they already carry.
-    const id = paymentLinkReceipt({ orgId: ORG, intentId: INTENT });
-    expect(id.sourceType).not.toBe("collectionPayments");
+  test("PAYMENT LINKS ARE ABSENT from the launch surface (c17632 product scope cut)", () => {
+    // The owner removed online-provider receipts from this redesign. The arm is
+    // gone rather than repaired, and this asserts the ABSENCE so a future
+    // re-add is a deliberate act with a test to update, not a quiet return.
+    //
+    // Deferred, NOT reclassified: nothing may remap a provider receipt onto
+    // COLLECTION_PAYMENT to get it through this contract. The module exports no
+    // door that could — checked by name against the real module namespace, not
+    // by grep.
+    const exported = Object.keys(receiptOccurrenceModule);
+    expect(exported).not.toContain("paymentLinkReceipt");
+    expect(exported.filter((k) => /payment ?link/i.test(k))).toEqual([]);
+    // ...and the one surviving source family is the direct-collection one.
+    expect(RECEIPT_SOURCE_TYPE).toBe("collectionPayments");
   });
 });
 
@@ -89,10 +105,6 @@ describe("SCRUM-237 §2 — the derived key is byte-identical to what production
     expect(occurrenceIdempotencyKey(id)).toBe("collection_payment_pay_abc");
   });
 
-  test("payment link reproduces payment_link_received_<intentId> exactly", () => {
-    const id = paymentLinkReceipt({ orgId: ORG, intentId: INTENT });
-    expect(occurrenceIdempotencyKey(id)).toBe("payment_link_received_int_xyz");
-  });
 });
 
 describe("SCRUM-237 §3 — a repeat occurrence is a DIFFERENT key", () => {
@@ -148,7 +160,7 @@ describe("SCRUM-237 §3 — a repeat occurrence is a DIFFERENT key", () => {
     // counterexample lives in the two-dimensional space. Sweep both axes, and
     // include delimiter-heavy ids deliberately chosen to collide under the old
     // derivation.
-    const sourceIds = ["X", "X_occ2", "X_occ", "a:b", "12:X", "", "occv2:1:a:1:b"];
+    const sourceIds = ["X", "X_occ2", "X_occ", "a:b", "12:X", "occv2:1:a:1:b"];
     const keys = new Set<string>();
     let pairs = 0;
     for (const raw of sourceIds) {
@@ -166,6 +178,21 @@ describe("SCRUM-237 §3 — a repeat occurrence is a DIFFERENT key", () => {
       }
     }
     expect(keys.size).toBe(pairs);
+  });
+
+  test("an EMPTY sourceId is REFUSED at construction", () => {
+    // Both injectivity sweeps above used to include `""` as a hostile input,
+    // and the derivation handled it injectively — but an empty source id is not
+    // a payment, and a key of `collection_payment_` addresses nothing. `seal`
+    // now refuses it, so the sweeps no longer carry it as a legal value. Pinned
+    // separately rather than silently dropped, because "the sweep got shorter"
+    // must not be how a lost case is recorded.
+    expect(() =>
+      directCollectionReceipt({
+        orgId: ORG,
+        paymentId: "" as unknown as Id<"collectionPayments">,
+      })
+    ).toThrow(/non-empty string/);
   });
 
   test("a non-positive or non-integer occurrence is REFUSED at construction", () => {
@@ -197,10 +224,25 @@ describe("SCRUM-237 §4 — one identity addresses one indexed range", () => {
     });
   });
 
-  test("two channels never address the same range", () => {
+  test("two different payments never address the same range", () => {
     const a = occurrenceIndexRange(directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT }));
-    const b = occurrenceIndexRange(paymentLinkReceipt({ orgId: ORG, intentId: INTENT }));
+    const b = occurrenceIndexRange(
+      directCollectionReceipt({
+        orgId: ORG,
+        paymentId: "pay_other" as unknown as Id<"collectionPayments">,
+      })
+    );
     expect(a).not.toEqual(b);
+  });
+
+  test("a repeat occurrence addresses a DIFFERENT range than its first", () => {
+    // eventVersion is a real index column, so occurrence 2 must not be able to
+    // read or reverse occurrence 1's row.
+    const first = occurrenceIndexRange(directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT }));
+    const repeat = occurrenceIndexRange(
+      directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT, occurrence: 2 })
+    );
+    expect(first).not.toEqual(repeat);
   });
 });
 
@@ -239,21 +281,22 @@ describe("SCRUM-237 §6 — NEGATIVE CONTROLS: what cannot mint a receipt identi
     // @ts-expect-error deposits are sourced from `deposits` and are not a
     // receipt occurrence family. If this compiles, a deposit has become
     // constructible as a receipt and the change is wrong.
-    paymentLinkReceipt({ orgId: ORG, intentId: deposit });
+    directCollectionReceipt({ orgId: ORG, paymentId: deposit });
     expect(deposit).toBeDefined();
   });
 
   test("the identity cannot be assembled from an object literal", () => {
-    // @ts-expect-error the brand is unproducible by callers, so the only way to
-    // obtain an identity is a channel constructor. Any `as` cast onto this type
-    // in production code is a defect.
+    // ⚠️ THIS CONTROL COVERS THE LITERAL CASE AND NOTHING ELSE, and generalising
+    // it is what cost a certification round. The brand is copied by SPREAD, so
+    // "a literal fails" never implied "callers cannot construct one" — see §13,
+    // which covers obtainability at RUNTIME, where the actual authority lives.
+    // @ts-expect-error the brand is unproducible in a literal.
     const forged: ReturnType<typeof directCollectionReceipt> = {
       orgId: ORG,
       eventType: "COLLECTION_PAYMENT",
       sourceType: "collectionPayments",
       sourceId: "forged",
       eventVersion: 1,
-      channel: "DIRECT_COLLECTION",
     };
     expect(forged.sourceId).toBe("forged");
   });
@@ -261,12 +304,23 @@ describe("SCRUM-237 §6 — NEGATIVE CONTROLS: what cannot mint a receipt identi
 
 describe("SCRUM-237 §7 — the description is one-way", () => {
   test("describeOccurrence carries every addressing field", () => {
-    const id = paymentLinkReceipt({ orgId: ORG, intentId: INTENT, occurrence: 3 });
-    expect(describeOccurrence(id)).toBe("PAYMENT_LINK_RECEIVED/paymentIntents/int_xyz@v3");
+    const id = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT, occurrence: 3 });
+    expect(describeOccurrence(id)).toBe("COLLECTION_PAYMENT/collectionPayments/pay_abc@v3");
+  });
+
+  test("describeOccurrence works on an UNTRUSTED value, deliberately", () => {
+    // It is diagnostic, mints no authority, and builds the very messages a
+    // refusal produces. A trust assertion here would throw while reporting a
+    // throw. Asserted rather than left to chance, because a later reviewer
+    // "tightening" this function would break error reporting on the refusal path.
+    const legit = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
+    const copy = { ...legit, sourceId: "elsewhere" };
+    expect(() => describeOccurrence(copy)).not.toThrow();
+    expect(describeOccurrence(copy)).toContain("elsewhere");
   });
 });
 
-describe("SCRUM-237 §8 — c17593 evidence: legacy tokens and channel confusion", () => {
+describe("SCRUM-237 §8 — c17593 evidence: legacy tokens", () => {
   test("EV4 — a retagged legacy transactions key cannot influence the derived key", () => {
     // The SCRUM-223 certification finding, carried into this contract as a
     // negative rule (c17593 §4): a row retagged to COLLECTION_PAYMENT through
@@ -301,21 +355,22 @@ describe("SCRUM-237 §8 — c17593 evidence: legacy tokens and channel confusion
     expect(occurrenceIdempotencyKey(id)).toBe(derived); // stable, input-free
   });
 
-  test("EV5 — the payment-link downstream collectionPayments row cannot change its identity", () => {
-    // The payment-link mutation writes a `collectionPayments` row in the same
-    // transaction. If a producer reconstructed the tuple from that row instead
-    // of calling the channel constructor, the receipt would acquire a second
-    // identity. The intent-sourced identity must be unaffected by the existence
-    // of any such row — and the two addresses must not coincide even when the
-    // raw ids collide.
-    const viaIntent = paymentLinkReceipt({ orgId: ORG, intentId: INTENT });
-    const collidingRawId = "int_xyz" as unknown as Id<"collectionPayments">;
-    const viaRow = directCollectionReceipt({ orgId: ORG, paymentId: collidingRawId });
+  test("EV5 — two orgs' identical raw payment ids never share an address", () => {
+    // EV5 previously proved the payment-link and direct-collection channels
+    // could not collide on a shared raw id. With provider receipts cut from this
+    // release (c17632) that pair no longer exists, so the surviving question is
+    // the tenancy one: `occurrenceIdempotencyKey` encodes NO orgId, so the two
+    // orgs' keys are IDENTICAL by construction and separation rests entirely on
+    // every consumer constraining `orgId` as its own index component. Pinned
+    // here so that dependency is visible rather than incidental.
+    const orgA = "org_a" as unknown as Id<"organizations">;
+    const orgB = "org_b" as unknown as Id<"organizations">;
+    const a = directCollectionReceipt({ orgId: orgA, paymentId: PAYMENT });
+    const b = directCollectionReceipt({ orgId: orgB, paymentId: PAYMENT });
 
-    expect(viaIntent.sourceType).toBe("paymentIntents");
-    expect(viaRow.sourceType).toBe("collectionPayments");
-    expect(occurrenceIdempotencyKey(viaIntent)).not.toBe(occurrenceIdempotencyKey(viaRow));
-    expect(occurrenceIndexRange(viaIntent)).not.toEqual(occurrenceIndexRange(viaRow));
+    expect(occurrenceIdempotencyKey(a)).toBe(occurrenceIdempotencyKey(b)); // by design
+    expect(occurrenceIndexRange(a).orgId).not.toBe(occurrenceIndexRange(b).orgId);
+    expect(occurrenceIndexRange(a)).not.toEqual(occurrenceIndexRange(b));
   });
 
   test("EV3 — there is no parameter through which a caller can supply a key", () => {
@@ -511,13 +566,15 @@ describe("SCRUM-237 §9 — the forward, causal and reversal addresses are ONE f
     const otherOccurrence = directCollectionReceipt({ orgId, paymentId, occurrence: 2 });
     expect(await t.run(async (ctx) => findPostedReceiptOccurrence(ctx, otherOccurrence))).toBeNull();
 
-    // eventType + sourceType differ (a payment-link identity carrying the SAME
-    // raw id) -> MISS. Nothing about the shared id may make these match.
-    const crossChannel = paymentLinkReceipt({
-      orgId,
-      intentId: paymentId as unknown as Id<"paymentIntents">,
-    });
-    expect(await t.run(async (ctx) => findPostedReceiptOccurrence(ctx, crossChannel))).toBeNull();
+    // orgId differs (the SAME raw payment id under another tenant) -> MISS.
+    // This replaces the old cross-channel probe, which required a payment-link
+    // identity; the tenancy axis is the one that still exists and it is the one
+    // that matters, since the derived key itself carries no orgId.
+    const otherOrgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Rival", createdAt: Date.now() })
+    );
+    const crossTenant = directCollectionReceipt({ orgId: otherOrgId, paymentId });
+    expect(await t.run(async (ctx) => findPostedReceiptOccurrence(ctx, crossTenant))).toBeNull();
 
     // sourceId differs -> MISS.
     const otherPaymentId = await seedCollectionPayment(t, orgId, customerId, userId);
@@ -805,7 +862,7 @@ describe("SCRUM-237 §11 — the key mapping must be injective over ROLE, not on
     // The §3 sweep covered sourceId x version and missed the role axis entirely —
     // a sweep shaped like the claim it was written for rather than like the
     // property. This one sweeps all three.
-    const sourceIds = ["X", "X_reversal", "reversal", "", "a:b", "occv2:1:a:1:b", "X_occ2", "_reversal"];
+    const sourceIds = ["X", "X_reversal", "reversal", "a:b", "occv2:1:a:1:b", "X_occ2", "_reversal"];
     const versions = [1, 2, 3, 12, 23];
     const keys = new Set<string>();
     let minted = 0;
@@ -836,10 +893,10 @@ describe("SCRUM-237 §11 — the key mapping must be injective over ROLE, not on
     // No exotic characters required. Same absorption mechanism as the original
     // injectivity defect, reached from the channel axis instead.
     expect(() =>
-      assertChannelPrefixesUnambiguous(["collection_payment", "collection_payment_reissue"])
+      assertKeyPrefixesUnambiguous(["collection_payment", "collection_payment_reissue"])
     ).toThrow(/is a prefix of/);
     expect(() =>
-      assertChannelPrefixesUnambiguous(["payment_link_received", "payment_link"])
+      assertKeyPrefixesUnambiguous(["payment_link_received", "payment_link"])
     ).toThrow(/is a prefix of/);
   });
 
@@ -850,7 +907,7 @@ describe("SCRUM-237 §11 — the key mapping must be injective over ROLE, not on
     // duplicate passes. That is the most basic way the prefix set can break:
     // two distinct economic tuples minting one identical key.
     expect(() =>
-      assertChannelPrefixesUnambiguous([
+      assertKeyPrefixesUnambiguous([
         "collection_payment",
         "payment_link_received",
         "collection_payment",
@@ -859,13 +916,13 @@ describe("SCRUM-237 §11 — the key mapping must be injective over ROLE, not on
   });
 
   test("a future channel prefix inside a RESERVED namespace is refused", () => {
-    expect(() => assertChannelPrefixesUnambiguous(["occv_channel"])).toThrow(/reserved namespace/);
-    expect(() => assertChannelPrefixesUnambiguous(["occr_channel"])).toThrow(/reserved namespace/);
+    expect(() => assertKeyPrefixesUnambiguous(["occv_channel"])).toThrow(/reserved namespace/);
+    expect(() => assertKeyPrefixesUnambiguous(["occr_channel"])).toThrow(/reserved namespace/);
   });
 
   test("the REAL channel prefix set satisfies the property", () => {
     expect(() =>
-      assertChannelPrefixesUnambiguous(["collection_payment", "payment_link_received"])
+      assertKeyPrefixesUnambiguous(["collection_payment", "payment_link_received"])
     ).not.toThrow();
   });
 
@@ -1261,5 +1318,157 @@ describe("SCRUM-237 §12 — the legacy deferred reversal drains through the REA
     expect(rowsAfter).toHaveLength(1);
     expect(rowsAfter[0].status).toBe("POSTED");
     expect(rowsAfter[0].resultEventId).toBe(legacyReversal?._id);
+  });
+});
+
+/* ------------------------------------------------------------------------- *
+ * SCRUM-237 §13 — OBTAINABILITY. Can a caller MANUFACTURE receipt authority?
+ * (owner ruling c17632, closing Codex B237-HEAD-01)
+ *
+ * Every control above §13 asks what the identity DERIVES. None asked how the
+ * value is OBTAINED — and that is where the defect was. A phantom brand refuses
+ * an object literal and nothing else: TypeScript copies the branded property
+ * through spread, so at `90d5f03fe` this compiled with ZERO diagnostics and no
+ * cast, and produced two distinct economic tuples sharing one stored key:
+ *
+ *     const forged: ReceiptOccurrenceIdentity = { ...legitimate,
+ *       eventType: "PAYMENT_LINK_RECEIVED", sourceType: "paymentIntents" };
+ *
+ * Authority is now RUNTIME OBJECT IDENTITY — membership of a module-private
+ * WeakSet that only `seal` writes to. A copy is a different object, so it is
+ * absent from the set however perfect its fields are.
+ *
+ * ⚠️ These tests must attack OBTAINABILITY, not derivation. The question is
+ * "can I get a value the monetary doors accept", never "is the key injective".
+ * ------------------------------------------------------------------------- */
+describe("SCRUM-237 §13 — a receipt identity cannot be copied, mutated or manufactured", () => {
+  test("SPREAD — a clone with a changed economic field is REFUSED at every monetary door", () => {
+    const legit = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
+    // ⚠️ NO CAST, DELIBERATELY. This assignment type-checks on its own, because
+    // TypeScript copies the phantom brand through the spread — that is exactly
+    // the defect, and casting here would hide it behind an obvious escape
+    // hatch. The refusal below therefore has to be a RUNTIME one.
+    const forged: ReceiptOccurrenceIdentity = { ...legit, sourceId: "someone_elses_payment" };
+
+    expect(forged.sourceId).toBe("someone_elses_payment");
+    for (const door of [
+      () => occurrenceIdempotencyKey(forged),
+      () => occurrenceReversalIdempotencyKey(forged),
+      () => occurrenceIndexRange(forged),
+      () => assertTrustedOccurrence(forged),
+      () => toReceiptOccurrenceSnapshot(forged),
+    ]) {
+      expect(door).toThrow(/untrusted receipt occurrence identity/);
+    }
+  });
+
+  test("SPREAD — an UNCHANGED clone is refused too", () => {
+    // Authority is object identity, not equality. A byte-identical copy is
+    // still not the value this module minted, and accepting it would mean the
+    // check was really a shape check wearing a WeakSet.
+    const legit = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
+    const copy: ReceiptOccurrenceIdentity = { ...legit };
+    expect(copy).toEqual(legit);
+    expect(() => occurrenceIdempotencyKey(copy)).toThrow(/untrusted/);
+    expect(() => occurrenceIdempotencyKey(legit)).not.toThrow();
+  });
+
+  test("MUTATION — Object.assign cannot rewrite an accepted identity", () => {
+    // `readonly` is erased at runtime. Without the freeze this silently
+    // rewrites an identity that has ALREADY passed its trust check — the
+    // time-of-check/time-of-use half of the same defect.
+    const legit = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
+    expect(Object.isFrozen(legit)).toBe(true);
+    expect(() => Object.assign(legit, { sourceId: "swapped" })).toThrow(TypeError);
+    expect(() => Object.assign(legit, { eventVersion: 99 })).toThrow(TypeError);
+    expect(legit.sourceId).toBe("pay_abc");
+    expect(legit.eventVersion).toBe(1);
+    expect(occurrenceIdempotencyKey(legit)).toBe("collection_payment_pay_abc");
+  });
+
+  test("HAND-BUILT — a perfect forgery with every correct field is refused", () => {
+    const forged = {
+      orgId: ORG,
+      eventType: RECEIPT_EVENT_TYPE,
+      sourceType: RECEIPT_SOURCE_TYPE,
+      sourceId: "pay_abc",
+      eventVersion: 1,
+    } as unknown as ReceiptOccurrenceIdentity;
+    expect(() => occurrenceIdempotencyKey(forged)).toThrow(/untrusted/);
+  });
+
+  test("SNAPSHOT ROUND TRIP — the sanctioned door restores authority and the key", () => {
+    const legit = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT, occurrence: 2 });
+    const snapshot = toReceiptOccurrenceSnapshot(legit);
+    // A snapshot is DATA: not frozen authority, and not accepted as an identity.
+    expect(() =>
+      occurrenceIdempotencyKey(snapshot as unknown as ReceiptOccurrenceIdentity)
+    ).toThrow(/untrusted/);
+
+    const rehydrated = rehydrateReceiptOccurrence({ orgId: ORG, snapshot });
+    expect(occurrenceIdempotencyKey(rehydrated)).toBe(occurrenceIdempotencyKey(legit));
+    expect(occurrenceReversalIdempotencyKey(rehydrated)).toBe(
+      occurrenceReversalIdempotencyKey(legit)
+    );
+    expect(rehydrated).not.toBe(legit); // a NEW sealed value, not the old one
+  });
+
+  test("SNAPSHOT — the tenant comes from the server, never from the stored blob", () => {
+    // The snapshot carries no orgId at all, so a row copied between tenants or
+    // restored from a foreign backup cannot bring a foreign tenant with it.
+    const legit = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
+    const snapshot = toReceiptOccurrenceSnapshot(legit);
+    expect(Object.keys(snapshot)).not.toContain("orgId");
+
+    const otherOrg = "org_rival" as unknown as Id<"organizations">;
+    const rehydrated = rehydrateReceiptOccurrence({ orgId: otherOrg, snapshot });
+    expect(occurrenceIndexRange(rehydrated).orgId).toBe(otherOrg);
+  });
+
+  test("REHYDRATION REFUSES a cross-family snapshot", () => {
+    // c17632 requirement 7 plus the product scope cut: a provider-receipt or
+    // legacy-transactions snapshot cannot become a direct collection by being
+    // read back out of a row.
+    for (const bad of [
+      { eventType: "PAYMENT_LINK_RECEIVED", sourceType: "paymentIntents", sourceId: "i", eventVersion: 1 },
+      { eventType: "COLLECTION_PAYMENT", sourceType: "transactions", sourceId: "t", eventVersion: 1 },
+      { eventType: "DEPOSIT_RECEIVED", sourceType: "deposits", sourceId: "d", eventVersion: 1 },
+    ]) {
+      expect(() => rehydrateReceiptOccurrence({ orgId: ORG, snapshot: bad })).toThrow(
+        /not a direct collection/
+      );
+    }
+  });
+
+  test("REHYDRATION REFUSES malformed, smuggled and non-object snapshots", () => {
+    const base = { eventType: RECEIPT_EVENT_TYPE, sourceType: RECEIPT_SOURCE_TYPE, sourceId: "p", eventVersion: 1 };
+    // A smuggled extra field is refused rather than ignored — this is how a
+    // `channel`-shaped field would find its way back in.
+    expect(() =>
+      rehydrateReceiptOccurrence({ orgId: ORG, snapshot: { ...base, channel: "DIRECT_COLLECTION" } })
+    ).toThrow(/unrecognised field/);
+    expect(() =>
+      rehydrateReceiptOccurrence({ orgId: ORG, snapshot: { ...base, eventVersion: 0 } })
+    ).toThrow(/safe integer/);
+    expect(() =>
+      rehydrateReceiptOccurrence({ orgId: ORG, snapshot: { ...base, sourceId: "" } })
+    ).toThrow(/non-empty string/);
+    expect(() =>
+      rehydrateReceiptOccurrence({ orgId: ORG, snapshot: { ...base, sourceId: 7 } })
+    ).toThrow(/sourceId must be a string/);
+    for (const notAnObject of [null, undefined, "x", 3, [base]]) {
+      expect(() =>
+        rehydrateReceiptOccurrence({ orgId: ORG, snapshot: notAnObject })
+      ).toThrow(/must be an object/);
+    }
+  });
+
+  test("a JSON round trip does NOT restore authority", () => {
+    // The shape survives serialization; the authority does not. If this ever
+    // stops throwing, authority has become a property of the bytes again.
+    const legit = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
+    const revived = JSON.parse(JSON.stringify(legit)) as ReceiptOccurrenceIdentity;
+    expect(revived).toEqual({ ...legit });
+    expect(() => occurrenceIdempotencyKey(revived)).toThrow(/untrusted/);
   });
 });

@@ -27,6 +27,7 @@ import {
   ReceiptOccurrenceIdentity,
   PostReceiptOccurrenceArgs,
   ReverseReceiptOccurrenceArgs,
+  assertTrustedOccurrence,
   occurrenceIdempotencyKey,
   occurrenceReversalIdempotencyKey,
   occurrenceIndexRange,
@@ -348,6 +349,12 @@ export async function postReceiptOccurrence(
   args: PostReceiptOccurrenceArgs
 ): Promise<void> {
   const id = args.identity;
+  // ⚠️ REFUSE AN UNMINTED IDENTITY BEFORE THE FIRST WRITE (c17632). This is the
+  // door B237-HEAD-01 walked through: a spread clone carrying a forged
+  // `eventType` selected a different posting rule and put a cash receipt in the
+  // bank account, while `postOrEnqueue`'s key-only short-circuit later absorbed
+  // the genuine post. The tuple below is only trustworthy because of this line.
+  assertTrustedOccurrence(id);
   await postOrEnqueue(ctx, {
     orgId: id.orgId,
     eventType: id.eventType,
@@ -460,6 +467,12 @@ export async function reverseReceiptOccurrence(
   args: ReverseReceiptOccurrenceArgs
 ): Promise<ReversalOutcome> {
   const id = args.identity;
+  // ⚠️ OBTAINABILITY BEFORE ANYTHING ELSE (c17632). Refuse a value this process
+  // did not mint — a spread clone, a JSON round trip, a hand-built object —
+  // before a single read, let alone a write. The key derivations assert this
+  // too; asserting at the door as well means a facade that later grows a write
+  // before its first key derivation cannot lose the check by accident.
+  assertTrustedOccurrence(id);
   // Throws on an ambiguous exact tuple. Its return value is deliberately
   // unused: NOT_POSTED is a legitimate outcome that reverseEventIfPosted below
   // determines for itself, so this call is here purely for its refusal.

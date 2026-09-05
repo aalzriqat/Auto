@@ -10,16 +10,35 @@
  * is why they can drift apart without anything failing.
  *
  * This module defines the identity as a VALUE that can only be constructed one
- * way per channel, and derives everything else from it. It deliberately does
- * not rewire any producer — removing the old `hookCollectionPayment` and
- * repointing `recordPayment` / `clearCheque` is SCRUM-236, and persisting the
- * identity on the row is SCRUM-218-C. This file is the contract those two
- * consume.
+ * way, and derives everything else from it. It deliberately does not rewire any
+ * producer — removing the old `hookCollectionPayment` and repointing
+ * `recordPayment` / `clearCheque` is SCRUM-236, and persisting the identity on
+ * the row is SCRUM-218-C. This file is the contract those two consume.
  *
- * ## The reviewed identity map (owner-proxy ruling c17579)
+ * ## The identity map — DIRECT COLLECTIONS ONLY (owner ruling c17632)
  *
- *   Direct collection   COLLECTION_PAYMENT     collectionPayments   <collectionPaymentId>
- *   Payment link        PAYMENT_LINK_RECEIVED  paymentIntents       <paymentIntentId>
+ *   Direct collection   COLLECTION_PAYMENT   collectionPayments   <collectionPaymentId>
+ *
+ * ⚠️ PAYMENT LINKS ARE OUT OF SCOPE FOR THIS RELEASE, BY OWNER PRODUCT RULING.
+ * The `PAYMENT_LINK_RECEIVED / paymentIntents` arm, its constructor and its
+ * channel abstraction were REMOVED here rather than repaired — the owner cut
+ * online-provider receipts from the Accounting Redesign launch, so a two-channel
+ * abstraction is complexity this release does not need. SCRUM-219 and SCRUM-233
+ * own provider intake and provider-capture-vs-settlement as Low, post-redesign.
+ *
+ * Two consequences a future reader must not get wrong:
+ *
+ *  - **Payment links are DEFERRED, not RECLASSIFIED.** Nothing may remap a
+ *    provider receipt onto `COLLECTION_PAYMENT` to get it through this contract.
+ *    If that is ever wanted it is a product decision, not a plumbing one.
+ *  - **The existing production hook is untouched.** `hookPaymentLinkReceived`
+ *    in `workflowHooks.ts` still posts exactly as it did; this change removes a
+ *    v2 identity arm that had no production caller, and disables nothing.
+ *
+ * Re-adding a channel is not a matter of adding a constructor: it re-opens the
+ * multi-prefix injectivity problem `assertKeyPrefixesUnambiguous` below exists
+ * for, which is why that guard is kept even though one prefix cannot collide
+ * with itself.
  *
  * ## Why the identity is not keyed on the row you would expect
  *
@@ -64,15 +83,43 @@ import { Id } from "../_generated/dataModel";
 import { EventType } from "./postingRules";
 
 /**
- * Brand. `ReceiptOccurrenceIdentity` carries a property no caller can produce,
- * so the value cannot be assembled from an object literal — it can only come
- * out of one of the channel constructors below. This is the whole enforcement
- * mechanism: reviewers should treat any `as` cast onto this type as a defect.
+ * Compile-time speed bump. **NOT authority** — see `TRUSTED_OCCURRENCES`.
+ *
+ * ⚠️ THIS BRAND ONCE CLAIMED TO BE "THE WHOLE ENFORCEMENT MECHANISM". IT WAS
+ * NOT, AND SAYING SO COST A CERTIFICATION ROUND. A `declare`d symbol has no
+ * runtime existence, and TypeScript COPIES a phantom branded property through
+ * object spread — so a caller holding one legitimate identity could produce
+ * another with a different economic tuple, and `tsc` reported zero diagnostics:
+ *
+ *     const forged: ReceiptOccurrenceIdentity = { ...legitimate, eventType: … };
+ *
+ * Found by the Codex seat at `90d5f03fe` (B237-HEAD-01), reproduced, and ruled a
+ * class-5 caller-forgeable-monetary-identity blocker by the owner (c17632).
+ *
+ * What a phantom brand actually buys, stated exactly:
+ *
+ *   object literal typed as the brand   REFUSED (missing property, TS2741)
+ *   `{ ...valid, field: other }`        ACCEPTED — brand is copied
+ *   `Object.assign(valid, {…})`         ACCEPTED — and mutates the original
+ *   anything at runtime                 NOTHING IS THERE TO CHECK
+ *
+ * It is kept only because refusing an accidental object literal at compile time
+ * is still worth having, and because the `Id<"transactions">` / `Id<"deposits">`
+ * negative controls depend on the constructor's argument types. Authority is
+ * established at RUNTIME, below, and nowhere else.
  */
 declare const RECEIPT_OCCURRENCE_BRAND: unique symbol;
 
-/** The two channels that mint a v2 receipt occurrence. Exhaustive by design. */
-export type ReceiptChannel = "DIRECT_COLLECTION" | "PAYMENT_LINK";
+/**
+ * The ONLY event type and source type this contract addresses (c17632).
+ *
+ * Server-fixed constants, not caller-selectable fields. They are `as const` and
+ * appear in `ReceiptOccurrenceIdentity` as literal types, so the tuple's two
+ * classifying columns are not a degree of freedom any caller can move — which
+ * is what made the forged `eventType` above select a different posting rule.
+ */
+export const RECEIPT_EVENT_TYPE = "COLLECTION_PAYMENT" as const;
+export const RECEIPT_SOURCE_TYPE = "collectionPayments" as const;
 
 /**
  * The canonical identity of one receipt accounting occurrence.
@@ -84,13 +131,23 @@ export type ReceiptChannel = "DIRECT_COLLECTION" | "PAYMENT_LINK";
  * "eventVersion"]`), so this value addresses a real, already-indexed row range
  * rather than inventing a parallel addressing scheme.
  *
- * `channel` is carried for key derivation and diagnostics. It is a function of
- * `eventType`/`sourceType`, not an independent degree of freedom.
+ * ⚠️ THERE IS NO `channel` FIELD, AND ITS REMOVAL IS A FIX, NOT A SIMPLIFICATION
+ * (c17632 requirement 1). It used to be carried alongside the tuple and the key
+ * derivation TRUSTED it — while this very comment said it "is a function of
+ * eventType/sourceType, not an independent degree of freedom". The code did not
+ * enforce what the comment asserted, so a spread that changed `eventType` while
+ * leaving `channel` alone made KEY AND TUPLE DIVERGE: two distinct economic
+ * tuples, one stored idempotency key. The prefix is now a module constant read
+ * from nowhere the caller can reach.
+ *
+ * General rule this cost us: **if a value is documented as derivable, DERIVE it.
+ * A carried copy of a derivable field is a forgery surface**, and every consumer
+ * that trusts the copy instead of recomputing it is a place the two can disagree.
  */
 export type ReceiptOccurrenceIdentity = {
   readonly orgId: Id<"organizations">;
-  readonly eventType: Extract<EventType, "COLLECTION_PAYMENT" | "PAYMENT_LINK_RECEIVED">;
-  readonly sourceType: "collectionPayments" | "paymentIntents";
+  readonly eventType: typeof RECEIPT_EVENT_TYPE;
+  readonly sourceType: typeof RECEIPT_SOURCE_TYPE;
   readonly sourceId: string;
   /**
    * ECONOMIC occurrence discriminator — which repeat of this event against this
@@ -103,7 +160,6 @@ export type ReceiptOccurrenceIdentity = {
    * versioning gets its own field — see `RECEIPT_PAYLOAD_VERSION` below.
    */
   readonly eventVersion: number;
-  readonly channel: ReceiptChannel;
   readonly [RECEIPT_OCCURRENCE_BRAND]: true;
 };
 
@@ -179,10 +235,18 @@ export const RECEIPT_PAYLOAD_VERSION = 2 as const;
  * value orphans every already-posted event from its own replay check, and a
  * lookup table makes that a visible edit instead of an emergent one.
  */
-const CHANNEL_KEY_PREFIX: Record<ReceiptChannel, string> = {
-  DIRECT_COLLECTION: "collection_payment",
-  PAYMENT_LINK: "payment_link_received",
-};
+const COLLECTION_PAYMENT_KEY_PREFIX = "collection_payment";
+
+/**
+ * The v1 key prefixes this module may mint. One member today.
+ *
+ * Kept as a SET, and kept guarded, even though a single prefix cannot collide
+ * with itself: the guard below encodes three properties that only bite when a
+ * second prefix is added, and re-adding a channel is exactly when they are
+ * needed and exactly when nobody will remember them. Deleting a proven guard
+ * because its current input makes it vacuous is how the defect class returns.
+ */
+const V1_KEY_PREFIXES = [COLLECTION_PAYMENT_KEY_PREFIX] as const;
 
 /**
  * The two reserved namespaces: repeat FORWARD posts, and every REVERSAL.
@@ -234,7 +298,7 @@ const RESERVED_NAMESPACES = [POST_KEY_NAMESPACE, REVERSAL_KEY_NAMESPACE] as cons
  * Exported so the property can be tested directly against a deliberately
  * colliding pair, instead of only indirectly through module-load behaviour.
  */
-export function assertChannelPrefixesUnambiguous(prefixes: readonly string[]): void {
+export function assertKeyPrefixesUnambiguous(prefixes: readonly string[]): void {
   // The most basic break, and the one the pairwise loop below CANNOT catch:
   // two channels whose prefixes are the same string. That loop guards on
   // `a !== b`, which compares VALUES, so a duplicate is never compared against
@@ -265,7 +329,7 @@ export function assertChannelPrefixesUnambiguous(prefixes: readonly string[]): v
   }
 }
 
-assertChannelPrefixesUnambiguous(Object.values(CHANNEL_KEY_PREFIX));
+assertKeyPrefixesUnambiguous(V1_KEY_PREFIXES);
 
 /**
  * `eventVersion` is typed `number`, which admits 0, negatives, fractions, NaN
@@ -281,11 +345,87 @@ function assertOccurrence(eventVersion: number): void {
   }
 }
 
-function identity(
-  parts: Omit<ReceiptOccurrenceIdentity, typeof RECEIPT_OCCURRENCE_BRAND>
-): ReceiptOccurrenceIdentity {
+/* ------------------------------------------------------------------------- *
+ * RUNTIME AUTHORITY. THIS IS THE ENFORCEMENT — NOT THE TYPE.
+ *
+ * Authority is OBJECT IDENTITY, not shape. A value is trusted if and only if
+ * THIS module minted it, and membership lives in a module-private `WeakSet` no
+ * caller can reach, add to, or forge an entry in.
+ *
+ * Why membership rather than shape: every shape check can be satisfied by a
+ * hand-built object, because a shape is exactly what an attacker copies. A
+ * spread produces a DIFFERENT OBJECT, so it is absent from the set however
+ * perfect its fields are. That is the whole mechanism, and it is three lines.
+ *
+ * ⚠️ WHY NOT A CLASS WITH A `#private` FIELD. It would also defeat spread, and
+ * it was considered and REJECTED under owner ruling c17632: SCRUM-218-C must
+ * PERSIST this occurrence, and a class instance is not a storable value — it
+ * would have to be converted at the boundary anyway, and the conversion is
+ * where the authority question reappears. Keeping the runtime value a plain
+ * frozen object makes the persisted form (`toReceiptOccurrenceSnapshot`) and the
+ * trusted form the same shape, with rehydration as the single sanctioned door
+ * between them. The invariant matters more than the syntax.
+ *
+ * `WeakSet` and not `Set`: entries must not keep identities alive. A receipt
+ * identity lives for one mutation; a strong set would leak every one ever built
+ * for the lifetime of the isolate.
+ * ------------------------------------------------------------------------- */
+const TRUSTED_OCCURRENCES = new WeakSet<object>();
+
+/**
+ * Mint a trusted identity. The ONLY function that adds to the registry, and it
+ * is module-private — every public door funnels through here.
+ *
+ * FROZEN, and the freeze is load-bearing rather than decorative: `readonly` is
+ * erased at runtime, so without it `Object.assign(id, { sourceId })` silently
+ * rewrites an already-accepted identity in place. Frozen, the same call THROWS
+ * (module code is strict mode), which is the behaviour c17632 §4 requires.
+ *
+ * Freezing a COPY, not the caller's object: if the argument were sealed
+ * directly, the caller would keep a live reference to the trusted value and
+ * could have mutated it before anyone read it.
+ */
+function seal(parts: {
+  orgId: Id<"organizations">;
+  sourceId: string;
+  eventVersion: number;
+}): ReceiptOccurrenceIdentity {
   assertOccurrence(parts.eventVersion);
-  return parts as ReceiptOccurrenceIdentity;
+  if (typeof parts.sourceId !== "string" || parts.sourceId.length === 0) {
+    throw new Error("receipt occurrence sourceId must be a non-empty string");
+  }
+  const sealed = Object.freeze({
+    orgId: parts.orgId,
+    eventType: RECEIPT_EVENT_TYPE,
+    sourceType: RECEIPT_SOURCE_TYPE,
+    sourceId: parts.sourceId,
+    eventVersion: parts.eventVersion,
+  }) as unknown as ReceiptOccurrenceIdentity;
+  TRUSTED_OCCURRENCES.add(sealed);
+  return sealed;
+}
+
+/**
+ * Refuse any value this module did not mint — BEFORE it can address a row or
+ * derive a key, and therefore before any caller can write anything from it.
+ *
+ * Every monetary door calls this: the two key derivations, the index range, and
+ * each of the three facades in `workflowHooks.ts`. `describeOccurrence` does
+ * NOT, deliberately — it is diagnostic, mints no authority, and is used to build
+ * the very error messages a refusal produces. A trust check there would throw
+ * while reporting a throw.
+ *
+ * The message names the two sanctioned doors on purpose: a developer who hits
+ * this is holding a copy and needs to be told where a real one comes from.
+ */
+export function assertTrustedOccurrence(id: ReceiptOccurrenceIdentity): void {
+  if (!TRUSTED_OCCURRENCES.has(id)) {
+    throw new Error(
+      "untrusted receipt occurrence identity: this value was not minted by " +
+        "directCollectionReceipt or rehydrateReceiptOccurrence. A spread, clone, " +
+        "cast or hand-built object carries the right shape but no authority."
+    );
+  }
 }
 
 /**
@@ -301,38 +441,113 @@ export function directCollectionReceipt(args: {
   /** Repeat economic occurrence against the same payment. Defaults to 1. */
   occurrence?: number;
 }): ReceiptOccurrenceIdentity {
-  return identity({
+  return seal({
     orgId: args.orgId,
-    eventType: "COLLECTION_PAYMENT",
-    sourceType: "collectionPayments",
     sourceId: args.paymentId.toString(),
     eventVersion: args.occurrence ?? 1,
-    channel: "DIRECT_COLLECTION",
   });
 }
 
-/**
- * Identity for a receipt settled through a payment link.
+/* ------------------------------------------------------------------------- *
+ * PERSISTENCE BOUNDARY — a stored object is NEVER authority (c17632 §5).
  *
- * Sourced from the INTENT, not from the `collectionPayments` row the same
- * mutation also writes. That row is operational lineage; the intent is where
- * this receipt's economics are booked. A payment-link producer must call THIS
- * constructor and must never reconstruct the tuple from its downstream
- * `collectionPayments` row (owner-proxy c17593 §6).
+ * SCRUM-218-C has to persist the exact occurrence. What it stores is a plain
+ * canonical snapshot; what a monetary facade accepts is a trusted runtime
+ * identity; and `rehydrateReceiptOccurrence` is the ONLY door between them.
+ * Reading a row back does not restore authority — re-validating it does.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The persisted form. Deliberately NOT `ReceiptOccurrenceIdentity`: it carries
+ * no brand, is not frozen, and is not in the trust registry, because it is data
+ * at rest rather than authority in flight.
+ *
+ * ⚠️ `orgId` IS ABSENT, AND THAT IS THE POINT. The tenant is supplied by the
+ * authenticated server context at rehydration, never read back out of the
+ * stored blob — so a snapshot that was tampered with, copied between rows, or
+ * restored from a foreign backup cannot carry a foreign tenant in with it.
  */
-export function paymentLinkReceipt(args: {
+export type ReceiptOccurrenceSnapshot = {
+  readonly eventType: typeof RECEIPT_EVENT_TYPE;
+  readonly sourceType: typeof RECEIPT_SOURCE_TYPE;
+  readonly sourceId: string;
+  readonly eventVersion: number;
+};
+
+/** Project a trusted identity into its storable form. */
+export function toReceiptOccurrenceSnapshot(
+  id: ReceiptOccurrenceIdentity
+): ReceiptOccurrenceSnapshot {
+  assertTrustedOccurrence(id);
+  return {
+    eventType: id.eventType,
+    sourceType: id.sourceType,
+    sourceId: id.sourceId,
+    eventVersion: id.eventVersion,
+  };
+}
+
+/**
+ * Re-establish runtime authority from a stored snapshot, or refuse.
+ *
+ * Takes `unknown`, because that is what a value read back out of a database
+ * row honestly is at this boundary. Typing the parameter as the snapshot type
+ * would assert the very property this function exists to check.
+ *
+ * ⚠️ WHAT THIS PROVES, AND WHAT IT DOES NOT. It proves the snapshot is
+ * STRUCTURALLY CANONICAL — the two classifying columns are this contract's
+ * server-fixed constants, the occurrence is a safe integer >= 1, the source id
+ * is a non-empty string, and nothing else is smuggled alongside — and it then
+ * re-mints through the same `seal` every constructor uses. It does NOT prove the
+ * referenced `collectionPayments` row exists, belongs to `orgId`, or represents
+ * trusted money. That is runtime provenance and remains SCRUM-218-C's job. A
+ * rehydrated identity is authority to ADDRESS an occurrence, not evidence that
+ * the occurrence is real.
+ *
+ * Unknown keys are REFUSED rather than ignored: a snapshot carrying an extra
+ * field is either a different contract's row or something a caller assembled,
+ * and silently dropping the extra is how a `channel`-shaped field would find its
+ * way back in.
+ */
+export function rehydrateReceiptOccurrence(args: {
   orgId: Id<"organizations">;
-  intentId: Id<"paymentIntents">;
-  /** Repeat economic occurrence against the same intent. Defaults to 1. */
-  occurrence?: number;
+  snapshot: unknown;
 }): ReceiptOccurrenceIdentity {
-  return identity({
+  const s = args.snapshot;
+  if (typeof s !== "object" || s === null || Array.isArray(s)) {
+    throw new Error("receipt occurrence snapshot must be an object");
+  }
+  const record = s as Record<string, unknown>;
+
+  const allowed = ["eventType", "sourceType", "sourceId", "eventVersion"];
+  const extra = Object.keys(record).filter((k) => !allowed.includes(k));
+  if (extra.length > 0) {
+    throw new Error(
+      `receipt occurrence snapshot carries unrecognised field(s) ${JSON.stringify(extra)}; ` +
+        "refusing rather than ignoring them"
+    );
+  }
+
+  // The cross-family refusal. A `paymentIntents`, `transactions` or `deposits`
+  // snapshot cannot become a direct-collection receipt by being read back.
+  if (record.eventType !== RECEIPT_EVENT_TYPE || record.sourceType !== RECEIPT_SOURCE_TYPE) {
+    throw new Error(
+      `receipt occurrence snapshot is not a direct collection: ` +
+        `${String(record.eventType)}/${String(record.sourceType)} is outside this contract ` +
+        `(expected ${RECEIPT_EVENT_TYPE}/${RECEIPT_SOURCE_TYPE})`
+    );
+  }
+  if (typeof record.sourceId !== "string") {
+    throw new Error("receipt occurrence snapshot sourceId must be a string");
+  }
+  if (typeof record.eventVersion !== "number") {
+    throw new Error("receipt occurrence snapshot eventVersion must be a number");
+  }
+
+  return seal({
     orgId: args.orgId,
-    eventType: "PAYMENT_LINK_RECEIVED",
-    sourceType: "paymentIntents",
-    sourceId: args.intentId.toString(),
-    eventVersion: args.occurrence ?? 1,
-    channel: "PAYMENT_LINK",
+    sourceId: record.sourceId,
+    eventVersion: record.eventVersion,
   });
 }
 
@@ -397,13 +612,14 @@ export function paymentLinkReceipt(args: {
  * `RECEIPT_PAYLOAD_VERSION` is deliberately absent from this computation.
  */
 function framedKey(namespace: string, id: ReceiptOccurrenceIdentity): string {
-  const prefix = CHANNEL_KEY_PREFIX[id.channel];
+  const prefix = COLLECTION_PAYMENT_KEY_PREFIX;
   return `${namespace}${id.eventVersion}:${prefix.length}:${prefix}:${id.sourceId.length}:${id.sourceId}`;
 }
 
 export function occurrenceIdempotencyKey(id: ReceiptOccurrenceIdentity): string {
+  assertTrustedOccurrence(id);
   assertOccurrence(id.eventVersion);
-  if (id.eventVersion === 1) return `${CHANNEL_KEY_PREFIX[id.channel]}_${id.sourceId}`;
+  if (id.eventVersion === 1) return `${COLLECTION_PAYMENT_KEY_PREFIX}_${id.sourceId}`;
   return framedKey(POST_KEY_NAMESPACE, id);
 }
 
@@ -466,6 +682,7 @@ export function occurrenceIdempotencyKey(id: ReceiptOccurrenceIdentity): string 
  * was a deviation from a convention that worked.
  */
 export function occurrenceReversalIdempotencyKey(id: ReceiptOccurrenceIdentity): string {
+  assertTrustedOccurrence(id);
   assertOccurrence(id.eventVersion);
   return framedKey(REVERSAL_KEY_NAMESPACE, id);
 }
@@ -483,6 +700,7 @@ export function occurrenceReversalIdempotencyKey(id: ReceiptOccurrenceIdentity):
  * where it matters; it can never be inferred from the schema.
  */
 export function occurrenceIndexRange(id: ReceiptOccurrenceIdentity) {
+  assertTrustedOccurrence(id);
   return {
     index: "by_org_event_source_version" as const,
     orgId: id.orgId,
