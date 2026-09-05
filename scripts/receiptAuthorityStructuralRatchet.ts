@@ -61,11 +61,17 @@
  * The guard parses `convex/schema.ts`, enumerates every `defineTable` property
  * name, and reports the count it inspected. If the schema declares the tables,
  * R2 and R5 activate automatically and the build fails until the manifests name
- * them. If `schema.ts` cannot be parsed at all, that is a VIOLATION — never an
- * INACTIVE.
+ * them.
  *
- * A surface that is PARTIALLY declared (one or two of the three) is a VIOLATION
- * outright.
+ * INACTIVE is reserved for a surface PROVED ABSENT. "The subject does not exist
+ * yet" and "I could not tell" are different claims, so if `schema.ts` cannot be
+ * parsed, or is only PARTIALLY declared (one or two of the three), R0 fails AND
+ * R2/R5 themselves report VIOLATED — never INACTIVE. Undecided is a violation
+ * here exactly as it is for every always-active invariant.
+ *
+ * The same rule governs the manifest readers: an entry whose keys cannot all be
+ * read is unparsable, not skipped. Skipping it would let a manifest that was
+ * never fully read stand as proof that a table is absent from it.
  *
  * ## What was already enforced before this file existed
  *
@@ -301,15 +307,36 @@ export function objectArrayManifest(
         reason: `${name} holds a non-object entry at line ${lineOf(element)}`,
       };
     }
+    // An entry may be SKIPPED only when every one of its keys is readable and
+    // none of them is `property` — the deletion manifest legitimately holds
+    // storage-aware steps that name no table, and those must keep parsing.
+    //
+    // But an entry carrying a key this grammar cannot read — a spread, or a
+    // computed name — may be naming `property` invisibly, and a shorthand names
+    // it with no literal value to read. Skipping either would turn a BLIND read
+    // into a proof of absence, which is the exact failure this guard exists to
+    // prevent: for R5 (presence) a dropped entry fails closed, but for R4
+    // (absence) it fails OPEN and reports a manifest it never finished reading.
+    const unreadableKey = object.properties.find(
+      (member) =>
+        !ts.isPropertyAssignment(member) ||
+        !(ts.isIdentifier(member.name) || ts.isStringLiteral(member.name))
+    );
+    if (unreadableKey !== undefined) {
+      return {
+        kind: "unparsable",
+        reason:
+          `${name} has an entry at line ${lineOf(object)} whose keys cannot all be read, ` +
+          `so it cannot be proved not to name "${property}"`,
+      };
+    }
+
     const assignment = object.properties.find(
       (member): member is ts.PropertyAssignment =>
         ts.isPropertyAssignment(member) &&
         (ts.isIdentifier(member.name) || ts.isStringLiteral(member.name)) &&
         member.name.text === property
     );
-    // An entry without the property is not necessarily an error — the deletion
-    // manifest holds storage-aware steps that name no table — so it is skipped
-    // rather than failed. A PRESENT but non-literal property IS an error.
     if (assignment === undefined) continue;
     const value = unwrap(assignment.initializer);
     if (!ts.isStringLiteral(value)) {
@@ -658,6 +685,28 @@ function inactive(
   };
 }
 
+/**
+ * A ratcheted invariant is DORMANT only when the surface is PROVED ABSENT.
+ *
+ * When the surface is PARTIAL or UNREADABLE the property is not dormant, it is
+ * UNDECIDED — and printing "the subject does not exist yet" would claim more
+ * than the enumeration established. Undecided is a violation here, exactly as
+ * it is for every always-active invariant.
+ */
+function dormantOrUndecided(
+  surface: RatchetReport["authoritySurface"],
+  enumeration: string,
+  id: string,
+  title: string,
+  subject: string,
+  proved: string
+): InvariantResult {
+  if (surface === "ABSENT") return inactive(id, title, subject, proved, enumeration);
+  return violated(id, title, subject, proved, [
+    `cannot prove the property: the authority surface could not be decided (see R0) — ${enumeration}`,
+  ]);
+}
+
 /** Turns a failed manifest read into a violation. A manifest we cannot read is
  * never a pass: absence of evidence is not evidence of absence. */
 function manifestFailure(read: Exclude<ManifestRead, { kind: "ok" }>): string {
@@ -780,12 +829,13 @@ export function checkStructuralRatchet(source: SourceProvider): RatchetReport {
     }
   } else {
     invariants.push(
-      inactive(
+      dormantOrUndecided(
+        surface,
+        surfaceEnumeration,
         "R2",
         "authority tables are declared NON-REASSIGNABLE",
         `${MERGE_HELPERS_MODULE} :: ${SEALED_CLASSIFICATION}`,
-        `all ${authority.length} authority tables appear in the sealed classification`,
-        surfaceEnumeration
+        `all ${authority.length} authority tables appear in the sealed classification`
       )
     );
   }
@@ -964,12 +1014,13 @@ export function checkStructuralRatchet(source: SourceProvider): RatchetReport {
     );
   } else {
     invariants.push(
-      inactive(
+      dormantOrUndecided(
+        surface,
+        surfaceEnumeration,
         "R5",
         "authority tables are named in both destructive lifecycle manifests",
         `${ORG_FINANCIAL_RESET_MODULE} :: ${RESET_MANIFEST} + ${ADMIN_ORGS_MODULE} :: ${DELETION_MANIFEST}`,
-        `all ${authority.length} authority tables are NAMED in both destructive manifests`,
-        surfaceEnumeration
+        `all ${authority.length} authority tables are NAMED in both destructive manifests`
       )
     );
   }

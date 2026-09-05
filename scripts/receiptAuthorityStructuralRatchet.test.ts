@@ -958,3 +958,111 @@ describe.skipIf(!historyAvailable)("integration against the frozen 218-C baselin
     expect(reportAt(KNOWN_BAD_218C).ok).toBe(false);
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * 7. Reviewer findings — a blind enumeration must never read as absence
+ * ------------------------------------------------------------------ */
+
+const ADMIN_ANCHOR = "const ADMIN_TABLES: { table: TableNames; index: string }[] = [";
+
+describe("R4 — an entry whose key the grammar cannot read is not an absence", () => {
+  // The hazard: `objectArrayManifest` SKIPS an entry that declares no readable
+  // `table` property, because the deletion manifest legitimately holds steps
+  // that name no table. For R5 (presence) a skipped entry fails closed. For R4
+  // (absence) it fails OPEN: the entry vanishes and the table it named is
+  // reported absent from a manifest that was never fully read.
+  test.each([
+    [
+      "shorthand property",
+      'const table = "receiptMovements" as const;\nconst index = "by_org";\n',
+      "  { table, index },",
+    ],
+    [
+      "computed key",
+      'const KEY = "table";\n',
+      '  { [KEY]: "receiptRetainedPositions", index: "by_org" },',
+    ],
+    [
+      "object spread",
+      'const SMUGGLED = { table: "receiptApplications" as const, index: "by_org" };\n',
+      "  { ...SMUGGLED },",
+    ],
+  ])("an ADMIN_TABLES entry hidden behind a %s is not read as absence", (_label, preamble, entry) => {
+    expect(invariant(check(), "R4").verdict).toBe("SATISFIED"); // green control
+
+    const smuggled = editFile(ADMIN_DATA, [
+      ADMIN_ANCHOR,
+      `${preamble}${ADMIN_ANCHOR}\n${entry}`,
+    ]);
+    const report = check({ [ADMIN_DATA]: smuggled });
+    const result = invariant(report, "R4");
+
+    expect(result.verdict).toBe("VIOLATED");
+    expect(result.violations.join("\n")).toContain("cannot prove the property");
+    expect(report.ok).toBe(false);
+  });
+
+  test("CONTROL: the real ADMIN_TABLES is read whole, and the printed count proves it", () => {
+    const result = invariant(check(), "R4");
+    expect(result.verdict).toBe("SATISFIED");
+    const counted = Number(/among the (\d+) admin-browsable/.exec(result.proved)?.[1]);
+    // A silently shortened enumeration would still say SATISFIED; only the
+    // count gives it away, so the count is asserted rather than the verdict.
+    expect(counted).toBeGreaterThan(15);
+  });
+
+  test("CONTROL: deletion-manifest steps that legitimately name no table still parse", () => {
+    // ORGANIZATION_DELETION_STEPS holds storage-aware steps with no `table`.
+    // Failing closed on unreadable keys must not turn those into violations.
+    expect(invariant(check(authoritySurface()), "R5").verdict).toBe("SATISFIED");
+  });
+});
+
+describe("INACTIVE is reserved for a surface PROVED absent", () => {
+  test("CONTROL: on the repository as it stands the surface is ABSENT and R2/R5 are INACTIVE", () => {
+    const report = check();
+    expect(report.authoritySurface).toBe("ABSENT");
+    expect(invariant(report, "R2").verdict).toBe("INACTIVE");
+    expect(invariant(report, "R5").verdict).toBe("INACTIVE");
+  });
+
+  test.each([
+    [
+      "PARTIAL",
+      (): Record<string, string | null> => {
+        const overlay = authoritySurface();
+        overlay[SCHEMA] = replaceOnce(
+          overlay[SCHEMA] as string,
+          `  receiptApplications: defineTable({ orgId: v.id("organizations") }).index("by_org", ["orgId"]),\n`,
+          "",
+          SCHEMA
+        );
+        return overlay;
+      },
+    ],
+    ["UNREADABLE", (): Record<string, string | null> => ({ [SCHEMA]: "export default 42;" })],
+  ])("a %s surface makes R2 and R5 VIOLATED, never INACTIVE", (_label, build) => {
+    const report = check(build());
+    for (const id of ["R2", "R5"]) {
+      const result = invariant(report, id);
+      // "the subject does not exist yet" and "I could not tell" are different
+      // claims, and only the first one is INACTIVE.
+      expect(result.verdict).not.toBe("INACTIVE");
+      expect(result.verdict).toBe("VIOLATED");
+      expect(result.violations.join("\n")).toContain("could not be decided");
+    }
+    expect(report.ok).toBe(false);
+  });
+
+  test("no report prints an INACTIVE verdict for a surface that is not ABSENT", () => {
+    for (const overlay of [
+      {},
+      { [SCHEMA]: "export default 42;" },
+    ] as Record<string, string | null>[]) {
+      const report = check(overlay);
+      if (report.invariants.some((i) => i.verdict === "INACTIVE")) {
+        expect(report.authoritySurface).toBe("ABSENT");
+      }
+    }
+  });
+});
