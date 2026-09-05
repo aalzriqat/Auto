@@ -629,11 +629,19 @@ describe("SCRUM-237 §9 — the forward, causal and reversal addresses are ONE f
     const { t, orgId, userId, customerId } = await seedPostableOrg("ev8");
     const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
     const identity = directCollectionReceipt({ orgId, paymentId });
+    // ONE captured timestamp for all three posts. SCRUM-249 extended the
+    // equivalence comparison to the whole posting envelope — accountingDate and
+    // currency are not in the payload, so no payload hash can see them — and a
+    // fresh `Date.now()` per call is three different envelopes rather than a
+    // retry. Both production producers reach this path with a stable date
+    // (`args.paymentDate`, `clearedAt`) and the drain replays the date stored on
+    // its own row, so a fixed timestamp is the faithful model here.
+    const occurredAt = Date.now();
 
     // v1-shaped gross payload.
     await t.run(async (ctx) => {
       await postReceiptOccurrence(ctx, {
-        identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
+        identity, currency: "USD", occurredAt, actorId: userId,
         payload: receiptPayload(paymentId, customerId, 5000),
       });
     });
@@ -644,7 +652,7 @@ describe("SCRUM-237 §9 — the forward, causal and reversal addresses are ONE f
     await expect(
       t.run(async (ctx) => {
         await postReceiptOccurrence(ctx, {
-          identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
+          identity, currency: "USD", occurredAt, actorId: userId,
           payload: { ...receiptPayload(paymentId, customerId, 9999), receiptPayloadVersion: RECEIPT_PAYLOAD_VERSION },
         });
       })
@@ -667,7 +675,7 @@ describe("SCRUM-237 §9 — the forward, causal and reversal addresses are ONE f
     // contradiction and not merely by "a second call happened".
     await t.run(async (ctx) => {
       await postReceiptOccurrence(ctx, {
-        identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
+        identity, currency: "USD", occurredAt, actorId: userId,
         payload: receiptPayload(paymentId, customerId, 5000),
       });
     });

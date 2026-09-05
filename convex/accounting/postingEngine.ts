@@ -136,13 +136,47 @@ export function proveReservedReceiptAuthority(
  * receipt is silently discarded.
  *
  * So an authorized reserved post refuses on divergence instead of absorbing it.
- * An EXACT retry — same tuple, same payload — still returns the prior event,
+ * An EXACT retry — the same posting envelope — still returns the prior event,
  * which is what keeps the drain and every legitimate retry idempotent.
  *
  * Scoped deliberately to the reserved domain. Widening it to every event family
  * would newly refuse producers that legitimately reuse one key across tuples
  * (`hookDepositApplied` varies `sourceType` behind a fixed key), and SCRUM-249
  * does not own those.
+ *
+ * ## ⚠️ THE COMPARISON IS THE WHOLE ENVELOPE, NOT THE TUPLE AND PAYLOAD
+ *
+ * The first revision of this function compared only the four economic columns
+ * and the payload hash. That is not what "the same posting" means. The Codex
+ * seat found it at `22605dff3` as SCRUM-249-ADV-01, and I reproduced it at the
+ * base revision `ca68b2b0e` before accepting it: through the base generic
+ * ingress an operator can create a POSTED row carrying the reserved tuple, the
+ * receipt authority's own derived key and a **byte-identical payloadHash**,
+ * while supplying a different `accountingDate` and a different top-level
+ * `currency`. Those two fields never appear in the payload, so the hash cannot
+ * see them — and `postAccountingEvent` uses them independently for period
+ * selection, journal/line currency, scale and snapshot partitioning.
+ *
+ * The certified receipt then arrives, matches on tuple and hash, and is
+ * reported `alreadyPosted` against a journal booked in the wrong period and the
+ * wrong currency. The outbox marks its row POSTED and the causal check accepts
+ * it. Proven, not argued: the provenance test at the base revision showed the
+ * exact bytes are producible and the certified receipt is absorbed.
+ *
+ * Reachability, stated honestly rather than inflated: at THIS revision the
+ * generic ingress can no longer create such a row at all, so the surviving
+ * exposure is a row already written under the base revision — a cutover
+ * concern. It is fixed here anyway, because "a conflicting existing occurrence
+ * must never be accepted merely because its key already exists" is this
+ * ticket's requirement, and a row in a different period and currency is a
+ * conflicting occurrence by any reading.
+ *
+ * Comparing dates is safe for every real producer, and that was checked rather
+ * than assumed: `recordPayment` and `clearCheque` each INSERT their own
+ * `collectionPayments` row, so one occurrence has exactly one legitimate
+ * forward post. The only same-occurrence repeats are the drain replaying its
+ * own persisted row and a genuine exact retry — both carry the identical
+ * envelope.
  */
 export function assertExistingRowIsSameOccurrence(
   existing: {
@@ -151,6 +185,10 @@ export function assertExistingRowIsSameOccurrence(
     sourceId: string;
     eventVersion?: number;
     payloadHash?: string;
+    currency?: string;
+    accountingDate?: number;
+    occurredAt?: number;
+    branchId?: Id<"branches">;
   },
   cmd: PostCommand,
   cmdPayloadHash: string
@@ -185,6 +223,28 @@ export function assertExistingRowIsSameOccurrence(
   }
   if (existing.payloadHash !== cmdPayloadHash) {
     divergent.push("payload economics differ");
+  }
+  // The rest of the posting envelope — the part no payload hash can see.
+  // Currency is normalised on BOTH sides: `postAccountingEvent` stores it
+  // uppercased on `accountingEvents`, while `enqueuePendingPost` stores the raw
+  // command value, so a case-only difference between the two tables is not a
+  // divergence and must not be reported as one.
+  if (String(existing.currency).toUpperCase() !== cmd.currency.toUpperCase()) {
+    divergent.push(`currency ${String(existing.currency)} != ${cmd.currency}`);
+  }
+  if (existing.accountingDate !== cmd.accountingDate) {
+    // Says what it KNOWS. An earlier wording called this "(different period)",
+    // which this function cannot establish — it has not resolved a period, and
+    // two timestamps milliseconds apart produced that message during testing.
+    // A different accounting date MAY select a different period; the refusal
+    // reports the fact and leaves the inference to the reader.
+    divergent.push(`accountingDate ${String(existing.accountingDate)} != ${cmd.accountingDate}`);
+  }
+  if (existing.occurredAt !== cmd.occurredAt) {
+    divergent.push(`occurredAt ${String(existing.occurredAt)} != ${cmd.occurredAt}`);
+  }
+  if (existing.branchId !== cmd.branchId) {
+    divergent.push(`branchId ${String(existing.branchId)} != ${String(cmd.branchId)}`);
   }
   if (divergent.length > 0) {
     throw new ConvexError(

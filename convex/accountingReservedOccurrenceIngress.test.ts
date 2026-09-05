@@ -50,6 +50,7 @@ import {
   type ReceiptOccurrenceIdentity,
 } from "./accounting/receiptOccurrence";
 import { postAccountingEvent } from "./accounting/postingEngine";
+import { simplePayloadHash } from "./accounting/postingRules";
 import { postReceiptOccurrence, findPostedReceiptOccurrence } from "./accounting/workflowHooks";
 import { settleOutbox, outboxRows } from "../test-utils/outboxWork";
 
@@ -764,6 +765,276 @@ describe("SCRUM-249 §4b - a QUEUED occurrence is not absorbed by divergent econ
 });
 
 /* ========================================================================== *
+ * §4c — THE POSTING ENVELOPE, NOT JUST THE TUPLE AND PAYLOAD
+ *
+ * SCRUM-249-ADV-01, raised by the Codex seat at 22605dff3 and reproduced by me
+ * at the base revision ca68b2b0e before being accepted.
+ *
+ * `accountingDate` and top-level `currency` are NOT in the payload, so no
+ * payload hash can see them — while the engine uses them for period selection,
+ * journal and line currency, scale and snapshot partitioning. A row matching on
+ * tuple and hash but booked in another period and another currency is not the
+ * same posting, and reporting it as `alreadyPosted` hands the certified receipt
+ * a journal it never authorised.
+ *
+ * ⚠️ PROVENANCE OF THE SEEDED ROW. At THIS revision the generic ingress cannot
+ * create such a row, so the fixture below inserts it directly. A seeded row is
+ * only honest evidence if its bytes are provably producible, so that was proven
+ * separately: a provenance test run in a worktree pinned at ca68b2b0e drove
+ * `internal.accountingLedger.post` and confirmed the base revision produces
+ * exactly this shape — reserved tuple, reserved derived key, byte-identical
+ * payloadHash, divergent accountingDate and currency — and that the certified
+ * receipt was then absorbed. The surviving exposure at this revision is
+ * therefore a row written under the base revision: a cutover concern, closed
+ * here because "a conflicting occurrence must never be accepted merely because
+ * its key already exists" does not admit an exception for period and currency.
+ * ========================================================================== */
+
+describe("SCRUM-249 §4c - a matching payload is not a matching posting", () => {
+  /**
+   * One seeded poisoned row, one diverging dimension at a time.
+   *
+   * An earlier draft diverged currency AND date in a single test. That would
+   * have passed against a comparator checking only one of them, so it could not
+   * show both are load-bearing — the same "a broad case masks a blind check"
+   * trap a broad mutant run creates. Each dimension gets its own case, and each
+   * has its own mutant.
+   */
+  async function seedPoisonedTwin(
+    t: TestHarness,
+    orgId: Id<"organizations">,
+    userId: Id<"users">,
+    identity: ReceiptOccurrenceIdentity,
+    payload: Record<string, unknown>,
+    envelope: { currency: string; accountingDate: number; occurredAt: number; branchId?: Id<"branches"> }
+  ): Promise<Id<"accountingEvents">> {
+    const poisonedId = await t.run(async (ctx) =>
+      ctx.db.insert("accountingEvents", {
+        orgId,
+        eventType: "COLLECTION_PAYMENT",
+        sourceType: "collectionPayments",
+        sourceId: identity.sourceId,
+        eventVersion: identity.eventVersion,
+        idempotencyKey: occurrenceIdempotencyKey(identity),
+        occurredAt: envelope.occurredAt,
+        accountingDate: envelope.accountingDate,
+        currency: envelope.currency,
+        branchId: envelope.branchId,
+        payload,
+        payloadHash: await simplePayloadHash(payload),
+        status: "POSTED",
+        createdBy: userId,
+        createdAt: Date.now(),
+      })
+    );
+    await t.run(async (ctx) => {
+      const journalEntryId = await ctx.db.insert("journalEntries", {
+        orgId,
+        accountingEventId: poisonedId,
+        journalNumber: "JE-POISON",
+        accountingDate: envelope.accountingDate,
+        periodId: (
+          await ctx.db.query("accountingPeriods").withIndex("by_org", (q) => q.eq("orgId", orgId)).first()
+        )!._id,
+        sourceType: "collectionPayments",
+        sourceId: identity.sourceId,
+        category: "SYSTEM",
+        memo: "poisoned",
+        status: "POSTED",
+        currency: envelope.currency,
+        postedBy: userId,
+        postedAt: Date.now(),
+        createdAt: Date.now(),
+      });
+      await ctx.db.patch(poisonedId, { journalEntryId });
+    });
+    return poisonedId;
+  }
+
+  const LEGIT_DATE = Date.UTC(new Date().getUTCFullYear(), 5, 1);
+
+  test("E1 - CURRENCY alone: same tuple, same payload, same dates, different currency refuses", async () => {
+    const { t, orgId, userId, customerId } = await seedPostableOrg("e1");
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const identity = directCollectionReceipt({ orgId, paymentId });
+    const payload = certifiedReceiptPayload(paymentId.toString(), customerId.toString());
+
+    const poisonedId = await seedPoisonedTwin(t, orgId, userId, identity, payload, {
+      currency: "JPY",
+      accountingDate: LEGIT_DATE,
+      occurredAt: LEGIT_DATE,
+    });
+    const before = await footprint(t, orgId);
+
+    await expect(
+      t.run(async (ctx) => {
+        await postReceiptOccurrence(ctx, {
+          identity, currency: "USD", occurredAt: LEGIT_DATE, actorId: userId, payload,
+        });
+      })
+    ).rejects.toThrow(/currency JPY != USD/);
+
+    // Refused before anything moved, and the row it refused is left as found.
+    expect(await footprint(t, orgId)).toEqual(before);
+    expect((await t.run(async (ctx) => ctx.db.get(poisonedId)))?.currency).toBe("JPY");
+  });
+
+  /**
+   * ⚠️ ACCOUNTING DATE AND OCCURRED-AT ARE SEPARATED ON PURPOSE, AND THE FIRST
+   * DRAFT OF THIS TEST DID NOT DO IT.
+   *
+   * `postReceiptOccurrence` sets both from one argument, so a divergence
+   * produced through the facade always moves the two together — and a case that
+   * moves both passes whichever single check survives. The mutant battery said
+   * so out loud: with one combined case, dropping the `accountingDate`
+   * comparison SURVIVED (occurredAt still caught it) and dropping `occurredAt`
+   * SURVIVED too. Neither was load-bearing under its own test.
+   *
+   * The seeded twin can move them independently, which is also faithful: the
+   * base generic ingress takes `accountingDate` and `occurredAt` as separate
+   * arguments, so a real pre-cutover row can carry any combination.
+   */
+  test("E1b - ACCOUNTING DATE alone: only the posting date differs, and it refuses", async () => {
+    const { t, orgId, userId, customerId } = await seedPostableOrg("e1b");
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const identity = directCollectionReceipt({ orgId, paymentId });
+    const payload = certifiedReceiptPayload(paymentId.toString(), customerId.toString());
+    const divergentDate = Date.UTC(new Date().getUTCFullYear(), 8, 1);
+
+    await seedPoisonedTwin(t, orgId, userId, identity, payload, {
+      currency: "USD",
+      accountingDate: divergentDate,
+      occurredAt: LEGIT_DATE,
+    });
+    const before = await footprint(t, orgId);
+
+    await expect(
+      t.run(async (ctx) => {
+        await postReceiptOccurrence(ctx, {
+          identity, currency: "USD", occurredAt: LEGIT_DATE, actorId: userId, payload,
+        });
+      })
+    ).rejects.toThrow(/accountingDate/);
+    expect(await footprint(t, orgId)).toEqual(before);
+  });
+
+  test("E1d - OCCURRED-AT alone: only the economic timestamp differs, and it refuses", async () => {
+    const { t, orgId, userId, customerId } = await seedPostableOrg("e1d");
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const identity = directCollectionReceipt({ orgId, paymentId });
+    const payload = certifiedReceiptPayload(paymentId.toString(), customerId.toString());
+
+    await seedPoisonedTwin(t, orgId, userId, identity, payload, {
+      currency: "USD",
+      accountingDate: LEGIT_DATE,
+      occurredAt: Date.UTC(new Date().getUTCFullYear(), 8, 1),
+    });
+    const before = await footprint(t, orgId);
+
+    await expect(
+      t.run(async (ctx) => {
+        await postReceiptOccurrence(ctx, {
+          identity, currency: "USD", occurredAt: LEGIT_DATE, actorId: userId, payload,
+        });
+      })
+    ).rejects.toThrow(/occurredAt/);
+    expect(await footprint(t, orgId)).toEqual(before);
+  });
+
+  test("E1c - BRANCH alone: the legitimate producer sets no branch, so a branched twin is not the same posting", async () => {
+    // `postReceiptOccurrence` never sets `branchId`, but the generic ingress
+    // accepts one — so a base-revision row can carry a branch the certified
+    // receipt does not, and every other dimension can still match exactly.
+    const { t, orgId, userId, customerId } = await seedPostableOrg("e1c");
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const identity = directCollectionReceipt({ orgId, paymentId });
+    const payload = certifiedReceiptPayload(paymentId.toString(), customerId.toString());
+    const branchId = (await t.run((ctx) =>
+      ctx.db.insert("branches", { orgId, name: "Branch A", isActive: true })
+    )) as Id<"branches">;
+
+    await seedPoisonedTwin(t, orgId, userId, identity, payload, {
+      currency: "USD",
+      accountingDate: LEGIT_DATE,
+      occurredAt: LEGIT_DATE,
+      branchId,
+    });
+    const before = await footprint(t, orgId);
+
+    await expect(
+      t.run(async (ctx) => {
+        await postReceiptOccurrence(ctx, {
+          identity, currency: "USD", occurredAt: LEGIT_DATE, actorId: userId, payload,
+        });
+      })
+    ).rejects.toThrow(/branchId/);
+    expect(await footprint(t, orgId)).toEqual(before);
+  });
+
+  test("E2 - the CONTROL: an identical envelope still absorbs, so E1 refuses for the right reason", async () => {
+    // Without this, E1 would pass just as well against a comparator that
+    // refuses everything. Same tuple, same payload, same currency, same dates:
+    // one event, no throw.
+    const { t, orgId, userId, customerId } = await seedPostableOrg("e2");
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const identity = directCollectionReceipt({ orgId, paymentId });
+    const payload = certifiedReceiptPayload(paymentId.toString(), customerId.toString());
+    const occurredAt = LEGIT_DATE;
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await t.run(async (ctx) => {
+        await postReceiptOccurrence(ctx, {
+          identity,
+          currency: "USD",
+          occurredAt,
+          actorId: userId,
+          payload,
+        });
+      });
+    }
+    expect(await eventsFor(t, orgId)).toHaveLength(1);
+    expect(await journalsFor(t, orgId)).toHaveLength(1);
+  });
+
+  test("E3 - a QUEUED row with a divergent envelope is not absorbed either", async () => {
+    // The queued short-circuit fires before the POSTED one and before the
+    // engine, so the envelope comparison has to reach it too.
+    const { t, orgId, userId, customerId } = await seedPostableOrg("e3", false);
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const identity = directCollectionReceipt({ orgId, paymentId });
+    const payload = certifiedReceiptPayload(paymentId.toString(), customerId.toString());
+    const year = new Date().getUTCFullYear();
+
+    await t.run(async (ctx) => {
+      await postReceiptOccurrence(ctx, {
+        identity,
+        currency: "USD",
+        occurredAt: Date.UTC(year, 5, 1),
+        actorId: userId,
+        payload,
+      });
+    });
+    expect(await outboxRows(t, orgId)).toHaveLength(1);
+
+    await expect(
+      t.run(async (ctx) => {
+        await postReceiptOccurrence(ctx, {
+          identity,
+          currency: "USD",
+          occurredAt: Date.UTC(year, 8, 1),
+          actorId: userId,
+          payload,
+        });
+      })
+    ).rejects.toThrow(/accountingDate|occurredAt/);
+
+    const rows = await outboxRows(t, orgId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].accountingDate).toBe(Date.UTC(year, 5, 1));
+  });
+});
+
+/* ========================================================================== *
  * §5 — POSITIVE CONTROLS: the guard must be scoped, not blunt
  * ========================================================================== */
 
@@ -793,13 +1064,26 @@ describe("SCRUM-249 §5 — everything legitimate still works", () => {
     const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
     const identity = directCollectionReceipt({ orgId, paymentId });
     const payload = certifiedReceiptPayload(paymentId.toString(), customerId.toString());
+    // ONE captured timestamp, reused. The earlier revision of this test called
+    // `Date.now()` inside the loop, which is not an exact retry — it is three
+    // different posting envelopes that happened to share a payload, and the
+    // ticket's requirement is that the EXACT retry stays idempotent. Both
+    // producers reach this path with a stable date (`args.paymentDate`,
+    // `clearedAt`) and the drain replays the date persisted on its own row, so
+    // a fixed timestamp is the faithful model, not a convenience.
+    //
+    // ⚠️ This was corrected while adding the envelope comparison below, which
+    // is exactly when a test gets quietly reshaped to fit a patch. It is called
+    // out here, and the behaviour the change introduces is pinned by its OWN
+    // test (E1) rather than being absorbed into this one.
+    const occurredAt = Date.UTC(new Date().getUTCFullYear(), 5, 1);
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
       await t.run(async (ctx) => {
         await postReceiptOccurrence(ctx, {
           identity,
           currency: "USD",
-          occurredAt: Date.now(),
+          occurredAt,
           actorId: userId,
           payload,
         });
@@ -902,7 +1186,7 @@ describe("SCRUM-249 §5 — everything legitimate still works", () => {
     // the guard reserved `eventType` alone, SCRUM-223's not-yet-retired legacy
     // producer would break — and the reservation would be wrong anyway, because
     // a table name is not a source family.
-    const { t, orgId, userId, customerId, asOperator } = await seedPostableOrg("l5");
+    const { t, orgId, customerId, asOperator } = await seedPostableOrg("l5");
     const legacyTransactionId = await t.run((ctx) =>
       ctx.db.insert("transactions", {
         orgId,
@@ -939,7 +1223,7 @@ describe("SCRUM-249 §5 — everything legitimate still works", () => {
   });
 
   test("L6 — an unrelated event family is untouched by the guard", async () => {
-    const { t, orgId, userId, asOperator } = await seedPostableOrg("l6");
+    const { t, orgId, asOperator } = await seedPostableOrg("l6");
     const expenseId = await t.run((ctx) =>
       ctx.db.insert("expenses", {
         orgId,
