@@ -139,17 +139,30 @@ async function completeVerificationIfNeeded(
   }
 }
 
-async function completeOnboardingIfNeeded(page: Page): Promise<void> {
-  if (isOrgRoute(new URL(page.url()))) return;
+/**
+ * Runs the dealership wizard from the CHOICE screen the app actually shows
+ * first.
+ *
+ * ⚠️ THE SCREEN THIS USED TO WAIT FOR IS NOT THE FIRST ONE. `/dashboard`
+ * presents "How will you be using AutoFlow?" to any orgless, non-support-agent
+ * user, and "Dealership Name" only mounts after "I run a dealership" is
+ * clicked. Waiting directly for that field therefore timed out after 15s on
+ * every genuine first run, returned as though no onboarding were needed, and
+ * the run then failed thirty seconds later on `waitForURL(isOrgRoute)` —
+ * naming a navigation instead of the screen it was stuck on. Measured at
+ * `90d5f03fe`, run `33933915963`.
+ *
+ * Reaching this at all is now an explicit opt-in (see `mayCreateDealership`):
+ * CI seeds the QA dealership deterministically and neither fixture is allowed
+ * to create one.
+ */
+async function completeOnboardingFromChoiceScreen(page: Page): Promise<void> {
+  await page.getByText("I run a dealership", { exact: true }).click();
 
   const dealershipNameField = page.getByRole("textbox", {
     name: "Dealership Name",
   });
-  const needsOnboarding = await dealershipNameField
-    .waitFor({ state: "visible", timeout: 15_000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!needsOnboarding) return;
+  await dealershipNameField.waitFor({ state: "visible", timeout: 15_000 });
 
   await dealershipNameField.fill(`AutoFlow Playwright QA ${Date.now()}`);
   await page.getByRole("button", { name: /^Continue/ }).click();
@@ -184,14 +197,23 @@ async function signIn(
     user: string;
     password: string;
     storagePath: string;
+    /** Which configured secret this identity came from, for diagnostics. */
+    seatLabel: string;
     /**
-     * Whether landing on the dealership wizard is a legitimate first run.
+     * Whether landing on the orgless choice screen is a legitimate first run
+     * this fixture may resolve by creating a dealership.
      *
-     * True for the primary fixture, which owns the QA dealership and creates it
-     * on a brand-new instance. FALSE for every additional identity: they are
-     * meant to JOIN that dealership, so a wizard means the invitation was never
-     * accepted, and completing it would silently create a second, empty
-     * dealership and produce a suite that passes against the wrong org.
+     * FALSE in CI for BOTH identities. The QA dealership is seeded
+     * deterministically against the preview deployment before any browser
+     * starts (`convex/e2eBootstrap.ts`), so an identity that still lands on
+     * the choice screen is reporting a broken bootstrap — and letting it click
+     * through would create a second, empty dealership and produce a suite that
+     * passes against the wrong org. It could never fix the approver either:
+     * the approver has to JOIN the first dealership, which no wizard can do.
+     *
+     * Opt-in via `E2E_ALLOW_DEALERSHIP_CREATION=1` for a developer running the
+     * suite against their own personal Convex dev deployment, where no preview
+     * bootstrap has run. CI never sets it.
      */
     mayCreateDealership: boolean;
   },
@@ -225,25 +247,15 @@ async function signIn(
   await completeVerificationIfNeeded(page, verificationCode);
   await page.waitForURL((url) => !isSignInRoute(url), { timeout: 30_000 });
 
-  // Existing fixtures land on a role-dependent /{orgId}/... route. Brand-new
-  // fixtures first land on /dashboard with the dealership onboarding wizard;
-  // complete it once so future runs can use the saved authenticated state.
-  if (options.mayCreateDealership) {
-    await completeOnboardingIfNeeded(page);
-  } else if (!isOrgRoute(new URL(page.url()))) {
-    /**
-     * Detected by the CHOICE screen an orgless identity actually lands on.
-     *
-     * Not by the "Dealership Name" field: that only mounts after clicking "I
-     * run a dealership", which this branch exists to prevent. Waiting for it
-     * therefore always timed out, `stranded` stayed false, and the run failed
-     * thirty seconds later on the same generic URL timeout the check was added
-     * to replace — while costing every correctly-provisioned identity that
-     * briefly passes through /dashboard the full wait first.
-     *
-     * Raced against arrival at an org route, so a membership that resolves a
-     * moment later wins and nothing is delayed by the loser.
-     */
+  /**
+   * Seeded fixtures land on a role-dependent /{orgId}/... route. An identity
+   * with no membership lands on the orgless choice screen instead.
+   *
+   * Detected by the CHOICE screen, raced against arrival at an org route, so a
+   * membership that resolves a moment later wins and a correctly-seeded
+   * identity is never delayed by the loser.
+   */
+  if (!isOrgRoute(new URL(page.url()))) {
     const strandedOnChoice = await Promise.race([
       page
         .getByText("I run a dealership", { exact: true })
@@ -251,9 +263,23 @@ async function signIn(
         .then(() => true),
       page.waitForURL(isOrgRoute, { timeout: 20_000 }).then(() => false),
     ]).catch(() => false);
-    if (strandedOnChoice) {
+
+    if (strandedOnChoice && options.mayCreateDealership) {
+      await completeOnboardingFromChoiceScreen(page);
+    } else if (strandedOnChoice) {
       throw new Error(
-        `${options.user} signed in and was offered the "how will you use AutoFlow" choice, which means it belongs to no dealership. Add this identity to the QA organization with a role holding approve:finance_application — do NOT let it create a dealership of its own, or the suite will run against an empty org.`,
+        `${options.seatLabel} signed in successfully and was then offered the "How will you be using AutoFlow?" choice, ` +
+          `which means it belongs to no dealership on this deployment.\n\n` +
+          `This is an E2E BOOTSTRAP failure, not a product failure and not a Clerk credential failure — authentication ` +
+          `plainly worked to get this far.\n\n` +
+          `Every Playwright run claims a brand-new Convex preview whose database is empty, so the QA dealership, its ` +
+          `roles and both memberships have to be seeded against that exact deployment before the browser starts. That is ` +
+          `\`scripts/e2ePreviewBootstrap.mjs\` -> \`e2eBootstrap:bootstrapE2EOrganization\`, run with an explicit ` +
+          `--preview-name. Check that step's output.\n\n` +
+          `Do NOT resolve this by letting the fixture create a dealership: the approver has to JOIN the salesperson's ` +
+          `dealership (AutoFlow refuses to let one person both create and approve a deal), and a second empty org would ` +
+          `make the whole suite pass against the wrong tenant. Set E2E_ALLOW_DEALERSHIP_CREATION=1 only when running ` +
+          `locally against your own dev deployment.`,
       );
     }
   }
@@ -263,6 +289,17 @@ async function signIn(
 
   await page.evaluate(seedE2ELocalStorage, e2eLocalStorageEntries);
   await page.context().storageState({ path: options.storagePath });
+}
+
+/**
+ * Local-only escape hatch.
+ *
+ * On CI this is never set, so NEITHER fixture may create a dealership — the
+ * preview bootstrap owns that, and a fixture that quietly creates its own is
+ * how a suite ends up green against an empty org nobody meant to test.
+ */
+function mayCreateDealership(): boolean {
+  return process.env.E2E_ALLOW_DEALERSHIP_CREATION === "1";
 }
 
 /** The dealership's salesperson — the identity every existing spec runs as. */
@@ -279,7 +316,8 @@ setup("authenticate", async ({ page }) => {
     user,
     password,
     storagePath: authFile,
-    mayCreateDealership: true,
+    seatLabel: "E2E_LOGIN_USER (the salesperson seat)",
+    mayCreateDealership: mayCreateDealership(),
   });
 });
 
@@ -300,6 +338,10 @@ setup("authenticate the approver", async ({ page }) => {
     user: user!,
     password: password!,
     storagePath: approverAuthFile,
+    seatLabel: "E2E_APPROVER_USER (the approving colleague's seat)",
+    // Unconditionally false, even under E2E_ALLOW_DEALERSHIP_CREATION: this
+    // identity must JOIN the salesperson's dealership. A wizard here could only
+    // ever produce a second, empty org — which is the failure, not the fix.
     mayCreateDealership: false,
   });
 });

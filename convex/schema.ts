@@ -6152,4 +6152,28 @@ export default defineSchema({
     uploadedBy: v.id("users"),
     createdAt: v.number(),
   }).index("by_storageId", ["storageId"]),
+
+  // ─── E2E preview bootstrap marker (SCRUM-143) ───────────────────────────
+  //
+  // At most one row, and its only writer is `e2eBootstrap:markPreviewDeployment`.
+  //
+  // ⚠️ THE ROW'S PRESENCE IS AN AUTHORIZATION, so read what actually mints it.
+  // The Convex CLI runs that mutation through the deploy command's
+  // `--preview-run` hook, and that hook is *ignored* unless the target is a
+  // newly-claimed PREVIEW deployment — it is reachable only from the preview
+  // branch of the CLI's deploy path. On production, and on a personal dev
+  // deployment, this table therefore stays empty forever, and
+  // `e2eBootstrap:bootstrapE2EOrganization` refuses to write anything at all
+  // without a row here.
+  //
+  // `convexCloudUrl` is recorded so a marker vouches for exactly ONE
+  // deployment. Without it a snapshot import could carry a preview's marker
+  // into a real deployment and hand it an authorization it never earned.
+  e2ePreviewBootstrap: defineTable({
+    markedAt: v.number(),
+    convexCloudUrl: v.optional(v.string()),
+    /** Set once `bootstrapE2EOrganization` has seeded the QA dealership. */
+    orgId: v.optional(v.id("organizations")),
+    bootstrappedAt: v.optional(v.number()),
+  }),
 });

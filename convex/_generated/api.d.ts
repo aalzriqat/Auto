@@ -55,6 +55,7 @@ import type * as diagnosePrepaidLedgerIntegrity from "../diagnosePrepaidLedgerIn
 import type * as directMessages from "../directMessages.js";
 import type * as documents from "../documents.js";
 import type * as domainRegistrar from "../domainRegistrar.js";
+import type * as e2eBootstrap from "../e2eBootstrap.js";
 import type * as email from "../email.js";
 import type * as exchangeRates from "../exchangeRates.js";
 import type * as expenses from "../expenses.js";
@@ -278,6 +279,7 @@ declare const fullApi: ApiFromModules<{
   directMessages: typeof directMessages;
   documents: typeof documents;
   domainRegistrar: typeof domainRegistrar;
+  e2eBootstrap: typeof e2eBootstrap;
   email: typeof email;
   exchangeRates: typeof exchangeRates;
   expenses: typeof expenses;
