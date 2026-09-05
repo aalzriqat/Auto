@@ -68,11 +68,43 @@
  * repository — SCRUM-231 plans exactly such a wipe — and both adversarial
  * reviewers on PR #278 reached it independently.
  *
- * **Control 5 is what closes it**, and it is the only POSITIVE proof of
- * deployment type this module has: the deployment says what it is, in a
- * variable this workflow never supplies and no wipe can restore, because it
- * lives in project settings scoped to Preview rather than in the database.
- * Provisioned by the owner under SCRUM-143 c17727 / c17730.
+ * **Control 5 narrows that sharply** — it is the only POSITIVE evidence of
+ * deployment type this module has, it lives in project settings scoped to
+ * Preview rather than in the database, this workflow never supplies it, and no
+ * wipe restores it. Provisioned by the owner under SCRUM-143 c17727 / c17730.
+ *
+ * ⚠️ IT DOES NOT *CLOSE* THE RESIDUAL, AND AN EARLIER VERSION OF THIS COMMENT
+ * SAID IT DID. What the variable actually proves is:
+ *
+ *   > this deployment was CREATED as a preview, and its label has not been
+ *   > changed since.
+ *
+ * Not "this deployment is a preview NOW". Convex's own documentation closes off
+ * both ends of that gap. Project default environment variables "will be used
+ * when creating a new deployment, and will have no effect on existing
+ * deployments (they are not kept in sync)" — so the label is a COPY taken at
+ * creation, never a live signal. And the `deployment:updateType` permission
+ * "lets the holder change a deployment's type", which the docs themselves flag
+ * as a privilege-escalation risk, explicitly including promoting a
+ * non-production deployment to `type=prod`. A promoted preview therefore keeps
+ * its database, its URL, its marker AND its `preview` label, and every control
+ * in this file passes on it.
+ *
+ * ⚠️ THAT RESIDUAL IS PRE-EXISTING, NOT CREATED BY CONTROL 5. Before this check
+ * existed, a promoted preview carrying its marker and its recorded URL already
+ * passed `requireMarker` outright — the marker survives promotion, the URL
+ * survives promotion, and a promoted preview carries none of
+ * `REAL_DEPLOYMENT_ENV_MARKERS`. Control 5 adds a NECESSARY condition; it
+ * cannot manufacture authorization that was not already there. Codex found the
+ * gap on PR #278 (SCRUM-143-DEPLOY-1); the finding is correct and its
+ * "introduced by this diff" classification is not.
+ *
+ * Closing it needs one of two things this module cannot supply for itself: an
+ * immutable platform-provided CURRENT-type signal, which Convex does not
+ * expose, or keeping this module out of the production bundle entirely. Both
+ * are tracked as follow-up rather than papered over here. Until one exists, the
+ * rule that actually binds is operational, and it is short:
+ * **NEVER PROMOTE A DEPLOYMENT THIS MODULE HAS MARKED OR SEEDED.**
  *
  * ⚠️ THE ACCURATE BOUNDARY — BECAUSE THE FIRST VERSION OF THIS SENTENCE
  * OVERCLAIMED. It read "a variable no caller can supply", and that is false:
@@ -450,7 +482,12 @@ function assertMarkerBelongsToThisDeployment(marker: Doc<"e2ePreviewBootstrap">)
 /**
  * CONTROL 5 — the deployment must declare itself a preview, right now.
  *
- * ⚠️ THIS IS THE ONLY POSITIVE PROOF OF DEPLOYMENT TYPE IN THIS MODULE.
+ * ⚠️ THIS IS THE ONLY POSITIVE EVIDENCE OF DEPLOYMENT TYPE IN THIS MODULE —
+ * evidence, not proof. It attests that the deployment was CREATED as a preview
+ * and has not had its label changed; a deployment promoted to production keeps
+ * the label and passes. See the module header for why that residual is real,
+ * pre-existing, and bounded by an operational rule rather than by this code.
+ *
  * Every other control is an absence: no tenant rows, no production secrets, no
  * foreign URL. Absences are satisfiable by accident — an emptied, deconfigured
  * production deployment satisfies all of them — which is the residual both
@@ -971,6 +1008,18 @@ export const assertE2EBootstrap = internalQuery({
     expectedCloudUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // ⚠️ ORDERED DIFFERENTLY FROM `bootstrapE2EOrganization` ON PURPOSE, AND
+    // IT IS WORTH KNOWING WHY BEFORE DEBUGGING A MISFIRED JOB. That mutation
+    // runs `checkDeploymentIdentity` FIRST and reaches these two gates through
+    // `requireMarker`; this query runs these two FIRST and the identity check
+    // after. Every one of them is fail-closed and synchronous, so the same
+    // deployment is refused either way — but the two functions report a
+    // DIFFERENT reason for one underlying cause, which is exactly the sort of
+    // thing that sends an operator down the wrong path. The asymmetry predates
+    // control 5 (it already existed for the real-deployment denylist); control
+    // 5 inherited the position rather than introducing a new inconsistency.
+    // Raised by the Sonnet MAX seat on PR #278 as a LOW.
+    //
     // ⚠️ THE SAME TWO GATES AS `requireMarker`, deliberately repeated.
     // This query reads the marker itself rather than going through
     // `requireMarker`, because its marker-absence message is a preflight
