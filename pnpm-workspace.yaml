@@ -68,10 +68,7 @@ overrides:
   # block at all (its only top-level keys are packages, overrides,
   # allowBuilds, patchedDependencies and auditConfig). Whether CI should
   # enforce a release-age policy, and by what mechanism, is SCRUM-244's
-  # question and is deliberately NOT argued here. Two earlier attempts to
-  # settle it inside this comment, by characterising the CI install commands,
-  # were both wrong in different ways; that kind of census is stale the moment
-  # a workflow changes, and it is not needed — this pin is exact because of
+  # question and is deliberately NOT argued here. This pin is exact because of
   # the advisory ranges above, and would be even if that gate were fully
   # enforced.
   fast-uri: 4.1.4
