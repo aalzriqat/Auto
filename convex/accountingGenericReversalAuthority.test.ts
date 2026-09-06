@@ -614,6 +614,60 @@ describe("SCRUM-254 §7 — the authority refusal precedes the engine, not merel
     // And explicitly NOT the engine's answer — this is the assertion M5 fails.
     expect(message).not.toMatch(/Cannot reverse an event with status/i);
   });
+
+  /**
+   * GR9b — the same proof with a receipt nobody had to tamper with.
+   *
+   * ⚠️ GR9's `status: "FAILED"` is a WHITE-BOX PROBE, not an organic state. The
+   * Sonnet seat pointed this out and I verified it: the only production writers
+   * of `accountingEvents.status` are `postingEngine.ts` (PENDING, POSTED) and
+   * `reversals.ts` (PENDING, POSTED, REVERSED). Nothing writes FAILED to that
+   * table — FAILED belongs to `pendingAccountingEvents`. GR9 is still a valid
+   * ordering discriminator, because the engine's refusal at that branch is real
+   * either way, but it should not be read as evidence about a degraded receipt
+   * that could actually occur.
+   *
+   * This case needs no tampering at all. The receipt is exactly what the
+   * producer posted; only the caller's `reversalDate` is unusual, landing in a
+   * year the org has no accounting period for — an ordinary operator mistake.
+   * The engine calls `assertPostingAllowed` on that date and refuses. So:
+   *
+   *   guard before the engine  ->  authority refusal
+   *   guard after  the engine  ->  "No accounting period found for date …"
+   *
+   * And this one closes something GR9 could not. M7 — the Codex counterexample
+   * — special-cases exactly the state GR9 probes and lets everything else reach
+   * the engine. This receipt is POSTED, so it takes M7's late path and gets the
+   * period error. GR9b therefore kills M7 BEHAVIORALLY, independently of §8's
+   * syntactic rule. Two instruments, two failure modes, one invariant.
+   */
+  test("GR9b — an untampered POSTED receipt with an unpostable reversal date also fails on AUTHORITY first", async () => {
+    const { orgId, receipt, asOperator } = await postCertifiedReceipt("gr9b");
+
+    // The receipt is untouched — still exactly as the SCRUM-237 producer left it.
+    expect(receipt.status).toBe("POSTED");
+
+    // A date in a year `seedPostableOrg` created no period for.
+    const unpostableDate = Date.UTC(new Date().getUTCFullYear() - 5, 0, 15);
+
+    let message = "";
+    try {
+      await asOperator.mutation(internal.accountingLedger.reverse, {
+        orgId,
+        originalEventId: receipt._id,
+        reversalDate: unpostableDate,
+        reason: "ordering proof, organic fixture",
+        idempotencyKey: "gr9b_ordering",
+      });
+      message = "NO REFUSAL";
+    } catch (error: unknown) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toMatch(/certified receipt/i);
+    // The engine never got as far as having an opinion about the period.
+    expect(message).not.toMatch(/No accounting period found/i);
+  });
 });
 
 /**
