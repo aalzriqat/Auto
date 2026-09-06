@@ -323,9 +323,23 @@ export async function createVehicle(
 
   // Step 5/5 — Availability. Status defaults to AVAILABLE and Trust Passport
   // fields are optional, so the final step submits directly.
+  //
+  // Unlike the Continue clicks above, this click's own success handler closes
+  // the dialog (onOpenChange(false)) synchronously enough to race Playwright's
+  // click-actionability tracking: a fresh-preview trace confirmed the "Vehicle
+  // added successfully" toast and dialog-closed state landing well under a
+  // second after this click, while Playwright itself still reported the click
+  // as "element was detached from the DOM, retrying" all the way to a 60s
+  // timeout. The submission had already succeeded; only Playwright's own
+  // bookkeeping for *this specific click* never resolved. The toast and
+  // dialog-closed assertions immediately below are the real, authoritative
+  // proof of outcome and still fail correctly if the submission genuinely
+  // didn't happen, so a spurious click-timeout here is swallowed rather than
+  // failing the test on a false negative.
   await dialog
     .getByRole("button", { name: /^(Add Vehicle|Submit for Approval)$/ })
-    .click();
+    .click()
+    .catch(() => {});
 
   // A caller holding only CREATE_VEHICLES_REQUEST gets "Submit for Approval":
   // a pending vehicleEdits row is written and NO vehicles row exists. Callers
