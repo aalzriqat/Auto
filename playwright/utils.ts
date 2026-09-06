@@ -329,14 +329,16 @@ export async function createVehicle(
   // click-actionability tracking: a fresh-preview trace confirmed the "Vehicle
   // added successfully" toast and dialog-closed state landing well under a
   // second after this click, while Playwright itself still reported the click
-  // as "element was detached from the DOM, retrying" all the way to a 60s
+  // as "element was detached from the DOM, retrying" all the way to the test
   // timeout. The submission had already succeeded; only Playwright's own
-  // bookkeeping for *this specific click* never resolved. The toast and
-  // dialog-closed assertions immediately below are the real, authoritative
-  // proof of outcome and still fail correctly if the submission genuinely
-  // didn't happen, so a spurious click-timeout here is swallowed rather than
-  // failing the test on a false negative.
-  await dialog
+  // bookkeeping for *this specific click* never resolved. Awaiting that
+  // failure before checking the toast is itself wrong — by the time it gives
+  // up, the toast (a few seconds by default) has already disappeared, turning
+  // a real pass into a false "toast never appeared" failure. So the click is
+  // fired without being awaited on its own, and raced against the toast
+  // check below; both must still resolve for the test to pass, so a
+  // submission that genuinely doesn't happen still fails correctly.
+  const submitClick = dialog
     .getByRole("button", { name: /^(Add Vehicle|Submit for Approval)$/ })
     .click()
     .catch(() => {});
@@ -357,6 +359,7 @@ export async function createVehicle(
       ),
     ).toBeVisible();
   }
+  await submitClick;
   await expect(dialog).not.toBeVisible();
 
   return { make, model, vin };
