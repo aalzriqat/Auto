@@ -164,7 +164,7 @@ describe("SCRUM-121 characterization of current main", () => {
     // and dropped B with no error and no audit trace; it failed the moment the
     // refusal landed, which is the failing-first proof for this defect.
     await expect(
-      asFinance.mutation(api.collections.recordPayment, {
+      asFinance.mutation(api.collections.recordPayment, { idempotencyKey: "t-scrum121Characterization.test-167-57",
         orgId,
         receivableId,
         customerId: customerB,
@@ -177,7 +177,7 @@ describe("SCRUM-121 characterization of current main", () => {
     // CONTROL — the identical call naming the RIGHT customer still succeeds, so
     // the refusal is caused by the contradiction itself and not by supplying a
     // customerId alongside a receivable at all.
-    const paymentId = await asFinance.mutation(api.collections.recordPayment, {
+    const paymentId = await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: "t-scrum121Characterization.test-180-79",
       orgId,
       receivableId,
       customerId: customerA,
@@ -216,7 +216,7 @@ describe("SCRUM-121 characterization of current main", () => {
     });
 
     await expect(
-      asFinance.mutation(api.collections.recordPayment, {
+      asFinance.mutation(api.collections.recordPayment, { idempotencyKey: "t-scrum121Characterization.test-219-57",
         orgId,
         receivableId: overpaid,
         amount: 1500,
@@ -245,7 +245,7 @@ describe("SCRUM-121 characterization of current main", () => {
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
     await expect(
-      asFinance.mutation(api.collections.recordPayment, {
+      asFinance.mutation(api.collections.recordPayment, { idempotencyKey: "t-scrum121Characterization.test-248-57",
         orgId,
         receivableId: exact,
         amount: 1000,
@@ -310,7 +310,7 @@ describe("SCRUM-121 characterization of current main", () => {
     // the state directly, so the guard is genuinely executed and a mutation of
     // it is killed rather than surviving as unreachable code.
     await expect(
-      asFinance.mutation(api.collections.recordPayment, {
+      asFinance.mutation(api.collections.recordPayment, { idempotencyKey: "t-scrum121Characterization.test-313-57",
         orgId,
         receivableId,
         amount: 250,
@@ -394,7 +394,7 @@ describe("SCRUM-121 characterization of current main", () => {
     expect(requestId).toBeTruthy();
 
     await expect(
-      asApprover.mutation(api.collections.respondToApproval, {
+      asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: "t-scrum121Characterization.test-397-62",
         orgId,
         requestId,
         status: "APPROVED",
@@ -435,7 +435,7 @@ describe("SCRUM-121 characterization of current main", () => {
       requestType: "CANCEL_RECEIVABLE",
       reason: "Booked in error",
     });
-    await asApprover.mutation(api.collections.respondToApproval, {
+    await asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: "t-scrum121Characterization.test-438-66",
       orgId,
       requestId: cancelRequest,
       status: "APPROVED",
@@ -514,7 +514,7 @@ describe("SCRUM-121 characterization of current main", () => {
       dueDate: DUE(),
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
-    await asFinance.mutation(api.collections.recordPayment, {
+    await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: "t-scrum121Characterization.test-517-61",
       orgId,
       receivableId: paidId,
       amount: 500,
@@ -582,7 +582,7 @@ describe("SCRUM-121 characterization of current main", () => {
       requestType: "CANCEL_RECEIVABLE",
       reason: "Booked in error",
     });
-    await asApprover.mutation(api.collections.respondToApproval, {
+    await asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: "t-scrum121Characterization.test-585-66",
       orgId,
       requestId: cancelRequest,
       status: "APPROVED",
@@ -660,7 +660,7 @@ describe("SCRUM-121 characterization of current main", () => {
     // The refusal has moved to the free side of the funds boundary: no intent is
     // created, so there is never a confirmed receipt with nowhere to live.
     await expect(
-      asFinance.mutation(api.paymentIntents.create, {
+      asFinance.mutation(api.paymentIntents.create, { idempotencyKey: "t-scrum121Characterization.test-663-53",
         orgId,
         customerId,
         receivableDocumentId: foreignDocId,
@@ -679,7 +679,7 @@ describe("SCRUM-121 characterization of current main", () => {
     });
 
     // CONTROL — same intent shape without the unvalidated document settles.
-    const cleanIntentId = await asFinance.mutation(api.paymentIntents.create, {
+    const cleanIntentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: "t-scrum121Characterization.test-682-79",
       orgId,
       customerId,
       amountMinor: 100_000,
@@ -687,7 +687,7 @@ describe("SCRUM-121 characterization of current main", () => {
       provider: "stripe",
     });
     await expect(
-      asFinance.mutation(api.paymentIntents.markSettled, { orgId, intentId: cleanIntentId })
+      asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: "t-scrum121Characterization.test-690-58", orgId, intentId: cleanIntentId })
     ).resolves.toBeNull();
 
     await t.run(async (ctx) => {
@@ -774,7 +774,7 @@ describe("SCRUM-121A — golden GL baselines from current main", () => {
     });
     const baseline = await accountingCommands(t, orgId);
 
-    await asFinance.mutation(api.collections.recordPayment, {
+    await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: "t-scrum121Characterization.test-777-61",
       orgId,
       receivableId,
       amount: 300,
@@ -818,7 +818,7 @@ describe("SCRUM-121A — golden GL baselines from current main", () => {
     });
     const baseline = await accountingCommands(t, orgId);
 
-    await asFinance.mutation(api.collections.clearCheque, { orgId, chequeId });
+    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: "t-scrum121Characterization.test-821-59", orgId, chequeId });
 
     const after = await accountingCommands(t, orgId);
     const key = (c: unknown) => JSON.stringify(c);
@@ -845,7 +845,7 @@ describe("SCRUM-121A — golden GL baselines from current main", () => {
       dueDate: DUE(),
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
-    const intentId = await asFinance.mutation(api.paymentIntents.create, {
+    const intentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: "t-scrum121Characterization.test-848-74",
       orgId,
       customerId,
       receivableId,
@@ -853,14 +853,14 @@ describe("SCRUM-121A — golden GL baselines from current main", () => {
       currency: "JOD",
       provider: "stripe",
     });
-    await asFinance.mutation(api.collections.recordPayment, {
+    await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: "t-scrum121Characterization.test-856-61",
       orgId,
       receivableId,
       amount: 60,
       method: "CASH",
       paymentDate: Date.now(),
     });
-    await asFinance.mutation(api.paymentIntents.markSettled, { orgId, intentId });
+    await asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: "t-scrum121Characterization.test-863-62", orgId, intentId });
 
     const commands = await accountingCommands(t, orgId);
     const money = commands.filter(
@@ -963,7 +963,7 @@ describe("SCRUM-121A — Sonnet MAX F1, validated independently", () => {
     });
 
     // A payment link is raised while the debt is live, and stays PENDING.
-    const intentId = await asFinance.mutation(api.paymentIntents.create, {
+    const intentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: "t-scrum121Characterization.test-966-74",
       orgId,
       customerId,
       receivableId,
@@ -973,7 +973,7 @@ describe("SCRUM-121A — Sonnet MAX F1, validated independently", () => {
     });
 
     // The customer pays 600 in cash, then the whole 600 is refunded.
-    await asFinance.mutation(api.collections.recordPayment, {
+    await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: "t-scrum121Characterization.test-976-61",
       orgId,
       receivableId,
       amount: 600,
@@ -988,7 +988,7 @@ describe("SCRUM-121A — Sonnet MAX F1, validated independently", () => {
       disbursementMethod: "CASH",
       reason: "Customer returned the vehicle",
     });
-    await asApprover.mutation(api.collections.respondToApproval, {
+    await asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: "t-scrum121Characterization.test-991-66",
       orgId,
       requestId: refundReq,
       status: "APPROVED",
@@ -1002,7 +1002,7 @@ describe("SCRUM-121A — Sonnet MAX F1, validated independently", () => {
     });
 
     // The stale intent settles.
-    await asFinance.mutation(api.paymentIntents.markSettled, { orgId, intentId });
+    await asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: "t-scrum121Characterization.test-1005-62", orgId, intentId });
 
     await t.run(async (ctx) => {
       const row = await ctx.db.get(receivableId);
@@ -1068,7 +1068,7 @@ describe("SCRUM-121A — Codex F2, validated independently", () => {
     });
 
     // Document-only intent: the supported shape proven by accountingPhase8.
-    const intentId = await asFinance.mutation(api.paymentIntents.create, {
+    const intentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: "t-scrum121Characterization.test-1071-74",
       orgId,
       customerId,
       receivableDocumentId: docId,
@@ -1076,7 +1076,7 @@ describe("SCRUM-121A — Codex F2, validated independently", () => {
       currency: "JOD",
       provider: "tap",
     });
-    await asFinance.mutation(api.paymentIntents.markSettled, { orgId, intentId });
+    await asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: "t-scrum121Characterization.test-1079-62", orgId, intentId });
 
     await t.run(async (ctx) => {
       const intent = await ctx.db.get(intentId);
@@ -1102,7 +1102,7 @@ describe("SCRUM-121A — Codex F2, validated independently", () => {
       reason: "Booked in error",
     });
     await expect(
-      asApprover.mutation(api.collections.respondToApproval, {
+      asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: "t-scrum121Characterization.test-1105-62",
         orgId,
         requestId: cancelReq,
         status: "APPROVED",
@@ -1143,7 +1143,7 @@ describe("SCRUM-121A — Codex F2, validated independently", () => {
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
 
-    const intentId = await asFinance.mutation(api.paymentIntents.create, {
+    const intentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: "t-scrum121Characterization.test-1146-74",
       orgId,
       customerId,
       receivableId,
@@ -1151,7 +1151,7 @@ describe("SCRUM-121A — Codex F2, validated independently", () => {
       currency: "JOD",
       provider: "tap",
     });
-    await asFinance.mutation(api.paymentIntents.markSettled, { orgId, intentId });
+    await asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: "t-scrum121Characterization.test-1154-62", orgId, intentId });
 
     const cancelReq = await asFinance.mutation(api.collections.requestApproval, {
       orgId,
@@ -1161,7 +1161,7 @@ describe("SCRUM-121A — Codex F2, validated independently", () => {
     });
     // The legacy mirror ran, so paidAmount > 0 and cancellation is refused.
     await expect(
-      asApprover.mutation(api.collections.respondToApproval, {
+      asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: "t-scrum121Characterization.test-1164-62",
         orgId,
         requestId: cancelReq,
         status: "APPROVED",
@@ -1195,7 +1195,7 @@ describe("SCRUM-121 — Codex findings, validated independently", () => {
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
 
-    const intentId = await asFinance.mutation(api.paymentIntents.create, {
+    const intentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: "t-scrum121Characterization.test-1198-74",
       orgId,
       customerId,
       receivableId,
@@ -1205,7 +1205,7 @@ describe("SCRUM-121 — Codex findings, validated independently", () => {
     });
 
     // Another channel settles 60 of the same debt first.
-    await asFinance.mutation(api.collections.recordPayment, {
+    await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: "t-scrum121Characterization.test-1208-61",
       orgId,
       receivableId,
       amount: 60,
@@ -1213,7 +1213,7 @@ describe("SCRUM-121 — Codex findings, validated independently", () => {
       paymentDate: Date.now(),
     });
 
-    await asFinance.mutation(api.paymentIntents.markSettled, { orgId, intentId });
+    await asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: "t-scrum121Characterization.test-1216-62", orgId, intentId });
 
     await t.run(async (ctx) => {
       const row = await ctx.db.get(receivableId);
@@ -1266,7 +1266,7 @@ describe("SCRUM-121 — Codex findings, validated independently", () => {
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
 
-    const intentId = await asFinance.mutation(api.paymentIntents.create, {
+    const intentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: "t-scrum121Characterization.test-1269-74",
       orgId,
       customerId,
       receivableId,
@@ -1282,7 +1282,7 @@ describe("SCRUM-121 — Codex findings, validated independently", () => {
       requestType: "CANCEL_RECEIVABLE",
       reason: "Customer withdrew",
     });
-    await asApprover.mutation(api.collections.respondToApproval, {
+    await asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: "t-scrum121Characterization.test-1285-66",
       orgId,
       requestId: req,
       status: "APPROVED",
@@ -1292,7 +1292,7 @@ describe("SCRUM-121 — Codex findings, validated independently", () => {
     });
 
     // The provider settles anyway.
-    await asFinance.mutation(api.paymentIntents.markSettled, { orgId, intentId });
+    await asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: "t-scrum121Characterization.test-1295-62", orgId, intentId });
 
     await t.run(async (ctx) => {
       const row = await ctx.db.get(receivableId);
@@ -1366,7 +1366,7 @@ describe("SCRUM-121A — c16581 evidence fixtures", () => {
     // state is now CONSTRUCTED directly, and the defect it demonstrates is
     // reachable ONLY by construction. SCRUM-218 closes the constructed case;
     // 121A-PRE has closed the reachable one.
-    const intentId = await asFinance.mutation(api.paymentIntents.create, {
+    const intentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: "t-scrum121Characterization.test-1369-74",
       orgId,
       customerId,
       receivableDocumentId: docId,
@@ -1374,7 +1374,7 @@ describe("SCRUM-121A — c16581 evidence fixtures", () => {
       currency: "JOD",
       provider: "tap",
     });
-    await asFinance.mutation(api.paymentIntents.markSettled, { orgId, intentId });
+    await asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: "t-scrum121Characterization.test-1377-62", orgId, intentId });
 
     // First, prove the public route is shut — so "constructed" below is a
     // statement about this branch, not an assumption carried over from before.
@@ -1385,7 +1385,7 @@ describe("SCRUM-121A — c16581 evidence fixtures", () => {
       reason: "Booked in error",
     });
     await expect(
-      asApprover.mutation(api.collections.respondToApproval, {
+      asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: "t-scrum121Characterization.test-1388-62",
         orgId,
         requestId: cancelReq,
         status: "APPROVED",
@@ -1561,7 +1561,7 @@ describe("SCRUM-121A — c16581 evidence fixtures", () => {
     // recorded. It failed the moment the payer proof landed.
     const before = await snapshotMoneyWorld(t);
     await expect(
-      asFinance.mutation(api.paymentIntents.create, {
+      asFinance.mutation(api.paymentIntents.create, { idempotencyKey: "t-scrum121Characterization.test-1564-53",
         orgId,
         customerId,
         receivableDocumentId: othersDocId,
@@ -1705,7 +1705,7 @@ describe("SCRUM-121A — golden GL baselines for the paths 121A changes", () => 
     });
     const baseline = await accountingCommands(t, orgId);
 
-    await asApprover.mutation(api.collections.respondToApproval, {
+    await asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: "t-scrum121Characterization.test-1708-66",
       orgId,
       requestId: cancelReq,
       status: "APPROVED",
@@ -1766,7 +1766,7 @@ describe("SCRUM-121A — golden GL baselines for the paths 121A changes", () => 
       dueDate: DUE(),
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
-    const intentId = await asFinance.mutation(api.paymentIntents.create, {
+    const intentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: "t-scrum121Characterization.test-1769-74",
       orgId,
       customerId,
       receivableId,
@@ -1780,14 +1780,14 @@ describe("SCRUM-121A — golden GL baselines for the paths 121A changes", () => 
       requestType: "CANCEL_RECEIVABLE",
       reason: "Booked in error",
     });
-    await asApprover.mutation(api.collections.respondToApproval, {
+    await asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: "t-scrum121Characterization.test-1783-66",
       orgId,
       requestId: cancelReq,
       status: "APPROVED",
     });
 
     const baseline = await accountingCommands(t, orgId);
-    await asFinance.mutation(api.paymentIntents.markSettled, { orgId, intentId });
+    await asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: "t-scrum121Characterization.test-1790-62", orgId, intentId });
 
     const after = await accountingCommands(t, orgId);
     const key = (c: unknown) => JSON.stringify(c);
@@ -1887,7 +1887,7 @@ describe("SCRUM-121A — EV6, the withdrawn payer", () => {
     // And the debt is still collectible against a payer who no longer exists
     // as far as every customer-facing surface is concerned.
     await expect(
-      asFinance.mutation(api.collections.recordPayment, {
+      asFinance.mutation(api.collections.recordPayment, { idempotencyKey: "t-scrum121Characterization.test-1890-57",
         orgId,
         receivableId,
         amount: 250,
@@ -1967,7 +1967,7 @@ describe("SCRUM-121A — Codex R3 findings, validated independently", () => {
       requestType: "CANCEL_RECEIVABLE",
       reason: "Booked in error",
     });
-    await asApprover.mutation(api.collections.respondToApproval, {
+    await asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: "t-scrum121Characterization.test-1970-66",
       orgId,
       requestId: cancelReq,
       status: "APPROVED",
@@ -2137,7 +2137,7 @@ describe("SCRUM-121A — Codex R3 findings, validated independently", () => {
 
     // Clearing works today and allocates through collections.ts:364 — the same
     // writer call site recordPayment uses, reached after the bank confirmed.
-    await asFinance.mutation(api.collections.clearCheque, { orgId, chequeId });
+    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: "t-scrum121Characterization.test-2140-59", orgId, chequeId });
 
     await t.run(async (ctx) => {
       const row = await ctx.db.get(receivableId);
@@ -2207,7 +2207,7 @@ describe("SCRUM-121A-PRE — R3-05, saleId is never correlated", () => {
     // CONTROL: the receivable-vs-document rule DOES fire, so this mutation is
     // not simply permissive — the saleId gap below is specific.
     await expect(
-      asFinance.mutation(api.paymentIntents.create, {
+      asFinance.mutation(api.paymentIntents.create, { idempotencyKey: "t-scrum121Characterization.test-2210-53",
         orgId, customerId, receivableId: receivableA, receivableDocumentId: docB,
         amountMinor: 100_000, currency: "JOD", provider: "tap",
       })
@@ -2224,7 +2224,7 @@ describe("SCRUM-121A-PRE — R3-05, saleId is never correlated", () => {
     // other identifier — fell between the two branches. The commit message then
     // claimed every supplied identifier must agree, which this test disproved.
     await expect(
-      asFinance.mutation(api.paymentIntents.create, {
+      asFinance.mutation(api.paymentIntents.create, { idempotencyKey: "t-scrum121Characterization.test-2227-53",
         orgId, customerId, receivableDocumentId: docB, saleId: unrelatedSaleId,
         amountMinor: 100_000, currency: "JOD", provider: "tap",
       })
@@ -2286,7 +2286,7 @@ describe("SCRUM-121A-PRE — R3-05, saleId is never correlated", () => {
       expect((await ctx.db.get(receivableId))?.saleId).toBe(saleId);
     });
 
-    const intentId = await asFinance.mutation(api.paymentIntents.create, {
+    const intentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: "t-scrum121Characterization.test-2289-74",
       orgId, customerId, receivableId, saleId,
       amountMinor: 100_000, currency: "JOD", provider: "tap",
     });
@@ -2302,7 +2302,7 @@ describe("SCRUM-121A-PRE — R3-05, saleId is never correlated", () => {
     // could name S2 while its own receipt named S1, and the two records of one
     // payment disagreed about which deal it belonged to. Equality here is only
     // guaranteed because creation now refuses the pair that could differ.
-    await asFinance.mutation(api.paymentIntents.markSettled, { orgId, intentId });
+    await asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: "t-scrum121Characterization.test-2305-62", orgId, intentId });
     await t.run(async (ctx) => {
       const intent = await ctx.db.get(intentId);
       expect(intent?.status).toBe("SETTLED");
@@ -2351,7 +2351,7 @@ describe("SCRUM-121A-PRE — Codex R4 findings, validated independently", () => 
       dueDate: DUE(),
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
-    const intentId = await asFinance.mutation(api.paymentIntents.create, {
+    const intentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: "t-scrum121Characterization.test-2354-74",
       orgId,
       customerId,
       receivableId,
@@ -2365,12 +2365,12 @@ describe("SCRUM-121A-PRE — Codex R4 findings, validated independently", () => 
       requestType: "CANCEL_RECEIVABLE",
       reason: "Booked in error",
     });
-    await asApprover.mutation(api.collections.respondToApproval, {
+    await asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: "t-scrum121Characterization.test-2368-66",
       orgId,
       requestId: cancelReq,
       status: "APPROVED",
     });
-    await asFinance.mutation(api.paymentIntents.markSettled, { orgId, intentId });
+    await asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: "t-scrum121Characterization.test-2373-62", orgId, intentId });
 
     const paymentId = await t.run(async (ctx) => {
       const rows = await ctx.db
@@ -2512,7 +2512,7 @@ describe("SCRUM-121A-PRE — Codex R4 findings, validated independently", () => 
     // `disbursedAt` is still unset here — that was the whole finding, and it is
     // why the gate had to read the document rather than the application.
     await expect(
-      asFinance.mutation(api.applications.cancelApplication, {
+      asFinance.mutation(api.applications.cancelApplication, { idempotencyKey: "t-scrum121Characterization.test-2515-62",
         orgId,
         applicationId,
         reason: "Deal voided",
@@ -2575,7 +2575,7 @@ describe("SCRUM-121A-PRE — Codex R5 findings, validated independently", () => 
       dueDate: DUE(),
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
-    const intentId = await asFinance.mutation(api.paymentIntents.create, {
+    const intentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: "t-scrum121Characterization.test-2578-74",
       orgId,
       customerId,
       receivableId,
@@ -2596,7 +2596,7 @@ describe("SCRUM-121A-PRE — Codex R5 findings, validated independently", () => 
       requestType: "CANCEL_RECEIVABLE",
       reason: "Booked in error",
     });
-    await asApprover.mutation(api.collections.respondToApproval, {
+    await asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: "t-scrum121Characterization.test-2599-66",
       orgId,
       requestId: cancelReq,
       status: "APPROVED",
@@ -2688,7 +2688,7 @@ describe("SCRUM-121A-PRE — Codex R5 findings, validated independently", () => 
     // pinning them independently: an implementation covering only one door
     // would still be failing this test.
     await expect(
-      asFinance.mutation(api.paymentIntents.create, {
+      asFinance.mutation(api.paymentIntents.create, { idempotencyKey: "t-scrum121Characterization.test-2691-53",
         orgId,
         customerId,
         receivableId,
@@ -2782,7 +2782,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     // CURRENCY. The case that used to be accepted here and then destroy a
     // confirmed receipt inside assertSameCurrency at settlement.
     await expect(
-      asFinance.mutation(api.paymentIntents.create, {
+      asFinance.mutation(api.paymentIntents.create, { idempotencyKey: "t-scrum121Characterization.test-2785-53",
         orgId, customerId, receivableId,
         amountMinor: 100_000, currency: "USD", provider: "tap",
       })
@@ -2791,7 +2791,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     // SALE-ONLY with no document to collect against — UNPROVEN_TARGET.
     const { saleId } = await seedVehicleAndSale(t, orgId, customerId, userId);
     await expect(
-      asFinance.mutation(api.paymentIntents.create, {
+      asFinance.mutation(api.paymentIntents.create, { idempotencyKey: "t-scrum121Characterization.test-2794-53",
         orgId, customerId, saleId,
         amountMinor: 100_000, currency: "JOD", provider: "tap",
       })
@@ -2810,7 +2810,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     });
     await t.run((ctx) => ctx.db.patch(saleId, { canonicalReceivableDocumentId: otherDocId }));
     await expect(
-      asFinance.mutation(api.paymentIntents.create, {
+      asFinance.mutation(api.paymentIntents.create, { idempotencyKey: "t-scrum121Characterization.test-2813-53",
         orgId, customerId, receivableId, saleId,
         amountMinor: 100_000, currency: "JOD", provider: "tap",
       })
@@ -2820,7 +2820,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     // legacy row — the legacy terminal check cannot see this.
     await t.run((ctx) => ctx.db.patch(docId, { status: "PAID" }));
     await expect(
-      asFinance.mutation(api.paymentIntents.create, {
+      asFinance.mutation(api.paymentIntents.create, { idempotencyKey: "t-scrum121Characterization.test-2823-53",
         orgId, customerId, receivableId,
         amountMinor: 100_000, currency: "JOD", provider: "tap",
       })
@@ -2832,7 +2832,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     await t.run((ctx) => ctx.db.patch(docId, { status: "OPEN" }));
     await t.run((ctx) => ctx.db.patch(saleId, { canonicalReceivableDocumentId: docId }));
     await expect(
-      asFinance.mutation(api.paymentIntents.create, {
+      asFinance.mutation(api.paymentIntents.create, { idempotencyKey: "t-scrum121Characterization.test-2835-53",
         orgId, customerId, receivableId, saleId,
         amountMinor: 100_000, currency: "JOD", provider: "tap",
       })
@@ -2864,7 +2864,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
 
     // Receivable mode: the caller names a different vehicle.
     await expect(
-      asFinance.mutation(api.collections.recordPayment, {
+      asFinance.mutation(api.collections.recordPayment, { idempotencyKey: "t-scrum121Characterization.test-2867-57",
         orgId, receivableId, vehicleId: other.vehicleId,
         amount: 100, method: "CASH", paymentDate: Date.now(),
       })
@@ -2872,7 +2872,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
 
     // Receivable mode: the caller names a different sale.
     await expect(
-      asFinance.mutation(api.collections.recordPayment, {
+      asFinance.mutation(api.collections.recordPayment, { idempotencyKey: "t-scrum121Characterization.test-2875-57",
         orgId, receivableId, saleId: other.saleId,
         amount: 100, method: "CASH", paymentDate: Date.now(),
       })
@@ -2882,7 +2882,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     // is the shape that stored cleanly while attributing the canonical payment
     // to one customer and every operational reader to another.
     await expect(
-      asFinance.mutation(api.collections.recordPayment, {
+      asFinance.mutation(api.collections.recordPayment, { idempotencyKey: "t-scrum121Characterization.test-2885-57",
         orgId, customerId, saleId: other.saleId,
         amount: 100, method: "CASH", paymentDate: Date.now(),
       })
@@ -2892,13 +2892,13 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     // vehicle-only ad-hoc payment stays unconstrained: a vehicle does not imply
     // a customer, and refusing that would refuse legitimate counter takings.
     await expect(
-      asFinance.mutation(api.collections.recordPayment, {
+      asFinance.mutation(api.collections.recordPayment, { idempotencyKey: "t-scrum121Characterization.test-2895-57",
         orgId, customerId, saleId, vehicleId,
         amount: 100, method: "CASH", paymentDate: Date.now(),
       })
     ).resolves.toBeTruthy();
     await expect(
-      asFinance.mutation(api.collections.recordPayment, {
+      asFinance.mutation(api.collections.recordPayment, { idempotencyKey: "t-scrum121Characterization.test-2901-57",
         orgId, customerId, vehicleId: other.vehicleId,
         amount: 100, method: "CASH", paymentDate: Date.now(),
       })
@@ -3066,7 +3066,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
       return { applicationId: appId, docId: id as Id<"receivableDocuments"> };
     });
 
-    await asFinance.mutation(api.applications.cancelApplication, {
+    await asFinance.mutation(api.applications.cancelApplication, { idempotencyKey: "t-scrum121Characterization.test-3069-66",
       orgId, applicationId, reason: "Customer withdrew",
     });
 
@@ -3125,7 +3125,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
 
     const before = await snapshotMoneyWorld(t);
     await expect(
-      asFinance.mutation(api.collections.recordPayment, {
+      asFinance.mutation(api.collections.recordPayment, { idempotencyKey: "t-scrum121Characterization.test-3128-57",
         orgId, receivableId, saleId: salesB.saleId,
         amount: 100, method: "CASH", paymentDate: Date.now(),
       })
@@ -3148,7 +3148,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
       })
     );
     await expect(
-      asFinance.mutation(api.collections.recordPayment, {
+      asFinance.mutation(api.collections.recordPayment, { idempotencyKey: "t-scrum121Characterization.test-3151-57",
         orgId, receivableId: receivableWithSale, vehicleId: strangerVehicle,
         amount: 100, method: "CASH", paymentDate: Date.now(),
       })
@@ -3158,7 +3158,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     // point of the rule is that an absent field stays fillable; only a
     // contradiction is refused.
     await expect(
-      asFinance.mutation(api.collections.recordPayment, {
+      asFinance.mutation(api.collections.recordPayment, { idempotencyKey: "t-scrum121Characterization.test-3161-57",
         orgId, receivableId: receivableWithSale, vehicleId: salesB.vehicleId,
         amount: 100, method: "CASH", paymentDate: Date.now(),
       })
@@ -3229,7 +3229,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
       orgId, receivableId, requestType: "CANCEL_RECEIVABLE", reason: "Booked in error",
     });
     await expect(
-      asApprover.mutation(api.collections.respondToApproval, {
+      asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: "t-scrum121Characterization.test-3232-62",
         orgId, requestId: cancelReq, status: "APPROVED",
       })
     ).rejects.toThrow(/cannot be identified/i);
@@ -3291,7 +3291,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
       return { applicationId: appId, docId: id as Id<"receivableDocuments"> };
     });
 
-    await asFinance.mutation(api.applications.cancelApplication, {
+    await asFinance.mutation(api.applications.cancelApplication, { idempotencyKey: "t-scrum121Characterization.test-3294-66",
       orgId, applicationId, reason: "   ",
     });
 
@@ -3366,7 +3366,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
       orgId, receivableId, requestType: "CANCEL_RECEIVABLE", reason: "Booked in error",
     });
     await expect(
-      asApprover.mutation(api.collections.respondToApproval, {
+      asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: "t-scrum121Characterization.test-3369-62",
         orgId, requestId: cancelReq, status: "APPROVED",
       })
     ).rejects.toThrow(/too long an allocation history/i);

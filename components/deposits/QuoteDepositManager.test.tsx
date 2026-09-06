@@ -204,7 +204,7 @@ async function seedQuote(tag: string, rolePermissions: string[] = PERMS_MANAGER)
 type Seed = Awaited<ReturnType<typeof seedQuote>>;
 
 const payDeposit = (s: Seed, amount: number) =>
-  s.asUser.mutation(api.deposits.create, {
+  s.asUser.mutation(api.deposits.create, { idempotencyKey: "qdm-deposit-1",
     orgId: s.orgId, quoteId: s.quoteId, amount, method: "CASH" as const,
   });
 
@@ -214,7 +214,7 @@ const allocate = (s: Seed, allocations: Array<{ vehicleId: Id<"vehicles">; amoun
   });
 
 const sell = (s: Seed, vehicleId: Id<"vehicles">, salePrice: number) =>
-  s.asUser.mutation(api.sales.create, {
+  s.asUser.mutation(api.sales.create, { idempotencyKey: "qdm-sale-1",
     orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
     salePrice, saleDate: Date.now(), status: "COMPLETED" as const, quoteId: s.quoteId,
   });

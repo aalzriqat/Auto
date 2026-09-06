@@ -105,6 +105,12 @@ async function seedGuardDealer() {
   const vehicleId = await vehicleIn(orgId, "GUARDVIN0001");
   const customerId = await customerIn(orgId, "Ours");
 
+  // SCRUM-57: `sales.create` is an economic command and now requires a command
+  // identity. A FRESH one per built payload is what these guard tests want —
+  // each call here is a distinct intent, and a shared constant would make the
+  // second call replay the first's stored result instead of exercising the
+  // guard under test. Callers that need a specific key still override it.
+  let saleSeq = 0;
   const sale = (overrides: Record<string, unknown>) => ({
     orgId,
     vehicleId,
@@ -114,6 +120,7 @@ async function seedGuardDealer() {
     saleDate: Date.now(),
     status: "COMPLETED" as const,
     financingType: "CASH" as const,
+    idempotencyKey: `guard-sale-${++saleSeq}`,
     ...overrides,
   });
 
@@ -398,7 +405,7 @@ describe("a finance application from another dealership is refused when the draf
     // simply refuse every application, which is the state that would make the
     // two refusals below pass while breaking every real financed sale.
     await expect(
-      s.asUser.mutation(api.sales.completeDraft, { orgId: s.orgId, saleId })
+      s.asUser.mutation(api.sales.completeDraft, { idempotencyKey: "t-saleCompletionTenancyGuards.test-401-50", orgId: s.orgId, saleId })
     ).resolves.toBeDefined();
   });
 
@@ -407,7 +414,7 @@ describe("a finance application from another dealership is refused when the draf
     const saleId = await draftCarrying(s, s.otherOrgId);
 
     await expect(
-      s.asUser.mutation(api.sales.completeDraft, { orgId: s.orgId, saleId })
+      s.asUser.mutation(api.sales.completeDraft, { idempotencyKey: "t-saleCompletionTenancyGuards.test-410-50", orgId: s.orgId, saleId })
     ).rejects.toThrow(/Finance application not found in this organization/i);
   });
 
@@ -421,7 +428,7 @@ describe("a finance application from another dealership is refused when the draf
     // not this org, and the sale must not complete against a document that is
     // no longer there.
     await expect(
-      s.asUser.mutation(api.sales.completeDraft, { orgId: s.orgId, saleId })
+      s.asUser.mutation(api.sales.completeDraft, { idempotencyKey: "t-saleCompletionTenancyGuards.test-424-50", orgId: s.orgId, saleId })
     ).rejects.toThrow(/Finance application not found in this organization/i);
   });
 });

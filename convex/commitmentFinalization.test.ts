@@ -429,7 +429,7 @@ async function quoteFor(seed: Seed, customerId: Id<"customers">, vehicles: Array
 }
 
 async function depositOn(seed: Seed, quoteId: Id<"quotes">, amount: number) {
-  return await seed.asUser.mutation(api.deposits.create, {
+  return await seed.asUser.mutation(api.deposits.create, { idempotencyKey: "t-commitmentFinalization.test-432-58",
     orgId: seed.orgId,
     quoteId,
     amount,
@@ -450,7 +450,7 @@ async function allocate(
 
 async function completeQuote(seed: Seed, quoteId: Id<"quotes">) {
   // Returns one sale id PER LINE ITEM, not a single id.
-  return (await seed.asUser.mutation(api.sales.completeFromQuote, {
+  return (await seed.asUser.mutation(api.sales.completeFromQuote, { idempotencyKey: "t-commitmentFinalization.test-453-67",
     orgId: seed.orgId,
     quoteId,
   })) as Array<Id<"sales">>;
@@ -467,7 +467,7 @@ async function directSale(
   vehicleId: Id<"vehicles">,
   customerId: Id<"customers">
 ) {
-  return (await seed.asUser.mutation(api.sales.create, {
+  return (await seed.asUser.mutation(api.sales.create, { idempotencyKey: "t-commitmentFinalization.test-470-56",
     orgId: seed.orgId,
     vehicleId,
     customerId,
@@ -519,7 +519,7 @@ async function releaseDeposit(
 ) {
   // THROUGH THE MANAGER. `releaseHeldDeposit` calls `assertDifferentActors`
   // against `deposit.createdBy`, and the deposit was created by `asUser`.
-  return await seed.asManager.mutation(api.deposits.release, {
+  return await seed.asManager.mutation(api.deposits.release, { idempotencyKey: "t-commitmentFinalization.test-522-62",
     orgId: seed.orgId,
     depositId,
     resolution,
@@ -565,7 +565,7 @@ async function rejectApplication(seed: Seed, applicationId: Id<"financeApplicati
 
 /** D7 — the finance application is voided. */
 async function cancelApplication(seed: Seed, applicationId: Id<"financeApplications">) {
-  return await seed.asManager.mutation(api.applications.cancelApplication, {
+  return await seed.asManager.mutation(api.applications.cancelApplication, { idempotencyKey: "t-commitmentFinalization.test-568-76",
     orgId: seed.orgId,
     applicationId,
     reason: "submitted against the wrong vehicle",
@@ -633,7 +633,7 @@ async function financedSale(seed: Seed, applicationId: Id<"financeApplications">
     method: "CASH" as const,
     expectedDate: Date.now() + 86_400_000,
   });
-  return (await seed.asUser.mutation(api.applications.finalizeDeal, {
+  return (await seed.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: "t-commitmentFinalization.test-636-69",
     orgId: seed.orgId,
     applicationId,
   })) as Id<"sales">;
@@ -1309,7 +1309,7 @@ describe("P2-F M3 finalization barrier — CONSUME", () => {
       "precondition: a DRAFT is not a completion — the root is still open"
     ).toBe("OPEN");
 
-    await seed.asUser.mutation(api.sales.completeDraft, { orgId: seed.orgId, saleId: draftId });
+    await seed.asUser.mutation(api.sales.completeDraft, { idempotencyKey: "t-commitmentFinalization.test-1312-57", orgId: seed.orgId, saleId: draftId });
 
     expectTerminalRoot((await rootsOn(seed, v))[0], {
       status: "CONSUMED",
@@ -1365,7 +1365,7 @@ describe("P2-F M3 finalization barrier — CONSUME", () => {
     // ARCHIVED, never a held car. The authority's existing rule is the
     // consistent answer: no lineage on a held car means REFUSE.
     await expect(
-      seed.asUser.mutation(api.sales.create, {
+      seed.asUser.mutation(api.sales.create, { idempotencyKey: "t-commitmentFinalization.test-1368-46",
         orgId: seed.orgId,
         vehicleId: v,
         customerId: seed.customerB,
@@ -1404,7 +1404,7 @@ describe("P2-F M3 finalization barrier — CONSUME", () => {
     await expect(
       (async () => {
         const draftId = await createDraftFor(seed, rival, v, seed.customerB);
-        return await seed.asUser.mutation(api.sales.completeDraft, {
+        return await seed.asUser.mutation(api.sales.completeDraft, { idempotencyKey: "t-commitmentFinalization.test-1407-68",
           orgId: seed.orgId,
           saleId: draftId,
         });
@@ -1500,7 +1500,7 @@ describe("P2-F M3 finalization barrier — CONSUME", () => {
     // for a sequence and failed, the other constructed one. A failed search is
     // not a proof of absence.
     await expect(
-      seed.asUser.mutation(api.applications.finalizeDeal, {
+      seed.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: "t-commitmentFinalization.test-1503-59",
         orgId: seed.orgId,
         applicationId,
       }),
@@ -2701,7 +2701,7 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
         expiresAt: realNow + 60_000,
       });
       const quoteId = await quoteFor(seed, seed.customerA, [v]);
-      const depositId = await seed.asUser.mutation(api.deposits.create, {
+      const depositId = await seed.asUser.mutation(api.deposits.create, { idempotencyKey: "t-commitmentFinalization.test-2704-73",
         orgId: seed.orgId,
         quoteId,
         amount: 5_000,
@@ -2747,7 +2747,7 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
     // The deal adopts the reservation, so the quote genuinely owns the root it
     // is about to complete against. Without this the sale is refused by the
     // ACQUISITION boundary and the contract never reaches its subject.
-    await seed.asUser.mutation(api.deposits.create, {
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: "t-commitmentFinalization.test-2750-53",
       orgId: seed.orgId,
       quoteId,
       amount: 5_000,
@@ -2794,7 +2794,7 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
     expect(draftId, "a draft is NOT gated on the commitment authority").toBeTruthy();
 
     await expect(
-      seed.asUser.mutation(api.sales.completeDraft, { orgId: seed.orgId, saleId: draftId }),
+      seed.asUser.mutation(api.sales.completeDraft, { idempotencyKey: "t-commitmentFinalization.test-2797-53", orgId: seed.orgId, saleId: draftId }),
       "but completing it is"
     ).rejects.toThrow(COMMITMENT_MESSAGES.heldByAnotherDealSale);
 
@@ -2862,7 +2862,7 @@ describe("P2-T the tenant boundary", () => {
     // A real, completed sale — in the other dealership, about the other
     // dealership's car. Everything about it is legitimate except its tenant.
     const other = await secondTenant(seed, "t1");
-    const foreignSale = await other.asUser.mutation(api.sales.create, {
+    const foreignSale = await other.asUser.mutation(api.sales.create, { idempotencyKey: "t-commitmentFinalization.test-2865-71",
       orgId: other.orgId,
       vehicleId: other.vehicleId,
       customerId: other.customerId,
@@ -3029,7 +3029,7 @@ describe("P2-T the tenant boundary", () => {
     //     dealership's car on their own org. This is the dangerous shape: the
     //     actor is legitimate and only the vehicle is not theirs.
     await expect(
-      other.asUser.mutation(api.sales.create, {
+      other.asUser.mutation(api.sales.create, { idempotencyKey: "t-commitmentFinalization.test-3032-47",
         orgId: other.orgId,
         vehicleId: car,
         customerId: other.customerId,
@@ -3043,7 +3043,7 @@ describe("P2-T the tenant boundary", () => {
 
     // (b) The same actor reaching into THIS org directly.
     await expect(
-      other.asUser.mutation(api.sales.create, {
+      other.asUser.mutation(api.sales.create, { idempotencyKey: "t-commitmentFinalization.test-3046-47",
         orgId: seed.orgId,
         vehicleId: car,
         customerId: seed.customerA,

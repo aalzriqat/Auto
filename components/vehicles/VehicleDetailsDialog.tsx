@@ -50,6 +50,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import { getErrorMessage } from "@/lib/errors";
+import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 
 interface VehicleDetailsDialogProps {
   vehicle: Doc<"vehicles"> | null;
@@ -103,6 +104,7 @@ export function VehicleDetailsDialog({
       : "skip"
   );
   const releaseDeposit = useMutation(api.deposits.release);
+  const commandId = useCommandIdentity();
   const upsertLandedCosts = useMutation(api.vehicles.upsertLandedCosts);
   const createReservation = useMutation(api.vehicles.createReservation);
   const releaseReservation = useMutation(api.vehicles.releaseReservation);
@@ -219,21 +221,29 @@ export function VehicleDetailsDialog({
     if (!activeOrgId) return;
     setReleasingDepositId(depositId);
     try {
+      // SCRUM-57. This call used to pass NO key at all, because a key DERIVED
+      // from (deposit, resolution) made the SECOND genuine payout — the free
+      // part today, the rest when the cars it was held against fall away —
+      // match the first's stored command: the mutation returned without
+      // running, moved no money, and the operator was told the customer had
+      // been refunded.
+      //
+      // The identity here is minted PER INTENT rather than derived, and it is
+      // retired the moment this one succeeds, so the next genuine release of
+      // the same deposit mints a fresh one and cannot collide. What it adds
+      // over passing nothing is the retry direction, which the old comment's
+      // "the second is refused anyway" reasoning did not cover: a lost
+      // response re-sent by the client is now the SAME command rather than a
+      // second payout racing the balance check.
+      const intent = `release-deposit:${String(depositId)}:${resolution}`;
       await releaseDeposit({
         orgId: activeOrgId,
         depositId,
         resolution,
         refundMethod: resolution === "REFUNDED" ? (refundMethodByDeposit[depositId] ?? "CASH") : undefined,
-        // Deliberately no idempotency key. A row can now be released more than
-        // once — the free part today, the rest when the cars it was held
-        // against fall away — and a key derived from the deposit and the
-        // resolution made the SECOND genuine payout match the first's stored
-        // command: the mutation returned without running, moved no money, and
-        // the operator was told the customer had been refunded.
-        //
-        // A double submit is already safe without one: the two calls serialize,
-        // and the second recomputes the free balance as zero and is refused.
+        idempotencyKey: commandId.for(intent),
       });
+      commandId.retire(intent);
       toast.success(
         resolution === "REFUNDED"
           ? (t("DepositRefundedSuccess" as any) ?? "Deposit refunded")

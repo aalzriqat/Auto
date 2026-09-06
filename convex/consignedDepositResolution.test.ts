@@ -217,7 +217,7 @@ async function seed(
   if (instalments) {
     for (const amount of instalments) {
       depositIds.push(
-        await asUser.mutation(api.deposits.create, { orgId, quoteId, amount, method: "CASH" })
+        await asUser.mutation(api.deposits.create, { idempotencyKey: "t-consignedDepositResolution.test-220-52", orgId, quoteId, amount, method: "CASH" })
       );
     }
     depositId = depositIds[0]!;
@@ -288,7 +288,7 @@ async function completeAs(
   resolution?: { treatment: Treatment; reason?: string; refundMethod?: RefundMethod },
   extra: Record<string, unknown> = {}
 ) {
-  return await actor.mutation(api.sales.create, {
+  return await actor.mutation(api.sales.create, { idempotencyKey: "t-consignedDepositResolution.test-291-49",
     orgId: s.orgId,
     vehicleId: s.vehicleId,
     customerId: s.customerId,
@@ -311,7 +311,7 @@ async function completeWith(
   extra: Record<string, unknown> = {}
 ) {
   const { salePriceOverride, ...rest } = extra as { salePriceOverride?: number };
-  return await s.asUser.mutation(api.sales.create, {
+  return await s.asUser.mutation(api.sales.create, { idempotencyKey: "t-consignedDepositResolution.test-314-52",
     orgId: s.orgId,
     vehicleId: s.vehicleId,
     customerId: s.customerId,
@@ -699,7 +699,7 @@ describe("APPLY_TO_TRANSACTION_SETTLEMENT across the shapes a real deal takes", 
     // Refunding the whole row would take the second car's 400 with it as well
     // as paying back the 600 already spent.
     await expect(
-      s.asManager.mutation(api.deposits.release, {
+      s.asManager.mutation(api.deposits.release, { idempotencyKey: "t-consignedDepositResolution.test-702-50",
         orgId: s.orgId,
         depositId: s.depositId,
         resolution: "REFUNDED",
@@ -757,7 +757,7 @@ describe("a quote-wide treatment on a quote whose lines are not all consigned", 
       ],
     });
 
-    const saleIds = await s.asUser.mutation(api.sales.completeFromQuote, {
+    const saleIds = await s.asUser.mutation(api.sales.completeFromQuote, { idempotencyKey: "t-consignedDepositResolution.test-760-74",
       orgId: s.orgId,
       quoteId: s.quoteId,
       supplierSettlementRoute: "DIRECT_TO_SUPPLIER",

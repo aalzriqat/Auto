@@ -2523,7 +2523,7 @@ export const cancelApplication = mutation({
     orgId: v.id("organizations"),
     applicationId: v.id("financeApplications"),
     reason: v.optional(v.string()),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_FINANCE_APPLICATION]);
@@ -2533,6 +2533,7 @@ export const cancelApplication = mutation({
       {
         orgId: args.orgId,
         operation: "applications.cancelApplication",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: auth.user._id,
         fingerprint: JSON.stringify({ applicationId: args.applicationId, reason: args.reason }),
@@ -3258,7 +3259,7 @@ export const finalizeDeal = mutation({
         refundMethod: v.optional(depositMethodValidator),
       })
     ),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.FINALIZE_FINANCED_DEAL]);
@@ -3268,8 +3269,15 @@ export const finalizeDeal = mutation({
       {
         orgId: args.orgId,
         operation: "applications.finalizeDeal",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: auth.user._id,
+        // Which application is being finalized, and how any held deposit is
+        // treated as part of finalizing it.
+        fingerprint: JSON.stringify({
+          applicationId: args.applicationId,
+          depositResolution: args.depositResolution ?? null,
+        }),
       },
       async () => {
         const app = await ctx.db.get(args.applicationId);
@@ -3689,7 +3697,7 @@ export const confirmDisbursement = mutation({
     orgId: v.id("organizations"),
     applicationId: v.id("financeApplications"),
     disbursedAmountMinor: v.number(),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     // The expected-amount comparison further down is skipped whenever the quote
@@ -3703,6 +3711,7 @@ export const confirmDisbursement = mutation({
       {
         orgId: args.orgId,
         operation: "applications.confirmDisbursement",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
         fingerprint: JSON.stringify({
@@ -3946,7 +3955,7 @@ export const confirmSupplierDisbursement = mutation({
     reference: v.optional(v.string()),
     /** Defaults to now; set it when recording an advice that arrived earlier. */
     disbursedAt: v.optional(v.number()),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     assertValidMinorAmount(args.disbursedAmountMinor, "disbursed amount");
@@ -3971,6 +3980,7 @@ export const confirmSupplierDisbursement = mutation({
       {
         orgId: args.orgId,
         operation: "applications.confirmSupplierDisbursement",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
         // Every field that gets PERSISTED belongs here. `runWithIdempotency`
@@ -4272,7 +4282,7 @@ export const amendSupplierDisbursementAdvice = mutation({
      * someone making the discrepancy go away.
      */
     reason: v.string(),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     assertValidMinorAmount(args.disbursedAmountMinor, "disbursed amount");
@@ -4306,6 +4316,7 @@ export const amendSupplierDisbursementAdvice = mutation({
       {
         orgId: args.orgId,
         operation: "applications.amendSupplierDisbursementAdvice",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
         fingerprint: JSON.stringify({

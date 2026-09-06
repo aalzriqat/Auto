@@ -122,7 +122,7 @@ export const recordAdvance = mutation({
     date: v.optional(v.number()),
     method: v.optional(paymentMethodValidator),
     note: v.optional(v.string()),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     try {
@@ -147,6 +147,7 @@ export const recordAdvance = mutation({
         {
           orgId: args.orgId,
           operation: "payroll.recordAdvance",
+          economic: true,
           idempotencyKey: args.idempotencyKey,
           actorId: user._id,
           fingerprint: JSON.stringify({ userId: args.userId, amount: args.amount, date: args.date ?? null }),
@@ -206,7 +207,7 @@ export const recoverAdvance = mutation({
     advanceId: v.id("employeeAdvances"),
     method: v.optional(paymentMethodValidator),
     amount: v.optional(v.number()),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     try {
@@ -270,6 +271,7 @@ export const recoverAdvance = mutation({
         {
           orgId: args.orgId,
           operation: "payroll.recoverAdvance",
+          economic: true,
           idempotencyKey: args.idempotencyKey,
           actorId: user._id,
           fingerprint: JSON.stringify({ advanceId: args.advanceId, recoverMinor, method }),

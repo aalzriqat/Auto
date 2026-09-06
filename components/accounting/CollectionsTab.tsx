@@ -49,6 +49,7 @@ import { toast } from "@/components/ui/sonner";
 import { CashDrawerPanel } from "./collections/CashDrawerPanel";
 import { PaymentLinksPanel } from "./collections/PaymentLinksPanel";
 import { InstallmentCalendar } from "./collections/InstallmentCalendar";
+import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 
 type ReceivableRow = Doc<"receivables"> & {
   customerName: string;
@@ -161,6 +162,7 @@ export function CollectionsTab() {
   const clearCheque = useMutation(api.collections.clearCheque);
   const respondApproval = useMutation(api.collections.respondToApproval);
   const reviewReconciliation = useMutation(api.collections.reviewCashierReconciliation);
+  const commandId = useCommandIdentity();
 
   if (!activeOrgId) return null;
 
@@ -170,7 +172,15 @@ export function CollectionsTab() {
         await depositCheque({ orgId: activeOrgId!, chequeId: cheque._id });
         toast.success(t("CollectionToastChequeDeposited" as any));
       } else {
-        await clearCheque({ orgId: activeOrgId!, chequeId: cheque._id });
+        // Clearing a cheque moves money, so it carries an identity that is
+        // stable per cheque across retries and retired only once it lands.
+        const intent = `clear-cheque:${cheque._id}`;
+        await clearCheque({
+          orgId: activeOrgId!,
+          chequeId: cheque._id,
+          idempotencyKey: commandId.for(intent),
+        });
+        commandId.retire(intent);
         toast.success(t("CollectionToastChequeCleared" as any));
       }
     } catch (error) {
@@ -180,7 +190,16 @@ export function CollectionsTab() {
 
   async function decideApproval(row: ApprovalRow, status: "APPROVED" | "REJECTED") {
     try {
-      await respondApproval({ orgId: activeOrgId!, requestId: row._id, status });
+      // The decision is part of the intent: approving and then rejecting the
+      // same request are two different commands, not a retry of one.
+      const intent = `collection-approval:${row._id}:${status}`;
+      await respondApproval({
+        orgId: activeOrgId!,
+        requestId: row._id,
+        status,
+        idempotencyKey: commandId.for(intent),
+      });
+      commandId.retire(intent);
       toast.success(status === "APPROVED" ? t("CollectionToastRequestApproved" as any) : t("CollectionToastRequestRejected" as any));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));

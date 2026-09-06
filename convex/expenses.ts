@@ -334,7 +334,7 @@ export const create = mutation({
     isPrepaid: v.optional(v.boolean()),
     amortizationMonths: v.optional(v.number()),
     amortizationStartDate: v.optional(v.number()),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_EXPENSES]);
@@ -369,6 +369,7 @@ export const create = mutation({
       {
         orgId: args.orgId,
         operation: "expenses.create",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
         fingerprint: JSON.stringify({

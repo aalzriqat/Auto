@@ -26,6 +26,7 @@ import { getErrorMessage } from "@/lib/errors";
 import { ConfirmHandoverDialog } from "./cockpit/ConfirmHandoverDialog";
 import { RegisterExpectedPaymentDialog, type ExpectedPaymentMethod } from "./RegisterExpectedPaymentDialog";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
+import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 
 type DepositResolution = "REFUNDED" | "FORFEITED";
 type PendingDepositResolution = {
@@ -87,6 +88,7 @@ export function ApplicationDetailsDialog({
   const registerVehicleHandover = useMutation(api.applications.registerVehicleHandover);
   const registerExpectedPayment = useMutation(api.applications.registerExpectedPayment);
   const releaseDeposit = useMutation(api.deposits.release);
+  const commandId = useCommandIdentity();
   const updateDocStatus = useMutation(api.documents.updateDocumentStatus);
   const generateUploadUrl = useMutation(api.documents.generateUploadUrl);
   const saveDocumentFile = useMutation(api.documents.saveDocumentFile);
@@ -174,12 +176,17 @@ export function ApplicationDetailsDialog({
     if (!activeOrgId) return;
     setResolvingDepositId(depositId);
     try {
+      // Per-intent, and retired on success so a later genuine release of the
+      // same deposit is a new command rather than a replay of this one.
+      const intent = `release-deposit:${String(depositId)}:${resolution}`;
       await releaseDeposit({
         orgId: activeOrgId,
         depositId,
         resolution,
         refundMethod: resolution === "REFUNDED" ? refundMethod : undefined,
+        idempotencyKey: commandId.for(intent),
       });
+      commandId.retire(intent);
       toast.success(
         resolution === "REFUNDED"
           ? t("DepositRefundedSuccess")

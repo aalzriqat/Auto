@@ -269,7 +269,7 @@ export const create = mutation({
     providerAccountId: v.optional(v.string()),
     providerPayload: v.optional(v.any()),
     expiresAt: v.optional(v.number()),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -294,6 +294,7 @@ export const create = mutation({
       {
         orgId: args.orgId,
         operation: "paymentIntents.create",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
         fingerprint: JSON.stringify({
@@ -460,7 +461,7 @@ export const markSettled = mutation({
     intentId: v.id("paymentIntents"),
     externalId: v.optional(v.string()),
     providerPayload: v.optional(v.any()),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -470,6 +471,7 @@ export const markSettled = mutation({
       {
         orgId: args.orgId,
         operation: "paymentIntents.markSettled",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
         fingerprint: JSON.stringify({ intentId: args.intentId, externalId: args.externalId ?? null }),

@@ -153,7 +153,7 @@ describe("Sales Mutations", () => {
     });
 
     // Act: Create Sale
-    const saleId = await asAdmin.mutation(api.sales.create, {
+    const saleId = await asAdmin.mutation(api.sales.create, { idempotencyKey: "t-sales.test-156-61",
       orgId,
       vehicleId,
       customerId,
@@ -252,7 +252,7 @@ describe("Sales Mutations", () => {
       termMonths: 0,
     });
 
-    const saleId = await asAdmin.mutation(api.sales.create, {
+    const saleId = await asAdmin.mutation(api.sales.create, { idempotencyKey: "t-sales.test-255-61",
       orgId,
       vehicleId,
       customerId,
@@ -307,7 +307,7 @@ describe("Sales Mutations", () => {
     const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "draft_2");
 
     await expect(
-      asAdmin.mutation(api.sales.create, {
+      asAdmin.mutation(api.sales.create, { idempotencyKey: "t-sales.test-310-42",
         orgId,
         vehicleId,
         customerId,
@@ -352,7 +352,7 @@ describe("Sales Mutations", () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "locked_1");
 
-    const saleId = await asAdmin.mutation(api.sales.create, {
+    const saleId = await asAdmin.mutation(api.sales.create, { idempotencyKey: "t-sales.test-355-61",
       orgId,
       vehicleId,
       customerId,
@@ -405,7 +405,7 @@ describe("C3: automatic commission requires a recorded purchase cost", () => {
     // AUTO_MEMBER @ 10%, but the seeded vehicle has NO purchasePrice.
     await setAutoMemberMode(t, orgId, userId, 10);
 
-    const saleId = await asAdmin.mutation(api.sales.create, {
+    const saleId = await asAdmin.mutation(api.sales.create, { idempotencyKey: "t-sales.test-408-61",
       orgId,
       vehicleId,
       customerId,
@@ -428,7 +428,7 @@ describe("C3: automatic commission requires a recorded purchase cost", () => {
     await setAutoMemberMode(t, orgId, userId, 10);
     await t.run((ctx) => ctx.db.patch(vehicleId, { purchasePrice: 10000 }));
 
-    const saleId = await asAdmin.mutation(api.sales.create, {
+    const saleId = await asAdmin.mutation(api.sales.create, { idempotencyKey: "t-sales.test-431-61",
       orgId,
       vehicleId,
       customerId,
@@ -452,7 +452,7 @@ describe("C3: automatic commission requires a recorded purchase cost", () => {
     // price (15000 * 10% = 1500) — exactly what the guard exists to prevent.
     await t.run((ctx) => ctx.db.patch(vehicleId, { purchasePrice: 0 }));
 
-    const saleId = await asAdmin.mutation(api.sales.create, {
+    const saleId = await asAdmin.mutation(api.sales.create, { idempotencyKey: "t-sales.test-455-61",
       orgId,
       vehicleId,
       customerId,
@@ -474,7 +474,7 @@ describe("C3: automatic commission requires a recorded purchase cost", () => {
     // SOURCED vehicles carry their cost in sourceCost, not purchasePrice.
     await t.run((ctx) => ctx.db.patch(vehicleId, { sourceType: "SOURCED", sourceCost: 12000 }));
 
-    const saleId = await asAdmin.mutation(api.sales.create, {
+    const saleId = await asAdmin.mutation(api.sales.create, { idempotencyKey: "t-sales.test-477-61",
       orgId,
       vehicleId,
       customerId,
@@ -497,7 +497,7 @@ describe("C3: automatic commission requires a recorded purchase cost", () => {
     await setAutoMemberMode(t, orgId, userId, 10);
 
     // Completes with NO cost => no commission computed, sale flagged.
-    const saleId = await asAdmin.mutation(api.sales.create, {
+    const saleId = await asAdmin.mutation(api.sales.create, { idempotencyKey: "t-sales.test-500-61",
       orgId,
       vehicleId,
       customerId,
@@ -590,7 +590,7 @@ describe("C1/C2: MANUAL commission lifecycle", () => {
     const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "manual_edit");
     await setManualMode(t, orgId);
 
-    const saleId = await asAdmin.mutation(api.sales.create, {
+    const saleId = await asAdmin.mutation(api.sales.create, { idempotencyKey: "t-sales.test-593-61",
       orgId,
       vehicleId,
       customerId,
@@ -612,7 +612,7 @@ describe("C1/C2: MANUAL commission lifecycle", () => {
     const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "manual_pay");
     await setManualMode(t, orgId);
 
-    const saleId = await asAdmin.mutation(api.sales.create, {
+    const saleId = await asAdmin.mutation(api.sales.create, { idempotencyKey: "t-sales.test-615-61",
       orgId,
       vehicleId,
       customerId,
@@ -623,7 +623,7 @@ describe("C1/C2: MANUAL commission lifecycle", () => {
       financingType: "CASH",
     });
     await asAdmin.mutation(api.sales.setCommissionAmount, { orgId, saleId, commissionAmount: 400 });
-    await asAdmin.mutation(api.sales.markCommissionPaid, { orgId, saleId, paymentMethod: "CASH" });
+    await asAdmin.mutation(api.sales.markCommissionPaid, { idempotencyKey: "t-sales.test-626-58", orgId, saleId, paymentMethod: "CASH" });
 
     // A COMMISSION_ACCRUED event must exist (posted or still queued) so the
     // payment clears a real payable instead of pushing it negative. Pre-fix the
@@ -663,7 +663,7 @@ describe("correcting a commission already in the ledger", () => {
       });
     });
 
-    const saleId = await asAdmin.mutation(api.sales.create, {
+    const saleId = await asAdmin.mutation(api.sales.create, { idempotencyKey: "t-sales.test-666-61",
       orgId,
       vehicleId,
       customerId,
@@ -808,7 +808,7 @@ describe("cancelled sales must not stay on the P&L", () => {
     const asManager = t.withIdentity({ subject: "user_plcancel_mgr", clerkId: "user_plcancel_mgr" });
 
     const saleDate = Date.now();
-    const saleId = await asAdmin.mutation(api.sales.create, {
+    const saleId = await asAdmin.mutation(api.sales.create, { idempotencyKey: "t-sales.test-811-61",
       orgId,
       vehicleId,
       customerId,

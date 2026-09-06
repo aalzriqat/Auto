@@ -876,7 +876,7 @@ describe("inventory intelligence", () => {
     // and names it. Without that proof the authority correctly refuses — a
     // second, unrelated deal on a held vehicle is exactly what it exists to stop,
     // and the same customer is not evidence of the same deal.
-    await asUser.mutation(api.deposits.create, {
+    await asUser.mutation(api.deposits.create, { idempotencyKey: "t-vehicles.test-879-48",
       orgId,
       quoteId,
       amount: 500,
