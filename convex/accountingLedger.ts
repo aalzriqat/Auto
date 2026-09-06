@@ -182,11 +182,13 @@ export const post = internalMutation({
 // (retained credit, refund, cheque return) is never a consequence the generic
 // door can reason about.
 //
-// SCRUM-249 guards the reserved `occr…` key NAMESPACE inside the engine. That
-// answers "may this key be used here", a different question from "may this
-// caller reverse this at all", which is why the refusal below is deliberately
-// blind to `idempotencyKey`: the exact derived reserved key must be refused for
-// the same reason an invented one is. Authority is not a spelling.
+// The refusal below is deliberately blind to `idempotencyKey`. SCRUM-249 — a
+// separate branch, not an ancestor of this one — adds a reserved `occr…`
+// key-namespace guard inside the engine; no such guard exists here, and this
+// change does not need one. That guard would answer "may this key be used
+// here", a different question from "may this caller reverse this at all". So
+// the exact derived reserved key is refused for the same reason an invented one
+// is: authority is not a spelling, and the two guards never overlap.
 //
 // The refusal is at the WRAPPER, not in `reverseAccountingEvent`, because the
 // engine is the shared seam legitimate domain code reverses through —

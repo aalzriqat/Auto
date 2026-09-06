@@ -10,18 +10,21 @@
  * certified direct-collection receipt — the row that says a customer's money
  * arrived — using nothing but a reversal key of their own choosing.
  *
- * SCRUM-249 protects the reserved `occr…` key NAMESPACE. That is a different
- * question. §2 below makes the distinction concrete: the exact derived reserved
- * key must be refused for the same reason an arbitrary operator-invented key
- * is. If key spelling changed the answer, the control would be a spelling check
- * rather than an authority boundary.
+ * ⚠️ THERE IS NO KEY GUARD AT THIS BASE, AND §2 DOES NOT DEPEND ON ONE.
+ * SCRUM-249 — a separate branch that is NOT an ancestor of this one — adds a
+ * reserved `occr…` key-namespace guard inside the engine. `reversals.ts` here
+ * contains no such guard, and an earlier revision of this comment asserted
+ * otherwise in the present tense. §2's point stands either way and is in fact
+ * cleaner without it: the exact derived reserved key must be refused for the
+ * same reason an arbitrary operator-invented key is. If key spelling changed
+ * the answer, this would be a spelling check rather than an authority boundary.
  *
  * What this ticket deliberately does NOT touch is the shared engine itself.
  * Legitimate domain code calls `reverseAccountingEvent` directly — SCRUM-130's
  * cheque-return seam in `collections.ts` is the one that matters — so §4 pins
- * that seam as a structural negative control. If a future change closes the
- * receipt door inside the engine instead of at the wrapper, §4 goes red and
- * says so, rather than SCRUM-130 silently losing its reversal authority.
+ * the engine's receipt-reversal CAPABILITY as a negative control. If a future
+ * change closes the receipt door inside the engine instead of at the wrapper,
+ * §4 goes red and says so, rather than SCRUM-130 silently losing its authority.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
@@ -58,8 +61,24 @@ function receiptPayload(paymentId: string, customerId: string, amountMinor: numb
   };
 }
 
-async function seedPostableOrg(suffix: string) {
-  const t = convexTestWithComponents(schema, MODULE_GLOB);
+/**
+ * ⚠️ `harness` IS NOT OPTIONAL POLISH — A CROSS-TENANT TEST MUST PASS IT.
+ *
+ * Each `convexTestWithComponents` call is an independent in-memory database
+ * that hands out the SAME deterministic id sequence. Building a "foreign" org
+ * from a second harness therefore produces an id that either resolves to
+ * nothing in the caller's database, or resolves to an unrelated row that
+ * happens to sit at the same counter position. Either way the tenancy branch is
+ * never reached and the test silently degrades into the missing-row case.
+ *
+ * This repo already paid for that lesson once — see the warning above
+ * "another org's retained credit is not reachable" in
+ * `accountingReceiptMovement.test.ts`. GR6 repeated it, and the Codex seat
+ * caught it. Passing one harness to both orgs is what makes the foreign row
+ * genuinely present.
+ */
+async function seedPostableOrg(suffix: string, harness?: TestHarness) {
+  const t = harness ?? convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = (await t.run((ctx) =>
     ctx.db.insert("organizations", { name: `Reversal ${suffix}`, createdAt: Date.now() })
   )) as Id<"organizations">;
@@ -130,8 +149,8 @@ async function seedCollectionPayment(
  * look-alike row would exercise the guard's comparison while proving nothing
  * about the occurrence the guard exists to protect.
  */
-async function postCertifiedReceipt(suffix: string) {
-  const seeded = await seedPostableOrg(suffix);
+async function postCertifiedReceipt(suffix: string, harness?: TestHarness) {
+  const seeded = await seedPostableOrg(suffix, harness);
   const { t, orgId, userId, customerId } = seeded;
   const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
   const identity = directCollectionReceipt({ orgId, paymentId });
@@ -160,12 +179,26 @@ async function postCertifiedReceipt(suffix: string) {
 }
 
 /**
- * The whole economic footprint a reversal would leave, in one value.
+ * Everything a reversal would COMMIT, in one value.
  *
- * The owner-proxy floor is explicit that atomicity must not be inferred from
- * the thrown error: a mutation that threw after writing, or a guard placed
- * after the first effect, both still throw. So the refusal tests compare this
- * snapshot across the refused call instead of trusting the exception.
+ * ⚠️ WHAT THIS DOES AND DOES NOT PROVE — an earlier revision of this comment
+ * overclaimed, and the Codex seat disproved it with a mutant I then reproduced.
+ * Comparing this snapshot across the refused call proves the refused call
+ * commits nothing. It does **not** prove the refusal happens before the engine
+ * is entered: Convex rolls an uncaught throw's writes back, so relocating the
+ * guard to AFTER `reverseAccountingEvent` leaves this comparison — and all
+ * eight tests — green. That mutant (M5) survives this helper entirely.
+ *
+ * Ordering is therefore proved separately and behaviorally, by §7/GR9, which
+ * puts the receipt in a state the ENGINE would itself refuse and checks which
+ * refusal wins. Keep both: this one pins "no committed effect", GR9 pins
+ * "before the engine".
+ *
+ * The audit tables are in here because `reverseAccountingEvent` writes a
+ * `REVERSE_EVENT` row to `financialAuditLog` (`reversals.ts`, via
+ * `auditLog`), and `requireTenantAuth` writes `adminAuditLog` under an
+ * impersonation session before this guard runs. A "whole footprint" that
+ * omitted them was not whole.
  */
 async function economicFootprint(t: TestHarness, orgId: Id<"organizations">) {
   return await t.run(async (ctx) => {
@@ -176,7 +209,11 @@ async function economicFootprint(t: TestHarness, orgId: Id<"organizations">) {
     const lines = await ctx.db.query("journalLines").collect();
     const pending = await ctx.db.query("pendingAccountingEvents").collect();
     const snapshots = await ctx.db.query("accountBalanceSnapshots").collect();
+    const financialAudit = await ctx.db.query("financialAuditLog").collect();
+    const adminAudit = await ctx.db.query("adminAuditLog").collect();
     return {
+      financialAuditCount: financialAudit.filter((a) => a.orgId === orgId).length,
+      adminAuditCount: adminAudit.length,
       events: events.map((e) => ({
         id: e._id, status: e.status, reversedByEventId: e.reversedByEventId ?? null,
       })),
@@ -216,9 +253,9 @@ describe("SCRUM-254 §1 — the generic wrapper cannot reverse a certified recei
         originalEventId: receipt._id,
         reversalDate: Date.now(),
         reason: "operator decided to unwind this receipt",
-        // Deliberately outside the reserved `occr…` namespace: SCRUM-249's key
-        // guard has nothing to say about this string, so anything that refuses
-        // it is refusing on authority.
+        // Deliberately outside the reserved `occr…` namespace, so that even
+        // once SCRUM-249's engine key guard exists it would have nothing to say
+        // about this string. Anything that refuses it is refusing on authority.
         idempotencyKey: "operator_adhoc_reversal_gr1",
       })
     ).rejects.toThrow(/certified receipt/i);
@@ -232,6 +269,11 @@ describe("SCRUM-254 §1 — the generic wrapper cannot reverse a certified recei
     expect(after.entryCount).toBe(1);
     expect(after.entries[0].status).toBe("POSTED");
     expect(after.pendingCount).toBe(0);
+    // No REVERSE_EVENT audit row was committed. `reverseAccountingEvent` writes
+    // one on every successful reversal, so this dimension moves when the guard
+    // is removed rather than sitting inert.
+    expect(after.financialAuditCount).toBe(before.financialAuditCount);
+    expect(after.adminAuditCount).toBe(before.adminAuditCount);
   });
 });
 
@@ -300,13 +342,20 @@ describe("SCRUM-254 §3 — supported non-receipt generic reversal is preserved"
   });
 });
 
-describe("SCRUM-254 §4 — the SCRUM-130 direct-engine seam is behaviorally unchanged", () => {
+describe("SCRUM-254 §4 — the shared engine keeps receipt-reversal capability", () => {
   test("GR4 — reverseAccountingEvent called directly on a certified receipt still reverses", async () => {
     const { t, orgId, userId, receipt } = await postCertifiedReceipt("gr4");
 
-    // This is the shape `collections.ts`'s cheque-return path uses: the shared
-    // engine, directly, with its own domain-built key. SCRUM-254 closes the
-    // generic wrapper and must leave this exactly where it found it.
+    // ⚠️ SCOPE OF THIS CONTROL, STATED EXACTLY. This calls the shared engine
+    // directly with a domain-built key, in the shape `collections.ts`'s
+    // cheque-return path uses. It therefore proves the ENGINE still has the
+    // capability SCRUM-130 depends on, and it goes red if a future change moves
+    // the receipt denylist out of the wrapper and into the engine.
+    //
+    // It is NOT a `returnClearedCheque` lifecycle test and must not be cited as
+    // one — the Codex seat was right that the earlier heading overstated it.
+    // The real cheque-return behavior is covered by `collections.test.ts` and
+    // `accountingPhase9.test.ts`, which this ticket does not touch.
     const outcome = await t.run(async (ctx) =>
       reverseAccountingEvent(ctx, {
         orgId,
@@ -341,37 +390,90 @@ describe("SCRUM-254 §5 — tenancy and existence answers are unchanged, and lea
     ).rejects.toThrow(/Accounting event not found in this organization/i);
   });
 
-  test("GR6 — a certified receipt in ANOTHER org is not-found, and is not disclosed as a receipt", async () => {
-    // The caller's own org, where they legitimately hold MANAGE_FINANCE.
-    const home = await seedPostableOrg("gr6home");
-    // A foreign tenant holding a certified receipt the caller must not learn about.
-    const foreign = await postCertifiedReceipt("gr6foreign");
+  test("GR6 — foreign receipt, foreign non-receipt and missing id are one indistinguishable answer", async () => {
+    // ONE harness, so the foreign rows genuinely exist in the database the
+    // caller queries. See the warning on `seedPostableOrg`: the previous
+    // revision of this test used two harnesses, the foreign id resolved to
+    // nothing in the caller's database, and it silently re-tested GR5's
+    // missing-row branch while claiming to test tenancy.
+    const t = convexTestWithComponents(schema, MODULE_GLOB);
 
-    let message = "";
-    await expect(
-      home.asOperator
-        .mutation(internal.accountingLedger.reverse, {
+    // The caller's own org, where they legitimately hold MANAGE_FINANCE.
+    const home = await seedPostableOrg("gr6home", t);
+    // A foreign tenant holding a certified receipt the caller must not learn about.
+    const foreign = await postCertifiedReceipt("gr6foreign", t);
+
+    // A foreign NON-receipt, so the oracle has all three arms.
+    const foreignDeposit = await foreign.asOperator.mutation(internal.accountingLedger.post, {
+      orgId: foreign.orgId,
+      eventType: "DEPOSIT_RECEIVED",
+      sourceType: "deposits",
+      sourceId: "dep_gr6",
+      eventVersion: 1,
+      accountingDate: Date.now(),
+      occurredAt: Date.now(),
+      currency: "USD",
+      idempotencyKey: "dep_gr6_post",
+      payload: {
+        depositId: "dep_gr6", amountMinor: 1000, currency: "USD",
+        paymentMethod: "CASH", customerId: foreign.customerId.toString(),
+      },
+    });
+
+    // A well-formed id that resolves to nothing, in the SAME database.
+    const missingId = (await t.run(async (ctx) => {
+      const { _id: _ignoredId, _creationTime: _ignoredCreated, ...fields } = foreign.receipt;
+      const id = await ctx.db.insert("accountingEvents", {
+        ...fields,
+        sourceId: "doomed_gr6",
+        idempotencyKey: "doomed_gr6_key",
+      });
+      await ctx.db.delete(id);
+      return id;
+    })) as Id<"accountingEvents">;
+
+    // ⚠️ LIVENESS FIRST — without this the whole test can decay back into GR5.
+    // Both foreign rows must actually be present in the caller's database, and
+    // the missing one must actually be absent.
+    expect(await t.run((ctx) => ctx.db.get(foreign.receipt._id))).not.toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(foreignDeposit.eventId!))).not.toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(missingId))).toBeNull();
+
+    async function messageFor(originalEventId: Id<"accountingEvents">, key: string) {
+      try {
+        await home.asOperator.mutation(internal.accountingLedger.reverse, {
           orgId: home.orgId,
-          originalEventId: foreign.receipt._id,
+          originalEventId,
           reversalDate: Date.now(),
           reason: "cross-tenant probe",
-          idempotencyKey: "cross_org_gr6",
-        })
-        .catch((error: unknown) => {
-          message = error instanceof Error ? error.message : String(error);
-          throw error;
-        })
-    ).rejects.toThrow(/Accounting event not found in this organization/i);
+          idempotencyKey: key,
+        });
+        return "NO REFUSAL";
+      } catch (error: unknown) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    }
 
-    // The refusal must not classify a row whose tenancy the caller has not
-    // established. "Not yours" is the whole answer they are entitled to.
-    expect(message).not.toMatch(/certified receipt/i);
-    expect(message).not.toMatch(new RegExp(RECEIPT_EVENT_TYPE, "i"));
-    expect(message).not.toMatch(new RegExp(RECEIPT_SOURCE_TYPE, "i"));
+    const foreignReceiptMsg = await messageFor(foreign.receipt._id, "cross_org_receipt_gr6");
+    const foreignDepositMsg = await messageFor(foreignDeposit.eventId!, "cross_org_deposit_gr6");
+    const missingMsg = await messageFor(missingId, "cross_org_missing_gr6");
 
-    // And the foreign receipt is untouched.
-    const foreignRow = await foreign.t.run((ctx) => ctx.db.get(foreign.receipt._id));
-    expect(foreignRow?.status).toBe("POSTED");
+    // All three are the engine's precise not-found answer...
+    for (const m of [foreignReceiptMsg, foreignDepositMsg, missingMsg]) {
+      expect(m).toMatch(/Accounting event not found in this organization/i);
+      // ...and none classifies a row whose tenancy the caller never established.
+      expect(m).not.toMatch(/certified receipt/i);
+      expect(m).not.toMatch(new RegExp(RECEIPT_EVENT_TYPE, "i"));
+      expect(m).not.toMatch(new RegExp(RECEIPT_SOURCE_TYPE, "i"));
+    }
+    // Indistinguishable from each other, so the error is no oracle: a caller
+    // cannot learn whether a foreign id is a receipt, a non-receipt, or nothing.
+    expect(foreignReceiptMsg).toBe(foreignDepositMsg);
+    expect(foreignDepositMsg).toBe(missingMsg);
+
+    // And neither foreign row was touched.
+    expect((await t.run((ctx) => ctx.db.get(foreign.receipt._id)))?.status).toBe("POSTED");
+    expect((await t.run((ctx) => ctx.db.get(foreignDeposit.eventId!)))?.status).toBe("POSTED");
   });
 });
 
@@ -460,5 +562,54 @@ describe("SCRUM-254 §6 — both columns of the certified tuple discriminate", (
 
     expect(result.alreadyReversed).toBe(false);
     expect((await t.run((ctx) => ctx.db.get(posted.eventId!)))?.status).toBe("REVERSED");
+  });
+});
+
+/**
+ * §7 — the refusal happens BEFORE the engine is entered, proved behaviorally.
+ *
+ * This section exists because the Codex seat disproved a claim I had made, and
+ * I reproduced the disproof before accepting it. `economicFootprint`'s
+ * before/after comparison proves the refused call COMMITS nothing — but Convex
+ * rolls an uncaught throw's writes back, so a mutant that relocates the guard to
+ * AFTER `reverseAccountingEvent` still commits nothing and still throws the same
+ * error. That mutant (M5) survives every other test in this file.
+ *
+ * The discriminator is a certified receipt in a state the ENGINE would itself
+ * refuse. `reverseAccountingEvent` rejects a non-POSTED original with
+ * `Cannot reverse an event with status "..."`. So the two placements answer
+ * differently, and the answer names which code ran first:
+ *
+ *   guard before the engine  ->  the authority refusal wins
+ *   guard after  the engine  ->  the engine's status error wins  (M5, killed here)
+ *
+ * No AST, no source-order matching, no coupling to how the handler is written —
+ * just the observable consequence of ordering.
+ */
+describe("SCRUM-254 §7 — the authority refusal precedes the engine, not merely its writes", () => {
+  test("GR9 — a certified receipt the ENGINE would also refuse still fails on AUTHORITY first", async () => {
+    const { t, orgId, receipt, asOperator } = await postCertifiedReceipt("gr9");
+
+    // A state the engine rejects on its own, with a distinguishable message.
+    await t.run((ctx) => ctx.db.patch(receipt._id, { status: "FAILED" }));
+
+    let message = "";
+    try {
+      await asOperator.mutation(internal.accountingLedger.reverse, {
+        orgId,
+        originalEventId: receipt._id,
+        reversalDate: Date.now(),
+        reason: "ordering proof",
+        idempotencyKey: "gr9_ordering",
+      });
+      message = "NO REFUSAL";
+    } catch (error: unknown) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    // Authority is decided before the engine gets an opinion about status.
+    expect(message).toMatch(/certified receipt/i);
+    // And explicitly NOT the engine's answer — this is the assertion M5 fails.
+    expect(message).not.toMatch(/Cannot reverse an event with status/i);
   });
 });
