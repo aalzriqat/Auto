@@ -26,7 +26,17 @@ module.exports = {
   ...pkg.jest,
   rootDir: __dirname,
   collectCoverage: true,
-  collectCoverageFrom: ["src/**/*.{ts,tsx}", "!src/**/*.test.{ts,tsx}"],
+  // `app/**` mirrors the normal mobile config: those are the Expo route files.
+  // Leaving them out made this config NARROWER than the one it stands in for,
+  // which is the same allowlist-drift defect it exists to remove — and Sonar
+  // does index them as main code, because `sonar.coverage.exclusions` anchors
+  // `app/**` at the repository root, which `apps/mobile/app/**` does not match.
+  collectCoverageFrom: [
+    "app/**/*.tsx",
+    "!app/**/*.test.tsx",
+    "src/**/*.{ts,tsx}",
+    "!src/**/*.test.{ts,tsx}",
+  ],
   coverageThreshold: undefined,
   coverageDirectory: "coverage",
   coverageReporters: [["lcovonly", { projectRoot: "../.." }], "text-summary"],
