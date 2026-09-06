@@ -204,7 +204,7 @@ describe("Dealer fees post to the GL", () => {
       orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
     });
 
-    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-207-61",
+    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 15000, dealerFees: 300, saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
     });
@@ -228,7 +228,7 @@ describe("Dealer fees post to the GL", () => {
     const vehicleId = await asOwner.mutation(api.vehicles.create, {
       orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
     });
-    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-231-61",
+    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 15000, saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
     });
@@ -246,7 +246,7 @@ describe("A cancelled sale's receivable stops counting as AR — but only from i
       orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
     });
     const saleDate = Date.UTC(2025, 3, 1);
-    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-249-61",
+    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 15000, saleDate, status: "COMPLETED",
     });
@@ -281,7 +281,7 @@ describe("A cancelled sale's receivable stops counting as AR — but only from i
     const vehicleId = await asOwner.mutation(api.vehicles.create, {
       orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
     });
-    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-284-61",
+    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 15000, saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
     });
@@ -331,7 +331,7 @@ describe("Trade-in vehicles net against the sale's AR", () => {
       orgId, ...baseVehicle, vin: "TRD3N9AN0000001AX", status: "AVAILABLE",
     });
 
-    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-334-61",
+    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 15000, tradeInVehicleId, tradeInValue: 4000,
       saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
@@ -367,7 +367,7 @@ describe("Trade-in vehicles net against the sale's AR", () => {
     });
 
     await expect(
-      asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-370-42",
+      asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
         orgId, vehicleId, customerId, salespersonId: userId,
         salePrice: 15000, tradeInVehicleId, tradeInValue: 4000,
         saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
@@ -382,7 +382,7 @@ describe("Trade-in vehicles net against the sale's AR", () => {
     });
 
     await expect(
-      asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-385-42",
+      asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
         orgId, vehicleId, customerId, salespersonId: userId,
         salePrice: 15000, tradeInVehicleId: vehicleId, tradeInValue: 4000,
         saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
@@ -403,7 +403,7 @@ describe("Trade-in vehicles net against the sale's AR", () => {
     await t.run((ctx) => ctx.db.patch(tradeInVehicleId, { status: "SOLD" }));
 
     await expect(
-      asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-406-42",
+      asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
         orgId, vehicleId, customerId, salespersonId: userId,
         salePrice: 15000, tradeInVehicleId, tradeInValue: 4000,
         saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
@@ -422,7 +422,7 @@ describe("Trade-in vehicles net against the sale's AR", () => {
     });
 
     await expect(
-      asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-425-42",
+      asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
         orgId, vehicleId, customerId, salespersonId: userId,
         salePrice: 15000, tradeInVehicleId, tradeInValue: 4000,
         saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
@@ -439,7 +439,7 @@ describe("Trade-in vehicles net against the sale's AR", () => {
       orgId, ...baseVehicle, vin: "TRD3N9AN0000005AX", status: "AVAILABLE",
     });
 
-    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-442-61",
+    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 15000, tradeInVehicleId, tradeInValue: 4000,
       saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
@@ -496,7 +496,7 @@ describe("Trade-in vehicles net against the sale's AR", () => {
     const asApprover = await addCancellationApprover(t, orgId, "ti_reuse");
 
     // First trade-in: sell vehicleA, trade in reusedVehicleId, then cancel.
-    const saleA = await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-499-60",
+    const saleA = await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId: vehicleA, customerId, salespersonId: userId,
       salePrice: 15000, tradeInVehicleId: reusedVehicleId, tradeInValue: 4000,
       saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
@@ -507,7 +507,7 @@ describe("Trade-in vehicles net against the sale's AR", () => {
 
     // Second trade-in: the same vehicle, now clear of a purchase price, is
     // traded in again on a different sale — then that one is cancelled too.
-    const saleB = await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-510-60",
+    const saleB = await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId: vehicleB, customerId, salespersonId: userId,
       salePrice: 18000, tradeInVehicleId: reusedVehicleId, tradeInValue: 5000,
       saleDate: Date.UTC(2025, 4, 1), status: "COMPLETED",
@@ -536,7 +536,7 @@ describe("Trade-in vehicles net against the sale's AR", () => {
       orgId, ...baseVehicle, vin: "TRD3N9AN0000009AX", purchasePrice: 7000, purchasePaymentMethod: "CASH",
     });
 
-    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-539-61",
+    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 15000, tradeInVehicleId: otherVehicleId, // no tradeInValue
       saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
@@ -560,7 +560,7 @@ describe("Trade-in vehicles net against the sale's AR", () => {
     const tradeInVehicleId = await asOwner.mutation(api.vehicles.create, {
       orgId, ...baseVehicle, vin: "TRD3N9AN0000010AX", status: "AVAILABLE",
     });
-    const saleA = await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-563-60",
+    const saleA = await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 15000, tradeInVehicleId, tradeInValue: 4000,
       saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
@@ -571,7 +571,7 @@ describe("Trade-in vehicles net against the sale's AR", () => {
     const otherCustomerId = await t.run((ctx) =>
       ctx.db.insert("customers", { orgId, firstName: "Sam", lastName: "Buyer", email: "sam@example.com" })
     );
-    await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-574-46",
+    await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId: tradeInVehicleId, customerId: otherCustomerId, salespersonId: userId,
       salePrice: 6000, saleDate: Date.UTC(2025, 4, 1), status: "COMPLETED",
     });
@@ -595,7 +595,7 @@ describe("Trade-in vehicles net against the sale's AR", () => {
     const tradeInVehicleId = await asOwner.mutation(api.vehicles.create, {
       orgId, ...baseVehicle, vin: "TRD3N9AN0000011AX", status: "AVAILABLE",
     });
-    const saleA = await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-598-60",
+    const saleA = await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 15000, tradeInVehicleId, tradeInValue: 4000,
       saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
@@ -620,7 +620,7 @@ describe("Trade-in vehicles net against the sale's AR", () => {
     const tradeInVehicleId = await asOwner.mutation(api.vehicles.create, {
       orgId, ...baseVehicle, vin: "TRD3N9AN0000012AX", status: "AVAILABLE",
     });
-    const saleA = await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-623-60",
+    const saleA = await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 15000, tradeInVehicleId, tradeInValue: 4000,
       saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
@@ -645,7 +645,7 @@ describe("Trade-in vehicles net against the sale's AR", () => {
     const tradeInVehicleId = await asOwner.mutation(api.vehicles.create, {
       orgId, ...baseVehicle, vin: "TRD3N9AN0000013AX", status: "AVAILABLE",
     });
-    const saleA = await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-648-60",
+    const saleA = await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 15000, tradeInVehicleId, tradeInValue: 4000,
       saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
@@ -677,7 +677,7 @@ describe("Resold warranty/GAP products defer the dealer's margin", () => {
       orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
     });
 
-    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-680-61",
+    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 15000,
       warrantySold: 500, warrantyCost: 300, warrantyTermMonths: 10,
@@ -721,7 +721,7 @@ describe("Resold warranty/GAP products defer the dealer's margin", () => {
     });
 
     await expect(
-      asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-724-42",
+      asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
         orgId, vehicleId, customerId, salespersonId: userId,
         salePrice: 15000, warrantySold: 500, warrantyCost: 300,
         saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
@@ -735,7 +735,7 @@ describe("Resold warranty/GAP products defer the dealer's margin", () => {
       orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
     });
 
-    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-738-61",
+    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 15000, warrantySold: 500, warrantyCost: 500, warrantyTermMonths: 12,
       saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
@@ -756,7 +756,7 @@ describe("Resold warranty/GAP products defer the dealer's margin", () => {
     const vehicleId = await asOwner.mutation(api.vehicles.create, {
       orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
     });
-    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-759-61",
+    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 15000, warrantySold: 500, warrantyCost: 300, warrantyTermMonths: 10,
       saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
@@ -776,7 +776,7 @@ describe("Resold warranty/GAP products defer the dealer's margin", () => {
     const vehicleId = await asOwner.mutation(api.vehicles.create, {
       orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
     });
-    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-779-61",
+    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 15000, warrantySold: 500, warrantyCost: 300, warrantyTermMonths: 10,
       saleDate: Date.now(), status: "COMPLETED",
@@ -814,7 +814,7 @@ describe("Resold warranty/GAP products defer the dealer's margin", () => {
     const vehicleId = await asOwner.mutation(api.vehicles.create, {
       orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
     });
-    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-817-61",
+    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 15000, warrantySold: 500, warrantyCost: 300, warrantyTermMonths: 10,
       saleDate: Date.now(), status: "COMPLETED",
@@ -865,7 +865,7 @@ describe("Monthly F&I commission recognition cron", () => {
     const vehicleId = await asOwner.mutation(api.vehicles.create, {
       orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
     });
-    await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-868-46",
+    await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 15000, warrantySold: 500, warrantyCost: 300, warrantyTermMonths: 10,
       saleDate: Date.now(), status: "COMPLETED",
@@ -911,7 +911,7 @@ describe("Monthly F&I commission recognition cron", () => {
     // Margin = 500-400 = 100 (minor units, JOD scale 3 -> 100 already in whole
     // units here since warrantySold/Cost are decimal JOD; use whole-JOD amounts
     // that convert to a minor-unit margin not evenly divisible by 3).
-    await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-914-46",
+    await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 15000, warrantySold: 0.100, warrantyCost: 0, warrantyTermMonths: 3,
       saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
@@ -948,7 +948,7 @@ describe("Monthly F&I commission recognition cron", () => {
     const vehicleId = await asOwner.mutation(api.vehicles.create, {
       orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
     });
-    await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-951-46",
+    await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 15000, warrantySold: 500, warrantyCost: 300, warrantyTermMonths: 10,
       saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
@@ -1157,7 +1157,7 @@ describe("Fix #13 — ON_ACCOUNT credit purchases for owned vehicles", () => {
       ctx.db.query("vehicleSupplierPayables").withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicleId)).first()
     );
 
-    await asOwner.mutation(api.sourcingPayables.markPaid, { idempotencyKey: "t-accountingVehicleInventory.test-1160-59",
+    await asOwner.mutation(api.sourcingPayables.markPaid, { idempotencyKey: crypto.randomUUID(),
       orgId, payableId: payable!._id, paymentMethod: "BANK_TRANSFER", taxAmount: 500,
     });
 
@@ -1358,11 +1358,11 @@ describe("Fix #3 — vehicle-prep expenses capitalize into inventory", () => {
       orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
     });
 
-    const repairExpenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: "t-accountingVehicleInventory.test-1361-73",
+    const repairExpenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, title: "Brake repair", amount: 400, date: Date.UTC(2025, 2, 1),
       category: "REPAIR", status: "PAID",
     });
-    const marketingExpenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: "t-accountingVehicleInventory.test-1365-76",
+    const marketingExpenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, title: "Listing boost", amount: 100, date: Date.UTC(2025, 2, 1),
       category: "MARKETING", status: "PAID",
     });
@@ -1390,7 +1390,7 @@ describe("Fix #3 — vehicle-prep expenses capitalize into inventory", () => {
     });
     await t.run((ctx) => ctx.db.patch(vehicleId, { status: "SOLD" }));
 
-    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: "t-accountingVehicleInventory.test-1393-67",
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, title: "Warranty repair after sale", amount: 150, date: Date.UTC(2025, 3, 1),
       category: "REPAIR", status: "PAID",
     });
@@ -1410,17 +1410,17 @@ describe("Fix #4 — one authoritative cost basis for COGS and commission", () =
     await asOwner.mutation(api.vehicles.upsertLandedCosts, {
       orgId, vehicleId, items: [{ label: "Transport", amount: 300, paymentMethod: "CASH" }],
     });
-    await asOwner.mutation(api.expenses.create, { idempotencyKey: "t-accountingVehicleInventory.test-1413-49",
+    await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, title: "Detailing", amount: 200, date: Date.UTC(2025, 2, 1),
       category: "DETAILING", status: "PAID",
     });
     // Non-capitalizable — must NOT be part of COGS.
-    await asOwner.mutation(api.expenses.create, { idempotencyKey: "t-accountingVehicleInventory.test-1418-49",
+    await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, title: "Listing ad", amount: 999, date: Date.UTC(2025, 2, 1),
       category: "MARKETING", status: "PAID",
     });
 
-    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-1423-61",
+    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 15000, saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
     });
@@ -1767,7 +1767,7 @@ describe("Review issue #3 — capitalized VAT-inclusive expenses exclude the rec
     const vehicleId = await asOwner.mutation(api.vehicles.create, {
       orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
     });
-    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: "t-accountingVehicleInventory.test-1770-67",
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, title: "Repair with VAT", amount: 116, taxAmount: 16,
       date: Date.UTC(2025, 2, 1), category: "REPAIR", status: "PAID",
     });
@@ -1785,7 +1785,7 @@ describe("Review issue #3 — capitalized VAT-inclusive expenses exclude the rec
     // The cost basis used for COGS/commission must match the 100 actually
     // capitalized, not the 116 gross invoice amount — otherwise the sale
     // would relieve inventory by more than was ever debited to it.
-    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-1788-61",
+    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 15000, saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
     });
@@ -1801,7 +1801,7 @@ describe("Review issue #4 — a post-sale repair can never retroactively join th
     const vehicleId = await asOwner.mutation(api.vehicles.create, {
       orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
     });
-    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-1804-61",
+    const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 15000, saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
     });
@@ -1811,7 +1811,7 @@ describe("Review issue #4 — a post-sale repair can never retroactively join th
     expect(saleLinesBefore.find((l) => l.accountId === cogs._id)?.debitMinor).toBe(10_000_000);
 
     // A warranty repair after the sale — correctly a period expense, not inventory.
-    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: "t-accountingVehicleInventory.test-1814-67",
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, title: "Warranty repair after sale", amount: 400,
       date: Date.UTC(2025, 4, 1), category: "REPAIR", status: "PAID",
     });
@@ -2106,7 +2106,7 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     expect(await glBalanceMinor(t, orgId, "CASH_ON_HAND")).toBe(-20_000_000);
 
     const sold = await vehicleByVin(t, orgId, "IMPORTGL0000001AA");
-    await asOwner.mutation(api.sales.create, { idempotencyKey: "t-accountingVehicleInventory.test-2109-46",
+    await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId: sold!._id, customerId, salespersonId: userId,
       salePrice: 15000, saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
     });

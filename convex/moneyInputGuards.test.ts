@@ -72,7 +72,7 @@ describe("money entry points reject NaN", () => {
     const ids = await seed(t, "pi");
 
     await expect(
-      ids.asOwner.mutation(api.paymentIntents.create, {
+      ids.asOwner.mutation(api.paymentIntents.create, { idempotencyKey: crypto.randomUUID(),
         orgId: ids.orgId,
         customerId: ids.customerId,
         provider: "stripe",

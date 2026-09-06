@@ -123,28 +123,26 @@ describe("Phase 0 financial safety controls", () => {
   test("duplicate_sale_create_with_same_key_reuses_sale_and_single_legacy_transaction", async () => {
     const { t, orgId, userId, vehicleId, customerId, asUser } = await seedPhase0Dealer();
 
-    const firstSaleId = await asUser.mutation(api.sales.create, {
+    // SCRUM-57: a faithful retry re-sends the SAME bytes. This used to build the
+    // payload twice, so `saleDate: Date.now()` differed by a millisecond between
+    // the two calls — which is now a materially different effective date and is
+    // refused rather than replayed. In production the date comes from a form
+    // field (`components/sales/SaleDialog.tsx`) and is stable across retries, so
+    // the faithful shape is the one worth pinning.
+    const command = {
       orgId,
       vehicleId,
       customerId,
       salespersonId: userId,
       salePrice: 42000,
       saleDate: Date.now(),
-      status: "COMPLETED",
-      financingType: "CASH",
+      status: "COMPLETED" as const,
+      financingType: "CASH" as const,
       idempotencyKey: "sale-submit-1",
-    });
-    const secondSaleId = await asUser.mutation(api.sales.create, {
-      orgId,
-      vehicleId,
-      customerId,
-      salespersonId: userId,
-      salePrice: 42000,
-      saleDate: Date.now(),
-      status: "COMPLETED",
-      financingType: "CASH",
-      idempotencyKey: "sale-submit-1",
-    });
+    };
+
+    const firstSaleId = await asUser.mutation(api.sales.create, command);
+    const secondSaleId = await asUser.mutation(api.sales.create, command);
 
     expect(secondSaleId).toBe(firstSaleId);
     await t.run(async (ctx) => {
@@ -249,22 +247,20 @@ describe("Phase 0 financial safety controls", () => {
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
 
-    const firstPaymentId = await asUser.mutation(api.collections.recordPayment, {
+    // A faithful retry: identical bytes, as a real client re-sends them. The
+    // payment date comes from a date input in `CollectionsTab` and is stable
+    // across attempts, so re-deriving it per call was an artefact of the test.
+    const command = {
       orgId,
       receivableId,
       amount: 300,
-      method: "CASH",
+      method: "CASH" as const,
       paymentDate: Date.now(),
       idempotencyKey: "payment-submit-1",
-    });
-    const secondPaymentId = await asUser.mutation(api.collections.recordPayment, {
-      orgId,
-      receivableId,
-      amount: 300,
-      method: "CASH",
-      paymentDate: Date.now(),
-      idempotencyKey: "payment-submit-1",
-    });
+    };
+
+    const firstPaymentId = await asUser.mutation(api.collections.recordPayment, command);
+    const secondPaymentId = await asUser.mutation(api.collections.recordPayment, command);
 
     expect(secondPaymentId).toBe(firstPaymentId);
     await t.run(async (ctx) => {
@@ -430,7 +426,7 @@ describe("Phase 0 financial safety controls", () => {
       amount: 500,
       dueDate: Date.now() + 86_400_000,
     });
-    await asUser.mutation(api.collections.recordPayment, { idempotencyKey: "t-accountingPhase0.test-433-58",
+    await asUser.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
       orgId,
       receivableId,
       amount: 500,
@@ -447,7 +443,7 @@ describe("Phase 0 financial safety controls", () => {
     });
 
     await expect(
-      asUser.mutation(api.collections.respondToApproval, { idempotencyKey: "t-accountingPhase0.test-450-58",
+      asUser.mutation(api.collections.respondToApproval, { idempotencyKey: crypto.randomUUID(),
         orgId,
         requestId,
         status: "APPROVED",
@@ -491,7 +487,7 @@ describe("Phase 0 financial safety controls", () => {
       dueDate: Date.now() + 86_400_000,
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
-    await asUser.mutation(api.collections.recordPayment, { idempotencyKey: "t-accountingPhase0.test-494-58",
+    await asUser.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
       orgId,
       receivableId,
       amount: 250,

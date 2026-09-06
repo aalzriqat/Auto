@@ -202,7 +202,7 @@ describe("payroll: employee advances (سلفة)", () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "adv");
 
-    const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, { idempotencyKey: "t-payroll.test-205-73",
+    const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, { idempotencyKey: crypto.randomUUID(),
       orgId,
       userId,
       amount: 20,
@@ -246,8 +246,8 @@ describe("payroll: employee advances (سلفة)", () => {
   test("recovering an advance marks it RECOVERED", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "rec");
-    const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, { idempotencyKey: "t-payroll.test-249-73", orgId, userId, amount: 50 });
-    await asAdmin.mutation(api.payroll.recoverAdvance, { idempotencyKey: "t-payroll.test-250-56", orgId, advanceId, method: "CASH" });
+    const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, { idempotencyKey: crypto.randomUUID(), orgId, userId, amount: 50 });
+    await asAdmin.mutation(api.payroll.recoverAdvance, { idempotencyKey: crypto.randomUUID(), orgId, advanceId, method: "CASH" });
     const advance = await t.run((ctx) => ctx.db.get(advanceId));
     expect(advance?.status).toBe("RECOVERED");
     expect(advance?.recoveredMinor).toBe(advance?.amountMinor);
@@ -261,7 +261,7 @@ describe("payroll: monthly run (Option A — commissions paid through payroll)",
 
     // Salary 500, an outstanding advance 50, and a completed unpaid commission 100.
     await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
-    await asAdmin.mutation(api.payroll.recordAdvance, { idempotencyKey: "t-payroll.test-264-55", orgId, userId, amount: 50 });
+    await asAdmin.mutation(api.payroll.recordAdvance, { idempotencyKey: crypto.randomUUID(), orgId, userId, amount: 50 });
     const saleId = await t.run(async (ctx) => {
       const vehicleId = await ctx.db.insert("vehicles", {
         orgId, vin: "VIN-RUN", make: "Kia", model: "K5", year: 2024, color: "White",
@@ -510,7 +510,7 @@ describe("payroll: monthly run (Option A — commissions paid through payroll)",
     // Draft captures salary 200 + commission 100.
     const runId = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
     // Commission is then paid DIRECTLY, outside payroll.
-    await asAdmin.mutation(api.sales.markCommissionPaid, { idempotencyKey: "t-payroll.test-513-58", orgId, saleId, paymentMethod: "CASH" });
+    await asAdmin.mutation(api.sales.markCommissionPaid, { idempotencyKey: crypto.randomUUID(), orgId, saleId, paymentMethod: "CASH" });
 
     await asAdmin.mutation(api.payroll.approveRun, { orgId, runId });
     await asAdmin.mutation(api.payroll.payRun, { orgId, runId, method: "BANK_TRANSFER" });
@@ -547,7 +547,7 @@ describe("payroll: monthly run (Option A — commissions paid through payroll)",
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "advstale");
 
     await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 200 });
-    const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, { idempotencyKey: "t-payroll.test-550-73", orgId, userId, amount: 50 });
+    const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, { idempotencyKey: crypto.randomUUID(), orgId, userId, amount: 50 });
 
     // Draft snapshots a 50 advance deduction (gross 200 → net 150).
     const runId = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
@@ -556,7 +556,7 @@ describe("payroll: monthly run (Option A — commissions paid through payroll)",
     expect(before[0].netMinor).toBe(150000);
 
     // The advance is recovered out-of-band before the run is paid.
-    await asAdmin.mutation(api.payroll.recoverAdvance, { idempotencyKey: "t-payroll.test-559-56", orgId, advanceId, method: "CASH" });
+    await asAdmin.mutation(api.payroll.recoverAdvance, { idempotencyKey: crypto.randomUUID(), orgId, advanceId, method: "CASH" });
 
     await asAdmin.mutation(api.payroll.approveRun, { orgId, runId });
     await asAdmin.mutation(api.payroll.payRun, { orgId, runId, method: "CASH" });
@@ -657,7 +657,7 @@ describe("payroll: production-hardening controls", () => {
   test("changing org currency is blocked once financial records exist", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "curlock");
-    await asAdmin.mutation(api.payroll.recordAdvance, { idempotencyKey: "t-payroll.test-660-55", orgId, userId, amount: 50 });
+    await asAdmin.mutation(api.payroll.recordAdvance, { idempotencyKey: crypto.randomUUID(), orgId, userId, amount: 50 });
     await expect(
       asAdmin.mutation(api.orgSettings.upsert, { orgId, currency: "USD" })
     ).rejects.toThrow(/currency cannot be changed/i);
@@ -684,7 +684,7 @@ describe("payroll: production-hardening controls", () => {
       asMgr.mutation(api.payroll.setCompensation, { orgId, userId: mgrUserId, monthlySalary: 500 })
     ).rejects.toThrow(/only the organization owner/i);
     await expect(
-      asMgr.mutation(api.payroll.recordAdvance, { idempotencyKey: "t-payroll.test-687-49", orgId, userId: mgrUserId, amount: 50 })
+      asMgr.mutation(api.payroll.recordAdvance, { idempotencyKey: crypto.randomUUID(), orgId, userId: mgrUserId, amount: 50 })
     ).rejects.toThrow(/only the organization owner/i);
 
     await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId: mgrUserId, monthlySalary: 500 });
@@ -699,7 +699,7 @@ describe("payroll: production-hardening controls", () => {
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "dblbook");
     await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
     await expect(
-      asAdmin.mutation(api.expenses.create, { idempotencyKey: "t-payroll.test-702-45",
+      asAdmin.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
         orgId, title: "July salaries", amount: 500, date: Date.now(), category: "SALARIES",
       })
     ).rejects.toThrow(/payroll module/i);
@@ -708,13 +708,13 @@ describe("payroll: production-hardening controls", () => {
   test("a partial advance repayment leaves the advance outstanding", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "partial");
-    const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, { idempotencyKey: "t-payroll.test-711-73", orgId, userId, amount: 100 });
-    await asAdmin.mutation(api.payroll.recoverAdvance, { idempotencyKey: "t-payroll.test-712-56", orgId, advanceId, method: "CASH", amount: 40 });
+    const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, { idempotencyKey: crypto.randomUUID(), orgId, userId, amount: 100 });
+    await asAdmin.mutation(api.payroll.recoverAdvance, { idempotencyKey: crypto.randomUUID(), orgId, advanceId, method: "CASH", amount: 40 });
     const adv = await t.run((ctx) => ctx.db.get(advanceId));
     expect(adv?.status).toBe("OUTSTANDING");
     expect(adv?.recoveredMinor).toBe(40000);
     await expect(
-      asAdmin.mutation(api.payroll.recoverAdvance, { idempotencyKey: "t-payroll.test-717-52", orgId, advanceId, amount: 100 })
+      asAdmin.mutation(api.payroll.recoverAdvance, { idempotencyKey: crypto.randomUUID(), orgId, advanceId, amount: 100 })
     ).rejects.toThrow(/exceeds the outstanding/i);
   });
 
@@ -757,10 +757,10 @@ describe("payroll: ledger-integrity (third audit)", () => {
   test("two partial recoveries each post their own GL entry (not silently deduped)", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "partgl");
-    const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, { idempotencyKey: "t-payroll.test-760-73", orgId, userId, amount: 100 });
+    const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, { idempotencyKey: crypto.randomUUID(), orgId, userId, amount: 100 });
 
-    await asAdmin.mutation(api.payroll.recoverAdvance, { idempotencyKey: "t-payroll.test-762-56", orgId, advanceId, method: "CASH", amount: 40 });
-    await asAdmin.mutation(api.payroll.recoverAdvance, { idempotencyKey: "t-payroll.test-763-56", orgId, advanceId, method: "CASH", amount: 60 });
+    await asAdmin.mutation(api.payroll.recoverAdvance, { idempotencyKey: crypto.randomUUID(), orgId, advanceId, method: "CASH", amount: 40 });
+    await asAdmin.mutation(api.payroll.recoverAdvance, { idempotencyKey: crypto.randomUUID(), orgId, advanceId, method: "CASH", amount: 60 });
 
     const adv = await t.run((ctx) => ctx.db.get(advanceId));
     expect(adv?.status).toBe("RECOVERED");
@@ -884,17 +884,17 @@ describe("payroll: fourth audit (cross-flow integrity)", () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, clerkId, asOwner, asClerk } = await seedClerkWithOwnAdvance(t, "selfrec");
     // Owner (an independent actor) issues the clerk an advance.
-    const advanceId = await asOwner.mutation(api.payroll.recordAdvance, { idempotencyKey: "t-payroll.test-887-73", orgId, userId: clerkId, amount: 100 });
+    const advanceId = await asOwner.mutation(api.payroll.recordAdvance, { idempotencyKey: crypto.randomUUID(), orgId, userId: clerkId, amount: 100 });
     // The clerk must not be able to clear the record of their own debt.
     await expect(
-      asClerk.mutation(api.payroll.recoverAdvance, { idempotencyKey: "t-payroll.test-890-52", orgId, advanceId, method: "CASH" })
+      asClerk.mutation(api.payroll.recoverAdvance, { idempotencyKey: crypto.randomUUID(), orgId, advanceId, method: "CASH" })
     ).rejects.toThrow(/only the organization owner/i);
   });
 
   test("#4 a duplicate partial repayment with the same key recovers only once", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "partidem");
-    const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, { idempotencyKey: "t-payroll.test-897-73", orgId, userId, amount: 100 });
+    const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, { idempotencyKey: crypto.randomUUID(), orgId, userId, amount: 100 });
 
     await asAdmin.mutation(api.payroll.recoverAdvance, { orgId, advanceId, method: "CASH", amount: 40, idempotencyKey: "r-1" });
     await asAdmin.mutation(api.payroll.recoverAdvance, { orgId, advanceId, method: "CASH", amount: 40, idempotencyKey: "r-1" });
@@ -1042,7 +1042,7 @@ describe("payroll: fourth audit (cross-flow integrity)", () => {
     // Only July is open. An advance dated in June (no open period) queues its
     // issuance; a July salary run will try to recover it while July can post.
     await openMonth(asAdmin, orgId, 2026, 6, 7); // July
-    await asAdmin.mutation(api.payroll.recordAdvance, { idempotencyKey: "t-payroll.test-1045-55", orgId, userId, amount: 50, date: Date.UTC(2026, 5, 15) });
+    await asAdmin.mutation(api.payroll.recordAdvance, { idempotencyKey: crypto.randomUUID(), orgId, userId, amount: 50, date: Date.UTC(2026, 5, 15) });
     await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
 
     const runId = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
@@ -1108,7 +1108,7 @@ describe("payroll: fifth audit (approval immutability + idempotency)", () => {
 
     // A 700 advance is issued AFTER approval — paying now would net only 300,
     // which nobody approved. Payment must instead require re-approval.
-    await asAdmin.mutation(api.payroll.recordAdvance, { idempotencyKey: "t-payroll.test-1111-55", orgId, userId, amount: 700 });
+    await asAdmin.mutation(api.payroll.recordAdvance, { idempotencyKey: crypto.randomUUID(), orgId, userId, amount: 700 });
     const res = await asAdmin.mutation(api.payroll.payRun, { orgId, runId, method: "CASH" });
     expect(res.status).toBe("NEEDS_REAPPROVAL");
     run = await t.run((ctx) => ctx.db.get(runId));
@@ -1129,7 +1129,7 @@ describe("payroll: fifth audit (approval immutability + idempotency)", () => {
   test("#4 a full-repayment retry with the same key returns the original recovery", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "fullidem");
-    const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, { idempotencyKey: "t-payroll.test-1132-73", orgId, userId, amount: 100 });
+    const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, { idempotencyKey: crypto.randomUUID(), orgId, userId, amount: 100 });
 
     // Full repayment, then an exact retry with the same key.
     const r1 = await asAdmin.mutation(api.payroll.recoverAdvance, { orgId, advanceId, method: "CASH", idempotencyKey: "full-1" });
