@@ -2000,10 +2000,28 @@ export const returnClearedCheque = mutation({
          * against one row because two applications of 300 and 500 happened is
          * the amount-wrong-one-level-up defect Codex found in r2 (`c17522`).
          *
-         * `status: "OVERDUE"` is the convention this handler already used for the
-         * cheque's own receivable and is preserved unchanged; whether a
-         * not-yet-due reopened debt should really read OVERDUE is a pre-existing
-         * question this ticket does not answer.
+         * ⚠️ STATUS IS DERIVED FROM THE DEBT'S OWN DUE DATE, never hardcoded.
+         *
+         * The handler used to write `status: "OVERDUE"` unconditionally. That
+         * was survivable while it touched only the cheque's OWN receivable;
+         * extending the same helper to every later application target would
+         * brand THIRD-PARTY debts — which merely received retained credit and
+         * may not be due for a month — as past due. A tender bouncing says
+         * nothing about another debt's calendar.
+         *
+         * It is not a cosmetic label. `collections.summary` counts a row whose
+         * status is OVERDUE into `overdueOutstanding` regardless of `dueDate`,
+         * and the reminder cron scans only OPEN / PARTIALLY_PAID / RESCHEDULED
+         * — while NOTHING transitions a row back out of OVERDUE. A wrongly
+         * branded debt therefore misstates the ageing and then receives neither
+         * a due-soon nor an overdue reminder, permanently.
+         *
+         * `nextStatus` is this file's own existing derivation, and the nearest
+         * precedent is exact: `reverseAllocationsForRefund` reopens a legacy
+         * debt after reversing an allocation and derives the status the same
+         * way. This also corrects the pre-existing hardcode on the cheque's own
+         * receivable rather than leaving two rules inside one helper.
+         * Codex CX-3, reproduced failing-first by C4.
          */
         const reopenLegacyReceivable = async (
           receivableId: Id<"receivables">,
@@ -2011,12 +2029,13 @@ export const returnClearedCheque = mutation({
         ) => {
           const receivable = await ctx.db.get(receivableId);
           if (!receivable || receivable.orgId !== args.orgId) return;
+          const outstandingAmount = roundMoney(
+            (receivable.outstandingAmount ?? 0) + fromMinorUnits(amountMinor, currency),
+            currency
+          );
           await ctx.db.patch(receivable._id, {
-            outstandingAmount: roundMoney(
-              (receivable.outstandingAmount ?? 0) + fromMinorUnits(amountMinor, currency),
-              currency
-            ),
-            status: "OVERDUE",
+            outstandingAmount,
+            status: nextStatus(outstandingAmount, receivable.dueDate, now),
             updatedAt: now,
           });
         };

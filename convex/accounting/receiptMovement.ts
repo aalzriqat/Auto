@@ -403,6 +403,33 @@ export async function recordRetainedApplication(
 export const CHEQUE_RETURN_UNSUPPORTED_REFUND_INTERACTION =
   "CHEQUE_RETURN_UNSUPPORTED_REFUND_INTERACTION";
 
+export const CHEQUE_RETURN_LINEAGE_TOO_LARGE = "CHEQUE_RETURN_LINEAGE_TOO_LARGE";
+
+/**
+ * The largest application lineage one return may unwind inside one mutation.
+ *
+ * ⚠️ THIS IS A REFUSAL BOUND, NOT A PROVEN CONVEX LIMIT. Nothing caps
+ * `applicationCount`: `applyRetainedCredit` accepts any positive amount, so a
+ * receipt can in principle carry arbitrarily many applications. The unwind is
+ * O(N) in reads, writes, allocation reversals and accounting reversals, all in
+ * a SINGLE mutation, so a large enough lineage would exceed Convex's
+ * transaction limits and roll back — identically on every retry, leaving a
+ * physically returned tender CLEARED with its receipt, debts, allocations,
+ * retained position and GL effects all live, and no error naming the cause.
+ *
+ * Refusing by name BEFORE the first write converts that silent unrecoverable
+ * rollback into a detectable, routable condition with zero economic delta. It
+ * does not make an over-large lineage returnable — that needs a resumable
+ * bounded workflow, which is a design SCRUM-130 does not own.
+ *
+ * 100 is chosen to sit far below the limit while being far above any realistic
+ * customer receipt (retained credit is applied to a handful of debts, not
+ * hundreds). ⚠️ The headroom is an ESTIMATE from the per-application op count,
+ * not a measured bound: `convex-test` models no transaction limits, so no test
+ * in this repo can establish where the real ceiling is. Codex CX-1.
+ */
+export const MAX_REVOCABLE_APPLICATIONS = 100;
+
 /** One later application, paired with the debt it must reopen and by how much. */
 export type ReceiptApplicationUnwind = {
   readonly application: Doc<"receiptApplications">;
@@ -492,12 +519,23 @@ export async function planReceiptRevocation(
     await requireActiveAllocation(allocationId);
   }
 
+  // `.take(cap + 1)`, never `.collect()`. An unbounded read is the first thing
+  // that fails on a lineage too large to unwind, and it fails as a limit error
+  // rather than as this refusal.
   const rows = await ctx.db
     .query("receiptApplications")
     .withIndex("by_org_movement", (q) =>
       q.eq("orgId", orgId).eq("receiptMovementId", movement._id)
     )
-    .collect();
+    .take(MAX_REVOCABLE_APPLICATIONS + 1);
+  if (rows.length > MAX_REVOCABLE_APPLICATIONS) {
+    throw new ConvexError(
+      `${CHEQUE_RETURN_LINEAGE_TOO_LARGE}: this receipt carries more than ` +
+        `${MAX_REVOCABLE_APPLICATIONS} retained-credit applications, which is more than one ` +
+        `return can unwind in a single transaction. Nothing has been changed. Returning this ` +
+        `tender needs a resumable bounded unwind, which this path does not implement.`
+    );
+  }
 
   const applications: ReceiptApplicationUnwind[] = [];
   let totalApplicationMinor = 0;

@@ -3825,13 +3825,26 @@ export default defineSchema({
     }),
     eventIdempotencyKey: v.string(),
     /**
-     * ⚠️ NOTHING WRITES `REVERSED` YET, AND THAT IS DECLARED RATHER THAN LEFT TO
-     * BE DISCOVERED. Unwinding an application belongs to SCRUM-130's
-     * cleared-cheque return, which needs exactly the lineage above to know which
-     * applications to reverse and how much AR each reopens. The member is inert
-     * today: no production writer sets it and no reader branches on it, so it
-     * cannot silently mean something. It is here so 130 consumes a stable shape
-     * instead of migrating one.
+     * `REVERSED` IS NOW WRITTEN — SCRUM-130 is the writer this member was
+     * reserved for, and SCRUM-218-C predicted it by name.
+     *
+     * ⚠️ THE PREVIOUS TEXT HERE IS RETRACTED, NOT MERELY OUTGROWN. It said
+     * "NOTHING WRITES `REVERSED` YET ... no production writer sets it and no
+     * reader branches on it, so it cannot silently mean something." That was
+     * true when 218-C shipped the shape and is FALSE now, and a comment
+     * asserting inertness is exactly the kind a later change trusts without
+     * re-reading the code.
+     *
+     * The writer is `retireReceiptRevocationState` in
+     * `accounting/receiptMovement.ts`, reached only from `returnClearedCheque`:
+     * a returned cleared cheque unwinds every live application of the retained
+     * credit it created. The reader is `planReceiptRevocation`, which SKIPS an
+     * already-REVERSED child so an exact replay of a return produces one effect
+     * rather than a second reversal.
+     *
+     * `applicationCount` on the position is deliberately NOT wound back when a
+     * child is reversed: it is the source of the next `sequence`, and a sequence
+     * is part of an application's accounting identity.
      */
     status: v.union(v.literal("APPLIED"), v.literal("REVERSED")),
     actorId: v.id("users"),

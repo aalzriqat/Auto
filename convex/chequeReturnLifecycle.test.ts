@@ -46,6 +46,7 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
+import { MAX_REVOCABLE_APPLICATIONS } from "./accounting/receiptMovement";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -166,12 +167,17 @@ async function makeReceivable(
   orgId: Id<"organizations">,
   customerId: Id<"customers">,
   amount: number,
-  title = "Balance due"
+  title = "Balance due",
+  // Defaults to TOMORROW. Every receivable in this suite is therefore NOT yet
+  // due, which is exactly why the reopened-status defect Codex found (CX-3)
+  // could hide here: an assertion of `OVERDUE` on a debt due tomorrow looks
+  // like a lifecycle assertion and is really an assertion of a hardcode.
+  dueDate: number = Date.now() + 86_400_000
 ) {
   return (await asAdmin.mutation(api.collections.createReceivable, {
     orgId, customerId, sourceType: "OTHER",
     creditSystemKey: "MISCELLANEOUS_INCOME",
-    title, amount, dueDate: Date.now() + 86_400_000,
+    title, amount, dueDate,
   })) as Id<"receivables">;
 }
 
@@ -646,7 +652,54 @@ describe("SCRUM-130 §C — each debt reopens by its own persisted application a
     await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
 
     expect((await t.run((ctx) => ctx.db.get(debt)))!.outstandingAmount).toBe(1000);
-    expect((await t.run((ctx) => ctx.db.get(debt)))!.status).toBe("OVERDUE");
+    // Due TOMORROW, so reopening it does not make it past due. Before CX-3 this
+    // asserted `OVERDUE` — an outcome-shaped assertion that agreed with the
+    // hardcode instead of with the calendar.
+    expect((await t.run((ctx) => ctx.db.get(debt)))!.status).toBe("PARTIALLY_PAID");
+  });
+
+  test("C4 — a reopened debt's status follows its OWN due date, not the return", async () => {
+    const seeded = await seedOrg("c4");
+    const { t, asAdmin, orgId, customerId } = seeded;
+    const { chequeId, movement } = await clearedCheque(seeded, "c4", 1000);
+
+    // One debt genuinely past due, one genuinely not. Retained credit from the
+    // SAME receipt pays both, so the return reopens both through one helper.
+    const pastDue = await makeReceivable(
+      asAdmin, orgId, customerId, 300, "Past due", Date.now() - 86_400_000
+    );
+    const futureDue = await makeReceivable(
+      asAdmin, orgId, customerId, 500, "Not yet due", Date.now() + 30 * 86_400_000
+    );
+    for (const [receivableId, requestedAmount] of [
+      [pastDue, 300], [futureDue, 500],
+    ] as const) {
+      await asAdmin.mutation(api.collections.applyRetainedCredit, {
+        orgId, receiptMovementId: movement._id, receivableId, requestedAmount,
+      });
+    }
+
+    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+
+    // The tender bouncing says nothing about whether a THIRD-PARTY debt it
+    // happened to pay is past its own due date. Writing OVERDUE onto a debt due
+    // in a month misstates `collections.summary`'s overdue ageing, and — because
+    // the reminder cron scans only OPEN / PARTIALLY_PAID / RESCHEDULED and
+    // nothing ever transitions a row back OUT of OVERDUE — that debt then
+    // receives neither a due-soon nor an overdue reminder, permanently.
+    expect(
+      (await t.run((ctx) => ctx.db.get(pastDue)))!.status,
+      "a genuinely past-due reopened debt must read OVERDUE"
+    ).toBe("OVERDUE");
+    expect(
+      (await t.run((ctx) => ctx.db.get(futureDue)))!.status,
+      "a not-yet-due reopened debt must NOT be branded OVERDUE by the return"
+    ).toBe("PARTIALLY_PAID");
+
+    // Control: the amounts still reopen per-receivable, so a status fix cannot
+    // be mistaken for having changed what money did.
+    expect((await t.run((ctx) => ctx.db.get(pastDue)))!.outstandingAmount).toBe(300);
+    expect((await t.run((ctx) => ctx.db.get(futureDue)))!.outstandingAmount).toBe(500);
   });
 });
 
@@ -827,8 +880,46 @@ describe("SCRUM-130 §E — an exact replay is one return; a changed command is 
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * §F — FAIL-CLOSED BOUNDARIES: refund interaction, contradictory lineage,
- *      and the application-owned cheque that belongs to SCRUM-239.
+ *      the application-owned cheque that belongs to SCRUM-239, and a lineage
+ *      too large to unwind in one transaction.
  * ═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Pads a movement's lineage to exactly `total` application ROWS by cloning the
+ * real one as already-REVERSED siblings.
+ *
+ * REVERSED deliberately: the unwind skips them, so the ONLY thing they change
+ * is the row count the plan has to read. That is precisely the property under
+ * test — the bound is a READ bound, so it must count rows irrespective of
+ * whether they are still live. Driving 100+ real `applyRetainedCredit` calls
+ * would test the same guard far more slowly and prove nothing extra about it.
+ */
+async function padLineage(
+  t: TestHarness,
+  orgId: Id<"organizations">,
+  movementId: Id<"receiptMovements">,
+  total: number
+) {
+  await t.run(async (ctx) => {
+    const rows = await ctx.db
+      .query("receiptApplications")
+      .withIndex("by_org_movement", (q) =>
+        q.eq("orgId", orgId).eq("receiptMovementId", movementId)
+      )
+      .collect();
+    const template = rows[0];
+    if (!template) throw new Error("padLineage needs one real application to clone");
+    for (let i = rows.length; i < total; i++) {
+      const { _id, _creationTime, ...rest } = template;
+      await ctx.db.insert("receiptApplications", {
+        ...rest,
+        sequence: 1000 + i,
+        status: "REVERSED",
+        eventIdempotencyKey: `${rest.eventIdempotencyKey}:pad${i}`,
+      });
+    }
+  });
+}
 
 describe("SCRUM-130 §F — boundaries refuse with zero economic delta", () => {
   test("F1 — a refund that reversed this receipt's allocation blocks the return", async () => {
@@ -978,6 +1069,44 @@ describe("SCRUM-130 §F — boundaries refuse with zero economic delta", () => {
     await expect(
       asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId })
     ).rejects.toThrow(/CHEQUE_RETURN_UNSUPPORTED_REFUND_INTERACTION/);
+    expect(await worldSnapshot(t), "the refusal was not zero-delta").toEqual(before);
+  });
+
+  test("F6 — a lineage AT the bound still returns (the green control for F7)", async () => {
+    const seeded = await seedOrg("f6");
+    const { t, asAdmin, orgId, customerId } = seeded;
+    const { chequeId, movement } = await clearedCheque(seeded, "f6", 1000);
+    const other = await makeReceivable(asAdmin, orgId, customerId, 400, "Other debt");
+    await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      orgId, receiptMovementId: movement._id, receivableId: other, requestedAmount: 400,
+    });
+    await padLineage(t, orgId, movement._id, MAX_REVOCABLE_APPLICATIONS);
+
+    // Exactly at the bound: no refusal, and the real application still unwinds.
+    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+    expect((await t.run((ctx) => ctx.db.get(other)))!.outstandingAmount).toBe(400);
+    expect((await t.run((ctx) => ctx.db.get(chequeId)))!.status).toBe("RETURNED");
+  });
+
+  test("F7 — a lineage OVER the bound refuses by name, before any write", async () => {
+    const seeded = await seedOrg("f7");
+    const { t, asAdmin, orgId, customerId } = seeded;
+    const { chequeId, movement } = await clearedCheque(seeded, "f7", 1000);
+    const other = await makeReceivable(asAdmin, orgId, customerId, 400, "Other debt");
+    await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      orgId, receiptMovementId: movement._id, receivableId: other, requestedAmount: 400,
+    });
+    await padLineage(t, orgId, movement._id, MAX_REVOCABLE_APPLICATIONS + 1);
+
+    // One row past the bound — the ONLY difference from F6. Without this the
+    // unwind is O(N) reads, writes, allocation reversals and accounting
+    // reversals in one mutation, and a large enough lineage rolls the whole
+    // return back identically on every retry, with the tender physically
+    // returned and its receipt, debts and GL effects all still live.
+    const before = await worldSnapshot(t);
+    await expect(
+      asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId })
+    ).rejects.toThrow(/CHEQUE_RETURN_LINEAGE_TOO_LARGE/);
     expect(await worldSnapshot(t), "the refusal was not zero-delta").toEqual(before);
   });
 });
