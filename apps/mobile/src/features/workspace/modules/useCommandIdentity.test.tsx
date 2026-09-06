@@ -12,9 +12,14 @@
  * `useRef` + `useMemo` wrapper around exactly this object, so the behaviour
  * asserted here is the behaviour the call sites get.
  */
+import { fireEvent, render, waitFor } from "@testing-library/react-native";
+import { useState } from "react";
+import { Pressable, Text } from "react-native";
+
 import {
   createCommandIdentity,
   idempotencyKey,
+  useCommandIdentity,
 } from "./moduleShared";
 
 describe("mobile command identity", () => {
@@ -65,5 +70,63 @@ describe("mobile command identity", () => {
     // Pinning the distinction the hook exists to fix: this helper is per-call by
     // design, which is why calling it inline gave mobile no retry protection.
     expect(idempotencyKey("op")).not.toBe(idempotencyKey("op"));
+  });
+
+  it("falls back to a unique key when the platform has no crypto.randomUUID", () => {
+    // Older Android JSC builds ship no `crypto.randomUUID`. The fallback still
+    // has to be unique per call: two economic commands colliding on one key
+    // would make the server replay the first and discard the second.
+    const realCrypto = globalThis.crypto;
+    // @ts-expect-error deliberately removing the API the fallback guards against
+    delete globalThis.crypto;
+    try {
+      const first = idempotencyKey("expenses.create");
+      const second = idempotencyKey("expenses.create");
+      expect(first).not.toBe(second);
+      expect(first.startsWith("expenses.create-")).toBe(true);
+    } finally {
+      globalThis.crypto = realCrypto;
+    }
+  });
+});
+
+/**
+ * The hook is the thin `useRef` + `useMemo` wrapper the call sites actually use.
+ * Its whole job is to give one identity map a stable lifetime across rerenders —
+ * recreating it during render would mint a fresh identity mid-intent, which is
+ * exactly the per-invocation behaviour this replaces. So it is exercised through
+ * a rendered component rather than asserted on in isolation.
+ */
+function IdentityProbe() {
+  const commandId = useCommandIdentity();
+  const [, setTick] = useState(0);
+  return (
+    <>
+      <Text testID="identity">{commandId.for("expenses.create")}</Text>
+      <Pressable testID="rerender" onPress={() => setTick((value) => value + 1)}>
+        <Text>rerender</Text>
+      </Pressable>
+      <Pressable testID="retire" onPress={() => commandId.retire("expenses.create")}>
+        <Text>retire</Text>
+      </Pressable>
+    </>
+  );
+}
+
+describe("useCommandIdentity", () => {
+  it("holds one identity across rerenders, and mints a new one after retire", async () => {
+    const { getByTestId } = await render(<IdentityProbe />);
+    const read = () => (getByTestId("identity") as unknown as { props: { children: string } }).props.children;
+
+    const minted = read();
+    expect(minted).toEqual(expect.stringContaining("expenses.create-"));
+
+    fireEvent.press(getByTestId("rerender"));
+    await waitFor(() => expect(read()).toBe(minted));
+
+    // Retiring is what ends the command; only then is a new identity correct.
+    fireEvent.press(getByTestId("retire"));
+    fireEvent.press(getByTestId("rerender"));
+    await waitFor(() => expect(read()).not.toBe(minted));
   });
 });
