@@ -361,6 +361,20 @@ export function joinList(value: string[] | undefined): string {
 
 let idempotencyFallbackCounter = 0;
 
+/**
+ * A brand-new command identity.
+ *
+ * ⚠️ This mints a FRESH value on every call, so calling it inline in a mutation
+ * argument list gives that command NO retry protection at all: every attempt is
+ * a different command to the server. That is correct only for a command whose
+ * at-most-once property comes from a server-side state guard rather than from
+ * the command log — `deposits.release` is the case, because it pays out
+ * whatever is currently free and its fingerprint therefore cannot tell a retry
+ * from a second genuine payout.
+ *
+ * For every other economic command, use `useCommandIdentity` below, which holds
+ * one identity per business intent across retries.
+ */
 export function idempotencyKey(operation: string): string {
   if (typeof globalThis.crypto?.randomUUID === "function") {
     return `${operation}-${globalThis.crypto.randomUUID()}`;
@@ -368,6 +382,68 @@ export function idempotencyKey(operation: string): string {
 
   idempotencyFallbackCounter += 1;
   return `${operation}-${Date.now().toString(36)}-${idempotencyFallbackCounter.toString(36)}`;
+}
+
+export type MobileCommandIdentity = {
+  /** The identity for this intent — stable until it is retired. */
+  for: (intentId: string) => string;
+  /** Call after the intent has succeeded, so the next one is a new command. */
+  retire: (intentId: string) => void;
+  /** Retire and re-mint in one step: marks the start of a NEW attempt. */
+  renew: (intentId: string) => string;
+};
+
+/**
+ * SCRUM-57 — the mobile half of the command-identity contract.
+ *
+ * Mirrors `hooks/useCommandIdentity.ts` on the web. Every financial mutation now
+ * REFUSES to run without an identity, and the identity only means anything if it
+ * survives a retry: minted once per business intent, held across attempts, and
+ * retired once the outcome is known.
+ *
+ * Mobile previously called `idempotencyKey(...)` inline in each mutation
+ * argument list, which mints a fresh value per invocation — so a lost response
+ * re-sent by the operator was a second command, and the server had no way to
+ * collapse it. That is the "supply a random id immediately before every request"
+ * shape: it makes types green while leaving retries economically unsafe.
+ *
+ * ⚠️ Anything that feeds the server's canonical fingerprint must be snapshotted
+ * alongside the identity — a `Date.now()` re-evaluated on the retry changes the
+ * fingerprint and turns a genuine retry into a hard conflict.
+ */
+/**
+ * The identity lifecycle itself, with no React in it, so it can be tested
+ * directly rather than through a rendered tree. `useCommandIdentity` is the
+ * thin React wrapper that gives one of these a stable lifetime per component.
+ */
+export function createCommandIdentity(
+  keys: Map<string, string> = new Map()
+): MobileCommandIdentity {
+  return {
+    for(intentId: string) {
+      const existing = keys.get(intentId);
+      if (existing) return existing;
+      const minted = idempotencyKey(intentId);
+      keys.set(intentId, minted);
+      return minted;
+    },
+    retire(intentId: string) {
+      keys.delete(intentId);
+    },
+    renew(intentId: string) {
+      const minted = idempotencyKey(intentId);
+      keys.set(intentId, minted);
+      return minted;
+    },
+  };
+}
+
+export function useCommandIdentity(): MobileCommandIdentity {
+  // The ref is what makes the identity survive a rerender: recreating the map
+  // during render would mint a new identity mid-intent, which is exactly the
+  // per-invocation behaviour this replaces.
+  const keys = useRef<Map<string, string>>(new Map());
+  return useMemo(() => createCommandIdentity(keys.current), []);
 }
 
 export function isPaginationLoading(status: string): boolean {

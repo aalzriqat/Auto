@@ -1,9 +1,9 @@
 import { useMutation, usePaginatedQuery } from "convex/react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Text, View } from "react-native";
 import { api, type MobileLedgerCategory, type MobileLedgerTransaction, type MobileLedgerType } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { PAGE_SIZE, type Option, money, dateLabel, parseRequiredPositiveNumber, idempotencyKey, requiredText, useFieldFocusChain, useFormErrors, useGenericError, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
+import { PAGE_SIZE, type Option, money, dateLabel, parseRequiredPositiveNumber, requiredText, useFieldFocusChain, useFormErrors, useGenericError, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, ModuleList , useCommandIdentity } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 export function AccountingModule({ orgId }: { orgId: string }) {
@@ -11,6 +11,8 @@ export function AccountingModule({ orgId }: { orgId: string }) {
   const { locale } = useLocale();
   const reportError = useGenericError();
   const addTransaction = useMutation(api.transactions.add);
+  const commandId = useCommandIdentity();
+  const dateRef = useRef<number | null>(null);
   const updateTransaction = useMutation(api.transactions.update);
   const removeTransaction = useMutation(api.transactions.remove);
   const { loadMore, results, status } = usePaginatedQuery(api.transactions.list, { orgId }, { initialNumItems: PAGE_SIZE });
@@ -84,15 +86,24 @@ export function AccountingModule({ orgId }: { orgId: string }) {
           date: editing.date,
         });
       } else {
+        // SCRUM-57. Identity held across retries, and the date snapshotted with
+        // it: `transactions.add` fingerprints the date, so re-evaluating
+        // `Date.now()` on a retry would turn it into a conflict rather than a
+        // safe replay.
+        const intent = "transactions.add";
+        const key = commandId.for(intent);
+        dateRef.current ??= Date.now();
         await addTransaction({
           orgId,
           type: form.type,
           amount,
           category: form.category,
           description: form.description,
-          date: Date.now(),
-          idempotencyKey: idempotencyKey("transactions.add"),
+          date: dateRef.current,
+          idempotencyKey: key,
         });
+        commandId.retire(intent);
+        dateRef.current = null;
       }
       setOpen(false);
       setEditing(null);
