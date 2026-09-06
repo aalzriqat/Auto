@@ -211,6 +211,33 @@ describe("sourcing — sourcingPayables.markPaid", () => {
 
     expect(keyOf(spy, 1)).toBe(keyOf(spy, 0));
   });
+
+  test("after the payment SUCCEEDS the identity is retired, so the next one is a NEW command", async () => {
+    // The mirror of the retry case, and the half that was untested: holding an
+    // identity too long is as dangerous as never holding it. Reusing a retired
+    // identity would make the server replay the completed payment and silently
+    // discard a second, genuinely-intended one while reporting success.
+    const spy = mutationSpy();
+    spy.mockResolvedValue(null);
+    mockUseQuery.mockReturnValue([payable("pay_1")] as unknown as ReturnType<typeof useQuery>);
+    const { getByText, queryByText } = await renderModule(<SourcingModule orgId={ORG} />);
+
+    fireEvent.press(getByText("تسجيل الدفع"));
+    await waitFor(() => expect(queryByText(SAVE)).not.toBeNull());
+    fireEvent.press(getByText(SAVE));
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    // Success closes the sheet, which is what proves the handler ran past
+    // `commandId.retire(intent)`.
+    await waitFor(() => expect(queryByText(SAVE)).toBeNull());
+
+    // A second, genuinely separate payment on the same payable.
+    fireEvent.press(getByText("تسجيل الدفع"));
+    await waitFor(() => expect(queryByText(SAVE)).not.toBeNull());
+    fireEvent.press(getByText(SAVE));
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
+
+    expect(keyOf(spy, 1)).not.toBe(keyOf(spy, 0));
+  });
 });
 
 describe("expenses — expenses.create", () => {
