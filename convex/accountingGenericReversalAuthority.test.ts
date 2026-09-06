@@ -272,10 +272,14 @@ async function postCertifiedReceipt(suffix: string, harness?: TestHarness) {
  * guard to AFTER `reverseAccountingEvent` leaves this comparison — and all
  * eight tests — green. That mutant (M5) survives this helper entirely.
  *
- * Ordering is therefore proved separately and behaviorally, by §7/GR9, which
- * puts the receipt in a state the ENGINE would itself refuse and checks which
- * refusal wins. Keep both: this one pins "no committed effect", GR9 pins
- * "before the engine".
+ * Ordering is therefore pinned elsewhere. ⚠️ An earlier revision of this
+ * paragraph said §7/GR9 proved it; that was later disproved too — GR9 asks only
+ * which error message won, and a mutant that catches the engine's answer and
+ * translates it (M9), or that early-branches on GR9's exact fixture (M7),
+ * defeats it. **The instrument for ordering is the engine-entry counter at the
+ * top of this file**, within the scope stated there. GR9/GR9b are kept as
+ * secondary message-precedence checks, and this helper is kept for what it
+ * genuinely pins: no committed effect.
  *
  * The audit tables are in here because `reverseAccountingEvent` writes a
  * `REVERSE_EVENT` row to `financialAuditLog` (`reversals.ts`, via
@@ -668,7 +672,15 @@ describe("SCRUM-254 §6 — both columns of the certified tuple discriminate", (
 });
 
 /**
- * §7 — the refusal happens BEFORE the engine is entered, proved behaviorally.
+ * §7 — SECONDARY message-precedence checks. NOT the ordering proof.
+ *
+ * ⚠️ This section's heading used to read "the refusal happens BEFORE the engine
+ * is entered, proved behaviorally". That is retracted. These two tests only ask
+ * WHICH ERROR WON, and a mutant that catches the engine's answer and translates
+ * it into the authority message (M9), or that early-branches on GR9's exact
+ * fixture (M7), passes them while entering the engine. The ordering instrument
+ * is the engine-entry counter at the top of this file, within the scope stated
+ * there; these are kept because they fail differently and cost nothing.
  *
  * This section exists because the Codex seat disproved a claim I had made, and
  * I reproduced the disproof before accepting it. `economicFootprint`'s
@@ -807,13 +819,21 @@ describe("SCRUM-254 §7 — the authority refusal precedes the engine, not merel
  *
  * ⚠️ DO NOT "FIX" THIS BY ADDING ANOTHER PREDICATE. If a reviewer defeats it
  * again, that is expected and is not a finding against the invariant — check
- * instead that the engine-entry counter still catches the shape, because that
- * is the control. Escalating this analyzer is the arms race SCRUM-238 lost.
+ * instead whether the engine-entry counter catches the shape, WITHIN THE SCOPE
+ * that counter actually claims. Escalating this analyzer is the arms race
+ * SCRUM-238 lost.
  *
- * Known blind spots, asserted below rather than merely described: a refusal not
- * spelled `throw`; catch-and-translate; an engine call behind a helper (which
- * this version reports as "found 0" and therefore fails CLOSED); executable
- * template interpolation.
+ * Known blind spots — three ASSERTED as tests below, one only DESCRIBED, and
+ * the difference is stated because conflating them is how a documented limit
+ * turns into a false claim:
+ *
+ *   ASSERTED   a refusal not spelled `throw`
+ *   ASSERTED   catch-and-translate
+ *   ASSERTED   an engine call behind a helper (reported as "found 0", so it
+ *              fails CLOSED rather than passing)
+ *   DESCRIBED  executable `${...}` template interpolation — blanked along with
+ *              its template, so a call inside one is invisible. There is NO
+ *              test for this, and adding one would be instrument escalation.
  */
 const HANDLER_MARKER = "export const reverse = internalMutation({";
 const HANDLER_KEY = "handler:";
