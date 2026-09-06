@@ -16,25 +16,82 @@ function normalizeIdempotencyKey(idempotencyKey: string | undefined) {
   return normalized;
 }
 
+/**
+ * ─── SCRUM-57: an economic command must be identifiable ─────────────────────
+ *
+ * `economic` is REQUIRED and has no default. Adding a new `runWithIdempotency`
+ * call site is therefore a forced classification decision rather than a silent
+ * inheritance of whichever behaviour happened to be permissive — a compile
+ * error where the old shape only had a convention.
+ *
+ * ECONOMIC means the command produces an at-most-once effect on money, the
+ * general ledger, a subledger, or an obligation. For those, the identity and a
+ * canonical fingerprint are both non-optional at the type level AND re-checked
+ * at runtime, because a validator is not the last word: an untyped or future
+ * client can still reach the mutation.
+ *
+ * ⚠️ WHAT THIS DELIBERATELY DOES *NOT* DO: derive the identity from the payload.
+ * That was tried and it caused a real incident — see the note at
+ * `components/vehicles/VehicleDetailsDialog.tsx`, where a key derived from
+ * (deposit, resolution) made a SECOND genuine payout collide with the first's
+ * stored command; the mutation returned without running, no money moved, and
+ * the operator was told the customer had been refunded. Payload equality cannot
+ * distinguish "this is a retry" from "this is a second, genuinely identical
+ * intent". Only an identity minted once per INTENT can, so the identity is
+ * minted at the intent boundary and this layer's job is to ENFORCE that one
+ * exists — not to invent one.
+ */
+type IdempotencyArgsBase = {
+  orgId: Id<"organizations">;
+  operation: string;
+  actorId?: Id<"users">;
+};
+
+type EconomicIdempotencyArgs = IdempotencyArgsBase & {
+  economic: true;
+  /** Minted once per user/business intent and preserved across every retry. */
+  idempotencyKey: string;
+  /**
+   * Canonical fingerprint of the material economic inputs — at minimum amount,
+   * counterparty, source and effective date. Replaying the same identity with a
+   * materially different intent is rejected instead of silently returning the
+   * prior result.
+   */
+  fingerprint: string;
+};
+
+type NonEconomicIdempotencyArgs = IdempotencyArgsBase & {
+  economic: false;
+  idempotencyKey?: string;
+  fingerprint?: string;
+};
+
+export type RunWithIdempotencyArgs =
+  | EconomicIdempotencyArgs
+  | NonEconomicIdempotencyArgs;
+
 export async function runWithIdempotency<T>(
   ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    operation: string;
-    idempotencyKey?: string;
-    actorId?: Id<"users">;
-    /**
-     * Canonical fingerprint of the request inputs. When supplied, replaying the
-     * same idempotency key with a materially different payload is rejected
-     * rather than silently returning the prior result — critical for money
-     * movement (payments, disbursements, cheques).
-     */
-    fingerprint?: string;
-  },
+  args: RunWithIdempotencyArgs,
   run: () => Promise<T>
 ): Promise<T> {
   const idempotencyKey = normalizeIdempotencyKey(args.idempotencyKey);
-  if (!idempotencyKey) {
+
+  if (args.economic) {
+    // The whole point of SCRUM-57. An economic effect this server cannot
+    // identify is an economic effect it cannot deduplicate, so it refuses to
+    // produce one. `run()` has not been called at this point and must not be.
+    if (!idempotencyKey) {
+      throw new ConvexError(
+        "This financial command requires a command identity (idempotencyKey) and cannot be executed without one."
+      );
+    }
+    if (!args.fingerprint || !args.fingerprint.trim()) {
+      throw new ConvexError(
+        "This financial command requires a canonical fingerprint of its economic inputs."
+      );
+    }
+  } else if (!idempotencyKey) {
     return await run();
   }
 
@@ -53,8 +110,24 @@ export async function runWithIdempotency<T>(
     .unique();
 
   if (existing) {
-    // Reject key reuse with different inputs (only when both fingerprints exist).
-    if (args.fingerprint && existing.fingerprint && existing.fingerprint !== args.fingerprint) {
+    if (args.economic) {
+      // Fail CLOSED, including when the stored row carries no fingerprint at
+      // all. The previous rule — `args.fingerprint && existing.fingerprint &&
+      // …` — was an allowlist that failed open by omission: with either side
+      // missing, a replay carrying a different amount was handed back the
+      // earlier command's result as though it were its own. "Cannot tell
+      // whether this is the same intent" must never take the permissive branch
+      // on a money path.
+      if (existing.fingerprint !== args.fingerprint) {
+        throw new ConvexError(
+          "Idempotency key reused with different request content. Use a new key for a different operation."
+        );
+      }
+    } else if (
+      args.fingerprint &&
+      existing.fingerprint &&
+      existing.fingerprint !== args.fingerprint
+    ) {
       throw new ConvexError(
         "Idempotency key reused with different request content. Use a new key for a different operation."
       );

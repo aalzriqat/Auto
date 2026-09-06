@@ -89,7 +89,7 @@ describe("sourcingPayables.markPaid VAT reclassification", () => {
   test("without a VAT amount, settles AP and cash for the full amount with no VAT line", async () => {
     const { t, orgId, asOwner, payableId, accountBySystemKey } = await seedDealerWithPayable(5000);
 
-    await asOwner.mutation(api.sourcingPayables.markPaid, { orgId, payableId, paymentMethod: "BANK_TRANSFER" });
+    await asOwner.mutation(api.sourcingPayables.markPaid, { idempotencyKey: "t-sourcingPayables.test-92-59", orgId, payableId, paymentMethod: "BANK_TRANSFER" });
 
     const event = await t.run((ctx) =>
       ctx.db
@@ -114,7 +114,7 @@ describe("sourcingPayables.markPaid VAT reclassification", () => {
   test("with a VAT amount, AP and cash still settle in full, plus a self-balancing VAT reclass pair", async () => {
     const { t, orgId, asOwner, payableId, accountBySystemKey } = await seedDealerWithPayable(5000);
 
-    await asOwner.mutation(api.sourcingPayables.markPaid, {
+    await asOwner.mutation(api.sourcingPayables.markPaid, { idempotencyKey: "t-sourcingPayables.test-117-59",
       orgId, payableId, paymentMethod: "BANK_TRANSFER", taxAmount: 500,
     });
 
@@ -156,7 +156,7 @@ describe("sourcingPayables.markPaid VAT reclassification", () => {
     const { orgId, asOwner, payableId } = await seedDealerWithPayable(1000);
 
     await expect(
-      asOwner.mutation(api.sourcingPayables.markPaid, {
+      asOwner.mutation(api.sourcingPayables.markPaid, { idempotencyKey: "t-sourcingPayables.test-159-55",
         orgId, payableId, paymentMethod: "CASH", taxAmount: 2000,
       })
     ).rejects.toThrow(/cannot exceed/i);

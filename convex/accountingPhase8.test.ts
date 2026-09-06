@@ -563,7 +563,7 @@ describe("Phase 8 — payment intent settlement", () => {
   test("expiring a pending intent marks it EXPIRED without posting GL", async () => {
     const { t, orgId, asUser, customerId } = await seedDealer("pi3");
 
-    const intentId = await asUser.mutation(api.paymentIntents.create, {
+    const intentId = await asUser.mutation(api.paymentIntents.create, { idempotencyKey: "t-accountingPhase8.test-566-71",
       orgId, customerId, amountMinor: 500_000, currency: "JOD", provider: "telr",
     });
 
@@ -661,7 +661,7 @@ describe("Phase 8 — finance disbursement", () => {
     );
 
     await expect(
-      asUser.mutation(api.applications.confirmDisbursement, {
+      asUser.mutation(api.applications.confirmDisbursement, { idempotencyKey: "t-accountingPhase8.test-664-61",
         orgId, applicationId: appId, disbursedAmountMinor: 5_000_000,
       })
     ).rejects.toThrow("Disbursement has already been confirmed");

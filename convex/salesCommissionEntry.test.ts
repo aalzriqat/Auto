@@ -131,7 +131,7 @@ async function completedSale(
   ids: Pick<Ids, "orgId" | "vehicleId" | "customerId" | "userId" | "asAdmin">,
   salePrice = 15000
 ) {
-  return await ids.asAdmin.mutation(api.sales.create, {
+  return await ids.asAdmin.mutation(api.sales.create, { idempotencyKey: "t-salesCommissionEntry.test-134-55",
     orgId: ids.orgId,
     vehicleId: ids.vehicleId,
     customerId: ids.customerId,
@@ -482,7 +482,7 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
       });
     });
 
-    const saleId = await ids.asAdmin.mutation(api.sales.create, {
+    const saleId = await ids.asAdmin.mutation(api.sales.create, { idempotencyKey: "t-salesCommissionEntry.test-485-65",
       orgId: ids.orgId,
       vehicleId: ids.vehicleId,
       customerId: ids.customerId,
@@ -543,7 +543,7 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
       return await ctx.db.insert("memberships", { orgId: ids.orgId, userId: repUserId, roleId });
     });
 
-    const saleId = await ids.asAdmin.mutation(api.sales.create, {
+    const saleId = await ids.asAdmin.mutation(api.sales.create, { idempotencyKey: "t-salesCommissionEntry.test-546-65",
       orgId: ids.orgId,
       vehicleId: ids.vehicleId,
       customerId: ids.customerId,
@@ -583,7 +583,7 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
     for (let i = 0; i < 6; i++) {
       const extra = await extraVehicleAndCustomer(t, ids.orgId, `manual_queue_${i}`);
       saleIds.push(
-        await ids.asAdmin.mutation(api.sales.create, {
+        await ids.asAdmin.mutation(api.sales.create, { idempotencyKey: "t-salesCommissionEntry.test-586-54",
           orgId: ids.orgId,
           vehicleId: extra.vehicleId,
           customerId: extra.customerId,
@@ -623,7 +623,7 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
     // on every page load.
     for (let i = 0; i < 10; i++) {
       const extra = await extraVehicleAndCustomer(t, ids.orgId, `manual_sparse_${i}`);
-      await ids.asAdmin.mutation(api.sales.create, {
+      await ids.asAdmin.mutation(api.sales.create, { idempotencyKey: "t-salesCommissionEntry.test-626-52",
         orgId: ids.orgId,
         vehicleId: extra.vehicleId,
         customerId: extra.customerId,
@@ -716,7 +716,7 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
       return await ctx.db.insert("memberships", { orgId: ids.orgId, userId: repUserId, roleId });
     });
 
-    const saleId = await ids.asAdmin.mutation(api.sales.create, {
+    const saleId = await ids.asAdmin.mutation(api.sales.create, { idempotencyKey: "t-salesCommissionEntry.test-719-65",
       orgId: ids.orgId,
       vehicleId: ids.vehicleId,
       customerId: ids.customerId,
@@ -755,7 +755,7 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
     for (let i = 0; i < dates.length; i++) {
       const extra = await extraVehicleAndCustomer(t, ids.orgId, `manual_repdate_${i}`);
       saleIds.push(
-        await ids.asAdmin.mutation(api.sales.create, {
+        await ids.asAdmin.mutation(api.sales.create, { idempotencyKey: "t-salesCommissionEntry.test-758-54",
           orgId: ids.orgId,
           vehicleId: extra.vehicleId,
           customerId: extra.customerId,
@@ -818,7 +818,7 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
       saleId,
       commissionAmount: 400,
     });
-    await ids.asAdmin.mutation(api.sales.markCommissionPaid, {
+    await ids.asAdmin.mutation(api.sales.markCommissionPaid, { idempotencyKey: "t-salesCommissionEntry.test-821-62",
       orgId: ids.orgId,
       saleId,
       paymentMethod: "CASH",
@@ -845,7 +845,7 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
     const saleId = await completedSale(ids);
 
     await expect(
-      ids.asAdmin.mutation(api.sales.markCommissionPaid, {
+      ids.asAdmin.mutation(api.sales.markCommissionPaid, { idempotencyKey: "t-salesCommissionEntry.test-848-58",
         orgId: ids.orgId,
         saleId,
         paymentMethod: "CASH",
@@ -1040,7 +1040,7 @@ describe("MANUAL entry point through to payroll settlement", () => {
     const ids = await seedPayrollCapableOrg(t, "manual_payroll");
 
     const saleDate = Date.UTC(2026, 6, 15); // 2026-07-15
-    const saleId = await ids.asAdmin.mutation(api.sales.create, {
+    const saleId = await ids.asAdmin.mutation(api.sales.create, { idempotencyKey: "t-salesCommissionEntry.test-1043-65",
       orgId: ids.orgId,
       vehicleId: ids.vehicleId,
       customerId: ids.customerId,
@@ -1114,7 +1114,7 @@ describe("MANUAL entry point through to payroll settlement", () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const ids = await seedPayrollCapableOrg(t, "manual_direct");
 
-    const saleId = await ids.asAdmin.mutation(api.sales.create, {
+    const saleId = await ids.asAdmin.mutation(api.sales.create, { idempotencyKey: "t-salesCommissionEntry.test-1117-65",
       orgId: ids.orgId,
       vehicleId: ids.vehicleId,
       customerId: ids.customerId,
@@ -1129,7 +1129,7 @@ describe("MANUAL entry point through to payroll settlement", () => {
       saleId,
       commissionAmount: 250,
     });
-    await ids.asAdmin.mutation(api.sales.markCommissionPaid, {
+    await ids.asAdmin.mutation(api.sales.markCommissionPaid, { idempotencyKey: "t-salesCommissionEntry.test-1132-62",
       orgId: ids.orgId,
       saleId,
       paymentMethod: "CASH",

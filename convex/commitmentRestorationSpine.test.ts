@@ -172,7 +172,7 @@ async function quoteFor(seed: Seed, customerId: Id<"customers">, vehicles: Array
 }
 
 const depositOn = async (seed: Seed, quoteId: Id<"quotes">, amount: number) =>
-  await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount });
+  await seed.asUser.mutation(api.deposits.create, { idempotencyKey: "t-commitmentRestorationSpine.test-175-51", orgId: seed.orgId, quoteId, amount });
 
 const directSale = async (
   seed: Seed,
@@ -180,7 +180,7 @@ const directSale = async (
   vehicleId: Id<"vehicles">,
   customerId: Id<"customers">
 ) =>
-  (await seed.asUser.mutation(api.sales.create, {
+  (await seed.asUser.mutation(api.sales.create, { idempotencyKey: "t-commitmentRestorationSpine.test-183-49",
     orgId: seed.orgId,
     vehicleId,
     customerId,
@@ -852,7 +852,7 @@ describe("S.4 an organization without the canonical authority", () => {
       method: "CASH" as const,
       expectedDate: Date.now() + 86_400_000,
     });
-    await seed.asUser.mutation(api.applications.finalizeDeal, {
+    await seed.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: "t-commitmentRestorationSpine.test-855-63",
       orgId: seed.orgId,
       applicationId,
     });
@@ -866,7 +866,7 @@ describe("S.4 an organization without the canonical authority", () => {
     }));
 
     await cancelAndDrain(seed, period._id, () =>
-      seed.asManager.mutation(api.applications.cancelApplication, {
+      seed.asManager.mutation(api.applications.cancelApplication, { idempotencyKey: "t-commitmentRestorationSpine.test-869-67",
         orgId: seed.orgId,
         applicationId,
         reason: "customer withdrew",

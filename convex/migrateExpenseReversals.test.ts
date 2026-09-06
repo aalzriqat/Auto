@@ -58,7 +58,7 @@ const JAN_END = Date.UTC(YEAR, 0, 31, 23, 59, 59, 999);
 describe("backfillExpenseReversedAt", () => {
   test("restores a legacy reversed expense to the month it posted", async () => {
     const { t, orgId, asOwner } = await seedDealer("legacy");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: "t-migrateExpenseReversals.test-61-67",
       orgId, title: "Office supplies", amount: 500, date: Date.UTC(YEAR, 0, 10),
       category: "OTHER", status: "PAID", paymentMethod: "CASH",
     });
@@ -84,7 +84,7 @@ describe("backfillExpenseReversedAt", () => {
 
   test("is idempotent and leaves an already-stamped row alone", async () => {
     const { t, orgId, asOwner } = await seedDealer("idem");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: "t-migrateExpenseReversals.test-87-67",
       orgId, title: "Supplies", amount: 200, date: Date.UTC(YEAR, 0, 10),
       category: "OTHER", status: "PAID", paymentMethod: "CASH",
     });
@@ -102,7 +102,7 @@ describe("backfillExpenseReversedAt", () => {
 
   test("a reversed prep-expense RECLASSIFICATION never marks the expense itself reversed", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("reclass");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: "t-migrateExpenseReversals.test-105-67",
       orgId, title: "Detailing", amount: 400, date: Date.UTC(YEAR, 0, 10),
       category: "DETAILING", status: "PAID", paymentMethod: "CASH",
     });

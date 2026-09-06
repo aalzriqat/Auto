@@ -430,7 +430,7 @@ describe("Phase 0 financial safety controls", () => {
       amount: 500,
       dueDate: Date.now() + 86_400_000,
     });
-    await asUser.mutation(api.collections.recordPayment, {
+    await asUser.mutation(api.collections.recordPayment, { idempotencyKey: "t-accountingPhase0.test-433-58",
       orgId,
       receivableId,
       amount: 500,
@@ -447,7 +447,7 @@ describe("Phase 0 financial safety controls", () => {
     });
 
     await expect(
-      asUser.mutation(api.collections.respondToApproval, {
+      asUser.mutation(api.collections.respondToApproval, { idempotencyKey: "t-accountingPhase0.test-450-58",
         orgId,
         requestId,
         status: "APPROVED",
@@ -491,7 +491,7 @@ describe("Phase 0 financial safety controls", () => {
       dueDate: Date.now() + 86_400_000,
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
-    await asUser.mutation(api.collections.recordPayment, {
+    await asUser.mutation(api.collections.recordPayment, { idempotencyKey: "t-accountingPhase0.test-494-58",
       orgId,
       receivableId,
       amount: 250,

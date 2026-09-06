@@ -141,7 +141,7 @@ type Seed = Awaited<ReturnType<typeof seed>>;
 
 /** The real path: one deposit row plus a hold row per car. */
 async function payDeposit(s: Seed, amount = DEPOSIT) {
-  await s.asUser.mutation(api.deposits.create, {
+  await s.asUser.mutation(api.deposits.create, { idempotencyKey: "t-multiVehicleDepositAllocation.test-144-48",
     orgId: s.orgId,
     quoteId: s.quoteId,
     amount,
@@ -162,7 +162,7 @@ async function sell(
   salePrice: number,
   opts: { actor?: Seed["asUser"] } = {}
 ) {
-  return await (opts.actor ?? s.asUser).mutation(api.sales.create, {
+  return await (opts.actor ?? s.asUser).mutation(api.sales.create, { idempotencyKey: "t-multiVehicleDepositAllocation.test-165-68",
     orgId: s.orgId,
     vehicleId,
     customerId: s.customerId,
@@ -485,7 +485,7 @@ describe("an allocation larger than that car's invoice", () => {
     ]);
 
     await expect(
-      s.asManager.mutation(api.sales.create, {
+      s.asManager.mutation(api.sales.create, { idempotencyKey: "t-multiVehicleDepositAllocation.test-488-46",
         orgId: s.orgId,
         vehicleId: s.vehicleA,
         customerId: s.customerId,
@@ -996,7 +996,7 @@ describe("refunding what is left of a shared deposit", () => {
     const depositId = await s.t.run(async (ctx) =>
       (await ctx.db.query("deposits").collect()).find((d) => d.orgId === s.orgId)!._id
     );
-    await s.asManager.mutation(api.deposits.release, {
+    await s.asManager.mutation(api.deposits.release, { idempotencyKey: "t-multiVehicleDepositAllocation.test-999-54",
       orgId: s.orgId,
       depositId,
       resolution: "REFUNDED" as const,
@@ -1029,7 +1029,7 @@ describe("refunding what is left of a shared deposit", () => {
       (await ctx.db.query("deposits").collect()).find((d) => d.orgId === s.orgId)!._id
     );
     await expect(
-      s.asManager.mutation(api.deposits.release, {
+      s.asManager.mutation(api.deposits.release, { idempotencyKey: "t-multiVehicleDepositAllocation.test-1032-50",
         orgId: s.orgId,
         depositId,
         resolution: "REFUNDED" as const,
@@ -1046,7 +1046,7 @@ describe("refunding what is left of a shared deposit", () => {
     const depositId = await s.t.run(async (ctx) =>
       (await ctx.db.query("deposits").collect()).find((d) => d.orgId === s.orgId)!._id
     );
-    await s.asManager.mutation(api.deposits.release, {
+    await s.asManager.mutation(api.deposits.release, { idempotencyKey: "t-multiVehicleDepositAllocation.test-1049-54",
       orgId: s.orgId,
       depositId,
       resolution: "REFUNDED" as const,
@@ -1298,7 +1298,7 @@ const release = (
   resolution: "REFUNDED" | "FORFEITED" = "REFUNDED",
   idempotencyKey?: string
 ) =>
-  s.asManager.mutation(api.deposits.release, {
+  s.asManager.mutation(api.deposits.release, { idempotencyKey: "t-multiVehicleDepositAllocation.test-1301-46",
     orgId: s.orgId,
     depositId,
     resolution,

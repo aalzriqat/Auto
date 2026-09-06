@@ -98,7 +98,7 @@ describe("transactions ledger", () => {
 
   test("update_and_remove_keep_transactions_auditable_but_hidden_from_list", async () => {
     const { t, orgId, vehicleId, asManager } = await setupLedgerOrg();
-    const transactionId = await asManager.mutation(api.transactions.add, {
+    const transactionId = await asManager.mutation(api.transactions.add, { idempotencyKey: "t-transactions.test-101-74",
       orgId,
       type: "OUT",
       amount: 400,
@@ -139,7 +139,7 @@ describe("transactions ledger", () => {
     const olderDate = Date.now() - 10 * 24 * 60 * 60 * 1000;
     const currentDate = Date.now();
 
-    await asManager.mutation(api.transactions.add, {
+    await asManager.mutation(api.transactions.add, { idempotencyKey: "t-transactions.test-142-52",
       orgId,
       type: "IN",
       amount: 100,
@@ -147,7 +147,7 @@ describe("transactions ledger", () => {
       category: "OTHER",
       description: "Outside reporting window",
     });
-    const currentTransactionId = await asManager.mutation(api.transactions.add, {
+    const currentTransactionId = await asManager.mutation(api.transactions.add, { idempotencyKey: "t-transactions.test-150-81",
       orgId,
       type: "IN",
       amount: 200,
@@ -307,7 +307,7 @@ describe("transactions ledger", () => {
     });
 
     await expect(
-      asManager.mutation(api.transactions.add, {
+      asManager.mutation(api.transactions.add, { idempotencyKey: "t-transactions.test-310-48",
         orgId,
         type: "OUT",
         amount: 500,
@@ -347,7 +347,7 @@ describe("transactions ledger", () => {
     });
 
     await expect(
-      asManager.mutation(api.transactions.add, {
+      asManager.mutation(api.transactions.add, { idempotencyKey: "t-transactions.test-350-48",
         orgId,
         type: "OUT",
         amount: 200,
@@ -358,7 +358,7 @@ describe("transactions ledger", () => {
       })
     ).rejects.toThrow(/expense not found/i);
 
-    const transactionId = await asManager.mutation(api.transactions.add, {
+    const transactionId = await asManager.mutation(api.transactions.add, { idempotencyKey: "t-transactions.test-361-74",
       orgId,
       type: "OUT",
       amount: 300,

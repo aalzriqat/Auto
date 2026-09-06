@@ -564,7 +564,7 @@ describe("appraisal integrity", () => {
       providerType: "FINANCE_COMPANY",
       appraisedAt: Date.now(),
     });
-    await seed.asUser.mutation(api.applications.cancelApplication, {
+    await seed.asUser.mutation(api.applications.cancelApplication, { idempotencyKey: "t-financingEconomics.test-567-68",
       orgId: seed.orgId,
       applicationId: firstApplicationId,
       reason: "Customer postponed.",

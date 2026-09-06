@@ -37,10 +37,21 @@ import {
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
+import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 
 import { expenseSchema, ExpenseFormValues, ExpenseDialogProps } from "./expense.schema";
 
+/** One create-expense intent per dialog session. */
+const CREATE_EXPENSE_INTENT = "create-expense";
+
 export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProps) {
+  const commandId = useCommandIdentity();
+  // Closing the dialog ends the intent. Without this, reopening it to record a
+  // DIFFERENT expense would reuse the previous identity and be refused as a
+  // fingerprint conflict instead of recording a new one.
+  useEffect(() => {
+    if (!open) commandId.retire(CREATE_EXPENSE_INTENT);
+  }, [open, commandId]);
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
 
@@ -164,7 +175,11 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
         });
         toast.success(t("ExpenseUpdatedSuccess" as any));
       } else {
+        // One intent per dialog session: stable while the dialog is open, so a
+        // failed submit retried from the same form is the SAME command, and
+        // retired when the dialog closes so the next expense is a new one.
         await createExpense({
+          idempotencyKey: commandId.for(CREATE_EXPENSE_INTENT),
           orgId: activeOrgId,
           title: values.title,
           amount: values.amount,

@@ -168,7 +168,7 @@ async function completeSale(
   customerId: Id<"customers">,
   salePrice: number
 ): Promise<Id<"sales">> {
-  return await s.asAdmin.mutation(api.sales.create, {
+  return await s.asAdmin.mutation(api.sales.create, { idempotencyKey: "t-saleOwnedTeardown.test-171-53",
     orgId: s.orgId,
     vehicleId: s.vehicleId,
     customerId,
@@ -635,7 +635,7 @@ describe("SCRUM-212 — the locator and the transition must be exact", () => {
     // The control that stops R2's fix widening into 'void everything on this
     // car': a manually entered VEHICLE_SALE row carries no saleId and is no
     // sale's to void.
-    const manual = await s.asAdmin.mutation(api.transactions.add, {
+    const manual = await s.asAdmin.mutation(api.transactions.add, { idempotencyKey: "t-saleOwnedTeardown.test-638-67",
       orgId: s.orgId,
       type: "IN",
       amount: 750,
