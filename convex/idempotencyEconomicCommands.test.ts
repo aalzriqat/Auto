@@ -308,6 +308,69 @@ function argIsOptional(mod: Record<string, unknown>, exportName: string): boolea
 }
 
 /**
+ * ─── The fingerprint-completeness ratchet ───────────────────────────────────
+ *
+ * A fingerprint that is too NARROW is the dangerous direction: two materially
+ * different commands hash the same, so a reused identity silently replays the
+ * first and the second economic instruction is discarded. Review found exactly
+ * that on `sales.create` — `depositResolution`, which decides whether a held
+ * deposit is refunded, forfeited or applied, was missing.
+ *
+ * This guard reads the REAL source and asserts that every argument the mutation
+ * accepts is either hashed or explicitly exempted, so adding a field to the
+ * validator and forgetting the fingerprint fails here instead of in production.
+ * It throws rather than returns whenever it cannot parse what it is checking —
+ * a guard that has gone blind must not be indistinguishable from a passing one.
+ */
+function fieldsBetween(source: string, startMarker: string, endMarker: string): string[] {
+  const start = source.indexOf(startMarker);
+  if (start < 0) throw new Error(`Cannot locate ${startMarker} — the guard cannot be evaluated.`);
+  const end = source.indexOf(endMarker, start);
+  if (end < 0) throw new Error(`Cannot locate ${endMarker} after ${startMarker}.`);
+  const names = [...source.slice(start, end).matchAll(/^\s{4,}([a-zA-Z][a-zA-Z0-9]*):/gm)].map(
+    (m) => m[1]
+  );
+  if (names.length === 0) throw new Error(`Parsed zero fields between markers — guard is blind.`);
+  return names;
+}
+
+describe("SCRUM-57 — fingerprint completeness ratchet (sales.create)", () => {
+  test("every accepted argument is hashed, or explicitly exempted with a reason", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    // Same convention as the other source-level guard in this repo
+    // (convex/multiVehicleDepositAllocation.test.ts).
+    const source = readFileSync(join(process.cwd(), "convex/sales.ts"), "utf8");
+
+    const accepted = new Set(
+      fieldsBetween(source, "export const create = mutation({", "  handler:")
+    );
+    const hashed = new Set(
+      fieldsBetween(source, 'operation: "sales.create"', "        }),")
+    );
+
+    const EXEMPT = new Set([
+      "orgId", // part of the lookup key, not the fingerprint
+      "status", // the literal "COMPLETED" on this door
+      "idempotencyKey", // the identity itself
+      // Wrapper fields that live in the same object as the fingerprint.
+      "operation",
+      "economic",
+      "actorId",
+      "fingerprint",
+      "args",
+      "handler",
+    ]);
+
+    const unhashed = [...accepted].filter((f) => !hashed.has(f) && !EXEMPT.has(f));
+    expect(unhashed).toEqual([]);
+    // The enumeration itself is asserted: a parse that silently matched almost
+    // nothing would otherwise look identical to full coverage.
+    expect(accepted.size).toBeGreaterThan(20);
+  });
+});
+
+/**
  * ─── The classification ratchet ─────────────────────────────────────────────
  *
  * Every command classified ECONOMIC must expose a REQUIRED identity at the

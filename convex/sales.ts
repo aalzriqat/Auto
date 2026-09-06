@@ -387,12 +387,26 @@ export const create = mutation({
           tradeInValue: args.tradeInValue ?? null,
           financingType: args.financingType ?? null,
           loanAmount: args.loanAmount ?? null,
+          apr: args.apr ?? null,
+          termMonths: args.termMonths ?? null,
           warrantySold: args.warrantySold ?? null,
           warrantyCost: args.warrantyCost ?? null,
+          warrantyTermMonths: args.warrantyTermMonths ?? null,
           gapSold: args.gapSold ?? null,
           gapCost: args.gapCost ?? null,
+          gapTermMonths: args.gapTermMonths ?? null,
           supplierSettlementRoute: args.supplierSettlementRoute ?? null,
+          // Decides whether a held deposit is refunded, forfeited or applied.
+          // Omitting it let two economically DIFFERENT sales share one
+          // fingerprint, so a reused identity would replay the first and apply
+          // the wrong treatment to the customer's money. Found in review.
+          depositResolution: args.depositResolution ?? null,
         }),
+        // `orgId` is part of the lookup key rather than the fingerprint, and
+        // `status` is the literal "COMPLETED" for this door — every other
+        // accepted argument is material and is hashed above. A field added to
+        // the validator without being added here silently widens what counts
+        // as "the same command".
       },
       async () => {
         // SCRUM-195 M3, DOOR 1. A direct completed sale, no quote wizard — and
