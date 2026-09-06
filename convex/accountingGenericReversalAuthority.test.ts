@@ -28,6 +28,8 @@
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
@@ -611,5 +613,139 @@ describe("SCRUM-254 §7 — the authority refusal precedes the engine, not merel
     expect(message).toMatch(/certified receipt/i);
     // And explicitly NOT the engine's answer — this is the assertion M5 fails.
     expect(message).not.toMatch(/Cannot reverse an event with status/i);
+  });
+});
+
+/**
+ * §8 — no path may ENTER the engine and refuse afterwards.
+ *
+ * §7/GR9 proves ordering only for the one status it probes. The Codex seat
+ * refused to close on that and built the counterexample; I reproduced it before
+ * accepting, and it survives all nine behavioral tests:
+ *
+ *     if (isCertifiedReceipt && original.status === "FAILED") throw refusal;  // satisfies GR9
+ *     const result = await reverseAccountingEvent(ctx, cmd);                  // POSTED receipts ENTER
+ *     if (isCertifiedReceipt) throw refusal;                                  // satisfies GR1/GR2 via rollback
+ *
+ * That mutant (M7) is why this section exists. For a plain POSTED receipt there
+ * is NO behavioral discriminator available from outside the transaction: the
+ * only difference between guarding before and guarding after is work that gets
+ * rolled back, and rolled-back work is unobservable. So the ordering invariant
+ * cannot be closed behaviorally, and a syntactic rule is the honest instrument.
+ *
+ * WHAT THIS PROVES AND WHAT IT DOES NOT. It proves a textual dominance property
+ * of one handler: exactly one engine call, and every refusal ahead of it. It is
+ * not a dataflow proof and it cannot see a refusal moved into a helper. That
+ * limit is stated rather than papered over — the check FAILS CLOSED in that
+ * case (it would find no refusal in the handler) and tells the author so.
+ *
+ * The self-tests come first deliberately, following the house convention in
+ * `economicsRevisionGuard.test.ts`: a guard nobody has watched fail is not a
+ * guard. They pin that the analyzer clears the real shape, rejects M5, rejects
+ * M7, and refuses rather than silently passing when it cannot find what it is
+ * looking for.
+ */
+const HANDLER_MARKER = "export const reverse = internalMutation({";
+const ENGINE_CALL = "reverseAccountingEvent(";
+const REFUSAL_TOKEN = "GENERIC_RECEIPT_REVERSAL_REFUSED";
+
+function indicesOf(haystack: string, needle: string): number[] {
+  const out: number[] = [];
+  for (let i = haystack.indexOf(needle); i !== -1; i = haystack.indexOf(needle, i + 1)) out.push(i);
+  return out;
+}
+
+/**
+ * Returns a reason string. "ok" is the only passing value; every other outcome
+ * names what went wrong, so a failure here is actionable rather than a bare
+ * boolean. Every non-"ok" path is a REFUSAL — an analyzer that cannot find the
+ * handler must not report success.
+ */
+function reverseHandlerRefusesBeforeEngine(source: string): string {
+  const start = source.indexOf(HANDLER_MARKER);
+  if (start < 0) return `handler not found: no "${HANDLER_MARKER}"`;
+  const body = source.slice(start);
+
+  const engineCalls = indicesOf(body, ENGINE_CALL);
+  if (engineCalls.length !== 1) {
+    return `expected exactly one ${ENGINE_CALL} in the reverse handler, found ${engineCalls.length}`;
+  }
+  const refusals = indicesOf(body, REFUSAL_TOKEN);
+  if (refusals.length === 0) {
+    return `no ${REFUSAL_TOKEN} in the reverse handler — the receipt refusal must live in this handler, not behind a helper`;
+  }
+  if (Math.max(...refusals) > engineCalls[0]) {
+    return `a ${REFUSAL_TOKEN} refusal appears AFTER ${ENGINE_CALL} — a certified receipt would enter the engine and be refused only by rollback`;
+  }
+  return "ok";
+}
+
+const CORRECT_SHAPE = `${HANDLER_MARKER}
+  handler: async (ctx, args) => {
+    const original = await ctx.db.get(args.originalEventId);
+    if (isReceipt) { throw new ConvexError(${REFUSAL_TOKEN}); }
+    return ${ENGINE_CALL}ctx, cmd);
+  },
+});`;
+
+const M5_SHAPE = `${HANDLER_MARKER}
+  handler: async (ctx, args) => {
+    const original = await ctx.db.get(args.originalEventId);
+    const result = await ${ENGINE_CALL}ctx, cmd);
+    if (isReceipt) { throw new ConvexError(${REFUSAL_TOKEN}); }
+    return result;
+  },
+});`;
+
+const M7_SHAPE = `${HANDLER_MARKER}
+  handler: async (ctx, args) => {
+    const original = await ctx.db.get(args.originalEventId);
+    if (isReceipt && original.status === "FAILED") { throw new ConvexError(${REFUSAL_TOKEN}); }
+    const result = await ${ENGINE_CALL}ctx, cmd);
+    if (isReceipt) { throw new ConvexError(${REFUSAL_TOKEN}); }
+    return result;
+  },
+});`;
+
+describe("SCRUM-254 §8 — the ordering analyzer, watched failing before it is trusted", () => {
+  test("clears the real shape", () => {
+    expect(reverseHandlerRefusesBeforeEngine(CORRECT_SHAPE)).toBe("ok");
+  });
+
+  test("rejects M5 — the refusal relocated after the engine call", () => {
+    expect(reverseHandlerRefusesBeforeEngine(M5_SHAPE)).toMatch(/appears AFTER/);
+  });
+
+  test("rejects M7 — a narrow early branch plus a late refusal", () => {
+    expect(reverseHandlerRefusesBeforeEngine(M7_SHAPE)).toMatch(/appears AFTER/);
+  });
+
+  test("refuses rather than passes when it cannot find what it is looking for", () => {
+    // No handler at all — must not report success.
+    expect(reverseHandlerRefusesBeforeEngine("export const other = 1;")).toMatch(/handler not found/);
+    // Handler present, refusal absent (e.g. moved behind a helper) — fails closed.
+    expect(
+      reverseHandlerRefusesBeforeEngine(`${HANDLER_MARKER}\n  return ${ENGINE_CALL}ctx, cmd);\n});`)
+    ).toMatch(/no GENERIC_RECEIPT_REVERSAL_REFUSED/);
+    // Two engine calls — the single-call assumption is asserted, not assumed.
+    expect(
+      reverseHandlerRefusesBeforeEngine(
+        `${HANDLER_MARKER}\n throw ${REFUSAL_TOKEN};\n ${ENGINE_CALL}a);\n ${ENGINE_CALL}b);\n});`
+      )
+    ).toMatch(/exactly one/);
+  });
+});
+
+describe("SCRUM-254 §8 — applied to the real handler", () => {
+  test("GR10 — every receipt refusal in `reverse` precedes the single engine call", () => {
+    const source = fs.readFileSync(path.join(path.resolve(__dirname), "accountingLedger.ts"), "utf8");
+
+    // Liveness: the file really is the one under test and really contains the
+    // handler. Without this the analyzer could be reading something inert and
+    // reporting a reason string nobody notices is about nothing.
+    expect(source).toContain(HANDLER_MARKER);
+    expect(source.slice(source.indexOf(HANDLER_MARKER))).toContain("requireTenantAuth");
+
+    expect(reverseHandlerRefusesBeforeEngine(source)).toBe("ok");
   });
 });
