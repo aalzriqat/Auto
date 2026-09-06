@@ -455,7 +455,15 @@ export const completeFromQuote = mutation({
         economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
-        fingerprint: JSON.stringify({ quoteId: args.quoteId }),
+        // Both of these are forwarded to completeSalesForLineItems and change
+        // what the completion does with the supplier settlement and any held
+        // deposit. Fingerprinting the quote alone let a reused identity replay
+        // the first completion and silently discard changed instructions.
+        fingerprint: JSON.stringify({
+          quoteId: args.quoteId,
+          supplierSettlementRoute: args.supplierSettlementRoute ?? null,
+          depositResolution: args.depositResolution ?? null,
+        }),
       },
       async () => {
         const quote = await ctx.db.get(args.quoteId);

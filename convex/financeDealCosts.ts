@@ -604,6 +604,10 @@ export const recordDealFee = mutation({
           accountingTreatment: args.accountingTreatment,
           custodyId: args.custodyId ?? null,
           receiptReference: args.receiptReference?.trim() || null,
+          // Persisted at line ~629 and summed by settlementDeductedTotalMinor,
+          // so it changes the dealer remittance. Two fees identical except for
+          // this flag are DIFFERENT economic instructions.
+          deductedFromSettlement: args.deductedFromSettlement ?? false,
         }),
       },
       async () => {

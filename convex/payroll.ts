@@ -150,7 +150,19 @@ export const recordAdvance = mutation({
           economic: true,
           idempotencyKey: args.idempotencyKey,
           actorId: user._id,
-          fingerprint: JSON.stringify({ userId: args.userId, amount: args.amount, date: args.date ?? null }),
+          // `method` selects the credit account in hookEmployeeAdvancePaid, so
+          // two advances identical except for it are different economic
+          // instructions. It is normalized here the same way the callback
+          // normalizes it, so the fingerprint matches the effect rather than
+          // the raw input. `note` is hashed too: it is caller-stable, and a
+          // changed one under a reused identity is a different record.
+          fingerprint: JSON.stringify({
+            userId: args.userId,
+            amount: args.amount,
+            date: args.date ?? null,
+            method: normalizePaymentMethod(args.method),
+            note: args.note?.trim() || null,
+          }),
         },
         async () => {
           const currency = await getOrgCurrency(ctx, args.orgId);
