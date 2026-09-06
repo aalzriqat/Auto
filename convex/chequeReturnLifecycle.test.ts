@@ -1,0 +1,833 @@
+/**
+ * SCRUM-130 — the collection/customer cleared-cheque return, as one fail-closed
+ * economic lifecycle.
+ *
+ * A returned cleared cheque invalidates the SAME TENDER that created the
+ * receipt. Every still-live economic consequence of that tender must therefore
+ * be unwound exactly once — and the complete set is NOT "the initial receipt".
+ * It is the initial receipt occurrence, PLUS every persisted later
+ * retained-credit application occurrence, PLUS each of their canonical
+ * allocation/debt effects, PLUS the residual retained 2110 position, PLUS the
+ * exact canonical pending forward receipt obligation.
+ *
+ * The enumeration that closes that set (search surface: every non-test `.ts`
+ * under `convex/` at the integration base; method: `grep -rn` on each event-type
+ * constant, every candidate classified) is:
+ *
+ *   COLLECTION_PAYMENT / collectionPayments / <collectionPaymentId> / v1
+ *     sole forward producer  postReceiptOccurrence  <- clearCheque, recordPayment
+ *   RECEIPT_CREDIT_APPLIED / receiptApplications / rcapp:<n>:<movementId>:<seq> / v1
+ *     sole forward producer  hookReceiptCreditApplied  <- applyRetainedCredit
+ *
+ * The only other `COLLECTION_PAYMENT` writer in the tree is
+ * `accountingMigration.ts`, whose `sourceType` is `transactions` — explicitly
+ * outside the reserved tuple (`receiptOccurrence.ts`: "posting a tuple that is
+ * NOT reserved — COLLECTION_PAYMENT / transactions") and owned by SCRUM-223/231.
+ * `RECEIPT_CREDIT_APPLIED` has exactly one producer. The legacy `transactions`
+ * cashbook row written by `insertLedgerTransaction` is deliberately NOT unwound
+ * here: it is untouched by the pre-existing return path and stays owned by
+ * SCRUM-223/231 per `c17764`.
+ *
+ * ## What this file can and cannot prove
+ *
+ * ⚠️ THE STALE-WORKER RACE IS PROVABLE ONLY AS ORDERING, NEVER AS A CONFLICT.
+ * `convex-test` serializes every transaction and models no OCC, so a genuine
+ * write conflict between `returnClearedCheque` and `postOutboxRow` cannot be
+ * produced here. The two ORDERINGS are proven — return-then-drain and
+ * drain-then-return — which is a real and separate obligation, and the
+ * concurrent case rests on Convex's optimistic concurrency over the exact
+ * pending row rather than on anything demonstrated below. Reporting it as a
+ * concurrency pass would be a false claim about what ran. This is the same
+ * limitation SCRUM-218-C's §6 already declares about the retained position.
+ */
+import { convexTestWithComponents } from "../test-utils/convexTest";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import schema from "./schema";
+import { api, internal } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
+import { SYSTEM_KEYS } from "./utils/defaultChart";
+
+const MODULE_GLOB = import.meta.glob("./**/*.*s");
+
+/**
+ * ⚠️ THE DRAIN SCHEDULES; IT DOES NOT POST.
+ *
+ * `drainPendingAccountingEvents` returns `{ scheduled: n }` and the SCRUM-222
+ * worker (`claimOutboxRow` -> `postOutboxRow`) runs as scheduled work. An
+ * assertion made after calling the drain alone therefore observes a world where
+ * the worker never ran, and "no journal appeared" passes VACUOUSLY — which is
+ * exactly how the first version of this file reported the resurrection as
+ * already-fixed. `vi.useFakeTimers()` must be installed BEFORE anything
+ * schedules, or the scheduler stays on the real clock and `runAllTimers` has
+ * nothing to fire.
+ */
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+type TestHarness = ReturnType<typeof convexTestWithComponents<typeof schema>>;
+type IdentityHarness = ReturnType<TestHarness["withIdentity"]>;
+
+/**
+ * An org with a chart, an open period for the CURRENT calendar year, and 2110.
+ *
+ * The open period covers this year only, so a date in a PREVIOUS year has no
+ * open period and any event dated there routes to the durable outbox instead of
+ * posting. That is how the tests below obtain a genuinely PENDING occurrence
+ * without hand-writing an outbox row.
+ */
+async function seedOrg(suffix: string) {
+  vi.useFakeTimers();
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
+  const orgId = (await t.run((ctx) =>
+    ctx.db.insert("organizations", { name: `Return ${suffix}`, createdAt: Date.now() })
+  )) as Id<"organizations">;
+  await t.run((ctx) =>
+    ctx.db.insert("subscriptions", {
+      orgId, plan: "professional", status: "active",
+      createdAt: Date.now(), updatedAt: Date.now(),
+    })
+  );
+  const userId = (await t.run((ctx) =>
+    ctx.db.insert("users", { clerkId: `cr_${suffix}`, email: `${suffix}@cr.com`, name: "Owner" })
+  )) as Id<"users">;
+  const roleId = await t.run((ctx) =>
+    ctx.db.insert("roles", {
+      orgId, name: "OWNER", isSystemOwnerRole: true,
+      permissions: ["view:finance", "manage:finance"],
+    })
+  );
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+  await t.run((ctx) =>
+    ctx.db.insert("orgSettings", {
+      orgId, currency: "USD", currencySymbol: "$",
+      enabledPaymentTypes: ["CASH", "CHEQUE", "BANK_TRANSFER"],
+    })
+  );
+  const asAdmin = t.withIdentity({ subject: `cr_${suffix}`, clerkId: `cr_${suffix}` });
+  await asAdmin.mutation(api.chartOfAccounts.initialize, { orgId });
+
+  const year = new Date().getUTCFullYear();
+  await asAdmin.mutation(api.accountingPeriods.create, {
+    orgId,
+    startDate: Date.UTC(year, 0, 1),
+    endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+    fiscalYear: year,
+    periodNumber: 1,
+  });
+  const period = (await asAdmin.query(api.accountingPeriods.list, { orgId }))[0];
+  await asAdmin.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+
+  // 2110 exactly as SCRUM-231's cutover must define it. LIABILITY / CREDIT is
+  // the point: 1220 is ASSET / DEBIT and would make every assertion below pass
+  // while the books said the opposite thing.
+  await t.run((ctx) =>
+    ctx.db.insert("chartOfAccounts", {
+      orgId,
+      code: "2110",
+      name: "Unapplied Customer Receipts",
+      type: "LIABILITY",
+      normalBalance: "CREDIT",
+      isControlAccount: true,
+      allowManualPosting: false,
+      active: true,
+      systemKey: SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+  );
+
+  // A SECOND member who can approve: `respondToApproval` refuses to let the
+  // requester approve their own request, so a one-user org cannot drive the
+  // real refund path at all.
+  const approverId = (await t.run((ctx) =>
+    ctx.db.insert("users", { clerkId: `ap_${suffix}`, email: `ap_${suffix}@cr.com`, name: "Approver" })
+  )) as Id<"users">;
+  const approverRoleId = await t.run((ctx) =>
+    ctx.db.insert("roles", {
+      orgId, name: "MANAGER",
+      permissions: ["view:finance", "manage:finance", "approve:requests"],
+    })
+  );
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: approverId, roleId: approverRoleId }));
+  const asApprover = t.withIdentity({ subject: `ap_${suffix}`, clerkId: `ap_${suffix}` });
+
+  const customerId = (await t.run((ctx) =>
+    ctx.db.insert("customers", { orgId, firstName: "Cust", lastName: suffix, createdAt: Date.now() })
+  )) as Id<"customers">;
+  return { t, asAdmin, asApprover, orgId, userId, customerId };
+}
+
+/** A date with NO open period — the previous calendar year. */
+const UNPOSTABLE_DATE = Date.UTC(new Date().getUTCFullYear() - 1, 5, 1);
+
+async function makeReceivable(
+  asAdmin: IdentityHarness,
+  orgId: Id<"organizations">,
+  customerId: Id<"customers">,
+  amount: number,
+  title = "Balance due"
+) {
+  return (await asAdmin.mutation(api.collections.createReceivable, {
+    orgId, customerId, sourceType: "OTHER",
+    creditSystemKey: "MISCELLANEOUS_INCOME",
+    title, amount, dueDate: Date.now() + 86_400_000,
+  })) as Id<"receivables">;
+}
+
+async function movementFor(t: TestHarness, orgId: Id<"organizations">, paymentId: Id<"collectionPayments">) {
+  return await t.run((ctx) =>
+    ctx.db
+      .query("receiptMovements")
+      .withIndex("by_org_payment", (q) => q.eq("orgId", orgId).eq("collectionPaymentId", paymentId))
+      .unique()
+  );
+}
+
+/** Register + clear a cheque, returning the payment and its sealed movement. */
+async function clearedCheque(
+  seeded: Awaited<ReturnType<typeof seedOrg>>,
+  suffix: string,
+  amount: number,
+  receivableId?: Id<"receivables">
+) {
+  const chequeId = (await seeded.asAdmin.mutation(api.collections.registerCheque, {
+    orgId: seeded.orgId, customerId: seeded.customerId, receivableId,
+    bank: "Bank", chequeNumber: `C-${suffix}`, chequeDate: Date.now(), amount,
+  })) as Id<"postDatedCheques">;
+  const paymentId = (await seeded.asAdmin.mutation(api.collections.clearCheque, {
+    orgId: seeded.orgId, chequeId,
+  })) as Id<"collectionPayments">;
+  const movement = (await movementFor(seeded.t, seeded.orgId, paymentId))!;
+  return { chequeId, paymentId, movement };
+}
+
+async function positionFor(t: TestHarness, orgId: Id<"organizations">, movementId: Id<"receiptMovements">) {
+  return await t.run((ctx) =>
+    ctx.db
+      .query("receiptRetainedPositions")
+      .withIndex("by_org_movement", (q) => q.eq("orgId", orgId).eq("receiptMovementId", movementId))
+      .unique()
+  );
+}
+
+async function applicationsFor(t: TestHarness, orgId: Id<"organizations">, movementId: Id<"receiptMovements">) {
+  return await t.run((ctx) =>
+    ctx.db
+      .query("receiptApplications")
+      .withIndex("by_org_movement", (q) => q.eq("orgId", orgId).eq("receiptMovementId", movementId))
+      .collect()
+  );
+}
+
+async function events(t: TestHarness, orgId: Id<"organizations">) {
+  return await t.run((ctx) =>
+    ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+  );
+}
+
+async function pendingRows(t: TestHarness, orgId: Id<"organizations">) {
+  return await t.run((ctx) =>
+    ctx.db.query("pendingAccountingEvents").collect()
+  ).then((rows) => rows.filter((r) => r.orgId === orgId));
+}
+
+/** Net movement on one system account across EVERY journal line in the org. */
+async function netOn(t: TestHarness, orgId: Id<"organizations">, systemKey: string) {
+  return await t.run(async (ctx) => {
+    const entries = await ctx.db
+      .query("journalEntries")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .collect();
+    let debit = 0;
+    let credit = 0;
+    for (const entry of entries) {
+      const lines = await ctx.db
+        .query("journalLines")
+        .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id))
+        .collect();
+      for (const l of lines) {
+        const account = await ctx.db.get(l.accountId);
+        if (account?.systemKey === systemKey) {
+          debit += l.debitMinor;
+          credit += l.creditMinor;
+        }
+      }
+    }
+    return { debitMinor: debit, creditMinor: credit, netCreditMinor: credit - debit };
+  });
+}
+
+/**
+ * Drain AND run the worker the drain schedules. Both halves are required: see
+ * the note at the top of this file about the vacuous pass.
+ */
+async function drain(t: TestHarness, orgId: Id<"organizations">) {
+  const result = await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  return result;
+}
+
+const WORLD_TABLES = [
+  "postDatedCheques", "collectionPayments", "canonicalPayments", "paymentAllocations",
+  "receivables", "receivableDocuments", "accountingEvents", "journalEntries",
+  "journalLines", "receiptApplications", "receiptRetainedPositions",
+  "pendingAccountingEvents", "accountBalanceSnapshots",
+] as const;
+
+/**
+ * Every mutable surface a fail-closed refusal must leave untouched.
+ *
+ * Compared as a whole rather than field by field: a refusal that is supposed to
+ * produce ZERO economic delta is easiest to prove by showing the entire relevant
+ * world is byte-identical, and hardest to fake.
+ */
+async function worldSnapshot(t: TestHarness) {
+  return await t.run(async (ctx) => {
+    const out: Record<string, string[]> = {};
+    for (const table of WORLD_TABLES) {
+      out[table] = (await ctx.db.query(table).collect())
+        .map((r) => JSON.stringify(r))
+        .sort();
+    }
+    return out;
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * §A — THE SCRUM-249 ROUND-3 RESURRECTION (c17760 / c17763)
+ *
+ * canonical receipt POST still PENDING
+ *   + a receipt row at the SAME reserved tuple under a FOREIGN key, POSTED
+ *   -> return reverses the posted sibling, voids the payment, marks RETURNED
+ *   -> canonical pending obligation SURVIVES
+ *   -> a later drain publishes it and receipt GL is RESURRECTED for a returned,
+ *      voided tender.
+ *
+ * The binding correction: cancel/supersede the exact canonical pending forward
+ * receipt obligation REGARDLESS of whether a posted sibling was also found and
+ * reversed. The current branch cancels only in the no-posted-event branch.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+describe("SCRUM-130 §A — a returned tender cannot have its receipt resurrected", () => {
+  /**
+   * Builds the exact state `c17763` names.
+   *
+   * ⚠️ WHY THE FOREIGN ROW IS CONSTRUCTED RATHER THAN DRIVEN THROUGH A MUTATION.
+   * SCRUM-249's forward guard now refuses a generic producer that tries to post
+   * at the reserved tuple, so this state can no longer be MINTED — which is
+   * exactly why it has to be modelled here. It represents rows written before
+   * that guard existed, and the whole point of `c17763` is that the return
+   * lifecycle must survive finding one, not that the posting engine should grow
+   * a fourth patch. SCRUM-249 proved a "refuse every REVERSED tuple occupant"
+   * proxy blocks legitimate recovery while the payment is still LIVE.
+   */
+  async function canonicalPendingWithForeignPostedSibling(suffix: string, amount: number) {
+    const seeded = await seedOrg(suffix);
+    const { chequeId, paymentId, movement } = await clearedCheque(seeded, suffix, amount);
+
+    // The receipt posted normally. Re-key that POSTED row to a foreign,
+    // non-canonical idempotency key so it is no longer reachable by the
+    // canonical key, while still occupying the exact reserved tuple.
+    const canonicalKey = `collection_payment_${paymentId}`;
+    const posted = (await events(seeded.t, seeded.orgId)).find(
+      (e) => e.idempotencyKey === canonicalKey
+    )!;
+    await seeded.t.run((ctx) =>
+      ctx.db.patch(posted._id, { idempotencyKey: `foreign_ingress_${paymentId}` })
+    );
+
+    // ...and re-create the canonical forward obligation that `c17763` says is
+    // left alive: same tuple, same canonical key, still PENDING.
+    await seeded.t.run((ctx) =>
+      ctx.db.insert("pendingAccountingEvents", {
+        orgId: seeded.orgId,
+        kind: "POST" as const,
+        status: "PENDING" as const,
+        idempotencyKey: canonicalKey,
+        accountingDate: posted.accountingDate,
+        actorId: seeded.userId,
+        reason: "modelled surviving canonical obligation (c17763)",
+        attempts: 0,
+        createdAt: Date.now(),
+        eventType: posted.eventType,
+        sourceType: posted.sourceType,
+        sourceId: posted.sourceId,
+        eventVersion: posted.eventVersion,
+        occurredAt: posted.occurredAt,
+        currency: posted.currency,
+        payload: posted.payload,
+      })
+    );
+    return { ...seeded, chequeId, paymentId, movement, canonicalKey, postedEventId: posted._id };
+  }
+
+  test("A1 — the canonical pending obligation is cancelled even though a posted sibling was reversed", async () => {
+    const { t, asAdmin, orgId, chequeId, canonicalKey } =
+      await canonicalPendingWithForeignPostedSibling("a1", 1000);
+
+    // Precondition: both halves of the reproduced state really exist.
+    expect((await pendingRows(t, orgId)).filter((r) => r.idempotencyKey === canonicalKey)).toHaveLength(1);
+
+    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+
+    // THE REQUIREMENT: no eligible canonical forward receipt obligation survives.
+    const survivors = (await pendingRows(t, orgId)).filter(
+      (r) => r.idempotencyKey === canonicalKey && r.kind === "POST" && r.status !== "POSTED"
+    );
+    expect(survivors, "canonical pending receipt POST survived a cheque return").toHaveLength(0);
+  });
+
+  test("A2 — a stale drain after the return mints no new receipt journal", async () => {
+    const { t, asAdmin, orgId, chequeId, paymentId } =
+      await canonicalPendingWithForeignPostedSibling("a2", 1000);
+
+    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+
+    const receiptEventsBefore = (await events(t, orgId)).filter(
+      (e) => e.eventType === "COLLECTION_PAYMENT" && e.sourceId === paymentId.toString()
+    ).length;
+
+    // The stale worker runs. It must find nothing eligible.
+    await drain(t, orgId);
+
+    const receiptEventsAfter = (await events(t, orgId)).filter(
+      (e) => e.eventType === "COLLECTION_PAYMENT" && e.sourceId === paymentId.toString()
+    );
+    expect(
+      receiptEventsAfter.length,
+      "the drain minted a NEW receipt occurrence for a returned tender"
+    ).toBe(receiptEventsBefore);
+    // And none of them is live.
+    expect(receiptEventsAfter.filter((e) => e.status === "POSTED")).toHaveLength(0);
+
+    // The tender really is dead on every surface.
+    const cheque = await t.run((ctx) => ctx.db.get(chequeId));
+    expect(cheque!.status).toBe("RETURNED");
+    const payment = await t.run((ctx) => ctx.db.get(paymentId));
+    expect(payment!.status).toBe("VOIDED");
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * §B — PER-OCCURRENCE UNWIND: a later application that is still PENDING
+ *
+ * Fully reachable with no constructed row: apply retained credit dated into a
+ * period that is not open, and the application's own occurrence enqueues. If the
+ * return only reverses POSTED occurrences, that obligation drains afterwards and
+ * writes DR 2110 / CR AR for a tender the bank took back.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+describe("SCRUM-130 §B — every later application occurrence is unwound, posted or not", () => {
+  test("B1 — a PENDING application obligation cannot publish after the cheque is returned", async () => {
+    const seeded = await seedOrg("b1");
+    const { t, asAdmin, orgId, customerId } = seeded;
+    const { chequeId, movement } = await clearedCheque(seeded, "b1", 1000);
+    expect(movement.initialUnappliedMinor).toBe(100000);
+
+    const other = await makeReceivable(asAdmin, orgId, customerId, 400, "Other debt");
+    // Dated where no period is open -> the application's occurrence ENQUEUES.
+    await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      orgId, receiptMovementId: movement._id, receivableId: other,
+      requestedAmount: 400, appliedAt: UNPOSTABLE_DATE,
+    });
+    const queued = (await pendingRows(t, orgId)).filter(
+      (r) => r.eventType === "RECEIPT_CREDIT_APPLIED" && r.status === "PENDING"
+    );
+    expect(queued, "fixture did not actually produce a PENDING application").toHaveLength(1);
+
+    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+
+    // The obligation must be gone, not merely un-drained.
+    expect(
+      (await pendingRows(t, orgId)).filter(
+        (r) => r.eventType === "RECEIPT_CREDIT_APPLIED" && r.kind === "POST" && r.status !== "POSTED"
+      ),
+      "a retained-credit application obligation survived the cheque return"
+    ).toHaveLength(0);
+
+    await drain(t, orgId);
+    expect(
+      (await events(t, orgId)).filter(
+        (e) => e.eventType === "RECEIPT_CREDIT_APPLIED" && e.status === "POSTED"
+      ),
+      "the drain posted a retained-credit application for a returned tender"
+    ).toHaveLength(0);
+  });
+
+  test("B2 — a POSTED application occurrence is reversed exactly once", async () => {
+    const seeded = await seedOrg("b2");
+    const { t, asAdmin, orgId, customerId } = seeded;
+    const { chequeId, movement } = await clearedCheque(seeded, "b2", 1000);
+
+    const other = await makeReceivable(asAdmin, orgId, customerId, 400, "Other debt");
+    await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      orgId, receiptMovementId: movement._id, receivableId: other, requestedAmount: 400,
+    });
+    const applied = (await events(t, orgId)).filter(
+      (e) => e.eventType === "RECEIPT_CREDIT_APPLIED" && e.status === "POSTED"
+    );
+    expect(applied, "fixture did not actually post an application").toHaveLength(1);
+
+    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+
+    const after = (await events(t, orgId)).filter((e) => e.eventType === "RECEIPT_CREDIT_APPLIED");
+    expect(after).toHaveLength(1);
+    expect(after[0].status).toBe("REVERSED");
+
+    // The persisted lineage records it, so a replay can tell the difference.
+    const apps = await applicationsFor(t, orgId, movement._id);
+    expect(apps).toHaveLength(1);
+    expect(apps[0].status).toBe("REVERSED");
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * §C — PER-RECEIVABLE REOPENING, and the residual 2110
+ *
+ * The aggregate is a conservation check, never the write amount for any one
+ * debt. Two applications against two different receivables must reopen each by
+ * ITS OWN persisted application amount.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+describe("SCRUM-130 §C — each debt reopens by its own persisted application amount", () => {
+  test("C1 — two applications, two receivables, two exact reopenings", async () => {
+    const seeded = await seedOrg("c1");
+    const { t, asAdmin, orgId, customerId } = seeded;
+    const { chequeId, movement } = await clearedCheque(seeded, "c1", 1000);
+    expect(movement.initialUnappliedMinor).toBe(100000);
+
+    const debtA = await makeReceivable(asAdmin, orgId, customerId, 300, "Debt A");
+    const debtB = await makeReceivable(asAdmin, orgId, customerId, 500, "Debt B");
+    await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      orgId, receiptMovementId: movement._id, receivableId: debtA, requestedAmount: 300,
+    });
+    await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      orgId, receiptMovementId: movement._id, receivableId: debtB, requestedAmount: 500,
+    });
+    expect((await t.run((ctx) => ctx.db.get(debtA)))!.outstandingAmount).toBe(0);
+    expect((await t.run((ctx) => ctx.db.get(debtB)))!.outstandingAmount).toBe(0);
+    expect((await positionFor(t, orgId, movement._id))!.remainingUnappliedMinor).toBe(20000);
+
+    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+
+    // EXACTLY its own amount. Not the 1000 face value, not the 800 aggregate.
+    expect(
+      (await t.run((ctx) => ctx.db.get(debtA)))!.outstandingAmount,
+      "debt A did not reopen by its own application amount"
+    ).toBe(300);
+    expect(
+      (await t.run((ctx) => ctx.db.get(debtB)))!.outstandingAmount,
+      "debt B did not reopen by its own application amount"
+    ).toBe(500);
+
+    // Both applications recorded as reversed, and the retained position is dead:
+    // no 2110 balance may survive for a tender that no longer exists.
+    const apps = await applicationsFor(t, orgId, movement._id);
+    expect(apps.map((a) => a.status).sort()).toEqual(["REVERSED", "REVERSED"]);
+    expect((await positionFor(t, orgId, movement._id))!.remainingUnappliedMinor).toBe(0);
+
+    // GL conservation: 2110 nets to exactly zero across the whole lifecycle.
+    expect(
+      (await netOn(t, orgId, SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY)).netCreditMinor,
+      "2110 did not net to zero after the tender was returned"
+    ).toBe(0);
+  });
+
+  test("C2 — a never-applied retained receipt still leaves no live 2110", async () => {
+    const seeded = await seedOrg("c2");
+    const { t, asAdmin, orgId } = seeded;
+    const { chequeId, movement } = await clearedCheque(seeded, "c2", 1000);
+    expect((await positionFor(t, orgId, movement._id))!.applicationCount).toBe(0);
+
+    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+
+    expect((await positionFor(t, orgId, movement._id))!.remainingUnappliedMinor).toBe(0);
+    expect(
+      (await netOn(t, orgId, SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY)).netCreditMinor
+    ).toBe(0);
+  });
+
+  test("C3 — a cheque applied to its own receivable reopens the persisted amount", async () => {
+    const seeded = await seedOrg("c3");
+    const { t, asAdmin, orgId, customerId } = seeded;
+    const debt = await makeReceivable(asAdmin, orgId, customerId, 1000, "Own debt");
+    const { chequeId, movement } = await clearedCheque(seeded, "c3", 1000, debt);
+
+    // The receipt fully discharged its own receivable, so there is no retained
+    // credit at all and the reopening is driven by the sealed movement.
+    expect(movement.initialAppliedMinor).toBe(100000);
+    expect(movement.initialUnappliedMinor).toBe(0);
+    expect((await t.run((ctx) => ctx.db.get(debt)))!.outstandingAmount).toBe(0);
+
+    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+
+    expect((await t.run((ctx) => ctx.db.get(debt)))!.outstandingAmount).toBe(1000);
+    expect((await t.run((ctx) => ctx.db.get(debt)))!.status).toBe("OVERDUE");
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * §D — ORDERING TRUTH TABLE (not concurrency; see the file header)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+describe("SCRUM-130 §D — pending vs posted receipt, both orderings", () => {
+  /** A cheque cleared into a period that is not open: the receipt only queues. */
+  async function clearedIntoClosedPeriod(suffix: string, amount: number) {
+    const seeded = await seedOrg(suffix);
+    const chequeId = (await seeded.asAdmin.mutation(api.collections.registerCheque, {
+      orgId: seeded.orgId, customerId: seeded.customerId,
+      bank: "Bank", chequeNumber: `C-${suffix}`, chequeDate: UNPOSTABLE_DATE, amount,
+    })) as Id<"postDatedCheques">;
+    const paymentId = (await seeded.asAdmin.mutation(api.collections.clearCheque, {
+      orgId: seeded.orgId, chequeId, clearedAt: UNPOSTABLE_DATE,
+    })) as Id<"collectionPayments">;
+    return { ...seeded, chequeId, paymentId };
+  }
+
+  test("D1 — RETURN WINS: the queued receipt becomes ineligible and never posts", async () => {
+    const { t, asAdmin, orgId, chequeId, paymentId } = await clearedIntoClosedPeriod("d1", 1000);
+    const queued = (await pendingRows(t, orgId)).filter((r) => r.eventType === "COLLECTION_PAYMENT");
+    expect(queued, "fixture did not queue the receipt").toHaveLength(1);
+
+    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+    await drain(t, orgId);
+
+    expect(
+      (await events(t, orgId)).filter(
+        (e) => e.eventType === "COLLECTION_PAYMENT" && e.sourceId === paymentId.toString()
+      ),
+      "a receipt occurrence appeared for a cheque returned before it ever posted"
+    ).toHaveLength(0);
+  });
+
+  test("D2 — WORKER WINS: the return reverses the now-POSTED occurrence exactly once", async () => {
+    const { t, asAdmin, orgId, chequeId, paymentId } = await clearedIntoClosedPeriod("d2", 1000);
+
+    // Open the period the receipt was dated into, then let the worker post it.
+    const year = new Date().getUTCFullYear() - 1;
+    await asAdmin.mutation(api.accountingPeriods.create, {
+      orgId,
+      startDate: Date.UTC(year, 0, 1),
+      endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+      fiscalYear: year,
+      periodNumber: 1,
+    });
+    const prior = (await asAdmin.query(api.accountingPeriods.list, { orgId })).find(
+      (p) => p.fiscalYear === year
+    )!;
+    await asAdmin.mutation(api.accountingPeriods.open, { orgId, periodId: prior._id });
+    await drain(t, orgId);
+
+    const posted = (await events(t, orgId)).filter(
+      (e) => e.eventType === "COLLECTION_PAYMENT" && e.sourceId === paymentId.toString()
+    );
+    expect(posted, "the worker did not post the receipt").toHaveLength(1);
+    expect(posted[0].status).toBe("POSTED");
+
+    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+
+    const after = (await events(t, orgId)).filter(
+      (e) => e.eventType === "COLLECTION_PAYMENT" && e.sourceId === paymentId.toString()
+    );
+    expect(after).toHaveLength(1);
+    expect(after[0].status).toBe("REVERSED");
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * §E — REPLAY AND CONTRADICTION
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+describe("SCRUM-130 §E — an exact replay is one return; a changed command is a conflict", () => {
+  test("E1 — replaying the same return key reverses once and reopens once", async () => {
+    const seeded = await seedOrg("e1");
+    const { t, asAdmin, orgId, customerId } = seeded;
+    const debt = await makeReceivable(asAdmin, orgId, customerId, 1000, "Own debt");
+    const { chequeId } = await clearedCheque(seeded, "e1", 1000, debt);
+
+    await asAdmin.mutation(api.collections.returnClearedCheque, {
+      orgId, chequeId, idempotencyKey: "return-e1",
+    });
+    await asAdmin.mutation(api.collections.returnClearedCheque, {
+      orgId, chequeId, idempotencyKey: "return-e1",
+    });
+
+    expect((await t.run((ctx) => ctx.db.get(debt)))!.outstandingAmount).toBe(1000);
+    expect(
+      (await events(t, orgId)).filter((e) => e.eventType === "JOURNAL_REVERSAL"),
+      "an exact replay produced a second reversal"
+    ).toHaveLength(1);
+  });
+
+  test("E2 — the same key with different economics is refused", async () => {
+    const seeded = await seedOrg("e2");
+    const { asAdmin, orgId } = seeded;
+    const { chequeId } = await clearedCheque(seeded, "e2", 1000);
+
+    await asAdmin.mutation(api.collections.returnClearedCheque, {
+      orgId, chequeId, idempotencyKey: "return-e2", bankFeeMinor: 500,
+    });
+    await expect(
+      asAdmin.mutation(api.collections.returnClearedCheque, {
+        orgId, chequeId, idempotencyKey: "return-e2", bankFeeMinor: 900,
+      })
+    ).rejects.toThrow();
+  });
+
+  test("E3 — returning an already-returned cheque refuses", async () => {
+    const seeded = await seedOrg("e3");
+    const { asAdmin, orgId } = seeded;
+    const { chequeId } = await clearedCheque(seeded, "e3", 1000);
+
+    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+    await expect(
+      asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId })
+    ).rejects.toThrow(/only cleared cheques/i);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * §F — FAIL-CLOSED BOUNDARIES: refund interaction, contradictory lineage,
+ *      and the application-owned cheque that belongs to SCRUM-239.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+describe("SCRUM-130 §F — boundaries refuse with zero economic delta", () => {
+  test("F1 — a refund that reversed this receipt's allocation blocks the return", async () => {
+    const seeded = await seedOrg("f1");
+    const { t, asAdmin, asApprover, orgId, customerId } = seeded;
+    const debt = await makeReceivable(asAdmin, orgId, customerId, 1000, "Own debt");
+    const { chequeId } = await clearedCheque(seeded, "f1", 1000, debt);
+
+    // The real refund path: request, then approve. `reverseAllocationsForRefund`
+    // reverses the receipt's own persisted allocation, newest first.
+    const requestId = await asAdmin.mutation(api.collections.requestApproval, {
+      orgId, receivableId: debt, requestType: "REFUND",
+      requestedAmount: 400, disbursementMethod: "BANK_TRANSFER", reason: "customer refund",
+    });
+    await asApprover.mutation(api.collections.respondToApproval, {
+      orgId, requestId, status: "APPROVED",
+    });
+
+    const before = await worldSnapshot(t);
+    await expect(
+      asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId })
+    ).rejects.toThrow(/CHEQUE_RETURN_UNSUPPORTED_REFUND_INTERACTION/);
+    expect(await worldSnapshot(t), "the refusal was not zero-delta").toEqual(before);
+  });
+
+  test("F2 — an application-owned cheque is routed to SCRUM-239, not unwound here", async () => {
+    const seeded = await seedOrg("f2");
+    const { t, asAdmin, orgId, customerId, userId } = seeded;
+
+    // `applications.confirmDisbursement` (applications.ts) clears an
+    // application-owned cheque through `markChequeClearedCore` ONLY: no
+    // `collectionPayments` mirror, no customer receivable, and — per its own
+    // comment — "a cheque that bounces after this point is not yet handled".
+    // The resulting STATE is modelled here rather than driving the whole finance
+    // fixture; what matters to this control is the shape `returnClearedCheque`
+    // receives, and every row below is schema-valid.
+    const companyId = await t.run((ctx) =>
+      ctx.db.insert("financeCompanies", {
+        orgId, name: "Bank", isActive: true,
+        profitRate: 5, maxTermMonths: 60, gracePeriodMonths: 1,
+      })
+    );
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, vin: "VIN_F2", make: "Honda", model: "Civic", year: 2021,
+        mileage: 0, color: "Blue", fuelType: "Petrol", transmission: "Automatic",
+        purchasePrice: 8000, sellingPrice: 12000, status: "AVAILABLE",
+      })
+    );
+    const quoteId = await t.run((ctx) =>
+      ctx.db.insert("quotes", {
+        orgId, vehicleId, customerId, vehiclePrice: 12000, downPayment: 2000,
+        totalFinancedAmount: 10000, termMonths: 24, status: "DRAFT",
+        companyId, createdBy: userId, createdAt: Date.now(),
+      })
+    );
+    const applicationId = await t.run((ctx) =>
+      ctx.db.insert("financeApplications", {
+        orgId, customerId, vehicleId, companyId, quoteId, salespersonId: userId,
+        status: "CLOSED", createdAt: Date.now(), updatedAt: Date.now(),
+      })
+    );
+    const chequeId = (await t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", {
+        orgId, customerId, applicationId,
+        bank: "Bank", chequeNumber: "C-f2", chequeDate: Date.now(), amount: 1000,
+        status: "CLEARED", clearedAt: Date.now(),
+        createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+      })
+    )) as Id<"postDatedCheques">;
+
+    const before = await worldSnapshot(t);
+    await expect(
+      asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId })
+    ).rejects.toThrow(/finance application/i);
+    expect(await worldSnapshot(t), "the refusal was not zero-delta").toEqual(before);
+  });
+
+  test("F3 — a contradictory application lineage refuses before any write", async () => {
+    const seeded = await seedOrg("f3");
+    const { t, asAdmin, orgId, customerId } = seeded;
+    const { chequeId, movement } = await clearedCheque(seeded, "f3", 1000);
+    const other = await makeReceivable(asAdmin, orgId, customerId, 400, "Other debt");
+    await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      orgId, receiptMovementId: movement._id, receivableId: other, requestedAmount: 400,
+    });
+
+    // The application row says APPLIED while its allocation is already REVERSED.
+    const apps = await applicationsFor(t, orgId, movement._id);
+    await t.run((ctx) => ctx.db.patch(apps[0].allocationId, { status: "REVERSED" as const }));
+
+    const before = await worldSnapshot(t);
+    await expect(
+      asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId })
+    ).rejects.toThrow(/CHEQUE_RETURN_UNSUPPORTED_REFUND_INTERACTION/);
+    expect(await worldSnapshot(t), "the refusal was not zero-delta").toEqual(before);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * §G — POSITIVE CONTROLS: the ordinary paths must keep working.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+describe("SCRUM-130 §G — the ordinary lifecycle is untouched", () => {
+  test("G1 — an ordinary receipt and a later application still post normally", async () => {
+    const seeded = await seedOrg("g1");
+    const { t, asAdmin, orgId, customerId } = seeded;
+    const { movement } = await clearedCheque(seeded, "g1", 1000);
+    const other = await makeReceivable(asAdmin, orgId, customerId, 400, "Other debt");
+
+    await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      orgId, receiptMovementId: movement._id, receivableId: other, requestedAmount: 400,
+    });
+
+    expect((await t.run((ctx) => ctx.db.get(other)))!.outstandingAmount).toBe(0);
+    expect((await positionFor(t, orgId, movement._id))!.remainingUnappliedMinor).toBe(60000);
+    expect(
+      (await events(t, orgId)).filter(
+        (e) => e.eventType === "RECEIPT_CREDIT_APPLIED" && e.status === "POSTED"
+      )
+    ).toHaveLength(1);
+  });
+
+  test("G2 — applying retained credit after the return is refused", async () => {
+    const seeded = await seedOrg("g2");
+    const { asAdmin, orgId, customerId } = seeded;
+    const { chequeId, movement } = await clearedCheque(seeded, "g2", 1000);
+    const other = await makeReceivable(asAdmin, orgId, customerId, 400, "Other debt");
+
+    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+
+    // The causal check is the load-bearing guard: the receipt occurrence is
+    // REVERSED, so it is no longer on the books and nothing can be drawn from it.
+    await expect(
+      asAdmin.mutation(api.collections.applyRetainedCredit, {
+        orgId, receiptMovementId: movement._id, receivableId: other, requestedAmount: 400,
+      })
+    ).rejects.toThrow();
+  });
+});

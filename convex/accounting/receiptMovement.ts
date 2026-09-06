@@ -377,3 +377,213 @@ export async function recordRetainedApplication(
 
   return { applicationId, sequence, idempotencyKey };
 }
+
+/* ------------------------------------------------------------------------- *
+ * SCRUM-130 — REVOKING A RECEIPT, FROM ITS PERSISTED LINEAGE
+ *
+ * A returned cleared cheque invalidates the tender that created the receipt, so
+ * every still-live economic consequence of that tender has to be unwound exactly
+ * once. The set is enumerable ONLY from the rows above — the initial movement's
+ * own allocations, and one child per later application — which is why every
+ * earlier round of this ticket was rejected for reaching for `cheque.amount`, a
+ * generic ACTIVE-allocation scan, or the mirror row's stale allocation id.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The one named refusal for a lineage this ticket must not guess about.
+ *
+ * ⚠️ NAMED, NOT PARAPHRASED. `c17504` split the economic fate of already-refunded
+ * money to SCRUM-221 and required SCRUM-130 to fail closed with a NAMED
+ * unsupported-refund-interaction reason rather than infer that outcome from
+ * reversed allocations. A machine-readable token is what makes the boundary
+ * assertable in a test and greppable when SCRUM-221 lands; without it the caller
+ * sees `reverseAllocation`'s bare "Allocation is already reversed.", which
+ * describes a symptom and names no owner.
+ */
+export const CHEQUE_RETURN_UNSUPPORTED_REFUND_INTERACTION =
+  "CHEQUE_RETURN_UNSUPPORTED_REFUND_INTERACTION";
+
+/** One later application, paired with the debt it must reopen and by how much. */
+export type ReceiptApplicationUnwind = {
+  readonly application: Doc<"receiptApplications">;
+  readonly allocationId: Id<"paymentAllocations">;
+  readonly receivableId: Id<"receivables">;
+  readonly amountMinor: number;
+};
+
+/**
+ * Everything a revocation will touch, proven before anything is written.
+ *
+ * `initialAppliedMinor` is the amount the RECEIPT ITSELF discharged, read from
+ * the sealed movement. It is the reopening amount for the cheque's own debt, and
+ * it is NOT `cheque.amount`: the two coincide on today's cheque path only
+ * because `clearCheque` refuses over-receipt, and a reopening driven by the face
+ * value is wrong the moment that stops being true — which SCRUM-121 contract v3
+ * R8 already forbids.
+ */
+export type ReceiptRevocationPlan = {
+  readonly movement: Doc<"receiptMovements">;
+  readonly position: Doc<"receiptRetainedPositions"> | null;
+  readonly initialAllocationIds: readonly Id<"paymentAllocations">[];
+  readonly initialAppliedMinor: number;
+  /** Highest sequence FIRST — an unwind runs newest-to-oldest. */
+  readonly applications: readonly ReceiptApplicationUnwind[];
+  readonly totalApplicationMinor: number;
+};
+
+/**
+ * Read and VALIDATE the complete unwind for one receipt movement. Writes nothing.
+ *
+ * ⚠️ THE VALIDATION IS THE POINT, NOT THE READ. Every allocation this receipt
+ * persisted — its own, and one per application — must still be ACTIVE. If any is
+ * not, something outside this receipt's own history has already transformed the
+ * lineage, and the known producer is the refund path: `reverseAllocationsForRefund`
+ * reverses ACTIVE allocations on a receivable newest-first and can even SPLIT
+ * one, re-allocating the un-refunded remainder under an allocation id no lineage
+ * row records. Unwinding on top of that would reopen debts twice, or reopen them
+ * for money the customer was already paid back.
+ *
+ * Enumeration of what can reverse a lineage allocation (search surface: every
+ * non-test `.ts` under `convex/`; method: `grep -rn "reverseAllocation("`;
+ * candidates classified):
+ *
+ *   collections.ts   reverseAllocationsForRefund   the refund approval path
+ *   collections.ts   returnClearedCheque           this lifecycle itself
+ *   subledger.ts     the exported mutation wrapper
+ *   utils/saleCancellation.ts                      sale cancellation
+ *
+ * All four leave the same observable state, and none of them is safe to unwind
+ * over. So the refusal is keyed on the OBSERVED state rather than on identifying
+ * which producer caused it — a discrimination this ticket has no authority to
+ * make, and `c17504` explicitly forbids inventing.
+ */
+export async function planReceiptRevocation(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    movement: Doc<"receiptMovements">;
+  }
+): Promise<ReceiptRevocationPlan> {
+  const { orgId, movement } = args;
+  if (movement.orgId !== orgId) {
+    throw new ConvexError("Receipt movement does not belong to this organization.");
+  }
+
+  const requireActiveAllocation = async (allocationId: Id<"paymentAllocations">) => {
+    const allocation = await ctx.db.get(allocationId);
+    if (!allocation || allocation.orgId !== orgId) {
+      throw new ConvexError(
+        `${CHEQUE_RETURN_UNSUPPORTED_REFUND_INTERACTION}: this receipt's persisted allocation ` +
+          `${allocationId} is missing, so the amounts it moved cannot be unwound safely.`
+      );
+    }
+    if (allocation.status !== "ACTIVE") {
+      throw new ConvexError(
+        `${CHEQUE_RETURN_UNSUPPORTED_REFUND_INTERACTION}: part of this receipt has already been ` +
+          `reversed elsewhere — most commonly by an approved refund. Resolve the refund's economic ` +
+          `disposition first; returning the cheque now would reopen the debt for money the customer ` +
+          `has already been paid back.`
+      );
+    }
+    return allocation;
+  };
+
+  for (const allocationId of movement.initialAllocationIds) {
+    await requireActiveAllocation(allocationId);
+  }
+
+  const rows = await ctx.db
+    .query("receiptApplications")
+    .withIndex("by_org_movement", (q) =>
+      q.eq("orgId", orgId).eq("receiptMovementId", movement._id)
+    )
+    .collect();
+
+  const applications: ReceiptApplicationUnwind[] = [];
+  let totalApplicationMinor = 0;
+  // Newest first. An unwind that ran oldest-first would restore a position it is
+  // about to draw down again in the same transaction; going backwards through
+  // the sequence mirrors the order the applications were created in.
+  for (const application of [...rows].sort((a, b) => b.sequence - a.sequence)) {
+    // An already-REVERSED child is not an error and not work: an exact replay of
+    // the return must produce one effect, not a second reversal.
+    if (application.status === "REVERSED") continue;
+    await requireActiveAllocation(application.allocationId);
+    applications.push({
+      application,
+      allocationId: application.allocationId,
+      receivableId: application.receivableId,
+      amountMinor: application.amountMinor,
+    });
+    totalApplicationMinor += application.amountMinor;
+  }
+
+  const position = await ctx.db
+    .query("receiptRetainedPositions")
+    .withIndex("by_org_movement", (q) =>
+      q.eq("orgId", orgId).eq("receiptMovementId", movement._id)
+    )
+    .unique();
+
+  // Conservation, asserted rather than assumed. The applications may never have
+  // moved more than the receipt retained; if they have, the lineage contradicts
+  // itself and no unwind derived from it can be trusted.
+  if (totalApplicationMinor > movement.initialUnappliedMinor) {
+    throw new ConvexError(
+      `${CHEQUE_RETURN_UNSUPPORTED_REFUND_INTERACTION}: this receipt's applications total ` +
+        `${totalApplicationMinor}, which exceeds the ${movement.initialUnappliedMinor} it retained.`
+    );
+  }
+
+  return {
+    movement,
+    position,
+    initialAllocationIds: movement.initialAllocationIds,
+    initialAppliedMinor: movement.initialAppliedMinor,
+    applications,
+    totalApplicationMinor,
+  };
+}
+
+/**
+ * Mark the planned applications REVERSED and retire the retained position, in
+ * one write set.
+ *
+ * ⚠️ THE POSITION IS STILL NEVER PATCHED ALONE. `recordRetainedApplication`'s
+ * rule was that the position moves only alongside a persisted child; the same
+ * rule holds in reverse, which is why this is one function rather than an
+ * exported "zero the position" helper a future caller could reach for on its own.
+ *
+ * ## Why the residue goes to zero rather than back up
+ *
+ * Economically the unwind is two steps: reversing an application RESTORES
+ * retained credit (CR 2110), and reversing the receipt then EXTINGUISHES the
+ * whole retained credit (DR 2110). Both journals are written, so the ledger
+ * shows both steps and 2110 nets to zero. The POSITION is state, not ledger, and
+ * its terminal value after those two steps is zero — writing the intermediate
+ * restored value first and then zeroing it in the same transaction would record
+ * no additional fact.
+ *
+ * ⚠️ `applicationCount` IS NOT DECREMENTED. It is the source of the next
+ * `sequence`, and a sequence is part of an application's accounting identity;
+ * winding it back would let a future application mint the identity a reversed
+ * one already used, and the dedupe tuple would then swallow it.
+ */
+export async function retireReceiptRevocationState(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    plan: ReceiptRevocationPlan;
+  }
+): Promise<void> {
+  const now = Date.now();
+  for (const unwind of args.plan.applications) {
+    await ctx.db.patch(unwind.application._id, { status: "REVERSED" });
+  }
+  if (args.plan.position && args.plan.position.remainingUnappliedMinor !== 0) {
+    await ctx.db.patch(args.plan.position._id, {
+      remainingUnappliedMinor: 0,
+      updatedAt: now,
+    });
+  }
+}
