@@ -11,6 +11,7 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
+import { settleOutbox, makeDue } from "../test-utils/outboxWork";
 import { api, internal } from "./_generated/api";
 
 vi.mock("./rateLimit", () => ({
@@ -287,7 +288,7 @@ describe("Phase 9 — accounting outbox", () => {
     });
     const period = (await asUser.query(api.accountingPeriods.list, { orgId }))[0];
     await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
-    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    await settleOutbox(t, orgId);
 
     const after = await eventForSource(asUser, orgId, "expenses", expenseId.toString());
     expect(after).toBeTruthy();
@@ -314,7 +315,10 @@ describe("Phase 9 — accounting outbox", () => {
     await openFullYearPeriod(asUser, orgId);
 
     for (let i = 0; i < 10; i++) {
-      await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+      // Each failed attempt applies a backoff, so the row is not due again
+      // until the clock moves — which the one-minute cron does in production.
+      await makeDue(t, orgId);
+      await settleOutbox(t, orgId);
     }
 
     const failed = await asUser.query(api.accountingOutbox.listPending, { orgId, status: "FAILED" });
@@ -323,7 +327,7 @@ describe("Phase 9 — accounting outbox", () => {
     expect(failed[0].attempts).toBe(10);
 
     // An 11th drain must not touch it further — it's no longer PENDING.
-    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    await settleOutbox(t, orgId);
     const stillFailed = await asUser.query(api.accountingOutbox.listPending, { orgId, status: "FAILED" });
     expect(stillFailed[0].attempts).toBe(10);
     const pending = await asUser.query(api.accountingOutbox.listPending, { orgId, status: "PENDING" });
@@ -356,7 +360,8 @@ describe("Phase 9 — accounting outbox", () => {
       const periods = await asUser.query(api.accountingPeriods.list, { orgId });
       const thisMonth = periods.find((p) => p.periodNumber === month + 1)!;
       await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: thisMonth._id });
-      await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+      await makeDue(t, orgId);
+      await settleOutbox(t, orgId);
     }
 
     const failed = await asUser.query(api.accountingOutbox.listPending, { orgId, status: "FAILED" });
@@ -371,7 +376,8 @@ describe("Phase 9 — accounting outbox", () => {
     const allPeriods = await asUser.query(api.accountingPeriods.list, { orgId });
     const december = allPeriods.find((p) => p.periodNumber === 12)!;
     await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: december._id });
-    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    await makeDue(t, orgId);
+    await settleOutbox(t, orgId);
 
     const posted = await eventForSource(asUser, orgId, "expenses", decemberExpenseId.toString());
     expect(posted?.status).toBe("POSTED");
@@ -389,7 +395,10 @@ describe("Phase 9 — accounting outbox", () => {
     await openFullYearPeriod(asUser, orgId);
 
     for (let i = 0; i < 10; i++) {
-      await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+      // Each failed attempt applies a backoff, so the row is not due again
+      // until the clock moves — which the one-minute cron does in production.
+      await makeDue(t, orgId);
+      await settleOutbox(t, orgId);
     }
     const failed = await asUser.query(api.accountingOutbox.listPending, { orgId, status: "FAILED" });
     expect(failed).toHaveLength(1);
@@ -402,7 +411,7 @@ describe("Phase 9 — accounting outbox", () => {
     expect(afterRetry).toHaveLength(1);
     expect(afterRetry[0].attempts).toBe(0);
 
-    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    await settleOutbox(t, orgId);
     const after = await eventForSource(asUser, orgId, "expenses", expenseId.toString());
     expect(after.status).toBe("POSTED");
   });
@@ -786,3 +795,5 @@ describe("payment intent settlement clamping", () => {
     expect(intent?.canonicalPaymentId).toBeTruthy();
   });
 });
+
+
