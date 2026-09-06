@@ -228,20 +228,28 @@ export function VehicleDetailsDialog({
       // running, moved no money, and the operator was told the customer had
       // been refunded.
       //
-      // The identity here is minted PER INTENT rather than derived, and it is
-      // retired the moment this one succeeds, so the next genuine release of
-      // the same deposit mints a fresh one and cannot collide. What it adds
-      // over passing nothing is the retry direction, which the old comment's
-      // "the second is refused anyway" reasoning did not cover: a lost
-      // response re-sent by the client is now the SAME command rather than a
-      // second payout racing the balance check.
+      // The identity marks ONE ATTEMPT, minted fresh here at the start of each
+      // user-initiated release rather than held across them.
+      //
+      // Holding it would be unsafe for this particular command. `deposits.release`
+      // pays out whatever is currently FREE on the row — the amount is not a
+      // client input — so its fingerprint cannot separate a retry from a second
+      // genuine payout, and `convex/deposits.ts` says so explicitly. If the
+      // first response were LOST, a held identity would never be retired, and
+      // the next genuine payout would be handed the first one's stored result:
+      // no money moved, operator told it was refunded. That is the original
+      // incident above arriving through a second door, and it is reproducible.
+      //
+      // At-most-once still holds, from where it always did on this path: a
+      // duplicate submit recomputes the free balance, finds nothing left, and
+      // pays nothing.
       const intent = `release-deposit:${String(depositId)}:${resolution}`;
       await releaseDeposit({
         orgId: activeOrgId,
         depositId,
         resolution,
         refundMethod: resolution === "REFUNDED" ? (refundMethodByDeposit[depositId] ?? "CASH") : undefined,
-        idempotencyKey: commandId.for(intent),
+        idempotencyKey: commandId.renew(intent),
       });
       commandId.retire(intent);
       toast.success(
