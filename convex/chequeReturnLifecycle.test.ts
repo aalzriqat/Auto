@@ -716,6 +716,61 @@ describe("SCRUM-130 §D — pending vs posted receipt, both orderings", () => {
     expect(after).toHaveLength(1);
     expect(after[0].status).toBe("REVERSED");
   });
+
+  /**
+   * ⚠️ A NEW INTERACTION THIS TICKET INTRODUCES, NOT AN INHERITED ONE.
+   *
+   * The old return wrote its reversal under `cheque_return_after_clear_<id>`,
+   * which sits OUTSIDE SCRUM-249's reserved namespace and therefore never met
+   * that ticket's reversal-side guard. Deriving the key moves it INSIDE the
+   * namespace (`occr…`), so a DEFERRED reversal — enqueued because no period was
+   * open, drained later — now passes through `reverseAccountingEvent`'s reserved
+   * check on its way to the ledger.
+   *
+   * That check recomputes the sanctioned key from the ORIGINAL EVENT'S OWN
+   * persisted columns. Reasoning says it must agree with the key the facade
+   * derived from the same occurrence. Reasoning is not evidence: if it disagreed,
+   * every deferred cheque-return reversal would refuse on drain and dead-letter,
+   * with the tender already marked RETURNED — the money would stay reversed in
+   * intent and un-reversed in the ledger, forever.
+   */
+  test("D3 — a DEFERRED reversal survives SCRUM-249's reserved-key guard on drain", async () => {
+    const seeded = await seedOrg("d3");
+    const { t, asAdmin, orgId, customerId } = seeded;
+    const debt = await makeReceivable(asAdmin, orgId, customerId, 1000, "Own debt");
+    const { chequeId, paymentId } = await clearedCheque(seeded, "d3", 1000, debt);
+
+    const posted = (await events(t, orgId)).find(
+      (e) => e.eventType === "COLLECTION_PAYMENT" && e.sourceId === paymentId.toString()
+    )!;
+    expect(posted.status).toBe("POSTED");
+
+    // Close the period so the reversal defers rather than posting inline.
+    const period = (await asAdmin.query(api.accountingPeriods.list, { orgId }))[0];
+    await asAdmin.mutation(api.accountingPeriods.close, { orgId, periodId: period._id });
+
+    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+
+    const deferred = (await pendingRows(t, orgId)).filter((r) => r.kind === "REVERSE");
+    expect(deferred, "the reversal did not defer").toHaveLength(1);
+    // It really is in the reserved namespace — otherwise this test proves nothing
+    // about the guard it exists to exercise.
+    expect(deferred[0].idempotencyKey.startsWith("occr")).toBe(true);
+
+    // Reopen and let the worker run it through the guard.
+    await asAdmin.mutation(api.accountingPeriods.reopen, {
+      orgId, periodId: period._id, reason: "drain the deferred cheque-return reversal",
+    });
+    await drain(t, orgId);
+
+    expect(
+      (await t.run((ctx) => ctx.db.get(posted._id)))!.status,
+      "the deferred reversal never reached the ledger — it was refused or dead-lettered"
+    ).toBe("REVERSED");
+    expect(
+      (await pendingRows(t, orgId)).filter((r) => r.kind === "REVERSE" && r.status === "FAILED")
+    ).toHaveLength(0);
+  });
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════

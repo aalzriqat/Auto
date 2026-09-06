@@ -1,0 +1,171 @@
+{
+  "before": {
+    "failed": 0,
+    "passed": 88,
+    "total": 88,
+    "failedNames": []
+  },
+  "results": [
+    {
+      "id": "M1",
+      "note": "reopen the cheque's own debt by FACE VALUE instead of the sealed initialAppliedMinor",
+      "expect": "SURVIVE",
+      "verdict": "SURVIVED",
+      "failed": 0,
+      "passed": 88,
+      "byteIdenticalRestore": true,
+      "failedNames": []
+    },
+    {
+      "id": "M2",
+      "note": "handle ONLY the initial receipt occurrence; skip every later application",
+      "expect": "KILL",
+      "verdict": "KILLED",
+      "failed": 5,
+      "passed": 83,
+      "byteIdenticalRestore": true,
+      "failedNames": [
+        "SCRUM-218-C §10 RM-01 — a bounced cheque cannot silently strand spent retained credit > unwinds the applied retained credit rather than refusing the return",
+        "SCRUM-130 §B — every later application occurrence is unwound, posted or not > B1 — a PENDING application obligation cannot publish after the cheque is returned",
+        "SCRUM-130 §B — every later application occurrence is unwound, posted or not > B3 — a posted application with a surviving queued obligation cannot be resurrected",
+        "SCRUM-130 §B — every later application occurrence is unwound, posted or not > B2 — a POSTED application occurrence is reversed exactly once",
+        "SCRUM-130 §C — each debt reopens by its own persisted application amount > C1 — two applications, two receivables, two exact reopenings"
+      ]
+    },
+    {
+      "id": "M3",
+      "note": "reopen each application's debt by the AGGREGATE instead of its own amount",
+      "expect": "KILL",
+      "verdict": "KILLED",
+      "failed": 1,
+      "passed": 87,
+      "byteIdenticalRestore": true,
+      "failedNames": [
+        "SCRUM-130 §C — each debt reopens by its own persisted application amount > C1 — two applications, two receivables, two exact reopenings"
+      ]
+    },
+    {
+      "id": "M4",
+      "note": "cancel the canonical pending receipt ONLY when no posted sibling was found",
+      "expect": "KILL",
+      "verdict": "KILLED",
+      "failed": 2,
+      "passed": 86,
+      "byteIdenticalRestore": true,
+      "failedNames": [
+        "SCRUM-130 §A — a returned tender cannot have its receipt resurrected > A1 — the canonical pending obligation is cancelled even though a posted sibling was reversed",
+        "SCRUM-130 §A — a returned tender cannot have its receipt resurrected > A2 — a stale drain after the return mints no new receipt journal"
+      ]
+    },
+    {
+      "id": "M5",
+      "note": "drop the unconditional cancel of an application's forward obligation",
+      "expect": "KILL",
+      "verdict": "KILLED",
+      "failed": 1,
+      "passed": 87,
+      "byteIdenticalRestore": true,
+      "failedNames": [
+        "SCRUM-130 §B — every later application occurrence is unwound, posted or not > B3 — a posted application with a surviving queued obligation cannot be resurrected"
+      ]
+    },
+    {
+      "id": "M6",
+      "note": "resolve the target debt by a scan of the rows instead of THIS application's persisted target",
+      "expect": "KILL",
+      "verdict": "KILLED",
+      "failed": 1,
+      "passed": 87,
+      "byteIdenticalRestore": true,
+      "failedNames": [
+        "SCRUM-130 §C — each debt reopens by its own persisted application amount > C1 — two applications, two receivables, two exact reopenings"
+      ]
+    },
+    {
+      "id": "M7",
+      "note": "naked retained-position patch: zero the position without marking its children reversed",
+      "expect": "KILL",
+      "verdict": "KILLED",
+      "failed": 3,
+      "passed": 85,
+      "byteIdenticalRestore": true,
+      "failedNames": [
+        "SCRUM-218-C §10 RM-01 — a bounced cheque cannot silently strand spent retained credit > unwinds the applied retained credit rather than refusing the return",
+        "SCRUM-130 §B — every later application occurrence is unwound, posted or not > B2 — a POSTED application occurrence is reversed exactly once",
+        "SCRUM-130 §C — each debt reopens by its own persisted application amount > C1 — two applications, two receivables, two exact reopenings"
+      ]
+    },
+    {
+      "id": "M8",
+      "note": "skip the refund-interaction fail-closed boundary",
+      "expect": "KILL",
+      "verdict": "KILLED",
+      "failed": 2,
+      "passed": 86,
+      "byteIdenticalRestore": true,
+      "failedNames": [
+        "SCRUM-130 §F — boundaries refuse with zero economic delta > F1 — a refund that reversed this receipt's allocation blocks the return",
+        "SCRUM-130 §F — boundaries refuse with zero economic delta > F3 — a contradictory application lineage refuses before any write"
+      ]
+    },
+    {
+      "id": "M9",
+      "note": "a constant return fingerprint, so the same key with different economics is absorbed",
+      "expect": "KILL",
+      "verdict": "KILLED",
+      "failed": 1,
+      "passed": 87,
+      "byteIdenticalRestore": true,
+      "failedNames": [
+        "SCRUM-130 §E — an exact replay is one return; a changed command is a conflict > E2 — the same key with different economics is refused"
+      ]
+    },
+    {
+      "id": "M11",
+      "note": "the ticket's Defect 1 restored: reopen the debt even with no mirror row to reverse",
+      "expect": "KILL",
+      "verdict": "KILLED",
+      "failed": 1,
+      "passed": 87,
+      "byteIdenticalRestore": true,
+      "failedNames": [
+        "SCRUM-130 §F — boundaries refuse with zero economic delta > F4 — with the mirror row severed, the debt does not reopen on its own"
+      ]
+    },
+    {
+      "id": "M12",
+      "note": "accept a cleared payment with no sealed receipt lineage and unwind nothing",
+      "expect": "KILL",
+      "verdict": "KILLED",
+      "failed": 1,
+      "passed": 87,
+      "byteIdenticalRestore": true,
+      "failedNames": [
+        "SCRUM-130 §F — boundaries refuse with zero economic delta > F5 — a mirror row with no sealed receipt lineage refuses rather than guessing"
+      ]
+    },
+    {
+      "id": "M13",
+      "verdict": "NOT INSTALLED",
+      "detail": "anchor occurs 2x, need exactly 1"
+    },
+    {
+      "id": "M10",
+      "note": "let an application-owned cheque through the customer-receipt path",
+      "expect": "KILL",
+      "verdict": "KILLED",
+      "failed": 1,
+      "passed": 87,
+      "byteIdenticalRestore": true,
+      "failedNames": [
+        "SCRUM-130 §F — boundaries refuse with zero economic delta > F2 — an application-owned cheque is routed to SCRUM-239, not unwound here"
+      ]
+    }
+  ],
+  "after": {
+    "failed": 0,
+    "passed": 88,
+    "total": 88,
+    "failedNames": []
+  }
+}
