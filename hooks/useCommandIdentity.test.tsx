@@ -49,6 +49,39 @@ describe("useCommandIdentity", () => {
     expect(secondPayout).not.toBe(firstPayout);
   });
 
+  /**
+   * The regression test for the stale-identity defect found in review and
+   * reproduced against `deposits.release`.
+   *
+   * `deposits.release` pays whatever is FREE on the row, so two genuine payouts
+   * of the same deposit with the same resolution are byte-identical requests
+   * and the server's fingerprint cannot separate them. If the first response is
+   * lost, `retire` never runs — and a HELD identity would then hand the next
+   * genuine payout the first one's stored result: no money moved, success
+   * reported. `renew` is what makes each user-initiated attempt its own command.
+   */
+  test("renew mints a new identity even when the previous one was never retired", () => {
+    const { result } = renderHook(() => useCommandIdentity());
+    const intent = "release-deposit:dep_1:REFUNDED";
+
+    const lostAttempt = result.current.renew(intent);
+    // No retire() — this is the lost-response case, the whole point.
+    const nextGenuinePayout = result.current.renew(intent);
+
+    expect(nextGenuinePayout).not.toBe(lostAttempt);
+  });
+
+  test("renew replaces the held identity rather than leaving a stale one behind", () => {
+    const { result } = renderHook(() => useCommandIdentity());
+    const intent = "release-deposit:dep_1:REFUNDED";
+
+    result.current.for(intent);
+    const renewed = result.current.renew(intent);
+    // A subsequent read within the SAME attempt must see the renewed identity,
+    // so a transport-level retry of that attempt is still one command.
+    expect(result.current.for(intent)).toBe(renewed);
+  });
+
   test("different intents never share an identity", () => {
     const { result } = renderHook(() => useCommandIdentity());
     const a = result.current.for("clear-cheque:chq_1");

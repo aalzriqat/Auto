@@ -36,6 +36,30 @@ export type CommandIdentity = {
   for: (intentId: string) => string;
   /** Call after the intent has succeeded, so the next one is a new command. */
   retire: (intentId: string) => void;
+  /**
+   * Retire whatever identity this intent holds and mint a new one, marking the
+   * start of a NEW attempt.
+   *
+   * ⚠️ Use this ONLY for a command whose server-side fingerprint provably
+   * cannot separate a retry from a genuinely new command, because the amount it
+   * moves is not a client input. `deposits.release` is the case: it pays out
+   * whatever is currently FREE on the row, so two real payouts of the same
+   * deposit with the same resolution are byte-identical requests
+   * (`convex/deposits.ts` documents exactly this).
+   *
+   * For such a command, holding one identity across attempts is unsafe rather
+   * than safe: if the first response is LOST, `retire` never runs, and a later
+   * genuinely-new payout reuses the stale identity and is handed the first
+   * one's stored result — money silently not moved, success reported. That is
+   * the original VehicleDetailsDialog incident arriving through a second door.
+   *
+   * At-most-once for these commands comes from the server recomputing the free
+   * balance — a duplicate submit finds nothing left to pay and pays nothing —
+   * not from the command log. Marking one attempt is therefore the correct
+   * identity, and is NOT the "fresh random id per request" anti-pattern, which
+   * is unsafe precisely where content CAN identify the command.
+   */
+  renew: (intentId: string) => string;
 };
 
 export function useCommandIdentity(): CommandIdentity {
@@ -52,6 +76,11 @@ export function useCommandIdentity(): CommandIdentity {
       },
       retire(intentId: string) {
         keys.current.delete(intentId);
+      },
+      renew(intentId: string) {
+        const minted = `${intentId}:${crypto.randomUUID()}`;
+        keys.current.set(intentId, minted);
+        return minted;
       },
     }),
     []

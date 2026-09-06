@@ -1949,10 +1949,15 @@ describe("releasing the same row twice from the same screen", () => {
     // SCRUM-57 made an identity mandatory on this command, so "sends no key at
     // all" stopped being an available answer — and asserting the ABSENCE of the
     // string would now pass only by breaking the mutation. The invariant is
-    // unchanged and is re-pinned here against the mechanism that replaced it:
-    // the key comes from the per-intent minter and is RETIRED once the payout
-    // lands, so the next genuine release of the same deposit mints a fresh one.
-    // `hooks/useCommandIdentity.test.tsx` proves the retirement behaviourally.
+    // unchanged and is re-pinned here against the mechanism that replaced it.
+    //
+    // The identity must mark ONE ATTEMPT (`renew`), never be HELD across
+    // attempts (`for`). Adversarial review reproduced the difference: with a
+    // held identity, a lost response leaves it un-retired, and the next genuine
+    // payout is handed the first one's stored result — cash out stays [2000]
+    // when it should be [2000, 3000], with no error raised. `renew` is what
+    // keeps the two payouts distinct; `hooks/useCommandIdentity.test.tsx`
+    // proves that behaviourally.
     const source = readFileSync(
       join(process.cwd(), "components/vehicles/VehicleDetailsDialog.tsx"),
       "utf8"
@@ -1963,16 +1968,13 @@ describe("releasing the same row twice from the same screen", () => {
 
     // It DOES carry an identity now — the command refuses to run without one.
     expect(releaseCall).toContain("idempotencyKey");
-    // ...and that identity is minted per intent, not spelled out from the row.
-    expect(releaseCall).toContain("commandId.for(");
-    // The literal key shape that caused the incident must not come back.
+    // ...minted per ATTEMPT.
+    expect(releaseCall).toContain("commandId.renew(");
+    // A HELD identity on this path is the reproduced defect, not a style choice.
+    expect(releaseCall).not.toContain("commandId.for(");
+    // The literal key shape that caused the original incident must not return.
     expect(releaseCall).not.toMatch(/deposit_release_/);
     expect(releaseCall).not.toMatch(/idempotencyKey:\s*`?deposit/);
-
-    // Retirement is what makes a second genuine payout a NEW command. Without
-    // it the incident returns, so it is asserted rather than assumed.
-    const handler = source.slice(start, source.indexOf("toast.success", start));
-    expect(handler).toContain("commandId.retire(");
   });
 
   test("a genuine retry of the SAME release replays rather than paying twice", async () => {

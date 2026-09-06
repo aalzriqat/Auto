@@ -176,15 +176,18 @@ export function ApplicationDetailsDialog({
     if (!activeOrgId) return;
     setResolvingDepositId(depositId);
     try {
-      // Per-intent, and retired on success so a later genuine release of the
-      // same deposit is a new command rather than a replay of this one.
+      // Per ATTEMPT, not per (deposit, resolution) — same reasoning as the
+      // release path in `components/vehicles/VehicleDetailsDialog.tsx`:
+      // `deposits.release` pays whatever is free, so a held identity would let a
+      // later genuine payout replay an earlier one's stored result after a lost
+      // response. At-most-once comes from the server's free-balance check.
       const intent = `release-deposit:${String(depositId)}:${resolution}`;
       await releaseDeposit({
         orgId: activeOrgId,
         depositId,
         resolution,
         refundMethod: resolution === "REFUNDED" ? refundMethod : undefined,
-        idempotencyKey: commandId.for(intent),
+        idempotencyKey: commandId.renew(intent),
       });
       commandId.retire(intent);
       toast.success(
