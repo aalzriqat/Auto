@@ -243,6 +243,34 @@ export async function expectVisibleTableCell(
 }
 
 /**
+ * Add Vehicle's create flow is a 5-step wizard (VehicleDialog.tsx,
+ * VEHICLE_WIZARD_STEPS); the step name and "Step N of 5" progress text are
+ * the only user-observable signal that a step transition actually happened,
+ * so assertions here key on that text rather than internal wizard state.
+ */
+const VEHICLE_WIZARD_STEP_COUNT = 5;
+
+async function expectVehicleWizardStep(
+  dialog: Locator,
+  stepNumber: number,
+  stepLabel: string,
+): Promise<void> {
+  await expect(
+    dialog.getByText(`Step ${stepNumber} of ${VEHICLE_WIZARD_STEP_COUNT}`),
+    `Add Vehicle wizard expected step ${stepNumber} (${stepLabel}) but the step indicator did not reach it`,
+  ).toBeVisible();
+}
+
+async function advanceVehicleWizard(
+  dialog: Locator,
+  nextStepNumber: number,
+  nextStepLabel: string,
+): Promise<void> {
+  await dialog.getByRole("button", { name: "Continue" }).click();
+  await expectVehicleWizardStep(dialog, nextStepNumber, nextStepLabel);
+}
+
+/**
  * Creates a vehicle through the real UI (not the API) so the sales/leads
  * specs always have a fresh, distinctively-named vehicle to select without
  * depleting or depending on whatever real inventory exists in the shared QA
@@ -264,14 +292,23 @@ export async function createVehicle(
     dialog.getByRole("heading", { name: "Add Vehicle" }),
   ).toBeVisible();
 
+  // Step 1/5 — VIN.
+  await expectVehicleWizardStep(dialog, 1, "VIN");
   await dialog.getByPlaceholder("17-character VIN").fill(vin);
+  await advanceVehicleWizard(dialog, 2, "Vehicle details");
+
+  // Step 2/5 — Vehicle details. Only becomes visible once the wizard advances.
+  await expect(dialog.getByLabel("Make")).toBeVisible();
   await dialog.getByLabel("Make").fill(make);
   await dialog.getByLabel("Model").fill(model);
   await dialog.getByLabel("Year").fill("2024");
   await dialog.getByLabel("Color").fill("Black");
   await dialog.getByLabel("Mileage").fill("100");
-  await dialog.getByLabel("Selling Price (JOD)").fill("15000");
+  await advanceVehicleWizard(dialog, 3, "Acquisition & cost");
 
+  // Step 3/5 — Acquisition & cost. Vehicle source defaults to STOCK with
+  // purchasePrice 0, so no payment method is required on this path.
+  await dialog.getByLabel("Selling Price (JOD)").fill("15000");
   // Only the profit-approval spec needs a floor; left at the form default (0)
   // otherwise so no other spec accidentally trips the approval gate.
   if (opts?.minimumProfit !== undefined) {
@@ -279,7 +316,13 @@ export async function createVehicle(
       .getByLabel("Minimum Profit (JOD)")
       .fill(String(opts.minimumProfit));
   }
+  await advanceVehicleWizard(dialog, 4, "Photos");
 
+  // Step 4/5 — Photos. Optional; no upload needed for a test vehicle.
+  await advanceVehicleWizard(dialog, 5, "Availability");
+
+  // Step 5/5 — Availability. Status defaults to AVAILABLE and Trust Passport
+  // fields are optional, so the final step submits directly.
   await dialog
     .getByRole("button", { name: /^(Add Vehicle|Submit for Approval)$/ })
     .click();
