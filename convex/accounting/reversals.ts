@@ -6,6 +6,12 @@ import { scaleForCurrency } from "../utils/money";
 import { simplePayloadHash, validateBalance, LineSpec } from "./postingRules";
 import { auditLog } from "../financialAudit";
 import { incrementAccountSnapshot } from "./accountSnapshots";
+import {
+  isReservedReceiptKey,
+  isReservedReceiptTuple,
+  occurrenceReversalIdempotencyKey,
+  rehydrateReceiptOccurrence,
+} from "./receiptOccurrence";
 
 export interface ReversalCommand {
   orgId: Id<"organizations">;
@@ -48,6 +54,61 @@ export async function reverseAccountingEvent(
   }
   if (!original.journalEntryId) {
     throw new ConvexError("Original event has no linked journal entry.");
+  }
+
+  // ⚠️ SCRUM-249 — THE RESERVED KEY NAMESPACE IS CLOSED ON THIS DOOR TOO.
+  //
+  // A reversal writes an `accountingEvents` row carrying the caller's
+  // `idempotencyKey`, so `internal.accountingLedger.reverse` is a second way to
+  // occupy the receipt authority's key space — and once a row holds
+  // `collection_payment_<paymentId>`, `postOrEnqueue` drops the genuine receipt
+  // silently, exactly as in the forward case. Reserving the namespace here as
+  // well is what makes the forward guard's claim true rather than approximate.
+  //
+  // Stated precisely, because the boundary matters: this restricts WHICH KEY a
+  // reversal may be written under, not WHICH EVENTS may be reversed. The only
+  // reserved-namespace key any caller may use is the one derived from the
+  // occurrence actually being reversed, proven from the ORIGINAL EVENT'S OWN
+  // PERSISTED COLUMNS rather than from anything the caller supplied.
+  // `reverseReceiptOccurrence` derives exactly that key and is unaffected;
+  // `clearCheque`'s `cheque_return_after_clear_<chequeId>` lives outside the
+  // namespace and is untouched.
+  //
+  // ⚠️ WHAT THIS DELIBERATELY DOES NOT DO: it does not decide whether a generic
+  // operator may reverse a certified receipt occurrence at all. That is a real
+  // and separate authority question, it would refuse `clearCheque`'s existing
+  // direct reversal of a `collectionPayments`-sourced event, and that surface
+  // belongs to SCRUM-130. Recorded as an open boundary rather than closed by
+  // implication.
+  if (isReservedReceiptKey(cmd.idempotencyKey)) {
+    // Rehydration is attempted ONLY when the original really is a reserved
+    // receipt occurrence. Calling it unconditionally also fails closed — the
+    // cross-family check refuses a `JOURNAL_REVERSAL` or an `expenses` snapshot
+    // — but it reports "snapshot is not a direct collection", which describes
+    // the wrong problem to whoever hit it. Reversing an unrelated event under a
+    // reserved key is not a malformed snapshot; it is taking a namespace that
+    // is not yours, and the error should say so.
+    const sanctioned = isReservedReceiptTuple(original.eventType, original.sourceType)
+      ? occurrenceReversalIdempotencyKey(
+          rehydrateReceiptOccurrence({
+            orgId: cmd.orgId,
+            snapshot: {
+              eventType: original.eventType,
+              sourceType: original.sourceType,
+              sourceId: original.sourceId,
+              eventVersion: original.eventVersion,
+            },
+          })
+        )
+      : null;
+    if (cmd.idempotencyKey !== sanctioned) {
+      throw new ConvexError(
+        `Refusing a reversal under a reserved receipt idempotency key (SCRUM-249). ` +
+          `"${cmd.idempotencyKey}" is inside the direct-collection receipt authority's key space, ` +
+          `and the only sanctioned key for reversing ${original.eventType}/${original.sourceType}/` +
+          `${original.sourceId}@v${original.eventVersion} is the one derived from that occurrence.`
+      );
+    }
   }
 
   // Check idempotency

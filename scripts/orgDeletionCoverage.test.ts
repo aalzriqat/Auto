@@ -15,7 +15,7 @@
 import { describe, expect, test } from "vitest";
 import schema from "../convex/schema";
 import { ORGANIZATION_DELETION_STEPS } from "../convex/adminOrgs";
-import { RESET_TABLES_FOR_TEST } from "../convex/orgFinancialReset";
+import { RESET_TABLES_FOR_TEST, CHILD_TABLES_FOR_TEST } from "../convex/orgFinancialReset";
 
 /**
  * Tables that hold an `orgId` and are deliberately NOT deleted with the org.
@@ -228,5 +228,45 @@ describe("organization hard-delete coverage", () => {
     expect(RESET_TABLES_FOR_TEST).toContain("financeApplications");
     expect(RESET_TABLES_FOR_TEST).toContain("financeAppraisals");
     expect(RESET_TABLES_FOR_TEST).toContain("financeApplicationOverrides");
+  });
+
+  /**
+   * ⚠️ `CHILD_TABLES` IS SILENTLY INERT FOR ANY EDGE LISTED THE WRONG WAY ROUND.
+   *
+   * `resetOrgFinancialData` builds its `stillPopulated` set INCREMENTALLY while
+   * iterating `RESET_TABLES`, so a parent listed BEFORE its child can never see
+   * that child in the set and is never blocked by it — the edge exists, reads as
+   * protection, and does nothing.
+   *
+   * A reviewer demonstrated this by reordering `RESET_TABLES` and watching the
+   * receipt-orphan regression fail on pass 0, then reverting it as a control.
+   * The comment in that file had claimed ordering was merely a readability aid,
+   * which was an over-correction of an earlier comment claiming ordering was the
+   * whole guarantee. Both were wrong; both are load-bearing.
+   *
+   * This test is here so the ordering half stops being a claim in prose. It
+   * covers every edge, including ones added later — which is the point, since
+   * the failure mode is a future edit that reorders the array in good faith.
+   */
+  test("every CHILD_TABLES child is listed before its parent in RESET_TABLES", () => {
+    const indexOf = new Map(RESET_TABLES_FOR_TEST.map((table, i) => [table, i]));
+
+    for (const [parent, children] of Object.entries(CHILD_TABLES_FOR_TEST)) {
+      const parentIndex = indexOf.get(parent);
+      expect(parentIndex, `CHILD_TABLES names "${parent}", which is not in RESET_TABLES`).toBeDefined();
+
+      for (const child of children) {
+        const childIndex = indexOf.get(child);
+        expect(
+          childIndex,
+          `CHILD_TABLES lists "${child}" under "${parent}", but it is not in RESET_TABLES`
+        ).toBeDefined();
+        expect(
+          childIndex!,
+          `"${child}" must be listed BEFORE its parent "${parent}" in RESET_TABLES — ` +
+            "stillPopulated is built during iteration, so a later child never blocks an earlier parent"
+        ).toBeLessThan(parentIndex!);
+      }
+    }
   });
 });
