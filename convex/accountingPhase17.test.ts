@@ -338,7 +338,10 @@ describe("Phase 17 — parallel reporting and sign-off", () => {
   test("signOffCutover records a point-in-time snapshot that listSignOffs returns", async () => {
     const ctx = await seedCutoverDealer();
     await ctx.t.run((c) =>
-      c.db.insert("transactions", { orgId: ctx.orgId, type: "IN", amount: 200, date: Date.now(), category: "COLLECTION_PAYMENT", description: "Legacy collection" })
+      // A validly mapped category. This control exists to prove that a
+      // migrated row satisfies sign-off; it must not depend on the retired
+      // COLLECTION_PAYMENT producer (SCRUM-223), which no longer migrates.
+      c.db.insert("transactions", { orgId: ctx.orgId, type: "OUT", amount: 200, date: Date.now(), category: "EXPENSE", description: "Legacy expense" })
     );
     await ctx.asOwner.mutation(api.accountingMigration.migrateUnpostedTransactions, { orgId: ctx.orgId, dryRun: false });
 
@@ -357,10 +360,26 @@ describe("Phase 17 — parallel reporting and sign-off", () => {
   test("signOffCutover rejects when transactions remain unmigrated", async () => {
     const ctx = await seedCutoverDealer();
     await ctx.t.run((c) =>
-      c.db.insert("transactions", { orgId: ctx.orgId, type: "IN", amount: 200, date: Date.now(), category: "COLLECTION_PAYMENT", description: "Never migrated" })
+      c.db.insert("transactions", { orgId: ctx.orgId, type: "IN", amount: 200, date: Date.now(), category: "COLLECTION_PAYMENT", description: "Retired, never migrated" })
     );
-    // Deliberately skip migrateUnpostedTransactions.
 
+    // SCRUM-223: migration IS invoked here. The previous version of this test
+    // deliberately skipped it, which made the assertion a tautology — sign-off
+    // rejected because nothing had been migrated, proving nothing about
+    // retirement. Running migration and still failing sign-off is the real
+    // obligation: a retired row is not a migrated row, and retirement is not
+    // sign-off proof.
+    const migration = await ctx.asOwner.mutation(api.accountingMigration.migrateUnpostedTransactions, {
+      orgId: ctx.orgId, dryRun: false,
+    });
+    expect(migration.retired).toBe(1);
+    expect(migration.posted).toBe(0);
+    expect(migration.results[0].disposition).toBe("RETIRED_COLLECTION");
+
+    // Sign-off still refuses, and it does so on its own independent evidence:
+    // it counts POSTED accounting events sourced from `transactions` and has
+    // no notion of RETIRED at all. That independence is deliberate defence in
+    // depth and must not be collapsed to make retirement look like progress.
     await expect(
       ctx.asOwner.mutation(api.accountingCutover.signOffCutover, { orgId: ctx.orgId })
     ).rejects.toThrow(/still unmigrated/i);
