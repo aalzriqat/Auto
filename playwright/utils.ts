@@ -329,18 +329,20 @@ export async function createVehicle(
   // click-actionability tracking: a fresh-preview trace confirmed the "Vehicle
   // added successfully" toast and dialog-closed state landing well under a
   // second after this click, while Playwright itself still reported the click
-  // as "element was detached from the DOM, retrying" all the way to the test
-  // timeout. The submission had already succeeded; only Playwright's own
-  // bookkeeping for *this specific click* never resolved. Awaiting that
-  // failure before checking the toast is itself wrong — by the time it gives
-  // up, the toast (a few seconds by default) has already disappeared, turning
-  // a real pass into a false "toast never appeared" failure. So the click is
-  // fired without being awaited on its own, and raced against the toast
-  // check below; both must still resolve for the test to pass, so a
-  // submission that genuinely doesn't happen still fails correctly.
+  // as "element was detached from the DOM, retrying" all the way to its own
+  // action timeout. The submission had already succeeded; only Playwright's
+  // own bookkeeping for *this specific click* never resolved. Two things
+  // follow: the click is fired without being awaited on its own so the toast
+  // check below can catch the toast the moment it appears rather than after
+  // the click's bookkeeping gives up, and its own timeout is capped short —
+  // otherwise awaiting it later (even caught) burns most of the test's
+  // budget before the dialog-closed check ever gets to run, which is exactly
+  // what turned a real pass into a "Test timeout of 60000ms exceeded" here.
+  // A submission that genuinely doesn't happen still fails the toast and
+  // dialog-closed assertions correctly.
   const submitClick = dialog
     .getByRole("button", { name: /^(Add Vehicle|Submit for Approval)$/ })
-    .click()
+    .click({ timeout: 5_000 })
     .catch(() => {});
 
   // A caller holding only CREATE_VEHICLES_REQUEST gets "Submit for Approval":
