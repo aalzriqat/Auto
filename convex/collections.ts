@@ -2016,12 +2016,29 @@ export const returnClearedCheque = mutation({
          * branded debt therefore misstates the ageing and then receives neither
          * a due-soon nor an overdue reminder, permanently.
          *
-         * `nextStatus` is this file's own existing derivation, and the nearest
-         * precedent is exact: `reverseAllocationsForRefund` reopens a legacy
-         * debt after reversing an allocation and derives the status the same
-         * way. This also corrects the pre-existing hardcode on the cheque's own
-         * receivable rather than leaving two rules inside one helper.
-         * Codex CX-3, reproduced failing-first by C4.
+         * ⚠️ DERIVED LOCALLY, NOT THROUGH THE SHARED `nextStatus`.
+         *
+         * `nextStatus` has no OPEN branch: its positive, not-yet-due case always
+         * returns PARTIALLY_PAID, which is true for its own callers because
+         * they only reach it when a payment genuinely remains. A cheque return
+         * restores the ENTIRE original balance, so borrowing that helper made
+         * the row assert a partial payment that never happened, while canonical
+         * `reverseAllocation` independently recorded OPEN from
+         * `outstanding >= originalAmountMinor` — the two projections disagreeing
+         * about the same debt. Codex R3-STATUS-01, reproduced by C3 and C4.
+         *
+         * The correction stays LOCAL on purpose. `nextStatus` has other payment
+         * and refund callers whose contract is correct as it stands; widening it
+         * to teach every caller about full restoration would change behaviour
+         * nobody asked to change, for one caller's benefit. Owner ruling
+         * `c17783`.
+         *
+         * Precedence, and why: PAID first because a non-positive balance is
+         * settled whatever the calendar says; then OVERDUE, because a late debt
+         * is late whether or not anything was ever paid against it; then OPEN
+         * when the full original amount is back; PARTIALLY_PAID only when a real
+         * payment survives the return. C5 is the control that stops "always
+         * OPEN" — a surviving cash payment must still read PARTIALLY_PAID.
          */
         const reopenLegacyReceivable = async (
           receivableId: Id<"receivables">,
@@ -2033,9 +2050,17 @@ export const returnClearedCheque = mutation({
             (receivable.outstandingAmount ?? 0) + fromMinorUnits(amountMinor, currency),
             currency
           );
+          const reopenedStatus: ReceivableStatus =
+            outstandingAmount <= 0
+              ? "PAID"
+              : receivable.dueDate < now
+                ? "OVERDUE"
+                : outstandingAmount >= receivable.originalAmount
+                  ? "OPEN"
+                  : "PARTIALLY_PAID";
           await ctx.db.patch(receivable._id, {
             outstandingAmount,
-            status: nextStatus(outstandingAmount, receivable.dueDate, now),
+            status: reopenedStatus,
             updatedAt: now,
           });
         };

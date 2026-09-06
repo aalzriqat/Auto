@@ -181,6 +181,22 @@ async function makeReceivable(
   })) as Id<"receivables">;
 }
 
+/** The canonical `receivableDocuments` row mirroring a legacy receivable. */
+async function canonicalFor(
+  t: TestHarness,
+  orgId: Id<"organizations">,
+  receivableId: Id<"receivables">
+) {
+  return await t.run(async (ctx) =>
+    (await ctx.db.query("receivableDocuments").collect()).find(
+      (d) =>
+        d.orgId === orgId &&
+        d.sourceType === "legacy_receivable" &&
+        d.sourceId === receivableId
+    )
+  );
+}
+
 async function movementFor(t: TestHarness, orgId: Id<"organizations">, paymentId: Id<"collectionPayments">) {
   return await t.run((ctx) =>
     ctx.db
@@ -652,10 +668,18 @@ describe("SCRUM-130 §C — each debt reopens by its own persisted application a
     await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
 
     expect((await t.run((ctx) => ctx.db.get(debt)))!.outstandingAmount).toBe(1000);
-    // Due TOMORROW, so reopening it does not make it past due. Before CX-3 this
-    // asserted `OVERDUE` — an outcome-shaped assertion that agreed with the
-    // hardcode instead of with the calendar.
-    expect((await t.run((ctx) => ctx.db.get(debt)))!.status).toBe("PARTIALLY_PAID");
+    // The FULL original balance is back and the debt is not yet due, so nothing
+    // about it is either overdue or partly paid: it is OPEN.
+    //
+    // This assertion has now been wrong twice, in opposite directions, and both
+    // times it agreed with the implementation instead of with the facts —
+    // `OVERDUE` while the status was hardcoded, then `PARTIALLY_PAID` while it
+    // was derived by a helper with no OPEN branch. Codex R3-STATUS-01.
+    expect((await t.run((ctx) => ctx.db.get(debt)))!.status).toBe("OPEN");
+    // Legacy and canonical must agree. `reverseAllocation` already computed
+    // OPEN on the canonical document from `outstanding >= originalAmountMinor`;
+    // a divergence here means one of the two projections is lying.
+    expect((await canonicalFor(t, orgId, debt))!.status).toBe("OPEN");
   });
 
   test("C4 — a reopened debt's status follows its OWN due date, not the return", async () => {
@@ -693,13 +717,67 @@ describe("SCRUM-130 §C — each debt reopens by its own persisted application a
     ).toBe("OVERDUE");
     expect(
       (await t.run((ctx) => ctx.db.get(futureDue)))!.status,
-      "a not-yet-due reopened debt must NOT be branded OVERDUE by the return"
-    ).toBe("PARTIALLY_PAID");
+      "a not-yet-due fully-restored debt must read OPEN, not OVERDUE and not PARTIALLY_PAID"
+    ).toBe("OPEN");
 
     // Control: the amounts still reopen per-receivable, so a status fix cannot
     // be mistaken for having changed what money did.
     expect((await t.run((ctx) => ctx.db.get(pastDue)))!.outstandingAmount).toBe(300);
     expect((await t.run((ctx) => ctx.db.get(futureDue)))!.outstandingAmount).toBe(500);
+  });
+
+  test("C5 — a reopened debt with a SURVIVING payment stays PARTIALLY_PAID", async () => {
+    const seeded = await seedOrg("c5");
+    const { t, asAdmin, orgId, customerId } = seeded;
+    const { chequeId, movement } = await clearedCheque(seeded, "c5", 1000);
+
+    // 1000 owed, 200 paid in cash, 300 covered by this cheque's retained credit.
+    const debt = await makeReceivable(asAdmin, orgId, customerId, 1000, "Mixed debt");
+    await asAdmin.mutation(api.collections.recordPayment, {
+      orgId, receivableId: debt, amount: 200, method: "CASH", paymentDate: Date.now(),
+    });
+    await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      orgId, receiptMovementId: movement._id, receivableId: debt, requestedAmount: 300,
+    });
+    expect((await t.run((ctx) => ctx.db.get(debt)))!.outstandingAmount).toBe(500);
+
+    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+
+    // The cheque's 300 comes back; the CASH 200 does not — it was a different
+    // tender and this return does not touch it. So the debt is genuinely part
+    // paid, and PARTIALLY_PAID is the true answer rather than a default.
+    //
+    // This is the control that stops "always OPEN" from passing: without a
+    // surviving payment, every reopened debt would look fully restored.
+    const row = (await t.run((ctx) => ctx.db.get(debt)))!;
+    expect(row.outstandingAmount, "the surviving cash payment was disturbed").toBe(800);
+    expect(row.outstandingAmount).toBeLessThan(row.originalAmount);
+    expect(row.status, "a debt with a live payment against it is not OPEN").toBe(
+      "PARTIALLY_PAID"
+    );
+    expect((await canonicalFor(t, orgId, debt))!.status).toBe("PARTIALLY_PAID");
+  });
+
+  test("C6 — a fully restored PAST-DUE debt reads OVERDUE, not OPEN", async () => {
+    const seeded = await seedOrg("c6");
+    const { t, asAdmin, orgId, customerId } = seeded;
+    const { chequeId, movement } = await clearedCheque(seeded, "c6", 1000);
+    const debt = await makeReceivable(
+      asAdmin, orgId, customerId, 400, "Past due", Date.now() - 86_400_000
+    );
+    await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      orgId, receiptMovementId: movement._id, receivableId: debt, requestedAmount: 400,
+    });
+
+    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+
+    // Full restoration and past due at once. The due date wins: a debt that is
+    // late is late whether or not anything was ever paid against it, so OVERDUE
+    // must take precedence over OPEN.
+    const row = (await t.run((ctx) => ctx.db.get(debt)))!;
+    expect(row.outstandingAmount).toBe(400);
+    expect(row.outstandingAmount).toBe(row.originalAmount);
+    expect(row.status, "a past-due fully-restored debt must read OVERDUE").toBe("OVERDUE");
   });
 });
 
