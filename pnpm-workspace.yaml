@@ -49,7 +49,8 @@ overrides:
   #
   # Reached through ajv@8 by TWO independent paths. `pnpm why fast-uri -r`
   # resolves ONE instance, not two, so this is a documentation point, not a
-  # second exposure (ajv@6, used by eslint/zxing-wasm, takes uri-js instead):
+  # second exposure (ajv@6, whose only two parents are eslint and
+  # @eslint/eslintrc, takes uri-js instead):
   #   @sentry/nextjs > @sentry/webpack-plugin > webpack > schema-utils > ajv
   #   shadcn > @modelcontextprotocol/sdk > ajv
   #
@@ -63,11 +64,14 @@ overrides:
   # their exact pins by the minimumReleaseAge (<24h) gate: that reason does not
   # apply here and is not being borrowed. minimumReleaseAge is pnpm's own
   # RESOLUTION-time policy, there is no .npmrc or settings key configuring it in
-  # this repository, and every install in .github/workflows is
-  # `pnpm install --frozen-lockfile` (8x) or `npm ci` (2x) — none of which
-  # resolves anything, so CI never exercises it. Tracked as SCRUM-244. This pin
-  # is exact because of the advisory ranges above, and would be even if that
-  # gate were fully enforced.
+  # this repository, and every install under .github/workflows is either
+  # `pnpm install --frozen-lockfile` or `npm ci` — there is no unfrozen
+  # `pnpm install` and no bare `npm install` anywhere in that directory. Both
+  # forms are frozen and resolve nothing, so CI never exercises it. (Stated as
+  # the invariant rather than a per-file count: a count is only true for the
+  # file it was taken in, and goes stale the moment a workflow is added.)
+  # Tracked as SCRUM-244. This pin is exact because of the advisory ranges
+  # above, and would be even if that gate were fully enforced.
   fast-uri: 4.1.4
   ip-address: ">=10.3.1"
   "js-yaml@>=4.0.0 <4.3.0": ">=4.3.0 <5.0.0"
