@@ -61,17 +61,19 @@ overrides:
   # surfaces.
   #
   # A note on the exact form, since postcss/nanoid/browserslist above justify
-  # their exact pins by the minimumReleaseAge (<24h) gate: that reason does not
-  # apply here and is not being borrowed. minimumReleaseAge is pnpm's own
-  # RESOLUTION-time policy, there is no .npmrc or settings key configuring it in
-  # this repository, and every install under .github/workflows is either
-  # `pnpm install --frozen-lockfile` or `npm ci` — there is no unfrozen
-  # `pnpm install` and no bare `npm install` anywhere in that directory. Both
-  # forms are frozen and resolve nothing, so CI never exercises it. (Stated as
-  # the invariant rather than a per-file count: a count is only true for the
-  # file it was taken in, and goes stale the moment a workflow is added.)
-  # Tracked as SCRUM-244. This pin is exact because of the advisory ranges
-  # above, and would be even if that gate were fully enforced.
+  # their exact pins by the minimumReleaseAge (<24h) gate: that reason does
+  # not apply here and is NOT being borrowed. minimumReleaseAge is pnpm's own
+  # RESOLUTION-time policy, and nothing in this repository configures it —
+  # there is no .npmrc anywhere in the tree, and this file has no settings
+  # block at all (its only top-level keys are packages, overrides,
+  # allowBuilds, patchedDependencies and auditConfig). Whether CI should
+  # enforce a release-age policy, and by what mechanism, is SCRUM-244's
+  # question and is deliberately NOT argued here. Two earlier attempts to
+  # settle it inside this comment, by characterising the CI install commands,
+  # were both wrong in different ways; that kind of census is stale the moment
+  # a workflow changes, and it is not needed — this pin is exact because of
+  # the advisory ranges above, and would be even if that gate were fully
+  # enforced.
   fast-uri: 4.1.4
   ip-address: ">=10.3.1"
   "js-yaml@>=4.0.0 <4.3.0": ">=4.3.0 <5.0.0"
