@@ -27,7 +27,7 @@
  * §4 goes red and says so, rather than SCRUM-130 silently losing its authority.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import schema from "./schema";
@@ -41,6 +41,48 @@ import {
 } from "./accounting/receiptOccurrence";
 import { postReceiptOccurrence } from "./accounting/workflowHooks";
 import { reverseAccountingEvent } from "./accounting/reversals";
+
+/**
+ * ⚠️ THE INSTRUMENT THAT ACTUALLY OBSERVES THE INVARIANT.
+ *
+ * Everything else in this file infers whether the engine was entered — from a
+ * committed footprint (which rollback erases), from which error wins (which a
+ * duplicated precondition can short-circuit), or from source text (which
+ * indirection defeats). Each of those was defeated in turn by a reviewer, and
+ * each time the answer was another inference.
+ *
+ * This counts the calls. `reverseAccountingEvent` is wrapped so every entry
+ * into the shared engine increments a counter, and the refusal tests assert the
+ * counter did not move. There is no fixture to special-case and no spelling to
+ * evade: if a certified receipt reaches the engine, this sees it.
+ *
+ * The wrapper FORWARDS to the real implementation, so GR3/GR4/GR7/GR8 still
+ * exercise genuine reversals. The `vi.mock` + `importOriginal` idiom against a
+ * Convex module is precedented in this repo — see
+ * `authorityOutcomePersistence.test.ts`, which wraps `scheduleAuthorityDispatch`
+ * the same way and relies on the wrapper actually running under `convex-test`'s
+ * `import.meta.glob` module map.
+ *
+ * ⚠️ A COUNTER THAT IS NEVER INCREMENTED WOULD MAKE EVERY "not called" ASSERTION
+ * VACUOUS. GR3 is the liveness control: it asserts the counter DOES move on a
+ * supported reversal. Without it, an unwired mock would turn this whole section
+ * green and prove nothing — the same failure mode that already bit the balance
+ * dimension of `economicFootprint` in this file.
+ */
+const engineEntries = { count: 0 };
+vi.mock("./accounting/reversals", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./accounting/reversals")>();
+  return {
+    ...actual,
+    reverseAccountingEvent: async (
+      ctx: Parameters<typeof actual.reverseAccountingEvent>[0],
+      cmd: Parameters<typeof actual.reverseAccountingEvent>[1]
+    ) => {
+      engineEntries.count++;
+      return actual.reverseAccountingEvent(ctx, cmd);
+    },
+  };
+});
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -248,6 +290,7 @@ describe("SCRUM-254 §1 — the generic wrapper cannot reverse a certified recei
     // the refusal proves nothing. Pinned here rather than assumed.
     expect(before.balances.length).toBeGreaterThan(0);
     expect(before.balances.every((b) => !b.includes("undefined"))).toBe(true);
+    const entriesBefore = engineEntries.count;
 
     await expect(
       asOperator.mutation(internal.accountingLedger.reverse, {
@@ -276,6 +319,13 @@ describe("SCRUM-254 §1 — the generic wrapper cannot reverse a certified recei
     // is removed rather than sitting inert.
     expect(after.financialAuditCount).toBe(before.financialAuditCount);
     expect(after.adminAuditCount).toBe(before.adminAuditCount);
+
+    // ⚠️ THE ORDINARY CASE, DIRECTLY OBSERVED. This receipt is POSTED and the
+    // reversal date is today, inside an open period — nothing special about it,
+    // which is exactly why it is the case that matters. The engine was never
+    // entered. Not inferred from rollback, not inferred from which error won,
+    // not inferred from source text: counted.
+    expect(engineEntries.count).toBe(entriesBefore);
   });
 });
 
@@ -289,6 +339,7 @@ describe("SCRUM-254 §2 — key spelling does not create authority", () => {
     // which is not an authority boundary at all.
     const reservedKey = occurrenceReversalIdempotencyKey(identity);
     expect(reservedKey.startsWith("occr")).toBe(true);
+    const entriesBefore = engineEntries.count;
 
     await expect(
       asOperator.mutation(internal.accountingLedger.reverse, {
@@ -305,6 +356,8 @@ describe("SCRUM-254 §2 — key spelling does not create authority", () => {
     expect(after.eventCount).toBe(1);
     expect(after.events[0].status).toBe("POSTED");
     expect(after.events[0].reversedByEventId).toBeNull();
+    // The right key does not buy entry either.
+    expect(engineEntries.count).toBe(entriesBefore);
   });
 });
 
@@ -329,6 +382,7 @@ describe("SCRUM-254 §3 — supported non-receipt generic reversal is preserved"
       },
     });
 
+    const entriesBefore = engineEntries.count;
     const result = await asOperator.mutation(internal.accountingLedger.reverse, {
       orgId,
       originalEventId: posted.eventId!,
@@ -341,6 +395,13 @@ describe("SCRUM-254 §3 — supported non-receipt generic reversal is preserved"
     const original = await t.run((ctx) => ctx.db.get(posted.eventId!));
     expect(original?.status).toBe("REVERSED");
     expect(original?.reversedByEventId).toBe(result.reversalEventId);
+
+    // ⚠️ LIVENESS FOR THE WHOLE ENGINE-ENTRY INSTRUMENT. If the mock were not
+    // wired — wrong specifier, hoisting change, convex-test resolving the real
+    // module instead — the counter would never move and every "engine not
+    // entered" assertion in this file would pass vacuously. This is the one
+    // test that fails in that case, so it is load-bearing, not decoration.
+    expect(engineEntries.count).toBe(entriesBefore + 1);
   });
 });
 
@@ -595,6 +656,7 @@ describe("SCRUM-254 §7 — the authority refusal precedes the engine, not merel
     // A state the engine rejects on its own, with a distinguishable message.
     await t.run((ctx) => ctx.db.patch(receipt._id, { status: "FAILED" }));
 
+    const entriesBefore = engineEntries.count;
     let message = "";
     try {
       await asOperator.mutation(internal.accountingLedger.reverse, {
@@ -613,6 +675,7 @@ describe("SCRUM-254 §7 — the authority refusal precedes the engine, not merel
     expect(message).toMatch(/certified receipt/i);
     // And explicitly NOT the engine's answer — this is the assertion M5 fails.
     expect(message).not.toMatch(/Cannot reverse an event with status/i);
+    expect(engineEntries.count).toBe(entriesBefore);
   });
 
   /**
@@ -650,6 +713,7 @@ describe("SCRUM-254 §7 — the authority refusal precedes the engine, not merel
     // A date in a year `seedPostableOrg` created no period for.
     const unpostableDate = Date.UTC(new Date().getUTCFullYear() - 5, 0, 15);
 
+    const entriesBefore = engineEntries.count;
     let message = "";
     try {
       await asOperator.mutation(internal.accountingLedger.reverse, {
@@ -667,50 +731,50 @@ describe("SCRUM-254 §7 — the authority refusal precedes the engine, not merel
     expect(message).toMatch(/certified receipt/i);
     // The engine never got as far as having an opinion about the period.
     expect(message).not.toMatch(/No accounting period found/i);
+    expect(engineEntries.count).toBe(entriesBefore);
   });
 });
 
 
 /**
- * §8 — a deliberately limited syntactic backstop, with its blind spots named.
+ * §8 — A CONVENTION CHECK. EXPLICITLY NOT A SECURITY CONTROL.
  *
- * ## What carries the ordering invariant, and what merely helps
+ * ⚠️ READ THIS BEFORE CITING §8 AS EVIDENCE OF ANYTHING.
  *
- * The PRIMARY instrument is behavioral: §7/GR9b reverses an untampered POSTED
- * receipt with a reversal date the org has no period for. Any handler that lets
- * a POSTED certified receipt reach `reverseAccountingEvent` fails it, because
- * the engine answers first with its own period error. That is general — it does
- * not care how the late refusal is spelled, aliased, or hidden behind a helper.
+ * The ordering invariant is enforced by the ENGINE-ENTRY COUNTER at the top of
+ * this file, asserted in GR1, GR2, GR9 and GR9b. That instrument observes the
+ * call. This section only reads source text, and it has now been defeated three
+ * times by two independent reviewers:
  *
- * This section is a CHEAP SECOND OPINION, not the proof. Its value is that it
- * fails differently: it catches shapes at edit time by reading the source,
- * where a behavioral test only catches shapes it happens to exercise.
+ *   v1  "every refusal token precedes the single engine call"
+ *       - defeated by ALIASING the constant before the call (Codex M8);
+ *       - the slice ran marker-to-EOF, so a later decoy satisfied it;
+ *       - a token inside a comment or string counted as a refusal.
+ *   v2  + comments/strings blanked, handler brace-matched,
+ *       + rule inverted to "no `throw` after the engine call"
+ *       - defeated by CATCH-AND-TRANSLATE: call the engine inside `try`, and
+ *         return `Promise.reject(new ConvexError(refusal))` instead of throwing
+ *         (Codex, SCRUM-254-R2(a)-CLOSURE-2);
+ *       - defeated by moving the engine call behind a same-file helper
+ *         (Sonnet, SCRUM-254-R2B-F1);
+ *       - executable `${...}` interpolations are blanked with their template.
  *
- * ## History — this analyzer has been defeated twice, and both times honestly
+ * The pattern is the point. A lexical rule over an artifact its author fully
+ * controls cannot be made adversarially sound — this repository already learned
+ * that in SCRUM-238, where three successive static-analysis architectures were
+ * each defeated in turn. So v2 is kept only as a cheap edit-time smell check
+ * that fails differently from a behavioral test, and every claim that it closes
+ * the invariant has been withdrawn.
  *
- * v1 required "every refusal token before the single engine call". The Codex
- * seat defeated it with M8: alias the constant into a local before the call and
- * throw the alias after, leaving one early literal token and a late refusal.
- * The seat also showed the slice was not a handler at all — it ran from the
- * marker to end of file, so a decoy declared later could satisfy it — and that
- * a token inside a comment or string counted as a refusal.
+ * ⚠️ DO NOT "FIX" THIS BY ADDING ANOTHER PREDICATE. If a reviewer defeats it
+ * again, that is expected and is not a finding against the invariant — check
+ * instead that the engine-entry counter still catches the shape, because that
+ * is the control. Escalating this analyzer is the arms race SCRUM-238 lost.
  *
- * v2 (here) fixes all three: comments and string literals are blanked before
- * scanning, the handler body is brace-matched rather than sliced to EOF, and
- * the rule is inverted from "a refusal appears early" to **NO `throw` may appear
- * after the engine call**. That inversion is what makes aliasing pointless: M8's
- * late `throw new ConvexError(refusal)` is a `throw` whatever it throws.
- *
- * ## What v2 still CANNOT see — stated, not implied
- *
- * A refusal that is not spelled `throw` in this handler. `if (isReceipt)
- * refuseSomewhereElse();` contains no `throw`, so this analyzer passes it.
- * **GR9b catches that shape and this one does not.** That is the division of
- * labour, and it is why removing either instrument weakens the invariant.
- *
- * It is also not a dominance analysis. It proves textual position within one
- * brace-matched body after comments and strings are removed — nothing about
- * reachability, control flow, or what a called function does.
+ * Known blind spots, asserted below rather than merely described: a refusal not
+ * spelled `throw`; catch-and-translate; an engine call behind a helper (which
+ * this version reports as "found 0" and therefore fails CLOSED); executable
+ * template interpolation.
  */
 const HANDLER_MARKER = "export const reverse = internalMutation({";
 const HANDLER_KEY = "handler:";
@@ -911,11 +975,47 @@ describe("SCRUM-254 §8 — the analyzer, watched failing before it is trusted",
   });
 
   test("KNOWN BLIND SPOT — a late refusal that is not spelled `throw` is NOT caught here", () => {
-    // Recorded deliberately. GR9b catches this shape behaviorally, because the
-    // POSTED receipt reaches the engine and gets the engine's answer. If this
-    // assertion ever flips to a rejection, the analyzer got stronger and the
-    // comment above it is stale.
+    // Asserted, not described, so it cannot rot into a false claim. The
+    // engine-entry counter catches this shape; this analyzer does not.
     expect(reverseHandlerRefusesBeforeEngine(HELPER_REFUSAL_SHAPE)).toBe("ok");
+  });
+
+  test("KNOWN BLIND SPOT — catch-and-translate is NOT caught here", () => {
+    // Codex SCRUM-254-R2(a)-CLOSURE-2. The engine runs inside `try`; the late
+    // refusal is a rejected promise rather than a `throw`, so no `throw`
+    // follows the call. Caught by the engine-entry counter, not by this.
+    const CATCH_TRANSLATE_SHAPE = `${HANDLER_MARKER}
+  handler: async (ctx, args) => {
+    const refusal = ${REFUSAL_TOKEN};
+    if (never) { throw new ConvexError(refusal); }
+    let result;
+    try {
+      result = await ${ENGINE_CALL}ctx, cmd);
+    } catch (error) {
+      return Promise.reject(isReceipt ? new ConvexError(refusal) : error);
+    }
+    return isReceipt ? Promise.reject(new ConvexError(refusal)) : result;
+  },
+});`;
+    expect(reverseHandlerRefusesBeforeEngine(CATCH_TRANSLATE_SHAPE)).toBe("ok");
+  });
+
+  test("an engine call behind a helper fails CLOSED rather than passing", () => {
+    // Sonnet SCRUM-254-R2B-F1's shape. v1 folded a trailing helper into the
+    // scanned region and passed; v2 brace-matches, so the handler body contains
+    // zero engine calls and the analyzer refuses instead of reporting success.
+    const HELPER_ENGINE_SHAPE = `${HANDLER_MARKER}
+  handler: async (ctx, args) => {
+    if (isReceipt && (bad || notPostable)) { throw new ConvexError(${REFUSAL_TOKEN}); }
+    const result = await callEngine(ctx, cmd);
+    return result;
+  },
+});
+
+async function callEngine(ctx, cmd) {
+  return ${ENGINE_CALL}ctx, cmd);
+}`;
+    expect(reverseHandlerRefusesBeforeEngine(HELPER_ENGINE_SHAPE)).toMatch(/exactly one/);
   });
 });
 
