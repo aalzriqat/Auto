@@ -53,8 +53,47 @@ import { reverseAccountingEvent } from "./accounting/reversals";
  *
  * This counts the calls. `reverseAccountingEvent` is wrapped so every entry
  * into the shared engine increments a counter, and the refusal tests assert the
- * counter did not move. There is no fixture to special-case and no spelling to
- * evade: if a certified receipt reaches the engine, this sees it.
+ * counter did not move.
+ *
+ * ## ⚠️ EXACTLY WHAT IT OBSERVES — AN EARLIER VERSION OF THIS COMMENT LIED
+ *
+ * It said "if a certified receipt reaches the engine, this sees it". **That is
+ * false and is retracted here.** What it observes is entry into
+ * `reverseAccountingEvent` *through the `./accounting/reversals` specifier* —
+ * the binding `accountingLedger.ts` actually imports. Within that scope nothing
+ * evades it: no fixture to special-case, no spelling, no aliasing, no
+ * catch-and-translate, no same-file helper.
+ *
+ * What it does NOT see is a SECOND module performing the same writes. The
+ * Sonnet seat proved it (SCRUM-254-R4-F1) and I reproduced it: copy
+ * `reversals.ts` to `reversalsDup.ts`, call the copy from the handler, swallow
+ * its answer, then throw the refusal — the full destructive path runs against a
+ * certified receipt, Convex rolls it back when the wrapper throws, and all 21
+ * tests stay green.
+ *
+ * ## Why there is no instrument #6, and why that is the answer
+ *
+ * Look at the sequence. Committed-state footprint → defeated by rollback.
+ * Behavioral fixture → defeated by a fixture-specific early branch. Lexical
+ * rule v1 → defeated by aliasing. Lexical rule v2 → defeated by
+ * catch-and-translate and by a hoisted helper. This counter → defeated by a
+ * duplicated module. **Every instrument is defeated by indirection one level
+ * above where it observes, and there is always another level.** A counter on
+ * the duplicate would fall to inlining the engine body; a DB-write-shape
+ * observer would fall to a slightly different row shape — the seat that
+ * proposed that option said so itself.
+ *
+ * That is a design signal, not a backlog item, and the convergence breaker
+ * (adversarial-review-loop 6b) is the rule that says to stop here. So this
+ * blind spot is DOCUMENTED rather than chased. Note what every one of these
+ * mutants actually is: a hypothetical future refactor of code that is correct
+ * today. A second copy of the reversal engine is not a subtle refactor — it is
+ * a large, obvious diff, and catching it is code review's job and the structural
+ * write-authority lane's (SCRUM-238), not a runtime probe's.
+ *
+ * ⚠️ SO DO NOT ADD INSTRUMENT #6 HERE. If a reviewer defeats this counter again
+ * at a higher level of indirection, that is expected and confirms the analysis
+ * above; take it to the owner as a design question rather than patching.
  *
  * The wrapper FORWARDS to the real implementation, so GR3/GR4/GR7/GR8 still
  * exercise genuine reversals. The `vi.mock` + `importOriginal` idiom against a
