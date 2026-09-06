@@ -17,7 +17,61 @@ overrides:
   # minimumReleaseAge (<24h) gate that originally forced the older pin. Still
   # pinned exact, for the same reason as postcss above.
   nanoid: 3.3.18
-  fast-uri: ">=4.1.2"
+  # TWO advisory surfaces disagree about this package, and only the stricter
+  # one is correct. Both were read from live GitHub at 2026-09-06.
+  #
+  # 1. The registry-backed global feed — what `pnpm audit` and therefore the
+  #    required dependency-audit check query — lists NINE fast-uri advisories.
+  #    Four of them fire against the 4.1.2 this repository used to resolve, and
+  #    all four name >=4.1.3 as patched:
+  #      GHSA-5jgf-p345-68v8  host confusion, skipped IDN canonicalization
+  #      GHSA-f65p-4m7j-42xc  SSRF, malformed IPv6 normalization
+  #      GHSA-fph4-wmhf-6fwf  SSRF, repeated hostname percent-decoding
+  #      GHSA-jqff-g426-hqxp  host confusion, percent-encoded scheme normalization
+  #    The other five are patched at or below 4.1.2 and so did not fire.
+  #
+  # 2. The UPSTREAM REPOSITORY surface — repos/fastify/fast-uri/security-
+  #    advisories — lists ELEVEN published advisories. The two the global feed
+  #    does NOT carry are exactly the two that make 4.1.3 insufficient:
+  #      GHSA-qw65-cvwx-89v3  HIGH  >=4.0.0 <4.1.4   patched 4.1.4
+  #      GHSA-58mr-gqgx-xq4g  HIGH  =4.1.3           patched 4.1.4
+  #    Both return HTTP 404 from the global advisory API. A 404 there proves
+  #    absence FROM THAT DATABASE, not that no advisory exists.
+  #
+  # So >=4.1.3 is NOT a safe floor: it admits 4.1.3, which two published HIGH
+  # advisories affect. 4.1.4 is the first release unaffected by all eleven, and
+  # the pin is exact for that SUBSTANTIVE reason — not as a style choice.
+  #
+  # Consequence worth knowing: the required dependency-audit gate is BLIND to
+  # those two, because it queries surface 1 only. Its green says the resolved
+  # graph is clean against the feed it reads; it is not evidence that no
+  # upstream advisory exists. Tracked as SCRUM-245, not papered over here.
+  #
+  # Reached through ajv@8 by TWO independent paths. `pnpm why fast-uri -r`
+  # resolves ONE instance, not two, so this is a documentation point, not a
+  # second exposure (ajv@6, whose only two parents are eslint and
+  # @eslint/eslintrc, takes uri-js instead):
+  #   @sentry/nextjs > @sentry/webpack-plugin > webpack > schema-utils > ajv
+  #   shadcn > @modelcontextprotocol/sdk > ajv
+  #
+  # Same failure mode as the nanoid pin above: the earlier >=4.1.2 floor was
+  # correct when written and became insufficient with no repository change at
+  # all, because these advisories landed afterwards. Advisory-database drift,
+  # not a bad floor — the defence is periodic re-verification, against BOTH
+  # surfaces.
+  #
+  # A note on the exact form, since postcss/nanoid/browserslist above justify
+  # their exact pins by the minimumReleaseAge (<24h) gate: that reason does
+  # not apply here and is NOT being borrowed. minimumReleaseAge is pnpm's own
+  # RESOLUTION-time policy, and nothing in this repository configures it —
+  # there is no .npmrc anywhere in the tree, and this file has no settings
+  # block at all (its only top-level keys are packages, overrides,
+  # allowBuilds, patchedDependencies and auditConfig). Whether CI should
+  # enforce a release-age policy, and by what mechanism, is SCRUM-244's
+  # question and is deliberately NOT argued here. This pin is exact because of
+  # the advisory ranges above, and would be even if that gate were fully
+  # enforced.
+  fast-uri: 4.1.4
   ip-address: ">=10.3.1"
   "js-yaml@>=4.0.0 <4.3.0": ">=4.3.0 <5.0.0"
   # GHSA-5p4m-2wfm-xmqj (CVE-2026-59870): quadratic CPU consumption in !!omap.
