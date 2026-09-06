@@ -124,7 +124,7 @@ const runsInJanuary = NOW_MONTH === 0;
 describe("operational Expenses Report — posted vs pending vs failed", () => {
   test("a paid expense whose debit never posted is reported as pending, not as posted", async () => {
     const ctx = await seedDealer("split-pending", { openPeriod: false });
-    await ctx.asOwner.mutation(api.expenses.create, { idempotencyKey: "t-reportGlParity.test-127-53",
+    await ctx.asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId: ctx.orgId, title: "Office supplies", amount: 500, date: Date.UTC(YEAR, 0, 10),
       category: "OTHER", status: "PAID", paymentMethod: "CASH",
     });
@@ -156,7 +156,7 @@ describe("operational Expenses Report — posted vs pending vs failed", () => {
     // Pending resolves itself when a period opens; failed needs a human. A
     // report that merges them hides the one that needs attention.
     const ctx = await seedDealer("split-failed", { openPeriod: false });
-    await ctx.asOwner.mutation(api.expenses.create, { idempotencyKey: "t-reportGlParity.test-159-53",
+    await ctx.asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId: ctx.orgId, title: "Office supplies", amount: 500, date: Date.UTC(YEAR, 0, 10),
       category: "OTHER", status: "PAID", paymentMethod: "CASH",
     });
@@ -177,7 +177,7 @@ describe("operational Expenses Report — posted vs pending vs failed", () => {
   test("an expense that really did post is reported as posted, and agrees with the ledger", async () => {
     // The split must not turn into a blanket "nothing is posted" caveat.
     const ctx = await seedDealer("split-posted");
-    await ctx.asOwner.mutation(api.expenses.create, { idempotencyKey: "t-reportGlParity.test-180-53",
+    await ctx.asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId: ctx.orgId, title: "Office supplies", amount: 500, date: Date.UTC(YEAR, 0, 10),
       category: "OTHER", status: "PAID", paymentMethod: "CASH",
     });
@@ -207,7 +207,7 @@ describe("operational Expenses Report — posted vs pending vs failed", () => {
         purchasePrice: 40000, sellingPrice: 45000, status: "AVAILABLE",
       })
     );
-    await ctx.asOwner.mutation(api.expenses.create, { idempotencyKey: "t-reportGlParity.test-210-53",
+    await ctx.asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId: ctx.orgId, title: "Engine repair", amount: 500, date: Date.UTC(YEAR, 0, 10),
       category: "REPAIR", status: "PAID", paymentMethod: "CASH", vehicleId,
     });
@@ -236,7 +236,7 @@ describe("operational Expenses Report — posted vs pending vs failed", () => {
     // If the all-clear rode on the signed net it would flip green with two
     // entries outstanding — so it rides on the entry COUNT instead.
     const ctx = await seedDealer("split-offsetting");
-    const expenseId = await ctx.asOwner.mutation(api.expenses.create, { idempotencyKey: "t-reportGlParity.test-239-71",
+    const expenseId = await ctx.asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId: ctx.orgId, title: "Insurance", amount: 1200, date: Date.UTC(YEAR, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -289,7 +289,7 @@ describe("operational Expenses Report — posted vs pending vs failed", () => {
     // The case only a per-event split can represent: the schedule's own months
     // are what posted or didn't, independent of the debit that opened it.
     const ctx = await seedDealer("split-mixed");
-    const expenseId = await ctx.asOwner.mutation(api.expenses.create, { idempotencyKey: "t-reportGlParity.test-292-71",
+    const expenseId = await ctx.asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId: ctx.orgId, title: "Insurance", amount: 1200, date: Date.UTC(YEAR, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -346,7 +346,7 @@ describe("operational Expenses Report — posted vs pending vs failed", () => {
 describe("operational Expenses Report vs ledger income statement — parity across reversals", () => {
   test("an ordinary expense reversed in a later month keeps reporting in the month it posted", async () => {
     const ctx = await seedDealer("ord");
-    const expenseId = await ctx.asOwner.mutation(api.expenses.create, { idempotencyKey: "t-reportGlParity.test-349-71",
+    const expenseId = await ctx.asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId: ctx.orgId, title: "Office supplies", amount: 500, date: Date.UTC(YEAR, 0, 10),
       category: "OTHER", status: "PAID", paymentMethod: "CASH",
     });
@@ -372,7 +372,7 @@ describe("operational Expenses Report vs ledger income statement — parity acro
 
   test("a prepaid expense reversed after amortizing keeps each posted month intact", async () => {
     const ctx = await seedDealer("prepaid");
-    const expenseId = await ctx.asOwner.mutation(api.expenses.create, { idempotencyKey: "t-reportGlParity.test-375-71",
+    const expenseId = await ctx.asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId: ctx.orgId, title: "Insurance", amount: 1200, date: Date.UTC(YEAR, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -402,7 +402,7 @@ describe("operational Expenses Report vs ledger income statement — parity acro
 
   test("an expense deleted before it ever posted stays invisible to both", async () => {
     const ctx = await seedDealer("unposted");
-    const expenseId = await ctx.asOwner.mutation(api.expenses.create, { idempotencyKey: "t-reportGlParity.test-405-71",
+    const expenseId = await ctx.asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId: ctx.orgId, title: "Draft entry", amount: 300, date: Date.UTC(YEAR, 0, 12),
       category: "OTHER", status: "PENDING", paymentMethod: "CASH",
     });
@@ -416,7 +416,7 @@ describe("operational Expenses Report vs ledger income statement — parity acro
     // Paid with no open period: postOrEnqueue parks EXPENSE_POSTED in the
     // outbox, so the ledger never sees it.
     const ctx = await seedDealer("queued", { openPeriod: false });
-    const expenseId = await ctx.asOwner.mutation(api.expenses.create, { idempotencyKey: "t-reportGlParity.test-419-71",
+    const expenseId = await ctx.asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId: ctx.orgId, title: "Fuel", amount: 500, date: Date.UTC(YEAR, 0, 10),
       category: "OTHER", status: "PAID", paymentMethod: "CASH",
     });
@@ -458,7 +458,7 @@ describe("operational Expenses Report vs ledger income statement — parity acro
   // rather than through the now-guarded public mutation.
   test("a queued prepaid whose write-off posted keeps the write-off's month", async () => {
     const ctx = await seedDealer("queued-writeoff", { openPeriod: false });
-    const expenseId = await ctx.asOwner.mutation(api.expenses.create, { idempotencyKey: "t-reportGlParity.test-461-71",
+    const expenseId = await ctx.asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId: ctx.orgId, title: "Insurance", amount: 1200, date: Date.UTC(YEAR, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });

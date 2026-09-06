@@ -142,7 +142,7 @@ async function quoteWithDeposit(
       status: "ACCEPTED", createdBy: s.userId, createdAt: opts.at,
     })
   );
-  await s.asUser.mutation(api.deposits.create, { idempotencyKey: "t-depositRevenueRecognition.test-145-48",
+  await s.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
     orgId: s.orgId, quoteId, amount: opts.amount, method: "CASH" as const,
   });
   // The receipt is dated now by the mutation; the whole point is that it sits
@@ -169,7 +169,7 @@ describe("a عربون is not revenue when the cash arrives", () => {
     const quoteId = await quoteWithDeposit(s, {
       vehicleId: v, price: OWNED_PRICE, amount: DEPOSIT, at: depositAt,
     });
-    await s.asUser.mutation(api.sales.create, { idempotencyKey: "t-depositRevenueRecognition.test-172-47",
+    await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, vehicleId: v, customerId: s.customerId, salespersonId: s.userId,
       salePrice: OWNED_PRICE, saleDate: saleAt, status: "COMPLETED" as const, quoteId,
     });
@@ -196,7 +196,7 @@ describe("a عربون is not revenue when the cash arrives", () => {
     const quoteId = await quoteWithDeposit(s, {
       vehicleId: v, price: SALE_PRICE, amount: DEPOSIT, at: depositAt,
     });
-    await s.asUser.mutation(api.sales.create, { idempotencyKey: "t-depositRevenueRecognition.test-199-47",
+    await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, vehicleId: v, customerId: s.customerId, salespersonId: s.userId,
       salePrice: SALE_PRICE, saleDate: saleAt, status: "COMPLETED" as const, quoteId,
     });
@@ -224,7 +224,7 @@ describe("a عربون is not revenue when the cash arrives", () => {
     const quoteId = await quoteWithDeposit(s, {
       vehicleId: v, price: OWNED_PRICE, amount: DEPOSIT, at: at - 3600_000,
     });
-    await s.asUser.mutation(api.sales.create, { idempotencyKey: "t-depositRevenueRecognition.test-227-47",
+    await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, vehicleId: v, customerId: s.customerId, salespersonId: s.userId,
       salePrice: OWNED_PRICE, saleDate: at, status: "COMPLETED" as const, quoteId,
     });

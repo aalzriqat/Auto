@@ -136,7 +136,7 @@ async function completeConsignedSale(
   route?: "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER",
   extra: Record<string, unknown> = {}
 ) {
-  return await seeded.asUser.mutation(api.sales.create, { idempotencyKey: "t-consignedSettlementRoute.test-139-57",
+  return await seeded.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
     orgId: seeded.orgId,
     vehicleId: seeded.vehicleId,
     customerId: seeded.customerId,
@@ -260,7 +260,7 @@ describe("what the route is not allowed to do", () => {
         status: "AVAILABLE", sourceType: "STOCK", purchasePrice: 6_000,
       })
     );
-    const saleId = await s.asUser.mutation(api.sales.create, { idempotencyKey: "t-consignedSettlementRoute.test-263-62",
+    const saleId = await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       vehicleId: ownedVehicleId,
       customerId: s.customerId,

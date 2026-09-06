@@ -101,7 +101,7 @@ async function seedFinanceLifecycleDealer() {
   }
 
   async function completeSale(args: { quoteId?: Id<"quotes">; salePrice?: number } = {}) {
-    return await asUser.mutation(api.sales.create, { idempotencyKey: "t-financeLifecyclePhase3.test-104-52",
+    return await asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       customerId,

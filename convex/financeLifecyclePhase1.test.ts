@@ -117,7 +117,7 @@ async function finalizeQuote(
     method: "CASH",
     expectedDate: Date.now(),
   });
-  return await asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: "t-financeLifecyclePhase1.test-120-63", orgId, applicationId });
+  return await asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId });
 }
 
 describe("Finance lifecycle phase 1 quote mode", () => {
@@ -231,7 +231,7 @@ describe("Finance lifecycle phase 1 quote mode", () => {
       method: "CASH",
       expectedDate: Date.now(),
     });
-    await asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: "t-financeLifecyclePhase1.test-234-58", orgId, applicationId });
+    await asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId });
 
     await t.run(async (ctx) => {
       const application = await ctx.db.get(applicationId);

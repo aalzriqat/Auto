@@ -118,7 +118,7 @@ describe("Phase 4 — hooks emit events when chart + period configured", () => {
     const { orgId, asUser } = await seedPhase4Dealer();
     const now = Date.now();
 
-    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: "t-accountingPhase4.test-121-66",
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       title: "Office Supplies",
       amount: 100,
@@ -142,7 +142,7 @@ describe("Phase 4 — hooks emit events when chart + period configured", () => {
     const { orgId, asUser } = await seedPhase4Dealer();
     const now = Date.now();
 
-    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: "t-accountingPhase4.test-145-66",
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       title: "Marketing Banner",
       amount: 250,
@@ -173,7 +173,7 @@ describe("Phase 4 — hooks are no-ops without accounting period", () => {
   test("expense creation succeeds even without a period (backward-compatible)", async () => {
     const { orgId, asUser } = await seedWithoutPeriod();
 
-    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: "t-accountingPhase4.test-176-66",
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       title: "Legacy Expense",
       amount: 50,

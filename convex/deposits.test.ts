@@ -112,7 +112,7 @@ describe("deposits.create", () => {
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
 
     await expect(
-      asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-115-44", orgId, quoteId, amount: 1500, method: "OTHER" })
+      asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500, method: "OTHER" })
     ).rejects.toThrow(/OTHER is not accepted/i);
   });
 
@@ -120,7 +120,7 @@ describe("deposits.create", () => {
     const { t, orgId, customerId, vehicleId, asUser } = await setup();
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
 
-    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-123-66",
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       quoteId,
       amount: 1500,
@@ -172,7 +172,7 @@ describe("deposits.create", () => {
     // second deposit did to the deal that already held the car.
     const { t, orgId, customerId, vehicleId, asUser } = await setup();
     const quoteId1 = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    await asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-175-48", orgId, quoteId: quoteId1, amount: 1000 });
+    await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId: quoteId1, amount: 1000 });
 
     const customer2Id = await t.run((ctx) =>
       ctx.db.insert("customers", { orgId, firstName: "Omar", lastName: "Saleh" })
@@ -180,7 +180,7 @@ describe("deposits.create", () => {
     const quoteId2 = await makeQuote(t, asUser, orgId, customer2Id, vehicleId);
 
     await expect(
-      asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-183-44", orgId, quoteId: quoteId2, amount: 2000 })
+      asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId: quoteId2, amount: 2000 })
     ).rejects.toThrow(/already committed to another deal/i);
 
     await t.run(async (ctx) => {
@@ -201,11 +201,11 @@ describe("deposits.create", () => {
     const quoteId = await makeQuote(null, asUser, orgId, customerId, vehicleId);
 
     await expect(
-      asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-204-44", orgId, quoteId, amount: 0 })
+      asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 0 })
     ).rejects.toThrow(/greater than 0/i);
 
     await expect(
-      asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-208-44", orgId, quoteId, amount: 0.0001 })
+      asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 0.0001 })
     ).rejects.toThrow(/decimal places|minor-unit/i);
   });
 
@@ -214,7 +214,7 @@ describe("deposits.create", () => {
     const quoteId = await makeQuote(null, asUser, orgId, customerId, vehicleId);
 
     await expect(
-      asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-217-44",
+      asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
         orgId,
         quoteId,
         amount: 100,
@@ -227,10 +227,10 @@ describe("deposits.create", () => {
     const { orgId, customerId, vehicleId, asUser } = await setup();
     const quoteId = await makeQuote(null, asUser, orgId, customerId, vehicleId);
 
-    await asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-230-48", orgId, quoteId, amount: 21_000 });
+    await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 21_000 });
 
     await expect(
-      asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-233-44", orgId, quoteId, amount: 1_001 })
+      asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1_001 })
     ).rejects.toThrow(/cannot exceed the quote amount/i);
   });
 
@@ -260,9 +260,9 @@ describe("deposits.release", () => {
   test("REFUNDED releases the vehicle hold and books a reversing OUT transaction", async () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-263-66", orgId, quoteId, amount: 1500 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
-    await asApprover.mutation(api.deposits.release, { idempotencyKey: "t-deposits.test-265-53", orgId, depositId, resolution: "REFUNDED", refundMethod: "CASH" });
+    await asApprover.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(), orgId, depositId, resolution: "REFUNDED", refundMethod: "CASH" });
 
     await t.run(async (ctx) => {
       const deposit = await ctx.db.get(depositId);
@@ -300,10 +300,10 @@ describe("deposits.release", () => {
   test("rejects a refund with no refund method", async () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-303-66", orgId, quoteId, amount: 1500 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
     await expect(
-      asApprover.mutation(api.deposits.release, { idempotencyKey: "t-deposits.test-306-49", orgId, depositId, resolution: "REFUNDED" })
+      asApprover.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(), orgId, depositId, resolution: "REFUNDED" })
     ).rejects.toThrow(/refund payment method is required/i);
   });
 
@@ -311,9 +311,9 @@ describe("deposits.release", () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     await openAccountingPeriod(asUser, orgId);
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-314-66", orgId, quoteId, amount: 1500 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
-    await asApprover.mutation(api.deposits.release, { idempotencyKey: "t-deposits.test-316-53",
+    await asApprover.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(),
       orgId, depositId, resolution: "REFUNDED", refundMethod: "BANK_TRANSFER",
     });
 
@@ -343,9 +343,9 @@ describe("deposits.release", () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     await openAccountingPeriod(asUser, orgId);
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-346-66", orgId, quoteId, amount: 1500 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
-    await asApprover.mutation(api.deposits.release, { idempotencyKey: "t-deposits.test-348-53",
+    await asApprover.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(),
       orgId, depositId, resolution: "REFUNDED", refundMethod: "PAYMENT_LINK",
     });
 
@@ -373,10 +373,10 @@ describe("deposits.release", () => {
   test("rejects OTHER as a refund method", async () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-376-66", orgId, quoteId, amount: 1500 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
     await expect(
-      asApprover.mutation(api.deposits.release, { idempotencyKey: "t-deposits.test-379-49",
+      asApprover.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(),
         orgId, depositId, resolution: "REFUNDED", refundMethod: "OTHER",
       })
     ).rejects.toThrow(/OTHER is not accepted/i);
@@ -385,7 +385,7 @@ describe("deposits.release", () => {
   test("ledger enrichment uses each transaction's exact deposit link", async () => {
     const { t, orgId, customerId, vehicleId, asUser } = await setup();
     const firstQuoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    const firstDepositId = await asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-388-71",
+    const firstDepositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       quoteId: firstQuoteId,
       amount: 1500,
@@ -419,7 +419,7 @@ describe("deposits.release", () => {
       })
     );
     const secondQuoteId = await makeQuote(t, asUser, orgId, secondCustomerId, secondVehicleId);
-    const secondDepositId = await asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-422-72",
+    const secondDepositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       quoteId: secondQuoteId,
       amount: 1500,
@@ -441,9 +441,9 @@ describe("deposits.release", () => {
   test("FORFEITED releases the hold without a reversing transaction", async () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-444-66", orgId, quoteId, amount: 1500 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
-    await asApprover.mutation(api.deposits.release, { idempotencyKey: "t-deposits.test-446-53", orgId, depositId, resolution: "FORFEITED" });
+    await asApprover.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(), orgId, depositId, resolution: "FORFEITED" });
 
     await t.run(async (ctx) => {
       const deposit = await ctx.db.get(depositId);
@@ -465,9 +465,9 @@ describe("deposits.release", () => {
     const { orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     await openAccountingPeriod(asUser, orgId);
     const quoteId = await makeQuote(null, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-468-66", orgId, quoteId, amount: 1500 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
-    await asApprover.mutation(api.deposits.release, { idempotencyKey: "t-deposits.test-470-53", orgId, depositId, resolution: "FORFEITED" });
+    await asApprover.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(), orgId, depositId, resolution: "FORFEITED" });
 
     const events = await asUser.query(api.accountingLedger.listAccountingEvents, {
       orgId,
@@ -484,7 +484,7 @@ describe("deposits.voidDeposit", () => {
   test("marks deposit VOIDED, releases vehicle hold, and soft-deletes the original IN transaction", async () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-487-66", orgId, quoteId, amount: 1500 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
     await asApprover.mutation(api.deposits.voidDeposit, {
       orgId,
@@ -525,7 +525,7 @@ describe("deposits.voidDeposit", () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     await openAccountingPeriod(asUser, orgId);
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-528-66", orgId, quoteId, amount: 1500 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
     await asApprover.mutation(api.deposits.voidDeposit, {
       orgId,
@@ -563,9 +563,9 @@ describe("deposits.voidDeposit", () => {
   test("rejects void on an already-resolved deposit", async () => {
     const { orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const quoteId = await makeQuote(null, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-566-66", orgId, quoteId, amount: 1500 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
-    await asApprover.mutation(api.deposits.release, { idempotencyKey: "t-deposits.test-568-53", orgId, depositId, resolution: "REFUNDED", refundMethod: "CASH" });
+    await asApprover.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(), orgId, depositId, resolution: "REFUNDED", refundMethod: "CASH" });
 
     await expect(
       asApprover.mutation(api.deposits.voidDeposit, { orgId, depositId })
@@ -575,12 +575,12 @@ describe("deposits.voidDeposit", () => {
   test("voided deposits are excluded from the cumulative deposit cap", async () => {
     const { orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const quoteId = await makeQuote(null, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-578-66", orgId, quoteId, amount: 21000 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 21000 });
 
     await asApprover.mutation(api.deposits.voidDeposit, { orgId, depositId });
 
     await expect(
-      asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-583-44", orgId, quoteId, amount: 21000 })
+      asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 21000 })
     ).resolves.toBeDefined();
   });
 });
@@ -632,7 +632,7 @@ describe("deposits multi-vehicle holds", () => {
     const secondVehicleId = await makeSecondVehicle(t, orgId);
     const quoteId = await makeMultiVehicleQuote(t, asUser, orgId, customerId, vehicleId, secondVehicleId);
 
-    await asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-635-48", orgId, quoteId, amount: 5000 });
+    await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 5000 });
 
     await t.run(async (ctx) => {
       const primary = await ctx.db.get(vehicleId);
@@ -646,9 +646,9 @@ describe("deposits multi-vehicle holds", () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const secondVehicleId = await makeSecondVehicle(t, orgId);
     const quoteId = await makeMultiVehicleQuote(t, asUser, orgId, customerId, vehicleId, secondVehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-649-66", orgId, quoteId, amount: 5000 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 5000 });
 
-    await asApprover.mutation(api.deposits.release, { idempotencyKey: "t-deposits.test-651-53", orgId, depositId, resolution: "REFUNDED", refundMethod: "CASH" });
+    await asApprover.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(), orgId, depositId, resolution: "REFUNDED", refundMethod: "CASH" });
 
     await t.run(async (ctx) => {
       const primary = await ctx.db.get(vehicleId);
@@ -662,7 +662,7 @@ describe("deposits multi-vehicle holds", () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const secondVehicleId = await makeSecondVehicle(t, orgId);
     const quoteId = await makeMultiVehicleQuote(t, asUser, orgId, customerId, vehicleId, secondVehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-665-66", orgId, quoteId, amount: 5000 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 5000 });
 
     await asApprover.mutation(api.deposits.voidDeposit, { orgId, depositId, reason: "test" });
 
@@ -678,7 +678,7 @@ describe("deposits multi-vehicle holds", () => {
     const { t, orgId, customerId, vehicleId, asUser } = await setup();
     const secondVehicleId = await makeSecondVehicle(t, orgId);
     const quoteId = await makeMultiVehicleQuote(t, asUser, orgId, customerId, vehicleId, secondVehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-681-66", orgId, quoteId, amount: 5000 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 5000 });
 
     // A quote with more than one car cannot be finalized until somebody says
     // how its one deposit divides between them — the split is the customer's
@@ -692,7 +692,7 @@ describe("deposits multi-vehicle holds", () => {
       ],
     });
 
-    await asUser.mutation(api.sales.completeFromQuote, { idempotencyKey: "t-deposits.test-695-56", orgId, quoteId });
+    await asUser.mutation(api.sales.completeFromQuote, { idempotencyKey: crypto.randomUUID(), orgId, quoteId });
 
     await t.run(async (ctx) => {
       const primary = await ctx.db.get(vehicleId);
@@ -710,7 +710,7 @@ describe("deposits multi-vehicle holds", () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const secondVehicleId = await makeSecondVehicle(t, orgId);
     const quoteId = await makeMultiVehicleQuote(t, asUser, orgId, customerId, vehicleId, secondVehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-713-66", orgId, quoteId, amount: 5000 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 5000 });
     await asUser.mutation(api.deposits.allocateToVehicles, {
       orgId,
       quoteId,
@@ -720,7 +720,7 @@ describe("deposits multi-vehicle holds", () => {
       ],
     });
 
-    const saleIds = await asUser.mutation(api.sales.completeFromQuote, { idempotencyKey: "t-deposits.test-723-72", orgId, quoteId });
+    const saleIds = await asUser.mutation(api.sales.completeFromQuote, { idempotencyKey: crypto.randomUUID(), orgId, quoteId });
 
     // Unwinding the whole deal cancels each vehicle's own sale row in turn, and
     // each cancellation touches only its own car.
@@ -770,7 +770,7 @@ describe("deposits multi-vehicle holds", () => {
     const { t, orgId, customerId, vehicleId, asUser } = await setup();
     const secondVehicleId = await makeSecondVehicle(t, orgId);
     const quoteId = await makeMultiVehicleQuote(t, asUser, orgId, customerId, vehicleId, secondVehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-773-66", orgId, quoteId, amount: 5000 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 5000 });
 
     const secondaryDeposits = await asUser.query(api.deposits.listByVehicle, {
       orgId,
@@ -790,9 +790,9 @@ describe("sales.create resolves deposits", () => {
   test("a sale created from a quote resolves its deposit to APPLIED and excludes it from the sale transaction amount", async () => {
     const { t, orgId, userId, customerId, vehicleId, asUser } = await setup();
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-793-66", orgId, quoteId, amount: 2000 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 2000 });
 
-    const saleId = await asUser.mutation(api.sales.create, { idempotencyKey: "t-deposits.test-795-60",
+    const saleId = await asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       customerId,
@@ -834,7 +834,7 @@ describe("applications deposit hooks", () => {
   test("rejecting an application releases the vehicle hold but leaves the deposit HELD", async () => {
     const { t, orgId, customerId, vehicleId, asUser } = await setup();
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-837-66", orgId, quoteId, amount: 1500 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
     const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
     await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "REJECTED" });
@@ -852,7 +852,7 @@ describe("applications deposit hooks", () => {
   test("finalizing a deal resolves the deposit to APPLIED", async () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: "t-deposits.test-855-66", orgId, quoteId, amount: 1500 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
     const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
     await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
@@ -864,7 +864,7 @@ describe("applications deposit hooks", () => {
       method: "CASH",
       expectedDate: Date.now(),
     });
-    await asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: "t-deposits.test-867-58", orgId, applicationId });
+    await asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId });
 
     await t.run(async (ctx) => {
       const deposit = await ctx.db.get(depositId);

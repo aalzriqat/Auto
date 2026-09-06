@@ -405,7 +405,7 @@ describe("a finance application from another dealership is refused when the draf
     // simply refuse every application, which is the state that would make the
     // two refusals below pass while breaking every real financed sale.
     await expect(
-      s.asUser.mutation(api.sales.completeDraft, { idempotencyKey: "t-saleCompletionTenancyGuards.test-401-50", orgId: s.orgId, saleId })
+      s.asUser.mutation(api.sales.completeDraft, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, saleId })
     ).resolves.toBeDefined();
   });
 
@@ -414,7 +414,7 @@ describe("a finance application from another dealership is refused when the draf
     const saleId = await draftCarrying(s, s.otherOrgId);
 
     await expect(
-      s.asUser.mutation(api.sales.completeDraft, { idempotencyKey: "t-saleCompletionTenancyGuards.test-410-50", orgId: s.orgId, saleId })
+      s.asUser.mutation(api.sales.completeDraft, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, saleId })
     ).rejects.toThrow(/Finance application not found in this organization/i);
   });
 
@@ -428,7 +428,7 @@ describe("a finance application from another dealership is refused when the draf
     // not this org, and the sale must not complete against a document that is
     // no longer there.
     await expect(
-      s.asUser.mutation(api.sales.completeDraft, { idempotencyKey: "t-saleCompletionTenancyGuards.test-424-50", orgId: s.orgId, saleId })
+      s.asUser.mutation(api.sales.completeDraft, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, saleId })
     ).rejects.toThrow(/Finance application not found in this organization/i);
   });
 });
