@@ -151,18 +151,6 @@ jobs:
       env:
         NODE_ENV: test
 
-    # Produces apps/mobile/coverage/lcov.info, the second report in
-    # sonar-project.properties. The root vitest run above excludes `apps/**`, so
-    # without this every mobile file reaches Sonar as 0% covered however well
-    # tested it is — the same instrumentation artifact SCRUM-208 fixed for
-    # `scripts/**`, one tree over. This does NOT replace the mobile quality gate:
-    # `pnpm mobile:test` still runs in `mobile-and-shared` with its own
-    # allowlist and its own 100% threshold, both untouched.
-    - name: Generate mobile coverage for Sonar
-      run: pnpm mobile:coverage:sonar
-      env:
-        NODE_ENV: test
-
     - name: SonarCloud scan
       if: ${{ env.SONAR_TOKEN != '' }}
       uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1

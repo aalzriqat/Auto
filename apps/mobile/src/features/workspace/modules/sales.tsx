@@ -5,7 +5,7 @@ import { GuidedStepFlow, type GuidedStep } from "../../../components/GuidedStepF
 import { api, type MobileFinancingType, type MobileMyMembership, type MobileSale } from "../../../convexApi";
 import { hapticSuccess } from "../../../haptics";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { PAGE_SIZE, SELECTOR_PAGE_SIZE, type Option, type MobileSaleStatusFilter, compactNumber, money, dateLabel, commissionAmountLabel, commissionStatusLabel, parseOptionalNumber, parseRequiredNumber, idempotencyKey, invalidNumberMessage, requiredSelectionMessage, useFormErrors, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, ModuleList, getOptionLabel, saleMatchesView, averageSalePrice, saleRemainingBalance, vehicleListPriceLabel, DetailPill, SummaryRow, SummaryPanel, WizardActions , useCommandIdentity } from "./moduleShared";
+import { PAGE_SIZE, SELECTOR_PAGE_SIZE, type Option, type MobileSaleStatusFilter, compactNumber, money, dateLabel, commissionAmountLabel, commissionStatusLabel, parseOptionalNumber, parseRequiredNumber, idempotencyKey, invalidNumberMessage, requiredSelectionMessage, useFormErrors, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, ModuleList, getOptionLabel, saleMatchesView, averageSalePrice, saleRemainingBalance, vehicleListPriceLabel, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 export function SalesModule({
@@ -22,7 +22,6 @@ export function SalesModule({
   const reportError = useGenericError();
   const createDraft = useMutation(api.sales.createDraft);
   const completeDraft = useMutation(api.sales.completeDraft);
-  const commandId = useCommandIdentity();
   const updateSale = useMutation(api.sales.update);
   const { loadMore, results, status } = usePaginatedQuery(api.sales.list, { orgId }, { initialNumItems: PAGE_SIZE });
   const customers = useQuery(api.customers.list, { orgId, paginationOpts: { cursor: null, numItems: SELECTOR_PAGE_SIZE } });
@@ -165,10 +164,7 @@ export function SalesModule({
 
   async function complete(sale: MobileSale) {
     try {
-      // SCRUM-57: one identity per draft, held across retries.
-      const intent = `sales.completeDraft:${sale._id}`;
-      await completeDraft({ orgId, saleId: sale._id, idempotencyKey: commandId.for(intent) });
-      commandId.retire(intent);
+      await completeDraft({ orgId, saleId: sale._id, idempotencyKey: idempotencyKey("sales.completeDraft") });
     } catch (error) {
       reportError("Mobile sale complete failed", error);
     }

@@ -24,8 +24,7 @@
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
     "test": "jest --coverage --watchAll=false",
-    "test:coverage": "jest --coverage --watchAll=false",
-    "test:coverage:sonar": "jest --config jest.sonar.config.js --watchAll=false"
+    "test:coverage": "jest --coverage --watchAll=false"
   },
   "dependencies": {
     "@autoflow/shared": "workspace:*",
