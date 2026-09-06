@@ -89,6 +89,61 @@ describe("SCRUM-57 A — an economic command refuses to run without an identity"
     expect(ran).toBe(0);
   });
 
+  /**
+   * The runtime backstop for a missing fingerprint. The type system already
+   * refuses this shape, but a validator is not the last word — an untyped or
+   * future client reaches the handler regardless, so the check is re-made at
+   * runtime and is asserted here rather than assumed from the types.
+   */
+  test("an economic command with NO fingerprint fails closed at runtime", async () => {
+    const { t, orgId } = await seedOrg();
+    let ran = 0;
+    await expect(
+      t.run(async (ctx) =>
+        runWithIdempotency(
+          ctx,
+          {
+            orgId,
+            operation: "test.economic",
+            economic: true,
+            idempotencyKey: "intent-no-fingerprint",
+            // Deliberately absent, cast past the type that normally forbids it.
+            fingerprint: undefined as unknown as string,
+          },
+          async () => {
+            ran += 1;
+            return "moved money";
+          }
+        )
+      )
+    ).rejects.toThrow(/fingerprint/i);
+    expect(ran).toBe(0);
+  });
+
+  test("an economic command with a BLANK fingerprint fails closed at runtime", async () => {
+    const { t, orgId } = await seedOrg();
+    let ran = 0;
+    await expect(
+      t.run(async (ctx) =>
+        runWithIdempotency(
+          ctx,
+          {
+            orgId,
+            operation: "test.economic",
+            economic: true,
+            idempotencyKey: "intent-blank-fingerprint",
+            fingerprint: "   ",
+          },
+          async () => {
+            ran += 1;
+            return "moved money";
+          }
+        )
+      )
+    ).rejects.toThrow(/fingerprint/i);
+    expect(ran).toBe(0);
+  });
+
   test("a NON-economic command may still run without an identity", async () => {
     const { t, orgId } = await seedOrg();
     let ran = 0;
@@ -296,6 +351,77 @@ describe("SCRUM-57 B — identity reuse with a changed canonical intent fails cl
         )
       )
     ).rejects.toThrow();
+    expect(ran).toBe(0);
+  });
+
+  /**
+   * The preserved NON-economic branch. It keeps the older, permissive rule —
+   * conflict only when BOTH fingerprints are present — because a non-economic
+   * command has no money to misstate and a stored row without a fingerprint is
+   * not evidence of a different intent there. Asserted rather than left as the
+   * one untested branch of the conflict logic.
+   */
+  test("a NON-economic command still conflicts when both fingerprints differ", async () => {
+    const { t, orgId } = await seedOrg();
+    let ran = 0;
+    const run = (fingerprint: string) =>
+      t.run(async (ctx) =>
+        runWithIdempotency(
+          ctx,
+          {
+            orgId,
+            operation: "test.harmless",
+            economic: false,
+            idempotencyKey: "intent-1",
+            fingerprint,
+          },
+          async () => {
+            ran += 1;
+            return { ran };
+          }
+        )
+      );
+    await run(JSON.stringify({ a: 1 }));
+    await expect(run(JSON.stringify({ a: 2 }))).rejects.toThrow(
+      /different request content/i
+    );
+    expect(ran).toBe(1);
+  });
+
+  test("a NON-economic command replays against a fingerprint-less stored row", async () => {
+    // The permissive branch that economic commands deliberately do NOT take:
+    // with no stored fingerprint there is nothing to compare, and for a
+    // non-economic command replaying is the safe answer.
+    const { t, orgId } = await seedOrg();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("commandIdempotency", {
+        orgId,
+        operation: "test.harmless",
+        idempotencyKey: "intent-legacy-harmless",
+        status: "COMPLETED",
+        result: { stored: true },
+        createdAt: Date.now(),
+        completedAt: Date.now(),
+      } as any);
+    });
+    let ran = 0;
+    const out = await t.run(async (ctx) =>
+      runWithIdempotency(
+        ctx,
+        {
+          orgId,
+          operation: "test.harmless",
+          economic: false,
+          idempotencyKey: "intent-legacy-harmless",
+          fingerprint: JSON.stringify({ anything: true }),
+        },
+        async () => {
+          ran += 1;
+          return { stored: false };
+        }
+      )
+    );
+    expect(out).toEqual({ stored: true });
     expect(ran).toBe(0);
   });
 

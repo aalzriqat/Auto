@@ -1966,10 +1966,11 @@ describe("releasing the same row twice from the same screen", () => {
     expect(start).toBeGreaterThan(-1);
     const releaseCall = source.slice(start, source.indexOf("});", start));
 
-    // It DOES carry an identity now — the command refuses to run without one.
-    expect(releaseCall).toContain("idempotencyKey");
-    // ...minted per ATTEMPT.
-    expect(releaseCall).toContain("commandId.renew(");
+    // The identity field must be WIRED to the per-attempt minter, not merely
+    // present alongside it. Asserting the two strings separately would pass if
+    // a future edit pointed `idempotencyKey` at something stale while
+    // `commandId.renew(...)` fed an unrelated field — flagged in review.
+    expect(releaseCall).toMatch(/idempotencyKey:\s*commandId\.renew\(/);
     // A HELD identity on this path is the reproduced defect, not a style choice.
     expect(releaseCall).not.toContain("commandId.for(");
     // The literal key shape that caused the original incident must not return.

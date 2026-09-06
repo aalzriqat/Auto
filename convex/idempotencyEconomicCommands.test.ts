@@ -371,6 +371,75 @@ describe("SCRUM-57 — fingerprint completeness ratchet (sales.create)", () => {
 });
 
 /**
+ * ─── Fields that must stay in specific fingerprints ─────────────────────────
+ *
+ * Each entry below is a field whose absence was a REAL defect found in review
+ * and reproduced against the real code, not a guess. The framework tests above
+ * already prove the behavioural half — a differing fingerprint fails closed —
+ * so what these pin is the other half: that this particular field is part of
+ * this particular command's fingerprint at all. Together the two halves say
+ * "changing this field is refused", which is the property that matters.
+ *
+ * Extracted by brace-matching the `JSON.stringify({...})` argument rather than
+ * by matching indented lines: a line-shaped regex silently mis-read single-line
+ * and comment-interrupted fingerprints when this guard was first attempted, and
+ * a guard that mis-parses is worse than no guard.
+ */
+function fingerprintBody(source: string, operation: string): string {
+  const op = source.indexOf(`operation: "${operation}"`);
+  if (op < 0) throw new Error(`No call site for operation ${operation}.`);
+  const fp = source.indexOf("fingerprint:", op);
+  if (fp < 0) throw new Error(`${operation} declares no fingerprint.`);
+  const open = source.indexOf("(", source.indexOf("JSON.stringify", fp));
+  if (open < 0) throw new Error(`${operation} fingerprint is not a JSON.stringify call.`);
+  let depth = 0;
+  for (let i = open; i < source.length; i++) {
+    if (source[i] === "(") depth++;
+    else if (source[i] === ")") {
+      depth--;
+      if (depth === 0) return source.slice(open, i);
+    }
+  }
+  throw new Error(`Unbalanced fingerprint expression for ${operation}.`);
+}
+
+const REQUIRED_FINGERPRINT_FIELDS: Array<[string, string, string[]]> = [
+  // Decides refund vs forfeit vs apply for a held deposit.
+  ["convex/sales.ts", "sales.create", ["depositResolution", "apr", "termMonths"]],
+  // Both forwarded to completeSalesForLineItems; the fingerprint was quoteId only.
+  [
+    "convex/sales.ts",
+    "sales.completeFromQuote",
+    ["supplierSettlementRoute", "depositResolution"],
+  ],
+  // Feeds settlementDeductedTotalMinor, so it changes the dealer remittance.
+  [
+    "convex/financeDealCosts.ts",
+    "financeDealCosts.recordDealFee",
+    ["deductedFromSettlement"],
+  ],
+  // Selects the credit account in hookEmployeeAdvancePaid.
+  ["convex/payroll.ts", "payroll.recordAdvance", ["method"]],
+];
+
+describe("SCRUM-57 — fields whose omission was a reproduced defect stay hashed", () => {
+  test.each(REQUIRED_FINGERPRINT_FIELDS)(
+    "%s %s hashes its material fields",
+    async (file, operation, fields) => {
+      const { readFileSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      const body = fingerprintBody(
+        readFileSync(join(process.cwd(), file), "utf8"),
+        operation
+      );
+      for (const field of fields) {
+        expect(body).toContain(field);
+      }
+    }
+  );
+});
+
+/**
  * ─── The classification ratchet ─────────────────────────────────────────────
  *
  * Every command classified ECONOMIC must expose a REQUIRED identity at the
