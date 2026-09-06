@@ -27,7 +27,7 @@ import { useLocale } from "../../../providers/LocaleProvider";
 import { type AppTheme } from "../../../theme";
 import { useAppTheme, useThemedStyles } from "../../../providers/ThemeProvider";
 import { compactInitials } from "../nativeModules";
-import { money, parseOptionalNumber, useGenericError, SearchInput , useCommandIdentity } from "../modules/moduleShared";
+import { idempotencyKey, money, parseOptionalNumber, useGenericError, SearchInput } from "../modules/moduleShared";
 import { calculateUnifiedMurabaha, type UnifiedMurabahaResult } from "./murabaha";
 
 export type WizardPaymentType = "CASH" | "INSTALLMENT";
@@ -211,7 +211,6 @@ export function SalesWizardScreen({
     depositId ? { orgId, depositId } : "skip",
   );
   const completeFromQuote = useMutation(api.sales.completeFromQuote);
-  const commandId = useCommandIdentity();
   const createApplication = useMutation(api.applications.createFromQuote);
 
   const activeStatusOptions = (statusOptions ?? []).filter((option) => option.isActive);
@@ -524,15 +523,12 @@ export function SalesWizardScreen({
     if (!quoteId || !amount || amount <= 0) return;
     setSaving(true);
     try {
-      // SCRUM-57: one identity per deposit intent on this quote.
-      const depositIntent = `deposits.create:${quoteId}`;
       const newDepositId = await createDeposit({
         orgId,
         quoteId,
         amount,
-        idempotencyKey: commandId.for(depositIntent),
+        idempotencyKey: idempotencyKey("deposits.create"),
       });
-      commandId.retire(depositIntent);
       setDepositId(newDepositId);
       setDepositDone(true);
       setDepositOpen(false);
@@ -547,10 +543,7 @@ export function SalesWizardScreen({
     if (!quoteId) return;
     setSaving(true);
     try {
-      // SCRUM-57: one identity per quote completion, held across retries.
-      const completeIntent = `sales.completeFromQuote:${quoteId}`;
-      await completeFromQuote({ orgId, quoteId, idempotencyKey: commandId.for(completeIntent) });
-      commandId.retire(completeIntent);
+      await completeFromQuote({ orgId, quoteId, idempotencyKey: idempotencyKey("sales.completeFromQuote") });
       setSaleCompleted(true);
     } catch (error) {
       reportError("Mobile wizard complete sale failed", error);

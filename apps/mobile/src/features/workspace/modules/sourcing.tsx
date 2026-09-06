@@ -4,7 +4,7 @@ import { Text, View } from "react-native";
 import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileSupplierPayable, type MobileSupplierPayableStatus } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { type Option, money, maybeText, parseOptionalNumber, useGenericError, PrimaryButton, SegmentedControl, FormField, FormModal, RecordCard, ModuleList , useCommandIdentity } from "./moduleShared";
+import { type Option, money, maybeText, parseOptionalNumber, idempotencyKey, useGenericError, PrimaryButton, SegmentedControl, FormField, FormModal, RecordCard, ModuleList } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 export function SourcingModule({ orgId }: { orgId: string }) {
@@ -12,7 +12,6 @@ export function SourcingModule({ orgId }: { orgId: string }) {
   const { locale } = useLocale();
   const reportError = useGenericError();
   const markPaid = useMutation(api.sourcingPayables.markPaid);
-  const commandId = useCommandIdentity();
   const [statusFilter, setStatusFilter] = useState<MobileSupplierPayableStatus | "ALL">("PENDING");
   const payables = useQuery(
     api.sourcingPayables.list,
@@ -40,17 +39,14 @@ export function SourcingModule({ orgId }: { orgId: string }) {
     if (!selected) return;
     setSaving(true);
     try {
-      // SCRUM-57: one identity per payable, held across retries.
-      const intent = `sourcingPayables.markPaid:${selected._id}`;
       await markPaid({
         orgId,
         payableId: selected._id,
         paymentMethod: "CASH",
         paymentNotes: maybeText(form.notes),
         taxAmount: parseOptionalNumber(form.taxAmount),
-        idempotencyKey: commandId.for(intent),
+        idempotencyKey: idempotencyKey("sourcingPayables.markPaid"),
       });
-      commandId.retire(intent);
       setSelected(null);
     } catch (error) {
       reportError("Mobile sourcing payable mark paid failed", error);

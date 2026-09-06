@@ -27,10 +27,10 @@ import {
   SummaryRow,
   UnderlineTabBar,
   dateLabel,
+  idempotencyKey,
   money,
   parseOptionalNumber,
   useGenericError,
-  useCommandIdentity,
 } from "./modules/moduleShared";
 import { useStyles } from "./modules/moduleStyles";
 
@@ -211,7 +211,6 @@ function VehicleDetailContent({
   );
 
   const releaseDeposit = useMutation(api.deposits.release);
-  const commandId = useCommandIdentity();
   const upsertLandedCosts = useMutation(api.vehicles.upsertLandedCosts);
   const createReservation = useMutation(api.vehicles.createReservation);
   const releaseReservation = useMutation(api.vehicles.releaseReservation);
@@ -284,10 +283,7 @@ function VehicleDetailContent({
         depositId,
         resolution,
         refundMethod: resolution === "REFUNDED" ? (refundMethodByDeposit[depositId] ?? "CASH") : undefined,
-        // SCRUM-57: per ATTEMPT, not held — deposits.release pays whatever is
-        // free, so a held identity would let a later genuine payout replay an
-        // earlier one after a lost response. Same reasoning as the web dialogs.
-        idempotencyKey: commandId.renew(`deposits.release:${depositId}:${resolution}`),
+        idempotencyKey: idempotencyKey("deposit-release"),
       });
     } catch (error) {
       reportError("Mobile deposit release failed", error);

@@ -1458,7 +1458,7 @@ type DepositReleaseArgs = OrgScopedArgs & {
   resolution: "REFUNDED" | "FORFEITED";
   refundMethod?: MobileDepositMethod;
   notes?: string;
-  idempotencyKey: string;
+  idempotencyKey?: string;
 };
 
 type ReservationCreateArgs = VehicleScopedArgs & {
@@ -1719,7 +1719,7 @@ type ExpenseCreateArgs = OrgScopedArgs & {
   payerId?: string;
   paymentMethod?: MobilePaymentMethod;
   notes?: string;
-  idempotencyKey: string;
+  idempotencyKey?: string;
 };
 
 type ExpenseUpdateArgs = Partial<Omit<ExpenseCreateArgs, "orgId">> &
@@ -1930,7 +1930,7 @@ type TransactionMutationArgs = OrgScopedArgs & {
   vehicleId?: string;
   userId?: string;
   expenseId?: string;
-  idempotencyKey: string;
+  idempotencyKey?: string;
 };
 
 type ApprovalRespondArgs = OrgScopedArgs & {
@@ -2199,12 +2199,12 @@ export const api = {
     ),
     completeDraft: makeFunctionReference<
       "mutation",
-      OrgScopedArgs & { saleId: string; idempotencyKey: string },
+      OrgScopedArgs & { saleId: string; idempotencyKey?: string },
       string
     >("sales:completeDraft"),
     completeFromQuote: makeFunctionReference<
       "mutation",
-      OrgScopedArgs & { quoteId: string; idempotencyKey: string },
+      OrgScopedArgs & { quoteId: string; idempotencyKey?: string },
       string
     >("sales:completeFromQuote"),
     update: makeFunctionReference<"mutation", SaleUpdateArgs, null>("sales:update"),
@@ -2218,7 +2218,7 @@ export const api = {
     >("sales:listCommissionsPaginated"),
     markCommissionPaid: makeFunctionReference<
       "mutation",
-      OrgScopedArgs & { saleId: string; paymentMethod?: MobilePaymentMethod; idempotencyKey: string },
+      OrgScopedArgs & { saleId: string; paymentMethod?: MobilePaymentMethod; idempotencyKey?: string },
       string
     >("sales:markCommissionPaid"),
   },
@@ -2502,7 +2502,7 @@ export const api = {
         paymentNotes?: string;
         paymentMethod?: MobilePaymentMethod;
         taxAmount?: number;
-        idempotencyKey: string;
+        idempotencyKey?: string;
       },
       null
     >("sourcingPayables:markPaid"),
@@ -2621,7 +2621,7 @@ export const api = {
   deposits: {
     create: makeFunctionReference<
       "mutation",
-      OrgScopedArgs & { quoteId: string; amount: number; notes?: string; idempotencyKey: string },
+      OrgScopedArgs & { quoteId: string; amount: number; notes?: string; idempotencyKey?: string },
       string
     >("deposits:create"),
     listByVehicle: makeFunctionReference<
@@ -2978,13 +2978,13 @@ export const api = {
     completeDraft: FunctionReference<
       "mutation",
       "public",
-      OrgScopedArgs & { saleId: string; idempotencyKey: string },
+      OrgScopedArgs & { saleId: string; idempotencyKey?: string },
       string
     >;
     completeFromQuote: FunctionReference<
       "mutation",
       "public",
-      OrgScopedArgs & { quoteId: string; idempotencyKey: string },
+      OrgScopedArgs & { quoteId: string; idempotencyKey?: string },
       string
     >;
     update: FunctionReference<"mutation", "public", SaleUpdateArgs, null>;
@@ -2998,7 +2998,7 @@ export const api = {
     markCommissionPaid: FunctionReference<
       "mutation",
       "public",
-      OrgScopedArgs & { saleId: string; paymentMethod?: MobilePaymentMethod; idempotencyKey: string },
+      OrgScopedArgs & { saleId: string; paymentMethod?: MobilePaymentMethod; idempotencyKey?: string },
       string
     >;
   };
@@ -3178,7 +3178,7 @@ export const api = {
         paymentNotes?: string;
         paymentMethod?: MobilePaymentMethod;
         taxAmount?: number;
-        idempotencyKey: string;
+        idempotencyKey?: string;
       },
       null
     >;
@@ -3280,7 +3280,7 @@ export const api = {
     create: FunctionReference<
       "mutation",
       "public",
-      OrgScopedArgs & { quoteId: string; amount: number; notes?: string; idempotencyKey: string },
+      OrgScopedArgs & { quoteId: string; amount: number; notes?: string; idempotencyKey?: string },
       string
     >;
     listByVehicle: FunctionReference<"query", "public", VehicleScopedArgs, MobileVehicleDeposit[]>;

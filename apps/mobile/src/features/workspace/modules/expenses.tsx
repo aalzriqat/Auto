@@ -1,9 +1,9 @@
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { Text, View } from "react-native";
 import { api, type MobileExpense, type MobileExpenseCategory } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { PAGE_SIZE, money, dateLabel, maybeText, parseOptionalNumber, parseRequiredNumber, invalidNumberMessage, requiredText, useFieldFocusChain, useFormErrors, useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, ModuleList , useCommandIdentity } from "./moduleShared";
+import { PAGE_SIZE, money, dateLabel, maybeText, parseOptionalNumber, parseRequiredNumber, idempotencyKey, invalidNumberMessage, requiredText, useFieldFocusChain, useFormErrors, useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 export function ExpensesModule({ highlightId, orgId }: { highlightId?: string; orgId: string }) {
@@ -11,8 +11,6 @@ export function ExpensesModule({ highlightId, orgId }: { highlightId?: string; o
   const { locale } = useLocale();
   const reportError = useGenericError();
   const createExpense = useMutation(api.expenses.create);
-  const commandId = useCommandIdentity();
-  const dateRef = useRef<number | null>(null);
   const removeExpense = useMutation(api.expenses.remove);
   const { loadMore, results, status } = usePaginatedQuery(api.expenses.list, { orgId }, { initialNumItems: PAGE_SIZE });
   const vehicles = useQuery(api.vehicles.listAll, { orgId, includeReserved: true });
@@ -48,28 +46,19 @@ export function ExpensesModule({ highlightId, orgId }: { highlightId?: string; o
     if (!valid || amount === null) return;
     setSaving(true);
     try {
-      // SCRUM-57. One identity for this expense, held across retries — and the
-      // date snapshotted WITH it. `expenses.create` fingerprints the date, so a
-      // `Date.now()` re-evaluated on the retry would change the fingerprint and
-      // turn a genuine retry into a hard conflict instead of a safe replay.
-      const intent = "expenses.create";
-      const key = commandId.for(intent);
-      dateRef.current ??= Date.now();
       await createExpense({
         orgId,
         title: form.title,
         amount,
         taxAmount: parseOptionalNumber(form.taxAmount),
-        date: dateRef.current,
+        date: Date.now(),
         category: form.category,
         status: "PAID",
         vendor: maybeText(form.vendor),
         vehicleId: maybeText(form.vehicleId),
         notes: maybeText(form.notes),
-        idempotencyKey: key,
+        idempotencyKey: idempotencyKey("expenses.create"),
       });
-      commandId.retire(intent);
-      dateRef.current = null;
       setOpen(false);
       setForm({ title: "", amount: "", taxAmount: "", category: "OTHER", vendor: "", vehicleId: "", notes: "" });
     } catch (error) {
