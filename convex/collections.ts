@@ -9,16 +9,27 @@ import { PERMISSIONS } from "./utils/permissions";
 import { getActorName, notifyManagers, notifyUser } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
-import { hookCollectionPayment, hookCollectionRefund, hookExpensePosted, hookReceivableCreated, hookReceivableCancelled, getOrgCurrency } from "./accounting/workflowHooks";
+import { postReceiptOccurrence, hookCollectionRefund, hookExpensePosted, hookReceivableCreated, hookReceivableCancelled, hookReceiptCreditApplied, findPostedReceiptOccurrence, getOrgCurrency } from "./accounting/workflowHooks";
+import { directCollectionReceipt, rehydrateReceiptOccurrence } from "./accounting/receiptOccurrence";
+import {
+  sealReceiptMovement,
+  loadRetainedPosition,
+  requirePostedReceiptForMovement,
+  computeApplicableMinor,
+  recordRetainedApplication,
+  receiptApplicationSourceId,
+  RETAINED_CREDIT_SYSTEM_KEY,
+} from "./accounting/receiptMovement";
 import { ReceivableCreditKey } from "./accounting/postingRules";
 import { reverseAccountingEvent } from "./accounting/reversals";
-import { getOpenPeriodForDate } from "./accountingPeriods";
+import { getOpenPeriodForDate, assertValidAccountingDate } from "./accountingPeriods";
 import { enqueuePendingReversal, cancelPendingPostByKey } from "./accountingOutbox";
 import { toMinorUnits, fromMinorUnits, scaleForCurrency } from "./utils/money";
 import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
   ensureReceivableDocument,
+  getReceivableOutstandingMinor,
   reverseAllocation,
 } from "./subledger";
 
@@ -460,7 +471,11 @@ async function mirrorCollectionPaymentToCanonical(
     actorId: Id<"users">;
     currency: string;
   }
-) {
+): Promise<{
+  canonicalPaymentId: Id<"canonicalPayments">;
+  /** Absent exactly when this receipt discharged no receivable (SCRUM-218-C). */
+  paymentAllocationId?: Id<"paymentAllocations">;
+}> {
   const amountMinor = toMinorUnits(args.payment.amount, args.currency);
   const canonicalPaymentId = await createCanonicalPayment(ctx, {
     orgId: args.payment.orgId,
@@ -499,7 +514,11 @@ async function mirrorCollectionPaymentToCanonical(
   }
 
   await ctx.db.patch(args.paymentId, patch);
-  return patch;
+  // Returned as an exact, non-optional canonical id plus the allocation this
+  // call actually created. SCRUM-218-C seals that allocation id as the receipt
+  // movement's lineage; recovering it later by set-difference is impossible,
+  // because every write in one Convex transaction can share a `_creationTime`.
+  return { canonicalPaymentId, paymentAllocationId: patch.paymentAllocationId };
 }
 
 /**
@@ -737,6 +756,94 @@ export const listPayments = query({
     return {
       ...result,
       page: await Promise.all(result.page.map((row) => hydratePayment(ctx, row))),
+    };
+  },
+});
+
+/**
+ * SCRUM-218-C — the retained customer credit an organization still owes back.
+ *
+ * ⚠️ THIS EXISTS BECAUSE THE LIABILITY WAS OTHERWISE UNREACHABLE (Codex R04).
+ * `recordPayment` returns only the collection payment id and `listPayments`
+ * exposes neither the movement nor the position, so `applyRetainedCredit` — which
+ * needs a `receiptMovementId` — had no supported way for an operator to obtain
+ * its own argument. A retained liability with no discoverable discharge path is
+ * functionally the "ship A without C" outcome the owner refused, reached by a
+ * different route. My own tests hid the gap by reading the movement id straight
+ * out of the database, which is exactly why it stayed invisible.
+ *
+ * Reads positions rather than movements: a position exists only where credit was
+ * actually retained, so "no row" and "drawn down to zero" stay distinguishable.
+ * `VIEW_FINANCE` rather than `MANAGE_FINANCE` — seeing what the dealership owes
+ * a customer is a reporting act; only applying it moves money.
+ */
+export const listRetainedCredits = query({
+  args: {
+    orgId: v.id("organizations"),
+    customerId: v.optional(v.id("customers")),
+    /**
+     * Omit or pass false to include positions already drawn to zero.
+     *
+     * ⚠️ THIS FILTERS THE PAGE, NOT THE QUERY, so a page can come back shorter
+     * than `numItems` — even empty — while `isDone` is still false. A caller
+     * must loop on `continueCursor` / `isDone` and never treat
+     * `page.length < numItems` as the end of the results. Filtering inside the
+     * paginated range is the alternative and it is worse: it would make the
+     * cursor's meaning depend on a boolean argument.
+     */
+    onlyRemaining: v.optional(v.boolean()),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+
+    // Tenant scoping is the INDEX, not a post-filter: both ranges are rooted at
+    // this org, so a foreign row is unreachable rather than merely excluded.
+    const result = args.customerId
+      ? await ctx.db
+          .query("receiptRetainedPositions")
+          .withIndex("by_org_customer", (q) =>
+            q.eq("orgId", args.orgId).eq("customerId", args.customerId!)
+          )
+          .order("desc")
+          .paginate(args.paginationOpts)
+      : await ctx.db
+          .query("receiptRetainedPositions")
+          .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+          .order("desc")
+          .paginate(args.paginationOpts);
+
+    const page = await Promise.all(
+      result.page.map(async (position) => {
+        const movement = await ctx.db.get(position.receiptMovementId);
+        const customer = await ctx.db.get(position.customerId);
+        return {
+          receiptMovementId: position.receiptMovementId,
+          customerId: position.customerId,
+          customerName: customer ? `${customer.firstName} ${customer.lastName}`.trim() : undefined,
+          currency: position.currency,
+          initialUnappliedMinor: position.initialUnappliedMinor,
+          remainingUnappliedMinor: position.remainingUnappliedMinor,
+          applicationCount: position.applicationCount,
+          // Whether `applyRetainedCredit` would currently accept it. The receipt
+          // must be POSTED, so a credit whose own journal is still queued behind
+          // an unmapped 2110 is visible but explicitly not yet applicable —
+          // rather than failing at the point of use with no explanation.
+          receiptPosted:
+            movement !== null &&
+            (await findPostedReceiptOccurrence(
+              ctx,
+              rehydrateReceiptOccurrence({ orgId: args.orgId, snapshot: movement.occurrence })
+            )) !== null,
+          collectionPaymentId: movement?.collectionPaymentId,
+          createdAt: movement?.createdAt,
+        };
+      })
+    );
+
+    return {
+      ...result,
+      page: args.onlyRemaining ? page.filter((p) => p.remainingUnappliedMinor > 0) : page,
     };
   },
 });
@@ -1086,25 +1193,81 @@ export const recordPayment = mutation({
         });
 
         const payment = await ctx.db.get(paymentId);
-        if (payment) {
-          await mirrorCollectionPaymentToCanonical(ctx, {
-            paymentId,
-            payment,
-            receivable,
-            actorId: user._id,
-            currency,
-          });
+        // Refuses rather than skips (SCRUM-218-C). The row was inserted a few
+        // statements above in this same transaction, so this is unreachable —
+        // but the previous `if (payment)` shape meant an absent row silently
+        // produced a receipt with no canonical payment and therefore no movement
+        // to seal, which is precisely the "operationally final, accounting
+        // missing" state this ticket exists to make impossible.
+        if (!payment) {
+          throw new ConvexError("Collection payment could not be re-read within its own transaction.");
         }
-
-        await hookCollectionPayment(ctx, {
-          orgId: args.orgId,
+        const mirrored = await mirrorCollectionPaymentToCanonical(ctx, {
           paymentId,
-          customerId,
-          amountMinor: toMinorUnits(roundMoney(args.amount, currency), currency),
-          currency,
-          paymentMethod: args.method,
+          payment,
+          receivable,
           actorId: user._id,
+          currency,
+        });
+
+        // SCRUM-236 — the single forward producer of this receipt occurrence.
+        //
+        // The identity is constructed HERE, inside this invocation, from this
+        // invocation's own arguments, and is never held anywhere else. The
+        // trust registry backing `directCollectionReceipt` is a module-private
+        // WeakSet whose lifetime is the MODULE, not the mutation, so a cached
+        // identity would stay trusted across later invocations in the same
+        // isolate and let one of them address an occurrence it never earned
+        // (owner-proxy c17641 requirement 1).
+        //
+        // ⚠️ NOTHING MAY CATCH THIS CALL. `paymentId` is the occurrence's own
+        // `sourceId`, so the identity cannot exist before the insert above —
+        // "refuse before writes" is structurally unavailable on the forward
+        // path, and the guarantee is the other one c17641 requirement 3
+        // allows: the refusal ESCAPES the mutation and Convex rolls the whole
+        // attempt back. In Convex a CAUGHT exception commits the writes made
+        // before it, so wrapping this in a try/catch would leave the payment
+        // row, the ledger transaction and the canonical mirror committed while
+        // the accounting refused — and report the refusal as handled.
+        const receiptIdentity = directCollectionReceipt({ orgId: args.orgId, paymentId });
+
+        // SCRUM-218-C — seal what this receipt WAS before anything posts.
+        //
+        // The split is derived inside `sealReceiptMovement` from the canonical
+        // payment row and the exact allocation this transaction created, not
+        // from `args.amount`. On this path over-receipt is refused above, so the
+        // outcome is one of exactly two shapes: a receivable was named and fully
+        // absorbed the money, or none was and the whole receipt is retained
+        // customer credit.
+        const { split } = await sealReceiptMovement(ctx, {
+          identity: receiptIdentity,
+          orgId: args.orgId,
+          collectionPaymentId: paymentId,
+          canonicalPaymentId: mirrored.canonicalPaymentId,
+          customerId,
+          currency,
+          allocationIds: mirrored.paymentAllocationId ? [mirrored.paymentAllocationId] : [],
+          actorId: user._id,
+        });
+
+        await postReceiptOccurrence(ctx, {
+          identity: receiptIdentity,
+          currency,
           occurredAt: args.paymentDate,
+          actorId: user._id,
+          // Only demanded when there is actually a residue to credit. A receipt
+          // that fully discharges a receivable must not become unpostable just
+          // because an org has no 2110 — it never needed one.
+          requiredSystemKeys: split.unappliedMinor > 0 ? [RETAINED_CREDIT_SYSTEM_KEY] : [],
+          payload: {
+            paymentId: paymentId.toString(),
+            receivedMinor: split.receivedMinor,
+            appliedMinor: split.appliedMinor,
+            unappliedMinor: split.unappliedMinor,
+            currency,
+            customerId: customerId.toString(),
+            paymentMethod: args.method,
+          },
         });
 
         const actorName = await getActorName(ctx);
@@ -1114,6 +1277,197 @@ export const recordPayment = mutation({
         }, { link: `/${args.orgId}/accounting` });
 
         return paymentId;
+      }
+    );
+  },
+});
+
+/**
+ * SCRUM-218-C part C — apply retained customer credit to a receivable.
+ *
+ * DR 2110 Unapplied Customer Receipts / CR Customer AR. No cash moves: the money
+ * arrived when the receipt posted. Without this operation the 2110 liability
+ * created by a no-receivable receipt could never be discharged, which is why
+ * owner-proxy `c17653` refused to ship the receipt-side split on its own.
+ *
+ * ## Exact retry vs. a genuine second application
+ *
+ * These are different events and the distinction is the caller's to state.
+ * Applications #1, #2 and #3 against one receipt are three legitimate economic
+ * occurrences, each with its own sequence, identity and journal. An exact RETRY
+ * of #1 must produce one effect, and the way a client says "this is a retry" is
+ * by replaying the same `idempotencyKey`. The `fingerprint` then makes that
+ * claim checkable: the same key with materially different inputs is rejected
+ * rather than silently returning the first result.
+ *
+ * Omitting the key means "this is a new application", which is the correct
+ * default for an operator clicking Apply a second time on purpose.
+ */
+export const applyRetainedCredit = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    receiptMovementId: v.id("receiptMovements"),
+    receivableId: v.id("receivables"),
+    requestedAmount: v.number(),
+    appliedAt: v.optional(v.number()),
+    idempotencyKey: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    // ⚠️ BEFORE runWithIdempotency, AND BEFORE THE FIRST WRITE (Codex R01).
+    //
+    // `v.number()` admits NaN, ±Infinity and any finite double, including dates
+    // outside the `Date` domain. Such a value matches no accounting period, so
+    // the command ENQUEUES and every monetary write in this mutation COMMITS —
+    // then the outbox drain throws `RangeError` formatting the date, retries,
+    // and dead-letters. The money would have moved with no journal, and no
+    // replay could repair it. Refusing here is the only point that helps.
+    if (args.appliedAt !== undefined) {
+      assertValidAccountingDate(args.appliedAt, "Application date");
+    }
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "collections.applyRetainedCredit",
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+        // Every input that changes what money does. Replaying one key against a
+        // different receipt, receivable or amount is a contradiction, not a
+        // retry, and must not quietly return the first application's result.
+        //
+        // `appliedAt` is included because it selects the ACCOUNTING PERIOD, so
+        // the same key with a different date is a different economic claim.
+        // `null` — not `Date.now()` — encodes "omitted": folding in the server
+        // clock would make every retry of an omitted-date call disagree with
+        // itself and refuse a legitimate replay.
+        fingerprint: JSON.stringify([
+          args.receiptMovementId.toString(),
+          args.receivableId.toString(),
+          args.requestedAmount,
+          args.appliedAt ?? null,
+        ]),
+      },
+      async () => {
+        assertPositiveAmount(args.requestedAmount);
+        const currency = await getOrgCurrency(ctx, args.orgId);
+        const appliedAt = args.appliedAt ?? Date.now();
+
+        const movement = await ctx.db.get(args.receiptMovementId);
+        if (!movement || movement.orgId !== args.orgId) {
+          throw new ConvexError("Receipt movement not found.");
+        }
+
+        // Proves BOTH that the stored snapshot is structurally canonical (by
+        // re-minting it through the sanctioned rehydration door) and that the
+        // receipt's own journal is POSTED. Applying a credit whose receipt never
+        // reached the ledger would relieve a receivable against a liability that
+        // does not exist in the books.
+        await requirePostedReceiptForMovement(ctx, movement);
+
+        const position = await loadRetainedPosition(ctx, args.orgId, movement._id);
+
+        const receivable = await ctx.db.get(args.receivableId);
+        if (!receivable || receivable.orgId !== args.orgId) {
+          throw new ConvexError("Receivable not found.");
+        }
+        if (["PAID", "CANCELLED", "REFUNDED"].includes(receivable.status)) {
+          throw new ConvexError("This receivable can no longer accept payments.");
+        }
+        // Same customer — retained credit belongs to the person who overpaid, and
+        // applying it to a different customer's debt would move money between
+        // two parties' accounts with no transaction behind it.
+        if (receivable.customerId !== movement.customerId) {
+          throw new ConvexError("This retained credit belongs to a different customer.");
+        }
+        // Same currency. The position, the receipt and the org must agree; there
+        // is no conversion here and silently treating minor units of one currency
+        // as another would misstate the amount outright.
+        if (movement.currency.toUpperCase() !== currency.toUpperCase()) {
+          throw new ConvexError("This retained credit is held in a different currency.");
+        }
+
+        // Resolved BEFORE the cap is computed, deliberately.
+        //
+        // `allocatePaymentToReceivable` refuses — it throws, it does not clamp —
+        // when the amount exceeds the CANONICAL document's outstanding balance,
+        // while the operator sees the LEGACY receivable. Those two can drift.
+        // Capping only on the legacy figure would turn that drift into a hard
+        // failure of a legitimate application; capping on the lower of the two
+        // caps instead, which is the same safe direction from either side.
+        const receivableDocumentId = await ensureCanonicalReceivableForLegacy(
+          ctx,
+          receivable,
+          user._id,
+          currency
+        );
+        const canonicalOutstandingMinor = await getReceivableOutstandingMinor(ctx, receivableDocumentId);
+
+        const amountMinor = computeApplicableMinor({
+          requestedMinor: toMinorUnits(roundMoney(args.requestedAmount, currency), currency),
+          remainingUnappliedMinor: position.remainingUnappliedMinor,
+          outstandingMinor: Math.min(
+            toMinorUnits(roundMoney(receivable.outstandingAmount, currency), currency),
+            canonicalOutstandingMinor
+          ),
+        });
+        if (amountMinor <= 0) {
+          throw new ConvexError(
+            "There is nothing to apply — the retained credit or the receivable's outstanding balance is already zero."
+          );
+        }
+        const allocationId = await allocatePaymentToReceivable(ctx, {
+          orgId: args.orgId,
+          paymentId: movement.canonicalPaymentId,
+          receivableDocumentId,
+          amountMinor,
+          actorId: user._id,
+        });
+
+        const { applicationId, sequence, idempotencyKey } = await recordRetainedApplication(ctx, {
+          orgId: args.orgId,
+          movement,
+          position,
+          receivableId: receivable._id,
+          receivableDocumentId,
+          allocationId,
+          amountMinor,
+          actorId: user._id,
+        });
+
+        await applyPostedPayment(
+          ctx,
+          receivable,
+          fromMinorUnits(amountMinor, currency),
+          appliedAt,
+          currency
+        );
+
+        // ⚠️ NOTHING MAY CATCH THIS. As in `recordPayment`, a caught exception in
+        // Convex COMMITS every write above it — the allocation, the application
+        // row and the drawn-down position would survive while the journal
+        // refused, leaving the credit spent with no accounting behind it.
+        await hookReceiptCreditApplied(ctx, {
+          orgId: args.orgId,
+          sourceId: receiptApplicationSourceId(movement._id, sequence),
+          idempotencyKey,
+          receiptMovementId: movement._id.toString(),
+          applicationId: applicationId.toString(),
+          sequence,
+          amountMinor,
+          currency,
+          customerId: movement.customerId.toString(),
+          receivableDocumentId: receivableDocumentId.toString(),
+          occurredAt: appliedAt,
+          actorId: user._id,
+        });
+
+        return {
+          applicationId,
+          sequence,
+          appliedMinor: amountMinor,
+          remainingUnappliedMinor: position.remainingUnappliedMinor - amountMinor,
+        };
       }
     );
   },
@@ -1385,31 +1739,67 @@ export const clearCheque = mutation({
           idempotencyKey: args.idempotencyKey,
         });
 
-        // Post to the GL: a cleared cheque deposits funds into the bank and
-        // settles the receivable (DR Bank / CR Accounts Receivable). Booked as a
+        // Post to the GL: a cleared cheque deposits funds into the bank, and
+        // that money either settles a receivable or becomes retained customer
+        // credit (DR Bank / CR AR and/or CR 2110 — SCRUM-218-C). Booked as a
         // COLLECTION_PAYMENT so the return-after-clearing flow can reverse it by
         // its source event. Posts now, or enqueues to the outbox if the chart /
         // period is not yet set up.
+        //
+        // A cheque may carry no receivable — `cheque.receivableId` is optional
+        // and guarded everywhere in this file — so this path reaches the
+        // no-receivable shape exactly as `recordPayment` does.
         const payment = await ctx.db.get(paymentId);
-        if (payment) {
-          await mirrorCollectionPaymentToCanonical(ctx, {
-            paymentId,
-            payment,
-            receivable,
-            actorId: user._id,
-            currency,
-          });
+        if (!payment) {
+          throw new ConvexError("Collection payment could not be re-read within its own transaction.");
         }
-
-        await hookCollectionPayment(ctx, {
-          orgId: args.orgId,
+        const mirrored = await mirrorCollectionPaymentToCanonical(ctx, {
           paymentId,
-          customerId: cheque.customerId,
-          amountMinor: toMinorUnits(cheque.amount, currency),
-          currency,
-          paymentMethod: "BANK_TRANSFER",
+          payment,
+          receivable,
           actorId: user._id,
+          currency,
+        });
+
+        // SCRUM-236 — same single forward producer as `recordPayment`. See the
+        // note there: identity built inside this invocation, never cached, and
+        // this call must not be caught, because its refusal is only safe if it
+        // escapes the mutation and rolls back the writes above.
+        //
+        // `paymentMethod: "BANK_TRANSFER"` is carried over unchanged from the
+        // retired hook call. A cleared cheque deposits into the bank, so the
+        // posting rule must resolve the bank account and not the cash account;
+        // this is the existing production behavior and SCRUM-236 does not
+        // change it.
+        const receiptIdentity = directCollectionReceipt({ orgId: args.orgId, paymentId });
+
+        // SCRUM-218-C — identical sealing to `recordPayment`; see the note there.
+        const { split } = await sealReceiptMovement(ctx, {
+          identity: receiptIdentity,
+          orgId: args.orgId,
+          collectionPaymentId: paymentId,
+          canonicalPaymentId: mirrored.canonicalPaymentId,
+          customerId: cheque.customerId,
+          currency,
+          allocationIds: mirrored.paymentAllocationId ? [mirrored.paymentAllocationId] : [],
+          actorId: user._id,
+        });
+
+        await postReceiptOccurrence(ctx, {
+          identity: receiptIdentity,
+          currency,
           occurredAt: clearedAt,
+          actorId: user._id,
+          requiredSystemKeys: split.unappliedMinor > 0 ? [RETAINED_CREDIT_SYSTEM_KEY] : [],
+          payload: {
+            paymentId: paymentId.toString(),
+            receivedMinor: split.receivedMinor,
+            appliedMinor: split.appliedMinor,
+            unappliedMinor: split.unappliedMinor,
+            currency,
+            customerId: cheque.customerId.toString(),
+            paymentMethod: "BANK_TRANSFER",
+          },
         });
 
         return paymentId;
@@ -1566,6 +1956,56 @@ export const returnClearedCheque = mutation({
           .withIndex("by_cheque", (q) => q.eq("chequeId", args.chequeId))
           .filter((q) => q.eq(q.field("status"), "POSTED"))
           .first();
+
+        // 🔴 SCRUM-218-C / review RM-01 — REFUSE RATHER THAN SILENTLY MISSTATE 2110.
+        //
+        // This handler reverses the clearing event and reopens the cheque's own
+        // receivable. It knows nothing about retained credit. So when a
+        // no-receivable cheque created a retained position and that credit was
+        // already applied to a DIFFERENT receivable, returning the cheque
+        // reverses the full CR 2110 while the application's DR 2110 stands:
+        //
+        //     CR 2110  100000   original clearing
+        //     DR 2110   40000   retained credit applied elsewhere
+        //     DR 2110  100000   cheque-return reversal
+        //     ------------------------------------------------
+        //     net       40000 DEBIT on a LIABILITY control account
+        //
+        // and the other receivable stays PAID on money the bank took back. A
+        // reviewer reproduced exactly those numbers against this code.
+        //
+        // Unwinding an application — reopening the right receivable, reversing
+        // the RECEIPT_CREDIT_APPLIED journal, restoring the position, and
+        // deciding which application to reverse when the amounts differ — is
+        // SCRUM-130's charter, not this ticket's. Refusing converts a silent,
+        // signal-free corruption into a visible stop an accountant can act on,
+        // and it follows the convention this file already sets: a
+        // partially-refunded cleared cheque likewise cannot be auto-returned.
+        //
+        // Placed BEFORE the first write. Everything above is a read.
+        if (clearedPayment) {
+          const movement = await ctx.db
+            .query("receiptMovements")
+            .withIndex("by_org_payment", (q) =>
+              q.eq("orgId", args.orgId).eq("collectionPaymentId", clearedPayment._id)
+            )
+            .unique();
+          if (movement) {
+            const position = await ctx.db
+              .query("receiptRetainedPositions")
+              .withIndex("by_org_movement", (q) =>
+                q.eq("orgId", args.orgId).eq("receiptMovementId", movement._id)
+              )
+              .unique();
+            if (position && position.applicationCount > 0) {
+              throw new ConvexError(
+                "This cheque's retained customer credit has already been applied to another receivable, " +
+                  "so returning it automatically would leave the customer-credit liability misstated. " +
+                  "Reverse the applied credit in Accounting first."
+              );
+            }
+          }
+        }
 
         // Reverse the GL impact of the original clearing.
         if (clearedPayment) {

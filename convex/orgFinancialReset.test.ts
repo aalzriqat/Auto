@@ -333,7 +333,22 @@ describe("resetOrgFinancialData", () => {
     // them. They are listed immediately before their parent so a run that stops
     // between batches never leaves a child without one. The financeCompanies
     // row itself is still deliberately out of scope, as `forbidden` pins above.
-    expect(RESET_TABLES_FOR_TEST).toHaveLength(33);
+    // 33 -> 36: `receiptApplications`, `receiptRetainedPositions` and
+    // `receiptMovements` — SCRUM-218-C's receipt authority. Added on purpose,
+    // which is what this guard asks for.
+    //
+    // The reset already clears `collectionPayments`, `canonicalPayments` and
+    // `paymentAllocations`. Leaving these three behind would strand a customer's
+    // RETAINED CREDIT: a live liability position, and the movement that created
+    // it, pointing at payments and allocations that no longer exist — on an
+    // otherwise fresh ledger. They are listed before the rows they reference so
+    // a run that stops between batches never leaves a child without its parent.
+    //
+    // Found because the organization hard-delete guard failed for the same three
+    // tables and this file's own constant warns, from a previous round, that
+    // fixing the destructive path that fired without asking which OTHER one has
+    // the same gap is how the second gap survives.
+    expect(RESET_TABLES_FOR_TEST).toHaveLength(36);
   });
 });
 

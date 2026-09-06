@@ -489,12 +489,36 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // `sweepAuthorityWork`, which took an `orgId` and was analysed, was deleted
   // with the drain-riding retry it implemented; the three replacements above
   // are all `workId`-only and the cron selector takes nothing.
+  // Then 481→485 / skippedNoOrgId 151→155, `analysed` unchanged at 315, by the
+  // four SCRUM-222 outbox posting mutations:
+  //
+  // `accountingOutbox.dispatchDueOutboxWork`, `accountingOutbox.claimOutboxRow`,
+  // `accountingOutbox.postOutboxRow` and `accountingOutbox.observeOutboxAttempt`:
+  //
+  // The GL half of exactly the split SCRUM-208 made for the authority half
+  // above, and they take the same shape for the same reason.
+  // `dispatchDueOutboxWork` is the cron selector and has no tenant: it reads the
+  // global `by_dispatch_next_action` range and does nothing but SCHEDULE one
+  // per-row mutation each, writing no tenant data at all. The other three take
+  // only a `rowId` — plus, for the worker, the attempt identity and generation
+  // it must validate — which is STRONGER than taking an `orgId`: the tenant is
+  // read from the stored `pendingAccountingEvents` row and every subsequent read
+  // is scoped by it, so there is no caller-supplied organization for a caller to
+  // get wrong or to forge. All four are `internalMutation`s reachable only from
+  // the scheduler or the `dispatch-outbox-work` cron, with no public entry point.
+  // Then 485→486 / analysed 315→316, by the one SCRUM-218-C mutation:
+  //
+  // `collections.applyRetainedCredit` — applies retained customer credit to a
+  // receivable. It takes an explicit `orgId` and is therefore ANALYSED rather
+  // than skipped, which is the outcome to want: every row it touches (the
+  // movement, its retained position, the receivable and the canonical
+  // allocation) is re-read and checked against that tenant before any write.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 481,
-      analysed: 315,
+      totalMutations: 486,
+      analysed: 316,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 151,
+      skippedNoOrgId: 155,
     });
   });
 });

@@ -296,9 +296,42 @@ export default defineSchema({
     // REVERSE shape
     originalEventId: v.optional(v.id("accountingEvents")),
     resultEventId: v.optional(v.id("accountingEvents")),
+
+    // ─── SCRUM-222 — EXECUTION METADATA IS NOT AN ACCOUNTING OUTCOME ────────
+    //
+    // `status` above stays exactly PENDING / POSTED / FAILED. A row claimed by
+    // a worker is STILL `PENDING`, because period close, cancellation hooks,
+    // reporting projections and evidence checks all read that field and were
+    // written when three values existed. An earlier revision of this design put
+    // the claim in `status`; its sharpest consequence was not a stale control
+    // but a WRONG GL ENTRY — a claimed prepaid amortization row no longer
+    // matched `hookPrepaidExpenseAmortizationsReversed` (which enumerates only
+    // PENDING/FAILED), so the worker posted an amortization for a REVERSED
+    // prepayment. Fourteen exact-status readers would have had to learn a
+    // fourth literal, and a fifteenth proved absent. These fields make that set
+    // empty by construction.
+    //
+    // ⚠️ ALL OPTIONAL AND ADDITIVE, AND THE ABSENCE IS LOAD-BEARING. Every
+    // pre-SCRUM-222 row is valid unchanged, and an absent `nextActionAt` means
+    // "due now" rather than "invisible" — which is what a legacy backlog must
+    // mean. That the index actually behaves that way is not assumed here; it is
+    // proved against a real deployment (contract §4.2).
+    /** Present only while a worker attempt is outstanding. Absent = unclaimed. */
+    dispatchState: v.optional(v.literal("DISPATCHED")),
+    /** Bumped on every claim and every manual revive; a stale worker loses. */
+    generation: v.optional(v.number()),
+    activeAttemptId: v.optional(v.string()),
+    scheduledFunctionId: v.optional(v.id("_scheduled_functions")),
+    /** When this row next becomes selectable. Absent = immediately due. */
+    nextActionAt: v.optional(v.number()),
   })
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_idempotency", ["orgId", "idempotencyKey"])
+    // SCRUM-222 — the due-work index, mirroring `commitmentAuthorityWork`'s
+    // `by_status_next_action` (:464). One index serves both selector ranges:
+    // unclaimed work (`dispatchState` absent) and claimed work awaiting
+    // observation (`DISPATCHED`), each bounded by `nextActionAt`.
+    .index("by_dispatch_next_action", ["status", "dispatchState", "nextActionAt"])
     // Lets a cancelled/voided source (e.g. a warranty/GAP deferral whose sale
     // was cancelled) sweep every one of its own not-yet-posted queued POSTs in
     // one query, not just the one idempotencyKey it happens to know about —
@@ -3637,6 +3670,181 @@ export default defineSchema({
     .index("by_quote", ["quoteId"])
     .index("by_hold", ["holdId"])
     .index("by_org_event_key", ["orgId", "eventIdempotencyKey"])
+    .index("by_org_customer", ["orgId", "customerId"]),
+
+  /* ─────────────────────────────────────────────────────────────────────────
+   * SCRUM-218-C — the direct-collection receipt movement model.
+   *
+   * Three tables, one job each, deliberately domain-local rather than another
+   * shared authority kernel (owner-proxy c17412 / c17653):
+   *
+   *   receiptMovements          what a receipt WAS, sealed once, never patched
+   *   receiptRetainedPositions  what is still owed back, server-owned, contended
+   *   receiptApplications       each later discharge, append-only
+   *
+   * The split exists because receipt disposition is an economic fact created by
+   * a movement. Reconstructing it later from `payment.amountMinor − Σ ACTIVE
+   * allocations` is what every earlier round was rejected for: a refund reverses
+   * allocations, so refunded money reappears as "available", and a customer
+   * DEPOSIT is also a settled payment with no allocation. "Unallocated" does not
+   * identify "unapplied receipt".
+   * ──────────────────────────────────────────────────────────────────────── */
+
+  /**
+   * One immutable row per direct-collection receipt occurrence.
+   *
+   * Every amount here is derived by the server inside the same transaction that
+   * created the payment and its allocations, from rows it re-read itself. No
+   * caller supplies `receivedMinor`, `initialAppliedMinor` or
+   * `initialUnappliedMinor`, and no field is a residual over mutable tables.
+   *
+   * ⚠️ `customerId` IS PART OF WHAT IS SEALED. It records whose money this
+   * receipt represents, so a customer merge does NOT repoint it —
+   * `CUSTOMER_NON_REASSIGNABLE_TABLES` holds this table out of the generic
+   * rewriting registry, and no merge loop can raw-reassign settled money to a
+   * different customer.
+   *
+   * The rest of the lineage is NOT sealed: a merge DOES repoint
+   * `canonicalPayments` (this row's own `canonicalPaymentId` target),
+   * `journalLines` and `receivableDocuments`. After a merge the movement
+   * therefore names the loser while its canonical payment names the survivor.
+   *
+   * Removing that write path is not by itself a fence. A merge still SUCCEEDS,
+   * and because `applyRetainedCredit` requires
+   * `receivable.customerId === movement.customerId` while a merge repoints
+   * `receivables`, the merged-away customer's retained credit becomes
+   * permanently UNAPPLIABLE. It fails closed — no money reaches the wrong party
+   * and this liability stays on the books — but it is a freeze. Deciding what a
+   * merge must do instead (refuse before writing, or perform a specified
+   * authority transfer) is SCRUM-250, with its own evidence floor.
+   */
+  receiptMovements: defineTable({
+    orgId: v.id("organizations"),
+    collectionPaymentId: v.id("collectionPayments"),
+    canonicalPaymentId: v.id("canonicalPayments"),
+    customerId: v.id("customers"),
+    currency: v.string(),
+    receivedMinor: v.number(),
+    initialAppliedMinor: v.number(),
+    initialUnappliedMinor: v.number(),
+    /**
+     * The EXACT allocation rows this movement created — recorded from what
+     * `allocatePaymentToReceivable` returned, not recovered by set-difference.
+     * `_creationTime` cannot separate a movement's own writes from pre-existing
+     * rows, because every write in one Convex transaction shares an instant.
+     * An empty array is legitimate: it is the no-receivable receipt.
+     */
+    initialAllocationIds: v.array(v.id("paymentAllocations")),
+    /**
+     * The persisted SCRUM-237 occurrence snapshot. Stored as plain data with no
+     * brand and no trust registry entry; `rehydrateReceiptOccurrence` is the
+     * only door back to runtime authority. `orgId` is deliberately NOT inside
+     * this object — the tenant comes from the authenticated context at
+     * rehydration, so a snapshot copied between rows cannot carry a foreign
+     * tenant in with it.
+     */
+    occurrence: v.object({
+      eventType: v.string(),
+      sourceType: v.string(),
+      sourceId: v.string(),
+      eventVersion: v.number(),
+    }),
+    /** `RECEIPT_PAYLOAD_VERSION` as of sealing. NOT the economic eventVersion. */
+    receiptPayloadVersion: v.number(),
+    /**
+     * Which liability the residue belongs to, stated rather than inferred.
+     * NONE when the receipt fully discharged a receivable; a reader must never
+     * conclude "no allocation, therefore unapplied credit" — that is exactly the
+     * inference that mistakes a customer deposit for a retained receipt.
+     */
+    liabilityTreatment: v.union(
+      v.literal("NONE"),
+      v.literal("UNAPPLIED_CUSTOMER_RECEIPTS")
+    ),
+    actorId: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_payment", ["orgId", "collectionPaymentId"])
+    // NO READER TODAY, and that is stated rather than left to be discovered.
+    // `customerId` here is sealed provenance, not a pointer the merge rewrites,
+    // so nothing resolves a movement this way yet. Declared for SCRUM-250's
+    // "does this customer hold live receipt authority?" lookup, which needs it
+    // under either of that ticket's shapes (refuse, or transfer).
+    .index("by_org_customer", ["orgId", "customerId"]),
+
+  /**
+   * The authoritative remaining retained credit for one movement.
+   *
+   *   0 <= remainingUnappliedMinor <= initialUnappliedMinor
+   *
+   * Changes ONLY in the same transaction as a persisted application child. A
+   * naked patch is forbidden. Concurrent consumers contend on this single row,
+   * so Convex's OCC is what prevents two applications from overdrawing one
+   * retained credit — the exclusivity is the row, not a lock we invented.
+   */
+  receiptRetainedPositions: defineTable({
+    orgId: v.id("organizations"),
+    receiptMovementId: v.id("receiptMovements"),
+    customerId: v.id("customers"),
+    currency: v.string(),
+    initialUnappliedMinor: v.number(),
+    remainingUnappliedMinor: v.number(),
+    /** Monotonic count of applications, and the source of the next `sequence`. */
+    applicationCount: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_movement", ["orgId", "receiptMovementId"])
+    .index("by_org_customer", ["orgId", "customerId"]),
+
+  /**
+   * One append-only row per later application of retained credit.
+   *
+   * `sequence` is part of the ACCOUNTING identity, not decoration: applications
+   * #1 and #2 against one receipt are two legitimate economic occurrences, and a
+   * dedup tuple that ignored the sequence would swallow the second one — the
+   * subledger showing two discharges and the ledger one.
+   */
+  receiptApplications: defineTable({
+    orgId: v.id("organizations"),
+    receiptMovementId: v.id("receiptMovements"),
+    sequence: v.number(),
+    customerId: v.id("customers"),
+    receivableId: v.id("receivables"),
+    receivableDocumentId: v.id("receivableDocuments"),
+    allocationId: v.id("paymentAllocations"),
+    amountMinor: v.number(),
+    currency: v.string(),
+    /** The application event's own occurrence identity, exactly as posted. */
+    occurrence: v.object({
+      eventType: v.string(),
+      sourceType: v.string(),
+      sourceId: v.string(),
+      eventVersion: v.number(),
+    }),
+    eventIdempotencyKey: v.string(),
+    /**
+     * ⚠️ NOTHING WRITES `REVERSED` YET, AND THAT IS DECLARED RATHER THAN LEFT TO
+     * BE DISCOVERED. Unwinding an application belongs to SCRUM-130's
+     * cleared-cheque return, which needs exactly the lineage above to know which
+     * applications to reverse and how much AR each reopens. The member is inert
+     * today: no production writer sets it and no reader branches on it, so it
+     * cannot silently mean something. It is here so 130 consumes a stable shape
+     * instead of migrating one.
+     */
+    status: v.union(v.literal("APPLIED"), v.literal("REVERSED")),
+    actorId: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_movement", ["orgId", "receiptMovementId"])
+    .index("by_org_movement_sequence", ["orgId", "receiptMovementId", "sequence"])
+    .index("by_org_event_key", ["orgId", "eventIdempotencyKey"])
+    // NO READER TODAY — same status as the `by_org_customer` on
+    // `receiptMovements`, and for the same reason: a merge does not rewrite this
+    // `customerId`, so nothing looks an application up by customer. Declared for
+    // SCRUM-250, in the same spirit as the inert `REVERSED` above.
     .index("by_org_customer", ["orgId", "customerId"]),
 
   // Receipt voucher (سند قبض) auto-generated as proof of payment whenever a

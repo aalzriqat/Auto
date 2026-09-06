@@ -1,10 +1,11 @@
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { query } from "./_generated/server";
 import { internalMutation } from "./functions";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { postAccountingEvent } from "./accounting/postingEngine";
 import { reverseAccountingEvent } from "./accounting/reversals";
+import { RECEIPT_EVENT_TYPE, RECEIPT_SOURCE_TYPE } from "./accounting/receiptOccurrence";
 import { requireFeature } from "./subscriptions";
 
 // ─── Queries ──────────────────────────────────────────────────────────────────
@@ -170,6 +171,37 @@ export const post = internalMutation({
   },
 });
 
+// SCRUM-254 — being allowed to operate the ledger is not authority to unwind a
+// customer receipt.
+//
+// This wrapper authenticates the caller against the org and the accounting
+// feature and then hands ANY POSTED event to the shared reversal engine, with a
+// reversal key the caller picks. For a certified direct-collection receipt —
+// the row asserting a customer's money arrived — that is a generic operator
+// command deciding a receipt never happened, and the money's disposition
+// (retained credit, refund, cheque return) is never a consequence the generic
+// door can reason about.
+//
+// The refusal below is deliberately blind to `idempotencyKey`. SCRUM-249 — a
+// separate branch, not an ancestor of this one — adds a reserved `occr…`
+// key-namespace guard inside the engine; no such guard exists here, and this
+// change does not need one. That guard would answer "may this key be used
+// here", a different question from "may this caller reverse this at all". So
+// the exact derived reserved key is refused for the same reason an invented one
+// is: authority is not a spelling, and the two guards never overlap.
+//
+// The refusal is at the WRAPPER, not in `reverseAccountingEvent`, because the
+// engine is the shared seam legitimate domain code reverses through —
+// `collections.ts`'s cheque-return path (SCRUM-130), the outbox drain, and the
+// workflow hooks all call it directly. A receipt denylist inside the engine
+// would revoke those lifecycles' own sanctioned authority. This door has no
+// production callers to break: every real reversal in the repo reaches the
+// engine directly.
+const GENERIC_RECEIPT_REVERSAL_REFUSED =
+  "A certified receipt occurrence cannot be reversed through the generic ledger " +
+  "reversal. Generic operator access is not authority over a receipt — reverse it " +
+  "through the collection lifecycle that owns it.";
+
 export const reverse = internalMutation({
   args: {
     orgId: v.id("organizations"),
@@ -181,6 +213,24 @@ export const reverse = internalMutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
+
+    // Classify only a row whose tenancy is already established. A missing
+    // original, or one belonging to another org, falls through UNCLASSIFIED to
+    // the engine's existing `Accounting event not found in this organization`
+    // refusal — so this guard can never tell a caller that a row they have no
+    // claim to is a receipt. "Not yours" stays the whole answer.
+    const original = await ctx.db.get(args.originalEventId);
+    if (
+      original &&
+      original.orgId === args.orgId &&
+      original.eventType === RECEIPT_EVENT_TYPE &&
+      original.sourceType === RECEIPT_SOURCE_TYPE
+    ) {
+      // Before the engine call, therefore before any event, journal, line,
+      // balance snapshot, status patch or pending-reversal row exists.
+      throw new ConvexError(GENERIC_RECEIPT_REVERSAL_REFUSED);
+    }
+
     return reverseAccountingEvent(ctx, { ...args, actorId: user._id });
   },
 });

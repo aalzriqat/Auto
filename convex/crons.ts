@@ -119,6 +119,31 @@ crons.interval(
   {}
 );
 
+// SCRUM-222 — dispatch due GL posting work, and observe what became of each
+// worker execution.
+//
+// ⚠️ THE SAME "NOT ATTACHED TO ACCOUNTING TRAFFIC" RULE, FOR THE SAME REASON.
+// An outbox row used to be retried only when something else caused a drain — a
+// period opening, a chart being initialized, an operator pressing redrive. An
+// organization that never triggered one of those never retried, so a transient
+// failure could park real GL work indefinitely with nothing to surface it.
+// Eager dispatch still exists and is still worth having, but it buys LATENCY
+// only: losing an eager schedule must never cost liveness.
+//
+// This tick also owns RECOVERY of a lost worker. A row claimed by a scheduled
+// function that never reported back is re-observed from here — never
+// re-dispatched — which is why the selector reads a claimed-and-overdue range
+// as well as an unclaimed one.
+//
+// Bounded per tick and reading exact due-time ranges, so an empty queue costs
+// two indexed reads.
+crons.interval(
+  "dispatch-outbox-work",
+  { minutes: 1 },
+  internal.accountingOutbox.dispatchDueOutboxWork,
+  {}
+);
+
 // Refresh Instagram long-lived tokens for orgs whose token expires within 7 days.
 // Instagram tokens last 60 days; refreshing weekly keeps them perpetually valid.
 crons.cron(
