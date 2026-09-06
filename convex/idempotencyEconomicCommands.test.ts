@@ -232,6 +232,50 @@ describe("SCRUM-57 — the identity is not optional at the trust boundary", () =
     expect(fp.expenses).toBe(0);
   });
 
+  /**
+   * The property that stops the mandatory identity becoming a workflow
+   * dead-end, and the reason `ExpenseDialog` can safely hold ONE identity for a
+   * whole dialog session.
+   *
+   * A rejected command must leave NO stored row. Convex rolls the whole mutation
+   * back on a throw, taking the STARTED row with it — so the operator who is
+   * told "VAT amount cannot exceed the expense amount", corrects the figure and
+   * submits again is running a genuinely new command against a clean slate,
+   * not colliding with the identity their failed attempt used.
+   *
+   * Without this, every server-side validation refusal would strand the form:
+   * same key, changed amount, IDEMPOTENCY_CONFLICT, and no way forward except
+   * closing the dialog.
+   */
+  test("a REFUSED command stores nothing, so a corrected resubmit on the same identity succeeds", async () => {
+    const { t, orgId, asUser } = await setup("retryafterfail");
+    const key = "intent-corrected-after-refusal";
+
+    // Refused inside the command body: VAT cannot exceed the amount.
+    await expect(
+      asUser.mutation(
+        api.expenses.create,
+        payload(orgId, key, { amount: 100, taxAmount: 500 })
+      )
+    ).rejects.toThrow();
+
+    // No evidence of the refused attempt may survive its own transaction.
+    const afterFailure = await economicFootprint(t, orgId);
+    expect(afterFailure.commands).toBe(0);
+    expect(afterFailure.expenses).toBe(0);
+
+    // The corrected resubmit reuses the SAME identity and must go through.
+    const created = await asUser.mutation(
+      api.expenses.create,
+      payload(orgId, key, { amount: 100, taxAmount: 5 })
+    );
+    expect(created).toBeDefined();
+
+    const afterFix = await economicFootprint(t, orgId);
+    expect(afterFix.expenses).toBe(1);
+    expect(afterFix.commands).toBe(1);
+  });
+
   test("a NON-economic command (sales.createDraft) is NOT constrained", async () => {
     // The classification boundary. A draft "commits nothing and reserves
     // nothing" (`convex/utils/saleCompletion.ts`), so forcing an identity onto
