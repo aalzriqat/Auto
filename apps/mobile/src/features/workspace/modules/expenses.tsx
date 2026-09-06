@@ -68,7 +68,6 @@ export function ExpensesModule({ highlightId, orgId }: { highlightId?: string; o
         notes: maybeText(form.notes),
         idempotencyKey: key,
       });
-      commandId.retire(intent);
       dateRef.current = null;
       setOpen(false);
       setForm({ title: "", amount: "", taxAmount: "", category: "OTHER", vendor: "", vehicleId: "", notes: "" });
