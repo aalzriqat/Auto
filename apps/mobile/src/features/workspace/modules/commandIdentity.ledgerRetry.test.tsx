@@ -6,8 +6,12 @@
  * same rule applies: the identity is held across the retry AND the date is
  * snapshotted with it, or a genuine retry arrives as a fingerprint conflict.
  *
- * Own file for the same reason as the expense scenarios: a `TextInput` inside
- * RN's `Modal` cannot be remounted cleanly twice in one jest module registry.
+ * One scenario per file: once a form in this tree has been typed into, a second
+ * `render()` in the same jest module registry yields an empty tree. That is
+ * reproducible but NOT root-caused, so it is recorded as an observation rather
+ * than explained — an earlier revision of this comment asserted a cause
+ * (a `TextInput` inside a `Modal` failing to remount) that turned out to be
+ * false.
  */
 import { fireEvent, render, waitFor } from "@testing-library/react-native";
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";

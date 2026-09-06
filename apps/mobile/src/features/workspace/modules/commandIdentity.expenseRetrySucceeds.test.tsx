@@ -14,11 +14,23 @@
  * event, however many attempts it took. Driving the intent through to success
  * is also what exercises the retire-and-clear path.
  *
- * That the identity is then RETIRED is asserted at a call site without a form,
- * in `commandIdentity.modules.test.tsx` ("after the payout SUCCEEDS ..."):
- * observing it here would mean reopening the sheet, and a `TextInput` inside
- * RN's `Modal` cannot be remounted cleanly twice in one jest module registry —
- * which is also why this scenario has its own file.
+ * It then submits a THIRD time on the same mounted tree, which is what proves
+ * the success path actually retired the identity and cleared the date snapshot:
+ * the third command must carry a NEW identity and a FRESH date. Without that,
+ * deleting either `commandId.retire(intent)` or `dateRef.current = null` would
+ * break nothing that any test observes — and dropping the date reset is the
+ * quiet one, since every later expense in that mounted lifetime would silently
+ * inherit the FIRST one's timestamp.
+ *
+ * ⚠️ A `Modal` in this environment renders its children whether or not it is
+ * `visible`, so the sheet cannot be observed closing and post-success UI state
+ * is not a usable oracle — assert on what the server was sent instead.
+ *
+ * Scenarios are still one-per-file here: once a form in this tree has been typed
+ * into, a second `render()` in the same jest module registry yields an empty
+ * tree. That is reproducible but NOT root-caused, so it is recorded as an
+ * observation rather than explained — an earlier revision of this comment
+ * asserted a cause that turned out to be false.
  */
 import { fireEvent, render, waitFor } from "@testing-library/react-native";
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
@@ -102,4 +114,18 @@ test("a retry that SUCCEEDS re-sends the SAME identity and date as the failed at
   expect(Date.now() - startedAt).toBeGreaterThanOrEqual(CLOCK_GAP_MS);
   expect(second.idempotencyKey).toBe(first.idempotencyKey);
   expect(second.date).toBe(first.date);
+
+  // A THIRD command, after the second one succeeded. This is the part that
+  // proves the success path ran its cleanup rather than merely executing it:
+  // reusing the completed identity would make the server replay that command
+  // and silently discard this one while reporting success.
+  await new Promise((resolve) => setTimeout(resolve, CLOCK_GAP_MS));
+  fireEvent.press(getByText(SAVE));
+  await waitFor(() => expect(spy).toHaveBeenCalledTimes(3));
+
+  const third = spy.mock.calls[2][0] as { idempotencyKey: string; date: number };
+  expect(third.idempotencyKey).not.toBe(first.idempotencyKey);
+  // And the date snapshot was cleared, not held: without the reset, every later
+  // expense in this mounted lifetime would inherit the first one's timestamp.
+  expect(third.date).toBeGreaterThan(first.date);
 });
