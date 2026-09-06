@@ -136,6 +136,20 @@ async function postOrEnqueue(
     if (reservedAuthority) {
       // A queued row carries its own payload, so "the same work is already
       // waiting" is checkable rather than assumed.
+      //
+      // ASYMMETRY WITH THE DRAIN, DELIBERATELY NOT "FIXED" (SCRUM-249 / Sonnet F2).
+      // `accountingOutbox.postPendingEntry` rebuilds the command with
+      // `occurredAt: p.occurredAt ?? p.accountingDate`, because the pending
+      // column is optional. The row is passed here WITHOUT that fallback, so an
+      // absent `occurredAt` diverges from any real `cmd.occurredAt` and refuses.
+      //
+      // Mirroring the drain's fallback here was proposed and DECLINED: it would
+      // turn a refusal into a MATCH whenever the queued row's `accountingDate`
+      // happened to equal the incoming `occurredAt`, which is absorption — the
+      // exact outcome this ticket exists to prevent. Fail-closed is the correct
+      // asymmetry, not an oversight, and it is unreachable either way:
+      // `enqueuePendingPost` is the only POST-kind writer and always sets
+      // `occurredAt`, and `PostCommand.occurredAt` is non-optional.
       assertExistingRowIsSameOccurrence(
         { ...queued, payloadHash: await simplePayloadHash((queued.payload ?? {}) as Record<string, unknown>) },
         cmd,

@@ -189,6 +189,7 @@ export function assertExistingRowIsSameOccurrence(
     accountingDate?: number;
     occurredAt?: number;
     branchId?: Id<"branches">;
+    idempotencyKey?: string;
   },
   cmd: PostCommand,
   cmdPayloadHash: string
@@ -245,6 +246,30 @@ export function assertExistingRowIsSameOccurrence(
   }
   if (existing.branchId !== cmd.branchId) {
     divergent.push(`branchId ${String(existing.branchId)} != ${String(cmd.branchId)}`);
+  }
+  // THE CANONICAL ADDRESS ITSELF (SCRUM-249-ADV-02).
+  //
+  // The comparator is reached from two lookups. Step 3 selects the row BY KEY,
+  // so there the stored key equals the command key by construction and this
+  // comparison is a tautology. Step 4 selects it by the TUPLE index, where the
+  // stored key is entirely FREE — and without this line a POSTED reserved row
+  // carrying somebody else's key is handed back as `alreadyPosted`.
+  //
+  // Reproduced before it was fixed: a row keyed `cheque_return_after_clear_<id>`
+  // with an otherwise byte-identical envelope absorbed the certified receipt
+  // silently — no new event, no pending row, no error — and
+  // `findPostedReceiptOccurrence` then returned that foreign-keyed row as the
+  // receipt's posting.
+  //
+  // `cmd.idempotencyKey` is already proven canonical for a reserved command:
+  // `assertOccurrenceAuthorizes` refuses unless it equals
+  // `occurrenceIdempotencyKey(identity)`. So this asks the one remaining
+  // question — is the STORED row addressed as this occurrence, or as something
+  // else that merely shares its tuple.
+  if (existing.idempotencyKey !== cmd.idempotencyKey) {
+    divergent.push(
+      `idempotencyKey ${String(existing.idempotencyKey)} != ${cmd.idempotencyKey}`
+    );
   }
   if (divergent.length > 0) {
     throw new ConvexError(

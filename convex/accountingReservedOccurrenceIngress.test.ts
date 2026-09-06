@@ -42,7 +42,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import {
   directCollectionReceipt,
   occurrenceIdempotencyKey,
@@ -880,6 +880,52 @@ describe("SCRUM-249 §4c - a matching payload is not a matching posting", () => 
   });
 
   /**
+   * E1e — the OTHER half of the currency sentence, and the reason it is here.
+   *
+   * The comparator normalises case on both sides, and its own doc comment says
+   * a case-only difference "is not a divergence and must not be reported as
+   * one". Nothing tested that. An adversarial reviewer removed the
+   * normalisation — `String(existing.currency) !== cmd.currency` — and all 90
+   * tests across both receipt files still passed, so the normalisation was
+   * carrying no weight it could be held to.
+   *
+   * E1 proves a genuine currency divergence REFUSES. This proves a case-only
+   * difference does NOT, which is the half that keeps the guard from refusing
+   * a legitimate posting. A refusal test without its positive control cannot
+   * tell "correctly scoped" from "refuses whenever the bytes differ".
+   *
+   * Reachability is honestly narrow today: `orgSettings` validates currency
+   * against an uppercase-only list with a case-sensitive `includes`, and it is
+   * not one of `adminData`'s raw-editable tables, so no live writer can persist
+   * a lower-case currency. This pins a documented property against a future
+   * writer or migration, and it is the mutant's executioner either way.
+   */
+  test("E1e CONTROL - a CASE-ONLY currency difference is absorbed, not refused", async () => {
+    const { t, orgId, userId, customerId } = await seedPostableOrg("e1e");
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const identity = directCollectionReceipt({ orgId, paymentId });
+    const payload = certifiedReceiptPayload(paymentId.toString(), customerId.toString());
+
+    // Stored lower-case, command upper-case. Same money, same period, same
+    // occurrence — only the spelling of the currency differs.
+    await seedPoisonedTwin(t, orgId, userId, identity, payload, {
+      currency: "usd",
+      accountingDate: LEGIT_DATE,
+      occurredAt: LEGIT_DATE,
+    });
+
+    await t.run(async (ctx) => {
+      await postReceiptOccurrence(ctx, {
+        identity, currency: "USD", occurredAt: LEGIT_DATE, actorId: userId, payload,
+      });
+    });
+
+    // Absorbed as the same occurrence: no second event, no second journal.
+    expect(await eventsFor(t, orgId)).toHaveLength(1);
+    expect(await journalsFor(t, orgId)).toHaveLength(1);
+  });
+
+  /**
    * ⚠️ ACCOUNTING DATE AND OCCURRED-AT ARE SEPARATED ON PURPOSE, AND THE FIRST
    * DRAFT OF THIS TEST DID NOT DO IT.
    *
@@ -1032,7 +1078,258 @@ describe("SCRUM-249 §4c - a matching payload is not a matching posting", () => 
     expect(rows).toHaveLength(1);
     expect(rows[0].accountingDate).toBe(Date.UTC(year, 5, 1));
   });
+
+
 });
+
+/* ========================================================================== *
+ * §4d — THE COMPARATOR'S COMPLETENESS IS DERIVED FROM THE SCHEMA
+ *
+ * Two review rounds found the same class of defect: a field the comparator
+ * forgot. Round 1 (SCRUM-249-ADV-01) was `currency` / `accountingDate` /
+ * `occurredAt` / `branchId`; round 2 (SCRUM-249-ADV-02) was `idempotencyKey`.
+ * Neither was a hard bug to fix and both were invisible for the same reason —
+ * an ALLOWLIST OF COMPARED FIELDS FAILS OPEN BY OMISSION, and nothing was
+ * checking the list against reality.
+ *
+ * So the list is checked against reality here. Every column `accountingEvents`
+ * actually declares must be either
+ *
+ *   - COMPARED — and that is proved BEHAVIOURALLY, by seeding a twin that
+ *     differs in that column ALONE and requiring the certified receipt to
+ *     refuse; a name in a list proves nothing, a refusal does; or
+ *   - EXCUSED  — with a written reason for why it cannot distinguish two
+ *     postings of the same occurrence.
+ *
+ * A column added to the schema later lands in neither set and fails §4d-1
+ * before it can fail open in production. A comparison deleted later fails its
+ * own §4d-2 case. This is the mechanism that makes ADV-03 a test failure
+ * instead of a third review round.
+ * ========================================================================== */
+
+describe("SCRUM-249 §4d — every accountingEvents column is compared or excused", () => {
+
+
+  /** Proved by a twin below. The refusal must NAME the column that diverged. */
+  const COMPARED: Record<string, RegExp> = {
+    eventType: /eventType/,
+    sourceType: /sourceType/,
+    sourceId: /sourceId/,
+    eventVersion: /eventVersion/,
+    payloadHash: /payload economics differ/,
+    currency: /currency/,
+    accountingDate: /accountingDate/,
+    occurredAt: /occurredAt/,
+    branchId: /branchId/,
+    idempotencyKey: /idempotencyKey/,
+  };
+
+  /** Cannot distinguish two postings of the same occurrence. Reasons, not vibes. */
+  const EXCUSED: Record<string, string> = {
+    orgId:
+      "every lookup that can reach the comparator is already range-scoped by orgId, " +
+      "so a row from another tenant is never selected in the first place",
+    payload:
+      "compared through payloadHash, which canonicalises before hashing so a payload " +
+      "that round-tripped through the outbox row still matches",
+    status:
+      "gated BEFORE the comparator: only a POSTED row holding a journalEntryId reaches " +
+      "it. The non-POSTED by-source case is recorded as an open question on the " +
+      "reversal arm, not silently excused here",
+    createdBy:
+      "actor attribution is not economic occurrence identity — a different operator " +
+      "replaying the same receipt must remain idempotent (Codex accepted this decline)",
+    createdAt: "wall-clock of the ROW, not of the occurrence; every retry writes a new one",
+    journalEntryId: "the RESULT of posting, not an input that defines what gets posted",
+    reversalOfEventId: "reversal linkage; a forward receipt never carries it",
+    reversedByEventId: "reversal linkage, written after the fact by reversals.ts",
+  };
+
+  function schemaColumns(): string[] {
+    const table = schema.tables.accountingEvents as unknown as {
+      validator: { fields?: Record<string, unknown> };
+    };
+    const fields = table.validator?.fields;
+    // A BLIND ENUMERATION AND A TRUE ABSENCE LOOK IDENTICAL. If the validator
+    // ever stops exposing its fields this must fail loudly, not report "all
+    // columns accounted for" over an empty set.
+    if (!fields || Object.keys(fields).length === 0) {
+      throw new Error(
+        "accountingEvents validator exposed no fields — the completeness check " +
+          "cannot enumerate the schema and must not pass vacuously."
+      );
+    }
+    return Object.keys(fields).sort();
+  }
+
+  test("§4d-1 — the schema's columns are exactly COMPARED ∪ EXCUSED", () => {
+    const columns = schemaColumns();
+    const accountedFor = [...Object.keys(COMPARED), ...Object.keys(EXCUSED)].sort();
+
+    // Disjoint: a column cannot be both compared and excused.
+    const both = Object.keys(COMPARED).filter((c) => c in EXCUSED);
+    expect(both).toEqual([]);
+
+    // Exact: no column unaccounted for, and nothing declared that does not exist.
+    expect(accountedFor).toEqual(columns);
+  });
+
+  async function seedBranch(t: TestHarness, orgId: Id<"organizations">) {
+    return t.run(async (ctx) =>
+      ctx.db.insert("branches", { orgId, name: "Second", isActive: true })
+    );
+  }
+
+  /**
+   * One twin per compared column, differing in THAT COLUMN ALONE.
+   *
+   * The routing is automatic and worth stating, because it is why one uniform
+   * case covers both lookups: the twin keeps the canonical key for every column
+   * except `idempotencyKey`, so step 3 finds it by key; for `idempotencyKey`
+   * the key no longer matches and step 4 finds it by the tuple index. Both
+   * roads lead to the comparator, which is the point.
+   */
+  for (const [column, expected] of Object.entries(COMPARED)) {
+    test(`§4d-2 ${column} — a twin differing ONLY in this column refuses`, async () => {
+      const { t, orgId, userId, customerId } = await seedPostableOrg(`d4${column.toLowerCase()}`);
+      const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+      const identity = directCollectionReceipt({ orgId, paymentId });
+      const payload = certifiedReceiptPayload(paymentId.toString(), customerId.toString());
+      const date = Date.UTC(new Date().getUTCFullYear(), 5, 1);
+
+      const row: Omit<Doc<"accountingEvents">, "_id" | "_creationTime"> = {
+        orgId,
+        eventType: "COLLECTION_PAYMENT",
+        sourceType: "collectionPayments",
+        sourceId: identity.sourceId,
+        eventVersion: identity.eventVersion,
+        idempotencyKey: occurrenceIdempotencyKey(identity),
+        occurredAt: date,
+        accountingDate: date,
+        currency: "USD",
+        payload,
+        payloadHash: await simplePayloadHash(payload),
+        status: "POSTED" as const,
+        createdBy: userId,
+        createdAt: Date.now(),
+      };
+
+      // Exactly one dimension moves.
+      switch (column) {
+        case "eventType": row.eventType = "SALE_COMPLETED"; break;
+        case "sourceType": row.sourceType = "transactions"; break;
+        case "sourceId": row.sourceId = `${identity.sourceId}-other`; break;
+        case "eventVersion": row.eventVersion = identity.eventVersion + 1; break;
+        case "payloadHash": {
+          const other = { ...payload, receivedMinor: 999900 };
+          row.payload = other;
+          row.payloadHash = await simplePayloadHash(other);
+          break;
+        }
+        case "currency": row.currency = "JPY"; break;
+        case "accountingDate": row.accountingDate = date + 86_400_000; break;
+        case "occurredAt": row.occurredAt = date + 1_000; break;
+        case "branchId": row.branchId = await seedBranch(t, orgId); break;
+        case "idempotencyKey": row.idempotencyKey = `cheque_return_after_clear_${paymentId}`; break;
+        default: throw new Error(`no twin defined for compared column ${column}`);
+      }
+
+      const twinId = await t.run(async (ctx) => ctx.db.insert("accountingEvents", row));
+      await t.run(async (ctx) => {
+        const journalEntryId = await ctx.db.insert("journalEntries", {
+          orgId,
+          accountingEventId: twinId,
+          journalNumber: `JE-${column}`,
+          accountingDate: row.accountingDate,
+          periodId: (
+            await ctx.db.query("accountingPeriods").withIndex("by_org", (q) => q.eq("orgId", orgId)).first()
+          )!._id,
+          sourceType: "collectionPayments",
+          sourceId: identity.sourceId,
+          category: "SYSTEM",
+          memo: `twin-${column}`,
+          status: "POSTED",
+          currency: row.currency,
+          postedBy: userId,
+          postedAt: Date.now(),
+          createdAt: Date.now(),
+        });
+        await ctx.db.patch(twinId, { journalEntryId });
+      });
+
+      const before = await footprint(t, orgId);
+
+      await expect(
+        t.run(async (ctx) => {
+          await postReceiptOccurrence(ctx, {
+            identity, currency: "USD", occurredAt: date, actorId: userId, payload,
+          });
+        })
+      ).rejects.toThrow(expected);
+
+      // Refused with nothing moved, and the row it refused left as found.
+      expect(await footprint(t, orgId)).toEqual(before);
+    });
+  }
+
+  test("§4d-3 CONTROL — an identical twin is still absorbed as an exact retry", async () => {
+    const { t, orgId, userId, customerId } = await seedPostableOrg("d4ctl");
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const identity = directCollectionReceipt({ orgId, paymentId });
+    const payload = certifiedReceiptPayload(paymentId.toString(), customerId.toString());
+    const date = Date.UTC(new Date().getUTCFullYear(), 5, 1);
+
+    const twinId = await t.run(async (ctx) =>
+      ctx.db.insert("accountingEvents", {
+        orgId,
+        eventType: "COLLECTION_PAYMENT",
+        sourceType: "collectionPayments",
+        sourceId: identity.sourceId,
+        eventVersion: identity.eventVersion,
+        idempotencyKey: occurrenceIdempotencyKey(identity),
+        occurredAt: date,
+        accountingDate: date,
+        currency: "USD",
+        payload,
+        payloadHash: await simplePayloadHash(payload),
+        status: "POSTED",
+        createdBy: userId,
+        createdAt: Date.now(),
+      })
+    );
+    await t.run(async (ctx) => {
+      const journalEntryId = await ctx.db.insert("journalEntries", {
+        orgId,
+        accountingEventId: twinId,
+        journalNumber: "JE-CTL",
+        accountingDate: date,
+        periodId: (
+          await ctx.db.query("accountingPeriods").withIndex("by_org", (q) => q.eq("orgId", orgId)).first()
+        )!._id,
+        sourceType: "collectionPayments",
+        sourceId: identity.sourceId,
+        category: "SYSTEM",
+        memo: "control",
+        status: "POSTED",
+        currency: "USD",
+        postedBy: userId,
+        postedAt: Date.now(),
+        createdAt: Date.now(),
+      });
+      await ctx.db.patch(twinId, { journalEntryId });
+    });
+
+    // A suite of refusals with no accepted case cannot tell "correctly scoped"
+    // from "refuses everything".
+    await t.run(async (ctx) => {
+      await postReceiptOccurrence(ctx, {
+        identity, currency: "USD", occurredAt: date, actorId: userId, payload,
+      });
+    });
+    expect(await eventsFor(t, orgId)).toHaveLength(1);
+  });
+});
+
 
 /* ========================================================================== *
  * §5 — POSITIVE CONTROLS: the guard must be scoped, not blunt
