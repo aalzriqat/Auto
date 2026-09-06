@@ -455,6 +455,89 @@ describe("SCRUM-130 §B — every later application occurrence is unwound, poste
     ).toHaveLength(0);
   });
 
+  /**
+   * The §A resurrection, on the APPLICATION axis.
+   *
+   * ⚠️ WRITTEN BECAUSE A MUTANT SURVIVED. Removing the unconditional cancel from
+   * `revokeReceiptApplicationOccurrence` changed nothing in B1, because when an
+   * application never posted, `reverseEventIfPosted` takes its NOT_POSTED branch
+   * and cancels the queued row itself. B1 therefore proved the OUTCOME without
+   * proving WHICH code produced it, and the unconditional cancel looked like
+   * dead weight.
+   *
+   * It is not. The application family has exactly the receipt family's shape: a
+   * POSTED row at the occurrence's tuple under a foreign key, plus the canonical
+   * forward obligation still queued. `reverseEventIfPosted` then finds the posted
+   * row, reverses it, returns REVERSED — and never reaches the branch that
+   * cancels. The queued obligation drains afterwards and debits 2110 for a tender
+   * the bank took back.
+   *
+   * Same construction and same justification as §A: SCRUM-249's forward guard
+   * means this state can no longer be MINTED, which is precisely why the return
+   * lifecycle has to survive finding one.
+   */
+  test("B3 — a posted application with a surviving queued obligation cannot be resurrected", async () => {
+    const seeded = await seedOrg("b3");
+    const { t, asAdmin, orgId, customerId, userId } = seeded;
+    const { chequeId, movement } = await clearedCheque(seeded, "b3", 1000);
+
+    const other = await makeReceivable(asAdmin, orgId, customerId, 400, "Other debt");
+    await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      orgId, receiptMovementId: movement._id, receivableId: other, requestedAmount: 400,
+    });
+
+    const application = (await applicationsFor(t, orgId, movement._id))[0];
+    const canonicalKey = application.eventIdempotencyKey;
+    const posted = (await events(t, orgId)).find((e) => e.idempotencyKey === canonicalKey)!;
+    expect(posted.status).toBe("POSTED");
+
+    await t.run((ctx) =>
+      ctx.db.patch(posted._id, { idempotencyKey: `foreign_ingress_${application._id}` })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("pendingAccountingEvents", {
+        orgId,
+        kind: "POST" as const,
+        status: "PENDING" as const,
+        idempotencyKey: canonicalKey,
+        accountingDate: posted.accountingDate,
+        actorId: userId,
+        reason: "modelled surviving application obligation",
+        attempts: 0,
+        createdAt: Date.now(),
+        eventType: posted.eventType,
+        sourceType: posted.sourceType,
+        sourceId: posted.sourceId,
+        eventVersion: posted.eventVersion,
+        occurredAt: posted.occurredAt,
+        currency: posted.currency,
+        payload: posted.payload,
+      })
+    );
+
+    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+
+    expect(
+      (await pendingRows(t, orgId)).filter(
+        (r) => r.idempotencyKey === canonicalKey && r.kind === "POST" && r.status !== "POSTED"
+      ),
+      "the queued application obligation survived the return"
+    ).toHaveLength(0);
+
+    const appEventsBefore = (await events(t, orgId)).filter(
+      (e) => e.eventType === "RECEIPT_CREDIT_APPLIED"
+    ).length;
+    await drain(t, orgId);
+    const appEventsAfter = (await events(t, orgId)).filter(
+      (e) => e.eventType === "RECEIPT_CREDIT_APPLIED"
+    );
+    expect(
+      appEventsAfter.length,
+      "the drain minted a NEW application occurrence for a returned tender"
+    ).toBe(appEventsBefore);
+    expect(appEventsAfter.filter((e) => e.status === "POSTED")).toHaveLength(0);
+  });
+
   test("B2 — a POSTED application occurrence is reversed exactly once", async () => {
     const seeded = await seedOrg("b2");
     const { t, asAdmin, orgId, customerId } = seeded;
@@ -766,6 +849,60 @@ describe("SCRUM-130 §F — boundaries refuse with zero economic delta", () => {
     await expect(
       asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId })
     ).rejects.toThrow(/finance application/i);
+    expect(await worldSnapshot(t), "the refusal was not zero-delta").toEqual(before);
+  });
+
+  /**
+   * DEFECT 1 FROM THE TICKET ITSELF — the guard asymmetry.
+   *
+   * The old handler guarded the ENTIRE GL/allocation reversal on `clearedPayment`
+   * and then reopened `outstandingAmount` OUTSIDE that guard, unconditionally. So
+   * with the mirror row absent the cheque was marked RETURNED, the reversal was
+   * skipped, and the debt reopened anyway: the same money simultaneously OWED on
+   * the legacy row and COLLECTED on its canonical twin, with no throw, no log and
+   * no operator signal.
+   *
+   * The reversal and the reopening are two halves of one movement. Either both
+   * execute or the mutation fails closed — a reopening that outlives its reversal
+   * is a guard that fails open. Mutant M11 restores the old shape and this test
+   * must fail.
+   */
+  test("F4 — with the mirror row severed, the debt does not reopen on its own", async () => {
+    const seeded = await seedOrg("f4");
+    const { t, asAdmin, orgId, customerId } = seeded;
+    const debt = await makeReceivable(asAdmin, orgId, customerId, 1000, "Own debt");
+    const { chequeId, paymentId } = await clearedCheque(seeded, "f4", 1000, debt);
+
+    // Sever the mirror row, exactly as the ticket's Defect 1 describes.
+    await t.run((ctx) => ctx.db.delete(paymentId));
+
+    const before = await worldSnapshot(t);
+    await expect(
+      asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId })
+    ).rejects.toThrow(/owed and collected at the same time/i);
+    expect(await worldSnapshot(t), "the refusal was not zero-delta").toEqual(before);
+
+    // The specific corruption, named: the debt did NOT reopen while the reversal
+    // was skipped.
+    expect((await t.run((ctx) => ctx.db.get(debt)))!.outstandingAmount).toBe(0);
+    expect((await t.run((ctx) => ctx.db.get(chequeId)))!.status).toBe("CLEARED");
+  });
+
+  test("F5 — a mirror row with no sealed receipt lineage refuses rather than guessing", async () => {
+    const seeded = await seedOrg("f5");
+    const { t, asAdmin, orgId, customerId } = seeded;
+    const debt = await makeReceivable(asAdmin, orgId, customerId, 1000, "Own debt");
+    const { chequeId, paymentId } = await clearedCheque(seeded, "f5", 1000, debt);
+
+    // Pre-SCRUM-218-C shape: a mirror row whose receipt was never sealed, so
+    // what the receipt moved cannot be enumerated from anything.
+    const movement = (await movementFor(t, orgId, paymentId))!;
+    await t.run((ctx) => ctx.db.delete(movement._id));
+
+    const before = await worldSnapshot(t);
+    await expect(
+      asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId })
+    ).rejects.toThrow(/no persisted receipt lineage/i);
     expect(await worldSnapshot(t), "the refusal was not zero-delta").toEqual(before);
   });
 
