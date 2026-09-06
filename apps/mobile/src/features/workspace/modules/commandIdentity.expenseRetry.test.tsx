@@ -8,12 +8,17 @@
  * server is required to reject as a conflict. A genuine retry would then fail
  * hard instead of replaying. The date has to be snapshotted WITH the identity.
  *
- * This scenario lives in its own file on purpose. Once a `TextInput` inside
- * React Native's `Modal` has been typed into, that root cannot be cleanly
- * remounted within the same jest module registry — a later `render` in the same
- * file yields an empty tree, so every subsequent query misses and the failure
- * reads as a broken assertion rather than broken teardown. Jest isolates per
- * file, so one form scenario per file is the reliable boundary.
+ * This scenario lives in its own file on purpose, but for an observed reason
+ * rather than an explained one: after a test in this tree types into a form and
+ * lets that update settle, a second `render()` in the same jest module registry
+ * yields an empty tree, so every later query misses and the failure reads as a
+ * broken assertion rather than broken teardown. Jest isolates per file, so one
+ * form scenario per file is the reliable boundary.
+ *
+ * That is REPRODUCIBLE BUT NOT ROOT-CAUSED, and it is deliberately stated as an
+ * observation. An earlier revision of this comment asserted a cause — that a
+ * `TextInput` inside RN's `Modal` cannot be cleanly remounted — which was
+ * disproved. Do not replace this with another mechanism unless it is measured.
  */
 import { fireEvent, render, waitFor } from "@testing-library/react-native";
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";

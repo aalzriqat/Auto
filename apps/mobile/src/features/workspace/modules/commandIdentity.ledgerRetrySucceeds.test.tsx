@@ -1,35 +1,31 @@
 /// <reference types="jest" />
 /**
- * SCRUM-57 — a ledger retry that SUCCEEDS is still ONE entry.
+ * SCRUM-57 — a ledger retry that SUCCEEDS is still ONE entry, and the NEXT
+ * entry is a genuinely new command.
  *
  * The companion to `commandIdentity.ledgerRetry.test.tsx`, which stops at the
- * failing attempts. This one carries the same intent through to success, which
- * is the path that retires the identity and clears the date snapshot
- * (`accounting.tsx`). Without it that path is never executed by any test, so a
- * future edit that dropped `commandId.retire(intent)` would leave the identity
- * held into the NEXT, genuinely new ledger entry — the server would replay the
- * completed command and the new entry would silently never exist while the UI
- * reported success.
+ * failing attempts. This one carries the intent through to success and then
+ * enters a SECOND, different entry. That second entry is what proves the
+ * success path RETIRED the identity and CLEARED the date snapshot, rather than
+ * merely executing those two lines:
  *
- * The identity is re-sent UNCHANGED on the attempt that finally succeeds: one
- * intent, one economic event, however many attempts it took.
+ *   - drop `commandId.retire(intent)` and the second entry travels under a
+ *     COMPLETED identity: the server replays the first command and the new
+ *     entry silently never exists, while the UI reports success
+ *   - drop `dateRef.current = null` and `dateRef.current ??= Date.now()` never
+ *     re-arms, so every later entry in that mounted lifetime silently inherits
+ *     the FIRST entry's timestamp — no error, no exception
  *
- * It then submits a THIRD time on the same mounted tree, which is what proves
- * the success path actually retired the identity and cleared the date snapshot:
- * the third command must carry a NEW identity and a FRESH date. Without that,
- * deleting either `commandId.retire(intent)` or `dateRef.current = null` would
- * break nothing that any test observes — and dropping the date reset is the
- * quiet one, since every later entry in that mounted lifetime would silently
- * inherit the FIRST entry's timestamp.
+ * Both are checked here by mutation, not assumed.
  *
- * ⚠️ A `Modal` in this environment renders its children whether or not it is
- * `visible`, so the sheet cannot be observed closing and post-success UI state
- * is not a usable oracle — assert on what the server was sent instead.
- *
- * Scenarios are still one-per-file here: once a form in this tree has been typed
- * into, a second `render()` in the same jest module registry yields an empty
- * tree. That is reproducible but NOT root-caused, so it is recorded as an
- * observation rather than explained.
+ * Every `fireEvent` is AWAITED. In @testing-library/react-native 14 the event
+ * helpers return promises and are documented to be awaited; not awaiting them
+ * leaves the renderer with unflushed state, and assertions then read a tree no
+ * user could be looking at. An earlier revision of this file did not await,
+ * reached its third submission through exactly that stale state, and explained
+ * it with a claim about `Modal` that turned out to be false. Awaiting also
+ * makes the sheet observably close on success, which is what allows the second
+ * entry to be typed the way an operator would type it.
  */
 import { fireEvent, render, waitFor } from "@testing-library/react-native";
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
@@ -75,7 +71,7 @@ afterEach(() => {
   jest.restoreAllMocks();
 });
 
-test("a ledger retry that SUCCEEDS re-sends the SAME identity and date as the failed attempt", async () => {
+test("a ledger retry that succeeds keeps ONE identity, then the next entry gets a NEW one", async () => {
   const spy = jest.fn();
   // Fails once, then succeeds — the ordinary lost-response retry.
   spy.mockRejectedValueOnce(new Error("network lost")).mockResolvedValue(null);
@@ -89,43 +85,50 @@ test("a ledger retry that SUCCEEDS re-sends the SAME identity and date as the fa
     </ThemeProvider>,
   );
 
-  fireEvent.press(getByText("إضافة قيد"));
-  await waitFor(() => expect(queryByText(SAVE)).not.toBeNull());
-  fireEvent.changeText(getByLabelText("المبلغ"), "250");
-  fireEvent.changeText(getByLabelText("البيان"), "Deposit");
-  await waitFor(() =>
-    expect((getByLabelText("المبلغ") as unknown as { props: { value: string } }).props.value).toBe("250"),
-  );
+  async function fill(amount: string, description: string) {
+    await fireEvent.press(getByText("إضافة قيد"));
+    await waitFor(() => expect(queryByText(SAVE)).not.toBeNull());
+    await fireEvent.changeText(getByLabelText("المبلغ"), amount);
+    await fireEvent.changeText(getByLabelText("البيان"), description);
+  }
 
+  await fill("250", "Deposit");
   const startedAt = Date.now();
-  fireEvent.press(getByText(SAVE));
+  await fireEvent.press(getByText(SAVE));
   await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
   await waitFor(() => expect(queryByText(SAVING)).toBeNull());
 
+  // The clock MOVES before the retry. An un-snapshotted `Date.now()` would send
+  // a later date here — same identity, different fingerprint — which the server
+  // must reject as a conflict instead of replaying.
   await new Promise((resolve) => setTimeout(resolve, CLOCK_GAP_MS));
-  fireEvent.press(getByText(SAVE));
+  await fireEvent.press(getByText(SAVE));
   await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
 
-  const first = spy.mock.calls[0][0] as { idempotencyKey: string; date: number };
-  const second = spy.mock.calls[1][0] as { idempotencyKey: string; date: number };
+  // Success closes the sheet: the observable end of this command.
+  await waitFor(() => expect(queryByText(SAVE)).toBeNull());
 
-  // Control: real time passed between the attempts, so the date equality is
-  // evidence of snapshotting rather than of both presses landing in one ms.
+  // A SECOND, genuinely different entry, entered the way an operator would.
+  await new Promise((resolve) => setTimeout(resolve, CLOCK_GAP_MS));
+  await fill("975", "Second entry");
+  await fireEvent.press(getByText(SAVE));
+  await waitFor(() => expect(spy).toHaveBeenCalledTimes(3));
+
+  const first = spy.mock.calls[0][0] as { idempotencyKey: string; date: number; amount: number };
+  const second = spy.mock.calls[1][0] as { idempotencyKey: string; date: number };
+  const third = spy.mock.calls[2][0] as { idempotencyKey: string; date: number; amount: number };
+
+  // Control: real time passed, so the date equality below is evidence of
+  // snapshotting rather than of two presses landing in the same millisecond.
   expect(Date.now() - startedAt).toBeGreaterThanOrEqual(CLOCK_GAP_MS);
+
+  // One intent, one economic event, however many attempts it took.
   expect(second.idempotencyKey).toBe(first.idempotencyKey);
   expect(second.date).toBe(first.date);
 
-  // A THIRD command, after the second one succeeded. This is the part that
-  // proves the success path ran its cleanup rather than merely executing it:
-  // reusing the completed identity would make the server replay that command
-  // and silently discard this one while reporting success.
-  await new Promise((resolve) => setTimeout(resolve, CLOCK_GAP_MS));
-  fireEvent.press(getByText(SAVE));
-  await waitFor(() => expect(spy).toHaveBeenCalledTimes(3));
-
-  const third = spy.mock.calls[2][0] as { idempotencyKey: string; date: number };
+  // A different economic instruction must never travel under a completed
+  // identity, and must carry its own date.
+  expect(third.amount).not.toBe(first.amount);
   expect(third.idempotencyKey).not.toBe(first.idempotencyKey);
-  // And the date snapshot was cleared, not held: without the reset, every later
-  // entry in this mounted lifetime would inherit the first one's timestamp.
   expect(third.date).toBeGreaterThan(first.date);
 });
