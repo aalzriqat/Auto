@@ -220,51 +220,31 @@ export const recoverAdvance = mutation({
       // of their OWN debt — an independent actor has to record the repayment.
       assertNotSelfBeneficiary(authCtx, advance.userId, "record repayment of your own advance");
 
-      // Idempotent response: a retry with the same key must return the ORIGINAL
-      // recovery, not throw — even after a full repayment left the advance
-      // RECOVERED (the status check below would otherwise reject the replay).
-      if (args.idempotencyKey) {
-        const prior = await ctx.db
-          .query("employeeAdvanceRecoveries")
-          .withIndex("by_org_idempotency", (q) => q.eq("orgId", args.orgId).eq("idempotencyKey", args.idempotencyKey))
-          .first();
-        if (prior) return prior._id;
-      }
-
-      if (advance.status !== "OUTSTANDING") {
-        throw new ConvexError("Only an outstanding advance can be recovered.");
-      }
-      const outstandingMinor = advance.amountMinor - advance.recoveredMinor;
-      if (outstandingMinor <= 0) {
-        throw new ConvexError("This advance has nothing left to recover.");
-      }
-
-      // Full remaining balance unless a (positive, not-over) partial is given.
-      let recoverMinor = outstandingMinor;
-      if (args.amount !== undefined) {
-        if (!(args.amount > 0)) {
-          throw new ConvexError("Repayment amount must be a positive number.");
-        }
-        recoverMinor = toMinorUnits(args.amount, advance.currency);
-        if (recoverMinor > outstandingMinor) {
-          throw new ConvexError("Repayment amount exceeds the outstanding balance.");
-        }
-      }
-
-      // Don't credit Employee Advances before the issuance that debited it has
-      // actually posted — otherwise the asset goes negative (issuance queued in
-      // a closed period, recovery posts now). Only enforced when the recovery
-      // would post now; if it too would queue, it drains after the issuance.
-      if (await isPostableNow(ctx, args.orgId, Date.now())) {
-        await assertAdvanceIssuancePosted(ctx, args.orgId, args.advanceId);
-      }
-
       const method = normalizePaymentMethod(args.method);
 
-      // Idempotent: a double-click or network retry with the same key returns the
-      // first recovery instead of booking a second partial repayment (a duplicate
-      // full repayment self-guards via the RECOVERED status above, but a duplicate
-      // PARTIAL would otherwise succeed twice against the re-read balance).
+      // ONE authoritative replay boundary.
+      //
+      // A `(orgId, idempotencyKey)`-only lookup used to run HERE, ahead of
+      // `runWithIdempotency`, and resolve a replay by itself. It matched on the
+      // key alone — not the advance, not the amount, not the method — so a
+      // retained identity carrying a materially DIFFERENT economic instruction
+      // found an unrelated recovery row and was returned as success: a second
+      // idempotency authority that failed OPEN, in front of the one that fails
+      // CLOSED. Because it returned before `run()`, the fingerprint comparison
+      // that would have caught it was unreachable on that path.
+      //
+      // Its legitimate job is preserved rather than deleted: the OUTSTANDING
+      // refusal now lives INSIDE the callback, so a genuine replay is resolved
+      // from the command log before that refusal can reject it — which is the
+      // only reason the shortcut had to exist.
+      //
+      // The fingerprint is taken over the REQUEST AS SUBMITTED, never over
+      // derived state. `args.amount === undefined` means "the full remaining
+      // balance", and that intent is stable across retries even though the
+      // balance it resolves to is not; fingerprinting the derived `recoverMinor`
+      // would make a genuine retry look like a different command the moment the
+      // balance moved. `method` is normalized first so an omitted method and an
+      // explicit CASH one are one intent, not a false conflict.
       return await runWithIdempotency(
         ctx,
         {
@@ -272,14 +252,54 @@ export const recoverAdvance = mutation({
           operation: "payroll.recoverAdvance",
           idempotencyKey: args.idempotencyKey,
           actorId: user._id,
-          fingerprint: JSON.stringify({ advanceId: args.advanceId, recoverMinor, method }),
+          fingerprint: JSON.stringify({
+            advanceId: args.advanceId,
+            requestedAmount: args.amount ?? null,
+            method,
+          }),
         },
         async () => {
+          // Re-read inside the guarded path: the row this executes against must
+          // be the one the command log has just admitted, never one read before
+          // the boundary was entered.
+          const current = await ctx.db.get(args.advanceId);
+          if (!current || current.isDeleted || current.orgId !== args.orgId) {
+            throw new ConvexError("Advance not found.");
+          }
+          if (current.status !== "OUTSTANDING") {
+            throw new ConvexError("Only an outstanding advance can be recovered.");
+          }
+          const outstandingMinor = current.amountMinor - current.recoveredMinor;
+          if (outstandingMinor <= 0) {
+            throw new ConvexError("This advance has nothing left to recover.");
+          }
+
+          // Full remaining balance unless a (positive, not-over) partial is given.
+          let recoverMinor = outstandingMinor;
+          if (args.amount !== undefined) {
+            if (!(args.amount > 0)) {
+              throw new ConvexError("Repayment amount must be a positive number.");
+            }
+            recoverMinor = toMinorUnits(args.amount, current.currency);
+            if (recoverMinor > outstandingMinor) {
+              throw new ConvexError("Repayment amount exceeds the outstanding balance.");
+            }
+          }
+
           const now = Date.now();
-          const newRecovered = advance.recoveredMinor + recoverMinor;
+
+          // Don't credit Employee Advances before the issuance that debited it has
+          // actually posted — otherwise the asset goes negative (issuance queued in
+          // a closed period, recovery posts now). Only enforced when the recovery
+          // would post now; if it too would queue, it drains after the issuance.
+          if (await isPostableNow(ctx, args.orgId, now)) {
+            await assertAdvanceIssuancePosted(ctx, args.orgId, args.advanceId);
+          }
+
+          const newRecovered = current.recoveredMinor + recoverMinor;
           await ctx.db.patch(args.advanceId, {
             recoveredMinor: newRecovered,
-            status: newRecovered >= advance.amountMinor ? "RECOVERED" : "OUTSTANDING",
+            status: newRecovered >= current.amountMinor ? "RECOVERED" : "OUTSTANDING",
             updatedAt: now,
           });
 
@@ -288,9 +308,9 @@ export const recoverAdvance = mutation({
           const recoveryId = await ctx.db.insert("employeeAdvanceRecoveries", {
             orgId: args.orgId,
             advanceId: args.advanceId,
-            userId: advance.userId,
+            userId: current.userId,
             amountMinor: recoverMinor,
-            currency: advance.currency,
+            currency: current.currency,
             method,
             source: "DIRECT",
             recoveredAt: now,
@@ -303,9 +323,9 @@ export const recoverAdvance = mutation({
             orgId: args.orgId,
             advanceId: args.advanceId,
             recoveryId,
-            userId: advance.userId,
+            userId: current.userId,
             amountMinor: recoverMinor,
-            currency: advance.currency,
+            currency: current.currency,
             paymentMethod: method,
             actorId: user._id,
             occurredAt: now,
