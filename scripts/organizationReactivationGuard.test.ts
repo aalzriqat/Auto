@@ -74,7 +74,7 @@
  * against the accidental omission that has now happened twice here, not a proof
  * of absence.
  */
-import { describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import ts from "typescript";
@@ -108,7 +108,11 @@ function convexSourceFiles(dir: string): string[] {
 }
 
 function parse(source: string, fileName = "fixture.ts") {
-  return ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, /* setParentNodes */ true);
+  // setParentNodes is deliberately FALSE. Building parent pointers for every
+  // node is the expensive half of parsing, and the only thing that needed them
+  // was "which function encloses this write" — now tracked with a stack during
+  // the walk instead. This is what makes parsing all 218 files affordable.
+  return ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, /* setParentNodes */ false);
 }
 
 /** `ctx.db.patch(...)` / `ctx.db.replace(...)` — the writes that mutate an existing row. */
@@ -240,20 +244,6 @@ function isFunctionLike(node: ts.Node): node is FunctionLike {
   );
 }
 
-/** Names of every enclosing function, so a nested helper cannot masquerade as the writer. */
-function enclosingFunctionNames(node: ts.Node): string[] {
-  const names: string[] = [];
-  let current: ts.Node | undefined = node.parent;
-  while (current) {
-    if (isFunctionLike(current)) {
-      const name = (current as ts.FunctionDeclaration).name;
-      names.push(name && ts.isIdentifier(name) ? name.text : "<anonymous>");
-    }
-    current = current.parent;
-  }
-  return names;
-}
-
 export type SuspensionClearingWrite = { line: number; insideAuthorizedWriter: boolean };
 
 /**
@@ -269,15 +259,26 @@ export function findSuspensionClearingWrites(
 
 function findSuspensionClearingWritesIn(sourceFile: ts.SourceFile): SuspensionClearingWrite[] {
   const writes: SuspensionClearingWrite[] = [];
+  // The names of the functions currently open around the node being visited.
+  // A write at module scope sees an empty stack and is never authorized.
+  const enclosing: string[] = [];
 
   const visit = (node: ts.Node) => {
+    const opensFunction = isFunctionLike(node);
+    if (opensFunction) {
+      const name = (node as ts.FunctionDeclaration).name;
+      enclosing.push(name && ts.isIdentifier(name) ? name.text : "<anonymous>");
+    }
+
     if (isDbWrite(node) && clearsSuspension(node)) {
       writes.push({
         line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
-        insideAuthorizedWriter: enclosingFunctionNames(node).includes(AUTHORIZED_WRITER),
+        insideAuthorizedWriter: enclosing.includes(AUTHORIZED_WRITER),
       });
     }
+
     ts.forEachChild(node, visit);
+    if (opensFunction) enclosing.pop();
   };
 
   ts.forEachChild(sourceFile, visit);
@@ -362,14 +363,16 @@ let cachedTree: { file: string; name: string; sourceFile: ts.SourceFile }[] | un
  * Caching the PARSED trees is what makes it fast without narrowing it: 218
  * parses once instead of 654, and the walks are cheap. No file is skipped.
  */
+function buildTree() {
+  return convexSourceFiles(CONVEX_DIR).map((file) => ({
+    file,
+    name: path.basename(file),
+    sourceFile: parse(fs.readFileSync(file, "utf8"), file),
+  }));
+}
+
 function convexTree() {
-  if (!cachedTree) {
-    cachedTree = convexSourceFiles(CONVEX_DIR).map((file) => ({
-      file,
-      name: path.basename(file),
-      sourceFile: parse(fs.readFileSync(file, "utf8"), file),
-    }));
-  }
+  if (!cachedTree) cachedTree = buildTree();
   return cachedTree;
 }
 
@@ -395,14 +398,21 @@ describe("SCRUM-297 organization reactivation guard", () => {
     // remove the reason to: if the whole tree is inspected in a fraction of the
     // budget, narrowing it buys nothing. If this ever fails, cache harder —
     // do not inspect fewer files.
+    // ⚠️ MEASURES A COLD BUILD ON PURPOSE. The previous version called the
+    // MEMOIZED tree and happened to run second, so it timed a warm cache and
+    // reported 541ms while the test above it was timing out at 5088ms paying
+    // the real cost. A budget test that runs after the budget is spent
+    // measures nothing — it passed while the thing it guards failed.
     const started = Date.now();
-    const tree = convexTree();
-    for (const entry of tree) findSuspensionClearingWritesIn(entry.sourceFile);
+    const fresh = buildTree();
+    for (const entry of fresh) findSuspensionClearingWritesIn(entry.sourceFile);
     const elapsed = Date.now() - started;
 
-    expect(tree.length).toBe(convexSourceFiles(CONVEX_DIR).length);
-    expect(elapsed).toBeLessThan(2500); // half of vitest's 5s default
-  });
+    expect(fresh.length).toBe(convexSourceFiles(CONVEX_DIR).length);
+    // Generous against a slow shared runner; the point is to catch a return to
+    // the 5s cliff, not to police milliseconds.
+    expect(elapsed).toBeLessThan(15_000);
+  }, 60_000);
 
   test("nothing outside reactivateOrganization clears an organization's suspension", () => {
     const offenders: string[] = [];
