@@ -211,12 +211,15 @@ async function findActiveDeletionRequest(ctx: MutationCtx, orgId: Id<"organizati
  * refused, and `rejectDeletionRequest` reactivated the same organization
  * without ever reading either condition. Rather than guard each writer, there
  * is now exactly one — `reactivateOrganization` below — and
- * `organizationReactivationGuard.test.ts` parses the source and fails when ANY
- * other code assigns `suspended` to something it cannot prove is `true`. It
- * does not resolve a computed key (`{ [field]: false }`), which needs a type
- * checker, so a deliberately obfuscated writer still gets past. Treat it as a
- * net for the accidental omission that has already happened twice here, not as
- * proof that no unguarded writer can exist.
+ * `organizationReactivationGuard.test.ts` fails when other code assigns
+ * `suspended` something it cannot prove is `true` — but only for the write
+ * shapes it recognises, which is a NARROWER set than "any". It is blind to
+ * `db.replace` clearing the field by omission, the three-argument table-name
+ * API, aliases of `ctx.db`, table-scoped writers, non-dominating guards,
+ * computed keys and bare spreads. Its completeness claim is explicitly
+ * WITHDRAWN (owner ruling, SCRUM-297, 2026-09-08) and the list lives at the top
+ * of that file. Treat it as a net for the accidental omission that has already
+ * happened twice here, never as proof that no unguarded writer can exist.
  *
  * Two conditions, because they answer the same question from different
  * evidence:
@@ -269,8 +272,15 @@ async function assertNoIrreversiblePurgeHistory(
  *
  * Fusing them deletes the question instead of answering it. There is exactly
  * one write site, four lines long, with the guard on the line above — so the
- * ratchet only has to check that no OTHER code clears `suspended`, which is a
- * structural fact a parser can establish outright.
+ * ratchet only has to check that no OTHER code clears `suspended`.
+ *
+ * ⚠️ AND A PARSER DOES NOT ESTABLISH THAT OUTRIGHT — an earlier version of this
+ * sentence said it did. A syntactic detector is blind to `db.replace` clearing
+ * the field by OMISSION, to the three-argument table-name API, to aliases of
+ * `ctx.db`, and to table-scoped writers. Completeness is explicitly withdrawn
+ * (owner ruling, SCRUM-297, 2026-09-08); the full list is at the top of
+ * `scripts/organizationReactivationGuard.test.ts`. What protects this invariant
+ * is the fusion below plus the executable lifecycle tests, NOT the ratchet.
  *
  * ⚠️ `suspended` is `v.optional(v.boolean())` and `requireTenantAuth` tests it
  * for TRUTHINESS, so clearing it to `undefined` reactivates exactly as `false`

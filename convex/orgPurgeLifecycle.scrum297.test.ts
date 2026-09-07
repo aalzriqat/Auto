@@ -14,8 +14,18 @@
  * These tests are LIFECYCLE-level on purpose. Payroll is the manifestation that
  * SCRUM-291 reproduced; it is not the boundary. The boundary is
  * ORGANIZATION_DELETION_STEPS[0] deleting `commandIdempotency` — the sole
- * replay authority behind all 29 `runWithIdempotency` call sites — before the
+ * replay authority behind all 30 `runWithIdempotency` call sites — before the
  * economic provenance those commands write.
+ *
+ * ⚠️ SCOPE OF THAT COUNT, because a count without its scope is a rumour: 30 is
+ * the number of CALL EXPRESSIONS of the helper in non-test `convex/` source,
+ * across 12 modules (applications 5, collections 5, sales 5, financeDealCosts
+ * 3, deposits/paymentIntents/payroll/sourcingPayables 2 each, expenses/
+ * prepaidExpenses/supplierReceivables/transactions 1 each). SCRUM-57 counts a
+ * DIFFERENT set — economic command sites — and lands on 29. The two numbers do
+ * not contradict each other and must not be conflated. This comment said 29
+ * while the assertion at the bottom of T3 said 30; 30 is the one that matches
+ * this scope.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, beforeEach, afterEach } from "vitest";

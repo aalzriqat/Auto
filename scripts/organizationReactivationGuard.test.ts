@@ -38,41 +38,73 @@
  * ⚠️ If this fails because you added a legitimate new reactivation path, the fix
  * is to call `reactivateOrganization` from it — not to add an exemption.
  *
- * ═══ WHAT THIS GUARANTEES, STATED HONESTLY ═══
+ * ═══ 🛑 COMPLETENESS IS WITHDRAWN — READ THIS BEFORE TRUSTING THIS FILE ═══
  *
- * Any `ctx.db.patch`/`ctx.db.replace` payload that names `suspended` with any
- * value other than the literal `true`, anywhere in non-test `convex/` source
- * outside `reactivateOrganization`, fails this test. `false`, `undefined`, a
- * shorthand `{ suspended }`, and a variable are all caught, because the check is
- * on the PROPERTY NAME and it fails closed on any value it cannot prove is
- * `true`.
+ * Owner ruling, SCRUM-297, 2026-09-08: the attempt to make this syntactic
+ * detector an exhaustive proof of every possible `organizations` writer shape
+ * is ENDED. Five consecutive review rounds each found a new hole in it, several
+ * of them introduced by the previous repair. Rather than patch the parser a
+ * sixth time, this file now states what it actually covers and stops claiming
+ * the rest.
  *
- * TWO KNOWN GAPS, both named because the previous version of this paragraph
- * said "the one known gap" and that was already untrue when it was written:
+ * ⚠️ THIS IS NOT A PROOF THAT NO UNGUARDED REACTIVATION WRITER EXISTS.
+ * It never was. Earlier versions of this paragraph implied otherwise.
  *
- *  1. A COMPUTED key — `{ [name]: false }` — is not resolved. That needs a type
- *     checker evaluating the variable, not a parser.
- *  2. A payload that never mentions `suspended` at all but carries a spread —
- *     `{ ...patch }` — could contain it. This is not flagged because it is
- *     indistinguishable from the generic patch shape used throughout `convex/`,
- *     and flagging it would fail on hundreds of unrelated writes.
+ * ─── The grammar it genuinely understands ───
  *
- * Both gaps share one root: this reads syntax, so a payload it cannot see reads
- * as a payload that is safe. That FAIL-OPEN polarity is closed separately, and
- * only where it matters — `findUninspectableOrgWrites` requires every patch in
- * the files that write organization rows to be an inline literal, so an
- * unreadable payload there is an offence rather than a silence. Outside those
- * files the gaps above remain, and closing them properly needs a type checker
- * resolving values and table identity, not a parser.
+ * A TWO-ARGUMENT `<expr>.db.patch(id, { ... })` or `<expr>.db.replace(id, {...})`
+ * whose payload is an INLINE OBJECT LITERAL naming `suspended` with any value
+ * other than the literal `true`, in non-test `convex/` source, outside
+ * `reactivateOrganization`. `false`, `undefined`, a shorthand `{ suspended }`
+ * and a variable are all caught: the check is on the PROPERTY NAME and it fails
+ * closed on any value it cannot prove is `true`. A spread AFTER `suspended:
+ * true` forfeits the exemption, because it can shadow the literal; a spread
+ * before it cannot and stays exempt.
  *
- * A spread that shadows a CLAIMED exemption is closed rather than documented:
- * `{ suspended: true, ...o }` is treated as clearing, because a later spread
- * can override the literal. `{ ...o, suspended: true }` cannot be overridden
- * and stays exempt.
+ * That is the whole of it. Everything below is OUTSIDE the grammar.
  *
- * A deliberately obfuscated writer still gets past. This is a detective control
- * against the accidental omission that has now happened twice here, not a proof
- * of absence.
+ * ─── 🔴 KNOWN UNCOVERED SHAPES — NON-EXHAUSTIVE, DO NOT READ AS A GAP LIST ───
+ *
+ *  1. `ctx.db.replace(orgId, { ...no suspended key... })` — replace DELETES
+ *     omitted fields, so a payload that never MENTIONS `suspended` still clears
+ *     it. `requireTenantAuth` tests truthiness, so the org is reactivated. A
+ *     detector keyed on a field being NAMED cannot see a write that removes it
+ *     by omission.
+ *  2. The THREE-ARGUMENT table-name API — `ctx.db.patch("organizations", id,
+ *     {...})`. `convex@1.42` documents this as the form to PREFER and marks the
+ *     two-argument form "supported for backwards compatibility". This detector
+ *     reads `arguments[1]`, so it is blind to the shape Convex now recommends.
+ *  3. Any ALIAS of the database handle — `const db = ctx.db; db.patch(...)`.
+ *  4. TABLE-SCOPED writers — `ctx.db.table("organizations").patch(...)`
+ *     (`BaseTableWriter`).
+ *  5. CONTROL-FLOW / DOMINANCE variants. `guardPrecedesWriteInAuthorizedWriter`
+ *     answers LEXICAL precedence, not dominance: a guard inside `if (cond) {}`
+ *     followed by the write still reports satisfied. Dominance needs CFG
+ *     analysis.
+ *  6. A COMPUTED key — `{ [name]: false }` — is not resolved.
+ *  7. A payload that never mentions `suspended` but carries a bare spread —
+ *     `{ ...patch }` — could contain it. Not flagged, because it is
+ *     indistinguishable from the generic patch shape used throughout `convex/`.
+ *  8. Any writer shape not listed above. 1-5 were found by a cross-family
+ *     reviewer AFTER 6-7 had been documented as "the two known gaps", which is
+ *     precisely why this list carries no claim of being complete either.
+ *
+ * All of these share one root: this reads SYNTAX, so a payload it cannot see
+ * reads as a payload that is safe. `findUninspectableOrgWrites` narrows that
+ * fail-open polarity inside the two org-lifecycle files by requiring inline
+ * literals there — it does NOT close it, as shape 1 demonstrates inside those
+ * very files. Closing it properly needs a type checker resolving values and
+ * table identity. That approach is deliberately NOT pursued here; the
+ * type-aware lane in SCRUM-238 went terminal.
+ *
+ * ─── What actually protects production ───
+ *
+ * NOT this file. The invariant is enforced by the code itself: there is exactly
+ * one function that clears suspension, with the guard fused to the line above
+ * the write, and `convex/orgPurgeLifecycle.scrum297.test.ts` proves BY
+ * EXECUTION that a partially purged organization cannot be returned to service
+ * through the supported path. This file is a cheap detective net for the
+ * accidental omission that has already happened twice here — nothing more.
  */
 import { beforeAll, describe, expect, test } from "vitest";
 import fs from "node:fs";
@@ -467,7 +499,10 @@ describe("SCRUM-297 organization reactivation guard", () => {
     expect(elapsed).toBeLessThan(15_000);
   }, 60_000);
 
-  test("nothing outside reactivateOrganization clears an organization's suspension", () => {
+  // ⚠️ SCOPED CLAIM. "No write THE DETECTOR UNDERSTANDS" — not "no write". The
+  // grammar it understands, and the shapes outside it, are listed at the top of
+  // this file. A green result here is evidence, not proof.
+  test("no write the detector understands clears suspension outside reactivateOrganization", () => {
     const offenders: string[] = [];
 
     for (const entry of convexTree()) {
@@ -480,7 +515,12 @@ describe("SCRUM-297 organization reactivation guard", () => {
     expect(offenders).toEqual([]);
   }, 60_000);
 
-  test("every organization write is inspectable, so the detector cannot fail open", () => {
+  // ⚠️ THE OLD NAME OF THIS TEST WAS FALSE. It read "...so the detector cannot
+  // fail open", which the detector can and does — a `db.replace` omitting
+  // `suspended` passes this check with an inline literal payload and still
+  // reactivates the org. This narrows the fail-open surface in the two files
+  // that own organization rows. It does not close it.
+  test("in the org-lifecycle files, every two-argument db payload is an inline literal", () => {
     const offenders: string[] = [];
 
     for (const entry of convexTree()) {
@@ -493,12 +533,19 @@ describe("SCRUM-297 organization reactivation guard", () => {
     expect(offenders).toEqual([]);
   }, 60_000);
 
-  test("the authorized writer exists, is unique, and consults the guard first", () => {
+  // ⚠️ "unique" and "first" are both SCOPED. Unique AMONG THE WRITES THIS
+  // DETECTOR RECOGNISES, and `guardPrecedesWriteInAuthorizedWriter` answers
+  // LEXICAL precedence, not dominance — a guard inside `if (cond) {}` above the
+  // write satisfies it. What makes that acceptable is not this assertion: it is
+  // that the real function is four straight-line statements with no branch
+  // between the guard and the write. Read it before trusting this test.
+  test("the authorized writer exists, is the only recognised writer, and the guard precedes the write", () => {
     const files = convexTree().filter(
       (entry) => findSuspensionClearingWritesIn(entry.sourceFile).length > 0
     );
 
-    // Pins the blast radius: reactivation lives in one file, in one function.
+    // Pins the blast radius AS THE DETECTOR SEES IT: every recognised
+    // reactivating write lives in one file, in one function.
     expect(files.map((entry) => path.relative(CONVEX_DIR, entry.file).replace(/\\/g, "/"))).toEqual([
       "adminOrgs.ts",
     ]);

@@ -93,8 +93,15 @@ export default defineSchema({
      * `rejectDeletionRequest` cleared `suspended` without reading this field at
      * all. Both former writers now delegate to `reactivateOrganization`, the
      * single function allowed to clear suspension, which reads this field
-     * first; `scripts/organizationReactivationGuard.test.ts` fails when any
-     * other code assigns `suspended` a value it cannot prove is `true`.
+     * first. `scripts/organizationReactivationGuard.test.ts` catches other code
+     * assigning `suspended` a value it cannot prove is `true` — ⚠️ but ONLY for
+     * the write shapes it recognises. That detector is explicitly NON-EXHAUSTIVE
+     * (owner ruling, SCRUM-297, 2026-09-08): it cannot see `db.replace` clearing
+     * the field by omission, the three-argument table-name API, aliases of
+     * `ctx.db`, or table-scoped writers. What enforces this invariant is the
+     * single fused writer plus `convex/orgPurgeLifecycle.scrum297.test.ts`,
+     * which proves by execution that a partially purged organization cannot be
+     * returned to service. Do not read a green ratchet as proof of absence.
      *
      * The legal transitions once set are: resume the purge, or complete it.
      * Restoring a partially purged organization is NOT a product requirement
