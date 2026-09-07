@@ -4436,8 +4436,13 @@ export default defineSchema({
     payrollItemId: v.optional(v.id("payrollItems")),
     recoveredAt: v.number(),
     recoveredBy: v.id("users"),
-    // Fingerprint for direct-repayment idempotency (advance+amount+method); a
-    // retried recoverAdvance with the same key must not book a second recovery.
+    // AUDIT PROVENANCE ONLY - this field is NOT the replay authority.
+    // It records which command identity produced this row. Replay for
+    // payroll.recoverAdvance is resolved solely by `commandIdempotency` via
+    // runWithIdempotency (SCRUM-291). A `(orgId, idempotencyKey)` lookup on
+    // THIS table used to short-circuit ahead of that boundary, and because it
+    // matched on the key alone it returned unrelated recoveries as success.
+    // Do not reintroduce a reader that resolves replay from this field.
     idempotencyKey: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
@@ -4445,6 +4450,8 @@ export default defineSchema({
     // Lets the outbox find every advance a payslip recovered, so a queued
     // PAYROLL_PAID can be held until each advance issuance has posted.
     .index("by_payroll_item", ["payrollItemId"])
+    // Retained for provenance lookups only; it has NO reader that resolves
+    // replay. See the warning on idempotencyKey above.
     .index("by_org_idempotency", ["orgId", "idempotencyKey"]),
 
   // A monthly payroll run and its per-employee payslip items.

@@ -151,10 +151,16 @@ describe("SCRUM-291: recoverAdvance has one authoritative replay boundary", () =
   });
 
   test("RED (primary production scenario): a retained identity with a CHANGED AMOUNT fails closed", async () => {
-    // The web payroll page holds one identity per advance across attempts. The
-    // operator recovers 40, loses the response, sees 60 outstanding, and
+    // The operator recovers 40, loses the response, sees 60 outstanding, and
     // resubmits 60 under the SAME identity. That is a different economic
     // instruction and must never be reported as success.
+    //
+    // Reachability, stated accurately for THIS branch: the shipped web page
+    // (app/(dashboard)/[orgId]/payroll/page.tsx) still mints a fresh UUID per
+    // submission, so today this is reachable from any direct/API caller that
+    // retains a key across attempts — not from the first-party UI. It becomes
+    // UI-reachable once SCRUM-57 lands, which deliberately retains one identity
+    // per advance across retries. That is why SCRUM-291 blocks SCRUM-57.
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "r291amt");
     const a1 = await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 100, idempotencyKey: "adv-amt" });
@@ -289,7 +295,13 @@ describe("SCRUM-291: recoverAdvance has one authoritative replay boundary", () =
     expect(await advanceRecoveredEvents(t)).toHaveLength(1);
   });
 
-  test("CONCURRENT identical retries produce exactly one recovery and one GL effect", async () => {
+  test("back-to-back identical submits produce exactly one recovery and one GL effect (SEQUENTIAL ONLY)", async () => {
+    // ⚠️ SEQUENTIAL ONLY, and stated as such — matching the convention already
+    // used in saleOwnedTeardown.test.ts. convex-test's DatabaseFake takes a mutex
+    // in TransactionManager.begin() and runs one top-level function at a time, so
+    // `Promise.all` here is observably identical to two awaits and models NO
+    // interleaving. Genuine concurrent safety rests on Convex's OCC, which this
+    // harness does not implement and which this test therefore does NOT claim.
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "r291conc");
     const a1 = await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 100, idempotencyKey: "adv-conc" });
@@ -300,14 +312,140 @@ describe("SCRUM-291: recoverAdvance has one authoritative replay boundary", () =
       attempt(() => asAdmin.mutation(api.payroll.recoverAdvance, args)),
     ]);
 
-    // Either both replay the same id, or one is rejected as in-flight. What is
-    // NOT negotiable is the economic outcome: one movement, one journal.
+    // Under this harness both simply replay. What is asserted — and what would
+    // still have to hold under real interleaving — is the economic outcome:
+    // one movement, one journal.
     const succeeded = outcomes.filter((o) => o.ok);
     expect(succeeded.length).toBeGreaterThanOrEqual(1);
     const adv = await t.run((ctx) => ctx.db.get(a1));
     expect(adv?.recoveredMinor).toBe(40000);
     expect(await recoveriesFor(t, a1)).toHaveLength(1);
     expect(await advanceRecoveredEvents(t)).toHaveLength(1);
+  });
+
+  test("SCRUM-291-01: a legacy-format command row still replays an identical explicit partial retry", async () => {
+    // Version skew. Rows written before this change carry the OLD fingerprint
+    // shape `{advanceId, recoverMinor, method}`. If the new shape cannot match
+    // them, an identical retry of a pre-existing keyed recovery stops replaying
+    // and hard-conflicts instead — and the operator then resubmits under a FRESH
+    // key, which for a PARTIAL recovery books a SECOND recovery row and a SECOND
+    // EMPLOYEE_ADVANCE_RECOVERED event. A false conflict here is therefore a
+    // duplicate-posting path, not a safe refusal.
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "r291legacy");
+    const a1 = await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 100, idempotencyKey: "adv-legacy" });
+
+    const args = { orgId, advanceId: a1, method: "CASH" as const, amount: 40, idempotencyKey: "K" };
+    const r1 = await asAdmin.mutation(api.payroll.recoverAdvance, args);
+
+    // Rewrite the stored fingerprint to exactly what protected main wrote, so
+    // this row is indistinguishable from one committed before the deployment.
+    const legacy = JSON.stringify({ advanceId: a1, recoverMinor: 40000, method: "CASH" });
+    await t.run(async (ctx) => {
+      const all = await ctx.db.query("commandIdempotency").collect();
+      const row = all.find((r) => r.operation === "payroll.recoverAdvance");
+      if (!row) throw new Error("fixture: no recoverAdvance command row to age");
+      await ctx.db.patch(row._id, { fingerprint: legacy });
+    });
+
+    const replay = await attempt(() => asAdmin.mutation(api.payroll.recoverAdvance, args));
+
+    expect(replay.ok).toBe(true);
+    if (replay.ok) expect(replay.value).toBe(r1);
+    // And no duplicate was booked.
+    const adv = await t.run((ctx) => ctx.db.get(a1));
+    expect(adv?.recoveredMinor).toBe(40000);
+    expect(await recoveriesFor(t, a1)).toHaveLength(1);
+    expect(await advanceRecoveredEvents(t)).toHaveLength(1);
+  });
+
+  test("SCRUM-291-01: a legacy-format row still fails closed when the retry genuinely differs", async () => {
+    // The compatibility above must not become a hole: a legacy row must still
+    // reject a materially different instruction under the same identity.
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "r291legdiff");
+    const a1 = await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 100, idempotencyKey: "adv-legdiff" });
+
+    await asAdmin.mutation(api.payroll.recoverAdvance, { orgId, advanceId: a1, method: "CASH", amount: 40, idempotencyKey: "K" });
+    const legacy = JSON.stringify({ advanceId: a1, recoverMinor: 40000, method: "CASH" });
+    await t.run(async (ctx) => {
+      const all = await ctx.db.query("commandIdempotency").collect();
+      const row = all.find((r) => r.operation === "payroll.recoverAdvance");
+      if (!row) throw new Error("fixture: no recoverAdvance command row to age");
+      await ctx.db.patch(row._id, { fingerprint: legacy });
+    });
+
+    const changed = await attempt(() =>
+      asAdmin.mutation(api.payroll.recoverAdvance, { orgId, advanceId: a1, method: "CASH", amount: 60, idempotencyKey: "K" })
+    );
+    expect(changed.ok).toBe(false);
+    if (!changed.ok) expect(changed.message).toMatch(CONFLICT);
+    expect(await recoveriesFor(t, a1)).toHaveLength(1);
+    expect(await advanceRecoveredEvents(t)).toHaveLength(1);
+  });
+
+  test("SCRUM-291-02: a non-finite amount is rejected and never aliases the omitted-amount identity", async () => {
+    // JSON.stringify maps NaN, Infinity and -Infinity all to `null` — the same
+    // token an OMITTED amount produces. Without a finiteness guard, a reused key
+    // whose original call omitted the amount would match a NaN retry and return
+    // the earlier recovery as SUCCESS for an invalid monetary instruction.
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "r291nonfinite");
+    const a1 = await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 100, idempotencyKey: "adv-nonfinite" });
+
+    // Full recovery with the amount OMITTED => fingerprint carries null.
+    const r1 = await asAdmin.mutation(api.payroll.recoverAdvance, { orgId, advanceId: a1, method: "CASH", idempotencyKey: "K" });
+
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const outcome = await attempt(() =>
+        asAdmin.mutation(api.payroll.recoverAdvance, { orgId, advanceId: a1, method: "CASH", amount: bad, idempotencyKey: "K" })
+      );
+
+      // THE SECURITY PROPERTY: no false success, and never the earlier recovery.
+      // Note precisely what closes this. Converting the amount through
+      // `toMinorUnits` for the fingerprint already rejects every non-finite
+      // value (Math.round(NaN) is not a safe integer), so this assertion holds
+      // even without the explicit finiteness guard. It genuinely FAILED against
+      // the earlier request-shaped fingerprint, which hashed the raw value and
+      // let NaN alias the omitted-amount identity into a replayed success.
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) expect(outcome.value).not.toBe(r1);
+
+      // ERROR QUALITY, a separate and weaker claim: the caller is told the
+      // amount is invalid rather than being handed an internal overflow
+      // message. This is what `assertFiniteNumber` adds; it is defense in
+      // depth plus a legible refusal, NOT the thing that closes the alias.
+      if (!outcome.ok) expect(outcome.message).toMatch(/finite/i);
+    }
+
+    expect(await recoveriesFor(t, a1)).toHaveLength(1);
+    expect(await advanceRecoveredEvents(t)).toHaveLength(1);
+  });
+
+  test("a mid-callback throw on a FRESH key rolls back and leaves the key reusable", async () => {
+    // The conflicting-retry case below cannot prove STARTED-row rollback: the
+    // fingerprint mismatch throws before any row is inserted for that call. This
+    // one does prove it — the key is fresh, so runWithIdempotency inserts its
+    // STARTED row and only then does the callback throw.
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "r291rollback");
+    const a1 = await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 100, idempotencyKey: "adv-rollback" });
+
+    // Over the outstanding balance => throws INSIDE the guarded callback.
+    const failed = await attempt(() =>
+      asAdmin.mutation(api.payroll.recoverAdvance, { orgId, advanceId: a1, method: "CASH", amount: 999, idempotencyKey: "K" })
+    );
+    expect(failed.ok).toBe(false);
+
+    // Nothing survives the throw — including the STARTED command row.
+    expect(await recoverAdvanceCommandRows(t)).toHaveLength(0);
+    expect(await recoveriesFor(t, a1)).toHaveLength(0);
+    expect(await advanceRecoveredEvents(t)).toHaveLength(0);
+
+    // And the key is NOT permanently burned: a valid request may still use it.
+    const ok = await asAdmin.mutation(api.payroll.recoverAdvance, { orgId, advanceId: a1, method: "CASH", amount: 40, idempotencyKey: "K" });
+    expect(ok).toBeDefined();
+    expect(await recoveriesFor(t, a1)).toHaveLength(1);
   });
 
   test("a rejected conflicting retry adds NO command-log row, recovery, event or state change", async () => {
@@ -330,9 +468,9 @@ describe("SCRUM-291: recoverAdvance has one authoritative replay boundary", () =
 
     // A conflict is a refusal, not a partial write. Convex rolls the whole
     // mutation back on throw, so nothing above may have moved.
-    expect((await recoverAdvanceCommandRows(t)).length).toBe(before.commands);
-    expect((await recoveriesFor(t, a1)).length).toBe(before.recoveries);
-    expect((await advanceRecoveredEvents(t)).length).toBe(before.events);
+    expect(await recoverAdvanceCommandRows(t)).toHaveLength(before.commands);
+    expect(await recoveriesFor(t, a1)).toHaveLength(before.recoveries);
+    expect(await advanceRecoveredEvents(t)).toHaveLength(before.events);
     expect((await t.run((ctx) => ctx.db.get(a1)))?.recoveredMinor).toBe(before.recovered);
   });
 });
