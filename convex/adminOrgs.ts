@@ -210,7 +210,12 @@ async function findActiveDeletionRequest(ctx: MutationCtx, orgId: Id<"organizati
  * power stays open is how the first version of this fix shipped: `unsuspendOrg`
  * refused, and `rejectDeletionRequest` reactivated the same organization
  * without ever reading either condition. `organizationReactivationGuard.test.ts`
- * fails if a third writer of `suspended: false` appears.
+ * parses this file and fails when a `ctx.db.patch`/`replace` assigns
+ * `suspended: false` in a function that does not call this guard. It does not
+ * resolve a computed key (`{ [field]: false }`) — that needs a type checker, so
+ * a deliberately obfuscated writer still gets past it. Treat it as a net for
+ * the accidental omission that has already happened twice here, not as proof
+ * that no unguarded writer can exist.
  *
  * Two conditions, because they answer the same question from different
  * evidence:
