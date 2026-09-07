@@ -185,12 +185,13 @@ describe("SCRUM-297 — organization destructive lifecycle", () => {
     expect(org?.suspended).toBe(true);
   });
 
-  test("T3 GENERALITY: after reactivation the SAME command key re-executes, duplicating the effect", async () => {
+  test("T3 GENERALITY: the economic surface stays unreachable after destructive progress", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, ownerId } = await seedOrg(t);
     const asAdmin = t.withIdentity({ subject: "dev_admin" });
+    const asOwner = t.withIdentity({ subject: "owner_1" });
 
-    const first = await executeEconomicCommand(t, orgId, ownerId, "K");
+    await executeEconomicCommand(t, orgId, ownerId, "K");
     const { requestId } = await asAdmin.mutation(api.adminOrgs.hardDeleteOrg, {
       orgId,
       confirmName: "Acme Motors",
@@ -198,16 +199,66 @@ describe("SCRUM-297 — organization destructive lifecycle", () => {
     await purgeUntilCommandAuthorityGone(t, requestId);
     await markRequestFailedAsTheCatchBlockDoes(t, requestId);
 
-    try {
-      await asAdmin.mutation(api.adminOrgs.unsuspendOrg, { orgId });
-    } catch {
-      // Once T2 is fixed this throws and the org never returns to service.
+    await expect(asAdmin.mutation(api.adminOrgs.unsuspendOrg, { orgId })).rejects.toThrow();
+
+    // Reactivation is the ONLY route to the economic surface: every ordinary
+    // command goes through requireTenantAuth, which refuses a suspended org. So
+    // refusing reactivation is what makes the retry unreachable for all 30
+    // runWithIdempotency call sites at once, not just for payroll.
+    const org = await t.run(async (ctx) => await ctx.db.get(orgId));
+    expect(org?.suspended).toBe(true);
+    await expect(asOwner.query(api.organizations.get, { orgId })).rejects.toThrow();
+  });
+
+  test("T4 RESUME: a failed purge can still be driven to completion", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, ownerId } = await seedOrg(t);
+    const asAdmin = t.withIdentity({ subject: "dev_admin" });
+
+    await executeEconomicCommand(t, orgId, ownerId, "K");
+    const first = await asAdmin.mutation(api.adminOrgs.hardDeleteOrg, {
+      orgId,
+      confirmName: "Acme Motors",
+    });
+    await purgeUntilCommandAuthorityGone(t, first.requestId);
+    await markRequestFailedAsTheCatchBlockDoes(t, first.requestId);
+
+    // Failing closed must not strand the org: completion stays reachable.
+    const resumed = await asAdmin.mutation(api.adminOrgs.hardDeleteOrg, {
+      orgId,
+      confirmName: "Acme Motors",
+    });
+    for (let i = 0; i < 400; i += 1) {
+      const request = await t.run(async (ctx) => ctx.db.get(resumed.requestId));
+      if (request?.status !== "RUNNING") break;
+      await t.mutation(internal.adminOrgs.runDeletionRequestBatch, { requestId: resumed.requestId });
     }
 
-    const second = await executeEconomicCommand(t, orgId, ownerId, "K");
+    const request = await t.run(async (ctx) => ctx.db.get(resumed.requestId));
+    expect(request?.status).toBe("COMPLETED");
+    expect(await t.run(async (ctx) => await ctx.db.get(orgId))).toBeNull();
+  });
 
-    // The identical economic intent must not produce a second effect.
-    expect(second.provenanceId).toBe(first.provenanceId);
-    expect(await countRows(t, "employeeAdvances")).toBe(1);
+  test("T5 MARKER ORDERING: irreversibility is stamped even when the batch deletes nothing", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrg(t);
+    const asAdmin = t.withIdentity({ subject: "dev_admin" });
+
+    // No command rows at all, so step 0 deletes nothing and records no counts.
+    // The marker must still be set, because it is written ahead of the step
+    // rather than derived from what the step reported.
+    expect(await countRows(t, "commandIdempotency")).toBe(0);
+
+    const { requestId } = await asAdmin.mutation(api.adminOrgs.hardDeleteOrg, {
+      orgId,
+      confirmName: "Acme Motors",
+    });
+    await t.mutation(internal.adminOrgs.runDeletionRequestBatch, { requestId });
+
+    const org = await t.run(async (ctx) => await ctx.db.get(orgId));
+    expect(org?.destructivePurgeStartedAt).toEqual(expect.any(Number));
+
+    const request = await t.run(async (ctx) => ctx.db.get(requestId));
+    expect(request?.deletedCounts ?? {}).toEqual({});
   });
 });

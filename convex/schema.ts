@@ -62,6 +62,36 @@ export default defineSchema({
     deletionRequestedAt: v.optional(v.number()),
     deletionRequestId: v.optional(v.id("organizationDeletionRequests")),
     /**
+     * SCRUM-297 — WHEN DESTRUCTIVE PURGE BECAME IRREVERSIBLE FOR THIS ORG.
+     *
+     * Written once, in the same transaction as and strictly BEFORE the first
+     * destructive step of a purge run. Its PRESENCE — never its value, and
+     * never a deletion request's `status` — forbids returning the dealership to
+     * service. Destruction outlives the status that described it: a purge that
+     * throws marks the *request* FAILED and leaves the organization row alone,
+     * and FAILED is not in `ACTIVE_DELETION_STATUSES`, so a status-based guard
+     * reads "no purge in flight" over a half-destroyed dealership.
+     *
+     * ⚠️ NOT DERIVED FROM `deletedCounts`. Counts are patched only AFTER a step
+     * returns, while `runDeletionRequestBatch`'s catch block returns normally
+     * and therefore COMMITS — a step throwing mid-loop commits up to a full
+     * batch of deletions while recording zero counts. A marker derived from
+     * them reports "nothing destroyed" after real destruction. This one is
+     * written ahead of the delete, so deletions without the marker require a
+     * transaction abort, which discards those deletions too.
+     *
+     * ⚠️ NOTHING CLEARS IT. `rejectDeletionRequest` only runs from
+     * PENDING_REVIEW — before any destruction — so it never meets this field.
+     * The field disappears only with the organization row itself, at the end of
+     * a completed purge, when there is no longer anything to reactivate.
+     *
+     * The legal transitions once set are: resume the purge, or complete it.
+     * Restoring a partially purged organization is NOT a product requirement
+     * (owner ruling 2026-09-07); if it ever becomes one it needs a reviewed
+     * reconciliation protocol, not the removal of this field.
+     */
+    destructivePurgeStartedAt: v.optional(v.number()),
+    /**
      * SCRUM-208 — WHICH COMMITMENT AUTHORITY THIS DEALERSHIP RUNS ON.
      *
      * Canonical-state admission is ONE per-org rule, not per-field `undefined`

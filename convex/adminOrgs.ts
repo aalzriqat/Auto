@@ -655,6 +655,32 @@ export const unsuspendOrg = mutation({
     const org = await ctx.db.get(args.orgId);
     if (!org) throwAppError(AppErrorCode.ORG_NOT_FOUND, "Organization not found.");
 
+    // ⚠️ SCRUM-297 — FAIL CLOSED ONCE DESTRUCTION HAS BEGUN.
+    //
+    // Checked BEFORE the in-flight check, because it is the stronger and
+    // permanent condition: an in-flight purge is a state a request can leave,
+    // whereas destroyed rows never come back. `ACTIVE_DELETION_STATUSES` alone
+    // could not see this — a purge that throws marks the *request* FAILED,
+    // never touches the organization row, and FAILED is not an active status,
+    // so the guard below reads "nothing in flight" over a dealership whose
+    // command-idempotency authority has already been deleted while its economic
+    // provenance survives. Reactivating there lets an identical retry of a
+    // previously-completed economic command execute a second time — reproduced
+    // as a duplicate advance recovery and a duplicate economic event.
+    //
+    // Not payroll-specific: `commandIdempotency` is deletion step 0 and the
+    // sole replay authority behind every `runWithIdempotency` call site, so the
+    // hole is under all of them at once. The fix belongs here, at the one
+    // boundary that can return the organization to service, rather than as a
+    // fallback inside any financial module.
+    if (org.destructivePurgeStartedAt !== undefined) {
+      throwAppError(
+        AppErrorCode.VALIDATION_FAILED,
+        "This organization has begun destructive deletion and cannot be returned to service. " +
+          "The deletion must be completed instead."
+      );
+    }
+
     const activeDeletionRequest = await findActiveDeletionRequest(ctx, args.orgId);
     if (activeDeletionRequest) {
       throwAppError(
@@ -860,6 +886,24 @@ export const runDeletionRequestBatch = internalMutation({
           lastProcessedAt: now,
         });
         return { status: "COMPLETED" as const };
+      }
+
+      // ⚠️ SCRUM-297 — STAMP IRREVERSIBILITY BEFORE THE FIRST DESTRUCTIVE STEP.
+      //
+      // Ordered ahead of `runDeletionStep`, in the same transaction, so the
+      // only way to commit deletions without the marker is a transaction abort
+      // — which discards those deletions too. The reverse order would not hold:
+      // this function's catch block returns normally and therefore COMMITS, so
+      // a step that throws mid-loop commits its deletions, and anything written
+      // after the step would never record them. That is exactly why the marker
+      // is not derived from `deletedCounts`, which is patched only after a step
+      // returns and reads zero for a batch that threw.
+      //
+      // Idempotent by the `undefined` check: re-stamping on every batch would
+      // move the timestamp and lose when destruction actually began.
+      const org = await ctx.db.get(request.orgId);
+      if (org && org.destructivePurgeStartedAt === undefined) {
+        await ctx.db.patch(request.orgId, { destructivePurgeStartedAt: now });
       }
 
       const step = ORGANIZATION_DELETION_STEPS[currentStepIndex];
