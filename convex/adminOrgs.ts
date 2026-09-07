@@ -681,6 +681,34 @@ export const unsuspendOrg = mutation({
       );
     }
 
+    // ⚠️ SCRUM-297 — THE LEGACY NET. The marker above is written by this
+    // version of the code; it says nothing about a purge that ran before this
+    // shipped. Those organizations carry a FAILED request and NO marker, which
+    // is the identical hazard with none of the evidence, so a marker-only guard
+    // would be correct exactly from its own deploy forward and blind to every
+    // org already in that state.
+    //
+    // A FAILED request proves the batch chain was scheduled and entered, which
+    // is the same thing the marker records — so this is the conservative
+    // reading of the same fact from the only durable evidence a pre-marker run
+    // left behind. Post-deploy it is redundant with the marker, and redundancy
+    // in the safe direction is the point.
+    //
+    // Does NOT block `hardDeleteOrg`: `findActiveDeletionRequest` still
+    // excludes FAILED, so completing the purge remains reachable. Refusing
+    // reactivation must not also refuse the one legal way forward.
+    const failedDeletionRequest = await ctx.db
+      .query("organizationDeletionRequests")
+      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "FAILED"))
+      .first();
+    if (failedDeletionRequest) {
+      throwAppError(
+        AppErrorCode.VALIDATION_FAILED,
+        "This organization has a failed deletion that may have destroyed records and cannot be " +
+          "returned to service. The deletion must be completed instead."
+      );
+    }
+
     const activeDeletionRequest = await findActiveDeletionRequest(ctx, args.orgId);
     if (activeDeletionRequest) {
       throwAppError(

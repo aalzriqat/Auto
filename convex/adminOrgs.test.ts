@@ -492,8 +492,22 @@ describe("adminOrgs", () => {
       })
     );
 
-    // The admin puts the dealership back into service. This is permitted today.
-    await asAdmin.mutation(api.adminOrgs.unsuspendOrg, { orgId });
+    // ⚠️ SCRUM-297 REVERSED THIS. Returning the dealership to service used to be
+    // permitted here, and that is the defect: the purge deletes
+    // `commandIdempotency` — the sole replay authority behind every
+    // `runWithIdempotency` call site — as step 0, while the economic provenance
+    // it protects survives. Reactivating let an identical retry of a
+    // previously-completed economic command execute a second time. A FAILED
+    // request now refuses reactivation permanently.
+    await expect(asAdmin.mutation(api.adminOrgs.unsuspendOrg, { orgId })).rejects.toThrow();
+
+    // The materialization gate is what this test is actually about, and it must
+    // still read the request's STATUS rather than the mere presence of
+    // `deletionRequestId`. Since no supported path can now return a
+    // FAILED-request org to service, the live-but-marked shape is constructed
+    // directly — it is the state of any organization reactivated before
+    // SCRUM-297 shipped, and the reader must not deny it permanently.
+    await t.run(async (ctx) => ctx.db.patch(orgId, { suspended: false, suspendedAt: undefined }));
 
     const org = await t.run(async (ctx) => ctx.db.get(orgId));
     expect(org).not.toBeNull();

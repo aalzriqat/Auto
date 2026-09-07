@@ -239,6 +239,43 @@ describe("SCRUM-297 — organization destructive lifecycle", () => {
     expect(await t.run(async (ctx) => await ctx.db.get(orgId))).toBeNull();
   });
 
+  test("T6 LEGACY: a purge that failed BEFORE the marker existed is still refused", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, ownerId } = await seedOrg(t);
+    const asAdmin = t.withIdentity({ subject: "dev_admin" });
+
+    await executeEconomicCommand(t, orgId, ownerId, "K");
+    const { requestId } = await asAdmin.mutation(api.adminOrgs.hardDeleteOrg, {
+      orgId,
+      confirmName: "Acme Motors",
+    });
+
+    // The shape a pre-SCRUM-297 purge left behind: the command log destroyed by
+    // a batch that ran under code which stamped nothing, the request FAILED,
+    // and NO marker on the organization. Reconstructed directly because no
+    // current code path can produce it — that is precisely why a marker-only
+    // guard cannot see these organizations.
+    await t.run(async (ctx) => {
+      for (const row of await ctx.db.query("commandIdempotency").collect()) {
+        await ctx.db.delete(row._id);
+      }
+      await ctx.db.patch(orgId, { destructivePurgeStartedAt: undefined });
+    });
+    await markRequestFailedAsTheCatchBlockDoes(t, requestId);
+
+    const before = await t.run(async (ctx) => await ctx.db.get(orgId));
+    expect(before?.destructivePurgeStartedAt).toBeUndefined();
+    expect(await countRows(t, "commandIdempotency")).toBe(0);
+    expect(await countRows(t, "employeeAdvances")).toBe(1);
+
+    await expect(asAdmin.mutation(api.adminOrgs.unsuspendOrg, { orgId })).rejects.toThrow();
+
+    // Refusing reactivation must not also refuse the one legal way forward.
+    await expect(
+      asAdmin.mutation(api.adminOrgs.hardDeleteOrg, { orgId, confirmName: "Acme Motors" })
+    ).resolves.toBeDefined();
+  });
+
   test("T5 MARKER ORDERING: irreversibility is stamped even when the batch deletes nothing", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrg(t);
