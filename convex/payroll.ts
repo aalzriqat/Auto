@@ -222,13 +222,34 @@ export const recoverAdvance = mutation({
 
       const method = normalizePaymentMethod(args.method);
 
-      // Reject a non-finite amount BEFORE the fingerprint is built. JSON.stringify
-      // maps NaN, Infinity and -Infinity all to `null` — the SAME token an omitted
-      // amount produces — so without this guard a reused key whose original call
-      // omitted the amount would MATCH a NaN retry and hand back the earlier
-      // recovery as success for an invalid monetary instruction.
+      // ── State-independent validation runs BEFORE the replay boundary ──────
+      //
+      // This ordering is the invariant, not a detail: a replay may only be
+      // resolved AFTER the request has been validated on its own terms. Any
+      // check left until after the identity lookup is a check a replay can skip,
+      // and a canonicalised fingerprint makes distinct invalid inputs collide
+      // onto a stored valid one. Concretely, all three of `0.0004` (positive but
+      // below JOD's minor unit), `0`, and `-0.0004` convert to 0 minor units and
+      // serialize identically — `Math.round(-0.0004 * 1000)` is `-0`, which
+      // JSON.stringify writes as `0`. With validation inside the callback, a
+      // first call of 0.0004 booked a zero-value recovery and a zero-value GL
+      // event, and a later `0` or `-0.0004` matched its fingerprint and was
+      // replayed as success without the positivity check ever running.
+      //
+      // So the amount is fully resolved and refused here: finite, positive as
+      // submitted, and still positive once converted to minor units. An amount
+      // that moves no money is not an economic instruction and must never reach
+      // the command log.
+      let requestedMinor: number | null = null;
       if (args.amount !== undefined) {
         assertFiniteNumber(args.amount, "repayment amount");
+        if (!(args.amount > 0)) {
+          throw new ConvexError("Repayment amount must be a positive number.");
+        }
+        requestedMinor = toMinorUnits(args.amount, advance.currency);
+        if (requestedMinor <= 0) {
+          throw new ConvexError("Repayment amount is smaller than the smallest unit of currency.");
+        }
       }
 
       // ONE authoritative replay boundary.
@@ -264,11 +285,26 @@ export const recoverAdvance = mutation({
       // is not a safe refusal here — the operator would resubmit under a fresh
       // key and book a SECOND recovery row and a SECOND GL event.
       //
-      // Legacy rows written by an OMITTED-amount (full) recovery stored the
-      // then-outstanding balance rather than null, so those alone still conflict.
-      // That case cannot duplicate anything: the advance is already RECOVERED, so
-      // a fresh-key resubmission is refused by the status check. Fail-closed with
-      // no economic effect is the acceptable end of this trade.
+      // ⚠️ ACCEPTED RESIDUAL, stated precisely because the imprecise version of
+      // this sentence was wrong. Legacy rows written by an OMITTED-amount (full)
+      // recovery stored the then-outstanding balance rather than null. Such a row
+      // conflicts with an omitted retry (null vs a number) — pinned by test — but
+      // it MATCHES a new EXPLICIT request whose minor value equals that balance.
+      // It is NOT true that legacy full rows "always conflict".
+      //
+      // That match is judged correct rather than merely tolerated: a fingerprint
+      // hit requires the same advance, the same minor amount and the same method,
+      // which is the same economic instruction however it was phrased — the same
+      // reasoning that makes an omitted method and an explicit CASH one one intent.
+      // The conflicting sub-case is safe for a different reason: the advance is
+      // already RECOVERED, so a fresh-key resubmission is refused by the status
+      // check and cannot duplicate.
+      //
+      // ⚠️ That safety argument depends on advances being monotonic — nothing
+      // reopens or reverses a RECOVERED advance today. If a reversal, correction
+      // or reopen path is ever added, this reasoning lapses and the FULL-versus-
+      // EXACT ambiguity must be re-assessed, because the legacy format carries no
+      // request-mode bit to distinguish them.
       //
       // Converting through `toMinorUnits` also rounds, so float noise in the
       // submitted amount cannot manufacture a spurious conflict.
@@ -281,7 +317,7 @@ export const recoverAdvance = mutation({
           actorId: user._id,
           fingerprint: JSON.stringify({
             advanceId: args.advanceId,
-            recoverMinor: args.amount === undefined ? null : toMinorUnits(args.amount, advance.currency),
+            recoverMinor: requestedMinor,
             method,
           }),
         },
@@ -306,16 +342,12 @@ export const recoverAdvance = mutation({
             throw new ConvexError("This advance has nothing left to recover.");
           }
 
-          // Full remaining balance unless a (positive, not-over) partial is given.
-          let recoverMinor = outstandingMinor;
-          if (args.amount !== undefined) {
-            if (!(args.amount > 0)) {
-              throw new ConvexError("Repayment amount must be a positive number.");
-            }
-            recoverMinor = toMinorUnits(args.amount, current.currency);
-            if (recoverMinor > outstandingMinor) {
-              throw new ConvexError("Repayment amount exceeds the outstanding balance.");
-            }
+          // Full remaining balance unless a partial was given. The amount itself
+          // was already validated above; only the balance-DEPENDENT check can
+          // live here, because it is the one that genuinely needs current state.
+          const recoverMinor = requestedMinor ?? outstandingMinor;
+          if (recoverMinor > outstandingMinor) {
+            throw new ConvexError("Repayment amount exceeds the outstanding balance.");
           }
 
           const now = Date.now();
