@@ -91,9 +91,10 @@ export default defineSchema({
      * deletion requests over time, so a fresh PENDING_REVIEW one carries no
      * evidence about an EARLIER purge that already destroyed command authority.
      * `rejectDeletionRequest` cleared `suspended` without reading this field at
-     * all. Both writers of `suspended: false` now call
-     * `assertNoIrreversiblePurgeHistory`, and
-     * `scripts/organizationReactivationGuard.test.ts` fails if a third appears.
+     * all. Both former writers now delegate to `reactivateOrganization`, the
+     * single function allowed to clear suspension, which reads this field
+     * first; `scripts/organizationReactivationGuard.test.ts` fails when any
+     * other code assigns `suspended` a value it cannot prove is `true`.
      *
      * The legal transitions once set are: resume the purge, or complete it.
      * Restoring a partially purged organization is NOT a product requirement

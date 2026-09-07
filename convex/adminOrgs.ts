@@ -209,13 +209,14 @@ async function findActiveDeletionRequest(ctx: MutationCtx, orgId: Id<"organizati
  * organization to service". Guarding one writer while a sibling with equal
  * power stays open is how the first version of this fix shipped: `unsuspendOrg`
  * refused, and `rejectDeletionRequest` reactivated the same organization
- * without ever reading either condition. `organizationReactivationGuard.test.ts`
- * parses this file and fails when a `ctx.db.patch`/`replace` assigns
- * `suspended: false` in a function that does not call this guard. It does not
- * resolve a computed key (`{ [field]: false }`) — that needs a type checker, so
- * a deliberately obfuscated writer still gets past it. Treat it as a net for
- * the accidental omission that has already happened twice here, not as proof
- * that no unguarded writer can exist.
+ * without ever reading either condition. Rather than guard each writer, there
+ * is now exactly one — `reactivateOrganization` below — and
+ * `organizationReactivationGuard.test.ts` parses the source and fails when ANY
+ * other code assigns `suspended` to something it cannot prove is `true`. It
+ * does not resolve a computed key (`{ [field]: false }`), which needs a type
+ * checker, so a deliberately obfuscated writer still gets past. Treat it as a
+ * net for the accidental omission that has already happened twice here, not as
+ * proof that no unguarded writer can exist.
  *
  * Two conditions, because they answer the same question from different
  * evidence:
@@ -254,6 +255,42 @@ async function assertNoIrreversiblePurgeHistory(
         "returned to service. The deletion must be completed instead."
     );
   }
+}
+
+/**
+ * THE ONLY PLACE AN ORGANIZATION IS RETURNED TO SERVICE.
+ *
+ * The guard and the write live in one function on purpose. Two earlier
+ * versions of this fix asked a source ratchet the question "is this write
+ * guarded?", and that question turns out to be genuinely hard to answer about
+ * code: a guard call sitting AFTER the write, or inside a branch that never
+ * runs, still reads as "the function calls the guard". Proving otherwise needs
+ * control-flow dominance analysis.
+ *
+ * Fusing them deletes the question instead of answering it. There is exactly
+ * one write site, four lines long, with the guard on the line above — so the
+ * ratchet only has to check that no OTHER code clears `suspended`, which is a
+ * structural fact a parser can establish outright.
+ *
+ * ⚠️ `suspended` is `v.optional(v.boolean())` and `requireTenantAuth` tests it
+ * for TRUTHINESS, so clearing it to `undefined` reactivates exactly as `false`
+ * does. Any write of this field other than `suspended: true` belongs here.
+ */
+async function reactivateOrganization(
+  ctx: MutationCtx,
+  org: Doc<"organizations">,
+  options: { clearDeletionRequestPointer?: boolean } = {}
+) {
+  await assertNoIrreversiblePurgeHistory(ctx, org);
+
+  await ctx.db.patch(org._id, {
+    suspended: false,
+    suspendedAt: undefined,
+    suspendedReason: undefined,
+    ...(options.clearDeletionRequestPointer
+      ? { deletionRequestedAt: undefined, deletionRequestId: undefined }
+      : {}),
+  });
 }
 
 function countDeletedRows(counts: DeletedCounts) {
@@ -731,8 +768,6 @@ export const unsuspendOrg = mutation({
     // Does NOT block `hardDeleteOrg`: `findActiveDeletionRequest` still
     // excludes FAILED, so completing the purge remains reachable. Refusing
     // reactivation must not also refuse the one legal way forward.
-    await assertNoIrreversiblePurgeHistory(ctx, org);
-
     const activeDeletionRequest = await findActiveDeletionRequest(ctx, args.orgId);
     if (activeDeletionRequest) {
       throwAppError(
@@ -741,11 +776,7 @@ export const unsuspendOrg = mutation({
       );
     }
 
-    await ctx.db.patch(args.orgId, {
-      suspended: false,
-      suspendedAt: undefined,
-      suspendedReason: undefined,
-    });
+    await reactivateOrganization(ctx, org);
 
     await notifyManagers(ctx, args.orgId, "admin.org_unsuspended", {});
 
@@ -841,15 +872,16 @@ export const rejectDeletionRequest = mutation({
     // progressively harder to find. (They stay discoverable from the request
     // side: `organizationDeletionRequests` is never purged.)
     //
-    // ⚠️ THE WHOLE MUTATION REFUSES, request transition included — a throw
-    // aborts the transaction, so there is no partial outcome where the request
-    // is REJECTED but the organization stayed suspended, and that is the safe
-    // direction. Nothing is stranded: the request stays PENDING_REVIEW, an
-    // ACTIVE status that already blocks `unsuspendOrg`, while
-    // `approveDeletionRequest` still works, so completing the purge remains the
-    // path forward.
-    await assertNoIrreversiblePurgeHistory(ctx, org);
-
+    // ⚠️ THE WHOLE MUTATION REFUSES, request transition included. The guard
+    // now runs inside `reactivateOrganization`, which is called AFTER the
+    // request patch below — that ordering does not change the outcome, because
+    // the throw is UNCAUGHT and an uncaught throw rolls the whole mutation back.
+    // (Convex commits a CAUGHT exception's writes; this one is never caught.)
+    // So there is still no partial outcome where the request is REJECTED but the
+    // organization stayed suspended, and that is the safe direction. Nothing is
+    // stranded: the request stays PENDING_REVIEW, an ACTIVE status that already
+    // blocks `unsuspendOrg`, while `approveDeletionRequest` still works, so
+    // completing the purge remains the path forward. `T7` pins this.
     const now = Date.now();
     await ctx.db.patch(args.requestId, {
       status: "REJECTED",
@@ -858,13 +890,7 @@ export const rejectDeletionRequest = mutation({
       reviewNotes: args.reviewNotes,
       lastProcessedAt: now,
     });
-    await ctx.db.patch(request.orgId, {
-      suspended: false,
-      suspendedAt: undefined,
-      suspendedReason: undefined,
-      deletionRequestedAt: undefined,
-      deletionRequestId: undefined,
-    });
+    await reactivateOrganization(ctx, org, { clearDeletionRequestPointer: true });
 
     await logAdminAction(ctx, admin, {
       action: "rejectOrgDeletionRequest",
