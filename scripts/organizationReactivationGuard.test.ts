@@ -262,12 +262,28 @@ function findSuspensionClearingWritesIn(sourceFile: ts.SourceFile): SuspensionCl
   // The names of the functions currently open around the node being visited.
   // A write at module scope sees an empty stack and is never authorized.
   const enclosing: string[] = [];
+  // Set by a variable declaration, consumed by the function it initializes.
+  let pendingName: string | undefined;
 
   const visit = (node: ts.Node) => {
+    // A `const reactivateOrganization = async () => {}` has its name on the
+    // VARIABLE, not the arrow. Parent pointers are off (they are the expensive
+    // half of parsing), so the name is carried DOWN from the declaration to the
+    // function it initializes rather than looked up afterwards.
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      isFunctionLike(node.initializer)
+    ) {
+      pendingName = node.name.text;
+    }
+
     const opensFunction = isFunctionLike(node);
     if (opensFunction) {
-      const name = (node as ts.FunctionDeclaration).name;
-      enclosing.push(name && ts.isIdentifier(name) ? name.text : "<anonymous>");
+      const own = (node as ts.FunctionDeclaration).name;
+      enclosing.push(own && ts.isIdentifier(own) ? own.text : pendingName ?? "<anonymous>");
+      pendingName = undefined;
     }
 
     if (isDbWrite(node) && clearsSuspension(node)) {
@@ -296,17 +312,36 @@ export function guardPrecedesWriteInAuthorizedWriter(source: string, fileName = 
   const sourceFile = parse(source, fileName);
   let writer: FunctionLike | undefined;
 
+  // ⚠️ THE SIBLING. This locates the writer by name, exactly as the walk in
+  // `findSuspensionClearingWritesIn` does, and the two must agree on what a
+  // name IS. Fixing arrow-const naming in one and not the other left this one
+  // returning null for a writer the other recognised — the same
+  // guarded-one-writer-missed-its-sibling shape this whole ratchet exists to
+  // catch, reproduced inside the ratchet. Caught by a mutation control that
+  // rewrote the real writer as an arrow const.
+  let pendingName: string | undefined;
   const findWriter = (node: ts.Node) => {
     if (writer) return;
+
     if (
-      isFunctionLike(node) &&
-      (node as ts.FunctionDeclaration).name &&
-      ts.isIdentifier((node as ts.FunctionDeclaration).name!) &&
-      ((node as ts.FunctionDeclaration).name as ts.Identifier).text === AUTHORIZED_WRITER
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      isFunctionLike(node.initializer)
     ) {
-      writer = node;
-      return;
+      pendingName = node.name.text;
     }
+
+    if (isFunctionLike(node)) {
+      const own = (node as ts.FunctionDeclaration).name;
+      const name = own && ts.isIdentifier(own) ? own.text : pendingName;
+      pendingName = undefined;
+      if (name === AUTHORIZED_WRITER) {
+        writer = node;
+        return;
+      }
+    }
+
     ts.forEachChild(node, findWriter);
   };
   ts.forEachChild(sourceFile, findWriter);
@@ -377,6 +412,24 @@ function convexTree() {
 }
 
 describe("SCRUM-297 organization reactivation guard", () => {
+  // Warm the shared tree once, so no individual assertion pays the cold parse.
+  //
+  // ⚠️ THIS IS AN OPTIMIZATION, NOT THE SAFETY MECHANISM — and that distinction
+  // is the whole lesson of the commit before this one. Its message stated this
+  // hook existed and made the suite safe. The edit had silently not applied:
+  // `beforeAll` was imported and never called. The suite still PASSED, because
+  // the memo initializes lazily — only the timing distribution changed, so
+  // nothing failed and nothing caught it. On CI the first assertion to touch
+  // the tree was measured at 4357-4820ms against a 5000ms default.
+  //
+  // A property that holds only because tests happen to run in a helpful order
+  // is not a property. Every assertion that touches the tree therefore carries
+  // its OWN explicit timeout; that is what guarantees none can die on parse
+  // cost, whatever the order. This hook only makes them fast.
+  beforeAll(() => {
+    convexTree();
+  }, 60_000);
+
   test("the scan actually reaches the source tree", () => {
     // A ratchet that enumerates nothing passes vacuously. Pin that it doesn't.
     const files = convexTree();
@@ -384,7 +437,7 @@ describe("SCRUM-297 organization reactivation guard", () => {
     expect(files.some((entry) => entry.name === "adminOrgs.ts")).toBe(true);
     // Every file is parsed; nothing is filtered out before inspection.
     expect(files.every((entry) => entry.sourceFile !== undefined)).toBe(true);
-  });
+  }, 60_000);
 
   test("inspecting the whole tree stays well inside the test timeout", () => {
     // ⚠️ THIS IS THE CONTROL FOR A REAL REGRESSION, not a micro-benchmark.
@@ -425,7 +478,7 @@ describe("SCRUM-297 organization reactivation guard", () => {
     }
 
     expect(offenders).toEqual([]);
-  });
+  }, 60_000);
 
   test("every organization write is inspectable, so the detector cannot fail open", () => {
     const offenders: string[] = [];
@@ -438,7 +491,7 @@ describe("SCRUM-297 organization reactivation guard", () => {
     }
 
     expect(offenders).toEqual([]);
-  });
+  }, 60_000);
 
   test("the authorized writer exists, is unique, and consults the guard first", () => {
     const files = convexTree().filter(
@@ -453,7 +506,7 @@ describe("SCRUM-297 organization reactivation guard", () => {
     const source = fs.readFileSync(path.join(CONVEX_DIR, "adminOrgs.ts"), "utf8");
     expect(findSuspensionClearingWrites(source, "adminOrgs.ts")).toHaveLength(1);
     expect(guardPrecedesWriteInAuthorizedWriter(source, "adminOrgs.ts")).toBe(true);
-  });
+  }, 60_000);
 
   /**
    * Meta-tests for the detector itself.
@@ -560,6 +613,34 @@ describe("SCRUM-297 organization reactivation guard", () => {
       expect(findSuspensionClearingWrites(source)[0].insideAuthorizedWriter).toBe(false);
     });
 
+    test("the authorized writer is recognised even when declared as an arrow const", () => {
+      // ts.ArrowFunction has no `.name`; the name lives on the variable. Without
+      // carrying it down, rewriting the writer in this style would misclassify
+      // its one legitimate write as an offender and break CI on correct code.
+      const source = [
+        `const ${AUTHORIZED_WRITER} = async (ctx, org) => {`,
+        `  await ${GUARD_NAME}(ctx, org);`,
+        "  await ctx.db.patch(org._id, { suspended: false });",
+        "};",
+      ].join("\n");
+
+      expect(findSuspensionClearingWrites(source)).toEqual([
+        { line: 3, insideAuthorizedWriter: true },
+      ]);
+    });
+
+    test("an arrow const with a DIFFERENT name is still not the authorized writer", () => {
+      const source = [
+        "const somethingElse = async (ctx, org) => {",
+        "  await ctx.db.patch(org._id, { suspended: false });",
+        "};",
+      ].join("\n");
+
+      expect(findSuspensionClearingWrites(source)).toEqual([
+        { line: 2, insideAuthorizedWriter: false },
+      ]);
+    });
+
     test("a guard call in the same function no longer authorizes the write", () => {
       // The old question. A function may call the guard and still be the wrong
       // place to clear suspension — that is the whole point of centralizing.
@@ -588,6 +669,20 @@ describe("SCRUM-297 organization reactivation guard", () => {
       ].join("\n");
 
       expect(guardPrecedesWriteInAuthorizedWriter(source)).toBe(false);
+    });
+
+    test("the ordering check also recognises an arrow-const writer", () => {
+      // The sibling detector resolves names the same way the main walk does.
+      // It did not, until a mutation control rewrote the real writer as an
+      // arrow const and this assertion went red.
+      const source = [
+        `const ${AUTHORIZED_WRITER} = async (ctx, org) => {`,
+        `  await ${GUARD_NAME}(ctx, org);`,
+        "  await ctx.db.patch(org._id, { suspended: false });",
+        "};",
+      ].join("\n");
+
+      expect(guardPrecedesWriteInAuthorizedWriter(source)).toBe(true);
     });
 
     test("the ordering check reports null rather than passing when the writer is absent", () => {
