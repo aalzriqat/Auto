@@ -192,11 +192,23 @@ function clearsSuspension(call: ts.CallExpression) {
  * Elsewhere in `convex/` the rule is NOT applied — `ctx.db.patch(id, updates)`
  * is the ordinary write shape across the codebase and flagging it would fail
  * hundreds of unrelated writes. A new file that starts writing organization
- * rows must be added to `ORG_LIFECYCLE_FILES`, and the blast-radius assertion
- * below is what surfaces that.
+ * rows must be added to `ORG_LIFECYCLE_FILES`.
+ *
+ * ⚠️ AND THE BLAST-RADIUS ASSERTION DOES NOT RELIABLY SURFACE THAT — an earlier
+ * version of this comment claimed it did. That assertion filters over files
+ * where `findSuspensionClearingWrites` already found something, so a new file
+ * writing organizations through an INDIRECT payload returns `[]`, never enters
+ * the candidate list, and is invisible to the very check cited as the safety
+ * net. It surfaces a new file only when that file clears suspension through an
+ * inline literal. Adding a third writer file remains a human decision this
+ * suite cannot force; discovering such files structurally (by their references
+ * to `Id<"organizations">`) is recorded follow-up work.
  */
 export function findUninspectableOrgWrites(source: string, fileName = "fixture.ts") {
-  const sourceFile = parse(source, fileName);
+  return findUninspectableOrgWritesIn(parse(source, fileName));
+}
+
+function findUninspectableOrgWritesIn(sourceFile: ts.SourceFile) {
   const lines: number[] = [];
 
   const visit = (node: ts.Node) => {
@@ -252,7 +264,10 @@ export function findSuspensionClearingWrites(
   source: string,
   fileName = "fixture.ts"
 ): SuspensionClearingWrite[] {
-  const sourceFile = parse(source, fileName);
+  return findSuspensionClearingWritesIn(parse(source, fileName));
+}
+
+function findSuspensionClearingWritesIn(sourceFile: ts.SourceFile): SuspensionClearingWrite[] {
   const writes: SuspensionClearingWrite[] = [];
 
   const visit = (node: ts.Node) => {
@@ -325,34 +340,37 @@ export function guardPrecedesWriteInAuthorizedWriter(source: string, fileName = 
  * CI runner, taking the Sonar coverage job down with it. The tree is immutable
  * for the length of a run, so it is read once and cached.
  */
-let cachedTree: { file: string; name: string; source: string }[] | undefined;
+let cachedTree: { file: string; name: string; sourceFile: ts.SourceFile }[] | undefined;
 
+/**
+ * Parse the tree once, not once per assertion.
+ *
+ * The first version parsed all 218 non-test files under `convex/` in each of
+ * three tests — 654 parses — and timed out at vitest's 5s default on a CI
+ * runner, taking the Sonar coverage job down with it.
+ *
+ * ⚠️ THE OBVIOUS FIX WAS WRONG AND SHIPPED BRIEFLY. It gated parsing on
+ * `source.includes("suspended")`, arguing that every writer form this detector
+ * catches contains that substring. That claim is FALSE: `suspended` is a
+ * valid TypeScript identifier that the parser resolves to `suspended` while the
+ * raw text contains no such substring, so the filter skipped a write the parser
+ * caught. Reproduced before removal — raw `.includes("suspended")` false, real
+ * detector flagged it. That was a text-matching gate in front of a parser,
+ * reintroducing the exact failure class this file was rewritten to escape,
+ * inside the commit that claimed to be a pure speed fix.
+ *
+ * Caching the PARSED trees is what makes it fast without narrowing it: 218
+ * parses once instead of 654, and the walks are cheap. No file is skipped.
+ */
 function convexTree() {
   if (!cachedTree) {
     cachedTree = convexSourceFiles(CONVEX_DIR).map((file) => ({
       file,
       name: path.basename(file),
-      source: fs.readFileSync(file, "utf8"),
+      sourceFile: parse(fs.readFileSync(file, "utf8"), file),
     }));
   }
   return cachedTree;
-}
-
-/**
- * Only parse files that could possibly contain the property.
- *
- * ⚠️ This is a text pre-filter in front of a parser, which is the shape that
- * caused three earlier defects in this file — so note precisely why it is sound
- * here. A `suspended` property, in EVERY form this detector claims to catch
- * (`suspended: x`, shorthand `{ suspended }`, a payload built in a variable),
- * contains the literal substring `suspended`. The only writer that would not is
- * a computed key built from a string this file never sees — which is gap 1
- * above, already documented and already not caught. The filter therefore
- * removes no coverage the parser had; it only skips 208 files that cannot
- * match.
- */
-function filesWorthParsing() {
-  return convexTree().filter((entry) => entry.source.includes("suspended"));
 }
 
 describe("SCRUM-297 organization reactivation guard", () => {
@@ -361,15 +379,36 @@ describe("SCRUM-297 organization reactivation guard", () => {
     const files = convexTree();
     expect(files.length).toBeGreaterThan(50);
     expect(files.some((entry) => entry.name === "adminOrgs.ts")).toBe(true);
-    // And the pre-filter must not have emptied the set it feeds.
-    expect(filesWorthParsing().length).toBeGreaterThan(0);
+    // Every file is parsed; nothing is filtered out before inspection.
+    expect(files.every((entry) => entry.sourceFile !== undefined)).toBe(true);
+  });
+
+  test("inspecting the whole tree stays well inside the test timeout", () => {
+    // ⚠️ THIS IS THE CONTROL FOR A REAL REGRESSION, not a micro-benchmark.
+    //
+    // The version that timed out in CI cost 654 parses. The fix for THAT
+    // introduced a text pre-filter which silently skipped files, because the
+    // pressure was speed and the cheapest relief was to inspect less. Caching
+    // the parsed trees removes the pressure instead.
+    //
+    // No test can stop someone re-adding a filter to the loops below. This can
+    // remove the reason to: if the whole tree is inspected in a fraction of the
+    // budget, narrowing it buys nothing. If this ever fails, cache harder —
+    // do not inspect fewer files.
+    const started = Date.now();
+    const tree = convexTree();
+    for (const entry of tree) findSuspensionClearingWritesIn(entry.sourceFile);
+    const elapsed = Date.now() - started;
+
+    expect(tree.length).toBe(convexSourceFiles(CONVEX_DIR).length);
+    expect(elapsed).toBeLessThan(2500); // half of vitest's 5s default
   });
 
   test("nothing outside reactivateOrganization clears an organization's suspension", () => {
     const offenders: string[] = [];
 
-    for (const entry of filesWorthParsing()) {
-      for (const write of findSuspensionClearingWrites(entry.source, entry.file)) {
+    for (const entry of convexTree()) {
+      for (const write of findSuspensionClearingWritesIn(entry.sourceFile)) {
         if (write.insideAuthorizedWriter) continue;
         offenders.push(`${path.relative(CONVEX_DIR, entry.file).replace(/\\/g, "/")}:${write.line}`);
       }
@@ -383,7 +422,7 @@ describe("SCRUM-297 organization reactivation guard", () => {
 
     for (const entry of convexTree()) {
       if (!ORG_LIFECYCLE_FILES.includes(entry.name)) continue;
-      for (const line of findUninspectableOrgWrites(entry.source, entry.file)) {
+      for (const line of findUninspectableOrgWritesIn(entry.sourceFile)) {
         offenders.push(`${entry.name}:${line}`);
       }
     }
@@ -392,8 +431,8 @@ describe("SCRUM-297 organization reactivation guard", () => {
   });
 
   test("the authorized writer exists, is unique, and consults the guard first", () => {
-    const files = filesWorthParsing().filter(
-      (entry) => findSuspensionClearingWrites(entry.source, entry.file).length > 0
+    const files = convexTree().filter(
+      (entry) => findSuspensionClearingWritesIn(entry.sourceFile).length > 0
     );
 
     // Pins the blast radius: reactivation lives in one file, in one function.
@@ -473,6 +512,19 @@ describe("SCRUM-297 organization reactivation guard", () => {
       // than only from prose, which has already drifted once in this file.
       const source = unauthorized("  await ctx.db.patch(a, { ...override });");
       expect(findSuspensionClearingWrites(source)).toEqual([]);
+    });
+
+    test("an escape-obfuscated identifier is still caught — the parser resolves it", () => {
+      // `\\u0073uspended` is a valid TypeScript identifier resolving to
+      // `suspended`. A version of this file gated parsing on the raw text
+      // containing "suspended" and skipped exactly this write while claiming to
+      // remove no coverage. Nothing is text-gated now; this pins that.
+      const source = unauthorized(
+        "  await ctx.db.patch(orgId, { \\\\u0073uspended: false });"
+      );
+
+      expect(source.includes("suspended")).toBe(false);
+      expect(findSuspensionClearingWrites(source)).toEqual([{ line: 2, insideAuthorizedWriter: false }]);
     });
 
     test("DOCUMENTED GAP: a computed key is not resolved", () => {
