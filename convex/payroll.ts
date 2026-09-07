@@ -18,7 +18,7 @@ import {
   commissionAccountingDate,
   commissionAccrualStrandedReason,
 } from "./accounting/workflowHooks";
-import { toMinorUnits, fromMinorUnits } from "./utils/money";
+import { toMinorUnits, fromMinorUnits, assertFiniteNumber } from "./utils/money";
 import { paymentMethodValidator, normalizePaymentMethod, PaymentMethod } from "./utils/paymentMethods";
 import { runWithIdempotency } from "./utils/idempotency";
 import { isCommissionOwed } from "./utils/commission";
@@ -222,6 +222,15 @@ export const recoverAdvance = mutation({
 
       const method = normalizePaymentMethod(args.method);
 
+      // Reject a non-finite amount BEFORE the fingerprint is built. JSON.stringify
+      // maps NaN, Infinity and -Infinity all to `null` — the SAME token an omitted
+      // amount produces — so without this guard a reused key whose original call
+      // omitted the amount would MATCH a NaN retry and hand back the earlier
+      // recovery as success for an invalid monetary instruction.
+      if (args.amount !== undefined) {
+        assertFiniteNumber(args.amount, "repayment amount");
+      }
+
       // ONE authoritative replay boundary.
       //
       // A `(orgId, idempotencyKey)`-only lookup used to run HERE, ahead of
@@ -239,12 +248,30 @@ export const recoverAdvance = mutation({
       // only reason the shortcut had to exist.
       //
       // The fingerprint is taken over the REQUEST AS SUBMITTED, never over
-      // derived state. `args.amount === undefined` means "the full remaining
+      // post-read state. `args.amount === undefined` means "the full remaining
       // balance", and that intent is stable across retries even though the
-      // balance it resolves to is not; fingerprinting the derived `recoverMinor`
-      // would make a genuine retry look like a different command the moment the
+      // balance it resolves to is not; hashing the balance-derived amount would
+      // make a genuine retry look like a different command the moment the
       // balance moved. `method` is normalized first so an omitted method and an
       // explicit CASH one are one intent, not a false conflict.
+      //
+      // ⚠️ The field is deliberately still named `recoverMinor` and still carries
+      // minor units, because rows committed BEFORE this change stored exactly
+      // `{advanceId, recoverMinor, method}` with `recoverMinor` computed by this
+      // same `toMinorUnits(args.amount, currency)` expression. Keeping the shape
+      // means an identical retry of a pre-existing EXPLICIT partial recovery
+      // still replays instead of hard-conflicting. That matters: a false conflict
+      // is not a safe refusal here — the operator would resubmit under a fresh
+      // key and book a SECOND recovery row and a SECOND GL event.
+      //
+      // Legacy rows written by an OMITTED-amount (full) recovery stored the
+      // then-outstanding balance rather than null, so those alone still conflict.
+      // That case cannot duplicate anything: the advance is already RECOVERED, so
+      // a fresh-key resubmission is refused by the status check. Fail-closed with
+      // no economic effect is the acceptable end of this trade.
+      //
+      // Converting through `toMinorUnits` also rounds, so float noise in the
+      // submitted amount cannot manufacture a spurious conflict.
       return await runWithIdempotency(
         ctx,
         {
@@ -254,14 +281,19 @@ export const recoverAdvance = mutation({
           actorId: user._id,
           fingerprint: JSON.stringify({
             advanceId: args.advanceId,
-            requestedAmount: args.amount ?? null,
+            recoverMinor: args.amount === undefined ? null : toMinorUnits(args.amount, advance.currency),
             method,
           }),
         },
         async () => {
-          // Re-read inside the guarded path: the row this executes against must
-          // be the one the command log has just admitted, never one read before
-          // the boundary was entered.
+          // Re-read inside the guarded path. Being precise about what this does
+          // and does not buy: within one Convex transaction it is byte-identical
+          // to the read above, and Convex retries the WHOLE mutation on an OCC
+          // conflict, so it is not closing a race the outer read leaves open. It
+          // is kept because it makes the guarded block self-contained — the
+          // economic decision reads its own state rather than inheriting a value
+          // captured before the boundary was entered — which is what stops a
+          // later edit from quietly reintroducing the original defect.
           const current = await ctx.db.get(args.advanceId);
           if (!current || current.isDeleted || current.orgId !== args.orgId) {
             throw new ConvexError("Advance not found.");
