@@ -57,6 +57,14 @@
  *     indistinguishable from the generic patch shape used throughout `convex/`,
  *     and flagging it would fail on hundreds of unrelated writes.
  *
+ * Both gaps share one root: this reads syntax, so a payload it cannot see reads
+ * as a payload that is safe. That FAIL-OPEN polarity is closed separately, and
+ * only where it matters — `findUninspectableOrgWrites` requires every patch in
+ * the files that write organization rows to be an inline literal, so an
+ * unreadable payload there is an offence rather than a silence. Outside those
+ * files the gaps above remain, and closing them properly needs a type checker
+ * resolving values and table identity, not a parser.
+ *
  * A spread that shadows a CLAIMED exemption is closed rather than documented:
  * `{ suspended: true, ...o }` is treated as clearing, because a later spread
  * can override the literal. `{ ...o, suspended: true }` cannot be overridden
@@ -74,6 +82,13 @@ import ts from "typescript";
 const CONVEX_DIR = path.join(__dirname, "..", "convex");
 const GUARD_NAME = "assertNoIrreversiblePurgeHistory";
 const AUTHORIZED_WRITER = "reactivateOrganization";
+
+/**
+ * The files that write `organizations` rows. Inside these, a patch payload must
+ * be an inline object literal so this detector can actually read it — see
+ * `findUninspectableOrgWrites`.
+ */
+const ORG_LIFECYCLE_FILES = ["adminOrgs.ts", "organizations.ts"];
 
 /** Every non-test source file under convex/, recursively. */
 function convexSourceFiles(dir: string): string[] {
@@ -155,6 +170,47 @@ function clearsSuspension(call: ts.CallExpression) {
   }
 
   return false;
+}
+
+/**
+ * Writes whose payload this detector CANNOT read, in the files that own
+ * organization rows.
+ *
+ * `clearsSuspension` needs to see an inline object literal. Handed anything
+ * else — `ctx.db.patch(orgId, patch)` with the payload built above, a spread of
+ * a variable, a function call — it answers "no", which is the FAIL-OPEN
+ * direction: an unreadable payload and a genuinely safe one produce the same
+ * silence.
+ *
+ * That is the polarity error, not another shape to match. Rather than chase a
+ * fifth syntactic form, this makes unreadability itself visible: inside the two
+ * files that write organization rows, a patch payload must be inspectable. All
+ * 13 such calls in those files are inline literals today, so the rule costs
+ * nothing now and fails loudly the first time someone hides a payload behind a
+ * variable there.
+ *
+ * Elsewhere in `convex/` the rule is NOT applied — `ctx.db.patch(id, updates)`
+ * is the ordinary write shape across the codebase and flagging it would fail
+ * hundreds of unrelated writes. A new file that starts writing organization
+ * rows must be added to `ORG_LIFECYCLE_FILES`, and the blast-radius assertion
+ * below is what surfaces that.
+ */
+export function findUninspectableOrgWrites(source: string, fileName = "fixture.ts") {
+  const sourceFile = parse(source, fileName);
+  const lines: number[] = [];
+
+  const visit = (node: ts.Node) => {
+    if (isDbWrite(node)) {
+      const payload = node.arguments[1];
+      if (!payload || !ts.isObjectLiteralExpression(payload)) {
+        lines.push(sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+
+  ts.forEachChild(sourceFile, visit);
+  return lines;
 }
 
 type FunctionLike =
@@ -283,6 +339,20 @@ describe("SCRUM-297 organization reactivation guard", () => {
     expect(offenders).toEqual([]);
   });
 
+  test("every organization write is inspectable, so the detector cannot fail open", () => {
+    const offenders: string[] = [];
+
+    for (const file of convexSourceFiles(CONVEX_DIR)) {
+      const name = path.basename(file);
+      if (!ORG_LIFECYCLE_FILES.includes(name)) continue;
+      for (const line of findUninspectableOrgWrites(fs.readFileSync(file, "utf8"), file)) {
+        offenders.push(`${name}:${line}`);
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
   test("the authorized writer exists, is unique, and consults the guard first", () => {
     const files = convexSourceFiles(CONVEX_DIR).filter(
       (file) => findSuspensionClearingWrites(fs.readFileSync(file, "utf8"), file).length > 0
@@ -337,6 +407,25 @@ describe("SCRUM-297 organization reactivation guard", () => {
     test("a spread BEFORE suspended:true cannot shadow it and stays exempt", () => {
       const source = unauthorized("  await ctx.db.patch(a, { ...defaults, suspended: true });");
       expect(findSuspensionClearingWrites(source)).toEqual([]);
+    });
+
+    test("a payload hidden behind a variable is unreadable, and that is now visible", () => {
+      const source = unauthorized(
+        [
+          "  const patch = { suspended: false };",
+          "  await ctx.db.patch(orgId, patch);",
+        ].join("\n")
+      );
+
+      // The suspension check cannot see it — that is the fail-open this closes.
+      expect(findSuspensionClearingWrites(source)).toEqual([]);
+      // In an org-lifecycle file, unreadability is itself the offence.
+      expect(findUninspectableOrgWrites(source)).toEqual([3]);
+    });
+
+    test("an inline literal payload is inspectable and raises nothing", () => {
+      const source = unauthorized("  await ctx.db.patch(orgId, { name: \"x\" });");
+      expect(findUninspectableOrgWrites(source)).toEqual([]);
     });
 
     test("DOCUMENTED GAP: a bare spread naming no suspended key is not flagged", () => {
