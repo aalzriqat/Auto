@@ -317,22 +317,61 @@ export function guardPrecedesWriteInAuthorizedWriter(source: string, fileName = 
   return guardAt !== -1 && writeAt !== -1 && guardAt < writeAt;
 }
 
+/**
+ * Read the tree once, not once per assertion.
+ *
+ * The first version of this parsed all 218 non-test files under `convex/` in
+ * each of three tests — 654 parses — and timed out at vitest's 5s default on a
+ * CI runner, taking the Sonar coverage job down with it. The tree is immutable
+ * for the length of a run, so it is read once and cached.
+ */
+let cachedTree: { file: string; name: string; source: string }[] | undefined;
+
+function convexTree() {
+  if (!cachedTree) {
+    cachedTree = convexSourceFiles(CONVEX_DIR).map((file) => ({
+      file,
+      name: path.basename(file),
+      source: fs.readFileSync(file, "utf8"),
+    }));
+  }
+  return cachedTree;
+}
+
+/**
+ * Only parse files that could possibly contain the property.
+ *
+ * ⚠️ This is a text pre-filter in front of a parser, which is the shape that
+ * caused three earlier defects in this file — so note precisely why it is sound
+ * here. A `suspended` property, in EVERY form this detector claims to catch
+ * (`suspended: x`, shorthand `{ suspended }`, a payload built in a variable),
+ * contains the literal substring `suspended`. The only writer that would not is
+ * a computed key built from a string this file never sees — which is gap 1
+ * above, already documented and already not caught. The filter therefore
+ * removes no coverage the parser had; it only skips 208 files that cannot
+ * match.
+ */
+function filesWorthParsing() {
+  return convexTree().filter((entry) => entry.source.includes("suspended"));
+}
+
 describe("SCRUM-297 organization reactivation guard", () => {
   test("the scan actually reaches the source tree", () => {
     // A ratchet that enumerates nothing passes vacuously. Pin that it doesn't.
-    const files = convexSourceFiles(CONVEX_DIR);
+    const files = convexTree();
     expect(files.length).toBeGreaterThan(50);
-    expect(files.some((file) => file.endsWith("adminOrgs.ts"))).toBe(true);
+    expect(files.some((entry) => entry.name === "adminOrgs.ts")).toBe(true);
+    // And the pre-filter must not have emptied the set it feeds.
+    expect(filesWorthParsing().length).toBeGreaterThan(0);
   });
 
   test("nothing outside reactivateOrganization clears an organization's suspension", () => {
     const offenders: string[] = [];
 
-    for (const file of convexSourceFiles(CONVEX_DIR)) {
-      const source = fs.readFileSync(file, "utf8");
-      for (const write of findSuspensionClearingWrites(source, file)) {
+    for (const entry of filesWorthParsing()) {
+      for (const write of findSuspensionClearingWrites(entry.source, entry.file)) {
         if (write.insideAuthorizedWriter) continue;
-        offenders.push(`${path.relative(CONVEX_DIR, file).replace(/\\/g, "/")}:${write.line}`);
+        offenders.push(`${path.relative(CONVEX_DIR, entry.file).replace(/\\/g, "/")}:${write.line}`);
       }
     }
 
@@ -342,11 +381,10 @@ describe("SCRUM-297 organization reactivation guard", () => {
   test("every organization write is inspectable, so the detector cannot fail open", () => {
     const offenders: string[] = [];
 
-    for (const file of convexSourceFiles(CONVEX_DIR)) {
-      const name = path.basename(file);
-      if (!ORG_LIFECYCLE_FILES.includes(name)) continue;
-      for (const line of findUninspectableOrgWrites(fs.readFileSync(file, "utf8"), file)) {
-        offenders.push(`${name}:${line}`);
+    for (const entry of convexTree()) {
+      if (!ORG_LIFECYCLE_FILES.includes(entry.name)) continue;
+      for (const line of findUninspectableOrgWrites(entry.source, entry.file)) {
+        offenders.push(`${entry.name}:${line}`);
       }
     }
 
@@ -354,12 +392,12 @@ describe("SCRUM-297 organization reactivation guard", () => {
   });
 
   test("the authorized writer exists, is unique, and consults the guard first", () => {
-    const files = convexSourceFiles(CONVEX_DIR).filter(
-      (file) => findSuspensionClearingWrites(fs.readFileSync(file, "utf8"), file).length > 0
+    const files = filesWorthParsing().filter(
+      (entry) => findSuspensionClearingWrites(entry.source, entry.file).length > 0
     );
 
     // Pins the blast radius: reactivation lives in one file, in one function.
-    expect(files.map((file) => path.relative(CONVEX_DIR, file).replace(/\\/g, "/"))).toEqual([
+    expect(files.map((entry) => path.relative(CONVEX_DIR, entry.file).replace(/\\/g, "/"))).toEqual([
       "adminOrgs.ts",
     ]);
 
