@@ -47,9 +47,22 @@
  * on the PROPERTY NAME and it fails closed on any value it cannot prove is
  * `true`.
  *
- * The one known gap: a COMPUTED key — `{ [name]: false }` — is not resolved.
- * That needs a type checker evaluating the variable, not a parser. A
- * deliberately obfuscated writer still gets past. This is a detective control
+ * TWO KNOWN GAPS, both named because the previous version of this paragraph
+ * said "the one known gap" and that was already untrue when it was written:
+ *
+ *  1. A COMPUTED key — `{ [name]: false }` — is not resolved. That needs a type
+ *     checker evaluating the variable, not a parser.
+ *  2. A payload that never mentions `suspended` at all but carries a spread —
+ *     `{ ...patch }` — could contain it. This is not flagged because it is
+ *     indistinguishable from the generic patch shape used throughout `convex/`,
+ *     and flagging it would fail on hundreds of unrelated writes.
+ *
+ * A spread that shadows a CLAIMED exemption is closed rather than documented:
+ * `{ suspended: true, ...o }` is treated as clearing, because a later spread
+ * can override the literal. `{ ...o, suspended: true }` cannot be overridden
+ * and stays exempt.
+ *
+ * A deliberately obfuscated writer still gets past. This is a detective control
  * against the accidental omission that has now happened twice here, not a proof
  * of absence.
  */
@@ -117,12 +130,31 @@ function clearsSuspension(call: ts.CallExpression) {
   const payload = call.arguments[1];
   if (!payload || !ts.isObjectLiteralExpression(payload)) return false;
 
-  return payload.properties.some((property) => {
-    if (ts.isShorthandPropertyAssignment(property)) return namesSuspended(property.name);
-    if (!ts.isPropertyAssignment(property)) return false;
-    if (!namesSuspended(property.name)) return false;
-    return property.initializer.kind !== ts.SyntaxKind.TrueKeyword;
-  });
+  let suspendedTrueAt = -1;
+
+  for (const [index, property] of payload.properties.entries()) {
+    if (ts.isShorthandPropertyAssignment(property)) {
+      if (namesSuspended(property.name)) return true;
+      continue;
+    }
+    if (!ts.isPropertyAssignment(property)) continue;
+    if (!namesSuspended(property.name)) continue;
+    if (property.initializer.kind !== ts.SyntaxKind.TrueKeyword) return true;
+    suspendedTrueAt = index;
+  }
+
+  // A spread AFTER `suspended: true` overrides it — `{ suspended: true, ...o }`
+  // is `false` whenever `o.suspended` is. The exemption is only sound while
+  // nothing can shadow it, so claiming it next to a later spread forfeits it.
+  // A spread BEFORE it cannot win, so `{ ...defaults, suspended: true }` stays
+  // exempt and legitimate code is not punished for ordering it that way.
+  if (suspendedTrueAt !== -1) {
+    return payload.properties
+      .slice(suspendedTrueAt + 1)
+      .some((property) => ts.isSpreadAssignment(property));
+  }
+
+  return false;
 }
 
 type FunctionLike =
@@ -295,6 +327,31 @@ describe("SCRUM-297 organization reactivation guard", () => {
     test("a variable value is caught, because it cannot be proven to be true", () => {
       const source = unauthorized("  await ctx.db.patch(a, { suspended: nextValue });");
       expect(findSuspensionClearingWrites(source)).toEqual([{ line: 2, insideAuthorizedWriter: false }]);
+    });
+
+    test("a spread AFTER suspended:true forfeits the exemption — it can shadow the literal", () => {
+      const source = unauthorized("  await ctx.db.patch(a, { suspended: true, ...override });");
+      expect(findSuspensionClearingWrites(source)).toEqual([{ line: 2, insideAuthorizedWriter: false }]);
+    });
+
+    test("a spread BEFORE suspended:true cannot shadow it and stays exempt", () => {
+      const source = unauthorized("  await ctx.db.patch(a, { ...defaults, suspended: true });");
+      expect(findSuspensionClearingWrites(source)).toEqual([]);
+    });
+
+    test("DOCUMENTED GAP: a bare spread naming no suspended key is not flagged", () => {
+      // Accepted on purpose. `{ ...patch }` is the generic write shape used
+      // across convex/, so flagging it would fail hundreds of unrelated writes.
+      // Pinned here so the limitation is discoverable from the suite rather
+      // than only from prose, which has already drifted once in this file.
+      const source = unauthorized("  await ctx.db.patch(a, { ...override });");
+      expect(findSuspensionClearingWrites(source)).toEqual([]);
+    });
+
+    test("DOCUMENTED GAP: a computed key is not resolved", () => {
+      // Needs a type checker evaluating `field`, not a parser.
+      const source = unauthorized("  await ctx.db.patch(a, { [field]: false });");
+      expect(findSuspensionClearingWrites(source)).toEqual([]);
     });
 
     test("suspending is allowed anywhere — only clearing is restricted", () => {

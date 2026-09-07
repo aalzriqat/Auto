@@ -749,10 +749,21 @@ export const unsuspendOrg = mutation({
 
     // ⚠️ SCRUM-297 — FAIL CLOSED ONCE DESTRUCTION HAS BEGUN.
     //
-    // Checked BEFORE the in-flight check, because it is the stronger and
-    // permanent condition: an in-flight purge is a state a request can leave,
-    // whereas destroyed rows never come back. `ACTIVE_DELETION_STATUSES` alone
-    // could not see this — a purge that throws marks the *request* FAILED,
+    // The in-flight check runs first here, and the irreversible-purge guard
+    // second, inside `reactivateOrganization` below. That ordering is safe
+    // rather than merely tolerable: the two conditions overlap only while a
+    // purge is actively RUNNING, and there BOTH answers are refusals. In the
+    // case this guard exists for — a purge that already FAILED —
+    // `findActiveDeletionRequest` excludes FAILED and passes, so the guard is
+    // what refuses and the operator gets the destruction message rather than a
+    // misleading "deletion in progress".
+    //
+    // ⚠️ An earlier comment here claimed the guard was checked FIRST. It was,
+    // until reactivation was centralized; the claim was left behind by that
+    // refactor and is corrected rather than deleted, because this is the third
+    // comment in this lane that described a property the code no longer had.
+    //
+    // `ACTIVE_DELETION_STATUSES` alone could not see this — a purge that throws marks the *request* FAILED,
     // never touches the organization row, and FAILED is not an active status,
     // so the guard below reads "nothing in flight" over a dealership whose
     // command-idempotency authority has already been deleted while its economic
