@@ -422,6 +422,82 @@ describe("SCRUM-291: recoverAdvance has one authoritative replay boundary", () =
     expect(await advanceRecoveredEvents(t)).toHaveLength(1);
   });
 
+  test("SCRUM-291-R2: an amount that moves no minor unit is refused, and cannot alias zero/negative retries", async () => {
+    // Canonicalising the fingerprint to minor units made three DIFFERENT inputs
+    // serialize identically: 0.0004 (positive, rounds to 0), 0, and -0.0004
+    // (Math.round gives -0, which JSON.stringify writes as 0). So a first call
+    // of 0.0004 committed a ZERO recovery and stored `recoverMinor: 0`, and a
+    // later 0 or -0.0004 under the same key MATCHED it and was replayed as
+    // success — the positivity check inside the callback never ran.
+    //
+    // The invariant: a replay may only be resolved AFTER state-independent
+    // validation of the request. An amount that moves no money is not a valid
+    // economic instruction and must be refused before the identity is consulted.
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "r291submin");
+    const a1 = await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 100, idempotencyKey: "adv-submin" });
+
+    // JOD has 3 minor digits, so 0.0004 rounds to 0 minor units: it moves nothing.
+    for (const bad of [0.0004, 0, -0.0004]) {
+      const outcome = await attempt(() =>
+        asAdmin.mutation(api.payroll.recoverAdvance, { orgId, advanceId: a1, method: "CASH", amount: bad, idempotencyKey: "K" })
+      );
+      expect(outcome.ok).toBe(false);
+    }
+
+    // Nothing was booked at all: no zero recovery, no zero-value GL event, and
+    // no command row for an instruction that was never valid.
+    const adv = await t.run((ctx) => ctx.db.get(a1));
+    expect(adv?.recoveredMinor).toBe(0);
+    expect(adv?.status).toBe("OUTSTANDING");
+    expect(await recoveriesFor(t, a1)).toHaveLength(0);
+    expect(await advanceRecoveredEvents(t)).toHaveLength(0);
+    expect(await recoverAdvanceCommandRows(t)).toHaveLength(0);
+
+    // And the key is still usable for a real instruction afterwards.
+    const ok = await asAdmin.mutation(api.payroll.recoverAdvance, { orgId, advanceId: a1, method: "CASH", amount: 40, idempotencyKey: "K" });
+    expect(ok).toBeDefined();
+    expect(await recoveriesFor(t, a1)).toHaveLength(1);
+  });
+
+  test("SCRUM-291-R2: a legacy OMITTED-amount full-recovery row conflicts with an omitted retry, and no fresh key can duplicate", async () => {
+    // The residual risk accepted in round 2, pinned as a test rather than left
+    // as a claim in a comment. A legacy FULL row stored the resolved balance as
+    // a number; the current code hashes `null` for an omitted amount, so the two
+    // do not match and the identical retry is refused. That refusal is safe only
+    // because the advance is already RECOVERED, so a fresh-key resubmission is
+    // rejected by the status check and cannot book a second recovery.
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "r291legfull");
+    const a1 = await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 100, idempotencyKey: "adv-legfull" });
+
+    await asAdmin.mutation(api.payroll.recoverAdvance, { orgId, advanceId: a1, method: "CASH", idempotencyKey: "K" });
+    // Age the row to what protected main wrote for an omitted-amount recovery:
+    // the RESOLVED balance, not null.
+    await t.run(async (ctx) => {
+      const all = await ctx.db.query("commandIdempotency").collect();
+      const row = all.find((r) => r.operation === "payroll.recoverAdvance");
+      if (!row) throw new Error("fixture: no recoverAdvance command row to age");
+      await ctx.db.patch(row._id, { fingerprint: JSON.stringify({ advanceId: a1, recoverMinor: 100000, method: "CASH" }) });
+    });
+
+    const identicalRetry = await attempt(() =>
+      asAdmin.mutation(api.payroll.recoverAdvance, { orgId, advanceId: a1, method: "CASH", idempotencyKey: "K" })
+    );
+    expect(identicalRetry.ok).toBe(false);
+    if (!identicalRetry.ok) expect(identicalRetry.message).toMatch(CONFLICT);
+
+    // The safety argument: a fresh key cannot turn that refusal into a duplicate.
+    const fresh = await attempt(() =>
+      asAdmin.mutation(api.payroll.recoverAdvance, { orgId, advanceId: a1, method: "CASH", idempotencyKey: "K2" })
+    );
+    expect(fresh.ok).toBe(false);
+    if (!fresh.ok) expect(fresh.message).toMatch(/only an outstanding advance/i);
+
+    expect(await recoveriesFor(t, a1)).toHaveLength(1);
+    expect(await advanceRecoveredEvents(t)).toHaveLength(1);
+  });
+
   test("a mid-callback throw on a FRESH key rolls back and leaves the key reusable", async () => {
     // The conflicting-retry case below cannot prove STARTED-row rollback: the
     // fingerprint mismatch throws before any row is inserted for that call. This
