@@ -276,6 +276,45 @@ describe("SCRUM-297 — organization destructive lifecycle", () => {
     ).resolves.toBeDefined();
   });
 
+  test("T7 SIBLING WRITER: rejectDeletionRequest cannot reactivate a purged org either", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, ownerId } = await seedOrg(t);
+    const asAdmin = t.withIdentity({ subject: "dev_admin" });
+    const asOwner = t.withIdentity({ subject: "owner_1" });
+
+    await executeEconomicCommand(t, orgId, ownerId, "K");
+    const { requestId } = await asAdmin.mutation(api.adminOrgs.hardDeleteOrg, {
+      orgId,
+      confirmName: "Acme Motors",
+    });
+    await purgeUntilCommandAuthorityGone(t, requestId);
+    await markRequestFailedAsTheCatchBlockDoes(t, requestId);
+
+    // The organization as it stood after the pre-guard `unsuspendOrg` leaked it:
+    // live, with the FAILED request still on file. `unsuspendOrg` refuses this
+    // now, so the only way to reach the state is to reconstruct it — which is
+    // precisely why guarding one writer was not enough.
+    await t.run(async (ctx) => ctx.db.patch(orgId, { suspended: false, suspendedAt: undefined }));
+
+    // The owner files a fresh deletion request; an admin rejects it. Rejection
+    // used to clear `suspended` unconditionally AND erase `deletionRequestId`,
+    // returning a purged organization to service without consulting either
+    // condition — and destroying the pointer to the failed purge on the way.
+    const filed = await asOwner.mutation(api.organizations.remove, { orgId });
+    await expect(
+      asAdmin.mutation(api.adminOrgs.rejectDeletionRequest, { requestId: filed.requestId })
+    ).rejects.toThrow();
+
+    const org = await t.run(async (ctx) => await ctx.db.get(orgId));
+    expect(org?.deletionRequestId).toBeDefined();
+
+    // Refusing must not strand the organization: completing the purge is still
+    // reachable, which is the whole point of failing closed rather than dead.
+    await expect(
+      asAdmin.mutation(api.adminOrgs.approveDeletionRequest, { requestId: filed.requestId })
+    ).resolves.toBeDefined();
+  });
+
   test("T5 MARKER ORDERING: irreversibility is stamped even when the batch deletes nothing", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrg(t);

@@ -80,10 +80,20 @@ export default defineSchema({
      * written ahead of the delete, so deletions without the marker require a
      * transaction abort, which discards those deletions too.
      *
-     * ⚠️ NOTHING CLEARS IT. `rejectDeletionRequest` only runs from
-     * PENDING_REVIEW — before any destruction — so it never meets this field.
-     * The field disappears only with the organization row itself, at the end of
-     * a completed purge, when there is no longer anything to reactivate.
+     * ⚠️ NOTHING CLEARS IT. The field disappears only with the organization row
+     * itself, at the end of a completed purge, when there is no longer anything
+     * to reactivate.
+     *
+     * ⚠️ AND A FIELD NOTHING CLEARS IS NOT A GUARD. An earlier version of this
+     * comment argued the field was safe because `rejectDeletionRequest` only
+     * runs from PENDING_REVIEW and so never meets it. True about the request
+     * being rejected, and beside the point: an organization accumulates
+     * deletion requests over time, so a fresh PENDING_REVIEW one carries no
+     * evidence about an EARLIER purge that already destroyed command authority.
+     * `rejectDeletionRequest` cleared `suspended` without reading this field at
+     * all. Both writers of `suspended: false` now call
+     * `assertNoIrreversiblePurgeHistory`, and
+     * `scripts/organizationReactivationGuard.test.ts` fails if a third appears.
      *
      * The legal transitions once set are: resume the purge, or complete it.
      * Restoring a partially purged organization is NOT a product requirement

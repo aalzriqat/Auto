@@ -201,6 +201,56 @@ async function findActiveDeletionRequest(ctx: MutationCtx, orgId: Id<"organizati
   return null;
 }
 
+/**
+ * SCRUM-297 — REFUSE TO RETURN AN ORGANIZATION TO SERVICE AFTER DESTRUCTION.
+ *
+ * ⚠️ CALL THIS FROM EVERY MUTATION THAT CAN CLEAR `suspended`. The invariant is
+ * not "unsuspendOrg is guarded" — it is "no path returns a destroyed
+ * organization to service". Guarding one writer while a sibling with equal
+ * power stays open is how the first version of this fix shipped: `unsuspendOrg`
+ * refused, and `rejectDeletionRequest` reactivated the same organization
+ * without ever reading either condition. `organizationReactivationGuard.test.ts`
+ * fails if a third writer of `suspended: false` appears.
+ *
+ * Two conditions, because they answer the same question from different
+ * evidence:
+ *
+ *  1. `destructivePurgeStartedAt` — precise, stamped by this code before the
+ *     first destructive delete.
+ *  2. any FAILED deletion request — the conservative reading for organizations
+ *     purged BEFORE the marker existed. Their destruction is just as real; the
+ *     code that did it simply had nothing to record it with. A marker-only
+ *     guard is correct exactly from its own deploy forward, which is not what
+ *     "permanently" means.
+ *
+ * Deliberately does NOT consider ACTIVE statuses — those are a separate,
+ * recoverable "in flight" condition that each caller handles on its own terms.
+ */
+async function assertNoIrreversiblePurgeHistory(
+  ctx: MutationCtx,
+  org: Doc<"organizations">
+) {
+  if (org.destructivePurgeStartedAt !== undefined) {
+    throwAppError(
+      AppErrorCode.VALIDATION_FAILED,
+      "This organization has begun destructive deletion and cannot be returned to service. " +
+        "The deletion must be completed instead."
+    );
+  }
+
+  const failedDeletionRequest = await ctx.db
+    .query("organizationDeletionRequests")
+    .withIndex("by_org_status", (q) => q.eq("orgId", org._id).eq("status", "FAILED"))
+    .first();
+  if (failedDeletionRequest) {
+    throwAppError(
+      AppErrorCode.VALIDATION_FAILED,
+      "This organization has a failed deletion that may have destroyed records and cannot be " +
+        "returned to service. The deletion must be completed instead."
+    );
+  }
+}
+
 function countDeletedRows(counts: DeletedCounts) {
   return Object.values(counts).reduce((sum, count) => sum + count, 0);
 }
@@ -673,41 +723,10 @@ export const unsuspendOrg = mutation({
     // hole is under all of them at once. The fix belongs here, at the one
     // boundary that can return the organization to service, rather than as a
     // fallback inside any financial module.
-    if (org.destructivePurgeStartedAt !== undefined) {
-      throwAppError(
-        AppErrorCode.VALIDATION_FAILED,
-        "This organization has begun destructive deletion and cannot be returned to service. " +
-          "The deletion must be completed instead."
-      );
-    }
-
-    // ⚠️ SCRUM-297 — THE LEGACY NET. The marker above is written by this
-    // version of the code; it says nothing about a purge that ran before this
-    // shipped. Those organizations carry a FAILED request and NO marker, which
-    // is the identical hazard with none of the evidence, so a marker-only guard
-    // would be correct exactly from its own deploy forward and blind to every
-    // org already in that state.
-    //
-    // A FAILED request proves the batch chain was scheduled and entered, which
-    // is the same thing the marker records — so this is the conservative
-    // reading of the same fact from the only durable evidence a pre-marker run
-    // left behind. Post-deploy it is redundant with the marker, and redundancy
-    // in the safe direction is the point.
-    //
     // Does NOT block `hardDeleteOrg`: `findActiveDeletionRequest` still
     // excludes FAILED, so completing the purge remains reachable. Refusing
     // reactivation must not also refuse the one legal way forward.
-    const failedDeletionRequest = await ctx.db
-      .query("organizationDeletionRequests")
-      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "FAILED"))
-      .first();
-    if (failedDeletionRequest) {
-      throwAppError(
-        AppErrorCode.VALIDATION_FAILED,
-        "This organization has a failed deletion that may have destroyed records and cannot be " +
-          "returned to service. The deletion must be completed instead."
-      );
-    }
+    await assertNoIrreversiblePurgeHistory(ctx, org);
 
     const activeDeletionRequest = await findActiveDeletionRequest(ctx, args.orgId);
     if (activeDeletionRequest) {
@@ -801,6 +820,30 @@ export const rejectDeletionRequest = mutation({
 
     const org = await ctx.db.get(request.orgId);
     if (!org) throwAppError(AppErrorCode.ORG_NOT_FOUND, "Organization not found.");
+
+    // ⚠️ SCRUM-297 — THE SIBLING WRITER. This mutation clears `suspended` just
+    // as `unsuspendOrg` does, and the first version of that fix guarded only
+    // the other one. Rejecting THIS request says nothing about whether an
+    // EARLIER purge of the same organization already destroyed its command
+    // authority: an org accumulates deletion requests over time, and a fresh
+    // PENDING_REVIEW one carries no evidence about its predecessors.
+    //
+    // Reachable only for an organization already returned to service before the
+    // guard existed — it must be unsuspended for `organizations.remove` to file
+    // a new request at all — which is exactly the population the guard is for.
+    // Left unguarded it also erased `deletionRequestId`, destroying the forward
+    // pointer to the failed purge and making the affected organizations
+    // progressively harder to find. (They stay discoverable from the request
+    // side: `organizationDeletionRequests` is never purged.)
+    //
+    // ⚠️ THE WHOLE MUTATION REFUSES, request transition included — a throw
+    // aborts the transaction, so there is no partial outcome where the request
+    // is REJECTED but the organization stayed suspended, and that is the safe
+    // direction. Nothing is stranded: the request stays PENDING_REVIEW, an
+    // ACTIVE status that already blocks `unsuspendOrg`, while
+    // `approveDeletionRequest` still works, so completing the purge remains the
+    // path forward.
+    await assertNoIrreversiblePurgeHistory(ctx, org);
 
     const now = Date.now();
     await ctx.db.patch(args.requestId, {
