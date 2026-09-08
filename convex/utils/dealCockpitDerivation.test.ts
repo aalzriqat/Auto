@@ -12,6 +12,7 @@ import {
   DEAL_STAGE_ORDER,
   type DealStageFacts,
   type DealStageKey,
+  deriveCashDealStages,
   deriveDealStages,
   deriveManagementProfit,
 } from "./financingEconomics";
@@ -27,8 +28,81 @@ function stages(overrides: Partial<DealStageFacts> = {}) {
     rail,
     state: (key: DealStageKey) => rail.find((s) => s.key === key)!.state,
     blocker: (key: DealStageKey) => rail.find((s) => s.key === key)!.blocker,
+    authority: (key: DealStageKey) => rail.find((s) => s.key === key)!.authority,
   };
 }
+
+/**
+ * Whose move each stage is.
+ *
+ * The distinction the screen turns on, and the one the product keeps getting
+ * wrong in the same direction: a stage that belongs to the finance company gets
+ * presented as something the dealership has failed to do, and an operator goes
+ * looking for a button that must never exist. These assert the taxonomy at its
+ * source, so a stage added later cannot quietly inherit "the dealership acts".
+ */
+describe("who each stage is waiting on", () => {
+  test("every stage on the rail says whose move it is", () => {
+    const rail = stages().rail;
+    expect(rail.length).toBeGreaterThan(0);
+    for (const stage of rail) {
+      expect(["MIRROR", "DEALER"]).toContain(stage.authority);
+    }
+  });
+
+  /**
+   * AutoFlow never approves or evaluates a financing request. These four stages
+   * record what somebody else decided or did, and the recording must never be
+   * refused on the dealership's judgement of whether it should have happened.
+   */
+  test("the finance company's own decisions are MIRROR stages", () => {
+    const rail = stages({ rawAppraisalGapMinor: 500_000 });
+    expect(rail.authority("CREDIT_DECISION")).toBe("MIRROR");
+    expect(rail.authority("APPRAISAL")).toBe("MIRROR");
+    expect(rail.authority("APPROVED_PURCHASE")).toBe("MIRROR");
+    expect(rail.authority("DISBURSEMENT")).toBe("MIRROR");
+  });
+
+  test("the steps the dealership itself takes are DEALER stages", () => {
+    const rail = stages({ rawAppraisalGapMinor: 500_000 });
+    expect(rail.authority("APPLICATION")).toBe("DEALER");
+    expect(rail.authority("GAP_RESOLUTION")).toBe("DEALER");
+    expect(rail.authority("DELIVERY_ACTIONS")).toBe("DEALER");
+    expect(rail.authority("HANDOVER")).toBe("DEALER");
+  });
+
+  /**
+   * Only defensible because DISBURSEMENT was carved out of it. What is left at
+   * SETTLEMENT is registering the expected payment and closing the deal — both
+   * the dealership's own actions. The money actually moving is its own MIRROR
+   * stage now, and calling the whole tail DEALER before that split would have
+   * told the operator to chase a payment they cannot cause.
+   */
+  test("settlement belongs to the dealership now that disbursement is its own stage", () => {
+    const rail = stages();
+    expect(rail.authority("SETTLEMENT")).toBe("DEALER");
+    expect(rail.authority("DISBURSEMENT")).toBe("MIRROR");
+  });
+
+  test("a cash deal's stages carry the same answer", () => {
+    const cash = deriveCashDealStages({ saleStatus: "PENDING" });
+    expect(cash.map((s) => s.authority)).toEqual(cash.map(() => "DEALER"));
+  });
+
+  /** The state does not change whose stage it is. */
+  test("authority survives every state the stage can be in", () => {
+    const stopped = stages({ status: "CANCELLED" });
+    expect(stopped.state("CREDIT_DECISION")).toBe("STOPPED");
+    expect(stopped.authority("CREDIT_DECISION")).toBe("MIRROR");
+
+    const complete = stages({
+      requiredDocumentsComplete: true,
+      approvedDealerPurchaseAmountMinor: 12_200_000,
+    });
+    expect(complete.state("CREDIT_DECISION")).toBe("COMPLETE");
+    expect(complete.authority("CREDIT_DECISION")).toBe("MIRROR");
+  });
+});
 
 describe("an approval the finance company named without an appraisal", () => {
   /**
@@ -111,8 +185,13 @@ describe("an approval the finance company named without an appraisal", () => {
 });
 
 describe("the stage rail", () => {
-  test("covers every stage exactly once, in order", () => {
-    expect(stages().rail.map((s) => s.key)).toEqual(DEAL_STAGE_ORDER);
+  test("covers each stage it has exactly once, in the canonical order", () => {
+    // Since SCRUM-215 P2 the rail carries only the stages this deal actually
+    // has, so it is a SUBSEQUENCE of the canonical order rather than all of it.
+    // Order and uniqueness are still guaranteed; presence is not.
+    const keys = stages().rail.map((s) => s.key);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys).toEqual(DEAL_STAGE_ORDER.filter((k) => keys.includes(k)));
   });
 
   test("marks exactly one stage as the one to act on", () => {
@@ -147,7 +226,9 @@ describe("a historical deal that answers none of the lifecycle dimensions", () =
   });
 
   test("does not invent an unresolved appraisal gap where no gap was recorded", () => {
-    expect(stages(legacy).state("GAP_RESOLUTION")).toBe("COMPLETE");
+    // Previously this rendered as a permanently-green stage. Since SCRUM-215 P2
+    // the deal simply does not have the stage — absent, not ticked.
+    expect(stages(legacy).rail.map((s) => s.key)).not.toContain("GAP_RESOLUTION");
   });
 
   test("shows the car as handed over, because a finalized sale is the evidence", () => {
@@ -219,7 +300,7 @@ describe("a live deal mid-flight", () => {
       approvedDealerPurchaseAmountMinor: 12_500_000,
       requiredDocumentsComplete: true,
     });
-    expect(s.state("GAP_RESOLUTION")).toBe("COMPLETE");
+    expect(s.rail.map((x) => x.key)).not.toContain("GAP_RESOLUTION");
   });
 
   test("the mockup's deal is at إجراءات التسليم", () => {
@@ -394,4 +475,109 @@ describe("صافي ربح المعرض", () => {
     expect(profit.available && profit.amountMinor).toBe(3_000_000);
   });
 
+});
+
+/**
+ * SCRUM-215 P2 — the rail carries only the stages this deal actually has, and
+ * it names the moment the money moved.
+ *
+ * Two defects the old fixed eight-stage rail produced:
+ *
+ *  1. A deal that never had an appraisal gap still rendered a GAP_RESOLUTION
+ *     stage, permanently COMPLETE. A stage that is green on every deal that
+ *     never had the problem is a checklist nobody checked — it teaches
+ *     operators that the rail's ticks mean nothing, and this same rail has to
+ *     carry a real blocker.
+ *  2. There was no disbursement stage at all, although `confirmDisbursement`
+ *     and `confirmSupplierDisbursement` are real mutations and `disbursedAt` a
+ *     real field. Disbursement was folded invisibly into SETTLEMENT — hiding
+ *     the step a dealer cares about most, because it is when the money moves.
+ *
+ * Absent is not the same as complete, and that is the whole point: `undefined`
+ * means "this deal does not have this stage", COMPLETE means "it had it and it
+ * is done".
+ */
+describe("a rail that carries only the stages this deal has", () => {
+  const present = (overrides: Partial<DealStageFacts> = {}) =>
+    deriveDealStages({
+      status: "APPROVED",
+      requiredDocumentsComplete: false,
+      ...overrides,
+    }).map((s) => s.key);
+
+  test("omits gap resolution entirely when no gap was ever recorded", () => {
+    expect(present()).not.toContain("GAP_RESOLUTION");
+  });
+
+  test("renders gap resolution as soon as a real gap exists", () => {
+    expect(
+      present({ rawAppraisalGapMinor: 1_000_000, gapResolution: "PENDING_NEGOTIATION" })
+    ).toContain("GAP_RESOLUTION");
+  });
+
+  test("keeps gap resolution once it has been resolved, because it happened", () => {
+    // A resolved gap is history the deal really has. Dropping the stage the
+    // moment it completes would erase the record of a decision that moved money.
+    expect(
+      present({ rawAppraisalGapMinor: 1_000_000, gapResolution: "DEALER_ABSORBS" })
+    ).toContain("GAP_RESOLUTION");
+  });
+
+  test("omits the document stage when no document rules apply to this deal", () => {
+    // Cash deals and orgs without companyDocumentRules have no paperwork gate.
+    // The card is already absent rather than empty; the rail must agree.
+    expect(present({ documentRulesApply: false })).not.toContain("DELIVERY_ACTIONS");
+  });
+
+  test("renders the document stage when rules do apply", () => {
+    expect(present({ documentRulesApply: true })).toContain("DELIVERY_ACTIONS");
+  });
+
+  test("a zero gap is still not a gap, and now says so by absence", () => {
+    expect(present({ rawAppraisalGapMinor: 0 })).not.toContain("GAP_RESOLUTION");
+  });
+});
+
+describe("the disbursement stage", () => {
+  const rail = (overrides: Partial<DealStageFacts> = {}) =>
+    stages({ creditDecision: "APPROVED", ...overrides });
+
+  test("is on the financed rail, between the paperwork and the handover", () => {
+    expect(DEAL_STAGE_ORDER).toContain("DISBURSEMENT");
+    expect(DEAL_STAGE_ORDER.indexOf("DISBURSEMENT")).toBeGreaterThan(
+      DEAL_STAGE_ORDER.indexOf("DELIVERY_ACTIONS")
+    );
+    expect(DEAL_STAGE_ORDER.indexOf("DISBURSEMENT")).toBeLessThan(
+      DEAL_STAGE_ORDER.indexOf("HANDOVER")
+    );
+  });
+
+  test("waits on the finance company, not on the dealership", () => {
+    // A MIRROR stage: AutoFlow records that the money arrived, it does not
+    // cause it. The blocker names who we are waiting for.
+    const s = rail({
+      appraisalStatus: "FINALIZED",
+      approvedDealerPurchaseAmountMinor: 12_500_000,
+      requiredDocumentsComplete: true,
+    });
+    expect(s.state("DISBURSEMENT")).toBe("BLOCKED");
+    expect(s.blocker("DISBURSEMENT")).toBe("AwaitingDisbursement");
+  });
+
+  test("completes when the financier paid the dealership", () => {
+    expect(rail({ disbursedAt: Date.UTC(2026, 8, 1) }).state("DISBURSEMENT")).toBe("COMPLETE");
+  });
+
+  test("completes when the financier paid the supplier directly instead", () => {
+    // On the direct route the dealership is never paid, so judging this stage
+    // by `disbursedAt` alone left it blocked forever on a finished deal.
+    expect(
+      rail({ supplierDisbursementConfirmedAt: Date.UTC(2026, 8, 1) }).state("DISBURSEMENT")
+    ).toBe("COMPLETE");
+  });
+
+  test("does not report the money as moved merely because a sale was finalized", () => {
+    // A finalized sale is handover/settlement evidence, not payment evidence.
+    expect(rail({ finalizedSaleId: "sale1" }).state("DISBURSEMENT")).not.toBe("COMPLETE");
+  });
 });

@@ -347,6 +347,29 @@ async function hasHeldQuoteDeposit(ctx: QueryCtx, quoteId: Id<"quotes">): Promis
   return false;
 }
 
+/**
+ * Whether this deal is holding customer money that nobody has decided about.
+ *
+ * A deposit taken on a deal that was then rejected or cancelled stays HELD
+ * until somebody refunds or forfeits it: real cash in a liability with no
+ * owner. It is the state the applications LIST surfaces as the synthetic
+ * `DEPOSIT_PENDING` badge.
+ *
+ * Extracted so the list and the deal cockpit answer it with ONE rule. The
+ * cockpit previously did not answer it at all — a held deposit read as plain
+ * "Rejected" on the deal screen while the list said "Deposit Pending" — and the
+ * review dialog computes a third version from a different input entirely.
+ * Retiring the list before the cockpit could see this would silently delete a
+ * live operational state.
+ */
+export async function pendingDepositResolution(
+  ctx: QueryCtx,
+  app: Doc<"financeApplications">
+): Promise<boolean> {
+  if (app.status !== "REJECTED" && app.status !== "CANCELLED") return false;
+  return hasHeldQuoteDeposit(ctx, app.quoteId);
+}
+
 async function getQuoteDeposits(ctx: QueryCtx, quoteId: Id<"quotes">): Promise<Array<Doc<"deposits">>> {
   const deposits: Array<Doc<"deposits">> = [];
   for await (const deposit of ctx.db
@@ -1403,10 +1426,7 @@ export const list = query({
         const company = app.companyId ? await ctx.db.get(app.companyId) : null;
         const salesperson = await ctx.db.get(app.salespersonId);
         const quote = await ctx.db.get(app.quoteId);
-        const hasPendingDepositResolution =
-          app.status === "REJECTED" || app.status === "CANCELLED"
-            ? await hasHeldQuoteDeposit(ctx, app.quoteId)
-            : false;
+        const hasPendingDepositResolution = await pendingDepositResolution(ctx, app);
         // Through the shared resolver, not a fourth hand-rolled reading of the
         // same rule — this file has been corrected twice already for exactly
         // that. The pure form, because `quote` is loaded here anyway for the
@@ -1817,6 +1837,14 @@ export const dealCockpit = query({
       // appraisal moot when the economics could be computed without one.
       fundingSplitComputed: app.financeCompanyFundedPortionMinor !== undefined,
       requiredDocumentsComplete,
+      // Whether this deal has a paperwork gate at all. The documents CARD is
+      // already absent rather than empty when no rule applies; without this the
+      // rail would still show a blocker for a checklist that does not exist.
+      documentRulesApply: applicableRules.length > 0,
+      // The direct route's own disbursement evidence. Without it the stage
+      // stays blocked forever on a deal whose money has entirely moved,
+      // because the financier paid the supplier and never paid the dealership.
+      supplierDisbursementConfirmedAt: app.supplierDisbursementConfirmedAt,
     });
 
     const timeline = await ctx.db
