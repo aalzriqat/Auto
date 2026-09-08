@@ -55,6 +55,43 @@ export interface PostResult {
  */
 const RETIRED_EVENT_TYPES = new Set<string>(["CLAIM_SETTLED", "CLAIM_WRITTEN_OFF"]);
 
+/**
+ * Source families that may no longer ORIGINATE a forward accounting occurrence.
+ *
+ * `transactions` is the legacy cashbook projection. Under the clean-slate v2
+ * model it is not an accounting source authority: the owning domain workflow
+ * posts under its own source identity, and the legacy row is a projection of
+ * that, not a second economic event.
+ *
+ * SCRUM-234 retired `accountingMigration.migrateUnpostedTransactions`, the only
+ * production function that ever minted one. Retiring the CALLER is not the same
+ * as retiring the AUTHORITY, and the difference is exactly what a repository
+ * scan cannot enforce: `postAccountingEvent` takes a caller-supplied
+ * `sourceType`, `accountingLedger.post` exposes it as a free-form `v.string()`,
+ * and the outbox forwards a stored one on redrive. Two successive static guards
+ * over the source tree failed to close that, in ten separate ways, because a
+ * textual scan certifies recognition rather than authority. This is the
+ * authority boundary, and it is the same one SCRUM-51 chose for retired EVENT
+ * types directly above — the single place every posting path must pass.
+ *
+ * SCOPE, deliberately narrow:
+ *
+ *   - It refuses the creation of a NEW forward occurrence only. Reading,
+ *     auditing and linking historical `transactions`-sourced events is
+ *     untouched, and so are the rules that describe them.
+ *   - `reverseAccountingEvent` does NOT route through this function — it writes
+ *     its own event and journal rows directly (see the standing note in
+ *     `postingRules.ts` beside JOURNAL_REVERSAL). A historical reversal is
+ *     therefore unaffected, which is intended: reversing a legacy event is not
+ *     minting a new forward one.
+ *
+ * A queued POST that reaches this refuses, is marked failed by the drain's own
+ * error handling and eventually dead-letters — the same disposition, and for
+ * the same reason, as a retired event type: it will never become postable, so
+ * retrying forever would misrepresent what is waiting.
+ */
+const RETIRED_SOURCE_TYPES = new Set<string>(["transactions"]);
+
 export async function postAccountingEvent(
   ctx: MutationCtx,
   cmd: PostCommand
@@ -89,6 +126,19 @@ export async function postAccountingEvent(
   if (RETIRED_EVENT_TYPES.has(cmd.eventType)) {
     throw new ConvexError(
       `The ${cmd.eventType} accounting event is retired and can no longer post. Finance-company receivables are originated and settled through the Finance Application, which is the only authority for them.`
+    );
+  }
+
+  // Same boundary, same reason, for a retired SOURCE FAMILY — SCRUM-234.
+  // Placed here with the event-type refusal, ahead of currency handling and of
+  // the idempotency probe at step 3, so a refused command completes no
+  // idempotency record and creates no accountingEvents, journalEntries,
+  // journalLines, accountBalanceSnapshots or audit row, and mutates no status.
+  if (RETIRED_SOURCE_TYPES.has(cmd.sourceType)) {
+    throw new ConvexError(
+      `The "${cmd.sourceType}" accounting source is retired and can no longer originate an accounting event (SCRUM-234). ` +
+        "The legacy cashbook is a projection, not an accounting authority: the owning domain workflow posts under its own source identity. " +
+        "Historical events already sourced this way remain readable and reversible."
     );
   }
 

@@ -848,12 +848,25 @@ export const signOffCutover = mutation({
     // passes without any migration ever running. It only STAYS zero while
     // nothing writes new legacy rows, which is SCRUM-53's containment.
     //
-    // What is deliberately NOT done here: redefining the predicate (e.g.
-    // gating on the legacy table being empty rather than on a per-row
-    // migrated event). That is a segregation-of-duties control change to an
-    // accounting attestation and needs its own review — it is routed to the
-    // owner, not smuggled in as a rider on the retirement. All this change
-    // does is stop the error naming a remedy that no longer exists.
+    // OWNERSHIP, ruled explicitly so the two tickets cannot blur:
+    //
+    //   SCRUM-234 fixes the now-FALSE OPERATOR INSTRUCTION that migration
+    //             retirement caused. Message and this comment only.
+    //   SCRUM-231 redesigns WHAT CUTOVER SIGN-OFF MEANS.
+    //
+    // So nothing else here moves: the predicate, the counts, the snapshot, the
+    // attestation's meaning, the permissions and the control flow are all
+    // untouched. Redefining the predicate — gating on the legacy table being
+    // empty rather than on a per-row migrated event — is a segregation-of-duties
+    // change to an accounting attestation, and it belongs to SCRUM-231's
+    // clean-slate preflight, not to a rider on a write-authority retirement.
+    //
+    // For whoever picks up that redesign: under SCRUM-231 a migrated legacy row
+    // is STILL legacy state and must fail the attestation. The successor is a
+    // zero-state proof (`CLEAN_SLATE_V2` or an equivalent durable discriminator
+    // persisted on the sign-off), not a migration-completeness proof — so a
+    // future reader can tell whether the accountant certified a historical
+    // migration or a destructive reset.
     if (unmigratedTransactionCount > 0) {
       throw new ConvexError(
         `Cannot sign off: ${unmigratedTransactionCount} legacy transaction(s) have no accounting event sourced from the legacy ledger. ` +
