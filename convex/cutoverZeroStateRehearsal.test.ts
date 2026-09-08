@@ -91,7 +91,20 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  process.env.SUPER_ADMIN_EMAILS = ORIGINAL_SUPER_ADMIN_EMAILS;
+  // ⚠️ `delete`, NOT `= undefined`. Assigning `undefined` to a `process.env`
+  // key stores the STRING "undefined" — verified by probe, not assumed — which
+  // would leave a bogus super-admin allowlist behind for any test file sharing
+  // this worker afterwards. Restoring "no value" has to mean removing the key.
+  //
+  // (The same `= undefined` restore exists in
+  // `convex/orgPurgeLifecycle.scrum297.test.ts`, which this fixture was
+  // modelled on. That instance is pre-existing and belongs to another lane; it
+  // is recorded here rather than changed from this one.)
+  if (ORIGINAL_SUPER_ADMIN_EMAILS === undefined) {
+    delete process.env.SUPER_ADMIN_EMAILS;
+  } else {
+    process.env.SUPER_ADMIN_EMAILS = ORIGINAL_SUPER_ADMIN_EMAILS;
+  }
 });
 
 /** A dealership with money state across the tables the cutover must clear. */
