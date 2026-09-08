@@ -25,18 +25,32 @@ const dealRailMessages = defineBilingualMessages({
   StageDisbursement: ["Finance company payment", "صرف شركة التمويل"],
 
   /**
-   * TRANSITIONAL, and load-bearing for exactly one release.
+   * TRANSITIONAL. It did its job in the previous release; it is kept here as
+   * DEFERRED CLEANUP, not as a compatibility requirement.
    *
-   * This release ships the DISBURSEMENT stage from the backend while the
-   * deployed cockpit is still the previous build. That build resolves a stage
-   * label as `t(STAGE_LABEL[key] ?? key)`, and `t()` returns the KEY when it
-   * knows no translation — so without this entry the rail would render the bare
+   * ## What it was for
+   *
+   * The previous release shipped the DISBURSEMENT stage from the backend while
+   * the deployed cockpit was still the build before it. That build resolves a
+   * stage label as `t(STAGE_LABEL[key] ?? key)`, and `t()` returns the KEY when
+   * it knows no translation — so without this entry the rail rendered the bare
    * string "DISBURSEMENT" to operators, in Arabic as well as English, for the
-   * whole window between this deploy and the frontend release that follows it.
+   * window between that backend deploy and this frontend release.
    *
-   * The new cockpit never reads this key; it uses `StageDisbursement` above.
-   * Remove this once that frontend is live.
-   * `lib/i18n/deployedStageLabels.test.ts` is what keeps it honest meanwhile.
+   * ## Why keeping it is NOT a compatibility claim
+   *
+   * ⚠️ An earlier version of this note, and the PR description that quoted it,
+   * justified retention as "an older deployed frontend may still need it".
+   * That mechanism is wrong and is corrected here rather than quietly dropped.
+   * Each deployment is an IMMUTABLE, SELF-CONTAINED bundle carrying its own
+   * frozen copy of this dictionary, served from its own content-hashed chunks.
+   * No running frontend reads this source entry, so deleting it could not
+   * affect one — including a rollback, which would serve its own embedded copy.
+   *
+   * Deleting it is therefore safe. It stays only because retiring it also means
+   * retiring `lib/i18n/deployedStageLabels.test.ts`, which is cleanup this
+   * frontend-consumption PR was not scoped to do. The cockpit in this build
+   * never reads it; it uses `StageDisbursement` above.
    */
   DISBURSEMENT: ["Finance company payment", "صرف شركة التمويل"],
 

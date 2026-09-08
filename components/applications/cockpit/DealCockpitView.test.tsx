@@ -1020,3 +1020,82 @@ describe("a stopped deal still holding the customer's deposit says so", () => {
     expect(screen.queryByText("DepositAwaitingResolutionTitle")).toBeNull();
   });
 });
+
+/**
+ * One workflow state, one owner — across EVERY surface that names one.
+ *
+ * The rail badge and the next-step note both answer "whose move is this?", and
+ * they answered it from different sources: the badge from RECORDED SERVER
+ * PROVENANCE (`activeAppraisalProvider`), the note from the stage's static
+ * `authority`. `APPRAISAL` carries `authority: "MIRROR"`, so a deal appraised
+ * by an INDEPENDENT appraiser rendered "An independent appraiser" in the rail
+ * and "This step is the finance company's" directly beneath it — the same
+ * screen naming two different parties for one step.
+ *
+ * That is worse than the original defect this issue fixed, because the screen
+ * now contradicts ITSELF rather than merely being wrong once.
+ *
+ * This was VISIBLE in the Gate B render and reported as clean. Rendering
+ * produced the evidence; reading it missed the contradiction. So the property
+ * is asserted mechanically here rather than left to a human reading a
+ * screenshot: no surface may name a party the provenance does not support.
+ */
+describe("two surfaces describing one step must not name different parties", () => {
+  function appraisalScreen(provider: "FINANCE_COMPANY" | "INDEPENDENT" | null) {
+    return render(
+      <DealCockpitView
+        deal={dealFixture({
+          stages: [{ key: "APPRAISAL", state: "CURRENT", authority: "MIRROR" }],
+        })}
+        activeAppraisalProvider={provider}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+  }
+
+  test("an INDEPENDENT appraisal is not called the finance company's by the note", () => {
+    appraisalScreen("INDEPENDENT");
+
+    // The badge is right — and was already right before this fix.
+    expect(screen.getAllByText("AppraisalByIndependent").length).toBeGreaterThan(0);
+    // The note was the surface still asserting the other party.
+    expect(screen.queryByText("StageMirrorNote")).toBeNull();
+  });
+
+  test("an unrecorded appraiser is not called the finance company's by the note", () => {
+    appraisalScreen(null);
+
+    expect(screen.getAllByText("StageOwnerAppraiserNotRecorded").length).toBeGreaterThan(0);
+    // `null` means "not on record, or a dealer estimate". Neither of those
+    // licenses the note to name the finance company.
+    expect(screen.queryByText("StageMirrorNote")).toBeNull();
+  });
+
+  test("a FINANCE_COMPANY appraisal DOES carry the note, because there it is true", () => {
+    // The positive control. Without it the two assertions above pass equally
+    // well against a note that was simply deleted, which would remove the
+    // operator's only explanation for why the step has no button.
+    appraisalScreen("FINANCE_COMPANY");
+
+    expect(screen.getAllByText("AppraisalByFinanceCompany").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("StageMirrorNote").length).toBeGreaterThan(0);
+  });
+
+  test("a non-appraisal mirrored step is untouched by the provenance gate", () => {
+    // The fix must narrow the note for APPRAISAL only. A stage whose owner
+    // genuinely IS the finance company keeps both surfaces agreeing on it,
+    // even when no appraisal provider is on record.
+    render(
+      <DealCockpitView
+        deal={dealFixture({
+          stages: [{ key: "CREDIT_DECISION", state: "CURRENT", authority: "MIRROR" }],
+        })}
+        activeAppraisalProvider={null}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    expect(screen.getAllByText("StageOwnerFinanceCompany").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("StageMirrorNote").length).toBeGreaterThan(0);
+  });
+});

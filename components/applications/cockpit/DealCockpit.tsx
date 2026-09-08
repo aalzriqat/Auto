@@ -162,6 +162,30 @@ function stageOwnerLabel(
   return undefined;
 }
 
+/**
+ * Whether the "this step belongs to the finance company" note is TRUE here.
+ *
+ * Gated by the same recorded provenance that drives the rail badge, because
+ * the two surfaces answer the same question and must not answer it from
+ * different sources. `APPRAISAL` carries a static `authority: "MIRROR"`, so
+ * keying the note on authority alone asserted the finance company owned an
+ * appraisal an INDEPENDENT appraiser had performed — while the badge two
+ * elements above correctly named the appraiser. One step, two parties, one
+ * screen.
+ *
+ * A `null` provider does not license the note either: it means no active
+ * appraisal is on record, or the one on record is a dealer estimate. Neither
+ * is the finance company.
+ */
+function stageShowsMirrorNote(
+  stage: Readonly<{ key: string; authority?: string }>,
+  activeAppraisalProvider: ActiveAppraisalProvider
+): boolean {
+  if (stage.authority !== "MIRROR") return false;
+  if (stage.key === "APPRAISAL") return activeAppraisalProvider === "FINANCE_COMPANY";
+  return true;
+}
+
 const PARTY_LABEL: Record<string, string> = {
   CUSTOMER: "PartyCustomer",
   SUPPLIER: "PartySupplier",
@@ -1906,7 +1930,7 @@ export function DealCockpitView({
                 and gives no reason — so the operator goes hunting for an action
                 that must not exist. Stated once, here, rather than on every
                 rail row, because this is the block the operator acts from. */}
-            {live.authority === "MIRROR" && (
+            {stageShowsMirrorNote(live, activeAppraisalProvider) && (
               <p className="text-sm text-muted-foreground">{t("StageMirrorNote")}</p>
             )}
             {/* Why the named step is not actionable BY THIS CALLER. Silence
@@ -2389,8 +2413,9 @@ function StageRow({
    * Typography and alignment rather than a pill: this is an operator console at
    * high information density, where a box around every row's owner would spend
    * the space the rail itself needs and turn a scannable list into a stack of
-   * cards. `ms-auto` (not `ml-auto`) so it sits on the trailing edge in Arabic
-   * as well as English.
+   * cards. The trailing edge comes from the SIBLING `min-w-0 flex-1` label
+   * column absorbing the free space, so this reads correctly in Arabic and
+   * English without a directional utility of its own.
    */
   owner?: string;
   isFocus: boolean;
