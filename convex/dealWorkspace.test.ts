@@ -164,7 +164,7 @@ describe("dealWorkspace.financedDealCockpit", () => {
     return s.t.withIdentity({ subject: `dw_${tag}` });
   }
 
-  // --- the one field the wrapper adds --------------------------------------
+  // --- the held-deposit flag ------------------------------------------------
 
   test("a rejected deal still holding a HELD deposit reports pendingDepositResolution", async () => {
     const s = await seed();
@@ -277,7 +277,7 @@ describe("dealWorkspace.financedDealCockpit", () => {
     ["owner", ALL_PERMISSIONS],
     ["salesonly", ["view:sales"]],
   ])(
-    "for a %s caller the wrapper returns the cockpit payload plus exactly one new key",
+    "for a %s caller the wrapper returns the cockpit payload plus exactly its added keys",
     async (tag, permissions) => {
       const s = await seed();
       const applicationId = await insertApplication(s, "REJECTED");

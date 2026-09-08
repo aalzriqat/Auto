@@ -81,10 +81,28 @@ describe("protected source content pins", () => {
       /**
        * Immutable for a structural reason, not an architectural one: it carries
        * seven historical non-indexed query filters that predate the repository's
-       * Convex lint rule, and that guard evaluates the whole projected file. One
-       * token was changed in it under a one-time owner authorization —
-       * `async function pendingDepositResolution(` became
-       * `export async function pendingDepositResolution(` — and nothing else.
+       * Convex lint rule, and that guard evaluates the whole projected file.
+       *
+       * ⚠️ WHAT THIS FILE'S DELTA ACTUALLY IS, relative to the branch this PR
+       * merges into — stated because the shorter story is misleading.
+       *
+       * Against `origin/main` this file differs by **32 insertions and 4
+       * deletions**, not by one token:
+       *
+       *   1. `pendingDepositResolution` is extracted into an exported function
+       *      from logic previously inlined in `applications.list`, and `list`
+       *      now calls it. Behaviour-preserving, covered by
+       *      `applications.test.ts` and `dealWorkspace.test.ts`.
+       *   2. `dealCockpit`'s payload gains two additive fields,
+       *      `documentRulesApply` and `supplierDisbursementConfirmedAt`.
+       *
+       * The "one token" description is true only against `fa9d48d09` on the
+       * parked `agent/scrum-215-unified-deal-p0-p3` branch — a lineage that is
+       * NOT an ancestor of main and whose combined candidate failed review. That
+       * framing understated the reviewable surface roughly thirtyfold and lent
+       * an owner authorization, granted for one token, to content that
+       * authorization never covered. Read the 32 lines; do not take this
+       * comment's word for their pedigree.
        */
       file: "convex/applications.ts",
       bytes: 214777,
