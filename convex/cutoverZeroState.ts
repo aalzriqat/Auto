@@ -101,8 +101,28 @@ export const CUTOVER_RETAINED_BY_DESIGN: Record<string, string> = {
  */
 export const COMMAND_AUTHORITY_TABLES = ["commandIdempotency"] as const;
 
-/** Rows removed per table per call. Matches `orgFinancialReset`'s budget. */
-const CUTOVER_DELETE_BATCH = 500;
+/**
+ * Rows removed per INVOCATION, across every table together.
+ *
+ * ⚠️ THIS IS A GLOBAL BUDGET, NOT A PER-TABLE ONE, AND THE DIFFERENCE IS A
+ * RUNTIME LIMIT. `orgFinancialReset` budgets per table — it says so itself:
+ * "the batch limit applies to each table separately". Over its ~40 tables that
+ * is already up to 20,000 writes in one mutation; over the 138 tables this
+ * module derives it would be up to 69,000. A Convex mutation is a transaction
+ * with bounded reads and writes, and a reset that only discovers the bound on a
+ * realistically populated tenant discovers it mid-cutover, at the worst
+ * possible moment.
+ *
+ * So one budget is spent across the whole walk. Reads are bounded by the same
+ * number: each table is read `budgetLeft + 1` deep and the walk stops the
+ * moment the budget is gone, so total documents read is at most
+ * `budget + tablesVisited`.
+ *
+ * (The pre-existing per-table budgeting in `orgFinancialReset` is NOT changed
+ * here — it is a separate defect on a separate path, recorded rather than
+ * folded into this lane.)
+ */
+const CUTOVER_DELETE_BUDGET = 500;
 
 type IndexDefinition = { indexDescriptor: string; fields: string[] };
 
@@ -194,6 +214,55 @@ export function cutoverResetOrder(): string[] {
 }
 
 /**
+ * Resolves the `orgId`-first index for every table in `tables`.
+ *
+ * Pure and total: it never reads the database, so it can run before a
+ * destructive walk begins rather than discovering a gap partway through one.
+ */
+export function resolveCutoverIndexes(tables: string[]): {
+  resolved: Map<string, string>;
+  unverifiable: string[];
+} {
+  const resolved = new Map<string, string>();
+  const unverifiable: string[] = [];
+  for (const table of tables) {
+    const indexName = orgIndexFor(table);
+    if (indexName) resolved.set(table, indexName);
+    else unverifiable.push(table);
+  }
+  return { resolved, unverifiable };
+}
+
+/**
+ * THE PREFLIGHT. Refuses the whole reset unless every in-scope table can be
+ * read by an `orgId`-first index.
+ *
+ * ⚠️ THIS RUNS BEFORE THE FIRST DELETE, AND THAT ORDERING IS THE SAFETY
+ * PROPERTY. The previous shape collected unverifiable tables *while deleting*
+ * and reported them in the return value. That is a partially committed reset
+ * wearing a report: by the time the operator reads "unverifiable: [x]", rows in
+ * every table before `x` are already gone, and the tables after it were never
+ * even looked at. A destructive command that cannot see its whole subject must
+ * not perform any of it.
+ *
+ * Throwing is what makes it atomic. In Convex an UNCAUGHT exception rolls the
+ * transaction back — a caught one commits — so this must stay uncaught, and no
+ * caller may wrap the reset in a `try`/`catch` that swallows it.
+ */
+export function assertCutoverScopeVerifiable(tables: string[]): Map<string, string> {
+  const { resolved, unverifiable } = resolveCutoverIndexes(tables);
+  if (unverifiable.length > 0) {
+    throw new ConvexError(
+      "Refusing to run the cutover reset: " +
+        `${unverifiable.length} in-scope table(s) cannot be read by an orgId-first index ` +
+        `(${unverifiable.join(", ")}). A reset that cannot see part of its scope would ` +
+        "leave that part behind while reporting success. Nothing was deleted."
+    );
+  }
+  return resolved;
+}
+
+/**
  * Proves — or refuses to prove — that an organization holds no state in any
  * org-scoped table.
  *
@@ -253,7 +322,8 @@ export const verifyOrgZeroState = internalQuery({
 });
 
 /**
- * Drives one organization to the clean-slate zero state.
+ * Drives one organization toward the clean-slate zero state, one bounded
+ * invocation at a time.
  *
  * `dryRun` defaults to **true**, matching `resetOrgFinancialData`: the natural
  * first invocation counts, and the destructive form has to be typed on purpose.
@@ -263,15 +333,36 @@ export const verifyOrgZeroState = internalQuery({
  * destructive reset and the production deployment require a separate owner
  * go-live authorization.
  *
- * Reports `remaining` honestly so the operator repeats the call until it is
- * zero, and then proves the result with `verifyOrgZeroState`. The reset's own
- * report is NOT the proof — that distinction is the whole point of the gate.
+ * ## The invocation contract
+ *
+ * Each call spends ONE global budget across the whole table order, then stops.
+ * `nextCursor` is the table to resume at, or `null` when the walk reached the
+ * end within budget. The operator repeats the call, passing the cursor back,
+ * until `nextCursor` is `null` — then proves the result with
+ * `verifyOrgZeroState`.
+ *
+ * ⚠️ `nextCursor === null` IS NOT THE PROOF OF ZERO, and neither is any other
+ * field returned here. The reset's own report is exactly the kind of evidence
+ * SCRUM-231 refuses: `hardDeleteOrg` reports COMPLETED and
+ * `resetOrgFinancialData` reports completed while both leave the employee
+ * advances behind. Only the row count from `verifyOrgZeroState` settles it.
+ *
+ * The cursor is an optimisation, never a correctness dependency: resuming at
+ * the start is always safe, just slower, so a lost cursor costs a re-walk of
+ * already-empty tables and nothing else.
+ *
+ * ⚠️ A DRY RUN DOES NOT CONVERGE BY REPETITION, and is not meant to. It deletes
+ * nothing, so the rows it counted are still there on the next call and the
+ * cursor returns to the same place forever. A dry run answers "what would ONE
+ * destructive invocation do, and would it fit in one budget" — it is a bound
+ * check, not a rehearsal of the whole walk.
  */
 export const resetOrgToZeroState = internalMutation({
   args: {
     orgId: v.id("organizations"),
     dryRun: v.optional(v.boolean()),
     batchSize: v.optional(v.number()),
+    resumeFrom: v.optional(v.string()),
   },
   handler: async (
     ctx,
@@ -280,15 +371,30 @@ export const resetOrgToZeroState = internalMutation({
     dryRun: boolean;
     orgName: string | null;
     perTable: Record<string, number>;
-    total: number;
-    remaining: number;
-    unverifiable: string[];
+    deleted: number;
+    budget: number;
+    tablesVisited: number;
+    nextCursor: string | null;
   }> => {
     const dryRun = args.dryRun ?? true;
-    const limit = Math.min(
-      Math.max(args.batchSize ?? CUTOVER_DELETE_BATCH, 1),
-      CUTOVER_DELETE_BATCH
-    );
+
+    // ── Preflight. Every refusal in this block happens before the first
+    // delete, so a refused reset is a reset that did nothing at all.
+
+    // A budget that is not a positive whole number is a mistyped destructive
+    // command, and silently reinterpreting it would hide the mistake. Asking
+    // for MORE than the ceiling is different — that is the tool's own bound,
+    // not the operator's error — so it clamps down.
+    if (
+      args.batchSize !== undefined &&
+      (!Number.isInteger(args.batchSize) || args.batchSize < 1)
+    ) {
+      throw new ConvexError(
+        "Refusing to run the cutover reset: batchSize must be a positive whole number. " +
+          "Nothing was deleted."
+      );
+    }
+    const budget = Math.min(args.batchSize ?? CUTOVER_DELETE_BUDGET, CUTOVER_DELETE_BUDGET);
 
     const org = await ctx.db.get(args.orgId);
     if (!org) {
@@ -300,47 +406,74 @@ export const resetOrgToZeroState = internalMutation({
       );
     }
 
-    const perTable: Record<string, number> = {};
-    const unverifiable: string[] = [];
-    let total = 0;
-    let remaining = 0;
+    const order = cutoverResetOrder();
+    const indexes = assertCutoverScopeVerifiable(order);
 
-    for (const table of cutoverResetOrder()) {
-      const indexName = orgIndexFor(table);
-      if (!indexName) {
-        // Reported, never skipped silently — same reason as the verifier. A
-        // destructive tool that cannot see a table must say so, because the
-        // operator's next move is to trust its report.
-        unverifiable.push(table);
-        continue;
+    let startAt = 0;
+    if (args.resumeFrom !== undefined) {
+      startAt = order.indexOf(args.resumeFrom);
+      if (startAt < 0) {
+        // A cursor naming a table that is no longer in scope would silently
+        // restart the walk or skip it entirely depending on how it was
+        // handled. Refuse instead — the operator can resume from the start.
+        throw new ConvexError(
+          `Refusing to run the cutover reset: resumeFrom "${args.resumeFrom}" is not in the ` +
+            "reset scope. Nothing was deleted."
+        );
       }
+    }
 
-      // One past the limit, so `remaining` reports whether another run is
-      // needed rather than silently stopping on a full batch.
-      const rows = await takeOrgRows(ctx.db, table, indexName, args.orgId, limit + 1);
+    // ── Bounded walk. From here on, writes happen.
 
-      const batch = rows.slice(0, limit);
+    const perTable: Record<string, number> = {};
+    let deleted = 0;
+    let tablesVisited = 0;
+    let nextCursor: string | null = null;
+
+    for (let i = startAt; i < order.length; i++) {
+      const table = order[i];
+      const budgetLeft = budget - deleted;
+      if (budgetLeft <= 0) {
+        nextCursor = table;
+        break;
+      }
+      tablesVisited++;
+
+      // One past the remaining budget, so a table that still holds rows after
+      // this pass is detected without reading the whole table.
+      const rows = await takeOrgRows(
+        ctx.db,
+        table,
+        indexes.get(table)!,
+        args.orgId,
+        budgetLeft + 1
+      );
+      const batch = rows.slice(0, budgetLeft);
       if (batch.length > 0) perTable[table] = batch.length;
-      total += batch.length;
-      if (rows.length > limit) remaining += rows.length - batch.length;
+      deleted += batch.length;
 
       if (!dryRun) {
         for (const row of batch) {
           await ctx.db.delete(row._id);
         }
       }
-    }
 
-    // A dry run deletes nothing, so everything it counted is still present.
-    if (dryRun) remaining += total;
+      if (rows.length > budgetLeft) {
+        // This table still has rows, so the next invocation resumes HERE, not
+        // at the table after it.
+        nextCursor = table;
+        break;
+      }
+    }
 
     return {
       dryRun,
       orgName: org.name ?? null,
       perTable,
-      total,
-      remaining,
-      unverifiable,
+      deleted,
+      budget,
+      tablesVisited,
+      nextCursor,
     };
   },
 });
