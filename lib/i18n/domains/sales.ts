@@ -74,6 +74,43 @@ const dealRailMessages = defineBilingualMessages({
     "Waiting on the finance company to pay",
     "بانتظار صرف شركة التمويل",
   ],
+
+  /**
+   * The appraisal stage when the appraiser is NOT on record.
+   *
+   * Deliberately not "the finance company". `APPRAISAL` is a MIRROR stage, so
+   * the rail would otherwise name them by default — but the vehicle may be
+   * valued by an independent appraiser instead, and a deal with no active
+   * appraisal at all has no appraiser to name. Saying "not recorded" is the
+   * truthful answer; naming a party the server never recorded is the defect
+   * this key exists to prevent.
+   *
+   * Also covers a DEALER_ESTIMATE, which is neither party the badge can name.
+   */
+  StageOwnerAppraiserNotRecorded: ["Appraiser not recorded", "جهة التخمين غير مسجّلة"],
+
+  /**
+   * A rejected or cancelled deal that is still holding the customer's deposit.
+   *
+   * The wording avoids naming a resolution: refunding and forfeiting are
+   * different decisions with different accounting, and this screen does not
+   * make either. It says money is being held and that somebody must decide —
+   * which is exactly what the applications list has always said, and what this
+   * screen used to omit entirely.
+   */
+  DepositAwaitingResolutionTitle: [
+    "A customer deposit is still being held",
+    // `عربون` is MASCULINE, so `ما زال … محتجزاً`, not the feminine agreement.
+    // The first draft read `ما زالت … محتجزة` and contradicted this entry's own
+    // body, which refers back to the deposit as `مصادرته`. Caught by RENDERING
+    // the screen in Arabic — the tests use an identity `t`, so they never
+    // display real copy and no assertion here could have failed.
+    "ما زال عربون العميل محتجزاً",
+  ],
+  DepositAwaitingResolutionBody: [
+    "This deal is closed, but the deposit has not been refunded or forfeited. Until it is, the money sits against the customer with no outcome recorded.",
+    "أُغلقت هذه الصفقة دون ردّ العربون أو مصادرته. وحتى يتم ذلك، يبقى المبلغ مقيّداً على العميل دون نتيجة مسجّلة.",
+  ],
 });
 
 export const salesEn = {
