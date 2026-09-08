@@ -486,14 +486,14 @@ Status: Implemented. All Phase 6 acceptance gates pass.
 - No duplicates in a fresh system
 - Posting same event twice via idempotency produces no duplicate in GL
 - Audit shows legacy transaction as unposted
-- Dry-run shows WOULD_POST without creating events
-- Live migration posts events and is idempotent when run twice
+- ~~Dry-run shows WOULD_POST without creating events~~ **RETIRED (SCRUM-234)** — `dryRun: true` is now refused like every other argument value.
+- ~~Live migration posts events and is idempotent when run twice~~ **RETIRED (SCRUM-234)** — there is no live migration; the mutation refuses unconditionally.
 
 ## Acceptance Gates Passed
 
-- `migrationGapAnalysis` reports correct progress before and after migration. ✓
-- Dry-run produces no writes. ✓
-- Live migration is idempotent; second run skips already-posted rows. ✓
+- `migrationGapAnalysis` reports correct progress. ✓ (It remains a read-only query; "after migration" no longer describes a reachable state — SCRUM-234.)
+- ~~Dry-run produces no writes.~~ **SUPERSEDED by SCRUM-234** — dry-run is refused outright, so the stronger property holds: no argument value produces a write.
+- ~~Live migration is idempotent; second run skips already-posted rows.~~ **RETIRED by SCRUM-234** — there is no live migration to be idempotent about.
 - `duplicateEventCheck` correctly identifies idempotency-key collisions. ✓
 
 ## Decisions Made
