@@ -211,10 +211,18 @@ describe("SCRUM-297 — organization destructive lifecycle", () => {
 
     await expect(asAdmin.mutation(api.adminOrgs.unsuspendOrg, { orgId })).rejects.toThrow();
 
-    // Reactivation is the ONLY route to the economic surface: every ordinary
-    // command goes through requireTenantAuth, which refuses a suspended org. So
-    // refusing reactivation is what makes the retry unreachable for all 30
-    // runWithIdempotency call sites at once, not just for payroll.
+    // All currently enumerated `runWithIdempotency` economic command sites — 30
+    // of them, across 12 modules — are `requireTenantAuth`-gated, and that guard
+    // refuses a suspended org. So reactivation is the route by which a
+    // destructively progressed org regains access to those AUTHENTICATED
+    // economic commands, for all 30 at once rather than for payroll alone.
+    //
+    // ⚠️ THIS DOES NOT COVER internal/webhook/cron economic entry points, which
+    // bypass `requireTenantAuth` by construction and consult no lifecycle state.
+    // Those are a separate, pre-existing defect tracked by SCRUM-302 and are NOT
+    // closed by SCRUM-297. An earlier version of this comment claimed
+    // reactivation was the ONLY route to the economic surface; that was false,
+    // and SCRUM-302 is the counterexample.
     const org = await t.run(async (ctx) => await ctx.db.get(orgId));
     expect(org?.suspended).toBe(true);
     await expect(asOwner.query(api.organizations.get, { orgId })).rejects.toThrow();

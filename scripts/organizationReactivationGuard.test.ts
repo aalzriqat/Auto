@@ -598,8 +598,11 @@ describe("SCRUM-297 organization reactivation guard", () => {
    *
    * Most cases below are real evasions that some previous version of this file
    * failed to catch — found by an adversarial reviewer, by a cross-family
-   * reviewer, and by CodeRabbit, on three separate commits. None involves
-   * obfuscation; they are shapes ordinary code takes.
+   * reviewer, and by CodeRabbit, on three separate commits. Exactly one fixture
+   * below uses an obfuscated form — the one named "an escape-obfuscated
+   * identifier is still caught" — and it is here because a text pre-filter
+   * genuinely missed that form. Every other fixture is a shape ordinary code
+   * takes. Measured against the fixture set as it stands, not generalized.
    *
    * The exceptions are the two cases named DOCUMENTED GAP. Those assert that a
    * shape is NOT caught, pinning a known limit so it cannot be quietly believed
