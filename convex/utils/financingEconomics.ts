@@ -302,6 +302,42 @@ export type FinanceCompanyRuleSnapshot = NonNullable<
   Doc<"financeApplications">["companyRuleSnapshot"]
 >;
 
+/**
+ * The appraisal a deal is currently answered by, or `undefined` when it has
+ * none.
+ *
+ * Lifted verbatim out of `financingEconomics.recordApprovedPurchase`, which is
+ * where this rule has always lived, so that the cockpit's reading of "who
+ * valued this car" cannot drift from the approval's reading of "which appraisal
+ * may be approved against". The rule is deliberately not re-derived anywhere:
+ * this repository has already corrected a held-deposit predicate that had been
+ * written three different ways, and a second opinion about which appraisal is
+ * live would fork the same way.
+ *
+ * Two exclusions carry meaning and are not incidental:
+ *
+ *   - SUPERSEDED and REJECTED rows are gone. History here is append-only — a
+ *     reappraisal supersedes its predecessor rather than replacing it — so the
+ *     newest surviving row is the live one and the older rows must never answer
+ *     for it.
+ *   - A DEALER_ESTIMATE is never selected. It is not an appraisal; the schema
+ *     marks it so precisely so it cannot be mistaken for one, and an approval
+ *     refuses it outright. A deal carrying only an estimate therefore has NO
+ *     active appraisal, which is the truthful answer rather than a convenient
+ *     one.
+ */
+export function selectActiveAppraisal(
+  appraisals: Array<Doc<"financeAppraisals">>
+): Doc<"financeAppraisals"> | undefined {
+  return appraisals
+    .filter(
+      (row) =>
+        (row.status === "RECORDED" || row.status === "APPROVED") &&
+        row.providerType !== "DEALER_ESTIMATE"
+    )
+    .sort((a, b) => b.appraisedAt - a.appraisedAt)[0];
+}
+
 /** The economics fields, as the guards below need to read them. */
 export interface ApplicationEconomics {
   economicsCurrency?: string;
@@ -687,6 +723,16 @@ export type DealStageKey =
   | "GAP_RESOLUTION"
   | "APPROVED_PURCHASE"
   | "DELIVERY_ACTIONS"
+  /**
+   * The moment the money actually moved — a MIRROR stage.
+   *
+   * `confirmDisbursement` and `confirmSupplierDisbursement` are real mutations
+   * and `disbursedAt` a real field, but the rail had no stage for either: the
+   * step was folded invisibly into SETTLEMENT. That hid the event a dealer
+   * cares about most. AutoFlow records that the financier paid; it does not
+   * cause the payment, so this stage waits on them and never refuses.
+   */
+  | "DISBURSEMENT"
   | "HANDOVER"
   | "SETTLEMENT"
   /**
@@ -722,6 +768,7 @@ export const DEAL_STAGE_ORDER: FinancedDealStageKey[] = [
   "GAP_RESOLUTION",
   "APPROVED_PURCHASE",
   "DELIVERY_ACTIONS",
+  "DISBURSEMENT",
   "HANDOVER",
   "SETTLEMENT",
 ];
@@ -734,21 +781,92 @@ export const DEAL_STAGE_ORDER: FinancedDealStageKey[] = [
  */
 export type DealStageState = "COMPLETE" | "CURRENT" | "BLOCKED" | "PENDING" | "STOPPED";
 
-export type DealStageBlocker =
-  | "AwaitingCreditDecision"
-  | "AwaitingAppraisal"
-  | "GapUnresolved"
-  | "GapNegotiationFailed"
-  | "NoApprovedPurchaseAmount"
-  | "DocumentsIncomplete"
-  | "HandoverBlocked"
-  | "AwaitingSettlement";
+/**
+ * Every blocker the rail can name, as VALUES rather than only as a type.
+ *
+ * Enumerable on purpose. The deployed cockpit renders a blocker by building its
+ * translation key through interpolation — ``t(`Blocker${stage.blocker}`)`` —
+ * rather than by looking one up in a map, so no static scan of the dictionaries
+ * can see which keys that path needs, and `lib/i18n/keyCoverage.test.ts` says so
+ * in as many words. Its guarantee was "every member resolves today", checked by
+ * hand. This change added the first new member since that was written, which is
+ * exactly the moment a hand-checked guarantee stops holding.
+ *
+ * The type is derived FROM this list so the two cannot disagree.
+ */
+export const DEAL_STAGE_BLOCKERS = [
+  "AwaitingCreditDecision",
+  "AwaitingAppraisal",
+  "GapUnresolved",
+  "GapNegotiationFailed",
+  "NoApprovedPurchaseAmount",
+  "DocumentsIncomplete",
+  /** Waiting on the financing company to pay — never on the dealership. */
+  "AwaitingDisbursement",
+  "HandoverBlocked",
+  "AwaitingSettlement",
+] as const;
+
+export type DealStageBlocker = (typeof DEAL_STAGE_BLOCKERS)[number];
+
+/**
+ * Who the deal is waiting on at this stage — the distinction the whole screen
+ * turns on.
+ *
+ * `MIRROR` means an external party did something, or has yet to: AutoFlow
+ * records the fact and has no standing to refuse it. The finance company's
+ * credit decision, its appraisal, the amount it approved and the moment it
+ * paid are all facts about somebody else's decision. The dealership cannot
+ * take these steps, and a screen that offers a button for them is lying.
+ *
+ * `DEALER` means the dealership itself must decide or act. These are the only
+ * stages where a refusal is legitimate, and the only ones that carry an action.
+ *
+ * Derived here rather than in the view because it is a property of the stage
+ * model, and a second copy of it in React would be a second answer to "may this
+ * be refused?" — the exact question the recording rule exists to settle.
+ */
+export type DealStageAuthority = "MIRROR" | "DEALER";
+
+/**
+ * Total over every key, cash and financed alike, so a new stage cannot be added
+ * without answering whose move it is.
+ */
+const STAGE_AUTHORITY: Record<DealStageKey, DealStageAuthority> = {
+  // The dealership puts the application together and sends it.
+  APPLICATION: "DEALER",
+  // Theirs entirely. AutoFlow never approves or evaluates a financing request.
+  CREDIT_DECISION: "MIRROR",
+  // Valued by the finance company or an independent appraiser; never by us.
+  APPRAISAL: "MIRROR",
+  // Who absorbs the shortfall — customer, dealership, or split — is ours to
+  // settle, which is precisely why it is the one stage with no exit yet.
+  GAP_RESOLUTION: "DEALER",
+  // They name the amount; the dealership only puts their decision on record.
+  APPROVED_PURCHASE: "MIRROR",
+  DELIVERY_ACTIONS: "DEALER",
+  // They pay. The dealership confirms it happened and cannot cause it.
+  DISBURSEMENT: "MIRROR",
+  HANDOVER: "DEALER",
+  // Deliberately DEALER, and only defensible since DISBURSEMENT was carved out
+  // of it: what remains here is registering the expected payment and closing
+  // the deal, both of which the dealership does. The external half — the money
+  // actually moving — is its own stage now.
+  SETTLEMENT: "DEALER",
+  SALE_AGREED: "DEALER",
+};
 
 export interface DealStage {
   key: DealStageKey;
   state: DealStageState;
   /** A key, never a sentence — the screen owns the wording in both locales. */
   blocker?: DealStageBlocker;
+  /**
+   * Whose move this stage is. Required, not optional: a stage that does not say
+   * lets the screen fall back to "the dealership must act", which is the wrong
+   * default — it invites an operator to chase a finance company's decision.
+   */
+  authority: DealStageAuthority;
 }
 
 export interface DealStageFacts extends LifecycleFacts {
@@ -784,6 +902,25 @@ export interface DealStageFacts extends LifecycleFacts {
   fundingSplitComputed?: boolean;
   /** Every required document uploaded, verified or waived. */
   requiredDocumentsComplete: boolean;
+  /**
+   * Whether any document rule applies to this deal at all.
+   *
+   * Absent means "assume it does", so a caller that does not answer keeps the
+   * old behaviour. When it is `false` the stage is not rendered: an org with no
+   * `companyDocumentRules` has no paperwork gate, and the documents CARD is
+   * already absent rather than empty in that case — the rail has to agree with
+   * it, or the screen shows a blocker for a checklist that does not exist.
+   */
+  documentRulesApply?: boolean;
+  /**
+   * When the financier confirmed paying the SUPPLIER directly.
+   *
+   * The direct route never pays the dealership, so `disbursedAt` stays unset on
+   * a deal whose money has entirely moved. Judging the disbursement stage by
+   * that field alone would leave the route's own evidence unread and the stage
+   * blocked forever on a finished deal.
+   */
+  supplierDisbursementConfirmedAt?: number;
   /**
    * The deal is over for a reason the credit dimension cannot express — the
    * sale itself was cancelled from the sales side, which reverses the GL and
@@ -862,6 +999,11 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
       (gap === undefined && !hasGap),
     APPROVED_PURCHASE: facts.approvedDealerPurchaseAmountMinor !== undefined,
     DELIVERY_ACTIONS: facts.requiredDocumentsComplete,
+    // Either route's evidence closes it. Read as an OR rather than by route
+    // because the route is not always recorded, and an unknown route must not
+    // make a disbursement that demonstrably happened unreadable.
+    DISBURSEMENT:
+      facts.disbursedAt !== undefined || facts.supplierDisbursementConfirmedAt !== undefined,
     HANDOVER: handover === "HANDED_OVER",
     SETTLEMENT:
       facts.settlementComplete ??
@@ -874,18 +1016,87 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
     GAP_RESOLUTION: gap === "FAILED" ? "GapNegotiationFailed" : "GapUnresolved",
     APPROVED_PURCHASE: "NoApprovedPurchaseAmount",
     DELIVERY_ACTIONS: "DocumentsIncomplete",
+    DISBURSEMENT: "AwaitingDisbursement",
     HANDOVER: handover === "BLOCKED" ? "HandoverBlocked" : undefined,
     SETTLEMENT: "AwaitingSettlement",
   };
 
-  const firstIncomplete = DEAL_STAGE_ORDER.find((key) => !complete[key]);
+  /**
+   * Which stages this deal HAS — as opposed to which it has finished.
+   *
+   * Absent and complete are different claims. A deal that never had an
+   * appraisal gap was previously shown a permanently-green GAP_RESOLUTION
+   * stage, and a stage that is ticked on every deal that never had the problem
+   * teaches operators that the ticks mean nothing — on the same rail that has
+   * to carry a real blocker.
+   *
+   * Kept as a total `Record` over the financed keys, exactly like `complete`
+   * above, so adding a stage fails the build rather than silently defaulting to
+   * whichever branch happened to be the fallback.
+   */
+  const applicable: Record<FinancedDealStageKey, boolean> = {
+    APPLICATION: true,
+    CREDIT_DECISION: true,
+    APPRAISAL: true,
+    // A recorded gap, or a resolution that says something happened. Explicit
+    // NOT_REQUIRED is the finance company stating there is no shortfall, which
+    // is the very case that should not occupy a step on the rail.
+    GAP_RESOLUTION: hasGap || (gap !== undefined && gap !== "NOT_REQUIRED"),
+    APPROVED_PURCHASE: true,
+    DELIVERY_ACTIONS: facts.documentRulesApply ?? true,
+    /**
+     * Only once the money can actually be awaited — never as a step standing
+     * ahead of the work that produces it.
+     *
+     * A disbursement is unreachable until the deal is CLOSED:
+     * `confirmDisbursement` refuses any other status, `finalizeDeal` is what
+     * closes the deal, and finalization itself refuses until the vehicle
+     * handover is registered. Disbursement is nevertheless ordered BEFORE
+     * handover here, because that is the sequence a dealer describes.
+     *
+     * Marking it applicable unconditionally therefore made it the first
+     * incomplete stage on every ordinary approved deal — the live stage — while
+     * the real next step, handover, sat behind it as merely PENDING. That is not
+     * a labelling problem. The cockpit shipped today renders a workflow action
+     * only when its stage is the live one, and every action it has belongs to
+     * HANDOVER or SETTLEMENT, so the handover button disappeared, and the
+     * expected-payment and finalize buttons behind it with it: the deal could
+     * not be progressed from the screen at all.
+     *
+     * Evidence keeps it visible on deals that already disbursed, including
+     * historical ones whose status has moved on, so this hides a future step
+     * rather than a finished one.
+     *
+     * `finalizedSaleId` is part of the test for the same reason, and not
+     * redundant with CLOSED. A closed deal can be cancelled before the money
+     * arrives — `cancelApplication` refuses only once a disbursement is
+     * confirmed — and that patch moves the status to CANCELLED while leaving
+     * the finalized sale in place. Testing the status alone therefore deleted
+     * the stage from the rail of a deal that genuinely reached it, while every
+     * other unresolved stage on a stopped deal still renders STOPPED. The rail
+     * is the record of what happened; a step that was reached and then
+     * abandoned belongs in it.
+     */
+    DISBURSEMENT:
+      facts.status === "CLOSED" ||
+      facts.finalizedSaleId !== undefined ||
+      complete.DISBURSEMENT,
+    HANDOVER: true,
+    SETTLEMENT: true,
+  };
 
-  return DEAL_STAGE_ORDER.map((key): DealStage => {
-    if (complete[key]) return { key, state: "COMPLETE" };
-    if (stopped) return { key, state: "STOPPED" };
-    if (key !== firstIncomplete) return { key, state: "PENDING" };
+  const order = DEAL_STAGE_ORDER.filter((key) => applicable[key]);
+  const firstIncomplete = order.find((key) => !complete[key]);
+
+  return order.map((key): DealStage => {
+    const authority = STAGE_AUTHORITY[key];
+    if (complete[key]) return { key, state: "COMPLETE", authority };
+    if (stopped) return { key, state: "STOPPED", authority };
+    if (key !== firstIncomplete) return { key, state: "PENDING", authority };
     const blocker = blockers[key];
-    return blocker ? { key, state: "BLOCKED", blocker } : { key, state: "CURRENT" };
+    return blocker
+      ? { key, state: "BLOCKED", blocker, authority }
+      : { key, state: "CURRENT", authority };
   });
 }
 
@@ -967,11 +1178,14 @@ export function deriveCashDealStages(facts: CashDealStageFacts): DealStage[] {
   const firstIncomplete = CASH_DEAL_STAGE_ORDER.find((key) => !complete[key]);
 
   return CASH_DEAL_STAGE_ORDER.map((key): DealStage => {
-    if (complete[key]) return { key, state: "COMPLETE" };
-    if (stopped) return { key, state: "STOPPED" };
-    if (key !== firstIncomplete) return { key, state: "PENDING" };
+    const authority = STAGE_AUTHORITY[key];
+    if (complete[key]) return { key, state: "COMPLETE", authority };
+    if (stopped) return { key, state: "STOPPED", authority };
+    if (key !== firstIncomplete) return { key, state: "PENDING", authority };
     const blocker = blockers[key];
-    return blocker ? { key, state: "BLOCKED", blocker } : { key, state: "CURRENT" };
+    return blocker
+      ? { key, state: "BLOCKED", blocker, authority }
+      : { key, state: "CURRENT", authority };
   });
 }
 

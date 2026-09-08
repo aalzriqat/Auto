@@ -146,11 +146,17 @@ describe("i18n key coverage", () => {
  * own description claimed all of them — a gate overstating its reach, which is
  * the defect this whole file exists to prevent.
  *
- * Still NOT covered, and left alone deliberately: `t(`Blocker${stage.blocker}`)`
- * builds its key by interpolation rather than by lookup, so neither scan can see
- * it. Every member of `DealStageBlocker` resolves today. Closing that one means
- * exporting the union for the test to enumerate, which edits backend source for
- * a test's benefit — worth doing, not worth doing here.
+ * Still not covered BY THE SCANS HERE: `t(`Blocker${stage.blocker}`)` builds its
+ * key by interpolation rather than by lookup, so neither scan can see it.
+ *
+ * That gap is now closed elsewhere rather than left to diligence. This note used
+ * to rest on "every member of `DealStageBlocker` resolves today", which was true
+ * when written and stopped being self-maintaining the moment a member was added
+ * — SCRUM-215 added `AwaitingDisbursement`, the first since. The union is
+ * therefore exported as `DEAL_STAGE_BLOCKERS` (the type is derived from it, so
+ * they cannot disagree) and `lib/i18n/deployedStageLabels.test.ts` enumerates it
+ * and asserts both locales resolve. That is the "worth doing" this comment
+ * predicted; it is done, and this paragraph is no longer a standing exception.
  */
 describe("cockpit label maps resolve through the dictionaries", () => {
   const COCKPIT = path.join("components", "applications", "cockpit", "DealCockpit.tsx");
