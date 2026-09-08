@@ -18,7 +18,7 @@ import {
   commissionAccountingDate,
   commissionAccrualStrandedReason,
 } from "./accounting/workflowHooks";
-import { toMinorUnits, fromMinorUnits } from "./utils/money";
+import { toMinorUnits, fromMinorUnits, assertFiniteNumber } from "./utils/money";
 import { paymentMethodValidator, normalizePaymentMethod, PaymentMethod } from "./utils/paymentMethods";
 import { runWithIdempotency } from "./utils/idempotency";
 import { isCommissionOwed } from "./utils/commission";
@@ -220,51 +220,94 @@ export const recoverAdvance = mutation({
       // of their OWN debt — an independent actor has to record the repayment.
       assertNotSelfBeneficiary(authCtx, advance.userId, "record repayment of your own advance");
 
-      // Idempotent response: a retry with the same key must return the ORIGINAL
-      // recovery, not throw — even after a full repayment left the advance
-      // RECOVERED (the status check below would otherwise reject the replay).
-      if (args.idempotencyKey) {
-        const prior = await ctx.db
-          .query("employeeAdvanceRecoveries")
-          .withIndex("by_org_idempotency", (q) => q.eq("orgId", args.orgId).eq("idempotencyKey", args.idempotencyKey))
-          .first();
-        if (prior) return prior._id;
-      }
+      const method = normalizePaymentMethod(args.method);
 
-      if (advance.status !== "OUTSTANDING") {
-        throw new ConvexError("Only an outstanding advance can be recovered.");
-      }
-      const outstandingMinor = advance.amountMinor - advance.recoveredMinor;
-      if (outstandingMinor <= 0) {
-        throw new ConvexError("This advance has nothing left to recover.");
-      }
-
-      // Full remaining balance unless a (positive, not-over) partial is given.
-      let recoverMinor = outstandingMinor;
+      // ── State-independent validation runs BEFORE the replay boundary ──────
+      //
+      // This ordering is the invariant, not a detail: a replay may only be
+      // resolved AFTER the request has been validated on its own terms. Any
+      // check left until after the identity lookup is a check a replay can skip,
+      // and a canonicalised fingerprint makes distinct invalid inputs collide
+      // onto a stored valid one. Concretely, all three of `0.0004` (positive but
+      // below JOD's minor unit), `0`, and `-0.0004` convert to 0 minor units and
+      // serialize identically — `Math.round(-0.0004 * 1000)` is `-0`, which
+      // JSON.stringify writes as `0`. With validation inside the callback, a
+      // first call of 0.0004 booked a zero-value recovery and a zero-value GL
+      // event, and a later `0` or `-0.0004` matched its fingerprint and was
+      // replayed as success without the positivity check ever running.
+      //
+      // So the amount is fully resolved and refused here: finite, positive as
+      // submitted, and still positive once converted to minor units. An amount
+      // that moves no money is not an economic instruction and must never reach
+      // the command log.
+      let requestedMinor: number | null = null;
       if (args.amount !== undefined) {
+        assertFiniteNumber(args.amount, "repayment amount");
         if (!(args.amount > 0)) {
           throw new ConvexError("Repayment amount must be a positive number.");
         }
-        recoverMinor = toMinorUnits(args.amount, advance.currency);
-        if (recoverMinor > outstandingMinor) {
-          throw new ConvexError("Repayment amount exceeds the outstanding balance.");
+        requestedMinor = toMinorUnits(args.amount, advance.currency);
+        if (requestedMinor <= 0) {
+          throw new ConvexError("Repayment amount is smaller than the smallest unit of currency.");
         }
       }
 
-      // Don't credit Employee Advances before the issuance that debited it has
-      // actually posted — otherwise the asset goes negative (issuance queued in
-      // a closed period, recovery posts now). Only enforced when the recovery
-      // would post now; if it too would queue, it drains after the issuance.
-      if (await isPostableNow(ctx, args.orgId, Date.now())) {
-        await assertAdvanceIssuancePosted(ctx, args.orgId, args.advanceId);
-      }
-
-      const method = normalizePaymentMethod(args.method);
-
-      // Idempotent: a double-click or network retry with the same key returns the
-      // first recovery instead of booking a second partial repayment (a duplicate
-      // full repayment self-guards via the RECOVERED status above, but a duplicate
-      // PARTIAL would otherwise succeed twice against the re-read balance).
+      // ONE authoritative replay boundary.
+      //
+      // A `(orgId, idempotencyKey)`-only lookup used to run HERE, ahead of
+      // `runWithIdempotency`, and resolve a replay by itself. It matched on the
+      // key alone — not the advance, not the amount, not the method — so a
+      // retained identity carrying a materially DIFFERENT economic instruction
+      // found an unrelated recovery row and was returned as success: a second
+      // idempotency authority that failed OPEN, in front of the one that fails
+      // CLOSED. Because it returned before `run()`, the fingerprint comparison
+      // that would have caught it was unreachable on that path.
+      //
+      // Its legitimate job is preserved rather than deleted: the OUTSTANDING
+      // refusal now lives INSIDE the callback, so a genuine replay is resolved
+      // from the command log before that refusal can reject it — which is the
+      // only reason the shortcut had to exist.
+      //
+      // The fingerprint is taken over the REQUEST AS SUBMITTED, never over
+      // post-read state. `args.amount === undefined` means "the full remaining
+      // balance", and that intent is stable across retries even though the
+      // balance it resolves to is not; hashing the balance-derived amount would
+      // make a genuine retry look like a different command the moment the
+      // balance moved. `method` is normalized first so an omitted method and an
+      // explicit CASH one are one intent, not a false conflict.
+      //
+      // ⚠️ The field is deliberately still named `recoverMinor` and still carries
+      // minor units, because rows committed BEFORE this change stored exactly
+      // `{advanceId, recoverMinor, method}` with `recoverMinor` computed by this
+      // same `toMinorUnits(args.amount, currency)` expression. Keeping the shape
+      // means an identical retry of a pre-existing EXPLICIT partial recovery
+      // still replays instead of hard-conflicting. That matters: a false conflict
+      // is not a safe refusal here — the operator would resubmit under a fresh
+      // key and book a SECOND recovery row and a SECOND GL event.
+      //
+      // ⚠️ ACCEPTED RESIDUAL, stated precisely because the imprecise version of
+      // this sentence was wrong. Legacy rows written by an OMITTED-amount (full)
+      // recovery stored the then-outstanding balance rather than null. Such a row
+      // conflicts with an omitted retry (null vs a number) — pinned by test — but
+      // it MATCHES a new EXPLICIT request whose minor value equals that balance.
+      // It is NOT true that legacy full rows "always conflict".
+      //
+      // That match is judged correct rather than merely tolerated: a fingerprint
+      // hit requires the same advance, the same minor amount and the same method,
+      // which is the same economic instruction however it was phrased — the same
+      // reasoning that makes an omitted method and an explicit CASH one one intent.
+      // The conflicting sub-case is safe for a different reason: the advance is
+      // already RECOVERED, so a fresh-key resubmission is refused by the status
+      // check and cannot duplicate.
+      //
+      // ⚠️ That safety argument depends on advances being monotonic — nothing
+      // reopens or reverses a RECOVERED advance today. If a reversal, correction
+      // or reopen path is ever added, this reasoning lapses and the FULL-versus-
+      // EXACT ambiguity must be re-assessed, because the legacy format carries no
+      // request-mode bit to distinguish them.
+      //
+      // Converting through `toMinorUnits` also rounds, so float noise in the
+      // submitted amount cannot manufacture a spurious conflict.
       return await runWithIdempotency(
         ctx,
         {
@@ -272,14 +315,55 @@ export const recoverAdvance = mutation({
           operation: "payroll.recoverAdvance",
           idempotencyKey: args.idempotencyKey,
           actorId: user._id,
-          fingerprint: JSON.stringify({ advanceId: args.advanceId, recoverMinor, method }),
+          fingerprint: JSON.stringify({
+            advanceId: args.advanceId,
+            recoverMinor: requestedMinor,
+            method,
+          }),
         },
         async () => {
+          // Re-read inside the guarded path. Being precise about what this does
+          // and does not buy: within one Convex transaction it is byte-identical
+          // to the read above, and Convex retries the WHOLE mutation on an OCC
+          // conflict, so it is not closing a race the outer read leaves open. It
+          // is kept because it makes the guarded block self-contained — the
+          // economic decision reads its own state rather than inheriting a value
+          // captured before the boundary was entered — which is what stops a
+          // later edit from quietly reintroducing the original defect.
+          const current = await ctx.db.get(args.advanceId);
+          if (!current || current.isDeleted || current.orgId !== args.orgId) {
+            throw new ConvexError("Advance not found.");
+          }
+          if (current.status !== "OUTSTANDING") {
+            throw new ConvexError("Only an outstanding advance can be recovered.");
+          }
+          const outstandingMinor = current.amountMinor - current.recoveredMinor;
+          if (outstandingMinor <= 0) {
+            throw new ConvexError("This advance has nothing left to recover.");
+          }
+
+          // Full remaining balance unless a partial was given. The amount itself
+          // was already validated above; only the balance-DEPENDENT check can
+          // live here, because it is the one that genuinely needs current state.
+          const recoverMinor = requestedMinor ?? outstandingMinor;
+          if (recoverMinor > outstandingMinor) {
+            throw new ConvexError("Repayment amount exceeds the outstanding balance.");
+          }
+
           const now = Date.now();
-          const newRecovered = advance.recoveredMinor + recoverMinor;
+
+          // Don't credit Employee Advances before the issuance that debited it has
+          // actually posted — otherwise the asset goes negative (issuance queued in
+          // a closed period, recovery posts now). Only enforced when the recovery
+          // would post now; if it too would queue, it drains after the issuance.
+          if (await isPostableNow(ctx, args.orgId, now)) {
+            await assertAdvanceIssuancePosted(ctx, args.orgId, args.advanceId);
+          }
+
+          const newRecovered = current.recoveredMinor + recoverMinor;
           await ctx.db.patch(args.advanceId, {
             recoveredMinor: newRecovered,
-            status: newRecovered >= advance.amountMinor ? "RECOVERED" : "OUTSTANDING",
+            status: newRecovered >= current.amountMinor ? "RECOVERED" : "OUTSTANDING",
             updatedAt: now,
           });
 
@@ -288,9 +372,9 @@ export const recoverAdvance = mutation({
           const recoveryId = await ctx.db.insert("employeeAdvanceRecoveries", {
             orgId: args.orgId,
             advanceId: args.advanceId,
-            userId: advance.userId,
+            userId: current.userId,
             amountMinor: recoverMinor,
-            currency: advance.currency,
+            currency: current.currency,
             method,
             source: "DIRECT",
             recoveredAt: now,
@@ -303,9 +387,9 @@ export const recoverAdvance = mutation({
             orgId: args.orgId,
             advanceId: args.advanceId,
             recoveryId,
-            userId: advance.userId,
+            userId: current.userId,
             amountMinor: recoverMinor,
-            currency: advance.currency,
+            currency: current.currency,
             paymentMethod: method,
             actorId: user._id,
             occurredAt: now,
