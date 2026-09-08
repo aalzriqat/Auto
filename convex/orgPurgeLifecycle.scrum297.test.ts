@@ -195,7 +195,7 @@ describe("SCRUM-297 — organization destructive lifecycle", () => {
     expect(org?.suspended).toBe(true);
   });
 
-  test("T3 GENERALITY: the economic surface stays unreachable after destructive progress", async () => {
+  test("T3: authenticated runWithIdempotency economic commands remain unreachable after destructive progress", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, ownerId } = await seedOrg(t);
     const asAdmin = t.withIdentity({ subject: "dev_admin" });
