@@ -124,6 +124,22 @@ export const COMMAND_AUTHORITY_TABLES = ["commandIdempotency"] as const;
  */
 const CUTOVER_DELETE_BUDGET = 500;
 
+/**
+ * Orders table names deterministically.
+ *
+ * ⚠️ EXPLICIT ON PURPOSE, AND NOT ONLY TO SATISFY A LINT RULE. The deletion
+ * ORDER of a destructive walk is part of its contract: `nextCursor` is a table
+ * name, and resuming means finding that name's position again. A bare `.sort()`
+ * leaves the comparison implicit, which is the wrong thing to leave implicit in
+ * the one function whose output decides what gets deleted next.
+ *
+ * The locale is pinned rather than left to the host, so the order cannot depend
+ * on where the reset happens to run.
+ */
+function byTableName(a: string, b: string): number {
+  return a.localeCompare(b, "en");
+}
+
 type IndexDefinition = { indexDescriptor: string; fields: string[] };
 
 /**
@@ -193,7 +209,7 @@ export function orgScopedTableNames(): string[] {
   return Object.entries(tables)
     .filter(([, table]) => Object.hasOwn(table.validator.fields ?? {}, "orgId"))
     .map(([name]) => name)
-    .sort();
+    .sort(byTableName);
 }
 
 /**
@@ -316,10 +332,74 @@ export const verifyOrgZeroState = internalQuery({
       tablesChecked: inScope.length - unverifiable.length,
       residual,
       unverifiable,
-      retainedByDesign: Object.keys(CUTOVER_RETAINED_BY_DESIGN).sort(),
+      retainedByDesign: Object.keys(CUTOVER_RETAINED_BY_DESIGN).sort(byTableName),
     };
   },
 });
+
+/**
+ * Everything the destructive walk needs, and every reason to refuse it.
+ *
+ * Extracted so the refusals cannot drift below the first `ctx.db.delete`: this
+ * function performs no writes, and the handler's first statement is a call to
+ * it. In Convex an UNCAUGHT exception rolls the transaction back while a caught
+ * one COMMITS, so each refusal throws rather than returning a report, and no
+ * caller may wrap the reset in a `try`/`catch` that swallows it.
+ */
+async function preflightCutoverReset(
+  ctx: { db: { get: (id: Id<"organizations">) => Promise<Doc<"organizations"> | null> } },
+  args: { orgId: Id<"organizations">; batchSize?: number; resumeFrom?: string }
+): Promise<{
+  org: Doc<"organizations">;
+  budget: number;
+  order: string[];
+  indexes: Map<string, string>;
+  startAt: number;
+}> {
+  // A budget that is not a positive whole number is a mistyped destructive
+  // command, and silently reinterpreting it would hide the mistake. Asking for
+  // MORE than the ceiling is different — that is the tool's own bound, not the
+  // operator's error — so it clamps down.
+  if (
+    args.batchSize !== undefined &&
+    (!Number.isInteger(args.batchSize) || args.batchSize < 1)
+  ) {
+    throw new ConvexError(
+      "Refusing to run the cutover reset: batchSize must be a positive whole number. " +
+        "Nothing was deleted."
+    );
+  }
+  const budget = Math.min(args.batchSize ?? CUTOVER_DELETE_BUDGET, CUTOVER_DELETE_BUDGET);
+
+  const org = await ctx.db.get(args.orgId);
+  if (!org) {
+    // Thrown, not returned: a reset aimed at an org that does not exist is a
+    // mistargeted reset, and the safest response to a mistargeted destructive
+    // command is to do nothing at all.
+    throw new ConvexError(
+      "Refusing to run the cutover reset: no organization with that id exists."
+    );
+  }
+
+  const order = cutoverResetOrder();
+  const indexes = assertCutoverScopeVerifiable(order);
+
+  let startAt = 0;
+  if (args.resumeFrom !== undefined) {
+    startAt = order.indexOf(args.resumeFrom);
+    if (startAt < 0) {
+      // A cursor naming a table that is no longer in scope would silently
+      // restart the walk or skip it entirely depending on how it was handled.
+      // Refuse instead — the operator can resume from the start.
+      throw new ConvexError(
+        `Refusing to run the cutover reset: resumeFrom "${args.resumeFrom}" is not in the ` +
+          "reset scope. Nothing was deleted."
+      );
+    }
+  }
+
+  return { org, budget, order, indexes, startAt };
+}
 
 /**
  * Drives one organization toward the clean-slate zero state, one bounded
@@ -378,53 +458,15 @@ export const resetOrgToZeroState = internalMutation({
   }> => {
     const dryRun = args.dryRun ?? true;
 
-    // ── Preflight. Every refusal in this block happens before the first
-    // delete, so a refused reset is a reset that did nothing at all.
-
-    // A budget that is not a positive whole number is a mistyped destructive
-    // command, and silently reinterpreting it would hide the mistake. Asking
-    // for MORE than the ceiling is different — that is the tool's own bound,
-    // not the operator's error — so it clamps down.
-    if (
-      args.batchSize !== undefined &&
-      (!Number.isInteger(args.batchSize) || args.batchSize < 1)
-    ) {
-      throw new ConvexError(
-        "Refusing to run the cutover reset: batchSize must be a positive whole number. " +
-          "Nothing was deleted."
-      );
-    }
-    const budget = Math.min(args.batchSize ?? CUTOVER_DELETE_BUDGET, CUTOVER_DELETE_BUDGET);
-
-    const org = await ctx.db.get(args.orgId);
-    if (!org) {
-      // Thrown, not returned: a reset aimed at an org that does not exist is a
-      // mistargeted reset, and the safest response to a mistargeted destructive
-      // command is to do nothing at all.
-      throw new ConvexError(
-        "Refusing to run the cutover reset: no organization with that id exists."
-      );
-    }
-
-    const order = cutoverResetOrder();
-    const indexes = assertCutoverScopeVerifiable(order);
-
-    let startAt = 0;
-    if (args.resumeFrom !== undefined) {
-      startAt = order.indexOf(args.resumeFrom);
-      if (startAt < 0) {
-        // A cursor naming a table that is no longer in scope would silently
-        // restart the walk or skip it entirely depending on how it was
-        // handled. Refuse instead — the operator can resume from the start.
-        throw new ConvexError(
-          `Refusing to run the cutover reset: resumeFrom "${args.resumeFrom}" is not in the ` +
-            "reset scope. Nothing was deleted."
-        );
-      }
-    }
+    // ⚠️ EVERY REFUSAL LIVES IN THE PREFLIGHT, AND THE PREFLIGHT RUNS FIRST.
+    // Nothing below this line may throw a refusal, and nothing above it may
+    // write — that is the whole safety property, and keeping it in one call is
+    // what makes it checkable by reading two lines instead of a whole handler.
+    const plan = await preflightCutoverReset(ctx, args);
 
     // ── Bounded walk. From here on, writes happen.
 
+    const { org, budget, order, indexes, startAt } = plan;
     const perTable: Record<string, number> = {};
     let deleted = 0;
     let tablesVisited = 0;
