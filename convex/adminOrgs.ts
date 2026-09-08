@@ -201,6 +201,108 @@ async function findActiveDeletionRequest(ctx: MutationCtx, orgId: Id<"organizati
   return null;
 }
 
+/**
+ * SCRUM-297 — REFUSE TO RETURN AN ORGANIZATION TO SERVICE AFTER DESTRUCTION.
+ *
+ * ⚠️ CALL THIS FROM EVERY MUTATION THAT CAN CLEAR `suspended`. The invariant is
+ * not "unsuspendOrg is guarded" — it is "no path returns a destroyed
+ * organization to service". Guarding one writer while a sibling with equal
+ * power stays open is how the first version of this fix shipped: `unsuspendOrg`
+ * refused, and `rejectDeletionRequest` reactivated the same organization
+ * without ever reading either condition. Rather than guard each writer, there
+ * is now exactly one — `reactivateOrganization` below — and
+ * `organizationReactivationGuard.test.ts` fails when other code assigns
+ * `suspended` something it cannot prove is `true` — but only for the write
+ * shapes it recognises, which is a NARROWER set than "any". It is blind to
+ * `db.replace` clearing the field by omission, the three-argument table-name
+ * API, aliases of `ctx.db`, table-scoped writers, non-dominating guards,
+ * computed keys and bare spreads. Its completeness claim is explicitly
+ * WITHDRAWN (owner ruling, SCRUM-297, 2026-09-08) and the list lives at the top
+ * of that file. Treat it as a net for the accidental omission that has already
+ * happened twice here, never as proof that no unguarded writer can exist.
+ *
+ * Two conditions, because they answer the same question from different
+ * evidence:
+ *
+ *  1. `destructivePurgeStartedAt` — precise, stamped by this code before the
+ *     first destructive delete.
+ *  2. any FAILED deletion request — the conservative reading for organizations
+ *     purged BEFORE the marker existed. Their destruction is just as real; the
+ *     code that did it simply had nothing to record it with. A marker-only
+ *     guard is correct exactly from its own deploy forward, which is not what
+ *     "permanently" means.
+ *
+ * Deliberately does NOT consider ACTIVE statuses — those are a separate,
+ * recoverable "in flight" condition that each caller handles on its own terms.
+ */
+async function assertNoIrreversiblePurgeHistory(
+  ctx: MutationCtx,
+  org: Doc<"organizations">
+) {
+  if (org.destructivePurgeStartedAt !== undefined) {
+    throwAppError(
+      AppErrorCode.VALIDATION_FAILED,
+      "This organization has begun destructive deletion and cannot be returned to service. " +
+        "The deletion must be completed instead."
+    );
+  }
+
+  const failedDeletionRequest = await ctx.db
+    .query("organizationDeletionRequests")
+    .withIndex("by_org_status", (q) => q.eq("orgId", org._id).eq("status", "FAILED"))
+    .first();
+  if (failedDeletionRequest) {
+    throwAppError(
+      AppErrorCode.VALIDATION_FAILED,
+      "This organization has a failed deletion that may have destroyed records and cannot be " +
+        "returned to service. The deletion must be completed instead."
+    );
+  }
+}
+
+/**
+ * THE ONLY PLACE AN ORGANIZATION IS RETURNED TO SERVICE.
+ *
+ * The guard and the write live in one function on purpose. Two earlier
+ * versions of this fix asked a source ratchet the question "is this write
+ * guarded?", and that question turns out to be genuinely hard to answer about
+ * code: a guard call sitting AFTER the write, or inside a branch that never
+ * runs, still reads as "the function calls the guard". Proving otherwise needs
+ * control-flow dominance analysis.
+ *
+ * Fusing them deletes the question instead of answering it. There is exactly
+ * one write site, four lines long, with the guard on the line above — so the
+ * ratchet only has to check that no OTHER code clears `suspended`.
+ *
+ * ⚠️ AND A PARSER DOES NOT ESTABLISH THAT OUTRIGHT — an earlier version of this
+ * sentence said it did. A syntactic detector is blind to `db.replace` clearing
+ * the field by OMISSION, to the three-argument table-name API, to aliases of
+ * `ctx.db`, and to table-scoped writers. Completeness is explicitly withdrawn
+ * (owner ruling, SCRUM-297, 2026-09-08); the full list is at the top of
+ * `scripts/organizationReactivationGuard.test.ts`. What protects this invariant
+ * is the fusion below plus the executable lifecycle tests, NOT the ratchet.
+ *
+ * ⚠️ `suspended` is `v.optional(v.boolean())` and `requireTenantAuth` tests it
+ * for TRUTHINESS, so clearing it to `undefined` reactivates exactly as `false`
+ * does. Any write of this field other than `suspended: true` belongs here.
+ */
+async function reactivateOrganization(
+  ctx: MutationCtx,
+  org: Doc<"organizations">,
+  options: { clearDeletionRequestPointer?: boolean } = {}
+) {
+  await assertNoIrreversiblePurgeHistory(ctx, org);
+
+  await ctx.db.patch(org._id, {
+    suspended: false,
+    suspendedAt: undefined,
+    suspendedReason: undefined,
+    ...(options.clearDeletionRequestPointer
+      ? { deletionRequestedAt: undefined, deletionRequestId: undefined }
+      : {}),
+  });
+}
+
 function countDeletedRows(counts: DeletedCounts) {
   return Object.values(counts).reduce((sum, count) => sum + count, 0);
 }
@@ -655,6 +757,38 @@ export const unsuspendOrg = mutation({
     const org = await ctx.db.get(args.orgId);
     if (!org) throwAppError(AppErrorCode.ORG_NOT_FOUND, "Organization not found.");
 
+    // ⚠️ SCRUM-297 — FAIL CLOSED ONCE DESTRUCTION HAS BEGUN.
+    //
+    // The in-flight check runs first here, and the irreversible-purge guard
+    // second, inside `reactivateOrganization` below. That ordering is safe
+    // rather than merely tolerable: the two conditions overlap only while a
+    // purge is actively RUNNING, and there BOTH answers are refusals. In the
+    // case this guard exists for — a purge that already FAILED —
+    // `findActiveDeletionRequest` excludes FAILED and passes, so the guard is
+    // what refuses and the operator gets the destruction message rather than a
+    // misleading "deletion in progress".
+    //
+    // ⚠️ An earlier comment here claimed the guard was checked FIRST. It was,
+    // until reactivation was centralized; the claim was left behind by that
+    // refactor and is corrected rather than deleted, because this is the third
+    // comment in this lane that described a property the code no longer had.
+    //
+    // `ACTIVE_DELETION_STATUSES` alone could not see this — a purge that throws marks the *request* FAILED,
+    // never touches the organization row, and FAILED is not an active status,
+    // so the guard below reads "nothing in flight" over a dealership whose
+    // command-idempotency authority has already been deleted while its economic
+    // provenance survives. Reactivating there lets an identical retry of a
+    // previously-completed economic command execute a second time — reproduced
+    // as a duplicate advance recovery and a duplicate economic event.
+    //
+    // Not payroll-specific: `commandIdempotency` is deletion step 0 and the
+    // sole replay authority behind every `runWithIdempotency` call site, so the
+    // hole is under all of them at once. The fix belongs here, at the one
+    // boundary that can return the organization to service, rather than as a
+    // fallback inside any financial module.
+    // Does NOT block `hardDeleteOrg`: `findActiveDeletionRequest` still
+    // excludes FAILED, so completing the purge remains reachable. Refusing
+    // reactivation must not also refuse the one legal way forward.
     const activeDeletionRequest = await findActiveDeletionRequest(ctx, args.orgId);
     if (activeDeletionRequest) {
       throwAppError(
@@ -663,11 +797,7 @@ export const unsuspendOrg = mutation({
       );
     }
 
-    await ctx.db.patch(args.orgId, {
-      suspended: false,
-      suspendedAt: undefined,
-      suspendedReason: undefined,
-    });
+    await reactivateOrganization(ctx, org);
 
     await notifyManagers(ctx, args.orgId, "admin.org_unsuspended", {});
 
@@ -748,6 +878,31 @@ export const rejectDeletionRequest = mutation({
     const org = await ctx.db.get(request.orgId);
     if (!org) throwAppError(AppErrorCode.ORG_NOT_FOUND, "Organization not found.");
 
+    // ⚠️ SCRUM-297 — THE SIBLING WRITER. This mutation clears `suspended` just
+    // as `unsuspendOrg` does, and the first version of that fix guarded only
+    // the other one. Rejecting THIS request says nothing about whether an
+    // EARLIER purge of the same organization already destroyed its command
+    // authority: an org accumulates deletion requests over time, and a fresh
+    // PENDING_REVIEW one carries no evidence about its predecessors.
+    //
+    // Reachable only for an organization already returned to service before the
+    // guard existed — it must be unsuspended for `organizations.remove` to file
+    // a new request at all — which is exactly the population the guard is for.
+    // Left unguarded it also erased `deletionRequestId`, destroying the forward
+    // pointer to the failed purge and making the affected organizations
+    // progressively harder to find. (They stay discoverable from the request
+    // side: `organizationDeletionRequests` is never purged.)
+    //
+    // ⚠️ THE WHOLE MUTATION REFUSES, request transition included. The guard
+    // now runs inside `reactivateOrganization`, which is called AFTER the
+    // request patch below — that ordering does not change the outcome, because
+    // the throw is UNCAUGHT and an uncaught throw rolls the whole mutation back.
+    // (Convex commits a CAUGHT exception's writes; this one is never caught.)
+    // So there is still no partial outcome where the request is REJECTED but the
+    // organization stayed suspended, and that is the safe direction. Nothing is
+    // stranded: the request stays PENDING_REVIEW, an ACTIVE status that already
+    // blocks `unsuspendOrg`, while `approveDeletionRequest` still works, so
+    // completing the purge remains the path forward. `T7` pins this.
     const now = Date.now();
     await ctx.db.patch(args.requestId, {
       status: "REJECTED",
@@ -756,13 +911,7 @@ export const rejectDeletionRequest = mutation({
       reviewNotes: args.reviewNotes,
       lastProcessedAt: now,
     });
-    await ctx.db.patch(request.orgId, {
-      suspended: false,
-      suspendedAt: undefined,
-      suspendedReason: undefined,
-      deletionRequestedAt: undefined,
-      deletionRequestId: undefined,
-    });
+    await reactivateOrganization(ctx, org, { clearDeletionRequestPointer: true });
 
     await logAdminAction(ctx, admin, {
       action: "rejectOrgDeletionRequest",
@@ -860,6 +1009,24 @@ export const runDeletionRequestBatch = internalMutation({
           lastProcessedAt: now,
         });
         return { status: "COMPLETED" as const };
+      }
+
+      // ⚠️ SCRUM-297 — STAMP IRREVERSIBILITY BEFORE THE FIRST DESTRUCTIVE STEP.
+      //
+      // Ordered ahead of `runDeletionStep`, in the same transaction, so the
+      // only way to commit deletions without the marker is a transaction abort
+      // — which discards those deletions too. The reverse order would not hold:
+      // this function's catch block returns normally and therefore COMMITS, so
+      // a step that throws mid-loop commits its deletions, and anything written
+      // after the step would never record them. That is exactly why the marker
+      // is not derived from `deletedCounts`, which is patched only after a step
+      // returns and reads zero for a batch that threw.
+      //
+      // Idempotent by the `undefined` check: re-stamping on every batch would
+      // move the timestamp and lose when destruction actually began.
+      const org = await ctx.db.get(request.orgId);
+      if (org && org.destructivePurgeStartedAt === undefined) {
+        await ctx.db.patch(request.orgId, { destructivePurgeStartedAt: now });
       }
 
       const step = ORGANIZATION_DELETION_STEPS[currentStepIndex];

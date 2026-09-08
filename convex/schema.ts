@@ -62,6 +62,54 @@ export default defineSchema({
     deletionRequestedAt: v.optional(v.number()),
     deletionRequestId: v.optional(v.id("organizationDeletionRequests")),
     /**
+     * SCRUM-297 — WHEN DESTRUCTIVE PURGE BECAME IRREVERSIBLE FOR THIS ORG.
+     *
+     * Written once, in the same transaction as and strictly BEFORE the first
+     * destructive step of a purge run. Its PRESENCE — never its value, and
+     * never a deletion request's `status` — forbids returning the dealership to
+     * service. Destruction outlives the status that described it: a purge that
+     * throws marks the *request* FAILED and leaves the organization row alone,
+     * and FAILED is not in `ACTIVE_DELETION_STATUSES`, so a status-based guard
+     * reads "no purge in flight" over a half-destroyed dealership.
+     *
+     * ⚠️ NOT DERIVED FROM `deletedCounts`. Counts are patched only AFTER a step
+     * returns, while `runDeletionRequestBatch`'s catch block returns normally
+     * and therefore COMMITS — a step throwing mid-loop commits up to a full
+     * batch of deletions while recording zero counts. A marker derived from
+     * them reports "nothing destroyed" after real destruction. This one is
+     * written ahead of the delete, so deletions without the marker require a
+     * transaction abort, which discards those deletions too.
+     *
+     * ⚠️ NOTHING CLEARS IT. The field disappears only with the organization row
+     * itself, at the end of a completed purge, when there is no longer anything
+     * to reactivate.
+     *
+     * ⚠️ AND A FIELD NOTHING CLEARS IS NOT A GUARD. An earlier version of this
+     * comment argued the field was safe because `rejectDeletionRequest` only
+     * runs from PENDING_REVIEW and so never meets it. True about the request
+     * being rejected, and beside the point: an organization accumulates
+     * deletion requests over time, so a fresh PENDING_REVIEW one carries no
+     * evidence about an EARLIER purge that already destroyed command authority.
+     * `rejectDeletionRequest` cleared `suspended` without reading this field at
+     * all. Both former writers now delegate to `reactivateOrganization`, the
+     * single function allowed to clear suspension, which reads this field
+     * first. `scripts/organizationReactivationGuard.test.ts` catches other code
+     * assigning `suspended` a value it cannot prove is `true` — ⚠️ but ONLY for
+     * the write shapes it recognises. That detector is explicitly NON-EXHAUSTIVE
+     * (owner ruling, SCRUM-297, 2026-09-08): it cannot see `db.replace` clearing
+     * the field by omission, the three-argument table-name API, aliases of
+     * `ctx.db`, or table-scoped writers. What enforces this invariant is the
+     * single fused writer plus `convex/orgPurgeLifecycle.scrum297.test.ts`,
+     * which proves by execution that a partially purged organization cannot be
+     * returned to service. Do not read a green ratchet as proof of absence.
+     *
+     * The legal transitions once set are: resume the purge, or complete it.
+     * Restoring a partially purged organization is NOT a product requirement
+     * (owner ruling 2026-09-07); if it ever becomes one it needs a reviewed
+     * reconciliation protocol, not the removal of this field.
+     */
+    destructivePurgeStartedAt: v.optional(v.number()),
+    /**
      * SCRUM-208 — WHICH COMMITMENT AUTHORITY THIS DEALERSHIP RUNS ON.
      *
      * Canonical-state admission is ONE per-org rule, not per-field `undefined`
