@@ -14,6 +14,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { reverseAccountingEvent } from "./accounting/reversals";
+import { postLegacyTransactionEvent } from "../test-utils/legacyMigrationSeed";
 
 const MODULE_GLOB = import.meta.glob("./**/*.ts");
 
@@ -112,19 +113,21 @@ describe("Phase 18 — snapshot correctness across a period boundary", () => {
   test("snapshots accumulate per (account, currency, period) and reports sum them correctly", async () => {
     const ctx = await seedSnapshotDealer();
 
-    // Post directly through the migration's postAccountingEvent path (same
-    // engine every domain event uses) so this test doesn't depend on any
-    // one domain module's specific mutation surface.
-    await ctx.t.run((c) =>
-      c.db.insert("transactions", { orgId: ctx.orgId, type: "OUT", amount: 100, date: Date.UTC(2025, 1, 1), category: "EXPENSE", description: "Period A expense" })
-    );
-    await ctx.t.run((c) =>
-      c.db.insert("transactions", { orgId: ctx.orgId, type: "OUT", amount: 50, date: Date.UTC(2025, 7, 1), category: "EXPENSE", description: "Period B expense (before cutoff)" })
-    );
-    await ctx.t.run((c) =>
-      c.db.insert("transactions", { orgId: ctx.orgId, type: "OUT", amount: 30, date: Date.UTC(2025, 10, 1), category: "EXPENSE", description: "Period B expense (after cutoff)" })
-    );
-    await ctx.asOwner.mutation(api.accountingMigration.migrateUnpostedTransactions, { orgId: ctx.orgId, dryRun: false });
+    // Post directly through postAccountingEvent (same engine every domain event
+    // uses) so this test doesn't depend on any one domain module's specific
+    // mutation surface. This used to go through
+    // `accountingMigration.migrateUnpostedTransactions`, which is retired and
+    // can no longer post (SCRUM-234); the seeded events are identical.
+    for (const [amount, date, description] of [
+      [100, Date.UTC(2025, 1, 1), "Period A expense"],
+      [50, Date.UTC(2025, 7, 1), "Period B expense (before cutoff)"],
+      [30, Date.UTC(2025, 10, 1), "Period B expense (after cutoff)"],
+    ] as const) {
+      const transactionId = await ctx.t.run((c) =>
+        c.db.insert("transactions", { orgId: ctx.orgId, type: "OUT", amount, date, category: "EXPENSE", description })
+      );
+      await ctx.t.run((c) => postLegacyTransactionEvent(c, { orgId: ctx.orgId, transactionId, actorId: ctx.userId }));
+    }
 
     const cash = await accountBySystemKey(ctx.t, ctx.orgId, "CASH_ON_HAND");
     const expenseAccount = await accountBySystemKey(ctx.t, ctx.orgId, "GENERAL_EXPENSE");
@@ -169,10 +172,10 @@ describe("Phase 18 — snapshot correctness across a period boundary", () => {
   test("a reversed event nets its snapshot contribution back to zero", async () => {
     const ctx = await seedSnapshotDealer();
 
-    await ctx.t.run((c) =>
+    const transactionId = await ctx.t.run((c) =>
       c.db.insert("transactions", { orgId: ctx.orgId, type: "OUT", amount: 75, date: Date.UTC(2025, 1, 1), category: "EXPENSE", description: "To be reversed" })
     );
-    await ctx.asOwner.mutation(api.accountingMigration.migrateUnpostedTransactions, { orgId: ctx.orgId, dryRun: false });
+    await ctx.t.run((c) => postLegacyTransactionEvent(c, { orgId: ctx.orgId, transactionId, actorId: ctx.userId }));
 
     const event = await ctx.t.run((c) =>
       c.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", ctx.orgId)).filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED")).first()
