@@ -1028,7 +1028,30 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
     GAP_RESOLUTION: hasGap || (gap !== undefined && gap !== "NOT_REQUIRED"),
     APPROVED_PURCHASE: true,
     DELIVERY_ACTIONS: facts.documentRulesApply ?? true,
-    DISBURSEMENT: true,
+    /**
+     * Only once the money can actually be awaited — never as a step standing
+     * ahead of the work that produces it.
+     *
+     * A disbursement is unreachable until the deal is CLOSED:
+     * `confirmDisbursement` refuses any other status, `finalizeDeal` is what
+     * closes the deal, and finalization itself refuses until the vehicle
+     * handover is registered. Disbursement is nevertheless ordered BEFORE
+     * handover here, because that is the sequence a dealer describes.
+     *
+     * Marking it applicable unconditionally therefore made it the first
+     * incomplete stage on every ordinary approved deal — the live stage — while
+     * the real next step, handover, sat behind it as merely PENDING. That is not
+     * a labelling problem. The cockpit shipped today renders a workflow action
+     * only when its stage is the live one, and every action it has belongs to
+     * HANDOVER or SETTLEMENT, so the handover button disappeared, and the
+     * expected-payment and finalize buttons behind it with it: the deal could
+     * not be progressed from the screen at all.
+     *
+     * Evidence keeps it visible on deals that already disbursed, including
+     * historical ones whose status has moved on, so this hides a future step
+     * rather than a finished one.
+     */
+    DISBURSEMENT: facts.status === "CLOSED" || complete.DISBURSEMENT,
     HANDOVER: true,
     SETTLEMENT: true,
   };
