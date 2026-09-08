@@ -1,6 +1,12 @@
 /**
- * SCRUM-297 — structural ratchet: only one function may return an organization
- * to service, and it consults the irreversible-purge guard.
+ * SCRUM-297 — BOUNDED convention control: only one function may return an
+ * organization to service, and it consults the irreversible-purge guard.
+ *
+ * ⚠️ "Bounded" is load-bearing and is not modesty. This file catches an
+ * ACCIDENTAL regression against that convention, over a set of write shapes it
+ * explicitly recognises. It is NOT an exhaustive proof that no other
+ * organization writer or reactivation path exists. See the withdrawal below
+ * before citing it as evidence of anything.
  *
  * ═══ WHY THE QUESTION CHANGED ═══
  *
@@ -33,7 +39,13 @@
  * has exactly ONE function that clears suspension — `reactivateOrganization` —
  * with the guard fused into it on the line above the write. This file no longer
  * asks whether a write is guarded. It asks whether any OTHER code clears
- * `suspended` at all, which is a structural fact a parser settles outright.
+ * `suspended` — a narrower question, and a cheaper one.
+ *
+ * ⚠️ BUT A PARSER DOES NOT SETTLE EVEN THAT QUESTION OUTRIGHT. An earlier
+ * version of this sentence claimed it did, five lines above the paragraph that
+ * says the opposite. It settles it only for the write shapes enumerated under
+ * "the grammar it genuinely understands" below; everything under "known
+ * uncovered shapes" passes unseen.
  *
  * ⚠️ If this fails because you added a legitimate new reactivation path, the fix
  * is to call `reactivateOrganization` from it — not to add an exemption.
@@ -99,12 +111,34 @@
  *
  * ─── What actually protects production ───
  *
- * NOT this file. The invariant is enforced by the code itself: there is exactly
- * one function that clears suspension, with the guard fused to the line above
- * the write, and `convex/orgPurgeLifecycle.scrum297.test.ts` proves BY
- * EXECUTION that a partially purged organization cannot be returned to service
- * through the supported path. This file is a cheap detective net for the
- * accidental omission that has already happened twice here — nothing more.
+ * NOT this file, and the distinction matters: production safety here rests on
+ * four things, none of which is the detector's completeness.
+ *
+ *  1. THE ENUMERATED WRITER SET. Every current production writer of
+ *     `organizations` was enumerated by hand and checked — `organizations.ts`
+ *     (create, name update, deletion-request suspension) and `adminOrgs.ts`
+ *     (guarded reactivation, suspension, approval suspension, hard-delete
+ *     suspension, final deletion, purge marker). `adminData.ts`'s raw-JSON
+ *     editor excludes the `organizations` table.
+ *  2. THE RUNTIME GUARD. `reactivateOrganization` is the only function that
+ *     clears suspension, four straight-line statements with
+ *     `assertNoIrreversiblePurgeHistory` on the line above the write and no
+ *     branch between them — which is why the dominance gap below cannot bite
+ *     THIS function, though the detector could not prove that in general.
+ *  3. EXECUTABLE LIFECYCLE TESTS. `convex/orgPurgeLifecycle.scrum297.test.ts`
+ *     drives the real purge engine and proves BY EXECUTION that a partially
+ *     purged organization cannot be returned to service through the supported
+ *     path.
+ *  4. INDEPENDENT WHOLE-TREE SWEEPS. Both review seats separately searched all
+ *     of `convex/` for each shape listed above as uncovered and found none in
+ *     production: no `ctx.db.replace(`, no three-argument table-name write, no
+ *     aliased database handle, no `ctx.db.table(...)` writer.
+ *
+ * ⚠️ Points 1 and 4 are observations about the tree AT THIS REVISION, not
+ * invariants. They decay the moment someone adds a writer, and this file will
+ * not reliably tell you when that happens. Re-derive them; do not cite them
+ * forward. This file is a cheap detective net for the accidental omission that
+ * has already happened twice here — nothing more.
  */
 import { beforeAll, describe, expect, test } from "vitest";
 import fs from "node:fs";
@@ -279,8 +313,12 @@ function isFunctionLike(node: ts.Node): node is FunctionLike {
 export type SuspensionClearingWrite = { line: number; insideAuthorizedWriter: boolean };
 
 /**
- * Every write that could return an organization to service, and whether it sits
- * inside the single function authorized to do so.
+ * Every write THIS DETECTOR RECOGNISES as able to return an organization to
+ * service, and whether it sits inside the single function authorized to do so.
+ *
+ * ⚠️ NOT "every write that could". The uncovered shapes are listed at the top
+ * of this file; a `db.replace` omitting `suspended` reactivates an organization
+ * and never appears in this result.
  */
 export function findSuspensionClearingWrites(
   source: string,
@@ -558,10 +596,14 @@ describe("SCRUM-297 organization reactivation guard", () => {
   /**
    * Meta-tests for the detector itself.
    *
-   * Every case below is a real evasion that some previous version of this file
+   * Most cases below are real evasions that some previous version of this file
    * failed to catch — found by an adversarial reviewer, by a cross-family
    * reviewer, and by CodeRabbit, on three separate commits. None involves
    * obfuscation; they are shapes ordinary code takes.
+   *
+   * The exceptions are the two cases named DOCUMENTED GAP. Those assert that a
+   * shape is NOT caught, pinning a known limit so it cannot be quietly believed
+   * closed. They are not evasions this file ever handled.
    */
   describe("the detector itself", () => {
     const unauthorized = (body: string) => `async function somewhereElse() {\n${body}\n}`;

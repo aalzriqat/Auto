@@ -67,7 +67,7 @@ async function seedOrg(t: Harness) {
 }
 
 /**
- * Execute an economic command through the SHARED command log, exactly as all 29
+ * Execute an economic command through the SHARED command log, exactly as all 30
  * production call sites do. The effect is written into `employeeAdvances`, a
  * table listed in KNOWN_UNCOVERED_PRE_EXISTING, so it survives the purge.
  */
