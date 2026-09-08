@@ -19,7 +19,7 @@ import { internalMutation, mutation } from "./functions";
 import { MutationCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
-import { PostCommand, postAccountingEvent } from "./accounting/postingEngine";
+import { PostCommand, postAccountingEvent, retiredPostingRefusal } from "./accounting/postingEngine";
 import { prepaidPostingBlockedReason } from "./utils/prepaidSourceLedger";
 import { payrollPostingBlockedReason } from "./utils/payrollSourceLedger";
 import { commissionPostingBlockedReason } from "./utils/commissionSourceLedger";
@@ -1118,6 +1118,35 @@ export async function drainEntries(
     // its period opens. A CLOSED or LOCKED period is a different matter — that
     // is a deliberate refusal that will not resolve on its own, so it still
     // burns attempts and dead-letters as designed.
+    // ⚠️ PERMANENT REFUSALS MUST BE CLASSIFIED BEFORE TEMPORARY HOLDS.
+    //
+    // Everything below this point can decide an entry is merely WAITING — for
+    // a period to open, or for a prepaid/payroll/commission dependency to post
+    // — and `markEntryHeld` deliberately leaves it PENDING without consuming an
+    // attempt, because retrying it is not wrong. That is right for an entry
+    // that will one day become postable.
+    //
+    // A retired forward posting never will. Held first, it would sit PENDING
+    // forever: never posted (correct), never dead-lettered (wrong), permanently
+    // blocking `computeCloseChecklist` with a row no operator action can
+    // resolve, and never reaching the engine refusal that was supposed to end
+    // it. Reproduced before fixing — a `transactions`-sourced
+    // PREPAID_EXPENSE_AMORTIZED carrying no schedule reference survived ten
+    // redrives at `attempts: 0`.
+    //
+    // The engine remains the authority: this shares its exact classifier and
+    // its exact wording rather than restating the rule, so the two cannot
+    // drift. REVERSE entries are exempt — a reversal unwinds something that
+    // already posted, and does not route through the engine at all.
+    if (p.kind === "POST" && p.eventType) {
+      const retired = retiredPostingRefusal({ eventType: p.eventType, sourceType: p.sourceType });
+      if (retired) {
+        await markEntryFailed(ctx, p, retired);
+        failed++;
+        continue;
+      }
+    }
+
     const periodCheck = await checkPostingAllowed(ctx, p.orgId, p.accountingDate);
     if (!periodCheck.ok && periodCheck.waiting) {
       await markEntryHeld(ctx, p, periodCheck.reason);
