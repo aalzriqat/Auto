@@ -1,4 +1,83 @@
+import { defineBilingualMessages } from "../defineBilingualMessages";
+
+/**
+ * The deal rail's stage-authority vocabulary, defined ONCE per message.
+ *
+ * The rest of this file is still two parallel catalogs, and that shape is
+ * exactly what `defineBilingualMessages` exists to avoid — it keeps each pair
+ * together so a missing translation is visible in review and the two halves
+ * cannot drift. It also means these messages are written once rather than as
+ * matching blocks in two places, which is what the duplication gate measures.
+ *
+ * Only the messages this change introduces are defined this way. Converting the
+ * pre-existing catalogs is a separate job and not this PR's to do.
+ */
+const dealRailMessages = defineBilingualMessages({
+  /**
+   * Named for the money moving, not for a form being filled in. This is the
+   * moment the dealer actually cares about, and it was invisible until it got
+   * its own stage — folded into "financial settlement", which reads as
+   * paperwork.
+   *
+   * "صرف" is what a finance company actually does with the money, and what a
+   * dealer says on the phone. "دفعة" would have read as the customer's payment.
+   */
+  StageDisbursement: ["Finance company payment", "صرف شركة التمويل"],
+
+  /**
+   * TRANSITIONAL, and load-bearing for exactly one release.
+   *
+   * This release ships the DISBURSEMENT stage from the backend while the
+   * deployed cockpit is still the previous build. That build resolves a stage
+   * label as `t(STAGE_LABEL[key] ?? key)`, and `t()` returns the KEY when it
+   * knows no translation — so without this entry the rail would render the bare
+   * string "DISBURSEMENT" to operators, in Arabic as well as English, for the
+   * whole window between this deploy and the frontend release that follows it.
+   *
+   * The new cockpit never reads this key; it uses `StageDisbursement` above.
+   * Remove this once that frontend is live.
+   * `lib/i18n/deployedStageLabels.test.ts` is what keeps it honest meanwhile.
+   */
+  DISBURSEMENT: ["Finance company payment", "صرف شركة التمويل"],
+
+  /**
+   * Whose move is it — the distinction the whole screen turns on. A stage that
+   * belongs to the finance company must never read as something the dealership
+   * has failed to do, and the badge is what stops an operator hunting for a
+   * button that must not exist.
+   */
+  StageOwnerFinanceCompany: ["Finance company", "شركة التمويل"],
+  StageOwnerDealership: ["Dealership", "المعرض"],
+
+  /**
+   * Says what AutoFlow's role is, in the one place an operator is looking at a
+   * step they cannot take. AutoFlow never approves or evaluates a financing
+   * request; it writes down what the finance company decided.
+   */
+  StageMirrorNote: [
+    "This step is the finance company's. AutoFlow records what they decide — it does not approve financing.",
+    "هذه الخطوة على شركة التمويل. يسجّل أوتوفلو ما تُقرّره، ولا يمنح موافقة على التمويل.",
+  ],
+
+  /** A DEALER stage that is genuinely ready — nothing outstanding, nothing awaited. */
+  StageReadyToProceed: [
+    "Nothing is outstanding on this step.",
+    "لا يوجد ما ينتظر إكماله في هذه الخطوة.",
+  ],
+
+  /**
+   * Waiting on THEM, and it says so. Deliberately not "payment is outstanding",
+   * which reads like a dealership failure for a payment the dealership cannot
+   * make happen.
+   */
+  BlockerAwaitingDisbursement: [
+    "Waiting on the finance company to pay",
+    "بانتظار صرف شركة التمويل",
+  ],
+});
+
 export const salesEn = {
+  ...dealRailMessages.en,
   // Sales & F&I
   LogSale: "Log Sale",
   SaleDetails: "Sale Details",
@@ -631,57 +710,14 @@ export const salesEn = {
   StageGapResolution: "Appraisal gap",
   StageApprovedPurchase: "Approved purchase amount",
   StageDeliveryActions: "Delivery actions",
-  /**
-   * Named for the money moving, not for a form being filled in. This is the
-   * moment the dealer actually cares about, and it was invisible until it got
-   * its own stage — folded into "financial settlement", which reads as
-   * paperwork.
-   */
-  StageDisbursement: "Finance company payment",
-  /**
-   * TRANSITIONAL, and load-bearing for exactly one release.
-   *
-   * This release ships the DISBURSEMENT stage from the backend while the
-   * deployed cockpit is still the previous build. That build resolves a stage
-   * label as `t(STAGE_LABEL[key] ?? key)`, and `t()` returns the KEY when it
-   * knows no translation — so without this entry the rail would render the bare
-   * string "DISBURSEMENT" to operators, in Arabic as well as English, for the
-   * whole window between this deploy and the frontend release that follows it.
-   *
-   * The new cockpit never reads this key; it uses `StageDisbursement` above.
-   * Remove this once that frontend is live.
-   */
-  DISBURSEMENT: "Finance company payment",
   StageHandover: "Vehicle handover",
   StageSettlement: "Financial settlement",
-  // --- whose move is it -------------------------------------------------
-  // The distinction the whole screen turns on. A stage that belongs to the
-  // finance company must never read as something the dealership has failed to
-  // do, and the badge is what stops an operator hunting for a button that must
-  // not exist.
-  StageOwnerFinanceCompany: "Finance company",
-  StageOwnerDealership: "Dealership",
-  /**
-   * Says what AutoFlow's role is, in the one place an operator is looking at a
-   * step they cannot take. AutoFlow never approves or evaluates a financing
-   * request; it writes down what the finance company decided.
-   */
-  StageMirrorNote:
-    "This step is the finance company's. AutoFlow records what they decide — it does not approve financing.",
-  /** A DEALER stage that is genuinely ready — nothing outstanding, nothing awaited. */
-  StageReadyToProceed: "Nothing is outstanding on this step.",
   BlockerAwaitingCreditDecision: "Waiting on the finance company's decision",
   BlockerAwaitingAppraisal: "Waiting on the appraisal",
   BlockerGapUnresolved: "The appraisal gap is not resolved",
   BlockerGapNegotiationFailed: "Gap negotiation failed",
   BlockerNoApprovedPurchaseAmount: "The approved purchase amount is not recorded",
   BlockerDocumentsIncomplete: "Required documents are outstanding",
-  /**
-   * Waiting on THEM, and it says so. Deliberately not "payment is outstanding",
-   * which reads like a dealership failure for a payment the dealership cannot
-   * make happen.
-   */
-  BlockerAwaitingDisbursement: "Waiting on the finance company to pay",
   BlockerHandoverBlocked: "The vehicle cannot be handed over yet",
   BlockerAwaitingSettlement: "Waiting on settlement",
   NextStepHeading: "Next step",
@@ -1041,6 +1077,7 @@ export const salesEn = {
 };
 
 export const salesAr = {
+  ...dealRailMessages.ar,
   // Sales & F&I
   LogSale: "تسجيل بيع",
   SaleDetails: "تفاصيل البيع",
@@ -1666,25 +1703,14 @@ export const salesAr = {
   StageGapResolution: "فرق التخمين",
   StageApprovedPurchase: "قيمة الشراء المعتمدة",
   StageDeliveryActions: "إجراءات التسليم",
-  // "صرف" is what a finance company actually does with the money, and what a
-  // dealer says on the phone. "دفعة" would have read as the customer's payment.
-  StageDisbursement: "صرف شركة التمويل",
-  /** TRANSITIONAL — see the English entry. Removed with the frontend release. */
-  DISBURSEMENT: "صرف شركة التمويل",
   StageHandover: "تسليم المركبة",
   StageSettlement: "التسوية المالية",
-  StageOwnerFinanceCompany: "شركة التمويل",
-  StageOwnerDealership: "المعرض",
-  StageMirrorNote:
-    "هذه الخطوة على شركة التمويل. يسجّل أوتوفلو ما تُقرّره، ولا يمنح موافقة على التمويل.",
-  StageReadyToProceed: "لا يوجد ما ينتظر إكماله في هذه الخطوة.",
   BlockerAwaitingCreditDecision: "بانتظار قرار شركة التمويل",
   BlockerAwaitingAppraisal: "بانتظار التخمين",
   BlockerGapUnresolved: "فرق التخمين غير مُعالَج",
   BlockerGapNegotiationFailed: "تعذّر الاتفاق على فرق التخمين",
   BlockerNoApprovedPurchaseAmount: "قيمة الشراء المعتمدة غير مُسجَّلة",
   BlockerDocumentsIncomplete: "مستندات مطلوبة لم تُستكمل",
-  BlockerAwaitingDisbursement: "بانتظار صرف شركة التمويل",
   BlockerHandoverBlocked: "لا يمكن تسليم المركبة بعد",
   BlockerAwaitingSettlement: "بانتظار التسوية",
   NextStepHeading: "الخطوة التالية",
