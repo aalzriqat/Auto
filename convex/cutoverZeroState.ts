@@ -140,6 +140,102 @@ function byTableName(a: string, b: string): number {
   return a.localeCompare(b, "en");
 }
 
+/**
+ * Field names anywhere in the schema whose value is (or contains) a
+ * `_storage` id, derived from the validators rather than listed.
+ *
+ * ⚠️ WHY THIS EXISTS AT ALL. The walk used to delete every row with a bare
+ * `ctx.db.delete(row._id)`. `orgFinancialReset` deliberately does not, and says
+ * why: "An orphaned row is recoverable; an unreferenced blob is not."
+ * `_storage` carries no `orgId`, so once the last referencing row is gone the
+ * blob cannot be enumerated by org, cannot be deleted by any code path, and is
+ * still billed — while `verifyOrgZeroState`, which counts ROWS, certifies that
+ * tenant as zero. For a cutover whose whole purpose is to destroy the current
+ * data before launch, that is the data quietly surviving the destruction.
+ *
+ * Derived, not listed, for the same reason the table scope is: a storage field
+ * added tomorrow is covered without anyone remembering to type its name.
+ */
+function collectStorageFieldNames(node: unknown, into: Set<string>): boolean {
+  if (node === null || typeof node !== "object") return false;
+  const validator = node as {
+    kind?: string;
+    tableName?: string;
+    element?: unknown;
+    fields?: Record<string, unknown>;
+    members?: unknown[];
+  };
+
+  if (validator.kind === "id") return validator.tableName === "_storage";
+  if (validator.kind === "array") return collectStorageFieldNames(validator.element, into);
+  if (validator.kind === "union") {
+    let found = false;
+    for (const member of validator.members ?? []) {
+      found = collectStorageFieldNames(member, into) || found;
+    }
+    return found;
+  }
+  if (validator.kind === "object") {
+    let found = false;
+    for (const [field, child] of Object.entries(validator.fields ?? {})) {
+      if (collectStorageFieldNames(child, into)) {
+        into.add(field);
+        found = true;
+      }
+    }
+    return found;
+  }
+  return false;
+}
+
+type SchemaTableShape = { validator: { fields?: Record<string, unknown> } };
+
+/** Every field name in the schema that holds a `_storage` id, at any depth. */
+export function storageFieldNames(): Set<string> {
+  const names = new Set<string>();
+  const tables = schema.tables as unknown as Record<string, SchemaTableShape>;
+  for (const table of Object.values(tables)) {
+    for (const [field, child] of Object.entries(table.validator.fields ?? {})) {
+      if (collectStorageFieldNames(child, names)) names.add(field);
+    }
+  }
+  return names;
+}
+
+/** Tables carrying a `_storage` id anywhere in their validator. */
+export function storageBearingTableNames(): string[] {
+  const tables = schema.tables as unknown as Record<string, SchemaTableShape>;
+  return Object.entries(tables)
+    .filter(([, table]) =>
+      Object.values(table.validator.fields ?? {}).some((child) =>
+        collectStorageFieldNames(child, new Set<string>())
+      )
+    )
+    .map(([name]) => name)
+    .sort(byTableName);
+}
+
+/**
+ * Whether a row actually carries a storage reference right now.
+ *
+ * Presence of the FIELD is not enough — most of these fields are optional, and
+ * refusing on every row of a storage-bearing table would refuse essentially
+ * every real dealership forever. The question is whether this row would orphan
+ * a blob if it were deleted.
+ */
+export function rowCarriesStorage(value: unknown, fields: Set<string>): boolean {
+  if (value === null || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some((item) => rowCarriesStorage(item, fields));
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (fields.has(key)) {
+      if (typeof child === "string" && child.length > 0) return true;
+      if (Array.isArray(child) && child.length > 0) return true;
+    }
+    if (rowCarriesStorage(child, fields)) return true;
+  }
+  return false;
+}
+
 type IndexDefinition = { indexDescriptor: string; fields: string[] };
 
 /**
@@ -307,7 +403,24 @@ export const verifyOrgZeroState = internalQuery({
     residual: Record<string, number>;
     unverifiable: string[];
     retainedByDesign: string[];
+    storageNotMeasured: string[];
   }> => {
+    // ⚠️ THE PROOF MUST MEASURE ITS OWN TARGET. Without this read the verifier
+    // probed 138 index ranges, found every one of them empty — which they
+    // trivially are for an id that names nothing — and returned `zero: true`.
+    // A stale or mistyped id therefore produced a clean zero-state CERTIFICATE
+    // for a tenant that was never examined, while the real tenant stayed
+    // populated. Absence of the target is UNAVAILABLE, never success; the same
+    // rule that makes an unreadable table fail closed rather than count as
+    // empty.
+    const org = await ctx.db.get(args.orgId);
+    if (!org) {
+      throw new ConvexError(
+        "Refusing to certify a zero state: no organization with that id exists. " +
+          "An empty result for an id that names nothing is not a proof."
+      );
+    }
+
     const residual: Record<string, number> = {};
     const unverifiable: string[] = [];
     const inScope = orgScopedTableNames().filter(
@@ -333,6 +446,15 @@ export const verifyOrgZeroState = internalQuery({
       residual,
       unverifiable,
       retainedByDesign: Object.keys(CUTOVER_RETAINED_BY_DESIGN).sort(byTableName),
+      // ⚠️ `zero` IS A STATEMENT ABOUT DATABASE ROWS AND NOTHING ELSE. These
+      // tables can reference `_storage` blobs, and `_storage` has no `orgId`,
+      // so no query here can tell whether a blob for this tenant survives.
+      // Reported so the certificate names its own boundary rather than letting
+      // a reader infer a wider one; the reset refuses outright rather than
+      // creating orphans in the first place.
+      storageNotMeasured: storageBearingTableNames().filter((table) =>
+        Object.hasOwn(CUTOVER_RETAINED_BY_DESIGN, table) ? false : true
+      ),
     };
   },
 });
@@ -348,13 +470,12 @@ export const verifyOrgZeroState = internalQuery({
  */
 async function preflightCutoverReset(
   ctx: { db: { get: (id: Id<"organizations">) => Promise<Doc<"organizations"> | null> } },
-  args: { orgId: Id<"organizations">; batchSize?: number; resumeFrom?: string }
+  args: { orgId: Id<"organizations">; batchSize?: number }
 ): Promise<{
   org: Doc<"organizations">;
   budget: number;
   order: string[];
   indexes: Map<string, string>;
-  startAt: number;
 }> {
   // A budget that is not a positive whole number is a mistyped destructive
   // command, and silently reinterpreting it would hide the mistake. Asking for
@@ -384,21 +505,7 @@ async function preflightCutoverReset(
   const order = cutoverResetOrder();
   const indexes = assertCutoverScopeVerifiable(order);
 
-  let startAt = 0;
-  if (args.resumeFrom !== undefined) {
-    startAt = order.indexOf(args.resumeFrom);
-    if (startAt < 0) {
-      // A cursor naming a table that is no longer in scope would silently
-      // restart the walk or skip it entirely depending on how it was handled.
-      // Refuse instead — the operator can resume from the start.
-      throw new ConvexError(
-        `Refusing to run the cutover reset: resumeFrom "${args.resumeFrom}" is not in the ` +
-          "reset scope. Nothing was deleted."
-      );
-    }
-  }
-
-  return { org, budget, order, indexes, startAt };
+  return { org, budget, order, indexes };
 }
 
 /**
@@ -415,21 +522,33 @@ async function preflightCutoverReset(
  *
  * ## The invocation contract
  *
- * Each call spends ONE global budget across the whole table order, then stops.
- * `nextCursor` is the table to resume at, or `null` when the walk reached the
- * end within budget. The operator repeats the call, passing the cursor back,
- * until `nextCursor` is `null` — then proves the result with
- * `verifyOrgZeroState`.
+ * Each call spends ONE global budget across the whole table order, starting at
+ * the beginning every time, then stops. `complete` is true when the walk
+ * reached the end of the order within budget. The operator repeats the call
+ * until `complete` is true — then proves the result with `verifyOrgZeroState`.
  *
- * ⚠️ `nextCursor === null` IS NOT THE PROOF OF ZERO, and neither is any other
+ * ⚠️ THERE IS NO CALLER-SUPPLIED CURSOR, AND ITS ABSENCE IS THE SAFETY
+ * PROPERTY. An earlier revision took a `resumeFrom` table name and started
+ * there. Both reviewer seats reached the same defect independently, and it was
+ * reproduced by execution: one forged or stale cursor — a runbook looping over
+ * organizations and forgetting to reset its cursor variable is the obvious way
+ * — started the walk at the LAST table, deleted the command authority while
+ * every financial row was still live, and reported that the walk had
+ * completed. That is precisely SCRUM-291's F-1 precondition, manufactured by
+ * the tool built to contain it.
+ *
+ * The argument was deleted rather than policed. Once a resumed walk has to
+ * verify that everything before it is empty, verifying the prefix costs the
+ * same reads as walking it — so the cursor saved nothing and carried the whole
+ * attack surface. Re-walking from the start also closes the honest-cursor
+ * variant, where another writer inserts into an already-passed table between
+ * invocations.
+ *
+ * ⚠️ `complete === true` IS NOT THE PROOF OF ZERO, and neither is any other
  * field returned here. The reset's own report is exactly the kind of evidence
  * SCRUM-231 refuses: `hardDeleteOrg` reports COMPLETED and
  * `resetOrgFinancialData` reports completed while both leave the employee
  * advances behind. Only the row count from `verifyOrgZeroState` settles it.
- *
- * The cursor is an optimisation, never a correctness dependency: resuming at
- * the start is always safe, just slower, so a lost cursor costs a re-walk of
- * already-empty tables and nothing else.
  *
  * ⚠️ A DRY RUN DOES NOT CONVERGE BY REPETITION, and is not meant to. It deletes
  * nothing, so the rows it counted are still there on the next call and the
@@ -442,7 +561,6 @@ export const resetOrgToZeroState = internalMutation({
     orgId: v.id("organizations"),
     dryRun: v.optional(v.boolean()),
     batchSize: v.optional(v.number()),
-    resumeFrom: v.optional(v.string()),
   },
   handler: async (
     ctx,
@@ -454,7 +572,7 @@ export const resetOrgToZeroState = internalMutation({
     deleted: number;
     budget: number;
     tablesVisited: number;
-    nextCursor: string | null;
+    complete: boolean;
   }> => {
     const dryRun = args.dryRun ?? true;
 
@@ -466,17 +584,27 @@ export const resetOrgToZeroState = internalMutation({
 
     // ── Bounded walk. From here on, writes happen.
 
-    const { org, budget, order, indexes, startAt } = plan;
+    const { org, budget, order, indexes } = plan;
+    const storageFields = storageFieldNames();
     const perTable: Record<string, number> = {};
     let deleted = 0;
     let tablesVisited = 0;
-    let nextCursor: string | null = null;
+    let complete = true;
 
-    for (let i = startAt; i < order.length; i++) {
+    // ⚠️ ALWAYS FROM THE START. There is deliberately no caller-supplied
+    // cursor: progress is derived from the data, because an already-empty
+    // table costs one indexed read to skip and a caller-supplied one bought
+    // nothing while carrying the whole attack surface. This is what makes
+    // "command authority LAST" an executable property rather than an array
+    // ordering — the last table is reachable only once every table before it
+    // is empty IN THIS TRANSACTION.
+    for (let i = 0; i < order.length; i++) {
       const table = order[i];
       const budgetLeft = budget - deleted;
       if (budgetLeft <= 0) {
-        nextCursor = table;
+        // Budget spent with tables still unvisited: this invocation did not
+        // reach the end of the order, so the operator must call again.
+        complete = false;
         break;
       }
       tablesVisited++;
@@ -491,6 +619,26 @@ export const resetOrgToZeroState = internalMutation({
         budgetLeft + 1
       );
       const batch = rows.slice(0, budgetLeft);
+
+      // ⚠️ REFUSE RATHER THAN ORPHAN. Deleting a row that still references a
+      // `_storage` blob strands that blob permanently: `_storage` has no
+      // `orgId`, so after the last reference is gone nothing can enumerate or
+      // delete it, and the row-counting proof would call the tenant zero.
+      // Thrown, not skipped, and thrown UNCAUGHT so the whole transaction
+      // rolls back — a destructive tool that cannot dispose of part of its
+      // subject must not perform any of it.
+      for (const row of batch) {
+        if (rowCarriesStorage(row, storageFields)) {
+          throw new ConvexError(
+            `Refusing to run the cutover reset: a row in "${table}" still references ` +
+              "storage, and deleting it would strand that blob permanently — `_storage` " +
+              "carries no orgId, so nothing could enumerate or delete it afterwards, and " +
+              "the row-count proof would report this tenant as zero. Dispose of the " +
+              "tenant's stored files first. Nothing was deleted."
+          );
+        }
+      }
+
       if (batch.length > 0) perTable[table] = batch.length;
       deleted += batch.length;
 
@@ -501,9 +649,9 @@ export const resetOrgToZeroState = internalMutation({
       }
 
       if (rows.length > budgetLeft) {
-        // This table still has rows, so the next invocation resumes HERE, not
-        // at the table after it.
-        nextCursor = table;
+        // This table still holds rows beyond the budget, so the walk did not
+        // finish. The next invocation starts over and reaches it again.
+        complete = false;
         break;
       }
     }
@@ -515,7 +663,7 @@ export const resetOrgToZeroState = internalMutation({
       deleted,
       budget,
       tablesVisited,
-      nextCursor,
+      complete,
     };
   },
 });

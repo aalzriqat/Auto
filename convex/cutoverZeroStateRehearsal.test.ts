@@ -33,20 +33,31 @@
  * 10 F-1 three tables zero BY EXECUTION          COVERED   counted individually after reset
  * ```
  *
- * **Item 2 is PENDING, not covered, and the exposure below is DEMONSTRATED
- * rather than assumed.** A scheduled internal job enqueued before the reset
- * still runs after it and writes into the zeroed organization. That is not a
- * defect of this module — `internalMutation` bypasses `requireTenantAuth`, so
- * the suspension that holds writes during a cutover does not reach it, which is
- * SCRUM-302. Recording it as an executed negative result is the honest form:
- * the cutover sequence's step 1 ("stop/hold user writes") is not sufficient,
- * and SCRUM-302 must close before item 2 can be claimed.
+ * **Item 2 is PENDING, not covered.** ⚠️ AND THIS PARAGRAPH USED TO CLAIM MORE
+ * THAN THE TEST SHOWS — it said a pre-reset job "still runs after it and writes
+ * into the zeroed organization." A reviewer seat checked the test against the
+ * sentence and it does not: it schedules the job, drives the reset, and asserts
+ * the job is STILL PENDING afterwards. It never executes it, so no post-reset
+ * write is demonstrated.
+ *
+ * What is demonstrated, by execution, is narrower and still sufficient to show
+ * item 2 unmet: the reset cancels nothing, and the zero proof cannot see what
+ * it left behind. `_scheduled_functions` carries no `orgId`, so the derived
+ * scope can never reach it, and `verifyOrgZeroState` returns `zero: true` while
+ * work scheduled before the reset is still pending against that same
+ * organization — its arguments being org-scoped state living outside every
+ * org-scoped table. Whether such a job then writes depends on which job it is,
+ * and that is SCRUM-302's question, not this module's: `internalMutation`
+ * bypasses `requireTenantAuth`, so cutover step 1 ("stop/hold user writes")
+ * does not reach it. SCRUM-302 must close before item 2 can be claimed.
  *
  * **Items 7 and 8 cannot be written here at all.** `convex/e2eBootstrap.ts`
  * exists only on the unmerged SCRUM-143 branch, so there is no marker table in
  * the merged schema to detect. Inventing one would be a fabricated gate. See
  * the test at the bottom that fails the moment that stops being true.
  */
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import schema from "./schema";
@@ -54,6 +65,8 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import {
   assertCutoverScopeVerifiable,
+  storageBearingTableNames,
+  storageFieldNames,
   COMMAND_AUTHORITY_TABLES,
   CUTOVER_RETAINED_BY_DESIGN,
   cutoverResetOrder,
@@ -173,25 +186,20 @@ async function resetToZero(
   orgId: Id<"organizations">,
   batchSize?: number
 ) {
-  let cursor: string | null | undefined = undefined;
   let invocations = 0;
   let deleted = 0;
   const maxDeletedInOneCall: number[] = [];
   for (;;) {
-    const args: {
-      orgId: Id<"organizations">;
-      dryRun: boolean;
-      batchSize?: number;
-      resumeFrom?: string;
-    } = { orgId, dryRun: false };
+    const args: { orgId: Id<"organizations">; dryRun: boolean; batchSize?: number } = {
+      orgId,
+      dryRun: false,
+    };
     if (batchSize !== undefined) args.batchSize = batchSize;
-    if (cursor) args.resumeFrom = cursor;
     const result = await t.mutation(internal.cutoverZeroState.resetOrgToZeroState, args);
     invocations++;
     deleted += result.deleted;
     maxDeletedInOneCall.push(result.deleted);
-    cursor = result.nextCursor;
-    if (cursor === null) return { invocations, deleted, maxDeletedInOneCall };
+    if (result.complete) return { invocations, deleted, maxDeletedInOneCall };
     if (invocations > 60) throw new Error("reset did not converge in 60 invocations");
   }
 }
@@ -344,7 +352,7 @@ describe("SCRUM-231 zero state is proven, not asserted", () => {
     expect(dry.deleted).toBeGreaterThan(0);
     // It walked the whole order and nothing was left over budget, so the
     // destructive form of this call would finish in one invocation.
-    expect(dry.nextCursor).toBeNull();
+    expect(dry.complete).toBe(true);
 
     const after = await t.query(internal.cutoverZeroState.verifyOrgZeroState, { orgId });
     expect(after.zero).toBe(false);
@@ -479,11 +487,11 @@ describe("SCRUM-231 the reset is bounded by ONE budget, not one per table", () =
     });
     expect(first.budget).toBe(2);
     expect(first.deleted).toBeLessThanOrEqual(2);
-    // It stopped early, so there is somewhere to resume from.
-    expect(first.nextCursor).not.toBeNull();
+    // It stopped early, so the walk is not finished.
+    expect(first.complete).toBe(false);
   });
 
-  test("the cursor resumes where the budget ran out and the walk converges", async () => {
+  test("a starved walk converges, and every invocation stays inside its budget", async () => {
     const { t, orgId } = await seedDealer("Cursor Dealer", "cursor_user");
 
     const walk = await resetToZero(t, orgId, 1);
@@ -499,21 +507,58 @@ describe("SCRUM-231 the reset is bounded by ONE budget, not one per table", () =
     ).toBe(true);
   });
 
-  test("a cursor naming a table outside the scope refuses rather than guessing", async () => {
-    const { t, orgId } = await seedDealer("Bad Cursor Dealer", "badcur_user");
-    await expect(
-      t.mutation(internal.cutoverZeroState.resetOrgToZeroState, {
-        orgId,
-        dryRun: false,
-        resumeFrom: "organizations",
-      })
-    ).rejects.toThrow(/not in the reset scope/i);
+  test("a completed walk VISITS every table in the order, not just the populated ones", async () => {
+    // ⚠️ THIS EXISTS BECAUSE A MUTANT SURVIVED. Changing the walk to start at
+    // index 1 instead of 0 left all 36 tests green: the fixture populates
+    // about nine of the 138 in-scope tables, so a defect that silently skips
+    // any of the other 129 is invisible to a proof that only checks the rows
+    // the fixture happened to create.
+    //
+    // Counting the tables the walk actually visited closes that without
+    // needing a fixture for all 138 — the zero-state assertions stay the
+    // proof of emptiness, and this is the proof of COVERAGE.
+    const { t, orgId } = await seedDealer("Coverage Dealer", "coverage_user");
 
-    // The refusal deleted nothing: silently restarting the walk and silently
-    // skipping the rest of it are both worse than stopping.
-    expect(
-      (await t.query(internal.cutoverZeroState.verifyOrgZeroState, { orgId })).zero
-    ).toBe(false);
+    const result = await t.mutation(internal.cutoverZeroState.resetOrgToZeroState, {
+      orgId,
+      dryRun: false,
+    });
+    expect(result.complete).toBe(true);
+    expect(result.tablesVisited).toBe(cutoverResetOrder().length);
+    expect(result.tablesVisited).toBeGreaterThan(100);
+  });
+
+  test("every invocation restarts the walk, so progress comes from the data", async () => {
+    // ⚠️ THIS REPLACES A TEST THAT ASSERTED A CURSOR NAMING AN OUT-OF-SCOPE
+    // TABLE WAS REFUSED. That refusal is gone because the argument it policed
+    // is gone: both reviewer seats independently found that a caller-supplied
+    // cursor could start the walk at the LAST table and delete the command
+    // authority while financial rows were live. Policing one bad value was
+    // never the fix — the input was.
+    //
+    // What replaces it is the property that made the cursor unnecessary: a
+    // second invocation on a partially cleared org visits the tables from the
+    // beginning again, so nothing depends on remembering where the last one
+    // stopped.
+    const { t, orgId } = await seedDealer("Restart Dealer", "restart_user");
+
+    const first = await t.mutation(internal.cutoverZeroState.resetOrgToZeroState, {
+      orgId,
+      dryRun: false,
+      batchSize: 1,
+    });
+    expect(first.complete).toBe(false);
+    expect(first.tablesVisited).toBeGreaterThan(0);
+
+    const second = await t.mutation(internal.cutoverZeroState.resetOrgToZeroState, {
+      orgId,
+      dryRun: false,
+      batchSize: 1,
+    });
+    // It walked from the start again — the tables it had already emptied cost
+    // one indexed read each and were skipped, and it still found work to do.
+    expect(second.deleted).toBeGreaterThan(0);
+    expect(Object.keys(second.perTable)).not.toEqual(Object.keys(first.perTable));
   });
 });
 
@@ -858,11 +903,12 @@ describe("SCRUM-231 purge history dead-ends same-org reuse (SCRUM-297)", () => {
 
 describe("SCRUM-231 evidence-floor item 2 is PENDING behind SCRUM-302", () => {
   test("DEMONSTRATED — the reset cancels no scheduled work and the zero proof cannot see it", async () => {
-    // ⚠️ THIS TEST RECORDS A GAP, NOT A GUARANTEE. Evidence-floor item 2 asks
-    // that stale scheduled work from before the reset cannot create a new
-    // accounting footprint after it. Nothing in this module establishes that,
-    // and an earlier version of this file's header claimed item 2 was covered.
-    // It was not.
+    // ⚠️ THIS TEST RECORDS A GAP, NOT A GUARANTEE, AND IT PROVES LESS THAN THE
+    // HEADER ONCE CLAIMED. Evidence-floor item 2 asks that stale scheduled work
+    // from before the reset cannot create a new accounting footprint after it.
+    // This does NOT execute the scheduled job and therefore demonstrates no
+    // post-reset write; it demonstrates that the reset neither cancels nor
+    // counts the pending work, which is what makes item 2 unmet.
     //
     // Two executed facts, together sufficient to show item 2 is unmet:
     //
@@ -873,10 +919,11 @@ describe("SCRUM-231 evidence-floor item 2 is PENDING behind SCRUM-302", () => {
     //   2. `verifyOrgZeroState` reports `zero: true` while a job scheduled
     //      before the reset is still pending against that same organization.
     //
-    // Closing this needs a hold on internal/scheduled execution across the
-    // cutover boundary, which is SCRUM-302: `requireTenantAuth` is the only
-    // suspension gate and `internalMutation` bypasses it by construction, so
-    // "stop/hold user writes" (cutover sequence step 1) does not reach it.
+    // Whether that job then writes depends on which job it is. Closing item 2
+    // needs a hold on internal/scheduled execution across the cutover
+    // boundary, which is SCRUM-302: `requireTenantAuth` is the only suspension
+    // gate and `internalMutation` bypasses it by construction, so "stop/hold
+    // user writes" (cutover sequence step 1) does not reach it.
     const { t, orgId } = await seedDealer("Scheduled Dealer", "sched_user");
 
     // A real internal mutation, scheduled with real org-scoped arguments. The
@@ -913,6 +960,273 @@ describe("SCRUM-231 evidence-floor item 2 is PENDING behind SCRUM-302", () => {
     // And it can never come into scope, because the scope is derived from orgId.
     expect(orgScopedTableNames()).not.toContain("_scheduled_functions");
     expect(cutoverResetOrder()).not.toContain("_scheduled_functions");
+  });
+});
+
+describe("SCRUM-231 seat findings — the walk cannot be steered past unproven phases", () => {
+  test("FAILING-FIRST — a caller-supplied cursor cannot skip to the command authority", async () => {
+    // SEAT FINDING, both seats independently, reproduced by Sonnet MAX and by
+    // reading: `resumeFrom` was taken from the caller and used as the starting
+    // index with NO check that anything before it was actually drained. One
+    // forged or stale cursor — a runbook looping over orgs and forgetting to
+    // reset its cursor variable is the obvious way — deleted the command
+    // authority FIRST while every financial row was still live, and returned
+    // `nextCursor: null` claiming the walk had completed. That is SCRUM-291's
+    // F-1 precondition, produced by the very tool meant to contain it.
+    //
+    // The cursor is gone. Progress is now derived from the data: every
+    // invocation walks from the start, so the command authority is reachable
+    // only once all 137 preceding tables are empty IN THAT TRANSACTION. This
+    // also closes the honest-cursor variant Codex raised, where a writer
+    // inserts into an already-passed table between invocations.
+    //
+    // Deleting the argument rather than policing it is deliberate. Once the
+    // prefix has to be verified, walking it costs the same reads as checking
+    // it, so the cursor bought nothing and carried the whole attack surface.
+    const { t, orgId } = await seedDealer("Forged Cursor Dealer", "forged_user");
+
+    await expect(
+      t.mutation(internal.cutoverZeroState.resetOrgToZeroState, {
+        orgId,
+        dryRun: false,
+        resumeFrom: "commandIdempotency",
+      } as unknown as { orgId: Id<"organizations">; dryRun: boolean })
+    ).rejects.toThrow();
+
+    // The control: nothing was deleted by the rejected call, so the org is
+    // exactly as populated as before — in particular the command authority and
+    // the advances are BOTH still present, which is the state the forged
+    // cursor previously destroyed asymmetrically.
+    const counts = await t.run(async (ctx) => ({
+      commandIdempotency: (
+        await ctx.db
+          .query("commandIdempotency")
+          .withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId))
+          .collect()
+      ).length,
+      employeeAdvances: (
+        await ctx.db
+          .query("employeeAdvances")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect()
+      ).length,
+    }));
+    expect(counts.commandIdempotency).toBeGreaterThan(0);
+    expect(counts.employeeAdvances).toBeGreaterThan(0);
+  });
+
+  test("the command authority is never emptied while any earlier table still holds rows", async () => {
+    // The invariant itself, asserted at every step of a deliberately starved
+    // walk rather than inferred from the final state. `commandIdempotency` is
+    // last in the order, so a budget of one row per call means many
+    // invocations, and this checks the dangerous pair after EACH of them.
+    const { t, orgId } = await seedDealer("Stepwise Dealer", "stepwise_user");
+
+    for (let step = 0; step < 40; step++) {
+      const result = await t.mutation(internal.cutoverZeroState.resetOrgToZeroState, {
+        orgId,
+        dryRun: false,
+        batchSize: 1,
+      });
+
+      const state = await t.run(async (ctx) => ({
+        command: (
+          await ctx.db
+            .query("commandIdempotency")
+            .withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId))
+            .take(1)
+        ).length,
+        advances: (
+          await ctx.db
+            .query("employeeAdvances")
+            .withIndex("by_org", (q) => q.eq("orgId", orgId))
+            .take(1)
+        ).length,
+        recoveries: (
+          await ctx.db
+            .query("employeeAdvanceRecoveries")
+            .withIndex("by_org", (q) => q.eq("orgId", orgId))
+            .take(1)
+        ).length,
+      }));
+
+      if (state.command === 0) {
+        expect(
+          state.advances + state.recoveries,
+          "command authority reached zero while economic provenance was still live — SCRUM-291 F-1"
+        ).toBe(0);
+      }
+      if (result.complete) break;
+    }
+
+    expect(
+      (await t.query(internal.cutoverZeroState.verifyOrgZeroState, { orgId })).zero
+    ).toBe(true);
+  });
+});
+
+describe("SCRUM-231 seat findings — the proof measures its own target", () => {
+  test("FAILING-FIRST — the zero proof refuses an organization that does not exist", async () => {
+    // SEAT FINDING (Codex): `verifyOrgZeroState` never loaded the org row. It
+    // probed 138 index ranges, found them all empty — which they trivially are
+    // for an id that names nothing — and returned `zero: true`. A stale or
+    // mistyped id therefore produced a clean zero-state CERTIFICATE for a
+    // tenant that was never examined, while the real tenant stayed populated.
+    //
+    // A proof must not PASS a property it did not measure. Absence of the
+    // target is UNAVAILABLE, never success — the same rule that makes an
+    // unreadable table fail closed rather than count as empty.
+    const { t, orgId } = await seedDealer("Ghost Dealer", "ghost_user");
+    await t.run((ctx) => ctx.db.delete(orgId));
+
+    await expect(
+      t.query(internal.cutoverZeroState.verifyOrgZeroState, { orgId })
+    ).rejects.toThrow(/no organization with that id exists/i);
+  });
+
+  test("the proof still answers normally for a real organization, empty or not", async () => {
+    // The control for the test above: fail-closed on a missing target must not
+    // become fail-closed on everything.
+    const { t, orgId } = await seedDealer("Present Dealer", "present_user");
+    expect(
+      (await t.query(internal.cutoverZeroState.verifyOrgZeroState, { orgId })).zero
+    ).toBe(false);
+    await resetToZero(t, orgId);
+    expect(
+      (await t.query(internal.cutoverZeroState.verifyOrgZeroState, { orgId })).zero
+    ).toBe(true);
+  });
+});
+
+describe("SCRUM-231 seat findings — the reset refuses to orphan tenant storage", () => {
+  test("FAILING-FIRST — a row carrying a storage id is refused, and nothing is deleted", async () => {
+    // SEAT FINDING (Codex): the walk deleted every row with a bare
+    // `ctx.db.delete(row._id)`. `orgFinancialReset` does NOT — it deletes the
+    // blob first, and says exactly why: "An orphaned row is recoverable; an
+    // unreferenced blob is not." `_storage` carries no `orgId`, so once the
+    // last referencing row is gone the blob is not enumerable by org, not
+    // deletable by any code path, and still billed — and `verifyOrgZeroState`,
+    // which only counts rows, would certify that tenant as ZERO.
+    //
+    // For a cutover whose entire purpose is to destroy the current test data
+    // before launch, that is the data quietly surviving the destruction.
+    //
+    // ⚠️ THE FIX HERE IS A REFUSAL, NOT A DELETION, AND THAT IS DELIBERATE.
+    // Disposing of blobs correctly needs a policy this lane does not own: a
+    // storage id can be referenced from more than one row, and
+    // `marketplaceImageUploads` tracks ids that belong to a user rather than an
+    // org, so a generic "delete the blob with the row" would be an
+    // irreversible cross-tenant delete. Refusing is the same call this module
+    // already makes for a table it cannot read: a destructive tool that cannot
+    // dispose of part of its subject must not perform that part.
+    const { t, orgId } = await seedDealer("Storage Dealer", "storage_user");
+
+    const storageId = await t.run(async (ctx) =>
+      ctx.storage.store(new Blob(["appraisal report"], { type: "text/plain" }))
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("orgSettings", {
+        orgId,
+        currency: "JOD",
+        currencySymbol: "JD",
+        enabledPaymentTypes: ["CASH"],
+        logoStorageId: storageId,
+      })
+    );
+
+    await expect(
+      t.mutation(internal.cutoverZeroState.resetOrgToZeroState, { orgId, dryRun: false })
+    ).rejects.toThrow(/storage/i);
+
+    // Nothing was deleted — not the referencing row, not the blob, and not the
+    // rows in the tables the walk would otherwise have reached first.
+    const after = await t.run(async (ctx) => ({
+      blob: await ctx.db.system.get("_storage", storageId),
+      settings: (
+        await ctx.db
+          .query("orgSettings")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect()
+      ).length,
+      command: (
+        await ctx.db
+          .query("commandIdempotency")
+          .withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId))
+          .collect()
+      ).length,
+    }));
+    expect(after.blob, "the blob must still exist — refusing beats orphaning").not.toBeNull();
+    expect(after.settings).toBe(1);
+    expect(after.command).toBe(1);
+  });
+
+  test("the storage derivation is non-vacuous, cross-checked against the schema SOURCE", () => {
+    // A guard nobody has watched work is not a guard. If `storageFieldNames()`
+    // came back empty, every storage test above would pass vacuously and the
+    // reset would happily orphan blobs again.
+    //
+    // The cross-check derives the same answer by a DIFFERENT method — reading
+    // the schema source text rather than the runtime validators — so the two
+    // must agree for a reason other than sharing a bug.
+    const fields = storageFieldNames();
+    expect(fields.size).toBeGreaterThan(0);
+
+    const source = readFileSync(path.resolve(__dirname, "schema.ts"), "utf-8");
+    const fromSource = new Set(
+      [...source.matchAll(/(\w+)\s*:\s*v\.[\w.()]*?v?\.?id\("_storage"\)/g)].map(
+        (match) => match[1]
+      )
+    );
+    // Every field the source shows as a `_storage` id must be one the runtime
+    // derivation also found. (The runtime set may be larger: it also sees
+    // fields whose storage id is nested deeper than one regex line.)
+    for (const field of fromSource) {
+      expect(
+        fields.has(field),
+        `${field} holds a _storage id in the schema source but the runtime ` +
+          `derivation missed it — the reset would orphan its blobs`
+      ).toBe(true);
+    }
+    expect(fromSource.size).toBeGreaterThan(5);
+
+    const tables = storageBearingTableNames();
+    expect(tables).toContain("orgSettings");
+    expect(tables).toContain("vehicles");
+    expect(tables.length).toBeGreaterThan(5);
+  });
+
+  test("a dry run reports the storage blocker instead of throwing, so an operator sees it first", async () => {
+    // The refusal has to be discoverable BEFORE the destructive form is typed,
+    // which is the same reason `orgFinancialReset` reports its own
+    // authority-lifecycle precondition truthfully on a dry run.
+    const { t, orgId } = await seedDealer("Storage Preview Dealer", "storageprev_user");
+    const storageId = await t.run(async (ctx) =>
+      ctx.storage.store(new Blob(["photo"], { type: "text/plain" }))
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("orgSettings", {
+        orgId,
+        currency: "JOD",
+        currencySymbol: "JD",
+        enabledPaymentTypes: ["CASH"],
+        logoStorageId: storageId,
+      })
+    );
+
+    await expect(
+      t.mutation(internal.cutoverZeroState.resetOrgToZeroState, { orgId, dryRun: true })
+    ).rejects.toThrow(/storage/i);
+  });
+
+  test("an org with no stored blobs is unaffected by the storage guard", async () => {
+    // Non-vacuity: the guard must not refuse every reset. The whole rehearsal
+    // above depends on this, but it is asserted directly rather than inferred
+    // from the other tests passing.
+    const { t, orgId } = await seedDealer("No Storage Dealer", "nostorage_user");
+    await resetToZero(t, orgId);
+    expect(
+      (await t.query(internal.cutoverZeroState.verifyOrgZeroState, { orgId })).zero
+    ).toBe(true);
   });
 });
 
