@@ -1331,6 +1331,21 @@ describe("SCRUM-231 the storage guard is NAME-BASED, and both of its blind sides
     const { t, orgId } = await seedDealer("Disclosure Dealer", "disclose_user");
     const proof = await t.query(internal.cutoverZeroState.verifyOrgZeroState, { orgId });
 
+    // Both disclosure lists must describe THIS proof's scope, not the whole
+    // schema. A reviewer seat caught `storageNotMeasured` naming
+    // `marketplaceListings`, which has no `orgId` and is therefore not a table
+    // this reset ever visits — an over-inclusive boundary is still a wrong one.
+    const scope = new Set(cutoverResetOrder());
+    for (const table of proof.storageNotMeasured) {
+      expect(scope.has(table), `${table} is disclosed but is not in the reset scope`).toBe(true);
+    }
+    for (const table of proof.opaqueFieldsNotMeasured) {
+      expect(scope.has(table), `${table} is disclosed but is not in the reset scope`).toBe(true);
+    }
+    expect(proof.storageNotMeasured.length).toBeGreaterThan(3);
+    expect(proof.storageNotMeasured).not.toContain("marketplaceListings");
+    expect(proof.storageNotMeasured).toContain("vehicles");
+
     expect(proof.opaqueFieldsNotMeasured.length).toBeGreaterThan(5);
     expect(proof.opaqueFieldsNotMeasured).toContain("commandIdempotency");
     expect(proof.opaqueFieldsNotMeasured).toContain("accountingEvents");

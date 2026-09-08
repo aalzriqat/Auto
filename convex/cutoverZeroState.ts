@@ -128,10 +128,11 @@ const CUTOVER_DELETE_BUDGET = 500;
  * Orders table names deterministically.
  *
  * ⚠️ EXPLICIT ON PURPOSE, AND NOT ONLY TO SATISFY A LINT RULE. The deletion
- * ORDER of a destructive walk is part of its contract: `nextCursor` is a table
- * name, and resuming means finding that name's position again. A bare `.sort()`
- * leaves the comparison implicit, which is the wrong thing to leave implicit in
- * the one function whose output decides what gets deleted next.
+ * ORDER of a destructive walk is part of its contract — it is what puts the
+ * command/replay authority last, and therefore what makes "authority cleared
+ * last" true rather than merely intended. A bare `.sort()` leaves the
+ * comparison implicit, which is the wrong thing to leave implicit in the one
+ * function whose output decides what gets deleted next.
  *
  * The locale is pinned rather than left to the host, so the order cannot depend
  * on where the reset happens to run.
@@ -494,6 +495,7 @@ export const verifyOrgZeroState = internalQuery({
       if (rows.length > 0) residual[table] = rows.length;
     }
 
+    const storageBearing = new Set(storageBearingTableNames());
     return {
       zero: Object.keys(residual).length === 0 && unverifiable.length === 0,
       tablesChecked: inScope.length - unverifiable.length,
@@ -506,8 +508,13 @@ export const verifyOrgZeroState = internalQuery({
       // Reported so the certificate names its own boundary rather than letting
       // a reader infer a wider one; the reset refuses outright rather than
       // creating orphans in the first place.
-      storageNotMeasured: storageBearingTableNames().filter(
-        (table) => !Object.hasOwn(CUTOVER_RETAINED_BY_DESIGN, table)
+      // Scoped through `cutoverResetOrder()`, not merely filtered for retained
+      // tables: `storageBearingTableNames()` spans the WHOLE schema, and some
+      // of those tables are not org-scoped at all (`marketplaceListings` has no
+      // `orgId`). Naming them here would describe a boundary of this proof that
+      // this proof does not have.
+      storageNotMeasured: cutoverResetOrder().filter((table) =>
+        storageBearing.has(table)
       ),
       // ⚠️ AND THESE CANNOT EVEN BE INSPECTED. A `v.any()` field has no
       // validator shape, so the storage guard's name derivation never reaches
@@ -611,8 +618,8 @@ async function preflightCutoverReset(
  * advances behind. Only the row count from `verifyOrgZeroState` settles it.
  *
  * ⚠️ A DRY RUN DOES NOT CONVERGE BY REPETITION, and is not meant to. It deletes
- * nothing, so the rows it counted are still there on the next call and the
- * cursor returns to the same place forever. A dry run answers "what would ONE
+ * nothing, so the rows it counted are still there on the next call and every
+ * repetition reports the same thing forever. A dry run answers "what would ONE
  * destructive invocation do, and would it fit in one budget" — it is a bound
  * check, not a rehearsal of the whole walk.
  */
@@ -636,10 +643,28 @@ export const resetOrgToZeroState = internalMutation({
   }> => {
     const dryRun = args.dryRun ?? true;
 
-    // ⚠️ EVERY REFUSAL LIVES IN THE PREFLIGHT, AND THE PREFLIGHT RUNS FIRST.
-    // Nothing below this line may throw a refusal, and nothing above it may
-    // write — that is the whole safety property, and keeping it in one call is
-    // what makes it checkable by reading two lines instead of a whole handler.
+    // ⚠️ THERE ARE TWO KINDS OF REFUSAL HERE, AND AN EARLIER VERSION OF THIS
+    // COMMENT DENIED THE SECOND ONE. It said "every refusal lives in the
+    // preflight ... nothing below this line may throw a refusal", and that
+    // stopped being true the moment the storage refusal was added inside the
+    // walk. A reviewer seat caught it. It is corrected rather than deleted,
+    // because this is the third time in this lane that a comment has described
+    // a property the code no longer had.
+    //
+    //   1. PREFLIGHT REFUSALS — bad budget, missing org, unreadable scope.
+    //      Decided without reading any row, before a single delete, so a
+    //      refused reset provably did nothing.
+    //   2. THE LATE STORAGE REFUSAL — decided per row inside the walk, at
+    //      lines below, and therefore AFTER rows from earlier tables in this
+    //      same invocation may already have been deleted.
+    //
+    // ⚠️ THE SECOND KIND IS SAFE ONLY BECAUSE ITS EXCEPTION STAYS UNCAUGHT.
+    // In Convex an uncaught exception rolls the transaction back and a CAUGHT
+    // one COMMITS, so those earlier deletes are undone only while nothing
+    // wraps this mutation in a `try`/`catch`. That is a real, load-bearing
+    // dependency on the platform's semantics, and it must not be discovered by
+    // a future refactor — hence stating it here instead of claiming the
+    // simpler property that is not true.
     const plan = await preflightCutoverReset(ctx, args);
 
     // ── Bounded walk. From here on, writes happen.
