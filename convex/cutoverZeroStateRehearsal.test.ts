@@ -1098,7 +1098,7 @@ describe("SCRUM-231 seat findings — the proof measures its own target", () => 
   });
 });
 
-describe("SCRUM-231 seat findings — the reset refuses to orphan tenant storage", () => {
+describe("SCRUM-231 seat findings — the reset refuses to orphan TYPED tenant storage", () => {
   test("FAILING-FIRST — a row carrying a storage id is refused, and nothing is deleted", async () => {
     // SEAT FINDING (Codex): the walk deleted every row with a bare
     // `ctx.db.delete(row._id)`. `orgFinancialReset` does NOT — it deletes the
@@ -1160,7 +1160,7 @@ describe("SCRUM-231 seat findings — the reset refuses to orphan tenant storage
     expect(after.command).toBe(1);
   });
 
-  test("the storage derivation is non-vacuous, cross-checked against the schema SOURCE", () => {
+  test("the TYPED storage derivation is non-vacuous, cross-checked against the schema SOURCE", () => {
     // A guard nobody has watched work is not a guard. If `storageFieldNames()`
     // came back empty, every storage test above would pass vacuously and the
     // reset would happily orphan blobs again.
@@ -1168,6 +1168,9 @@ describe("SCRUM-231 seat findings — the reset refuses to orphan tenant storage
     // The cross-check derives the same answer by a DIFFERENT method — reading
     // the schema source text rather than the runtime validators — so the two
     // must agree for a reason other than sharing a bug.
+    // ⚠️ NON-VACUOUS IS NOT COMPLETE. This proves the derivation finds the
+    // TYPED storage fields; it says nothing about `v.any()` fields, which it
+    // provably cannot see — see the two blind-side tests below.
     const fields = storageFieldNames();
     expect(fields.size).toBeGreaterThan(0);
 
@@ -1227,6 +1230,115 @@ describe("SCRUM-231 seat findings — the reset refuses to orphan tenant storage
     expect(
       (await t.query(internal.cutoverZeroState.verifyOrgZeroState, { orgId })).zero
     ).toBe(true);
+  });
+});
+
+describe("SCRUM-231 the storage guard is NAME-BASED, and both of its blind sides are demonstrated", () => {
+  // ⚠️ THESE TWO TESTS RECORD GAPS, NOT GUARANTEES — the same form as the
+  // evidence-floor item 2 test above, and for the same reason: a launch gate
+  // that overstates its own coverage is more dangerous than one that states no
+  // coverage at all, because it exists to be trusted before an irreversible
+  // action.
+  //
+  // The guard derives storage FIELD NAMES from the schema validators. A
+  // `v.any()` field has no validator shape to derive from, so nothing beneath
+  // it is ever derived, and `rowCarriesStorage` then matches on KEY NAME with
+  // no relationship to what the value actually is. That is wrong in BOTH
+  // directions, and both are executed below.
+  //
+  // 13 tables in this schema carry a `v.any()` field. Two are out of reach
+  // (`adminAuditLog` is retained by design, `siteConfig` is not org-scoped);
+  // the rest are in the reset's scope, and they include
+  // `commandIdempotency.result` — the command/replay authority this entire
+  // module exists to drive to zero safely.
+  //
+  // Structural remediation is SCRUM-306. It is deliberately NOT attempted here:
+  // this subsystem has now produced a fresh CRITICAL in two consecutive rounds,
+  // which is the convergence circuit breaker, and the answer to that is to stop
+  // patching the mechanism rather than to guess a wider net.
+
+  test("BLIND SIDE 1 — a blob referenced from an opaque field is orphaned, and the proof still says zero", async () => {
+    // The false NEGATIVE, and the more dangerous one. Nothing refuses, the row
+    // is deleted, the blob survives with no reference and no way to enumerate
+    // it by org, and `verifyOrgZeroState` certifies the tenant as zero.
+    const { t, orgId } = await seedDealer("Opaque Blob Dealer", "opaque_user");
+
+    const storageId = await t.run(async (ctx) =>
+      ctx.storage.store(new Blob(["a receipt scan"], { type: "text/plain" }))
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("commandIdempotency", {
+        orgId,
+        operation: "scrum231.opaqueBlobProbe",
+        // `attachmentRef` is not a storage field name anywhere in the schema,
+        // so the derivation never learns it — and `result` is `v.any()`, so
+        // there was never a validator shape to learn it from.
+        idempotencyKey: "opaque-blob-key",
+        status: "COMPLETED",
+        result: { ok: true, attachmentRef: storageId },
+        createdAt: Date.now(),
+      })
+    );
+
+    // No refusal. The guard cannot see this.
+    await resetToZero(t, orgId);
+
+    const proof = await t.query(internal.cutoverZeroState.verifyOrgZeroState, { orgId });
+    expect(proof.zero, "the row-count proof passes...").toBe(true);
+
+    const blob = await t.run((ctx) => ctx.db.system.get("_storage", storageId));
+    expect(
+      blob,
+      "...while the blob it referenced is still there, now unreachable from any org — " +
+        "this is exactly the orphaning the storage guard claims to prevent, surviving " +
+        "through an opaque field. Structural fix: SCRUM-306."
+    ).not.toBeNull();
+  });
+
+  test("BLIND SIDE 2 — ordinary business data in an opaque field is falsely refused", async () => {
+    // The false POSITIVE. Matching on key name alone means any value under a
+    // key that HAPPENS to share a name with a storage field reads as a storage
+    // reference. Here an ordinary invoice reference string, in an ordinary
+    // command result, blocks the reset with a diagnosis that is simply untrue.
+    //
+    // This one cannot lose data — it refuses — but it can block the cutover on
+    // a false reason, which is why the refusal message says the check is
+    // name-based instead of asserting what the value is.
+    const { t, orgId } = await seedDealer("False Refusal Dealer", "falseref_user");
+
+    await t.run((ctx) =>
+      ctx.db.insert("commandIdempotency", {
+        orgId,
+        operation: "scrum231.ordinaryResult",
+        idempotencyKey: "ordinary-key",
+        status: "COMPLETED",
+        // Not a storage id. An everyday string, under a key name that collides
+        // with `applicationDocuments.fileId`.
+        result: { ok: true, fileId: "invoice-reference-42" },
+        createdAt: Date.now(),
+      })
+    );
+
+    await expect(
+      t.mutation(internal.cutoverZeroState.resetOrgToZeroState, { orgId, dryRun: false })
+    ).rejects.toThrow(/looks like a storage reference/i);
+  });
+
+  test("the opaque tables the guard cannot see are DISCLOSED by the proof, not hidden", async () => {
+    // The certificate has to name this boundary itself. A reader who sees
+    // `zero: true` must be able to find out, from the same result, that storage
+    // was not measured and that some fields could not even be inspected.
+    const { t, orgId } = await seedDealer("Disclosure Dealer", "disclose_user");
+    const proof = await t.query(internal.cutoverZeroState.verifyOrgZeroState, { orgId });
+
+    expect(proof.opaqueFieldsNotMeasured.length).toBeGreaterThan(5);
+    expect(proof.opaqueFieldsNotMeasured).toContain("commandIdempotency");
+    expect(proof.opaqueFieldsNotMeasured).toContain("accountingEvents");
+    // Retained-by-design tables are not in the reset's scope, so they are not
+    // part of this boundary claim.
+    expect(proof.opaqueFieldsNotMeasured).not.toContain("adminAuditLog");
+    // Nor is a table that carries no orgId at all.
+    expect(proof.opaqueFieldsNotMeasured).not.toContain("siteConfig");
   });
 });
 

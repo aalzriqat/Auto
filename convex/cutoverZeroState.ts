@@ -144,6 +144,20 @@ function byTableName(a: string, b: string): number {
  * Field names anywhere in the schema whose value is (or contains) a
  * `_storage` id, derived from the validators rather than listed.
  *
+ * ⚠️ THIS IS A NAME LIST, AND A NAME LIST IS NOT A SHAPE CHECK. It is derived
+ * from validator shapes, but it is APPLIED by matching keys on a row, so it is
+ * wrong in both directions and both are demonstrated by execution in the
+ * rehearsal:
+ *
+ *   - it MISSES a storage id held in a `v.any()` field, because an opaque
+ *     field has no shape to derive from — including `commandIdempotency.result`;
+ *   - it FALSELY MATCHES an ordinary string that happens to sit under one of
+ *     these key names.
+ *
+ * The refusal is therefore a partial guard over TYPED storage fields, not a
+ * general one, and nothing here may be described as if it were general.
+ * SCRUM-306 owns the structural fix.
+ *
  * ⚠️ WHY THIS EXISTS AT ALL. The walk used to delete every row with a bare
  * `ctx.db.delete(row._id)`. `orgFinancialReset` deliberately does not, and says
  * why: "An orphaned row is recoverable; an unreferenced blob is not."
@@ -213,6 +227,45 @@ export function storageBearingTableNames(): string[] {
     )
     .map(([name]) => name)
     .sort(byTableName);
+}
+
+/**
+ * Tables carrying a `v.any()` field, i.e. one whose contents no validator
+ * describes.
+ *
+ * ⚠️ THIS IS THE STORAGE GUARD'S BLIND SPOT, NAMED RATHER THAN LEFT IMPLICIT.
+ * `storageFieldNames` derives from validator SHAPES, and an opaque field has
+ * no shape to derive from, so a storage id sitting inside one is invisible to
+ * the guard — proven by execution in the rehearsal, on `commandIdempotency`,
+ * the very table this module exists to drive to zero safely.
+ *
+ * The certificate reports this set so a reader can see the boundary from the
+ * same result that says `zero: true`. Closing it structurally is SCRUM-306,
+ * and is deliberately not attempted here: this subsystem produced a fresh
+ * CRITICAL in two consecutive review rounds, which is the convergence circuit
+ * breaker, and the response to that is to stop widening a guessed net.
+ */
+function hasOpaqueField(validator: unknown): boolean {
+  if (validator === null || typeof validator !== "object") return false;
+  const node = validator as {
+    kind?: string;
+    element?: unknown;
+    fields?: Record<string, unknown>;
+    members?: unknown[];
+  };
+  if (node.kind === "any") return true;
+  if (node.kind === "array") return hasOpaqueField(node.element);
+  if (node.kind === "union") return (node.members ?? []).some(hasOpaqueField);
+  if (node.kind === "object") return Object.values(node.fields ?? {}).some(hasOpaqueField);
+  return false;
+}
+
+/** Org-scoped, in-scope tables whose contents the storage guard cannot inspect. */
+export function opaqueBearingTableNames(): string[] {
+  const tables = schema.tables as unknown as Record<string, SchemaTableShape>;
+  return cutoverResetOrder().filter((name) =>
+    Object.values(tables[name]?.validator.fields ?? {}).some(hasOpaqueField)
+  );
 }
 
 /**
@@ -404,6 +457,7 @@ export const verifyOrgZeroState = internalQuery({
     unverifiable: string[];
     retainedByDesign: string[];
     storageNotMeasured: string[];
+    opaqueFieldsNotMeasured: string[];
   }> => {
     // ⚠️ THE PROOF MUST MEASURE ITS OWN TARGET. Without this read the verifier
     // probed 138 index ranges, found every one of them empty — which they
@@ -452,9 +506,15 @@ export const verifyOrgZeroState = internalQuery({
       // Reported so the certificate names its own boundary rather than letting
       // a reader infer a wider one; the reset refuses outright rather than
       // creating orphans in the first place.
-      storageNotMeasured: storageBearingTableNames().filter((table) =>
-        Object.hasOwn(CUTOVER_RETAINED_BY_DESIGN, table) ? false : true
+      storageNotMeasured: storageBearingTableNames().filter(
+        (table) => !Object.hasOwn(CUTOVER_RETAINED_BY_DESIGN, table)
       ),
+      // ⚠️ AND THESE CANNOT EVEN BE INSPECTED. A `v.any()` field has no
+      // validator shape, so the storage guard's name derivation never reaches
+      // inside one. A blob referenced from here is orphaned silently and this
+      // proof still returns `zero: true` — demonstrated by execution in the
+      // rehearsal. SCRUM-306 owns closing it.
+      opaqueFieldsNotMeasured: opaqueBearingTableNames(),
     };
   },
 });
@@ -620,21 +680,30 @@ export const resetOrgToZeroState = internalMutation({
       );
       const batch = rows.slice(0, budgetLeft);
 
-      // ⚠️ REFUSE RATHER THAN ORPHAN. Deleting a row that still references a
+      // ⚠️ REFUSE RATHER THAN ORPHAN — OVER TYPED STORAGE FIELDS ONLY, AND THE
+      // LIMIT IS PART OF THE CONTRACT. Deleting a row that still references a
       // `_storage` blob strands that blob permanently: `_storage` has no
       // `orgId`, so after the last reference is gone nothing can enumerate or
       // delete it, and the row-counting proof would call the tenant zero.
       // Thrown, not skipped, and thrown UNCAUGHT so the whole transaction
       // rolls back — a destructive tool that cannot dispose of part of its
       // subject must not perform any of it.
+      //
+      // What this does NOT reach is a storage id inside a `v.any()` field,
+      // reported as `opaqueFieldsNotMeasured` and owned by SCRUM-306. Do not
+      // read this refusal as proof that no blob can be orphaned.
       for (const row of batch) {
         if (rowCarriesStorage(row, storageFields)) {
           throw new ConvexError(
-            `Refusing to run the cutover reset: a row in "${table}" still references ` +
-              "storage, and deleting it would strand that blob permanently — `_storage` " +
-              "carries no orgId, so nothing could enumerate or delete it afterwards, and " +
-              "the row-count proof would report this tenant as zero. Dispose of the " +
-              "tenant's stored files first. Nothing was deleted."
+            `Refusing to run the cutover reset: a field in a "${table}" row looks like a ` +
+              "storage reference. Deleting that row could strand the blob permanently — " +
+              "`_storage` carries no orgId, so nothing could enumerate or delete it " +
+              "afterwards, and the row-count proof would report this tenant as zero. " +
+              "⚠️ THIS CHECK MATCHES FIELD NAMES, NOT VALUES, so it cannot tell a real " +
+              "storage id from an ordinary string under the same key — and for the same " +
+              "reason it cannot see a storage id inside an opaque field at all " +
+              "(SCRUM-306). Dispose of the tenant's stored files first. Nothing was " +
+              "deleted."
           );
         }
       }
