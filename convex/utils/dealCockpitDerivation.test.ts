@@ -56,7 +56,9 @@ describe("who each stage is waiting on", () => {
    * refused on the dealership's judgement of whether it should have happened.
    */
   test("the finance company's own decisions are MIRROR stages", () => {
-    const rail = stages({ rawAppraisalGapMinor: 500_000 });
+    // CLOSED so the disbursement stage is on the rail at all: it is deliberately
+    // absent until the deal can actually disburse.
+    const rail = stages({ rawAppraisalGapMinor: 500_000, status: "CLOSED" });
     expect(rail.authority("CREDIT_DECISION")).toBe("MIRROR");
     expect(rail.authority("APPRAISAL")).toBe("MIRROR");
     expect(rail.authority("APPROVED_PURCHASE")).toBe("MIRROR");
@@ -79,7 +81,7 @@ describe("who each stage is waiting on", () => {
    * told the operator to chase a payment they cannot cause.
    */
   test("settlement belongs to the dealership now that disbursement is its own stage", () => {
-    const rail = stages();
+    const rail = stages({ status: "CLOSED" });
     expect(rail.authority("SETTLEMENT")).toBe("DEALER");
     expect(rail.authority("DISBURSEMENT")).toBe("MIRROR");
   });
@@ -542,6 +544,53 @@ describe("the disbursement stage", () => {
   const rail = (overrides: Partial<DealStageFacts> = {}) =>
     stages({ creditDecision: "APPROVED", ...overrides });
 
+  /**
+   * The live stage — the first one that is not finished.
+   *
+   * This is not a cosmetic detail on the deployed cockpit: that build renders a
+   * workflow action ONLY when `workflowAction.stageKey === live.key`, and every
+   * action it has is attached to HANDOVER or SETTLEMENT. So whichever stage is
+   * live decides whether the operator can act at all.
+   */
+  const liveStage = (overrides: Partial<DealStageFacts> = {}) =>
+    rail(overrides).rail.find((s) => s.state === "CURRENT" || s.state === "BLOCKED")?.key;
+
+  /**
+   * A disbursement stage must never become the live stage while the actions
+   * that PRODUCE a disbursement are still outstanding.
+   *
+   * The money cannot move until the deal is CLOSED: `confirmDisbursement`
+   * refuses anything else, `finalizeDeal` is what closes it, and finalization
+   * refuses until the vehicle handover is registered. So on an ordinary
+   * approved deal the disbursement is not merely incomplete — it is
+   * unreachable, and it sits AHEAD of handover in the order.
+   *
+   * Emitting it as the live stage therefore replaced the deal's real next step
+   * with one nobody can take. On the deployed cockpit that hides the handover
+   * button, and then the expected-payment and finalize buttons behind it, so
+   * the deal cannot be progressed from the screen at all.
+   */
+  test("never becomes the live stage while the deal still has to be handed over", () => {
+    const readyForHandover = {
+      appraisalStatus: "FINALIZED" as const,
+      approvedDealerPurchaseAmountMinor: 12_500_000,
+      requiredDocumentsComplete: true,
+    };
+    expect(liveStage(readyForHandover)).toBe("HANDOVER");
+  });
+
+  test("is not shown at all on a deal that cannot yet disburse", () => {
+    // Absent, not green: a stage that is ticked on every deal that never
+    // reached it teaches operators the ticks mean nothing.
+    const s = rail({
+      appraisalStatus: "FINALIZED",
+      approvedDealerPurchaseAmountMinor: 12_500_000,
+      requiredDocumentsComplete: true,
+    });
+    expect(s.rail.map((stage) => stage.key)).not.toContain("DISBURSEMENT");
+  });
+
+
   test("is on the financed rail, between the paperwork and the handover", () => {
     expect(DEAL_STAGE_ORDER).toContain("DISBURSEMENT");
     expect(DEAL_STAGE_ORDER.indexOf("DISBURSEMENT")).toBeGreaterThan(
@@ -555,11 +604,18 @@ describe("the disbursement stage", () => {
   test("waits on the finance company, not on the dealership", () => {
     // A MIRROR stage: AutoFlow records that the money arrived, it does not
     // cause it. The blocker names who we are waiting for.
+    //
+    // CLOSED, because that is the only state in which the money can be awaited
+    // at all. This fixture previously used an APPROVED deal and asserted the
+    // stage was BLOCKED there — which PINNED the defect this section now
+    // guards against, rather than catching it.
     const s = rail({
+      status: "CLOSED",
       appraisalStatus: "FINALIZED",
       approvedDealerPurchaseAmountMinor: 12_500_000,
       requiredDocumentsComplete: true,
     });
+    expect(s.rail.map((stage) => stage.key)).toContain("DISBURSEMENT");
     expect(s.state("DISBURSEMENT")).toBe("BLOCKED");
     expect(s.blocker("DISBURSEMENT")).toBe("AwaitingDisbursement");
   });
@@ -578,6 +634,8 @@ describe("the disbursement stage", () => {
 
   test("does not report the money as moved merely because a sale was finalized", () => {
     // A finalized sale is handover/settlement evidence, not payment evidence.
-    expect(rail({ finalizedSaleId: "sale1" }).state("DISBURSEMENT")).not.toBe("COMPLETE");
+    expect(
+      rail({ status: "CLOSED", finalizedSaleId: "sale1" }).state("DISBURSEMENT")
+    ).not.toBe("COMPLETE");
   });
 });
