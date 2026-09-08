@@ -9,16 +9,29 @@
  *
  * Every test here asserts the FULL accounting footprint before and after the
  * refused call, not just the returned status: `accountingEvents`,
- * `pendingAccountingEvents`, `journalEntries`, `journalLines` and
- * `accountBalanceSnapshots`. The comparison is a whole-footprint equality, so a
+ * `pendingAccountingEvents`, `journalEntries`, `journalLines`,
+ * `accountBalanceSnapshots` and `financialAuditLog`. The comparison is a
+ * whole-footprint equality, so a
  * REMOVAL fails it exactly as loudly as an addition — an additions-only delta
  * would read a cancelled pending post as "no GL effect".
  *
- * The structural claim that no OTHER module still exposes the same writer is
- * not testable from in here (a behavioral test only knocks on the doors it
- * happens to know about); it is a source-level enumeration and lives in
- * `scripts/legacyMigrationWriterRetired.test.ts`, alongside the other
- * static-analysis guards.
+ * WHAT THIS FILE DOES NOT PROVE, stated here because the file that used to
+ * claim it has been deleted rather than repaired:
+ *
+ * Nothing prevents a FUTURE module from posting an accounting event under the
+ * legacy `transactions` source family. `postAccountingEvent` takes a
+ * caller-supplied `sourceType`, `accountingLedger.post` exposes it as a
+ * free-form `v.string()` on an `internalMutation` with zero production callers,
+ * and the outbox forwards a stored one on redrive.
+ *
+ * A source-level enumeration guarding that once lived in
+ * `scripts/legacyMigrationWriterRetired.test.ts`. It was removed, not fixed: a
+ * mutant that genuinely inserted into `accountingEvents` from the retired
+ * handler — aliasing `ctx.db` and calling a computed method name — left that
+ * guard entirely GREEN while this suite caught it. A textual scan cannot
+ * measure that property, and one that says it can is worse than none, because
+ * it reads as coverage. Real enforcement means refusing the source family at
+ * the posting boundary, which is routed to the owner as its own decision.
  *
  * FAILING-FIRST CONTROL: run this file against `convex/accountingMigration.ts`
  * as it stands on protected main `62b5a5b9c` and the collection, expense, sale
