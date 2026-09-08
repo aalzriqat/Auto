@@ -1138,11 +1138,24 @@ export async function drainEntries(
     // its exact wording rather than restating the rule, so the two cannot
     // drift. REVERSE entries are exempt — a reversal unwinds something that
     // already posted, and does not route through the engine at all.
-    if (p.kind === "POST" && p.eventType) {
-      const retired = retiredPostingRefusal({ eventType: p.eventType, sourceType: p.sourceType });
+    if (p.kind === "POST") {
+      // `eventType` is schema-optional, `sourceType` is not — so the source
+      // check must not be gated on eventType being present, or a POST row with
+      // a falsy eventType would skip this entirely and fall back into the
+      // held-forever exposure this block exists to close.
+      const retired = retiredPostingRefusal({
+        eventType: p.eventType ?? "",
+        sourceType: p.sourceType,
+      });
       if (retired) {
-        await markEntryFailed(ctx, p, retired);
-        failed++;
+        // COUNT WHAT WAS RECORDED, NOT WHAT WAS ATTEMPTED — the same rule the
+        // catch below states, and for the same reason. `markEntryFailed`
+        // refuses to write onto a row that is no longer failable, and
+        // `prepaidExpenses.redriveScheduleEvents` deliberately sweeps in rows
+        // that are ALREADY FAILED. An unconditional `failed++` here reported a
+        // fresh failure against a row nothing had been written to, in a count
+        // the operator sees directly in a toast.
+        if (await markEntryFailed(ctx, p, retired)) failed++;
         continue;
       }
     }

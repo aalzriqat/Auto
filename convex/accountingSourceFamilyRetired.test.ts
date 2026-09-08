@@ -292,6 +292,101 @@ describe("SCRUM-234 — a retired posting DEAD-LETTERS, it does not sit held for
     expect(after.journalLines).toEqual([]);
   });
 
+  test("a retired EVENT type held by the same guard also dead-letters", async () => {
+    // Coverage, not a second mechanism: retiredPostingRefusal checks both the
+    // event-type set (SCRUM-51) and the source-family set (SCRUM-234) from one
+    // call site, so a future refactor that splits them apart must fail here.
+    // The existing claims-retirement suite opens the period BEFORE queueing, so
+    // it never exercises the held branch for event types.
+    const dealer = await seedDealer();
+    const { t, orgId, userId, asOwner } = dealer;
+
+    await t.run((ctx) =>
+      enqueuePendingPost(
+        ctx,
+        {
+          orgId, eventType: "PREPAID_EXPENSE_AMORTIZED", sourceType: "prepaidExpenseSchedules",
+          sourceId: "held_retired_evt", eventVersion: 1,
+          accountingDate: Date.now(), occurredAt: Date.now(), currency: "JOD",
+          idempotencyKey: "held_retired_evt_key",
+          payload: { amountMinor: 10_000, currency: "JOD" },
+          actorId: userId,
+        },
+        "modern source, held by the prepaid dependency guard"
+      )
+    );
+    // Now retire it by event type instead, in place — the row is otherwise
+    // identical to the modern control below.
+    await t.run(async (ctx) => {
+      const rows = await ctx.db.query("pendingAccountingEvents").collect();
+      const row = rows.find((r) => r.idempotencyKey === "held_retired_evt_key");
+      if (row) await ctx.db.patch(row._id, { eventType: "CLAIM_SETTLED" });
+    });
+
+    for (let i = 0; i < 10; i++) await asOwner.mutation(api.accountingOutbox.redrive, { orgId });
+
+    const rows = await t.run((ctx) => ctx.db.query("pendingAccountingEvents").collect());
+    const row = rows.find((r) => r.idempotencyKey === "held_retired_evt_key");
+    expect(row?.status).toBe("FAILED");
+    expect(row?.lastError).toMatch(/retired and can no longer post/i);
+  });
+
+  test("an ALREADY-FAILED retired row swept in again is not counted as a fresh failure", async () => {
+    // `prepaidExpenses.redriveScheduleEvents` is the one drain entry point that
+    // deliberately sweeps rows which are ALREADY FAILED, and `markEntryFailed`
+    // refuses to write onto a row that is no longer failable. An unconditional
+    // `failed++` therefore reported a failure that exists nowhere in the data —
+    // in a number the operator reads straight off a toast.
+    //
+    // ⚠️ This test MUST go through redriveScheduleEvents. An earlier version
+    // used the ordinary `accountingOutbox.redrive`, which selects only PENDING
+    // rows, so the terminal row was never swept and the assertion passed with
+    // the bug still present. It was vacuous, and the failing-first control
+    // caught it. The rule it pins is `drainEntries`'s own: count what was
+    // RECORDED, not what was attempted.
+    const dealer = await seedDealer();
+    const { t, orgId, userId, asOwner } = dealer;
+
+    const expenseId = await t.run((ctx) =>
+      ctx.db.insert("expenses", {
+        orgId, title: "Prepaid source", amount: 100, date: Date.now(),
+        category: "OTHER", status: "PAID",
+      } as never)
+    );
+    const scheduleId = await t.run((ctx) =>
+      ctx.db.insert("prepaidExpenseSchedules", {
+        orgId, expenseId, currency: "JOD", totalMinor: 100_000, termMonths: 12,
+        expenseSystemKey: "GENERAL_EXPENSE", startYearMonth: "2026-01",
+        recognizedMinor: 0, status: "ACTIVE", createdAt: Date.now(),
+      } as never)
+    );
+
+    // The schedule's own source debit, already terminal — exactly the shape
+    // redriveScheduleEvents sweeps by idempotency key.
+    await t.run((ctx) =>
+      ctx.db.insert("pendingAccountingEvents", {
+        orgId, kind: "POST", status: "FAILED", actorId: userId,
+        idempotencyKey: `expense_posted_${expenseId}`,
+        eventType: "EXPENSE_POSTED", sourceType: "transactions", sourceId: String(expenseId),
+        eventVersion: 1, accountingDate: Date.now(), occurredAt: Date.now(), currency: "JOD",
+        payload: { expenseId: String(expenseId), amountMinor: 100_000, currency: "JOD" },
+        attempts: 10, lastError: "ORIGINAL TERMINAL REASON — MUST NOT BE OVERWRITTEN",
+        createdAt: Date.now(),
+      } as never)
+    );
+
+    const result = await asOwner.mutation(api.prepaidExpenses.redriveScheduleEvents, { orgId, scheduleId });
+
+    // Nothing was written, so nothing may be counted.
+    expect(result.failed).toBe(0);
+
+    const row = (await t.run((ctx) => ctx.db.query("pendingAccountingEvents").collect()))
+      .find((r) => r.idempotencyKey === `expense_posted_${expenseId}`);
+    expect(row?.attempts).toBe(10);
+    expect(row?.lastError).toBe("ORIGINAL TERMINAL REASON — MUST NOT BE OVERWRITTEN");
+    expect(row?.status).toBe("FAILED");
+  });
+
   test("CONTROL — a MODERN entry blocked by the same guard is still HELD, not failed", async () => {
     const dealer = await seedDealer();
     const { t, orgId, userId, asOwner } = dealer;
