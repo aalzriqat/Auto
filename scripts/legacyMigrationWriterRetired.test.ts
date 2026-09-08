@@ -36,10 +36,28 @@
  *
  * So this guard proves: **no production module names the legacy `transactions`
  * source family in a posting call.** It does NOT prove that the posting engine
- * refuses that family. Refusing it at the shared engine boundary is a materially
- * larger change — reversals copy the original source type, so a blanket engine
- * refusal would make historical `transactions`-sourced events unreversible — and
- * it is routed to the owner rather than smuggled in here.
+ * refuses that family. Whether it should is routed to the owner.
+ *
+ * ⚠️ CORRECTION. An earlier version of this comment justified that routing by
+ * claiming a blanket engine refusal "would make historical
+ * `transactions`-sourced events unreversible". **That claim was FALSE**, and both
+ * review seats refuted it independently. `reverseAccountingEvent` does NOT go
+ * through `postAccountingEvent` at all — it inserts its own `accountingEvents`
+ * and `journalEntries` rows directly (`reversals.ts:110` and `:129`), and
+ * `postingRules.ts:77-78` already said so in as many words: "JOURNAL_REVERSAL is
+ * intentionally excluded: it is written directly by reverseAccountingEvent() in
+ * reversals.ts and never goes through postAccountingEvent()."
+ *
+ * The correction matters because it makes the routed option CHEAPER than it was
+ * described: a refusal inside `postAccountingEvent` would leave reversal
+ * untouched, and needs no coordinated "reversal source policy" for correctness.
+ * Whether reversal of legacy-sourced history should ALSO be curtailed is a real
+ * but separate question, not an automatic consequence of the engine refusal.
+ *
+ * The surviving reasons for routing rather than fixing here are scope — this lane
+ * retires one mutation, not the shared engine every domain posts through — and
+ * that the surface is pre-existing, has zero production callers, and is
+ * unreachable by any client.
  *
  * ⚠️ An executable pin of those forwarding surfaces was TRIED and DELETED rather
  * than reworded. `sourceType` is an overloaded field name in this schema —
@@ -99,7 +117,19 @@ export function stripComments(source: string): string {
  * `prettier --check`, so a single-quoted reintroduction would otherwise pass
  * lint, typecheck and this guard together.
  */
-export const LEGACY_SOURCE_LITERAL = /sourceType\s*:\s*(["'`])transactions\1/;
+export const LEGACY_SOURCE_LITERAL =
+  /["'`]?sourceType["'`]?\s*:\s*\(?\s*(["'`])transactions\1/;
+
+/**
+ * The remedy SCRUM-234 made impossible: "run the migration tools".
+ *
+ * Case-insensitive on purpose. The first version was `/[Rr]un the migration
+ * tools/`, a hand-rolled single-character case fold that missed
+ * "RUN THE MIGRATION TOOLS" and "run the Migration Tools" — verified false by
+ * execution. A guard whose whole job is "this defect must not come back" must
+ * not be weaker than the one sitting beside it in the same file.
+ */
+export const RETIRED_REMEDY_PHRASE = /run the migration tools/i;
 
 describe("SCRUM-234 — the legacy transactions GL writer stays retired", () => {
   test("the enumeration itself is not vacuous", () => {
@@ -128,6 +158,31 @@ describe("SCRUM-234 — the legacy transactions GL writer stays retired", () => 
     expect(LEGACY_SOURCE_LITERAL.test("sourceType: `transactions`")).toBe(true);
     expect(LEGACY_SOURCE_LITERAL.test('sourceType:"transactions"')).toBe(true);
     expect(LEGACY_SOURCE_LITERAL.test('sourceType: "collectionPayments"')).toBe(false);
+    // Both of these returned FALSE against the previous version of this regex,
+    // so they are failing-first cases, not decorative ones.
+    expect(LEGACY_SOURCE_LITERAL.test('"sourceType": "transactions"')).toBe(true);
+    expect(LEGACY_SOURCE_LITERAL.test('sourceType: ("transactions")')).toBe(true);
+  });
+
+  test("the remedy-phrase matcher catches every casing, not just the one in use", () => {
+    // The same defect class as the quote-style blind spot above, in the sibling
+    // regex added in the same commit. All three of these returned FALSE against
+    // the previous `[Rr]un the migration tools` pattern.
+    expect(RETIRED_REMEDY_PHRASE.test("RUN THE MIGRATION TOOLS.")).toBe(true);
+    expect(RETIRED_REMEDY_PHRASE.test("Please run the Migration Tools to fix this.")).toBe(true);
+    expect(RETIRED_REMEDY_PHRASE.test("Kindly RUN the migration tools before signing off.")).toBe(true);
+    expect(RETIRED_REMEDY_PHRASE.test("Clear the rows with the accounting reset.")).toBe(false);
+  });
+
+  test("reversal does not route through the posting engine — the fact the routing note rests on", () => {
+    // Pinned so the architectural fact in this file's header cannot drift
+    // silently. An earlier version of that header asserted the OPPOSITE and was
+    // refuted by both review seats; a claim that load-bearing should be held by
+    // an assertion, not by prose alone.
+    const reversals = stripComments(readFileSync(join(CONVEX_DIR, "accounting", "reversals.ts"), "utf8"));
+    expect(reversals).not.toMatch(/postAccountingEvent/);
+    expect(readFileSync(join(CONVEX_DIR, "accounting", "postingRules.ts"), "utf8"))
+      .toMatch(/never goes through postAccountingEvent/);
   });
 
   test("no production convex module names the legacy transactions source family", () => {
@@ -167,7 +222,7 @@ describe("SCRUM-234 — the legacy transactions GL writer stays retired", () => 
     // thrown error must not name a remedy that no longer exists — both review
     // seats blocked on `accountingCutover.signOffCutover` saying exactly that.
     const offenders = convexSourceFiles(CONVEX_DIR).filter((file) =>
-      /[Rr]un the migration tools/.test(stripComments(readFileSync(file, "utf8")))
+      RETIRED_REMEDY_PHRASE.test(stripComments(readFileSync(file, "utf8")))
     );
     expect(offenders).toEqual([]);
   });

@@ -405,9 +405,13 @@ describe("Phase 17 — parallel reporting and sign-off", () => {
     const message = error instanceof Error ? error.message : String(error);
 
     expect(message).toMatch(/retired \(SCRUM-234\)/i);
-    expect(message).toMatch(/clean-slate accounting reset/i);
-    // The point of the test: the remedy it names must be one that still exists.
-    expect(message).not.toMatch(/[Rr]un the migration tools/);
+    // The remedy it names must exist AND be findable. Asserted on the
+    // mechanism's real identifier rather than on prose: `resetOrgFinancialData`
+    // is a real internalMutation in convex/orgFinancialReset.ts and
+    // `transactions` is in its RESET_TABLES manifest, so an operator can grep
+    // straight to it. The other seat claimed no such tool existed; it does.
+    expect(message).toMatch(/resetOrgFinancialData/);
+    expect(message).not.toMatch(/run the migration tools/i);
   });
 
   test("signOffCutover rejects when the trial balance is unbalanced", async () => {

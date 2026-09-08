@@ -858,7 +858,8 @@ export const signOffCutover = mutation({
       throw new ConvexError(
         `Cannot sign off: ${unmigratedTransactionCount} legacy transaction(s) have no accounting event sourced from the legacy ledger. ` +
           "Legacy transaction migration is retired (SCRUM-234), so there is no migration tool to run: these rows must be cleared " +
-          "by the clean-slate accounting reset before cutover can be signed off."
+          "by the clean-slate accounting reset (orgFinancialReset.resetOrgFinancialData, which lists `transactions` in RESET_TABLES) " +
+          "before cutover can be signed off. That reset is gated on SCRUM-231 and is not authorized on its own."
       );
     }
     if (!isBalanced) {
