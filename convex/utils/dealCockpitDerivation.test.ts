@@ -579,6 +579,31 @@ describe("the disbursement stage", () => {
     expect(liveStage(readyForHandover)).toBe("HANDOVER");
   });
 
+  /**
+   * A deal that was closed and then cancelled before the money arrived.
+   *
+   * `cancelApplication` permits cancelling a CLOSED deal — it refuses only once
+   * a disbursement has actually been confirmed — and its patch moves `status` to
+   * CANCELLED while leaving `finalizedSaleId` in place. So the stage's own
+   * evidence of having been reached survives, but the status that made it
+   * applicable does not.
+   *
+   * Every other unresolved stage on a stopped deal renders STOPPED. This one
+   * must not silently vanish instead: the rail is the record of what happened to
+   * the deal, and a step that was genuinely reached and then abandoned is part
+   * of that record.
+   */
+  test("stays on the rail, stopped, when a closed deal is cancelled before disbursement", () => {
+    const s = rail({
+      status: "CANCELLED",
+      creditDecision: "CANCELLED",
+      finalizedSaleId: "sale1",
+      vehicleHandoverAt: Date.UTC(2026, 8, 1),
+    });
+    expect(s.rail.map((stage) => stage.key)).toContain("DISBURSEMENT");
+    expect(s.state("DISBURSEMENT")).toBe("STOPPED");
+  });
+
   test("is not shown at all on a deal that cannot yet disburse", () => {
     // Absent, not green: a stage that is ticked on every deal that never
     // reached it teaches operators the ticks mean nothing.

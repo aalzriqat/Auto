@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import { salesEn, salesAr } from "./domains/sales";
 import {
   CASH_DEAL_STAGE_ORDER,
+  DEAL_STAGE_BLOCKERS,
   DEAL_STAGE_ORDER,
 } from "../../convex/utils/financingEconomics";
 
@@ -95,6 +96,40 @@ describe("deployed cockpit can label every stage this backend emits", () => {
       // dictionary entry.
       expect(en).not.toBe(stageKey);
       expect(ar).not.toBe(stageKey);
+    }
+  );
+
+  /**
+   * The blocker sub-label, which reaches the operator through a DIFFERENT and
+   * more fragile path than the stage label above.
+   *
+   * The deployed cockpit builds this key by interpolation —
+   * ``t(`Blocker${stage.blocker}`)`` at `DealCockpit.tsx:1732` and `:1766` —
+   * with no `STAGE_LABEL`-style indirection to fall back on. There is no
+   * allowlist to consult and nothing to snapshot: EVERY blocker the backend can
+   * emit must have a translation under its interpolated key, or the operator
+   * reads a bare identifier where the reason for the hold should be.
+   *
+   * `lib/i18n/keyCoverage.test.ts` documents that its static scans cannot see
+   * this path and rests on "every member resolves today". This change added the
+   * first new member since that was written — `AwaitingDisbursement` — so the
+   * hand-checked guarantee is replaced here with an enforced one.
+   */
+  test.each(DEAL_STAGE_BLOCKERS)(
+    "the blocker %s resolves to real copy in both locales",
+    (blocker) => {
+      const key = `Blocker${blocker}`;
+      const en = (salesEn as Record<string, string>)[key];
+      const ar = (salesAr as Record<string, string>)[key];
+
+      expect(
+        en,
+        `The rail can emit blocker "${blocker}", which the cockpit renders as t("${key}"). ` +
+          `Without an English entry the operator reads the identifier instead of the reason.`
+      ).toBeTruthy();
+      expect(ar, `Same for Arabic: "${key}" has no entry.`).toBeTruthy();
+      expect(en).not.toBe(key);
+      expect(ar).not.toBe(key);
     }
   );
 

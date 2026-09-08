@@ -781,17 +781,33 @@ export const DEAL_STAGE_ORDER: FinancedDealStageKey[] = [
  */
 export type DealStageState = "COMPLETE" | "CURRENT" | "BLOCKED" | "PENDING" | "STOPPED";
 
-export type DealStageBlocker =
-  | "AwaitingCreditDecision"
-  | "AwaitingAppraisal"
-  | "GapUnresolved"
-  | "GapNegotiationFailed"
-  | "NoApprovedPurchaseAmount"
-  | "DocumentsIncomplete"
+/**
+ * Every blocker the rail can name, as VALUES rather than only as a type.
+ *
+ * Enumerable on purpose. The deployed cockpit renders a blocker by building its
+ * translation key through interpolation — ``t(`Blocker${stage.blocker}`)`` —
+ * rather than by looking one up in a map, so no static scan of the dictionaries
+ * can see which keys that path needs, and `lib/i18n/keyCoverage.test.ts` says so
+ * in as many words. Its guarantee was "every member resolves today", checked by
+ * hand. This change added the first new member since that was written, which is
+ * exactly the moment a hand-checked guarantee stops holding.
+ *
+ * The type is derived FROM this list so the two cannot disagree.
+ */
+export const DEAL_STAGE_BLOCKERS = [
+  "AwaitingCreditDecision",
+  "AwaitingAppraisal",
+  "GapUnresolved",
+  "GapNegotiationFailed",
+  "NoApprovedPurchaseAmount",
+  "DocumentsIncomplete",
   /** Waiting on the financing company to pay — never on the dealership. */
-  | "AwaitingDisbursement"
-  | "HandoverBlocked"
-  | "AwaitingSettlement";
+  "AwaitingDisbursement",
+  "HandoverBlocked",
+  "AwaitingSettlement",
+] as const;
+
+export type DealStageBlocker = (typeof DEAL_STAGE_BLOCKERS)[number];
 
 /**
  * Who the deal is waiting on at this stage — the distinction the whole screen
@@ -1050,8 +1066,21 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
      * Evidence keeps it visible on deals that already disbursed, including
      * historical ones whose status has moved on, so this hides a future step
      * rather than a finished one.
+     *
+     * `finalizedSaleId` is part of the test for the same reason, and not
+     * redundant with CLOSED. A closed deal can be cancelled before the money
+     * arrives — `cancelApplication` refuses only once a disbursement is
+     * confirmed — and that patch moves the status to CANCELLED while leaving
+     * the finalized sale in place. Testing the status alone therefore deleted
+     * the stage from the rail of a deal that genuinely reached it, while every
+     * other unresolved stage on a stopped deal still renders STOPPED. The rail
+     * is the record of what happened; a step that was reached and then
+     * abandoned belongs in it.
      */
-    DISBURSEMENT: facts.status === "CLOSED" || complete.DISBURSEMENT,
+    DISBURSEMENT:
+      facts.status === "CLOSED" ||
+      facts.finalizedSaleId !== undefined ||
+      complete.DISBURSEMENT,
     HANDOVER: true,
     SETTLEMENT: true,
   };
