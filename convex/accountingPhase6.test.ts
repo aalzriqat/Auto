@@ -143,8 +143,13 @@ describe("Phase 6 — audit legacy transactions", () => {
   });
 });
 
-describe("Phase 6 — dry-run migration", () => {
-  test("dry-run migration shows WOULD_POST without creating events", async () => {
+describe("Phase 6 — the migration writer is retired (SCRUM-234)", () => {
+  // These two tests used to assert that a dry run reported WOULD_POST and that
+  // a live run posted and was idempotent. `migrateUnpostedTransactions` no
+  // longer writes at all, so what they assert now is the refusal and the
+  // absence of any GL effect. The read-only audit coverage above is unchanged.
+
+  test("a dry run is refused too — dryRun is not the authority boundary", async () => {
     const { t, orgId, asUser } = await seedMigrationDealer();
 
     await t.run((ctx) =>
@@ -154,21 +159,15 @@ describe("Phase 6 — dry-run migration", () => {
       })
     );
 
-    const result = await asUser.mutation(api.accountingMigration.migrateUnpostedTransactions, {
-      orgId, dryRun: true, limit: 10,
-    });
+    await expect(
+      asUser.mutation(api.accountingMigration.migrateUnpostedTransactions, { orgId, dryRun: true, limit: 10 })
+    ).rejects.toThrow(/retired/i);
 
-    expect(result.dryRun).toBe(true);
-    expect(result.wouldPost).toBe(1);
-    expect(result.posted).toBe(0);
-    expect(result.results[0].action).toBe("WOULD_POST");
-
-    // Verify no events were actually created
     const gap = await asUser.query(api.accountingMigration.migrationGapAnalysis, { orgId });
     expect(gap.gl.events).toBe(0);
   });
 
-  test("live migration posts events and is idempotent when run twice", async () => {
+  test("a live run is refused and posts nothing, however many times it is called", async () => {
     const { t, orgId, asUser } = await seedMigrationDealer();
     const now = Date.now();
 
@@ -179,21 +178,19 @@ describe("Phase 6 — dry-run migration", () => {
       })
     );
 
-    const first = await asUser.mutation(api.accountingMigration.migrateUnpostedTransactions, {
-      orgId, dryRun: false, limit: 10,
-    });
-    expect(first.posted).toBe(1);
-
-    // Second run should skip already-posted transactions
-    const second = await asUser.mutation(api.accountingMigration.migrateUnpostedTransactions, {
-      orgId, dryRun: false, limit: 10,
-    });
-    expect(second.posted).toBe(0);
-    expect(second.skipped).toBe(1);
+    for (const attempt of [1, 2]) {
+      await expect(
+        asUser.mutation(api.accountingMigration.migrateUnpostedTransactions, { orgId, dryRun: false, limit: 10 }),
+        `attempt ${attempt}`
+      ).rejects.toThrow(/retired/i);
+    }
 
     const gap = await asUser.query(api.accountingMigration.migrationGapAnalysis, { orgId });
-    expect(gap.gl.events).toBe(1);
-    expect(gap.migrationProgress).toBe(100);
+    expect(gap.gl.events).toBe(0);
+    // The legacy row itself is untouched: the refusal lands before any
+    // mutation of it, so it is still there and still classified as unposted.
+    const audit = await asUser.query(api.accountingMigration.auditLegacyTransactions, { orgId, onlyUnposted: true });
+    expect(audit.unpostedCount).toBe(1);
   });
 });
 
@@ -218,20 +215,19 @@ describe("Phase 6 — VEHICLE_PURCHASE rows are recognized as already posted via
     expect(audit.unpostedCount).toBe(0);
   });
 
-  test("migration skips the VEHICLE_PURCHASE row instead of double-posting VEHICLE_ACQUIRED", async () => {
+  test("the retired migration cannot double-post VEHICLE_ACQUIRED", async () => {
     const { orgId, asUser } = await seedMigrationDealer();
 
     const vehicleId = await asUser.mutation(api.vehicles.create, {
       orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
     });
 
-    const result = await asUser.mutation(api.accountingMigration.migrateUnpostedTransactions, {
-      orgId, dryRun: false, limit: 10,
-    });
-
-    expect(result.posted).toBe(0);
-    expect(result.skipped).toBe(1);
-    expect(result.results[0]).toMatchObject({ action: "SKIP", reason: "already_posted_via_vehicle" });
+    // This used to rely on the `already_posted_via_vehicle` SKIP branch. That
+    // cross-family exposure check is no longer what protects the books here —
+    // the writer is retired, so the call cannot reach a posting at all.
+    await expect(
+      asUser.mutation(api.accountingMigration.migrateUnpostedTransactions, { orgId, dryRun: false, limit: 10 })
+    ).rejects.toThrow(/retired/i);
 
     // Only the one VEHICLE_ACQUIRED event exists for the vehicle — no duplicate.
     const dup = await asUser.query(api.accountingMigration.duplicateEventCheck, {

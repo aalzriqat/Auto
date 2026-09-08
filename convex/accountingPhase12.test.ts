@@ -317,7 +317,16 @@ describe("Phase 12 — no direct balance edits", () => {
 });
 
 describe("Phase 12 — legacy migration gap", () => {
-  test("PARTNER_DRAW and CAPITAL_INJECTION legacy transactions now migrate with balanced entries", async () => {
+  // This used to assert that legacy PARTNER_DRAW / CAPITAL_INJECTION rows
+  // migrated into balanced equity entries. `migrateUnpostedTransactions` is
+  // retired (SCRUM-234) and can no longer post, so the balanced-entry
+  // assertions move to nothing being posted at all.
+  //
+  // No posting-rule coverage is lost by this: the PARTNER_DREW and
+  // CAPITAL_CONTRIBUTED rules are exercised through their domain path,
+  // `partnerEquity.recordEquityMovement`, earlier in this same file — including
+  // the balanced-entry and minor-unit assertions this test carried.
+  test("legacy PARTNER_DRAW and CAPITAL_INJECTION rows can no longer be migrated", async () => {
     const { t, orgId, asOwner } = await seedEquityDealer();
 
     await t.run((ctx) =>
@@ -333,24 +342,15 @@ describe("Phase 12 — legacy migration gap", () => {
       })
     );
 
-    const result = await asOwner.mutation(api.accountingMigration.migrateUnpostedTransactions, {
-      orgId, dryRun: false,
-    });
-    expect(result.posted).toBe(2);
-    expect(result.skipped).toBe(0);
+    await expect(
+      asOwner.mutation(api.accountingMigration.migrateUnpostedTransactions, { orgId, dryRun: false })
+    ).rejects.toThrow(/retired/i);
 
-    const drewEvents = await eventsOfType(t, orgId, "PARTNER_DREW");
-    const contribEvents = await eventsOfType(t, orgId, "CAPITAL_CONTRIBUTED");
-    expect(drewEvents).toHaveLength(1);
-    expect(contribEvents).toHaveLength(1);
+    expect(await eventsOfType(t, orgId, "PARTNER_DREW")).toHaveLength(0);
+    expect(await eventsOfType(t, orgId, "CAPITAL_CONTRIBUTED")).toHaveLength(0);
 
-    // 100 JOD → 100_000 minor at scale 3; 250 JOD → 250_000.
-    const drewTotals = totals(await linesForEvent(t, drewEvents[0]));
-    expect(drewTotals.debit).toBe(100_000);
-    expect(drewTotals.debit).toBe(drewTotals.credit);
-
-    const contribTotals = totals(await linesForEvent(t, contribEvents[0]));
-    expect(contribTotals.debit).toBe(250_000);
-    expect(contribTotals.debit).toBe(contribTotals.credit);
+    // Asserted as an absence in the GL itself, not only in the event table.
+    const lines = await t.run((ctx) => ctx.db.query("journalLines").collect());
+    expect(lines).toHaveLength(0);
   });
 });

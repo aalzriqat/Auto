@@ -154,7 +154,7 @@ describe("Phase 13 — the Claims GL lifecycle is retired (SCRUM-51)", () => {
   });
 });
 describe("Phase 13 — a legacy CLAIM_PAYMENT no longer posts (SCRUM-51)", () => {
-  test("the migration skips it instead of crediting AR nothing ever debited", async () => {
+  test("the retired migration refuses instead of crediting AR nothing ever debited", async () => {
     const { t, orgId, asOwner } = await seedClaimsDealer();
 
     await t.run((ctx) =>
@@ -164,15 +164,15 @@ describe("Phase 13 — a legacy CLAIM_PAYMENT no longer posts (SCRUM-51)", () =>
       })
     );
 
-    const result = await asOwner.mutation(api.accountingMigration.migrateUnpostedTransactions, {
-      orgId, dryRun: false,
-    });
-
-    // Skipped, not posted. This row used to become DR Cash / CR Finance-company
+    // Refused, not posted. This row used to become DR Cash / CR Finance-company
     // AR with no receivable and no originating debit anywhere — the SCRUM-51
     // defect reached through the migration rather than through `claims.add`.
-    expect(result.posted).toBe(0);
-    expect(result.skipped).toBe(1);
+    // SCRUM-51's own `mapCategoryToEventType` fix returned null for this
+    // category; SCRUM-234 removed the writer the category would have reached.
+    // The GL absence below is the assertion that survives both.
+    await expect(
+      asOwner.mutation(api.accountingMigration.migrateUnpostedTransactions, { orgId, dryRun: false })
+    ).rejects.toThrow(/retired/i);
 
     const events = await eventsOfType(t, orgId, "CLAIM_SETTLED");
     expect(events).toHaveLength(0);
