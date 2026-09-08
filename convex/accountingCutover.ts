@@ -832,13 +832,33 @@ export const signOffCutover = mutation({
     const isBalanced = trialBalanceByCurrency.every((b) => b.isBalanced);
 
     // A sign-off is an attestation that the cutover is DONE and correct —
-    // recording one while transactions remain unmigrated or the trial
-    // balance doesn't foot would let the org proceed as if production-ready
-    // when it isn't. Neither is overridable here: an incomplete migration or
-    // an unbalanced ledger needs to be fixed, not signed off around.
+    // recording one while transactions remain unaccounted for, or while the
+    // trial balance doesn't foot, would let the org proceed as if
+    // production-ready when it isn't. Neither is overridable here.
+    //
+    // ⚠️ SCRUM-234 changed what this refusal can honestly tell an operator.
+    // The gate is unchanged, but the remedy it used to name is gone: this
+    // count is satisfied only by a POSTED event sourced from `transactions`,
+    // and `accountingMigration.migrateUnpostedTransactions` — the sole
+    // production writer of that source family — now refuses unconditionally.
+    // So there is no longer any tool a caller can run to drive this to zero.
+    //
+    // Under SCRUM-231's clean-slate launch that is the intended shape: the
+    // wipe leaves zero active legacy rows, so the count is zero and sign-off
+    // passes without any migration ever running. It only STAYS zero while
+    // nothing writes new legacy rows, which is SCRUM-53's containment.
+    //
+    // What is deliberately NOT done here: redefining the predicate (e.g.
+    // gating on the legacy table being empty rather than on a per-row
+    // migrated event). That is a segregation-of-duties control change to an
+    // accounting attestation and needs its own review — it is routed to the
+    // owner, not smuggled in as a rider on the retirement. All this change
+    // does is stop the error naming a remedy that no longer exists.
     if (unmigratedTransactionCount > 0) {
       throw new ConvexError(
-        `Cannot sign off: ${unmigratedTransactionCount} legacy transaction(s) are still unmigrated. Run the migration tools first.`
+        `Cannot sign off: ${unmigratedTransactionCount} legacy transaction(s) have no accounting event sourced from the legacy ledger. ` +
+          "Legacy transaction migration is retired (SCRUM-234), so there is no migration tool to run: these rows must be cleared " +
+          "by the clean-slate accounting reset before cutover can be signed off."
       );
     }
     if (!isBalanced) {

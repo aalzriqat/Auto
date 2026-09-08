@@ -1,24 +1,58 @@
 /**
- * SCRUM-234 — static guard: no production module originates an accounting
- * event from a legacy `transactions` row.
+ * SCRUM-234 — static guard: the retired legacy-migration writer stays retired,
+ * and no production module regains a literal `transactions` source family.
  *
- * `accountingMigration.migrateUnpostedTransactions` was the only such writer,
- * and it is retired. A behavioral test cannot establish that absence: it can
- * only knock on the doors it already knows about, so it would stay green if the
- * writer were reintroduced somewhere else under another name. This is a
- * source-level enumeration of every non-test module under `convex/` instead,
- * which is the same shape as the other guards in this directory
- * (`tenantWriteGuard`, `commitmentWriteGuard`).
+ * `accountingMigration.migrateUnpostedTransactions` was the only production
+ * function that originated an accounting event from a legacy `transactions`
+ * row, and it is retired. A behavioral test cannot establish that absence — it
+ * can only knock on the doors it already knows about, so it would stay green if
+ * the writer were reintroduced somewhere else under another name. This is a
+ * source-level enumeration instead, in the same spirit as the other guards in
+ * this directory (`tenantWriteGuard`, `commitmentWriteGuard`).
  *
- * It lives in `scripts/` rather than `convex/` for a mechanical reason: it
- * reads the filesystem, and a `node:fs` import inside `convex/` is rejected —
+ * It lives in `scripts/` rather than `convex/` for a mechanical reason: it reads
+ * the filesystem, and a `node:fs` import inside `convex/` is rejected because
  * Convex's default runtime is a V8 isolate with no Node builtins.
  *
- * Scope boundary, stated so a future reader does not over-read this guard:
- * it forbids ORIGINATING an accounting event whose `sourceType` is the legacy
- * `transactions` table. It says nothing about reading such events (the audit
- * queries legitimately do), and nothing about the Phase 17 minor-unit backfills
- * in the same module, which widen existing money columns in place.
+ * ─── WHAT THIS GUARD DOES **NOT** PROVE ──────────────────────────────────────
+ *
+ * Stated plainly, because the first version of this file overclaimed and an
+ * adversarial reviewer was right to refuse it:
+ *
+ * A literal-string scan cannot see a source type that arrives as a VARIABLE.
+ * Three production surfaces legitimately forward one:
+ *
+ *   convex/accounting/postingEngine.ts   `cmd.sourceType`      (the shared engine)
+ *   convex/accountingOutbox.ts           `args/p/cmd.sourceType` (queue + redrive)
+ *   convex/accounting/reversals.ts       `original.sourceType`   (reversal copies it)
+ *
+ * and `convex/accountingLedger.ts` exposes `post` as an `internalMutation`
+ * taking a free-form `sourceType: v.string()`. An operator with deployment
+ * credentials could therefore still hand-post a `transactions`-sourced event
+ * through `npx convex run`, exactly as that same operator can already write
+ * arbitrary rows through the Convex dashboard or `adminData.ts`'s raw-JSON
+ * editor. That surface is PRE-EXISTING, has zero production callers, is not
+ * reachable by any client, and is not created or widened by SCRUM-234.
+ *
+ * So this guard proves: **no production module names the legacy `transactions`
+ * source family in a posting call.** It does NOT prove that the posting engine
+ * refuses that family. Refusing it at the shared engine boundary is a materially
+ * larger change — reversals copy the original source type, so a blanket engine
+ * refusal would make historical `transactions`-sourced events unreversible — and
+ * it is routed to the owner rather than smuggled in here.
+ *
+ * ⚠️ An executable pin of those forwarding surfaces was TRIED and DELETED rather
+ * than reworded. `sourceType` is an overloaded field name in this schema —
+ * receivables use it for `INTERNAL_INSTALLMENT`/`CHEQUE`, vehicles for
+ * `STOCK`/`SOURCED` — so every textual predicate wide enough to catch
+ * `cmd.sourceType` also caught `collections.ts`, `vehicles.ts`, `subledger.ts`
+ * and `applications.ts`, which have nothing to do with accounting-event source
+ * families. Measured: 14 files on the first predicate, 9 on the second. A pin
+ * that fails whenever an unrelated lane edits a vehicle would be deleted by the
+ * next engineer who hit it, which is worse than no pin at all. Separating them
+ * needs an AST, and building one for a single string literal is out of
+ * proportion to the risk. So the blind spot is documented here, in prose,
+ * instead of being papered over by a third regex.
  */
 import { describe, expect, test } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -45,27 +79,60 @@ function convexSourceFiles(dir: string): string[] {
 /**
  * Strips block and line comments.
  *
- * Without this the guard would fail on its own subject: the retirement notice
- * in `accountingMigration.ts` quotes the very string being searched for, and a
+ * Without this the guard would fail on its own subject: the retirement notice in
+ * `accountingMigration.ts` quotes the very string being searched for, and a
  * guard that cannot survive being documented is a guard nobody will keep.
  */
-function stripComments(source: string): string {
+export function stripComments(source: string): string {
   const blockComment = new RegExp("/\\*[\\s\\S]*?\\*/", "g");
   return source.replace(blockComment, "").replace(/^\s*\/\/.*$/gm, "");
 }
 
+/**
+ * Matches `sourceType:` bound to the literal `transactions` in ANY quote style.
+ *
+ * The first version of this guard matched double quotes only. `eslint.config.mjs`
+ * already records this team hitting the identical failure mode on a structurally
+ * identical problem — a regex guard that missed single-quoted specifiers — which
+ * is why that check was moved onto an AST-aware rule. Nothing here enforces a
+ * quote style: there is no ESLint `quotes` rule configured, and no CI step runs
+ * `prettier --check`, so a single-quoted reintroduction would otherwise pass
+ * lint, typecheck and this guard together.
+ */
+export const LEGACY_SOURCE_LITERAL = /sourceType\s*:\s*(["'`])transactions\1/;
+
 describe("SCRUM-234 — the legacy transactions GL writer stays retired", () => {
   test("the enumeration itself is not vacuous", () => {
-    // A scan that silently found no files would pass every assertion below,
-    // and an empty enumeration is indistinguishable from a true absence.
+    // A scan that silently found no files would pass every assertion below, and
+    // an empty enumeration is indistinguishable from a true absence.
     const files = convexSourceFiles(CONVEX_DIR);
     expect(files.length).toBeGreaterThan(50);
     expect(files).toContain(MIGRATION_MODULE);
+    // The engine and the forwarding surfaces named in the header must still be
+    // where the header says they are, so that documented limitation cannot go
+    // stale without someone noticing.
+    for (const surface of [
+      join(CONVEX_DIR, "accounting", "postingEngine.ts"),
+      join(CONVEX_DIR, "accounting", "reversals.ts"),
+      join(CONVEX_DIR, "accountingOutbox.ts"),
+      join(CONVEX_DIR, "accountingLedger.ts"),
+    ]) {
+      expect(files).toContain(surface);
+    }
   });
 
-  test("no production convex module posts an accounting event sourced from transactions", () => {
+  test("the literal matcher catches every quote style, not just the one in use", () => {
+    // The guard's own blind spot, tested directly rather than assumed away.
+    expect(LEGACY_SOURCE_LITERAL.test('sourceType: "transactions"')).toBe(true);
+    expect(LEGACY_SOURCE_LITERAL.test("sourceType: 'transactions'")).toBe(true);
+    expect(LEGACY_SOURCE_LITERAL.test("sourceType: `transactions`")).toBe(true);
+    expect(LEGACY_SOURCE_LITERAL.test('sourceType:"transactions"')).toBe(true);
+    expect(LEGACY_SOURCE_LITERAL.test('sourceType: "collectionPayments"')).toBe(false);
+  });
+
+  test("no production convex module names the legacy transactions source family", () => {
     const offenders = convexSourceFiles(CONVEX_DIR).filter((file) =>
-      /sourceType\s*:\s*"transactions"/.test(stripComments(readFileSync(file, "utf8")))
+      LEGACY_SOURCE_LITERAL.test(stripComments(readFileSync(file, "utf8")))
     );
     expect(offenders).toEqual([]);
   });
@@ -87,11 +154,21 @@ describe("SCRUM-234 — the legacy transactions GL writer stays retired", () => 
 
   test("the module still exposes its read-only audit surface", () => {
     // Retiring the writer must not quietly take the truthful diagnostics with
-    // it — the owner ruling keeps them, and they are what a launch operator is
-    // pointed at by the refusal message.
+    // it — the owner ruling keeps them, and they are what the refusal message
+    // points a launch operator at.
     const source = readFileSync(MIGRATION_MODULE, "utf8");
     for (const surface of ["auditLegacyTransactions", "duplicateEventCheck", "migrationGapAnalysis"]) {
       expect(source).toMatch(new RegExp(`export const ${surface} = query\\(`));
     }
+  });
+
+  test("no surviving refusal message points an operator at the retired migration tools", () => {
+    // SCRUM-234 made "run the migration tools" an impossible instruction. A
+    // thrown error must not name a remedy that no longer exists — both review
+    // seats blocked on `accountingCutover.signOffCutover` saying exactly that.
+    const offenders = convexSourceFiles(CONVEX_DIR).filter((file) =>
+      /[Rr]un the migration tools/.test(stripComments(readFileSync(file, "utf8")))
+    );
+    expect(offenders).toEqual([]);
   });
 });

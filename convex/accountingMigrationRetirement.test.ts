@@ -93,7 +93,12 @@ type FootprintTable =
   | "pendingAccountingEvents"
   | "journalEntries"
   | "journalLines"
-  | "accountBalanceSnapshots";
+  | "accountBalanceSnapshots"
+  // `postAccountingEvent` writes one of these as its final step on EVERY
+  // successful post, including every duplicate the retired writer produced, so
+  // omitting it would have left the "whole footprint" claim below approximate
+  // rather than true.
+  | "financialAuditLog";
 
 /**
  * The whole accounting footprint of an org, as stable sorted identity lists.
@@ -117,6 +122,7 @@ async function accountingFootprint(t: Dealer["t"], orgId: Id<"organizations">) {
       journalEntries: await ids("journalEntries"),
       journalLines: await ids("journalLines"),
       accountBalanceSnapshots: await ids("accountBalanceSnapshots"),
+      financialAuditLog: await ids("financialAuditLog"),
     };
   });
 }
@@ -294,18 +300,64 @@ describe("SCRUM-240 — partial-GL reachability through this path is structurall
 });
 
 describe("SCRUM-234 — dryRun is not the authority boundary, and the read-only surface survives", () => {
-  test("dryRun true is refused as well, so no value of dryRun can write", async () => {
+  // One test block per dryRun state, deliberately not one block making three
+  // calls: a bundled block aborts on its first internal failure, so the other
+  // two states would never be independently exercised in a failing run — and
+  // the evidence count would not reconstruct.
+  test.each([
+    ["dryRun true", { dryRun: true }],
+    ["dryRun false", { dryRun: false }],
+    ["dryRun omitted", {}],
+  ] as const)("%s is refused with zero financial delta", async (_label, args) => {
+    const dealer = await seedAccountingDealer();
+    await dealer.t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId: dealer.orgId, type: "OUT", amount: 500, date: Date.now(),
+        category: "EXPENSE", description: "Marketing",
+      })
+    );
+
+    await expectRefusedWithNoDelta(dealer, args);
+  });
+
+  test("callers with no identity and no membership are refused the same way, writing nothing", async () => {
+    // The source places the refusal ahead of `requireTenantAuth` on purpose,
+    // and the commit message makes a security-relevant claim about that: no
+    // caller-dependent branch exists, so the tenancy guard's impersonation
+    // audit-write never fires on behalf of a call that can never act. Asserted
+    // rather than assumed.
     const dealer = await seedAccountingDealer();
     const { t, orgId } = dealer;
     await t.run((ctx) =>
       ctx.db.insert("transactions", {
-        orgId, type: "OUT", amount: 500, date: Date.now(), category: "EXPENSE", description: "Marketing",
+        orgId, type: "OUT", amount: 100, date: Date.now(), category: "EXPENSE", description: "Office supplies",
       })
     );
 
-    await expectRefusedWithNoDelta(dealer, { dryRun: true });
-    await expectRefusedWithNoDelta(dealer, { dryRun: false });
-    await expectRefusedWithNoDelta(dealer, {}); // dryRun omitted entirely
+    const outsiderUserId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "s234_outsider", email: "outsider@example.com", name: "Outsider" })
+    );
+    expect(outsiderUserId).toBeTruthy();
+
+    const before = await accountingFootprint(t, orgId);
+    const legacyBefore = await legacyRows(t, orgId);
+
+    for (const caller of [
+      t, // no identity at all
+      t.withIdentity({ subject: "s234_outsider", clerkId: "s234_outsider" }), // authenticated, not a member
+    ]) {
+      await expect(
+        caller.mutation(api.accountingMigration.migrateUnpostedTransactions, { orgId, dryRun: false })
+      ).rejects.toThrow(/retired/i);
+    }
+
+    // Including the admin audit trail — the table `requireTenantAuth` writes
+    // its `impersonated-write:*` row into. Nothing was written on behalf of a
+    // call that could never act.
+    const adminAudit = await t.run((ctx) => ctx.db.query("adminAuditLog").collect());
+    expect(adminAudit).toEqual([]);
+    expect(await accountingFootprint(t, orgId)).toEqual(before);
+    expect(await legacyRows(t, orgId)).toEqual(legacyBefore);
   });
 
   test("the read-only audit queries remain usable and mutate nothing", async () => {

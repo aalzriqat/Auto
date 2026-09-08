@@ -375,7 +375,39 @@ describe("Phase 17 — parallel reporting and sign-off", () => {
 
     await expect(
       ctx.asOwner.mutation(api.accountingCutover.signOffCutover, { orgId: ctx.orgId })
-    ).rejects.toThrow(/still unmigrated/i);
+    ).rejects.toThrow(/no accounting event sourced from the legacy ledger/i);
+  });
+
+  test("the refusal does not point the operator at a migration tool that no longer exists", async () => {
+    // SCRUM-234 retired the only production writer that could satisfy this
+    // gate, so the old message ("Run the migration tools first") named an
+    // impossible remedy. Both review seats blocked on that.
+    //
+    // The legacy row here is created by an ORDINARY domain call, with no
+    // test-only helper: `expenses.create` with status PAID posts its own
+    // EXPENSE_POSTED event sourced from `expenses` AND leaves a legacy
+    // `transactions` row that this gate counts as unaccounted-for. That is the
+    // production path an operator actually arrives on.
+    const ctx = await seedCutoverDealer();
+    await ctx.asOwner.mutation(api.expenses.create, {
+      orgId: ctx.orgId,
+      title: "Ordinary paid expense",
+      amount: 100,
+      date: Date.now(),
+      category: "OTHER",
+      status: "PAID",
+      paymentMethod: "CASH",
+    });
+
+    const error = await ctx.asOwner
+      .mutation(api.accountingCutover.signOffCutover, { orgId: ctx.orgId })
+      .then(() => null, (e: unknown) => e);
+    const message = error instanceof Error ? error.message : String(error);
+
+    expect(message).toMatch(/retired \(SCRUM-234\)/i);
+    expect(message).toMatch(/clean-slate accounting reset/i);
+    // The point of the test: the remedy it names must be one that still exists.
+    expect(message).not.toMatch(/[Rr]un the migration tools/);
   });
 
   test("signOffCutover rejects when the trial balance is unbalanced", async () => {

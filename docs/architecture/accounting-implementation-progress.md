@@ -470,7 +470,7 @@ Status: Implemented. All Phase 6 acceptance gates pass.
   - `auditLegacyTransactions`: classifies each legacy `transactions` row by whether it has a POSTED `accountingEvent`; returns `scannedCount`, `hasMore`, `postedCount`, `unpostedCount`, `rows`; optional `onlyUnposted` filter uses `scanLimit = limit * 5` to work past posted rows.
   - `duplicateEventCheck`: queries `accountingEvents` by `eventType` and detects idempotency-key collisions; returns `totalEvents`, `uniqueKeys`, `duplicateCount`, `duplicates` list.
   - `migrationGapAnalysis`: counts legacy transactions, GL events sourced from `transactions`, journal entries, journal lines, receivables, payments, allocations; computes `migrationProgress` percentage (capped at 100); all table reads capped at 10,000.
-  - `migrateUnpostedTransactions`: scans `limit * 10` rows past already-posted entries; maps legacy category to event type (`EXPENSE`, `VEHICLE_SALE`, `DEPOSIT`, `COLLECTION_PAYMENT`); dry-run mode returns `WOULD_POST` actions without writing; live mode calls `postAccountingEvent`; returns `{ dryRun, posted, wouldPost, skipped, failed, results }`.
+  - `migrateUnpostedTransactions`: **RETIRED (SCRUM-234)**. It used to scan `limit * 10` rows past already-posted entries, map legacy category to event type, and call `postAccountingEvent` in live mode. It now throws unconditionally as the first statement of its handler and can post nothing. It was the sole production origin of accounting events sourced from `transactions`, and its dedupe probe could not see a posting the owning domain workflow had already written under that workflow's own source identity — so it double-posted collections and expenses (SCRUM-234), sales (SCRUM-188), and could commit a partial GL through a caught posting failure (SCRUM-240). SCRUM-231 launches from a clean slate and needs no historical migration, so the authority was retired rather than repaired.
 - `classifyLegacyTransaction`: internal helper checking `accountingEvents` by `by_org_source` index; `hasJournalEntry` requires `status === "POSTED" && !!journalEntryId`.
 
 ## Files Changed
@@ -498,7 +498,7 @@ Status: Implemented. All Phase 6 acceptance gates pass.
 
 ## Decisions Made
 
-- `migrateUnpostedTransactions.dryRun` defaults to `true` (safe by default); callers must explicitly pass `dryRun: false` to write.
+- ~~`migrateUnpostedTransactions.dryRun` defaults to `true` (safe by default); callers must explicitly pass `dryRun: false` to write.~~ **SUPERSEDED by SCRUM-234:** `dryRun` is no longer an authority boundary of any kind. The posting branch is deleted rather than gated, so no value of any argument writes, and `dryRun: true` is refused too. The argument survives in the validator only so an existing caller receives a domain refusal rather than an argument-validation error.
 - `glEventCount` in gap analysis counts only events with `sourceType = "transactions"`, not all GL events, to measure legacy-migration progress specifically.
 - Unmappable transaction categories (e.g., `PARTNER_DRAW`, `CLAIM_PAYMENT`) are `SKIP`-ped with reason `no_rule_for_category`; they require manual journals or new event types.
 
