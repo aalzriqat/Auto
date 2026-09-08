@@ -551,15 +551,12 @@ describe("SCRUM-212 — the locator and the transition must be exact", () => {
     const rows = await liveSaleTransactions(s);
     expect(rows).toHaveLength(1);
 
-    // An ordinary finance edit through the public door. `category` is on the
-    // args validator, and the mobile accounting screen offers it — so the row
-    // keeps its saleId and its recognized revenue while ceasing to look like a
-    // vehicle sale.
-    await s.asAdmin.mutation(api.transactions.update, {
-      orgId: s.orgId,
-      transactionId: rows[0]._id,
-      category: "DEPOSIT",
-    });
+    // The row is reclassified so it keeps its saleId and its recognized
+    // revenue while ceasing to look like a vehicle sale. SCRUM-53 closed the
+    // generic public door that used to make this edit, so the drift is applied
+    // directly here — what this test pins is that the void locates rows by
+    // saleId rather than by category, whatever caused the category to differ.
+    await s.t.run((ctx) => ctx.db.patch(rows[0]._id, { category: "DEPOSIT" }));
 
     await s.asManager.mutation(api.sales.update, {
       orgId: s.orgId,
@@ -604,12 +601,9 @@ describe("SCRUM-212 — the locator and the transition must be exact", () => {
     expect(rows).toHaveLength(1);
 
     // The second escape: the row keeps category VEHICLE_SALE but leaves the
-    // index range the void searched.
-    await s.asAdmin.mutation(api.transactions.update, {
-      orgId: s.orgId,
-      transactionId: rows[0]._id,
-      vehicleId: otherVehicleId,
-    });
+    // index range the void searched. Applied directly for the same reason as
+    // above — the generic public edit door is retired (SCRUM-53).
+    await s.t.run((ctx) => ctx.db.patch(rows[0]._id, { vehicleId: otherVehicleId }));
 
     await s.asManager.mutation(api.sales.update, {
       orgId: s.orgId,
@@ -635,15 +629,17 @@ describe("SCRUM-212 — the locator and the transition must be exact", () => {
     // The control that stops R2's fix widening into 'void everything on this
     // car': a manually entered VEHICLE_SALE row carries no saleId and is no
     // sale's to void.
-    const manual = await s.asAdmin.mutation(api.transactions.add, {
-      orgId: s.orgId,
-      type: "IN",
-      amount: 750,
-      date: Date.now(),
-      category: "VEHICLE_SALE",
-      description: "Manually entered, owned by nobody",
-      vehicleId: s.vehicleId,
-    });
+    const manual = await s.t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId: s.orgId,
+        type: "IN" as const,
+        amount: 750,
+        date: Date.now(),
+        category: "VEHICLE_SALE" as const,
+        description: "Owned by nobody",
+        vehicleId: s.vehicleId,
+      })
+    );
 
     await s.asManager.mutation(api.sales.update, {
       orgId: s.orgId,
