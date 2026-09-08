@@ -12,6 +12,7 @@ import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
+import { postLegacyTransactionEvent } from "../test-utils/legacyMigrationSeed";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -311,12 +312,17 @@ describe("Phase 17 — parallel reporting and sign-off", () => {
     const to = Date.UTC(2026, 0, 31, 23, 59, 59);
     const inRange = Date.UTC(2026, 0, 15);
 
-    await ctx.t.run((c) =>
-      c.db.insert("transactions", { orgId: ctx.orgId, type: "OUT", amount: 100, date: inRange, category: "EXPENSE", description: "Legacy expense 1" })
-    );
-    await ctx.t.run((c) =>
-      c.db.insert("transactions", { orgId: ctx.orgId, type: "OUT", amount: 50, date: inRange, category: "EXPENSE", description: "Legacy expense 2" })
-    );
+    const legacyIds: Id<"transactions">[] = [];
+    for (const [amount, description] of [
+      [100, "Legacy expense 1"],
+      [50, "Legacy expense 2"],
+    ] as const) {
+      legacyIds.push(
+        await ctx.t.run((c) =>
+          c.db.insert("transactions", { orgId: ctx.orgId, type: "OUT", amount, date: inRange, category: "EXPENSE", description })
+        )
+      );
+    }
 
     const beforeMigration = await ctx.asOwner.query(api.accountingCutover.compareLegacyToGL, { orgId: ctx.orgId, fromDate: from, toDate: to });
     expect(beforeMigration.legacy.transactionCount).toBe(2);
@@ -324,7 +330,13 @@ describe("Phase 17 — parallel reporting and sign-off", () => {
     expect(beforeMigration.gl.migratedEventCount).toBe(0);
     expect(beforeMigration.unmigratedCount).toBe(2);
 
-    await ctx.asOwner.mutation(api.accountingMigration.migrateUnpostedTransactions, { orgId: ctx.orgId, dryRun: false });
+    // Seeded directly through the posting engine. The legacy-to-GL migration
+    // writer is retired (SCRUM-234); this suite's subject is the parallel
+    // reporting comparison, not the writer, so it seeds the identical
+    // `sourceType: "transactions"` events itself.
+    for (const transactionId of legacyIds) {
+      await ctx.t.run((c) => postLegacyTransactionEvent(c, { orgId: ctx.orgId, transactionId, actorId: ctx.userId }));
+    }
 
     const afterMigration = await ctx.asOwner.query(api.accountingCutover.compareLegacyToGL, { orgId: ctx.orgId, fromDate: from, toDate: to });
     expect(afterMigration.gl.migratedEventCount).toBe(2);
@@ -337,10 +349,10 @@ describe("Phase 17 — parallel reporting and sign-off", () => {
 
   test("signOffCutover records a point-in-time snapshot that listSignOffs returns", async () => {
     const ctx = await seedCutoverDealer();
-    await ctx.t.run((c) =>
+    const transactionId = await ctx.t.run((c) =>
       c.db.insert("transactions", { orgId: ctx.orgId, type: "IN", amount: 200, date: Date.now(), category: "COLLECTION_PAYMENT", description: "Legacy collection" })
     );
-    await ctx.asOwner.mutation(api.accountingMigration.migrateUnpostedTransactions, { orgId: ctx.orgId, dryRun: false });
+    await ctx.t.run((c) => postLegacyTransactionEvent(c, { orgId: ctx.orgId, transactionId, actorId: ctx.userId }));
 
     const result = await ctx.asOwner.mutation(api.accountingCutover.signOffCutover, { orgId: ctx.orgId, notes: "Reviewed and reconciled." });
     expect(result.snapshot.legacyTransactionCount).toBe(1);
@@ -359,11 +371,47 @@ describe("Phase 17 — parallel reporting and sign-off", () => {
     await ctx.t.run((c) =>
       c.db.insert("transactions", { orgId: ctx.orgId, type: "IN", amount: 200, date: Date.now(), category: "COLLECTION_PAYMENT", description: "Never migrated" })
     );
-    // Deliberately skip migrateUnpostedTransactions.
+    // Deliberately leave the legacy row unposted.
 
     await expect(
       ctx.asOwner.mutation(api.accountingCutover.signOffCutover, { orgId: ctx.orgId })
-    ).rejects.toThrow(/still unmigrated/i);
+    ).rejects.toThrow(/no accounting event sourced from the legacy ledger/i);
+  });
+
+  test("the refusal does not point the operator at a migration tool that no longer exists", async () => {
+    // SCRUM-234 retired the only production writer that could satisfy this
+    // gate, so the old message ("Run the migration tools first") named an
+    // impossible remedy. Both review seats blocked on that.
+    //
+    // The legacy row here is created by an ORDINARY domain call, with no
+    // test-only helper: `expenses.create` with status PAID posts its own
+    // EXPENSE_POSTED event sourced from `expenses` AND leaves a legacy
+    // `transactions` row that this gate counts as unaccounted-for. That is the
+    // production path an operator actually arrives on.
+    const ctx = await seedCutoverDealer();
+    await ctx.asOwner.mutation(api.expenses.create, {
+      orgId: ctx.orgId,
+      title: "Ordinary paid expense",
+      amount: 100,
+      date: Date.now(),
+      category: "OTHER",
+      status: "PAID",
+      paymentMethod: "CASH",
+    });
+
+    const error = await ctx.asOwner
+      .mutation(api.accountingCutover.signOffCutover, { orgId: ctx.orgId })
+      .then(() => null, (e: unknown) => e);
+    const message = error instanceof Error ? error.message : String(error);
+
+    expect(message).toMatch(/retired \(SCRUM-234\)/i);
+    // The remedy it names must exist AND be findable. Asserted on the
+    // mechanism's real identifier rather than on prose: `resetOrgFinancialData`
+    // is a real internalMutation in convex/orgFinancialReset.ts and
+    // `transactions` is in its RESET_TABLES manifest, so an operator can grep
+    // straight to it. The other seat claimed no such tool existed; it does.
+    expect(message).toMatch(/resetOrgFinancialData/);
+    expect(message).not.toMatch(/run the migration tools/i);
   });
 
   test("signOffCutover rejects when the trial balance is unbalanced", async () => {

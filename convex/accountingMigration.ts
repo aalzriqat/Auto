@@ -1,12 +1,20 @@
 /**
  * Phase 6 — Migration audit tooling
  *
- * Tools for detecting duplicate/gap between the legacy transactions table and
- * the new GL (journalLines), classifying legacy records, and producing dry-run
- * migration plans.  No data is mutated unless `dryRun: false` is explicitly
- * passed.
+ * Read-only tooling for detecting duplicate/gap between the legacy transactions
+ * table and the new GL (journalLines), and for classifying legacy records:
+ * `auditLegacyTransactions`, `duplicateEventCheck` and `migrationGapAnalysis`
+ * are all queries.
+ *
+ * The legacy-to-GL migration WRITER that used to live here is retired — see
+ * `migrateUnpostedTransactions` below (SCRUM-234). No caller, and no value of
+ * any argument, can post an accounting event from a legacy `transactions` row.
+ *
+ * The GL Phase 17 minor-unit backfills further down this file are a different
+ * concern: they widen existing money columns in place and never originate an
+ * accounting event from a legacy `transactions` row.
  */
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
 import { mutation, internalMutation } from "./functions";
 import { internal } from "./_generated/api";
@@ -16,7 +24,7 @@ import { requireTenantAuth, requireOwnedRow } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { postAccountingEvent } from "./accounting/postingEngine";
 import { getOrgCurrency, hookVehiclePrepExpenseReclassified } from "./accounting/workflowHooks";
-import { ensurePartnerEquityAccounts, ensureClaimAccounts } from "./chartOfAccounts";
+import { ensurePartnerEquityAccounts } from "./chartOfAccounts";
 import { toMinorUnits, fromMinorUnits } from "./utils/money";
 import { requireFeature } from "./subscriptions";
 import { auditLog } from "./financialAudit";
@@ -255,139 +263,71 @@ export const migrationGapAnalysis = query({
 
 // ─── Migration mutation ───────────────────────────────────────────────────────
 
+/**
+ * RETIRED (SCRUM-234) — this mutation can no longer write accounting state.
+ *
+ * It used to promote a legacy `transactions` projection row into the
+ * authoritative books by calling `postAccountingEvent` with
+ * `sourceType: "transactions"`. That writer was the sole production origin of
+ * `sourceType: "transactions"` accounting events, and it carried three
+ * established defect classes at once:
+ *
+ *   SCRUM-234  a modern collection receipt (sourced `collectionPayments`) and
+ *              an expense posted by `expenses.create` (sourced `expenses`) each
+ *              leave a legacy `transactions` row behind. The dedupe probe here
+ *              looked only under `sourceType: "transactions"`, so it could not
+ *              see either posting and booked a SECOND balanced journal for a
+ *              receipt/expense already in the books. Reproduced by execution on
+ *              protected main 62b5a5b9c: 1 -> 2 EXPENSE_POSTED events and
+ *              2 -> 4 journalLines from one `dryRun: false` call.
+ *   SCRUM-188  the same cross-family hole for SALE_COMPLETED.
+ *   SCRUM-240  the per-row `try/catch` swallowed a posting failure, and a
+ *              caught exception COMMITS in Convex — so a partially posted GL
+ *              survived the call that reported the row as `failed`.
+ *
+ * SCRUM-231 launches Accounting from a clean slate and explicitly requires that
+ * "deployment/startup on the empty state does not require a historical
+ * migration", so no first-launch flow needs this to write. Retiring the write
+ * authority closes all of the above without building preservation machinery for
+ * history the owner has ruled disposable.
+ *
+ * WHY THE REFUSAL IS THE FIRST STATEMENT, ahead of `requireTenantAuth`:
+ *
+ *   - The refusal is unconditional, so there is no authority to check. Running
+ *     the tenancy guard first would only add a side effect — under an
+ *     impersonation session `requireTenantAuth` legitimately writes an
+ *     `impersonated-write:*` security audit row — on behalf of a call that can
+ *     never do anything. Refusing first means this function reads nothing and
+ *     writes nothing, under every argument and every caller.
+ *   - It therefore lands strictly before classification, posting, migration
+ *     bookkeeping, `accountingEvents`, `journalEntries`, `journalLines`,
+ *     `accountBalanceSnapshots`, and any mutation of a legacy row.
+ *
+ * `dryRun` is NOT the authority boundary. No value of any argument reaches a
+ * write: the posting branch is deleted, not gated. `dryRun` survives in the
+ * validator only so that an existing caller receives this refusal rather than an
+ * argument-validation error. The `dryRun: true` plan is deliberately NOT
+ * retained either — a plan enumerating postings that can never be executed is
+ * not a truthful diagnostic. The read-only surface that remains truthful is
+ * `auditLegacyTransactions`, `migrationGapAnalysis` and `duplicateEventCheck`,
+ * all queries, all unchanged.
+ *
+ * If write-capable legacy migration is ever genuinely required again, this is
+ * not the door to reopen: SCRUM-188, SCRUM-234 and SCRUM-240 must each be
+ * repaired under their own acceptance criteria first.
+ */
+export const MIGRATION_RETIRED_MESSAGE =
+  "Legacy transaction migration has been retired (SCRUM-234). This mutation can no longer post accounting events. " +
+  "Use the read-only audit queries (auditLegacyTransactions, migrationGapAnalysis, duplicateEventCheck) to inspect legacy rows.";
+
 export const migrateUnpostedTransactions = mutation({
   args: {
     orgId: v.id("organizations"),
     limit: v.optional(v.number()),
     dryRun: v.optional(v.boolean()),
   },
-  handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    await requireFeature(ctx, args.orgId, "accounting");
-
-    const dryRun = args.dryRun !== false;
-    const rawMigLimit = args.limit ?? 50;
-    if (!Number.isSafeInteger(rawMigLimit) || rawMigLimit < 1) {
-      throw new Error("limit must be a positive integer.");
-    }
-    const limit = Math.min(rawMigLimit, 200);
-
-    // Scan 10x the requested limit to work past already-posted or unmappable rows
-    const txns = await ctx.db
-      .query("transactions")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .take(limit * 10);
-
-    const currency = await getOrgCurrency(ctx, args.orgId);
-    // Migration posts directly through postAccountingEvent (not the domain
-    // hooks), so the Phase 12 equity accounts must be self-healed here —
-    // otherwise migrating PARTNER_DRAW/CAPITAL_INJECTION rows on an older
-    // chart fails to resolve PARTNER_CAPITAL/PARTNER_DRAWINGS.
-    if (!dryRun) {
-      await ensurePartnerEquityAccounts(ctx, args.orgId, user._id);
-      await ensureClaimAccounts(ctx, args.orgId, user._id);
-    }
-    const results: Array<{ transactionId: string; action: string; eventType: string | null; reason?: string }> = [];
-
-    for (const tx of txns) {
-      if (results.filter((r) => r.action !== "SKIP").length >= limit) break;
-
-      // Check if already posted
-      const existing = await ctx.db
-        .query("accountingEvents")
-        .withIndex("by_org_source", (q) =>
-          q
-            .eq("orgId", args.orgId)
-            .eq("sourceType", "transactions")
-            .eq("sourceId", tx._id.toString())
-        )
-        .first();
-
-      if (existing) {
-        results.push({ transactionId: tx._id.toString(), action: "SKIP", eventType: null, reason: "already_posted" });
-        continue;
-      }
-
-      const eventType = mapCategoryToEventType(tx.category, tx.type);
-
-      if (!eventType) {
-        results.push({ transactionId: tx._id.toString(), action: "SKIP", eventType: null, reason: "no_rule_for_category" });
-        continue;
-      }
-
-      // VEHICLE_ACQUIRED for a VEHICLE_PURCHASE row posts sourced from
-      // "vehicles" (see postVehicleAcquisitionIfOwned), not "transactions" —
-      // the `existing` lookup above can never see it. Without this check
-      // this loop would post a genuine duplicate VEHICLE_ACQUIRED event,
-      // double-debiting Vehicle Inventory.
-      if (eventType === "VEHICLE_ACQUIRED" && tx.vehicleId && await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, tx.vehicleId)) {
-        results.push({ transactionId: tx._id.toString(), action: "SKIP", eventType, reason: "already_posted_via_vehicle" });
-        continue;
-      }
-
-      const amountMinor = toMinorUnits(tx.amount, currency);
-      const idempotencyKey = `migrate_${tx._id}`;
-
-      if (dryRun) {
-        results.push({ transactionId: tx._id.toString(), action: "WOULD_POST", eventType });
-        continue;
-      }
-
-      try {
-        const payload: Record<string, unknown> = {
-          amountMinor,
-          currency,
-          legacyTransactionId: tx._id.toString(),
-        };
-        if (tx.vehicleId) payload.vehicleId = tx.vehicleId.toString();
-
-        if (eventType === "EXPENSE_POSTED") {
-          payload.expenseId = tx.expenseId?.toString() ?? tx._id.toString();
-        } else if (eventType === "COLLECTION_PAYMENT") {
-          payload.paymentId = tx._id.toString();
-          payload.paymentMethod = "CASH";
-        } else if (eventType === "DEPOSIT_RECEIVED" || eventType === "DEPOSIT_REFUNDED") {
-          payload.depositId = tx._id.toString();
-          payload.paymentMethod = "CASH";
-        } else if (eventType === "SALE_COMPLETED") {
-          payload.saleId = tx._id.toString();
-          payload.saleAmountMinor = amountMinor;
-        } else if (eventType === "PARTNER_DREW" || eventType === "CAPITAL_CONTRIBUTED") {
-          payload.paymentMethod = "CASH";
-        } else if (eventType === "CLAIM_SETTLED") {
-          payload.claimId = tx._id.toString();
-          payload.paymentMethod = "CASH";
-        } else if (eventType === "VEHICLE_ACQUIRED") {
-          payload.costMinor = amountMinor;
-          payload.paymentMethod = "CASH";
-        }
-
-        await postAccountingEvent(ctx, {
-          orgId: args.orgId,
-          eventType: eventType as "EXPENSE_POSTED" | "COLLECTION_PAYMENT" | "DEPOSIT_RECEIVED" | "DEPOSIT_REFUNDED" | "SALE_COMPLETED" | "PARTNER_DREW" | "CAPITAL_CONTRIBUTED" | "CLAIM_SETTLED" | "VEHICLE_ACQUIRED",
-          sourceType: "transactions",
-          sourceId: tx._id.toString(),
-          eventVersion: 1,
-          accountingDate: tx.date,
-          occurredAt: tx.date,
-          currency,
-          idempotencyKey,
-          payload,
-          actorId: user._id,
-        });
-        results.push({ transactionId: tx._id.toString(), action: "POSTED", eventType });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        results.push({ transactionId: tx._id.toString(), action: "FAILED", eventType, reason: message });
-      }
-    }
-
-    const posted = results.filter((r) => r.action === "POSTED").length;
-    const wouldPost = results.filter((r) => r.action === "WOULD_POST").length;
-    const skipped = results.filter((r) => r.action === "SKIP").length;
-    const failed = results.filter((r) => r.action === "FAILED").length;
-
-    return { dryRun, posted, wouldPost, skipped, failed, results };
+  handler: async () => {
+    throw new ConvexError(MIGRATION_RETIRED_MESSAGE);
   },
 });
 

@@ -832,13 +832,47 @@ export const signOffCutover = mutation({
     const isBalanced = trialBalanceByCurrency.every((b) => b.isBalanced);
 
     // A sign-off is an attestation that the cutover is DONE and correct —
-    // recording one while transactions remain unmigrated or the trial
-    // balance doesn't foot would let the org proceed as if production-ready
-    // when it isn't. Neither is overridable here: an incomplete migration or
-    // an unbalanced ledger needs to be fixed, not signed off around.
+    // recording one while transactions remain unaccounted for, or while the
+    // trial balance doesn't foot, would let the org proceed as if
+    // production-ready when it isn't. Neither is overridable here.
+    //
+    // ⚠️ SCRUM-234 changed what this refusal can honestly tell an operator.
+    // The gate is unchanged, but the remedy it used to name is gone: this
+    // count is satisfied only by a POSTED event sourced from `transactions`,
+    // and `accountingMigration.migrateUnpostedTransactions` — the sole
+    // production writer of that source family — now refuses unconditionally.
+    // So there is no longer any tool a caller can run to drive this to zero.
+    //
+    // Under SCRUM-231's clean-slate launch that is the intended shape: the
+    // wipe leaves zero active legacy rows, so the count is zero and sign-off
+    // passes without any migration ever running. It only STAYS zero while
+    // nothing writes new legacy rows, which is SCRUM-53's containment.
+    //
+    // OWNERSHIP, ruled explicitly so the two tickets cannot blur:
+    //
+    //   SCRUM-234 fixes the now-FALSE OPERATOR INSTRUCTION that migration
+    //             retirement caused. Message and this comment only.
+    //   SCRUM-231 redesigns WHAT CUTOVER SIGN-OFF MEANS.
+    //
+    // So nothing else here moves: the predicate, the counts, the snapshot, the
+    // attestation's meaning, the permissions and the control flow are all
+    // untouched. Redefining the predicate — gating on the legacy table being
+    // empty rather than on a per-row migrated event — is a segregation-of-duties
+    // change to an accounting attestation, and it belongs to SCRUM-231's
+    // clean-slate preflight, not to a rider on a write-authority retirement.
+    //
+    // For whoever picks up that redesign: under SCRUM-231 a migrated legacy row
+    // is STILL legacy state and must fail the attestation. The successor is a
+    // zero-state proof (`CLEAN_SLATE_V2` or an equivalent durable discriminator
+    // persisted on the sign-off), not a migration-completeness proof — so a
+    // future reader can tell whether the accountant certified a historical
+    // migration or a destructive reset.
     if (unmigratedTransactionCount > 0) {
       throw new ConvexError(
-        `Cannot sign off: ${unmigratedTransactionCount} legacy transaction(s) are still unmigrated. Run the migration tools first.`
+        `Cannot sign off: ${unmigratedTransactionCount} legacy transaction(s) have no accounting event sourced from the legacy ledger. ` +
+          "Legacy transaction migration is retired (SCRUM-234), so there is no migration tool to run: these rows must be cleared " +
+          "by the clean-slate accounting reset (orgFinancialReset.resetOrgFinancialData, which lists `transactions` in RESET_TABLES) " +
+          "before cutover can be signed off. That reset is gated on SCRUM-231 and is not authorized on its own."
       );
     }
     if (!isBalanced) {

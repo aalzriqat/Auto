@@ -55,6 +55,80 @@ export interface PostResult {
  */
 const RETIRED_EVENT_TYPES = new Set<string>(["CLAIM_SETTLED", "CLAIM_WRITTEN_OFF"]);
 
+/**
+ * Source families that may no longer ORIGINATE a forward accounting occurrence.
+ *
+ * `transactions` is the legacy cashbook projection. Under the clean-slate v2
+ * model it is not an accounting source authority: the owning domain workflow
+ * posts under its own source identity, and the legacy row is a projection of
+ * that, not a second economic event.
+ *
+ * SCRUM-234 retired `accountingMigration.migrateUnpostedTransactions`, the only
+ * production function that ever minted one. Retiring the CALLER is not the same
+ * as retiring the AUTHORITY, and the difference is exactly what a repository
+ * scan cannot enforce: `postAccountingEvent` takes a caller-supplied
+ * `sourceType`, `accountingLedger.post` exposes it as a free-form `v.string()`,
+ * and the outbox forwards a stored one on redrive. Two successive static guards
+ * over the source tree failed to close that, in ten separate ways, because a
+ * textual scan certifies recognition rather than authority. This is the
+ * authority boundary, and it is the same one SCRUM-51 chose for retired EVENT
+ * types directly above — the single place every posting path must pass.
+ *
+ * SCOPE, deliberately narrow:
+ *
+ *   - It refuses the creation of a NEW forward occurrence only. Reading,
+ *     auditing and linking historical `transactions`-sourced events is
+ *     untouched, and so are the rules that describe them.
+ *   - `reverseAccountingEvent` does NOT route through this function — it writes
+ *     its own event and journal rows directly (see the standing note in
+ *     `postingRules.ts` beside JOURNAL_REVERSAL). A historical reversal is
+ *     therefore unaffected, which is intended: reversing a legacy event is not
+ *     minting a new forward one.
+ *
+ * A queued POST that reaches this refuses, is marked failed by the drain's own
+ * error handling and eventually dead-letters — the same disposition, and for
+ * the same reason, as a retired event type: it will never become postable, so
+ * retrying forever would misrepresent what is waiting.
+ */
+const RETIRED_SOURCE_TYPES = new Set<string>(["transactions"]);
+
+/**
+ * The single runtime definition of "this forward posting is permanently
+ * retired", shared by the engine and the outbox.
+ *
+ * Extracted because the outbox needs the SAME answer EARLIER than the engine
+ * can give it. `drainEntries` classifies temporary holds — no open period, a
+ * prepaid/payroll/commission dependency not yet posted — before it calls the
+ * engine at all, and a held entry `continue`s without consuming an attempt.
+ * A retired posting caught by one of those guards would therefore sit PENDING
+ * forever: never posted (correct) but never dead-lettered either, blocking
+ * period close with a row no operator action can ever resolve.
+ *
+ * That was a real defect, reproduced: a `transactions`-sourced
+ * PREPAID_EXPENSE_AMORTIZED with no schedule reference survived ten redrives
+ * at `attempts: 0`. The controls isolate it to guard ORDERING rather than the
+ * fixture — the same event under a modern source is held identically, and the
+ * same source under an event with no hold guard reaches the engine and
+ * dead-letters as intended.
+ *
+ * Returning the reason string rather than a boolean keeps one wording for both
+ * call sites, so the message an operator reads in `lastError` is the message
+ * the engine would have thrown.
+ */
+export function retiredPostingRefusal(cmd: { eventType: string; sourceType: string }): string | null {
+  if (RETIRED_EVENT_TYPES.has(cmd.eventType)) {
+    return `The ${cmd.eventType} accounting event is retired and can no longer post. Finance-company receivables are originated and settled through the Finance Application, which is the only authority for them.`;
+  }
+  if (RETIRED_SOURCE_TYPES.has(cmd.sourceType)) {
+    return (
+      `The "${cmd.sourceType}" accounting source is retired and can no longer originate an accounting event (SCRUM-234). ` +
+      "The legacy cashbook is a projection, not an accounting authority: the owning domain workflow posts under its own source identity. " +
+      "Historical events already sourced this way remain readable and reversible."
+    );
+  }
+  return null;
+}
+
 export async function postAccountingEvent(
   ctx: MutationCtx,
   cmd: PostCommand
@@ -64,32 +138,33 @@ export async function postAccountingEvent(
     throw new ConvexError(`Unknown event type: ${cmd.eventType}`);
   }
 
-  // ⚠️ RETIRED EVENT TYPES ARE REFUSED HERE, AT THE ONE PLACE EVERY POSTING
-  // PATH MUST PASS — SCRUM-51.
+  // ⚠️ RETIRED FORWARD POSTINGS ARE REFUSED HERE, AT THE ONE PLACE EVERY
+  // POSTING PATH MUST PASS — SCRUM-51 (event types) and SCRUM-234 (source
+  // families).
   //
   // Claims used to credit Accounts Receivable — Finance Companies with no
-  // originating debit. Retiring the five `claims.ts` writers closed the front
-  // door; removing the CLAIM_PAYMENT migration mapping closed a second. Both
-  // review seats then found a third: a CLAIM_SETTLED or CLAIM_WRITTEN_OFF
-  // event ALREADY QUEUED in `pendingAccountingEvents` by the pre-retirement
-  // code still drains and posts the moment an accounting period opens, with
-  // no operator action at all.
+  // originating debit; the legacy cashbook used to originate accounting events
+  // that duplicated what the owning domain had already posted. In both cases
+  // closing the individual doors was not enough — a queued entry from before
+  // the retirement still drained and posted with no operator action at all. So
+  // the refusal belongs where the invariant can be enforced: every posting —
+  // domain hook, ledger call, migration, and the outbox drain — reaches this
+  // function, and none of them can post a retired forward event past this point.
   //
-  // Closing that door individually would have been the third patch to the
-  // same defect, and the next path would have been the fourth. This is the
-  // invariant, so it belongs where the invariant can actually be enforced:
-  // every posting — domain hook, ledger call, either migration, and the
-  // outbox drain — reaches this function, and none of them can post a retired
-  // event type past this point.
+  // Placed ahead of currency handling and of the idempotency probe at step 3,
+  // so a refused command completes no idempotency record and creates no
+  // accountingEvents, journalEntries, journalLines, accountBalanceSnapshots or
+  // audit row, and mutates no status. That ordering is not merely belt-and-
+  // braces against Convex's transactional rollback: it is what protects a
+  // caller that CATCHES and continues, which is exactly the SCRUM-240 shape.
   //
-  // A drained entry that hits this refuses, is marked failed by the drain's
-  // own error handling, and eventually dead-letters. That is the right end
-  // for it: unlike a held entry it will never become postable, so retrying
-  // forever would be dishonest about what is waiting.
-  if (RETIRED_EVENT_TYPES.has(cmd.eventType)) {
-    throw new ConvexError(
-      `The ${cmd.eventType} accounting event is retired and can no longer post. Finance-company receivables are originated and settled through the Finance Application, which is the only authority for them.`
-    );
+  // ⚠️ This is necessary but NOT sufficient on its own. `accountingOutbox`
+  // classifies temporary holds BEFORE it calls this function, so a retired
+  // entry caught by one of those guards would never reach here. That is why
+  // `retiredPostingRefusal` is exported and applied there too — see its note.
+  const retired = retiredPostingRefusal(cmd);
+  if (retired) {
+    throw new ConvexError(retired);
   }
 
   // 2. Validate currency
