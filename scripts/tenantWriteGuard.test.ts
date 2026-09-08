@@ -483,16 +483,24 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // is also why a poisoned row cannot roll back another dealership's dispatch,
   // the failure mode a throwing call inside a global batch produces.
   //
-  // ⚠️ `analysed` is 315 and must never drop silently — a new mutation landing
+  // ⚠️ `analysed` is 316 and must never drop silently — a new mutation landing
   // in a skip bucket is only acceptable when the reason is one of the four
-  // above, stated per mutation. It fell by one from 316 because
-  // `sweepAuthorityWork`, which took an `orgId` and was analysed, was deleted
-  // with the drain-riding retry it implemented; the three replacements above
-  // are all `workId`-only and the cron selector takes nothing.
+  // above, stated per mutation. It fell to 315 when `sweepAuthorityWork`, which
+  // took an `orgId` and was analysed, was deleted with the drain-riding retry it
+  // implemented; the three replacements above are all `workId`-only and the cron
+  // selector takes nothing.
+  //
+  // SCRUM-231 took it back to 316: `cutoverZeroState.resetOrgToZeroState` takes
+  // an `orgId` and is ANALYSED, which is the outcome we want — it landed in no
+  // skip bucket and needed no exemption. It is nonetheless cross-tenant-safe by
+  // construction rather than by an ownership check: `orgId` is its only
+  // caller-supplied id, every read is an index range rooted at that org, and it
+  // is an `internalMutation` with no public entry point. There is no second
+  // caller-supplied document id for `requireOwnedRow` to own-check.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 481,
-      analysed: 315,
+      totalMutations: 482,
+      analysed: 316,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 151,
     });

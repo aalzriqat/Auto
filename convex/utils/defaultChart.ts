@@ -7,7 +7,7 @@ export const SYSTEM_KEYS = {
   ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES",
   RECEIVABLE_FROM_SUPPLIERS: "RECEIVABLE_FROM_SUPPLIERS",
   CONSIGNMENT_COMMISSION_REVENUE: "CONSIGNMENT_COMMISSION_REVENUE",
-  UNAPPLIED_CUSTOMER_CASH: "UNAPPLIED_CUSTOMER_CASH",
+  UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY: "UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY",
   CUSTOMER_DEPOSITS_LIABILITY: "CUSTOMER_DEPOSITS_LIABILITY",
   CHEQUES_IN_HAND: "CHEQUES_IN_HAND",
   CHEQUES_UNDER_COLLECTION: "CHEQUES_UNDER_COLLECTION",
@@ -178,16 +178,6 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     systemKey: SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS,
   },
   {
-    code: "1220",
-    name: "Unapplied Customer Cash",
-    nameAr: "نقد عملاء غير مطبق",
-    type: "ASSET",
-    normalBalance: "DEBIT",
-    isControlAccount: false,
-    allowManualPosting: false,
-    systemKey: SYSTEM_KEYS.UNAPPLIED_CUSTOMER_CASH,
-  },
-  {
     code: "1230",
     name: "Employee Advances",
     nameAr: "سلف الموظفين",
@@ -270,6 +260,28 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     isControlAccount: true,
     allowManualPosting: false,
     systemKey: SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY,
+  },
+  {
+    // SCRUM-231. Money a customer has handed over that is not yet applied to
+    // anything is an OBLIGATION, not an asset: the dealership owes either the
+    // goods or the money back. It was previously seeded as `1220 Unapplied
+    // Customer Cash`, an ASSET with a DEBIT normal balance and no control-
+    // account flag, which states the opposite and would overstate assets by the
+    // entire unapplied balance.
+    //
+    // That definition had no consumers — no posting rule and no test referenced
+    // `UNAPPLIED_CUSTOMER_CASH` — so nothing has ever posted to it, and the
+    // clean slate is the moment to seed the correct one rather than carry the
+    // wrong one forward. `allowManualPosting` is false because the balance is
+    // owned by the receipt-application flow, not by hand-written journals.
+    code: "2110",
+    name: "Unapplied Customer Receipts",
+    nameAr: "مقبوضات عملاء غير مطبقة",
+    type: "LIABILITY",
+    normalBalance: "CREDIT",
+    isControlAccount: true,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY,
   },
   {
     code: "2200",

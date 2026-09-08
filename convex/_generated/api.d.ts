@@ -47,6 +47,7 @@ import type * as commitments from "../commitments.js";
 import type * as constants from "../constants.js";
 import type * as crons from "../crons.js";
 import type * as customers from "../customers.js";
+import type * as cutoverZeroState from "../cutoverZeroState.js";
 import type * as dashboard from "../dashboard.js";
 import type * as dealWorkspace from "../dealWorkspace.js";
 import type * as dealerProductDeferrals from "../dealerProductDeferrals.js";
@@ -271,6 +272,7 @@ declare const fullApi: ApiFromModules<{
   constants: typeof constants;
   crons: typeof crons;
   customers: typeof customers;
+  cutoverZeroState: typeof cutoverZeroState;
   dashboard: typeof dashboard;
   dealWorkspace: typeof dealWorkspace;
   dealerProductDeferrals: typeof dealerProductDeferrals;
