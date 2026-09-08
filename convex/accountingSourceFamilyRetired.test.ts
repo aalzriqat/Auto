@@ -243,6 +243,88 @@ describe("SCRUM-234 — a new forward event cannot be sourced from the legacy ca
   });
 });
 
+describe("SCRUM-234 — a retired posting DEAD-LETTERS, it does not sit held forever", () => {
+  // Codex found this on the certification head and it reproduced: the outbox
+  // classifies temporary holds — no open period, or an unposted
+  // prepaid/payroll/commission dependency — BEFORE it calls the engine, and a
+  // held entry `continue`s without consuming an attempt. A retired posting
+  // caught by one of those guards therefore never reached the engine refusal at
+  // all: PENDING forever, never dead-lettered, permanently blocking period
+  // close with a row no operator action could resolve.
+  //
+  // The engine guard alone was necessary but NOT sufficient, which is why
+  // `retiredPostingRefusal` is shared with `drainEntries` rather than restated.
+
+  test("a retired POST caught by a temporary-hold guard still dead-letters", async () => {
+    const dealer = await seedDealer();
+    const { t, orgId, userId, asOwner } = dealer;
+
+    // PREPAID_EXPENSE_AMORTIZED with no `scheduleId` trips the prepaid
+    // dependency guard, which is a HOLD — the entry is not broken, it is
+    // waiting. Before the fix that hold won, and the retirement never applied.
+    await t.run((ctx) =>
+      enqueuePendingPost(
+        ctx,
+        {
+          orgId, eventType: "PREPAID_EXPENSE_AMORTIZED", sourceType: "transactions",
+          sourceId: "held_legacy", eventVersion: 1,
+          accountingDate: Date.now(), occurredAt: Date.now(), currency: "JOD",
+          idempotencyKey: "held_legacy_key",
+          payload: { amountMinor: 10_000, currency: "JOD" },
+          actorId: userId,
+        },
+        "seeded as if queued before the retirement"
+      )
+    );
+
+    for (let i = 0; i < 10; i++) await asOwner.mutation(api.accountingOutbox.redrive, { orgId });
+
+    const rows = await t.run((ctx) => ctx.db.query("pendingAccountingEvents").collect());
+    const row = rows.find((r) => r.idempotencyKey === "held_legacy_key");
+    expect(row?.status).toBe("FAILED");
+    expect(row?.attempts).toBeGreaterThan(0);
+    expect(row?.lastError).toMatch(/retired and can no longer originate/i);
+
+    // And it reached that end without touching the books.
+    const after = await footprint(t, orgId);
+    expect(after.accountingEvents).toEqual([]);
+    expect(after.journalEntries).toEqual([]);
+    expect(after.journalLines).toEqual([]);
+  });
+
+  test("CONTROL — a MODERN entry blocked by the same guard is still HELD, not failed", async () => {
+    const dealer = await seedDealer();
+    const { t, orgId, userId, asOwner } = dealer;
+
+    // The control that isolates the fix to the retirement rather than to the
+    // hold guard: identical event, identical missing dependency, modern source.
+    // It must keep its old disposition — PENDING, attempts unconsumed —
+    // otherwise the fix has started dead-lettering entries that are merely
+    // waiting on someone else's blocker.
+    await t.run((ctx) =>
+      enqueuePendingPost(
+        ctx,
+        {
+          orgId, eventType: "PREPAID_EXPENSE_AMORTIZED", sourceType: "prepaidExpenseSchedules",
+          sourceId: "held_modern", eventVersion: 1,
+          accountingDate: Date.now(), occurredAt: Date.now(), currency: "JOD",
+          idempotencyKey: "held_modern_key",
+          payload: { amountMinor: 10_000, currency: "JOD" },
+          actorId: userId,
+        },
+        "modern entry waiting on its dependency"
+      )
+    );
+
+    for (let i = 0; i < 10; i++) await asOwner.mutation(api.accountingOutbox.redrive, { orgId });
+
+    const rows = await t.run((ctx) => ctx.db.query("pendingAccountingEvents").collect());
+    const row = rows.find((r) => r.idempotencyKey === "held_modern_key");
+    expect(row?.status).toBe("PENDING");
+    expect(row?.attempts).toBe(0);
+  });
+});
+
 describe("SCRUM-234 — the refusal is narrow: legitimate accounting is untouched", () => {
   test("ordinary modern source families still post", async () => {
     const dealer = await seedDealer();
