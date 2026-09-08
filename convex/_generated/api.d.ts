@@ -48,6 +48,7 @@ import type * as constants from "../constants.js";
 import type * as crons from "../crons.js";
 import type * as customers from "../customers.js";
 import type * as dashboard from "../dashboard.js";
+import type * as dealWorkspace from "../dealWorkspace.js";
 import type * as dealerProductDeferrals from "../dealerProductDeferrals.js";
 import type * as depositRevenueImpact from "../depositRevenueImpact.js";
 import type * as deposits from "../deposits.js";
@@ -271,6 +272,7 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   customers: typeof customers;
   dashboard: typeof dashboard;
+  dealWorkspace: typeof dealWorkspace;
   dealerProductDeferrals: typeof dealerProductDeferrals;
   depositRevenueImpact: typeof depositRevenueImpact;
   deposits: typeof deposits;

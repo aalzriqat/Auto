@@ -26,6 +26,7 @@ import {
   deriveEconomics,
   evaluateQuotationException,
   resolveAppliedLtv,
+  selectActiveAppraisal,
   type FinanceCompanyRuleSnapshot,
 } from "./utils/financingEconomics";
 
@@ -309,16 +310,18 @@ export function approvedAmountIsFarFromEvidenceFor(
   });
 }
 
+/**
+ * Retained as a NAME, not as a second rule: "the appraisal this approval is
+ * compared against" and "the appraisal this deal is currently answered by" are
+ * the same row, and they were previously two byte-identical copies of the same
+ * predicate in this file. The reading now has one home in
+ * `utils/financingEconomics`, so the cockpit cannot disagree with the approval
+ * about which appraisal is live.
+ */
 function resolveComparisonAppraisal(
   appraisals: Array<Doc<"financeAppraisals">>
 ): Doc<"financeAppraisals"> | undefined {
-  return appraisals
-    .filter(
-      (row) =>
-        (row.status === "RECORDED" || row.status === "APPROVED") &&
-        row.providerType !== "DEALER_ESTIMATE"
-    )
-    .sort((a, b) => b.appraisedAt - a.appraisedAt)[0];
+  return selectActiveAppraisal(appraisals);
 }
 
 async function recordOverride(
@@ -1691,13 +1694,7 @@ export const approveDealerPurchaseAmount = mutation({
       // appraisal to APPROVED, so matching only RECORDED made every
       // re-approval fail to find one — leaving the explicit appraisalId
       // argument as the sole route through, which is the weaker path.
-      appraisal = appraisals
-        .filter(
-          (row) =>
-            (row.status === "RECORDED" || row.status === "APPROVED") &&
-            row.providerType !== "DEALER_ESTIMATE"
-        )
-        .sort((a, b) => b.appraisedAt - a.appraisedAt)[0];
+      appraisal = selectActiveAppraisal(appraisals);
     }
 
     if (args.basis !== "MANUAL" && !appraisal) {
