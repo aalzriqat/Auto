@@ -55,8 +55,11 @@ import {
  * obligation rather than a code one, and nothing mechanical enforces it:
  * **the Convex deploy must not be dispatched until the frontend deployment of
  * that merge commit is live and verified.** Deploying the backend first makes
- * every applicable undisbursed deal render raw `DISBURSEMENT` and
- * `BlockerAwaitingDisbursement` identifiers until the frontend catches up.
+ * every applicable undisbursed deal render a raw `DISBURSEMENT` stage label
+ * until the frontend catches up, and a deal merely AWAITING the money — BLOCKED
+ * rather than STOPPED — additionally renders a raw `BlockerAwaitingDisbursement`.
+ * A stopped deal shows the label only: the derivation returns STOPPED before a
+ * blocker is attached, so that row has no blocker text to mistranslate.
  *
  * Delete this file together with the transitional `DISBURSEMENT` entry once the
  * new cockpit is live, since at that point both sides move together and the
