@@ -32,13 +32,35 @@ import {
  * backend deploy and the frontend release. Not a crash, which is exactly why it
  * would have shipped unnoticed.
  *
- * ## Scope, stated honestly
+ * ## Scope, stated honestly — and what this does NOT prove
  *
- * This asserts label RESOLVABILITY, not layout, and it is TRANSITIONAL: it
- * describes the deployed build's behaviour during one release window. Delete it
- * together with the transitional `DISBURSEMENT` entry once the new cockpit is
- * live, since at that point both sides move together and the contract is no
- * longer skewed.
+ * This asserts label RESOLVABILITY, not layout, and it is TRANSITIONAL.
+ *
+ * ⚠️ It reads THIS candidate's dictionaries, not the ones in the bundle
+ * currently serving users. That distinction is load-bearing and was initially
+ * described wrongly here: the production bundle at the base commit contains
+ * neither `DISBURSEMENT` nor `BlockerAwaitingDisbursement` — this PR is what
+ * adds them — so the property proven is
+ *
+ *   "the dictionaries this PR ships cover every stage and blocker the backend
+ *    this PR ships can emit"
+ *
+ * and NOT "the bundle in production today can label them". It cannot prove the
+ * latter: the deployed artifact is not readable from a test, and CI checks out
+ * at depth 1 so the base catalogs are not available either.
+ *
+ * That is sufficient ONLY because the frontend half of this PR reaches
+ * production FIRST — merging deploys the bundle, while the Convex backend is a
+ * separate, later, manually approved step. The gap is therefore an ORDERING
+ * obligation rather than a code one, and nothing mechanical enforces it:
+ * **the Convex deploy must not be dispatched until the frontend deployment of
+ * that merge commit is live and verified.** Deploying the backend first makes
+ * every applicable undisbursed deal render raw `DISBURSEMENT` and
+ * `BlockerAwaitingDisbursement` identifiers until the frontend catches up.
+ *
+ * Delete this file together with the transitional `DISBURSEMENT` entry once the
+ * new cockpit is live, since at that point both sides move together and the
+ * contract is no longer skewed.
  */
 describe("deployed cockpit can label every stage this backend emits", () => {
   /**
