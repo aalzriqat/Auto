@@ -6,6 +6,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { scaleForCurrency, assertValidMinorAmount, assertSameCurrency } from "./utils/money";
 import { requireFeature } from "./subscriptions";
+import { assertOrgEconomicallyActive } from "./utils/orgLifecycle";
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -51,6 +52,17 @@ async function getPaymentUnappliedMinor(
   return Math.max(0, payment.amountMinor - allocated);
 }
 
+/**
+ * ⚠️ SCRUM-302 — the three creators below are the ONLY sites in non-test
+ * `convex/**` that insert `receivableDocuments`, `canonicalPayments` or
+ * `paymentAllocations`, so the organization-lifecycle refusal lives here rather
+ * than at the callers. An internal caller that has never heard of suspension —
+ * the payment webhook is the reproduced one — inherits the refusal for free.
+ *
+ * These throw. Anything reached from a cross-org cron batch must classify the
+ * refusal with `orgEconomicLifecycleBlock` BEFORE calling in, since an uncaught
+ * throw inside such a batch is a cross-tenant outage, not a single-tenant one.
+ */
 export async function createReceivableDocument(
   ctx: MutationCtx,
   args: {
@@ -70,6 +82,7 @@ export async function createReceivableDocument(
     branchId?: Id<"branches">;
   }
 ): Promise<Id<"receivableDocuments">> {
+  await assertOrgEconomicallyActive(ctx, args.orgId);
   assertValidMinorAmount(args.originalAmountMinor, "originalAmountMinor");
   const currency = args.currency.toUpperCase();
   const scale = scaleForCurrency(currency);
@@ -138,6 +151,7 @@ export async function createCanonicalPayment(
     accountingEventId?: Id<"accountingEvents">;
   }
 ): Promise<Id<"canonicalPayments">> {
+  await assertOrgEconomicallyActive(ctx, args.orgId);
   assertValidMinorAmount(args.amountMinor, "amountMinor");
   const currency = args.currency.toUpperCase();
   const scale = scaleForCurrency(currency);
@@ -186,6 +200,7 @@ export async function allocatePaymentToReceivable(
     actorId: Id<"users">;
   }
 ): Promise<Id<"paymentAllocations">> {
+  await assertOrgEconomicallyActive(ctx, args.orgId);
   const payment = await ctx.db.get(args.paymentId);
   if (!payment || payment.orgId !== args.orgId) throw new ConvexError("Payment not found.");
 
@@ -267,6 +282,15 @@ export async function allocatePaymentToReceivable(
  * that still has ACTIVE allocations; callers must reverse those first so
  * receivable balances stay consistent.
  */
+/**
+ * ⚠️ SCRUM-302, deliberately NOT lifecycle-gated — recorded as a decision so it
+ * is not read later as an omission. This inserts nothing: it patches one
+ * payment to VOIDED and refuses outright if any allocation is still active. It
+ * therefore creates no new economic footprint, and it is a corrective action.
+ * Refusing it for a blocked organization would remove a way to WITHDRAW effect
+ * without preventing any effect from being created. `reverseAllocation` below
+ * is the opposite case and IS gated: it inserts a new `paymentAllocations` row.
+ */
 export async function voidCanonicalPayment(
   ctx: MutationCtx,
   args: {
@@ -299,6 +323,7 @@ export async function reverseAllocation(
     actorId: Id<"users">;
   }
 ): Promise<Id<"paymentAllocations">> {
+  await assertOrgEconomicallyActive(ctx, args.orgId);
   const allocation = await ctx.db.get(args.allocationId);
   if (!allocation || allocation.orgId !== args.orgId) throw new ConvexError("Allocation not found.");
   if (allocation.status === "REVERSED") throw new ConvexError("Allocation is already reversed.");

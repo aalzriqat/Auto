@@ -52,6 +52,7 @@ import { runWithIdempotency } from "./utils/idempotency";
 import { drainEntries } from "./accountingOutbox";
 import { postedSourceExpenseEvent } from "./utils/prepaidSourceLedger";
 import { toMinorUnits, assertValidMinorAmount } from "./utils/money";
+import { orgEconomicLifecycleBlock } from "./utils/orgLifecycle";
 
 /** UTC "YYYY-MM" for a timestamp — the month recognition of that expense begins. */
 export function toYearMonth(timestamp: number): string {
@@ -435,6 +436,12 @@ export const catchUpScheduleMutation = internalMutation({
     systemActorId: v.id("users"),
   },
   handler: async (ctx, args) => {
+    // ⚠️ SCRUM-302 — see the identical note in `fixedAssets.depreciateAssetForMonth`.
+    // Classified before anything else so a blocked organization is a counted
+    // skip in a cross-org cron batch, never a throw that poisons the batch.
+    const lifecycle = await orgEconomicLifecycleBlock(ctx, args.orgId);
+    if (lifecycle) return { monthsPosted: 0, stoppedReason: "org_lifecycle_blocked" };
+
     const schedule = await ctx.db.get(args.scheduleId);
     if (!schedule || schedule.orgId !== args.orgId) return { monthsPosted: 0, stoppedReason: "not_found" };
     return catchUpPrepaidSchedule(ctx, schedule, {

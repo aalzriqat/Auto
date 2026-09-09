@@ -5508,7 +5508,11 @@ export default defineSchema({
       v.literal("fi-commission-recognition"),
       v.literal("prepaid-expense-amortization"),
       v.literal("marketplace-weekly-report"),
-      v.literal("marketplace-whatsapp")
+      v.literal("marketplace-whatsapp"),
+      // SCRUM-302: the payment provider webhook. It had no durable log at all,
+      // so a settlement refused on organization-lifecycle grounds would have
+      // left no evidence that a real provider fact had arrived.
+      v.literal("payment")
     ),
     status: v.union(v.literal("received"), v.literal("success"), v.literal("error"), v.literal("dead_letter")),
     summary: v.string(),

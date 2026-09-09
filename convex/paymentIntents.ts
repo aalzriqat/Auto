@@ -9,6 +9,8 @@ import { runWithIdempotency } from "./utils/idempotency";
 import { hookPaymentLinkReceived } from "./accounting/workflowHooks";
 import { allocatePaymentToReceivable, createCanonicalPayment, getReceivableOutstandingMinor } from "./subledger";
 import { fromMinorUnits, toMinorUnits, scaleForCurrency, assertValidMinorAmount } from "./utils/money";
+import { orgEconomicLifecycleBlock } from "./utils/orgLifecycle";
+import { recordWebhookLog } from "./utils/webhookLog";
 
 const statusValidator = v.union(
   v.literal("PENDING"),
@@ -571,6 +573,48 @@ export const settleByExternalId = internalMutation({
     if (!intent) {
       // Unknown intent — return gracefully so webhook caller gets 200
       console.warn(`[paymentIntents] Unknown externalId for provider ${provider}: ${externalId}`);
+      return null;
+    }
+
+    // ⚠️ SCRUM-302 — ORGANIZATION LIFECYCLE, CHECKED BEFORE ANY ECONOMIC EFFECT.
+    //
+    // This runs in a trusted internal context reached from the payment webhook,
+    // so `requireTenantAuth` — the only thing that refuses a suspended
+    // organization — is never consulted. Reproduced: a suspended org whose
+    // purge had already drained `canonicalPayments` to zero had a canonical
+    // payment written straight back into that table by this handler, while its
+    // authenticated twin `markSettled` correctly refused the identical request.
+    //
+    // WHY THIS RETURNS RATHER THAN THROWS. A throw would be a non-200 to the
+    // provider, which buys an uncontrolled retry storm and STILL loses the fact
+    // that a real, signature-verified payment arrived. Instead the refusal is
+    // recorded durably and the route answers 200: the provider stops retrying,
+    // nothing economic is created, and the money is visible to an operator.
+    // Real settlement for such an organization can then only happen through a
+    // separately reviewed recovery path, which is the point.
+    //
+    // The evidence is written HERE, in the same transaction as the refusal,
+    // rather than by the HTTP handler — so it cannot be lost by a caller that
+    // forgets to log, and cannot outlive a rollback of the thing it describes.
+    //
+    // `status: "error"` is deliberate and terminal. `getStuckWebhookIds`
+    // selects only `status === "received"`, so this row is never swept into
+    // `scanDeadLetterWebhooks`; it is a finished, refused delivery, not one
+    // still in flight.
+    const lifecycle = await orgEconomicLifecycleBlock(ctx, intent.orgId);
+    if (lifecycle) {
+      await recordWebhookLog(ctx, {
+        source: "payment",
+        status: "error",
+        summary:
+          `refused ${provider} settlement for org ${intent.orgId}: ${lifecycle.code}` +
+          ` (intent ${intent._id}, ${args.amountMinor} ${currency}, externalId ${externalId})`,
+        eventId: optionalTrimmed(args.providerEventId),
+        error: lifecycle.message,
+      });
+      console.error(
+        `[paymentIntents] Refused ${provider} settlement for ${intent._id}: ${lifecycle.code}`
+      );
       return null;
     }
 
