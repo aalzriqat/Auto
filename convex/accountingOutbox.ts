@@ -425,19 +425,47 @@ function authorityBackoffFor(generation: number): number {
 }
 
 /**
+ * How much of the bounded retry budget this work has actually spent.
+ *
+ * ⚠️ THE BUDGET MEASURES TECHNICAL FAILURE, AND A POLICY REFUSAL IS NOT ONE
+ * (SCRUM-302). `executions` counts every execution the dispatcher scheduled,
+ * including those that performed no settlement because the organization's
+ * lifecycle refused it. Charging those to the budget would let five
+ * suspend/reactivate races around dispatch terminalize a healthy car as
+ * RETRY_EXHAUSTED — an audit record asserting repeated failed attempts when
+ * not one settlement had ever run.
+ *
+ * Both sides of the subtraction are monotonic and `lifecycleHolds` is only
+ * ever incremented alongside an execution it refunds, so this cannot exceed
+ * `executions` or go negative.
+ */
+function technicalExecutionsSpent(work: Doc<"commitmentAuthorityWork">): number {
+  return work.executions - (work.lifecycleHolds ?? 0);
+}
+
+/**
  * Terminalize one work item as a repair condition, and let the accounting row
  * reflect it.
  *
  * ⚠️ BLOCKED IS TERMINAL AND VISIBLE, NEVER A SILENT GIVE-UP. The accounting
- * stays complete; the car keeps whatever authority it has; a person is told
- * this one needs them.
+ * stays complete and the car keeps whatever authority it has.
+ *
+ * ⚠️ BUT BLOCKED NO LONGER IMPLIES "A PERSON MUST ACT" (SCRUM-302). It used to,
+ * because retry exhaustion was its only producer. The lifecycle-abandonment
+ * outcome is also terminal and also has no automatic retry, yet there is nobody
+ * for whom repairing an organization under irreversible deletion would mean
+ * anything. The STATUS carries one invariant — terminal, no automatic retry —
+ * and the OUTCOME says why, and therefore whether human repair is meaningful.
  */
 async function blockAuthorityWork(
   ctx: MutationCtx,
   work: Doc<"commitmentAuthorityWork">,
   outcome:
     | "ACCOUNTING_REVERSED_AUTHORITY_RETRY_EXHAUSTED"
-    | "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT",
+    | "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT"
+    // SCRUM-302 — terminal because the organization is being irreversibly
+    // deleted, not because anything failed or contradicted itself.
+    | "ACCOUNTING_REVERSED_AUTHORITY_ABANDONED_ORG_PURGED",
   detail: string
 ): Promise<void> {
   const now = Date.now();
@@ -548,7 +576,7 @@ export const dispatchAuthorityWorkItem = internalMutation({
     const lifecycle = await orgEconomicLifecycleBlock(ctx, work.orgId);
     if (lifecycle) return { dispatched: false as const };
 
-    if (work.executions >= MAX_AUTHORITY_EXECUTIONS) {
+    if (technicalExecutionsSpent(work) >= MAX_AUTHORITY_EXECUTIONS) {
       await blockAuthorityWork(
         ctx,
         work,
@@ -625,15 +653,6 @@ export const performAuthoritySettlement = internalMutation({
     const work = await ctx.db.get(args.workId);
     if (!work || work.status !== "DISPATCHED") return;
 
-    // ⚠️ SCRUM-302 — defence in depth. The dispatcher already refuses blocked
-    // organizations, but this runs in a SEPARATE transaction scheduled earlier
-    // (deliberately, so bounded retry and rollback do not share one), and the
-    // organization's lifecycle can change in the gap. Returning matches how
-    // this handler already treats a superseded execution: ordinary history,
-    // not a failure to retry.
-    const lifecycle = await orgEconomicLifecycleBlock(ctx, work.orgId);
-    if (lifecycle) return;
-
     // ⚠️ ONLY THE ACTIVE ATTEMPT MAY WRITE AUTHORITY (SCRUM-208 c15825).
     //
     // A stale execution is not hypothetical: the observer moves work back to
@@ -648,6 +667,83 @@ export const performAuthoritySettlement = internalMutation({
     // failed and feed a retry that has already happened.
     if (String(work.activeAttemptId) !== String(args.attemptId)) return;
     if (work.generation !== args.generation) return;
+
+    // ⚠️ SCRUM-302 R1 — LIFECYCLE IS EVALUATED *BELOW* THE IDENTITY GUARDS,
+    // AND THE ORDER IS THE WHOLE CORRECTION.
+    //
+    // This check used to sit ABOVE them and simply `return`. That was wrong in
+    // two compounding ways, and I wrote a comment asserting it was fine.
+    //
+    // First, it ran for STALE executions too, so a superseded attempt could
+    // take a lifecycle transition against work that had already moved on.
+    // Second — the defect Sonnet MAX reproduced — returning while this attempt
+    // was still the ACTIVE one left `work.status === "DISPATCHED"` and
+    // `attempt.status === "SCHEDULED"` while the scheduled function completed
+    // normally, so Convex recorded `state.kind === "success"`. That triple is
+    // exactly the invariant violation `observeAuthorityAttempt` throws on, and
+    // the one-minute cron re-selected and re-threw it forever.
+    // `reactivateOrganization` touches neither table, so unsuspending could not
+    // repair it: the car stayed held permanently.
+    //
+    // My original comment claimed returning here "matches how this handler
+    // treats a superseded execution". IT DOES NOT. A superseded execution
+    // returns at the guards ABOVE, where re-dispatch has ALREADY made the state
+    // coherent under a new generation. Nothing had made it coherent here, and
+    // nothing else ever would. A bare `return` is only safe for an execution
+    // that is not the one holding the claim.
+    //
+    // So the claim is released HERE, coherently, before returning — and a
+    // stale execution never reaches this line at all.
+    const lifecycle = await orgEconomicLifecycleBlock(ctx, work.orgId);
+    if (lifecycle) {
+      const blockedAt = Date.now();
+
+      // The execution ran and performed no settlement. `SUCCEEDED` would claim
+      // a typed outcome that does not exist, and `FAILED` would feed a
+      // technical-failure reading of a policy decision. CANCELED is the
+      // truthful one: this settlement was called off, not attempted and not
+      // botched.
+      await ctx.db.patch(args.attemptId, {
+        status: "CANCELED" as const,
+        observedAt: blockedAt,
+        detail: "this settlement was not performed because of the organization's status",
+      });
+
+      if (lifecycle.permanent) {
+        // Irreversible destructive purge (or an organization row that is
+        // already gone). Per the owner ruling on SCRUM-302 R1 this terminalizes
+        // with its own outcome rather than borrowing one that would assert
+        // something never established — see the taxonomy note in
+        // `commitments.ts`. BLOCKED here means only "terminal, no automatic
+        // retry"; it does NOT summon a person to repair an organization that is
+        // being deleted.
+        await blockAuthorityWork(
+          ctx,
+          work,
+          "ACCOUNTING_REVERSED_AUTHORITY_ABANDONED_ORG_PURGED",
+          "this dealership is being permanently deleted, so the vehicle's authority settlement was abandoned"
+        );
+        return;
+      }
+
+      // Ordinary suspension: the organization may legitimately come back, so
+      // the work is HELD, not failed. The claim is released so a reactivated
+      // org can mint a fresh generation and settle normally.
+      //
+      // ⚠️ AND THE HOLD IS REFUNDED. The dispatcher already spent an execution
+      // on this attempt, but no settlement ran, so charging it to the technical
+      // retry budget would let five suspend/reactivate races terminalize a
+      // perfectly healthy car as RETRY_EXHAUSTED — an audit record asserting
+      // repeated failures that never happened. `executions` still counts what
+      // was scheduled; `lifecycleHolds` records how much of that was policy.
+      await ctx.db.patch(work._id, {
+        status: "READY" as const,
+        activeAttemptId: undefined,
+        lifecycleHolds: (work.lifecycleHolds ?? 0) + 1,
+        nextActionAt: blockedAt + authorityBackoffFor(work.generation),
+      });
+      return;
+    }
 
     const settled = await settleOneReversalSource(
       ctx,
@@ -796,7 +892,7 @@ export const observeAuthorityAttempt = internalMutation({
         : "this settlement attempt could not be observed",
     });
 
-    if (work.executions >= MAX_AUTHORITY_EXECUTIONS) {
+    if (technicalExecutionsSpent(work) >= MAX_AUTHORITY_EXECUTIONS) {
       await blockAuthorityWork(
         ctx,
         work,

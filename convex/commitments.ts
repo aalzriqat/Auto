@@ -2145,7 +2145,28 @@ export type DeferredAuthorityOutcome =
    * and rolls back on anything else. Produced only by the observer, from
    * counted ACTUAL failed executions.
    */
-  | { outcome: "ACCOUNTING_REVERSED_AUTHORITY_RETRY_EXHAUSTED"; detail: string };
+  | { outcome: "ACCOUNTING_REVERSED_AUTHORITY_RETRY_EXHAUSTED"; detail: string }
+  /**
+   * The organization entered irreversible destructive-purge lifecycle before
+   * the active settlement could execute, so settlement was permanently
+   * abandoned — having performed zero authority and zero economic writes.
+   *
+   * ⚠️ THIS IS A STATEMENT ABOUT THE ORGANIZATION, NOT ABOUT THE RECORDS, AND
+   * THAT IS WHY IT NEEDED ITS OWN NAME (SCRUM-302). Its three nearest
+   * neighbours each assert something that was never established here:
+   * RETRY_EXHAUSTED says repeated executions failed and the budget is spent
+   * (none failed, and none was spent); BLOCKED_INCONSISTENT says the canonical
+   * records contradict each other (nothing read them); and
+   * CANONICAL_UNAVAILABLE says the organization is not on the canonical
+   * authority under SCRUM-201's cutover, which is an activation fact and has
+   * nothing to do with lifecycle.
+   *
+   * ⚠️ TRUTHFUL FOR AN INTERVAL, NOT A RETENTION GUARANTEE. The destructive
+   * purge deletes `commitmentAuthorityWork` and `commitmentAuthorityAttempt`
+   * (`adminOrgs.ts` manifest). This outcome describes the row honestly while
+   * it still exists; it is not a claim that the fact survives the purge.
+   */
+  | { outcome: "ACCOUNTING_REVERSED_AUTHORITY_ABANDONED_ORG_PURGED"; detail: string };
 
 /** The detail string an outcome carries, when it carries one. */
 export function authorityOutcomeDetail(outcome: DeferredAuthorityOutcome): string | undefined {
@@ -2183,6 +2204,14 @@ export const AUTHORITY_SEVERITY: Record<DeferredAuthorityOutcome["outcome"], num
   // is. An unknown must never be buried by a clean sibling in the worst-of
   // summary — which is the only thing this ordering decides.
   ACCOUNTING_REVERSED_AUTHORITY_RETRY_EXHAUSTED: 6,
+  // ⚠️ SCRUM-302 — RANKED HIGHEST FOR EXACTLY ONE REASON, AND IT IS NOT
+  // "WORSE ACCOUNTING". This ordering decides only which fact survives the
+  // worst-of summary when one reversal settles several cars. A permanent
+  // lifecycle abandonment must never be buried by a sibling that restored
+  // cleanly, because the summary would then report a tidy restoration for an
+  // event on which one car's authority was abandoned outright. It says
+  // nothing about which condition is financially graver.
+  ACCOUNTING_REVERSED_AUTHORITY_ABANDONED_ORG_PURGED: 7,
 };
 
 /**

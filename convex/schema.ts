@@ -325,7 +325,15 @@ export default defineSchema({
         // authority state is. This used to be recorded as
         // BLOCKED_INCONSISTENT, which told the repairer the records
         // contradicted each other when nothing had established that.
-        v.literal("ACCOUNTING_REVERSED_AUTHORITY_RETRY_EXHAUSTED")
+        v.literal("ACCOUNTING_REVERSED_AUTHORITY_RETRY_EXHAUSTED"),
+        // ⚠️ SCRUM-302 — THE ORGANIZATION, NOT THE RECORDS. Irreversible
+        // destructive-purge lifecycle began before the active settlement could
+        // execute, so it was permanently abandoned with zero authority and
+        // zero economic effect. Ranked above RETRY_EXHAUSTED in
+        // AUTHORITY_SEVERITY for one reason only: a clean sibling must never
+        // bury a permanent lifecycle abandonment in the worst-of summary. That
+        // ordering is NOT a claim that this is "worse accounting".
+        v.literal("ACCOUNTING_REVERSED_AUTHORITY_ABANDONED_ORG_PURGED")
       )
     ),
     authorityOutcomeAt: v.optional(v.number()),
@@ -407,8 +415,16 @@ export default defineSchema({
      *   CLAIM ITSELF: a second dispatcher sees it and does nothing, which is
      *   what makes the budget count executions instead of delivery offers.
      * SETTLED — an expected typed outcome was reached and recorded. Terminal.
-     * BLOCKED — the execution budget is spent. Terminal, and a repair
-     *   condition a person must act on; never a silent give-up.
+     * BLOCKED — TERMINAL; NO AUTOMATIC RETRY. Never a silent give-up.
+     *
+     *   ⚠️ SCRUM-302 NARROWED THIS, BECAUSE IT USED TO OVERCLAIM. It read
+     *   "the execution budget is spent … a repair condition a person must act
+     *   on", which was true of the only producer that then existed. It is not
+     *   true of every BLOCKED row now: a work item abandoned because its
+     *   organization is being irreversibly deleted has spent no budget, and
+     *   there is nobody left for whom repair is meaningful. The status carries
+     *   exactly one invariant — terminal, no automatic retry — and the
+     *   `outcome` says WHY, and therefore whether human repair means anything.
      *
      * ⚠️ SCRUM-208 c15825 — `PENDING` MEANT BOTH "OWED" AND "EXECUTING", AND
      * THAT WAS THE DEFECT. A work row stayed PENDING while its settlement was
@@ -453,6 +469,27 @@ export default defineSchema({
      */
     executions: v.number(),
     /**
+     * How many of those executions performed NO settlement because the
+     * organization's lifecycle refused it (SCRUM-302).
+     *
+     * ⚠️ A SEPARATE COUNTER RATHER THAN A DECREMENT, ON PURPOSE. `executions`
+     * means "executions actually scheduled" and is incremented in exactly one
+     * place; rolling it back would make it lie about what really ran and would
+     * break the monotonicity the attempt identity depends on. So the technical
+     * retry budget is `executions - lifecycleHolds`, and a lifecycle refusal
+     * costs nothing.
+     *
+     * ⚠️ THIS IS WHAT STOPS A SUSPEND/REACTIVATE RACE FROM FALSELY EXHAUSTING
+     * A CAR'S BUDGET. Without it, five suspensions that each landed between
+     * dispatch and settlement would terminalize the work as
+     * RETRY_EXHAUSTED — reporting "repeated attempts failed" when no
+     * settlement had ever been attempted, on a car whose authority is fine.
+     *
+     * Optional because rows written before SCRUM-302 do not carry it; absent
+     * reads as 0.
+     */
+    lifecycleHolds: v.optional(v.number()),
+    /**
      * How many attempt rows have ever existed for this work. Monotonic, and
      * the second half of an attempt's identity — a stale generation may not
      * write authority or spend budget.
@@ -482,7 +519,15 @@ export default defineSchema({
         v.literal("ACCOUNTING_REVERSED_NO_AUTHORITY_RIVAL"),
         v.literal("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_AMBIGUOUS"),
         v.literal("ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT"),
-        v.literal("ACCOUNTING_REVERSED_AUTHORITY_RETRY_EXHAUSTED")
+        v.literal("ACCOUNTING_REVERSED_AUTHORITY_RETRY_EXHAUSTED"),
+        // ⚠️ SCRUM-302 — LIFECYCLE ABANDONMENT, AND IT IS NOT A FAILURE.
+        // The organization entered irreversible destructive-purge lifecycle
+        // before the active settlement could execute, so settlement was
+        // permanently abandoned having performed no authority or economic
+        // write. It is NOT retry exhaustion, NOT inconsistent authority, and
+        // NOT canonical unavailability — each of those asserts something about
+        // the RECORDS, and this asserts something about the ORGANIZATION.
+        v.literal("ACCOUNTING_REVERSED_AUTHORITY_ABANDONED_ORG_PURGED")
       )
     ),
     outcomeAt: v.optional(v.number()),
