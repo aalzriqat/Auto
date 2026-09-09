@@ -25,6 +25,15 @@
  * accountingEvents/pendingAccountingEvents) are what distinguish the two for
  * the accountant-facing status.
  */
+// ⚠️ SCRUM-302 — imported FIRST, deliberately. `utils/orgLifecycle` and
+// `utils/webhookLog` are leaves: neither imports anything from this
+// application. Appended at the END of an import block, the binding was
+// still uninitialized when a module cycle re-entered this file mid-init
+// (`Cannot access '__vite_ssr_import_9__' before initialization`, thrown
+// from enqueuePendingPost under full-suite ordering only). A leaf with no
+// app edges is safe to initialize before anything that can participate in
+// a cycle, so it goes above every local import.
+import { orgEconomicLifecycleBlock } from "./utils/orgLifecycle";
 import { v, ConvexError } from "convex/values";
 import { internalQuery, query, action, MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation } from "./functions";
@@ -52,7 +61,6 @@ import { runWithIdempotency } from "./utils/idempotency";
 import { drainEntries } from "./accountingOutbox";
 import { postedSourceExpenseEvent } from "./utils/prepaidSourceLedger";
 import { toMinorUnits, assertValidMinorAmount } from "./utils/money";
-import { orgEconomicLifecycleBlock } from "./utils/orgLifecycle";
 
 /** UTC "YYYY-MM" for a timestamp — the month recognition of that expense begins. */
 export function toYearMonth(timestamp: number): string {
