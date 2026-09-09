@@ -40,8 +40,8 @@
  * boundary on reactivation if a temporary one is treated as postable.
  */
 import { ConvexError } from "convex/values";
-import { Id } from "../_generated/dataModel";
-import { MutationCtx, QueryCtx } from "../_generated/server";
+import type { Id } from "../_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "../_generated/server";
 
 export type OrgLifecycleBlockCode = "ORG_NOT_FOUND" | "ORG_PURGE_HISTORY" | "ORG_SUSPENDED";
 

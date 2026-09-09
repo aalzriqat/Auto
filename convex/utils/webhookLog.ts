@@ -13,8 +13,8 @@
  * It lives in `utils/` rather than in `adminSystem.ts` so that a domain module
  * can record an observation without importing the admin surface.
  */
-import { MutationCtx } from "../_generated/server";
-import { Doc, Id } from "../_generated/dataModel";
+import type { MutationCtx } from "../_generated/server";
+import type { Doc, Id } from "../_generated/dataModel";
 
 export type WebhookLogSource = Doc<"webhookLogs">["source"];
 export type WebhookLogStatus = Doc<"webhookLogs">["status"];
