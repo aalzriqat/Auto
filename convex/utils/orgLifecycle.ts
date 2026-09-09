@@ -1,5 +1,31 @@
 /**
- * SCRUM-302 — the single lifecycle decision for economic writes.
+ * SCRUM-302 — the single lifecycle decision for the LEDGER-CORE economic write
+ * surface.
+ *
+ * ⚠️ READ THE BOUNDARY BEFORE RELYING ON THIS MODULE. What SCRUM-302 proved,
+ * and therefore all this module may be cited for, is:
+ *
+ *   the 19 enumerated ledger-core insert sites, across 7 files, and the
+ *   internal / webhook / cron entry points that reach them, refuse an
+ *   organization that is suspended or carries irreversible destructive-purge
+ *   history
+ *
+ * ⚠️ IT IS *NOT* A REPO-WIDE GUARANTEE THAT EVERY ECONOMIC WRITER IS GATED,
+ * AND AN EARLIER VERSION OF THIS COMMENT COULD BE READ THAT WAY. The SCRUM-302
+ * review seat traced `transactions`, `collectionPayments`, `receivables`,
+ * `employeeAdvances` and `employeeAdvanceRecoveries` — all economically real,
+ * none of them in `LEDGER_CORE_TABLES` — and found all 22 of their non-test
+ * insert sites terminate behind `requireTenantAuth`. So there is no live
+ * bypass. But that protection is COINCIDENTAL, not structural: it holds
+ * because every one of those writers happens to sit behind the authenticated
+ * door today, and nothing fails if a future internal, cron or webhook caller
+ * writes one of those tables directly.
+ *
+ * That gap is real and is deliberately NOT patched here — widening SCRUM-302
+ * to structurally gate every authenticated economic mutation is a separate
+ * piece of work with its own blast radius. The distinction that matters when
+ * citing this module: `ledgerCoreWriteGuard.test.ts` RATCHETS the surface named
+ * above, and nothing ratchets the rest.
  *
  * `requireTenantAuth` refuses a suspended organization, but it is an
  * AUTHENTICATED-door guard: `internalMutation`, cron and webhook entry points do
