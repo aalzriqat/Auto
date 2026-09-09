@@ -362,6 +362,123 @@ describe("CI must be green at the exact commit, and waivers expire", () => {
       }
     }
   });
+
+  // ── SCRUM-127 ────────────────────────────────────────────────────────────
+  //
+  // `dependency-audit` was waived because it failed identically on main with no
+  // fix available at the pinned major. That premise is FALSIFIED: the check is
+  // `completed`/`success` at protected main 46db3be8c, fixed by remediation
+  // (SCRUM-307, PR #295) rather than by lowering the bar. A waiver that outlives
+  // the condition it excused is the most dangerous kind — it reads as a live
+  // judgement while silently authorising a release over a red supply-chain gate.
+  //
+  // These assert the invariant against the REAL checked-in policy, not against a
+  // fixture. A fixture would keep passing if someone re-added the waiver to the
+  // file, which is precisely the regression worth catching.
+  describe("a failed dependency-audit refuses the release (SCRUM-127)", () => {
+    const loadPolicy = async () => (await import("../.github/release-waivers.json")).default;
+    const id = (c: { producer: string; name: string }) => `${c.producer}/${c.name}`;
+
+    /** Every required check completed and green, except where told otherwise. */
+    const observeAll = (
+      required: { producer: string; name: string }[],
+      over: Record<string, string> = {},
+      omit: string[] = []
+    ): CheckResult[] =>
+      required
+        .filter((c) => !omit.includes(c.name))
+        .map((c) => ({
+          producer: c.producer,
+          name: c.name,
+          status: "completed",
+          conclusion: c.name in over ? over[c.name] : "success",
+        }));
+
+    test("the policy carries NO dependency-audit waiver, and the other two are untouched", async () => {
+      const policy = await loadPolicy();
+      const waived = policy.waivers.map(id);
+
+      expect(waived).not.toContain("github-actions/dependency-audit");
+      // ⚠️ Not decoration. Removing either of these would be a DIFFERENT change
+      // resting on a different premise; this one must not have touched them.
+      expect(waived).toContain("github-actions/playwright");
+      expect(waived).toContain("sonarqubecloud/SonarCloud Code Analysis");
+      // And it stays REQUIRED. Dropping the requirement rather than the waiver
+      // would satisfy "no waiver" while gating on nothing at all.
+      expect(policy.required.map(id)).toContain("github-actions/dependency-audit");
+    });
+
+    test("REGRESSION: a FAILED dependency-audit is a refusal, never a waived result", async () => {
+      const policy = await loadPolicy();
+      const verdict = evaluateRequiredChecks({
+        required: policy.required,
+        results: observeAll(policy.required, { "dependency-audit": "failure" }),
+        waivers: policy.waivers,
+        now: NOW,
+      });
+
+      expect(verdict.ok).toBe(false);
+      expect(verdict.failures.join("\n")).toMatch(/github-actions\/dependency-audit: "failure"/);
+      expect(verdict.waived.map((w) => w.name)).not.toContain("dependency-audit");
+      expect(verdict.passed).not.toContain("github-actions/dependency-audit");
+    });
+
+    test("REGRESSION: an ABSENT dependency-audit is a refusal — a rename or a deleted job is not a pass", async () => {
+      const policy = await loadPolicy();
+      const verdict = evaluateRequiredChecks({
+        required: policy.required,
+        results: observeAll(policy.required, {}, ["dependency-audit"]),
+        waivers: policy.waivers,
+        now: NOW,
+      });
+
+      expect(verdict.ok).toBe(false);
+      expect(verdict.failures.join("\n")).toMatch(
+        /github-actions\/dependency-audit: no result at this commit/
+      );
+    });
+
+    test("a duplicated dependency-audit identity still refuses as ambiguous rather than picking one", async () => {
+      const policy = await loadPolicy();
+      const results = observeAll(policy.required, { "dependency-audit": "failure" });
+      results.push({
+        producer: "github-actions",
+        name: "dependency-audit",
+        status: "completed",
+        conclusion: "success",
+      });
+
+      const verdict = evaluateRequiredChecks({
+        required: policy.required,
+        results,
+        waivers: policy.waivers,
+        now: NOW,
+      });
+
+      expect(verdict.ok).toBe(false);
+      expect(verdict.failures.join("\n")).toMatch(/2 results share that producer and name/);
+    });
+
+    test("a SUCCESSFUL dependency-audit is reported as PASSED, and blocks nothing", async () => {
+      const policy = await loadPolicy();
+      const verdict = evaluateRequiredChecks({
+        required: policy.required,
+        results: observeAll(policy.required),
+        waivers: policy.waivers,
+        now: NOW,
+      });
+
+      expect(verdict.failures).toEqual([]);
+      expect(verdict.ok).toBe(true);
+      expect(verdict.passed).toContain("github-actions/dependency-audit");
+      // The remaining two stay WAIVED, and a waived check is never passing.
+      expect(verdict.passed).not.toContain("github-actions/playwright");
+      expect(verdict.waived.map((w) => w.name).sort()).toEqual([
+        "SonarCloud Code Analysis",
+        "playwright",
+      ]);
+    });
+  });
 });
 
 // ─── Rollout verification ───────────────────────────────────────────────────
