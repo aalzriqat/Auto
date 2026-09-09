@@ -38,7 +38,18 @@ const MODULE_GLOB = import.meta.glob("./**/*.*s");
 /**
  * The complete ledger-core surface. Derived by enumerating every
  * `ctx.db.insert("<table>", ...)` site in non-test `convex/**` for these tables:
- * 17 sites across 7 files.
+ * 19 sites across 7 files.
+ *
+ * ⚠️ THE COUNT WAS 17 HERE LONGER THAN ANYWHERE ELSE, AND THAT IS THE LESSON.
+ * A graph index reported 17, silently dropping both `commitmentAuthority*`
+ * inserts — which are the fourth economic cron's path. The correction to 19 was
+ * published to Jira, Slack, the coord claim, the PR body and the memory index,
+ * and this file, the one place a future reader would treat as authoritative
+ * BECAUSE it sits beside the code, kept asserting the refuted number. A refuted
+ * claim survives on every surface the correction did not sweep.
+ *
+ * `scripts/ledgerCoreWriteGuard.test.ts` is the authority: it re-derives the
+ * set from source on every CI run, so this comment cannot rot silently again.
  */
 const LEDGER_CORE_TABLES = [
   "accountingEvents",
