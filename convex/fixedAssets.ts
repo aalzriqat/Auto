@@ -13,6 +13,7 @@ import {
   getOrgCurrency,
 } from "./accounting/workflowHooks";
 import { paymentMethodValidator } from "./utils/paymentMethods";
+import { orgEconomicLifecycleBlock } from "./utils/orgLifecycle";
 
 const methodValidator = v.literal("STRAIGHT_LINE");
 
@@ -354,6 +355,16 @@ export const depreciateAssetForMonth = internalMutation({
     systemActorId: v.id("users"),
   },
   handler: async (ctx, args) => {
+    // ⚠️ SCRUM-302 — classified HERE, ahead of every other check, rather than
+    // left to the engine's throw. This mutation is called once per asset from a
+    // CROSS-ORG cron batch, and an uncaught throw inside such a batch aborts the
+    // run for every other tenant too — a suspended dealership must not stop the
+    // month's depreciation for everybody else. Returning the same
+    // `{ posted: false, reason }` shape the rest of this handler already uses
+    // makes the refusal a counted, reported outcome instead of an error.
+    const lifecycle = await orgEconomicLifecycleBlock(ctx, args.orgId);
+    if (lifecycle) return { posted: false, reason: "org_lifecycle_blocked" };
+
     const asset = await ctx.db.get(args.assetId);
     if (!asset || asset.orgId !== args.orgId || asset.isDeleted) return { posted: false, reason: "not_found" };
     if (asset.status !== "ACTIVE") return { posted: false, reason: "not_active" };

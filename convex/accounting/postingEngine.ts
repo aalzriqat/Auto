@@ -14,6 +14,7 @@ import {
 } from "./postingRules";
 import { auditLog } from "../financialAudit";
 import { incrementAccountSnapshot } from "./accountSnapshots";
+import { assertOrgEconomicallyActive } from "../utils/orgLifecycle";
 
 export interface PostCommand {
   orgId: Id<"organizations">;
@@ -166,6 +167,25 @@ export async function postAccountingEvent(
   if (retired) {
     throw new ConvexError(retired);
   }
+
+  // ⚠️ ORGANIZATION LIFECYCLE IS REFUSED HERE FOR THE SAME REASON — SCRUM-302.
+  //
+  // `requireTenantAuth` already refuses a suspended organization, but it is an
+  // authenticated-door guard: the payment webhook, the three monthly GL crons
+  // and every other internal caller bypass it by construction. Placing the
+  // check beside the retired-posting refusal — before currency handling and
+  // before the idempotency probe — means a blocked organization completes no
+  // idempotency record and creates no accountingEvents, journalEntries,
+  // journalLines, accountBalanceSnapshots or audit row, and that this holds for
+  // a caller that CATCHES and continues.
+  //
+  // Necessary, not sufficient, exactly as above: callers reached from a
+  // cross-org cron batch must classify the refusal themselves before getting
+  // here, because an uncaught throw inside such a batch is a cross-tenant
+  // outage rather than a single-tenant refusal. The outbox does the same,
+  // through `orgEconomicLifecycleBlock`, so a queued entry is dead-lettered or
+  // held according to whether the refusal can ever be lifted.
+  await assertOrgEconomicallyActive(ctx, cmd.orgId);
 
   // 2. Validate currency
   const currency = cmd.currency.toUpperCase();

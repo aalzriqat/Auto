@@ -6,6 +6,7 @@ import { scaleForCurrency } from "../utils/money";
 import { simplePayloadHash, validateBalance, LineSpec } from "./postingRules";
 import { auditLog } from "../financialAudit";
 import { incrementAccountSnapshot } from "./accountSnapshots";
+import { assertOrgEconomicallyActive } from "../utils/orgLifecycle";
 
 export interface ReversalCommand {
   orgId: Id<"organizations">;
@@ -26,6 +27,14 @@ export async function reverseAccountingEvent(
   ctx: MutationCtx,
   cmd: ReversalCommand
 ): Promise<ReversalResult> {
+  // ⚠️ SCRUM-302 — this function does NOT route through `postAccountingEvent`;
+  // it writes its own accountingEvents, journalEntries and journalLines rows
+  // directly (the standing note beside JOURNAL_REVERSAL in `postingRules.ts`
+  // says so). So the engine's lifecycle refusal does not cover it, and a
+  // reversal is a NEW economic footprint even though it unwinds an old one.
+  // A suspended or destructively-purged organization must not acquire one.
+  await assertOrgEconomicallyActive(ctx, cmd.orgId);
+
   const original = await ctx.db.get(cmd.originalEventId);
   if (!original || original.orgId !== cmd.orgId) {
     throw new ConvexError("Accounting event not found in this organization.");

@@ -8,6 +8,7 @@ import { logAdminAction } from "./adminAudit";
 import { internal } from "./_generated/api";
 import { CRON_HEARTBEAT_JOBS } from "./constants";
 import { describeOrgMaterialization } from "./utils/materialization";
+import { recordWebhookLog } from "./utils/webhookLog";
 
 const OVERVIEW_TABLES = [
   "organizations",
@@ -389,7 +390,8 @@ const webhookSourceValidator = v.union(
   v.literal("fi-commission-recognition"),
   v.literal("prepaid-expense-amortization"),
   v.literal("marketplace-weekly-report"),
-  v.literal("marketplace-whatsapp")
+  v.literal("marketplace-whatsapp"),
+  v.literal("payment")
 );
 
 /**
@@ -411,7 +413,7 @@ export const logWebhookEvent = internalMutation({
     error: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    return await ctx.db.insert("webhookLogs", { ...args, createdAt: Date.now() });
+    return await recordWebhookLog(ctx, args);
   },
 });
 
