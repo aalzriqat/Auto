@@ -1069,7 +1069,7 @@ export const salesEn = {
   QuotationAmountInvalid: "Enter an amount greater than zero.",
   QuotationRecorded: "Quotation recorded",
 
-  TheirAppraisalLabel: "Their appraisal of the vehicle",
+  TheirAppraisalLabel: "Recorded appraisal of the vehicle",
   RecordAppraisalAction: "Record appraisal",
   AppraisalNeedsReviewer:
     "A manager records the appraisal. The deal's stage rail waits on it once the quotation has gone out.",
@@ -1111,17 +1111,17 @@ export const salesEn = {
     "The amount the finance company said it will buy the vehicle at. Recording it here puts their decision on the record; it does not make one.",
   ApprovedAmountLabel: "Approved amount",
   ApprovalBasisLabel: "What they based it on",
-  BasisAppraisal: "Their appraisal",
+  BasisAppraisal: "The recorded appraisal",
   BasisAppraisalHint: "Equal to the appraisal on file.",
   BasisQuotationException: "Our quotation, as an exception",
   BasisQuotationExceptionHint:
-    "They approved at the amount we submitted even though their appraisal is lower. Their own tolerance rule decides whether this is allowed.",
+    "They approved at the amount we submitted even though the recorded appraisal is lower. Their own tolerance rule decides whether this is allowed.",
   BasisManual: "Another amount they named",
   BasisManualNotesLabel: "What they told us",
   BasisManualNotesPlaceholder: "e.g. approved at 18,900 by the branch's credit officer",
   BasisManualNotesRequired: "Record what the finance company said. It is kept on the audit record.",
   NoAppraisalOnFile:
-    "No appraisal from the finance company is recorded on this deal, so only an amount they named directly can be recorded.",
+    "No appraisal is recorded on this deal, so only an amount they named directly can be recorded.",
   ApprovedAmountInvalid: "Enter an amount greater than zero.",
   ApprovedPurchaseRecorded: "Approved amount recorded",
   ApprovedPurchaseReopened: "Reopened for correction — record the correct amount",
@@ -1957,7 +1957,7 @@ export const salesAr = {
   QuotationAmountInvalid: "أدخل مبلغاً أكبر من صفر.",
   QuotationRecorded: "تم تسجيل عرض السعر",
 
-  TheirAppraisalLabel: "تخمين شركة التمويل للمركبة",
+  TheirAppraisalLabel: "التخمين المسجَّل للمركبة",
   RecordAppraisalAction: "تسجيل التخمين",
   AppraisalNeedsReviewer:
     "يسجّل التخمين المدير. تتوقّف مراحل الصفقة عنده بعد إرسال عرض السعر.",
@@ -1992,17 +1992,17 @@ export const salesAr = {
     "المبلغ الذي أبلغت شركة التمويل أنها ستشتري به المركبة. تسجيله هنا يوثّق قرارها، ولا يصنع قراراً.",
   ApprovedAmountLabel: "المبلغ المعتمد",
   ApprovalBasisLabel: "أساس الاعتماد",
-  BasisAppraisal: "تخمينها",
+  BasisAppraisal: "التخمين المسجَّل",
   BasisAppraisalHint: "مساوٍ للتخمين المسجَّل على الصفقة.",
   BasisQuotationException: "عرض السعر المُرسَل، استثناءً",
   BasisQuotationExceptionHint:
-    "اعتمدت المبلغ الذي أرسلناه رغم أن تخمينها أقل. قاعدة التفاوت لديها هي التي تحدّد ما إذا كان ذلك مسموحاً.",
+    "اعتمدت المبلغ الذي أرسلناه رغم أن التخمين المسجَّل أقل. قاعدة التفاوت لديها هي التي تحدّد ما إذا كان ذلك مسموحاً.",
   BasisManual: "مبلغ آخر حدّدته",
   BasisManualNotesLabel: "ما أبلغتنا به",
   BasisManualNotesPlaceholder: "مثال: اعتُمد بمبلغ 18,900 من ضابط الائتمان في الفرع",
   BasisManualNotesRequired: "سجِّل ما أبلغت به شركة التمويل. يُحفظ في سجل التدقيق.",
   NoAppraisalOnFile:
-    "لا يوجد تخمين من شركة التمويل مسجَّل على هذه الصفقة، لذلك يمكن تسجيل المبلغ الذي حدّدته مباشرة فقط.",
+    "لا يوجد تخمين مسجَّل على هذه الصفقة، لذلك يمكن تسجيل المبلغ الذي حدّدته مباشرة فقط.",
   ApprovedAmountInvalid: "أدخل مبلغاً أكبر من صفر.",
   ApprovedPurchaseRecorded: "تم تسجيل المبلغ المعتمد",
   ApprovedPurchaseReopened: "أُعيد الفتح للتصحيح — سجِّل المبلغ الصحيح",
