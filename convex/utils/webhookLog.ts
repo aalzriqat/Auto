@@ -1,5 +1,5 @@
 /**
- * The one writer of `webhookLogs`, extracted so a durable webhook observation
+ * Appends a `webhookLogs` row, extracted so a durable webhook observation
  * can be recorded from a MUTATION as well as through
  * `internal.adminSystem.logWebhookEvent`.
  *

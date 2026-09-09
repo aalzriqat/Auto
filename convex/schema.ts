@@ -473,8 +473,8 @@ export default defineSchema({
      * organization's lifecycle refused it (SCRUM-302).
      *
      * ⚠️ A SEPARATE COUNTER RATHER THAN A DECREMENT, ON PURPOSE. `executions`
-     * means "executions actually scheduled" and is incremented in exactly one
-     * place; rolling it back would make it lie about what really ran and would
+     * means "executions actually scheduled"; rolling it back would make it lie
+     * about what really ran and would
      * break the monotonicity the attempt identity depends on. So the technical
      * retry budget is `executions - lifecycleHolds`, and a lifecycle refusal
      * costs nothing.

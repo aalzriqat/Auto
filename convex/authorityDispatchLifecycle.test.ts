@@ -331,15 +331,14 @@ describe("observing an execution", () => {
     // active attempt. SCRUM-302 then added a lifecycle early return ABOVE the
     // supersession guards, which returned while the attempt was still ACTIVE —
     // leaving exactly this triple, reachable by an ordinary suspension landing
-    // between dispatch and settlement, with no state forcing at all. The
-    // one-minute cron then re-threw it forever and the car stayed held.
+    // between dispatch and settlement. The one-minute cron then re-threw it
+    // forever and the car stayed held.
     //
     // The correction moved that check BELOW the identity guards and gave it a
-    // coherent transition (`accountingOutbox.ts`), so the state is unreachable
-    // again — but "unreachable" is a claim about today's call graph, not a
-    // property of the schema. `authorityLifecycleRace.scrum302.test.ts` is what
-    // keeps it true: it drives the real race and asserts this throw does NOT
-    // happen. If this test ever fires in CI, read that one first.
+    // coherent transition (`accountingOutbox.ts`).
+    // `authorityLifecycleRace.scrum302.test.ts` drives the real race and
+    // asserts this throw does NOT happen. If this test ever fires in CI,
+    // read that one first.
     await expect(
       seed.t.mutation(internal.accountingOutbox.observeAuthorityAttempt, { workId })
     ).rejects.toThrow(/reported success but work .* is still DISPATCHED/);

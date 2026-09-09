@@ -21,11 +21,12 @@
  * re-threw forever, and `reactivateOrganization` touches neither table, so
  * unsuspending the organization could not repair it. The car stayed held.
  *
- * ⚠️ EVERY RACE HERE IS DRIVEN THROUGH THE REAL DOORS WITH NO STATE FORCING.
- * The suspension lands between the real dispatcher and the real scheduled
- * settlement, which is precisely how it happens in production. Nothing here
- * patches a work row into a shape by hand — that is what made the original
- * defect look unreachable.
+ * ⚠️ THE RACES RUN THROUGH THE REAL DISPATCHER AND THE REAL SCHEDULER. The
+ * suspension lands between dispatch and the scheduled settlement, which is how
+ * it happens in production. Two setup steps do patch rows directly: the
+ * stale-generation case clears `scheduledFunctionId` and rewinds
+ * `nextActionAt` to force a re-dispatch. Those are setup, not the behaviour
+ * under test.
  *
  * ⚠️ THE HARNESS PROVES LOGIC, NOT CONTENTION. `convex-test` serializes and has
  * no OCC. These are state-machine properties, not concurrency results.
@@ -208,7 +209,7 @@ async function raceDuringDispatch(seed: Seed, workId: Id<"commitmentAuthorityWor
   }
 }
 
-/** Everything the authority may have written, plus the whole ledger-core count. */
+/** Selected root/claim/deposit indicators plus `MONEY_TABLES` row counts. */
 async function footprint(seed: Seed, depositId: Id<"deposits">) {
   return await seed.t.run(async (ctx) => {
     const roots = await ctx.db.query("commitmentRoots").collect();
@@ -261,8 +262,8 @@ describe("SCRUM-302 R1 — a suspension between dispatch and settlement (TEMPORA
     expect(attempts[0]?.status, "the attempt must not still be outstanding").not.toBe("SCHEDULED");
     expect(work.activeAttemptId, "the claim must be released").toBeUndefined();
 
-    // Zero economic effect, asserted as the whole table set rather than a spot
-    // check, so a partial write cannot pass.
+    // Zero economic effect, compared over `MONEY_TABLES` row counts and the
+    // root/claim/deposit indicators `footprint` reads.
     expect(await footprint(seed, deal.depositId)).toEqual(before);
 
     // The R1 defect, stated as the assertion that used to fail.

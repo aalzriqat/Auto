@@ -587,8 +587,8 @@ export const settleByExternalId = internalMutation({
     // ⚠️ SCRUM-302 — ORGANIZATION LIFECYCLE, CHECKED BEFORE ANY ECONOMIC EFFECT.
     //
     // This runs in a trusted internal context reached from the payment webhook,
-    // so `requireTenantAuth` — the only thing that refuses a suspended
-    // organization — is never consulted. Reproduced: a suspended org whose
+    // so `requireTenantAuth`, which refuses a suspended organization at the
+    // authenticated door, is never consulted. Reproduced: a suspended org whose
     // purge had already drained `canonicalPayments` to zero had a canonical
     // payment written straight back into that table by this handler, while its
     // authenticated twin `markSettled` correctly refused the identical request.

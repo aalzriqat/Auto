@@ -1,10 +1,6 @@
 /**
  * SCRUM-302 — FAILING-FIRST reproduction of the internal-economic-lifecycle defect.
  *
- * PROVENANCE (working-directory drift has bitten prior sessions):
- *   worktree : E:/tmp/auto-scrum302
- *   branch   : agent/scrum-302-lifecycle-economic-gate
- *   base SHA : 6d5dbd14c64155ab4aa0b413ea9812211f1ced4a  (protected main)
  *
  * INVARIANT UNDER TEST
  *   An organization that is suspended, or that carries irreversible
@@ -13,13 +9,13 @@
  *   refuses a suspended org at the authenticated door; `internalMutation`,
  *   cron and webhook entry points bypass it by construction.
  *
- * WHAT "ZERO ECONOMIC FOOTPRINT" MEANS HERE, stated as an explicit table set
- * rather than as a spot check, so a partial write cannot pass:
+ * WHAT "ZERO ECONOMIC FOOTPRINT" MEANS HERE — the table set whose per-org row
+ * counts must be unchanged:
  *   accountingEvents · pendingAccountingEvents · journalEntries · journalLines
  *   accountBalanceSnapshots · canonicalPayments · receivableDocuments
  *   paymentAllocations · commitmentAuthorityWork · commitmentAuthorityAttempt
  *
- * Every negative case is paired with a POSITIVE CONTROL on an active org in the
+ * Negative cases are paired with a POSITIVE CONTROL on an active org in the
  * same harness — a refusal that also refuses the healthy path proves nothing.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
@@ -36,29 +32,14 @@ vi.mock("./rateLimit", () => ({
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
 /**
- * The ledger-core table set. Enumerating `ctx.db.insert("<table>", ...)` for
- * these tables across non-test `convex/**` found 19 sites in 7 files at the
- * SCRUM-302 certification SHA — a measurement, not a completeness guarantee.
+ * The ledger-core table set.
  *
- * ⚠️ THE COUNT WAS 17 HERE LONGER THAN ANYWHERE ELSE, AND THAT IS THE LESSON.
- * A graph index reported 17, silently dropping both `commitmentAuthority*`
- * inserts — which are the fourth economic cron's path. The correction to 19 was
- * published to Jira, Slack, the coord claim, the PR body and the memory index,
- * and this file, the one place a future reader would treat as authoritative
- * BECAUSE it sits beside the code, kept asserting the refuted number. A refuted
- * claim survives on every surface the correction did not sweep.
- *
- * ⚠️ AND NOTHING RE-DERIVES THIS SET ON LATER COMMITS. An earlier revision of
- * this lane added a guard that claimed to; it was removed by owner ruling
- * because it did not measure what it asserted (line-at-a-time scanning, gate
- * tokens satisfied from comments, set rather than multiset comparison, and
- * caller completeness taken from a graph index). The count above is a
- * measurement taken by direct source scan at the SCRUM-302 certification SHA —
- * evidence about that revision, not a standing guarantee. A real fail-closed
- * guard is deferred to its own issue.
- *
- * So this comment CAN rot. If you are changing ledger-core writers, re-measure
- * directly rather than trusting this number or any index.
+ * A direct source scan of `ctx.db.insert("<table>", ...)` for these tables
+ * across non-test `convex/**` found 19 sites in 7 files at the SCRUM-302
+ * certification SHA. That is a measurement of one revision, not a standing
+ * guarantee, and nothing re-derives it on later commits. If you are changing
+ * ledger-core writers, re-measure directly rather than trusting this number
+ * or any index. A fail-closed structural guard is deferred to SCRUM-309.
  */
 const LEDGER_CORE_TABLES = [
   "accountingEvents",
@@ -91,7 +72,7 @@ const FINANCE_PERMS = [
   "edit:vehicles",
 ];
 
-/** Counts every ledger-core row belonging to one org. */
+/** Counts rows in `LEDGER_CORE_TABLES` belonging to one org. */
 async function economicFootprint(
   t: Harness,
   orgId: Id<"organizations">

@@ -435,9 +435,8 @@ function authorityBackoffFor(generation: number): number {
  * RETRY_EXHAUSTED — an audit record asserting repeated failed attempts when
  * not one settlement had ever run.
  *
- * Both sides of the subtraction are monotonic and `lifecycleHolds` is only
- * ever incremented alongside an execution it refunds, so this cannot exceed
- * `executions` or go negative.
+ * `lifecycleHolds` is incremented alongside the execution it refunds, which
+ * keeps this non-negative.
  */
 function technicalExecutionsSpent(work: Doc<"commitmentAuthorityWork">): number {
   return work.executions - (work.lifecycleHolds ?? 0);

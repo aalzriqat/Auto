@@ -1,97 +1,26 @@
 /**
- * SCRUM-302 — the single lifecycle decision for the LEDGER-CORE economic write
- * surface.
- *
- * ⚠️ READ THE BOUNDARY BEFORE RELYING ON THIS MODULE. What SCRUM-302 proved,
- * and therefore all this module may be cited for, is:
- *
- *   the 19 enumerated ledger-core insert sites, across 7 files, and the
- *   internal / webhook / cron entry points that reach them, refuse an
- *   organization that is suspended or carries irreversible destructive-purge
- *   history
- *
- * ⚠️ IT IS *NOT* A REPO-WIDE GUARANTEE THAT EVERY ECONOMIC WRITER IS GATED,
- * AND AN EARLIER VERSION OF THIS COMMENT COULD BE READ THAT WAY. The SCRUM-302
- * review seat traced `transactions`, `collectionPayments`, `receivables`,
- * `employeeAdvances` and `employeeAdvanceRecoveries` — all economically real,
- * none of them in `LEDGER_CORE_TABLES` — and found all 22 of their non-test
- * insert sites terminate behind `requireTenantAuth`. So there is no live
- * bypass. But that protection is COINCIDENTAL, not structural: it holds
- * because every one of those writers happens to sit behind the authenticated
- * door today, and nothing fails if a future internal, cron or webhook caller
- * writes one of those tables directly.
- *
- * That gap is real and is deliberately NOT patched here — widening SCRUM-302
- * to structurally gate every authenticated economic mutation is a separate
- * piece of work with its own blast radius, tracked as SCRUM-308.
- *
- * ⚠️ AND NOTHING AUTOMATICALLY RATCHETS THE SURFACE ABOVE EITHER. SCRUM-302
- * shipped with NO completeness guard, deliberately, by owner ruling.
- *
- * An earlier revision of this lane added `scripts/ledgerCoreWriteGuard.test.ts`
- * to enforce the enumeration. It was removed because it did not measure what it
- * claimed: it scanned line-at-a-time (so a multiline `insert(` was invisible),
- * accepted a gate token appearing in a comment, a string, a dead branch or
- * AFTER the write, compared write-site sets rather than multisets, and resolved
- * caller completeness from a hand-entered list that had itself been populated
- * from a graph index — which under-reported the callers of
- * `postOpeningBalanceDraft`. A guard that asserts a property it cannot measure
- * is worse than no guard, because the next reader stops checking.
- *
- * So the honest statement of this module's standing is: the 19-site boundary
- * above is an enumeration MEASURED BY DIRECT SOURCE SCAN at the SCRUM-302
- * certification SHA. It is evidence about that revision, NOT a continuing
- * guarantee. A new ledger-core writer added later will NOT fail CI.
- *
- * Building a real fail-closed guard — AST/symbol based, multiline-aware,
- * comment-proof, order-aware, with independently discovered callers — is
- * deferred to its own issue and is not a launch blocker.
+ * SCRUM-302 — the organization-lifecycle decision for economic writes.
  *
  * `requireTenantAuth` refuses a suspended organization, but it is an
- * AUTHENTICATED-door guard: `internalMutation`, cron and webhook entry points do
- * not pass through it and nothing substituted an org-state check at that trust
- * boundary. So an organization that is suspended — including one whose
+ * AUTHENTICATED-door guard: `internalMutation`, cron and webhook entry points
+ * do not pass through it, and nothing substituted an org-state check at that
+ * trust boundary. So an organization that is suspended — including one whose
  * destructive purge has already drained its financial tables — still received
  * money postings through doors that never looked at its lifecycle.
  *
- * WHERE THIS IS ENFORCED, and why it is not enforced at the entry points.
+ * The decision therefore lives at the ECONOMIC CHOKEPOINTS rather than at the
+ * entry points: gating only the entry points known to be defective would fix
+ * those and leave the class open, whereas a caller that reaches a chokepoint
+ * inherits the refusal without knowing the lifecycle exists.
  *
- * Gating the four entry points known to be defective today would fix four
- * defects and leave the CLASS open: the next internal economic writer is
- * ungated by default and nothing says so. So the decision lives at the
- * ECONOMIC CHOKEPOINTS instead — a caller reaching one of them inherits the
- * refusal without knowing the lifecycle exists.
- *
- * ⚠️ NOT EVERY LEDGER-CORE WRITE IS REFUSED BY THIS MODULE. Some are refused by
- * `requireTenantAuth` instead, because they sit behind public authenticated
- * mutations. Both mechanisms refuse a suspended organization; they are simply
- * different doors.
- *
- * ⚠️ AND THIS COMMENT DELIBERATELY NO LONGER TRIES TO SAY WHICH IS WHICH.
- *
- * Three successive revisions attempted a precise structural statement here and
- * each was wrong in a new way: first "every ledger-core row is written behind
- * [four chokepoints]", which omitted the two files that write journal rows
- * directly; then a two-bucket split, which mis-filed `accountSnapshots.ts`
- * because that helper is reached from BOTH kinds of caller and therefore
- * belongs to no single bucket. The reality is a call graph, and a prose
- * taxonomy of it is wrong the moment a shared helper gains a caller.
- *
- * So the claim class is removed rather than reworded a fourth time. What is
- * recorded instead is only what was directly measured and is cheap to
- * re-measure:
- *
- *   at the SCRUM-302 certification SHA, a direct source scan found 19
- *   ledger-core insert sites in 7 files, and every one of them was refused for
- *   a suspended or destructively-purged organization — by this module or by
- *   `requireTenantAuth`
- *
- * ⚠️ THAT IS A MEASUREMENT, NOT A GUARANTEE, and nothing re-verifies it on
- * later commits — see the deferral note above. If you need to know which door
- * guards a given writer, read that writer and its callers. Do not infer it from
- * this comment, and do not take a caller list from a graph index: one
- * under-reported the callers of `postOpeningBalanceDraft` during this very
- * lane, and that error reached a safety registry before it was caught.
+ * ⚠️ THIS MODULE IS NOT THE ONLY DOOR, AND NOTHING HERE ENUMERATES THE WRITERS.
+ * Some economic writes are refused by `requireTenantAuth` instead. To find out
+ * which door guards a given writer, read that writer and its callers; do not
+ * infer it from this comment, and do not take a caller list from a graph index.
+ * Nothing re-derives any writer set on later commits — a new ledger-core writer
+ * will not fail CI. Broader lifecycle uniformity across non-ledger-core
+ * economic writers is tracked as SCRUM-308; a fail-closed structural guard is
+ * tracked as SCRUM-309.
  *
  * TWO LIFECYCLE CLASSES, and the difference decides a disposition, not just a
  * message:
