@@ -193,10 +193,12 @@ const beginDestructivePurge = (seed: Seed) =>
  * Dispatch through the real dispatcher, let `mutate` happen in the gap, then
  * let the SCHEDULER run the settlement it queued.
  *
- * ⚠️ THIS IS THE WHOLE RACE, AND IT FORCES NOTHING. Running the settlement via
- * the scheduler rather than calling it directly is what makes Convex record a
- * real `state.kind` for the execution — which is the value the observer reads
- * and the original defect depended on.
+ * ⚠️ THE SETTLEMENT IS RUN BY THE SCHEDULER, NEVER CALLED DIRECTLY. That is
+ * what makes Convex record a real `state.kind` for the execution — the value
+ * the observer reads, and the one the original defect depended on.
+ *
+ * The lifecycle change itself is applied by patching the organization row,
+ * not by calling the admin suspension mutation.
  */
 async function raceDuringDispatch(seed: Seed, workId: Id<"commitmentAuthorityWork">, mutate: () => Promise<unknown>) {
   vi.useFakeTimers({ toFake: [...TIMER_FNS] });
@@ -240,7 +242,7 @@ async function settlementOutcomes(seed: Seed): Promise<string[]> {
 }
 
 describe("SCRUM-302 R1 — a suspension between dispatch and settlement (TEMPORARY)", () => {
-  test("leaves no poison state, writes nothing, and the observer does not throw", async () => {
+  test("leaves no poison state, no authority or economic footprint, and the observer does not throw", async () => {
     const seed = await seedDealer("r1a");
     const { workId, deal } = await workFor(seed, "reversed_race_temp_1");
     const before = await footprint(seed, deal.depositId);
@@ -335,7 +337,7 @@ describe("SCRUM-302 R1 — repeated suspend/reactivate cannot exhaust the retry 
 });
 
 describe("SCRUM-302 R1 — destructive purge between dispatch and settlement (PERMANENT)", () => {
-  test("abandons terminally with its own outcome, writes nothing, and never retries", async () => {
+  test("abandons terminally with its own outcome, no authority or economic footprint, and never retries", async () => {
     const seed = await seedDealer("r1d");
     const { workId, deal, eventId } = await workFor(seed, "reversed_race_purge_1");
     const before = await footprint(seed, deal.depositId);
