@@ -62,27 +62,36 @@
  * ECONOMIC CHOKEPOINTS instead — a caller reaching one of them inherits the
  * refusal without knowing the lifecycle exists.
  *
- * ⚠️ THE CHOKEPOINTS ARE NOT ALL OF ONE KIND, AND AN EARLIER VERSION OF THIS
- * COMMENT FLATTENED THEM — WRONGLY. It said every ledger-core row is written
- * behind `postAccountingEvent`, `reverseAccountingEvent`, the `subledger.ts`
- * writers or the accounting outbox. That omitted FOUR of the measured sites:
- * `accountingCutover.ts` and `financialAudit.ts` insert `journalEntries` and
- * `journalLines` DIRECTLY, and are refused not by this module but by
- * `requireTenantAuth`, because both sit behind public authenticated mutations.
+ * ⚠️ NOT EVERY LEDGER-CORE WRITE IS REFUSED BY THIS MODULE. Some are refused by
+ * `requireTenantAuth` instead, because they sit behind public authenticated
+ * mutations. Both mechanisms refuse a suspended organization; they are simply
+ * different doors.
  *
- * So the honest shape at the SCRUM-302 certification SHA, by direct source
- * scan, is 19 insert sites in 7 files, split two ways:
+ * ⚠️ AND THIS COMMENT DELIBERATELY NO LONGER TRIES TO SAY WHICH IS WHICH.
  *
- *   gated by THIS module — `accounting/postingEngine.ts`,
- *   `accounting/reversals.ts`, `accounting/accountSnapshots.ts` (via its
- *   callers), `subledger.ts`, `accountingOutbox.ts`
+ * Three successive revisions attempted a precise structural statement here and
+ * each was wrong in a new way: first "every ledger-core row is written behind
+ * [four chokepoints]", which omitted the two files that write journal rows
+ * directly; then a two-bucket split, which mis-filed `accountSnapshots.ts`
+ * because that helper is reached from BOTH kinds of caller and therefore
+ * belongs to no single bucket. The reality is a call graph, and a prose
+ * taxonomy of it is wrong the moment a shared helper gains a caller.
  *
- *   gated by `requireTenantAuth` instead — `accountingCutover.ts`,
- *   `financialAudit.ts`
+ * So the claim class is removed rather than reworded a fourth time. What is
+ * recorded instead is only what was directly measured and is cheap to
+ * re-measure:
  *
- * ⚠️ AND THAT IS A MEASUREMENT, NOT A GUARANTEE. Nothing re-verifies it on
- * later commits; see the deferral note above. Re-measure directly rather than
- * trusting this list or any index.
+ *   at the SCRUM-302 certification SHA, a direct source scan found 19
+ *   ledger-core insert sites in 7 files, and every one of them was refused for
+ *   a suspended or destructively-purged organization — by this module or by
+ *   `requireTenantAuth`
+ *
+ * ⚠️ THAT IS A MEASUREMENT, NOT A GUARANTEE, and nothing re-verifies it on
+ * later commits — see the deferral note above. If you need to know which door
+ * guards a given writer, read that writer and its callers. Do not infer it from
+ * this comment, and do not take a caller list from a graph index: one
+ * under-reported the callers of `postOpeningBalanceDraft` during this very
+ * lane, and that error reached a safety registry before it was caught.
  *
  * TWO LIFECYCLE CLASSES, and the difference decides a disposition, not just a
  * message:
