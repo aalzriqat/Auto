@@ -4,7 +4,17 @@ packages:
 overrides:
   undici: ^7.29.0
   # Security overrides — force patched transitive deps flagged by `pnpm audit`.
-  sharp: ">=0.35.0"
+  # GHSA-rgj7-g3m4-5g8c: libheif vulnerabilities (GHSA-g89c-p67h-r497,
+  # GHSA-2jg2-4ch7-h545) reachable through sharp's bundled libvips. Patched
+  # >=0.35.4. Reached only through next’s OPTIONAL dependency — next 16.3.4
+  # declares sharp ^0.35.4 — and used for Next image optimisation. The repo
+  # requires next ^16.3.4 rather than ^16.3.3 because 16.3.3 mitigated the
+  # AVIF Image Optimization RCE by DISABLING AVIF; 16.3.4 re-enables it with
+  # the actual fix, so 16.3.3 would have bought audit compliance by silently
+  # changing production image behaviour. Pinned exact so lockfile
+  # regeneration cannot drift onto a release younger than the pnpm 11
+  # minimumReleaseAge (<24h) supply-chain gate.
+  sharp: 0.35.4
   # Pinned exact (not a range) so it can't drift onto a release that trips the
   # CI minimumReleaseAge (<24h) supply-chain gate; 8.5.22 is patched (>=8.5.18).
   postcss: 8.5.22
@@ -73,12 +83,19 @@ overrides:
   # enforced.
   fast-uri: 4.1.4
   ip-address: ">=10.3.1"
-  "js-yaml@>=4.0.0 <4.3.0": ">=4.3.0 <5.0.0"
-  # GHSA-5p4m-2wfm-xmqj (CVE-2026-59870): quadratic CPU consumption in !!omap.
-  # The fix was not backported below 3.15.1, and the 3.x line is still pulled in
-  # by @istanbuljs/load-nyc-config via the mobile jest preset. Held inside 3.x —
-  # 4.x changed the API and is not a drop-in for those CommonJS consumers.
-  "js-yaml@3": ">=3.15.1 <4.0.0"
+  # GHSA-2883-xcg3-v3hh: maxTotalMergeKeys does not limit CPU use for empty
+  # merge sources. Patched >=4.3.2 on the 4.x line. The previous entry's
+  # selector kept matching — what failed was its open-ended TARGET
+  # (">=4.3.0 <5.0.0"), which resolves to whatever the registry offers and
+  # so drifted onto 4.3.1, itself affected. Keyed per-major and pinned exact
+  # instead, so the resolved version cannot move without a lockfile change.
+  "js-yaml@4": 4.3.2
+  # GHSA-5p4m-2wfm-xmqj (CVE-2026-59870, quadratic CPU consumption in !!omap)
+  # and GHSA-2883-xcg3-v3hh on the 3.x line: both cleared at >=3.15.2. Held
+  # inside 3.x — 4.x changed the API and is not a drop-in for the CommonJS
+  # consumers reached via @istanbuljs/load-nyc-config in the mobile jest
+  # preset. Pinned exact for the same minimumReleaseAge reason as above.
+  "js-yaml@3": 3.15.2
   # GHSA-73wf-gq98-2v4g (uncaught crash / prototype write via untrusted
   # browserslist-stats.json in normalizeStats) and GHSA-c83g-rgw3-j3cx
   # (unbounded cache growth -> OOM). Both fixed in >=4.28.7; reached only
@@ -124,6 +141,47 @@ overrides:
   "brace-expansion@1": 1.1.18
   "brace-expansion@2": 2.1.4
   "brace-expansion@>=3.0.0": 5.0.9
+  # @xmldom/xmldom: pin each line to its own patched release. A batch of HIGH
+  # advisories published against this package broke the repo-wide required
+  # dependency-audit check with no dependency change anywhere in this
+  # repository — the drift class tracked as SCRUM-244. This is SCRUM-307.
+  #
+  # The graph resolves TWO independent copies, not one, and they are NOT
+  # interchangeable:
+  #
+  #   @expo/plist@0.8.0 -> ^0.8.8     -- patched floor 0.8.15
+  #   plist@3.1.1       -> ^0.9.10    -- patched floor 0.9.12
+  #
+  # Both floors were verified against BOTH advisory surfaces (the SCRUM-245
+  # SCRUM-245 lesson — the global feed and the upstream repository surface
+  # disagreed about fast-uri, and only the stricter one was right). They
+  # disagree here too, over one withdrawn-vs-published entry
+  # (GHSA-9pgh-qqpf-7wqj), but that entry covers versions far below both
+  # floors and so moves neither. On both surfaces the highest patched floor is
+  # 0.8.15 for the 0.8 line and 0.9.12 for the 0.9 line, and nothing on either
+  # surface affects 0.8.15 or 0.9.12.
+  #
+  # A single unqualified `0.9.12` override does NOT work, and this was proven by
+  # execution rather than by reading semver. @expo/plist calls
+  #   new DOMParser({ errorHandler() {} }).parseFromString(xml)
+  # with ONE argument; xmldom 0.9 made the mimeType argument mandatory. Forcing
+  # @expo/plist onto 0.9.12 therefore fails at runtime with
+  #   TypeError: DOMParser.parseFromString: the provided mimeType "undefined"
+  #   is not valid.
+  # and the same fixture parses correctly on 0.8.15. That is a hard break in the
+  # Expo config/prebuild toolchain, not a style objection, so the 0.8 line is
+  # held at its own patched floor — exactly the reasoning already applied to
+  # brace-expansion and js-yaml above.
+  #
+  # Pinned exact, like postcss/nanoid/browserslist, so lockfile regeneration
+  # cannot drift onto a release younger than the pnpm 11 minimumReleaseAge
+  # (<24h) supply-chain gate.
+  #
+  # NOT added to auditConfig.ignoreGhsas: patched, compatible releases exist, so
+  # an override is the correct remedy and an ignore would suppress a fixable
+  # advisory.
+  "@xmldom/xmldom@0.8": 0.8.15
+  "@xmldom/xmldom@0.9": 0.9.12
 # GHSA-mh99 (brace-expansion unbounded-expansion DoS) is patched by the pins
 # above. Separate per-major overrides remain necessary because minimatch@3's
 # old-API CommonJS consumers are incompatible with the 5.x export shape.
