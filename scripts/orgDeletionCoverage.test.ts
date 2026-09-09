@@ -34,6 +34,16 @@ const RETAINED_BY_DESIGN: Record<string, string> = {
   // no audit, leaving the organization half-deleted. It must outlive the org it
   // is deleting.
   organizationDeletionRequests: "the deletion driver's own state row",
+  // SCRUM-143. An attestation about the DEPLOYMENT, not tenant data — it says
+  // "this is a disposable E2E preview", and it carries an `orgId` only as a
+  // pointer to whatever dealership the seed created here.
+  //
+  // Deleting it with the org would be the wrong direction twice over: it would
+  // erase the evidence that this deployment is a preview, and it would re-arm
+  // `bootstrapE2EOrganization` to seed a fresh dealership on a deployment
+  // somebody had just chosen to empty. Retained, the dangling pointer makes the
+  // next bootstrap REFUSE and say so, which is the fail-closed direction.
+  e2ePreviewBootstrap: "a deployment-level E2E preview attestation, not tenant data",
 };
 
 /**
