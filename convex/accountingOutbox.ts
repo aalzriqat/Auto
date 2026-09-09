@@ -13,6 +13,15 @@
  * reverseAccountingEvent dedupe by idempotency key), so re-driving is safe even
  * if the original operation later posts directly.
  */
+// ⚠️ SCRUM-302 — imported FIRST, deliberately. `utils/orgLifecycle` and
+// `utils/webhookLog` are leaves: neither imports anything from this
+// application. Appended at the END of an import block, the binding was
+// still uninitialized when a module cycle re-entered this file mid-init
+// (`Cannot access '__vite_ssr_import_9__' before initialization`, thrown
+// from enqueuePendingPost under full-suite ordering only). A leaf with no
+// app edges is safe to initialize before anything that can participate in
+// a cycle, so it goes above every local import.
+import { assertOrgEconomicallyActive, orgEconomicLifecycleBlock } from "./utils/orgLifecycle";
 import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
 import { internalMutation, mutation } from "./functions";
@@ -24,7 +33,6 @@ import { prepaidPostingBlockedReason } from "./utils/prepaidSourceLedger";
 import { payrollPostingBlockedReason } from "./utils/payrollSourceLedger";
 import { commissionPostingBlockedReason } from "./utils/commissionSourceLedger";
 import { reverseAccountingEvent } from "./accounting/reversals";
-import { assertOrgEconomicallyActive, orgEconomicLifecycleBlock } from "./utils/orgLifecycle";
 import { scheduleAuthorityDispatch } from "./utils/authorityDispatchScheduler";
 import {
   commitDeferredReversal,

@@ -8,11 +8,19 @@
  * fixedAssets.ts's depreciation cron exactly (paginated query here +
  * recognizeDeferredCommissionForMonth, same idempotent-per-yearMonth shape).
  */
+// ⚠️ SCRUM-302 — imported FIRST, deliberately. `utils/orgLifecycle` and
+// `utils/webhookLog` are leaves: neither imports anything from this
+// application. Appended at the END of an import block, the binding was
+// still uninitialized when a module cycle re-entered this file mid-init
+// (`Cannot access '__vite_ssr_import_9__' before initialization`, thrown
+// from enqueuePendingPost under full-suite ordering only). A leaf with no
+// app edges is safe to initialize before anything that can participate in
+// a cycle, so it goes above every local import.
+import { orgEconomicLifecycleBlock } from "./utils/orgLifecycle";
 import { v } from "convex/values";
 import { internalQuery } from "./_generated/server";
 import { internalMutation } from "./functions";
 import { hookFiCommissionRecognized } from "./accounting/workflowHooks";
-import { orgEconomicLifecycleBlock } from "./utils/orgLifecycle";
 
 /** Not org-scoped: the monthly cron runs across every tenant, same reasoning as listActiveAssetsForDepreciation. */
 export const listActiveDeferralsForRecognition = internalQuery({
