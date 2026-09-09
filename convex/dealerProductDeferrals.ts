@@ -12,6 +12,7 @@ import { v } from "convex/values";
 import { internalQuery } from "./_generated/server";
 import { internalMutation } from "./functions";
 import { hookFiCommissionRecognized } from "./accounting/workflowHooks";
+import { orgEconomicLifecycleBlock } from "./utils/orgLifecycle";
 
 /** Not org-scoped: the monthly cron runs across every tenant, same reasoning as listActiveAssetsForDepreciation. */
 export const listActiveDeferralsForRecognition = internalQuery({
@@ -36,6 +37,12 @@ export const recognizeDeferredCommissionForMonth = internalMutation({
     systemActorId: v.id("users"),
   },
   handler: async (ctx, args) => {
+    // ⚠️ SCRUM-302 — see the identical note in `fixedAssets.depreciateAssetForMonth`.
+    // Classified before anything else so a blocked organization is a counted
+    // skip in a cross-org cron batch, never a throw that poisons the batch.
+    const lifecycle = await orgEconomicLifecycleBlock(ctx, args.orgId);
+    if (lifecycle) return { posted: false, reason: "org_lifecycle_blocked" };
+
     const deferral = await ctx.db.get(args.deferralId);
     if (!deferral || deferral.orgId !== args.orgId) return { posted: false, reason: "not_found" };
     if (deferral.status !== "ACTIVE") return { posted: false, reason: "not_active" };

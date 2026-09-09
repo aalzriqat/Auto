@@ -24,6 +24,7 @@ import { prepaidPostingBlockedReason } from "./utils/prepaidSourceLedger";
 import { payrollPostingBlockedReason } from "./utils/payrollSourceLedger";
 import { commissionPostingBlockedReason } from "./utils/commissionSourceLedger";
 import { reverseAccountingEvent } from "./accounting/reversals";
+import { assertOrgEconomicallyActive, orgEconomicLifecycleBlock } from "./utils/orgLifecycle";
 import { scheduleAuthorityDispatch } from "./utils/authorityDispatchScheduler";
 import {
   commitDeferredReversal,
@@ -47,11 +48,23 @@ import { requireFeature } from "./subscriptions";
 
 // ─── Enqueue helpers (called from workflow hooks) ─────────────────────────────
 
+/**
+ * ⚠️ SCRUM-302 — a queue is not a safe place to park money for a blocked
+ * organization. Enqueueing is refused rather than deferred: a pending row for a
+ * suspended org would post the moment the org returned to service, turning a
+ * refusal into a delayed detonation, and for an org under destructive purge it
+ * would wait for a reactivation SCRUM-297 forbids outright.
+ *
+ * `drainEntries` carries the matching classification for rows that were already
+ * PENDING when the organization's lifecycle changed underneath them.
+ */
 export async function enqueuePendingPost(
   ctx: MutationCtx,
   cmd: PostCommand,
   reason: string
 ): Promise<void> {
+  await assertOrgEconomicallyActive(ctx, cmd.orgId);
+
   // Dedupe by idempotency key — never queue the same logical event twice.
   const existing = await ctx.db
     .query("pendingAccountingEvents")
@@ -95,6 +108,7 @@ export async function enqueuePendingReversal(
     sourceId: string;
   }
 ): Promise<void> {
+  await assertOrgEconomicallyActive(ctx, args.orgId);
   const existing = await ctx.db
     .query("pendingAccountingEvents")
     .withIndex("by_org_idempotency", (q) =>
@@ -336,6 +350,13 @@ async function recordAuthorityWork(
   p: Doc<"pendingAccountingEvents">,
   source: ReversalCompletionSource
 ): Promise<Id<"commitmentAuthorityWork"> | null> {
+  // ⚠️ SCRUM-302 — `commitmentAuthorityWork` is queued money work: it exists to
+  // be dispatched later and settle authority. Queuing it for a blocked
+  // organization is the same delayed-detonation shape `enqueuePendingPost`
+  // refuses above. `drainEntries` already classifies before reaching here; this
+  // is the guard for any future caller that does not.
+  await assertOrgEconomicallyActive(ctx, p.orgId);
+
   const workKey = `${p.idempotencyKey}:${source.kind}:${String(source.holdId ?? source.depositId)}`;
   const existing = await ctx.db
     .query("commitmentAuthorityWork")
@@ -508,6 +529,17 @@ export const dispatchAuthorityWorkItem = internalMutation({
     if (!work || work.status !== "READY") return { dispatched: false as const };
     if (work.nextActionAt > Date.now()) return { dispatched: false as const };
 
+    // ⚠️ SCRUM-302 — a fourth economic cron, which the ticket did not name:
+    // `crons.ts` schedules `dispatchDueAuthorityWork`, which fans out to this
+    // per-item mutation across EVERY organization. Refusing here — before the
+    // attempt row is minted and before any settlement is scheduled — leaves the
+    // work READY and untouched rather than consuming an execution from its
+    // bounded budget, so a suspension that later lifts loses nothing and a
+    // purge simply never dispatches. Returning rather than throwing for the
+    // usual reason: this is reached from a cross-org batch.
+    const lifecycle = await orgEconomicLifecycleBlock(ctx, work.orgId);
+    if (lifecycle) return { dispatched: false as const };
+
     if (work.executions >= MAX_AUTHORITY_EXECUTIONS) {
       await blockAuthorityWork(
         ctx,
@@ -584,6 +616,15 @@ export const performAuthoritySettlement = internalMutation({
   handler: async (ctx, args) => {
     const work = await ctx.db.get(args.workId);
     if (!work || work.status !== "DISPATCHED") return;
+
+    // ⚠️ SCRUM-302 — defence in depth. The dispatcher already refuses blocked
+    // organizations, but this runs in a SEPARATE transaction scheduled earlier
+    // (deliberately, so bounded retry and rollback do not share one), and the
+    // organization's lifecycle can change in the gap. Returning matches how
+    // this handler already treats a superseded execution: ordinary history,
+    // not a failure to retry.
+    const lifecycle = await orgEconomicLifecycleBlock(ctx, work.orgId);
+    if (lifecycle) return;
 
     // ⚠️ ONLY THE ACTIVE ATTEMPT MAY WRITE AUTHORITY (SCRUM-208 c15825).
     //
@@ -1138,6 +1179,42 @@ export async function drainEntries(
     // its exact wording rather than restating the rule, so the two cannot
     // drift. REVERSE entries are exempt — a reversal unwinds something that
     // already posted, and does not route through the engine at all.
+    // ⚠️ SCRUM-302 — ORGANIZATION LIFECYCLE, CLASSIFIED HERE FOR THE SAME
+    // ORDERING REASON as the retired refusal below, and BEFORE it.
+    //
+    // `enqueuePendingPost` now refuses to queue for a blocked organization, but
+    // that does not cover a row that was already PENDING when the organization
+    // was suspended or entered destructive purge underneath it. Such a row must
+    // not simply reach the engine: the engine THROWS, which routes it through
+    // `markEntryFailed` and burns an attempt on every unrelated drain until it
+    // dead-letters — right for a purge, wrong for a suspension that may lift.
+    //
+    // So the two classes take DIFFERENT dispositions, which is the whole reason
+    // `orgEconomicLifecycleBlock` reports `permanent` rather than a boolean:
+    //
+    //   permanent (destructive purge) -> markEntryFailed, so it dead-letters
+    //     and stops blocking period close with a row no operator can resolve.
+    //     There is no reactivation that could ever make it postable.
+    //
+    //   temporary (suspended)         -> markEntryHeld, PENDING with a visible
+    //     reason and no attempt consumed, exactly like an entry waiting for its
+    //     own period to open.
+    //
+    // Applies to BOTH kinds, unlike the retired check below: a REVERSE entry
+    // writes its own accountingEvents/journalEntries/journalLines rows through
+    // `reverseAccountingEvent`, so it is a new economic footprint too.
+    const lifecycle = await orgEconomicLifecycleBlock(ctx, p.orgId);
+    if (lifecycle) {
+      if (lifecycle.permanent) {
+        // COUNT WHAT WAS RECORDED, NOT WHAT WAS ATTEMPTED — same rule as below.
+        if (await markEntryFailed(ctx, p, lifecycle.message)) failed++;
+      } else {
+        await markEntryHeld(ctx, p, lifecycle.message);
+        held++;
+      }
+      continue;
+    }
+
     if (p.kind === "POST") {
       // `eventType` is schema-optional, `sourceType` is not — so the source
       // check must not be gated on eventType being present, or a POST row with
