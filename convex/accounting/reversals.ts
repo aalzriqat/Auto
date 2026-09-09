@@ -1,3 +1,12 @@
+// ⚠️ SCRUM-302 — imported FIRST, deliberately. `utils/orgLifecycle` and
+// `utils/webhookLog` are leaves: neither imports anything from this
+// application. Appended at the END of an import block, the binding was
+// still uninitialized when a module cycle re-entered this file mid-init
+// (`Cannot access '__vite_ssr_import_9__' before initialization`, thrown
+// from enqueuePendingPost under full-suite ordering only). A leaf with no
+// app edges is safe to initialize before anything that can participate in
+// a cycle, so it goes above every local import.
+import { assertOrgEconomicallyActive } from "../utils/orgLifecycle";
 import { ConvexError } from "convex/values";
 import { Id } from "../_generated/dataModel";
 import { MutationCtx } from "../_generated/server";
@@ -6,7 +15,6 @@ import { scaleForCurrency } from "../utils/money";
 import { simplePayloadHash, validateBalance, LineSpec } from "./postingRules";
 import { auditLog } from "../financialAudit";
 import { incrementAccountSnapshot } from "./accountSnapshots";
-import { assertOrgEconomicallyActive } from "../utils/orgLifecycle";
 
 export interface ReversalCommand {
   orgId: Id<"organizations">;
