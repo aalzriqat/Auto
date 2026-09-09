@@ -51,13 +51,6 @@
   "waivers": [
     {
       "producer": "github-actions",
-      "name": "dependency-audit",
-      "issue": "SCRUM-127",
-      "expires": "2026-11-17",
-      "reason": "Fails identically on main; a transitive nanoid advisory reached through next's dependency graph, with no fix available at the pinned major. Not introduced by any release this gates."
-    },
-    {
-      "producer": "github-actions",
       "name": "playwright",
       "issue": "SCRUM-95",
       "expires": "2026-11-17",
