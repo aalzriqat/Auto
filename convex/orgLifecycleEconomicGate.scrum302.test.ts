@@ -48,8 +48,17 @@ const MODULE_GLOB = import.meta.glob("./**/*.*s");
  * BECAUSE it sits beside the code, kept asserting the refuted number. A refuted
  * claim survives on every surface the correction did not sweep.
  *
- * `scripts/ledgerCoreWriteGuard.test.ts` is the authority: it re-derives the
- * set from source on every CI run, so this comment cannot rot silently again.
+ * ⚠️ AND NOTHING RE-DERIVES THIS SET ON LATER COMMITS. An earlier revision of
+ * this lane added a guard that claimed to; it was removed by owner ruling
+ * because it did not measure what it asserted (line-at-a-time scanning, gate
+ * tokens satisfied from comments, set rather than multiset comparison, and
+ * caller completeness taken from a graph index). The count above is a
+ * measurement taken by direct source scan at the SCRUM-302 certification SHA —
+ * evidence about that revision, not a standing guarantee. A real fail-closed
+ * guard is deferred to its own issue.
+ *
+ * So this comment CAN rot. If you are changing ledger-core writers, re-measure
+ * directly rather than trusting this number or any index.
  */
 const LEDGER_CORE_TABLES = [
   "accountingEvents",

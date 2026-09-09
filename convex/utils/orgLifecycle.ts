@@ -23,9 +23,29 @@
  *
  * That gap is real and is deliberately NOT patched here — widening SCRUM-302
  * to structurally gate every authenticated economic mutation is a separate
- * piece of work with its own blast radius. The distinction that matters when
- * citing this module: `ledgerCoreWriteGuard.test.ts` RATCHETS the surface named
- * above, and nothing ratchets the rest.
+ * piece of work with its own blast radius, tracked as SCRUM-308.
+ *
+ * ⚠️ AND NOTHING AUTOMATICALLY RATCHETS THE SURFACE ABOVE EITHER. SCRUM-302
+ * shipped with NO completeness guard, deliberately, by owner ruling.
+ *
+ * An earlier revision of this lane added `scripts/ledgerCoreWriteGuard.test.ts`
+ * to enforce the enumeration. It was removed because it did not measure what it
+ * claimed: it scanned line-at-a-time (so a multiline `insert(` was invisible),
+ * accepted a gate token appearing in a comment, a string, a dead branch or
+ * AFTER the write, compared write-site sets rather than multisets, and resolved
+ * caller completeness from a hand-entered list that had itself been populated
+ * from a graph index — which under-reported the callers of
+ * `postOpeningBalanceDraft`. A guard that asserts a property it cannot measure
+ * is worse than no guard, because the next reader stops checking.
+ *
+ * So the honest statement of this module's standing is: the 19-site boundary
+ * above is an enumeration MEASURED BY DIRECT SOURCE SCAN at the SCRUM-302
+ * certification SHA. It is evidence about that revision, NOT a continuing
+ * guarantee. A new ledger-core writer added later will NOT fail CI.
+ *
+ * Building a real fail-closed guard — AST/symbol based, multiline-aware,
+ * comment-proof, order-aware, with independently discovered callers — is
+ * deferred to its own issue and is not a launch blocker.
  *
  * `requireTenantAuth` refuses a suspended organization, but it is an
  * AUTHENTICATED-door guard: `internalMutation`, cron and webhook entry points do
@@ -44,8 +64,9 @@
  * `subledger.ts` creators, or the accounting outbox. A caller that has not been
  * written yet inherits the refusal for free.
  *
- * `scripts/ledgerCoreWriteGuard.test.ts` is the ratchet that keeps that claim
- * true: it fails CI if a ledger-core insert appears outside the enumerated set.
+ * ⚠️ THAT CLAIM IS HELD BY MEASUREMENT, NOT BY A GUARD. It was verified by a
+ * direct source scan at the SCRUM-302 certification SHA — 19 insert sites in 7
+ * files. Nothing re-verifies it on later commits; see the deferral note above.
  *
  * TWO LIFECYCLE CLASSES, and the difference decides a disposition, not just a
  * message:
