@@ -61,11 +61,24 @@ async function getPaymentUnappliedMinor(
 }
 
 /**
- * ⚠️ SCRUM-302 — the three creators below are the ONLY sites in non-test
- * `convex/**` that insert `receivableDocuments`, `canonicalPayments` or
- * `paymentAllocations`, so the organization-lifecycle refusal lives here rather
- * than at the callers. An internal caller that has never heard of suspension —
- * the payment webhook is the reproduced one — inherits the refusal for free.
+ * ⚠️ SCRUM-302 — the organization-lifecycle refusal lives on the writers in
+ * this file rather than at their callers, so an internal caller that has never
+ * heard of suspension — the payment webhook is the reproduced one — inherits it
+ * without knowing about it.
+ *
+ * ⚠️ NO COMPLETENESS IS CLAIMED, AND AN EARLIER VERSION OF THIS COMMENT DID
+ * CLAIM IT — WRONGLY. It said "the three creators below are the ONLY sites"
+ * that insert `receivableDocuments`, `canonicalPayments` or
+ * `paymentAllocations`. There are FOUR such writers in this file, not three:
+ * `createReceivableDocument`, `createCanonicalPayment`,
+ * `allocatePaymentToReceivable` and `reverseAllocation` — the last of which
+ * inserts a compensating `paymentAllocations` row. Each of the four calls
+ * `assertOrgEconomicallyActive`, so the refusal itself was never missing; the
+ * COUNT was wrong, which is exactly the kind of unmeasured assertion SCRUM-302
+ * removed its own write-guard for making.
+ *
+ * Treat the enumeration as evidence gathered at a point in time, verifiable by
+ * direct source scan, and never as a standing guarantee.
  *
  * These throw. Anything reached from a cross-org cron batch must classify the
  * refusal with `orgEconomicLifecycleBlock` BEFORE calling in, since an uncaught

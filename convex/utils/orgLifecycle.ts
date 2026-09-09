@@ -59,14 +59,30 @@
  * Gating the four entry points known to be defective today would fix four
  * defects and leave the CLASS open: the next internal economic writer is
  * ungated by default and nothing says so. So the decision lives at the
- * ECONOMIC CHOKEPOINTS instead — every ledger-core row in the repository is
- * written behind `postAccountingEvent`, `reverseAccountingEvent`, the
- * `subledger.ts` creators, or the accounting outbox. A caller that has not been
- * written yet inherits the refusal for free.
+ * ECONOMIC CHOKEPOINTS instead — a caller reaching one of them inherits the
+ * refusal without knowing the lifecycle exists.
  *
- * ⚠️ THAT CLAIM IS HELD BY MEASUREMENT, NOT BY A GUARD. It was verified by a
- * direct source scan at the SCRUM-302 certification SHA — 19 insert sites in 7
- * files. Nothing re-verifies it on later commits; see the deferral note above.
+ * ⚠️ THE CHOKEPOINTS ARE NOT ALL OF ONE KIND, AND AN EARLIER VERSION OF THIS
+ * COMMENT FLATTENED THEM — WRONGLY. It said every ledger-core row is written
+ * behind `postAccountingEvent`, `reverseAccountingEvent`, the `subledger.ts`
+ * writers or the accounting outbox. That omitted FOUR of the measured sites:
+ * `accountingCutover.ts` and `financialAudit.ts` insert `journalEntries` and
+ * `journalLines` DIRECTLY, and are refused not by this module but by
+ * `requireTenantAuth`, because both sit behind public authenticated mutations.
+ *
+ * So the honest shape at the SCRUM-302 certification SHA, by direct source
+ * scan, is 19 insert sites in 7 files, split two ways:
+ *
+ *   gated by THIS module — `accounting/postingEngine.ts`,
+ *   `accounting/reversals.ts`, `accounting/accountSnapshots.ts` (via its
+ *   callers), `subledger.ts`, `accountingOutbox.ts`
+ *
+ *   gated by `requireTenantAuth` instead — `accountingCutover.ts`,
+ *   `financialAudit.ts`
+ *
+ * ⚠️ AND THAT IS A MEASUREMENT, NOT A GUARANTEE. Nothing re-verifies it on
+ * later commits; see the deferral note above. Re-measure directly rather than
+ * trusting this list or any index.
  *
  * TWO LIFECYCLE CLASSES, and the difference decides a disposition, not just a
  * message:

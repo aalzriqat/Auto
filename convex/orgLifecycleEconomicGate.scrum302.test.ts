@@ -36,9 +36,9 @@ vi.mock("./rateLimit", () => ({
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
 /**
- * The complete ledger-core surface. Derived by enumerating every
- * `ctx.db.insert("<table>", ...)` site in non-test `convex/**` for these tables:
- * 19 sites across 7 files.
+ * The ledger-core table set. Enumerating `ctx.db.insert("<table>", ...)` for
+ * these tables across non-test `convex/**` found 19 sites in 7 files at the
+ * SCRUM-302 certification SHA — a measurement, not a completeness guarantee.
  *
  * ⚠️ THE COUNT WAS 17 HERE LONGER THAN ANYWHERE ELSE, AND THAT IS THE LESSON.
  * A graph index reported 17, silently dropping both `commitmentAuthority*`
