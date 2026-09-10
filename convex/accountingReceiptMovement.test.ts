@@ -22,11 +22,29 @@
  * anything this file demonstrates. Reporting it as a concurrency pass would be a
  * false claim about what ran.
  *
- * ⚠️ THE DEFAULT CHART DOES NOT CONTAIN 2110, AND THAT IS DELIBERATE. Seeding it
- * is a SCRUM-231 cutover decision. Tests that need it seed it explicitly with the
- * exact classification c17653 fixed — LIABILITY / CREDIT — which also means §3
- * gets its "missing account" state for free from `chartOfAccounts.initialize`
- * rather than by deleting a row and hoping that models the real gap.
+ * ⚠️ THAT CLAIM IS RETRACTED — RC-FRESH-CHART-2110. This block used to read "THE
+ * DEFAULT CHART DOES NOT CONTAIN 2110, AND THAT IS DELIBERATE. Seeding it is a
+ * SCRUM-231 cutover decision ... which also means §3 gets its 'missing account'
+ * state for free from `chartOfAccounts.initialize` rather than by deleting a row
+ * and hoping that models the real gap."
+ *
+ * The launch architecture moved to a NEW EMPTY production deployment, so there
+ * is no cutover step left to seed 2110 in, and the owner reassigned the
+ * preserved requirement to the Accounting RC: a fresh organization must receive
+ * 2110 at bootstrap, BEFORE any economic activity. `DEFAULT_CHART` now carries
+ * it, and `UNAPPLIED_CUSTOMER_CASH` / 1220 is no longer seeded at all.
+ *
+ * So the polarity of the fixtures inverts. `seedRetainedCreditAccount` becomes
+ * idempotent, and the absence cases in §3, §4, §7 and §10 call
+ * `removeRetainedCreditAccount` to make the gap DELIBERATE.
+ *
+ * ⚠️ That is not the weaker arrangement the old comment feared. The gap being
+ * modelled is no longer "a fresh org never had the account" — that state is now
+ * unreachable, which is the whole point of the change. It is "an org's chart
+ * LACKS 2110 when a receipt with a residue arrives", which is exactly what a
+ * deactivated or never-migrated account produces, and deleting the row is the
+ * faithful model of it. §3's positive control still proves the identical receipt
+ * posts once the account is present, so both directions stay exercised.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
@@ -104,6 +122,19 @@ async function seedOrg(suffix: string) {
  * every assertion below pass while the books said the opposite thing.
  */
 async function seedRetainedCreditAccount(t: TestHarness, orgId: Id<"organizations">) {
+  // Idempotent since RC-FRESH-CHART-2110 put 2110 into `DEFAULT_CHART`: a plain
+  // insert would now leave TWO rows on one (orgId, systemKey), and
+  // `resolveSystemAccount`'s `.unique()` would throw on a duplicate the product
+  // cannot actually produce — a fixture artefact masquerading as a defect.
+  const existing = await t.run((ctx) =>
+    ctx.db
+      .query("chartOfAccounts")
+      .withIndex("by_org_systemKey", (q) =>
+        q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY)
+      )
+      .unique()
+  );
+  if (existing) return existing._id;
   return await t.run((ctx) =>
     ctx.db.insert("chartOfAccounts", {
       orgId,
@@ -120,6 +151,37 @@ async function seedRetainedCreditAccount(t: TestHarness, orgId: Id<"organization
       updatedAt: Date.now(),
     })
   );
+}
+
+/**
+ * The mirror of the helper above, and the reason it exists —
+ * RC-FRESH-CHART-2110.
+ *
+ * A fresh org now receives 2110 at bootstrap, so "this org's chart lacks 2110"
+ * is a state a test has to CREATE. Deleting the row models the real gap
+ * faithfully: an org whose account was deactivated, removed, or never migrated
+ * from an older chart.
+ *
+ * It THROWS when there is nothing to delete. If 2110 ever leaves `DEFAULT_CHART`
+ * again, every absence test below fails loudly instead of silently proving its
+ * precondition arrived by accident — the fail-closed direction.
+ */
+async function removeRetainedCreditAccount(t: TestHarness, orgId: Id<"organizations">) {
+  await t.run(async (ctx) => {
+    const row = await ctx.db
+      .query("chartOfAccounts")
+      .withIndex("by_org_systemKey", (q) =>
+        q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY)
+      )
+      .unique();
+    if (!row) {
+      throw new Error(
+        "removeRetainedCreditAccount found no 2110 to remove — the default chart no longer " +
+          "seeds it, so this test's 'missing account' precondition is arriving by accident."
+      );
+    }
+    await ctx.db.delete(row._id);
+  });
 }
 
 async function makeReceivable(
@@ -293,6 +355,9 @@ describe("SCRUM-218-C §3 — 2110 missing at receipt time", () => {
    */
   test("receipt, movement and position all survive with ZERO general ledger effect", async () => {
     const { t, asAdmin, orgId, customerId } = await seedOrg("s3");
+    // RC-FRESH-CHART-2110 seeds 2110 at bootstrap, so the gap is now constructed
+    // deliberately rather than inherited from an incomplete default chart.
+    await removeRetainedCreditAccount(t, orgId);
 
     const paymentId = (await asAdmin.mutation(api.collections.recordPayment, {
       orgId, customerId, amount: 40, method: "CASH", paymentDate: Date.now(),
@@ -444,8 +509,10 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
   });
 
   test("refuses a credit whose receipt has not reached the ledger", async () => {
-    // No 2110, so the receipt's own event is queued and never POSTED.
+    // No 2110, so the receipt's own event is queued and never POSTED. Since
+    // RC-FRESH-CHART-2110 the absence has to be made, not inherited.
     const { asAdmin, orgId, customerId, t } = await seedOrg("s4np");
+    await removeRetainedCreditAccount(t, orgId);
     const paymentId = (await asAdmin.mutation(api.collections.recordPayment, {
       orgId, customerId, amount: 50, method: "CASH", paymentDate: Date.now(),
     })) as Id<"collectionPayments">;
@@ -701,21 +768,50 @@ describe("SCRUM-218-C §7 — 1220 and deposit lineage are not 2110 authority", 
 
   /**
    * 1220 is ASSET / DEBIT and is a different account entirely. The posting rule
-   * names 2110 by system key, so seeding only 1220 leaves the receipt unpostable
-   * rather than quietly booking a customer credit as a dealership asset.
+   * names 2110 by system key, so a chart holding only 1220 leaves the receipt
+   * unpostable rather than quietly booking a customer credit as a dealership
+   * asset.
+   *
+   * ⚠️ THE FIXTURE INVERTED, AND THE STALE ASSERTION IS REPLACED WITH THE CURRENT
+   * LAUNCH CONTRACT — RC-FRESH-CHART-2110.
+   *
+   * This test used to open by asserting `legacy` is NOT null, reasoning that
+   * "the default chart really does carry 1220, so this is a genuine confusion
+   * risk rather than a hypothetical one". The owner ruled that the historical
+   * 1220 ASSET / DEBIT model must not be seeded into a fresh org, so
+   * `DEFAULT_CHART` no longer carries it and that sentence is now FALSE.
+   *
+   * The confusion risk is removed at source for a fresh org — a better outcome
+   * than guarding against it. It is not gone everywhere: an org migrated from an
+   * older chart still holds 1220, and the substitution must stay impossible for
+   * them too. So the fixture now CONSTRUCTS that org — 1220 present, 2110 absent,
+   * the exact pre-cutover shape — and the assertion is unchanged: no line posts.
    */
-  test("seeding only 1220 does NOT satisfy the retained-credit requirement", async () => {
+  test("a chart holding only 1220 does NOT satisfy the retained-credit requirement", async () => {
     const { t, asAdmin, orgId, customerId } = await seedOrg("s7legacy");
-    const legacy = await t.run((ctx) =>
-      ctx.db
-        .query("chartOfAccounts")
-        .withIndex("by_org_systemKey", (q) =>
-          q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.UNAPPLIED_CUSTOMER_CASH)
-        )
-        .unique()
+
+    // A fresh chart now HAS 2110 and does NOT have 1220. Build the legacy shape.
+    await removeRetainedCreditAccount(t, orgId);
+    const legacyId = await t.run((ctx) =>
+      ctx.db.insert("chartOfAccounts", {
+        orgId,
+        code: "1220",
+        name: "Unapplied Customer Cash",
+        nameAr: "نقد عملاء غير مطبق",
+        type: "ASSET",
+        normalBalance: "DEBIT",
+        isControlAccount: false,
+        allowManualPosting: false,
+        active: true,
+        systemKey: SYSTEM_KEYS.UNAPPLIED_CUSTOMER_CASH,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
     );
-    // The default chart really does carry 1220, so this is a genuine confusion
-    // risk rather than a hypothetical one.
+
+    // Liveness: the wrong-sided account really is present and really is
+    // wrong-sided, so a pass cannot come from an empty chart.
+    const legacy = await t.run((ctx) => ctx.db.get(legacyId));
     expect(legacy).not.toBeNull();
     expect(legacy!.type).toBe("ASSET");
     expect(legacy!.normalBalance).toBe("DEBIT");
@@ -1035,8 +1131,10 @@ describe("SCRUM-218-C §10 R04 — retained credit is discoverable through a sup
   });
 
   test("a credit whose receipt has not posted is listed but flagged not applicable", async () => {
-    // No 2110, so the receipt's own event never reaches POSTED.
+    // No 2110, so the receipt's own event never reaches POSTED. Since
+    // RC-FRESH-CHART-2110 the absence has to be made, not inherited.
     const { t, asAdmin, orgId, customerId } = await seedOrg("r04np");
+    await removeRetainedCreditAccount(t, orgId);
     await asAdmin.mutation(api.collections.recordPayment, {
       orgId, customerId, amount: 45, method: "CASH", paymentDate: Date.now(),
     });
