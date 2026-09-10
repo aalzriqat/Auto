@@ -399,10 +399,13 @@ describe("CI must be green at the exact commit, and waivers expire", () => {
       const waived = policy.waivers.map(id);
 
       expect(waived).not.toContain("github-actions/dependency-audit");
-      // ⚠️ Not decoration. Removing either of these would be a DIFFERENT change
-      // resting on a different premise; this one must not have touched them.
-      expect(waived).toContain("github-actions/playwright");
+      // ⚠️ Not decoration. Removing this would be a DIFFERENT change resting on
+      // a different premise; this one must not have touched it.
       expect(waived).toContain("sonarqubecloud/SonarCloud Code Analysis");
+      // The playwright waiver was removed by SCRUM-143 + SCRUM-248 once its own
+      // stated removal condition was met; it is now asserted in that suite's
+      // own describe block below, against the same real policy.
+      expect(waived).not.toContain("github-actions/playwright");
       // And it stays REQUIRED. Dropping the requirement rather than the waiver
       // would satisfy "no waiver" while gating on nothing at all.
       expect(policy.required.map(id)).toContain("github-actions/dependency-audit");
@@ -471,12 +474,156 @@ describe("CI must be green at the exact commit, and waivers expire", () => {
       expect(verdict.failures).toEqual([]);
       expect(verdict.ok).toBe(true);
       expect(verdict.passed).toContain("github-actions/dependency-audit");
-      // The remaining two stay WAIVED, and a waived check is never passing.
+      // SonarCloud stays WAIVED, and a waived check is never passing.
+      expect(verdict.passed).not.toContain("sonarqubecloud/SonarCloud Code Analysis");
+      expect(verdict.waived.map((w) => w.name).sort()).toEqual(["SonarCloud Code Analysis"]);
+    });
+  });
+
+  // ─── SCRUM-143 + SCRUM-248: playwright is enforced again ──────────────────
+  //
+  // The playwright waiver (SCRUM-95) existed because the E2E suite could not
+  // run at all: first the shared Convex dev deployment was disabled, then the
+  // preview was created unnamed so `convex env set` could not resolve a target,
+  // then every fresh preview had an empty database and no QA organization, and
+  // finally `createVehicle()` was stale against the five-step Add Vehicle
+  // wizard. The waiver's own reason named the last of those as the only
+  // remaining cause and said to remove it once SCRUM-248 landed green.
+  //
+  // This candidate lands SCRUM-143 and SCRUM-248 together and measured
+  // 22 discovered / 17 passed / 5 owner-directed skips / 0 failed / 0 did-not-run
+  // on a genuinely fresh preview, so the waiver's own removal condition is met
+  // and it is gone from the policy.
+  //
+  // ⚠️ WHY THIS MATTERS MORE THAN A TIDY-UP. `evaluateRequiredChecks` consults
+  // a live waiver BEFORE it ever inspects the conclusion, then `continue`s — so
+  // while that entry existed, a genuinely FAILED playwright run was recorded as
+  // waived and authorised the release. A waiver on a check that now passes does
+  // not merely add noise; it silently disarms the gate for every future red run
+  // until it expires. That is the regression these assert against, and they
+  // assert it against the REAL checked-in policy rather than a fixture, because
+  // a fixture would keep passing if someone re-added the waiver to the file.
+  describe("a failed playwright refuses the release (SCRUM-143 / SCRUM-248)", () => {
+    const loadPolicy = async () => (await import("../.github/release-waivers.json")).default;
+    const id = (c: { producer: string; name: string }) => `${c.producer}/${c.name}`;
+
+    const observeAll = (
+      required: { producer: string; name: string }[],
+      over: Record<string, string> = {},
+      omit: string[] = []
+    ): CheckResult[] =>
+      required
+        .filter((c) => !omit.includes(c.name))
+        .map((c) => ({
+          producer: c.producer,
+          name: c.name,
+          status: "completed",
+          conclusion: c.name in over ? over[c.name] : "success",
+        }));
+
+    test("the policy carries NO playwright waiver, and playwright stays REQUIRED", async () => {
+      const policy = await loadPolicy();
+      const waived = policy.waivers.map(id);
+
+      expect(waived).not.toContain("github-actions/playwright");
+      // ⚠️ Dropping the REQUIREMENT rather than the waiver would satisfy "no
+      // waiver" while gating on nothing at all — the same shape of nothing,
+      // reached from the other side.
+      expect(policy.required.map(id)).toContain("github-actions/playwright");
+      // ⚠️ Not decoration. SonarCloud (SCRUM-128) rests on a different premise
+      // and this change must not have touched it.
+      expect(waived).toContain("sonarqubecloud/SonarCloud Code Analysis");
+    });
+
+    test("REGRESSION: a FAILED playwright is a refusal, never a waived result", async () => {
+      const policy = await loadPolicy();
+      const verdict = evaluateRequiredChecks({
+        required: policy.required,
+        results: observeAll(policy.required, { playwright: "failure" }),
+        waivers: policy.waivers,
+        now: NOW,
+      });
+
+      expect(verdict.ok).toBe(false);
+      expect(verdict.failures.join("\n")).toMatch(/github-actions\/playwright: "failure"/);
+      expect(verdict.waived.map((w) => w.name)).not.toContain("playwright");
       expect(verdict.passed).not.toContain("github-actions/playwright");
-      expect(verdict.waived.map((w) => w.name).sort()).toEqual([
-        "SonarCloud Code Analysis",
-        "playwright",
-      ]);
+    });
+
+    test("REGRESSION: an ABSENT playwright is a refusal — a rename or a deleted job is not a pass", async () => {
+      const policy = await loadPolicy();
+      const verdict = evaluateRequiredChecks({
+        required: policy.required,
+        results: observeAll(policy.required, {}, ["playwright"]),
+        waivers: policy.waivers,
+        now: NOW,
+      });
+
+      expect(verdict.ok).toBe(false);
+      expect(verdict.failures.join("\n")).toMatch(
+        /github-actions\/playwright: no result at this commit/
+      );
+    });
+
+    test("a still-running playwright is a refusal — an unfinished check has produced no result to accept", async () => {
+      const policy = await loadPolicy();
+      const results = observeAll(policy.required, {}, ["playwright"]);
+      results.push({
+        producer: "github-actions",
+        name: "playwright",
+        status: "in_progress",
+        conclusion: null,
+      });
+
+      const verdict = evaluateRequiredChecks({
+        required: policy.required,
+        results,
+        waivers: policy.waivers,
+        now: NOW,
+      });
+
+      expect(verdict.ok).toBe(false);
+      expect(verdict.failures.join("\n")).toMatch(/github-actions\/playwright: has not finished/);
+    });
+
+    test("a duplicated playwright identity still refuses as ambiguous rather than picking one", async () => {
+      const policy = await loadPolicy();
+      const results = observeAll(policy.required, { playwright: "failure" });
+      results.push({
+        producer: "github-actions",
+        name: "playwright",
+        status: "completed",
+        conclusion: "success",
+      });
+
+      const verdict = evaluateRequiredChecks({
+        required: policy.required,
+        results,
+        waivers: policy.waivers,
+        now: NOW,
+      });
+
+      expect(verdict.ok).toBe(false);
+      expect(verdict.failures.join("\n")).toMatch(/2 results share that producer and name/);
+    });
+
+    test("a SUCCESSFUL playwright is reported as PASSED, and permits evaluation", async () => {
+      const policy = await loadPolicy();
+      const verdict = evaluateRequiredChecks({
+        required: policy.required,
+        results: observeAll(policy.required),
+        waivers: policy.waivers,
+        now: NOW,
+      });
+
+      expect(verdict.failures).toEqual([]);
+      expect(verdict.ok).toBe(true);
+      // PASSED, not WAIVED. This is the assertion that fails if the waiver ever
+      // comes back: a re-added waiver would move playwright out of `passed`
+      // and into `waived` while leaving `ok` true, so asserting on `ok` alone
+      // would not notice.
+      expect(verdict.passed).toContain("github-actions/playwright");
+      expect(verdict.waived.map((w) => w.name)).not.toContain("playwright");
     });
   });
 });
