@@ -4,8 +4,6 @@ import { mutation } from "./functions";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
-import { notifyManagers, getActorName } from "./utils/notifications";
-import { runWithIdempotency } from "./utils/idempotency";
 import { Doc, Id } from "./_generated/dataModel";
 
 type LedgerTransaction = Doc<"transactions">;
@@ -210,6 +208,52 @@ export const list = query({
   },
 });
 
+/**
+ * The legacy `transactions` cashbook is a read-only operational projection.
+ *
+ * It is NOT the books. The authoritative accounting record is
+ * `accountingEvents` -> `journalEntries` / `journalLines`. A row in this table
+ * is a cash-movement projection that the owning domain workflow writes in the
+ * same atomic operation that owns the accounting event.
+ *
+ * These three mutations were the generic door into that table: a finance user
+ * could add, edit or delete something the UI presented as Accounting while the
+ * real books did not move at all. That is a shadow ledger — a false book — and
+ * it is the SCRUM-53 defect.
+ *
+ * The refusal is UNCONDITIONAL and deliberately so. An earlier revision tried to
+ * refuse only rows that were "already represented in the GL", and that guard
+ * protected nothing: this table carries no marker naming the posting that
+ * represents a row, and `sourceType: "transactions"` cannot prove which domain
+ * posting owns one. A guard that has to guess representation fails open on every
+ * row it guesses wrong. So no row is writable through this surface, and there is
+ * nothing to guess.
+ *
+ * This is containment, not the whole retirement. The three names remain exported
+ * so that installed mobile clients — which bind Convex functions by hand-written
+ * string reference in `apps/mobile/src/convexApi.ts`, not through the generated
+ * api — receive an explicit refusal instead of a "function not found". Deleting
+ * the names is the ordered client-second stage and is tracked separately.
+ *
+ * New financial activity originates only from the owning domain workflow or from
+ * an authoritative Manual Journal, which posts to the GL and is subject to
+ * period, approval and audit control.
+ */
+function refuseLegacyLedgerWrite(operation: string): never {
+  throw new ConvexError(
+    `The cash movements list is view only and is not the General Ledger. ` +
+      `'${operation}' has been retired: it changed this list without changing the books. ` +
+      `Record this through the workflow that owns it, or through a Manual Journal.`
+  );
+}
+
+/**
+ * RETIRED. Refuses before authentication, before any read, and before any write.
+ *
+ * The args validator is kept so a stale installed client gets this refusal
+ * rather than an argument-shape error, which would read as a transient bug and
+ * invite a retry.
+ */
 export const add = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -229,59 +273,10 @@ export const add = mutation({
     expenseId: v.optional(v.id("expenses")),
     idempotencyKey: v.optional(v.string()),
   },
-  handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-
-    return await runWithIdempotency(
-      ctx,
-      {
-        orgId: args.orgId,
-        operation: "transactions.add",
-        idempotencyKey: args.idempotencyKey,
-        actorId: user._id,
-      },
-      async () => {
-        if (args.vehicleId) {
-          const vehicle = await ctx.db.get(args.vehicleId);
-          if (!vehicle || vehicle.orgId !== args.orgId) {
-            throw new ConvexError("Vehicle not found in this organization.");
-          }
-        }
-        if (args.expenseId) {
-          const expense = await ctx.db.get(args.expenseId);
-          if (!expense || expense.orgId !== args.orgId) {
-            throw new ConvexError("Expense not found in this organization.");
-          }
-        }
-
-        const transactionId = await ctx.db.insert("transactions", {
-          orgId: args.orgId,
-          type: args.type,
-          amount: args.amount,
-          date: args.date,
-          category: args.category,
-          description: args.description,
-          vehicleId: args.vehicleId,
-          userId: args.userId,
-          expenseId: args.expenseId,
-          idempotencyKey: args.idempotencyKey,
-        });
-
-        const actorName = await getActorName(ctx);
-        await notifyManagers(
-          ctx,
-          args.orgId,
-          "transaction.recorded",
-          { actorName, amount: String(args.amount) },
-          { link: `/${args.orgId}/accounting` }
-        );
-
-        return transactionId;
-      }
-    );
-  },
+  handler: async (): Promise<never> => refuseLegacyLedgerWrite("transactions.add"),
 });
 
+/** RETIRED. See {@link refuseLegacyLedgerWrite}. */
 export const update = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -301,74 +296,14 @@ export const update = mutation({
     userId: v.optional(v.id("users")),
     expenseId: v.optional(v.id("expenses")),
   },
-  handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    const { orgId, transactionId, ...updates } = args;
-
-    // Verify the transaction belongs to this org
-    const transaction = await ctx.db.get(transactionId);
-    if (!transaction || transaction.orgId !== orgId) {
-      throw new ConvexError("Transaction not found in this organization.");
-    }
-
-    if (updates.vehicleId) {
-      const vehicle = await ctx.db.get(updates.vehicleId);
-      if (!vehicle || vehicle.orgId !== orgId) {
-        throw new ConvexError("Vehicle not found in this organization.");
-      }
-    }
-    if (updates.expenseId) {
-      const expense = await ctx.db.get(updates.expenseId);
-      if (!expense || expense.orgId !== orgId) {
-        throw new ConvexError("Expense not found in this organization.");
-      }
-    }
-
-    // Clean up undefined optional values
-    const cleanedUpdates = Object.fromEntries(
-      Object.entries(updates).filter(([_, v]) => v !== undefined)
-    );
-
-    await ctx.db.patch(transactionId, cleanedUpdates);
-
-    const actorName = await getActorName(ctx);
-    await notifyManagers(
-      ctx,
-      orgId,
-      "transaction.updated",
-      { actorName },
-      { link: `/${orgId}/accounting` }
-    );
-  },
+  handler: async (): Promise<never> => refuseLegacyLedgerWrite("transactions.update"),
 });
 
-// TODO: Add admin recovery endpoint if needed
+/** RETIRED. See {@link refuseLegacyLedgerWrite}. */
 export const remove = mutation({
   args: {
     orgId: v.id("organizations"),
     transactionId: v.id("transactions"),
   },
-  handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    const transaction = await ctx.db.get(args.transactionId);
-    if (!transaction || transaction.orgId !== args.orgId) {
-      throw new ConvexError("Transaction not found in this organization.");
-    }
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new ConvexError("Unauthenticated");
-    await ctx.db.patch(args.transactionId, {
-      isDeleted: true,
-      deletedAt: Date.now(),
-      deletedBy: identity.subject
-    });
-
-    const actorName = await getActorName(ctx);
-    await notifyManagers(
-      ctx,
-      args.orgId,
-      "transaction.removed",
-      { actorName },
-      { link: `/${args.orgId}/accounting` }
-    );
-  },
+  handler: async (): Promise<never> => refuseLegacyLedgerWrite("transactions.remove"),
 });

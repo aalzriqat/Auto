@@ -6,6 +6,14 @@ import { ALL_PERMISSIONS } from "./utils/permissions";
 
 const MODULES = import.meta.glob("./**/*.*s");
 
+/**
+ * `transactions` is a read-only cash-movement projection: SCRUM-53 retired the
+ * generic add/update/remove doors because they changed this list without
+ * changing the authoritative books. Rows here are written by the domain
+ * workflow that owns the accounting event, which is what these fixtures model.
+ */
+const RETIRED = /view only and is not the General Ledger/i;
+
 async function setupLedgerOrg() {
   const t = convexTestWithComponents(schema, MODULES);
   const orgId = await t.run((ctx) =>
@@ -56,32 +64,19 @@ async function setupLedgerOrg() {
 }
 
 describe("transactions ledger", () => {
-  test("add_is_idempotent_and_list_enriches_vehicle_context", async () => {
-    const { orgId, vehicleId, asManager } = await setupLedgerOrg();
-    const date = Date.now();
-
-    const transactionId = await asManager.mutation(api.transactions.add, {
-      orgId,
-      type: "IN",
-      amount: 750,
-      date,
-      category: "DEPOSIT",
-      description: "Deposit held for walk-in customer",
-      vehicleId,
-      idempotencyKey: "deposit-ledger-1",
-    });
-    const repeatedId = await asManager.mutation(api.transactions.add, {
-      orgId,
-      type: "IN",
-      amount: 999,
-      date,
-      category: "DEPOSIT",
-      description: "Should not create a second row",
-      vehicleId,
-      idempotencyKey: "deposit-ledger-1",
-    });
-
-    expect(repeatedId).toBe(transactionId);
+  test("list_enriches_vehicle_context", async () => {
+    const { t, orgId, vehicleId, asManager } = await setupLedgerOrg();
+    const transactionId = await t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId,
+        type: "IN" as const,
+        amount: 750,
+        date: Date.now(),
+        category: "DEPOSIT" as const,
+        description: "Deposit held for walk-in customer",
+        vehicleId,
+      })
+    );
 
     const page = await asManager.query(api.transactions.list, {
       orgId,
@@ -96,25 +91,22 @@ describe("transactions ledger", () => {
     });
   });
 
-  test("update_and_remove_keep_transactions_auditable_but_hidden_from_list", async () => {
+  test("a soft-deleted row is hidden from the projection but retained for audit", async () => {
     const { t, orgId, vehicleId, asManager } = await setupLedgerOrg();
-    const transactionId = await asManager.mutation(api.transactions.add, {
-      orgId,
-      type: "OUT",
-      amount: 400,
-      date: Date.now(),
-      category: "EXPENSE",
-      description: "Initial expense",
-      vehicleId,
-    });
-
-    await asManager.mutation(api.transactions.update, {
-      orgId,
-      transactionId,
-      amount: 425,
-      description: "Updated expense",
-    });
-    await asManager.mutation(api.transactions.remove, { orgId, transactionId });
+    const transactionId = await t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId,
+        type: "OUT" as const,
+        amount: 425,
+        date: Date.now(),
+        category: "EXPENSE" as const,
+        description: "Voided expense",
+        vehicleId,
+        isDeleted: true,
+        deletedAt: Date.now(),
+        deletedBy: "ledger_manager",
+      })
+    );
 
     const page = await asManager.query(api.transactions.list, {
       orgId,
@@ -126,35 +118,38 @@ describe("transactions ledger", () => {
       const transaction = await ctx.db.get(transactionId);
       expect(transaction).toMatchObject({
         amount: 425,
-        description: "Updated expense",
+        description: "Voided expense",
         isDeleted: true,
         deletedBy: "ledger_manager",
       });
       expect(transaction?.deletedAt).toBeTypeOf("number");
     });
   });
-
   test("list_applies_date_window_when_both_bounds_are_present", async () => {
-    const { orgId, asManager } = await setupLedgerOrg();
+    const { t, orgId, asManager } = await setupLedgerOrg();
     const olderDate = Date.now() - 10 * 24 * 60 * 60 * 1000;
     const currentDate = Date.now();
 
-    await asManager.mutation(api.transactions.add, {
-      orgId,
-      type: "IN",
-      amount: 100,
-      date: olderDate,
-      category: "OTHER",
-      description: "Outside reporting window",
-    });
-    const currentTransactionId = await asManager.mutation(api.transactions.add, {
-      orgId,
-      type: "IN",
-      amount: 200,
-      date: currentDate,
-      category: "OTHER",
-      description: "Inside reporting window",
-    });
+    await t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId,
+        type: "IN" as const,
+        amount: 100,
+        date: olderDate,
+        category: "OTHER" as const,
+        description: "Outside reporting window",
+      })
+    );
+    const currentTransactionId = await t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId,
+        type: "IN" as const,
+        amount: 200,
+        date: currentDate,
+        category: "OTHER" as const,
+        description: "Inside reporting window",
+      })
+    );
 
     const page = await asManager.query(api.transactions.list, {
       orgId,
@@ -287,11 +282,19 @@ describe("transactions ledger", () => {
     });
   });
 
-  test("rejects_cross_org_vehicle_references", async () => {
+  test("the write doors refuse even when the arguments cross an organization", async () => {
+    // These three doors used to carry their own cross-org checks on
+    // vehicleId, expenseId and transactionId. SCRUM-53 retired the doors
+    // outright, so those checks no longer exist and could not be reached if
+    // they did. What must still hold is the property they existed to protect:
+    // nothing another organization owns can be reached through this surface.
     const { t, orgId, asManager } = await setupLedgerOrg();
-    const otherVehicleId = await t.run(async (ctx) => {
-      const otherOrgId = await ctx.db.insert("organizations", { name: "Other Ledger Dealer", createdAt: Date.now() });
-      return await ctx.db.insert("vehicles", {
+    const foreign = await t.run(async (ctx) => {
+      const otherOrgId = await ctx.db.insert("organizations", {
+        name: "Other Ledger Dealer",
+        createdAt: Date.now(),
+      });
+      const vehicleId = await ctx.db.insert("vehicles", {
         orgId: otherOrgId,
         vin: "OTHERLEDGER001",
         make: "Ford",
@@ -304,6 +307,22 @@ describe("transactions ledger", () => {
         sellingPrice: 15_000,
         status: "AVAILABLE",
       });
+      const expenseId = await ctx.db.insert("expenses", {
+        orgId: otherOrgId,
+        title: "Other org expense",
+        amount: 200,
+        date: Date.now(),
+        category: "OTHER",
+      });
+      const transactionId = await ctx.db.insert("transactions", {
+        orgId: otherOrgId,
+        type: "IN" as const,
+        amount: 100,
+        date: Date.now(),
+        category: "OTHER" as const,
+        description: "Other org transaction",
+      });
+      return { vehicleId, expenseId, transactionId };
     });
 
     await expect(
@@ -314,37 +333,9 @@ describe("transactions ledger", () => {
         date: Date.now(),
         category: "VEHICLE_PURCHASE",
         description: "Wrong org vehicle",
-        vehicleId: otherVehicleId,
+        vehicleId: foreign.vehicleId,
       })
-    ).rejects.toThrow(/vehicle not found/i);
-  });
-
-  test("rejects_cross_org_expense_references_on_add_and_update", async () => {
-    const { t, orgId, vehicleId, asManager } = await setupLedgerOrg();
-    const otherOrgReferences = await t.run(async (ctx) => {
-      const otherOrgId = await ctx.db.insert("organizations", { name: "Other Expense Dealer", createdAt: Date.now() });
-      const otherVehicleId = await ctx.db.insert("vehicles", {
-        orgId: otherOrgId,
-        vin: "OTHERLEDGER002",
-        make: "Ford",
-        model: "Explorer",
-        year: 2020,
-        mileage: 44_000,
-        color: "Gray",
-        fuelType: "Gasoline",
-        transmission: "Automatic",
-        sellingPrice: 16_000,
-        status: "AVAILABLE",
-      });
-      const otherExpenseId = await ctx.db.insert("expenses", {
-        orgId: otherOrgId,
-        title: "Other org expense",
-        amount: 200,
-        date: Date.now(),
-        category: "OTHER",
-      });
-      return { otherVehicleId, otherExpenseId };
-    });
+    ).rejects.toThrow(RETIRED);
 
     await expect(
       asManager.mutation(api.transactions.add, {
@@ -354,64 +345,29 @@ describe("transactions ledger", () => {
         date: Date.now(),
         category: "EXPENSE",
         description: "Wrong org expense",
-        expenseId: otherOrgReferences.otherExpenseId,
+        expenseId: foreign.expenseId,
       })
-    ).rejects.toThrow(/expense not found/i);
-
-    const transactionId = await asManager.mutation(api.transactions.add, {
-      orgId,
-      type: "OUT",
-      amount: 300,
-      date: Date.now(),
-      category: "EXPENSE",
-      description: "Local transaction",
-      vehicleId,
-    });
+    ).rejects.toThrow(RETIRED);
 
     await expect(
       asManager.mutation(api.transactions.update, {
         orgId,
-        transactionId,
-        vehicleId: otherOrgReferences.otherVehicleId,
-      })
-    ).rejects.toThrow(/vehicle not found/i);
-
-    await expect(
-      asManager.mutation(api.transactions.update, {
-        orgId,
-        transactionId,
-        expenseId: otherOrgReferences.otherExpenseId,
-      })
-    ).rejects.toThrow(/expense not found/i);
-  });
-
-  test("update_and_remove_reject_transactions_from_another_organization", async () => {
-    const { t, orgId, asManager } = await setupLedgerOrg();
-    const otherTransactionId = await t.run(async (ctx) => {
-      const otherOrgId = await ctx.db.insert("organizations", { name: "Other Transaction Dealer", createdAt: Date.now() });
-      return await ctx.db.insert("transactions", {
-        orgId: otherOrgId,
-        type: "IN",
-        amount: 100,
-        date: Date.now(),
-        category: "OTHER",
-        description: "Other org transaction",
-      });
-    });
-
-    await expect(
-      asManager.mutation(api.transactions.update, {
-        orgId,
-        transactionId: otherTransactionId,
+        transactionId: foreign.transactionId,
         amount: 125,
       })
-    ).rejects.toThrow(/transaction not found/i);
+    ).rejects.toThrow(RETIRED);
 
     await expect(
       asManager.mutation(api.transactions.remove, {
         orgId,
-        transactionId: otherTransactionId,
+        transactionId: foreign.transactionId,
       })
-    ).rejects.toThrow(/transaction not found/i);
+    ).rejects.toThrow(RETIRED);
+
+    // Nothing was created here, and the other organization's row is untouched.
+    const rows = await t.run((ctx) => ctx.db.query("transactions").collect());
+    expect(rows).toHaveLength(1);
+    expect(rows[0]._id).toBe(foreign.transactionId);
+    expect(rows[0].isDeleted).toBeUndefined();
   });
 });
