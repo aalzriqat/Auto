@@ -1715,15 +1715,6 @@ export default defineSchema({
     .searchIndex("search_firstName", { searchField: "firstName", filterFields: ["orgId", "isDeleted"] })
     .searchIndex("search_lastName", { searchField: "lastName", filterFields: ["orgId", "isDeleted"] }),
 
-  customerMerges: defineTable({
-    orgId: v.id("organizations"),
-    survivorId: v.id("customers"),
-    loserId: v.id("customers"),
-    mergedBy: v.id("users"),
-    mergedAt: v.number(),
-    reassignedCounts: v.record(v.string(), v.number()),
-  }).index("by_org", ["orgId"]),
-
   leads: defineTable({
     orgId: v.id("organizations"),
     branchId: v.optional(v.id("branches")),

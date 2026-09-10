@@ -506,10 +506,23 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // is scoped by it, so there is no caller-supplied organization for a caller to
   // get wrong or to forge. All four are `internalMutation`s reachable only from
   // the scheduler or the `dispatch-outbox-work` cron, with no public entry point.
+  // Then 485→484 / analysed 315→314 (SCRUM-314), by the REMOVAL of
+  // `customers.mergeCustomers`. The customer-merge feature was deleted outright
+  // rather than fenced: SCRUM-250 existed only because a generic merge loop
+  // could raw-reassign `customerId` on receipt-authority rows, and with no loop
+  // there is no reachability left to fence. It took an `orgId` and was
+  // analysed, so both counts fall by one while the two skip counts hold.
+  //
+  // ⚠️ Re-pinning is legitimate ONLY for a surface that genuinely changed. This
+  // ratchet exists to make a SILENT shrink impossible — a mutation that stops
+  // being analysed because it lost its `orgId`, or an analyser that quietly
+  // stops seeing a file, must fail here. Lowering the pin to turn a red test
+  // green, without a removal in the same commit that explains it, is the exact
+  // failure it is built to catch.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 485,
-      analysed: 315,
+      totalMutations: 484,
+      analysed: 314,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 155,
     });

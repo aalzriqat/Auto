@@ -77,7 +77,6 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "vehicleStatusRequests", index: "by_org" },
   { kind: "vehicleEditsWithStorage" },
   { kind: "vehiclesWithStorage" },
-  { kind: "orgRows", table: "customerMerges", index: "by_org" },
   { kind: "orgRows", table: "leads", index: "by_org" },
   { kind: "orgRows", table: "sales", index: "by_org" },
   { kind: "orgRows", table: "expenses", index: "by_org" },

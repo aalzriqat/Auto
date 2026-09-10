@@ -25,12 +25,12 @@ describe("renderNotification", () => {
   });
 
   test("substitutes multiple distinct placeholders", () => {
-    const { message } = renderNotification("en", "customer.merged", {
+    const { message } = renderNotification("en", "vehicle.deleted", {
       actorName: "Bob",
-      loserName: "Dup Customer",
-      survivorName: "Main Customer",
+      vehicleLabel: "2021 Toyota Camry",
+      vin: "JT2BF22K1X0123456",
     });
-    expect(message).toBe('Bob merged "Dup Customer" into "Main Customer".');
+    expect(message).toBe("Bob deleted a 2021 Toyota Camry (VIN: JT2BF22K1X0123456)");
   });
 
   test("system.announcement renders the admin-authored title/message directly, bypassing the dictionary", () => {
