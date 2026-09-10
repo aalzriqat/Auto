@@ -1986,7 +1986,13 @@ describe("releasing the same row twice from the same screen", () => {
     // which is exactly the original incident.
     const intentLine = /const\s+intent\s*=\s*([^;]+);/.exec(source.slice(0, start));
     expect(intentLine, "the release intent must be a readable local").not.toBeNull();
-    expect(intentLine[1]).toMatch(/gen\$\{/);
+    // Narrowed rather than asserted non-null: an unreadable intent must FAIL
+    // this assertion with a useful message, not throw a TypeError above it.
+    const intentExpression = intentLine ? intentLine[1] : "<no intent found>";
+    expect(
+      intentExpression,
+      "the release intent must carry the payout generation"
+    ).toMatch(/gen\$\{/);
     // The literal key shape that caused the original incident must not return.
     expect(releaseCall).not.toMatch(/deposit_release_/);
     expect(releaseCall).not.toMatch(/idempotencyKey:\s*`?deposit/);
