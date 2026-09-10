@@ -1458,7 +1458,8 @@ type DepositReleaseArgs = OrgScopedArgs & {
   resolution: "REFUNDED" | "FORFEITED";
   refundMethod?: MobileDepositMethod;
   notes?: string;
-  idempotencyKey?: string;
+  /** REQUIRED on the backend — see ExpenseCreateArgs. */
+  idempotencyKey: string;
 };
 
 type ReservationCreateArgs = VehicleScopedArgs & {
@@ -1466,6 +1467,13 @@ type ReservationCreateArgs = VehicleScopedArgs & {
   depositAmount?: number;
   depositMethod?: MobileDepositMethod;
   expiresAt?: number;
+  /**
+   * REQUIRED, matching the backend contract (SCRUM-313). This façade is a
+   * hand-written second copy of the Convex API and nothing forces it to agree
+   * with `convex/vehicles.ts`; when the backend made this arg mandatory, the
+   * façade did not hear about it and the mobile type check went red.
+   */
+  idempotencyKey: string;
 };
 
 type CustomerListArgs = OrgScopedArgs & {
@@ -1635,9 +1643,15 @@ type VehicleCreateArgs = OrgScopedArgs & {
   accidentDisclosed?: boolean;
   ownerCount?: number;
   dealerGuarantee?: boolean;
+  /** REQUIRED, matching the backend contract (SCRUM-313). */
+  idempotencyKey: string;
 };
 
-type VehicleUpdateArgs = Partial<Omit<VehicleCreateArgs, "orgId">> &
+// `idempotencyKey` is omitted below on purpose: `vehicles.update` is
+// STATE_GUARDED, not identity-guarded, and its backend validator would REJECT
+// the field as unknown. A derived type inherits every field its base gains, so
+// widening the base silently widened this one too.
+type VehicleUpdateArgs = Partial<Omit<VehicleCreateArgs, "orgId" | "idempotencyKey">> &
   OrgScopedArgs & {
     vehicleId: string;
   };
@@ -1719,10 +1733,15 @@ type ExpenseCreateArgs = OrgScopedArgs & {
   payerId?: string;
   paymentMethod?: MobilePaymentMethod;
   notes?: string;
-  idempotencyKey?: string;
+  /**
+   * REQUIRED on the backend, so declaring it optional here made the façade
+   * LAXER than the contract: a caller could omit it and fail only at runtime.
+   */
+  idempotencyKey: string;
 };
 
-type ExpenseUpdateArgs = Partial<Omit<ExpenseCreateArgs, "orgId">> &
+// See VehicleUpdateArgs — `expenses.update` does not take an identity.
+type ExpenseUpdateArgs = Partial<Omit<ExpenseCreateArgs, "orgId" | "idempotencyKey">> &
   OrgScopedArgs & {
     expenseId: string;
     vehicleId?: string | null;
