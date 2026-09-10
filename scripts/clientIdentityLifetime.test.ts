@@ -105,7 +105,7 @@ describe("SCRUM-313 client identity lifetime", () => {
     const perAttempt = findings
       .filter((f) => f.keyLifetime === "PER_ATTEMPT" || f.keyLifetime === "ABSENT")
       .map((f) => `${f.command} @ ${f.file}:${f.line} (${f.keyLifetime})`)
-      .sort();
+      .sort((a, b) => a.localeCompare(b));
     expect(perAttempt).toEqual([]);
   });
 
@@ -113,7 +113,7 @@ describe("SCRUM-313 client identity lifetime", () => {
     const volatile = findings
       .filter((f) => f.volatileFingerprintArgs.length > 0)
       .map((f) => `${f.command} @ ${f.file}:${f.line} -> ${f.volatileFingerprintArgs.join(",")}`)
-      .sort();
+      .sort((a, b) => a.localeCompare(b));
     expect(volatile).toEqual([]);
   });
 
@@ -122,7 +122,7 @@ describe("SCRUM-313 client identity lifetime", () => {
     // no client caller anywhere under components/, app/, hooks/, lib/,
     // apps/mobile/src/, playwright/ or cypress/ — verified, not inferred from a
     // grep that happened to return nothing.
-    expect(commandsWithNoClientCaller.sort()).toEqual([
+    expect(commandsWithNoClientCaller.sort((a, b) => a.localeCompare(b))).toEqual([
       "collections.applyRetainedCredit",
       "financeDealCosts.openDealCustody",
       "financeDealCosts.recordCustodyMovement",

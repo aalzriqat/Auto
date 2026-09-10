@@ -240,15 +240,15 @@ describe("SCRUM-313 economic command classification ratchet", () => {
   const reverse = censusReverse(g);
 
   test("the population is derived identically in both directions", () => {
-    const onlyForward = [...forward].filter((x) => !reverse.has(x)).sort();
-    const onlyReverse = [...reverse].filter((x) => !forward.has(x)).sort();
+    const onlyForward = [...forward].filter((x) => !reverse.has(x)).sort((a, b) => a.localeCompare(b));
+    const onlyReverse = [...reverse].filter((x) => !forward.has(x)).sort((a, b) => a.localeCompare(b));
     expect(onlyForward).toEqual([]);
     expect(onlyReverse).toEqual([]);
   });
 
   test("the population is exactly the classified set", () => {
-    const classified = Object.keys(CLASSIFICATION).sort();
-    const population = [...forward].sort();
+    const classified = Object.keys(CLASSIFICATION).sort((a, b) => a.localeCompare(b));
+    const population = [...forward].sort((a, b) => a.localeCompare(b));
     // Both directions, so a NEW public financial writer fails here rather than
     // entering the codebase unclassified, and a classification for a command
     // that no longer exists fails too rather than rotting.

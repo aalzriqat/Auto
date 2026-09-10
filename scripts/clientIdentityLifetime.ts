@@ -160,7 +160,10 @@ export function serverFingerprints(convexRoot: string): Map<string, string[]> {
       // above) still derive from the request; record the field name too, since
       // the client sends it under that name.
       for (const [k] of topLevelProps(obj.text)) args.add(k);
-      out.set(command, [...args].sort());
+      // Explicit comparator: a bare `.sort()` orders by UTF-16 code unit, not
+      // alphabetically, so the ordering these names are compared and reported in
+      // would not be the one it appears to be (Sonar typescript:S2871).
+      out.set(command, [...args].sort((a, b) => a.localeCompare(b)));
       void mod;
     }
   }
@@ -241,7 +244,11 @@ export function auditClientCallers(
   }
 
   const called = new Set(findings.map((f) => f.command));
-  const commandsWithNoClientCaller = identityGuarded.filter((c) => !called.has(c)).sort();
+  // Explicit comparator — see the note in `serverFingerprints`. This list is
+  // asserted verbatim by the ratchet, so its order must be the stated one.
+  const commandsWithNoClientCaller = identityGuarded
+    .filter((c) => !called.has(c))
+    .sort((a, b) => a.localeCompare(b));
   return { findings, commandsWithNoClientCaller };
 }
 
