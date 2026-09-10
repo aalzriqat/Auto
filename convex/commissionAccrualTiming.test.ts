@@ -16,6 +16,7 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
+import { settleOutbox, makeDue } from "../test-utils/outboxWork";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { ruleCommissionAdjusted } from "./accounting/postingRules";
@@ -1093,7 +1094,7 @@ describe("the outbox will not drain a settlement ahead of its own accrual", () =
     });
     const period = (await asAdmin.query(api.accountingPeriods.list, { orgId }))[0];
     await asAdmin.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
-    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    await settleOutbox(t, orgId);
 
     // Before the drain-side guard, COMMISSION_PAID posted here on its own and
     // Commission Payable sat at -25,000 until somebody opened a period nobody
@@ -1133,7 +1134,7 @@ describe("the outbox will not drain a settlement ahead of its own accrual", () =
     });
     const period = (await asAdmin.query(api.accountingPeriods.list, { orgId }))[0];
     await asAdmin.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
-    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    await settleOutbox(t, orgId);
 
     expect(await commissionPayableMinor({ t, orgId })).toBe(0);
     expect(await commissionExpenseMinor({ t, orgId })).toBe(0);
@@ -1164,9 +1165,13 @@ describe("the outbox will not drain a settlement ahead of its own accrual", () =
     const period = (await asAdmin.query(api.accountingPeriods.list, { orgId }))[0];
     await asAdmin.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
 
-    // Returns rather than throwing, and never leaves the payable negative.
-    const result = await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
-    expect(result).toBeTruthy();
+    // ⚠️ ROW ISOLATION IS NOW STRUCTURAL, NOT A CATCH (SCRUM-222). The guard
+    // still throws on this malformed row, but the throw now aborts only that
+    // row's OWN worker transaction — which is what a per-row `try` was
+    // approximating, without the part where a caught throw commits whatever the
+    // row had already written. So the drain completing without throwing is
+    // still the property, and the payable is still never left negative.
+    await expect(settleOutbox(t, orgId)).resolves.toBeUndefined();
     expect(await commissionPayableMinor({ t, orgId })).toBeGreaterThanOrEqual(0);
   });
 
@@ -1183,8 +1188,8 @@ describe("the outbox will not drain a settlement ahead of its own accrual", () =
     const period = (await asAdmin.query(api.accountingPeriods.list, { orgId }))[0];
     await asAdmin.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
     // Twice: the first drain posts the accrual, which unblocks the payment.
-    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
-    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    await settleOutbox(t, orgId);
+    await settleOutbox(t, orgId);
 
     expect(await commissionPayableMinor({ t, orgId })).toBe(0);
     expect(await commissionExpenseMinor({ t, orgId })).toBe(25_000);
@@ -1309,7 +1314,7 @@ describe("a commission never outruns the sale that earned it", () => {
 
     const run = await d.t.mutation(internal.migrateCommissionAccruals.backfillCommissionAccruals, {});
     expect(run.accruedCount).toBe(1);
-    await d.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: d.orgId });
+    await settleOutbox(d.t, d.orgId);
 
     expect(await commissionPayableMinor(d)).toBe(25_000);
     expect(saleId).toBeTruthy();
@@ -1743,7 +1748,7 @@ describe("round-3 review fixes", () => {
   });
 
   test("a dead-lettered ledger entry is reported as needing a retry, not as a closed period", async () => {
-    // drainPendingForOrg reads only PENDING rows, so "open the period" is
+    // the sweep selects only PENDING rows, so "open the period" is
     // advice that provably cannot work for a FAILED entry — the same cry-wolf
     // failure this work removed from the close checklist.
     const d = await seedDealer("failed_entry_message");
@@ -2369,7 +2374,7 @@ describe("a commission whose month has no period is deferred, never dropped", ()
       orgId: d.orgId,
       periodId: created!._id,
     });
-    await d.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: d.orgId });
+    await settleOutbox(d.t, d.orgId);
 
     await d.asAdmin.mutation(api.payroll.payRun, { orgId: d.orgId, runId, method: "CASH" });
     const run = await d.t.run(async (ctx) => await ctx.db.get(runId));
@@ -2655,3 +2660,4 @@ describe("a posted entry with an unreadable amount fails closed", () => {
     expect(sale?.commissionPaidAt ?? null).toBeNull();
   });
 });
+

@@ -133,14 +133,29 @@ function ScheduleStatusPopover({
   async function handleRedrive() {
     await submitWithFeedback(async () => {
       const result = await redrive({ orgId, scheduleId: schedule._id });
-      if (result.posted === 0 && result.failed === 0) {
-        toast.success(t("PrepaidRedriveNothingToDo" as any));
-      } else {
+      // Queued and revived, never posted — posting is asynchronous (SCRUM-222).
+      // A revived row is always scheduled too, so `revived` is a subset of
+      // `scheduled` and the copy says so.
+      //
+      // Three states, all three read from the backend (owner ruling c17375).
+      // `alreadyInFlight` is the one that used to disappear: a row a worker is
+      // posting right now is skipped by the drain, so both counts came back
+      // zero and this button answered "nothing queued for this schedule" on the
+      // very schedule it was posting. Nothing here infers state from the
+      // schedule's own totals.
+      if (result.scheduled > 0) {
         toast.success(
           t("PrepaidRedriveSuccess" as any)
-            .replace("{posted}", String(result.posted))
-            .replace("{failed}", String(result.failed))
+            .replace("{scheduled}", String(result.scheduled))
+            .replace("{revived}", String(result.revived))
         );
+      } else if (result.alreadyInFlight > 0) {
+        toast.success(
+          t("PrepaidRedriveInFlight" as any)
+            .replace("{inFlight}", String(result.alreadyInFlight))
+        );
+      } else {
+        toast.success(t("PrepaidRedriveNothingToDo" as any));
       }
     });
   }

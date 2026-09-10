@@ -23,9 +23,9 @@
 // a cycle, so it goes above every local import.
 import { assertOrgEconomicallyActive, orgEconomicLifecycleBlock } from "./utils/orgLifecycle";
 import { v, ConvexError } from "convex/values";
-import { query } from "./_generated/server";
+import { query, internalQuery } from "./_generated/server";
 import { internalMutation, mutation } from "./functions";
-import { MutationCtx } from "./_generated/server";
+import { MutationCtx, QueryCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { PostCommand, postAccountingEvent, retiredPostingRefusal } from "./accounting/postingEngine";
@@ -264,7 +264,7 @@ async function markEntryPosted(
   // Done BEFORE the row is marked POSTED, not after. The journal already
   // exists by this point — `reversePendingEntry` returned — so nothing is lost
   // by ordering it first, and a throw in here used to be caught by the drain
-  // loop and routed to `markEntryFailed`, which patched the SAME row that had
+  // loop and routed to the failure write, which patched the SAME row that had
   // just been patched POSTED. The entry finished FAILED with `resolvedAt` set
   // while its journal sat in the ledger, and the application stayed REVERSING
   // with nothing left to finish it. Now a failure leaves the row untouched and
@@ -317,11 +317,23 @@ async function markEntryPosted(
   // authority is still pending, rival, ambiguous, withheld or failed. The
   // summary `authorityOutcome` is DERIVED later from the durable items — it is
   // no longer the mechanism that performs any authority write.
+  //
+  // ⚠️ THE TERMINAL TRANSITION CLEARS THE CLAIM (SCRUM-222). A row left holding
+  // `dispatchState: "DISPATCHED"` after completing would be read as claimed
+  // forever: the observer would keep asking about a worker that already
+  // succeeded, and `observeOutboxAttempt`'s success branch treats exactly that
+  // combination as an invariant violation and throws. Clearing here is also
+  // what makes a later `retryFailed` revival immediately selector-eligible
+  // rather than looking like someone else's outstanding attempt. A no-op for
+  // rows that were never claimed, which is every row written before this
+  // ticket. Mirrors `blockAuthorityWork` writing `activeAttemptId: undefined`.
   await ctx.db.patch(p._id, {
     status: "POSTED",
     resolvedAt: Date.now(),
     ...(resultEventId ? { resultEventId } : {}),
     attempts: p.attempts + 1,
+    ...CLEARED_CLAIM,
+    nextActionAt: undefined,
   });
 
   // ⚠️ SCHEDULED, NOT CALLED. A scheduled mutation runs in its own transaction,
@@ -1177,242 +1189,566 @@ async function settleOneReversalSource(
  * error for visibility. At/above it: stop auto-retrying and mark FAILED so it
  * needs deliberate attention instead of retrying forever.
  */
+
+// ─── SCRUM-222 — A REAL ROLLBACK BOUNDARY FOR GL POSTING ──────────────────────
+//
+// The defect this replaces: `drainEntries` used to wrap each row's financial
+// writes in a per-row `try`/`catch`. Convex has no block-scoped rollback — an
+// UNCAUGHT throw undoes every write in the transaction, a CAUGHT one undoes
+// nothing — so a throw AFTER the event, journal and some lines were written was
+// absorbed, the mutation returned normally, and the partial GL COMMITTED.
+//
+// SCRUM-208 already built and certified the cure for the AUTHORITY half; this
+// imports its TRANSACTION BOUNDARY ONLY — no commitment model, no workflow
+// engine. Four transactions, and the split is the whole point:
+//
+//   selector      read-only; chooses row ids                (dispatchDueOutboxWork)
+//   claim         metadata only; NO financial write         (claimOutboxRow)
+//   worker        every financial write, NOTHING CATCHES    (postOutboxRow)
+//   observer      bookkeeping, outside the money            (observeOutboxAttempt)
+
+/** How long a claimed row waits before the sweep asks what happened to it. */
+const OUTBOX_OBSERVE_DELAY_MS = 60_000;
+
 /**
- * ⚠️ RE-READS THE ROW. NEVER TRUSTS THE SNAPSHOT THE CALLER CARRIED IN.
- * (SCRUM-208 c15892 — the class guard, not a scheduler special case.)
+ * How long a HELD row waits before being offered again.
  *
- * `drainEntries` hands this the `p` it loaded BEFORE the row was processed, and
- * `markEntryPosted` can already have made that row terminal `POSTED` — journal
- * written, application REVERSED, authority work durable — before something
- * after the commit point throws. Deriving `attempts` and the FAILED transition
- * from the stale snapshot then downgraded completed accounting to FAILED, and
- * at `MAX_ATTEMPTS` it did so terminally: a row whose journal exists, reported
- * as failed, retryable by a manager who would be retrying nothing.
- *
- * ⚠️ THIS IS THE THIRD TIME THIS SHAPE HAS APPEARED IN THIS SUBSYSTEM, AND THE
- * FIRST TIME IT IS CLOSED AS A CLASS. The record-of-obligation (F1) and the
- * SLICE hold ordering were each fixed at their own call site; this one is fixed
- * where the damage is written instead. Any future step added after a durable
- * commit — another optimisation, another notification — is now harmless here by
- * construction, because failure state can only ever be written onto a row that
- * is still failable.
- *
- * `PENDING` is exactly that set: `POSTED` is completed accounting and `FAILED`
- * is already dead-lettered, so neither may consume a further attempt. A row
- * that has been deleted underneath us fails safe by doing nothing rather than
- * recreating state.
+ * ⚠️ A HELD ROW MUST ADVANCE `nextActionAt` OR IT STARVES THE QUEUE.
+ * `accountingOutboxSweep.test.ts` already regresses this class: 55 held rows
+ * ahead of 5 valid ones, asserting the held rows burn ZERO attempts. A held
+ * branch that only wrote `lastError` would leave those rows permanently due, so
+ * every tick re-selects them and nothing behind them is ever reached.
  */
-async function markEntryFailed(ctx: MutationCtx, p: Doc<"pendingAccountingEvents">, message: string): Promise<boolean> {
-  const current = await ctx.db.get(p._id);
-  if (!current) return false;
-  if (current.status !== "PENDING") {
-    // Server-side only: this text can carry raw error detail, and the row it
-    // would have been written onto is not a failure.
-    console.error(
-      `[outbox] suppressed failure write on a ${current.status} entry ${String(p._id)}: ${message}`
-    );
+const OUTBOX_HOLD_DELAY_MS = 60_000;
+
+/** Exponential, capped. Mirrors `authorityBackoffFor`. */
+function outboxBackoffFor(generation: number): number {
+  return Math.min(2 ** Math.max(0, generation - 1) * 30_000, 30 * 60_000);
+}
+
+/**
+ * Clears every claim field. Used by BOTH terminal transitions and by release.
+ *
+ * ⚠️ `undefined` here means "remove the field", which is what makes the row
+ * selector-eligible again: `dispatchState: undefined` is exactly what the
+ * unclaimed range matches, and it is the same absence a legacy row has. Mirrors
+ * `blockAuthorityWork` writing `activeAttemptId: undefined`.
+ */
+const CLEARED_CLAIM = {
+  dispatchState: undefined,
+  activeAttemptId: undefined,
+  scheduledFunctionId: undefined,
+} as const;
+
+/**
+ * SCRUM-222 §3.5.1 — REVIVE A DEAD-LETTERED ROW, DURABLY. The single authority
+ * for what "give this row another chance" means, shared by both redrive doors
+ * (`retryFailed` and `prepaidExpenses.redriveScheduleEvents`).
+ *
+ * ⚠️ THE RESET MUST BE PERSISTED, NOT CLONED. `redriveScheduleEvents` used to
+ * build an in-memory copy carrying `attempts: 0` and hand it to `drainEntries`.
+ * That worked only because posting was inline and read the object it was given.
+ * The worker now re-reads the STORED row by id, so an in-memory reset is
+ * invisible to it — the row would stay FAILED, dispatch would skip it, and the
+ * button would report success having done nothing.
+ *
+ * Returns false when the row is not revivable, so callers can count truthfully.
+ */
+export async function reviveFailedEntry(
+  ctx: MutationCtx,
+  row: Doc<"pendingAccountingEvents">
+): Promise<boolean> {
+  const current = await ctx.db.get(row._id);
+  if (!current || current.status !== "FAILED") return false;
+
+  // ⚠️ SCRUM-234 SURVIVES SCRUM-222: A PERMANENTLY RETIRED POSTING IS NOT
+  // REVIVABLE, AND THIS IS AN INTEGRATION DECISION, NOT AN OPTIMISATION.
+  //
+  // The two tickets collide precisely here. SCRUM-234 requires a retired
+  // forward posting to DEAD-LETTER and stay dead-lettered: its test pins that
+  // an already-FAILED retired row swept in again keeps `attempts`, keeps its
+  // ORIGINAL terminal reason, and is not counted as a fresh failure. SCRUM-222
+  // then made revival PERSISTENT — status back to PENDING, `attempts` reset to
+  // 0, `lastError` cleared — because the worker re-reads the stored row and an
+  // in-memory reset would be invisible to it.
+  //
+  // Persisting a revival for a RETIRED row would therefore un-dead-letter the
+  // exact thing SCRUM-234 exists to terminalize: the operator's next redrive
+  // would wipe the diagnostic that told them why it can never post, hand the
+  // row a fresh budget, and buy ten more refusals that cannot end differently.
+  // The posting is not blocked, it is retired — no operator action and no
+  // elapsed time can make it postable.
+  //
+  // So revival is refused at the source. `redriveScheduleEvents` counts it as
+  // not revived, and `retryFailed` turns the `false` into a visible error
+  // rather than a queued no-op. REVERSE rows are exempt for the same reason the
+  // worker exempts them: a reversal unwinds something that already posted and
+  // never routes through the engine's retirement check.
+  if (
+    current.kind === "POST" &&
+    retiredPostingRefusal({
+      eventType: current.eventType ?? "",
+      sourceType: current.sourceType,
+    })
+  ) {
     return false;
   }
 
-  const attempts = current.attempts + 1;
   await ctx.db.patch(current._id, {
-    attempts,
-    lastError: message,
-    ...(attempts >= MAX_ATTEMPTS ? { status: "FAILED" as const } : {}),
+    status: "PENDING" as const,
+    attempts: 0,
+    lastError: undefined,
+    // Stale claim metadata from the attempt that dead-lettered it MUST go, or
+    // the revived row is PENDING-but-claimed: invisible to the unclaimed
+    // selector range, and therefore never picked up again.
+    ...CLEARED_CLAIM,
+    // A fresh generation guarantees that if the ancient worker ever did
+    // arrive, it loses.
+    generation: (current.generation ?? 0) + 1,
+    // Absent, not zero: "immediately due".
+    nextActionAt: undefined,
   });
   return true;
 }
 
 /**
- * Records WHY an entry was skipped without counting it as an attempt, so it
- * stays PENDING and drains by itself once its blocker clears. The reason lands
- * in lastError purely so it is visible on the Accounting → Setup pending list —
- * an entry that silently refuses to post with no explanation is worse for the
- * accountant than one that fails loudly.
+ * SCRUM-222 — LIVENESS. A fixed tick over `nextActionAt`, never accounting
+ * traffic.
+ *
+ * ⚠️ LATENCY AND LIVENESS ARE DIFFERENT MECHANISMS, and conflating them is what
+ * the predecessor got wrong. Eager dispatch (a receipt, a period opening) exists
+ * only to make a row post SOON; losing an eager schedule must cost latency and
+ * never liveness. `markEntryPosted` and `crons.ts` already say this for the
+ * authority half: "retry LIVENESS comes from `dispatchDueAuthorityWork` reading
+ * `nextActionAt`, never from accounting traffic — so an organization that never
+ * drains again still retries."
  */
-async function markEntryHeld(ctx: MutationCtx, p: Doc<"pendingAccountingEvents">, reason: string): Promise<void> {
-  const lastError = `Waiting to post: ${reason}.`;
-  if (p.lastError === lastError) return;
-  await ctx.db.patch(p._id, { lastError });
+export const dispatchDueOutboxWork = internalMutation({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const limit = Math.min(args.limit ?? 50, 200);
+
+    const { unclaimed, awaitingObservation } = await selectDueOutboxRows(ctx, now, limit);
+
+    // ⚠️ SCHEDULED, NOT CALLED — every one of them. Calling inline would put
+    // each row's work back inside THIS transaction, which is the defect with
+    // more steps.
+    for (const row of unclaimed) {
+      await ctx.scheduler.runAfter(0, internal.accountingOutbox.claimOutboxRow, { rowId: row._id });
+    }
+    for (const row of awaitingObservation) {
+      await ctx.scheduler.runAfter(0, internal.accountingOutbox.observeOutboxAttempt, {
+        rowId: row._id,
+      });
+    }
+
+    return { dispatched: unclaimed.length, observed: awaitingObservation.length };
+  },
+});
+
+/**
+ * SCRUM-222 — CLAIM ONE ROW AND MINT ONE ATTEMPT, ATOMICALLY.
+ *
+ * ⚠️ THE `dispatchState` CHECK IS THE MUTUAL EXCLUSION. A row already carrying
+ * an outstanding attempt is not claimed again, so a duplicate schedule, a
+ * re-drained row and the cron racing an eager dispatch all collapse to one
+ * execution. This mirrors `dispatchAuthorityWorkItem`, whose comment calls the
+ * equivalent line "the at-most-once guard".
+ *
+ * ⚠️ AND THIS TRANSACTION MUST COMMIT BEFORE THE WORKER'S BEGINS. The worker
+ * rolls back completely when it fails — that is the entire point of the split —
+ * and a rollback would take the claim and the generation with it, so a bounded
+ * retry and a genuine rollback cannot share a transaction.
+ *
+ * NO FINANCIAL WRITE HAPPENS HERE.
+ */
+export const claimOutboxRow = internalMutation({
+  args: { rowId: v.id("pendingAccountingEvents") },
+  handler: async (ctx, args) => {
+    const row = await ctx.db.get(args.rowId);
+    // Vanished, terminal, already claimed, or not yet due.
+    //
+    // ⚠️ `!row` IS ALSO I3-POST. A queued POST whose source was cancelled is
+    // DELETED by the existing cancellation helpers (`cancelPendingPostByKey`,
+    // `cancelPendingPostsBySource`) — so "terminate the way the cancellation
+    // helpers already terminate it" needs no new mechanism here, only that a
+    // vanished row is never resurrected.
+    if (!row || row.status !== "PENDING") return { claimed: false as const };
+    if (row.dispatchState === "DISPATCHED") return { claimed: false as const };
+    if ((row.nextActionAt ?? 0) > Date.now()) return { claimed: false as const };
+
+    const now = Date.now();
+    const generation = (row.generation ?? 0) + 1;
+    const attemptId = `${String(row._id)}:${generation}`;
+
+    // SCHEDULE, THEN BACK-FILL — one transaction. `runAfter` returns the id the
+    // observer will read, so both halves commit together or neither does.
+    const scheduledFunctionId = await ctx.scheduler.runAfter(
+      0,
+      internal.accountingOutbox.postOutboxRow,
+      { rowId: row._id, attemptId, generation }
+    );
+
+    await ctx.db.patch(row._id, {
+      dispatchState: "DISPATCHED" as const,
+      generation,
+      activeAttemptId: attemptId,
+      scheduledFunctionId,
+      nextActionAt: now + OUTBOX_OBSERVE_DELAY_MS,
+    });
+
+    return { claimed: true as const, generation, attemptId };
+  },
+});
+
+/**
+ * Release a claim WITHOUT counting an attempt, and push the row out to a later
+ * due time so it cannot starve the queue.
+ *
+ * ⚠️ THIS IS A RETURN VALUE, NOT A CATCH, AND IT MUST NOT THROW. A throw here
+ * would roll back the release itself and the row would be re-dispatched
+ * forever. It mirrors `postPendingEntry`, which already returns `null` rather
+ * than throwing for "no accounting consequence".
+ */
+async function holdOutboxRow(
+  ctx: MutationCtx,
+  row: Doc<"pendingAccountingEvents">,
+  reason: string
+): Promise<{ outcome: "HELD" }> {
+  await ctx.db.patch(row._id, {
+    ...CLEARED_CLAIM,
+    lastError: `Waiting to post: ${reason}.`,
+    // ⚠️ ZERO ATTEMPTS BURNED. An entry waiting on someone else's blocker is
+    // not failing, and routing it through the attempt counter would
+    // dead-letter a perfectly valid entry.
+    nextActionAt: Date.now() + OUTBOX_HOLD_DELAY_MS,
+  });
+  return { outcome: "HELD" as const };
 }
 
 /**
- * Attempts to post/reverse a batch of already-fetched outbox rows, one at a
- * time, isolating each row's failure from the rest. Factored out of
- * drainPendingForOrg so a narrower, pre-filtered subset (e.g. one prepaid
- * schedule's own rows — see prepaidExpenses.redriveScheduleEvents) can share
- * the exact same posting/retry/dead-letter logic instead of re-implementing it.
+ * SCRUM-222 + SCRUM-234 + SCRUM-302 — THE PERMANENT-REFUSAL COUNTERPART TO
+ * `holdOutboxRow`, and the reason it is a separate function.
+ *
+ * ⚠️ A REFUSAL IS NOT A ROLLBACK CASE, WHICH IS WHY IT MAY WRITE. Everything
+ * this file says about the worker not recording its own outcome applies to a
+ * throw AFTER a financial write. This runs strictly BEFORE the first one, so
+ * nothing is being papered over: the transaction commits the refusal and
+ * exactly the refusal. Recording it here rather than letting the row throw
+ * saves nothing important, but it keeps the disposition identical to what the
+ * predecessor drain did, which is the point of the transplant.
+ *
+ * ⚠️ IT BURNS AN ATTEMPT AND DEAD-LETTERS AT `MAX_ATTEMPTS`, exactly as the
+ * former `markEntryFailed` did for these same two classes. A permanently
+ * refused row must not be HELD: held rows stay PENDING forever, never
+ * dead-letter, and permanently block `computeCloseChecklist` with a row no
+ * operator action can resolve. That is the SCRUM-234 defect verbatim.
  */
-export async function drainEntries(
+async function failOutboxRow(
   ctx: MutationCtx,
-  entries: Doc<"pendingAccountingEvents">[]
-): Promise<{ posted: number; failed: number; held: number }> {
-  let posted = 0;
-  let failed = 0;
-  let held = 0;
+  row: Doc<"pendingAccountingEvents">,
+  message: string
+): Promise<{ outcome: "REFUSED" }> {
+  const attempts = row.attempts + 1;
+  await ctx.db.patch(row._id, {
+    ...CLEARED_CLAIM,
+    attempts,
+    lastError: message,
+    ...(attempts >= MAX_ATTEMPTS
+      ? { status: "FAILED" as const }
+      : { nextActionAt: Date.now() + outboxBackoffFor(row.generation ?? 1) }),
+  });
+  return { outcome: "REFUSED" as const };
+}
 
-  for (const p of entries) {
-    // A drain is org-wide, but the events that trigger one (a period opening, a
-    // chart being initialized) are not specific to any entry. So an entry whose
-    // own period simply isn't open yet gets swept into every unrelated drain and
-    // charged an attempt each time — ten unrelated period-opens and a perfectly
-    // valid entry dead-letters, after which no drain will ever touch it again
-    // and its GL impact silently disappears until someone spots it in the FAILED
-    // list. Waiting on your own period is not failing, so hold instead: the
-    // entry stays PENDING with a visible reason and posts by itself the moment
-    // its period opens. A CLOSED or LOCKED period is a different matter — that
-    // is a deliberate refusal that will not resolve on its own, so it still
-    // burns attempts and dead-letters as designed.
-    // ⚠️ PERMANENT REFUSALS MUST BE CLASSIFIED BEFORE TEMPORARY HOLDS.
+/**
+ * SCRUM-222 — THE WORKER. EVERY FINANCIAL WRITE FOR ONE ROW, IN ITS OWN
+ * TRANSACTION.
+ *
+ * ⚠️ NOTHING CATCHES IN HERE, AND THAT IS THE FEATURE. This is a registered
+ * mutation of its own, so an unexpected throw aborts THIS transaction and
+ * nothing else: no accounting event, no journal entry, no journal line, no
+ * snapshot increment, no authority work item, no reversed deposit application,
+ * and no status flip. The row stays PENDING and retryable, and the observer —
+ * running in a DIFFERENT transaction — records what happened.
+ *
+ * ⚠️ SO DO NOT ADD A `try`/`catch` HERE. Converting a throw into a recorded
+ * outcome from inside this mutation rebuilds the exact defect this ticket
+ * exists to remove: the writes made before it would COMMIT. Expected business
+ * answers already come back as typed values (`holdOutboxRow`, `failOutboxRow`)
+ * and never throw; anything that DOES throw is precisely the case that must
+ * roll back rather than be described. This is the same warning
+ * `performAuthoritySettlement` carries, for the same reason.
+ *
+ * ⚠️ OWNING THE CLAIM DOES NOT AUTHORIZE POSTING. The order below is the
+ * contract: re-read the stored row -> prove this is the active
+ * generation/attempt -> RE-PROVE CURRENT BUSINESS ELIGIBILITY -> only then the
+ * first financial write. A borrowed pattern carries the assumptions of its
+ * original domain: SCRUM-208's "prove eligibility" means only "am I still the
+ * active attempt", because authority settlement's source cannot change under
+ * it. GL posting's source CAN — a prepaid schedule can be reversed, a payroll
+ * run voided, a sale cancelled — between the claim and the run.
+ */
+export const postOutboxRow = internalMutation({
+  args: {
+    rowId: v.id("pendingAccountingEvents"),
+    attemptId: v.string(),
+    generation: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const row = await ctx.db.get(args.rowId);
+    if (!row || row.status !== "PENDING") return { outcome: "SUPERSEDED" as const };
+    if (row.dispatchState !== "DISPATCHED") return { outcome: "SUPERSEDED" as const };
+
+    // ⚠️ ONLY THE ACTIVE GENERATION MAY WRITE. A stale worker is not
+    // hypothetical: the observer releases a claim it believes failed, and the
+    // row is re-claimed under a new generation. If the older execution then
+    // arrived — a delayed run, a duplicate delivery — it would post from a
+    // decision taken against state that has since moved, and two generations
+    // could both write a journal for one obligation.
     //
-    // Everything below this point can decide an entry is merely WAITING — for
-    // a period to open, or for a prepaid/payroll/commission dependency to post
-    // — and `markEntryHeld` deliberately leaves it PENDING without consuming an
-    // attempt, because retrying it is not wrong. That is right for an entry
-    // that will one day become postable.
+    // Returning rather than throwing: a superseded execution is ordinary
+    // history, not a failure, and throwing would mark the scheduled function
+    // failed and feed a retry that has already happened.
+    if (row.activeAttemptId !== args.attemptId) return { outcome: "SUPERSEDED" as const };
+    if (row.generation !== args.generation) return { outcome: "SUPERSEDED" as const };
+
+    // ─── RE-PROVE ELIGIBILITY, BEFORE THE FIRST FINANCIAL WRITE ──────────────
     //
-    // A retired forward posting never will. Held first, it would sit PENDING
-    // forever: never posted (correct), never dead-lettered (wrong), permanently
-    // blocking `computeCloseChecklist` with a row no operator action can
-    // resolve, and never reaching the engine refusal that was supposed to end
-    // it. Reproduced before fixing — a `transactions`-sourced
-    // PREPAID_EXPENSE_AMORTIZED carrying no schedule reference survived ten
-    // redrives at `attempts: 0`.
+    // ⚠️ PERMANENT REFUSALS MUST BE CLASSIFIED BEFORE TEMPORARY HOLDS, AND THAT
+    // ORDERING MOVED HERE WITH THE ARCHITECTURE (SCRUM-234, SCRUM-302).
     //
-    // The engine remains the authority: this shares its exact classifier and
-    // its exact wording rather than restating the rule, so the two cannot
-    // drift. REVERSE entries are exempt — a reversal unwinds something that
-    // already posted, and does not route through the engine at all.
-    // ⚠️ SCRUM-302 — ORGANIZATION LIFECYCLE, CLASSIFIED HERE FOR THE SAME
-    // ORDERING REASON as the retired refusal below, and BEFORE it.
+    // Both classifications used to live at the top of `drainEntries`, which no
+    // longer decides anything — it schedules. Re-proving eligibility is now the
+    // worker's job, so this is where they belong, and the ORDER is preserved
+    // exactly: lifecycle, then retired, then the temporary holds below.
     //
-    // `enqueuePendingPost` now refuses to queue for a blocked organization, but
+    // Getting that order wrong is not cosmetic. Everything after this point can
+    // decide a row is merely WAITING — for a period to open, or for a
+    // prepaid/payroll/commission dependency to post — and a held row stays
+    // PENDING without consuming an attempt, because retrying it is not wrong.
+    // A permanently refused posting never becomes postable, so held first it
+    // would sit PENDING forever: never posted (correct), never dead-lettered
+    // (wrong), permanently blocking `computeCloseChecklist` with a row no
+    // operator action can resolve. Reproduced under SCRUM-234 — a
+    // `transactions`-sourced PREPAID_EXPENSE_AMORTIZED carrying no schedule
+    // reference survived ten redrives at `attempts: 0`.
+
+    // ⚠️ SCRUM-302 — ORGANIZATION LIFECYCLE, FIRST.
+    //
+    // `enqueuePendingPost` refuses to queue for a blocked organization, but
     // that does not cover a row that was already PENDING when the organization
-    // was suspended or entered destructive purge underneath it. Such a row must
-    // not simply reach the engine: the engine THROWS, which routes it through
-    // `markEntryFailed` and burns an attempt on every unrelated drain until it
-    // dead-letters — right for a purge, wrong for a suspension that may lift.
-    //
-    // So the two classes take DIFFERENT dispositions, which is the whole reason
+    // was suspended or entered destructive purge underneath it. The two classes
+    // take DIFFERENT dispositions, which is the whole reason
     // `orgEconomicLifecycleBlock` reports `permanent` rather than a boolean:
     //
-    //   permanent (destructive purge) -> markEntryFailed, so it dead-letters
-    //     and stops blocking period close with a row no operator can resolve.
-    //     There is no reactivation that could ever make it postable.
+    //   permanent (destructive purge) -> refuse, so it dead-letters and stops
+    //     blocking period close with a row no operator can resolve. There is no
+    //     reactivation that could ever make it postable.
     //
-    //   temporary (suspended)         -> markEntryHeld, PENDING with a visible
-    //     reason and no attempt consumed, exactly like an entry waiting for its
-    //     own period to open.
+    //   temporary (suspended)         -> hold, with a visible reason and no
+    //     attempt consumed, exactly like an entry waiting for its own period.
     //
     // Applies to BOTH kinds, unlike the retired check below: a REVERSE entry
     // writes its own accountingEvents/journalEntries/journalLines rows through
     // `reverseAccountingEvent`, so it is a new economic footprint too.
-    const lifecycle = await orgEconomicLifecycleBlock(ctx, p.orgId);
+    const lifecycle = await orgEconomicLifecycleBlock(ctx, row.orgId);
     if (lifecycle) {
-      if (lifecycle.permanent) {
-        // COUNT WHAT WAS RECORDED, NOT WHAT WAS ATTEMPTED — same rule as below.
-        if (await markEntryFailed(ctx, p, lifecycle.message)) failed++;
-      } else {
-        await markEntryHeld(ctx, p, lifecycle.message);
-        held++;
-      }
-      continue;
+      return lifecycle.permanent
+        ? await failOutboxRow(ctx, row, lifecycle.message)
+        : await holdOutboxRow(ctx, row, lifecycle.message);
     }
 
-    if (p.kind === "POST") {
-      // `eventType` is schema-optional, `sourceType` is not — so the source
-      // check must not be gated on eventType being present, or a POST row with
-      // a falsy eventType would skip this entirely and fall back into the
-      // held-forever exposure this block exists to close.
+    if (row.kind === "POST") {
+      // ⚠️ SCRUM-234 — RETIRED FORWARD POSTINGS. `eventType` is schema-optional
+      // and `sourceType` is not, so the source check must not be gated on
+      // eventType being present, or a POST row with a falsy eventType would
+      // skip this entirely and fall back into the held-forever exposure this
+      // block exists to close.
+      //
+      // The engine remains the authority: this shares its exact classifier and
+      // its exact wording rather than restating the rule, so the two cannot
+      // drift. REVERSE entries are exempt — a reversal unwinds something that
+      // already posted, and does not route through the engine at all.
       const retired = retiredPostingRefusal({
-        eventType: p.eventType ?? "",
-        sourceType: p.sourceType,
+        eventType: row.eventType ?? "",
+        sourceType: row.sourceType,
       });
-      if (retired) {
-        // COUNT WHAT WAS RECORDED, NOT WHAT WAS ATTEMPTED — the same rule the
-        // catch below states, and for the same reason. `markEntryFailed`
-        // refuses to write onto a row that is no longer failable, and
-        // `prepaidExpenses.redriveScheduleEvents` deliberately sweeps in rows
-        // that are ALREADY FAILED. An unconditional `failed++` here reported a
-        // fresh failure against a row nothing had been written to, in a count
-        // the operator sees directly in a toast.
-        if (await markEntryFailed(ctx, p, retired)) failed++;
-        continue;
-      }
+      if (retired) return await failOutboxRow(ctx, row, retired);
     }
 
-    const periodCheck = await checkPostingAllowed(ctx, p.orgId, p.accountingDate);
+    const periodCheck = await checkPostingAllowed(ctx, row.orgId, row.accountingDate);
     if (!periodCheck.ok && periodCheck.waiting) {
-      await markEntryHeld(ctx, p, periodCheck.reason);
-      held++;
+      return await holdOutboxRow(ctx, row, periodCheck.reason);
+    }
+
+    if (row.kind === "POST") {
+      // ⚠️ NO `try`/`catch` AROUND THESE GUARDS, DELIBERATELY. They walk data
+      // the admin raw-JSON editor can write, so one malformed row can make a
+      // guard throw. Under the old drain that had to be caught, because a throw
+      // would abort an organization's whole sweep. Here the row already has its
+      // own transaction, so a throwing guard rolls back exactly one row and the
+      // observer records it — which is what §3.3 requires and what a catch here
+      // would take away.
+      const blockedReason =
+        (await prepaidPostingBlockedReason(ctx, row)) ??
+        (await payrollPostingBlockedReason(ctx, row)) ??
+        (await commissionPostingBlockedReason(ctx, row));
+      if (blockedReason) return await holdOutboxRow(ctx, row, blockedReason);
+    }
+
+    // ⚠️ REVERSE RE-PROVES NOTHING ABOUT THE DOMAIN SOURCE, AND THAT IS
+    // NORMATIVE (owner ruling c17361). A REVERSE row usually exists BECAUSE the
+    // source was cancelled — `workflowHooks.ts` defers the reversal when no
+    // period is open while the sale commits CANCELLED in the same mutation — so
+    // a source-active requirement would hold every deferred reversal forever
+    // and leave the original journal economically live against a cancelled
+    // operation.
+    //
+    // Nor may it require "the original event is still POSTED".
+    // `reverseAccountingEvent` deliberately treats an already-REVERSED original
+    // carrying a valid linked reversal journal as SUCCESSFUL idempotent
+    // recovery (`alreadyReversed: true`), and rejects the same original with
+    // BROKEN linkage. Re-implementing that judgement here would duplicate it
+    // and get it wrong; delegating keeps one authority for it. Both behaviours
+    // are pinned by tests.
+    const resultEventId =
+      row.kind === "POST" ? await postPendingEntry(ctx, row) : await reversePendingEntry(ctx, row);
+
+    // Finishes the accounting, records what authority is owed, flips the row
+    // POSTED and clears the claim — all in THIS transaction, all or nothing.
+    await markEntryPosted(ctx, row, resultEventId);
+
+    return { outcome: "POSTED" as const };
+  },
+});
+
+/**
+ * SCRUM-222 — FAILURE BOOKKEEPING, OUTSIDE THE FINANCIAL TRANSACTION.
+ *
+ * The worker cannot record its own failure: recording it would be a write, and
+ * a write in a transaction that must roll back is exactly the thing being
+ * removed. So the outcome is read afterwards, from the scheduler's own record.
+ */
+export const observeOutboxAttempt = internalMutation({
+  args: { rowId: v.id("pendingAccountingEvents") },
+  handler: async (ctx, args) => {
+    const row = await ctx.db.get(args.rowId);
+    if (!row || row.status !== "PENDING" || row.dispatchState !== "DISPATCHED") {
+      return { transition: "NONE" as const };
+    }
+
+    const scheduled = row.scheduledFunctionId
+      ? await ctx.db.system.get(row.scheduledFunctionId)
+      : null;
+
+    // Still queued or running. Look again later; spend nothing.
+    if (scheduled && (scheduled.state.kind === "pending" || scheduled.state.kind === "inProgress")) {
+      await ctx.db.patch(row._id, { nextActionAt: Date.now() + OUTBOX_OBSERVE_DELAY_MS });
+      return { transition: "OBSERVE_AGAIN" as const };
+    }
+
+    // ⚠️ A SUCCEEDED WORKER THAT LEFT THE ROW CLAIMED IS AN INVARIANT VIOLATION
+    // AND FAILS VISIBLY. The worker either terminalizes the row or returns
+    // without writing because it was superseded — and a superseded execution
+    // cannot be the active attempt, which is excluded above. There is no
+    // legitimate path here, so recording an outcome would paper over a state
+    // machine that has stopped being true.
+    if (scheduled && scheduled.state.kind === "success") {
+      throw new Error(
+        `[outbox-observe] worker reported success but row ${String(row._id)} is still DISPATCHED`
+      );
+    }
+
+    if (scheduled && scheduled.state.kind === "failed") {
+      // ⚠️ SERVER LOG ONLY — `state.error` is a backend stack trace and must
+      // never be persisted into `lastError`, which operators read in the UI.
+      console.error("[outbox-observe] worker execution failed", {
+        rowId: String(row._id),
+        generation: row.generation,
+        error: scheduled.state.error,
+      });
+    }
+
+    // ⚠️ THE ABSENT-RECORD BRANCH IS LOAD-BEARING. `ctx.db.system.get` returning
+    // null — a lost or expired scheduler record — is OBSERVED WORKER FAILURE,
+    // not "unknown, ask again". An earlier revision of this design listed only
+    // three branches, and because an unknown outcome is re-observed and never
+    // re-dispatched, a vanished record would have re-observed forever and
+    // stranded the row permanently. `observeAuthorityAttempt` already handles
+    // it: its `scheduled &&` guards let a null record fall through to FAILED
+    // and release.
+    const attempts = row.attempts + 1;
+    const deadLettered = attempts >= MAX_ATTEMPTS;
+
+    await ctx.db.patch(row._id, {
+      ...CLEARED_CLAIM,
+      attempts,
+      lastError: scheduled
+        ? "this posting attempt did not complete"
+        : "this posting attempt could not be observed",
+      ...(deadLettered
+        ? { status: "FAILED" as const }
+        : { nextActionAt: Date.now() + outboxBackoffFor(row.generation ?? 1) }),
+    });
+
+    return { transition: deadLettered ? ("FAILED" as const) : ("RETRY" as const) };
+  },
+});
+
+/**
+ * SCRUM-222 — EAGER DISPATCH. Schedules one claim per row; posts nothing.
+ *
+ * ⚠️ THIS FUNCTION USED TO CONTAIN THE DEFECT. It wrapped each row's financial
+ * writes in a per-row `try`/`catch` so that one bad row could not abort an
+ * organization's whole drain — correct in intent, and un-rollbackable in
+ * practice, because a caught exception in Convex commits every write already
+ * made. Row isolation is now provided by giving each row its OWN TRANSACTION
+ * instead of its own catch, which delivers the same isolation AND real
+ * rollback.
+ *
+ * ⚠️ THE RETURN SHAPE CHANGED, AND IT HAD TO. This used to return
+ * `{ posted, failed, held }`. Once posting is asynchronous those counts cannot
+ * be known here — reporting them would tell an operator that work had completed
+ * when it had merely been queued, which is a false success on a money path.
+ * `{ scheduled }` is what this transaction actually knows. Production's own
+ * comment at the old catch said it best: COUNT WHAT WAS RECORDED, NOT WHAT WAS
+ * ATTEMPTED.
+ *
+ * Eligibility is deliberately NOT re-checked here. The worker re-proves the
+ * organization lifecycle, the retired-source refusal, the period and the
+ * prepaid/payroll/commission guards immediately before its first financial
+ * write, which is the only place the answer is still true; checking here as
+ * well would be a second, staler copy of the same judgement.
+ */
+export async function drainEntries(
+  ctx: MutationCtx,
+  entries: Doc<"pendingAccountingEvents">[]
+): Promise<{ scheduled: number; alreadyInFlight: number }> {
+  let scheduled = 0;
+  let alreadyInFlight = 0;
+  for (const p of entries) {
+    // Terminal rows and rows already carrying an outstanding attempt are not
+    // re-dispatched. A row whose `nextActionAt` is still in the future is
+    // refused by `claimOutboxRow` itself, so an eager drain cannot short-circuit
+    // a backoff or un-hold a held row early.
+    if (p.status !== "PENDING") continue;
+    // ⚠️ SKIPPED IS NOT THE SAME AS ABSENT, AND THE CALLER MUST BE ABLE TO TELL
+    // (owner ruling c17375). A row already carrying an outstanding attempt is
+    // REAL WORK IN FLIGHT, not an empty result — but every count this function
+    // returned made it indistinguishable from "there was nothing here", so an
+    // operator re-driving a schedule whose rows were mid-post was told "nothing
+    // queued" while a worker was posting them. Reporting a skip as an absence is
+    // the same false claim this ticket exists to remove, one refusal further on.
+    if (p.dispatchState === "DISPATCHED") {
+      alreadyInFlight += 1;
       continue;
     }
-
-    // Posting-side guard. What makes an entry drain is "a period covering THIS
-    // entry's date opened" — which says nothing about whether the entry is
-    // still coherent with the rest of the ledger. A prepaid correction queued
-    // before prepaidExpenses.ts's guard existed would otherwise post here and
-    // credit an asset whose debit is still queued, recreating the exact
-    // negative balance that guard prevents, with no operator action. Reversals
-    // are exempt: they unwind something that already posted.
-    if (p.kind === "POST") {
-      let blockedReason: string | null;
-      try {
-        blockedReason =
-          (await prepaidPostingBlockedReason(ctx, p)) ??
-          (await payrollPostingBlockedReason(ctx, p)) ??
-          (await commissionPostingBlockedReason(ctx, p));
-      } catch (err) {
-        // A guard that THROWS must fail this one entry, not the drain. These
-        // guards walk data the admin raw-JSON editor can write, so a single
-        // malformed row could otherwise abort the whole mutation — and because
-        // every drain starts from the same query, that row would be hit first
-        // every time, silently stopping all GL posting for the organization.
-        const message = err instanceof Error ? err.message : String(err);
-        await markEntryFailed(ctx, p, `posting guard failed: ${message}`);
-        failed++;
-        continue;
-      }
-      if (blockedReason) {
-        // Held, not failed: this entry is not broken and retrying it is not
-        // wrong — it is waiting on something else to post first. Routing it
-        // through markEntryFailed would burn attempts and eventually
-        // dead-letter a perfectly valid entry for someone else's blocker.
-        await markEntryHeld(ctx, p, blockedReason);
-        held++;
-        continue;
-      }
-    }
-    try {
-      const resultEventId = p.kind === "POST" ? await postPendingEntry(ctx, p) : await reversePendingEntry(ctx, p);
-      await markEntryPosted(ctx, p, resultEventId);
-      posted++;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      // ⚠️ COUNT WHAT WAS RECORDED, NOT WHAT WAS ATTEMPTED. `markEntryFailed`
-      // refuses to write onto a row that is no longer failable, so an
-      // unconditional `failed++` here reported a POSTED row as failed — the
-      // durable state was right and the returned counters were not. An
-      // operator reading a drain summary would see a failure that does not
-      // exist anywhere in the data.
-      if (await markEntryFailed(ctx, p, message)) failed++;
-    }
+    await ctx.scheduler.runAfter(0, internal.accountingOutbox.claimOutboxRow, { rowId: p._id });
+    scheduled += 1;
   }
-
-  return { posted, failed, held };
-}
-
-export async function drainPendingForOrg(
-  ctx: MutationCtx,
-  orgId: Id<"organizations">,
-  limit = 50
-): Promise<{ posted: number; failed: number; held: number }> {
-  const pending = await ctx.db
-    .query("pendingAccountingEvents")
-    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
-    .take(Math.min(limit, 200));
-
-  return drainEntries(ctx, pending);
+  return { scheduled, alreadyInFlight };
 }
 
 // ─── Internal mutation (scheduler target) ─────────────────────────────────────
@@ -1431,8 +1767,8 @@ const DRAIN_RESUME_DELAY_MS = 60_000;
  * Drains one PAGE and continues with a cursor until the org's PENDING rows are
  * exhausted or the sweep budget runs out.
  *
- * Cursor, not "did we make progress". `drainPendingForOrg` always reads the
- * OLDEST PENDING rows, and a held row stays PENDING — so a first batch that is
+ * Cursor, not "did we make progress". The predecessor always read the OLDEST
+ * PENDING rows, and a held row stays PENDING — so a first batch that is
  * entirely held meant no progress, no continuation, and every postable row
  * behind it went unexamined however long it waited. Paging past them fixes
  * that. It also fixes the mirror-image problem: counting failures as progress
@@ -1447,7 +1783,7 @@ async function drainPageAndContinue(
   limit: number,
   cursor: string | null,
   pass: number
-): Promise<{ posted: number; failed: number; held: number }> {
+): Promise<{ scheduled: number; alreadyInFlight: number }> {
   const page = await ctx.db
     .query("pendingAccountingEvents")
     .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
@@ -1456,7 +1792,7 @@ async function drainPageAndContinue(
   const result = await drainEntries(ctx, page.page);
 
   console.log(
-    `[outbox-drain] org ${orgId} pass ${pass}: posted ${result.posted}, failed ${result.failed}, held ${result.held}`
+    `[outbox-drain] org ${orgId} pass ${pass}: scheduled ${result.scheduled}, already in flight ${result.alreadyInFlight}`
   );
 
   if (!page.isDone) {
@@ -1517,6 +1853,89 @@ export const drainPendingAccountingEvents = internalMutation({
 
 // ─── Visibility query ─────────────────────────────────────────────────────────
 
+/**
+ * SCRUM-222 — THE EXACT DUE-WORK SELECTOR.
+ *
+ * ⚠️ `.take()`, NEVER `.paginate()`. Convex permits ONE paginated query per
+ * function and this reads TWO ranges — the same constraint
+ * `dispatchDueAuthorityWork` records against itself. `convex-test` does NOT
+ * enforce that limit, and this repository has the receipt: a backfill cleared
+ * 2,115 tests, full CI and thirteen adversarial review rounds, then failed on
+ * its first production call. Both ranges here are bounded and exact.
+ *
+ * ⚠️ THE ABSENT-FIELD SEMANTICS ARE THE WHOLE QUESTION. Every pre-SCRUM-222 row
+ * has no `dispatchState` and no `nextActionAt` at all — absent, not `null`, not
+ * `0`. This selector is correct only if `eq("dispatchState", undefined)` matches
+ * a document where the field is ABSENT, and `lte("nextActionAt", now)` admits an
+ * absent value as ordering before every number. If either is false, an entire
+ * visible backlog silently becomes invisible, which is strictly worse than the
+ * defect this ticket repairs. `selectDueOutboxWork` below reports
+ * `hasNextActionAt` so a real-runtime gate can prove it saw a genuinely legacy
+ * row rather than one a fixture accidentally stamped.
+ */
+async function selectDueOutboxRows(
+  ctx: QueryCtx | MutationCtx,
+  now: number,
+  limit: number
+): Promise<{
+  unclaimed: Doc<"pendingAccountingEvents">[];
+  awaitingObservation: Doc<"pendingAccountingEvents">[];
+}> {
+  // Range 1 — unclaimed work: PENDING, no outstanding attempt, and due.
+  const unclaimed = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_dispatch_next_action", (q) =>
+      q.eq("status", "PENDING").eq("dispatchState", undefined).lte("nextActionAt", now)
+    )
+    .take(limit);
+
+  // Range 2 — claimed work whose observation deadline has passed. Without this
+  // range a lost worker leaves its row claimed forever; the sweep must
+  // RE-OBSERVE such a row, never dispatch a second worker.
+  const awaitingObservation = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_dispatch_next_action", (q) =>
+      q.eq("status", "PENDING").eq("dispatchState", "DISPATCHED").lte("nextActionAt", now)
+    )
+    .take(limit);
+
+  return { unclaimed, awaitingObservation };
+}
+
+/**
+ * Read-only visibility onto exactly what the dispatcher would pick up, for the
+ * real-runtime gate on absent-field index semantics.
+ */
+export const selectDueOutboxWork = internalQuery({
+  args: { now: v.optional(v.number()), limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const now = args.now ?? Date.now();
+    const limit = Math.min(args.limit ?? 50, 200);
+
+    // ⚠️ THE SAME FUNCTION THE DISPATCHER USES, not a copy of it. A duplicated
+    // query could drift away from the thing that was certified, which would
+    // silently invalidate the gate.
+    const { unclaimed, awaitingObservation } = await selectDueOutboxRows(ctx, now, limit);
+
+    const describe = (r: Doc<"pendingAccountingEvents">) => ({
+      id: r._id,
+      idempotencyKey: r.idempotencyKey,
+      status: r.status,
+      kind: r.kind,
+      // Proof the row really is legacy-shaped rather than fixture-stamped.
+      hasNextActionAt: r.nextActionAt !== undefined,
+      hasDispatchState: r.dispatchState !== undefined,
+      hasGeneration: r.generation !== undefined,
+    });
+
+    return {
+      now,
+      unclaimed: unclaimed.map(describe),
+      awaitingObservation: awaitingObservation.map(describe),
+    };
+  },
+});
+
 export const listPending = query({
   args: {
     orgId: v.id("organizations"),
@@ -1553,7 +1972,15 @@ export const redrive = mutation({
     // attempts per button press — the inline call left it PENDING and the sweep
     // selected it again immediately — so a row on its eighth attempt
     // dead-lettered on one click, spending the retry budget the operator was
-    // trying to give it. The caller still gets this page's counts to show.
+    // trying to give it.
+    //
+    // ⚠️ IT REPORTS WHAT IT QUEUED, NOT WHAT IT POSTED (SCRUM-222). Posting is
+    // now asynchronous, so posted/failed counts are simply not knowable in this
+    // transaction. Returning them anyway would tell an operator that GL work
+    // had completed when it had only been scheduled — a false success on a
+    // money path, and precisely the kind of claim this ticket exists to stop
+    // the outbox making. A duplicate click is safe: `claimOutboxRow` refuses a
+    // row that already carries an outstanding attempt.
     return drainPageAndContinue(ctx, args.orgId, 50, null, 0);
   },
 });
@@ -1562,7 +1989,27 @@ export const redrive = mutation({
  * Resets a dead-lettered event back to PENDING (with a fresh attempts count)
  * for another round of automatic retries, once whatever caused it to exhaust
  * MAX_ATTEMPTS has been fixed (e.g. the chart of accounts is now initialized).
- * Does not itself attempt to post — call redrive/drainPendingForOrg after.
+ *
+ * ⚠️ IT DOES NOT POST, AND IT MUST NOT SAY THAT IT DID. It returns
+ * `{ retryQueued: true }` — but only AFTER it has scheduled the claim for this
+ * exact row, which is the thing "queued" names. Reviving the row and scheduling
+ * nothing would describe work nobody had queued: the row would sit until the
+ * next cron tick while the operator was told it was already moving. Replacing a
+ * false "posted" with a false "queued" relocates the lie rather than removing
+ * it (owner ruling c17371).
+ *
+ * ⚠️ NOTHING CATCHES THE SCHEDULE. If `runAfter` rejects, the uncaught throw
+ * rolls this whole transaction back — the revival with it — so the row stays
+ * FAILED and the operator sees an error rather than an empty queue. That is the
+ * right trade: a manual retry REQUEST is not an economic fact, so losing one
+ * costs nothing and the operator can click again, whereas a revived-but-
+ * unscheduled row is invisible work that claims to be in flight.
+ *
+ * ⚠️ IT MUST ALSO ADVANCE THE GENERATION AND CLEAR STALE CLAIM METADATA — see
+ * `reviveFailedEntry`. A row that dead-lettered while claimed still carries
+ * `dispatchState: "DISPATCHED"`; reviving it without clearing that would
+ * produce a PENDING row the unclaimed selector range cannot see, visibly
+ * "retried" in the UI and permanently invisible to the sweep.
  */
 export const retryFailed = mutation({
   args: { orgId: v.id("organizations"), pendingEventId: v.id("pendingAccountingEvents") },
@@ -1578,6 +2025,20 @@ export const retryFailed = mutation({
       throw new ConvexError(`Only a FAILED event can be retried (current status: ${event.status}).`);
     }
 
-    await ctx.db.patch(args.pendingEventId, { status: "PENDING", attempts: 0, lastError: undefined });
+    const revived = await reviveFailedEntry(ctx, event);
+    // Unreachable behind the FAILED guard above, and deliberately fatal rather
+    // than reported as queued: `retryQueued` must never outrun the revival.
+    if (!revived) {
+      throw new ConvexError("Pending accounting event could not be revived for retry.");
+    }
+
+    // THE EXACT ROW, not a sweep. `claimOutboxRow` re-reads it, mints the
+    // attempt and schedules the worker. A duplicate schedule is refused by its
+    // own `dispatchState` check, so this races the cron safely.
+    await ctx.scheduler.runAfter(0, internal.accountingOutbox.claimOutboxRow, {
+      rowId: event._id,
+    });
+
+    return { retryQueued: true as const };
   },
 });
