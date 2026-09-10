@@ -721,6 +721,145 @@ export function describeOccurrence(id: ReceiptOccurrenceIdentity): string {
   return `${id.eventType}/${id.sourceType}/${id.sourceId}@v${id.eventVersion}`;
 }
 
+/* ------------------------------------------------------------------------- *
+ * THE RESERVATION (SCRUM-249)
+ *
+ * Everything above answers "what IS this occurrence?". This answers "who may
+ * ADDRESS it?", and it lives here because the reservation must be derived from
+ * the same constants that mint the identity. A copy of the prefix list in the
+ * posting engine would be a second definition of one fact, and the two would
+ * drift the first time a channel is added — which is the exact class of defect
+ * `assertKeyPrefixesUnambiguous` above already exists to prevent one axis over.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Does this (eventType, sourceType) pair name the reserved receipt family?
+ *
+ * ⚠️ THE PAIR, NOT EITHER HALF. Both narrower readings are wrong and each
+ * breaks something real:
+ *
+ *   eventType alone   -> refuses `COLLECTION_PAYMENT / transactions`, the
+ *                        legacy migration producer SCRUM-223 is still retiring
+ *   sourceType alone  -> refuses `COLLECTION_REFUND / collectionPayments`,
+ *                        which owner-proxy c17538 rejected as Option C in
+ *                        SCRUM-236 precisely because it silently kills refunds
+ *
+ * Within the pair the reservation is TOTAL: every `sourceId`, every
+ * `eventVersion`, every key. That is what makes it un-bypassable by spelling.
+ */
+export function isReservedReceiptTuple(eventType: string, sourceType: string): boolean {
+  return eventType === RECEIPT_EVENT_TYPE && sourceType === RECEIPT_SOURCE_TYPE;
+}
+
+/**
+ * Is this idempotency key inside the space this module can mint?
+ *
+ * ⚠️ RESERVING THE TUPLE ALONE IS NOT SOUND, AND THIS IS THE OTHER HALF.
+ * `postOrEnqueue` short-circuits on a POSTED row found by `by_org_idempotency`,
+ * and `postAccountingEvent` compares the key before the tuple. So a caller
+ * posting a tuple that is NOT reserved — `COLLECTION_PAYMENT / transactions`,
+ * say — while supplying `collection_payment_<paymentId>` takes the receipt's
+ * key without ever entering the reserved family, and the genuine receipt is
+ * then absorbed *silently*: `postOrEnqueue` returns without posting and without
+ * raising anything. Reproduced end-to-end as SCRUM-249 §3 K1.
+ *
+ * Derived from `V1_KEY_PREFIXES` and `RESERVED_NAMESPACES` rather than spelled
+ * out, so adding a channel prefix extends the reservation by construction. The
+ * `_` is included in the v1 comparison because that is how the v1 branch joins
+ * prefix to source id; without it `collection_payments_other` would be swept in
+ * on a string coincidence.
+ *
+ * NOT `mirrorCollectionPaymentToCanonical`'s identically-spelled key. That one
+ * addresses a `canonicalPayments` row — a different table with its own key
+ * space, disclaimed at the top of this file — and never reaches
+ * `accountingEvents` or `pendingAccountingEvents`.
+ */
+export function isReservedReceiptKey(idempotencyKey: string): boolean {
+  if (typeof idempotencyKey !== "string") return false;
+  for (const prefix of V1_KEY_PREFIXES) {
+    if (idempotencyKey.startsWith(`${prefix}_`)) return true;
+  }
+  for (const namespace of RESERVED_NAMESPACES) {
+    if (idempotencyKey.startsWith(namespace)) return true;
+  }
+  return false;
+}
+
+/**
+ * The economic columns of a posting command, as this module needs to see them.
+ *
+ * Declared structurally rather than importing `PostCommand`: `postingEngine`
+ * imports this module, so the reverse import would be a cycle, and the four
+ * columns plus the key are all the reservation reads.
+ */
+export type ReservedOccurrenceClaim = {
+  orgId: Id<"organizations">;
+  eventType: string;
+  sourceType: string;
+  sourceId: string;
+  eventVersion: number;
+  idempotencyKey: string;
+};
+
+/**
+ * Prove that `id` authorizes THIS EXACT claim — or refuse.
+ *
+ * Two separable things are checked, and conflating them is how a capability
+ * becomes a skeleton key:
+ *
+ *  1. **Is the value authority at all?** `assertTrustedOccurrence` — membership
+ *     of the module-private `WeakSet`, i.e. OBJECT IDENTITY. This is the part a
+ *     caller cannot forge, and it is a runtime fact rather than a type
+ *     assertion: a registered Convex mutation receives DESERIALIZED arguments,
+ *     so nothing arriving through `internal.accountingLedger.post` can be the
+ *     same object this module minted, however perfect its fields.
+ *
+ *  2. **Does it authorize this claim?** Field equality against the command. An
+ *     identity for occurrence A must not post occurrence B, and the derived key
+ *     must be the one actually being written — otherwise a legitimate holder
+ *     could still take a key that is not its own.
+ *
+ * Checked in that order deliberately: an untrusted value's fields are not
+ * evidence of anything, so there is no point comparing them first.
+ */
+export function assertOccurrenceAuthorizes(
+  id: ReceiptOccurrenceIdentity,
+  claim: ReservedOccurrenceClaim
+): void {
+  assertTrustedOccurrence(id);
+  const mismatches: string[] = [];
+  if (claim.orgId !== id.orgId) mismatches.push("orgId");
+  if (claim.eventType !== id.eventType) mismatches.push("eventType");
+  if (claim.sourceType !== id.sourceType) mismatches.push("sourceType");
+  if (claim.sourceId !== id.sourceId) mismatches.push("sourceId");
+  if (claim.eventVersion !== id.eventVersion) mismatches.push("eventVersion");
+  const derivedKey = occurrenceIdempotencyKey(id);
+  if (claim.idempotencyKey !== derivedKey) mismatches.push("idempotencyKey");
+  if (mismatches.length > 0) {
+    throw new Error(
+      `receipt occurrence authority does not cover this reserved posting command: ` +
+        `${mismatches.join(", ")} differ. Held ${describeOccurrence(id)} (key ${derivedKey}); ` +
+        `command claims ${claim.eventType}/${claim.sourceType}/${claim.sourceId}@v${claim.eventVersion} ` +
+        `(key ${claim.idempotencyKey}).`
+    );
+  }
+}
+
+/**
+ * The refusal itself, so every boundary that enforces the reservation says the
+ * same thing and a future one cannot invent a softer wording.
+ */
+export function reservedOccurrenceRefusal(claim: ReservedOccurrenceClaim): string {
+  return (
+    `Refusing a reserved receipt accounting occurrence from a generic posting ingress (SCRUM-249). ` +
+    `${claim.eventType}/${claim.sourceType}/${claim.sourceId}@v${claim.eventVersion} ` +
+    `(key ${claim.idempotencyKey}) is reserved to the certified direct-collection receipt authority. ` +
+    `A privileged internal or operator capability is infrastructure, not authority to mint this ` +
+    `occurrence: it is created only by the collections producer through directCollectionReceipt, or ` +
+    `re-established from persisted state through rehydrateReceiptOccurrence when the outbox drains it.`
+  );
+}
+
 /**
  * Forward-posting arguments for a v2 receipt occurrence (c17593 §6).
  *

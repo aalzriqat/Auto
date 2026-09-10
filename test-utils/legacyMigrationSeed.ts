@@ -57,34 +57,51 @@ export async function postLegacyTransactionEvent(
     eventType = "EXPENSE_POSTED";
     payload.expenseId = tx.expenseId?.toString() ?? sourceId;
   } else if (tx.category === "COLLECTION_PAYMENT") {
-    eventType = "COLLECTION_PAYMENT";
-    payload.paymentId = sourceId;
-    payload.paymentMethod = "CASH";
-    // SCRUM-218-C — reproduce the journal this legacy row ALREADY produced, and
-    // assert nothing further.
+    // ⚠️ NO LONGER REACHABLE THROUGH THE POSTING ENGINE — SCRUM-249, and this is
+    // the CORRECT outcome rather than a gap. Kept, throwing, so the reason is
+    // findable by whoever tries next.
     //
-    // The v2 receipt rule needs received/applied/unapplied, and a legacy
-    // `transactions` row records none of that split: it has one amount and it
-    // credited Customer AR in full. Booking `applied = received` is therefore
-    // the NO-RESTATEMENT choice — byte-identical to the entry the retired
-    // migration wrote before — and it deliberately never touches 2110.
+    // Seeding this shape means asking the engine for a COLLECTION_PAYMENT
+    // sourced from `collectionPayments` — the RESERVED receipt occurrence — and
+    // then restating its provenance to `transactions`. SCRUM-249 gave that tuple
+    // an owner: only `receiptOccurrence`'s minting path may originate one, and a
+    // caller without a runtime authority is refused before any write. The
+    // restate-afterwards construction was always a fiction; 249 is what makes it
+    // visible.
     //
-    // ⚠️ This is NOT a claim that the legacy receipt discharged a receivable. It
-    // is a refusal to invent a retained liability for a row that never recorded
-    // one; guessing the other way would mint 2110 credits out of historical
-    // data, which is exactly the legacy-data reconstruction that ticket is
-    // forbidden to do.
+    // There is no other door, and that was checked rather than assumed:
+    //   - posting under `transactions` directly is refused by SCRUM-234's
+    //     `RETIRED_SOURCE_TYPES` at the same boundary;
+    //   - `rehydrateReceiptOccurrence`, 249's one sanctioned rehydration door,
+    //     refuses a `transactions` snapshot BY NAME — "cannot become a direct
+    //     collection receipt by being read back";
+    //   - `collectionPayments` is the only surviving source family for
+    //     COLLECTION_PAYMENT, so there is no non-reserved tuple left to ride.
     //
-    // ⚠️ THIS INVARIANT WAS PORTED HERE, NOT COPIED FROM 218-C's DIFF. SCRUM-218-C
-    // wrote it into `migrateUnpostedTransactions`, because at its branch point
-    // that mutation still had a body. SCRUM-234 has since reduced that mutation
-    // to a parameterless unconditional throw and relocated legacy seeding into
-    // THIS helper, which 218-C never saw (`0a0390589` postdates its base). The
-    // semantic still has to exist; only its home moved. Porting the diff instead
-    // of the invariant would have meant resurrecting a retired writer.
-    payload.receivedMinor = amountMinor;
-    payload.appliedMinor = amountMinor;
-    payload.unappliedMinor = 0;
+    // ⚠️ WHAT WAS LOST, AND WHAT WAS NOT. SCRUM-218-C's `applied = received`
+    // no-restatement rule for a legacy receipt was ported here during RC
+    // integration and is now unexercised. Its SUBJECT went with it: no path can
+    // create a new legacy COLLECTION_PAYMENT event at all, so "what GL does one
+    // produce" is unreachable rather than unanswered. Historical rows already in
+    // a pre-cutover database stay readable, reportable and reversible — none of
+    // that runs through here. The rule itself is preserved verbatim below,
+    // unreachable, because deleting it would erase the reasoning if a future
+    // ticket ever needs to restate legacy receipts deliberately.
+    //
+    //     payload.receivedMinor = amountMinor;   // reproduce, never restate
+    //     payload.appliedMinor  = amountMinor;   // applied = received
+    //     payload.unappliedMinor = 0;            // and never mint a 2110 credit
+    //
+    // The one suite that seeded this shape — Phase 17's cutover sign-off
+    // snapshot — was re-pointed at an EXPENSE row, which is what the rest of
+    // that suite already uses and what its assertions were always about.
+    throw new Error(
+      'postLegacyTransactionEvent can no longer seed category "COLLECTION_PAYMENT". ' +
+        "That would post the RESERVED receipt occurrence tuple " +
+        "(COLLECTION_PAYMENT/collectionPayments) from a generic caller, which SCRUM-249 " +
+        "refuses, and SCRUM-234 refuses the transactions source directly. Seed an EXPENSE " +
+        "row, or assert against historical data rather than manufacturing it."
+    );
   } else {
     throw new Error(
       `postLegacyTransactionEvent does not seed category "${tx.category}". ` +

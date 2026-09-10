@@ -91,3 +91,6 @@ sentry-wizard-installation-error-*.log
 /.agents/
 /graphify-out/
 /.mem0/
+
+# SCRUM-249 mutation-harness scratch output (never part of the branch)
+.mut.json
