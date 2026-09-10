@@ -131,6 +131,21 @@ export const AUTHORITY_OWNER_MODULE = "convex/accounting/receiptMovement.ts";
  */
 export const AUTHORITY_INSERT_FIXTURE_EXCLUSIONS: readonly string[] = [
   "convex/accountingReceiptMovement.test.ts",
+  // SCRUM-130, added during RC integration (SCRUM-313). `padLineage` clones one
+  // REAL application row into already-REVERSED siblings so the lineage reaches
+  // the row count that exercises the unwind plan's READ bound. The bound counts
+  // rows irrespective of whether they are live, which is the property under
+  // test, so the sanctioned minting door cannot express it: `applyRetainedCredit`
+  // creates LIVE applications, and driving 100+ of them would test the same
+  // guard far more slowly while proving nothing extra.
+  //
+  // ⚠️ This is an EXEMPTION, not a finding that R6 was wrong. R6 caught this the
+  // moment SCRUM-130 landed and it was correct to: the site is a literal insert
+  // into a sealed authority table outside the owner module. It is exempted the
+  // way ruling c17733 permits — explicitly, by name, on a LIST rather than a
+  // `*.test.ts` wildcard, and the report PRINTS every exempted site so the
+  // exemption stays visible instead of becoming invisible.
+  "convex/chequeReturnLifecycle.test.ts",
 ];
 
 export const MERGE_HELPERS_MODULE = "convex/utils/mergeHelpers.ts";

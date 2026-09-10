@@ -1150,7 +1150,22 @@ describe("SCRUM-218-C §10 RM-01 — a bounced cheque cannot silently strand spe
     return { ...seeded, chequeId, movement };
   }
 
-  test("refuses the return once the retained credit has been applied elsewhere", async () => {
+  /**
+   * ⚠️ THIS TEST NOW ASSERTS THE UNWIND, NOT THE REFUSAL — AND THAT IS THE
+   * HANDOVER SCRUM-218-C DECLARED, NOT A WEAKENED ASSERTION.
+   *
+   * The refusal above was explicitly an interim guard: "Unwinding an application
+   * ... is SCRUM-130's charter, not this ticket's. Refusing converts a silent,
+   * signal-free corruption into a visible stop." SCRUM-130 has now built the
+   * unwind, so the correct behaviour is no longer to stop the accountant — it is
+   * to reverse the application, reopen the exact receivable it discharged by the
+   * exact amount it moved, and take 2110 back to zero.
+   *
+   * The numbers the reviewer reproduced are kept as the assertion, inverted:
+   * where the old code left `net 40000 DEBIT` on a liability control account,
+   * 2110 must now net to zero.
+   */
+  test("unwinds the applied retained credit rather than refusing the return", async () => {
     const { t, asAdmin, orgId, customerId, chequeId, movement } =
       await clearedChequeWithRetainedCredit("rm01", 1000);
     expect(movement.initialUnappliedMinor).toBe(100000);
@@ -1159,23 +1174,56 @@ describe("SCRUM-218-C §10 RM-01 — a bounced cheque cannot silently strand spe
     await asAdmin.mutation(api.collections.applyRetainedCredit, {
       orgId, receiptMovementId: movement._id, receivableId: otherReceivable, requestedAmount: 400,
     });
+    expect((await t.run((ctx) => ctx.db.get(otherReceivable)))!.outstandingAmount).toBe(0);
 
-    await expect(
-      asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId })
-    ).rejects.toThrow(/already been applied to another receivable/i);
+    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
 
-    // The refusal escapes, so nothing partial committed: the cheque is still
-    // CLEARED and no reversal journal exists.
     const cheque = await t.run((ctx) => ctx.db.get(chequeId));
-    expect(cheque!.status).toBe("CLEARED");
-    const reversals = await t.run((ctx) =>
+    expect(cheque!.status).toBe("RETURNED");
+
+    // The other receivable no longer stays PAID on money the bank took back, and
+    // it reopens by ITS OWN application amount.
+    expect((await t.run((ctx) => ctx.db.get(otherReceivable)))!.outstandingAmount).toBe(400);
+
+    // The application is recorded as reversed and the position is retired, so
+    // nothing can be drawn from a receipt that no longer exists.
+    const applications = await t.run((ctx) =>
       ctx.db
-        .query("accountingEvents")
-        .withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .filter((q) => q.eq(q.field("eventType"), "JOURNAL_REVERSAL"))
+        .query("receiptApplications")
+        .withIndex("by_org_movement", (q) =>
+          q.eq("orgId", orgId).eq("receiptMovementId", movement._id)
+        )
         .collect()
     );
-    expect(reversals).toHaveLength(0);
+    expect(applications.map((a) => a.status)).toEqual(["REVERSED"]);
+    expect((await positionFor(t, orgId, movement._id))!.remainingUnappliedMinor).toBe(0);
+
+    // The inverted reviewer numbers: 2110 nets to ZERO, not 40000 DEBIT.
+    const lines = await t.run(async (ctx) => {
+      const entries = await ctx.db
+        .query("journalEntries")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .collect();
+      let debit = 0;
+      let credit = 0;
+      for (const entry of entries) {
+        for (const l of await ctx.db
+          .query("journalLines")
+          .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id))
+          .collect()) {
+          const account = await ctx.db.get(l.accountId);
+          if (account?.systemKey === SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY) {
+            debit += l.debitMinor;
+            credit += l.creditMinor;
+          }
+        }
+      }
+      return { debit, credit };
+    });
+    expect(lines.credit - lines.debit).toBe(0);
+    // ...and it is not zero because nothing was posted: both directions moved.
+    expect(lines.credit).toBeGreaterThan(0);
+    expect(lines.debit).toBeGreaterThan(0);
   });
 
   /**

@@ -378,12 +378,23 @@ describe("SCRUM-236 §5 — structural: one constructible producer, no cached au
   test("S3 — no OTHER site can address this occurrence identity as a forward producer", () => {
     // Enumeration by SPACE rather than by name: anything that writes this
     // occurrence must name `collectionPayments` as an accounting sourceType.
-    // Two non-test sites do, and both are in the cheque-return REVERSAL path
-    // (SCRUM-130's territory) rather than forward producers. The third is the
-    // shared collection factory, which can now only mint COLLECTION_REFUND.
+    //
+    // ⚠️ THIS EXPECTED COUNT WENT 1 -> 0, AND THAT IS THE PROPERTY STRENGTHENING,
+    // NOT WEAKENING. The one remaining site was the cheque return's own
+    // `enqueuePendingReversal`, which hand-built the tuple from string literals.
+    // SCRUM-130 replaced it with `revokeReceiptOccurrence`, which derives
+    // `sourceType`, `sourceId` and `eventVersion` from a rehydrated identity, so
+    // `collections.ts` no longer names the reserved sourceType ANYWHERE — there
+    // is now no literal in this file through which any site, forward or reverse,
+    // could address the occurrence by hand.
+    //
+    // Asserted as an exact 0 rather than deleted: a future edit that reintroduces
+    // a hand-built tuple here must fail this test, which is the whole point of
+    // enumerating by space.
     const collections = read("./collections.ts");
-    const forwardProducers = collections.match(/sourceType:\s*"collectionPayments"/g) ?? [];
-    expect(forwardProducers).toHaveLength(1); // the deferred reversal enqueue
-    expect(collections).toMatch(/enqueuePendingReversal\(ctx, \{[\s\S]{0,400}sourceType: "collectionPayments"/);
+    const handBuiltTuples = collections.match(/sourceType:\s*"collectionPayments"/g) ?? [];
+    expect(handBuiltTuples).toHaveLength(0);
+    // ...and the reversal route that replaced it is the sanctioned facade.
+    expect(collections).toMatch(/await revokeReceiptOccurrence\(ctx, \{[\s\S]{0,200}identity,/);
   });
 });

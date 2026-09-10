@@ -4,6 +4,10 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { ruleCollectionRefund } from "./accounting/postingRules";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
+import {
+  occurrenceReversalIdempotencyKey,
+  rehydrateReceiptOccurrence,
+} from "./accounting/receiptOccurrence";
 
 /**
  * Two tests here queue collection reminders, which schedule
@@ -1939,11 +1943,39 @@ describe("Collections", () => {
       idempotencyKey: "posted-cheque-return-no-open-period",
     });
 
+    // ⚠️ THE DEFERRED REVERSAL'S KEY CHANGED, DELIBERATELY (SCRUM-130).
+    //
+    // It was the hand-built literal `cheque_return_after_clear_<chequeId>`, which
+    // `reversals.ts` records as an OPEN BOUNDARY: a reversal of a
+    // `collectionPayments`-sourced event written under a key OUTSIDE SCRUM-249's
+    // reserved namespace, addressed with `by_org_source` + `.first()` — no
+    // eventType, no eventVersion, no cardinality refusal. The return now goes
+    // through `revokeReceiptOccurrence`, so the key is DERIVED from the same
+    // identity as the forward post by `occurrenceReversalIdempotencyKey`.
+    //
+    // The key is recomputed here from the movement's own persisted snapshot
+    // rather than hard-coded, so this test cannot drift from the encoder: a
+    // change to the framing breaks the encoder's own suite, not this one.
     await t.run(async (ctx) => {
+      const payment = await ctx.db
+        .query("collectionPayments")
+        .withIndex("by_cheque", (q) => q.eq("chequeId", chequeId))
+        .first();
+      const movement = await ctx.db
+        .query("receiptMovements")
+        .withIndex("by_org_payment", (q) =>
+          q.eq("orgId", orgId).eq("collectionPaymentId", payment!._id)
+        )
+        .unique();
+      const derivedKey = occurrenceReversalIdempotencyKey(
+        rehydrateReceiptOccurrence({ orgId, snapshot: movement!.occurrence })
+      );
+      expect(derivedKey).not.toBe(`cheque_return_after_clear_${chequeId}`);
+
       const pendingReversal = await ctx.db
         .query("pendingAccountingEvents")
         .withIndex("by_org_idempotency", (q) =>
-          q.eq("orgId", orgId).eq("idempotencyKey", `cheque_return_after_clear_${chequeId}`)
+          q.eq("orgId", orgId).eq("idempotencyKey", derivedKey)
         )
         .unique();
       expect(pendingReversal).toMatchObject({
