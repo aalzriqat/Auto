@@ -37,6 +37,140 @@ export const getInternal = internalQuery({
 // ─── Mutations ───────────────────────────────────────────────────────────────
 
 /**
+ * The whole birth of a dealership: the organization row, its default roles,
+ * the owner's membership, the subscription, and the social-materialization
+ * stamps.
+ *
+ * ⚠️ EXTRACTED, NOT COPIED (SCRUM-143). The E2E preview bootstrap
+ * (`convex/e2eBootstrap.ts`) has to seed a QA dealership on a fresh preview
+ * deployment where no browser has run the onboarding wizard. Writing a second
+ * creator for it is precisely the failure `commitmentWriteGuard`'s
+ * organization-insert-site audit exists to catch — a creator that merely omits
+ * `commitmentAuthorityVersion` writes no guarded field, passes every other
+ * check, and mints LEGACY dealerships forever. So the seed calls THIS
+ * function, and the backend still contains exactly one
+ * `ctx.db.insert("organizations", …)`.
+ *
+ * Takes the owner's `users` row id rather than resolving the caller, because
+ * the seed has no authenticated identity to resolve.
+ */
+export async function createOrganizationWithDefaultRoles(
+  ctx: MutationCtx,
+  args: { name: string; ownerUserId: Id<"users"> }
+): Promise<Id<"organizations">> {
+  // ⚠️ A NEW DEALERSHIP IS BORN CANONICAL (SCRUM-208 / SCRUM-201, owner
+  // ruling c15855).
+  //
+  // `admitAuthorityVersion` reads `undefined | 0` as LEGACY, so an
+  // organization created without this field can never reach the canonical
+  // restoration lifecycle: every reversal it defers terminalizes as
+  // AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE, permanently. That is not future
+  // migration work — it is a brand-new tenant switched for good into the very
+  // model the canonical authority exists to replace. The legacy half of that
+  // behaviour was proven against a real backend in SCRUM-208 c15854.
+  //
+  // Server-owned and unconditional. No argument selects it, no update path
+  // reaches it, and there is no downgrade: `commitmentAuthorityVersion` is a
+  // guarded field, so a second writer outside the choke fails CI, and
+  // `commitmentWriteGuard` also counts organization INSERT SITES — because a
+  // future creator that merely OMITTED this field would write no guarded
+  // field at all, pass the field guard, and silently return every new
+  // dealership to LEGACY.
+  //
+  // ⚠️ WHY THE LITERAL 1 AND NOT `COMMITMENT_AUTHORITY_V1` (SCRUM-208
+  // c15929, owner ruling). The structural guard has to decide, from source
+  // text alone, that this field is really bound to the canonical version.
+  // Twice it tried to do that by trusting the CONSTANT'S NAME, and twice the
+  // name was forged — first by a plain redeclaration, then by an inner-scope
+  // shadow sitting under a genuine top-level import. Resolving a name to its
+  // binding needs a TypeScript Program, not a text scan, so the guard now
+  // accepts only a numeric literal. A number cannot be shadowed.
+  //
+  // The duplication is deliberate and it is NOT unpinned. Two executable
+  // contracts tie this literal to the kernel:
+  //
+  //   1. the guard's suite compares the guard's own canonical number with
+  //      the real `COMMITMENT_AUTHORITY_V1`;
+  //   2. `organizations.test.ts` drives THIS mutation and asserts the value
+  //      it actually stored equals that same kernel constant.
+  //
+  // So bumping the kernel to V2 does not silently leave new dealerships on
+  // 1 — it turns both suites red until this line and the guard are changed
+  // on purpose, together.
+  //
+  // EXISTING organizations are untouched. They stay LEGACY and keep failing
+  // closed; activating them is SCRUM-201's cutover and deliberately does not
+  // happen here.
+  const orgId = await ctx.db.insert("organizations", {
+    name: args.name.trim(),
+    createdAt: Date.now(),
+    commitmentAuthorityVersion: 1,
+  });
+
+  // A brand-new org has no social events, so its materialised conversation
+  // set is exhaustively correct the moment it exists — the eligible source is
+  // empty, and every event from here on is materialised by the trigger as it
+  // arrives. Recording that up front is what stops new tenants from sitting
+  // on the legacy full-scan path forever waiting for a backfill that has
+  // nothing to do.
+  //
+  // This is the one place COMPLETED may be written without a pagination pass,
+  // and it is sound for a reason specific to this moment: an event cannot
+  // exist for an organization that did not exist when the event arrived.
+  const materializationStamp = {
+    orgId,
+    generation: SOCIAL_CONVERSATION_GENERATION,
+    status: "completed" as const,
+    runId: `orgCreate:${Date.now()}`,
+    processedCount: 0,
+    materializedCount: 0,
+    expectedCount: 0,
+    startedAt: Date.now(),
+    lastProgressAt: Date.now(),
+    completedAt: Date.now(),
+  };
+  for (const platform of SOCIAL_PLATFORMS) {
+    await ctx.db.insert("socialMaterializationState", { ...materializationStamp, platform });
+  }
+
+  // Seed default roles for the new organization
+  let ownerRoleId = null;
+  for (const template of DEFAULT_ROLE_TEMPLATES) {
+    const roleId = await ctx.db.insert("roles", {
+      orgId,
+      name: template.name,
+      permissions: [...template.permissions],
+      isSystemOwnerRole: template.name === SYSTEM_OWNER_ROLE_NAME,
+    });
+    if (template.name === SYSTEM_OWNER_ROLE_NAME) {
+      ownerRoleId = roleId;
+    }
+  }
+
+  if (!ownerRoleId) {
+    throw new ConvexError("Fatal: OWNER role template is missing from defaults.");
+  }
+
+  // Assign the creator as OWNER
+  await ctx.db.insert("memberships", {
+    orgId,
+    userId: args.ownerUserId,
+    roleId: ownerRoleId,
+  });
+
+  // All new orgs start on the enterprise plan (no time limit)
+  await ctx.db.insert("subscriptions", {
+    orgId,
+    plan: "enterprise",
+    status: "active",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  });
+
+  return orgId;
+}
+
+/**
  * Creates a new organization and seeds it with default roles.
  * The calling user is automatically assigned the OWNER role.
  */
@@ -46,117 +180,10 @@ export const create = mutation({
   },
   handler: async (ctx, args) => {
     const user = await requireOrCreateAuthenticatedUser(ctx);
-
-    // ⚠️ A NEW DEALERSHIP IS BORN CANONICAL (SCRUM-208 / SCRUM-201, owner
-    // ruling c15855).
-    //
-    // `admitAuthorityVersion` reads `undefined | 0` as LEGACY, so an
-    // organization created without this field can never reach the canonical
-    // restoration lifecycle: every reversal it defers terminalizes as
-    // AUTHORITY_WITHHELD_CANONICAL_UNAVAILABLE, permanently. That is not future
-    // migration work — it is a brand-new tenant switched for good into the very
-    // model the canonical authority exists to replace. The legacy half of that
-    // behaviour was proven against a real backend in SCRUM-208 c15854.
-    //
-    // Server-owned and unconditional. No argument selects it, no update path
-    // reaches it, and there is no downgrade: `commitmentAuthorityVersion` is a
-    // guarded field, so a second writer outside the choke fails CI, and
-    // `commitmentWriteGuard` also counts organization INSERT SITES — because a
-    // future creator that merely OMITTED this field would write no guarded
-    // field at all, pass the field guard, and silently return every new
-    // dealership to LEGACY.
-    //
-    // ⚠️ WHY THE LITERAL 1 AND NOT `COMMITMENT_AUTHORITY_V1` (SCRUM-208
-    // c15929, owner ruling). The structural guard has to decide, from source
-    // text alone, that this field is really bound to the canonical version.
-    // Twice it tried to do that by trusting the CONSTANT'S NAME, and twice the
-    // name was forged — first by a plain redeclaration, then by an inner-scope
-    // shadow sitting under a genuine top-level import. Resolving a name to its
-    // binding needs a TypeScript Program, not a text scan, so the guard now
-    // accepts only a numeric literal. A number cannot be shadowed.
-    //
-    // The duplication is deliberate and it is NOT unpinned. Two executable
-    // contracts tie this literal to the kernel:
-    //
-    //   1. the guard's suite compares the guard's own canonical number with
-    //      the real `COMMITMENT_AUTHORITY_V1`;
-    //   2. `organizations.test.ts` drives THIS mutation and asserts the value
-    //      it actually stored equals that same kernel constant.
-    //
-    // So bumping the kernel to V2 does not silently leave new dealerships on
-    // 1 — it turns both suites red until this line and the guard are changed
-    // on purpose, together.
-    //
-    // EXISTING organizations are untouched. They stay LEGACY and keep failing
-    // closed; activating them is SCRUM-201's cutover and deliberately does not
-    // happen here.
-    const orgId = await ctx.db.insert("organizations", {
-      name: args.name.trim(),
-      createdAt: Date.now(),
-      commitmentAuthorityVersion: 1,
+    return await createOrganizationWithDefaultRoles(ctx, {
+      name: args.name,
+      ownerUserId: user._id,
     });
-
-    // A brand-new org has no social events, so its materialised conversation
-    // set is exhaustively correct the moment it exists — the eligible source is
-    // empty, and every event from here on is materialised by the trigger as it
-    // arrives. Recording that up front is what stops new tenants from sitting
-    // on the legacy full-scan path forever waiting for a backfill that has
-    // nothing to do.
-    //
-    // This is the one place COMPLETED may be written without a pagination pass,
-    // and it is sound for a reason specific to this moment: an event cannot
-    // exist for an organization that did not exist when the event arrived.
-    const materializationStamp = {
-      orgId,
-      generation: SOCIAL_CONVERSATION_GENERATION,
-      status: "completed" as const,
-      runId: `orgCreate:${Date.now()}`,
-      processedCount: 0,
-      materializedCount: 0,
-      expectedCount: 0,
-      startedAt: Date.now(),
-      lastProgressAt: Date.now(),
-      completedAt: Date.now(),
-    };
-    for (const platform of SOCIAL_PLATFORMS) {
-      await ctx.db.insert("socialMaterializationState", { ...materializationStamp, platform });
-    }
-
-    // Seed default roles for the new organization
-    let ownerRoleId = null;
-    for (const template of DEFAULT_ROLE_TEMPLATES) {
-      const roleId = await ctx.db.insert("roles", {
-        orgId,
-        name: template.name,
-        permissions: [...template.permissions],
-        isSystemOwnerRole: template.name === SYSTEM_OWNER_ROLE_NAME,
-      });
-      if (template.name === SYSTEM_OWNER_ROLE_NAME) {
-        ownerRoleId = roleId;
-      }
-    }
-
-    if (!ownerRoleId) {
-      throw new ConvexError("Fatal: OWNER role template is missing from defaults.");
-    }
-
-    // Assign the creator as OWNER
-    await ctx.db.insert("memberships", {
-      orgId,
-      userId: user._id,
-      roleId: ownerRoleId,
-    });
-
-    // All new orgs start on the enterprise plan (no time limit)
-    await ctx.db.insert("subscriptions", {
-      orgId,
-      plan: "enterprise",
-      status: "active",
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    });
-
-    return orgId;
   },
 });
 

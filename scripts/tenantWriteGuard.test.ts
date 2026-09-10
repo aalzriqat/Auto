@@ -535,12 +535,42 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // that nothing moved — which is why both steps are recorded separately above
   // rather than being netted into a single "unchanged" note. These numbers were
   // MEASURED after both changes, not arithmetic from the artifact's own pin.
+  //
+  // ─── RC INTEGRATION (SCRUM-313): the Playwright lane merged in here ───
+  //
+  // The two reasons below arrived from the OTHER side of this merge, on
+  // protected main `17fb50e4e` (PR #300 / SCRUM-143). Their reasoning is kept
+  // verbatim in substance; only the numbers are restated, because the two lanes
+  // moved the same counters independently and main's "151 to 153" was measured
+  // against a tree that had none of the Accounting changes above.
+  //
+  // `e2eBootstrap.markPreviewDeployment` / `.bootstrapE2EOrganization`
+  // (SCRUM-143) — the fifth stated reason, and the two mutations that take
+  // `skippedNoOrgId` from 155 to 157 in the COMBINED tree (they took it from
+  // 151 to 153 on main, where the Accounting slices were absent):
+  //
+  // Neither takes an `orgId` because on the deployment they are allowed to run
+  // on there is no tenant to name. `markPreviewDeployment` refuses unless the
+  // deployment holds NO organization, membership or user at all;
+  // `bootstrapE2EOrganization` creates the single organization it then works
+  // inside and refuses to proceed beside one it did not create. So there is no
+  // caller-supplied organization for a caller to get wrong or to forge, and the
+  // ids they do write are ones the same transaction just minted. Both are
+  // `internalMutation`s with no public entry point, reachable only through an
+  // admin/deploy key.
+  //
+  // ⚠️ THE COMBINED PINS BELOW WERE RE-MEASURED ON THE MERGED TREE, not derived
+  // by adding main's delta to the RC's. Arithmetic would have produced the same
+  // four numbers here, which is exactly why it is not evidence: it would equally
+  // have "confirmed" a count that silently lost a mutation on one side of the
+  // merge. The ratchet's whole purpose is to make a silent shrink impossible, so
+  // an integration re-measures rather than reconciles on paper.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 485,
+      totalMutations: 487,
       analysed: 315,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 155,
+      skippedNoOrgId: 157,
     });
   });
 });

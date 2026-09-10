@@ -6,7 +6,7 @@ import { PERMISSIONS } from "./utils/permissions";
 
 // ─── Seed data ────────────────────────────────────────────────────────────────
 
-const DEFAULT_LEAD_SOURCES = [
+export const DEFAULT_LEAD_SOURCES = [
   "Walk-in",
   "Website",
   "Facebook",
