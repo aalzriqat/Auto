@@ -318,12 +318,27 @@ describe("observing an execution", () => {
     );
     await seed.t.run((ctx) => ctx.db.patch(attempt._id, { status: "SCHEDULED" as const }));
 
-    // ⚠️ CONSTRUCTED ON PURPOSE, AND UNREACHABLE IN PRODUCTION. Tx C either
-    // terminalizes the work or returns without writing because it was
-    // superseded — and a superseded execution is not the active attempt. There
-    // is no legitimate path to this state, which is exactly why recording an
-    // outcome for it would paper over a state machine that had stopped being
-    // true. It throws instead.
+    // ⚠️ CONSTRUCTED ON PURPOSE. The invariant it guards is real: a succeeded
+    // execution that left the work claimed means the state machine has stopped
+    // being true, and recording an outcome for it would paper that over. It
+    // throws instead.
+    //
+    // ⚠️ THIS COMMENT USED TO SAY "AND UNREACHABLE IN PRODUCTION". THAT WAS
+    // FALSE, AND SCRUM-302 MADE IT FALSE (R1).
+    //
+    // The reasoning was: Tx C either terminalizes the work or returns without
+    // writing because it was superseded, and a superseded execution is not the
+    // active attempt. SCRUM-302 then added a lifecycle early return ABOVE the
+    // supersession guards, which returned while the attempt was still ACTIVE —
+    // leaving exactly this triple, reachable by an ordinary suspension landing
+    // between dispatch and settlement. The one-minute cron then re-threw it
+    // forever and the car stayed held.
+    //
+    // The correction moved that check BELOW the identity guards and gave it a
+    // coherent transition (`accountingOutbox.ts`).
+    // `authorityLifecycleRace.scrum302.test.ts` drives the real race and
+    // asserts this throw does NOT happen. If this test ever fires in CI,
+    // read that one first.
     await expect(
       seed.t.mutation(internal.accountingOutbox.observeAuthorityAttempt, { workId })
     ).rejects.toThrow(/reported success but work .* is still DISPATCHED/);

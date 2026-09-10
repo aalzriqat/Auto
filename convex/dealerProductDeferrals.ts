@@ -8,6 +8,15 @@
  * fixedAssets.ts's depreciation cron exactly (paginated query here +
  * recognizeDeferredCommissionForMonth, same idempotent-per-yearMonth shape).
  */
+// ⚠️ SCRUM-302 — imported FIRST, deliberately. `utils/orgLifecycle` and
+// `utils/webhookLog` are leaves: neither imports anything from this
+// application. Appended at the END of an import block, the binding was
+// still uninitialized when a module cycle re-entered this file mid-init
+// (`Cannot access '__vite_ssr_import_9__' before initialization`, thrown
+// from enqueuePendingPost under full-suite ordering only). A leaf with no
+// app edges is safe to initialize before anything that can participate in
+// a cycle, so it goes above every local import.
+import { orgEconomicLifecycleBlock } from "./utils/orgLifecycle";
 import { v } from "convex/values";
 import { internalQuery } from "./_generated/server";
 import { internalMutation } from "./functions";
@@ -36,6 +45,12 @@ export const recognizeDeferredCommissionForMonth = internalMutation({
     systemActorId: v.id("users"),
   },
   handler: async (ctx, args) => {
+    // ⚠️ SCRUM-302 — see the identical note in `fixedAssets.depreciateAssetForMonth`.
+    // Classified before anything else so a blocked organization is a counted
+    // skip in a cross-org cron batch, never a throw that poisons the batch.
+    const lifecycle = await orgEconomicLifecycleBlock(ctx, args.orgId);
+    if (lifecycle) return { posted: false, reason: "org_lifecycle_blocked" };
+
     const deferral = await ctx.db.get(args.deferralId);
     if (!deferral || deferral.orgId !== args.orgId) return { posted: false, reason: "not_found" };
     if (deferral.status !== "ACTIVE") return { posted: false, reason: "not_active" };

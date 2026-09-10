@@ -1,3 +1,12 @@
+// ⚠️ SCRUM-302 — imported FIRST, deliberately. `utils/orgLifecycle` and
+// `utils/webhookLog` are leaves: neither imports anything from this
+// application. Appended at the END of an import block, the binding was
+// still uninitialized when a module cycle re-entered this file mid-init
+// (`Cannot access '__vite_ssr_import_9__' before initialization`, thrown
+// from enqueuePendingPost under full-suite ordering only). A leaf with no
+// app edges is safe to initialize before anything that can participate in
+// a cycle, so it goes above every local import.
+import { recordWebhookLog } from "./utils/webhookLog";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
@@ -389,7 +398,8 @@ const webhookSourceValidator = v.union(
   v.literal("fi-commission-recognition"),
   v.literal("prepaid-expense-amortization"),
   v.literal("marketplace-weekly-report"),
-  v.literal("marketplace-whatsapp")
+  v.literal("marketplace-whatsapp"),
+  v.literal("payment")
 );
 
 /**
@@ -411,7 +421,7 @@ export const logWebhookEvent = internalMutation({
     error: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    return await ctx.db.insert("webhookLogs", { ...args, createdAt: Date.now() });
+    return await recordWebhookLog(ctx, args);
   },
 });
 

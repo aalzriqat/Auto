@@ -1,3 +1,13 @@
+// ⚠️ SCRUM-302 — imported FIRST, deliberately. `utils/orgLifecycle` and
+// `utils/webhookLog` are leaves: neither imports anything from this
+// application. Appended at the END of an import block, the binding was
+// still uninitialized when a module cycle re-entered this file mid-init
+// (`Cannot access '__vite_ssr_import_9__' before initialization`, thrown
+// from enqueuePendingPost under full-suite ordering only). A leaf with no
+// app edges is safe to initialize before anything that can participate in
+// a cycle, so it goes above every local import.
+import { orgEconomicLifecycleBlock } from "./utils/orgLifecycle";
+import { recordWebhookLog } from "./utils/webhookLog";
 import { v, ConvexError } from "convex/values";
 import { query, internalQuery, MutationCtx } from "./_generated/server";
 import { mutation, internalMutation } from "./functions";
@@ -571,6 +581,48 @@ export const settleByExternalId = internalMutation({
     if (!intent) {
       // Unknown intent — return gracefully so webhook caller gets 200
       console.warn(`[paymentIntents] Unknown externalId for provider ${provider}: ${externalId}`);
+      return null;
+    }
+
+    // ⚠️ SCRUM-302 — ORGANIZATION LIFECYCLE, CHECKED BEFORE ANY ECONOMIC EFFECT.
+    //
+    // This runs in a trusted internal context reached from the payment webhook,
+    // so `requireTenantAuth`, which refuses a suspended organization at the
+    // authenticated door, is never consulted. Reproduced: a suspended org whose
+    // purge had already drained `canonicalPayments` to zero had a canonical
+    // payment written straight back into that table by this handler, while its
+    // authenticated twin `markSettled` correctly refused the identical request.
+    //
+    // WHY THIS RETURNS RATHER THAN THROWS. A throw would be a non-200 to the
+    // provider, which buys an uncontrolled retry storm and STILL loses the fact
+    // that a real, signature-verified payment arrived. Instead the refusal is
+    // recorded durably and the route answers 200: the provider stops retrying,
+    // nothing economic is created, and the money is visible to an operator.
+    // Real settlement for such an organization can then only happen through a
+    // separately reviewed recovery path, which is the point.
+    //
+    // The evidence is written HERE, in the same transaction as the refusal,
+    // rather than by the HTTP handler — so it cannot be lost by a caller that
+    // forgets to log, and cannot outlive a rollback of the thing it describes.
+    //
+    // `status: "error"` is deliberate and terminal. `getStuckWebhookIds`
+    // selects only `status === "received"`, so this row is never swept into
+    // `scanDeadLetterWebhooks`; it is a finished, refused delivery, not one
+    // still in flight.
+    const lifecycle = await orgEconomicLifecycleBlock(ctx, intent.orgId);
+    if (lifecycle) {
+      await recordWebhookLog(ctx, {
+        source: "payment",
+        status: "error",
+        summary:
+          `refused ${provider} settlement for org ${intent.orgId}: ${lifecycle.code}` +
+          ` (intent ${intent._id}, ${args.amountMinor} ${currency}, externalId ${externalId})`,
+        eventId: optionalTrimmed(args.providerEventId),
+        error: lifecycle.message,
+      });
+      console.error(
+        `[paymentIntents] Refused ${provider} settlement for ${intent._id}: ${lifecycle.code}`
+      );
       return null;
     }
 

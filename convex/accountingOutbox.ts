@@ -13,6 +13,15 @@
  * reverseAccountingEvent dedupe by idempotency key), so re-driving is safe even
  * if the original operation later posts directly.
  */
+// ⚠️ SCRUM-302 — imported FIRST, deliberately. `utils/orgLifecycle` and
+// `utils/webhookLog` are leaves: neither imports anything from this
+// application. Appended at the END of an import block, the binding was
+// still uninitialized when a module cycle re-entered this file mid-init
+// (`Cannot access '__vite_ssr_import_9__' before initialization`, thrown
+// from enqueuePendingPost under full-suite ordering only). A leaf with no
+// app edges is safe to initialize before anything that can participate in
+// a cycle, so it goes above every local import.
+import { assertOrgEconomicallyActive, orgEconomicLifecycleBlock } from "./utils/orgLifecycle";
 import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
 import { internalMutation, mutation } from "./functions";
@@ -47,11 +56,23 @@ import { requireFeature } from "./subscriptions";
 
 // ─── Enqueue helpers (called from workflow hooks) ─────────────────────────────
 
+/**
+ * ⚠️ SCRUM-302 — a queue is not a safe place to park money for a blocked
+ * organization. Enqueueing is refused rather than deferred: a pending row for a
+ * suspended org would post the moment the org returned to service, turning a
+ * refusal into a delayed detonation, and for an org under destructive purge it
+ * would wait for a reactivation SCRUM-297 forbids outright.
+ *
+ * `drainEntries` carries the matching classification for rows that were already
+ * PENDING when the organization's lifecycle changed underneath them.
+ */
 export async function enqueuePendingPost(
   ctx: MutationCtx,
   cmd: PostCommand,
   reason: string
 ): Promise<void> {
+  await assertOrgEconomicallyActive(ctx, cmd.orgId);
+
   // Dedupe by idempotency key — never queue the same logical event twice.
   const existing = await ctx.db
     .query("pendingAccountingEvents")
@@ -95,6 +116,7 @@ export async function enqueuePendingReversal(
     sourceId: string;
   }
 ): Promise<void> {
+  await assertOrgEconomicallyActive(ctx, args.orgId);
   const existing = await ctx.db
     .query("pendingAccountingEvents")
     .withIndex("by_org_idempotency", (q) =>
@@ -336,6 +358,13 @@ async function recordAuthorityWork(
   p: Doc<"pendingAccountingEvents">,
   source: ReversalCompletionSource
 ): Promise<Id<"commitmentAuthorityWork"> | null> {
+  // ⚠️ SCRUM-302 — `commitmentAuthorityWork` is queued money work: it exists to
+  // be dispatched later and settle authority. Queuing it for a blocked
+  // organization is the same delayed-detonation shape `enqueuePendingPost`
+  // refuses above. `drainEntries` already classifies before reaching here; this
+  // is the guard for any future caller that does not.
+  await assertOrgEconomicallyActive(ctx, p.orgId);
+
   const workKey = `${p.idempotencyKey}:${source.kind}:${String(source.holdId ?? source.depositId)}`;
   const existing = await ctx.db
     .query("commitmentAuthorityWork")
@@ -396,19 +425,47 @@ function authorityBackoffFor(generation: number): number {
 }
 
 /**
+ * How much of the bounded retry budget this work has actually spent.
+ *
+ * ⚠️ THE BUDGET MEASURES TECHNICAL FAILURE, AND A POLICY REFUSAL IS NOT ONE
+ * (SCRUM-302). `executions` counts every execution the dispatcher scheduled,
+ * including those that performed no settlement because a temporary lifecycle
+ * refusal held the work. Charging those to the budget would let five
+ * suspend/reactivate races around dispatch terminalize a healthy car as
+ * RETRY_EXHAUSTED — an audit record asserting repeated failed attempts when
+ * not one settlement had ever run.
+ *
+ * `lifecycleHolds` is incremented alongside the execution it refunds, which
+ * keeps this non-negative. A permanent refusal terminalizes the work instead,
+ * so it neither refunds nor needs to.
+ */
+function technicalExecutionsSpent(work: Doc<"commitmentAuthorityWork">): number {
+  return work.executions - (work.lifecycleHolds ?? 0);
+}
+
+/**
  * Terminalize one work item as a repair condition, and let the accounting row
  * reflect it.
  *
  * ⚠️ BLOCKED IS TERMINAL AND VISIBLE, NEVER A SILENT GIVE-UP. The accounting
- * stays complete; the car keeps whatever authority it has; a person is told
- * this one needs them.
+ * stays complete and the car keeps whatever authority it has.
+ *
+ * ⚠️ BUT BLOCKED NO LONGER IMPLIES "A PERSON MUST ACT" (SCRUM-302). It used to,
+ * because retry exhaustion was its only producer. The lifecycle-abandonment
+ * outcome is also terminal and also has no automatic retry, yet there is nobody
+ * for whom repairing an organization under irreversible deletion would mean
+ * anything. The STATUS carries one invariant — terminal, no automatic retry —
+ * and the OUTCOME says why, and therefore whether human repair is meaningful.
  */
 async function blockAuthorityWork(
   ctx: MutationCtx,
   work: Doc<"commitmentAuthorityWork">,
   outcome:
     | "ACCOUNTING_REVERSED_AUTHORITY_RETRY_EXHAUSTED"
-    | "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT",
+    | "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT"
+    // SCRUM-302 — terminal because the organization is being irreversibly
+    // deleted, not because anything failed or contradicted itself.
+    | "ACCOUNTING_REVERSED_AUTHORITY_ABANDONED_ORG_PURGED",
   detail: string
 ): Promise<void> {
   const now = Date.now();
@@ -508,7 +565,18 @@ export const dispatchAuthorityWorkItem = internalMutation({
     if (!work || work.status !== "READY") return { dispatched: false as const };
     if (work.nextActionAt > Date.now()) return { dispatched: false as const };
 
-    if (work.executions >= MAX_AUTHORITY_EXECUTIONS) {
+    // ⚠️ SCRUM-302 — a fourth economic cron, which the ticket did not name:
+    // `crons.ts` schedules `dispatchDueAuthorityWork`, which fans out to this
+    // per-item mutation across EVERY organization. Refusing here — before the
+    // attempt row is minted and before any settlement is scheduled — leaves the
+    // work READY and untouched rather than consuming an execution from its
+    // bounded budget, so a suspension that later lifts loses nothing and a
+    // purge simply never dispatches. Returning rather than throwing for the
+    // usual reason: this is reached from a cross-org batch.
+    const lifecycle = await orgEconomicLifecycleBlock(ctx, work.orgId);
+    if (lifecycle) return { dispatched: false as const };
+
+    if (technicalExecutionsSpent(work) >= MAX_AUTHORITY_EXECUTIONS) {
       await blockAuthorityWork(
         ctx,
         work,
@@ -599,6 +667,83 @@ export const performAuthoritySettlement = internalMutation({
     // failed and feed a retry that has already happened.
     if (String(work.activeAttemptId) !== String(args.attemptId)) return;
     if (work.generation !== args.generation) return;
+
+    // ⚠️ SCRUM-302 R1 — LIFECYCLE IS EVALUATED *BELOW* THE IDENTITY GUARDS,
+    // AND THE ORDER IS THE WHOLE CORRECTION.
+    //
+    // This check used to sit ABOVE them and simply `return`. That was wrong in
+    // two compounding ways, and I wrote a comment asserting it was fine.
+    //
+    // First, it ran for STALE executions too, so a superseded attempt could
+    // take a lifecycle transition against work that had already moved on.
+    // Second — the defect Sonnet MAX reproduced — returning while this attempt
+    // was still the ACTIVE one left `work.status === "DISPATCHED"` and
+    // `attempt.status === "SCHEDULED"` while the scheduled function completed
+    // normally, so Convex recorded `state.kind === "success"`. That triple is
+    // exactly the invariant violation `observeAuthorityAttempt` throws on, and
+    // the one-minute cron re-selected and re-threw it forever.
+    // `reactivateOrganization` touches neither table, so unsuspending could not
+    // repair it: the car stayed held permanently.
+    //
+    // My original comment claimed returning here "matches how this handler
+    // treats a superseded execution". IT DOES NOT. A superseded execution
+    // returns at the guards ABOVE, where re-dispatch has ALREADY made the state
+    // coherent under a new generation. Nothing had made it coherent here, and
+    // nothing else ever would. A bare `return` is only safe for an execution
+    // that is not the one holding the claim.
+    //
+    // So the claim is released HERE, coherently, before returning — and a
+    // stale execution never reaches this line at all.
+    const lifecycle = await orgEconomicLifecycleBlock(ctx, work.orgId);
+    if (lifecycle) {
+      const blockedAt = Date.now();
+
+      // The execution ran and performed no settlement. `SUCCEEDED` would claim
+      // a typed outcome that does not exist, and `FAILED` would feed a
+      // technical-failure reading of a policy decision. CANCELED is the
+      // truthful one: this settlement was called off, not attempted and not
+      // botched.
+      await ctx.db.patch(args.attemptId, {
+        status: "CANCELED" as const,
+        observedAt: blockedAt,
+        detail: "this settlement was not performed because of the organization's status",
+      });
+
+      if (lifecycle.permanent) {
+        // Irreversible destructive purge (or an organization row that is
+        // already gone). Per the owner ruling on SCRUM-302 R1 this terminalizes
+        // with its own outcome rather than borrowing one that would assert
+        // something never established — see the taxonomy note in
+        // `commitments.ts`. BLOCKED here means only "terminal, no automatic
+        // retry"; it does NOT summon a person to repair an organization that is
+        // being deleted.
+        await blockAuthorityWork(
+          ctx,
+          work,
+          "ACCOUNTING_REVERSED_AUTHORITY_ABANDONED_ORG_PURGED",
+          "this dealership is being permanently deleted, so the vehicle's authority settlement was abandoned"
+        );
+        return;
+      }
+
+      // Ordinary suspension: the organization may legitimately come back, so
+      // the work is HELD, not failed. The claim is released so a reactivated
+      // org can mint a fresh generation and settle normally.
+      //
+      // ⚠️ AND THE HOLD IS REFUNDED. The dispatcher already spent an execution
+      // on this attempt, but no settlement ran, so charging it to the technical
+      // retry budget would let five suspend/reactivate races terminalize a
+      // perfectly healthy car as RETRY_EXHAUSTED — an audit record asserting
+      // repeated failures that never happened. `executions` still counts what
+      // was scheduled; `lifecycleHolds` records how much of that was policy.
+      await ctx.db.patch(work._id, {
+        status: "READY" as const,
+        activeAttemptId: undefined,
+        lifecycleHolds: (work.lifecycleHolds ?? 0) + 1,
+        nextActionAt: blockedAt + authorityBackoffFor(work.generation),
+      });
+      return;
+    }
 
     const settled = await settleOneReversalSource(
       ctx,
@@ -747,7 +892,7 @@ export const observeAuthorityAttempt = internalMutation({
         : "this settlement attempt could not be observed",
     });
 
-    if (work.executions >= MAX_AUTHORITY_EXECUTIONS) {
+    if (technicalExecutionsSpent(work) >= MAX_AUTHORITY_EXECUTIONS) {
       await blockAuthorityWork(
         ctx,
         work,
@@ -1138,6 +1283,42 @@ export async function drainEntries(
     // its exact wording rather than restating the rule, so the two cannot
     // drift. REVERSE entries are exempt — a reversal unwinds something that
     // already posted, and does not route through the engine at all.
+    // ⚠️ SCRUM-302 — ORGANIZATION LIFECYCLE, CLASSIFIED HERE FOR THE SAME
+    // ORDERING REASON as the retired refusal below, and BEFORE it.
+    //
+    // `enqueuePendingPost` now refuses to queue for a blocked organization, but
+    // that does not cover a row that was already PENDING when the organization
+    // was suspended or entered destructive purge underneath it. Such a row must
+    // not simply reach the engine: the engine THROWS, which routes it through
+    // `markEntryFailed` and burns an attempt on every unrelated drain until it
+    // dead-letters — right for a purge, wrong for a suspension that may lift.
+    //
+    // So the two classes take DIFFERENT dispositions, which is the whole reason
+    // `orgEconomicLifecycleBlock` reports `permanent` rather than a boolean:
+    //
+    //   permanent (destructive purge) -> markEntryFailed, so it dead-letters
+    //     and stops blocking period close with a row no operator can resolve.
+    //     There is no reactivation that could ever make it postable.
+    //
+    //   temporary (suspended)         -> markEntryHeld, PENDING with a visible
+    //     reason and no attempt consumed, exactly like an entry waiting for its
+    //     own period to open.
+    //
+    // Applies to BOTH kinds, unlike the retired check below: a REVERSE entry
+    // writes its own accountingEvents/journalEntries/journalLines rows through
+    // `reverseAccountingEvent`, so it is a new economic footprint too.
+    const lifecycle = await orgEconomicLifecycleBlock(ctx, p.orgId);
+    if (lifecycle) {
+      if (lifecycle.permanent) {
+        // COUNT WHAT WAS RECORDED, NOT WHAT WAS ATTEMPTED — same rule as below.
+        if (await markEntryFailed(ctx, p, lifecycle.message)) failed++;
+      } else {
+        await markEntryHeld(ctx, p, lifecycle.message);
+        held++;
+      }
+      continue;
+    }
+
     if (p.kind === "POST") {
       // `eventType` is schema-optional, `sourceType` is not — so the source
       // check must not be gated on eventType being present, or a POST row with

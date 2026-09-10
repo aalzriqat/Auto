@@ -25,6 +25,15 @@
  * accountingEvents/pendingAccountingEvents) are what distinguish the two for
  * the accountant-facing status.
  */
+// ⚠️ SCRUM-302 — imported FIRST, deliberately. `utils/orgLifecycle` and
+// `utils/webhookLog` are leaves: neither imports anything from this
+// application. Appended at the END of an import block, the binding was
+// still uninitialized when a module cycle re-entered this file mid-init
+// (`Cannot access '__vite_ssr_import_9__' before initialization`, thrown
+// from enqueuePendingPost under full-suite ordering only). A leaf with no
+// app edges is safe to initialize before anything that can participate in
+// a cycle, so it goes above every local import.
+import { orgEconomicLifecycleBlock } from "./utils/orgLifecycle";
 import { v, ConvexError } from "convex/values";
 import { internalQuery, query, action, MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation } from "./functions";
@@ -435,6 +444,12 @@ export const catchUpScheduleMutation = internalMutation({
     systemActorId: v.id("users"),
   },
   handler: async (ctx, args) => {
+    // ⚠️ SCRUM-302 — see the identical note in `fixedAssets.depreciateAssetForMonth`.
+    // Classified before anything else so a blocked organization is a counted
+    // skip in a cross-org cron batch, never a throw that poisons the batch.
+    const lifecycle = await orgEconomicLifecycleBlock(ctx, args.orgId);
+    if (lifecycle) return { monthsPosted: 0, stoppedReason: "org_lifecycle_blocked" };
+
     const schedule = await ctx.db.get(args.scheduleId);
     if (!schedule || schedule.orgId !== args.orgId) return { monthsPosted: 0, stoppedReason: "not_found" };
     return catchUpPrepaidSchedule(ctx, schedule, {

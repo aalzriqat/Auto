@@ -1,3 +1,12 @@
+// ⚠️ SCRUM-302 — imported FIRST, deliberately. `utils/orgLifecycle` and
+// `utils/webhookLog` are leaves: neither imports anything from this
+// application. Appended at the END of an import block, the binding was
+// still uninitialized when a module cycle re-entered this file mid-init
+// (`Cannot access '__vite_ssr_import_9__' before initialization`, thrown
+// from enqueuePendingPost under full-suite ordering only). A leaf with no
+// app edges is safe to initialize before anything that can participate in
+// a cycle, so it goes above every local import.
+import { assertOrgEconomicallyActive } from "../utils/orgLifecycle";
 import { ConvexError } from "convex/values";
 import { Id } from "../_generated/dataModel";
 import { MutationCtx } from "../_generated/server";
@@ -26,6 +35,14 @@ export async function reverseAccountingEvent(
   ctx: MutationCtx,
   cmd: ReversalCommand
 ): Promise<ReversalResult> {
+  // ⚠️ SCRUM-302 — this function does NOT route through `postAccountingEvent`;
+  // it writes its own accountingEvents, journalEntries and journalLines rows
+  // directly (the standing note beside JOURNAL_REVERSAL in `postingRules.ts`
+  // says so). So the engine's lifecycle refusal does not cover it, and a
+  // reversal is a NEW economic footprint even though it unwinds an old one.
+  // A suspended or destructively-purged organization must not acquire one.
+  await assertOrgEconomicallyActive(ctx, cmd.orgId);
+
   const original = await ctx.db.get(cmd.originalEventId);
   if (!original || original.orgId !== cmd.orgId) {
     throw new ConvexError("Accounting event not found in this organization.");

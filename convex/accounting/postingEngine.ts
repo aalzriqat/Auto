@@ -1,3 +1,12 @@
+// ⚠️ SCRUM-302 — imported FIRST, deliberately. `utils/orgLifecycle` and
+// `utils/webhookLog` are leaves: neither imports anything from this
+// application. Appended at the END of an import block, the binding was
+// still uninitialized when a module cycle re-entered this file mid-init
+// (`Cannot access '__vite_ssr_import_9__' before initialization`, thrown
+// from enqueuePendingPost under full-suite ordering only). A leaf with no
+// app edges is safe to initialize before anything that can participate in
+// a cycle, so it goes above every local import.
+import { assertOrgEconomicallyActive } from "../utils/orgLifecycle";
 import { ConvexError } from "convex/values";
 import { Id } from "../_generated/dataModel";
 import { MutationCtx } from "../_generated/server";
@@ -166,6 +175,25 @@ export async function postAccountingEvent(
   if (retired) {
     throw new ConvexError(retired);
   }
+
+  // ⚠️ ORGANIZATION LIFECYCLE IS REFUSED HERE FOR THE SAME REASON — SCRUM-302.
+  //
+  // `requireTenantAuth` already refuses a suspended organization, but it is an
+  // authenticated-door guard: the payment webhook, the three monthly GL crons
+  // and every other internal caller bypass it by construction. Placing the
+  // check beside the retired-posting refusal — before currency handling and
+  // before the idempotency probe — means a blocked organization completes no
+  // idempotency record and creates no accountingEvents, journalEntries,
+  // journalLines, accountBalanceSnapshots or audit row, and that this holds for
+  // a caller that CATCHES and continues.
+  //
+  // Necessary, not sufficient, exactly as above: callers reached from a
+  // cross-org cron batch must classify the refusal themselves before getting
+  // here, because an uncaught throw inside such a batch is a cross-tenant
+  // outage rather than a single-tenant refusal. The outbox does the same,
+  // through `orgEconomicLifecycleBlock`, so a queued entry is dead-lettered or
+  // held according to whether the refusal can ever be lifted.
+  await assertOrgEconomicallyActive(ctx, cmd.orgId);
 
   // 2. Validate currency
   const currency = cmd.currency.toUpperCase();
