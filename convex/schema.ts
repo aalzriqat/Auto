@@ -469,15 +469,18 @@ export default defineSchema({
      */
     executions: v.number(),
     /**
-     * How many of those executions performed NO settlement because the
-     * organization's lifecycle refused it (SCRUM-302).
+     * How many of those executions performed NO settlement because a TEMPORARY
+     * organization-lifecycle refusal held the work (SCRUM-302).
+     *
+     * ⚠️ TEMPORARY REFUSALS ONLY. A permanent refusal — irreversible
+     * destructive purge — terminalizes the work instead, so it never returns
+     * to the retry budget and does not increment this counter.
      *
      * ⚠️ A SEPARATE COUNTER RATHER THAN A DECREMENT, ON PURPOSE. `executions`
      * means "executions actually scheduled"; rolling it back would make it lie
-     * about what really ran and would
-     * break the monotonicity the attempt identity depends on. So the technical
-     * retry budget is `executions - lifecycleHolds`, and a lifecycle refusal
-     * costs nothing.
+     * about what really ran and would break the monotonicity the attempt
+     * identity depends on. So the technical retry budget is
+     * `executions - lifecycleHolds`, and a temporary hold costs nothing.
      *
      * ⚠️ THIS IS WHAT STOPS A SUSPEND/REACTIVATE RACE FROM FALSELY EXHAUSTING
      * A CAR'S BUDGET. Without it, five suspensions that each landed between

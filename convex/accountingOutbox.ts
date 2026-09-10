@@ -429,14 +429,15 @@ function authorityBackoffFor(generation: number): number {
  *
  * ⚠️ THE BUDGET MEASURES TECHNICAL FAILURE, AND A POLICY REFUSAL IS NOT ONE
  * (SCRUM-302). `executions` counts every execution the dispatcher scheduled,
- * including those that performed no settlement because the organization's
- * lifecycle refused it. Charging those to the budget would let five
+ * including those that performed no settlement because a temporary lifecycle
+ * refusal held the work. Charging those to the budget would let five
  * suspend/reactivate races around dispatch terminalize a healthy car as
  * RETRY_EXHAUSTED — an audit record asserting repeated failed attempts when
  * not one settlement had ever run.
  *
  * `lifecycleHolds` is incremented alongside the execution it refunds, which
- * keeps this non-negative.
+ * keeps this non-negative. A permanent refusal terminalizes the work instead,
+ * so it neither refunds nor needs to.
  */
 function technicalExecutionsSpent(work: Doc<"commitmentAuthorityWork">): number {
   return work.executions - (work.lifecycleHolds ?? 0);

@@ -54,7 +54,7 @@ export interface OrgLifecycleBlock {
    * organization may legitimately return to service.
    */
   permanent: boolean;
-  /** One wording, shared by every refusal site, so the two cannot drift. */
+  /** The refusal wording, defined here so call sites cannot word it differently. */
   message: string;
 }
 
