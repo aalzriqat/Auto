@@ -191,6 +191,7 @@ async function makeReceivable(
   amount: number
 ) {
   return (await asAdmin.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
     orgId,
     customerId,
     sourceType: "OTHER",

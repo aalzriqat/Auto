@@ -403,6 +403,7 @@ describe("RC-FRESH-CHART-2110 §7 — a zero-residue receipt does not depend on 
     await removeRetainedCreditAccount(t, orgId);
 
     const receivableId = (await asAdmin.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "OTHER",

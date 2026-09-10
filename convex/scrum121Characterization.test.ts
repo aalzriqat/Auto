@@ -148,6 +148,7 @@ describe("SCRUM-121 characterization of current main", () => {
     );
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId: customerA,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -206,6 +207,7 @@ describe("SCRUM-121 characterization of current main", () => {
     const { orgId, customerId, asFinance } = await seedFinanceMember(t);
 
     const overpaid = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -236,6 +238,7 @@ describe("SCRUM-121 characterization of current main", () => {
 
     // CONTROL — exact amount is accepted, so the refusal above is the excess.
     const exact = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -274,6 +277,7 @@ describe("SCRUM-121 characterization of current main", () => {
     const { orgId, customerId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -356,6 +360,7 @@ describe("SCRUM-121 characterization of current main", () => {
     const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -420,6 +425,7 @@ describe("SCRUM-121 characterization of current main", () => {
     const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -479,6 +485,7 @@ describe("SCRUM-121 characterization of current main", () => {
     // So the control is an OPEN receivable taking the identical registration and
     // return, and coming back collectible.
     const openId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -506,6 +513,7 @@ describe("SCRUM-121 characterization of current main", () => {
     // …and a PAID row still refuses the registration, which is the terminal
     // case the old control was really asserting.
     const paidId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -556,6 +564,7 @@ describe("SCRUM-121 characterization of current main", () => {
     const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -777,6 +786,7 @@ describe("SCRUM-121A — golden GL baselines from current main", () => {
     const { orgId, customerId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -812,6 +822,7 @@ describe("SCRUM-121A — golden GL baselines from current main", () => {
     const { orgId, customerId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -850,6 +861,7 @@ describe("SCRUM-121A — golden GL baselines from current main", () => {
     const { orgId, customerId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -902,6 +914,7 @@ describe("SCRUM-121A — whole-world zero-write harness", () => {
     const { orgId, customerId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -966,6 +979,7 @@ describe("SCRUM-121A — Sonnet MAX F1, validated independently", () => {
     const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -1066,6 +1080,7 @@ describe("SCRUM-121A — Codex F2, validated independently", () => {
     const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -1147,6 +1162,7 @@ describe("SCRUM-121A — Codex F2, validated independently", () => {
     const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -1199,6 +1215,7 @@ describe("SCRUM-121 — Codex findings, validated independently", () => {
     const { orgId, customerId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -1285,6 +1302,7 @@ describe("SCRUM-121 — Codex findings, validated independently", () => {
     const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -1367,6 +1385,7 @@ describe("SCRUM-121A — c16581 evidence fixtures", () => {
     const { orgId, userId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -1470,6 +1489,7 @@ describe("SCRUM-121A — c16581 evidence fixtures", () => {
     const { orgId, userId, customerId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -1517,6 +1537,7 @@ describe("SCRUM-121A — c16581 evidence fixtures", () => {
     const { orgId, userId, customerId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -1570,6 +1591,7 @@ describe("SCRUM-121A — c16581 evidence fixtures", () => {
       ctx.db.insert("customers", { orgId, firstName: "Omar", lastName: "Haddad", phone: "+962790000001" })
     );
     const othersReceivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId: otherCustomerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -1637,6 +1659,7 @@ describe("SCRUM-121A — c16581 evidence fixtures", () => {
     const { orgId, userId, customerId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -1717,6 +1740,7 @@ describe("SCRUM-121A — golden GL baselines for the paths 121A changes", () => 
     const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -1786,6 +1810,7 @@ describe("SCRUM-121A — golden GL baselines for the paths 121A changes", () => 
     const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -1892,6 +1917,7 @@ describe("SCRUM-121A — EV6, the withdrawn payer", () => {
     });
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -1976,6 +2002,7 @@ describe("SCRUM-121A — Codex R3 findings, validated independently", () => {
     );
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -2145,6 +2172,7 @@ describe("SCRUM-121A — Codex R3 findings, validated independently", () => {
     const { orgId, customerId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -2209,6 +2237,7 @@ describe("SCRUM-121A-PRE — R3-05, saleId is never correlated", () => {
     // the missing saleId correlation.
     const mkReceivable = async (title: string) =>
       await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
         orgId, customerId, sourceType: "INTERNAL_INSTALLMENT",
         title, amount: 1000, dueDate: DUE(), creditSystemKey: "MISCELLANEOUS_INCOME",
       });
@@ -2304,6 +2333,7 @@ describe("SCRUM-121A-PRE — R3-05, saleId is never correlated", () => {
     // The receivable names the pending sale, which therefore has no canonical
     // document of its own yet.
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId, saleId, sourceType: "INTERNAL_INSTALLMENT",
       title: "Owed against a deal still in progress",
       amount: 1000, dueDate: DUE(), creditSystemKey: "MISCELLANEOUS_INCOME",
@@ -2371,6 +2401,7 @@ describe("SCRUM-121A-PRE — Codex R4 findings, validated independently", () => 
     const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -2595,6 +2626,7 @@ describe("SCRUM-121A-PRE — Codex R5 findings, validated independently", () => 
     const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -2697,6 +2729,7 @@ describe("SCRUM-121A-PRE — Codex R5 findings, validated independently", () => 
     });
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -2794,6 +2827,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     const { orgId, customerId, userId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -2882,6 +2916,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     const other = await seedVehicleAndSale(t, orgId, otherCustomerId, userId);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId, vehicleId, saleId,
       sourceType: "INTERNAL_INSTALLMENT",
       title: "Correlated debt",
@@ -3145,6 +3180,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     // Customer A's debt, carrying NO sale of its own — so the caller's sale is
     // not a contradiction of any like-named field.
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId: customerA,
       sourceType: "INTERNAL_INSTALLMENT",
       title: "A's debt, no sale attached",
@@ -3164,6 +3200,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     // caller-filled vehicle that disagrees with the resolved sale is the same
     // hole one field over.
     const receivableWithSale = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId: customerB, saleId: salesB.saleId,
       sourceType: "INTERNAL_INSTALLMENT",
       title: "B's debt, sale but no vehicle",
@@ -3213,6 +3250,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     const { orgId, userId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId,
       sourceType: "INTERNAL_INSTALLMENT",
       title: "Mislinked debt",
@@ -3359,6 +3397,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     const { ALLOCATION_HISTORY_PROBE_LIMIT } = await import("./collections");
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId,
       sourceType: "INTERNAL_INSTALLMENT",
       title: "Long history",

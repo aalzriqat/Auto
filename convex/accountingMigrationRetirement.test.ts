@@ -184,6 +184,7 @@ describe("SCRUM-234 — modern collection receipts can no longer be double-poste
     const { t, orgId, customerId, asOwner } = dealer;
 
     const receivableId = await asOwner.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId, sourceType: "INTERNAL_INSTALLMENT", title: "Installment",
       amount: 1000, dueDate: Date.now() + 86_400_000, creditSystemKey: "MISCELLANEOUS_INCOME",
     });
@@ -211,6 +212,7 @@ describe("SCRUM-234 — modern collection receipts can no longer be double-poste
     const { t, orgId, customerId, asOwner } = dealer;
 
     const receivableId = await asOwner.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId, sourceType: "CHEQUE", title: "Cheque receivable",
       amount: 800, dueDate: Date.now() + 86_400_000, creditSystemKey: "MISCELLANEOUS_INCOME",
     });

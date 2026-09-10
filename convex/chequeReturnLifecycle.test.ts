@@ -175,6 +175,7 @@ async function makeReceivable(
   dueDate: number = Date.now() + 86_400_000
 ) {
   return (await asAdmin.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
     orgId, customerId, sourceType: "OTHER",
     creditSystemKey: "MISCELLANEOUS_INCOME",
     title, amount, dueDate,

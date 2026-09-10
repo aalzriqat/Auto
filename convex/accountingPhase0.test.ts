@@ -238,6 +238,7 @@ describe("Phase 0 financial safety controls", () => {
   test("duplicate_collection_payment_key_reduces_receivable_once", async () => {
     const { t, orgId, customerId, asUser } = await seedPhase0Dealer();
     const receivableId = await asUser.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -276,6 +277,7 @@ describe("Phase 0 financial safety controls", () => {
   test("duplicate_cheque_clear_key_posts_cheque_payment_once", async () => {
     const { t, orgId, customerId, asUser } = await seedPhase0Dealer();
     const receivableId = await asUser.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "CHEQUE",
@@ -419,6 +421,7 @@ describe("Phase 0 financial safety controls", () => {
   test("requester_cannot_approve_own_collection_refund", async () => {
     const { t, orgId, customerId, asUser, asApprover } = await seedPhase0Dealer();
     const receivableId = await asUser.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "RESERVATION_PAYMENT",
@@ -479,6 +482,7 @@ describe("Phase 0 financial safety controls", () => {
   test("cashier_cannot_approve_own_reconciliation", async () => {
     const { orgId, customerId, asUser, asApprover } = await seedPhase0Dealer();
     const receivableId = await asUser.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",

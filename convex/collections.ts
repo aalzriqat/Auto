@@ -863,6 +863,18 @@ export const createReceivable = mutation({
     dueDate: v.number(),
     notes: v.optional(v.string()),
     creditSystemKey: v.optional(receivableCreditKeyValidator),
+    // SCRUM-57, classified during RC integration (SCRUM-313) after this command
+    // was first disclosed as "writes only a receivable row, no GL". THAT WAS
+    // WRONG, and the mistake was reading `ctx.db.insert` calls instead of
+    // reading the helper below: `hookReceivableCreated` emits a real
+    // RECEIVABLE_CREATED event through the posting pipeline, whose accounting
+    // idempotency key is `receivable_created_${receivableId}`.
+    //
+    // The receivable id is minted per call, so a lost-response retry mints a
+    // NEW id, a NEW accounting key and a SECOND journal — the downstream dedupe
+    // is structurally blind to it. Only an identity minted at the INTENT
+    // boundary can tell a retry from a genuine second debt.
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user, membership } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -876,8 +888,63 @@ export const createReceivable = mutation({
     await validateOptionalLinks(ctx, args.orgId, args);
 
     const currency = await getOrgCurrency(ctx, args.orgId);
-    const now = Date.now();
-    const receivableId = await ctx.db.insert("receivables", {
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "collections.createReceivable",
+        economic: true,
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+        // Everything that changes what is OWED and how it is recognised.
+        // `dueDate` is included because it decides OPEN vs OVERDUE at birth,
+        // and `saleId` because it decides whether AR is recognised here at all.
+        fingerprint: JSON.stringify({
+          customerId: args.customerId.toString(),
+          sourceType: args.sourceType,
+          amount: args.amount,
+          dueDate: args.dueDate,
+          saleId: args.saleId?.toString() ?? null,
+          creditSystemKey: args.creditSystemKey ?? null,
+          title: args.title.trim(),
+        }),
+      },
+      async () => await createReceivableCore(ctx, args, { user, membership, creditSystemKey, currency })
+    );
+  },
+});
+
+/**
+ * The body of `createReceivable`, extracted so the mutation above is a thin
+ * identity boundary around it. Nothing here changed in this slice; it is the
+ * same sequence, moved.
+ */
+async function createReceivableCore(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    customerId: Id<"customers">;
+    vehicleId?: Id<"vehicles">;
+    saleId?: Id<"sales">;
+    quoteId?: Id<"quotes">;
+    applicationId?: Id<"financeApplications">;
+    assignedTo?: Id<"users">;
+    sourceType: Doc<"receivables">["sourceType"];
+    title: string;
+    amount: number;
+    dueDate: number;
+    notes?: string;
+  },
+  deps: {
+    user: Doc<"users">;
+    membership: Doc<"memberships">;
+    creditSystemKey: ReceivableCreditKey | undefined;
+    currency: string;
+  }
+): Promise<Id<"receivables">> {
+  const { user, membership, creditSystemKey, currency } = deps;
+  const now = Date.now();
+  const receivableId = await ctx.db.insert("receivables", {
       orgId: args.orgId,
       branchId: membership.branchId,
       customerId: args.customerId,
@@ -920,15 +987,14 @@ export const createReceivable = mutation({
       });
     }
 
-    const actorName = await getActorName(ctx);
-    await notifyManagers(ctx, args.orgId, "collection.receivable_created", {
-      actorName,
-      amount: String(roundMoney(args.amount, currency)),
-    }, { link: `/${args.orgId}/accounting` });
+  const actorName = await getActorName(ctx);
+  await notifyManagers(ctx, args.orgId, "collection.receivable_created", {
+    actorName,
+    amount: String(roundMoney(args.amount, currency)),
+  }, { link: `/${args.orgId}/accounting` });
 
-    return receivableId;
-  },
-});
+  return receivableId;
+}
 
 export const createInstallmentPlan = mutation({
   args: {
@@ -947,6 +1013,16 @@ export const createInstallmentPlan = mutation({
     sourceType: v.optional(receivableSourceValidator),
     notes: v.optional(v.string()),
     creditSystemKey: v.optional(receivableCreditKeyValidator),
+    // SCRUM-57 / SCRUM-313. This command emits ONE `RECEIVABLE_CREATED` event
+    // PER GENERATED INSTALLMENT, each keyed on its own freshly minted
+    // receivable id, so a retry duplicates the ENTIRE PLAN — N debts and N
+    // journals — with nothing downstream able to recognise it.
+    //
+    // ⚠️ The identity therefore represents the WHOLE PLAN INTENT, never an
+    // individual installment. A per-row identity would let a retry mint
+    // installments 13..24 under the first plan's name: a second plan wearing
+    // the first one's identity, which is worse than no protection at all.
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user, membership } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -967,6 +1043,30 @@ export const createInstallmentPlan = mutation({
     await validateOptionalLinks(ctx, args.orgId, args);
 
     const currency = await getOrgCurrency(ctx, args.orgId);
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "collections.createInstallmentPlan",
+        economic: true,
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+        // The whole plan's shape. Every field here changes how many debts exist,
+        // for how much, or when they fall due — so replaying one identity
+        // against a different schedule is a contradiction, not a retry.
+        fingerprint: JSON.stringify({
+          customerId: args.customerId.toString(),
+          totalAmount: args.totalAmount,
+          installmentCount: args.installmentCount,
+          firstDueDate: args.firstDueDate,
+          intervalMonths,
+          sourceType: args.sourceType ?? null,
+          saleId: args.saleId?.toString() ?? null,
+          creditSystemKey: args.creditSystemKey ?? null,
+          title: args.title.trim(),
+        }),
+      },
+      async () => {
     const now = Date.now();
     const baseAmount = roundMoney(args.totalAmount / args.installmentCount, currency);
     let allocated = 0;
@@ -1030,7 +1130,9 @@ export const createInstallmentPlan = mutation({
       amount: String(roundMoney(args.totalAmount, currency)),
     }, { link: `/${args.orgId}/accounting` });
 
-    return ids;
+        return ids;
+      }
+    );
   },
 });
 

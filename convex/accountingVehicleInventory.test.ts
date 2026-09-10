@@ -1441,6 +1441,7 @@ describe("Fix #5 — manual receivables originate a real GL entry", () => {
     const { t, orgId, asOwner, customerId } = await seedDealer("f5a");
 
     const receivableId = await asOwner.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId, sourceType: "OTHER", title: "Damage claim", amount: 250,
       dueDate: Date.UTC(2025, 4, 1), creditSystemKey: "MISCELLANEOUS_INCOME",
     });
@@ -2030,6 +2031,7 @@ describe("Review issue #7 — manual receivables don't default to income", () =>
     const { orgId, asOwner, customerId } = await seedDealer("ri7a");
     await expect(
       asOwner.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
         orgId, customerId, sourceType: "INTERNAL_INSTALLMENT", title: "Ambiguous", amount: 500,
         dueDate: Date.UTC(2025, 4, 1),
       })
@@ -2039,6 +2041,7 @@ describe("Review issue #7 — manual receivables don't default to income", () =>
   test("derives Customer Deposits Liability automatically for a deposit-like source type", async () => {
     const { t, orgId, asOwner, customerId } = await seedDealer("ri7b");
     const receivableId = await asOwner.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId, sourceType: "CUSTOMER_DEPOSIT", title: "Deposit hold", amount: 400,
       dueDate: Date.UTC(2025, 4, 1),
     });
@@ -2053,6 +2056,7 @@ describe("Review issue #7 — manual receivables don't default to income", () =>
   test("an explicit creditSystemKey overrides the default for OTHER", async () => {
     const { t, orgId, asOwner, customerId } = await seedDealer("ri7c");
     const receivableId = await asOwner.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId, sourceType: "OTHER", title: "Cost reimbursement", amount: 120,
       dueDate: Date.UTC(2025, 4, 1), creditSystemKey: "GENERAL_EXPENSE",
     });

@@ -230,6 +230,7 @@ describe("Collections", () => {
     const { orgId, customerId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -289,6 +290,7 @@ describe("Collections", () => {
     const { orgId, customerId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "CHEQUE",
@@ -370,6 +372,7 @@ describe("Collections", () => {
     const { orgId, customerId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "CHEQUE",
@@ -404,6 +407,7 @@ describe("Collections", () => {
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "RESERVATION_PAYMENT",
@@ -488,6 +492,7 @@ describe("Collections", () => {
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -559,6 +564,7 @@ describe("Collections", () => {
     await asFinance.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -641,6 +647,7 @@ describe("Collections", () => {
     );
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       saleId,
@@ -682,6 +689,7 @@ describe("Collections", () => {
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -744,6 +752,7 @@ describe("Collections", () => {
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -780,6 +789,7 @@ describe("Collections", () => {
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -855,6 +865,7 @@ describe("Collections", () => {
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -910,6 +921,7 @@ describe("Collections", () => {
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -949,6 +961,7 @@ describe("Collections", () => {
     const tomorrow = Date.now() + 24 * 60 * 60 * 1000;
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -1200,6 +1213,11 @@ describe("Collections", () => {
       amount: 450,
       dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
       creditSystemKey: "MISCELLANEOUS_INCOME" as const,
+      // SCRUM-57: every probe below is a REFUSAL, and an uncaught throw rolls
+      // the whole mutation back, so no command row survives any of them and one
+      // shared identity cannot collide. If that ever stopped being true the
+      // conflict would surface as a failed expectation here, not as a silent pass.
+      idempotencyKey: crypto.randomUUID(),
     };
 
     await expect(asFinance.mutation(api.collections.createReceivable, { ...baseArgs, amount: 0 })).rejects.toThrow("Amount must be greater than 0");
@@ -1217,6 +1235,7 @@ describe("Collections", () => {
     })).rejects.toThrow("credit account");
 
     const saleLinkedReceivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       vehicleId: related.vehicleId,
@@ -1246,6 +1265,7 @@ describe("Collections", () => {
     });
 
     await expect(asFinance.mutation(api.collections.createInstallmentPlan, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       title: "Bad plan",
@@ -1255,6 +1275,7 @@ describe("Collections", () => {
       creditSystemKey: "MISCELLANEOUS_INCOME",
     })).rejects.toThrow("Total amount must be greater than 0");
     await expect(asFinance.mutation(api.collections.createInstallmentPlan, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       title: "Bad plan",
@@ -1264,6 +1285,7 @@ describe("Collections", () => {
       creditSystemKey: "MISCELLANEOUS_INCOME",
     })).rejects.toThrow("Installment count must be between 1 and 120");
     await expect(asFinance.mutation(api.collections.createInstallmentPlan, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       title: "Bad plan",
@@ -1274,6 +1296,7 @@ describe("Collections", () => {
       creditSystemKey: "MISCELLANEOUS_INCOME",
     })).rejects.toThrow("Installment interval must be between 1 and 12");
     await expect(asFinance.mutation(api.collections.createInstallmentPlan, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       title: "   ",
@@ -1285,6 +1308,7 @@ describe("Collections", () => {
 
     const firstDueDate = Date.UTC(2026, 0, 15);
     const planIds = await asFinance.mutation(api.collections.createInstallmentPlan, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       vehicleId: related.vehicleId,
@@ -1323,6 +1347,7 @@ describe("Collections", () => {
       vin: "PAYCHEQUE00001",
     });
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       vehicleId,
@@ -1654,6 +1679,7 @@ describe("Collections", () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -1749,6 +1775,7 @@ describe("Collections", () => {
     })).rejects.toThrow("Requested due date is missing");
 
     const paidReceivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -1812,6 +1839,7 @@ describe("Collections", () => {
     const { orgId, customerId, asFinance, asApprover, userId } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -1916,6 +1944,7 @@ describe("Collections", () => {
     await asFinance.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "CHEQUE",

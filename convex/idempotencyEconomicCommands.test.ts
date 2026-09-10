@@ -453,13 +453,17 @@ describe("SCRUM-57 — fields whose omission was a reproduced defect stay hashed
  *
  * ─── THE DENOMINATOR, stated explicitly (SCRUM-313 RC integration) ──────────
  *
- * The combined RC has THIRTY `runWithIdempotency` call sites, and they split:
+ * The combined RC has THIRTY-TWO `runWithIdempotency` call sites, and they split:
  *
- *   29  economic: true   — every one listed below, identity + fingerprint
+ *   31  economic: true   — every one listed below, identity + fingerprint
  *                          REQUIRED at the trust boundary
  *    1  economic: false  — `sales.createDraft`, and only that one
  *   ──
- *   30  total classified call sites
+ *   32  total classified call sites
+ *
+ * (It was 30 = 29 + 1 until an owner finding showed `collections.createReceivable`
+ * and `collections.createInstallmentPlan` emit real accounting events through
+ * `hookReceivableCreated`. Both are now identity-guarded and listed below.)
  *
  * So "30 sites" and "29 protected" describe the same tree with no gap between
  * them. `sales.createDraft` is not an unprotected economic command; it is a
@@ -495,6 +499,19 @@ const ECONOMIC_COMMANDS: Record<string, string[]> = {
     // ratchet would have passed while the one genuinely new money command in
     // the combined RC kept an optional identity.
     "applyRetainedCredit",
+    // ADDED during RC integration (SCRUM-313) after an owner finding. These two
+    // were first disclosed as "write only a receivable row, no GL" — WRONG, and
+    // the error was reading `ctx.db.insert` calls instead of reading the helper.
+    // Both call `hookReceivableCreated`, which emits a real RECEIVABLE_CREATED
+    // event whose accounting key is `receivable_created_${receivableId}`. The id
+    // is minted per call, so a retry mints a new id, a new key and a SECOND
+    // journal that the downstream dedupe is structurally blind to.
+    //
+    // For the plan, the identity represents the WHOLE PLAN intent: a per-row
+    // identity would let a retry mint installments 13..24 under the first plan's
+    // name — a second plan wearing the first one's identity.
+    "createReceivable",
+    "createInstallmentPlan",
     "clearCheque",
     "returnClearedCheque",
     "respondToApproval",
@@ -553,7 +570,7 @@ describe("SCRUM-57 — classification ratchet", () => {
     // SCRUM-218-C's `collections.applyRetainedCredit`. The total returning to
     // 29 is a COINCIDENCE of two independent changes, which is precisely why
     // both are recorded above rather than netted into "unchanged".
-    expect(checked).toBe(29);
+    expect(checked).toBe(31);
   });
 
   /**
@@ -614,9 +631,9 @@ describe("SCRUM-57 — classification ratchet", () => {
     expect(missingFromSource, "listed in the manifest but not economic in the source").toEqual([]);
 
     // The denominator, asserted rather than described.
-    expect(economicInSource.size).toBe(29);
+    expect(economicInSource.size).toBe(31);
     expect([...nonEconomicInSource].sort()).toEqual(["sales.createDraft"]);
-    expect(economicInSource.size + nonEconomicInSource.size).toBe(30);
+    expect(economicInSource.size + nonEconomicInSource.size).toBe(32);
   });
 
   /**

@@ -676,6 +676,11 @@ function ReceivableDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
   const { t } = useLanguage();
   const createReceivable = useMutation(api.collections.createReceivable);
   const createInstallmentPlan = useMutation(api.collections.createInstallmentPlan);
+  // SCRUM-57. Minted ONCE per user intent and preserved across retries, then
+  // cleared only on success — the same pattern the payment and cheque-return
+  // dialogs in this file already use. A key minted per ATTEMPT would defeat the
+  // guard entirely, since a lost response would retry under a new identity.
+  const idempotencyKeyRef = useRef<string | null>(null);
   const { customerOptions, vehicleOptions } = useCustomerVehicleOptions();
   const [mode, setMode] = useState<"single" | "plan">("single");
   const [customerId, setCustomerId] = useState("");
@@ -704,7 +709,9 @@ function ReceivableDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
     }
     setSubmitting(true);
     try {
+      idempotencyKeyRef.current ??= `receivable-create:${crypto.randomUUID()}`;
       const common = {
+        idempotencyKey: idempotencyKeyRef.current,
         orgId: activeOrgId,
         customerId: customerId as Id<"customers">,
         vehicleId: vehicleId ? vehicleId as Id<"vehicles"> : undefined,
@@ -730,6 +737,9 @@ function ReceivableDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
           sourceType: sourceType as Doc<"receivables">["sourceType"],
         });
       }
+      // Only a SUCCESS retires the identity. A failure keeps it so the operator's
+      // retry is recognised as the same intent rather than a second debt.
+      idempotencyKeyRef.current = null;
       toast.success(t("CollectionToastReceivableSaved" as any));
       onOpenChange(false);
       setTitle("");

@@ -115,6 +115,7 @@ async function debtOf(
   title = "Rehearsal debt"
 ) {
   return (await asAdmin.mutation(api.collections.createReceivable, {
+    idempotencyKey: crypto.randomUUID(),
     orgId,
     customerId,
     sourceType: "OTHER",
@@ -632,6 +633,249 @@ describe("R8 — sourced (consigned) vehicle economics", () => {
     // ACC-1 restated as the thing that must NOT be true: the dealership never
     // owned this car, so none of the sale price is its own sales revenue.
     expect(lines.filter((l) => l.systemKey === "SALES_REVENUE")).toHaveLength(0);
+  });
+});
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * R9 — the debt-CREATION commands are economic too
+ *
+ * These were disclosed as "writes only `receivables`, no GL". That was WRONG,
+ * and the mistake was reading `ctx.db.insert` calls instead of reading the
+ * helper: `createReceivable` calls `hookReceivableCreated`, which emits a real
+ * RECEIVABLE_CREATED event through the posting pipeline whose accounting
+ * idempotency key is `receivable_created_${receivableId}`.
+ *
+ * The receivable id is minted per call, so a retry mints a NEW id, a NEW
+ * accounting key and a SECOND journal. The downstream dedupe cannot recognise
+ * the retry — it is structurally blind to it — which is precisely the class
+ * SCRUM-57 exists to prevent.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+describe("R9 — receivable creation under retry", () => {
+  test("a retried receivable creation does not duplicate the debt or its journal", async () => {
+    const { t, asAdmin, orgId, customerId } = await rehearseFreshDealership("r9a");
+    const identity = `rehearsal-receivable-${crypto.randomUUID()}`;
+
+    const args = {
+      idempotencyKey: identity,
+      orgId,
+      customerId,
+      sourceType: "OTHER" as const,
+      creditSystemKey: "MISCELLANEOUS_INCOME" as const,
+      title: "Retried debt",
+      amount: 100,
+      dueDate: 1_760_000_000_000,
+    };
+
+    await asAdmin.mutation(api.collections.createReceivable, args);
+    const after1 = {
+      receivables: (await t.run((ctx) =>
+        ctx.db.query("receivables").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+      )).length,
+      events: (await economicEvents(t, orgId)).length,
+      lines: (await ledgerLines(t, orgId)).length,
+    };
+
+    // The lost-response retry: same intent, same identity, identical payload.
+    await asAdmin.mutation(api.collections.createReceivable, args);
+
+    expect({
+      receivables: (await t.run((ctx) =>
+        ctx.db.query("receivables").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+      )).length,
+      events: (await economicEvents(t, orgId)).length,
+      lines: (await ledgerLines(t, orgId)).length,
+    }).toEqual(after1);
+  });
+
+  test("a retried installment PLAN replays as one plan, not a second set of rows", async () => {
+    const { t, asAdmin, orgId, customerId } = await rehearseFreshDealership("r9b");
+    const identity = `rehearsal-plan-${crypto.randomUUID()}`;
+
+    const args = {
+      idempotencyKey: identity,
+      orgId,
+      customerId,
+      sourceType: "INTERNAL_INSTALLMENT" as const,
+      creditSystemKey: "MISCELLANEOUS_INCOME" as const,
+      title: "Retried plan",
+      totalAmount: 1200,
+      installmentCount: 12,
+      firstDueDate: 1_760_000_000_000,
+    };
+
+    await asAdmin.mutation(api.collections.createInstallmentPlan, args);
+    const rowsAfterFirst = (await t.run((ctx) =>
+      ctx.db.query("receivables").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    )).length;
+    expect(rowsAfterFirst).toBe(12);
+    const eventsAfterFirst = (await economicEvents(t, orgId)).length;
+
+    // The identity covers the WHOLE PLAN intent, not an individual generated
+    // installment: a retry that produced installments 13..24 would be a second
+    // plan wearing the first one's name.
+    await asAdmin.mutation(api.collections.createInstallmentPlan, args);
+
+    expect(
+      (await t.run((ctx) =>
+        ctx.db.query("receivables").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+      )).length
+    ).toBe(12);
+    expect((await economicEvents(t, orgId)).length).toBe(eventsAfterFirst);
+  });
+
+  test("the same identity with different economic content is refused for a receivable", async () => {
+    const { t, asAdmin, orgId, customerId } = await rehearseFreshDealership("r9c");
+    const identity = `rehearsal-conflict-recv-${crypto.randomUUID()}`;
+    const base = {
+      idempotencyKey: identity,
+      orgId, customerId,
+      sourceType: "OTHER" as const,
+      creditSystemKey: "MISCELLANEOUS_INCOME" as const,
+      title: "Conflicting debt",
+      dueDate: 1_760_000_000_000,
+    };
+
+    await asAdmin.mutation(api.collections.createReceivable, { ...base, amount: 100 });
+    const before = await ledgerLines(t, orgId);
+
+    await expect(
+      asAdmin.mutation(api.collections.createReceivable, { ...base, amount: 250 })
+    ).rejects.toThrow();
+
+    expect(await ledgerLines(t, orgId)).toEqual(before);
+  });
+
+  test("a receivable creation with NO identity is refused before any write", async () => {
+    const { t, asAdmin, orgId, customerId } = await rehearseFreshDealership("r9d");
+    const before = await ledgerLines(t, orgId);
+
+    await expect(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (asAdmin.mutation as any)(api.collections.createReceivable, {
+        orgId, customerId, sourceType: "OTHER", creditSystemKey: "MISCELLANEOUS_INCOME",
+        title: "Unidentified debt", amount: 100, dueDate: 1_760_000_000_000,
+      })
+    ).rejects.toThrow();
+
+    expect(await ledgerLines(t, orgId)).toEqual(before);
+    expect(
+      (await t.run((ctx) =>
+        ctx.db.query("receivables").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+      )).length
+    ).toBe(0);
+  });
+
+  test("a SALE-LINKED receivable still recognises AR exactly once", async () => {
+    const { t, asAdmin, orgId, userId, customerId } = await rehearseFreshDealership("r9e");
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, vin: "VIN_R9E", make: "Toyota", model: "Camry", year: 2023,
+        mileage: 0, color: "Silver", fuelType: "Petrol", transmission: "Automatic",
+        sellingPrice: 20_000, sourceType: "STOCK", purchasePrice: 15_000, status: "AVAILABLE",
+      })
+    );
+    const saleId = await asAdmin.mutation(api.sales.create, {
+      idempotencyKey: crypto.randomUUID(),
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 20_000, saleDate: Date.now(), status: "COMPLETED", financingType: "CASH",
+    });
+
+    const arBefore = netOn(await ledgerLines(t, orgId), "ACCOUNTS_RECEIVABLE_CUSTOMERS");
+
+    // A sale-linked receivable takes its credit key from the SALE, so this is
+    // the path where a double AR recognition would show up.
+    const identity = `rehearsal-sale-recv-${crypto.randomUUID()}`;
+    const args = {
+      idempotencyKey: identity,
+      orgId, customerId, saleId,
+      // Sale-linked: the credit key comes from the SALE, so `hookReceivableCreated`
+      // is deliberately NOT fired here — AR was already recognised at completion.
+      sourceType: "BANK_FINANCED_BALANCE" as const,
+      title: "Balance due on sale",
+      amount: 500,
+      dueDate: 1_760_000_000_000,
+    };
+    await asAdmin.mutation(api.collections.createReceivable, args);
+    const arAfterFirst = netOn(await ledgerLines(t, orgId), "ACCOUNTS_RECEIVABLE_CUSTOMERS");
+
+    await asAdmin.mutation(api.collections.createReceivable, args);
+    expect(
+      netOn(await ledgerLines(t, orgId), "ACCOUNTS_RECEIVABLE_CUSTOMERS"),
+      "the retry recognised accounts receivable a second time"
+    ).toBe(arAfterFirst);
+    expect(arAfterFirst).toBeGreaterThanOrEqual(arBefore);
+  });
+});
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * R10 — the two approval paths are at-most-once BY STATE, and it is tested
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+describe("R10 — state-guarded approvals cannot post twice", () => {
+  test("approving a manual journal twice cannot produce a second journal", async () => {
+    const { t, asAdmin, orgId, userId } = await rehearseFreshDealership("r10");
+
+    // Both sides must permit MANUAL posting — a control account would be
+    // refused for a reason unrelated to what this test is about, and the
+    // failure would look like the replay guard working when it was not.
+    const postable = await t.run((ctx) =>
+      ctx.db.query("chartOfAccounts").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    const expense = postable.find((a) => a.code === "6200" && a.allowManualPosting);
+    const otherExpense = postable.find((a) => a.code === "6300" && a.allowManualPosting);
+    expect(expense, "no manual-postable debit account in the fresh chart").toBeDefined();
+    expect(otherExpense, "no manual-postable credit account in the fresh chart").toBeDefined();
+    const cashId = expense!._id;
+    const incomeId = otherExpense!._id;
+
+    const draft = await asAdmin.mutation(api.financialAudit.createManualJournal, {
+      idempotencyKey: crypto.randomUUID(),
+      orgId,
+      accountingDate: Date.now(),
+      memo: "Rehearsal manual journal",
+      lines: [
+        { accountId: cashId, debitMinor: 10_000, creditMinor: 0 },
+        { accountId: incomeId, debitMinor: 0, creditMinor: 10_000 },
+      ],
+    });
+    const draftId = draft.draftId;
+
+    const approverId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "r10_appr", email: "appr@rehearsal.test", name: "Approver" })
+    );
+    const approverRole = await t.run((ctx) =>
+      ctx.db.insert("roles", {
+        orgId, name: "APPROVER", isSystemOwnerRole: true,
+        permissions: ["view:finance", "manage:finance", "approve:manual_journal"],
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("memberships", { orgId, userId: approverId, roleId: approverRole })
+    );
+    const asApprover = t.withIdentity({ subject: "r10_appr", clerkId: "r10_appr" });
+
+    await asApprover.mutation(api.financialAudit.approveManualJournal, { orgId, draftId });
+    const afterFirst = {
+      entries: (await journalEntries(t, orgId)).length,
+      lines: (await ledgerLines(t, orgId)).length,
+      events: (await economicEvents(t, orgId)).length,
+    };
+    expect(afterFirst.entries).toBeGreaterThan(0);
+
+    // The state transition is the at-most-once mechanism here, in place of a
+    // command identity. That is acceptable ONLY if it is actually proven, so
+    // the second approval must be unable to produce anything.
+    await expect(
+      asApprover.mutation(api.financialAudit.approveManualJournal, { orgId, draftId })
+    ).rejects.toThrow();
+
+    expect({
+      entries: (await journalEntries(t, orgId)).length,
+      lines: (await ledgerLines(t, orgId)).length,
+      events: (await economicEvents(t, orgId)).length,
+    }).toEqual(afterFirst);
+    void userId;
   });
 });
 

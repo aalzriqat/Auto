@@ -488,6 +488,7 @@ describe("Phase 8 — payment intent settlement", () => {
     const { t, orgId, asUser, customerId } = await seedDealer("pi_legacy");
 
     const receivableId = await asUser.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "PAYMENT_LINK",
@@ -538,6 +539,7 @@ describe("Phase 8 — payment intent settlement", () => {
     const { orgId, asUser, customerId } = await seedDealer("pi_overpay");
 
     const receivableId = await asUser.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "PAYMENT_LINK",
