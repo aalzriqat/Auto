@@ -110,13 +110,13 @@ async function seed() {
 describe("recording instalments against a supplier", () => {
   test("two instalments settle the payable, and the balance falls as they land", async () => {
     const s = await seed();
-    const first = await s.asUser.mutation(api.sourcingPayables.recordPartialPayment, {
+    const first = await s.asUser.mutation(api.sourcingPayables.recordPartialPayment, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, payableId: s.payableId, amount: 4_000, paymentReference: "CHQ-1",
     });
     expect(first.remainingAmount).toBe(5_500);
     expect((await s.t.run((ctx) => ctx.db.get(s.payableId)))?.status).toBe("PARTIALLY_PAID");
 
-    const second = await s.asUser.mutation(api.sourcingPayables.recordPartialPayment, {
+    const second = await s.asUser.mutation(api.sourcingPayables.recordPartialPayment, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, payableId: s.payableId, amount: 5_500, paymentReference: "CHQ-2",
     });
     expect(second.remainingAmount).toBe(0);
@@ -130,13 +130,13 @@ describe("recording instalments against a supplier", () => {
 
   test("refuses to pay a supplier more than he is owed", async () => {
     const s = await seed();
-    await s.asUser.mutation(api.sourcingPayables.recordPartialPayment, {
+    await s.asUser.mutation(api.sourcingPayables.recordPartialPayment, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, payableId: s.payableId, amount: 9_000,
     });
     // Netting the excess into the next payable would hide which deal it
     // happened on.
     await expect(
-      s.asUser.mutation(api.sourcingPayables.recordPartialPayment, {
+      s.asUser.mutation(api.sourcingPayables.recordPartialPayment, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId, payableId: s.payableId, amount: 1_000,
       })
     ).rejects.toThrow(/against 9500 owed/i);
@@ -160,7 +160,7 @@ describe("recording instalments against a supplier", () => {
     });
 
     await expect(
-      s.asUser.mutation(api.sourcingPayables.recordPartialPayment, {
+      s.asUser.mutation(api.sourcingPayables.recordPartialPayment, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId, payableId: s.payableId, amount: 4_000,
       })
     ).rejects.toThrow(/under dispute/i);
@@ -178,7 +178,7 @@ describe("recording instalments against a supplier", () => {
 
   test("lifting a dispute returns to what the money says, not to a remembered status", async () => {
     const s = await seed();
-    await s.asUser.mutation(api.sourcingPayables.recordPartialPayment, {
+    await s.asUser.mutation(api.sourcingPayables.recordPartialPayment, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, payableId: s.payableId, amount: 4_000,
     });
     await s.asUser.mutation(api.sourcingPayables.setDisputed, {
@@ -216,7 +216,7 @@ describe("recording instalments against a supplier", () => {
     });
 
     await expect(
-      s.asUser.mutation(api.sourcingPayables.recordPartialPayment, {
+      s.asUser.mutation(api.sourcingPayables.recordPartialPayment, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId, payableId: foreignPayableId, amount: 1_000,
       })
     ).rejects.toThrow(/not found/i);
@@ -234,7 +234,7 @@ describe("recording instalments against a supplier", () => {
 
   test("settling in full records the amount, not just the flag", async () => {
     const s = await seed();
-    await s.asUser.mutation(api.sourcingPayables.markPaid, {
+    await s.asUser.mutation(api.sourcingPayables.markPaid, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, payableId: s.payableId, paymentReference: "TRF-9",
     });
     const row = await s.t.run((ctx) => ctx.db.get(s.payableId));

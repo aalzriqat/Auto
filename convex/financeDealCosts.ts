@@ -545,7 +545,7 @@ export const recordDealFee = mutation({
     receiptReference: v.optional(v.string()),
     documentStorageIds: v.optional(v.array(v.id("_storage"))),
     source: v.optional(v.union(v.literal("COMPANY_TEMPLATE"), v.literal("MANUAL"))),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [
@@ -591,6 +591,7 @@ export const recordDealFee = mutation({
       {
         orgId: args.orgId,
         operation: "financeDealCosts.recordDealFee",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
         fingerprint: JSON.stringify({
@@ -603,6 +604,10 @@ export const recordDealFee = mutation({
           accountingTreatment: args.accountingTreatment,
           custodyId: args.custodyId ?? null,
           receiptReference: args.receiptReference?.trim() || null,
+          // Persisted at line ~629 and summed by settlementDeductedTotalMinor,
+          // so it changes the dealer remittance. Two fees identical except for
+          // this flag are DIFFERENT economic instructions.
+          deductedFromSettlement: args.deductedFromSettlement ?? false,
         }),
       },
       async () => {
@@ -875,7 +880,7 @@ export const openDealCustody = mutation({
     reference: v.optional(v.string()),
     note: v.optional(v.string()),
     occurredAt: v.optional(v.number()),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [
@@ -934,6 +939,7 @@ export const openDealCustody = mutation({
       {
         orgId: args.orgId,
         operation: "financeDealCosts.openDealCustody",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
         fingerprint: JSON.stringify({
@@ -1026,7 +1032,7 @@ export const recordCustodyMovement = mutation({
     reference: v.optional(v.string()),
     note: v.optional(v.string()),
     occurredAt: v.optional(v.number()),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [
@@ -1076,6 +1082,7 @@ export const recordCustodyMovement = mutation({
       {
         orgId: args.orgId,
         operation: "financeDealCosts.recordCustodyMovement",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
         fingerprint: JSON.stringify({

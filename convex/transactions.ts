@@ -227,7 +227,7 @@ export const add = mutation({
     vehicleId: v.optional(v.id("vehicles")),
     userId: v.optional(v.id("users")),
     expenseId: v.optional(v.id("expenses")),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -237,8 +237,21 @@ export const add = mutation({
       {
         orgId: args.orgId,
         operation: "transactions.add",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
+        // Direction, amount, effective date, category and the subject the money
+        // is attached to — the whole economic instruction for a cash row.
+        fingerprint: JSON.stringify({
+          type: args.type,
+          amount: args.amount,
+          date: args.date,
+          category: args.category,
+          description: args.description.trim(),
+          vehicleId: args.vehicleId ?? null,
+          userId: args.userId ?? null,
+          expenseId: args.expenseId ?? null,
+        }),
       },
       async () => {
         if (args.vehicleId) {

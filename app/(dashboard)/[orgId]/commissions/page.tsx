@@ -33,6 +33,7 @@ import { Doc, Id } from "@/convex/_generated/dataModel";
 import { CommissionPaymentDialog } from "@/components/commissions/CommissionPaymentDialog";
 import { type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import { useTableControls } from "@/hooks/useTableControls";
+import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { getErrorMessage, GENERIC_ERROR_MESSAGE } from "@/lib/errors";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 
@@ -158,6 +159,7 @@ export default function CommissionsPage() {
   });
 
   const markPaid = useMutation(api.sales.markCommissionPaid);
+  const commandId = useCommandIdentity();
   const setCommissionAmount = useMutation(api.sales.setCommissionAmount);
   const recalculateCommission = useMutation(api.sales.recalculateCommission);
 
@@ -212,7 +214,16 @@ export default function CommissionsPage() {
     if (!activeOrgId || !commissionToPay) return;
     setIsPayingCommission(true);
     try {
-      await markPaid({ orgId: activeOrgId, saleId: commissionToPay._id, paymentMethod });
+      // Paying a commission moves money. The identity is stable per sale for as
+      // long as this payment is being attempted, and retired once it lands.
+      const intent = `mark-commission-paid:${commissionToPay._id}`;
+      await markPaid({
+        orgId: activeOrgId,
+        saleId: commissionToPay._id,
+        paymentMethod,
+        idempotencyKey: commandId.for(intent),
+      });
+      commandId.retire(intent);
       toast.success(t("CommissionPaidSuccess" as any));
       setCommissionToPay(null);
       setPaymentMethod("CASH");

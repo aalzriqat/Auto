@@ -26,6 +26,7 @@ import { getErrorMessage } from "@/lib/errors";
 import { ConfirmHandoverDialog } from "./cockpit/ConfirmHandoverDialog";
 import { RegisterExpectedPaymentDialog, type ExpectedPaymentMethod } from "./RegisterExpectedPaymentDialog";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
+import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 
 type DepositResolution = "REFUNDED" | "FORFEITED";
 type PendingDepositResolution = {
@@ -87,6 +88,7 @@ export function ApplicationDetailsDialog({
   const registerVehicleHandover = useMutation(api.applications.registerVehicleHandover);
   const registerExpectedPayment = useMutation(api.applications.registerExpectedPayment);
   const releaseDeposit = useMutation(api.deposits.release);
+  const commandId = useCommandIdentity();
   const updateDocStatus = useMutation(api.documents.updateDocumentStatus);
   const generateUploadUrl = useMutation(api.documents.generateUploadUrl);
   const saveDocumentFile = useMutation(api.documents.saveDocumentFile);
@@ -174,12 +176,20 @@ export function ApplicationDetailsDialog({
     if (!activeOrgId) return;
     setResolvingDepositId(depositId);
     try {
+      // Per ATTEMPT, not per (deposit, resolution) — same reasoning as the
+      // release path in `components/vehicles/VehicleDetailsDialog.tsx`:
+      // `deposits.release` pays whatever is free, so a held identity would let a
+      // later genuine payout replay an earlier one's stored result after a lost
+      // response. At-most-once comes from the server's free-balance check.
+      const intent = `release-deposit:${String(depositId)}:${resolution}`;
       await releaseDeposit({
         orgId: activeOrgId,
         depositId,
         resolution,
         refundMethod: resolution === "REFUNDED" ? refundMethod : undefined,
+        idempotencyKey: commandId.renew(intent),
       });
+      commandId.retire(intent);
       toast.success(
         resolution === "REFUNDED"
           ? t("DepositRefundedSuccess")

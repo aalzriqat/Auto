@@ -135,7 +135,7 @@ async function seedPreview(
       status: "ACCEPTED", createdBy: userId, createdAt: Date.now(),
     })
   );
-  await asUser.mutation(api.deposits.create, {
+  await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
     orgId, quoteId, amount: opts.deposit, method: "CASH",
   });
 

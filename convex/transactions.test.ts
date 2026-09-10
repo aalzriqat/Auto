@@ -60,28 +60,37 @@ describe("transactions ledger", () => {
     const { orgId, vehicleId, asManager } = await setupLedgerOrg();
     const date = Date.now();
 
-    const transactionId = await asManager.mutation(api.transactions.add, {
+    // SCRUM-57. This test used to re-send the SAME key carrying amount 999
+    // where the first call carried 750, and assert the two returned the same
+    // row — pinning the fail-open behaviour as though it were the contract. A
+    // changed amount under a reused identity is not a retry; it is a different
+    // economic instruction, and silently returning the first row is exactly the
+    // defect this ticket exists to close. The retry direction is asserted here
+    // with a FAITHFUL retry (identical bytes, as a real client re-sends), and
+    // the changed-amount direction is asserted immediately below as a refusal.
+    const command = {
       orgId,
-      type: "IN",
+      type: "IN" as const,
       amount: 750,
       date,
-      category: "DEPOSIT",
+      category: "DEPOSIT" as const,
       description: "Deposit held for walk-in customer",
       vehicleId,
       idempotencyKey: "deposit-ledger-1",
-    });
-    const repeatedId = await asManager.mutation(api.transactions.add, {
-      orgId,
-      type: "IN",
-      amount: 999,
-      date,
-      category: "DEPOSIT",
-      description: "Should not create a second row",
-      vehicleId,
-      idempotencyKey: "deposit-ledger-1",
-    });
+    };
+
+    const transactionId = await asManager.mutation(api.transactions.add, command);
+    const repeatedId = await asManager.mutation(api.transactions.add, command);
 
     expect(repeatedId).toBe(transactionId);
+
+    await expect(
+      asManager.mutation(api.transactions.add, {
+        ...command,
+        amount: 999,
+        description: "Should not create a second row",
+      })
+    ).rejects.toThrow(/different request content/i);
 
     const page = await asManager.query(api.transactions.list, {
       orgId,
@@ -98,7 +107,7 @@ describe("transactions ledger", () => {
 
   test("update_and_remove_keep_transactions_auditable_but_hidden_from_list", async () => {
     const { t, orgId, vehicleId, asManager } = await setupLedgerOrg();
-    const transactionId = await asManager.mutation(api.transactions.add, {
+    const transactionId = await asManager.mutation(api.transactions.add, { idempotencyKey: crypto.randomUUID(),
       orgId,
       type: "OUT",
       amount: 400,
@@ -139,7 +148,7 @@ describe("transactions ledger", () => {
     const olderDate = Date.now() - 10 * 24 * 60 * 60 * 1000;
     const currentDate = Date.now();
 
-    await asManager.mutation(api.transactions.add, {
+    await asManager.mutation(api.transactions.add, { idempotencyKey: crypto.randomUUID(),
       orgId,
       type: "IN",
       amount: 100,
@@ -147,7 +156,7 @@ describe("transactions ledger", () => {
       category: "OTHER",
       description: "Outside reporting window",
     });
-    const currentTransactionId = await asManager.mutation(api.transactions.add, {
+    const currentTransactionId = await asManager.mutation(api.transactions.add, { idempotencyKey: crypto.randomUUID(),
       orgId,
       type: "IN",
       amount: 200,
@@ -307,7 +316,7 @@ describe("transactions ledger", () => {
     });
 
     await expect(
-      asManager.mutation(api.transactions.add, {
+      asManager.mutation(api.transactions.add, { idempotencyKey: crypto.randomUUID(),
         orgId,
         type: "OUT",
         amount: 500,
@@ -347,7 +356,7 @@ describe("transactions ledger", () => {
     });
 
     await expect(
-      asManager.mutation(api.transactions.add, {
+      asManager.mutation(api.transactions.add, { idempotencyKey: crypto.randomUUID(),
         orgId,
         type: "OUT",
         amount: 200,
@@ -358,7 +367,7 @@ describe("transactions ledger", () => {
       })
     ).rejects.toThrow(/expense not found/i);
 
-    const transactionId = await asManager.mutation(api.transactions.add, {
+    const transactionId = await asManager.mutation(api.transactions.add, { idempotencyKey: crypto.randomUUID(),
       orgId,
       type: "OUT",
       amount: 300,

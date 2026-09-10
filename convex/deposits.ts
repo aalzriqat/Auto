@@ -48,7 +48,7 @@ export const create = mutation({
     currency: v.optional(v.string()),
     method: v.optional(depositMethodValidator),
     notes: v.optional(v.string()),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
     /**
      * SCRUM-195: EXPLICIT proof that this deal continues the reservation
      * already holding the car. Naming the reservation is the only way that
@@ -75,6 +75,7 @@ export const create = mutation({
       {
         orgId: args.orgId,
         operation: "deposits.create",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
         // ⚠️ THE ADOPTION IS PART OF THE REQUEST, SO IT IS PART OF ITS IDENTITY.
@@ -253,7 +254,7 @@ export const release = mutation({
     // out, and the GL entry must credit the account it actually left from.
     refundMethod: v.optional(depositMethodValidator),
     notes: v.optional(v.string()),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     // The permission is re-checked inside `releaseHeldDeposit` against the
@@ -265,6 +266,7 @@ export const release = mutation({
       {
         orgId: args.orgId,
         operation: "deposits.release",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
         fingerprint: JSON.stringify({

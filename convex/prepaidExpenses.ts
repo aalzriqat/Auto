@@ -1001,7 +1001,7 @@ export const correctSchedule = mutation({
     // intended once — same idempotency discipline expenses.create already
     // uses. The dialog mints one fresh key per open, so a retry within one
     // open replays safely and a second, deliberate open gets a new key.
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -1021,6 +1021,7 @@ export const correctSchedule = mutation({
       {
         orgId: args.orgId,
         operation: requiresApproval ? "submitPrepaidCorrectionRequest" : "correctPrepaidSchedule",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
         fingerprint: JSON.stringify({

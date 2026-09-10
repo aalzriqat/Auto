@@ -50,6 +50,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import { getErrorMessage } from "@/lib/errors";
+import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 
 interface VehicleDetailsDialogProps {
   vehicle: Doc<"vehicles"> | null;
@@ -103,6 +104,7 @@ export function VehicleDetailsDialog({
       : "skip"
   );
   const releaseDeposit = useMutation(api.deposits.release);
+  const commandId = useCommandIdentity();
   const upsertLandedCosts = useMutation(api.vehicles.upsertLandedCosts);
   const createReservation = useMutation(api.vehicles.createReservation);
   const releaseReservation = useMutation(api.vehicles.releaseReservation);
@@ -219,21 +221,37 @@ export function VehicleDetailsDialog({
     if (!activeOrgId) return;
     setReleasingDepositId(depositId);
     try {
+      // SCRUM-57. This call used to pass NO key at all, because a key DERIVED
+      // from (deposit, resolution) made the SECOND genuine payout — the free
+      // part today, the rest when the cars it was held against fall away —
+      // match the first's stored command: the mutation returned without
+      // running, moved no money, and the operator was told the customer had
+      // been refunded.
+      //
+      // The identity marks ONE ATTEMPT, minted fresh here at the start of each
+      // user-initiated release rather than held across them.
+      //
+      // Holding it would be unsafe for this particular command. `deposits.release`
+      // pays out whatever is currently FREE on the row — the amount is not a
+      // client input — so its fingerprint cannot separate a retry from a second
+      // genuine payout, and `convex/deposits.ts` says so explicitly. If the
+      // first response were LOST, a held identity would never be retired, and
+      // the next genuine payout would be handed the first one's stored result:
+      // no money moved, operator told it was refunded. That is the original
+      // incident above arriving through a second door, and it is reproducible.
+      //
+      // At-most-once still holds, from where it always did on this path: a
+      // duplicate submit recomputes the free balance, finds nothing left, and
+      // pays nothing.
+      const intent = `release-deposit:${String(depositId)}:${resolution}`;
       await releaseDeposit({
         orgId: activeOrgId,
         depositId,
         resolution,
         refundMethod: resolution === "REFUNDED" ? (refundMethodByDeposit[depositId] ?? "CASH") : undefined,
-        // Deliberately no idempotency key. A row can now be released more than
-        // once — the free part today, the rest when the cars it was held
-        // against fall away — and a key derived from the deposit and the
-        // resolution made the SECOND genuine payout match the first's stored
-        // command: the mutation returned without running, moved no money, and
-        // the operator was told the customer had been refunded.
-        //
-        // A double submit is already safe without one: the two calls serialize,
-        // and the second recomputes the free balance as zero and is refused.
+        idempotencyKey: commandId.renew(intent),
       });
+      commandId.retire(intent);
       toast.success(
         resolution === "REFUNDED"
           ? (t("DepositRefundedSuccess" as any) ?? "Deposit refunded")
