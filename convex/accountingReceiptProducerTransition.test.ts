@@ -80,6 +80,20 @@ async function seedPostableOrg(suffix: string) {
   );
   const asAdmin = t.withIdentity({ subject: `pt_${suffix}`, clerkId: `pt_${suffix}` });
   await asAdmin.mutation(api.chartOfAccounts.initialize, { orgId });
+  // SCRUM-218-C: these fixtures record a payment with NO receivable, which is
+  // now a retained-credit receipt and needs 2110 to be postable. The default
+  // chart deliberately omits it (SCRUM-231 seeds it at cutover), so it is seeded
+  // here. Without this the receipt correctly DEFERS to the outbox and every
+  // occurrence assertion below would be asserting over an empty ledger.
+  await t.run((ctx) =>
+    ctx.db.insert("chartOfAccounts", {
+      orgId, code: "2110", name: "Unapplied Customer Receipts",
+      type: "LIABILITY", normalBalance: "CREDIT",
+      isControlAccount: true, allowManualPosting: false, active: true,
+      systemKey: SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY,
+      createdAt: Date.now(), updatedAt: Date.now(),
+    })
+  );
 
   const year = new Date().getUTCFullYear();
   await asAdmin.mutation(api.accountingPeriods.create, {
@@ -174,9 +188,14 @@ describe("SCRUM-236 §1 — recordPayment owns the receipt occurrence", () => {
     // The payload is the v1 gross shape, unchanged. SCRUM-236 moves ownership of
     // the identity; the movement/authority payload is SCRUM-218-C's change and
     // is deliberately NOT made here.
+    // SCRUM-218-C replaced the single gross `amountMinor` with the three-way
+    // split. This receipt names no receivable, so the whole 250 is retained
+    // customer credit — exactly the shape the old payload could not express.
     expect(row.payload).toMatchObject({
       paymentId: paymentId.toString(),
-      amountMinor: 25000,
+      receivedMinor: 25000,
+      appliedMinor: 0,
+      unappliedMinor: 25000,
       currency: "USD",
       customerId: customerId.toString(),
       paymentMethod: "CASH",
@@ -220,7 +239,9 @@ describe("SCRUM-236 §2 — clearCheque owns the receipt occurrence", () => {
     // had dropped it, the cheque would debit cheques-in-hand a second time.
     expect(row.payload).toMatchObject({
       paymentId: paymentId.toString(),
-      amountMinor: 40000,
+      receivedMinor: 40000,
+      appliedMinor: 0,
+      unappliedMinor: 40000,
       currency: "USD",
       paymentMethod: "BANK_TRANSFER",
     });

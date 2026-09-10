@@ -519,10 +519,26 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // stops seeing a file, must fail here. Lowering the pin to turn a red test
   // green, without a removal in the same commit that explains it, is the exact
   // failure it is built to catch.
+  //
+  // Then 484→485 / analysed 314→315 (SCRUM-218-C), by the one mutation that
+  // slice adds:
+  //
+  // `collections.applyRetainedCredit` — applies retained customer credit to a
+  // receivable. It takes an explicit `orgId` and is therefore ANALYSED rather
+  // than skipped, which is the outcome to want: every row it touches (the
+  // movement, its retained position, the receivable and the canonical
+  // allocation) is re-read and checked against that tenant before any write.
+  //
+  // Net across the two changes in this lane: 485 → 484 → 485 and 315 → 314 →
+  // 315, one mutation removed and one added. The counts returning to their
+  // earlier values is a COINCIDENCE of two independent changes, not evidence
+  // that nothing moved — which is why both steps are recorded separately above
+  // rather than being netted into a single "unchanged" note. These numbers were
+  // MEASURED after both changes, not arithmetic from the artifact's own pin.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 484,
-      analysed: 314,
+      totalMutations: 485,
+      analysed: 315,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 155,
     });

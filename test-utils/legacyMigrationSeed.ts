@@ -60,6 +60,31 @@ export async function postLegacyTransactionEvent(
     eventType = "COLLECTION_PAYMENT";
     payload.paymentId = sourceId;
     payload.paymentMethod = "CASH";
+    // SCRUM-218-C — reproduce the journal this legacy row ALREADY produced, and
+    // assert nothing further.
+    //
+    // The v2 receipt rule needs received/applied/unapplied, and a legacy
+    // `transactions` row records none of that split: it has one amount and it
+    // credited Customer AR in full. Booking `applied = received` is therefore
+    // the NO-RESTATEMENT choice — byte-identical to the entry the retired
+    // migration wrote before — and it deliberately never touches 2110.
+    //
+    // ⚠️ This is NOT a claim that the legacy receipt discharged a receivable. It
+    // is a refusal to invent a retained liability for a row that never recorded
+    // one; guessing the other way would mint 2110 credits out of historical
+    // data, which is exactly the legacy-data reconstruction that ticket is
+    // forbidden to do.
+    //
+    // ⚠️ THIS INVARIANT WAS PORTED HERE, NOT COPIED FROM 218-C's DIFF. SCRUM-218-C
+    // wrote it into `migrateUnpostedTransactions`, because at its branch point
+    // that mutation still had a body. SCRUM-234 has since reduced that mutation
+    // to a parameterless unconditional throw and relocated legacy seeding into
+    // THIS helper, which 218-C never saw (`0a0390589` postdates its base). The
+    // semantic still has to exist; only its home moved. Porting the diff instead
+    // of the invariant would have meant resurrecting a retired writer.
+    payload.receivedMinor = amountMinor;
+    payload.appliedMinor = amountMinor;
+    payload.unappliedMinor = 0;
   } else {
     throw new Error(
       `postLegacyTransactionEvent does not seed category "${tx.category}". ` +

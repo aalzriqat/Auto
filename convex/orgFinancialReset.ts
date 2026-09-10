@@ -54,6 +54,42 @@ const RESET_TABLES = [
   "accountBalanceSnapshots",
   "chartOfAccounts",
   // Money movement
+  //
+  // ⚠️ SCRUM-218-C receipt authority FIRST, and it is here because the comment
+  // above told me to look. A repository guard failed on the organization
+  // hard-delete for exactly these three tables; the lesson recorded above is
+  // that fixing the guard that fired and not asking which OTHER destructive path
+  // has the same gap is how the second one survives. It did have the same gap.
+  //
+  // A reset that cleared `collectionPayments`, `canonicalPayments` and
+  // `paymentAllocations` while leaving these behind would strand a customer's
+  // retained credit — a live liability position pointing at payments that no
+  // longer exist, on an otherwise fresh ledger.
+  //
+  // ⚠️ ORDER AND `CHILD_TABLES` ARE **BOTH** LOAD-BEARING. Neither alone is the
+  // guarantee, and this comment has now been wrong in both directions:
+  //
+  //   "children first is the rule"        -> false: each table is batched
+  //                                          independently, so a child that does
+  //                                          not fully drain in one pass leaves
+  //                                          its parent deletable next pass.
+  //   "order is only a readability aid"   -> ALSO FALSE, and this was my
+  //                                          over-correction of the first.
+  //
+  // `stillPopulated` is built INCREMENTALLY as this array is iterated, so a
+  // parent listed BEFORE its child can never see that child in the set and is
+  // never blocked by it — `CHILD_TABLES` is silently inert for that pair. A
+  // reviewer proved it by reordering this array and watching the R02 regression
+  // fail on pass 0, then reverting it as a control.
+  //
+  // So: children stay before parents HERE, and `CHILD_TABLES` additionally
+  // covers the partial-drain case that ordering alone cannot.
+  // `orgDeletionCoverage.test.ts` now enforces the ordering half, because a
+  // property stated only in a comment is not enforced — which is exactly how
+  // this comment came to be wrong twice.
+  "receiptApplications",
+  "receiptRetainedPositions",
+  "receiptMovements",
   "transactions",
   "deposits",
   "collectionPayments",
@@ -94,9 +130,18 @@ const RESET_TABLES = [
  * Tables whose rows reference a parent, keyed by that parent.
  *
  * The parent is skipped for the whole run while any of these still has rows,
- * so a partial pass can never orphan them. Listing order above already puts
- * children first; this makes the guarantee independent of that ordering, since
- * a later edit reshuffling the array would silently remove it otherwise.
+ * so a PARTIAL PASS can never orphan them — the case listing order alone cannot
+ * cover, because each table is batched independently.
+ *
+ * ⚠️ IT DOES NOT MAKE THE GUARANTEE INDEPENDENT OF ORDER, WHICH THIS COMMENT
+ * PREVIOUSLY CLAIMED. `stillPopulated` is built while `RESET_TABLES` is
+ * iterated, so a child listed AFTER its parent is never in the set when the
+ * parent is considered, and the edge is silently inert. Order and this map are
+ * both load-bearing, for different failure modes.
+ *
+ * `orgDeletionCoverage.test.ts` enforces the ordering half for every edge here,
+ * including ones added later — the claim was wrong in this comment twice before
+ * anything checked it.
  */
 const CHILD_TABLES: Partial<Record<(typeof RESET_TABLES)[number], readonly string[]>> = {
   financeApplications: [
@@ -107,6 +152,26 @@ const CHILD_TABLES: Partial<Record<(typeof RESET_TABLES)[number], readonly strin
     "financeDealCustody",
     "applicationStatusLog",
   ],
+  // ⚠️ SCRUM-218-C receipt authority. These edges cover the PARTIAL-DRAIN case:
+  // every table is batched independently, so at a small `batchSize` the reset
+  // could otherwise delete a movement and its position while an application
+  // child still survived, committing an orphan whose immutable occurrence can
+  // never be reconstructed.
+  //
+  // They do NOT make ordering irrelevant — an earlier revision of this comment
+  // said they did, which was an over-correction of an earlier comment saying
+  // ordering was the whole story. Both halves are required; the array order is
+  // enforced by `orgDeletionCoverage.test.ts`.
+  receiptMovements: ["receiptApplications", "receiptRetainedPositions"],
+  receiptRetainedPositions: ["receiptApplications"],
+  // The rows a receipt movement and its applications POINT AT. Deleting these
+  // first would leave live receipt authority referring to payments,
+  // allocations and receivables that no longer exist.
+  collectionPayments: ["receiptMovements"],
+  canonicalPayments: ["receiptMovements"],
+  paymentAllocations: ["receiptApplications"],
+  receivableDocuments: ["receiptApplications"],
+  receivables: ["receiptApplications"],
 };
 
 /**
@@ -228,7 +293,26 @@ export const resetOrgFinancialData = internalMutation({
         stillPopulated.has(child)
       );
       if (blockedBy.length > 0) {
-        if (rows.length > 0) remaining += rows.length;
+        if (rows.length > 0) {
+          remaining += rows.length;
+          // ⚠️ BLOCKING MUST PROPAGATE, OR THE ORPHAN JUST MOVES UP A LEVEL
+          // (review R05). A blocked table that still holds rows has to block ITS
+          // parents too. Without this line the graph is only one level deep: a
+          // surviving `receiptMovements` row was invisible to
+          // `collectionPayments` and `canonicalPayments`, which then deleted
+          // themselves — leaving the movement alive with dangling
+          // `collectionPaymentId` and `canonicalPaymentId` references.
+          //
+          // That was strictly a consequence of ADDING the multi-level receipt
+          // edges: before them every dependency here was one level deep, so
+          // skip-without-propagation was indistinguishable from correct. The
+          // first fix relocated the orphan from the child to the parent rather
+          // than removing it.
+          //
+          // Guarded on `rows.length > 0` deliberately: an empty table cannot
+          // orphan anything, so it must not block its parents and stall the run.
+          stillPopulated.add(table);
+        }
         continue;
       }
 
@@ -271,6 +355,14 @@ export const resetOrgFinancialData = internalMutation({
 
 /** Exported for the test that pins the signed-off scope. */
 export const RESET_TABLES_FOR_TEST: readonly string[] = RESET_TABLES;
+
+/**
+ * Exported so the ordering invariant can be ENFORCED rather than asserted in
+ * prose. `stillPopulated` is built as `RESET_TABLES` is iterated, so an edge
+ * whose child is listed AFTER its parent is silently inert — the parent is
+ * never blocked by it. See `orgDeletionCoverage.test.ts`.
+ */
+export const CHILD_TABLES_FOR_TEST: Readonly<Record<string, readonly string[]>> = CHILD_TABLES;
 
 /** Exported so a caller can type the org argument without importing generated ids. */
 export type ResetOrgId = Id<"organizations">;
