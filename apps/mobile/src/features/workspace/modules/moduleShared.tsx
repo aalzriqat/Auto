@@ -361,6 +361,21 @@ export function joinList(value: string[] | undefined): string {
 
 let idempotencyFallbackCounter = 0;
 
+/**
+ * MINTS a key. It does NOT manage one.
+ *
+ * ⚠️ Calling this inside a submit handler mints a key per ATTEMPT, which is the
+ * opposite of what an economic command needs: a lost response then retries
+ * under a NEW identity and the server has no way to recognise the duplicate.
+ * That is how mobile shipped retry-blind `expenses.create`, `deposits.create`,
+ * `deposits.release`, `sales.completeDraft`, `sales.completeFromQuote`,
+ * `sales.markCommissionPaid` and `sourcingPayables.markPaid` (SCRUM-313).
+ *
+ * For any IDENTITY_GUARDED command use {@link useCommandIdentity} instead. This
+ * function remains only as the minting primitive behind it (it carries the
+ * React Native fallback for runtimes without `crypto.randomUUID`) and for
+ * non-economic paths.
+ */
 export function idempotencyKey(operation: string): string {
   if (typeof globalThis.crypto?.randomUUID === "function") {
     return `${operation}-${globalThis.crypto.randomUUID()}`;
@@ -368,6 +383,76 @@ export function idempotencyKey(operation: string): string {
 
   idempotencyFallbackCounter += 1;
   return `${operation}-${Date.now().toString(36)}-${idempotencyFallbackCounter.toString(36)}`;
+}
+
+export type CommandIdentity = {
+  /** The identity for this intent — stable until retired. */
+  for: (intentId: string) => string;
+  /** Call after the intent SUCCEEDED, so the next one is a new command. */
+  retire: (intentId: string) => void;
+  /**
+   * Retire this intent's identity and mint a new one, marking a NEW attempt.
+   *
+   * ⚠️ ONLY for a command whose server-side fingerprint provably cannot
+   * separate a retry from a genuinely new command, because the amount it moves
+   * is not a client input. `deposits.release` is the case: it pays out whatever
+   * is currently FREE on the row, so two real payouts of the same deposit with
+   * the same resolution are byte-identical requests.
+   *
+   * For such a command, holding one identity across attempts is UNSAFE: if the
+   * first response is lost, `retire` never runs, and a later genuinely-new
+   * payout reuses the stale identity and is handed the first one's stored
+   * result — money silently not moved, success reported to the operator.
+   */
+  renew: (intentId: string) => string;
+};
+
+/**
+ * SCRUM-313 — the mobile twin of the web `useCommandIdentity`
+ * (`hooks/useCommandIdentity.ts`), which is the source of truth for these
+ * semantics. Ported rather than reinvented so both clients answer "is this a
+ * retry or a second real request?" the same way.
+ *
+ * The lifecycle is the whole point:
+ *   - minted ONCE per business intent, on the first attempt;
+ *   - lives in a ref, so it survives rerenders;
+ *   - REUSED by every retry — a FAILURE deliberately does not retire it, which
+ *     is what collapses a lost response or an impatient second tap into one
+ *     economic effect;
+ *   - retired on success, so the next genuine intent gets a fresh identity.
+ *
+ * `intentId` names the INTENT, not the request: scope it to the thing being
+ * acted on (`commission-pay:<saleId>`), never to something recomputed per
+ * render or per attempt.
+ *
+ * ⚠️ The identity is only half the contract. Every FINGERPRINTED argument must
+ * be frozen alongside it, or the retry sends the same key with different
+ * content and the server correctly REFUSES it — turning a silent double-post
+ * into a rejection the operator cannot clear. `expenses.create` fingerprints
+ * `date`, so its caller freezes the whole request snapshot, not just the key.
+ */
+export function useCommandIdentity(): CommandIdentity {
+  const keys = useRef<Map<string, string>>(new Map());
+  return useMemo(
+    () => ({
+      for(intentId: string) {
+        const existing = keys.current.get(intentId);
+        if (existing) return existing;
+        const minted = idempotencyKey(intentId);
+        keys.current.set(intentId, minted);
+        return minted;
+      },
+      retire(intentId: string) {
+        keys.current.delete(intentId);
+      },
+      renew(intentId: string) {
+        const minted = idempotencyKey(intentId);
+        keys.current.set(intentId, minted);
+        return minted;
+      },
+    }),
+    []
+  );
 }
 
 export function isPaginationLoading(status: string): boolean {

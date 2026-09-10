@@ -4,7 +4,7 @@ import { Text, View } from "react-native";
 import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileSupplierPayable, type MobileSupplierPayableStatus } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { type Option, money, maybeText, parseOptionalNumber, idempotencyKey, useGenericError, PrimaryButton, SegmentedControl, FormField, FormModal, RecordCard, ModuleList } from "./moduleShared";
+import { type Option, money, maybeText, parseOptionalNumber, useCommandIdentity, useGenericError, PrimaryButton, SegmentedControl, FormField, FormModal, RecordCard, ModuleList } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 export function SourcingModule({ orgId }: { orgId: string }) {
@@ -12,6 +12,7 @@ export function SourcingModule({ orgId }: { orgId: string }) {
   const { locale } = useLocale();
   const reportError = useGenericError();
   const markPaid = useMutation(api.sourcingPayables.markPaid);
+  const commandId = useCommandIdentity();
   const [statusFilter, setStatusFilter] = useState<MobileSupplierPayableStatus | "ALL">("PENDING");
   const payables = useQuery(
     api.sourcingPayables.list,
@@ -38,6 +39,9 @@ export function SourcingModule({ orgId }: { orgId: string }) {
   async function savePaid() {
     if (!selected) return;
     setSaving(true);
+    // Scoped to the PAYABLE. A failed submit keeps the identity so the retry is
+    // the same settlement; only success retires it.
+    const intent = `payable-pay:${String(selected._id)}`;
     try {
       await markPaid({
         orgId,
@@ -45,8 +49,9 @@ export function SourcingModule({ orgId }: { orgId: string }) {
         paymentMethod: "CASH",
         paymentNotes: maybeText(form.notes),
         taxAmount: parseOptionalNumber(form.taxAmount),
-        idempotencyKey: idempotencyKey("sourcingPayables.markPaid"),
+        idempotencyKey: commandId.for(intent),
       });
+      commandId.retire(intent);
       setSelected(null);
     } catch (error) {
       reportError("Mobile sourcing payable mark paid failed", error);

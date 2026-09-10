@@ -27,7 +27,7 @@ import {
   SummaryRow,
   UnderlineTabBar,
   dateLabel,
-  idempotencyKey,
+  useCommandIdentity,
   money,
   parseOptionalNumber,
   useGenericError,
@@ -211,6 +211,7 @@ function VehicleDetailContent({
   );
 
   const releaseDeposit = useMutation(api.deposits.release);
+  const commandId = useCommandIdentity();
   const upsertLandedCosts = useMutation(api.vehicles.upsertLandedCosts);
   const createReservation = useMutation(api.vehicles.createReservation);
   // Minted at the user-intent boundary and held across attempts — with a
@@ -280,14 +281,34 @@ function VehicleDetailContent({
   async function handleReleaseDeposit(depositId: string, resolution: "REFUNDED" | "FORFEITED") {
     if (!orgId) return;
     setReleasingDepositId(depositId);
+    // `renew`, NOT `for` — mirroring the web caller in
+    // `components/vehicles/VehicleDetailsDialog.tsx`, which documents a
+    // reproducible incident behind this exact choice.
+    //
+    // This command pays out whatever is currently FREE on the row, so the
+    // amount is not a client input and two genuine payouts of the same deposit
+    // with the same resolution are BYTE-IDENTICAL requests. Holding one
+    // identity across attempts is therefore unsafe rather than safe: if the
+    // first response is LOST, `retire` never runs, and a later genuinely-new
+    // payout reuses the stale identity and is handed the first one's stored
+    // result — no money moves and the operator is told the customer was
+    // refunded.
+    //
+    // At-most-once comes from the server recomputing the free balance (a
+    // duplicate submit finds nothing left and pays nothing), not from the
+    // command log. Marking one ATTEMPT is the correct identity here, and is not
+    // the "fresh id per request" anti-pattern, which is unsafe precisely where
+    // content CAN identify the command.
+    const intent = `release-deposit:${String(depositId)}:${resolution}`;
     try {
       await releaseDeposit({
         orgId,
         depositId,
         resolution,
         refundMethod: resolution === "REFUNDED" ? (refundMethodByDeposit[depositId] ?? "CASH") : undefined,
-        idempotencyKey: idempotencyKey("deposit-release"),
+        idempotencyKey: commandId.renew(intent),
       });
+      commandId.retire(intent);
     } catch (error) {
       reportError("Mobile deposit release failed", error);
     } finally {

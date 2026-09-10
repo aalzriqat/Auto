@@ -1,9 +1,9 @@
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Text, View } from "react-native";
 import { api, type MobileExpense, type MobileExpenseCategory } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { PAGE_SIZE, money, dateLabel, maybeText, parseOptionalNumber, parseRequiredNumber, idempotencyKey, invalidNumberMessage, requiredText, useFieldFocusChain, useFormErrors, useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
+import { PAGE_SIZE, money, dateLabel, maybeText, parseOptionalNumber, parseRequiredNumber, useCommandIdentity, invalidNumberMessage, requiredText, useFieldFocusChain, useFormErrors, useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 export function ExpensesModule({ highlightId, orgId }: { highlightId?: string; orgId: string }) {
@@ -11,6 +11,21 @@ export function ExpensesModule({ highlightId, orgId }: { highlightId?: string; o
   const { locale } = useLocale();
   const reportError = useGenericError();
   const createExpense = useMutation(api.expenses.create);
+  const commandId = useCommandIdentity();
+  /**
+   * The FROZEN half of the retry contract.
+   *
+   * A retained key alone does NOT fix this command. `expenses.create`
+   * fingerprints `date`, and this screen has no date field — it sent
+   * `date: Date.now()`, recomputed on every attempt. Holding the key while
+   * letting the date move gives:
+   *     key A + date T1 -> response lost
+   *     key A + date T2 -> server correctly REFUSES as different content
+   * which converts a silent double-post into a rejection the operator cannot
+   * clear. The date belongs to the INTENT, not to the attempt, so it is
+   * captured once and reused until the intent succeeds.
+   */
+  const frozenDateRef = useRef<number | null>(null);
   const removeExpense = useMutation(api.expenses.remove);
   const { loadMore, results, status } = usePaginatedQuery(api.expenses.list, { orgId }, { initialNumItems: PAGE_SIZE });
   const vehicles = useQuery(api.vehicles.listAll, { orgId, includeReserved: true });
@@ -45,20 +60,26 @@ export function ExpensesModule({ highlightId, orgId }: { highlightId?: string; o
     });
     if (!valid || amount === null) return;
     setSaving(true);
+    const intent = "expenses.create";
+    frozenDateRef.current ??= Date.now();
     try {
       await createExpense({
         orgId,
         title: form.title,
         amount,
         taxAmount: parseOptionalNumber(form.taxAmount),
-        date: Date.now(),
+        date: frozenDateRef.current,
         category: form.category,
         status: "PAID",
         vendor: maybeText(form.vendor),
         vehicleId: maybeText(form.vehicleId),
         notes: maybeText(form.notes),
-        idempotencyKey: idempotencyKey("expenses.create"),
+        idempotencyKey: commandId.for(intent),
       });
+      // Key and snapshot are retired TOGETHER, and only on success: they are one
+      // contract, so retiring either alone re-opens the failure the other closes.
+      commandId.retire(intent);
+      frozenDateRef.current = null;
       setOpen(false);
       setForm({ title: "", amount: "", taxAmount: "", category: "OTHER", vendor: "", vehicleId: "", notes: "" });
     } catch (error) {
