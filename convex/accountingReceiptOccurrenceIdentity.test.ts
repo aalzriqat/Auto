@@ -1,0 +1,1474 @@
+/**
+ * SCRUM-237 — contract tests for the canonical receipt occurrence identity.
+ *
+ * §1–§7 are pure unit tests: the module under test touches no database and the
+ * properties that matter are structural. The one property that genuinely cannot
+ * be tested at runtime — that a legacy `transactions` id cannot reach a
+ * constructor — is asserted at COMPILE time with `@ts-expect-error`, because a
+ * runtime test could only observe the mistake after someone had already cast
+ * their way past the type.
+ *
+ * §8–§9 are the evidence additions required by owner-proxy c17593 §8. §9 is
+ * DB-backed against the real posting path, because the properties it pins —
+ * that the forward, causal and reversal addresses are ONE fact, and that a
+ * payload-version change cannot mint a second journal — are claims about what
+ * actually lands in `accountingEvents`, and structural reasoning about the
+ * helpers cannot establish them.
+ */
+import { convexTestWithComponents } from "../test-utils/convexTest";
+import { describe, expect, test } from "vitest";
+import schema from "./schema";
+import { api } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
+import * as receiptOccurrenceModule from "./accounting/receiptOccurrence";
+import {
+  directCollectionReceipt,
+  RECEIPT_EVENT_TYPE,
+  RECEIPT_SOURCE_TYPE,
+  assertTrustedOccurrence,
+  toReceiptOccurrenceSnapshot,
+  rehydrateReceiptOccurrence,
+  ReceiptOccurrenceIdentity,
+  occurrenceIdempotencyKey,
+  occurrenceReversalIdempotencyKey,
+  occurrenceIndexRange,
+  describeOccurrence,
+  assertKeyPrefixesUnambiguous,
+  RECEIPT_PAYLOAD_VERSION,
+} from "./accounting/receiptOccurrence";
+import {
+  postReceiptOccurrence,
+  findPostedReceiptOccurrence,
+  reverseReceiptOccurrence,
+} from "./accounting/workflowHooks";
+import { reverseAccountingEvent } from "./accounting/reversals";
+import { enqueuePendingReversal } from "./accountingOutbox";
+import { quiesceScheduler, settleOutbox, outboxRows } from "../test-utils/outboxWork";
+
+const MODULE_GLOB = import.meta.glob("./**/*.*s");
+
+const ORG = "org_123" as unknown as Id<"organizations">;
+const PAYMENT = "pay_abc" as unknown as Id<"collectionPayments">;
+
+describe("SCRUM-237 §1 — the identity map matches the owner-proxy ruling", () => {
+  test("direct collection is COLLECTION_PAYMENT / collectionPayments / <paymentId>", () => {
+    const id = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
+    expect(id.eventType).toBe("COLLECTION_PAYMENT");
+    expect(id.sourceType).toBe("collectionPayments");
+    expect(id.sourceId).toBe("pay_abc");
+    expect(id.eventVersion).toBe(1);
+  });
+
+  test("the classifying columns are SERVER CONSTANTS, not caller inputs", () => {
+    // c17632 requirement 2. `directCollectionReceipt` takes an org, a payment id
+    // and an occurrence number — there is no argument for eventType or
+    // sourceType, so the two columns that select a posting rule cannot be
+    // steered from a call site. This is what makes the forged-eventType chain
+    // (B237-HEAD-01) unreachable through the sanctioned door.
+    const id = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
+    expect(id.eventType).toBe(RECEIPT_EVENT_TYPE);
+    expect(id.sourceType).toBe(RECEIPT_SOURCE_TYPE);
+  });
+
+  test("PAYMENT LINKS ARE ABSENT from the launch surface (c17632 product scope cut)", () => {
+    // The owner removed online-provider receipts from this redesign. The arm is
+    // gone rather than repaired, and this asserts the ABSENCE so a future
+    // re-add is a deliberate act with a test to update, not a quiet return.
+    //
+    // Deferred, NOT reclassified: nothing may remap a provider receipt onto
+    // COLLECTION_PAYMENT to get it through this contract. The module exports no
+    // door that could — checked by name against the real module namespace, not
+    // by grep.
+    const exported = Object.keys(receiptOccurrenceModule);
+    expect(exported).not.toContain("paymentLinkReceipt");
+    expect(exported.filter((k) => /payment ?link/i.test(k))).toEqual([]);
+    // ...and the one surviving source family is the direct-collection one.
+    expect(RECEIPT_SOURCE_TYPE).toBe("collectionPayments");
+  });
+});
+
+describe("SCRUM-237 §2 — the derived key is byte-identical to what production stores", () => {
+  // This is the compatibility floor. The live ACCOUNTING producers write
+  // `collection_payment_<paymentId>` — `makeCollectionHook`, instantiated as
+  // `hookCollectionPayment` (workflowHooks.ts), called from `recordPayment` and
+  // `clearCheque` (collections.ts) — and `payment_link_received_<intentId>`
+  // from `hookPaymentLinkReceived`. NOT `mirrorCollectionPaymentToCanonical`:
+  // that builds an identically-spelled key for a `canonicalPayments` row, a
+  // different table and a different job. If the derivation drifts from these
+  // literals, every already-POSTED event stops matching its own replay check in
+  // `postOrEnqueue` and would re-post.
+  //
+  // Cited by symbol, not line number: the previous revision's numbers went stale
+  // within one commit when an earlier fix shifted the file by +20 lines.
+  test("direct collection reproduces collection_payment_<paymentId> exactly", () => {
+    const id = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
+    expect(occurrenceIdempotencyKey(id)).toBe("collection_payment_pay_abc");
+  });
+
+});
+
+describe("SCRUM-237 §3 — a repeat occurrence is a DIFFERENT key", () => {
+  // The trap this closes: the stored key format contains no eventVersion, so a
+  // second economic occurrence against one source would carry the first one's
+  // key, and `postOrEnqueue`'s POSTED short-circuit would return without
+  // posting — a receipt in the subledger and nothing in the ledger.
+  test("occurrence 2 does not collide with occurrence 1", () => {
+    const first = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
+    const second = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT, occurrence: 2 });
+    expect(occurrenceIdempotencyKey(second)).not.toBe(occurrenceIdempotencyKey(first));
+    // Disjoint namespace + length-prefixed fields. "collection_payment" is 18
+    // characters, "pay_abc" is 7.
+    expect(occurrenceIdempotencyKey(second)).toBe("occv2:18:collection_payment:7:pay_abc");
+  });
+
+  test("occurrence 1 is spelled the legacy way, so existing rows still match", () => {
+    const explicit = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT, occurrence: 1 });
+    const implicit = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
+    expect(occurrenceIdempotencyKey(explicit)).toBe(occurrenceIdempotencyKey(implicit));
+    expect(occurrenceIdempotencyKey(explicit)).not.toContain("occv");
+  });
+
+  test("REGRESSION — a sourceId carrying the repeat delimiter cannot collide", () => {
+    // The exact counterexample that falsified the previous `${base}_occ${v}`
+    // derivation, produced independently by two reviewers. Under the old form
+    // BOTH of these were "collection_payment_X_occ2":
+    //
+    //   sourceId "X_occ2" at v1   vs   sourceId "X" at v2
+    //
+    // Two distinct economic tuples sharing one key, and because postOrEnqueue
+    // short-circuits on a POSTED row found BY THAT KEY before postAccountingEvent
+    // ever compares the tuple, the second receipt is absorbed silently — in the
+    // subledger, absent from the ledger.
+    const looksLikeARepeat = directCollectionReceipt({
+      orgId: ORG,
+      paymentId: "X_occ2" as unknown as Id<"collectionPayments">,
+    });
+    const genuineRepeat = directCollectionReceipt({
+      orgId: ORG,
+      paymentId: "X" as unknown as Id<"collectionPayments">,
+      occurrence: 2,
+    });
+    expect(looksLikeARepeat.sourceId).not.toBe(genuineRepeat.sourceId);
+    expect(occurrenceIdempotencyKey(looksLikeARepeat)).not.toBe(
+      occurrenceIdempotencyKey(genuineRepeat)
+    );
+  });
+
+  test("the key mapping is INJECTIVE over sourceId AND eventVersion together", () => {
+    // The previous version of this test swept eventVersion for ONE fixed
+    // sourceId, which is exactly why it did not catch the collision above: the
+    // counterexample lives in the two-dimensional space. Sweep both axes, and
+    // include delimiter-heavy ids deliberately chosen to collide under the old
+    // derivation.
+    const sourceIds = ["X", "X_occ2", "X_occ", "a:b", "12:X", "occv2:1:a:1:b"];
+    const keys = new Set<string>();
+    let pairs = 0;
+    for (const raw of sourceIds) {
+      for (let occurrence = 1; occurrence <= 12; occurrence++) {
+        keys.add(
+          occurrenceIdempotencyKey(
+            directCollectionReceipt({
+              orgId: ORG,
+              paymentId: raw as unknown as Id<"collectionPayments">,
+              occurrence,
+            })
+          )
+        );
+        pairs++;
+      }
+    }
+    expect(keys.size).toBe(pairs);
+  });
+
+  test("an EMPTY sourceId is REFUSED at construction", () => {
+    // Both injectivity sweeps above used to include `""` as a hostile input,
+    // and the derivation handled it injectively — but an empty source id is not
+    // a payment, and a key of `collection_payment_` addresses nothing. `seal`
+    // now refuses it, so the sweeps no longer carry it as a legal value. Pinned
+    // separately rather than silently dropped, because "the sweep got shorter"
+    // must not be how a lost case is recorded.
+    expect(() =>
+      directCollectionReceipt({
+        orgId: ORG,
+        paymentId: "" as unknown as Id<"collectionPayments">,
+      })
+    ).toThrow(/non-empty string/);
+  });
+
+  test("a non-positive or non-integer occurrence is REFUSED at construction", () => {
+    // eventVersion is typed `number`, which admits all of these. Each would
+    // otherwise become part of a stored key (`_occNaN`, `_occ0`) and reach the
+    // ledger as a nonsense economic discriminator.
+    for (const bad of [0, -1, 1.5, NaN, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() =>
+        directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT, occurrence: bad })
+      ).toThrow(/safe integer/);
+    }
+    // The valid boundary still constructs.
+    expect(() =>
+      directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT, occurrence: 1 })
+    ).not.toThrow();
+  });
+});
+
+describe("SCRUM-237 §4 — one identity addresses one indexed range", () => {
+  test("the range is exactly the by_org_event_source_version columns", () => {
+    const id = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
+    expect(occurrenceIndexRange(id)).toEqual({
+      index: "by_org_event_source_version",
+      orgId: ORG,
+      eventType: "COLLECTION_PAYMENT",
+      sourceType: "collectionPayments",
+      sourceId: "pay_abc",
+      eventVersion: 1,
+    });
+  });
+
+  test("two different payments never address the same range", () => {
+    const a = occurrenceIndexRange(directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT }));
+    const b = occurrenceIndexRange(
+      directCollectionReceipt({
+        orgId: ORG,
+        paymentId: "pay_other" as unknown as Id<"collectionPayments">,
+      })
+    );
+    expect(a).not.toEqual(b);
+  });
+
+  test("a repeat occurrence addresses a DIFFERENT range than its first", () => {
+    // eventVersion is a real index column, so occurrence 2 must not be able to
+    // read or reverse occurrence 1's row.
+    const first = occurrenceIndexRange(directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT }));
+    const repeat = occurrenceIndexRange(
+      directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT, occurrence: 2 })
+    );
+    expect(first).not.toEqual(repeat);
+  });
+});
+
+describe("SCRUM-237 §5 — payload version is NOT the economic discriminator", () => {
+  test("payload version is a separate constant and never lands in eventVersion", () => {
+    const id = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
+    // Setting eventVersion to 2 to mean "v2 payload" would declare a SECOND
+    // economic receipt against the same source and post the ledger twice.
+    expect(id.eventVersion).toBe(1);
+    expect(RECEIPT_PAYLOAD_VERSION).toBe(2);
+    expect(id.eventVersion).not.toBe(RECEIPT_PAYLOAD_VERSION);
+  });
+
+  test("payload version does not appear in the derived key at all", () => {
+    // c17593 §3: letting the payload version into the key would mint a SECOND
+    // idempotency key — and therefore a second journal — for one economic
+    // receipt. The key must be blind to it.
+    const id = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
+    expect(occurrenceIdempotencyKey(id)).not.toContain(String(RECEIPT_PAYLOAD_VERSION));
+    expect(occurrenceIdempotencyKey(id)).toBe("collection_payment_pay_abc");
+  });
+});
+
+describe("SCRUM-237 §6 — NEGATIVE CONTROLS: what cannot mint a receipt identity", () => {
+  test("a legacy transactions id is a COMPILE error, not a runtime check", () => {
+    const legacyRow = "tx_legacy_1" as unknown as Id<"transactions">;
+    // @ts-expect-error a transactions row carries no receipt identity and
+    // cannot be given one — this is the enforcement, and if this line ever
+    // stops erroring the contract has been weakened.
+    directCollectionReceipt({ orgId: ORG, paymentId: legacyRow });
+    expect(legacyRow).toBeDefined();
+  });
+
+  test("a deposit id is a COMPILE error too — deposits are the negative control", () => {
+    const deposit = "dep_1" as unknown as Id<"deposits">;
+    // @ts-expect-error deposits are sourced from `deposits` and are not a
+    // receipt occurrence family. If this compiles, a deposit has become
+    // constructible as a receipt and the change is wrong.
+    directCollectionReceipt({ orgId: ORG, paymentId: deposit });
+    expect(deposit).toBeDefined();
+  });
+
+  test("the identity cannot be assembled from an object literal", () => {
+    // ⚠️ THIS CONTROL COVERS THE LITERAL CASE AND NOTHING ELSE, and generalising
+    // it is what cost a certification round. The brand is copied by SPREAD, so
+    // "a literal fails" never implied "callers cannot construct one" — see §13,
+    // which covers obtainability at RUNTIME, where the actual authority lives.
+    // @ts-expect-error the brand is unproducible in a literal.
+    const forged: ReturnType<typeof directCollectionReceipt> = {
+      orgId: ORG,
+      eventType: "COLLECTION_PAYMENT",
+      sourceType: "collectionPayments",
+      sourceId: "forged",
+      eventVersion: 1,
+    };
+    expect(forged.sourceId).toBe("forged");
+  });
+});
+
+describe("SCRUM-237 §7 — the description is one-way", () => {
+  test("describeOccurrence carries every addressing field", () => {
+    const id = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT, occurrence: 3 });
+    expect(describeOccurrence(id)).toBe("COLLECTION_PAYMENT/collectionPayments/pay_abc@v3");
+  });
+
+  test("describeOccurrence works on an UNTRUSTED value, deliberately", () => {
+    // It is diagnostic, mints no authority, and builds the very messages a
+    // refusal produces. A trust assertion here would throw while reporting a
+    // throw. Asserted rather than left to chance, because a later reviewer
+    // "tightening" this function would break error reporting on the refusal path.
+    const legit = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
+    const copy = { ...legit, sourceId: "elsewhere" };
+    expect(() => describeOccurrence(copy)).not.toThrow();
+    expect(describeOccurrence(copy)).toContain("elsewhere");
+  });
+});
+
+describe("SCRUM-237 §8 — c17593 evidence: legacy tokens", () => {
+  test("EV4 — a retagged legacy transactions key cannot influence the derived key", () => {
+    // The SCRUM-223 certification finding, carried into this contract as a
+    // negative rule (c17593 §4): a row retagged to COLLECTION_PAYMENT through
+    // `transactions.update` keeps the idempotencyKey it was born with, inherited
+    // from an unrelated original category. That is a plausible-looking token
+    // that correlates to NOTHING — worse than an absence, because an absence is
+    // detectable and a false positive is not.
+    //
+    // ⚠️ WHAT THIS TEST IS AND IS NOT — flagged by the Sonnet seat at acfd58429,
+    // and the criticism is correct. The assertions below construct no
+    // `transactions` row, retag nothing, and pass no legacy token anywhere.
+    // They would hold for ANY deterministic string function, so they are
+    // ILLUSTRATIVE OF THE RULE, NOT EVIDENCE FOR IT. Left in place because the
+    // rule is worth stating at the point a reader looks for it, but it must not
+    // be counted as coverage.
+    //
+    // The property is enforced STRUCTURALLY, and is visible from the signature
+    // alone: `occurrenceIdempotencyKey` and `occurrenceReversalIdempotencyKey`
+    // take one argument and no `ctx`/database handle, so a legacy token sitting
+    // in a row is not merely unused — it is unreachable. What actually holds
+    // that line is EV3's two `@ts-expect-error` excess-argument controls, which
+    // fail with ts(2578) the day a second parameter A STRING CAN SATISFY is
+    // admitted — see EV3 for why they reach no further than that — plus the §6
+    // compile-time negative controls on the constructors.
+    const id = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
+    const derived = occurrenceIdempotencyKey(id);
+
+    // A token that LOOKS exactly like a valid collection key, but was inherited
+    // by a retagged expense row. It has nowhere to go.
+    const plausibleInheritedToken = "collection_payment_pay_SOMETHING_ELSE";
+    expect(derived).not.toBe(plausibleInheritedToken);
+    expect(occurrenceIdempotencyKey(id)).toBe(derived); // stable, input-free
+  });
+
+  test("EV5 — two orgs' identical raw payment ids never share an address", () => {
+    // EV5 previously proved the payment-link and direct-collection channels
+    // could not collide on a shared raw id. With provider receipts cut from this
+    // release (c17632) that pair no longer exists, so the surviving question is
+    // the tenancy one: `occurrenceIdempotencyKey` encodes NO orgId, so the two
+    // orgs' keys are IDENTICAL by construction and separation rests entirely on
+    // every consumer constraining `orgId` as its own index component. Pinned
+    // here so that dependency is visible rather than incidental.
+    const orgA = "org_a" as unknown as Id<"organizations">;
+    const orgB = "org_b" as unknown as Id<"organizations">;
+    const a = directCollectionReceipt({ orgId: orgA, paymentId: PAYMENT });
+    const b = directCollectionReceipt({ orgId: orgB, paymentId: PAYMENT });
+
+    expect(occurrenceIdempotencyKey(a)).toBe(occurrenceIdempotencyKey(b)); // by design
+    expect(occurrenceIndexRange(a).orgId).not.toBe(occurrenceIndexRange(b).orgId);
+    expect(occurrenceIndexRange(a)).not.toEqual(occurrenceIndexRange(b));
+  });
+
+  test("EV3 — there is no parameter through which a caller can supply a key", () => {
+    // c17593 §3: the key "may never be caller-supplied independently for a v2
+    // receipt occurrence". Structurally there is no such argument to pass, so
+    // the runtime-observable form of this property is that the key is a pure
+    // function of the identity: same identity in, same key out, always.
+    const a = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
+    const b = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
+    expect(occurrenceIdempotencyKey(a)).toBe(occurrenceIdempotencyKey(b));
+    expect(occurrenceReversalIdempotencyKey(a)).toBe(occurrenceReversalIdempotencyKey(b));
+
+    // Runtime determinism is necessary but NOT sufficient, as the Codex seat
+    // pointed out: it would still pass if someone added an optional
+    // caller-supplied key parameter and simply never passed it here. The real
+    // guard is a COMPILE error. An unused @ts-expect-error is ts(2578), so these
+    // fail loudly the day a second parameter a STRING can satisfy appears —
+    // which is the caller-supplied-key shape c17593 §3 actually forbids.
+    //
+    // ⚠️ NOT "a second parameter of any kind", which is what this comment used
+    // to claim (Codex seat, `0280f185f`). A second parameter of an unrelated
+    // type — a `MutationCtx`, say — would still make this call a type error, so
+    // the @ts-expect-error stays USED, no ts(2578) is raised, and the control
+    // keeps passing while the property it guards has changed. The controls are
+    // as wide as the argument they pass, and no wider.
+    // @ts-expect-error a second argument must not exist on the forward key
+    occurrenceIdempotencyKey(a, "caller-supplied-key");
+    // @ts-expect-error a second argument must not exist on the reversal key
+    occurrenceReversalIdempotencyKey(a, "caller-supplied-key");
+
+    // The reversal key tracks the SAME identity as its forward post — change any
+    // identity field and it moves — while living in a namespace disjoint from
+    // every forward key, so it can never BE one.
+    //
+    // This previously asserted the literal shape `${forwardKey}_reversal`, which
+    // is an assertion about the patch rather than the property: it passed
+    // against the very encoding that made a reversal key collide with another
+    // occurrence's forward key.
+    const other = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT, occurrence: 2 });
+    expect(occurrenceReversalIdempotencyKey(a)).not.toBe(occurrenceReversalIdempotencyKey(other));
+    expect(occurrenceReversalIdempotencyKey(a)).not.toBe(occurrenceIdempotencyKey(a));
+    expect(occurrenceReversalIdempotencyKey(a)).not.toBe(occurrenceIdempotencyKey(other));
+  });
+});
+
+/* -------------------------------------------------------------------------- *
+ * §9 — DB-backed evidence (c17593 §8 items 6, 7, 8)
+ *
+ * These run the REAL posting path. The claims are about what lands in
+ * `accountingEvents` and what a later lookup can find, which structural
+ * reasoning about the helpers cannot establish.
+ * -------------------------------------------------------------------------- */
+
+/**
+ * Inserts one COMPLETED collection-payment row and returns its id, typed.
+ *
+ * `t.run` with an untyped callback returns `unknown`, and an `unknown` flowing
+ * into `directCollectionReceipt` would defeat the very compile-time control
+ * §6 asserts — the constructor would accept it. Narrowing here keeps the
+ * source-family type live at every call site in this file.
+ */
+async function seedCollectionPayment(
+  t: TestHarness,
+  orgId: Id<"organizations">,
+  customerId: Id<"customers">,
+  userId: Id<"users">
+): Promise<Id<"collectionPayments">> {
+  return (await t.run((ctx) =>
+    ctx.db.insert("collectionPayments", {
+      orgId, customerId, direction: "IN", method: "CASH",
+      amount: 5000, paymentDate: Date.now(), status: "POSTED", cashierId: userId,
+      createdAt: Date.now(),
+    })
+  )) as Id<"collectionPayments">;
+}
+
+async function seedPostableOrg(suffix: string, openPeriod = true) {
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
+  const orgId = (await t.run((ctx) =>
+    ctx.db.insert("organizations", { name: `Receipt ${suffix}`, createdAt: Date.now() })
+  )) as Id<"organizations">;
+  await t.run((ctx) =>
+    ctx.db.insert("subscriptions", {
+      orgId, plan: "professional", status: "active",
+      createdAt: Date.now(), updatedAt: Date.now(),
+    })
+  );
+  const userId = (await t.run((ctx) =>
+    ctx.db.insert("users", { clerkId: `ro_${suffix}`, email: `${suffix}@ro.com`, name: "Owner" })
+  )) as Id<"users">;
+  const roleId = await t.run((ctx) =>
+    ctx.db.insert("roles", {
+      orgId, name: "OWNER", isSystemOwnerRole: true,
+      permissions: ["view:finance", "manage:finance"],
+    })
+  );
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+  await t.run((ctx) =>
+    ctx.db.insert("orgSettings", {
+      orgId, currency: "USD", currencySymbol: "$", enabledPaymentTypes: ["CASH"],
+    })
+  );
+  const asAdmin = t.withIdentity({ subject: `ro_${suffix}`, clerkId: `ro_${suffix}` });
+  await asAdmin.mutation(api.chartOfAccounts.initialize, { orgId });
+
+  const year = new Date().getUTCFullYear();
+  if (openPeriod) {
+    await asAdmin.mutation(api.accountingPeriods.create, {
+      orgId,
+      startDate: Date.UTC(year, 0, 1),
+      endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+      fiscalYear: year,
+      periodNumber: 1,
+    });
+    const period = (await asAdmin.query(api.accountingPeriods.list, { orgId }))[0];
+    await asAdmin.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+  }
+
+  const customerId = (await t.run((ctx) =>
+    ctx.db.insert("customers", { orgId, firstName: "Cust", lastName: suffix, createdAt: Date.now() })
+  )) as Id<"customers">;
+  return { t, orgId, userId, customerId };
+}
+
+function receiptPayload(paymentId: string, customerId: string, amountMinor: number) {
+  return { paymentId, customerId, amountMinor, currency: "USD", paymentMethod: "CASH" };
+}
+
+// Pinned to `typeof schema`. The bare `ReturnType<typeof convexTestWithComponents>`
+// drops the Schema generic, which collapses ctx.db to the system data model and
+// makes `withIndex("by_org", ...)` a type error — the reason a helper like this
+// is usually written with `t: any`, which then erases the row types too.
+type TestHarness = ReturnType<typeof convexTestWithComponents<typeof schema>>;
+
+async function eventsFor(t: TestHarness, orgId: Id<"organizations">) {
+  return await t.run(async (ctx) =>
+    ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+  );
+}
+
+describe("SCRUM-237 §9 — the forward, causal and reversal addresses are ONE fact", () => {
+  test("EV6 — what is persisted matches the identity field-for-field, and the causal lookup finds it", async () => {
+    const { t, orgId, userId, customerId } = await seedPostableOrg("ev6");
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const identity = directCollectionReceipt({ orgId, paymentId });
+
+    await t.run(async (ctx) => {
+      await postReceiptOccurrence(ctx, {
+        identity,
+        currency: "USD",
+        occurredAt: Date.now(),
+        actorId: userId,
+        payload: receiptPayload(paymentId, customerId, 5000),
+      });
+    });
+
+    const events = await eventsFor(t, orgId);
+    expect(events).toHaveLength(1);
+    const persisted = events[0];
+
+    // Field-for-field: every economic addressing field, plus the key. If any
+    // one of these is assembled separately at some call site, this is where the
+    // drift becomes visible.
+    expect(persisted.eventType).toBe(identity.eventType);
+    expect(persisted.sourceType).toBe(identity.sourceType);
+    expect(persisted.sourceId).toBe(identity.sourceId);
+    expect(persisted.eventVersion).toBe(identity.eventVersion);
+    expect(persisted.idempotencyKey).toBe(occurrenceIdempotencyKey(identity));
+    expect(persisted.status).toBe("POSTED");
+
+    // And the causal lookup addressed by the SAME identity returns that row.
+    const found = await t.run(async (ctx) => findPostedReceiptOccurrence(ctx, identity));
+    expect(found?._id).toBe(persisted._id);
+  });
+
+  test("EV7 — a lookup whose identity differs in one economic field MISSES, with no key-only fallback", async () => {
+    const { t, orgId, userId, customerId } = await seedPostableOrg("ev7");
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const identity = directCollectionReceipt({ orgId, paymentId });
+    await t.run(async (ctx) => {
+      await postReceiptOccurrence(ctx, {
+        identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
+        payload: receiptPayload(paymentId, customerId, 5000),
+      });
+    });
+
+    // Present under its own identity.
+    expect(await t.run(async (ctx) => findPostedReceiptOccurrence(ctx, identity))).not.toBeNull();
+
+    // eventVersion differs -> MISS. This is the field a key-only match would
+    // ignore: `collection_payment_<id>` is a prefix of the v2 key's base, so a
+    // lookup that fell back to the key could plausibly return the v1 row.
+    const otherOccurrence = directCollectionReceipt({ orgId, paymentId, occurrence: 2 });
+    expect(await t.run(async (ctx) => findPostedReceiptOccurrence(ctx, otherOccurrence))).toBeNull();
+
+    // orgId differs (the SAME raw payment id under another tenant) -> MISS.
+    // This replaces the old cross-channel probe, which required a payment-link
+    // identity; the tenancy axis is the one that still exists and it is the one
+    // that matters, since the derived key itself carries no orgId.
+    const otherOrgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Rival", createdAt: Date.now() })
+    );
+    const crossTenant = directCollectionReceipt({ orgId: otherOrgId, paymentId });
+    expect(await t.run(async (ctx) => findPostedReceiptOccurrence(ctx, crossTenant))).toBeNull();
+
+    // sourceId differs -> MISS.
+    const otherPaymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const otherSource = directCollectionReceipt({ orgId, paymentId: otherPaymentId });
+    expect(await t.run(async (ctx) => findPostedReceiptOccurrence(ctx, otherSource))).toBeNull();
+  });
+
+  test("EV8 — a v1 and a v2 payload for ONE occurrence cannot both post", async () => {
+    // The catastrophic case c17593 §2 names: same economic tuple, different
+    // payload version. They must COLLIDE on one occurrence rather than becoming
+    // two keys and two journals. Posting twice with materially different
+    // payloads must leave exactly ONE event and ONE journal.
+    //
+    // ⚠️ SCOPE, precisely. c17593 §2 requires two things of this case: that the
+    // two commands COLLIDE on one occurrence, and that the second then FAIL
+    // SEMANTIC REPLAY because the payload/authority contradicts. This test pins
+    // the FIRST only. The second is not implemented and cannot be yet: refusing
+    // requires comparing the incoming payload version against the one stored on
+    // the occurrence, and nothing persists `receiptPayloadVersion` until
+    // SCRUM-218-C. Today the second command is silently ABSORBED by
+    // `postOrEnqueue`'s POSTED short-circuit — no second journal, but also no
+    // refusal. Collision is the precondition for refusal, so this is the half
+    // that had to land first; do not read it as the whole requirement.
+    const { t, orgId, userId, customerId } = await seedPostableOrg("ev8");
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const identity = directCollectionReceipt({ orgId, paymentId });
+
+    // v1-shaped gross payload.
+    await t.run(async (ctx) => {
+      await postReceiptOccurrence(ctx, {
+        identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
+        payload: receiptPayload(paymentId, customerId, 5000),
+      });
+    });
+    // v2-shaped payload for the SAME economic occurrence, carrying a DIFFERENT
+    // amount. If the payload version could reach the key, this would mint a
+    // second occurrence and the ledger would carry both.
+    await t.run(async (ctx) => {
+      await postReceiptOccurrence(ctx, {
+        identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
+        payload: { ...receiptPayload(paymentId, customerId, 9999), receiptPayloadVersion: RECEIPT_PAYLOAD_VERSION },
+      });
+    });
+
+    const events = await eventsFor(t, orgId);
+    expect(events).toHaveLength(1);
+    expect(events[0].idempotencyKey).toBe(occurrenceIdempotencyKey(identity));
+
+    const journals = await t.run(async (ctx) =>
+      ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(journals).toHaveLength(1);
+  });
+
+  test("EV6b — the reversal addresses the same occurrence the forward post created", async () => {
+    const { t, orgId, userId, customerId } = await seedPostableOrg("ev6b");
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const identity = directCollectionReceipt({ orgId, paymentId });
+    await t.run(async (ctx) => {
+      await postReceiptOccurrence(ctx, {
+        identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
+        payload: receiptPayload(paymentId, customerId, 5000),
+      });
+    });
+
+    const outcome = await t.run(async (ctx) =>
+      reverseReceiptOccurrence(ctx, {
+        identity, reason: "SCRUM-237 contract test", actorId: userId, reversalDate: Date.now(),
+      })
+    );
+    expect(outcome).toBe("REVERSED");
+
+    // The causal check must now refuse it: REVERSED is not POSTED, and c17593
+    // §7 makes POSTED the only eligible status.
+    const found = await t.run(async (ctx) => findPostedReceiptOccurrence(ctx, identity));
+    expect(found).toBeNull();
+  });
+});
+
+/* -------------------------------------------------------------------------- *
+ * §10 — the gaps two independent reviewers found in §9
+ *
+ * §9 covered exactly one of `ReversalOutcome`'s three values, and every
+ * DB-backed post used the default v1 identity. Both omissions let a real
+ * mutation survive the whole suite. Each test below was written against a
+ * specific surviving mutant and must fail when that mutant is applied.
+ * -------------------------------------------------------------------------- */
+
+describe("SCRUM-237 §10 — occurrence and reversal branches the first suite missed", () => {
+  test("EV9 — occurrences 1 and 2 post as TWO separate events (kills a hardcoded eventVersion)", async () => {
+    // SURVIVING MUTANT THIS KILLS: `eventVersion: 1` hardcoded in
+    // postReceiptOccurrence instead of `id.eventVersion`. Every §9 post used the
+    // default v1 identity, so the forward path could ignore the identity's
+    // version entirely and all 23 tests still passed — the facade reconstructing
+    // the tuple independently, which is the exact defect this contract exists to
+    // make impossible.
+    const { t, orgId, userId, customerId } = await seedPostableOrg("ev9");
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+
+    const first = directCollectionReceipt({ orgId, paymentId });
+    const second = directCollectionReceipt({ orgId, paymentId, occurrence: 2 });
+
+    for (const identity of [first, second]) {
+      await t.run(async (ctx) => {
+        await postReceiptOccurrence(ctx, {
+          identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
+          payload: receiptPayload(paymentId, customerId, 5000),
+        });
+      });
+    }
+
+    const events = await eventsFor(t, orgId);
+    expect(events).toHaveLength(2);
+    expect([...events.map((e) => e.eventVersion)].sort()).toEqual([1, 2]);
+    expect(new Set(events.map((e) => e.idempotencyKey)).size).toBe(2);
+
+    // And each is independently addressable by its own identity.
+    const foundFirst = await t.run(async (ctx) => findPostedReceiptOccurrence(ctx, first));
+    const foundSecond = await t.run(async (ctx) => findPostedReceiptOccurrence(ctx, second));
+    expect(foundFirst?.eventVersion).toBe(1);
+    expect(foundSecond?.eventVersion).toBe(2);
+    expect(foundFirst?._id).not.toBe(foundSecond?._id);
+  });
+
+  test("EV10 — NOT_POSTED cancels the queued forward entry the SAME identity enqueued", async () => {
+    // SURVIVING MUTANT THIS KILLS: passing anything other than
+    // occurrenceIdempotencyKey(id) as pendingPostIdempotencyKey. On a mismatch
+    // cancelPendingPostByKey cancels nothing and an unposted forward entry
+    // survives behind a NOT_POSTED result — the caller is told no money moved
+    // while a post is still queued to move it.
+    //
+    // No open period, so the forward post enqueues instead of posting.
+    const { t, orgId, userId, customerId } = await seedPostableOrg("ev10", false);
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const identity = directCollectionReceipt({ orgId, paymentId });
+
+    await t.run(async (ctx) => {
+      await postReceiptOccurrence(ctx, {
+        identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
+        payload: receiptPayload(paymentId, customerId, 5000),
+      });
+    });
+
+    const pendingRows = async () =>
+      await t.run(async (ctx) =>
+        ctx.db
+          .query("pendingAccountingEvents")
+          .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
+          .collect()
+      );
+
+    const queuedBefore = await pendingRows();
+    expect(queuedBefore).toHaveLength(1);
+    // The queued entry is addressed by the DERIVED key — this is the fact the
+    // reversal below must be able to rediscover from the identity alone.
+    expect(queuedBefore[0].idempotencyKey).toBe(occurrenceIdempotencyKey(identity));
+    expect(await eventsFor(t, orgId)).toHaveLength(0);
+
+    const outcome = await t.run(async (ctx) =>
+      reverseReceiptOccurrence(ctx, {
+        identity, reason: "SCRUM-237 §10", actorId: userId, reversalDate: Date.now(),
+      })
+    );
+    expect(outcome).toBe("NOT_POSTED");
+
+    // Nothing may still be queued to post. If the reversal had been handed any
+    // key other than the one the forward post enqueued, this row survives and
+    // the caller has been told NOT_POSTED while a post is still pending.
+    expect(await pendingRows()).toHaveLength(0);
+  });
+
+  test("EV11 — DEFERRED leaves the original POSTED until the outbox drains", async () => {
+    // The third ReversalOutcome. DEFERRED and REVERSED must not be collapsed:
+    // the original entry is STILL POSTED when a reversal defers, and anything
+    // treating the amount as recovered before the outbox drains is spending
+    // money the ledger still shows as spent.
+    const { t, orgId, userId, customerId } = await seedPostableOrg("ev11");
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const identity = directCollectionReceipt({ orgId, paymentId });
+
+    await t.run(async (ctx) => {
+      await postReceiptOccurrence(ctx, {
+        identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
+        payload: receiptPayload(paymentId, customerId, 5000),
+      });
+    });
+    expect(await t.run(async (ctx) => findPostedReceiptOccurrence(ctx, identity))).not.toBeNull();
+
+    // A reversal dated into a year with no open period.
+    const outsideOpenPeriod = Date.UTC(new Date().getUTCFullYear() - 3, 5, 1);
+    const outcome = await t.run(async (ctx) =>
+      reverseReceiptOccurrence(ctx, {
+        identity, reason: "SCRUM-237 §10", actorId: userId, reversalDate: outsideOpenPeriod,
+      })
+    );
+    expect(outcome).toBe("DEFERRED");
+
+    // Still POSTED — the defining property of DEFERRED.
+    const stillPosted = await t.run(async (ctx) => findPostedReceiptOccurrence(ctx, identity));
+    expect(stillPosted).not.toBeNull();
+    expect(stillPosted?.status).toBe("POSTED");
+  });
+
+  test("EV12 — an ambiguous exact tuple REFUSES rather than choosing a favourable row", async () => {
+    // Convex has no unique indexes, so nothing in the schema stops two rows
+    // sharing one exact economic tuple. The earlier lookup filtered to POSTED
+    // and took .first(), which would report a live occurrence from a corrupt
+    // POSTED/REVERSED pair — choosing the favourable row and hiding the
+    // corruption, while postAccountingEvent reads the same tuple with .unique()
+    // and fails closed. A causal check laxer than the writer it guards is worse
+    // than no check.
+    const { t, orgId, userId, customerId } = await seedPostableOrg("ev12");
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const identity = directCollectionReceipt({ orgId, paymentId });
+
+    await t.run(async (ctx) => {
+      await postReceiptOccurrence(ctx, {
+        identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
+        payload: receiptPayload(paymentId, customerId, 5000),
+      });
+    });
+    const [original] = await eventsFor(t, orgId);
+    expect(original.status).toBe("POSTED");
+
+    // Forge the corruption: a second row on the identical economic tuple.
+    await t.run(async (ctx) => {
+      const { _id, _creationTime, ...rest } = original;
+      await ctx.db.insert("accountingEvents", { ...rest, status: "REVERSED" });
+    });
+
+    await expect(
+      t.run(async (ctx) => findPostedReceiptOccurrence(ctx, identity))
+    ).rejects.toThrow(/ambiguous receipt occurrence/);
+  });
+});
+
+describe("SCRUM-237 §11 — the key mapping must be injective over ROLE, not only version", () => {
+  // Found by the Codex seat at 45dd608b0, reproduced here before fixing.
+  //
+  // §3 closed the VERSION axis by replacing an unframed `_occ${v}` suffix with a
+  // length-prefixed disjoint namespace. The ROLE axis kept exactly the defect
+  // that was just removed: the reversal key was `${forwardKey}_reversal`, an
+  // unframed suffix, so a sourceId ending in `_reversal` re-creates the same
+  // collision one axis over.
+  //
+  // Reachability is honest: a real Convex id cannot contain `_reversal`, so this
+  // is not reachable through today's producers. It is fixed because the contract
+  // ASSERTS injectivity for arbitrary `sourceId` — and a sibling elsewhere in the
+  // codebase already builds a composite sourceId (`${vehicleId}_${editToken}`),
+  // so the assumption that source ids are opaque Convex ids is not one this
+  // module is entitled to make.
+
+  test("R1 — a reversal key cannot equal the FORWARD key of a different occurrence", () => {
+    const a = directCollectionReceipt({
+      orgId: ORG,
+      paymentId: "X" as unknown as Id<"collectionPayments">,
+    });
+    const b = directCollectionReceipt({
+      orgId: ORG,
+      paymentId: "X_reversal" as unknown as Id<"collectionPayments">,
+    });
+    expect(a.sourceId).not.toBe(b.sourceId);
+    // Both were "collection_payment_X_reversal". Both accountingEvents and
+    // pendingAccountingEvents dedupe on by_org_idempotency, so this could report
+    // REVERSED while the original stayed POSTED, discard a forward post, or skip
+    // enqueueing a reversal.
+    expect(occurrenceReversalIdempotencyKey(a)).not.toBe(occurrenceIdempotencyKey(b));
+  });
+
+  test("R1 — a reversal key cannot equal another occurrence's REVERSAL key", () => {
+    const a = directCollectionReceipt({
+      orgId: ORG,
+      paymentId: "Y" as unknown as Id<"collectionPayments">,
+      occurrence: 2,
+    });
+    const b = directCollectionReceipt({
+      orgId: ORG,
+      paymentId: "Y" as unknown as Id<"collectionPayments">,
+      occurrence: 3,
+    });
+    expect(occurrenceReversalIdempotencyKey(a)).not.toBe(occurrenceReversalIdempotencyKey(b));
+  });
+
+  test("the mapping is INJECTIVE over ROLE x sourceId x eventVersion together", () => {
+    // The §3 sweep covered sourceId x version and missed the role axis entirely —
+    // a sweep shaped like the claim it was written for rather than like the
+    // property. This one sweeps all three.
+    const sourceIds = ["X", "X_reversal", "reversal", "a:b", "occv2:1:a:1:b", "X_occ2", "_reversal"];
+    const versions = [1, 2, 3, 12, 23];
+    const keys = new Set<string>();
+    let minted = 0;
+    for (const sourceId of sourceIds) {
+      for (const occurrence of versions) {
+        const id = directCollectionReceipt({
+          orgId: ORG,
+          paymentId: sourceId as unknown as Id<"collectionPayments">,
+          occurrence,
+        });
+        keys.add(occurrenceIdempotencyKey(id));
+        keys.add(occurrenceReversalIdempotencyKey(id));
+        minted += 2;
+      }
+    }
+    expect(minted).toBe(sourceIds.length * versions.length * 2);
+    expect(keys.size).toBe(minted);
+  });
+
+  test("a future channel prefix that is a PREFIX of another is refused", () => {
+    // Raised independently by both seats. The v1 forward branch cannot be
+    // length-framed (byte-compat), so its injectivity rests entirely on the
+    // prefix set — which makes the prefix set an invariant, not a naming choice.
+    //
+    //   "collection_payment_"         + "reissue_abc"  ==
+    //   "collection_payment_reissue_" + "abc"
+    //
+    // No exotic characters required. Same absorption mechanism as the original
+    // injectivity defect, reached from the channel axis instead.
+    expect(() =>
+      assertKeyPrefixesUnambiguous(["collection_payment", "collection_payment_reissue"])
+    ).toThrow(/is a prefix of/);
+    expect(() =>
+      assertKeyPrefixesUnambiguous(["payment_link_received", "payment_link"])
+    ).toThrow(/is a prefix of/);
+  });
+
+  test("two channels sharing the IDENTICAL prefix are refused", () => {
+    // Found independently by BOTH seats at acfd58429. The pairwise loop guards
+    // `a !== b`, which compares VALUES — so two channels whose prefixes are the
+    // same string are never compared against each other at all, and the
+    // duplicate passes. That is the most basic way the prefix set can break:
+    // two distinct economic tuples minting one identical key.
+    expect(() =>
+      assertKeyPrefixesUnambiguous([
+        "collection_payment",
+        "payment_link_received",
+        "collection_payment",
+      ])
+    ).toThrow(/duplicate/i);
+  });
+
+  test("a future channel prefix inside a RESERVED namespace is refused", () => {
+    expect(() => assertKeyPrefixesUnambiguous(["occv_channel"])).toThrow(/reserved namespace/);
+    expect(() => assertKeyPrefixesUnambiguous(["occr_channel"])).toThrow(/reserved namespace/);
+  });
+
+  test("the REAL channel prefix set satisfies the property", () => {
+    expect(() =>
+      assertKeyPrefixesUnambiguous(["collection_payment", "payment_link_received"])
+    ).not.toThrow();
+  });
+
+  test("R1-COMPAT — a LEGACY-keyed reversal already applied cannot be double-reversed via the facade", async () => {
+    // The Codex seat raised this against acfd58429, and it corrected a FALSE
+    // claim of mine: I had written that no COLLECTION_PAYMENT reversal exists.
+    // It does. `clearCheque`'s return path in collections.ts builds
+    // `cheque_return_after_clear_<chequeId>` and calls `reverseAccountingEvent`
+    // DIRECTLY on a `sourceType: "collectionPayments"` event. It uses neither
+    // `makeReversalHook` nor a `_reversal` suffix, which is exactly why my grep
+    // over those two patterns missed it.
+    //
+    // So a legacy reversal key for a receipt occurrence DOES exist in
+    // production shape, and the facade's `occr…` key can never match it.
+    //
+    // This test pins what actually protects the ledger, which is NOT the key:
+    // `reverseAccountingEvent` patches the ORIGINAL event to REVERSED, and
+    // refuses when it already is. The facade therefore sees no POSTED
+    // occurrence and reports NOT_POSTED instead of minting a second journal.
+    const { t, orgId, userId, customerId } = await seedPostableOrg("r1compat");
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const identity = directCollectionReceipt({ orgId, paymentId });
+
+    await t.run(async (ctx) => {
+      await postReceiptOccurrence(ctx, {
+        identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
+        payload: receiptPayload(paymentId, customerId, 5000),
+      });
+    });
+    const [original] = await eventsFor(t, orgId);
+    expect(original.status).toBe("POSTED");
+
+    await t.run(async (ctx) => {
+      await reverseAccountingEvent(ctx, {
+        orgId,
+        originalEventId: original._id,
+        reversalDate: Date.now(),
+        reason: "Cheque returned after clearing",
+        actorId: userId,
+        idempotencyKey: `cheque_return_after_clear_${paymentId}`,
+      });
+    });
+
+    const afterLegacy = await t.run(async (ctx) =>
+      ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(afterLegacy).toHaveLength(2); // the receipt + its legacy reversal
+
+    const outcome = await t.run(async (ctx) =>
+      reverseReceiptOccurrence(ctx, {
+        identity, reason: "facade reversal after a legacy one", actorId: userId,
+        reversalDate: Date.now(),
+      })
+    );
+    expect(outcome).toBe("NOT_POSTED");
+
+    const afterFacade = await t.run(async (ctx) =>
+      ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    // THE ASSERTION THAT MATTERS: still two. No second reversal journal.
+    expect(afterFacade).toHaveLength(2);
+  });
+
+  test("R1-COMPAT (reverse order) — a legacy-keyed reversal arriving AFTER the facade cannot double-post", async () => {
+    // The other ordering, which the first control does not cover. This is the
+    // deferred case: `clearCheque` with no open period calls
+    // `enqueuePendingReversal` with the legacy key, so the ORIGINAL stays POSTED
+    // and the legacy reversal executes later. If the facade reverses during that
+    // window, the legacy entry drains afterwards against an already-REVERSED
+    // original.
+    //
+    // Draining the outbox is simulated by calling `reverseAccountingEvent` with
+    // the legacy key directly, which is exactly what the drain does.
+    const { t, orgId, userId, customerId } = await seedPostableOrg("r1compat2");
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const identity = directCollectionReceipt({ orgId, paymentId });
+
+    await t.run(async (ctx) => {
+      await postReceiptOccurrence(ctx, {
+        identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
+        payload: receiptPayload(paymentId, customerId, 5000),
+      });
+    });
+    const [original] = await eventsFor(t, orgId);
+
+    const outcome = await t.run(async (ctx) =>
+      reverseReceiptOccurrence(ctx, {
+        identity, reason: "facade first", actorId: userId, reversalDate: Date.now(),
+      })
+    );
+    expect(outcome).toBe("REVERSED");
+
+    const afterFacade = await t.run(async (ctx) =>
+      ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(afterFacade).toHaveLength(2);
+
+    // The legacy reversal now drains, under a key the facade can never mint.
+    await t.run(async (ctx) => {
+      await reverseAccountingEvent(ctx, {
+        orgId,
+        originalEventId: original._id,
+        reversalDate: Date.now(),
+        reason: "Cheque returned after clearing",
+        actorId: userId,
+        idempotencyKey: `cheque_return_after_clear_${paymentId}`,
+      });
+    });
+
+    const afterLegacy = await t.run(async (ctx) =>
+      ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    // Still two. reverseAccountingEvent refuses an already-REVERSED original,
+    // so the key mismatch cannot produce a second reversal journal in EITHER
+    // ordering.
+    expect(afterLegacy).toHaveLength(2);
+  });
+
+  test("R2 — reversing an AMBIGUOUS exact tuple REFUSES instead of reporting REVERSED", async () => {
+    // findPostedReceiptOccurrence (the READ path) already refuses ambiguity.
+    // reverseReceiptOccurrence (the MUTATING path) did not: reverseEventIfPosted's
+    // exact-version branch filters POSTED and takes .first(), so it reversed one
+    // of two duplicate rows and reported REVERSED while the other stayed POSTED.
+    // A mutating consumer laxer than the read guarding it is the wrong way round.
+    const { t, orgId, userId, customerId } = await seedPostableOrg("r2");
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const identity = directCollectionReceipt({ orgId, paymentId });
+
+    await t.run(async (ctx) => {
+      await postReceiptOccurrence(ctx, {
+        identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
+        payload: receiptPayload(paymentId, customerId, 5000),
+      });
+    });
+    const [original] = await eventsFor(t, orgId);
+    expect(original.status).toBe("POSTED");
+
+    // Two rows on the identical economic tuple, both POSTED. Convex has no
+    // unique indexes, so nothing in the schema prevents this.
+    await t.run(async (ctx) => {
+      const { _id, _creationTime, ...rest } = original;
+      await ctx.db.insert("accountingEvents", { ...rest });
+    });
+
+    await expect(
+      t.run(async (ctx) =>
+        reverseReceiptOccurrence(ctx, {
+          identity, reason: "SCRUM-237 §11 R2", actorId: userId, reversalDate: Date.now(),
+        })
+      )
+    ).rejects.toThrow(/ambiguous receipt occurrence/);
+  });
+});
+
+/* ------------------------------------------------------------------------- *
+ * SCRUM-237 §12 — THE REAL DEFERRED-REVERSAL OUTBOX PATH, NOT A SIMULATION
+ * (owner-proxy c17613 §2, reaffirmed by c17617)
+ *
+ * §11's two R1-COMPAT controls call `reverseAccountingEvent` directly where a
+ * deferred legacy reversal would. That proves JOURNAL idempotency and nothing
+ * else: it skips the outbox's own completion bookkeeping entirely, which is the
+ * half the key mismatch could actually damage. The row the legacy producer
+ * writes is keyed `cheque_return_after_clear_<chequeId>`, while the event the
+ * facade already created is keyed `occr…` — so the pending row's key and its
+ * own result event's key DISAGREE, and a direct call never exercises what the
+ * completion does with that.
+ *
+ * These two drive the production chain end to end:
+ *
+ *     enqueuePendingReversal            (the legacy producer's own helper)
+ *     -> drainPendingAccountingEvents   (the sweep)
+ *     -> claimOutboxRow                 (mints the generation + attempt id)
+ *     -> postOutboxRow                  (the worker; reversePendingEntry ->
+ *                                        reverseAccountingEvent -> markEntryPosted)
+ *     -> observeOutboxAttempt           (a SEPARATE transaction, records the outcome)
+ *
+ * via `test-utils/outboxWork`, which calls the real registered mutations and
+ * fabricates no claim, generation or attempt identity of its own.
+ *
+ * ⚠️ `quiesceScheduler` BEFORE THE ROW EXISTS, DELIBERATELY. `chartOfAccounts.
+ * initialize` and `accountingPeriods.open` each schedule a drain of their own.
+ * A leftover fixture drain firing after the row was written would settle it,
+ * and the assertions below would then be measuring the fixture rather than the
+ * path under test.
+ *
+ * ⚠️ WHAT THESE TWO DO **NOT** COVER, STATED SO NOBODY READS MORE INTO THEM.
+ *
+ * Both fix ONE reversal date, so both exercise coexistence where every row can
+ * actually post. The case they do not reach is TWO DIFFERENT DATES: the legacy
+ * row queued for `d1` and the facade row for `d2`, with only `d2`'s period ever
+ * opened. `postOutboxRow` runs `checkPostingAllowed(row.accountingDate)` BEFORE
+ * it branches on `kind`, so the legacy row never reaches
+ * `reverseAccountingEvent`'s already-REVERSED recovery: `holdOutboxRow` returns
+ * it to PENDING having burned ZERO attempts, so it cannot dead-letter either,
+ * and the cron re-offers it for as long as `d1` has no period — while the
+ * original is already validly REVERSED and the ledger is correct.
+ *
+ * That is the Codex seat's R1-PENDING-ALIAS at this SHA. It REPRODUCES: the
+ * facade row reaches POSTED, the legacy row sits PENDING/attempts 0/"Waiting to
+ * post: No accounting period found for date 2027-06-15", the original reads
+ * REVERSED, and events and journals both stay at 2 — no double post, a stranded
+ * obligation. Its control is the causal half: give both enqueues the SAME key
+ * and `enqueuePendingReversal` dedupes through `by_org_idempotency`, so only one
+ * row exists and nothing strands. The mismatch is therefore what allows two
+ * obligations against one original.
+ *
+ * It is NOT fixed here, and no test asserting either the current or the desired
+ * behaviour is committed for it. The gap is in the outbox worker's ordering,
+ * not in this identity contract; the owner ruling that authorised this successor
+ * requires the defect to be REPORTED before any compatibility mechanism is
+ * designed. The reproduction is preserved outside the repository.
+ * ------------------------------------------------------------------------- */
+describe("SCRUM-237 §12 — the legacy deferred reversal drains through the REAL outbox", () => {
+  test("OB1 — a legacy-keyed pending REVERSE reaches terminal against a facade-reversed original", async () => {
+    const { t, orgId, userId, customerId } = await seedPostableOrg("ob1");
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const identity = directCollectionReceipt({ orgId, paymentId });
+    const legacyKey = `cheque_return_after_clear_${paymentId}`;
+
+    await t.run(async (ctx) => {
+      await postReceiptOccurrence(ctx, {
+        identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
+        payload: receiptPayload(paymentId, customerId, 5000),
+      });
+    });
+    const [original] = await eventsFor(t, orgId);
+    expect(original.status).toBe("POSTED");
+
+    // The facade reverses FIRST — the exact window c17613 §2 named: the legacy
+    // row is already queued in production, and its worker will arrive later to
+    // find an original that is no longer POSTED.
+    const facadeOutcome = await t.run(async (ctx) =>
+      reverseReceiptOccurrence(ctx, {
+        identity, reason: "facade first", actorId: userId, reversalDate: Date.now(),
+      })
+    );
+    expect(facadeOutcome).toBe("REVERSED");
+
+    await quiesceScheduler(t);
+
+    await t.run(async (ctx) => {
+      await enqueuePendingReversal(ctx, {
+        orgId,
+        originalEventId: original._id,
+        reversalDate: Date.now(),
+        reason: "Cheque returned after clearing",
+        actorId: userId,
+        idempotencyKey: legacyKey,
+        sourceType: "collectionPayments",
+        sourceId: paymentId.toString(),
+      });
+    });
+
+    await settleOutbox(t, orgId);
+
+    const events = await eventsFor(t, orgId);
+    const forward = events.find((e) => e._id === original._id);
+    const reversals = events.filter((e) => e._id !== original._id);
+    const journals = await t.run(async (ctx) =>
+      ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+
+    // (1) EXACTLY ONE REVERSAL JOURNAL. The receipt and one reversal, no more.
+    expect(journals).toHaveLength(2);
+    expect(reversals).toHaveLength(1);
+    expect(events).toHaveLength(2);
+
+    // (2) THE ORIGINAL OCCURRENCE ENDS REVERSED, linked to that one reversal.
+    expect(forward?.status).toBe("REVERSED");
+    expect(forward?.reversedByEventId).toBe(reversals[0]._id);
+
+    // (3) THE LEGACY PENDING ROW IS TERMINAL, with no PENDING/FAILED residue —
+    // and its claim is cleared, so no observer can read it as an attempt still
+    // outstanding against a worker that already finished.
+    const rows = await outboxRows(t, orgId);
+    expect(rows).toHaveLength(1);
+    const row = rows[0];
+    expect(row.status).toBe("POSTED");
+    expect(row.resolvedAt).toBeDefined();
+    expect(row.dispatchState).toBeUndefined();
+    expect(row.activeAttemptId).toBeUndefined();
+    expect(rows.filter((r) => r.status === "PENDING" || r.status === "FAILED")).toHaveLength(0);
+
+    // (4) `resultEventId` RESOLVES TO THE SINGLE REAL REVERSAL EVENT — the one
+    // the facade minted, not a second one and not a dangling id.
+    expect(row.resultEventId).toBe(reversals[0]._id);
+    const resolved = await t.run(async (ctx) => ctx.db.get(row.resultEventId));
+    expect(resolved?._id).toBe(reversals[0]._id);
+
+    // (5) THE KEY MISMATCH IS REAL, AND THE COMPLETION ABSORBS IT. This is the
+    // property being accepted rather than guarded against: the row completes
+    // carrying a key that its own result event does not share.
+    expect(row.idempotencyKey).toBe(legacyKey);
+    expect(reversals[0].idempotencyKey).toBe(occurrenceReversalIdempotencyKey(identity));
+    expect(row.idempotencyKey).not.toBe(reversals[0].idempotencyKey);
+
+    // ...and no deferred authority consumer is left owed or inconsistent BY
+    // that mismatch. The reason is structural, not a fixture artifact:
+    // `markEntryPosted` completes deferred authority through
+    // `resolveDeferredReversalSources`, which recognises ONLY keys prefixed
+    // `reversed_` and returns NOTHING_TO_COMPLETE for anything else. Both keys
+    // in play here live outside that namespace, so neither could mint an
+    // obligation for the other to strand. Asserted, not assumed.
+    expect(row.idempotencyKey.startsWith("reversed_")).toBe(false);
+    expect(reversals[0].idempotencyKey.startsWith("reversed_")).toBe(false);
+    const authorityWork = await t.run(async (ctx) =>
+      ctx.db.query("commitmentAuthorityWork").collect()
+    );
+    expect(authorityWork).toHaveLength(0);
+    const applications = await t.run(async (ctx) =>
+      ctx.db.query("depositApplications").collect()
+    );
+    expect(applications).toHaveLength(0);
+
+    // (6) A SUBSEQUENT DRAIN/RETRY IS IDEMPOTENT. Nothing new posts, and the
+    // row's recorded result does not move.
+    await settleOutbox(t, orgId);
+    const journalsAfter = await t.run(async (ctx) =>
+      ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(journalsAfter).toHaveLength(2);
+    expect(await eventsFor(t, orgId)).toHaveLength(2);
+    const rowsAfter = await outboxRows(t, orgId);
+    expect(rowsAfter).toHaveLength(1);
+    expect(rowsAfter[0].status).toBe("POSTED");
+    expect(rowsAfter[0].resultEventId).toBe(reversals[0]._id);
+  });
+
+  test("OB2 — the legacy row drains FIRST, and the facade then reports the already-reversed case", async () => {
+    // The other ordering, also through the real worker. This is the one that
+    // produces the outcome the contract wording had to be corrected for: the
+    // occurrence DID post and HAS been reversed, by a key this module can never
+    // mint, and the facade answers NOT_POSTED.
+    const { t, orgId, userId, customerId } = await seedPostableOrg("ob2");
+    const paymentId = await seedCollectionPayment(t, orgId, customerId, userId);
+    const identity = directCollectionReceipt({ orgId, paymentId });
+    const legacyKey = `cheque_return_after_clear_${paymentId}`;
+
+    await t.run(async (ctx) => {
+      await postReceiptOccurrence(ctx, {
+        identity, currency: "USD", occurredAt: Date.now(), actorId: userId,
+        payload: receiptPayload(paymentId, customerId, 5000),
+      });
+    });
+    const [original] = await eventsFor(t, orgId);
+
+    await quiesceScheduler(t);
+
+    await t.run(async (ctx) => {
+      await enqueuePendingReversal(ctx, {
+        orgId,
+        originalEventId: original._id,
+        reversalDate: Date.now(),
+        reason: "Cheque returned after clearing",
+        actorId: userId,
+        idempotencyKey: legacyKey,
+        sourceType: "collectionPayments",
+        sourceId: paymentId.toString(),
+      });
+    });
+
+    await settleOutbox(t, orgId);
+
+    const afterDrain = await eventsFor(t, orgId);
+    const legacyReversal = afterDrain.find((e) => e._id !== original._id);
+    expect(afterDrain).toHaveLength(2);
+    // The worker minted this one, so it carries the LEGACY key.
+    expect(legacyReversal?.idempotencyKey).toBe(legacyKey);
+    const drainedRow = (await outboxRows(t, orgId))[0];
+    expect(drainedRow.status).toBe("POSTED");
+    expect(drainedRow.resultEventId).toBe(legacyReversal?._id);
+
+    // Now the facade runs against an occurrence that posted and is already
+    // reversed. NOT_POSTED is the truthful OPERATIONAL answer — no live POSTED
+    // forward occurrence remains — and it is NOT the historical claim the
+    // predecessor doc-comment made ("the forward entry never posted").
+    const outcome = await t.run(async (ctx) =>
+      reverseReceiptOccurrence(ctx, {
+        identity, reason: "facade after the legacy drain", actorId: userId,
+        reversalDate: Date.now(),
+      })
+    );
+    expect(outcome).toBe("NOT_POSTED");
+
+    const journals = await t.run(async (ctx) =>
+      ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(journals).toHaveLength(2);
+    expect(await eventsFor(t, orgId)).toHaveLength(2);
+    // The row stays exactly where the worker left it — the facade's
+    // `cancelPendingPostByKey` addresses the FORWARD key and cannot touch it.
+    const rowsAfter = await outboxRows(t, orgId);
+    expect(rowsAfter).toHaveLength(1);
+    expect(rowsAfter[0].status).toBe("POSTED");
+    expect(rowsAfter[0].resultEventId).toBe(legacyReversal?._id);
+  });
+});
+
+/* ------------------------------------------------------------------------- *
+ * SCRUM-237 §13 — OBTAINABILITY. Can a caller MANUFACTURE receipt authority?
+ * (owner ruling c17632, closing Codex B237-HEAD-01)
+ *
+ * Every control above §13 asks what the identity DERIVES. None asked how the
+ * value is OBTAINED — and that is where the defect was. A phantom brand refuses
+ * an object literal and nothing else: TypeScript copies the branded property
+ * through spread, so at `90d5f03fe` this compiled with ZERO diagnostics and no
+ * cast, and produced two distinct economic tuples sharing one stored key:
+ *
+ *     const forged: ReceiptOccurrenceIdentity = { ...legitimate,
+ *       eventType: "PAYMENT_LINK_RECEIVED", sourceType: "paymentIntents" };
+ *
+ * Authority is now RUNTIME OBJECT IDENTITY — membership of a module-private
+ * WeakSet that only `seal` writes to. A copy is a different object, so it is
+ * absent from the set however perfect its fields are.
+ *
+ * ⚠️ These tests must attack OBTAINABILITY, not derivation. The question is
+ * "can I get a value the monetary doors accept", never "is the key injective".
+ * ------------------------------------------------------------------------- */
+describe("SCRUM-237 §13 — a receipt identity cannot be copied, mutated or manufactured", () => {
+  test("SPREAD — a clone with a changed economic field is REFUSED at every monetary door", () => {
+    const legit = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
+    // ⚠️ NO CAST, DELIBERATELY. This assignment type-checks on its own, because
+    // TypeScript copies the phantom brand through the spread — that is exactly
+    // the defect, and casting here would hide it behind an obvious escape
+    // hatch. The refusal below therefore has to be a RUNTIME one.
+    const forged: ReceiptOccurrenceIdentity = { ...legit, sourceId: "someone_elses_payment" };
+
+    expect(forged.sourceId).toBe("someone_elses_payment");
+    for (const door of [
+      () => occurrenceIdempotencyKey(forged),
+      () => occurrenceReversalIdempotencyKey(forged),
+      () => occurrenceIndexRange(forged),
+      () => assertTrustedOccurrence(forged),
+      () => toReceiptOccurrenceSnapshot(forged),
+    ]) {
+      expect(door).toThrow(/untrusted receipt occurrence identity/);
+    }
+  });
+
+  test("SPREAD — an UNCHANGED clone is refused too", () => {
+    // Authority is object identity, not equality. A byte-identical copy is
+    // still not the value this module minted, and accepting it would mean the
+    // check was really a shape check wearing a WeakSet.
+    const legit = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
+    const copy: ReceiptOccurrenceIdentity = { ...legit };
+    expect(copy).toEqual(legit);
+    expect(() => occurrenceIdempotencyKey(copy)).toThrow(/untrusted/);
+    expect(() => occurrenceIdempotencyKey(legit)).not.toThrow();
+  });
+
+  test("MUTATION — Object.assign cannot rewrite an accepted identity", () => {
+    // `readonly` is erased at runtime. Without the freeze this silently
+    // rewrites an identity that has ALREADY passed its trust check — the
+    // time-of-check/time-of-use half of the same defect.
+    const legit = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
+    expect(Object.isFrozen(legit)).toBe(true);
+    expect(() => Object.assign(legit, { sourceId: "swapped" })).toThrow(TypeError);
+    expect(() => Object.assign(legit, { eventVersion: 99 })).toThrow(TypeError);
+    expect(legit.sourceId).toBe("pay_abc");
+    expect(legit.eventVersion).toBe(1);
+    expect(occurrenceIdempotencyKey(legit)).toBe("collection_payment_pay_abc");
+  });
+
+  test("HAND-BUILT — a perfect forgery with every correct field is refused", () => {
+    const forged = {
+      orgId: ORG,
+      eventType: RECEIPT_EVENT_TYPE,
+      sourceType: RECEIPT_SOURCE_TYPE,
+      sourceId: "pay_abc",
+      eventVersion: 1,
+    } as unknown as ReceiptOccurrenceIdentity;
+    expect(() => occurrenceIdempotencyKey(forged)).toThrow(/untrusted/);
+  });
+
+  test("SNAPSHOT ROUND TRIP — the sanctioned door restores authority and the key", () => {
+    const legit = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT, occurrence: 2 });
+    const snapshot = toReceiptOccurrenceSnapshot(legit);
+    // A snapshot is DATA: not frozen authority, and not accepted as an identity.
+    expect(() =>
+      occurrenceIdempotencyKey(snapshot as unknown as ReceiptOccurrenceIdentity)
+    ).toThrow(/untrusted/);
+
+    const rehydrated = rehydrateReceiptOccurrence({ orgId: ORG, snapshot });
+    expect(occurrenceIdempotencyKey(rehydrated)).toBe(occurrenceIdempotencyKey(legit));
+    expect(occurrenceReversalIdempotencyKey(rehydrated)).toBe(
+      occurrenceReversalIdempotencyKey(legit)
+    );
+    expect(rehydrated).not.toBe(legit); // a NEW sealed value, not the old one
+  });
+
+  test("SNAPSHOT — the tenant comes from the server, never from the stored blob", () => {
+    // The snapshot carries no orgId at all, so a row copied between tenants or
+    // restored from a foreign backup cannot bring a foreign tenant with it.
+    const legit = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
+    const snapshot = toReceiptOccurrenceSnapshot(legit);
+    expect(Object.keys(snapshot)).not.toContain("orgId");
+
+    const otherOrg = "org_rival" as unknown as Id<"organizations">;
+    const rehydrated = rehydrateReceiptOccurrence({ orgId: otherOrg, snapshot });
+    expect(occurrenceIndexRange(rehydrated).orgId).toBe(otherOrg);
+  });
+
+  test("REHYDRATION REFUSES a cross-family snapshot", () => {
+    // c17632 requirement 7 plus the product scope cut: a provider-receipt or
+    // legacy-transactions snapshot cannot become a direct collection by being
+    // read back out of a row.
+    for (const bad of [
+      { eventType: "PAYMENT_LINK_RECEIVED", sourceType: "paymentIntents", sourceId: "i", eventVersion: 1 },
+      { eventType: "COLLECTION_PAYMENT", sourceType: "transactions", sourceId: "t", eventVersion: 1 },
+      { eventType: "DEPOSIT_RECEIVED", sourceType: "deposits", sourceId: "d", eventVersion: 1 },
+    ]) {
+      expect(() => rehydrateReceiptOccurrence({ orgId: ORG, snapshot: bad })).toThrow(
+        /not a direct collection/
+      );
+    }
+  });
+
+  test("REHYDRATION REFUSES malformed, smuggled and non-object snapshots", () => {
+    const base = { eventType: RECEIPT_EVENT_TYPE, sourceType: RECEIPT_SOURCE_TYPE, sourceId: "p", eventVersion: 1 };
+    // A smuggled extra field is refused rather than ignored — this is how a
+    // `channel`-shaped field would find its way back in.
+    expect(() =>
+      rehydrateReceiptOccurrence({ orgId: ORG, snapshot: { ...base, channel: "DIRECT_COLLECTION" } })
+    ).toThrow(/unrecognised field/);
+    expect(() =>
+      rehydrateReceiptOccurrence({ orgId: ORG, snapshot: { ...base, eventVersion: 0 } })
+    ).toThrow(/safe integer/);
+    expect(() =>
+      rehydrateReceiptOccurrence({ orgId: ORG, snapshot: { ...base, sourceId: "" } })
+    ).toThrow(/non-empty string/);
+    expect(() =>
+      rehydrateReceiptOccurrence({ orgId: ORG, snapshot: { ...base, sourceId: 7 } })
+    ).toThrow(/sourceId must be a string/);
+    for (const notAnObject of [null, undefined, "x", 3, [base]]) {
+      expect(() =>
+        rehydrateReceiptOccurrence({ orgId: ORG, snapshot: notAnObject })
+      ).toThrow(/must be an object/);
+    }
+  });
+
+  test("a JSON round trip does NOT restore authority", () => {
+    // The shape survives serialization; the authority does not. If this ever
+    // stops throwing, authority has become a property of the bytes again.
+    const legit = directCollectionReceipt({ orgId: ORG, paymentId: PAYMENT });
+    const revived = JSON.parse(JSON.stringify(legit)) as ReceiptOccurrenceIdentity;
+    expect(revived).toEqual({ ...legit });
+    expect(() => occurrenceIdempotencyKey(revived)).toThrow(/untrusted/);
+  });
+});
