@@ -9,7 +9,8 @@ import { PERMISSIONS } from "./utils/permissions";
 import { getActorName, notifyManagers, notifyUser } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
-import { hookCollectionPayment, hookCollectionRefund, hookExpensePosted, hookReceivableCreated, hookReceivableCancelled, getOrgCurrency } from "./accounting/workflowHooks";
+import { postReceiptOccurrence, hookCollectionRefund, hookExpensePosted, hookReceivableCreated, hookReceivableCancelled, getOrgCurrency } from "./accounting/workflowHooks";
+import { directCollectionReceipt } from "./accounting/receiptOccurrence";
 import { ReceivableCreditKey } from "./accounting/postingRules";
 import { reverseAccountingEvent } from "./accounting/reversals";
 import { getOpenPeriodForDate } from "./accountingPeriods";
@@ -1096,15 +1097,38 @@ export const recordPayment = mutation({
           });
         }
 
-        await hookCollectionPayment(ctx, {
-          orgId: args.orgId,
-          paymentId,
-          customerId,
-          amountMinor: toMinorUnits(roundMoney(args.amount, currency), currency),
+        // SCRUM-236 — the single forward producer of this receipt occurrence.
+        //
+        // The identity is constructed HERE, inside this invocation, from this
+        // invocation's own arguments, and is never held anywhere else. The
+        // trust registry backing `directCollectionReceipt` is a module-private
+        // WeakSet whose lifetime is the MODULE, not the mutation, so a cached
+        // identity would stay trusted across later invocations in the same
+        // isolate and let one of them address an occurrence it never earned
+        // (owner-proxy c17641 requirement 1).
+        //
+        // ⚠️ NOTHING MAY CATCH THIS CALL. `paymentId` is the occurrence's own
+        // `sourceId`, so the identity cannot exist before the insert above —
+        // "refuse before writes" is structurally unavailable on the forward
+        // path, and the guarantee is the other one c17641 requirement 3
+        // allows: the refusal ESCAPES the mutation and Convex rolls the whole
+        // attempt back. In Convex a CAUGHT exception commits the writes made
+        // before it, so wrapping this in a try/catch would leave the payment
+        // row, the ledger transaction and the canonical mirror committed while
+        // the accounting refused — and report the refusal as handled.
+        const receiptIdentity = directCollectionReceipt({ orgId: args.orgId, paymentId });
+        await postReceiptOccurrence(ctx, {
+          identity: receiptIdentity,
           currency,
-          paymentMethod: args.method,
-          actorId: user._id,
           occurredAt: args.paymentDate,
+          actorId: user._id,
+          payload: {
+            paymentId: paymentId.toString(),
+            amountMinor: toMinorUnits(roundMoney(args.amount, currency), currency),
+            currency,
+            customerId: customerId.toString(),
+            paymentMethod: args.method,
+          },
         });
 
         const actorName = await getActorName(ctx);
@@ -1401,15 +1425,29 @@ export const clearCheque = mutation({
           });
         }
 
-        await hookCollectionPayment(ctx, {
-          orgId: args.orgId,
-          paymentId,
-          customerId: cheque.customerId,
-          amountMinor: toMinorUnits(cheque.amount, currency),
+        // SCRUM-236 — same single forward producer as `recordPayment`. See the
+        // note there: identity built inside this invocation, never cached, and
+        // this call must not be caught, because its refusal is only safe if it
+        // escapes the mutation and rolls back the writes above.
+        //
+        // `paymentMethod: "BANK_TRANSFER"` is carried over unchanged from the
+        // retired hook call. A cleared cheque deposits into the bank, so the
+        // posting rule must resolve the bank account and not the cash account;
+        // this is the existing production behavior and SCRUM-236 does not
+        // change it.
+        const receiptIdentity = directCollectionReceipt({ orgId: args.orgId, paymentId });
+        await postReceiptOccurrence(ctx, {
+          identity: receiptIdentity,
           currency,
-          paymentMethod: "BANK_TRANSFER",
-          actorId: user._id,
           occurredAt: clearedAt,
+          actorId: user._id,
+          payload: {
+            paymentId: paymentId.toString(),
+            amountMinor: toMinorUnits(cheque.amount, currency),
+            currency,
+            customerId: cheque.customerId.toString(),
+            paymentMethod: "BANK_TRANSFER",
+          },
         });
 
         return paymentId;
