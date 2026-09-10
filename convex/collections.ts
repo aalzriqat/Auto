@@ -1046,7 +1046,7 @@ export const recordPayment = mutation({
     paymentDate: v.number(),
     reference: v.optional(v.string()),
     notes: v.optional(v.string()),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user, membership } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -1055,8 +1055,22 @@ export const recordPayment = mutation({
       {
         orgId: args.orgId,
         operation: "collections.recordPayment",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
+        // Amount, counterparty, source and effective date, plus the identifiers
+        // that decide WHICH debt the money lands on — changing any of them is a
+        // different economic instruction, never a retry of this one.
+        fingerprint: JSON.stringify({
+          receivableId: args.receivableId ?? null,
+          customerId: args.customerId ?? null,
+          vehicleId: args.vehicleId ?? null,
+          saleId: args.saleId ?? null,
+          amount: args.amount,
+          method: args.method,
+          paymentDate: args.paymentDate,
+          reference: args.reference?.trim() || null,
+        }),
       },
       async () => {
         assertPositiveAmount(args.amount);
@@ -1310,7 +1324,13 @@ export const applyRetainedCredit = mutation({
     receivableId: v.id("receivables"),
     requestedAmount: v.number(),
     appliedAt: v.optional(v.number()),
-    idempotencyKey: v.optional(v.string()),
+    // SCRUM-57, classified during RC integration (SCRUM-313). This command did
+    // not exist when SCRUM-57's artifact was authored — SCRUM-218-C added it
+    // afterwards — so nothing in that artifact protects it. It relieves a
+    // receivable against a retained receipt and posts to the GL, which is an
+    // at-most-once effect on money, so the identity is MANDATORY here exactly
+    // as it is for every other economic command, not a caller courtesy.
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -1330,6 +1350,7 @@ export const applyRetainedCredit = mutation({
       {
         orgId: args.orgId,
         operation: "collections.applyRetainedCredit",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
         // Every input that changes what money does. Replaying one key against a
@@ -1663,7 +1684,7 @@ export const clearCheque = mutation({
     orgId: v.id("organizations"),
     chequeId: v.id("postDatedCheques"),
     clearedAt: v.optional(v.number()),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user, membership } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -1672,6 +1693,7 @@ export const clearCheque = mutation({
       {
         orgId: args.orgId,
         operation: "collections.clearCheque",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
         fingerprint: JSON.stringify({ chequeId: args.chequeId, clearedAt: args.clearedAt ?? null }),
@@ -1917,7 +1939,7 @@ export const returnClearedCheque = mutation({
     chequeId: v.id("postDatedCheques"),
     returnReason: v.optional(v.string()),
     bankFeeMinor: v.optional(v.number()),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -1933,6 +1955,7 @@ export const returnClearedCheque = mutation({
       {
         orgId: args.orgId,
         operation: "collections.returnClearedCheque",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
         fingerprint: JSON.stringify({
@@ -2345,7 +2368,7 @@ export const respondToApproval = mutation({
     requestId: v.id("collectionApprovalRequests"),
     status: v.union(v.literal("APPROVED"), v.literal("REJECTED")),
     decisionNotes: v.optional(v.string()),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user, membership } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
@@ -2354,8 +2377,16 @@ export const respondToApproval = mutation({
       {
         orgId: args.orgId,
         operation: "collections.respondToApproval",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
+        // The decision IS the economic instruction here: the same identity may
+        // not be reused to flip an APPROVE into a REJECT (or onto a different
+        // request) and be handed the first decision's stored result.
+        fingerprint: JSON.stringify({
+          requestId: args.requestId,
+          status: args.status,
+        }),
       },
       async () => {
         const request = await ctx.db.get(args.requestId);
@@ -2639,7 +2670,7 @@ export const submitCashierReconciliation = mutation({
     businessDate: v.number(),
     countedCash: v.number(),
     notes: v.optional(v.string()),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user, membership } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -2648,8 +2679,15 @@ export const submitCashierReconciliation = mutation({
       {
         orgId: args.orgId,
         operation: "collections.submitCashierReconciliation",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
+        // Counted cash against a business date — a different count for the same
+        // day is a new declaration, not a retry of the earlier one.
+        fingerprint: JSON.stringify({
+          businessDate: args.businessDate,
+          countedCash: args.countedCash,
+        }),
       },
       async () => {
         if (!Number.isFinite(args.countedCash) || args.countedCash < 0) {

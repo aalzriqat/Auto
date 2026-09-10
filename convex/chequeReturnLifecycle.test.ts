@@ -218,6 +218,7 @@ async function clearedCheque(
     bank: "Bank", chequeNumber: `C-${suffix}`, chequeDate: Date.now(), amount,
   })) as Id<"postDatedCheques">;
   const paymentId = (await seeded.asAdmin.mutation(api.collections.clearCheque, {
+      idempotencyKey: crypto.randomUUID(),
     orgId: seeded.orgId, chequeId,
   })) as Id<"collectionPayments">;
   const movement = (await movementFor(seeded.t, seeded.orgId, paymentId))!;
@@ -391,7 +392,7 @@ describe("SCRUM-130 §A — a returned tender cannot have its receipt resurrecte
     // Precondition: both halves of the reproduced state really exist.
     expect((await pendingRows(t, orgId)).filter((r) => r.idempotencyKey === canonicalKey)).toHaveLength(1);
 
-    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+    await asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
 
     // THE REQUIREMENT: no eligible canonical forward receipt obligation survives.
     const survivors = (await pendingRows(t, orgId)).filter(
@@ -404,7 +405,7 @@ describe("SCRUM-130 §A — a returned tender cannot have its receipt resurrecte
     const { t, asAdmin, orgId, chequeId, paymentId } =
       await canonicalPendingWithForeignPostedSibling("a2", 1000);
 
-    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+    await asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
 
     const receiptEventsBefore = (await events(t, orgId)).filter(
       (e) => e.eventType === "COLLECTION_PAYMENT" && e.sourceId === paymentId.toString()
@@ -450,6 +451,7 @@ describe("SCRUM-130 §B — every later application occurrence is unwound, poste
     const other = await makeReceivable(asAdmin, orgId, customerId, 400, "Other debt");
     // Dated where no period is open -> the application's occurrence ENQUEUES.
     await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, receiptMovementId: movement._id, receivableId: other,
       requestedAmount: 400, appliedAt: UNPOSTABLE_DATE,
     });
@@ -458,7 +460,7 @@ describe("SCRUM-130 §B — every later application occurrence is unwound, poste
     );
     expect(queued, "fixture did not actually produce a PENDING application").toHaveLength(1);
 
-    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+    await asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
 
     // The obligation must be gone, not merely un-drained.
     expect(
@@ -505,6 +507,7 @@ describe("SCRUM-130 §B — every later application occurrence is unwound, poste
 
     const other = await makeReceivable(asAdmin, orgId, customerId, 400, "Other debt");
     await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, receiptMovementId: movement._id, receivableId: other, requestedAmount: 400,
     });
 
@@ -537,7 +540,7 @@ describe("SCRUM-130 §B — every later application occurrence is unwound, poste
       })
     );
 
-    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+    await asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
 
     expect(
       (await pendingRows(t, orgId)).filter(
@@ -567,6 +570,7 @@ describe("SCRUM-130 §B — every later application occurrence is unwound, poste
 
     const other = await makeReceivable(asAdmin, orgId, customerId, 400, "Other debt");
     await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, receiptMovementId: movement._id, receivableId: other, requestedAmount: 400,
     });
     const applied = (await events(t, orgId)).filter(
@@ -574,7 +578,7 @@ describe("SCRUM-130 §B — every later application occurrence is unwound, poste
     );
     expect(applied, "fixture did not actually post an application").toHaveLength(1);
 
-    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+    await asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
 
     const after = (await events(t, orgId)).filter((e) => e.eventType === "RECEIPT_CREDIT_APPLIED");
     expect(after).toHaveLength(1);
@@ -605,16 +609,18 @@ describe("SCRUM-130 §C — each debt reopens by its own persisted application a
     const debtA = await makeReceivable(asAdmin, orgId, customerId, 300, "Debt A");
     const debtB = await makeReceivable(asAdmin, orgId, customerId, 500, "Debt B");
     await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, receiptMovementId: movement._id, receivableId: debtA, requestedAmount: 300,
     });
     await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, receiptMovementId: movement._id, receivableId: debtB, requestedAmount: 500,
     });
     expect((await t.run((ctx) => ctx.db.get(debtA)))!.outstandingAmount).toBe(0);
     expect((await t.run((ctx) => ctx.db.get(debtB)))!.outstandingAmount).toBe(0);
     expect((await positionFor(t, orgId, movement._id))!.remainingUnappliedMinor).toBe(20000);
 
-    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+    await asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
 
     // EXACTLY its own amount. Not the 1000 face value, not the 800 aggregate.
     expect(
@@ -645,7 +651,7 @@ describe("SCRUM-130 §C — each debt reopens by its own persisted application a
     const { chequeId, movement } = await clearedCheque(seeded, "c2", 1000);
     expect((await positionFor(t, orgId, movement._id))!.applicationCount).toBe(0);
 
-    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+    await asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
 
     expect((await positionFor(t, orgId, movement._id))!.remainingUnappliedMinor).toBe(0);
     expect(
@@ -665,7 +671,7 @@ describe("SCRUM-130 §C — each debt reopens by its own persisted application a
     expect(movement.initialUnappliedMinor).toBe(0);
     expect((await t.run((ctx) => ctx.db.get(debt)))!.outstandingAmount).toBe(0);
 
-    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+    await asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
 
     expect((await t.run((ctx) => ctx.db.get(debt)))!.outstandingAmount).toBe(1000);
     // The FULL original balance is back and the debt is not yet due, so nothing
@@ -699,11 +705,12 @@ describe("SCRUM-130 §C — each debt reopens by its own persisted application a
       [pastDue, 300], [futureDue, 500],
     ] as const) {
       await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
         orgId, receiptMovementId: movement._id, receivableId, requestedAmount,
       });
     }
 
-    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+    await asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
 
     // The tender bouncing says nothing about whether a THIRD-PARTY debt it
     // happened to pay is past its own due date. Writing OVERDUE onto a debt due
@@ -734,14 +741,16 @@ describe("SCRUM-130 §C — each debt reopens by its own persisted application a
     // 1000 owed, 200 paid in cash, 300 covered by this cheque's retained credit.
     const debt = await makeReceivable(asAdmin, orgId, customerId, 1000, "Mixed debt");
     await asAdmin.mutation(api.collections.recordPayment, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, receivableId: debt, amount: 200, method: "CASH", paymentDate: Date.now(),
     });
     await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, receiptMovementId: movement._id, receivableId: debt, requestedAmount: 300,
     });
     expect((await t.run((ctx) => ctx.db.get(debt)))!.outstandingAmount).toBe(500);
 
-    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+    await asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
 
     // The cheque's 300 comes back; the CASH 200 does not — it was a different
     // tender and this return does not touch it. So the debt is genuinely part
@@ -766,10 +775,11 @@ describe("SCRUM-130 §C — each debt reopens by its own persisted application a
       asAdmin, orgId, customerId, 400, "Past due", Date.now() - 86_400_000
     );
     await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, receiptMovementId: movement._id, receivableId: debt, requestedAmount: 400,
     });
 
-    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+    await asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
 
     // Full restoration and past due at once. The due date wins: a debt that is
     // late is late whether or not anything was ever paid against it, so OVERDUE
@@ -794,6 +804,7 @@ describe("SCRUM-130 §D — pending vs posted receipt, both orderings", () => {
       bank: "Bank", chequeNumber: `C-${suffix}`, chequeDate: UNPOSTABLE_DATE, amount,
     })) as Id<"postDatedCheques">;
     const paymentId = (await seeded.asAdmin.mutation(api.collections.clearCheque, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seeded.orgId, chequeId, clearedAt: UNPOSTABLE_DATE,
     })) as Id<"collectionPayments">;
     return { ...seeded, chequeId, paymentId };
@@ -804,7 +815,7 @@ describe("SCRUM-130 §D — pending vs posted receipt, both orderings", () => {
     const queued = (await pendingRows(t, orgId)).filter((r) => r.eventType === "COLLECTION_PAYMENT");
     expect(queued, "fixture did not queue the receipt").toHaveLength(1);
 
-    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+    await asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
     await drain(t, orgId);
 
     expect(
@@ -839,7 +850,7 @@ describe("SCRUM-130 §D — pending vs posted receipt, both orderings", () => {
     expect(posted, "the worker did not post the receipt").toHaveLength(1);
     expect(posted[0].status).toBe("POSTED");
 
-    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+    await asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
 
     const after = (await events(t, orgId)).filter(
       (e) => e.eventType === "COLLECTION_PAYMENT" && e.sourceId === paymentId.toString()
@@ -880,7 +891,7 @@ describe("SCRUM-130 §D — pending vs posted receipt, both orderings", () => {
     const period = (await asAdmin.query(api.accountingPeriods.list, { orgId }))[0];
     await asAdmin.mutation(api.accountingPeriods.close, { orgId, periodId: period._id });
 
-    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+    await asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
 
     const deferred = (await pendingRows(t, orgId)).filter((r) => r.kind === "REVERSE");
     expect(deferred, "the reversal did not defer").toHaveLength(1);
@@ -949,9 +960,9 @@ describe("SCRUM-130 §E — an exact replay is one return; a changed command is 
     const { asAdmin, orgId } = seeded;
     const { chequeId } = await clearedCheque(seeded, "e3", 1000);
 
-    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+    await asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
     await expect(
-      asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId })
+      asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId })
     ).rejects.toThrow(/only cleared cheques/i);
   });
 });
@@ -1013,12 +1024,13 @@ describe("SCRUM-130 §F — boundaries refuse with zero economic delta", () => {
       requestedAmount: 400, disbursementMethod: "BANK_TRANSFER", reason: "customer refund",
     });
     await asApprover.mutation(api.collections.respondToApproval, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, requestId, status: "APPROVED",
     });
 
     const before = await worldSnapshot(t);
     await expect(
-      asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId })
+      asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId })
     ).rejects.toThrow(/CHEQUE_RETURN_UNSUPPORTED_REFUND_INTERACTION/);
     expect(await worldSnapshot(t), "the refusal was not zero-delta").toEqual(before);
   });
@@ -1071,7 +1083,7 @@ describe("SCRUM-130 §F — boundaries refuse with zero economic delta", () => {
 
     const before = await worldSnapshot(t);
     await expect(
-      asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId })
+      asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId })
     ).rejects.toThrow(/finance application/i);
     expect(await worldSnapshot(t), "the refusal was not zero-delta").toEqual(before);
   });
@@ -1102,7 +1114,7 @@ describe("SCRUM-130 §F — boundaries refuse with zero economic delta", () => {
 
     const before = await worldSnapshot(t);
     await expect(
-      asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId })
+      asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId })
     ).rejects.toThrow(/owed and collected at the same time/i);
     expect(await worldSnapshot(t), "the refusal was not zero-delta").toEqual(before);
 
@@ -1125,7 +1137,7 @@ describe("SCRUM-130 §F — boundaries refuse with zero economic delta", () => {
 
     const before = await worldSnapshot(t);
     await expect(
-      asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId })
+      asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId })
     ).rejects.toThrow(/no persisted receipt lineage/i);
     expect(await worldSnapshot(t), "the refusal was not zero-delta").toEqual(before);
   });
@@ -1136,6 +1148,7 @@ describe("SCRUM-130 §F — boundaries refuse with zero economic delta", () => {
     const { chequeId, movement } = await clearedCheque(seeded, "f3", 1000);
     const other = await makeReceivable(asAdmin, orgId, customerId, 400, "Other debt");
     await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, receiptMovementId: movement._id, receivableId: other, requestedAmount: 400,
     });
 
@@ -1145,7 +1158,7 @@ describe("SCRUM-130 §F — boundaries refuse with zero economic delta", () => {
 
     const before = await worldSnapshot(t);
     await expect(
-      asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId })
+      asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId })
     ).rejects.toThrow(/CHEQUE_RETURN_UNSUPPORTED_REFUND_INTERACTION/);
     expect(await worldSnapshot(t), "the refusal was not zero-delta").toEqual(before);
   });
@@ -1156,12 +1169,13 @@ describe("SCRUM-130 §F — boundaries refuse with zero economic delta", () => {
     const { chequeId, movement } = await clearedCheque(seeded, "f6", 1000);
     const other = await makeReceivable(asAdmin, orgId, customerId, 400, "Other debt");
     await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, receiptMovementId: movement._id, receivableId: other, requestedAmount: 400,
     });
     await padLineage(t, orgId, movement._id, MAX_REVOCABLE_APPLICATIONS);
 
     // Exactly at the bound: no refusal, and the real application still unwinds.
-    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+    await asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
     expect((await t.run((ctx) => ctx.db.get(other)))!.outstandingAmount).toBe(400);
     expect((await t.run((ctx) => ctx.db.get(chequeId)))!.status).toBe("RETURNED");
   });
@@ -1172,6 +1186,7 @@ describe("SCRUM-130 §F — boundaries refuse with zero economic delta", () => {
     const { chequeId, movement } = await clearedCheque(seeded, "f7", 1000);
     const other = await makeReceivable(asAdmin, orgId, customerId, 400, "Other debt");
     await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, receiptMovementId: movement._id, receivableId: other, requestedAmount: 400,
     });
     await padLineage(t, orgId, movement._id, MAX_REVOCABLE_APPLICATIONS + 1);
@@ -1183,7 +1198,7 @@ describe("SCRUM-130 §F — boundaries refuse with zero economic delta", () => {
     // returned and its receipt, debts and GL effects all still live.
     const before = await worldSnapshot(t);
     await expect(
-      asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId })
+      asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId })
     ).rejects.toThrow(/CHEQUE_RETURN_LINEAGE_TOO_LARGE/);
     expect(await worldSnapshot(t), "the refusal was not zero-delta").toEqual(before);
   });
@@ -1221,6 +1236,7 @@ describe("SCRUM-130 §F — boundaries refuse with zero economic delta", () => {
 
     const other = await makeReceivable(asAdmin, orgId, customerId, 600, "Other debt");
     await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, receiptMovementId: movement._id, receivableId: other, requestedAmount: 600,
     });
 
@@ -1248,7 +1264,7 @@ describe("SCRUM-130 §F — boundaries refuse with zero economic delta", () => {
 
     const before = await worldSnapshot(t);
     await expect(
-      asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId })
+      asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId })
     ).rejects.toThrow(/CHEQUE_RETURN_UNSUPPORTED_REFUND_INTERACTION/);
     // The refusal escapes uncaught, so nothing partial committed. In Convex an
     // uncaught throw rolls the whole mutation back; a CAUGHT one would have
@@ -1270,6 +1286,7 @@ describe("SCRUM-130 §G — the ordinary lifecycle is untouched", () => {
     const other = await makeReceivable(asAdmin, orgId, customerId, 400, "Other debt");
 
     await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, receiptMovementId: movement._id, receivableId: other, requestedAmount: 400,
     });
 
@@ -1288,12 +1305,13 @@ describe("SCRUM-130 §G — the ordinary lifecycle is untouched", () => {
     const { chequeId, movement } = await clearedCheque(seeded, "g2", 1000);
     const other = await makeReceivable(asAdmin, orgId, customerId, 400, "Other debt");
 
-    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+    await asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
 
     // The causal check is the load-bearing guard: the receipt occurrence is
     // REVERSED, so it is no longer on the books and nothing can be drawn from it.
     await expect(
       asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
         orgId, receiptMovementId: movement._id, receivableId: other, requestedAmount: 400,
       })
     ).rejects.toThrow();

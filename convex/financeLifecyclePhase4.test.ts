@@ -364,7 +364,7 @@ describe("Finance lifecycle Phase 4", () => {
     });
 
     await expect(
-      asLimitedUser.mutation(api.applications.finalizeDeal, { orgId, applicationId })
+      asLimitedUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId })
     ).rejects.toThrow(/finalize:financed_deal/);
 
     await registerHandover(asFinalizer, api, orgId, applicationId);
@@ -375,7 +375,7 @@ describe("Finance lifecycle Phase 4", () => {
       expectedDate: Date.now(),
     });
 
-    const saleId = await asFinalizer.mutation(api.applications.finalizeDeal, {
+    const saleId = await asFinalizer.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId,
       applicationId,
     });
@@ -394,14 +394,14 @@ describe("Finance lifecycle Phase 4", () => {
     });
 
     await expect(
-      asLimitedUser.mutation(api.applications.confirmDisbursement, {
+      asLimitedUser.mutation(api.applications.confirmDisbursement, { idempotencyKey: crypto.randomUUID(),
         orgId,
         applicationId,
         disbursedAmountMinor: 20_000_000,
       })
     ).rejects.toThrow(/confirm:finance_disbursement/);
 
-    await asAccountant.mutation(api.applications.confirmDisbursement, {
+    await asAccountant.mutation(api.applications.confirmDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId,
       applicationId,
       disbursedAmountMinor: 20_000_000,

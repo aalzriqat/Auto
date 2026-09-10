@@ -181,6 +181,7 @@ describe("SCRUM-236 §1 — recordPayment owns the receipt occurrence", () => {
   test("P1 — one occurrence, addressed by the certified facade, one journal", async () => {
     const { t, asAdmin, orgId, customerId } = await seedPostableOrg("p1");
     const paymentId = (await asAdmin.mutation(api.collections.recordPayment, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId, amount: 250, method: "CASH", paymentDate: Date.now(),
     })) as Id<"collectionPayments">;
 
@@ -215,9 +216,23 @@ describe("SCRUM-236 §1 — recordPayment owns the receipt occurrence", () => {
     expect(payments).toHaveLength(1);
     expect(ledger).toHaveLength(1);
     expect(canonical).toHaveLength(1);
-    // No idempotency key was supplied on this call, so no command record is
-    // expected; §3 covers the supplied-key case, where one IS written.
-    expect(commands).toHaveLength(0);
+    // ⚠️ CHANGED DURING RC INTEGRATION (SCRUM-313), and it makes this control
+    // STRONGER rather than weaker.
+    //
+    // The old assertion was `0`, justified as "no idempotency key was supplied
+    // on this call". SCRUM-57 abolishes that state: `recordPayment` is a
+    // classified economic command, so a call without a command identity is
+    // refused and this success path cannot occur without one.
+    //
+    // It also repairs a vacuity. This block is the POSITIVE CONTROL for §4,
+    // which asserts these four tables are EMPTY after a refusal — but the old
+    // expectation was ALSO 0 here, so the control proved nothing about the
+    // commands table: success and refusal were indistinguishable on it. Now a
+    // successful run demonstrably writes exactly one command record, which is
+    // what makes §4's "empty" a real observation for all four tables.
+    //
+    // Exactly one: one identity, one command, one occurrence.
+    expect(commands).toHaveLength(1);
   });
 });
 
@@ -229,6 +244,7 @@ describe("SCRUM-236 §2 — clearCheque owns the receipt occurrence", () => {
       chequeDate: Date.now(), amount: 400,
     })) as Id<"postDatedCheques">;
     const paymentId = (await asAdmin.mutation(api.collections.clearCheque, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, chequeId,
     })) as Id<"collectionPayments">;
 

@@ -111,7 +111,7 @@ describe("Phase 9 — expense account mapping", () => {
   test("general expense posts to General Expenses (6300), not Commission Expense (6100)", async () => {
     const { orgId, asUser } = await seedDealer("exp");
 
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Miscellaneous expense", amount: 120, date: Date.now(),
       category: "OTHER", status: "PAID",
     });
@@ -127,7 +127,7 @@ describe("Phase 9 — expense account mapping", () => {
   test("bank-transfer expense stores method and credits Bank", async () => {
     const { t, orgId, asUser } = await seedDealer("exp_method");
 
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       title: "Bank paid repair",
       amount: 80,
@@ -267,7 +267,7 @@ describe("Phase 9 — accounting outbox", () => {
   test("event with no open period is enqueued, then posts when a period opens", async () => {
     const { t, orgId, asUser } = await seedDealer("outbox", /* openPeriod */ false);
 
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Pre-period expense", amount: 75, date: Date.now(),
       category: "OFFICE", status: "PAID",
     });
@@ -300,7 +300,7 @@ describe("Phase 9 — accounting outbox", () => {
   test("an event that keeps failing moves to FAILED after 10 attempts and stops being drained", async () => {
     const { t, orgId, asUser } = await seedDealer("outbox_deadletter", /* openPeriod */ false);
 
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Never posts", amount: 40, date: Date.now(),
       category: "OFFICE", status: "PAID",
     });
@@ -339,7 +339,7 @@ describe("Phase 9 — accounting outbox", () => {
 
     const fiscalYear = new Date().getUTCFullYear();
     // Dated in December — the org will not open that period until year end.
-    const decemberExpenseId = await asUser.mutation(api.expenses.create, {
+    const decemberExpenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "December expense", amount: 90,
       date: Date.UTC(fiscalYear, 11, 15),
       category: "OFFICE", status: "PAID",
@@ -386,7 +386,7 @@ describe("Phase 9 — accounting outbox", () => {
   test("retryFailed resets a FAILED event back to PENDING for another drain attempt", async () => {
     const { t, orgId, asUser } = await seedDealer("outbox_retry", /* openPeriod */ false);
 
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Fails then recovers", amount: 60, date: Date.now(),
       category: "OFFICE", status: "PAID",
     });
@@ -419,7 +419,7 @@ describe("Phase 9 — accounting outbox", () => {
   test("retryFailed rejects a non-FAILED event", async () => {
     const { t, orgId, asUser } = await seedDealer("outbox_retry_reject", /* openPeriod */ false);
 
-    await asUser.mutation(api.expenses.create, {
+    await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Still pending", amount: 20, date: Date.now(),
       category: "OFFICE", status: "PAID",
     });
@@ -468,7 +468,7 @@ describe("Phase 9 — reversal audit log", () => {
   test("reversing an event writes a REVERSE_EVENT audit entry", async () => {
     const { orgId, asUser } = await seedDealer("rev");
 
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Reversible expense", amount: 60, date: Date.now(),
       category: "OTHER", status: "PAID",
     });
@@ -751,7 +751,7 @@ describe("payment intent settlement clamping", () => {
       })
     );
 
-    const intentId = await asUser.mutation(api.paymentIntents.create, {
+    const intentId = await asUser.mutation(api.paymentIntents.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       amountMinor: 1_000_000,

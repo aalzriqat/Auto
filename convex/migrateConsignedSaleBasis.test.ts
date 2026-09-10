@@ -297,7 +297,7 @@ describe("re-running it", () => {
         sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
       })
     );
-    await s.asUser.mutation(api.sales.create, {
+    await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
       salePrice: SALE_PRICE, saleDate: Date.now(), status: "COMPLETED" as const,
     });
@@ -380,7 +380,7 @@ describe("what it refuses to touch", () => {
         status: "AVAILABLE", sourceType: "STOCK", purchasePrice: 6_000,
       })
     );
-    await s.asUser.mutation(api.sales.create, {
+    await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
       salePrice: 8_000, saleDate: Date.now(), status: "COMPLETED" as const,
     });

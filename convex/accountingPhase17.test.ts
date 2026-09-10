@@ -401,6 +401,7 @@ describe("Phase 17 — parallel reporting and sign-off", () => {
     // production path an operator actually arrives on.
     const ctx = await seedCutoverDealer();
     await ctx.asOwner.mutation(api.expenses.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: ctx.orgId,
       title: "Ordinary paid expense",
       amount: 100,

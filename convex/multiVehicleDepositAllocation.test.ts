@@ -142,7 +142,7 @@ type Seed = Awaited<ReturnType<typeof seed>>;
 
 /** The real path: one deposit row plus a hold row per car. */
 async function payDeposit(s: Seed, amount = DEPOSIT) {
-  await s.asUser.mutation(api.deposits.create, {
+  await s.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
     orgId: s.orgId,
     quoteId: s.quoteId,
     amount,
@@ -163,7 +163,7 @@ async function sell(
   salePrice: number,
   opts: { actor?: Seed["asUser"] } = {}
 ) {
-  return await (opts.actor ?? s.asUser).mutation(api.sales.create, {
+  return await (opts.actor ?? s.asUser).mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
     orgId: s.orgId,
     vehicleId,
     customerId: s.customerId,
@@ -486,7 +486,7 @@ describe("an allocation larger than that car's invoice", () => {
     ]);
 
     await expect(
-      s.asManager.mutation(api.sales.create, {
+      s.asManager.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId,
         vehicleId: s.vehicleA,
         customerId: s.customerId,
@@ -997,7 +997,7 @@ describe("refunding what is left of a shared deposit", () => {
     const depositId = await s.t.run(async (ctx) =>
       (await ctx.db.query("deposits").collect()).find((d) => d.orgId === s.orgId)!._id
     );
-    await s.asManager.mutation(api.deposits.release, {
+    await s.asManager.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       depositId,
       resolution: "REFUNDED" as const,
@@ -1030,7 +1030,7 @@ describe("refunding what is left of a shared deposit", () => {
       (await ctx.db.query("deposits").collect()).find((d) => d.orgId === s.orgId)!._id
     );
     await expect(
-      s.asManager.mutation(api.deposits.release, {
+      s.asManager.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId,
         depositId,
         resolution: "REFUNDED" as const,
@@ -1047,7 +1047,7 @@ describe("refunding what is left of a shared deposit", () => {
     const depositId = await s.t.run(async (ctx) =>
       (await ctx.db.query("deposits").collect()).find((d) => d.orgId === s.orgId)!._id
     );
-    await s.asManager.mutation(api.deposits.release, {
+    await s.asManager.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       depositId,
       resolution: "REFUNDED" as const,
@@ -1299,7 +1299,7 @@ const release = (
   resolution: "REFUNDED" | "FORFEITED" = "REFUNDED",
   idempotencyKey?: string
 ) =>
-  s.asManager.mutation(api.deposits.release, {
+  s.asManager.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(),
     orgId: s.orgId,
     depositId,
     resolution,
@@ -1932,7 +1932,7 @@ describe("releasing the same row twice from the same screen", () => {
     return { s, depositId, key };
   }
 
-  test("the deposit screen sends no fixed key, because a row can be released again", async () => {
+  test("the deposit screen's key identifies one ATTEMPT, never the deposit itself", async () => {
     // The screen used to send `deposit_release_<depositId>_<resolution>`. A row
     // can now be released more than once — the free part today, the rest when
     // the cars it was held against fall away — so the SECOND genuine payout
@@ -1942,17 +1942,39 @@ describe("releasing the same row twice from the same screen", () => {
     //
     // There is nothing the server can do about it: a retry of one release and a
     // second, different release both arrive after the first has committed, so
-    // no fingerprint can separate them. The key has to identify one attempt,
+    // no fingerprint can separate them. The key has to identify one ATTEMPT,
     // which means the screen must not derive it from the deposit alone.
+    //
+    // SCRUM-57 made an identity mandatory on this command, so "sends no key at
+    // all" stopped being an available answer — and asserting the ABSENCE of the
+    // string would now pass only by breaking the mutation. The invariant is
+    // unchanged and is re-pinned here against the mechanism that replaced it.
+    //
+    // The identity must mark ONE ATTEMPT (`renew`), never be HELD across
+    // attempts (`for`). Adversarial review reproduced the difference: with a
+    // held identity, a lost response leaves it un-retired, and the next genuine
+    // payout is handed the first one's stored result — cash out stays [2000]
+    // when it should be [2000, 3000], with no error raised. `renew` is what
+    // keeps the two payouts distinct; `hooks/useCommandIdentity.test.tsx`
+    // proves that behaviourally.
     const source = readFileSync(
       join(process.cwd(), "components/vehicles/VehicleDetailsDialog.tsx"),
       "utf8"
     );
-    const releaseCall = source.slice(
-      source.indexOf("await releaseDeposit({"),
-      source.indexOf("});", source.indexOf("await releaseDeposit({"))
-    );
-    expect(releaseCall).not.toContain("idempotencyKey");
+    const start = source.indexOf("await releaseDeposit({");
+    expect(start).toBeGreaterThan(-1);
+    const releaseCall = source.slice(start, source.indexOf("});", start));
+
+    // The identity field must be WIRED to the per-attempt minter, not merely
+    // present alongside it. Asserting the two strings separately would pass if
+    // a future edit pointed `idempotencyKey` at something stale while
+    // `commandId.renew(...)` fed an unrelated field — flagged in review.
+    expect(releaseCall).toMatch(/idempotencyKey:\s*commandId\.renew\(/);
+    // A HELD identity on this path is the reproduced defect, not a style choice.
+    expect(releaseCall).not.toContain("commandId.for(");
+    // The literal key shape that caused the original incident must not return.
+    expect(releaseCall).not.toMatch(/deposit_release_/);
+    expect(releaseCall).not.toMatch(/idempotencyKey:\s*`?deposit/);
   });
 
   test("a genuine retry of the SAME release replays rather than paying twice", async () => {

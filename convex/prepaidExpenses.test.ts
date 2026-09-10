@@ -137,7 +137,7 @@ describe("prepaid amortization schedule (exact-term rounding)", () => {
 describe("prepaid expense — initial posting", () => {
   test("a prepaid expense debits Prepaid Expenses (asset), not an expense account, and opens a schedule", async () => {
     const { t, orgId, asOwner } = await seedDealer("post");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Annual insurance", amount: 1200, date: Date.UTC(2026, 0, 15),
       category: "FEES", status: "PAID", paymentMethod: "CASH",
       isPrepaid: true, amortizationMonths: 12,
@@ -159,7 +159,7 @@ describe("prepaid expense — initial posting", () => {
 
   test("VAT is split out immediately; only the net amount capitalizes to the asset and amortizes", async () => {
     const { t, orgId, asOwner } = await seedDealer("vat");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Prepaid rent w/ VAT", amount: 1200, taxAmount: 200, date: Date.UTC(2026, 0, 10),
       category: "RENT", status: "PAID", paymentMethod: "CASH",
       isPrepaid: true, amortizationMonths: 10,
@@ -182,7 +182,7 @@ async function amortize(t: T, orgId: Id<"organizations">, scheduleId: Id<"prepai
 describe("prepaid expense — monthly amortization", () => {
   test("one month releases a share from the asset to the expense account, idempotently", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("amort");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -236,7 +236,7 @@ describe("prepaid expense — monthly amortization", () => {
     // perfectly valid.
     const { t, orgId, userId, asOwner } = await seedDealer("amort-dating");
     const paidOn = Date.UTC(2026, 0, 25);
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: paidOn,
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -269,7 +269,7 @@ describe("prepaid expense — monthly amortization", () => {
 
   test("strict month ordering: a month at/before the last recognized one is rejected", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("order");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -284,7 +284,7 @@ describe("prepaid expense — monthly amortization", () => {
 
   test("runs to full term, then stops without over-recognizing; asset nets to zero", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("full");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1000, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 3, // 1000/3 indivisible
     });
@@ -308,7 +308,7 @@ describe("prepaid expense — monthly amortization", () => {
 describe("prepaid expense — reversal unwinds the whole lifecycle", () => {
   test("reversing after partial amortization nets every account to zero and cancels the schedule", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("rev");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -328,7 +328,7 @@ describe("prepaid expense — reversal unwinds the whole lifecycle", () => {
 
   test("reversing after a partial refund correction also unwinds the refund — no orphaned cash or negative prepaid balance", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("rev-refund");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -336,7 +336,7 @@ describe("prepaid expense — reversal unwinds the whole lifecycle", () => {
     await amortize(t, orgId, schedule!._id, userId, "2026-01");
 
     // Vendor refunds part of the unused balance before the expense is reversed.
-    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
       orgId, scheduleId: schedule!._id, refundMinor: 300_000, refundPaymentMethod: "CASH",
       reason: "Partial refund ahead of cancellation",
     });
@@ -354,7 +354,7 @@ describe("prepaid expense — reversal unwinds the whole lifecycle", () => {
 
   test("reversing after an accelerated write-off correction also unwinds the write-off — no orphaned expense or negative prepaid balance", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("rev-writeoff");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -363,7 +363,7 @@ describe("prepaid expense — reversal unwinds the whole lifecycle", () => {
 
     // Non-refundable portion of the unused balance is accelerated to expense
     // before the expense itself is reversed.
-    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
       orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Non-refundable portion",
     });
 
@@ -376,18 +376,18 @@ describe("prepaid expense — reversal unwinds the whole lifecycle", () => {
 
   test("reversing after a combined VAT refund + write-off unwinds both corrections", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("rev-combined");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Prepaid rent w/ VAT", amount: 1200, taxAmount: 200, date: Date.UTC(2026, 0, 1),
       category: "RENT", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 10,
     });
     const schedule = await scheduleForExpense(t, expenseId);
     await amortize(t, orgId, schedule!._id, userId, "2026-01");
 
-    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
       orgId, scheduleId: schedule!._id, refundMinor: 200_000, refundTaxMinor: 40_000,
       refundPaymentMethod: "CASH", reason: "Partial refund",
     });
-    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
       orgId, scheduleId: schedule!._id, writeOffMinor: 100_000, reason: "Non-refundable remainder",
     });
 
@@ -406,7 +406,7 @@ describe("prepaid expense — reversal unwinds the whole lifecycle", () => {
 describe("prepaid expense — operational report matches the GL", () => {
   test("the operational P&L recognizes exactly what the GL amortized for the month", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("report");
-    await asOwner.mutation(api.expenses.create, {
+    await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -425,7 +425,7 @@ describe("prepaid expense — operational report matches the GL", () => {
   test("Fix B1 — with VAT, the report recognizes the NET monthly share (from the schedule), not gross", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("vatreport");
     // Gross 1200 incl. 200 VAT → net 1000 capitalized, amortized over 10 months.
-    await asOwner.mutation(api.expenses.create, {
+    await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Prepaid rent w/ VAT", amount: 1200, taxAmount: 200, date: Date.UTC(2026, 0, 1),
       category: "RENT", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 10,
     });
@@ -443,7 +443,7 @@ describe("prepaid expense — operational report matches the GL", () => {
 
   test("a prepaid schedule that started before the reporting window still amortizes into it (schedule-driven, no lookback cap)", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("prior");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -471,7 +471,7 @@ function monthRange(yearMonth: string): { start: number; end: number } {
 describe("Phase 1 — report derives from posted/parked recognition events, never a curve recompute", () => {
   test("a write-off's accelerated expense shows up in its own correction month, never restating already-posted months", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("evt-writeoff");
-    await asOwner.mutation(api.expenses.create, {
+    await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -486,7 +486,7 @@ describe("Phase 1 — report derives from posted/parked recognition events, neve
       expect(report.totalExpenses).toBeCloseTo(100, 6);
     }
 
-    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
       orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Early cancellation, non-refundable portion",
     });
 
@@ -520,7 +520,7 @@ describe("Phase 1 — report derives from posted/parked recognition events, neve
 
   test("a refund never appears in the P&L (cash vs asset, not an expense), and history/future months are unaffected", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("evt-refund");
-    await asOwner.mutation(api.expenses.create, {
+    await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -529,7 +529,7 @@ describe("Phase 1 — report derives from posted/parked recognition events, neve
       await amortize(t, orgId, schedule!._id, userId, m);
     }
 
-    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
       orgId, scheduleId: schedule!._id, refundMinor: 300_000, refundPaymentMethod: "CASH", reason: "Early cancellation, refunded",
     });
 
@@ -556,14 +556,14 @@ describe("Phase 1 — report derives from posted/parked recognition events, neve
 
   test("a correction that consumes the full remainder cancels the schedule, but prior months still report with no expense-doc double count", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("evt-full-writeoff");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
     const schedule = await scheduleForExpense(t, expenseId);
     await amortize(t, orgId, schedule!._id, userId, "2026-01");
 
-    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
       orgId, scheduleId: schedule!._id, writeOffMinor: 1_100_000, reason: "Full write-off, contract voided",
     });
     expect((await scheduleForExpense(t, expenseId))!.status).toBe("CANCELLED");
@@ -586,7 +586,7 @@ describe("Phase 1 — report derives from posted/parked recognition events, neve
 
   test("a month parked in the outbox behind a closed period still reports in its own month", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("evt-parked");
-    await asOwner.mutation(api.expenses.create, {
+    await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -622,7 +622,7 @@ describe("Phase 1 — report derives from posted/parked recognition events, neve
 describe("prepaid expenses reconciliation", () => {
   test("GL Prepaid asset equals the sum of ACTIVE schedules' remaining", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("recon");
-    await asOwner.mutation(api.expenses.create, {
+    await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -644,7 +644,7 @@ describe("Fix B2/B9 — a period with prepaid amortization due but unrecognized 
     // Prepaid paid Jan 1, 12-month term — but the monthly cron has NOT run, so
     // nothing has been recognized. The period runs Jan–Dec, so by period end a
     // full year of amortization is DUE but zero is recognized.
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -673,7 +673,7 @@ describe("Fix B3 — catch-up recognizes each missed month in its own month, nev
     const now = new Date();
     // Paid in January of the current fiscal year (the seeded open period); the
     // cron has never run, so it must catch up Jan..currentMonth.
-    await asOwner.mutation(api.expenses.create, {
+    await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(now.getUTCFullYear(), 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -707,7 +707,7 @@ describe("Fix B3 — catch-up recognizes each missed month in its own month, nev
 describe("correctSchedule — a partial correction stays consistent with future recognition", () => {
   test("a write-off that doesn't end the schedule re-bases future months off the remaining balance, not the original curve", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("correct-writeoff");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -722,7 +722,7 @@ describe("correctSchedule — a partial correction stays consistent with future 
     // Write off 300 (minor units: 300_000) of the unrecognized remainder
     // (900_000 - 300_000 = 600_000 left), term unchanged — the schedule
     // keeps recognizing for 9 more months.
-    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
       orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Early cancellation, non-refundable portion",
     });
 
@@ -754,7 +754,7 @@ describe("correctSchedule — a partial correction stays consistent with future 
 
   test("shortening the term doesn't produce a false shortfall once caught up under the new term", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("correct-shorten");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -770,7 +770,7 @@ describe("correctSchedule — a partial correction stays consistent with future 
     // legitimately exist yet — checked at month 4 specifically (not the
     // eventual final month, where both formulas converge to the same total
     // by construction and so wouldn't distinguish the bug).
-    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
       orgId, scheduleId: schedule!._id, newTermMonths: 6, reason: "Contract shortened to 6 months",
     });
     await amortize(t, orgId, schedule!._id, userId, "2026-04");
@@ -783,7 +783,7 @@ describe("correctSchedule — a partial correction stays consistent with future 
 
   test("a term correction that leaves an unrecognized remainder with no future month is rejected", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("correct-strand");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -798,7 +798,7 @@ describe("correctSchedule — a partial correction stays consistent with future 
     // would be zero future months left for amortizeScheduleForMonth to ever
     // recognize it.
     await expect(
-      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
         orgId, scheduleId: schedule!._id, newTermMonths: 3, reason: "Shorten to 3 months",
       })
     ).rejects.toThrow(/no future month/i);
@@ -808,13 +808,13 @@ describe("correctSchedule — a partial correction stays consistent with future 
 describe("Phase 2 — correctSchedule term cap and idempotency", () => {
   test("rejects a corrected term above the 600-month cap (matches expense creation's own cap)", async () => {
     const { t, orgId, asOwner } = await seedDealer("correct-term-cap");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
     const schedule = await scheduleForExpense(t, expenseId);
     await expect(
-      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
         orgId, scheduleId: schedule!._id, newTermMonths: 601, reason: "Extend indefinitely",
       })
     ).rejects.toThrow(/between 1 and 600/i);
@@ -822,7 +822,7 @@ describe("Phase 2 — correctSchedule term cap and idempotency", () => {
 
   test("the same idempotency key replayed twice applies the correction exactly once", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("correct-idempotent");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -858,7 +858,7 @@ describe("Phase 2 — correctSchedule term cap and idempotency", () => {
 
   test("a different idempotency key applies a second, independent correction", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("correct-idempotent-diff");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -882,7 +882,7 @@ describe("Phase 2 — correctSchedule term cap and idempotency", () => {
 describe("Phase 4 — VAT-aware refunds", () => {
   test("a refund with a VAT portion posts a balanced 3-line journal: cash debit gross, Prepaid Expenses credit net, VAT_RECEIVABLE credit tax", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("vat-refund");
-    await asOwner.mutation(api.expenses.create, {
+    await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Prepaid rent w/ VAT", amount: 1200, taxAmount: 200, date: Date.UTC(2026, 0, 1),
       category: "RENT", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 10,
     });
@@ -893,7 +893,7 @@ describe("Phase 4 — VAT-aware refunds", () => {
     const prepaidBefore = await accountNetMinor(t, orgId, "PREPAID_EXPENSES");
     const vatBefore = await accountNetMinor(t, orgId, "VAT_RECEIVABLE");
 
-    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
       orgId, scheduleId: schedule!._id, refundMinor: 300_000, refundTaxMinor: 60_000,
       refundPaymentMethod: "CASH", reference: "CN-1001", reason: "Early cancellation, partial refund",
     });
@@ -911,7 +911,7 @@ describe("Phase 4 — VAT-aware refunds", () => {
 
   test("the VAT refund cap is enforced against the expense's original taxAmount, net of prior VAT refunds", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("vat-refund-cap");
-    await asOwner.mutation(api.expenses.create, {
+    await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Prepaid rent w/ VAT", amount: 1200, taxAmount: 200, date: Date.UTC(2026, 0, 1),
       category: "RENT", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 10,
     });
@@ -919,21 +919,21 @@ describe("Phase 4 — VAT-aware refunds", () => {
     await amortize(t, orgId, schedule!._id, userId, "2026-01");
 
     // First correction uses up 150 of the 200 total input VAT on this expense.
-    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
       orgId, scheduleId: schedule!._id, refundMinor: 100_000, refundTaxMinor: 150_000,
       refundPaymentMethod: "CASH", reason: "First partial refund",
     });
 
     // A second correction asking for more than the remaining 50 is rejected.
     await expect(
-      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
         orgId, scheduleId: schedule!._id, refundMinor: 50_000, refundTaxMinor: 60_000,
         refundPaymentMethod: "CASH", reason: "Second partial refund",
       })
     ).rejects.toThrow(/cannot exceed the remaining refundable input VAT/i);
 
     // Exactly the remaining 50 succeeds.
-    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
       orgId, scheduleId: schedule!._id, refundMinor: 50_000, refundTaxMinor: 50_000,
       refundPaymentMethod: "CASH", reason: "Second partial refund, capped",
     });
@@ -946,7 +946,7 @@ describe("Phase 4 — VAT-aware refunds", () => {
 
   test("a VAT refund without an accompanying net refund is rejected", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("vat-refund-orphan");
-    await asOwner.mutation(api.expenses.create, {
+    await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Prepaid rent w/ VAT", amount: 1200, taxAmount: 200, date: Date.UTC(2026, 0, 1),
       category: "RENT", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 10,
     });
@@ -954,7 +954,7 @@ describe("Phase 4 — VAT-aware refunds", () => {
     await amortize(t, orgId, schedule!._id, userId, "2026-01");
 
     await expect(
-      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
         orgId, scheduleId: schedule!._id, refundTaxMinor: 50_000, reason: "VAT only, no net",
       })
     ).rejects.toThrow(/requires a net refund amount/i);
@@ -962,14 +962,14 @@ describe("Phase 4 — VAT-aware refunds", () => {
 
   test("a refund with no VAT posts the same two-line journal as before (byte-identical zero-tax path)", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("refund-no-vat");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
     const schedule = await scheduleForExpense(t, expenseId);
     await amortize(t, orgId, schedule!._id, userId, "2026-01");
 
-    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
       orgId, scheduleId: schedule!._id, refundMinor: 300_000, refundPaymentMethod: "CASH", reason: "Refund, no VAT involved",
     });
 
@@ -981,7 +981,7 @@ describe("Phase 4 — VAT-aware refunds", () => {
 describe("Phase 6 — maker-checker write-off approval", () => {
   test("a non-owner's write-off creates a PENDING request instead of applying, and the schedule is untouched", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("mc-pending");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -989,7 +989,7 @@ describe("Phase 6 — maker-checker write-off approval", () => {
     await amortize(t, orgId, schedule!._id, userId, "2026-01");
 
     const { asUser: asAccountant } = await addFinanceUser(t, orgId, "mc-pending-accountant");
-    const result = await asAccountant.mutation(api.prepaidExpenses.correctSchedule, {
+    const result = await asAccountant.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
       orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Early cancellation, non-refundable",
     });
     expect(result.status).toBe("PENDING");
@@ -1014,14 +1014,14 @@ describe("Phase 6 — maker-checker write-off approval", () => {
 
   test("the owner's own write-off still applies directly, without a request", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("mc-owner-direct");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
     const schedule = await scheduleForExpense(t, expenseId);
     await amortize(t, orgId, schedule!._id, userId, "2026-01");
 
-    const result = await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+    const result = await asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
       orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Owner-approved write-off",
     });
     expect(result.status).toBe("APPLIED");
@@ -1035,7 +1035,7 @@ describe("Phase 6 — maker-checker write-off approval", () => {
 
   test("the maker cannot approve their own request", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("mc-self-approve");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -1043,7 +1043,7 @@ describe("Phase 6 — maker-checker write-off approval", () => {
     await amortize(t, orgId, schedule!._id, userId, "2026-01");
 
     const { asUser: asAccountant } = await addFinanceUser(t, orgId, "mc-self-approve-accountant");
-    const result = await asAccountant.mutation(api.prepaidExpenses.correctSchedule, {
+    const result = await asAccountant.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
       orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Needs approval",
     });
     const requestId = result.requestId!;
@@ -1058,7 +1058,7 @@ describe("Phase 6 — maker-checker write-off approval", () => {
 
   test("a different finance manager (or the owner) can approve, applying the correction and posting the GL", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("mc-approve");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -1066,7 +1066,7 @@ describe("Phase 6 — maker-checker write-off approval", () => {
     await amortize(t, orgId, schedule!._id, userId, "2026-01");
 
     const { asUser: asAccountant } = await addFinanceUser(t, orgId, "mc-approve-accountant");
-    const result = await asAccountant.mutation(api.prepaidExpenses.correctSchedule, {
+    const result = await asAccountant.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
       orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Early cancellation",
     });
     const requestId = result.requestId!;
@@ -1092,7 +1092,7 @@ describe("Phase 6 — maker-checker write-off approval", () => {
 
   test("a request whose remainder shrank while pending is rejected cleanly at approval time", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("mc-stale");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -1101,7 +1101,7 @@ describe("Phase 6 — maker-checker write-off approval", () => {
     // 1_100_000 unrecognized remainder after January.
 
     const { asUser: asAccountant } = await addFinanceUser(t, orgId, "mc-stale-accountant");
-    const result = await asAccountant.mutation(api.prepaidExpenses.correctSchedule, {
+    const result = await asAccountant.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
       orgId, scheduleId: schedule!._id, writeOffMinor: 1_000_000, reason: "Large write-off",
     });
     const requestId = result.requestId!;
@@ -1109,7 +1109,7 @@ describe("Phase 6 — maker-checker write-off approval", () => {
     // While the write-off request is still pending, the OWNER directly
     // refunds most of the remainder — shrinking what's left below the
     // pending request's own write-off amount.
-    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
       orgId, scheduleId: schedule!._id, refundMinor: 900_000, refundPaymentMethod: "CASH", reason: "Owner refunded most of it directly",
     });
 
@@ -1126,7 +1126,7 @@ describe("Phase 6 — maker-checker write-off approval", () => {
 
   test("rejecting a request applies no schedule change", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("mc-reject");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -1134,7 +1134,7 @@ describe("Phase 6 — maker-checker write-off approval", () => {
     await amortize(t, orgId, schedule!._id, userId, "2026-01");
 
     const { asUser: asAccountant } = await addFinanceUser(t, orgId, "mc-reject-accountant");
-    const result = await asAccountant.mutation(api.prepaidExpenses.correctSchedule, {
+    const result = await asAccountant.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
       orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Needs approval",
     });
     const requestId = result.requestId!;
@@ -1150,7 +1150,7 @@ describe("Phase 6 — maker-checker write-off approval", () => {
 
   test("listPendingCorrectionRequests only returns PENDING requests for the org, enriched with schedule/expense details", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("mc-list");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -1158,7 +1158,7 @@ describe("Phase 6 — maker-checker write-off approval", () => {
     await amortize(t, orgId, schedule!._id, userId, "2026-01");
 
     const { asUser: asAccountant } = await addFinanceUser(t, orgId, "mc-list-accountant");
-    await asAccountant.mutation(api.prepaidExpenses.correctSchedule, {
+    await asAccountant.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
       orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Needs approval",
     });
 
@@ -1209,7 +1209,7 @@ describe("retryAmortizationFailure — doesn't report success when still blocked
 describe("listSchedules — pending/failed totals only count amortization, not corrections", () => {
   test("a pending refund event is not counted as pending amortization", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("pending-filter");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -1235,7 +1235,7 @@ describe("listSchedules — pending/failed totals only count amortization, not c
 
   test("a failed write-off event is counted as a failed correction, not failed amortization", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("failed-correction-filter");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -1261,13 +1261,13 @@ describe("listSchedules — pending/failed totals only count amortization, not c
 describe("Phase 3 — runAmortizationNow isolates per-schedule failures and reports blocked schedules", () => {
   test("one schedule's posting failure doesn't roll back its own progress or block the others", async () => {
     const { t, orgId, asOwner } = await seedDealer("run-now-isolation");
-    const goodExpenseId = await asOwner.mutation(api.expenses.create, {
+    const goodExpenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Good Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
     const goodSchedule = await scheduleForExpense(t, goodExpenseId);
 
-    const badExpenseId = await asOwner.mutation(api.expenses.create, {
+    const badExpenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Broken Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -1331,7 +1331,7 @@ describe("Phase 3 — runAmortizationNow isolates per-schedule failures and repo
 describe("Phase 3 — redriveScheduleEvents", () => {
   test("redrives only the target schedule's own queued/dead-lettered rows, resetting a dead-lettered row's attempts", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("redrive-scoped");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -1339,7 +1339,7 @@ describe("Phase 3 — redriveScheduleEvents", () => {
     await amortize(t, orgId, schedule!._id, userId, "2026-01");
 
     // A different schedule's own stuck row must be left untouched.
-    const otherExpenseId = await asOwner.mutation(api.expenses.create, {
+    const otherExpenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Other Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -1404,7 +1404,7 @@ describe("Phase 3 — redriveScheduleEvents", () => {
 
   test("nothing queued for a clean schedule redrives zero rows", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("redrive-clean");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -1442,7 +1442,7 @@ describe("Phase 3 — redriveScheduleEvents", () => {
    */
   test("[L01] rows a worker is already posting report as IN FLIGHT, never as nothing to do", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("redrive-inflight");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -1515,7 +1515,7 @@ describe("Fix #4 — chart self-heal never duplicates or hijacks a code", () => 
     });
 
     await expect(
-      asOwner.mutation(api.expenses.create, {
+      asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
         orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
         category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
       })
@@ -1542,7 +1542,7 @@ describe("Fix #4 — chart self-heal never duplicates or hijacks a code", () => 
     // to Chart of Accounts > Resolve Conflicts until an owner/finance user
     // resolves the parked request (confirmSystemAccountAdoption).
     await expect(
-      asOwner.mutation(api.expenses.create, {
+      asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
         orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
         category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
       })
@@ -1558,7 +1558,7 @@ describe("Fix #4 — chart self-heal never duplicates or hijacks a code", () => 
     });
 
     // Once resolved, the same posting succeeds and reuses the adopted account.
-    await asOwner.mutation(api.expenses.create, {
+    await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -1679,7 +1679,7 @@ describe("prepaid corrections — refuse to post against an unbooked asset", () 
     const { scheduleId } = await seedQueuedPrepaid(t, orgId);
 
     await expect(
-      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
         orgId, scheduleId, writeOffMinor: 300_000, reason: "Early cancellation",
       })
     ).rejects.toThrow(NOT_POSTED);
@@ -1693,7 +1693,7 @@ describe("prepaid corrections — refuse to post against an unbooked asset", () 
     const { scheduleId } = await seedQueuedPrepaid(t, orgId);
 
     await expect(
-      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
         orgId, scheduleId, refundMinor: 300_000, refundPaymentMethod: "BANK_TRANSFER",
         reason: "Policy cancelled, vendor refunded",
       })
@@ -1709,7 +1709,7 @@ describe("prepaid corrections — refuse to post against an unbooked asset", () 
     const { scheduleId } = await seedQueuedPrepaid(t, orgId);
 
     await expect(
-      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
         orgId, scheduleId, refundMinor: 300_000, refundTaxMinor: 60_000,
         refundPaymentMethod: "BANK_TRANSFER", reason: "Partial refund with VAT",
       })
@@ -1724,7 +1724,7 @@ describe("prepaid corrections — refuse to post against an unbooked asset", () 
     const before = await t.run((ctx) => ctx.db.get(scheduleId));
 
     await expect(
-      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
         orgId, scheduleId, writeOffMinor: 300_000, newTermMonths: 6, reason: "Early cancellation",
       })
     ).rejects.toThrow(NOT_POSTED);
@@ -1745,7 +1745,7 @@ describe("prepaid corrections — refuse to post against an unbooked asset", () 
     const { asUser: asAccountant } = await addFinanceUser(t, orgId, "guard-submit-accountant");
 
     await expect(
-      asAccountant.mutation(api.prepaidExpenses.correctSchedule, {
+      asAccountant.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
         orgId, scheduleId, writeOffMinor: 300_000, reason: "Early cancellation",
       })
     ).rejects.toThrow(NOT_POSTED);
@@ -1760,7 +1760,7 @@ describe("prepaid corrections — refuse to post against an unbooked asset", () 
     // The submission-time check can't be the only one — an approval can land
     // long after the request, and the ledger may have moved underneath it.
     const { t, orgId, userId, asOwner } = await seedDealer("guard-approve");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -1768,7 +1768,7 @@ describe("prepaid corrections — refuse to post against an unbooked asset", () 
     await amortize(t, orgId, schedule!._id, userId, "2026-01");
 
     const { asUser: asAccountant } = await addFinanceUser(t, orgId, "guard-approve-accountant");
-    const submitted = await asAccountant.mutation(api.prepaidExpenses.correctSchedule, {
+    const submitted = await asAccountant.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
       orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Early cancellation",
     });
     expect(submitted.status).toBe("PENDING");
@@ -1803,7 +1803,7 @@ describe("prepaid corrections — refuse to post against an unbooked asset", () 
     const { t, orgId, asOwner } = await seedDealer("guard-term");
     const { scheduleId } = await seedQueuedPrepaid(t, orgId);
 
-    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
       orgId, scheduleId, newTermMonths: 6, reason: "Corrected coverage period",
     });
 
@@ -1814,14 +1814,14 @@ describe("prepaid corrections — refuse to post against an unbooked asset", () 
 
   test("allows the correction once the source expense has actually posted", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("guard-ok");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
     const schedule = await scheduleForExpense(t, expenseId);
     await amortize(t, orgId, schedule!._id, userId, "2026-01");
 
-    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
       orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Early cancellation",
     });
 
@@ -1849,7 +1849,7 @@ describe("prepaid corrections — refuse to post ahead of the original entry", (
   async function seedFutureDatedPrepaid(t: T, orgId: Id<"organizations">, asOwner: Awaited<ReturnType<typeof seedDealer>>["asOwner"]) {
     const clock = vi.spyOn(Date, "now").mockReturnValue(JUL);
     try {
-      const expenseId = await asOwner.mutation(api.expenses.create, {
+      const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
         orgId, title: "Insurance (starts December)", amount: 1200, date: DEC,
         category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
       });
@@ -1885,7 +1885,7 @@ describe("prepaid corrections — refuse to post ahead of the original entry", (
     const clock = vi.spyOn(Date, "now").mockReturnValue(JUL);
     try {
       await expect(
-        asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
           orgId, scheduleId, refundMinor: 300_000, refundPaymentMethod: "BANK_TRANSFER",
           reason: "Vendor refunded early",
         })
@@ -1905,7 +1905,7 @@ describe("prepaid corrections — refuse to post ahead of the original entry", (
     const clock = vi.spyOn(Date, "now").mockReturnValue(JUL);
     try {
       await expect(
-        asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
           orgId, scheduleId, writeOffMinor: 300_000, reason: "Cancelled before it started",
         })
       ).rejects.toThrow(NOT_YET);
@@ -1924,7 +1924,7 @@ describe("prepaid corrections — refuse to post ahead of the original entry", (
 
     const clock = vi.spyOn(Date, "now").mockReturnValue(JUL);
     try {
-      await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      await asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
         orgId, scheduleId, newTermMonths: 6, reason: "Corrected coverage period",
       });
     } finally {
@@ -1942,7 +1942,7 @@ describe("prepaid corrections — refuse to post ahead of the original entry", (
     // Same correction, now booked after December rather than before it.
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 11, 20));
     try {
-      await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      await asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
         orgId, scheduleId, refundMinor: 300_000, refundPaymentMethod: "BANK_TRANSFER",
         reason: "Vendor refunded",
       });
@@ -1962,7 +1962,7 @@ describe("prepaid corrections — refuse to post ahead of the original entry", (
     // schedule is re-pointed at a future-dated expense before approval. The
     // approval must vet the ordering itself rather than trust the request.
     const { t, orgId, userId, asOwner } = await seedDealer("date-approve");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -1970,7 +1970,7 @@ describe("prepaid corrections — refuse to post ahead of the original entry", (
     await amortize(t, orgId, schedule!._id, userId, "2026-01");
 
     const { asUser: asAccountant } = await addFinanceUser(t, orgId, "date-approve-accountant");
-    const submitted = await asAccountant.mutation(api.prepaidExpenses.correctSchedule, {
+    const submitted = await asAccountant.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
       orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Early cancellation",
     });
     expect(submitted.status).toBe("PENDING");
@@ -2012,7 +2012,7 @@ describe("prepaid corrections — refuse to post ahead of the original entry", (
 describe("prepaid corrections — the accountant can date the correction", () => {
   async function seedPostedPrepaid(tag: string, expenseDate = Date.UTC(2026, 0, 1)) {
     const ctx = await seedDealer(tag);
-    const expenseId = await ctx.asOwner.mutation(api.expenses.create, {
+    const expenseId = await ctx.asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId: ctx.orgId, title: "Insurance", amount: 1200, date: expenseDate,
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -2348,7 +2348,7 @@ describe("prepaid corrections — the outbox refuses to post them against an unb
   test("a healthy queued correction still drains normally", async () => {
     // The guard must not become a blanket refusal to post corrections.
     const { t, orgId, userId, asOwner } = await seedDealer("drain-healthy");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -2476,7 +2476,7 @@ describe("prepaid corrections — the outbox refuses to post them against an unb
 describe("prepaid corrections — non-finite money inputs", () => {
   test("a NaN refund is rejected instead of corrupting the schedule", async () => {
     const { t, orgId, asOwner } = await seedDealer("nan-refund");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
@@ -2487,7 +2487,7 @@ describe("prepaid corrections — non-finite money inputs", () => {
     // So NaN sailed through validation and was patched straight onto
     // totalMinor, permanently poisoning the schedule's arithmetic.
     await expect(
-      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
         orgId,
         scheduleId: schedule!._id,
         refundMinor: NaN,
@@ -2503,14 +2503,14 @@ describe("prepaid corrections — non-finite money inputs", () => {
 
   test("a NaN write-off cannot slip past the maker-checker approval gate", async () => {
     const { t, orgId, asOwner } = await seedDealer("nan-writeoff");
-    const expenseId = await asOwner.mutation(api.expenses.create, {
+    const expenseId = await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
     const schedule = await scheduleForExpense(t, expenseId);
 
     await expect(
-      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
         orgId,
         scheduleId: schedule!._id,
         writeOffMinor: NaN,

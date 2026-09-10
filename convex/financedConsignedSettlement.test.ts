@@ -216,7 +216,7 @@ async function runDeal(
 
   if (opts.deposit) {
     const taker = opts.depositTakenBy === "approver" ? s.asApprover : s.asUser;
-    await taker.mutation(api.deposits.create, {
+    await taker.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       quoteId,
       amount: opts.deposit,
@@ -253,7 +253,7 @@ async function runDeal(
   }
 
   if (opts.depositAfterRoute) {
-    await s.asUser.mutation(api.deposits.create, {
+    await s.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       quoteId,
       amount: opts.depositAfterRoute,
@@ -330,7 +330,7 @@ async function runDeal(
       legalInvoiceDate: Date.now(),
       issuedTo: "FINANCE_COMPANY",
     });
-    const feeId = await s.asUser.mutation(api.financeDealCosts.recordDealFee, {
+    const feeId = await s.asUser.mutation(api.financeDealCosts.recordDealFee, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       feeType: "OTHER_CLOSING_EXPENSE",
@@ -382,7 +382,7 @@ async function runDeal(
     });
   }
 
-  const saleId = await s.asUser.mutation(api.applications.finalizeDeal, {
+  const saleId = await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
     orgId: s.orgId,
     applicationId,
     ...(opts.depositResolution ? { depositResolution: opts.depositResolution } : {}),
@@ -560,7 +560,7 @@ describe("confirming the money, on each route", () => {
     // It books DR Bank / CR AR-Finance Companies. Here there is no bank receipt
     // and no receivable, so it would create cash out of nothing.
     await expect(
-      s.asUser.mutation(api.applications.confirmDisbursement, {
+      s.asUser.mutation(api.applications.confirmDisbursement, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId, applicationId, disbursedAmountMinor: VEHICLE_PRICE * SCALE,
       })
     ).rejects.toThrow(/directly with the supplier/i);
@@ -571,7 +571,7 @@ describe("confirming the money, on each route", () => {
     const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER" });
     const before = await ledgerBySystemKey(s);
 
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: VEHICLE_PRICE * SCALE,
@@ -598,7 +598,7 @@ describe("confirming the money, on each route", () => {
     const s = await seedDealership("cfm3");
     const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER" });
 
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, applicationId, disbursedAmountMinor: VEHICLE_PRICE * SCALE,
     });
 
@@ -611,11 +611,21 @@ describe("confirming the money, on each route", () => {
     const s = await seedDealership("cfm4");
     const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER" });
 
-    const once = { orgId: s.orgId, applicationId, disbursedAmountMinor: VEHICLE_PRICE * SCALE };
+    const once = {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: VEHICLE_PRICE * SCALE,
+      idempotencyKey: "cfm4-advice-first",
+    };
     await s.asUser.mutation(api.applications.confirmSupplierDisbursement, once);
     await expect(
+      // A DIFFERENT identity on purpose. The refusal under test is the business
+      // rule "an advice already exists", not idempotency replay — reusing the
+      // first key here would make this assertion pass for the wrong reason.
       s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
-        ...once, disbursedAmountMinor: 1 * SCALE,
+        ...once,
+        idempotencyKey: "cfm4-advice-second",
+        disbursedAmountMinor: 1 * SCALE,
       })
     ).rejects.toThrow(/already been recorded/i);
   });
@@ -625,7 +635,7 @@ describe("confirming the money, on each route", () => {
     const { applicationId } = await runDeal(s, { route: "THROUGH_DEALERSHIP" });
 
     await expect(
-      s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId, applicationId, disbursedAmountMinor: VEHICLE_PRICE * SCALE,
       })
     ).rejects.toThrow(/through the dealership/i);
@@ -659,7 +669,7 @@ describe("THROUGH_DEALERSHIP is unchanged by any of this", () => {
     // produce opposite balance sheets from the same sale, and simply forgetting
     // would post one of them silently. So the question is asked once, here.
     await expect(
-      s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId })
+      s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId })
     ).rejects.toThrow(/settlement route/i);
   });
 
@@ -805,7 +815,7 @@ describe("cancelling after the finance company has paid the supplier", () => {
   test("is refused, the way it is once the dealership itself has been paid", async () => {
     const s = await seedDealership("canc2");
     const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER" });
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, applicationId, disbursedAmountMinor: VEHICLE_PRICE * SCALE,
     });
 
@@ -815,7 +825,7 @@ describe("cancelling after the finance company has paid the supplier", () => {
     // paid-for, delivered car to sellable inventory and write off a margin the
     // dealership is still owed.
     await expect(
-      s.asUser.mutation(api.applications.cancelApplication, {
+      s.asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId, applicationId, reason: "Customer withdrew",
       })
     ).rejects.toThrow(/already paid/i);
@@ -831,7 +841,7 @@ describe("cancelling by the other door, after the supplier was paid", () => {
     const { applicationId, saleId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER" });
     // `runDeal` only returns a null `saleId` when called with `finalize: false`.
     if (!saleId) throw new Error("runDeal was expected to finalize a sale");
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, applicationId, disbursedAmountMinor: VEHICLE_PRICE * SCALE,
     });
 
@@ -873,7 +883,7 @@ describe("the settlement advice is recorded as stated", () => {
     // wrong on any deal with one. Here the principal is 17,000 and the advice
     // is 17,450; the advice tracks the APPROVAL, not the principal.
     const advised = 17_450 * SCALE;
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, applicationId, disbursedAmountMinor: advised, reference: "CHQ-771",
     });
 
@@ -895,7 +905,7 @@ describe("the settlement advice is recorded as stated", () => {
     // record comes from Date.now(). The documented purpose is backdating an
     // advice that already arrived, so a future date is not a valid one.
     await expect(
-      s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId, applicationId,
         disbursedAmountMinor: VEHICLE_PRICE * SCALE,
         disbursedAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
@@ -909,7 +919,7 @@ describe("cancelling a direct-settled financed deal", () => {
     const s = await seedDealership("can1");
     const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER" });
 
-    await s.asUser.mutation(api.applications.cancelApplication, {
+    await s.asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, applicationId, reason: "Customer withdrew",
     });
 
@@ -959,7 +969,7 @@ describe("an external financier the deal does not name with a companyId", () => 
 
     // And the settlement advice can be recorded against the named provider,
     // which `companyId`-gating made permanently impossible for this mode.
-    const result = await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    const result = await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, applicationId, disbursedAmountMinor: VEHICLE_PRICE * SCALE,
     });
     expect(result.disbursedAmountMinor).toBe(VEHICLE_PRICE * SCALE);
@@ -1040,7 +1050,7 @@ describe("a legacy deal that has a finance company but no recorded mode", () => 
     expect(posted[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES] ?? 0).toBe(0);
     expect(posted[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS] ?? 0).toBeGreaterThan(0);
 
-    const result = await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    const result = await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, applicationId, disbursedAmountMinor: VEHICLE_PRICE * SCALE,
     });
     expect(result.disbursedAmountMinor).toBe(VEHICLE_PRICE * SCALE);
@@ -1242,7 +1252,7 @@ describe("the deal cockpit query", () => {
       });
     });
     // What the finance company actually paid the supplier, off the advice.
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: VEHICLE_PRICE * SCALE,
@@ -1336,8 +1346,8 @@ describe("the deal cockpit query", () => {
       notes: "Approved below the quotation.",
     });
 
-    await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: APPROVED * SCALE,
@@ -1469,7 +1479,7 @@ describe("the deal cockpit, under the conditions that broke it", () => {
     });
     // The headline now derives from the RECORDED advice rather than from the
     // approved amount, so the advice has to exist for there to be a figure.
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: VEHICLE_PRICE * SCALE,
@@ -1480,7 +1490,7 @@ describe("the deal cockpit, under the conditions that broke it", () => {
     expect(profitBefore.available).toBe(true);
 
     const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
-    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       receivableId: claim._id,
       amount: MARGIN / 2,
@@ -1507,7 +1517,7 @@ describe("the deal cockpit, under the conditions that broke it", () => {
     });
     // The headline now derives from the RECORDED advice rather than from the
     // approved amount, so the advice has to exist for there to be a figure.
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: VEHICLE_PRICE * SCALE,
@@ -1672,7 +1682,7 @@ describe("the deal cockpit, under the conditions that broke it", () => {
         settlementStatus: "FULLY_SETTLED",
       });
     });
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: VEHICLE_PRICE * SCALE,
@@ -1705,13 +1715,13 @@ describe("a direct-settled deal that is genuinely finished", () => {
     });
 
     // The financier's advice, then the supplier repaying the margin in full.
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: VEHICLE_PRICE * SCALE,
     });
     const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
-    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       receivableId: claim._id,
       amount: MARGIN,
@@ -1789,7 +1799,7 @@ describe("proving a deal is settled, rather than assuming it", () => {
     const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
 
     // Half of what the financier owes the supplier.
-    const result = await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    const result = await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: (VEHICLE_PRICE / 2) * SCALE,
@@ -1831,7 +1841,7 @@ describe("proving a deal is settled, rather than assuming it", () => {
       await ctx.db.patch(applicationId, { dealerContributionMinor: 0 });
     });
 
-    const result = await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    const result = await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: Math.floor((MARGIN / 2) * SCALE),
@@ -1890,7 +1900,7 @@ describe("proving a deal is settled, rather than assuming it", () => {
       dealerContributionMinor: 0,
       });
     });
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: VEHICLE_PRICE * SCALE,
@@ -1916,13 +1926,13 @@ describe("proving a deal is settled, rather than assuming it", () => {
       dealerContributionMinor: 0,
       });
     });
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: VEHICLE_PRICE * SCALE,
     });
     const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
-    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       receivableId: claim._id,
       amount: MARGIN,
@@ -1954,7 +1964,7 @@ describe("what the supplier-receipt mutation accepts", () => {
   test("a receipt dated in the future is refused", async () => {
     const { s, claim } = await directClaim("guardFuture");
     await expect(
-      s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+      s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId,
         receivableId: claim._id,
         amount: 1_000,
@@ -1966,7 +1976,7 @@ describe("what the supplier-receipt mutation accepts", () => {
   test("a receipt date that is not a real instant is refused", async () => {
     const { s, claim } = await directClaim("guardNaN");
     await expect(
-      s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+      s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId,
         receivableId: claim._id,
         amount: 1_000,
@@ -1984,7 +1994,7 @@ describe("what the supplier-receipt mutation accepts", () => {
   test("an amount finer than the currency can represent is refused", async () => {
     const { s, claim } = await directClaim("guardFraction");
     await expect(
-      s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+      s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId,
         receivableId: claim._id,
         amount: 0.0005,
@@ -2094,7 +2104,7 @@ describe("the party rows and the stage rail agree", () => {
       dealerContributionMinor: 0,
       });
     });
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: VEHICLE_PRICE * SCALE,
@@ -2159,7 +2169,7 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
       dealerContributionMinor: 0,
       });
     });
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: VEHICLE_PRICE * SCALE,
@@ -2187,7 +2197,7 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
     });
 
     for (let i = 0; i < 3; i++) {
-      await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+      await s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId,
         receivableId: claim._id,
         amount: 1.48,
@@ -2271,7 +2281,7 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
   test("editing the vehicle cost after the sale does not disturb a settled deal", async () => {
     const { s, applicationId } = await directDeal("costEditedAfter");
     const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
-    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       receivableId: claim._id,
       amount: MARGIN,
@@ -2321,7 +2331,7 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
   test("the headline nets the dealership contribution, and shows it as its own line", async () => {
     const { s, applicationId } = await directDeal("h7Contribution");
     const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
-    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       receivableId: claim._id,
       amount: MARGIN,
@@ -2353,7 +2363,7 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
   test("an unrecorded contribution withholds the headline rather than assuming zero", async () => {
     const { s, applicationId } = await directDeal("h7Missing");
     const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
-    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       receivableId: claim._id,
       amount: MARGIN,
@@ -2421,7 +2431,7 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
         dealerContributionMinor: 0,
       });
     });
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId: first.applicationId,
       disbursedAmountMinor: VEHICLE_PRICE * SCALE,
@@ -2448,7 +2458,7 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
         dealerContributionMinor: 0,
       });
     });
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId: second.applicationId,
       disbursedAmountMinor: VEHICLE_PRICE * SCALE,
@@ -2537,7 +2547,7 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
       // The premise: completion recorded a zero rather than recording nothing.
       expect(sale.consignedMarginMinor).toBe(0);
     });
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: VEHICLE_PRICE * SCALE,
@@ -2617,7 +2627,7 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
     });
 
     for (let i = 0; i < 3; i++) {
-      await s.asApprover.mutation(api.sourcingPayables.recordPartialPayment, {
+      await s.asApprover.mutation(api.sourcingPayables.recordPartialPayment, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId,
         payableId: payable._id,
         amount: 1.48,
@@ -2655,7 +2665,7 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
     );
 
     await expect(
-      s.asApprover.mutation(api.sourcingPayables.recordPartialPayment, {
+      s.asApprover.mutation(api.sourcingPayables.recordPartialPayment, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId,
         payableId: payable._id,
         amount: 0.0005,
@@ -2862,7 +2872,7 @@ describe("the supplier is never made debtor for money that did not reach him", (
 
   test("a supplier paid exactly his entitlement owes nothing, and no claim is opened", async () => {
     const { s, applicationId } = await directDealApprovedAt("s30Exact", SUPPLIER_ENTITLEMENT);
-    await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
+    await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
 
     // He received 15,000 and was owed 15,000. A claim for anything at all would
     // be a debt he does not have — and a zero-amount claim is worse than none,
@@ -2878,7 +2888,7 @@ describe("the supplier is never made debtor for money that did not reach him", (
   test("a supplier paid 3,000 above his entitlement owes exactly 3,000, not the 5,000 dealer margin", async () => {
     const APPROVED = 18_000;
     const { s, applicationId } = await directDealApprovedAt("s30Excess", APPROVED);
-    await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
+    await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
 
     // The excess that genuinely reached him.
     expect(await claimDueOf(s)).toBe(APPROVED - SUPPLIER_ENTITLEMENT);
@@ -2910,7 +2920,7 @@ describe("the supplier is never made debtor for money that did not reach him", (
         customerGapInstallmentToDealerMinor: 800 * SCALE,
       });
     });
-    await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
+    await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
 
     // Unmoved by the customer's payment. This is the case that shows the old
     // model was not merely off by a rounding: it billed the SUPPLIER for money
@@ -2937,7 +2947,7 @@ describe("the supplier is never made debtor for money that did not reach him", (
   test("a dealership contribution moves its own profit, never the supplier's debt", async () => {
     const APPROVED = 18_000;
     const { s, applicationId } = await directDealApprovedAt("s30Contribution", APPROVED);
-    await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
+    await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
 
     const before = await claimDueOf(s);
 
@@ -2967,7 +2977,7 @@ describe("the supplier is never made debtor for money that did not reach him", (
   test("a receipt above the corrected claim is refused — the old claim was 2,000 larger", async () => {
     const APPROVED = 18_000;
     const { s, applicationId } = await directDealApprovedAt("s30Overpay", APPROVED);
-    await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
+    await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
 
     const claim = (await supplierClaimsOf(s)).find((r) => r.status !== "CANCELLED")!;
 
@@ -2975,7 +2985,7 @@ describe("the supplier is never made debtor for money that did not reach him", (
     // an operator working from the previous screen would have tried to collect.
     // It must be refused, not quietly absorbed as an overpayment.
     await expect(
-      s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+      s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId,
         receivableId: claim._id,
         amount: VEHICLE_PRICE - SUPPLIER_ENTITLEMENT,
@@ -2983,7 +2993,7 @@ describe("the supplier is never made debtor for money that did not reach him", (
     ).rejects.toThrow();
 
     // The exact claim settles it in full.
-    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       receivableId: claim._id,
       amount: APPROVED - SUPPLIER_ENTITLEMENT,
@@ -2995,10 +3005,10 @@ describe("the supplier is never made debtor for money that did not reach him", (
   test("a partial receipt leaves the remainder outstanding, against the corrected claim", async () => {
     const APPROVED = 18_000;
     const { s, applicationId } = await directDealApprovedAt("s30Partial", APPROVED);
-    await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
+    await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
 
     const claim = (await supplierClaimsOf(s)).find((r) => r.status !== "CANCELLED")!;
-    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       receivableId: claim._id,
       amount: 1_000,
@@ -3014,7 +3024,7 @@ describe("the supplier is never made debtor for money that did not reach him", (
   test("cancelling the deal reverses the corrected claim in both the GL and the subledger", async () => {
     const APPROVED = 18_000;
     const { s, applicationId } = await directDealApprovedAt("s30Cancel", APPROVED);
-    const saleId = await s.asUser.mutation(api.applications.finalizeDeal, {
+    const saleId = await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
     });
@@ -3045,8 +3055,8 @@ describe("the supplier is never made debtor for money that did not reach him", (
   test("the cockpit reports the same economic state the subledger and the GL hold", async () => {
     const APPROVED = 18_000;
     const { s, applicationId } = await directDealApprovedAt("s30Reconcile", APPROVED);
-    await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: APPROVED * SCALE,
@@ -3137,7 +3147,7 @@ describe("the supplier is never made debtor for money that did not reach him", (
     // `completeSale` measured the supplier's debt against `quote.vehiclePrice`
     // and opened a claim for money nobody had paid him.
     await expect(
-      s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId })
+      s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId })
     ).rejects.toThrow(/approved purchase amount is not recorded/i);
 
     expect(await claimDueOf(s)).toBeUndefined();
@@ -3170,7 +3180,7 @@ describe("cancelling a deal whose financing evidence cannot be read", () => {
       route: "DIRECT_TO_SUPPLIER",
       finalize: true,
     });
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: VEHICLE_PRICE * SCALE,
@@ -3328,7 +3338,7 @@ describe("the claim cannot be reopened through a second door", () => {
     // there is no exchange rate in the model, and inventing one would be worse
     // than stopping.
     await expect(
-      s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId })
+      s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId })
     ).rejects.toThrow(/currency/i);
 
     // Nothing was written on the way to the refusal.
@@ -3345,7 +3355,7 @@ describe("the claim cannot be reopened through a second door", () => {
     // 3,000, which is the exact defect SCRUM-30 exists to close, reached through
     // a writer the first round's tests never exercised.
     await expect(
-      s.asUser.mutation(api.sales.create, {
+      s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId,
         vehicleId: s.vehicleId,
         customerId: s.customerId,
@@ -3368,7 +3378,7 @@ describe("the claim cannot be reopened through a second door", () => {
     // the supplier the sale price, and PR #204 shipped it deliberately.
     const s = await seedDealership("s30CashWriter");
 
-    await s.asUser.mutation(api.sales.create, {
+    await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       vehicleId: s.vehicleId,
       customerId: s.customerId,
@@ -3440,7 +3450,7 @@ describe("automatic commission is based on recognized earnings, not the commerci
       basis: "MANUAL",
       notes: `Approved at ${approvedAmount}.`,
     });
-    const saleId = await s.asUser.mutation(api.applications.finalizeDeal, {
+    const saleId = await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
     });
@@ -3558,7 +3568,7 @@ describe("the sales reports reconcile to the ledger on a financed direct deal", 
       basis: "MANUAL",
       notes: `Approved at ${approvedAmount}.`,
     });
-    await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
+    await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
     return s;
   }
 
@@ -3680,7 +3690,7 @@ describe("financed direct evidence that has gone missing fails closed", () => {
       basis: "MANUAL",
       notes: `Approved at ${approvedAmount}.`,
     });
-    const saleId = (await s.asUser.mutation(api.applications.finalizeDeal, {
+    const saleId = (await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
     })) as never;
@@ -4152,7 +4162,7 @@ describe("financed direct evidence that has gone missing fails closed", () => {
 
     // Straight through sales.create rather than runDeal, which only builds
     // financed deals — and this is the one shape that must NOT be financed.
-    const saleId = await s.asUser.mutation(api.sales.create, {
+    const saleId = await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       vehicleId: s.vehicleId,
       customerId: s.customerId,
@@ -4296,7 +4306,7 @@ describe("a settlement advice that contradicts the approval", () => {
       basis: "MANUAL",
       notes: `Approved at ${approvedAmount}.`,
     });
-    const saleId = await s.asUser.mutation(api.applications.finalizeDeal, {
+    const saleId = await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
     });
@@ -4324,7 +4334,7 @@ describe("a settlement advice that contradicts the approval", () => {
     // 17,995 — the approved amount less a five-dinar wire fee. A real advice,
     // and one the deal can never be made to agree with, because the approval it
     // disagrees with is frozen.
-    const result = await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    const result = await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 17_995 * SCALE,
@@ -4369,7 +4379,7 @@ describe("a settlement advice that contradicts the approval", () => {
    */
   test("the reconciliation flag survives the finance gate; the evidence behind it does not", async () => {
     const { s, applicationId } = await paidDeal("s30ReconGate", 18_000);
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 17_995 * SCALE,
@@ -4445,7 +4455,7 @@ describe("a settlement advice that contradicts the approval", () => {
       return userId;
     });
 
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 17_995 * SCALE,
@@ -4534,7 +4544,7 @@ describe("a settlement advice that contradicts the approval", () => {
 
     // Disagrees with the approval, so on a LIVE deal this is precisely the case
     // that raises the reconciliation notice.
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 17_995 * SCALE,
@@ -4578,7 +4588,7 @@ describe("a settlement advice that contradicts the approval", () => {
 
   test("the application query withholds settlement evidence from a caller who cannot see money", async () => {
     const { s, applicationId } = await paidDeal("s30GetGate", 18_000);
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 17_995 * SCALE,
@@ -4654,7 +4664,7 @@ describe("a settlement advice that contradicts the approval", () => {
    */
   test("a role that may confirm a disbursement can still see what it needs to confirm it", async () => {
     const { s, applicationId } = await paidDeal("s30ConfirmRole", 18_000);
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 18_000 * SCALE,
@@ -4703,7 +4713,7 @@ describe("a settlement advice that contradicts the approval", () => {
    */
   test("the economics query answers the same question the same way", async () => {
     const { s, applicationId } = await paidDeal("s30EconGate", 18_000);
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 17_995 * SCALE,
@@ -4748,7 +4758,7 @@ describe("a settlement advice that contradicts the approval", () => {
    */
   test("the applications list redacts what the detail query redacts", async () => {
     const { s, applicationId } = await paidDeal("s30ListGate", 18_000);
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 17_995 * SCALE,
@@ -4853,8 +4863,8 @@ describe("a settlement advice that contradicts the approval", () => {
         }
       },
     });
-    await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: DISBURSED * SCALE,
@@ -5101,7 +5111,7 @@ describe("a settlement advice that contradicts the approval", () => {
    */
   test("a sales-only caller learns THAT the supplier was paid, not when or by whom", async () => {
     const { s, applicationId } = await paidDeal("s30WhetherOnly", 18_000);
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 18_000 * SCALE,
@@ -5165,7 +5175,7 @@ describe("a settlement advice that contradicts the approval", () => {
    */
   test("an advice recorded before the status field existed still reads as paid", async () => {
     const { s, applicationId } = await paidDeal("s30LegacyStatus", 18_000);
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 18_000 * SCALE,
@@ -5198,7 +5208,7 @@ describe("a settlement advice that contradicts the approval", () => {
 
   test("and the same query gives a finance-permitted caller the evidence in full", async () => {
     const { s, applicationId } = await paidDeal("s30GetGateAllowed", 18_000);
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 17_995 * SCALE,
@@ -5224,7 +5234,7 @@ describe("a settlement advice that contradicts the approval", () => {
 
   test("and a role holding view:finance receives the evidence in full", async () => {
     const { s, applicationId } = await paidDeal("s30ReconGateAllowed", 18_000);
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 17_995 * SCALE,
@@ -5244,7 +5254,7 @@ describe("a settlement advice that contradicts the approval", () => {
 
   test("the supplier claim is untouched by the disagreement", async () => {
     const { s, applicationId } = await paidDeal("s30ReconClaim", 18_000);
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 17_995 * SCALE,
@@ -5280,7 +5290,7 @@ describe("a settlement advice that contradicts the approval", () => {
 
     // The cheque was written for the quotation, not the approval. Nothing
     // refuses it — it is evidence about a payment somebody made.
-    const result = await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    const result = await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 20_000 * SCALE,
@@ -5290,7 +5300,7 @@ describe("a settlement advice that contradicts the approval", () => {
     // Collect the dealership's 3,000 claim, so the ONLY thing left standing
     // between this deal and "settled" is the contradicted advice.
     const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
-    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       receivableId: claim._id,
       amount: 3_000,
@@ -5312,19 +5322,19 @@ describe("a settlement advice that contradicts the approval", () => {
    */
   test("and correcting the advice back to the approval releases it", async () => {
     const { s, applicationId } = await paidDeal("s30ReconOverFixed", 18_000);
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 20_000 * SCALE,
     });
     const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
-    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       receivableId: claim._id,
       amount: 3_000,
     });
 
-    await s.asUser.mutation(api.applications.amendSupplierDisbursementAdvice, {
+    await s.asUser.mutation(api.applications.amendSupplierDisbursementAdvice, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 18_000 * SCALE,
@@ -5337,7 +5347,7 @@ describe("a settlement advice that contradicts the approval", () => {
 
   test("locks cancellation, which the refusal had left wide open", async () => {
     const { s, applicationId, saleId } = await paidDeal("s30ReconCancel", 18_000);
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 17_995 * SCALE,
@@ -5369,7 +5379,7 @@ describe("a settlement advice that contradicts the approval", () => {
     // succeeded, only that a deal the company has paid on cannot be cancelled.
     const { s, applicationId, saleId } = await paidDeal("s30ReconHole", 18_000);
     try {
-      await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId,
         applicationId,
         disbursedAmountMinor: 17_995 * SCALE,
@@ -5400,7 +5410,7 @@ describe("a settlement advice that contradicts the approval", () => {
     // by a route nobody was looking at.
     const { s, applicationId } = await paidDeal("s30ReconCancelApp", 18_000);
     try {
-      await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId,
         applicationId,
         disbursedAmountMinor: 17_995 * SCALE,
@@ -5410,7 +5420,7 @@ describe("a settlement advice that contradicts the approval", () => {
     }
 
     await expect(
-      s.asUser.mutation(api.applications.cancelApplication, {
+      s.asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId,
         applicationId,
         reason: "Trying to unwind a deal the company has already funded.",
@@ -5427,7 +5437,7 @@ describe("a settlement advice that contradicts the approval", () => {
 
   test("an agreeing advice is confirmed outright and still locks cancellation", async () => {
     const { s, applicationId, saleId } = await paidDeal("s30ReconExact", 18_000);
-    const result = await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    const result = await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 18_000 * SCALE,
@@ -5450,7 +5460,7 @@ describe("a settlement advice that contradicts the approval", () => {
 
   test("a mistyped advice can be corrected, and the correction clears the flag", async () => {
     const { s, applicationId } = await paidDeal("s30ReconAmend", 18_000);
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 17_995 * SCALE,
@@ -5460,7 +5470,7 @@ describe("a settlement advice that contradicts the approval", () => {
     // The operator transposed two digits; the company really did pay the
     // approved amount. Correcting the TRANSCRIPTION is legitimate and is the
     // only restatement this deal allows.
-    const amended = await s.asUser.mutation(api.applications.amendSupplierDisbursementAdvice, {
+    const amended = await s.asUser.mutation(api.applications.amendSupplierDisbursementAdvice, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 18_000 * SCALE,
@@ -5479,7 +5489,7 @@ describe("a settlement advice that contradicts the approval", () => {
 
   test("a correction that still disagrees stays flagged rather than being accepted", async () => {
     const { s, applicationId } = await paidDeal("s30ReconAmendStill", 18_000);
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 17_995 * SCALE,
@@ -5487,7 +5497,7 @@ describe("a settlement advice that contradicts the approval", () => {
 
     // The reconciliation state is DERIVED from the evidence every time, so an
     // amendment is not a way to declare the discrepancy resolved.
-    const amended = await s.asUser.mutation(api.applications.amendSupplierDisbursementAdvice, {
+    const amended = await s.asUser.mutation(api.applications.amendSupplierDisbursementAdvice, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 17_990 * SCALE,
@@ -5504,7 +5514,7 @@ describe("a settlement advice that contradicts the approval", () => {
 
     // Nothing recorded yet: there is no transcription to correct.
     await expect(
-      s.asUser.mutation(api.applications.amendSupplierDisbursementAdvice, {
+      s.asUser.mutation(api.applications.amendSupplierDisbursementAdvice, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId,
         applicationId,
         disbursedAmountMinor: 18_000 * SCALE,
@@ -5512,7 +5522,7 @@ describe("a settlement advice that contradicts the approval", () => {
       })
     ).rejects.toThrow(/no recorded settlement advice/i);
 
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 17_995 * SCALE,
@@ -5521,7 +5531,7 @@ describe("a settlement advice that contradicts the approval", () => {
     // An amendment with no stated cause is indistinguishable from someone
     // making the discrepancy go away.
     await expect(
-      s.asUser.mutation(api.applications.amendSupplierDisbursementAdvice, {
+      s.asUser.mutation(api.applications.amendSupplierDisbursementAdvice, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId,
         applicationId,
         disbursedAmountMinor: 18_000 * SCALE,
@@ -5577,10 +5587,10 @@ describe("amending one field of a settlement advice", () => {
       basis: "MANUAL",
       notes: "Approved at 18,000.",
     });
-    await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
+    await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
     // The advice as it actually arrived: wrong amount, but a real cheque number
     // and a real date, both of which are the evidence.
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 17_995 * SCALE,
@@ -5602,7 +5612,7 @@ describe("amending one field of a settlement advice", () => {
     const { s, applicationId } = await advisedDeal("s30Preserve");
     const before = await appOf(s, applicationId);
 
-    await s.asUser.mutation(api.applications.amendSupplierDisbursementAdvice, {
+    await s.asUser.mutation(api.applications.amendSupplierDisbursementAdvice, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 18_000 * SCALE,
@@ -5633,7 +5643,7 @@ describe("amending one field of a settlement advice", () => {
     const { s, applicationId } = await advisedDeal("s30PreserveControl");
     const correctedAt = Date.UTC(2026, 7, 6);
 
-    await s.asUser.mutation(api.applications.amendSupplierDisbursementAdvice, {
+    await s.asUser.mutation(api.applications.amendSupplierDisbursementAdvice, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 18_000 * SCALE,
@@ -5698,7 +5708,7 @@ describe("one recognized-earning rule, asked identically by every surface", () =
       basis: "MANUAL",
       notes: "Approved at 18,000.",
     });
-    const saleId = (await s.asUser.mutation(api.applications.finalizeDeal, {
+    const saleId = (await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
     })) as never;
@@ -5745,7 +5755,7 @@ describe("one recognized-earning rule, asked identically by every surface", () =
       financingType: "FINANCED",
     } as never);
 
-    await s.asUser.mutation(api.sales.completeDraft, { orgId: s.orgId, saleId } as never);
+    await s.asUser.mutation(api.sales.completeDraft, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, saleId } as never);
 
     // The ranking tile is drawn only for a role that may see people at all, and
     // this file's default role does not carry it — without this the tile is
@@ -5956,14 +5966,14 @@ describe("one recognized-earning rule, asked identically by every surface", () =
   test("clearing a wrongly transcribed reference removes it, and the audit says what actually happened", async () => {
     const { s, applicationId } = await paidDealForClearing("s30ClearRef");
 
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 18_000 * SCALE,
       reference: "WRONG-CHEQUE-9",
     });
 
-    await s.asUser.mutation(api.applications.amendSupplierDisbursementAdvice, {
+    await s.asUser.mutation(api.applications.amendSupplierDisbursementAdvice, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       disbursedAmountMinor: 18_000 * SCALE,
@@ -6013,7 +6023,7 @@ describe("one recognized-earning rule, asked identically by every surface", () =
       basis: "MANUAL",
       notes: "Approved at 18,000.",
     });
-    await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
+    await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
     return { s, applicationId };
   }
 });
@@ -6274,7 +6284,7 @@ describe("the cockpit's workflow projections", () => {
     // rather than assumed from reading it, because "the screen and the server
     // agree about this deal" is the only thing this projection is for.
     await expect(
-      s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId })
+      s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId })
     ).rejects.toThrow(/settlement route/i);
 
     await s.asUser.mutation(api.applications.setSupplierSettlementRoute, {
@@ -6698,7 +6708,7 @@ describe("the closing matrix c16216 requires", () => {
       (VEHICLE_PRICE - 3_000) * SCALE
     );
 
-    await s.asUser.mutation(api.applications.cancelApplication, {
+    await s.asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       reason: "Customer withdrew after handover",
@@ -6786,7 +6796,7 @@ describe("the closing matrix c16216 requires", () => {
 
     const before = await census();
 
-    const again = await s.asUser.mutation(api.applications.finalizeDeal, {
+    const again = await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
     });
@@ -7078,7 +7088,7 @@ describe("a reversal reads back the identity it was recorded under (Sonnet MAX)"
       })
     );
 
-    await s.asUser.mutation(api.applications.cancelApplication, {
+    await s.asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       reason: "Customer withdrew",
@@ -7154,7 +7164,7 @@ describe("a deposit released inside a sale journal stays locked until that journ
     }));
 
     await expect(
-      s.asUser.mutation(api.applications.cancelApplication, {
+      s.asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId,
         applicationId,
         reason: "Customer withdrew after the period closed",
@@ -7198,7 +7208,7 @@ describe("a deposit released inside a sale journal stays locked until that journ
       downPayment: 3_000,
       beforeHandover: async (appId) => {
         const app = await s.t.run((ctx) => ctx.db.get(appId));
-        await s.asUser.mutation(api.deposits.create, {
+        await s.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
           orgId: s.orgId,
           quoteId: app!.quoteId,
           amount: 1_000,
@@ -7218,7 +7228,7 @@ describe("a deposit released inside a sale journal stays locked until that journ
     });
 
     await expect(
-      s.asUser.mutation(api.applications.cancelApplication, {
+      s.asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId,
         applicationId,
         reason: "Customer withdrew",
@@ -7263,7 +7273,7 @@ describe("a deposit released inside a sale journal stays locked until that journ
 
     const vehicleBefore = await s.t.run((ctx) => ctx.db.get(s.vehicleId));
 
-    await s.asUser.mutation(api.applications.cancelApplication, {
+    await s.asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       reason: "Second cancellation attempt",
@@ -7301,7 +7311,7 @@ describe("a deposit released inside a sale journal stays locked until that journ
       }
     });
     await expect(
-      s.asUser.mutation(api.applications.cancelApplication, {
+      s.asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId,
         applicationId,
         reason: "Customer withdrew",
@@ -7316,7 +7326,7 @@ describe("a deposit released inside a sale journal stays locked until that journ
         await ctx.db.patch(period._id, { status: "OPEN" as const });
       }
     });
-    await s.asUser.mutation(api.applications.cancelApplication, {
+    await s.asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       reason: "Customer withdrew",
@@ -7345,7 +7355,7 @@ describe("a deposit released inside a sale journal stays locked until that journ
 describe("a stale finance application cannot tear down the sale that replaced it", () => {
   /** Sells the seeded car again, through the ordinary cash door. */
   async function sellAgain(s: Seeded, customerId: Id<"customers">) {
-    return await s.asUser.mutation(api.sales.create, {
+    return await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       vehicleId: s.vehicleId,
       customerId,
@@ -7404,7 +7414,7 @@ describe("a stale finance application cannot tear down the sale that replaced it
     expect(await liveSaleRows(s)).toHaveLength(1);
 
     // Now the stale paperwork is cancelled.
-    await s.asUser.mutation(api.applications.cancelApplication, {
+    await s.asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       reason: "Old deal tidied up",
@@ -7446,7 +7456,7 @@ describe("a stale finance application cannot tear down the sale that replaced it
     );
     const saleB = await sellAgain(s, otherCustomerId);
 
-    await s.asUser.mutation(api.applications.cancelApplication, {
+    await s.asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       reason: "Old deal tidied up",
@@ -7467,7 +7477,7 @@ describe("a stale finance application cannot tear down the sale that replaced it
     const saleB = await sellAgain(s, s.customerId);
 
     for (const attempt of [1, 2]) {
-      await s.asUser.mutation(api.applications.cancelApplication, {
+      await s.asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId,
         applicationId,
         reason: `Attempt ${attempt}`,
@@ -7514,7 +7524,7 @@ describe("a stale finance application cannot tear down the sale that replaced it
     expect(appsAfterCancel.length).toBeGreaterThan(0);
     const statusesAfterCancel = appsAfterCancel.map((a) => a.status).sort();
 
-    await s.asUser.mutation(api.applications.cancelApplication, {
+    await s.asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       reason: "Old deal tidied up",
@@ -7546,7 +7556,7 @@ describe("a stale finance application cannot tear down the sale that replaced it
     // asked for COMPLETED, this reached the teardown, hit B ownership and threw
     // — leaving the stale application permanently un-cancellable and telling
     // the operator to cancel the perfectly good sale B.
-    await s.asUser.mutation(api.applications.cancelApplication, {
+    await s.asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       reason: "Old deal tidied up",
@@ -7576,7 +7586,7 @@ describe("a stale finance application cannot tear down the sale that replaced it
 
     // The positive control for the application door. A fix that simply stopped
     // tearing anything down would pass every test above and break the product.
-    await s.asUser.mutation(api.applications.cancelApplication, {
+    await s.asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       reason: "Customer withdrew",

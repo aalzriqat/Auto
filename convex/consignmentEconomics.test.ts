@@ -109,7 +109,7 @@ async function sellConsigned(s: Seeded, vin: string) {
       sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
     })
   );
-  const saleId = await s.asUser.mutation(api.sales.create, {
+  const saleId = await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
     orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
     salePrice: SALE_PRICE, saleDate: Date.now(), status: "COMPLETED" as const,
   });
@@ -851,7 +851,7 @@ describe("SCRUM-40 O-3 — the frozen consigned fields belong to consigned sales
         status: "AVAILABLE", sourceType: "STOCK", purchasePrice: 6_000,
       })
     );
-    const saleId = await s.asUser.mutation(api.sales.create, {
+    const saleId = await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
       salePrice: 8_000, saleDate: Date.now(), status: "COMPLETED" as const,
     });

@@ -227,7 +227,7 @@ export const recordReceipt = mutation({
     receiptNotes: v.optional(v.string()),
     /** Defaults to now; set it when recording a receipt that landed earlier. */
     receivedAt: v.optional(v.number()),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -238,6 +238,7 @@ export const recordReceipt = mutation({
       {
         orgId: args.orgId,
         operation: "supplierReceivables.recordReceipt",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
         // EVERY persisted input that can change the stored record. `receivedAt`

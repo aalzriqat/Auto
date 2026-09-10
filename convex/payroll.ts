@@ -122,7 +122,7 @@ export const recordAdvance = mutation({
     date: v.optional(v.number()),
     method: v.optional(paymentMethodValidator),
     note: v.optional(v.string()),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     try {
@@ -147,9 +147,22 @@ export const recordAdvance = mutation({
         {
           orgId: args.orgId,
           operation: "payroll.recordAdvance",
+          economic: true,
           idempotencyKey: args.idempotencyKey,
           actorId: user._id,
-          fingerprint: JSON.stringify({ userId: args.userId, amount: args.amount, date: args.date ?? null }),
+          // `method` selects the credit account in hookEmployeeAdvancePaid, so
+          // two advances identical except for it are different economic
+          // instructions. It is normalized here the same way the callback
+          // normalizes it, so the fingerprint matches the effect rather than
+          // the raw input. `note` is hashed too: it is caller-stable, and a
+          // changed one under a reused identity is a different record.
+          fingerprint: JSON.stringify({
+            userId: args.userId,
+            amount: args.amount,
+            date: args.date ?? null,
+            method: normalizePaymentMethod(args.method),
+            note: args.note?.trim() || null,
+          }),
         },
         async () => {
           const currency = await getOrgCurrency(ctx, args.orgId);
@@ -206,7 +219,7 @@ export const recoverAdvance = mutation({
     advanceId: v.id("employeeAdvances"),
     method: v.optional(paymentMethodValidator),
     amount: v.optional(v.number()),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     try {
@@ -313,6 +326,7 @@ export const recoverAdvance = mutation({
         {
           orgId: args.orgId,
           operation: "payroll.recoverAdvance",
+          economic: true,
           idempotencyKey: args.idempotencyKey,
           actorId: user._id,
           fingerprint: JSON.stringify({

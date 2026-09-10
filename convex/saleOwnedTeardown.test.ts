@@ -168,7 +168,7 @@ async function completeSale(
   customerId: Id<"customers">,
   salePrice: number
 ): Promise<Id<"sales">> {
-  return await s.asAdmin.mutation(api.sales.create, {
+  return await s.asAdmin.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
     orgId: s.orgId,
     vehicleId: s.vehicleId,
     customerId,
@@ -629,6 +629,11 @@ describe("SCRUM-212 — the locator and the transition must be exact", () => {
     // The control that stops R2's fix widening into 'void everything on this
     // car': a manually entered VEHICLE_SALE row carries no saleId and is no
     // sale's to void.
+    // ⚠️ RC INTEGRATION (SCRUM-313): SCRUM-57's artifact edited this fixture to
+    // call `api.transactions.add` with a command identity. That edit is DEAD on
+    // this topology — SCRUM-53 retired `transactions.add` to a throw, so the
+    // mutation can no longer mint this row at all. The identity contract has no
+    // subject here. Kept as the direct insert SCRUM-53 already established.
     const manual = await s.t.run((ctx) =>
       ctx.db.insert("transactions", {
         orgId: s.orgId,

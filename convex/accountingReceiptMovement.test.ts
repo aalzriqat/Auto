@@ -265,6 +265,7 @@ describe("SCRUM-218-C §1 — receipt that fully discharges a receivable", () =>
     const receivableId = await makeReceivable(asAdmin, orgId, customerId, 100);
 
     const paymentId = (await asAdmin.mutation(api.collections.recordPayment, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, receivableId, amount: 100, method: "CASH", paymentDate: Date.now(),
     })) as Id<"collectionPayments">;
 
@@ -312,6 +313,7 @@ describe("SCRUM-218-C §2 — receipt with no receivable", () => {
     await seedRetainedCreditAccount(t, orgId);
 
     const paymentId = (await asAdmin.mutation(api.collections.recordPayment, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId, amount: 60, method: "CASH", paymentDate: Date.now(),
     })) as Id<"collectionPayments">;
 
@@ -360,6 +362,7 @@ describe("SCRUM-218-C §3 — 2110 missing at receipt time", () => {
     await removeRetainedCreditAccount(t, orgId);
 
     const paymentId = (await asAdmin.mutation(api.collections.recordPayment, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId, amount: 40, method: "CASH", paymentDate: Date.now(),
     })) as Id<"collectionPayments">;
 
@@ -397,6 +400,7 @@ describe("SCRUM-218-C §3 — 2110 missing at receipt time", () => {
     await seedRetainedCreditAccount(t, orgId);
 
     const paymentId = (await asAdmin.mutation(api.collections.recordPayment, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId, amount: 40, method: "CASH", paymentDate: Date.now(),
     })) as Id<"collectionPayments">;
 
@@ -409,6 +413,7 @@ describe("SCRUM-218-C §3 — 2110 missing at receipt time", () => {
     const receivableId = await makeReceivable(asAdmin, orgId, customerId, 25);
 
     const paymentId = (await asAdmin.mutation(api.collections.recordPayment, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, receivableId, amount: 25, method: "CASH", paymentDate: Date.now(),
     })) as Id<"collectionPayments">;
 
@@ -428,6 +433,7 @@ async function retainedCreditFixture(suffix: string, receiptAmount = 100) {
   const seeded = await seedOrg(suffix);
   await seedRetainedCreditAccount(seeded.t, seeded.orgId);
   const paymentId = (await seeded.asAdmin.mutation(api.collections.recordPayment, {
+      idempotencyKey: crypto.randomUUID(),
     orgId: seeded.orgId, customerId: seeded.customerId,
     amount: receiptAmount, method: "CASH", paymentDate: Date.now(),
   })) as Id<"collectionPayments">;
@@ -441,6 +447,7 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
     const receivableId = await makeReceivable(asAdmin, orgId, customerId, 30);
 
     const result = await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, receiptMovementId: movement._id, receivableId, requestedAmount: 30,
     });
     expect(result.appliedMinor).toBe(3000);
@@ -479,6 +486,7 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
     for (const amount of [10, 20, 30]) {
       const receivableId = await makeReceivable(asAdmin, orgId, customerId, amount);
       const r = await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
         orgId, receiptMovementId: movement._id, receivableId, requestedAmount: amount,
       });
       sequences.push(r.sequence);
@@ -514,6 +522,7 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
     const { asAdmin, orgId, customerId, t } = await seedOrg("s4np");
     await removeRetainedCreditAccount(t, orgId);
     const paymentId = (await asAdmin.mutation(api.collections.recordPayment, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId, amount: 50, method: "CASH", paymentDate: Date.now(),
     })) as Id<"collectionPayments">;
     const movement = (await movementFor(t, orgId, paymentId))!;
@@ -522,6 +531,7 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
 
     await expect(
       asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
         orgId, receiptMovementId: movement._id, receivableId, requestedAmount: 10,
       })
     ).rejects.toThrow(/has not reached the general ledger/i);
@@ -550,6 +560,7 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
 
     await expect(
       asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
         orgId, receiptMovementId: movement._id, receivableId, requestedAmount: 25,
       })
     ).rejects.toThrow();
@@ -577,6 +588,7 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
     const { customerId } = movement;
     const good = await makeReceivable(asAdmin, orgId, customerId, 25);
     await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, receiptMovementId: movement._id, receivableId: good, requestedAmount: 25,
     });
     const after = await positionFor(t, orgId, movement._id);
@@ -606,6 +618,7 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
 
     await expect(
       asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
         orgId, receiptMovementId: movement._id, receivableId, requestedAmount: 10,
       })
     ).rejects.toThrow(/different customer/i);
@@ -687,12 +700,14 @@ describe("SCRUM-218-C §6 — the retained position cannot be overdrawn", () => 
     const { t, asAdmin, orgId, customerId, movement } = await retainedCreditFixture("s6", 50);
     const first = await makeReceivable(asAdmin, orgId, customerId, 30);
     await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, receiptMovementId: movement._id, receivableId: first, requestedAmount: 30,
     });
 
     // 20 remains. Ask for 40 against a 40 receivable: capped to 20, never 40.
     const second = await makeReceivable(asAdmin, orgId, customerId, 40);
     const result = await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, receiptMovementId: movement._id, receivableId: second, requestedAmount: 40,
     });
     expect(result.appliedMinor).toBe(2000);
@@ -704,6 +719,7 @@ describe("SCRUM-218-C §6 — the retained position cannot be overdrawn", () => 
     const third = await makeReceivable(asAdmin, orgId, customerId, 10);
     await expect(
       asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
         orgId, receiptMovementId: movement._id, receivableId: third, requestedAmount: 10,
       })
     ).rejects.toThrow(/nothing to apply/i);
@@ -724,6 +740,7 @@ describe("SCRUM-218-C §6 — the retained position cannot be overdrawn", () => 
     const { asAdmin, orgId, customerId, movement } = await retainedCreditFixture("s6cap", 100);
     const small = await makeReceivable(asAdmin, orgId, customerId, 15);
     const result = await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, receiptMovementId: movement._id, receivableId: small, requestedAmount: 90,
     });
     expect(result.appliedMinor).toBe(1500);
@@ -817,6 +834,7 @@ describe("SCRUM-218-C §7 — 1220 and deposit lineage are not 2110 authority", 
     expect(legacy!.normalBalance).toBe("DEBIT");
 
     const paymentId = (await asAdmin.mutation(api.collections.recordPayment, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId, amount: 20, method: "CASH", paymentDate: Date.now(),
     })) as Id<"collectionPayments">;
 
@@ -903,6 +921,7 @@ describe("SCRUM-218-C §10 R01 — an unpostable accounting date is refused befo
 
       await expect(
         asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
           orgId, receiptMovementId: movement._id, receivableId, requestedAmount: 30, appliedAt,
         })
       ).rejects.toThrow();
@@ -938,6 +957,7 @@ describe("SCRUM-218-C §10 R01 — an unpostable accounting date is refused befo
     const { t, asAdmin, orgId, customerId, movement } = await retainedCreditFixture("r01pc");
     const receivableId = await makeReceivable(asAdmin, orgId, customerId, 30);
     const result = await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, receiptMovementId: movement._id, receivableId, requestedAmount: 30,
       appliedAt: Date.now(),
     });
@@ -993,6 +1013,7 @@ describe("SCRUM-218-C §10 R02 — a batched financial reset never orphans recei
     for (const amount of [10, 20]) {
       const receivableId = await makeReceivable(asAdmin, orgId, customerId, amount);
       await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
         orgId, receiptMovementId: movement._id, receivableId, requestedAmount: amount,
       });
     }
@@ -1125,6 +1146,7 @@ describe("SCRUM-218-C §10 R04 — retained credit is discoverable through a sup
     // The id it returns is exactly the argument the discharge mutation needs.
     const receivableId = await makeReceivable(asAdmin, orgId, customerId, 80);
     const applied = await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, receiptMovementId: row.receiptMovementId, receivableId, requestedAmount: 80,
     });
     expect(applied.appliedMinor).toBe(8000);
@@ -1136,6 +1158,7 @@ describe("SCRUM-218-C §10 R04 — retained credit is discoverable through a sup
     const { t, asAdmin, orgId, customerId } = await seedOrg("r04np");
     await removeRetainedCreditAccount(t, orgId);
     await asAdmin.mutation(api.collections.recordPayment, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId, amount: 45, method: "CASH", paymentDate: Date.now(),
     });
     const listed = await asAdmin.query(api.collections.listRetainedCredits, {
@@ -1149,6 +1172,7 @@ describe("SCRUM-218-C §10 R04 — retained credit is discoverable through a sup
     const receivableId = await makeReceivable(asAdmin, orgId, customerId, 10);
     await expect(
       asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
         orgId, receiptMovementId: listed.page[0].receiptMovementId, receivableId, requestedAmount: 10,
       })
     ).rejects.toThrow(/has not reached the general ledger/i);
@@ -1242,6 +1266,7 @@ describe("SCRUM-218-C §10 RM-01 — a bounced cheque cannot silently strand spe
       bank: "Bank", chequeNumber: `C-${suffix}`, chequeDate: Date.now(), amount,
     })) as Id<"postDatedCheques">;
     const paymentId = (await seeded.asAdmin.mutation(api.collections.clearCheque, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seeded.orgId, chequeId,
     })) as Id<"collectionPayments">;
     const movement = (await movementFor(seeded.t, seeded.orgId, paymentId))!;
@@ -1270,11 +1295,12 @@ describe("SCRUM-218-C §10 RM-01 — a bounced cheque cannot silently strand spe
 
     const otherReceivable = await makeReceivable(asAdmin, orgId, customerId, 400);
     await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, receiptMovementId: movement._id, receivableId: otherReceivable, requestedAmount: 400,
     });
     expect((await t.run((ctx) => ctx.db.get(otherReceivable)))!.outstandingAmount).toBe(0);
 
-    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+    await asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
 
     const cheque = await t.run((ctx) => ctx.db.get(chequeId));
     expect(cheque!.status).toBe("RETURNED");
@@ -1334,7 +1360,7 @@ describe("SCRUM-218-C §10 RM-01 — a bounced cheque cannot silently strand spe
       await clearedChequeWithRetainedCredit("rm01pc", 1000);
     expect((await positionFor(t, orgId, movement._id))!.applicationCount).toBe(0);
 
-    await asAdmin.mutation(api.collections.returnClearedCheque, { orgId, chequeId });
+    await asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
 
     const cheque = await t.run((ctx) => ctx.db.get(chequeId));
     expect(cheque!.status).toBe("RETURNED");

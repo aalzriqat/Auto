@@ -106,7 +106,7 @@ async function sellConsigned(s: Awaited<ReturnType<typeof seedDealer>>, vin: str
       sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
     })
   );
-  return await s.asUser.mutation(api.sales.create, {
+  return await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
     orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
     salePrice: SALE_PRICE, saleDate: Date.now(), status: "COMPLETED" as const,
   });
@@ -120,7 +120,7 @@ async function sellOwned(s: Awaited<ReturnType<typeof seedDealer>>, vin: string)
       status: "AVAILABLE", sourceType: "STOCK", purchasePrice: OWNED_COST,
     })
   );
-  return await s.asUser.mutation(api.sales.create, {
+  return await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
     orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
     salePrice: OWNED_PRICE, saleDate: Date.now(), status: "COMPLETED" as const,
   });
@@ -930,10 +930,10 @@ describe("every revenue consumer agrees on the same month", () => {
         status: "ACCEPTED", createdBy: s.userId, createdAt: Date.now(),
       })
     );
-    await s.asUser.mutation(api.deposits.create, {
+    await s.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, quoteId, amount: 3_000, method: "CASH" as const,
     });
-    await s.asUser.mutation(api.sales.create, {
+    await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
       salePrice: OWNED_PRICE, saleDate: Date.now(), status: "COMPLETED" as const,
       quoteId,
@@ -1294,7 +1294,7 @@ describe("tax on an agency sale, with no open accounting period", () => {
       s,
       vehicleId,
       attempt: () =>
-        s.asUser.mutation(api.sales.create, {
+        s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
           orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
           salePrice: opts.salePrice ?? SALE_PRICE, saleDate: Date.now(),
           status: "COMPLETED" as const,
@@ -1331,7 +1331,7 @@ describe("tax on an agency sale, with no open accounting period", () => {
         sourcedFromName: "Amman Importer Co", sourceCost: 9_500.5,
       })
     );
-    await s.asUser.mutation(api.sales.create, {
+    await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
       salePrice: 12_500.7, saleDate: Date.now(), status: "COMPLETED" as const,
     });
@@ -1464,7 +1464,7 @@ describe("a financed consigned sale settled directly with the supplier", () => {
       s,
       vehicleId,
       attempt: () =>
-        s.asUser.mutation(api.sales.create, {
+        s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
           orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
           salePrice: SALE_PRICE, saleDate: Date.now(), status: "COMPLETED" as const,
           financingType: overrides.financingType ?? "FINANCED",
@@ -1531,7 +1531,7 @@ describe("a financed consigned sale settled directly with the supplier", () => {
         sourcedFromName: "Amman Importer Co", sourceCost: COST,
       })
     );
-    await s.asUser.mutation(api.sales.create, {
+    await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
       salePrice: SALE, saleDate: Date.now(), status: "COMPLETED" as const,
       financingType: "CASH" as const,
@@ -1565,7 +1565,7 @@ describe("a financed consigned sale settled directly with the supplier", () => {
         sourcedFromName: "Amman Importer Co", sourceCost: COST,
       })
     );
-    await s.asUser.mutation(api.sales.create, {
+    await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
       salePrice: 12_500, saleDate: Date.now(), status: "COMPLETED" as const,
       financingType: "CASH" as const,

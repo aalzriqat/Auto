@@ -333,6 +333,7 @@ describe("RC-FRESH-CHART-2110 §4 — a receipt with a residue resolves the seed
 
     // No receivable, so the whole receipt is residue.
     await asAdmin.mutation(api.collections.recordPayment, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId, amount: 60, method: "CASH", paymentDate: Date.now(),
     });
 
@@ -358,6 +359,7 @@ describe("RC-FRESH-CHART-2110 §5 — posting never creates, adopts or reclassif
     );
 
     await asAdmin.mutation(api.collections.recordPayment, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId, amount: 35, method: "CASH", paymentDate: Date.now(),
     });
 
@@ -382,6 +384,7 @@ describe("RC-FRESH-CHART-2110 §5 — posting never creates, adopts or reclassif
     await removeRetainedCreditAccount(t, orgId);
 
     await asAdmin.mutation(api.collections.recordPayment, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId, amount: 35, method: "CASH", paymentDate: Date.now(),
     });
 
@@ -412,6 +415,7 @@ describe("RC-FRESH-CHART-2110 §7 — a zero-residue receipt does not depend on 
     })) as Id<"receivables">;
 
     await asAdmin.mutation(api.collections.recordPayment, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId, amount: 100, method: "CASH", paymentDate: Date.now(),
       receivableId,
     });
@@ -443,6 +447,7 @@ describe("RC-FRESH-CHART-2110 §6 — a missing 2110 fails closed through SCRUM-
     expect(emptyBooks).toEqual({ events: 0, entries: 0, lines: 0, snapshots: 0 });
 
     const paymentId = (await asAdmin.mutation(api.collections.recordPayment, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId, amount: 45, method: "CASH", paymentDate: Date.now(),
     })) as Id<"collectionPayments">;
 
@@ -482,6 +487,7 @@ describe("RC-FRESH-CHART-2110 §6 — a missing 2110 fails closed through SCRUM-
     // from "this receipt never posts under any chart".
     const { t, asAdmin, orgId, customerId } = await freshOrg("f6ctl");
     await asAdmin.mutation(api.collections.recordPayment, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId, amount: 45, method: "CASH", paymentDate: Date.now(),
     });
 
