@@ -1,0 +1,149 @@
+name: Accounting Cloud Rehearsal
+
+# SCRUM-313 — the Accounting rehearsal that `convex-test` structurally cannot
+# perform, run against a disposable Convex PREVIEW deployment.
+#
+# `convex/accountingReleaseRehearsal.test.ts` already covers this ground on
+# `convex-test`, and says in its own header that a genuine preview rehearsal is
+# "a strictly stronger artifact and is NOT claimed here". The gap is not
+# thoroughness, it is capability: `convex-test` serialises everything and models
+# no OCC, so it cannot put two release attempts IN FLIGHT TOGETHER against one
+# unchanged free balance — which is exactly the claim `deposits.release` rests on
+# now that its command identity is generation-aware.
+#
+# This is a TEST/CI addition only. No application or backend behaviour changes.
+on:
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# ⚠️ Deliberately a DIFFERENT group from the Playwright workflow.
+#
+# The deploy step below RECREATES the preview it names, which deletes whatever
+# was there. Sharing a name with the browser suite would mean this job destroys
+# that job's backend mid-suite. The name is derived from a REHEARSAL-SCOPED ref
+# string (see `rehearsalRefScope`), so it collides only when THIS group collides.
+concurrency:
+  group: accounting-rehearsal-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rehearsal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Record the exact tested checkout
+        # The SHA that was actually checked out, read back from git rather than
+        # assumed from `github.sha` — on a pull_request event those differ, and
+        # evidence naming the wrong commit is worse than evidence naming none.
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse HEAD)"
+          echo "REHEARSAL_TESTED_SHA=$SHA" >> "$GITHUB_ENV"
+          echo "Tested checkout: $SHA"
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Name the disposable rehearsal preview
+        # Same deterministic derivation the browser suite uses, over a
+        # rehearsal-scoped ref. `--preview-create` DELETES the named deployment,
+        # so this name is a destructive resource key and must never coincide
+        # with the Playwright preview for the same branch.
+        run: |
+          set -euo pipefail
+          SCOPED="$(node -e 'import("./scripts/accountingPreviewRehearsal.mjs").then(m => process.stdout.write(m.rehearsalRefScope(process.argv[1])))' "$GITHUB_REF")"
+          NAME="$(node scripts/e2ePreviewBootstrap.mjs --print-name "$SCOPED" "${PR_NUMBER:-}")"
+          if [ -z "$NAME" ]; then
+            echo "Refusing to deploy an unnamed preview." >&2
+            exit 1
+          fi
+          echo "CONVEX_PREVIEW_NAME=$NAME" >> "$GITHUB_ENV"
+          echo "Rehearsal preview deployment name: $NAME"
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+
+      - name: Create the disposable preview and mark it
+        # Both flags are safety, not convenience, and are reused unchanged from
+        # the reviewed SCRUM-143 path:
+        #   `--preview-create` starts from a genuinely empty database AND is
+        #   refused outright by the CLI for any non-preview key;
+        #   `--preview-run` mints the preview marker that every seeding and
+        #   rehearsal write below refuses to proceed without, and is IGNORED by
+        #   the CLI when deploying to production.
+        run: |
+          set -euo pipefail
+          if [ -z "${CONVEX_PREVIEW_NAME:-}" ]; then
+            echo "CONVEX_PREVIEW_NAME is empty; refusing to deploy." >&2
+            exit 1
+          fi
+          retry_convex() {
+            local attempt delay
+            delay=2
+            for attempt in 1 2 3 4 5; do
+              if "$@"; then return 0; fi
+              if [ "$attempt" = "5" ]; then return 1; fi
+              echo "Convex command failed on attempt $attempt/5; retrying in ${delay}s..." >&2
+              sleep "$delay"
+              delay=$((delay * 2))
+            done
+          }
+          retry_convex pnpm exec convex deploy \
+            --typecheck enable \
+            --preview-create "$CONVEX_PREVIEW_NAME" \
+            --preview-run e2eBootstrap:markPreviewDeployment \
+            --cmd 'echo "NEXT_PUBLIC_CONVEX_URL=$NEXT_PUBLIC_CONVEX_URL" >> "$GITHUB_ENV"' \
+            --cmd-url-env-var-name NEXT_PUBLIC_CONVEX_URL
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+
+      - name: Seed the synthetic QA dealership
+        # The reviewed bootstrap, unchanged. Every record it creates is
+        # synthetic; no real dealer or customer data is involved at any point.
+        run: node scripts/e2ePreviewBootstrap.mjs
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+
+      - name: Run the Accounting rehearsal
+        # No continue-on-error and no exit-code masking anywhere in this job:
+        # a rehearsal that cannot fail the workflow is not evidence.
+        run: node scripts/accountingPreviewRehearsal.mjs | tee rehearsal-evidence.json
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+          REHEARSAL_TESTED_SHA: ${{ env.REHEARSAL_TESTED_SHA }}
+
+      - name: Upload rehearsal evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: accounting-rehearsal-evidence
+          path: rehearsal-evidence.json
+          retention-days: 14
