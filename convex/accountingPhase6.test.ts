@@ -206,6 +206,7 @@ describe("Phase 6 — VEHICLE_PURCHASE rows are recognized as already posted via
     const { orgId, asUser } = await seedMigrationDealer();
 
     await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
     });
 
@@ -219,6 +220,7 @@ describe("Phase 6 — VEHICLE_PURCHASE rows are recognized as already posted via
     const { orgId, asUser } = await seedMigrationDealer();
 
     const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
     });
 

@@ -8,7 +8,8 @@
 // a cycle, so it goes above every local import.
 import { orgEconomicLifecycleBlock } from "./utils/orgLifecycle";
 import { v, ConvexError } from "convex/values";
-import { internalQuery, query } from "./_generated/server";
+import { internalQuery, query, MutationCtx } from "./_generated/server";
+import { Doc, Id } from "./_generated/dataModel";
 import { mutation, internalMutation } from "./functions";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -21,7 +22,8 @@ import {
   hookAssetDisposed,
   getOrgCurrency,
 } from "./accounting/workflowHooks";
-import { paymentMethodValidator } from "./utils/paymentMethods";
+import { paymentMethodValidator, PaymentMethod } from "./utils/paymentMethods";
+import { runWithIdempotency } from "./utils/idempotency";
 
 const methodValidator = v.literal("STRAIGHT_LINE");
 
@@ -75,6 +77,17 @@ export const capitalize = mutation({
     depreciationStartDate: v.optional(v.number()),
     paymentMethod: v.optional(paymentMethodValidator),
     notes: v.optional(v.string()),
+    // SCRUM-57 / SCRUM-313 census. `hookAssetCapitalized` keys its accounting
+    // event on `asset_capitalized_${assetId}`, and the asset id is minted by
+    // the `ctx.db.insert` below in this same call. A lost-response retry mints
+    // asset B, key B and a SECOND capitalization journal that the downstream
+    // dedupe cannot see as a duplicate — it is structurally blind to it.
+    //
+    // Unlike `vehicles.correctAcquisitionCost`, there is no absorbing state to
+    // guard on: this command creates the object it would have to check for.
+    // Only an identity minted at the user-intent boundary distinguishes a
+    // retry from a genuine second asset.
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -96,7 +109,55 @@ export const capitalize = mutation({
     const currency = args.currency ?? (await getOrgCurrency(ctx, args.orgId));
     const now = Date.now();
 
-    const assetId = await ctx.db.insert("fixedAssets", {
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "fixedAssets.capitalize",
+        economic: true,
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+        // Everything that changes what is capitalized and how it depreciates.
+        // A same-key call carrying any different value is a DIFFERENT economic
+        // intent and must be refused rather than silently deduped.
+        fingerprint: JSON.stringify({
+          name: args.name.trim(),
+          purchaseDate: args.purchaseDate,
+          costMinor: args.costMinor,
+          currency,
+          salvageValueMinor,
+          usefulLifeMonths: args.usefulLifeMonths,
+          method: args.method ?? "STRAIGHT_LINE",
+          depreciationStartDate: args.depreciationStartDate ?? args.purchaseDate,
+          paymentMethod: args.paymentMethod ?? null,
+        }),
+      },
+      async () => await capitalizeCore(ctx, args, { user, currency, salvageValueMinor, now })
+    );
+  },
+});
+
+/**
+ * The body of `capitalize`, extracted so the mutation above is a thin identity
+ * boundary around it. The sequence is unchanged — only moved.
+ */
+async function capitalizeCore(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    name: string;
+    purchaseDate: number;
+    costMinor: number;
+    usefulLifeMonths: number;
+    method?: Doc<"fixedAssets">["method"];
+    depreciationStartDate?: number;
+    paymentMethod?: PaymentMethod;
+    notes?: string;
+  },
+  deps: { user: Doc<"users">; currency: string; salvageValueMinor: number; now: number }
+): Promise<Id<"fixedAssets">> {
+  const { user, currency, salvageValueMinor, now } = deps;
+  const assetId = await ctx.db.insert("fixedAssets", {
       orgId: args.orgId,
       name: args.name,
       purchaseDate: args.purchaseDate,
@@ -132,14 +193,13 @@ export const capitalize = mutation({
       occurredAt: args.purchaseDate,
     });
 
-    const actorName = await getActorName(ctx);
-    await notifyOwner(ctx, args.orgId, "fixedAsset.changed", { actorName, assetLabel: args.name }, {
-      link: `/${args.orgId}/accounting`,
-    });
+  const actorName = await getActorName(ctx);
+  await notifyOwner(ctx, args.orgId, "fixedAsset.changed", { actorName, assetLabel: args.name }, {
+    link: `/${args.orgId}/accounting`,
+  });
 
-    return assetId;
-  },
-});
+  return assetId;
+}
 
 /** Non-financial metadata only — once capitalized, cost/currency/schedule are immutable (see architecture doc's "no in-place money edits" rule). Use impair/dispose for value changes. */
 export const update = mutation({

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { usePaginatedQuery, useMutation, useQuery } from "convex/react";
@@ -243,6 +243,11 @@ function CapitalizeAssetDialog({
   const { t } = useLanguage();
   const capitalize = useMutation(api.fixedAssets.capitalize);
   const { submitting, submitWithFeedback } = useAccountingSubmit();
+  // Identity is minted at the USER-INTENT boundary and held across attempts.
+  // Minting it per attempt would defeat the guard entirely: a lost response
+  // would retry under a new identity and capitalize the asset twice. Same
+  // pattern as the collections dialogs.
+  const idempotencyKeyRef = useRef<string | null>(null);
 
   const form = useForm<CapitalizeAssetFormValues>({
     resolver: zodResolver(capitalizeAssetSchema),
@@ -264,7 +269,9 @@ function CapitalizeAssetDialog({
 
   async function onSubmit(values: CapitalizeAssetFormValues) {
     await submitWithFeedback(async () => {
+      idempotencyKeyRef.current ??= `asset-capitalize:${crypto.randomUUID()}`;
       await capitalize({
+        idempotencyKey: idempotencyKeyRef.current,
         orgId,
         name: values.name.trim(),
         purchaseDate: dateInputToMs(values.purchaseDate),
@@ -274,6 +281,9 @@ function CapitalizeAssetDialog({
         paymentMethod: values.paymentMethod,
         notes: values.notes?.trim() || undefined,
       });
+      // Only a SUCCESS retires the identity. A failure keeps it so the
+      // operator's retry is recognised as the same intent, not a second asset.
+      idempotencyKeyRef.current = null;
       toast.success(t("AssetCapitalized" as any));
       handleOpenChange(false);
     });
@@ -288,7 +298,7 @@ function CapitalizeAssetDialog({
         </DialogHeader>
 
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+          <form onSubmit={(e) => void form.handleSubmit(onSubmit)(e)} className="space-y-4">
             <FormField
               control={form.control}
               name="name"
@@ -400,7 +410,7 @@ function CapitalizeAssetDialog({
                 cancelLabel={t("Cancel" as any)}
                 confirmLabel={t("CapitalizeNewAsset" as any)}
                 onCancel={() => handleOpenChange(false)}
-                onConfirm={form.handleSubmit(onSubmit)}
+                onConfirm={() => void form.handleSubmit(onSubmit)()}
                 submitting={submitting}
               />
             </DialogFooter>

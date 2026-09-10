@@ -40,7 +40,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { TestDriveDialog } from "@/components/test_drives/TestDriveDialog";
 import { WorkOrderDialog } from "@/components/work_orders/WorkOrderDialog";
 import { VehicleValuationsTab } from "@/components/vehicles/VehicleValuationsTab";
@@ -107,6 +107,10 @@ export function VehicleDetailsDialog({
   const commandId = useCommandIdentity();
   const upsertLandedCosts = useMutation(api.vehicles.upsertLandedCosts);
   const createReservation = useMutation(api.vehicles.createReservation);
+  // Minted at the user-intent boundary and held across attempts. With a deposit
+  // this books real customer money, so a per-attempt key would take the deposit
+  // twice on a lost response.
+  const reservationKeyRef = useRef<string | null>(null);
   const releaseReservation = useMutation(api.vehicles.releaseReservation);
   const [releasingDepositId, setReleasingDepositId] = useState<string | null>(null);
   const [refundMethodByDeposit, setRefundMethodByDeposit] = useState<Record<string, PaymentMethod>>({});
@@ -186,13 +190,17 @@ export function VehicleDetailsDialog({
     if (!activeOrgId || !vehicle || !reservationCustomerId) return;
     setSavingReservation(true);
     try {
+      reservationKeyRef.current ??= `vehicle-reservation:${crypto.randomUUID()}`;
       await createReservation({
+        idempotencyKey: reservationKeyRef.current,
         orgId: activeOrgId,
         vehicleId: vehicle._id,
         customerId: reservationCustomerId as any,
         depositAmount: reservationDeposit ? Number(reservationDeposit) : undefined,
         expiresAt: reservationExpiresAt ? new Date(reservationExpiresAt).getTime() : undefined,
       });
+      // Only a SUCCESS retires the identity.
+      reservationKeyRef.current = null;
       setReservationCustomerId("");
       setReservationDeposit("");
       setReservationExpiresAt("");

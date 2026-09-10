@@ -49,6 +49,7 @@ describe("workOrders.create", () => {
     const { t, orgId, vehicleId, asUser } = await setup();
 
     const woId = await asUser.mutation(api.workOrders.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       title: "Oil Change",
@@ -73,6 +74,7 @@ describe("workOrders.create", () => {
     const { t, orgId, vehicleId, asUser } = await setup();
 
     const woId = await asUser.mutation(api.workOrders.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       title: "Full Service",
@@ -108,6 +110,7 @@ describe("workOrders.update", () => {
     const { t, orgId, vehicleId, asUser } = await setup();
 
     const woId = await asUser.mutation(api.workOrders.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       title: "Brake Job",
@@ -146,6 +149,7 @@ describe("workOrders.update", () => {
 
     const tasks = [{ id: "t1", description: "Inspection", partsCost: 80, laborCost: 40, completed: true }];
     const woId = await asUser.mutation(api.workOrders.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       title: "Final inspection",
@@ -176,6 +180,7 @@ describe("workOrders.remove", () => {
     const { t, orgId, vehicleId, asUser } = await setup();
 
     const woId = await asUser.mutation(api.workOrders.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       title: "Completed service",

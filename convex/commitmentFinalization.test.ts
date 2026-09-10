@@ -581,6 +581,7 @@ async function reserve(
   extra: Record<string, unknown> = {}
 ) {
   await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
     orgId: seed.orgId,
     vehicleId,
     customerId,

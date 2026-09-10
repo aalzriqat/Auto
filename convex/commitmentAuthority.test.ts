@@ -492,6 +492,7 @@ describe("P1-M2 evidence is tagged and carried", () => {
     const seed = await seedDealer("m2a");
     const v = await vehicle(seed);
     const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: v,
       customerId: seed.customerA,
@@ -535,6 +536,7 @@ describe("P1-M2 evidence is tagged and carried", () => {
     const seed = await seedDealer("m2c");
     const v = await vehicle(seed);
     const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: v,
       customerId: seed.customerA,
@@ -929,6 +931,7 @@ describe("P1-A continuation is proven, never inferred", () => {
   async function reserved(seed: Seed) {
     const v = await vehicle(seed);
     const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: v,
       customerId: seed.customerA,
@@ -996,6 +999,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     const { v } = await reserved(seed);
     const other = await vehicle(seed);
     const otherReservation = await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: other,
       customerId: seed.customerA,
@@ -1105,6 +1109,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     const rootBefore = (await rootsOn(seed, v))[0];
 
     await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: v,
       customerId: seed.customerA,
@@ -1131,6 +1136,7 @@ describe("P1-A continuation is proven, never inferred", () => {
 
     await expectRefusal(
       seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         vehicleId: v,
         customerId: seed.customerA,
@@ -1510,6 +1516,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     const seed = await seedDealer("a8");
     const other = await secondTenant(seed);
     const foreign = await other.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: other.orgId,
       vehicleId: other.vehicleId,
       customerId: other.customerId,
@@ -1610,6 +1617,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     // unrelated live reservation is not a licence to keep going.
     const unrelated = await vehicle(seed);
     const otherReservation = await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: unrelated,
       customerId: seed.customerA,
@@ -1645,6 +1653,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     const quoteId = await cashQuote(seed, seed.customerA, v);
     await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount: 2_000 });
     const joined = await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: v,
       customerId: seed.customerA,
@@ -1763,6 +1772,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     let threw: unknown = null;
     try {
       await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         vehicleId: v,
         customerId: seed.customerB,
@@ -1798,6 +1808,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     const before = await snapshot(seed, v);
     await expectRefusal(
       seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         vehicleId: v,
         customerId: seed.customerB,
@@ -1811,6 +1822,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     // THE CONTROL — the very same call for the quote's OWN customer is allowed,
     // so the refusal above is about the mismatch and not about the door.
     await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: v,
       customerId: seed.customerA,
@@ -1929,6 +1941,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     const reservedCar = await vehicle(seed);
     const secondCar = await vehicle(seed);
     const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: reservedCar,
       customerId: seed.customerA,
@@ -2023,6 +2036,7 @@ describe("P1-C2 a supplied lineage proof is proved, not taken on trust", () => {
 
     await expectRefusal(
       seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         vehicleId: free,
         customerId: seed.customerA,
@@ -2043,6 +2057,7 @@ describe("P1-C2 a supplied lineage proof is proved, not taken on trust", () => {
 
     await expectRefusal(
       seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         vehicleId: free,
         customerId: seed.customerA,
@@ -2062,6 +2077,7 @@ describe("P1-C2 a supplied lineage proof is proved, not taken on trust", () => {
 
     await expectRefusal(
       seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         vehicleId: free,
         customerId: seed.customerA,
@@ -2080,6 +2096,7 @@ describe("P1-C2 a supplied lineage proof is proved, not taken on trust", () => {
     const quoteId = await cashQuote(seed, seed.customerA, free);
 
     await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: free,
       customerId: seed.customerA,
@@ -2106,6 +2123,7 @@ describe("P1-C2 a supplied lineage proof is proved, not taken on trust", () => {
 
     await expectRefusal(
       seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         vehicleId: free,
         customerId: seed.customerA,
@@ -2315,6 +2333,7 @@ describe("P1-C2 a supplied lineage proof is proved, not taken on trust", () => {
     const seed = await seedDealer("c28");
     const reservedCar = await vehicle(seed);
     const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: reservedCar,
       customerId: seed.customerA,
@@ -2361,6 +2380,7 @@ describe("P1-C4 an idempotency key does not launder a changed adoption", () => {
 
   async function reservationOn(seed: Seed, v: Id<"vehicles">) {
     return await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: v,
       customerId: seed.customerA,
@@ -2505,6 +2525,7 @@ describe("P1-S the multi-vehicle narrowing refuses what it must", () => {
 
     // A: this deal's own reservation, genuinely adoptable.
     const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: carA,
       customerId: seed.customerA,
@@ -2568,6 +2589,7 @@ describe("P1-S the multi-vehicle narrowing refuses what it must", () => {
     // valid, so an authority that checked adoption only where it could JOIN
     // would have opened the root and ignored the claim entirely.
     const dangling = await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: await vehicle(seed),
       customerId: seed.customerA,
@@ -2740,6 +2762,7 @@ describe("P1-C2E a reservation proof must still be LIVE, not merely ACTIVE", () 
   async function adoptableButExpiring(seed: Seed) {
     const v = await vehicle(seed);
     const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: v,
       customerId: seed.customerA,

@@ -518,6 +518,16 @@ const ECONOMIC_COMMANDS: Record<string, string[]> = {
     "submitCashierReconciliation",
   ],
   "./deposits": ["create", "release"],
+  // ADDED by the SCRUM-313 CENSUS (owner ruling: scope A, mechanism C). These six
+  // were outside the SCRUM-57 manifest because that manifest reasoned about
+  // `runWithIdempotency` callers, which was only ever a SUBSET of the commands
+  // that can move money. The census derives the population from the call graph
+  // in both directions instead; see scripts/economicCommandCensus.test.ts, which
+  // is now the release instrument and treats THIS manifest as a subset.
+  "./fixedAssets": ["capitalize"],
+  "./partnerEquity": ["add", "recordEquityMovement"],
+  "./vehicles": ["create", "createReservation"],
+  "./workOrders": ["create"],
   "./expenses": ["create"],
   "./financeDealCosts": ["recordDealFee", "openDealCustody", "recordCustodyMovement"],
   "./paymentIntents": ["create", "markSettled"],
@@ -570,7 +580,13 @@ describe("SCRUM-57 — classification ratchet", () => {
     // SCRUM-218-C's `collections.applyRetainedCredit`. The total returning to
     // 29 is a COINCIDENCE of two independent changes, which is precisely why
     // both are recorded above rather than netted into "unchanged".
-    expect(checked).toBe(31);
+    //
+    // 31 -> 37 by the SCRUM-313 census: +6 commands the census found outside
+    // this manifest (fixedAssets.capitalize, partnerEquity.add /
+    // recordEquityMovement, vehicles.create / createReservation,
+    // workOrders.create). RE-MEASURED against the combined tree, never carried
+    // over because it happened to compile.
+    expect(checked).toBe(37);
   });
 
   /**
@@ -631,9 +647,9 @@ describe("SCRUM-57 — classification ratchet", () => {
     expect(missingFromSource, "listed in the manifest but not economic in the source").toEqual([]);
 
     // The denominator, asserted rather than described.
-    expect(economicInSource.size).toBe(31);
+    expect(economicInSource.size).toBe(37);
     expect([...nonEconomicInSource].sort()).toEqual(["sales.createDraft"]);
-    expect(economicInSource.size + nonEconomicInSource.size).toBe(32);
+    expect(economicInSource.size + nonEconomicInSource.size).toBe(38);
   });
 
   /**

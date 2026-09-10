@@ -59,6 +59,7 @@ describe("vehicles.create", () => {
     const { t, orgId, asUser } = await setup();
 
     const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       ...baseVehicle,
     });
@@ -84,17 +85,20 @@ describe("vehicles.create", () => {
     const { t, orgId } = await setup();
 
     await expect(
-      t.mutation(api.vehicles.create, { orgId, ...baseVehicle })
+      t.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle })
     ).rejects.toThrow();
   });
 
   test("rejects duplicate VIN within the same org", async () => {
     const { orgId, asUser } = await setup();
 
-    await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle });
 
     await expect(
-      asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle })
+      asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle })
     ).rejects.toThrow(/already exists/i);
   });
 
@@ -105,6 +109,7 @@ describe("vehicles.create", () => {
 
       await expect(
         asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(),
           orgId,
           ...baseVehicle,
           status,
@@ -121,6 +126,7 @@ describe("vehicles.create", () => {
 
     await expect(
       asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(),
         orgId,
         ...baseVehicle,
         imageIds: [pdfStorageId],
@@ -143,8 +149,10 @@ describe("vehicles.create", () => {
     await t.run((ctx) => ctx.db.insert("memberships", { orgId: orgId2, userId: userId2, roleId: roleId2 }));
     const asUser2 = t.withIdentity({ subject: "user_v2" });
 
-    await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
-    const id2 = await asUser2.mutation(api.vehicles.create, { orgId: orgId2, ...baseVehicle });
+    await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle });
+    const id2 = await asUser2.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId: orgId2, ...baseVehicle });
 
     expect(id2).toBeDefined();
   });
@@ -305,7 +313,8 @@ describe("vehicles.update — protected lifecycle transitions", () => {
     "rejects direct updates to %s",
     async (status) => {
       const { orgId, asUser } = await setup();
-      const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+      const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle });
 
       await expect(
         asUser.mutation(api.vehicles.update, { orgId, vehicleId, status })
@@ -315,7 +324,8 @@ describe("vehicles.update — protected lifecycle transitions", () => {
 
   test("rejects making a sold vehicle available outside the sale workflow", async () => {
     const { t, orgId, asUser } = await setup();
-    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle });
     await t.run((ctx) => ctx.db.patch(vehicleId, { status: "SOLD" }));
 
     await expect(
@@ -325,7 +335,8 @@ describe("vehicles.update — protected lifecycle transitions", () => {
 
   test("rejects changing a reserved vehicle outside the reservation workflow", async () => {
     const { t, orgId, asUser } = await setup();
-    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle });
     await t.run((ctx) => ctx.db.patch(vehicleId, { status: "RESERVED" }));
 
     await expect(
@@ -339,6 +350,7 @@ describe("vehicles.softDelete", () => {
     const { t, orgId, asUser } = await setup();
 
     const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       ...baseVehicle,
     });
@@ -378,7 +390,8 @@ describe("vehicles.softDelete", () => {
       ctx.db.insert("memberships", { orgId: orgId2, userId, roleId: roleId2 })
     );
 
-    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle });
 
     await expect(
       asUser.mutation(api.vehicles.softDelete, { orgId: orgId2, vehicleId })
@@ -395,6 +408,7 @@ describe("vehicles.update — auto-post on status → AVAILABLE", () => {
 
     const storageId = await t.run((ctx) => ctx.storage.store(new Blob(["fake-image"])));
     const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       ...baseVehicle,
       status: "IN_INSPECTION",
@@ -430,6 +444,7 @@ describe("vehicles.update — auto-post on status → AVAILABLE", () => {
 
     const storageId = await t.run((ctx) => ctx.storage.store(new Blob(["fake-image"])));
     const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       ...baseVehicle,
       status: "IN_INSPECTION",
@@ -462,6 +477,7 @@ describe("vehicles.update — auto-post on status → AVAILABLE", () => {
     const { t, orgId, asUser } = await setup();
 
     const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       ...baseVehicle,
       status: "IN_INSPECTION",
@@ -494,6 +510,7 @@ describe("vehicles.update — auto-post on status → AVAILABLE", () => {
 
     const storageId = await t.run((ctx) => ctx.storage.store(new Blob(["fake-image"])));
     const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       ...baseVehicle,
       status: "AVAILABLE",
@@ -528,8 +545,10 @@ describe("vehicles.listAll includeReserved", () => {
   test("status AVAILABLE without includeReserved excludes RESERVED vehicles", async () => {
     const { t, orgId, asUser } = await setup();
 
-    await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle, vin: "1HGCM82633A700001", status: "AVAILABLE" });
-    const reservedVehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle, vin: "1HGCM82633A700002", status: "AVAILABLE" });
+    await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle, vin: "1HGCM82633A700001", status: "AVAILABLE" });
+    const reservedVehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle, vin: "1HGCM82633A700002", status: "AVAILABLE" });
     await t.run((ctx) => ctx.db.patch(reservedVehicleId, { status: "RESERVED" }));
 
     const results = await asUser.query(api.vehicles.listAll, { orgId, status: "AVAILABLE" });
@@ -540,8 +559,10 @@ describe("vehicles.listAll includeReserved", () => {
   test("status AVAILABLE with includeReserved also returns RESERVED vehicles", async () => {
     const { t, orgId, asUser } = await setup();
 
-    await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle, vin: "1HGCM82633A700003", status: "AVAILABLE" });
-    const reservedVehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle, vin: "1HGCM82633A700004", status: "AVAILABLE" });
+    await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle, vin: "1HGCM82633A700003", status: "AVAILABLE" });
+    const reservedVehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle, vin: "1HGCM82633A700004", status: "AVAILABLE" });
     await t.run((ctx) => ctx.db.patch(reservedVehicleId, { status: "RESERVED" }));
 
     const results = await asUser.query(api.vehicles.listAll, { orgId, status: "AVAILABLE", includeReserved: true });
@@ -564,7 +585,8 @@ describe("inventory intelligence", () => {
         [120, "1HGCM82633A800004"],
       ] as const) {
         vi.setSystemTime(now.getTime() - daysOld * 24 * 60 * 60 * 1000);
-        await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle, vin });
+        await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle, vin });
       }
 
       vi.setSystemTime(now);
@@ -583,7 +605,8 @@ describe("inventory intelligence", () => {
 
   test("upsertLandedCosts recomputes total and requires edit permission", async () => {
     const { t, orgId, userId, asUser } = await setup();
-    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle });
 
     await expect(
       asUser.mutation(api.vehicles.upsertLandedCosts, {
@@ -622,6 +645,7 @@ describe("inventory intelligence", () => {
   test("reports combine purchase price and landed costs (not one or the other)", async () => {
     const { t, orgId, userId, asUser } = await setup();
     const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       ...baseVehicle,
       purchasePrice: 8000,
@@ -663,6 +687,7 @@ describe("inventory intelligence", () => {
   test("price history is inserted only when selling price changes", async () => {
     const { t, orgId, asUser } = await setup();
     const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       ...baseVehicle,
       sellingPrice: 20000,
@@ -684,6 +709,7 @@ describe("inventory intelligence", () => {
   test("approved vehicle edit price changes insert price history", async () => {
     const { t, orgId, userId, asUser } = await setup();
     const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       ...baseVehicle,
       sellingPrice: 20000,
@@ -714,7 +740,8 @@ describe("inventory intelligence", () => {
 
   test("vehicle edit requests reject direct sold and reserved status updates", async () => {
     const { orgId, asUser } = await setup();
-    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle });
 
     await expect(
       asUser.mutation(api.vehicleEdits.requestUpdate, {
@@ -736,6 +763,7 @@ describe("inventory intelligence", () => {
   test("vehicle edit approvals recheck protected lifecycle transitions", async () => {
     const { t, orgId, userId, asUser } = await setup();
     const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       ...baseVehicle,
       status: "IN_INSPECTION",
@@ -767,12 +795,14 @@ describe("inventory intelligence", () => {
 
   test("createReservation reserves vehicle and releaseReservation makes it available", async () => {
     const { t, orgId, asUser } = await setup();
-    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle });
     const customerId = await t.run((ctx) =>
       ctx.db.insert("customers", { orgId, firstName: "Reserve", lastName: "Customer" })
     );
 
     const reservationId = await asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       customerId,
@@ -796,12 +826,14 @@ describe("inventory intelligence", () => {
 
   test("createReservation with deposit records a real held deposit and accounting event", async () => {
     const { t, orgId, asUser } = await setup();
-    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle });
     const customerId = await t.run((ctx) =>
       ctx.db.insert("customers", { orgId, firstName: "Deposit", lastName: "Customer" })
     );
 
     const reservationId = await asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       customerId,
@@ -850,11 +882,13 @@ describe("inventory intelligence", () => {
 
   test("releaseReservation keeps vehicle reserved when another active deposit hold exists", async () => {
     const { t, orgId, userId, asUser } = await setup();
-    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle });
     const customerId = await t.run((ctx) =>
       ctx.db.insert("customers", { orgId, firstName: "Hold", lastName: "Customer" })
     );
     const reservationId = await asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       customerId,
@@ -895,13 +929,15 @@ describe("inventory intelligence", () => {
 
   test("createReservation defaults expiresAt to 3 days when no org setting or explicit expiry is given", async () => {
     const { t, orgId, asUser } = await setup();
-    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle });
     const customerId = await t.run((ctx) =>
       ctx.db.insert("customers", { orgId, firstName: "Default", lastName: "Hold" })
     );
 
     const before = Date.now();
     const reservationId = await asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       customerId,
@@ -927,13 +963,15 @@ describe("inventory intelligence", () => {
         reservationHoldDays: 7,
       })
     );
-    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle });
     const customerId = await t.run((ctx) =>
       ctx.db.insert("customers", { orgId, firstName: "Configured", lastName: "Hold" })
     );
 
     const before = Date.now();
     const reservationId = await asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       customerId,
@@ -949,7 +987,8 @@ describe("inventory intelligence", () => {
 
   test("expireReservations notifies managers to resolve the deposit instead of auto-forfeiting it", async () => {
     const { t, orgId, userId, asUser } = await setup();
-    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle });
     const customerId = await t.run((ctx) =>
       ctx.db.insert("customers", { orgId, firstName: "Notify", lastName: "Customer" })
     );
@@ -1007,7 +1046,8 @@ describe("inventory intelligence", () => {
 
   test("expireReservations expires stale reservations and releases linked deposit holds", async () => {
     const { t, orgId, userId, asUser } = await setup();
-    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle });
     const customerId = await t.run((ctx) =>
       ctx.db.insert("customers", { orgId, firstName: "Expired", lastName: "Customer" })
     );
@@ -1064,6 +1104,7 @@ describe("vehicles trust passport (Phase 61 self-service form)", () => {
     const { t, orgId, asUser } = await setup();
 
     const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       ...baseVehicle,
       inspectionStatus: "SELF_REPORTED",
@@ -1086,6 +1127,7 @@ describe("vehicles trust passport (Phase 61 self-service form)", () => {
 
     await expect(
       asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(),
         orgId,
         ...baseVehicle,
         inspectionStatus: "PARTNER_VERIFIED" as any,
@@ -1095,7 +1137,8 @@ describe("vehicles trust passport (Phase 61 self-service form)", () => {
 
   test("update can set and later clear trust passport fields", async () => {
     const { t, orgId, asUser } = await setup();
-    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle });
 
     await asUser.mutation(api.vehicles.update, {
       orgId,
@@ -1134,7 +1177,8 @@ describe("vehicles trust passport (Phase 61 self-service form)", () => {
 
   test("update rejects PARTNER_VERIFIED so the form can never self-assign it", async () => {
     const { orgId, asUser } = await setup();
-    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle });
 
     await expect(
       asUser.mutation(api.vehicles.update, {
@@ -1147,7 +1191,8 @@ describe("vehicles trust passport (Phase 61 self-service form)", () => {
 
   test("requestCreate/requestUpdate reject a negative or non-integer ownerCount", async () => {
     const { orgId, asUser } = await setup();
-    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle });
 
     await expect(
       asUser.mutation(api.vehicleEdits.requestCreate, {
@@ -1176,14 +1221,17 @@ describe("vehicles trust passport (Phase 61 self-service form)", () => {
     const { orgId, asUser } = await setup();
 
     await expect(
-      asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle, ownerCount: -1 })
+      asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle, ownerCount: -1 })
     ).rejects.toThrow();
 
     await expect(
-      asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle, ownerCount: 1.5 })
+      asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle, ownerCount: 1.5 })
     ).rejects.toThrow();
 
-    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle });
 
     await expect(
       asUser.mutation(api.vehicles.update, { orgId, vehicleId, ownerCount: -1 })
@@ -1224,7 +1272,8 @@ describe("vehicles trust passport (Phase 61 self-service form)", () => {
 
   test("a vehicle update request carries trust passport field changes through approval", async () => {
     const { t, orgId, asUser } = await setup();
-    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle });
 
     await asUser.mutation(api.vehicleEdits.requestUpdate, {
       orgId,
@@ -1563,7 +1612,8 @@ describe("vehicles.exportData", () => {
 describe("vehicles.getRelations excludes soft-deleted rows", () => {
   test("a deleted sale, lead and expense stay out of the relations panel", async () => {
     const { t, orgId, userId, asUser } = await setup();
-    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle });
     const customerId = await t.run((ctx) =>
       ctx.db.insert("customers", { orgId, firstName: "Rana", lastName: "Khalil" })
     );

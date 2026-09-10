@@ -1,7 +1,7 @@
 import { useAuth } from "@clerk/expo";
 import { useMutation, useQuery } from "convex/react";
 import { useRouter } from "expo-router";
-import { Component, useEffect, useState, type ReactNode } from "react";
+import { Component, useEffect, useRef, useState, type ReactNode } from "react";
 import { Alert, Image, ScrollView, StyleSheet, Text, View } from "react-native";
 import { AppImage } from "../../components/AppImage";
 
@@ -213,6 +213,9 @@ function VehicleDetailContent({
   const releaseDeposit = useMutation(api.deposits.release);
   const upsertLandedCosts = useMutation(api.vehicles.upsertLandedCosts);
   const createReservation = useMutation(api.vehicles.createReservation);
+  // Minted at the user-intent boundary and held across attempts — with a
+  // deposit this books real customer money.
+  const reservationKeyRef = useRef<string | null>(null);
   const releaseReservation = useMutation(api.vehicles.releaseReservation);
   const archiveVehicle = useMutation(api.vehicles.softDelete);
 
@@ -338,13 +341,17 @@ function VehicleDetailContent({
     const holdDays = parseOptionalNumber(reservationHoldDays);
     setSavingReservation(true);
     try {
+      reservationKeyRef.current ??= `vehicle-reservation:${crypto.randomUUID()}`;
       await createReservation({
+        idempotencyKey: reservationKeyRef.current,
         orgId,
         vehicleId,
         customerId: reservationCustomerId,
         depositAmount: parseOptionalNumber(reservationDeposit),
         expiresAt: holdDays !== undefined && holdDays > 0 ? Date.now() + holdDays * 24 * 60 * 60 * 1000 : undefined,
       });
+      // Only a SUCCESS retires the identity.
+      reservationKeyRef.current = null;
       setReservationCustomerId("");
       setReservationDeposit("");
       setReservationHoldDays("");

@@ -727,6 +727,7 @@ describe("applications hold release and deposit resolution", () => {
     const { t, orgId, userId, customerId, vehicleId, asUser } = await setup();
 
     const reservationId = await asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       customerId,
@@ -777,6 +778,7 @@ describe("applications hold release and deposit resolution", () => {
     const { t, orgId, userId, customerId, vehicleId, asUser } = await setup();
 
     const reservationId = await asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       customerId,
@@ -826,6 +828,7 @@ describe("applications hold release and deposit resolution", () => {
     const { t, orgId, userId, customerId, vehicleId, asUser } = await setup();
 
     const reservationId = await asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       customerId,

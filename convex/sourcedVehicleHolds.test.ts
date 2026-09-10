@@ -207,6 +207,7 @@ describe("createReservation on a sourced vehicle", () => {
     const vehicleId = await makeSourcedVehicle(t, orgId);
 
     await asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       customerId,
@@ -240,6 +241,7 @@ describe("createReservation on a sourced vehicle", () => {
     // own customer's deposit holds is ordinary work; reserving one somebody
     // else's deal holds is not, and only explicit proof separates them.
     await asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       customerId,
@@ -269,6 +271,7 @@ describe("createReservation on a sourced vehicle", () => {
 
     await expect(
       asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
         orgId,
         vehicleId,
         customerId: otherCustomerId,
@@ -318,6 +321,7 @@ describe("multi-vehicle deposits hold their secondary vehicles too", () => {
     // Checking only deposits.by_vehicle_hold reports this car as unheld.
     await expect(
       asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
         orgId,
         vehicleId: secondaryId,
         customerId: otherCustomerId,

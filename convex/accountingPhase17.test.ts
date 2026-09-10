@@ -245,6 +245,7 @@ describe("Phase 17 — minor-unit backfills", () => {
     );
     // A fully Phase-11 asset should be left alone (already on minor units).
     const modernId = await ctx.asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: ctx.orgId, name: "New Asset", purchaseDate: Date.now(), costMinor: 400_000, usefulLifeMonths: 24,
     });
 

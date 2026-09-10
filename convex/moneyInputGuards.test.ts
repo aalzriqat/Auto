@@ -118,6 +118,7 @@ describe("money entry points reject NaN", () => {
 
     await expect(
       ids.asOwner.mutation(api.workOrders.create, {
+      idempotencyKey: crypto.randomUUID(),
         orgId: ids.orgId,
         vehicleId: ids.vehicleId,
         title: "Brake job",
@@ -140,6 +141,7 @@ describe("money entry points reject NaN", () => {
     const ids = await seed(t, "woup");
 
     const workOrderId = await ids.asOwner.mutation(api.workOrders.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: ids.orgId,
       vehicleId: ids.vehicleId,
       title: "Brake job",
@@ -174,6 +176,7 @@ describe("money entry points reject NaN", () => {
 
     await expect(
       ids.asOwner.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(),
         orgId: ids.orgId,
         vin: "VNSRCDNAN1234",
         make: "Toyota",

@@ -23,6 +23,10 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
   const { locale } = useLocale();
   const reportError = useGenericError();
   const createVehicle = useMutation(api.vehicles.create);
+  // Minted at the user-intent boundary and held across attempts. Mobile is the
+  // case that makes this mandatory rather than tidy: a phone on a weak
+  // connection is exactly where a response is lost and the operator taps again.
+  const createVehicleKeyRef = useRef<string | null>(null);
   const updateVehicle = useMutation(api.vehicles.update);
   const archiveVehicle = useMutation(api.vehicles.softDelete);
   const generateUploadUrl = useMutation(api.vehicles.generateUploadUrl);
@@ -329,7 +333,14 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
       if (editing) {
         await updateVehicle({ ...payload, vehicleId: editing._id });
       } else {
-        await createVehicle({ ...payload, sourceType: "STOCK" as const });
+        createVehicleKeyRef.current ??= `vehicle-create:${crypto.randomUUID()}`;
+        await createVehicle({
+          ...payload,
+          sourceType: "STOCK" as const,
+          idempotencyKey: createVehicleKeyRef.current,
+        });
+        // Only a SUCCESS retires the identity.
+        createVehicleKeyRef.current = null;
       }
       setOpen(false);
       setEditing(null);

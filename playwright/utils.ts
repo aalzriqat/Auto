@@ -146,6 +146,9 @@ export async function ensurePublishedDealerWebsite(
 
   await client.mutation(api.websites.startSetup, { orgId });
   await client.mutation(api.vehicles.create, {
+    // E2E fixture: a fresh identity per seeded vehicle, so repeated setup runs
+    // create distinct cars rather than deduping onto the first one.
+    idempotencyKey: `e2e-vehicle-create:${suffix}`,
     orgId,
     vin: testVin(),
     make: "Public",
