@@ -166,6 +166,16 @@ export async function mustCall(spec, fetchImpl = fetch) {
   return result.value;
 }
 
+/** Clerk's own session-id shape. Narrow on purpose: this value reaches a URL path. */
+export function isClerkSessionId(value) {
+  return typeof value === "string" && /^sess_[A-Za-z0-9]{8,64}$/.test(value);
+}
+
+/** The only URL shape this rehearsal will ever send a mutation to. */
+export function isPreviewCloudUrl(value) {
+  return typeof value === "string" && /^https:\/\/[a-z0-9-]+\.convex\.cloud$/.test(value);
+}
+
 /**
  * A genuine Clerk session token for one TEST-MODE identity.
  *
@@ -193,8 +203,20 @@ export async function mintConvexToken({ userId, secretKey }, fetchImpl = fetch) 
     );
   }
   const session = await sessionResponse.json();
+  // The session id comes back from a REMOTE server and is then interpolated
+  // into a URL PATH. Sonar flags that as SSRF-shaped (jssecurity:S7044/S8476)
+  // and it is right to: a response is not trustworthy input just because the
+  // host is. An id containing `../` or a scheme would redirect this
+  // authenticated request somewhere else entirely, with the Clerk secret
+  // attached. Validated against Clerk's own id shape, and refused otherwise.
+  if (!isClerkSessionId(session?.id)) {
+    throw new RehearsalError(
+      `Clerk returned a session id that does not match the expected \`sess_…\` shape. Refusing to build a ` +
+        `request URL from it rather than trusting a remote response to be well-formed.`
+    );
+  }
   const tokenResponse = await fetchImpl(
-    `https://api.clerk.com/v1/sessions/${session.id}/tokens/convex`,
+    `https://api.clerk.com/v1/sessions/${encodeURIComponent(session.id)}/tokens/convex`,
     { method: "POST", headers }
   );
   if (!tokenResponse.ok) {
@@ -359,6 +381,9 @@ export async function main(env = process.env) {
 
   const asSales = (kind, fnPath, args) =>
     convexCall({ convexUrl: config.convexUrl, token: sales.jwt, kind, path: fnPath, args });
+  /** No Authorization header at all — for the case that proves money needs one. */
+  const anonymousCall = (kind, fnPath, args) =>
+    convexCall({ convexUrl: config.convexUrl, token: null, kind, path: fnPath, args });
   const asApprover = (kind, fnPath, args) =>
     convexCall({ convexUrl: config.convexUrl, token: approver.jwt, kind, path: fnPath, args });
   const salesMust = (kind, fnPath, args) =>
@@ -384,6 +409,7 @@ export async function main(env = process.env) {
     tokens: { sales: sales.jwt, approver: approver.jwt },
     asSales,
     asApprover,
+    anonymousCall,
     salesMust,
     approverMust,
     recordCase,

@@ -21,7 +21,25 @@
  */
 const [, , convexUrl, startAtRaw, argsJson] = process.argv;
 
+/**
+ * The worker builds a request URL out of an argv string, so that string is
+ * validated before it is used — Sonar flags the unvalidated form as SSRF-shaped
+ * (jssecurity:S8703), and the concern is real rather than theoretical here: this
+ * process attaches a live session token to whatever host it is pointed at. A
+ * caller that gets the argument wrong should get a refusal, not a credential
+ * delivered somewhere unintended.
+ */
+function assertPreviewCloudUrl(value) {
+  if (typeof value !== "string" || !/^https:\/\/[a-z0-9-]+\.convex\.cloud$/.test(value)) {
+    throw new Error(
+      `Refusing to send an authenticated mutation to ${String(value)} — only a Convex cloud deployment URL is accepted.`
+    );
+  }
+  return value;
+}
+
 async function run() {
+  const target = assertPreviewCloudUrl(convexUrl);
   const startAt = Number(startAtRaw);
   if (!Number.isFinite(startAt)) {
     throw new Error("startAt must be an epoch-milliseconds number");
@@ -40,7 +58,7 @@ async function run() {
   }
 
   const sentAt = Date.now();
-  const response = await fetch(`${convexUrl}/api/mutation`, {
+  const response = await fetch(`${target}/api/mutation`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({ path: "deposits:release", args, format: "json" }),

@@ -38,16 +38,16 @@ const uuid = () => globalThis.crypto.randomUUID();
  * genuine payout is precisely what the generation-aware identity has to stay
  * distinguishable from a retry.
  */
-async function makePartiallyCommittedDeposit({ orgId, salesMust, label }) {
+async function makePartiallyCommittedDeposit({ orgId, ownerMust, label }) {
   const stamp = Date.now().toString(36);
-  const customerId = await salesMust("mutation", "customers:create", {
+  const customerId = await ownerMust("mutation", "customers:create", {
     orgId,
     firstName: "Rehearsal",
     lastName: `${label}-${stamp}`,
   });
 
   const vehicle = async (suffix, vin) =>
-    salesMust("mutation", "vehicles:create", {
+    ownerMust("mutation", "vehicles:create", {
       orgId,
       vin,
       make: "Toyota",
@@ -58,7 +58,12 @@ async function makePartiallyCommittedDeposit({ orgId, salesMust, label }) {
       fuelType: "Gasoline",
       transmission: "Automatic",
       sellingPrice: suffix === "a" ? 22000 : 18000,
-      sourceType: "OWNED",
+      // STOCK, not "OWNED". The first cloud run rejected every fixture on this
+      // exact value: the validator is `v.union(v.literal("STOCK"),
+      // v.literal("SOURCED"))`, and SOURCED vehicles are consignment (ACC-1) —
+      // they never capitalize into inventory, so they are the wrong shape for a
+      // deposit-release rehearsal.
+      sourceType: "STOCK",
       purchasePrice: 15000,
       purchasePaymentMethod: "CASH",
       idempotencyKey: `rehearsal-vehicle-${label}-${suffix}-${stamp}`,
@@ -71,7 +76,7 @@ async function makePartiallyCommittedDeposit({ orgId, salesMust, label }) {
   const vehicleA = await vehicle("a", `RHS${base}${label.toUpperCase().slice(0, 1)}A`.slice(0, 17));
   const vehicleB = await vehicle("b", `RHS${base}${label.toUpperCase().slice(0, 1)}B`.slice(0, 17));
 
-  const quoteId = await salesMust("mutation", "quotes:saveQuote", {
+  const quoteId = await ownerMust("mutation", "quotes:saveQuote", {
     orgId,
     customerId,
     vehicleId: vehicleA,
@@ -85,14 +90,14 @@ async function makePartiallyCommittedDeposit({ orgId, salesMust, label }) {
     termMonths: 0,
   });
 
-  const depositId = await salesMust("mutation", "deposits:create", {
+  const depositId = await ownerMust("mutation", "deposits:create", {
     orgId,
     quoteId,
     amount: 5000,
     idempotencyKey: `rehearsal-deposit-${label}-${stamp}`,
   });
 
-  await salesMust("mutation", "deposits:allocateToVehicles", {
+  await ownerMust("mutation", "deposits:allocateToVehicles", {
     orgId,
     quoteId,
     allocations: [
@@ -105,19 +110,72 @@ async function makePartiallyCommittedDeposit({ orgId, salesMust, label }) {
 }
 
 /** Reads a deposit back through the public API — never by touching rows. */
-async function readDeposit({ orgId, vehicleId, depositId, salesMust }) {
-  const rows = await salesMust("query", "deposits:listByVehicle", { orgId, vehicleId });
+async function readDeposit({ orgId, vehicleId, depositId, ownerMust }) {
+  const rows = await ownerMust("query", "deposits:listByVehicle", { orgId, vehicleId });
   const row = rows.find((r) => r._id === depositId);
   if (!row) fail(`deposit ${depositId} was not returned by deposits:listByVehicle`);
   return row;
 }
 
+/**
+ * Brings the fresh organization to the state a real dealership starts in:
+ * a chart of accounts and an OPEN period.
+ *
+ * The E2E bootstrap seats people and roles; it deliberately does not open books.
+ * Without these two calls the first cloud run had no 2110 and no open period, so
+ * every posting below would have been HELD — and a rehearsal whose postings are
+ * all held proves nothing while looking busy.
+ *
+ * Both are driven through the real public mutations, and both are tolerated if
+ * they already exist: a re-run against a surviving preview must not fail on
+ * "already initialized", and the ASSERTIONS about chart and period live in A1
+ * and A2, where they belong. Setup that quietly doubles as an assertion is how
+ * a rehearsal ends up proving its own setup.
+ */
+async function openTheBooks({ orgId, ownerCall }) {
+  const notes = {};
+  const chart = await ownerCall("mutation", "chartOfAccounts:initialize", { orgId });
+  notes.chart = chart.ok ? "initialized" : `already present or refused: ${chart.error.slice(0, 120)}`;
+
+  const now = new Date();
+  const fiscalYear = now.getUTCFullYear();
+  const period = await ownerCall("mutation", "accountingPeriods:create", {
+    orgId,
+    fiscalYear,
+    periodNumber: now.getUTCMonth() + 1,
+    startDate: Date.UTC(fiscalYear, now.getUTCMonth(), 1),
+    endDate: Date.UTC(fiscalYear, now.getUTCMonth() + 1, 0, 23, 59, 59, 999),
+    openImmediately: true,
+  });
+  notes.period = period.ok ? "created and opened" : `already present or refused: ${period.error.slice(0, 120)}`;
+  return notes;
+}
+
 export async function runRehearsalCases(ctx) {
-  const { results, orgId, asSales, asApprover, salesMust, approverMust, recordCase, fireConcurrentReleases, tokens, config } = ctx;
+  const { results, orgId, recordCase, fireConcurrentReleases, tokens, config } = ctx;
+
+  // The bootstrap seats the PRIMARY identity as OWNER and the approver as
+  // MANAGER. Every economic call below therefore runs as the OWNER: that is the
+  // identity which can drive the whole money path, and guessing which of
+  // MANAGER's permissions covers `deposits.release` would make an unrelated
+  // permission mapping decide whether this rehearsal runs at all.
+  //
+  // Authorization is still exercised, but by a case that cannot be wrong for an
+  // incidental reason — see UNAUTH below.
+  const ownerCall = ctx.asSales;
+  const ownerMust = ctx.salesMust;
+
+  const bookkeeping = await openTheBooks({ orgId, ownerCall });
+  results.push({
+    id: "SETUP",
+    description: "the fresh organization is brought to a chart + OPEN period through public mutations",
+    status: "PASS",
+    detail: bookkeeping,
+  });
 
   // ── A1 — the launch chart, on a genuinely fresh cloud deployment ───────────
   await recordCase(results, "A1", "the launch chart exists with 2110 as a LIABILITY", async () => {
-    const accounts = await salesMust("query", "chartOfAccounts:list", { orgId });
+    const accounts = await ownerMust("query", "chartOfAccounts:list", { orgId });
     const unapplied = accounts.find((a) => a.code === "2110");
     if (!unapplied) fail("account 2110 is absent from the chart of this fresh organization");
     if (unapplied.type !== "LIABILITY") {
@@ -133,7 +191,7 @@ export async function runRehearsalCases(ctx) {
 
   // ── A2 — an OPEN period, so nothing below is held for the wrong reason ─────
   await recordCase(results, "A2", "an accounting period is OPEN on this deployment", async () => {
-    const periods = await salesMust("query", "accountingPeriods:list", { orgId });
+    const periods = await ownerMust("query", "accountingPeriods:list", { orgId });
     const open = periods.filter((p) => p.status === "OPEN");
     if (open.length === 0) {
       fail("no OPEN accounting period — every posting below would be HELD, which would mask real failures");
@@ -147,7 +205,7 @@ export async function runRehearsalCases(ctx) {
     "D1",
     "the SAME intent replayed after the server has moved on pays exactly once",
     async () => {
-      const fx = await makePartiallyCommittedDeposit({ orgId, salesMust, label: "d1" });
+      const fx = await makePartiallyCommittedDeposit({ orgId, ownerMust, label: "d1" });
       const key = `release-deposit:${fx.depositId}:REFUNDED:CASH:gen0`;
       const args = {
         orgId,
@@ -157,17 +215,17 @@ export async function runRehearsalCases(ctx) {
         idempotencyKey: key,
       };
 
-      await approverMust("mutation", "deposits:release", args);
-      const afterFirst = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, salesMust });
+      await ownerMust("mutation", "deposits:release", args);
+      const afterFirst = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, ownerMust });
 
       // The operator's response was lost. The server has since moved on — the
       // deposit row now carries releaseCount 1 and a released amount — and the
       // client, having never been told, submits the SAME intent again.
-      const replay = await asApprover("mutation", "deposits:release", args);
+      const replay = await ownerCall("mutation", "deposits:release", args);
       if (!replay.ok) {
         fail(`a faithful retry of the same intent was REFUSED (${replay.error}); a retry must replay, not fail`);
       }
-      const afterReplay = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, salesMust });
+      const afterReplay = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, ownerMust });
 
       expectEqual(afterReplay.releasedAmountMinor, 2_000_000, "released amount after the replay");
       expectEqual(afterReplay.releaseCount, 1, "releaseCount after the replay");
@@ -186,21 +244,21 @@ export async function runRehearsalCases(ctx) {
     "D2",
     "the next generation is a new command, so the freed remainder is actually paid",
     async () => {
-      const fx = await makePartiallyCommittedDeposit({ orgId, salesMust, label: "d2" });
+      const fx = await makePartiallyCommittedDeposit({ orgId, ownerMust, label: "d2" });
       const base = {
         orgId,
         depositId: fx.depositId,
         resolution: "REFUNDED",
         refundMethod: "CASH",
       };
-      await approverMust("mutation", "deposits:release", {
+      await ownerMust("mutation", "deposits:release", {
         ...base,
         idempotencyKey: `release-deposit:${fx.depositId}:REFUNDED:CASH:gen0`,
       });
 
       // The second car falls away through a SUPPORTED operation, freeing its
       // share. No row is forced.
-      await salesMust("mutation", "deposits:allocateToVehicles", {
+      await ownerMust("mutation", "deposits:allocateToVehicles", {
         orgId,
         quoteId: fx.quoteId,
         allocations: [
@@ -209,12 +267,12 @@ export async function runRehearsalCases(ctx) {
         ],
       });
 
-      await approverMust("mutation", "deposits:release", {
+      await ownerMust("mutation", "deposits:release", {
         ...base,
         idempotencyKey: `release-deposit:${fx.depositId}:REFUNDED:CASH:gen1`,
       });
 
-      const after = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, salesMust });
+      const after = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, ownerMust });
       expectEqual(after.releaseCount, 2, "releaseCount after the second genuine payout");
       expectEqual(after.releasedAmountMinor, 3_000_000, "released amount after the second genuine payout");
       return { depositId: fx.depositId, releaseCount: after.releaseCount, released: after.releasedAmountMinor };
@@ -223,16 +281,16 @@ export async function runRehearsalCases(ctx) {
 
   // ── D3 — the same key with different content is REFUSED, not replayed ──────
   await recordCase(results, "D3", "the same key with a changed refund method is refused", async () => {
-    const fx = await makePartiallyCommittedDeposit({ orgId, salesMust, label: "d3" });
+    const fx = await makePartiallyCommittedDeposit({ orgId, ownerMust, label: "d3" });
     const key = `release-deposit:${fx.depositId}:REFUNDED:CASH:gen0`;
-    await approverMust("mutation", "deposits:release", {
+    await ownerMust("mutation", "deposits:release", {
       orgId,
       depositId: fx.depositId,
       resolution: "REFUNDED",
       refundMethod: "CASH",
       idempotencyKey: key,
     });
-    const conflict = await asApprover("mutation", "deposits:release", {
+    const conflict = await ownerCall("mutation", "deposits:release", {
       orgId,
       depositId: fx.depositId,
       resolution: "REFUNDED",
@@ -242,22 +300,22 @@ export async function runRehearsalCases(ctx) {
     if (conflict.ok) {
       fail("a changed refund method under the same key was ACCEPTED — it must be refused, not silently deduped");
     }
-    const after = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, salesMust });
+    const after = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, ownerMust });
     expectEqual(after.releaseCount, 1, "releaseCount after the refused conflict");
     return { refusal: conflict.error.slice(0, 200), releaseCount: after.releaseCount };
   });
 
   // ── D4 — an economic command with NO identity is refused before it posts ───
   await recordCase(results, "D4", "a release with no command identity is refused", async () => {
-    const fx = await makePartiallyCommittedDeposit({ orgId, salesMust, label: "d4" });
-    const naked = await asApprover("mutation", "deposits:release", {
+    const fx = await makePartiallyCommittedDeposit({ orgId, ownerMust, label: "d4" });
+    const naked = await ownerCall("mutation", "deposits:release", {
       orgId,
       depositId: fx.depositId,
       resolution: "REFUNDED",
       refundMethod: "CASH",
     });
     if (naked.ok) fail("a release with no idempotencyKey was accepted");
-    const after = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, salesMust });
+    const after = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, ownerMust });
     expectEqual(after.releasedAmountMinor ?? 0, 0, "released amount after the refused unidentified command");
     return { refusal: naked.error.slice(0, 200) };
   });
@@ -268,7 +326,7 @@ export async function runRehearsalCases(ctx) {
     "C1",
     "two SAME-KEY releases in flight together pay the free balance exactly once",
     async () => {
-      const fx = await makePartiallyCommittedDeposit({ orgId, salesMust, label: "c1" });
+      const fx = await makePartiallyCommittedDeposit({ orgId, ownerMust, label: "c1" });
       const key = `release-deposit:${fx.depositId}:REFUNDED:CASH:gen0`;
       const args = {
         orgId,
@@ -285,7 +343,7 @@ export async function runRehearsalCases(ctx) {
         ],
       });
 
-      const after = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, salesMust });
+      const after = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, ownerMust });
       expectEqual(after.releasedAmountMinor, 2_000_000, "released amount after two same-key concurrent attempts");
       expectEqual(after.releaseCount, 1, "releaseCount after two same-key concurrent attempts");
       return { attempts, after: { released: after.releasedAmountMinor, releaseCount: after.releaseCount } };
@@ -305,7 +363,7 @@ export async function runRehearsalCases(ctx) {
     "C2",
     "two DISTINCT-KEY releases in flight together cannot pay one free balance twice",
     async () => {
-      const fx = await makePartiallyCommittedDeposit({ orgId, salesMust, label: "c2" });
+      const fx = await makePartiallyCommittedDeposit({ orgId, ownerMust, label: "c2" });
       const base = {
         orgId,
         depositId: fx.depositId,
@@ -320,7 +378,7 @@ export async function runRehearsalCases(ctx) {
         ],
       });
 
-      const after = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, salesMust });
+      const after = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, ownerMust });
       // The whole claim: the free 2,000 left the business once, no matter how
       // many distinct identities asked for it simultaneously.
       expectEqual(after.releasedAmountMinor, 2_000_000, "released amount after two distinct-key concurrent attempts");
@@ -330,29 +388,40 @@ export async function runRehearsalCases(ctx) {
     }
   );
 
-  // ── AUTH — authority is enforced server-side, not by the client ───────────
-  await recordCase(results, "AUTH", "the salesperson cannot release a deposit", async () => {
-    const fx = await makePartiallyCommittedDeposit({ orgId, salesMust, label: "auth" });
-    const attempt = await asSales("mutation", "deposits:release", {
+  // ── UNAUTH — authority is enforced by the SERVER, not by the client ───────
+  //
+  // This replaces a case that asserted "the salesperson cannot release a
+  // deposit". That case could never have failed honestly: the bootstrap seats
+  // the primary identity as OWNER, which holds every permission, so the case
+  // would have been red for a reason that has nothing to do with authority.
+  // An assertion that cannot distinguish the property it names from an
+  // unrelated misconfiguration is not evidence.
+  //
+  // An UNAUTHENTICATED release is the version that cannot be wrong for an
+  // incidental reason: no identity at all must never move money, whatever the
+  // role mapping happens to be.
+  await recordCase(results, "UNAUTH", "an unauthenticated release is refused", async () => {
+    const fx = await makePartiallyCommittedDeposit({ orgId, ownerMust, label: "unauth" });
+    const attempt = await ctx.anonymousCall("mutation", "deposits:release", {
       orgId,
       depositId: fx.depositId,
       resolution: "REFUNDED",
       refundMethod: "CASH",
-      idempotencyKey: `rehearsal-auth-${uuid()}`,
+      idempotencyKey: `rehearsal-unauth-${uuid()}`,
     });
-    if (attempt.ok) fail("the salesperson identity was allowed to release a deposit");
-    const after = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, salesMust });
-    expectEqual(after.releasedAmountMinor ?? 0, 0, "released amount after the refused unauthorized release");
+    if (attempt.ok) fail("a release with NO authentication was accepted");
+    const after = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, ownerMust });
+    expectEqual(after.releasedAmountMinor ?? 0, 0, "released amount after the refused unauthenticated release");
     return { refusal: attempt.error.slice(0, 200) };
   });
 
   // ── TEN — a fabricated tenant id cannot reach this org's money ────────────
   await recordCase(results, "TEN", "a foreign orgId is refused on the money path", async () => {
-    const fx = await makePartiallyCommittedDeposit({ orgId, salesMust, label: "ten" });
+    const fx = await makePartiallyCommittedDeposit({ orgId, ownerMust, label: "ten" });
     // A syntactically valid but foreign organization id: the check must be
     // ownership, never merely well-formedness.
     const foreignOrg = orgId.slice(0, -1) + (orgId.at(-1) === "a" ? "b" : "a");
-    const attempt = await asApprover("mutation", "deposits:release", {
+    const attempt = await ownerCall("mutation", "deposits:release", {
       orgId: foreignOrg,
       depositId: fx.depositId,
       resolution: "REFUNDED",
@@ -360,7 +429,7 @@ export async function runRehearsalCases(ctx) {
       idempotencyKey: `rehearsal-tenancy-${uuid()}`,
     });
     if (attempt.ok) fail("a release naming a foreign organization was accepted");
-    const after = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, salesMust });
+    const after = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, ownerMust });
     expectEqual(after.releasedAmountMinor ?? 0, 0, "released amount after the refused cross-tenant release");
     return { refusal: attempt.error.slice(0, 200) };
   });

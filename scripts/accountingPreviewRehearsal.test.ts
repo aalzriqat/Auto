@@ -10,6 +10,8 @@ import { describe, expect, test } from "vitest";
 import {
   assertRehearsalEnv,
   convexCall,
+  isClerkSessionId,
+  isPreviewCloudUrl,
   mintConvexToken,
   recordCase,
   rehearsalRefScope,
@@ -128,12 +130,62 @@ describe("token minting surfaces a denial instead of working around it", () => {
     let call = 0;
     const partial = async () => {
       call += 1;
-      if (call === 1) return { ok: true, json: async () => ({ id: "sess_1" }) } as unknown as Response;
+      if (call === 1) {
+        return { ok: true, json: async () => ({ id: "sess_2abcDEF3456789ghijk" }) } as unknown as Response;
+      }
       return { ok: false, status: 404, text: async () => "no template" } as unknown as Response;
     };
     await expect(
       mintConvexToken({ userId: "user_1", secretKey: "sk_test" }, partial as unknown as typeof fetch)
     ).rejects.toThrow(/`convex` template token/);
+  });
+
+  test("a malformed session id from Clerk never reaches the token URL", async () => {
+    // The SSRF shape Sonar flagged, as a behavioural test rather than a promise:
+    // if the remote response carries a traversal, the SECOND request — the one
+    // that would carry the Clerk secret to the wrong path — must never be made.
+    let calls = 0;
+    const hostile = async () => {
+      calls += 1;
+      if (calls === 1) {
+        return { ok: true, json: async () => ({ id: "sess_../../../../tokens" }) } as unknown as Response;
+      }
+      return { ok: true, json: async () => ({ jwt: "should-never-be-reached" }) } as unknown as Response;
+    };
+    await expect(
+      mintConvexToken({ userId: "user_1", secretKey: "sk_test" }, hostile as unknown as typeof fetch)
+    ).rejects.toThrow(/does not match the expected/);
+    expect(calls, "the token request must not have been attempted").toBe(1);
+  });
+});
+
+describe("values that reach a URL are validated before they get there", () => {
+  test.each([
+    ["a path traversal", "sess_../../../admin"],
+    ["an absolute URL", "https://evil.example/x"],
+    ["a protocol-relative URL", "//evil.example"],
+    ["an empty id", ""],
+    ["a non-string", null],
+  ])("%s is refused as a Clerk session id", (_label, value) => {
+    // These reach a URL PATH on an authenticated request carrying the Clerk
+    // secret. A response is not trustworthy input just because the host is.
+    expect(isClerkSessionId(value as string)).toBe(false);
+  });
+
+  test("a real Clerk session id is accepted", () => {
+    expect(isClerkSessionId("sess_2abcDEF3456789ghijk")).toBe(true);
+  });
+
+  test.each([
+    ["a local backend", "http://127.0.0.1:3210"],
+    ["an attacker host", "https://evil.example"],
+    ["a path suffix", "https://x.convex.cloud/evil"],
+  ])("%s is refused as a mutation target", (_label, value) => {
+    expect(isPreviewCloudUrl(value)).toBe(false);
+  });
+
+  test("a Convex cloud deployment URL is accepted", () => {
+    expect(isPreviewCloudUrl("https://energized-pheasant-272.convex.cloud")).toBe(true);
   });
 });
 

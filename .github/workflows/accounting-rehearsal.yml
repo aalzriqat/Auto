@@ -128,9 +128,32 @@ jobs:
           E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
 
       - name: Run the Accounting rehearsal
-        # No continue-on-error and no exit-code masking anywhere in this job:
-        # a rehearsal that cannot fail the workflow is not evidence.
-        run: node scripts/accountingPreviewRehearsal.mjs | tee rehearsal-evidence.json
+        # ⚠️ THE REDIRECT IS NOT COSMETIC — IT REPLACES A `| tee` THAT MASKED
+        # THIS STEP'S EXIT CODE.
+        #
+        # The first run of this workflow reported the step as SUCCESS while the
+        # rehearsal printed "REHEARSAL FAILED: 10 of 10 cases". A shell pipeline
+        # exits with the status of its LAST command, and `tee` always succeeds,
+        # so the runner's non-zero exit was thrown away. The comment that used to
+        # sit here claimed there was no exit-code masking in this job while the
+        # very line beneath it was doing exactly that — which is worse than no
+        # comment, because it invites the reader to stop checking.
+        #
+        # Writing to the file and then `cat`ing it keeps the evidence in the log
+        # AND lets the step fail. `set -o pipefail` would also work; a redirect
+        # is used because there is then no pipeline whose exit status anyone has
+        # to reason about.
+        #
+        # `-e` is deliberately NOT set here: it would abort the step the instant
+        # the runner exits non-zero, and the evidence would never be printed —
+        # trading one silent outcome for another. The status is captured, the
+        # evidence is shown, and the step then exits with the runner's own code.
+        run: |
+          set -uo pipefail
+          node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json
+          status=$?
+          cat rehearsal-evidence.json
+          exit $status
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
           CONVEX_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}
