@@ -110,6 +110,10 @@ function makeBackend(defects: Defects = {}) {
         return { ok: true as const, value: id("period") };
       case "accountingPeriods:list":
         return { ok: true as const, value: [{ _id: "p1", status: "OPEN" }] };
+      case "organizations:create":
+        // A genuinely different organization the caller owns — what the TEN case
+        // needs in order to test OWNERSHIP rather than id syntax.
+        return { ok: true as const, value: id("org") };
       case "customers:create":
         return { ok: true as const, value: id("cust") };
       case "vehicles:create":

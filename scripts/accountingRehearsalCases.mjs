@@ -162,16 +162,24 @@ async function openTheBooks({ orgId, ownerCall }) {
 export async function runRehearsalCases(ctx) {
   const { results, orgId, recordCase, fireConcurrentReleases, tokens, config } = ctx;
 
-  // The bootstrap seats the PRIMARY identity as OWNER and the approver as
-  // MANAGER. Every economic call below therefore runs as the OWNER: that is the
-  // identity which can drive the whole money path, and guessing which of
-  // MANAGER's permissions covers `deposits.release` would make an unrelated
-  // permission mapping decide whether this rehearsal runs at all.
+  // TWO PEOPLE, AND THE PRODUCT INSISTS ON IT.
   //
-  // Authorization is still exercised, but by a case that cannot be wrong for an
-  // incidental reason — see UNAUTH below.
+  // The first working cloud run refused every release with "Deposit creator
+  // cannot resolve their own deposit refund or forfeiture"
+  // (`convex/utils/depositHelpers.ts`). That is a real segregation-of-duties
+  // invariant, not an obstacle: the same person must not both take a customer's
+  // money and decide it goes back out. It is the same rule the E2E bootstrap
+  // documents for approvals, and it is exactly why that bootstrap seats TWO
+  // identities.
+  //
+  // So the OWNER creates fixtures and the MANAGER resolves them, which is also
+  // how a dealership actually works. Routing everything through one identity —
+  // which is what this file did first — could not have exercised the money path
+  // at all.
   const ownerCall = ctx.asSales;
   const ownerMust = ctx.salesMust;
+  const resolverCall = ctx.asApprover;
+  const resolverMust = ctx.approverMust;
 
   const bookkeeping = await openTheBooks({ orgId, ownerCall });
   results.push({
@@ -223,13 +231,13 @@ export async function runRehearsalCases(ctx) {
         idempotencyKey: key,
       };
 
-      await ownerMust("mutation", "deposits:release", args);
+      await resolverMust("mutation", "deposits:release", args);
       const afterFirst = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, ownerMust });
 
       // The operator's response was lost. The server has since moved on — the
       // deposit row now carries releaseCount 1 and a released amount — and the
       // client, having never been told, submits the SAME intent again.
-      const replay = await ownerCall("mutation", "deposits:release", args);
+      const replay = await resolverCall("mutation", "deposits:release", args);
       if (!replay.ok) {
         fail(`a faithful retry of the same intent was REFUSED (${replay.error}); a retry must replay, not fail`);
       }
@@ -259,7 +267,7 @@ export async function runRehearsalCases(ctx) {
         resolution: "REFUNDED",
         refundMethod: "CASH",
       };
-      await ownerMust("mutation", "deposits:release", {
+      await resolverMust("mutation", "deposits:release", {
         ...base,
         idempotencyKey: `release-deposit:${fx.depositId}:REFUNDED:CASH:gen0`,
       });
@@ -275,7 +283,7 @@ export async function runRehearsalCases(ctx) {
         ],
       });
 
-      await ownerMust("mutation", "deposits:release", {
+      await resolverMust("mutation", "deposits:release", {
         ...base,
         idempotencyKey: `release-deposit:${fx.depositId}:REFUNDED:CASH:gen1`,
       });
@@ -291,14 +299,14 @@ export async function runRehearsalCases(ctx) {
   await recordCase(results, "D3", "the same key with a changed refund method is refused", async () => {
     const fx = await makePartiallyCommittedDeposit({ orgId, ownerMust, label: "d3" });
     const key = `release-deposit:${fx.depositId}:REFUNDED:CASH:gen0`;
-    await ownerMust("mutation", "deposits:release", {
+    await resolverMust("mutation", "deposits:release", {
       orgId,
       depositId: fx.depositId,
       resolution: "REFUNDED",
       refundMethod: "CASH",
       idempotencyKey: key,
     });
-    const conflict = await ownerCall("mutation", "deposits:release", {
+    const conflict = await resolverCall("mutation", "deposits:release", {
       orgId,
       depositId: fx.depositId,
       resolution: "REFUNDED",
@@ -316,7 +324,7 @@ export async function runRehearsalCases(ctx) {
   // ── D4 — an economic command with NO identity is refused before it posts ───
   await recordCase(results, "D4", "a release with no command identity is refused", async () => {
     const fx = await makePartiallyCommittedDeposit({ orgId, ownerMust, label: "d4" });
-    const naked = await ownerCall("mutation", "deposits:release", {
+    const naked = await resolverCall("mutation", "deposits:release", {
       orgId,
       depositId: fx.depositId,
       resolution: "REFUNDED",
@@ -423,22 +431,44 @@ export async function runRehearsalCases(ctx) {
     return { refusal: attempt.error.slice(0, 200) };
   });
 
-  // ── TEN — a fabricated tenant id cannot reach this org's money ────────────
-  await recordCase(results, "TEN", "a foreign orgId is refused on the money path", async () => {
+  // ── TEN — naming an org you DO belong to is not the same as owning the row ─
+  //
+  // ⚠️ THIS CASE PASSED FOR THE WRONG REASON ONCE, WHICH IS WHY IT LOOKS LIKE
+  // THIS NOW. It used to mutate one character of the real org id and assert the
+  // refusal. It was refused — by the ARGUMENT VALIDATOR, because the mangled
+  // string was not a well-formed Convex id at all. A green case that never
+  // reached the ownership check is worse than no case: it reports tenancy as
+  // proven while testing string syntax.
+  //
+  // The honest probe uses a SECOND REAL ORGANIZATION that the caller genuinely
+  // belongs to and owns. Membership is then satisfied, the id is well-formed,
+  // and the only thing standing between the caller and another tenant's money
+  // is `requireOwnedRow` (TEN-1) — the exact check whose absence shipped two
+  // cross-tenant Criticals.
+  await recordCase(results, "TEN", "a VALID org the caller owns cannot reach another org's deposit", async () => {
     const fx = await makePartiallyCommittedDeposit({ orgId, ownerMust, label: "ten" });
-    // A syntactically valid but foreign organization id: the check must be
-    // ownership, never merely well-formedness.
-    const foreignOrg = orgId.slice(0, -1) + (orgId.at(-1) === "a" ? "b" : "a");
-    const attempt = await ownerCall("mutation", "deposits:release", {
-      orgId: foreignOrg,
+    const foreignOrgId = await resolverMust("mutation", "organizations:create", {
+      name: `Rehearsal Second Dealership ${Date.now().toString(36)}`,
+    });
+    if (foreignOrgId === orgId) fail("the second organization is the same row; the probe would be vacuous");
+
+    const attempt = await resolverCall("mutation", "deposits:release", {
+      orgId: foreignOrgId,
       depositId: fx.depositId,
       resolution: "REFUNDED",
       refundMethod: "CASH",
       idempotencyKey: `rehearsal-tenancy-${uuid()}`,
     });
-    if (attempt.ok) fail("a release naming a foreign organization was accepted");
+    if (attempt.ok) {
+      fail("a release naming a DIFFERENT organization the caller owns was accepted — the deposit belongs to neither");
+    }
+    // The refusal must not be an argument-shape complaint, or this case has
+    // quietly reverted to testing string syntax again.
+    if (/ArgumentValidationError/i.test(attempt.error)) {
+      fail(`the refusal came from the argument validator, not an ownership check: ${attempt.error.slice(0, 200)}`);
+    }
     const after = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, ownerMust });
     expectEqual(after.releasedAmountMinor ?? 0, 0, "released amount after the refused cross-tenant release");
-    return { refusal: attempt.error.slice(0, 200) };
+    return { foreignOrgId, refusal: attempt.error.slice(0, 200) };
   });
 }

@@ -225,15 +225,25 @@ export async function mintConvexToken({ userId, secretKey }, fetchImpl = fetch) 
   // host is. An id containing `../` or a scheme would redirect this
   // authenticated request somewhere else entirely, with the Clerk secret
   // attached. Validated against Clerk's own id shape, and refused otherwise.
-  const sessionId = sanitizeClerkSessionId(session?.id);
-  if (sessionId === null) {
+  // ⚠️ VALIDATED INLINE, and the duplication with `sanitizeClerkSessionId` is
+  // deliberate. Sonar's taint analysis does not follow the guarantee across a
+  // helper boundary: with the check in a function, S7044/S8476 stayed OPEN
+  // through two attempts to satisfy them. That is not the analyser being
+  // pedantic — a validated value returned from elsewhere IS just a string here,
+  // and nothing at this line makes the guarantee visible to a reader either.
+  // The exported helper stays because it is what the unit tests drive.
+  const rawSessionId = typeof session?.id === "string" ? session.id : "";
+  const sessionMatch = /^sess_[A-Za-z0-9]{8,64}$/.exec(rawSessionId);
+  if (sessionMatch === null) {
     throw new RehearsalError(
       `Clerk returned a session id that does not match the expected \`sess_…\` shape. Refusing to build a ` +
         `request URL from it rather than trusting a remote response to be well-formed.`
     );
   }
-  const tokenUrl = new URL(`/v1/sessions/${sessionId}/tokens/convex`, "https://api.clerk.com");
-  const tokenResponse = await fetchImpl(tokenUrl.toString(), { method: "POST", headers });
+  const tokenResponse = await fetchImpl(
+    `https://api.clerk.com/v1/sessions/${sessionMatch[0]}/tokens/convex`,
+    { method: "POST", headers }
+  );
   if (!tokenResponse.ok) {
     const detail = await tokenResponse.text();
     throw new RehearsalError(

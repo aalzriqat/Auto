@@ -21,31 +21,25 @@
  */
 const [, , convexUrl, startAtRaw, argsJson] = process.argv;
 
-/**
- * The worker builds a request URL out of an argv string, so that string is
- * validated before it is used — Sonar flags the unvalidated form as SSRF-shaped
- * (jssecurity:S8703), and the concern is real rather than theoretical here: this
- * process attaches a live session token to whatever host it is pointed at. A
- * caller that gets the argument wrong should get a refusal, not a credential
- * delivered somewhere unintended.
- */
-function assertPreviewCloudUrl(value) {
-  // REBUILT from the matched subdomain rather than returning the argv string.
-  // Testing a value and then using the original leaves the untrusted string
-  // flowing into the request, which is both what Sonar's taint analysis flags
-  // and a real fragility: the guard and the use are separate facts, and a later
-  // edit can pull them apart without either looking wrong.
-  const match = /^https:\/\/([a-z0-9-]{1,64})\.convex\.cloud$/.exec(typeof value === "string" ? value : "");
-  if (!match) {
+async function run() {
+  // ⚠️ VALIDATED INLINE, NOT IN A HELPER, and that is a deliberate concession to
+  // how taint analysis actually works. With the same check behind a function
+  // call, Sonar kept S8703 open: a value returned from elsewhere is just a
+  // string at the point it reaches `fetch`, and the guarantee is invisible both
+  // to the analyser and to whoever reads this line next.
+  //
+  // The concern is real rather than theoretical here. This process attaches a
+  // LIVE SESSION TOKEN to whatever host it is pointed at, so a wrong argument
+  // must produce a refusal, not a credential delivered somewhere unintended.
+  const targetMatch = /^https:\/\/[a-z0-9-]{1,64}\.convex\.cloud$/.exec(
+    typeof convexUrl === "string" ? convexUrl : ""
+  );
+  if (targetMatch === null) {
     throw new Error(
-      `Refusing to send an authenticated mutation to ${String(value)} — only a Convex cloud deployment URL is accepted.`
+      `Refusing to send an authenticated mutation to ${String(convexUrl)} — only a Convex cloud deployment URL is accepted.`
     );
   }
-  return `https://${match[1]}.convex.cloud`;
-}
-
-async function run() {
-  const target = assertPreviewCloudUrl(convexUrl);
+  const target = targetMatch[0];
   const startAt = Number(startAtRaw);
   if (!Number.isFinite(startAt)) {
     throw new Error("startAt must be an epoch-milliseconds number");
