@@ -50,36 +50,85 @@ describe("useCommandIdentity", () => {
   });
 
   /**
-   * The regression test for the stale-identity defect found in review and
-   * reproduced against `deposits.release`.
+   * SCRUM-313 — the GENERATION-AWARE identity for `deposits.release`, and the
+   * reason `renew()` no longer exists.
    *
-   * `deposits.release` pays whatever is FREE on the row, so two genuine payouts
-   * of the same deposit with the same resolution are byte-identical requests
-   * and the server's fingerprint cannot separate them. If the first response is
-   * lost, `retire` never runs — and a HELD identity would then hand the next
-   * genuine payout the first one's stored result: no money moved, success
-   * reported. `renew` is what makes each user-initiated attempt its own command.
+   * This command pays out whatever is currently FREE on the row, so two genuine
+   * payouts of the same deposit with the same decision are byte-identical
+   * requests: content cannot separate them. Both naive answers are wrong.
+   * A permanently-held key makes the second genuine payout replay the first's
+   * stored result (money not moved, success reported). A per-attempt key
+   * (`renew`) fixes that by surrendering retry safety entirely.
+   *
+   * The server keeps an authoritative monotonic discriminator — `releaseCount`,
+   * bumped inside the same patch that moves the money — so the GENERATION goes
+   * into the intent and `for()` does the rest.
    */
-  test("renew mints a new identity even when the previous one was never retired", () => {
+  const releaseIntent = (depositId: string, resolution: string, method: string, generation: number) =>
+    `release-deposit:${depositId}:${resolution}:${method}:gen${generation}`;
+
+  test("a lost response inside ONE generation reuses the identity — the retry is one command", () => {
     const { result } = renderHook(() => useCommandIdentity());
-    const intent = "release-deposit:dep_1:REFUNDED";
+    const intent = releaseIntent("dep_1", "REFUNDED", "CASH", 0);
 
-    const lostAttempt = result.current.renew(intent);
-    // No retire() — this is the lost-response case, the whole point.
-    const nextGenuinePayout = result.current.renew(intent);
+    const lostAttempt = result.current.for(intent);
+    // No retire() — the response never came back. This is the whole case.
+    const retry = result.current.for(intent);
 
-    expect(nextGenuinePayout).not.toBe(lostAttempt);
+    expect(retry).toBe(lostAttempt);
   });
 
-  test("renew replaces the held identity rather than leaving a stale one behind", () => {
+  test("an ADVANCED generation is a different intent, so a second genuine payout is a new command", () => {
     const { result } = renderHook(() => useCommandIdentity());
-    const intent = "release-deposit:dep_1:REFUNDED";
 
-    result.current.for(intent);
-    const renewed = result.current.renew(intent);
-    // A subsequent read within the SAME attempt must see the renewed identity,
-    // so a transport-level retry of that attempt is still one command.
-    expect(result.current.for(intent)).toBe(renewed);
+    // The free part today...
+    const firstPayout = result.current.for(releaseIntent("dep_1", "REFUNDED", "CASH", 0));
+    // ...and the rest once the car it was held against falls away. The server
+    // has advanced releaseCount to 1, so the client observes a new generation.
+    const secondPayout = result.current.for(releaseIntent("dep_1", "REFUNDED", "CASH", 1));
+
+    expect(secondPayout).not.toBe(firstPayout);
+  });
+
+  test("a STALE generation still cannot suppress a genuine payout after a success", () => {
+    // The failure mode a generation alone would NOT close. The payout succeeded
+    // and the key was retired, but the client's `releaseCount` query has not yet
+    // caught up, so the operator's next genuine payout computes the SAME intent
+    // string. It must still be a new command — which it is, because `for()`
+    // mints afresh once the slot is retired. Generation handles the LOST
+    // response; retire-on-success handles the stale read. Neither alone is
+    // enough, which is why both are in the mechanism.
+    const { result } = renderHook(() => useCommandIdentity());
+    const staleIntent = releaseIntent("dep_1", "REFUNDED", "CASH", 0);
+
+    const firstPayout = result.current.for(staleIntent);
+    act(() => result.current.retire(staleIntent));
+    const secondPayout = result.current.for(staleIntent);
+
+    expect(secondPayout).not.toBe(firstPayout);
+  });
+
+  test("the refund METHOD is part of the identity — a changed decision is a new command", () => {
+    const { result } = renderHook(() => useCommandIdentity());
+    const toCash = result.current.for(releaseIntent("dep_1", "REFUNDED", "CASH", 0));
+    const toBank = result.current.for(releaseIntent("dep_1", "REFUNDED", "BANK_TRANSFER", 0));
+    // Reusing one key here would put the same key on genuinely different
+    // content, which the server refuses outright — a rejection the operator
+    // cannot clear rather than a duplicate payment, but still a defect.
+    expect(toBank).not.toBe(toCash);
+  });
+
+  test("there is NO per-attempt mint on the identity API", () => {
+    const { result } = renderHook(() => useCommandIdentity());
+    // `renew` was removed rather than left unused: an available per-attempt mint
+    // is an invitation, and it wore the same shape as the safe `for()` at the
+    // call site — which is exactly how the client-lifetime ratchet came to
+    // report zero per-attempt callers while every release caller was one.
+    expect((result.current as Record<string, unknown>).renew).toBeUndefined();
+    expect(Object.keys(result.current).sort((a, b) => a.localeCompare(b))).toEqual([
+      "for",
+      "retire",
+    ]);
   });
 
   test("different intents never share an identity", () => {

@@ -390,22 +390,17 @@ export type CommandIdentity = {
   for: (intentId: string) => string;
   /** Call after the intent SUCCEEDED, so the next one is a new command. */
   retire: (intentId: string) => void;
-  /**
-   * Retire this intent's identity and mint a new one, marking a NEW attempt.
-   *
-   * ⚠️ ONLY for a command whose server-side fingerprint provably cannot
-   * separate a retry from a genuinely new command, because the amount it moves
-   * is not a client input. `deposits.release` is the case: it pays out whatever
-   * is currently FREE on the row, so two real payouts of the same deposit with
-   * the same resolution are byte-identical requests.
-   *
-   * For such a command, holding one identity across attempts is UNSAFE: if the
-   * first response is lost, `retire` never runs, and a later genuinely-new
-   * payout reuses the stale identity and is handed the first one's stored
-   * result — money silently not moved, success reported to the operator.
-   */
-  renew: (intentId: string) => string;
 };
+
+/**
+ * ⚠️ THERE IS DELIBERATELY NO `renew()` — see the same note on the web twin at
+ * `hooks/useCommandIdentity.ts`. It minted a fresh key per call, which trades
+ * the stale-key incident for the loss of retry safety, and wore the same shape
+ * as the safe `for()` at the call site. A command that content cannot identify
+ * takes a server-owned GENERATION in its intent instead (`deposits.releaseCount`
+ * for `deposits.release`). `scripts/clientIdentityLifetime.ts` now classifies
+ * `.renew(` as PER_ATTEMPT so the shape cannot come back unnoticed.
+ */
 
 /**
  * SCRUM-313 — the mobile twin of the web `useCommandIdentity`
@@ -444,11 +439,6 @@ export function useCommandIdentity(): CommandIdentity {
       },
       retire(intentId: string) {
         keys.current.delete(intentId);
-      },
-      renew(intentId: string) {
-        const minted = idempotencyKey(intentId);
-        keys.current.set(intentId, minted);
-        return minted;
       },
     }),
     []

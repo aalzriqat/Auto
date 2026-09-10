@@ -43,16 +43,52 @@ export interface CallerFinding {
   keyExpression: string;
   /** Fingerprinted args whose call-site expression is recomputed per attempt. */
   volatileFingerprintArgs: string[];
+  /**
+   * For a GENERATION_DISCRIMINATED command: whether this caller's intent
+   * visibly carries the server-owned generation. `undefined` for every other
+   * command, where the question does not arise.
+   */
+  carriesGeneration?: boolean;
 }
 
 /** Expressions that produce a different value on every evaluation. */
 const VOLATILE = /\bDate\.now\s*\(|\bnew\s+Date\s*\(\s*\)|\bperformance\.now\s*\(|\bMath\.random\s*\(|\brandomUUID\s*\(/;
 
-/** A key expression that CALLS something is minted at that moment. */
-const MINTS_INLINE = /randomUUID\s*\(|idempotencyKey\s*\(|uuid\s*\(|nanoid\s*\(/;
+/**
+ * A key expression that CALLS something is minted at that moment.
+ *
+ * `.renew(` is here for a reason the analyzer originally MISSED.
+ * `useCommandIdentity.renew()` mints a fresh uuid on every call by definition —
+ * it is a per-attempt mint wearing the same shape as the retained `.for()` — so
+ * while it was unrecognised this census could report "zero per-attempt callers"
+ * while both `deposits.release` callers used exactly that mechanism. An
+ * instrument that cannot see the one mechanism its own codebase uses is not an
+ * instrument. `renew` has since been removed outright; the pattern stays so the
+ * shape cannot return unnoticed.
+ */
+const MINTS_INLINE = /randomUUID\s*\(|idempotencyKey\s*\(|uuid\s*\(|nanoid\s*\(|\.\s*renew\s*\(/;
 
 /** A key read from a retained holder survives the attempt. */
 const RETAINED = /\w*[Kk]eyRef\s*\.\s*current|\w*Ref\s*\.\s*current/;
+
+/**
+ * Classifies ONE key expression. Extracted from the walker so the regression
+ * cases can exercise it on a literal expression rather than on whatever the
+ * repository happens to contain today — a self-test that depends on the current
+ * tree stops testing the analyzer the moment the tree is fixed.
+ */
+export function classifyKeyExpression(
+  keyExpr: string | undefined,
+  hasSpread: boolean
+): KeyLifetime {
+  if (!keyExpr) return hasSpread ? "VIA_SPREAD" : "ABSENT";
+  // MINTS_INLINE is tested BEFORE the retained-holder shape: an expression can
+  // read a ref and still mint (`keyRef.current = randomUUID()`), and minting is
+  // the property that decides safety.
+  if (MINTS_INLINE.test(keyExpr)) return "PER_ATTEMPT";
+  if (RETAINED.test(keyExpr)) return "RETAINED";
+  return "LITERAL_OR_DERIVED";
+}
 
 /**
  * Commands that carry identity under a DIFFERENT argument name. Named
@@ -63,6 +99,51 @@ const RETAINED = /\w*[Kk]eyRef\s*\.\s*current|\w*Ref\s*\.\s*current/;
 export const ALTERNATE_IDENTITY_ARG: Record<string, string> = {
   "vehicles.importBulk": "importId",
 };
+
+/**
+ * Commands whose intent must carry a server-owned GENERATION, and the state
+ * that supplies it.
+ *
+ * A retained key is the right mechanism only when content can tell one command
+ * from the next. `deposits.release` pays out whatever is currently FREE, so two
+ * genuine payouts of the same deposit with the same decision are byte-identical
+ * — a key held on (deposit, resolution) alone makes the second replay the
+ * first's stored result, which is a real incident, not a hypothetical. The
+ * discriminator is `deposits.releaseCount`, bumped inside the same patch that
+ * moves the money.
+ *
+ * This registry exists because a mutation proved the need for it: deleting
+ * `:gen${generation}` from the intent SURVIVED the whole suite. Every other
+ * assertion here is about the key's LIFETIME, and by that measure a permanent
+ * key looks perfect. The generation is a property of the intent's CONTENT, so
+ * nothing was watching it.
+ */
+export const GENERATION_DISCRIMINATED: Record<string, string> = {
+  "deposits.release": "releaseCount",
+};
+
+/** `commandId.for(intent)` -> `intent`; anything else -> undefined. */
+function intentIdentifier(keyExpr: string): string | undefined {
+  const m = keyExpr.match(/\bfor\s*\(\s*([A-Za-z_$][\w$]*)\s*\)/);
+  return m?.[1];
+}
+
+/**
+ * Does this caller's intent visibly include a generation?
+ *
+ * Deliberately conservative: it resolves the identifier passed to `.for(...)`
+ * back to its assignment in the same file and inspects the template. An intent
+ * built somewhere this cannot follow returns `false` and FAILS the ratchet
+ * rather than passing unexamined — an analyzer that cannot see something must
+ * say so, not assume the best.
+ */
+export function intentCarriesGeneration(src: string, keyExpr: string): boolean {
+  const ident = intentIdentifier(keyExpr);
+  if (!ident) return false;
+  const assignment = new RegExp(`\\b(?:const|let|var)\\s+${ident}\\s*=\\s*([^;]+);`).exec(src);
+  if (!assignment) return false;
+  return /gen\$\{/.test(assignment[1]);
+}
 
 function walk(dir: string, out: string[] = []): string[] {
   if (!fs.existsSync(dir)) return out;
@@ -217,12 +298,7 @@ export function auditClientCallers(
       if (seen.has(id)) continue;
       seen.add(id);
 
-      let keyLifetime: KeyLifetime;
-      if (!keyExpr && props.has("...spread")) keyLifetime = "VIA_SPREAD";
-      else if (!keyExpr) keyLifetime = "ABSENT";
-      else if (RETAINED.test(keyExpr)) keyLifetime = "RETAINED";
-      else if (MINTS_INLINE.test(keyExpr)) keyLifetime = "PER_ATTEMPT";
-      else keyLifetime = "LITERAL_OR_DERIVED";
+      const keyLifetime = classifyKeyExpression(keyExpr, props.has("...spread"));
 
       const fpArgs = fingerprints.get(site.command) ?? [];
       const volatileFingerprintArgs: string[] = [];
@@ -239,6 +315,9 @@ export function auditClientCallers(
         keyLifetime,
         keyExpression: (keyExpr ?? "<absent>").replace(/\s+/g, " ").slice(0, 60),
         volatileFingerprintArgs,
+        ...(GENERATION_DISCRIMINATED[site.command]
+          ? { carriesGeneration: keyExpr ? intentCarriesGeneration(src, keyExpr) : false }
+          : {}),
       });
     }
   }
@@ -252,9 +331,18 @@ export function auditClientCallers(
   return { findings, commandsWithNoClientCaller };
 }
 
-/** A caller is unsafe if either lifetime is broken. */
+/**
+ * A caller is unsafe if either lifetime is broken — or if a command that needs
+ * a generation was given a key with no generation in it, which is a PERMANENT
+ * key wearing the right shape.
+ */
 export function isUnsafe(f: CallerFinding): boolean {
-  return f.keyLifetime === "PER_ATTEMPT" || f.keyLifetime === "ABSENT" || f.volatileFingerprintArgs.length > 0;
+  return (
+    f.keyLifetime === "PER_ATTEMPT" ||
+    f.keyLifetime === "ABSENT" ||
+    f.volatileFingerprintArgs.length > 0 ||
+    f.carriesGeneration === false
+  );
 }
 
 /** VIA_SPREAD cannot be decided mechanically and must be read by a human. */

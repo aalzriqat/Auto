@@ -17,6 +17,9 @@ import fs from "node:fs";
 import {
   ALTERNATE_IDENTITY_ARG,
   auditClientCallers,
+  classifyKeyExpression,
+  GENERATION_DISCRIMINATED,
+  intentCarriesGeneration,
   isUnsafe,
   needsManualRead,
   serverFingerprints,
@@ -70,6 +73,46 @@ describe("analyzer self-tests — the faults this census actually had", () => {
     // every chunk and every retry. Demanding the literal name `idempotencyKey`
     // would report a correctly-guarded caller as unguarded.
     expect(ALTERNATE_IDENTITY_ARG["vehicles.importBulk"]).toBe("importId");
+  });
+
+  test("FAULT 4: a `.renew(...)` key is PER_ATTEMPT, not a passing caller", () => {
+    // The fault this ratchet was BLIND to, and the reason it is worth having a
+    // ratchet you also attack. `useCommandIdentity.renew()` minted a fresh uuid
+    // on every call — a per-attempt key by construction — but at the call site
+    // it was indistinguishable from the retained `.for()`, so the analyzer
+    // classified it LITERAL_OR_DERIVED and reported ZERO per-attempt callers
+    // while BOTH `deposits.release` callers used exactly that mechanism. The
+    // census was not wrong about the code it read; it could not see the one
+    // mechanism this codebase actually used.
+    //
+    // `renew` has since been removed outright, which is precisely why this case
+    // is pinned on the CLASSIFIER rather than on the tree: a self-test that
+    // reads the current repository stops testing anything the moment the
+    // repository is fixed.
+    expect(classifyKeyExpression("commandId.renew(intent)", false)).toBe("PER_ATTEMPT");
+    expect(classifyKeyExpression("commandId.renew(`release:${id}`)", false)).toBe("PER_ATTEMPT");
+    expect(
+      isUnsafe({
+        command: "deposits.release",
+        file: "synthetic.tsx",
+        line: 1,
+        keyLifetime: classifyKeyExpression("commandId.renew(intent)", false),
+        keyExpression: "commandId.renew(intent)",
+        volatileFingerprintArgs: [],
+      })
+    ).toBe(true);
+    // The safe sibling must NOT be swept up with it, or the ratchet is just
+    // noise: `.for()` returns the SAME key until it is retired.
+    expect(classifyKeyExpression("commandId.for(intent)", false)).toBe("LITERAL_OR_DERIVED");
+  });
+
+  test("minting inside a retained holder is still PER_ATTEMPT", () => {
+    // Ordering matters in the classifier. An expression can read a ref AND mint
+    // (`keyRef.current = crypto.randomUUID()`); minting is the property that
+    // decides safety, so it is tested first. Checking the retained shape first
+    // would let this hide behind the ref.
+    expect(classifyKeyExpression("(keyRef.current = crypto.randomUUID())", false)).toBe("PER_ATTEMPT");
+    expect(classifyKeyExpression("keyRef.current", false)).toBe("RETAINED");
   });
 
   test("the volatility rule catches a recomputed fingerprint input", () => {
@@ -129,6 +172,79 @@ describe("SCRUM-313 client identity lifetime", () => {
       "financeDealCosts.recordDealFee",
       "sourcingPayables.recordPartialPayment",
     ]);
+  });
+
+  test("every generation-discriminated caller puts the GENERATION in its intent", () => {
+    // Found by mutation, not by review: deleting `:gen${generation}` from the
+    // release intent survived the entire suite. Every other assertion here
+    // measures the key's LIFETIME, and a permanent key scores perfectly on that
+    // — which is precisely the shape of the original incident. So the intent's
+    // CONTENT gets its own assertion.
+    const generationCommands = Object.keys(GENERATION_DISCRIMINATED);
+    const relevant = findings.filter((f) => generationCommands.includes(f.command));
+    expect(relevant.length, "no generation-discriminated caller was inspected").toBeGreaterThan(0);
+    const missing = relevant
+      .filter((f) => f.carriesGeneration !== true)
+      .map((f) => `${f.command} @ ${f.file}:${f.line} -> ${f.keyExpression}`)
+      .sort((a, b) => a.localeCompare(b));
+    expect(missing).toEqual([]);
+  });
+
+  test("the generation check REJECTS an intent without one", () => {
+    // The self-test half: an assertion nobody has watched fail is not an
+    // assertion. Both shapes are literal, so this keeps testing the analyzer
+    // after the tree is fixed.
+    const withGen = "const intent = `release-deposit:${id}:${resolution}:${method}:gen${generation}`;";
+    const withoutGen = "const intent = `release-deposit:${id}:${resolution}:${method}`;";
+    expect(intentCarriesGeneration(withGen, "commandId.for(intent)")).toBe(true);
+    expect(intentCarriesGeneration(withoutGen, "commandId.for(intent)")).toBe(false);
+    // An intent this analyzer cannot follow FAILS rather than passing unseen.
+    expect(intentCarriesGeneration(withGen, "commandId.for(buildIntent(id))")).toBe(false);
+    expect(intentCarriesGeneration("", "someKeyRef.current")).toBe(false);
+  });
+
+  test("neither command-identity hook offers a per-attempt mint", () => {
+    // `renew` is gone from both clients, not merely unused. Leaving a
+    // per-attempt mint on the identity API is an invitation with a docstring:
+    // the next caller that finds content-based identity awkward reaches for it,
+    // and the ratchet above only catches the call site AFTER it is written.
+    // The generation-aware intent (`deposits.releaseCount`) is the replacement.
+    const hooks = [
+      "hooks/useCommandIdentity.ts",
+      "apps/mobile/src/features/workspace/modules/moduleShared.tsx",
+    ];
+    for (const rel of hooks) {
+      const src = fs.readFileSync(path.join(REPO_ROOT, rel), "utf8");
+      // Prose ABOUT renew is required — the removal has to explain itself — so
+      // this pins the declaration and the implementation, not the mention.
+      expect(src, `${rel} declares renew on the identity type`).not.toMatch(
+        /^\s*renew\s*:\s*\(/m
+      );
+      expect(src, `${rel} implements renew`).not.toMatch(/^\s*renew\s*\(\s*intentId/m);
+    }
+  });
+
+  test("no client caller mints a per-attempt identity via `.renew(`", () => {
+    // The population-level statement, complementing the classifier unit test.
+    const roots = ["components", "app", "hooks", "lib", "apps/mobile/src"];
+    const offenders: string[] = [];
+    const walkAll = (dir: string) => {
+      if (!fs.existsSync(dir)) return;
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) {
+          if (["node_modules", ".next", "_generated", ".expo"].includes(e.name)) continue;
+          walkAll(p);
+        } else if (/\.(ts|tsx)$/.test(e.name)) {
+          const src = fs.readFileSync(p, "utf8");
+          if (/\bcommandId\s*\.\s*renew\s*\(/.test(src)) {
+            offenders.push(path.relative(REPO_ROOT, p).replace(/\\/g, "/"));
+          }
+        }
+      }
+    };
+    for (const r of roots) walkAll(path.join(REPO_ROOT, r));
+    expect(offenders.sort((a, b) => a.localeCompare(b))).toEqual([]);
   });
 
   test("the census actually inspected client callers", () => {

@@ -778,6 +778,20 @@ export interface MobileVehicleDeposit {
   amount: number;
   status: MobileDepositStatus;
   notes?: string;
+  /**
+   * How many times this deposit has already paid out. READ-ONLY: the server
+   * owns it, bumping it inside the same patch that moves the money
+   * (`convex/utils/depositHelpers.ts`). Mobile needs it because it is the
+   * GENERATION discriminator in the `deposits.release` command identity — same
+   * generation means a retry, an advanced generation means a genuinely new
+   * payout. Optional because rows written before the counter existed have none;
+   * absent reads as generation 0.
+   *
+   * `deposits.listByVehicle` returns the raw `Doc<"deposits">`, so this field is
+   * really there — this façade is a hand-maintained second copy of the Convex
+   * contract and was simply narrower than the document it describes.
+   */
+  releaseCount?: number;
 }
 
 export interface MobileVehicleRelationSale {

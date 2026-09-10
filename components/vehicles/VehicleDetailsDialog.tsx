@@ -225,39 +225,50 @@ export function VehicleDetailsDialog({
     }
   };
 
-  const handleReleaseDeposit = async (depositId: any, resolution: "REFUNDED" | "FORFEITED") => {
+  const handleReleaseDeposit = async (
+    depositId: any,
+    resolution: "REFUNDED" | "FORFEITED",
+    observedReleaseCount: number
+  ) => {
     if (!activeOrgId) return;
     setReleasingDepositId(depositId);
+    const refundMethod = resolution === "REFUNDED" ? (refundMethodByDeposit[depositId] ?? "CASH") : "NONE";
     try {
-      // SCRUM-57. This call used to pass NO key at all, because a key DERIVED
-      // from (deposit, resolution) made the SECOND genuine payout — the free
-      // part today, the rest when the cars it was held against fall away —
-      // match the first's stored command: the mutation returned without
-      // running, moved no money, and the operator was told the customer had
-      // been refunded.
+      // SCRUM-313 — a GENERATION-AWARE retained identity. This line has been
+      // wrong twice in two opposite directions, so both failures are recorded:
       //
-      // The identity marks ONE ATTEMPT, minted fresh here at the start of each
-      // user-initiated release rather than held across them.
+      //   1. A key DERIVED from (deposit, resolution) held FOREVER. The SECOND
+      //      genuine payout — the free part today, the rest when the cars it was
+      //      held against fall away — matched the first's stored command: the
+      //      mutation returned without running, moved no money, and the operator
+      //      was told the customer had been refunded.
+      //   2. A key minted PER ATTEMPT (`renew`) to escape (1). That fixes the
+      //      second payout by giving up retry safety entirely: a lost response
+      //      plus one more tap is two payouts of the same free balance.
       //
-      // Holding it would be unsafe for this particular command. `deposits.release`
-      // pays out whatever is currently FREE on the row — the amount is not a
-      // client input — so its fingerprint cannot separate a retry from a second
-      // genuine payout, and `convex/deposits.ts` says so explicitly. If the
-      // first response were LOST, a held identity would never be retired, and
-      // the next genuine payout would be handed the first one's stored result:
-      // no money moved, operator told it was refunded. That is the original
-      // incident above arriving through a second door, and it is reproducible.
+      // Both are avoidable because the server keeps an authoritative monotonic
+      // discriminator. `releaseCount` is incremented inside the same patch that
+      // pays the money out (`convex/utils/depositHelpers.ts`), so it names the
+      // GENERATION of this payout:
       //
-      // At-most-once still holds, from where it always did on this path: a
-      // duplicate submit recomputes the free balance, finds nothing left, and
-      // pays nothing.
-      const intent = `release-deposit:${String(depositId)}:${resolution}`;
+      //   same generation + same decision -> same key -> a retry is deduped;
+      //   an unknown/lost response        -> the key is NOT retired, so the
+      //                                      retry reuses it;
+      //   a confirmed payout              -> releaseCount advances, so a later
+      //                                      genuine payout is a NEW generation
+      //                                      and gets its OWN identity.
+      //
+      // The refund method is in the intent because it is part of the decision
+      // being made, not a presentation detail: refunding to CASH and refunding
+      // to BANK_TRANSFER are different commands and must not share an identity.
+      const generation = observedReleaseCount;
+      const intent = `release-deposit:${String(depositId)}:${resolution}:${refundMethod}:gen${generation}`;
       await releaseDeposit({
         orgId: activeOrgId,
         depositId,
         resolution,
         refundMethod: resolution === "REFUNDED" ? (refundMethodByDeposit[depositId] ?? "CASH") : undefined,
-        idempotencyKey: commandId.renew(intent),
+        idempotencyKey: commandId.for(intent),
       });
       commandId.retire(intent);
       toast.success(
@@ -507,7 +518,7 @@ export function VehicleDetailsDialog({
                                 size="sm"
                                 className="h-7 text-xs"
                                 disabled={releasingDepositId === deposit._id}
-                                onClick={() => handleReleaseDeposit(deposit._id, "REFUNDED")}
+                                onClick={() => handleReleaseDeposit(deposit._id, "REFUNDED", deposit.releaseCount ?? 0)}
                               >
                                 {t("Refund" as any) ?? "Refund"}
                               </Button>
@@ -516,7 +527,7 @@ export function VehicleDetailsDialog({
                                 size="sm"
                                 className="h-7 text-xs text-destructive hover:text-destructive"
                                 disabled={releasingDepositId === deposit._id}
-                                onClick={() => handleReleaseDeposit(deposit._id, "FORFEITED")}
+                                onClick={() => handleReleaseDeposit(deposit._id, "FORFEITED", deposit.releaseCount ?? 0)}
                               >
                                 {t("Forfeit" as any) ?? "Forfeit"}
                               </Button>

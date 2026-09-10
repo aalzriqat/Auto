@@ -278,35 +278,40 @@ function VehicleDetailContent({
     return locale === "ar" ? labels[status][1] : labels[status][0];
   };
 
-  async function handleReleaseDeposit(depositId: string, resolution: "REFUNDED" | "FORFEITED") {
+  async function handleReleaseDeposit(
+    depositId: string,
+    resolution: "REFUNDED" | "FORFEITED",
+    observedReleaseCount: number,
+  ) {
     if (!orgId) return;
     setReleasingDepositId(depositId);
-    // `renew`, NOT `for` — mirroring the web caller in
-    // `components/vehicles/VehicleDetailsDialog.tsx`, which documents a
-    // reproducible incident behind this exact choice.
+    // SCRUM-313 — a GENERATION-AWARE retained identity, mirroring the web caller
+    // in `components/vehicles/VehicleDetailsDialog.tsx`, which carries the full
+    // reasoning and both incidents behind it.
     //
-    // This command pays out whatever is currently FREE on the row, so the
-    // amount is not a client input and two genuine payouts of the same deposit
-    // with the same resolution are BYTE-IDENTICAL requests. Holding one
-    // identity across attempts is therefore unsafe rather than safe: if the
-    // first response is LOST, `retire` never runs, and a later genuinely-new
-    // payout reuses the stale identity and is handed the first one's stored
-    // result — no money moves and the operator is told the customer was
-    // refunded.
+    // `deposits.release` pays out whatever is currently FREE on the row, so the
+    // amount is not a client input and two genuine payouts with the same
+    // decision are byte-identical requests. Content alone therefore cannot tell
+    // a retry from a second real payout — but `releaseCount` can: the server
+    // bumps it inside the same patch that moves the money.
     //
-    // At-most-once comes from the server recomputing the free balance (a
-    // duplicate submit finds nothing left and pays nothing), not from the
-    // command log. Marking one ATTEMPT is the correct identity here, and is not
-    // the "fresh id per request" anti-pattern, which is unsafe precisely where
-    // content CAN identify the command.
-    const intent = `release-deposit:${String(depositId)}:${resolution}`;
+    //   same generation + same decision -> same key -> a retry is deduped;
+    //   an unknown/lost response        -> the key is NOT retired, so the retry
+    //                                      reuses it and pays once;
+    //   a confirmed payout              -> the generation advances, so a later
+    //                                      genuine payout is a NEW command.
+    //
+    // The refund method is part of the decision, not presentation: refunding to
+    // CASH and to BANK_TRANSFER must not share one identity.
+    const method = resolution === "REFUNDED" ? (refundMethodByDeposit[depositId] ?? "CASH") : "NONE";
+    const intent = `release-deposit:${String(depositId)}:${resolution}:${method}:gen${observedReleaseCount}`;
     try {
       await releaseDeposit({
         orgId,
         depositId,
         resolution,
         refundMethod: resolution === "REFUNDED" ? (refundMethodByDeposit[depositId] ?? "CASH") : undefined,
-        idempotencyKey: commandId.renew(intent),
+        idempotencyKey: commandId.for(intent),
       });
       commandId.retire(intent);
     } catch (error) {
@@ -316,7 +321,16 @@ function VehicleDetailContent({
     }
   }
 
-  function confirmReleaseDeposit(depositId: string, amount: number, resolution: "REFUNDED" | "FORFEITED") {
+  function confirmReleaseDeposit(
+    depositId: string,
+    amount: number,
+    resolution: "REFUNDED" | "FORFEITED",
+    // Captured HERE, at the user-intent boundary, rather than read again inside
+    // the handler: the confirmation dialog can sit open while the underlying
+    // query updates, and a generation that moves under a decision the operator
+    // has already taken is not the generation they decided against.
+    observedReleaseCount: number,
+  ) {
     const actionLabel =
       resolution === "REFUNDED"
         ? locale === "ar" ? "استرداد" : "Refund"
@@ -331,7 +345,7 @@ function VehicleDetailContent({
         {
           text: actionLabel,
           style: resolution === "FORFEITED" ? "destructive" : "default",
-          onPress: () => void handleReleaseDeposit(depositId, resolution),
+          onPress: () => void handleReleaseDeposit(depositId, resolution, observedReleaseCount),
         },
       ],
     );
@@ -558,13 +572,17 @@ function VehicleDetailContent({
                           disabled={releasingDepositId === deposit._id}
                           label={locale === "ar" ? "استرداد" : "Refund"}
                           tone="muted"
-                          onPress={() => confirmReleaseDeposit(deposit._id, deposit.amount, "REFUNDED")}
+                          onPress={() =>
+                            confirmReleaseDeposit(deposit._id, deposit.amount, "REFUNDED", deposit.releaseCount ?? 0)
+                          }
                         />
                         <PrimaryButton
                           disabled={releasingDepositId === deposit._id}
                           label={locale === "ar" ? "مصادرة" : "Forfeit"}
                           tone="danger"
-                          onPress={() => confirmReleaseDeposit(deposit._id, deposit.amount, "FORFEITED")}
+                          onPress={() =>
+                            confirmReleaseDeposit(deposit._id, deposit.amount, "FORFEITED", deposit.releaseCount ?? 0)
+                          }
                         />
                       </View>
                     </>

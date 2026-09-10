@@ -1932,7 +1932,7 @@ describe("releasing the same row twice from the same screen", () => {
     return { s, depositId, key };
   }
 
-  test("the deposit screen's key identifies one ATTEMPT, never the deposit itself", async () => {
+  test("the deposit screen's key carries the payout GENERATION, never the deposit alone", async () => {
     // The screen used to send `deposit_release_<depositId>_<resolution>`. A row
     // can now be released more than once — the free part today, the rest when
     // the cars it was held against fall away — so the SECOND genuine payout
@@ -1950,13 +1950,22 @@ describe("releasing the same row twice from the same screen", () => {
     // string would now pass only by breaking the mutation. The invariant is
     // unchanged and is re-pinned here against the mechanism that replaced it.
     //
-    // The identity must mark ONE ATTEMPT (`renew`), never be HELD across
-    // attempts (`for`). Adversarial review reproduced the difference: with a
-    // held identity, a lost response leaves it un-retired, and the next genuine
-    // payout is handed the first one's stored result — cash out stays [2000]
-    // when it should be [2000, 3000], with no error raised. `renew` is what
-    // keeps the two payouts distinct; `hooks/useCommandIdentity.test.tsx`
-    // proves that behaviourally.
+    // SCRUM-313 SUPERSEDES the mechanism this test previously pinned. It used
+    // to demand a per-attempt mint (`renew`), which does keep two genuine
+    // payouts distinct — by giving up retry safety altogether: a lost response
+    // plus one more tap is two payouts of the same free balance. Both answers
+    // were wrong, in opposite directions.
+    //
+    // The correct discriminator is state the SERVER owns. `releaseCount` is
+    // incremented inside the same `ctx.db.patch` that moves the money
+    // (`convex/utils/depositHelpers.ts`), so the observed value names the
+    // GENERATION of this payout. A retained key over (deposit, resolution,
+    // refund method, generation) is a retry within its generation and a NEW
+    // command once the generation advances — safe in both directions.
+    //
+    // `convex/deposits.test.ts` proves all four cases behaviourally, including
+    // that a STALE generation still suppresses (which is why it must advance),
+    // and `hooks/useCommandIdentity.test.tsx` proves the client lifecycle.
     const source = readFileSync(
       join(process.cwd(), "components/vehicles/VehicleDetailsDialog.tsx"),
       "utf8"
@@ -1965,13 +1974,19 @@ describe("releasing the same row twice from the same screen", () => {
     expect(start).toBeGreaterThan(-1);
     const releaseCall = source.slice(start, source.indexOf("});", start));
 
-    // The identity field must be WIRED to the per-attempt minter, not merely
+    // The identity field must be WIRED to the retained minter, not merely
     // present alongside it. Asserting the two strings separately would pass if
     // a future edit pointed `idempotencyKey` at something stale while
-    // `commandId.renew(...)` fed an unrelated field — flagged in review.
-    expect(releaseCall).toMatch(/idempotencyKey:\s*commandId\.renew\(/);
-    // A HELD identity on this path is the reproduced defect, not a style choice.
-    expect(releaseCall).not.toContain("commandId.for(");
+    // `commandId.for(...)` fed an unrelated field — flagged in review.
+    expect(releaseCall).toMatch(/idempotencyKey:\s*commandId\.for\(/);
+    // A per-attempt mint on this path is the second defect, not a style choice.
+    expect(releaseCall).not.toContain("commandId.renew(");
+    // And the retained key is safe ONLY because the intent carries the
+    // generation. Asserting `for(` alone would pass a permanently-held key,
+    // which is exactly the original incident.
+    const intentLine = /const\s+intent\s*=\s*([^;]+);/.exec(source.slice(0, start));
+    expect(intentLine, "the release intent must be a readable local").not.toBeNull();
+    expect(intentLine[1]).toMatch(/gen\$\{/);
     // The literal key shape that caused the original incident must not return.
     expect(releaseCall).not.toMatch(/deposit_release_/);
     expect(releaseCall).not.toMatch(/idempotencyKey:\s*`?deposit/);
