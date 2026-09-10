@@ -15,6 +15,7 @@ import {
   mintConvexToken,
   recordCase,
   rehearsalRefScope,
+  sanitizeClerkSessionId,
   summarize,
 } from "./accountingPreviewRehearsal.mjs";
 import { previewNameForRef } from "./e2ePreviewBootstrap.mjs";
@@ -174,6 +175,16 @@ describe("values that reach a URL are validated before they get there", () => {
 
   test("a real Clerk session id is accepted", () => {
     expect(isClerkSessionId("sess_2abcDEF3456789ghijk")).toBe(true);
+  });
+
+  test("the id that reaches the URL is REBUILT from the matched characters", () => {
+    // Not merely validated. Testing a value and then using the original leaves
+    // the untrusted string flowing into the request; reconstructing means what
+    // reaches the URL can only ever be `sess_` plus admitted characters.
+    expect(sanitizeClerkSessionId("sess_2abcDEF3456789ghijk")).toBe("sess_2abcDEF3456789ghijk");
+    expect(sanitizeClerkSessionId("sess_../../../admin")).toBeNull();
+    expect(sanitizeClerkSessionId("https://evil.example")).toBeNull();
+    expect(sanitizeClerkSessionId(undefined)).toBeNull();
   });
 
   test.each([

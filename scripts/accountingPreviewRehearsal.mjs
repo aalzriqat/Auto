@@ -171,6 +171,22 @@ export function isClerkSessionId(value) {
   return typeof value === "string" && /^sess_[A-Za-z0-9]{8,64}$/.test(value);
 }
 
+/**
+ * Returns a session id REBUILT from the characters that matched, or null.
+ *
+ * Not the same thing as testing and then using the original string, and the
+ * difference is the point. A `test()` guard leaves the tainted value itself
+ * flowing into the URL — Sonar's taint analysis still flags it (S7044/S8476),
+ * and it is right to, because the guard and the use are two separate facts that
+ * a later edit can silently pull apart. Reconstructing from the capture group
+ * means the value that reaches the URL is, by construction, only ever
+ * `sess_` followed by characters this regex admitted.
+ */
+export function sanitizeClerkSessionId(value) {
+  const match = /^sess_([A-Za-z0-9]{8,64})$/.exec(typeof value === "string" ? value : "");
+  return match ? `sess_${match[1]}` : null;
+}
+
 /** The only URL shape this rehearsal will ever send a mutation to. */
 export function isPreviewCloudUrl(value) {
   return typeof value === "string" && /^https:\/\/[a-z0-9-]+\.convex\.cloud$/.test(value);
@@ -209,16 +225,15 @@ export async function mintConvexToken({ userId, secretKey }, fetchImpl = fetch) 
   // host is. An id containing `../` or a scheme would redirect this
   // authenticated request somewhere else entirely, with the Clerk secret
   // attached. Validated against Clerk's own id shape, and refused otherwise.
-  if (!isClerkSessionId(session?.id)) {
+  const sessionId = sanitizeClerkSessionId(session?.id);
+  if (sessionId === null) {
     throw new RehearsalError(
       `Clerk returned a session id that does not match the expected \`sess_…\` shape. Refusing to build a ` +
         `request URL from it rather than trusting a remote response to be well-formed.`
     );
   }
-  const tokenResponse = await fetchImpl(
-    `https://api.clerk.com/v1/sessions/${encodeURIComponent(session.id)}/tokens/convex`,
-    { method: "POST", headers }
-  );
+  const tokenUrl = new URL(`/v1/sessions/${sessionId}/tokens/convex`, "https://api.clerk.com");
+  const tokenResponse = await fetchImpl(tokenUrl.toString(), { method: "POST", headers });
   if (!tokenResponse.ok) {
     const detail = await tokenResponse.text();
     throw new RehearsalError(

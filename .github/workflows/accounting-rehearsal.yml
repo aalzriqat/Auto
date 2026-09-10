@@ -144,16 +144,22 @@ jobs:
         # is used because there is then no pipeline whose exit status anyone has
         # to reason about.
         #
-        # `-e` is deliberately NOT set here: it would abort the step the instant
-        # the runner exits non-zero, and the evidence would never be printed —
-        # trading one silent outcome for another. The status is captured, the
-        # evidence is shown, and the step then exits with the runner's own code.
+        # ⚠️ AND `set -uo pipefail` WAS NOT ENOUGH, WHICH IS WHY THE `||` IS HERE.
+        #
+        # GitHub runs every `run:` block as `/usr/bin/bash -e {0}` — the `-e` is
+        # in the RUNNER's own shell invocation, not something the script opts
+        # into. So the second attempt still lost its evidence: node exited 1,
+        # bash aborted on the spot, and `cat` never ran. A previous comment on
+        # these lines asserted "-e is deliberately NOT set here", which was
+        # simply false about the environment it was describing.
+        #
+        # `|| status=$?` is what actually survives `-e`: a command on the left of
+        # `||` does not trigger the errexit path, so the status is captured, the
+        # evidence is printed, and the step still exits non-zero.
         run: |
-          set -uo pipefail
-          node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json
-          status=$?
+          node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?
           cat rehearsal-evidence.json
-          exit $status
+          exit "${status:-0}"
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
           CONVEX_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}

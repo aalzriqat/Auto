@@ -64,6 +64,14 @@ async function makePartiallyCommittedDeposit({ orgId, ownerMust, label }) {
       // they never capitalize into inventory, so they are the wrong shape for a
       // deposit-release rehearsal.
       sourceType: "STOCK",
+      // ⚠️ REQUIRED even though the Convex arg validator declares it
+      // `v.optional(vehicleStatus)`. The cloud run refused every fixture with
+      // "Validation failed: status: Required" — the ARG VALIDATOR IS NOT THE
+      // LAST WORD here, a zod schema runs after it and demands this field. It is
+      // a documented trap in this repository and it still caught me, because a
+      // reader of `convex/vehicles.ts` alone would conclude the field is
+      // optional. `convex-test` never surfaced it.
+      status: "AVAILABLE",
       purchasePrice: 15000,
       purchasePaymentMethod: "CASH",
       idempotencyKey: `rehearsal-vehicle-${label}-${suffix}-${stamp}`,

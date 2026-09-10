@@ -30,12 +30,18 @@ const [, , convexUrl, startAtRaw, argsJson] = process.argv;
  * delivered somewhere unintended.
  */
 function assertPreviewCloudUrl(value) {
-  if (typeof value !== "string" || !/^https:\/\/[a-z0-9-]+\.convex\.cloud$/.test(value)) {
+  // REBUILT from the matched subdomain rather than returning the argv string.
+  // Testing a value and then using the original leaves the untrusted string
+  // flowing into the request, which is both what Sonar's taint analysis flags
+  // and a real fragility: the guard and the use are separate facts, and a later
+  // edit can pull them apart without either looking wrong.
+  const match = /^https:\/\/([a-z0-9-]{1,64})\.convex\.cloud$/.exec(typeof value === "string" ? value : "");
+  if (!match) {
     throw new Error(
       `Refusing to send an authenticated mutation to ${String(value)} — only a Convex cloud deployment URL is accepted.`
     );
   }
-  return value;
+  return `https://${match[1]}.convex.cloud`;
 }
 
 async function run() {
