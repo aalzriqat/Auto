@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { salesAr, salesEn } from "../lib/i18n/domains/sales";
@@ -43,20 +43,64 @@ function cockpitSources(): string {
     .join("\n");
 }
 
-describe("every Review mutation has a Deal caller on the same command", () => {
-  test("Review wires nothing the Deal does not", () => {
-    const review = wiredMutations(read(REVIEW_DIALOG));
+/**
+ * The commands the Review dialog wired at `b5baaa213` — frozen as DATA so the
+ * proof outlives the file. Deriving the expected set from the Review source
+ * would let deleting Review make this test error (or, worse, pass on an empty
+ * set); a literal cannot shrink because its source went away.
+ */
+const REQUIRED_DEAL_COMMANDS = [
+  "applications.updateStatus",
+  "applications.cancelApplication",
+  "applications.finalizeDeal",
+  "applications.confirmDisbursement",
+  "applications.confirmSupplierDisbursement",
+  "applications.setSupplierSettlementRoute",
+  "applications.registerVehicleHandover",
+  "applications.registerExpectedPayment",
+  "deposits.release",
+  "documents.updateDocumentStatus",
+  "documents.generateUploadUrl",
+  "documents.saveDocumentFile",
+] as const;
+
+describe("every command Review used to wire has a Deal caller on the same command", () => {
+  test("the frozen list is the full set, not a sample", () => {
+    expect(REQUIRED_DEAL_COMMANDS).toHaveLength(12);
+    expect(new Set(REQUIRED_DEAL_COMMANDS).size).toBe(12);
+  });
+
+  test("the Deal wires every command on the frozen list", () => {
     const deal = wiredMutations(cockpitSources());
-    // Sanity floor: the enumeration must actually have found the dialog's
-    // callers. An empty set would make the containment below vacuous.
-    expect(review.size).toBeGreaterThanOrEqual(12);
-    const missing = [...review].filter((name) => !deal.has(name));
+    const missing = REQUIRED_DEAL_COMMANDS.filter((name) => !deal.has(name));
     expect(missing).toEqual([]);
+  });
+
+  test("NEGATIVE CONTROL — removing a required Deal caller fails the ratchet", () => {
+    // The same enumeration over the cockpit sources with ONE required caller
+    // struck out: the check above must go red on exactly that command, so a
+    // future deletion cannot pass by making the source smaller.
+    const struck = cockpitSources().replace(/useMutation\(\s*api\.deposits\.release\)/, "/* removed */");
+    const deal = wiredMutations(struck);
+    const missing = REQUIRED_DEAL_COMMANDS.filter((name) => !deal.has(name));
+    expect(missing).toEqual(["deposits.release"]);
+  });
+
+  test("while the Review dialog still exists it wires nothing beyond the frozen list", () => {
+    // Deleted at retirement — the list above is then the whole contract.
+    if (!existsSync(join(ROOT, REVIEW_DIALOG))) return;
+    const extra = [...wiredMutations(read(REVIEW_DIALOG))].filter(
+      (name) => !(REQUIRED_DEAL_COMMANDS as ReadonlyArray<string>).includes(name)
+    );
+    expect(extra).toEqual([]);
   });
 
   test("the enumerator sees a caller written on one line and across lines", () => {
     expect(
-      wiredMutations(`const a = useMutation(api.applications.finalizeDeal);\nconst b = useMutation(\n  api.financingEconomics.approveDealerPurchaseAmount\n);`)
+      wiredMutations(`const a = useMutation(api.applications.finalizeDeal);
+const b = useMutation(
+  api.financingEconomics.approveDealerPurchaseAmount
+);`)
     ).toEqual(new Set(["applications.finalizeDeal", "financingEconomics.approveDealerPurchaseAmount"]));
   });
 });
@@ -65,7 +109,8 @@ describe("one deal, one backend command", () => {
   test("no client calls a duplicated deal mutation namespace", () => {
     // `dealWorkspace` is a READ model; a mutation there, or any `*V2` command,
     // would be the second economic path the architecture rule forbids.
-    const everything = cockpitSources() + read(REVIEW_DIALOG);
+    const everything =
+      cockpitSources() + (existsSync(join(ROOT, REVIEW_DIALOG)) ? read(REVIEW_DIALOG) : "");
     expect(everything.match(/useMutation\(\s*api\.(unifiedDeal|dealWorkspace)\./g) ?? []).toEqual([]);
     expect(everything.match(/useMutation\(\s*api\.[A-Za-z0-9_]+\.[A-Za-z0-9_]+V2\b/g) ?? []).toEqual([]);
   });
