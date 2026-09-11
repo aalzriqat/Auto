@@ -860,3 +860,81 @@ describe("the route control sits on the step that is waiting for it", () => {
     expect(within(focusRow()).getByText("FinalizeNeedsSettlementRoute")).toBeTruthy();
   });
 });
+
+/**
+ * P4 information parity (c19345/c19384): the customer's financing plan the
+ * Review dialog used to be the only place to read is on the Deal, read-only,
+ * and separate from the dealer economics. Every figure is the quote's own;
+ * nothing is derived, and an absent one is "not recorded", not a zero.
+ */
+describe("the customer's financing plan is readable on the Deal, separately from the dealer economics", () => {
+  test("renders the quote's price, down payment, financed amount, term and instalment in the deal's currency", () => {
+    queryResults.set(COCKPIT_QUERY, cockpit({ status: "APPROVED" }));
+    queryResults.set(
+      GET_QUERY,
+      application({
+        status: "APPROVED",
+        quote: {
+          vehiclePrice: 17000,
+          downPayment: 2000,
+          totalFinancedAmount: 15000,
+          termMonths: 48,
+          monthlyInstallment: 362.5,
+        },
+        customer: { firstName: "Test", lastName: "Customer", phone: "0790000000", nationalId: "1000000009" },
+      })
+    );
+    renderCockpit();
+    const panel = screen.getByTestId("deal-financing-plan");
+    expect(panel.textContent).toContain("FinancingPlanHeading");
+    expect(panel.textContent).toContain("17,000 Jordanian Dinar");
+    expect(panel.textContent).toContain("2,000 Jordanian Dinar");
+    expect(panel.textContent).toContain("15,000 Jordanian Dinar");
+    expect(panel.textContent).toContain("48 MonthsUnit");
+    expect(panel.textContent).toContain("362.5 Jordanian Dinar");
+    // Not a money-panel figure: the dealer's approved purchase amount is not here.
+    expect(panel.textContent).not.toContain("16,500");
+  });
+
+  test("a figure the quote does not carry is marked not recorded — never a zero", () => {
+    queryResults.set(COCKPIT_QUERY, cockpit({ status: "APPROVED" }));
+    queryResults.set(
+      GET_QUERY,
+      application({
+        status: "APPROVED",
+        quote: { vehiclePrice: 17000, downPayment: 2000, termMonths: 48 },
+      })
+    );
+    renderCockpit();
+    const panel = screen.getByTestId("deal-financing-plan");
+    expect(panel.textContent).toContain("FactUnavailable");
+    expect(panel.textContent).not.toMatch(/\b0 JD/);
+  });
+
+  test("the national ID is masked to its last four by default and disclosed only on request; absent when not recorded", () => {
+    queryResults.set(COCKPIT_QUERY, cockpit({ status: "APPROVED" }));
+    queryResults.set(
+      GET_QUERY,
+      application({
+        status: "APPROVED",
+        customer: { firstName: "Test", lastName: "Customer", phone: "0790000000", nationalId: "1000000009" },
+      })
+    );
+    renderCockpit();
+    const id = screen.getByTestId("deal-financing-plan-national-id");
+    expect(id.textContent).toBe("••••••0009");
+    fireEvent.click(screen.getByRole("button", { name: "ShowNationalId" }));
+    expect(id.textContent).toBe("1000000009");
+    fireEvent.click(screen.getByRole("button", { name: "HideNationalId" }));
+    expect(id.textContent).toBe("••••••0009");
+
+    cleanup();
+    queryResults.set(
+      GET_QUERY,
+      application({ status: "APPROVED", customer: { firstName: "Test", lastName: "Customer", phone: "0790000000" } })
+    );
+    renderCockpit();
+    expect(screen.queryByTestId("deal-financing-plan-national-id")).toBeNull();
+    expect(screen.getByTestId("deal-financing-plan").textContent).not.toContain("NationalIdLabel");
+  });
+});

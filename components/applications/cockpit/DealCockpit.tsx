@@ -80,6 +80,7 @@ import {
 } from "./StoppedDealDepositsPanel";
 import { DisbursementConfirmationDialog } from "../DisbursementConfirmationDialog";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
+import { FinancingPlanPanel, type FinancingPlanFacts } from "./FinancingPlanPanel";
 
 /**
  * The financed-deal cockpit.
@@ -660,6 +661,30 @@ export function DealCockpit({
       economicsCurrencyCode === orgCurrency.code ? orgCurrency.displayLabel : economicsCurrencyCode
     }`;
   /**
+   * The customer's plan, read straight off the quote `applications.get`
+   * already serves this caller. Nothing is computed from anything else: a
+   * figure the quote does not carry is shown as unavailable. The national
+   * identifier is exactly the field the Review dialog shows the same caller,
+   * masked here by default.
+   */
+  const financingPlan: FinancingPlanFacts | undefined =
+    app && app.quote
+      ? {
+          financierName: deal?.financeCompanyName || null,
+          currency: economicsCurrencyCode,
+          vehiclePrice: app.quote.vehiclePrice,
+          downPayment: app.quote.downPayment,
+          termMonths: app.quote.termMonths,
+          monthlyInstallment: app.quote.monthlyInstallment,
+          totalFinancedAmount: app.quote.totalFinancedAmount,
+          nationalId: app.customer?.nationalId?.trim() || null,
+        }
+      : undefined;
+  const formatPlanMajor = (major: number, currency: string) =>
+    `${major.toLocaleString(undefined, { maximumFractionDigits: scaleForCurrency(currency) })} ${
+      currency === orgCurrency.code ? orgCurrency.displayLabel : currency
+    }`;
+  /**
    * The frozen net is built in the deal's PINNED currency
    * (`resolveFinancedSalePlan` runs in `app.economicsCurrency ?? org`), so it is
    * spelled at that scale with that label. The legacy principal is a
@@ -1211,6 +1236,7 @@ export function DealCockpit({
     <DealCockpitView
       deal={deal}
       financeDecision={financeDecision}
+      financingPlan={financingPlan ? { facts: financingPlan, formatMajor: formatPlanMajor } : undefined}
       workflowAction={workflowAction}
       // Both are financed-only and come straight off the wrapper's payload.
       // `?? null` / `?? false` cover the loading and unreadable cases, where
@@ -1829,6 +1855,7 @@ export type FinanceDecisionWiring = {
 export function DealCockpitView({
   deal,
   financeDecision,
+  financingPlan,
   workflowAction,
   handover,
   expectedPayment,
@@ -1943,6 +1970,12 @@ export function DealCockpitView({
    * was skipped for want of `view:finance_applications`.
    */
   financeDecision?: FinanceDecisionWiring;
+  /**
+   * The customer's financing plan as the quote recorded it — financed deals
+   * only, and only once `applications.get` has arrived. Read-only; separate
+   * from the dealer economics in the money panel by design.
+   */
+  financingPlan?: { facts: FinancingPlanFacts; formatMajor: (major: number, currency: string) => string };
   /**
    * The action belonging to the stage the rail currently names.
    *
@@ -2932,6 +2965,17 @@ export function DealCockpitView({
                 )}
               </CardContent>
             </Card>
+          )}
+
+          {/* What the CUSTOMER agreed to pay, beside the car and before the
+              documents — the reading surface Review used to be for this, and
+              the one fact set the money panel deliberately does not carry. */}
+          {financingPlan && (
+            <FinancingPlanPanel
+              plan={financingPlan.facts}
+              formatMajor={financingPlan.formatMajor}
+              t={t}
+            />
           )}
 
           {/* The checklist that also DOES something — upload, verify, view —

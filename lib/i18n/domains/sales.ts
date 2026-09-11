@@ -188,6 +188,28 @@ const dealRailMessages = defineBilingualMessages({
   RecordedSettlementAmount: ["Recorded settlement", "التسوية المسجّلة"],
   /** Prefix for the currency a deal's figures were pinned in. */
   RecordedEconomicsCurrency: ["Recorded currency", "العملة المسجّلة"],
+
+  /**
+   * The customer's financing plan on the Deal — read-only, what the customer
+   * agreed to pay; explicitly not the dealer's remittance or profit.
+   */
+  FinancingPlanHeading: ["Financing plan", "خطة التمويل"],
+  FinancingPlanNote: [
+    "What the customer agreed to pay, as the quote recorded it — not what the finance company remits to the dealership.",
+    "ما اتفق العميل على دفعه كما سجّله عرض السعر — وليس ما تحوّله جهة التمويل إلى المعرض.",
+  ],
+  FinancingProvider: ["Financier", "جهة التمويل"],
+  CustomerPrice: ["Vehicle price", "سعر السيارة"],
+  DownPaymentLabel: ["Down payment", "الدفعة الأولى"],
+  FinancedAmountLabel: ["Financed amount", "المبلغ المموَّل"],
+  TermLabel: ["Term", "المدة"],
+  MonthsUnit: ["months", "شهرًا"],
+  InstallmentLabel: ["Monthly instalment", "القسط الشهري"],
+  NationalIdLabel: ["National ID", "الرقم الوطني"],
+  ShowNationalId: ["Show national ID", "إظهار الرقم الوطني"],
+  HideNationalId: ["Hide national ID", "إخفاء الرقم الوطني"],
+  /** A fact the record does not carry; never rendered as a zero. */
+  FactUnavailable: ["Not recorded", "غير مسجّل"],
   /** Prefix for the organisation's current currency beside it. */
   OrganisationCurrencyLabel: ["Organisation currency", "عملة المؤسسة"],
 
