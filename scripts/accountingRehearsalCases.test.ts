@@ -121,6 +121,8 @@ type Defects = {
   doubleFootprintOnReplay?: boolean;
   /** The same, for createReceivable / createInstallmentPlan ONLY — the six other steps stay healthy (Sonnet MAX R4-A1). */
   doubleFootprintReceivablesOnly?: boolean;
+  /** A replayed reservation returns the original id and inserts a SECOND reservation row — deposit and event untouched (Codex A-RT2-RESERVATION). */
+  duplicateReservationRowOnly?: boolean;
   /** A completed work order with a posted expense can be edited (and re-posted). */
   workOrderLockOpen?: boolean;
 };
@@ -150,6 +152,7 @@ function makeBackend(defects: Defects = {}) {
   const partners: Array<Record<string, any>> = [];
   const equityTxs: Array<Record<string, any>> = [];
   const workOrders: Array<Record<string, any>> = [];
+  const reservations: Array<Record<string, any>> = [];
   /**
    * THREE decimal places, matching the deployment the rehearsal actually runs
    * against. The fake used 100 and therefore agreed with my wrong expectation
@@ -749,9 +752,16 @@ function makeBackend(defects: Defects = {}) {
       case "vehicles:createReservation": {
         const again = replayedFootprint(args);
         const made = replayableCreate("resv", args, true);
-        if (made && !again) return made;
+        if (made && !again) {
+          // The isolated survivor: same id back, one more PRIMARY row, nothing else.
+          if (defects.duplicateReservationRowOnly) {
+            reservations.push({ _id: id("resv-dup"), vehicleId: String(args.vehicleId), customerId: String(args.customerId), origin: "RESERVATION" });
+          }
+          return made;
+        }
         const reservationId = again ? createdByKey.get(args.idempotencyKey)! : id("resv");
         if (args.idempotencyKey && !again) createdByKey.set(args.idempotencyKey, reservationId);
+        reservations.push({ _id: again ? id("resv-dup") : reservationId, vehicleId: String(args.vehicleId), customerId: String(args.customerId), origin: "RESERVATION" });
         const depositId = id("dep");
         const amountMinor = Math.round(Number(args.depositAmount ?? 0) * MINOR_SCALE);
         deposits.set(depositId, {
@@ -765,6 +775,15 @@ function makeBackend(defects: Defects = {}) {
         ]);
         return { ok: true as const, value: reservationId };
       }
+      case "vehicles:getReservationHistory":
+        return {
+          ok: true as const,
+          value: [
+            ...reservations.filter((r) => r.vehicleId === String(args.vehicleId)),
+            // deposit-origin holds are listed too, with a different origin
+            ...[...deposits.values()].filter((d) => d.vehicleId === String(args.vehicleId)).map((d) => ({ ...d, origin: "DEPOSIT" })),
+          ],
+        };
       case "fixedAssets:capitalize": {
         const again = replayedFootprint(args);
         const made = replayableCreate("asset", args, true);
@@ -1449,6 +1468,13 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
     const results = await runAgainst({ doubleFootprintReceivablesOnly: true });
     expect(statusOf(results, "RT2")).toBe("FAIL");
     expect(detail(results, "RT2")).toMatch(/receivable rows carrying this run's title after create \+ replay: expected 1, got 2/);
+  });
+
+  test("RT2 catches a replayed reservation that inserts a second PRIMARY row while returning the same id (Codex A-RT2-RESERVATION)", async () => {
+    // Deposit and DEPOSIT_RECEIVED stay at one; only the reservation row count can see it.
+    const results = await runAgainst({ duplicateReservationRowOnly: true });
+    expect(statusOf(results, "RT2")).toBe("FAIL");
+    expect(detail(results, "RT2")).toMatch(/reservation rows for the vehicle after create \+ replay: expected 1, got 2/);
   });
 
   test("RT2 catches a work-order state barrier that lets a posted expense be edited", async () => {

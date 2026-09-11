@@ -995,7 +995,20 @@ export async function runRehearsalCases(ctx) {
       expectEqual((reservationDeposits ?? []).length, 1, "deposit rows for the reserved vehicle after create + replay");
       await oneEvent("deposits", reservationDeposits[0]._id, "DEPOSIT_RECEIVED", "the reservation deposit");
       expectEqual(reservationDeposits[0].amountMinor ?? reservationDeposits[0].amount * m, 300 * m, "the reservation deposit's amount");
-      proven["vehicles.createReservation"] = { id: String(reservationId), depositId: String(reservationDeposits[0]._id) };
+      // The PRIMARY row too, not only its deposit and event. Codex A-RT2-RESERVATION:
+      // a replay that returns the original id, inserts a second
+      // vehicleReservations row under a fresh id and duplicates nothing else
+      // passed — the product lists reservations through getReservationHistory,
+      // so the fact is publicly measurable.
+      const history = await ownerMust("query", "vehicles:getReservationHistory", { orgId, vehicleId: reservedVehicle });
+      const reservationRows = (history ?? []).filter((h) => h.origin === "RESERVATION");
+      expectEqual(reservationRows.length, 1, "reservation rows for the vehicle after create + replay");
+      expectEqual(String(reservationRows[0]._id), String(reservationId), "the one reservation row is the one the command returned");
+      proven["vehicles.createReservation"] = {
+        id: String(reservationId),
+        depositId: String(reservationDeposits[0]._id),
+        reservationRows: reservationRows.length,
+      };
 
       // 7. workOrders.create COMPLETED — the expense is minted BEFORE the work
       //    order row exists, so nothing durable could identify a retry but the
