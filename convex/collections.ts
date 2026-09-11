@@ -899,6 +899,13 @@ export const createReceivable = mutation({
         // Everything that changes what is OWED and how it is recognised.
         // `dueDate` is included because it decides OPEN vs OVERDUE at birth,
         // and `saleId` because it decides whether AR is recognised here at all.
+        // The remaining persisted inputs — the vehicle, quote, application and
+        // assignee links and the notes — are included too (SCRUM-318): a retry
+        // that changed which car or deal a debt belongs to is not the same
+        // intent, and acknowledging it with the original id would record one
+        // thing while the caller believes another. Each is fingerprinted the
+        // way the row stores it: ids as strings, absence as null, notes
+        // untrimmed because they are persisted untrimmed.
         fingerprint: JSON.stringify({
           customerId: args.customerId.toString(),
           sourceType: args.sourceType,
@@ -907,6 +914,11 @@ export const createReceivable = mutation({
           saleId: args.saleId?.toString() ?? null,
           creditSystemKey: args.creditSystemKey ?? null,
           title: args.title.trim(),
+          vehicleId: args.vehicleId?.toString() ?? null,
+          quoteId: args.quoteId?.toString() ?? null,
+          applicationId: args.applicationId?.toString() ?? null,
+          assignedTo: args.assignedTo?.toString() ?? null,
+          notes: args.notes ?? null,
         }),
       },
       async () => await createReceivableCore(ctx, args, { user, membership, creditSystemKey, currency })
@@ -1053,7 +1065,10 @@ export const createInstallmentPlan = mutation({
         actorId: user._id,
         // The whole plan's shape. Every field here changes how many debts exist,
         // for how much, or when they fall due — so replaying one identity
-        // against a different schedule is a contradiction, not a retry.
+        // against a different schedule is a contradiction, not a retry. The
+        // links and notes every instalment carries are part of that shape for
+        // the reason given on createReceivable (SCRUM-318), fingerprinted as
+        // persisted: ids as strings, absence as null, notes untrimmed.
         fingerprint: JSON.stringify({
           customerId: args.customerId.toString(),
           totalAmount: args.totalAmount,
@@ -1064,6 +1079,11 @@ export const createInstallmentPlan = mutation({
           saleId: args.saleId?.toString() ?? null,
           creditSystemKey: args.creditSystemKey ?? null,
           title: args.title.trim(),
+          vehicleId: args.vehicleId?.toString() ?? null,
+          quoteId: args.quoteId?.toString() ?? null,
+          applicationId: args.applicationId?.toString() ?? null,
+          assignedTo: args.assignedTo?.toString() ?? null,
+          notes: args.notes ?? null,
         }),
       },
       async () => {
