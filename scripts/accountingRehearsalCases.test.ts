@@ -201,6 +201,7 @@ function makeBackend(defects: Defects = {}) {
   const allocations: Array<Record<string, any>> = [];
   const quotePrice = new Map<string, number>();
   const quoteCompany = new Map<string, string>();
+  const companyLtv = new Map<string, number | undefined>();
   const disbursementByKey = new Map<string, string>();
   const accountIdOf = (key: string) => {
     const hit = CHART.find((a) => a.systemKey === key);
@@ -958,8 +959,11 @@ function makeBackend(defects: Defects = {}) {
           value: [...deposits.values()].filter((d) => d.vehicleId === String(args.vehicleId)),
         };
       // ── FD1: a financed deal, its receivable, and the company's receipt ──
-      case "finance:createCompany":
-        return { ok: true as const, value: id("fco") };
+      case "finance:createCompany": {
+        const companyId = id("fco");
+        companyLtv.set(companyId, args.defaultLtvPercent);
+        return { ok: true as const, value: companyId };
+      }
       case "applications:createFromQuote": {
         const appId = id("fapp");
         financeApps.set(appId, {
@@ -978,7 +982,15 @@ function makeBackend(defects: Defects = {}) {
         app.status = args.status;
         return { ok: true as const, value: null };
       }
-      case "financingEconomics:recordSubmittedQuotation":
+      case "financingEconomics:recordSubmittedQuotation": {
+        // The product refuses to quote for a company with no LTV — the guard
+        // the first cloud run of FD1 hit because the fake did not carry it.
+        const app = financeApps.get(String(args.applicationId));
+        if (!app || companyLtv.get(app.companyId) === undefined) {
+          return { ok: false as const, error: "No LTV is configured for this finance company. Set a default LTV before quoting." };
+        }
+        return { ok: true as const, value: null };
+      }
       case "financingEconomics:approveDealerPurchaseAmount":
       case "applications:registerVehicleHandover":
       case "applications:registerExpectedPayment":

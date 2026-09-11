@@ -1652,6 +1652,9 @@ export async function runRehearsalCases(ctx) {
         profitRate: 5,
         maxTermMonths: 60,
         gracePeriodMonths: 0,
+        // The product refuses to quote for a company with no LTV; the first
+        // cloud run of this case failed on exactly that.
+        defaultLtvPercent: 100,
         isActive: true,
       });
       const price = 22000;
