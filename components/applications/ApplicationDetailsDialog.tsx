@@ -296,7 +296,12 @@ export function ApplicationDetailsDialog({
   const economicsCurrencyCode = app.economicsCurrency ?? currency.code;
   const economicsFactor = Math.pow(10, scaleForCurrency(economicsCurrencyCode));
   const expectedDisbursementAmount = app.quote?.totalFinancedAmount ?? 0;
-  const expectedDisbursementMinor = Math.round(expectedDisbursementAmount * currencyFactor);
+  // The finalized NET receivable when the deal has one — the figure the
+  // server compares against — and the principal only for a legacy row that
+  // predates it. Kept identical to the Deal cockpit's derivation so the two
+  // doors into `confirmDisbursement` send the same number. SCRUM-241.
+  const expectedDisbursementMinor =
+    app.financedSaleNetReceivableMinor ?? Math.round(expectedDisbursementAmount * currencyFactor);
   const expectsFinanceCompanyDisbursement = Boolean(app.companyId && expectedDisbursementMinor > 0);
   const confirmedDisbursementLabel = app.disbursedAmountMinor !== undefined
     ? currency.format(app.disbursedAmountMinor / currencyFactor)

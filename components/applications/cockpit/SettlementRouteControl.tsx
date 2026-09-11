@@ -23,6 +23,13 @@ export type DirectRouteRefusal =
   | "HeldDeposit"
   | null;
 
+const DIRECT_ROUTE_REFUSAL_KEY: Record<NonNullable<DirectRouteRefusal>, string> = {
+  NoExternalFinancier: "RouteDirectUnavailableNoExternalFinancier",
+  LEASE: "RouteDirectUnavailableLease",
+  PAYER_UNNAMED: "RouteDirectUnavailableUnnamedProvider",
+  HeldDeposit: "RouteDirectUnavailableHeldDeposit",
+};
+
 export function SettlementRouteControl({
   route,
   canSettleDirectToSupplier,
@@ -35,7 +42,7 @@ export function SettlementRouteControl({
   /** The recorded route, or undefined when nothing has been recorded yet. */
   route: SupplierSettlementRoute | undefined;
   canSettleDirectToSupplier: boolean;
-  directRouteRefusal: DirectRouteRefusal | string | null | undefined;
+  directRouteRefusal: DirectRouteRefusal | undefined;
   supplierName: string | undefined;
   disabled?: boolean;
   t: (key: string) => string;
@@ -43,13 +50,8 @@ export function SettlementRouteControl({
 }>) {
   const supplierLabel = supplierName ?? t("TheSupplier");
   const reasonKey =
-    directRouteRefusal === "LEASE"
-      ? "RouteDirectUnavailableLease"
-      : directRouteRefusal === "PAYER_UNNAMED"
-        ? "RouteDirectUnavailableUnnamedProvider"
-        : directRouteRefusal === "HeldDeposit"
-          ? "RouteDirectUnavailableHeldDeposit"
-          : "RouteDirectUnavailableNoExternalFinancier";
+    (directRouteRefusal && DIRECT_ROUTE_REFUSAL_KEY[directRouteRefusal]) ||
+    "RouteDirectUnavailableNoExternalFinancier";
 
   return (
     <fieldset

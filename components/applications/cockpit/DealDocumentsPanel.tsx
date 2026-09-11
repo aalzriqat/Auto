@@ -24,6 +24,14 @@ export type DealDocument = {
   fileUrl: string | null;
 };
 
+const DOCUMENT_STATUS_LABEL: Record<string, string> = {
+  MISSING: "DocMissing",
+  UPLOADED: "DocUploaded",
+  VERIFIED: "DocVerified",
+  REJECTED: "DocRejected",
+  WAIVED: "DocWaived",
+};
+
 /**
  * The document checklist that also DOES something.
  *
@@ -61,18 +69,10 @@ export function DealDocumentsPanel({
 }>) {
   const [previewFile, setPreviewFile] = useState<{ url: string; name: string } | null>(null);
 
-  const statusLabel = (status: string) =>
-    status === "MISSING"
-      ? t("DocMissing")
-      : status === "UPLOADED"
-        ? t("DocUploaded")
-        : status === "VERIFIED"
-          ? t("DocVerified")
-          : status === "REJECTED"
-            ? t("DocRejected")
-            : status === "WAIVED"
-              ? t("DocWaived")
-              : status;
+  const statusLabel = (status: string) => {
+    const key = DOCUMENT_STATUS_LABEL[status];
+    return key ? t(key) : status;
+  };
 
   if (documents === undefined) {
     // Withheld or loading: the checklist the rail already reads, with no

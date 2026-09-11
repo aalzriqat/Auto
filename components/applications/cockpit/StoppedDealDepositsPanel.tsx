@@ -21,6 +21,8 @@ export type DealDeposit = {
   amount: number;
   status: string;
   method?: string;
+  /** Minor units already paid out of this row by an earlier release. */
+  releasedAmountMinor?: number;
 };
 
 /**
@@ -41,6 +43,7 @@ export type DealDeposit = {
 export function StoppedDealDepositsPanel({
   deposits,
   canResolve,
+  faceValueIsReleasable,
   resolvingId,
   formatAmount,
   t,
@@ -48,6 +51,14 @@ export function StoppedDealDepositsPanel({
 }: Readonly<{
   deposits: ReadonlyArray<DealDeposit>;
   canResolve: boolean;
+  /**
+   * Server-derived: nothing on the quote is applied, assigned to a car,
+   * awaiting its own decision, or paid out — so a row's face value IS what
+   * `deposits.release` would pay. When false the action is withheld and the
+   * reason is stated, because an irreversible confirmation must show the exact
+   * amount that will move, and this screen cannot compute the free remainder.
+   */
+  faceValueIsReleasable: boolean;
   resolvingId: string | null;
   formatAmount: (amount: number) => string;
   t: (key: string) => string;
@@ -104,8 +115,16 @@ export function StoppedDealDepositsPanel({
           <HandCoins className="h-4 w-4" />
           {t("ApplicationDeposits")}
         </div>
+        {/* Stated once, above the rows, when the decision belongs elsewhere. */}
+        {canResolve && !faceValueIsReleasable && deposits.some((d) => d.status === "HELD") && (
+          <p className="text-xs text-muted-foreground">{t("DepositResolveElsewhere")}</p>
+        )}
         {deposits.map((deposit) => {
           const held = deposit.status === "HELD";
+          // A row partly paid out is never resolved from its face value here,
+          // whatever the quote summary says.
+          const resolvable =
+            held && canResolve && faceValueIsReleasable && !(deposit.releasedAmountMinor ?? 0);
           return (
             <div
               key={deposit._id}
@@ -130,7 +149,10 @@ export function StoppedDealDepositsPanel({
                   {statusLabel(deposit.status)}
                 </span>
               </div>
-              {held && canResolve && (
+              {held && canResolve && !!(deposit.releasedAmountMinor ?? 0) && faceValueIsReleasable && (
+                <p className="text-xs text-muted-foreground">{t("DepositResolveElsewhere")}</p>
+              )}
+              {resolvable && (
                 <div className="flex flex-wrap gap-2">
                   <Button
                     size="sm"

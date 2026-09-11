@@ -13,7 +13,7 @@
  * refuse. No `unifiedDeal.*` second path exists; the structural test in
  * `scripts/` proves that at the file level, this proves it at the call level.
  */
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Id } from "../../../convex/_generated/dataModel";
 
@@ -88,6 +88,31 @@ const APP = "app_2048" as Id<"financeApplications">;
 const COCKPIT_QUERY = "dealWorkspace:financedDealCockpit";
 const GET_QUERY = "applications:get";
 const DOCUMENTS_QUERY = "documents:getForApplication";
+const ALLOCATION_QUERY = "deposits:quoteAllocation";
+
+/** `deposits.quoteAllocation`'s summary: nothing committed, nothing paid out unless a case says so. */
+function allocationSummary(overrides: Record<string, unknown> = {}) {
+  return {
+    currency: "JOD",
+    scale: 3,
+    isMultiVehicle: false,
+    heldTotalMinor: 500_000,
+    totalReceivedMinor: 500_000,
+    allocatedMinor: 0,
+    appliedMinor: 0,
+    reversingMinor: 0,
+    releasedAwaitingDecisionMinor: 0,
+    refundedMinor: 0,
+    forfeitedMinor: 0,
+    otherFinalizedMinor: 0,
+    resolvedOutMinor: 0,
+    unallocatedMinor: 500_000,
+    availableForAllocationMinor: 500_000,
+    vehicles: [],
+    vehiclesWithoutAllocation: [],
+    ...overrides,
+  };
+}
 
 /** The cockpit payload, minimal. */
 function cockpit(overrides: Record<string, unknown> = {}) {
@@ -132,6 +157,7 @@ function cockpit(overrides: Record<string, unknown> = {}) {
 function application(overrides: Record<string, unknown> = {}) {
   return {
     _id: APP,
+    quoteId: "quote_1",
     status: "UNDER_REVIEW",
     salespersonId: "user_sales",
     companyId: "company_1",
@@ -377,6 +403,33 @@ describe("disbursement — the two confirmations, from the DISBURSEMENT stage", 
     expect(String(call.idempotencyKey)).toMatch(/^confirm-disbursement:/);
   });
 
+  test("a finalized deal sends the finance company's NET receivable, not the customer's principal", async () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages: closedStages }));
+    // finalizeDeal froze what the company actually owes after a 3,000 applied
+    // deposit and a 1,375 deduction: 15,625 JOD. `confirmDisbursement`
+    // compares the caller's figure to THIS and refuses the 20,000 principal.
+    queryResults.set(
+      GET_QUERY,
+      application({
+        status: "CLOSED",
+        quote: { totalFinancedAmount: 20000, downPayment: 500, vehiclePrice: 22000 },
+        financedSaleNetReceivableMinor: 15_625_000,
+      })
+    );
+    renderCockpit();
+
+    fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+    // The figure the operator confirms is the one that will be sent.
+    expect(screen.getByRole("dialog").textContent).toContain("JD 15625");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+
+    await waitFor(() => expect(mutationCalls.get("applications:confirmDisbursement")).toHaveLength(1));
+    expect(mutationCalls.get("applications:confirmDisbursement")![0]).toMatchObject({
+      disbursedAmountMinor: 15_625_000,
+    });
+  });
+
   test("direct to the supplier: the advice is recorded through confirmSupplierDisbursement, scaled by the deal's currency", async () => {
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages: closedStages }));
@@ -433,6 +486,10 @@ describe("held deposit on a stopped deal — deposits.release", () => {
     pendingDepositResolution: true,
   };
 
+  beforeEach(() => {
+    queryResults.set(ALLOCATION_QUERY, allocationSummary());
+  });
+
   test("refunding sends the resolution, the method the cash leaves by, and a retained key", async () => {
     permissions.add(PERMISSIONS.APPROVE_REQUESTS);
     queryResults.set(COCKPIT_QUERY, cockpit(rejected));
@@ -457,7 +514,14 @@ describe("held deposit on a stopped deal — deposits.release", () => {
       resolution: "REFUNDED",
       refundMethod: "CASH",
     });
-    expect(String(call.idempotencyKey)).toMatch(/^release-deposit:/);
+    // NO client-minted key. `deposits.release` pays out whatever is FREE on
+    // the row, so two genuine payouts of one deposit are byte-identical
+    // requests: a key retained across a lost acknowledgement would hand the
+    // second, genuinely new release the FIRST release's stored result — no
+    // money moves and the operator is told the customer was refunded. The
+    // Review dialog omits the key for exactly this reason; the generation-
+    // aware identity arrives with the Accounting convergence (SCRUM-313).
+    expect("idempotencyKey" in call).toBe(false);
   });
 
   test("forfeiting carries no refund method", async () => {
@@ -489,6 +553,38 @@ describe("held deposit on a stopped deal — deposits.release", () => {
     const row = screen.getByTestId("deal-deposit-dep_1");
     expect(row.textContent).toContain("DepositStatusHeld");
     expect(within(row).queryByRole("button")).toBeNull();
+  });
+
+  test("a deposit partly paid out, or with money committed elsewhere on the quote, is listed but NOT resolvable here", () => {
+    permissions.add(PERMISSIONS.APPROVE_REQUESTS);
+    queryResults.set(COCKPIT_QUERY, cockpit(rejected));
+    // 2,000 of a 5,000 deposit already paid out: the face value is not what
+    // the server would release, so the irreversible confirmation must not
+    // offer the face value.
+    queryResults.set(
+      GET_QUERY,
+      application({
+        status: "REJECTED",
+        deposits: [{ _id: "dep_1", amount: 5000, status: "HELD", releasedAmountMinor: 2_000_000 }],
+      })
+    );
+    renderCockpit();
+    const row = screen.getByTestId("deal-deposit-dep_1");
+    expect(within(row).queryByRole("button")).toBeNull();
+    expect(screen.getByText("DepositResolveElsewhere")).toBeTruthy();
+    cleanup();
+
+    // Same for money still assigned to a car on the quote, as the server's
+    // own allocation summary reports it.
+    queryResults.set(COCKPIT_QUERY, cockpit(rejected));
+    queryResults.set(
+      GET_QUERY,
+      application({ status: "REJECTED", deposits: [{ _id: "dep_1", amount: 5000, status: "HELD" }] })
+    );
+    queryResults.set(ALLOCATION_QUERY, allocationSummary({ allocatedMinor: 3_000_000 }));
+    renderCockpit();
+    expect(within(screen.getByTestId("deal-deposit-dep_1")).queryByRole("button")).toBeNull();
+    expect(screen.getByText("DepositResolveElsewhere")).toBeTruthy();
   });
 
   test("deposits are not listed on a live deal", () => {
@@ -546,6 +642,29 @@ describe("documents — documents.updateDocumentStatus / upload, from the checkl
 });
 
 describe("the route control sits on the step that is waiting for it", () => {
+  test("while the application facts are still loading, the step keeps its blocker and names no refusal it cannot yet back with a control", () => {
+    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.REGISTER_VEHICLE_HANDOVER);
+    permissions.add(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "APPROVED",
+        expectedPaymentRegistered: true,
+        supplierSettlementRouteRequired: true,
+        stages: [
+          { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+          { key: "SETTLEMENT", state: "BLOCKED", blocker: "AwaitingSettlement", authority: "DEALER" },
+        ],
+      })
+    );
+    // `applications:get` deliberately NOT stubbed: still loading.
+    renderCockpit();
+    expect(within(focusRow()).getByText("BlockerAwaitingSettlement")).toBeTruthy();
+    expect(within(focusRow()).queryByText("FinalizeNeedsSettlementRoute")).toBeNull();
+    expect(within(focusRow()).queryByRole("button")).toBeNull();
+  });
+
   test("when the close is refused for want of the route, the control renders inside the focus row and not beside the vehicle", () => {
     permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
     permissions.add(PERMISSIONS.REGISTER_VEHICLE_HANDOVER);

@@ -310,6 +310,28 @@ function finalizeUnavailableReasonKey(
   return undefined;
 }
 
+/** The toast for each credit-stage transition this screen can record. */
+const CREDIT_STATUS_SUCCESS: Record<"UNDER_REVIEW" | "APPROVED" | "REJECTED", string> = {
+  UNDER_REVIEW: "AppUnderReviewSuccess",
+  APPROVED: "AppApprovedSuccess",
+  REJECTED: "AppRejectedSuccess",
+};
+
+/**
+ * Why a DISBURSEMENT confirmation is not offered: the permission case names a
+ * person, the not-applicable case names a fact about the deal. Enumerable
+ * rather than a nested ternary, so the three outcomes read one per line.
+ */
+function disbursementUnavailableReason(
+  available: boolean,
+  hasPermission: boolean,
+  notApplicableKey: string
+): string | undefined {
+  if (available) return undefined;
+  if (hasPermission) return notApplicableKey;
+  return "DisbursementNeedsPermission";
+}
+
 /** A money run is Latin digits inside Arabic prose; `<bdi>` keeps it whole. */
 function Money({ children }: Readonly<{ children: React.ReactNode }>) {
   return <bdi className="tabular-nums">{children}</bdi>;
@@ -559,7 +581,15 @@ export function DealCockpit({
   const cancelKeyRef = useRef<string | null>(null);
   const confirmDisbursementKeyRef = useRef<string | null>(null);
   const confirmSupplierDisbursementKeyRef = useRef<string | null>(null);
-  const releaseDepositKeyRef = useRef<string | null>(null);
+  // Deliberately NO key ref for `deposits.release`. That command pays out
+  // whatever is currently FREE on the row, so two genuine payouts of one
+  // deposit are byte-identical requests; a key retained across a lost
+  // acknowledgement would hand the second, genuinely new release the first
+  // one's stored result — no money moves and the operator is told the
+  // customer was refunded. The Review dialog omits the key for this reason
+  // and so does this caller. At-most-once on this path comes from the server
+  // recomputing the free balance; the generation-aware identity (keyed on
+  // `releaseCount`) arrives with the Accounting convergence (SCRUM-313).
 
   // ---- the same derivations the Review dialog made, from the same payload ----
   // The dealer-side economics are denominated in the application's OWN pinned
@@ -569,7 +599,23 @@ export function DealCockpit({
   const orgFactor = Math.pow(10, scaleForCurrency(orgCurrency.code));
   const economicsCurrencyCode = app?.economicsCurrency ?? orgCurrency.code;
   const economicsFactor = Math.pow(10, scaleForCurrency(economicsCurrencyCode));
-  const expectedDisbursementMinor = Math.round((app?.quote?.totalFinancedAmount ?? 0) * orgFactor);
+  /**
+   * What the finance company actually owes the dealership — the figure
+   * `confirmDisbursement` compares against.
+   *
+   * `finalizeDeal` freezes `financedSaleNetReceivableMinor`: the principal
+   * less every deposit the dealership holds and every cost the company
+   * withholds. The server checks the caller's amount against THAT first, and
+   * only a legacy row that predates the field is checked against the
+   * principal. Sending the principal unconditionally — as the Review dialog
+   * still does — is a guaranteed refusal on any deal with an applied deposit
+   * or a withheld fee, from a dialog that offers no way to type the right
+   * number. The same value is displayed and sent, so what the operator
+   * confirms is what the server receives. SCRUM-241 owns making this a
+   * server-projected authority; until then the frozen snapshot is read here.
+   */
+  const principalMinor = Math.round((app?.quote?.totalFinancedAmount ?? 0) * orgFactor);
+  const expectedDisbursementMinor = app?.financedSaleNetReceivableMinor ?? principalMinor;
   const expectsFinanceCompanyDisbursement = Boolean(app?.companyId && expectedDisbursementMinor > 0);
   const isConsignedDeal = app?.vehicle?.sourceType === "SOURCED";
   const settlesDirectToSupplier =
@@ -618,11 +664,44 @@ export function DealCockpit({
     amount: deposit.amount,
     status: deposit.status,
     method: deposit.method,
+    releasedAmountMinor: deposit.releasedAmountMinor,
   }));
   const showApplicationDeposits =
     app != null &&
     (app.status === "REJECTED" || app.status === "CANCELLED") &&
     applicationDeposits.length > 0;
+  /**
+   * Whether a deposit's FACE value is what `deposits.release` would actually
+   * pay out — the only case in which this screen may put that figure on an
+   * irreversible confirmation.
+   *
+   * The server releases the FREE part of the row: face value less what a live
+   * sale has applied, what is still assigned to a car on the deal, what was
+   * released for its own decision, and what was already paid out. Those live
+   * in holds and applications the deal payload does not carry, so the answer
+   * is read from the server's own allocation summary
+   * (`deposits.quoteAllocation`) rather than reconstructed here. Any money in
+   * any of those buckets, on any deposit of the quote, and the action is
+   * withheld with a reason — the deposit manager on the vehicle is the surface
+   * that resolves shares and remainders exactly. Conservative on purpose: the
+   * cost of withholding is a pointer, the cost of over-offering is an operator
+   * authorising 5,000 while 2,000 moves.
+   */
+  const allocation = useQuery(
+    api.deposits.quoteAllocation,
+    showApplicationDeposits && app?.quoteId ? { orgId, quoteId: app.quoteId } : "skip"
+  );
+  const quoteHasCommittedMoney =
+    allocation === undefined ||
+    allocation === null ||
+    allocation.isMultiVehicle ||
+    allocation.allocatedMinor > 0 ||
+    allocation.appliedMinor > 0 ||
+    allocation.reversingMinor > 0 ||
+    allocation.releasedAwaitingDecisionMinor > 0 ||
+    allocation.refundedMinor > 0 ||
+    allocation.forfeitedMinor > 0 ||
+    allocation.otherFinalizedMinor > 0;
 
   const [confirmingHandover, setConfirmingHandover] = useState(false);
   const [handoverSubmitting, setHandoverSubmitting] = useState(false);
@@ -779,22 +858,22 @@ export function DealCockpit({
           stageKey: "DISBURSEMENT",
           actionKey: "ConfirmSupplierDisbursement",
           onStart: () => setConfirmingSupplierDisbursement(true),
-          unavailableReasonKey: canConfirmSupplierDisbursement
-            ? undefined
-            : canConfirmFinanceDisbursement
-              ? "SupplierDisbursementUnavailable"
-              : "DisbursementNeedsPermission",
+          unavailableReasonKey: disbursementUnavailableReason(
+            canConfirmSupplierDisbursement,
+            canConfirmFinanceDisbursement,
+            "SupplierDisbursementUnavailable"
+          ),
         };
       }
       return {
         stageKey: "DISBURSEMENT",
         actionKey: "ConfirmDisbursement",
         onStart: () => setConfirmingDisbursement(true),
-        unavailableReasonKey: canConfirmDisbursement
-          ? undefined
-          : canConfirmFinanceDisbursement
-            ? "DisbursementUnavailable"
-            : "DisbursementNeedsPermission",
+        unavailableReasonKey: disbursementUnavailableReason(
+          canConfirmDisbursement,
+          canConfirmFinanceDisbursement,
+          "DisbursementUnavailable"
+        ),
       };
     }
 
@@ -840,6 +919,13 @@ export function DealCockpit({
       };
     }
 
+    // The close's refusal reason and the route control it points at are
+    // derived from two independent queries (`deal` and `app`). Naming the
+    // refusal before `app` has arrived would show "choose it here" with
+    // nothing to choose from for a render or two, so the step keeps only its
+    // blocker until both facts are on hand.
+    if (app === undefined) return undefined;
+
     return {
       stageKey: "SETTLEMENT",
       actionKey: "FinalizeDealAction",
@@ -881,15 +967,7 @@ export function DealCockpit({
     setCreditError(null);
     try {
       await updateStatus({ orgId, applicationId, status });
-      toast.success(
-        t(
-          status === "APPROVED"
-            ? "AppApprovedSuccess"
-            : status === "REJECTED"
-              ? "AppRejectedSuccess"
-              : "AppUnderReviewSuccess"
-        )
-      );
+      toast.success(t(CREDIT_STATUS_SUCCESS[status]));
       setDecidingCredit(false);
     } catch (error) {
       // "You cannot approve your own application", an illegal transition —
@@ -1157,23 +1235,19 @@ export function DealCockpit({
           ? {
               items: applicationDeposits,
               canResolve: canResolveDeposits,
+              // Withheld — with a reason on the panel — whenever face value is
+              // not provably the releasable value.
+              faceValueIsReleasable: !quoteHasCommittedMoney,
               resolvingId: resolvingDepositId,
               onResolve: async (depositId, resolution, refundMethod) => {
                 setResolvingDepositId(depositId);
                 try {
-                  // Retained until the server answers, then retired. The
-                  // Accounting RC (SCRUM-313) replaces this with a
-                  // generation-aware identity at convergence; the mutation
-                  // already accepts the key today.
-                  releaseDepositKeyRef.current ??= `release-deposit:${crypto.randomUUID()}`;
                   await releaseDeposit({
                     orgId,
                     depositId: depositId as Id<"deposits">,
                     resolution,
                     refundMethod: resolution === "REFUNDED" ? refundMethod : undefined,
-                    idempotencyKey: releaseDepositKeyRef.current,
                   });
-                  releaseDepositKeyRef.current = null;
                   toast.success(
                     t(resolution === "REFUNDED" ? "DepositRefundedSuccess" : "DepositForfeitedSuccess")
                   );
@@ -1713,6 +1787,8 @@ export function DealCockpitView({
   deposits?: {
     items: ReadonlyArray<DealDeposit>;
     canResolve: boolean;
+    /** Server-derived: nothing on the quote is applied, assigned, awaiting a decision or paid out. */
+    faceValueIsReleasable: boolean;
     resolvingId: string | null;
     onResolve: (
       depositId: string,
@@ -2405,6 +2481,7 @@ export function DealCockpitView({
             <StoppedDealDepositsPanel
               deposits={deposits.items}
               canResolve={deposits.canResolve}
+              faceValueIsReleasable={deposits.faceValueIsReleasable}
               resolvingId={deposits.resolvingId}
               formatAmount={(amount) => currency.format(amount)}
               t={t}

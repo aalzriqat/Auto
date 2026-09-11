@@ -167,6 +167,17 @@ const dealRailMessages = defineBilingualMessages({
 
   /** A document rule the finance company waived for this deal. */
   DocWaived: ["Waived", "مُعفى"],
+
+  /**
+   * Why a held deposit is listed here but not resolved here: part of it is
+   * applied, assigned to a car, awaiting its own decision, or already paid
+   * out, so its face value is not what a release would move. The exact
+   * remainder is resolved from the vehicle's deposit manager.
+   */
+  DepositResolveElsewhere: [
+    "Part of this deposit is applied, assigned to a vehicle, or already paid out, so its face value is not what a release would move. Resolve it from the vehicle's deposit manager, which shows the exact remainder.",
+    "جزء من هذا العربون مطبَّق أو مخصَّص لمركبة أو مدفوع مسبقاً، لذا فإن قيمته الاسمية ليست ما سيُصرف عند التحرير. عالجه من إدارة العربون في صفحة المركبة، حيث يظهر المتبقي بدقة.",
+  ],
 });
 
 export const salesEn = {

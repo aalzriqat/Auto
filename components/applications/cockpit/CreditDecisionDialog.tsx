@@ -96,11 +96,9 @@ function CreditDecisionBody({
 }>) {
   const [decision, setDecision] = useState<CreditDecision | null>(null);
   const approveUnavailable = !canApprove || isOwnDeal;
-  const approveReason = !canApprove
-    ? "CreditDecisionApproveNeedsPermission"
-    : isOwnDeal
-      ? "CreditDecisionOwnDeal"
-      : null;
+  let approveReason: string | null = null;
+  if (!canApprove) approveReason = "CreditDecisionApproveNeedsPermission";
+  else if (isOwnDeal) approveReason = "CreditDecisionOwnDeal";
 
   return (
     <>
