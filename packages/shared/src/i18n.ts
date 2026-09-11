@@ -115,8 +115,13 @@ const mobileFoundationStringEntries = [
   ["roleStartSalesBody", "Create and complete deals", "أنشئ الصفقات وأكملها"],
   ["roleStartReceptionTitle", "Front desk", "الاستقبال"],
   ["roleStartReceptionBody", "Follow up with leads and customers", "تابع العملاء المحتملين والعملاء"],
-  ["roleStartAccountantTitle", "Daily collections", "التحصيل اليومي"],
-  ["roleStartAccountantBody", "Manage the ledger and cash movement", "إدارة القيود وحركة النقد"],
+  // Routes to the accounting module, which is the operational cash-movement
+  // projection and not the General Ledger. It offers no writes, so this card
+  // must not promise ledger management. Kept identical to the module's own
+  // title/subtitle in nativeModules.ts — accounting.test.tsx fails if the two
+  // drift apart again. SCRUM-53.
+  ["roleStartAccountantTitle", "Cash movements", "حركات نقدية"],
+  ["roleStartAccountantBody", "View only, not the General Ledger.", "للعرض فقط، وليست دفتر الأستاذ العام."],
   // Dealer home screen. Deliberately namespaced `dealerHome*` and NOT `home*`:
   // the `home*` prefix already belongs to the public buyer home screen, and
   // reusing it is exactly how `homeSearchPlaceholder` ended up shared between

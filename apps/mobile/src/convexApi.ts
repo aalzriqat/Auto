@@ -1954,18 +1954,6 @@ type QuoteSaveArgs = OrgScopedArgs & {
   manualIncludesCommissionInDebt?: boolean;
 };
 
-type TransactionMutationArgs = OrgScopedArgs & {
-  type: MobileLedgerType;
-  amount: number;
-  date: number;
-  category: MobileLedgerCategory;
-  description: string;
-  vehicleId?: string;
-  userId?: string;
-  expenseId?: string;
-  idempotencyKey?: string;
-};
-
 type ApprovalRespondArgs = OrgScopedArgs & {
   requestId: string;
   status: MobileApprovalStatus;
@@ -2505,22 +2493,17 @@ export const api = {
       "directMessages:setMuted",
     ),
   },
+  // Read-only by contract. `transactions` is the operational cash-movement
+  // projection, not the General Ledger, so no client may hold a generic write
+  // reference to it — a mobile write moved this list and left the authoritative
+  // books unchanged. New financial activity originates from the domain workflow
+  // that owns it, or from an approved manual journal. SCRUM-53.
   transactions: {
     list: makeFunctionReference<
       "query",
       TransactionListArgs,
       MobilePageResult<MobileLedgerTransaction>
     >("transactions:list"),
-    add: makeFunctionReference<"mutation", TransactionMutationArgs, string>("transactions:add"),
-    update: makeFunctionReference<
-      "mutation",
-      Partial<Omit<TransactionMutationArgs, "orgId" | "idempotencyKey">> &
-        OrgScopedArgs & { transactionId: string },
-      null
-    >("transactions:update"),
-    remove: makeFunctionReference<"mutation", OrgScopedArgs & { transactionId: string }, null>(
-      "transactions:remove",
-    ),
   },
   sourcingPayables: {
     list: makeFunctionReference<
@@ -3186,15 +3169,6 @@ export const api = {
   };
   transactions: {
     list: FunctionReference<"query", "public", TransactionListArgs, MobilePageResult<MobileLedgerTransaction>>;
-    add: FunctionReference<"mutation", "public", TransactionMutationArgs, string>;
-    update: FunctionReference<
-      "mutation",
-      "public",
-      Partial<Omit<TransactionMutationArgs, "orgId" | "idempotencyKey">> &
-        OrgScopedArgs & { transactionId: string },
-      null
-    >;
-    remove: FunctionReference<"mutation", "public", OrgScopedArgs & { transactionId: string }, null>;
   };
   sourcingPayables: {
     list: FunctionReference<
