@@ -239,8 +239,21 @@ function makeBackend(defects: Defects = {}) {
         }
         periodStatus = "CLOSED";
         return { ok: true as const, value: null };
-      case "collections:createReceivable":
+      case "collections:createReceivable": {
+        // The product refuses to INFER a credit account from an ambiguous
+        // source type. The fake accepted anything, so the cloud run was the
+        // first thing to tell me — twice, in one run. A fake more permissive
+        // than the product turns every one of its preconditions into a
+        // cloud-only discovery.
+        const ambiguous = args.sourceType === "OTHER" || args.sourceType === "CHEQUE";
+        if (ambiguous && !args.creditSystemKey) {
+          return {
+            ok: false as const,
+            error: "This receivable's credit account isn't obvious from its source type — specify creditSystemKey.",
+          };
+        }
         return replayableCreate("recv", args)!;
+      }
       case "collections:recordPayment": {
         const made = replayableCreate("pay", args, true);
         if (made) return made;

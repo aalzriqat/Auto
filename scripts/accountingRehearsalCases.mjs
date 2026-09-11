@@ -793,6 +793,10 @@ export async function runRehearsalCases(ctx) {
         orgId,
         customerId,
         sourceType: "OTHER",
+        // The product REFUSES to infer a credit account from an ambiguous source
+        // type, and it is right to: guessing which account a receivable credits
+        // is how revenue ends up in the wrong place with no error anywhere.
+        creditSystemKey: "MISCELLANEOUS_INCOME",
         title: `Rehearsal invoice A ${stamp}`,
         amount: 1000,
         dueDate,
@@ -802,6 +806,10 @@ export async function runRehearsalCases(ctx) {
         orgId,
         customerId,
         sourceType: "OTHER",
+        // The product REFUSES to infer a credit account from an ambiguous source
+        // type, and it is right to: guessing which account a receivable credits
+        // is how revenue ends up in the wrong place with no error anywhere.
+        creditSystemKey: "MISCELLANEOUS_INCOME",
         title: `Rehearsal invoice B ${stamp}`,
         amount: 400,
         dueDate,
@@ -907,6 +915,7 @@ export async function runRehearsalCases(ctx) {
         orgId,
         customerId,
         sourceType: "CHEQUE",
+        creditSystemKey: "MISCELLANEOUS_INCOME",
         title: `Rehearsal cheque invoice ${stamp}`,
         amount: 1200,
         dueDate,
