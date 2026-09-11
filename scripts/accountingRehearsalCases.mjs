@@ -1350,7 +1350,7 @@ export async function runRehearsalCases(ctx) {
       expectEqual(settled.status, "PAID", "receivable status after the cheque cleared");
       const clearingLineShape = cleared.lines
         .map((l) => `${keyOf.get(String(l.accountId))}|${l.debitMinor}|${l.creditMinor}`)
-        .sort();
+        .sort((a, b) => a.localeCompare(b));
 
       const returned = await ownerCall("mutation", "collections:returnClearedCheque", {
         orgId,
@@ -1378,7 +1378,7 @@ export async function runRehearsalCases(ctx) {
       expectEqual(reversedEvent.entry.status, "REVERSED", "the clearing entry's status after the return");
       const originalAfter = reversedEvent.lines
         .map((l) => `${keyOf.get(String(l.accountId))}|${l.debitMinor}|${l.creditMinor}`)
-        .sort();
+        .sort((a, b) => a.localeCompare(b));
       if (JSON.stringify(originalAfter) !== JSON.stringify(clearingLineShape)) {
         fail("the clearing entry's lines CHANGED across the return — history was edited, not reversed");
       }
@@ -1975,8 +1975,8 @@ async function eventAndJournal({ orgId, ownerMust, sourceType, sourceId, eventTy
  */
 function expectExactLines(lines, keyOf, expected, { currency, decimals, what, customerId }) {
   const shape = (key, debit, credit) => `${key} Dr ${debit} Cr ${credit}`;
-  const actual = lines.map((l) => shape(keyOf.get(String(l.accountId)) ?? "?", l.debitMinor ?? 0, l.creditMinor ?? 0)).sort();
-  const wanted = expected.map((e) => shape(e.key, e.debitMinor ?? 0, e.creditMinor ?? 0)).sort();
+  const actual = lines.map((l) => shape(keyOf.get(String(l.accountId)) ?? "?", l.debitMinor ?? 0, l.creditMinor ?? 0)).sort((a, b) => a.localeCompare(b));
+  const wanted = expected.map((e) => shape(e.key, e.debitMinor ?? 0, e.creditMinor ?? 0)).sort((a, b) => a.localeCompare(b));
   if (JSON.stringify(actual) !== JSON.stringify(wanted)) {
     fail(`${what}: journal lines are not exactly the expected posting.\n  expected ${JSON.stringify(wanted)}\n  actual   ${JSON.stringify(actual)}`);
   }
@@ -2053,7 +2053,7 @@ async function replayMustReturnSame({ call, must, fnPath, args, what }) {
   if (!replay.ok) {
     fail(`replaying ${what} with the SAME identity was refused (${String(replay.error).slice(0, 200)}) — a refused retry is not a safe retry`);
   }
-  const norm = (v) => JSON.stringify(Array.isArray(v) ? v.map(String).sort() : String(v));
+  const norm = (v) => JSON.stringify(Array.isArray(v) ? v.map(String).sort((a, b) => a.localeCompare(b)) : String(v));
   if (norm(replay.value) !== norm(first)) {
     fail(`replaying ${what} returned a DIFFERENT identity (${norm(replay.value)} vs ${norm(first)}) — the retry acted twice`);
   }
