@@ -105,6 +105,68 @@ const dealRailMessages = defineBilingualMessages({
     "This deal is closed, but the deposit has not been refunded or forfeited. Until it is, the money sits against the customer with no outcome recorded.",
     "أُغلقت هذه الصفقة دون ردّ العربون أو مصادرته. وحتى يتم ذلك، يبقى المبلغ مقيّداً على العميل دون نتيجة مسجّلة.",
   ],
+
+  /**
+   * The finance company's credit decision, RECORDED on the deal.
+   *
+   * AutoFlow never approves financing. Every string here says the company
+   * decided and the dealership wrote it down; the two outcomes are offered as
+   * equals, not as a green "approve" and a red "reject".
+   */
+  RecordCreditDecisionAction: ["Record the finance company's decision", "تسجيل قرار شركة التمويل"],
+  RecordCreditDecisionTitle: ["The finance company's decision", "قرار شركة التمويل"],
+  RecordCreditDecisionDesc: [
+    "Record what the finance company decided about this application. AutoFlow writes the decision down; it does not make one.",
+    "سجِّل ما قرّرته شركة التمويل بشأن هذا الطلب. يدوّن أوتوفلو القرار ولا يتّخذه.",
+  ],
+  CreditDecisionApproved: ["They approved the financing", "وافقت على التمويل"],
+  CreditDecisionApprovedHint: [
+    "The application moves on to the appraisal and the approved purchase amount.",
+    "ينتقل الطلب إلى التخمين والمبلغ المعتمد للشراء.",
+  ],
+  CreditDecisionRejected: ["They declined the financing", "رفضت التمويل"],
+  CreditDecisionRejectedHint: [
+    "The deal stops here. Any held deposit will need to be refunded or forfeited.",
+    "تتوقّف الصفقة هنا. وأي عربون محتجز سيلزم ردّه أو مصادرته.",
+  ],
+  RecordCreditDecisionConfirm: ["Record decision", "تسجيل القرار"],
+  CreditDecisionApproveNeedsPermission: [
+    "Recording an approval needs permission to approve finance applications.",
+    "يتطلّب تسجيل الموافقة صلاحية اعتماد طلبات التمويل.",
+  ],
+  CreditDecisionRejectNeedsPermission: [
+    "Recording a rejection needs permission to review finance applications.",
+    "يتطلّب تسجيل الرفض صلاحية مراجعة طلبات التمويل.",
+  ],
+  CreditDecisionOwnDeal: [
+    "You submitted this application, so someone else records its approval.",
+    "أنت من قدّم هذا الطلب، لذا يسجّل الموافقة شخص آخر.",
+  ],
+  CreditDecisionNeedsPermission: [
+    "You do not have permission to record the finance company's decision. Someone who does completes this step.",
+    "ليست لديك صلاحية تسجيل قرار شركة التمويل. يُكمل هذه الخطوة من يملكها.",
+  ],
+
+  /**
+   * Why the DISBURSEMENT step offers no button to this caller. The
+   * permission case and the not-yet case are different sentences: one names
+   * a person, the other names a fact about the deal.
+   */
+  DisbursementNeedsPermission: [
+    "You do not have permission to confirm the finance company's payment. Someone who does completes this step.",
+    "ليست لديك صلاحية تأكيد دفعة شركة التمويل. يُكمل هذه الخطوة من يملكها.",
+  ],
+  DisbursementUnavailable: [
+    "Nothing is expected from the finance company on this deal, or the receipt is already on record.",
+    "لا يوجد مبلغ متوقّع من شركة التمويل على هذه الصفقة، أو أن الاستلام مسجّل بالفعل.",
+  ],
+  SupplierDisbursementUnavailable: [
+    "The supplier's payment cannot be recorded on this deal: the direct route is not available, or the advice is already on record.",
+    "لا يمكن تسجيل دفعة المورّد على هذه الصفقة: المسار المباشر غير متاح، أو أن الإشعار مسجّل بالفعل.",
+  ],
+
+  /** A document rule the finance company waived for this deal. */
+  DocWaived: ["Waived", "مُعفى"],
 });
 
 export const salesEn = {
@@ -983,7 +1045,7 @@ export const salesEn = {
    * record. It says where, because the control is still in the review dialog.
    */
   FinalizeNeedsSettlementRoute:
-    "This car belongs to the supplier and the deal is financed, so who the finance company pays has to be recorded before the deal can be closed. It is chosen in Finance Applications → Review.",
+    "This car belongs to the supplier and the deal is financed, so who the finance company pays has to be recorded before the deal can be closed. It is chosen beside the vehicle on this screen.",
   /**
    * Both blockers at once, and the pointer withheld on purpose.
    *
@@ -1903,7 +1965,7 @@ export const salesAr = {
   FinalizeDealAction: "إغلاق الصفقة",
   FinalizeNeedsPermission: "لا تملك صلاحية إغلاق الصفقة. يُكمل هذه الخطوة من يملكها.",
   FinalizeNeedsSettlementRoute:
-    "هذه المركبة تعود للمورد والصفقة ممولة، لذا يجب تسجيل الجهة التي تدفع لها شركة التمويل قبل إغلاق الصفقة. يُختار ذلك من طلبات التمويل ← مراجعة.",
+    "هذه المركبة تعود للمورد والصفقة ممولة، لذا يجب تسجيل الجهة التي تدفع لها شركة التمويل قبل إغلاق الصفقة. يُختار ذلك بجانب المركبة في هذه الشاشة.",
   FinalizeNeedsRouteAndPermission:
     "هذه الصفقة بانتظار تحديد الجهة التي تدفع لها شركة التمويل، ويُسجّل ذلك من يملك صلاحية إغلاق الصفقة نفسها. يُكمل الخطوتين من يملك تلك الصلاحية.",
   GapResolutionUnavailable:

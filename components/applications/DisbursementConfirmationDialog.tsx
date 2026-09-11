@@ -51,6 +51,12 @@ type DisbursementConfirmationDialogProps = {
   onConfirmSupplier?: (advice: { amountMajor: number; reference?: string; disbursedAt?: number }) => void;
   /** Prefill for the advice amount, in major units. */
   defaultAmountMajor?: number;
+  /**
+   * Whether the dialog renders its own opener. The Deal cockpit's stage rail
+   * owns the action for the DISBURSEMENT step, so it mounts this without a
+   * trigger — the same shape `RegisterExpectedPaymentDialog` already offers.
+   */
+  withTrigger?: boolean;
   t: (key: string) => string;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void;
@@ -65,6 +71,7 @@ export function DisbursementConfirmationDialog({
   supplierName,
   onConfirmSupplier,
   defaultAmountMajor,
+  withTrigger = true,
   t,
   onOpenChange,
   onConfirm,
@@ -134,16 +141,18 @@ export function DisbursementConfirmationDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogTrigger asChild>
-        <Button
-          className={isReceipt ? accentClass : undefined}
-          variant={isReceipt ? "default" : "outline"}
-          disabled={disabled}
-        >
-          <Icon className="h-4 w-4 me-2" />
-          {copy.trigger}
-        </Button>
-      </DialogTrigger>
+      {withTrigger && (
+        <DialogTrigger asChild>
+          <Button
+            className={isReceipt ? accentClass : undefined}
+            variant={isReceipt ? "default" : "outline"}
+            disabled={disabled}
+          >
+            <Icon className="h-4 w-4 me-2" />
+            {copy.trigger}
+          </Button>
+        </DialogTrigger>
+      )}
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>{copy.title}</DialogTitle>

@@ -22,7 +22,6 @@ import {
   ChevronDown,
   CircleDot,
   Clock,
-  FileText,
   Lock,
   Minus,
   Ban,
@@ -57,6 +56,23 @@ import {
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import type { PaymentMethod } from "@/components/payments/PaymentMethodSelect";
+// The actions the Finance Applications → Review dialog used to own, moved here
+// on the SAME mutations. Each is its own file so the container stays a wiring
+// layer and the view stays renderable against fixtures.
+import { CreditDecisionDialog, type CreditDecision } from "./CreditDecisionDialog";
+import { CancelApplicationDialog } from "./CancelApplicationDialog";
+import {
+  SettlementRouteControl,
+  type DirectRouteRefusal,
+  type SupplierSettlementRoute,
+} from "./SettlementRouteControl";
+import { DealDocumentsPanel, type DealDocument } from "./DealDocumentsPanel";
+import {
+  StoppedDealDepositsPanel,
+  type DealDeposit,
+  type DepositResolution,
+} from "./StoppedDealDepositsPanel";
+import { DisbursementConfirmationDialog } from "../DisbursementConfirmationDialog";
 
 /**
  * The financed-deal cockpit.
@@ -483,6 +499,131 @@ export function DealCockpit({
   // an action that appears and then vanishes reads as a bug, and the server is
   // the authority either way.
   const canCorrectAdvice = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
+
+  /**
+   * ---- The facts and commands the Review dialog used to own ----------------
+   *
+   * `applications.get` is the query that dialog reads, authorized on the same
+   * `view:sales` as the cockpit query, so nothing here widens who may see what.
+   * It carries the workflow facts the stage rail does not: the recorded
+   * settlement route and whether the direct route is available, the
+   * disbursement evidence, the deal's deposits, and the pinned economics
+   * currency the disbursement figures are denominated in. `documents.getForApplication`
+   * requires `view:finance_applications` and THROWS otherwise, so it is
+   * skipped for a caller without it — the same discipline as `getEconomics`.
+   *
+   * Every mutation below is the one the Review dialog calls. The caller moved;
+   * the authority did not. No new economic command exists on this screen.
+   */
+  const app = useQuery(api.applications.get, { orgId, applicationId });
+  const documents = useQuery(
+    api.documents.getForApplication,
+    canViewApplications && deal ? { orgId, applicationId } : "skip"
+  );
+  const updateStatus = useMutation(api.applications.updateStatus);
+  const cancelApplication = useMutation(api.applications.cancelApplication);
+  const confirmDisbursement = useMutation(api.applications.confirmDisbursement);
+  const confirmSupplierDisbursement = useMutation(api.applications.confirmSupplierDisbursement);
+  const setSupplierSettlementRoute = useMutation(api.applications.setSupplierSettlementRoute);
+  const releaseDeposit = useMutation(api.deposits.release);
+  const updateDocStatus = useMutation(api.documents.updateDocumentStatus);
+  const generateUploadUrl = useMutation(api.documents.generateUploadUrl);
+  const saveDocumentFile = useMutation(api.documents.saveDocumentFile);
+  const orgCurrency = useCurrency();
+
+  const canReviewApplication = !permissionsLoading && hasPermission(PERMISSIONS.REVIEW_FINANCE_APPLICATION);
+  const canApproveApplication = !permissionsLoading && hasPermission(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
+  const canCreateApplication = !permissionsLoading && hasPermission(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+  const canFinalizeApplication = !permissionsLoading && hasPermission(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+  const canVerifyDocuments = !permissionsLoading && hasPermission(PERMISSIONS.VERIFY_FINANCE_DOCUMENTS);
+  const canConfirmFinanceDisbursement =
+    !permissionsLoading && hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+  const canResolveDeposits = !permissionsLoading && hasPermission(PERMISSIONS.APPROVE_REQUESTS);
+
+  const [decidingCredit, setDecidingCredit] = useState(false);
+  const [creditSubmitting, setCreditSubmitting] = useState(false);
+  const [creditError, setCreditError] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelSubmitting, setCancelSubmitting] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+  const [confirmingDisbursement, setConfirmingDisbursement] = useState(false);
+  const [confirmingSupplierDisbursement, setConfirmingSupplierDisbursement] = useState(false);
+  const [disbursementSubmitting, setDisbursementSubmitting] = useState(false);
+  const [uploadingDocId, setUploadingDocId] = useState<string | null>(null);
+  const [resolvingDepositId, setResolvingDepositId] = useState<string | null>(null);
+  // One key per attempt, held in a ref so a retry after a lost response is the
+  // SAME command rather than a second one, and cleared only once the server
+  // has confirmed. Cancelling a CLOSED deal reverses a posted sale; confirming
+  // a disbursement posts DR Bank; releasing a deposit pays real cash out.
+  // These are the exact keys the Review dialog minted, under the same names.
+  const cancelKeyRef = useRef<string | null>(null);
+  const confirmDisbursementKeyRef = useRef<string | null>(null);
+  const confirmSupplierDisbursementKeyRef = useRef<string | null>(null);
+  const releaseDepositKeyRef = useRef<string | null>(null);
+
+  // ---- the same derivations the Review dialog made, from the same payload ----
+  // The dealer-side economics are denominated in the application's OWN pinned
+  // currency, not the org's current one; the customer's principal is read at
+  // the org scale, as the dialog reads it. Absent means the row predates the
+  // field, and the org's currency is then the only reading available.
+  const orgFactor = Math.pow(10, scaleForCurrency(orgCurrency.code));
+  const economicsCurrencyCode = app?.economicsCurrency ?? orgCurrency.code;
+  const economicsFactor = Math.pow(10, scaleForCurrency(economicsCurrencyCode));
+  const expectedDisbursementMinor = Math.round((app?.quote?.totalFinancedAmount ?? 0) * orgFactor);
+  const expectsFinanceCompanyDisbursement = Boolean(app?.companyId && expectedDisbursementMinor > 0);
+  const isConsignedDeal = app?.vehicle?.sourceType === "SOURCED";
+  const settlesDirectToSupplier =
+    isConsignedDeal && app?.supplierSettlementRoute === "DIRECT_TO_SUPPLIER";
+  const supplierName = app?.vehicle?.sourcedFromName ?? undefined;
+  const formatEconomics = (minor: number) =>
+    `${(minor / economicsFactor).toLocaleString()} ${
+      economicsCurrencyCode === orgCurrency.code ? orgCurrency.displayLabel : economicsCurrencyCode
+    }`;
+  // The route is a decision about a deal that has not posted yet; once it
+  // closes, changing it is a correction and the server refuses it there too.
+  // Keyed on FINALIZE_FINANCED_DEAL, matching the server.
+  const canChooseSettlementRoute =
+    app != null &&
+    canFinalizeApplication &&
+    isConsignedDeal &&
+    app.status !== "CLOSED" &&
+    app.status !== "CANCELLED";
+  // On the direct route the company pays the supplier, so there is no
+  // dealership receipt to confirm — `confirmDisbursement` would invent cash.
+  const canConfirmDisbursement =
+    app != null &&
+    canConfirmFinanceDisbursement &&
+    app.status === "CLOSED" &&
+    expectsFinanceCompanyDisbursement &&
+    !settlesDirectToSupplier &&
+    !app.disbursedAt;
+  // Gated on the SERVER's own answer (`canSettleDirectToSupplier`), not on
+  // `companyId`, which is unset on every MANUAL_FINANCE_COMPANY deal.
+  const canConfirmSupplierDisbursement =
+    app != null &&
+    canConfirmFinanceDisbursement &&
+    app.status === "CLOSED" &&
+    settlesDirectToSupplier &&
+    app.canSettleDirectToSupplier &&
+    !app.supplierDisbursementStatus;
+  // Mirror the backend permission tiers exactly.
+  const canCancel =
+    app != null &&
+    app.status !== "CANCELLED" &&
+    canCreateApplication &&
+    (app.status === "APPROVED" ? canApproveApplication : true) &&
+    (app.status === "CLOSED" ? canFinalizeApplication : true);
+  const applicationDeposits: DealDeposit[] = (app?.deposits ?? []).map((deposit) => ({
+    _id: deposit._id,
+    amount: deposit.amount,
+    status: deposit.status,
+    method: deposit.method,
+  }));
+  const showApplicationDeposits =
+    app != null &&
+    (app.status === "REJECTED" || app.status === "CANCELLED") &&
+    applicationDeposits.length > 0;
+
   const [confirmingHandover, setConfirmingHandover] = useState(false);
   const [handoverSubmitting, setHandoverSubmitting] = useState(false);
   const [registeringPayment, setRegisteringPayment] = useState(false);
@@ -584,6 +725,79 @@ export function DealCockpit({
       };
     }
 
+    /**
+     * The finance company's credit decision — RECORDED here, never made.
+     *
+     * Two dealership moves on this stage, matching `updateStatus`'s legal
+     * transitions exactly: PENDING_DOCS → UNDER_REVIEW says the application is
+     * with the finance company; UNDER_REVIEW → APPROVED | REJECTED writes down
+     * what they decided. APPROVED needs `approve:finance_application`,
+     * UNDER_REVIEW and REJECTED need `review:finance_application`; a caller
+     * holding neither is told so rather than shown nothing.
+     */
+    if (liveStage?.key === "CREDIT_DECISION") {
+      if (deal.status === "PENDING_DOCS") {
+        return {
+          stageKey: "CREDIT_DECISION",
+          actionKey: "MarkUnderReview",
+          onStart: () => {
+            void recordCreditStatus("UNDER_REVIEW");
+          },
+          unavailableReasonKey: canReviewApplication ? undefined : "CreditDecisionNeedsPermission",
+        };
+      }
+      if (deal.status === "UNDER_REVIEW") {
+        return {
+          stageKey: "CREDIT_DECISION",
+          actionKey: "RecordCreditDecisionAction",
+          onStart: () => {
+            setCreditError(null);
+            setDecidingCredit(true);
+          },
+          unavailableReasonKey:
+            canApproveApplication || canReviewApplication ? undefined : "CreditDecisionNeedsPermission",
+        };
+      }
+      return undefined;
+    }
+
+    /**
+     * The money actually moving — confirmed from the evidence, on the route the
+     * deal recorded. Direct route: the finance company paid the SUPPLIER, and
+     * the advice is recorded (no journal, no dealership cash). Through the
+     * dealership: the receipt is confirmed and posts DR Bank. Two different
+     * claims, so two different actions rather than one button meaning two
+     * things depending on a field elsewhere.
+     *
+     * `app` carries the facts these gates need; until it arrives the stage
+     * keeps its blocker and offers nothing, which is honest rather than early.
+     */
+    if (liveStage?.key === "DISBURSEMENT") {
+      if (!app) return undefined;
+      if (settlesDirectToSupplier) {
+        return {
+          stageKey: "DISBURSEMENT",
+          actionKey: "ConfirmSupplierDisbursement",
+          onStart: () => setConfirmingSupplierDisbursement(true),
+          unavailableReasonKey: canConfirmSupplierDisbursement
+            ? undefined
+            : canConfirmFinanceDisbursement
+              ? "SupplierDisbursementUnavailable"
+              : "DisbursementNeedsPermission",
+        };
+      }
+      return {
+        stageKey: "DISBURSEMENT",
+        actionKey: "ConfirmDisbursement",
+        onStart: () => setConfirmingDisbursement(true),
+        unavailableReasonKey: canConfirmDisbursement
+          ? undefined
+          : canConfirmFinanceDisbursement
+            ? "DisbursementUnavailable"
+            : "DisbursementNeedsPermission",
+      };
+    }
+
     // Handover first: the step the rail names on a deal whose economics are
     // recorded, and the one the product could not perform at all.
     if (handoverStage && handoverStage.state !== "COMPLETE") {
@@ -606,13 +820,9 @@ export function DealCockpit({
     // Everything below is only reachable while the application is still
     // APPROVED, because all three of these mutations refuse anything else.
     //
-    // A CLOSED deal still shows SETTLEMENT as its live stage until the money
-    // actually arrives, and this returns no action for it. That stage's
-    // confirmations — the financier's disbursement and the supplier's — are
-    // still only in the review dialog, so the cockpit names a step it cannot
-    // take there. That is the SAME defect one stage further along, it predates
-    // this change, and it is filed rather than fixed here: it is a fourth
-    // action, on a different surface, and this issue scopes to three.
+    // A CLOSED deal's money arriving is the DISBURSEMENT stage above, which
+    // now carries its own confirmations; SETTLEMENT below is the dealership's
+    // own closing steps while the application is still APPROVED.
     if (!settlementStage || settlementStage.state === "COMPLETE") return undefined;
     if (deal.status !== "APPROVED") return undefined;
 
@@ -659,6 +869,38 @@ export function DealCockpit({
         hasPermission(PERMISSIONS.FINALIZE_FINANCED_DEAL)
       ),
     };
+  }
+
+  /**
+   * `updateStatus` for the two dealership moves on the credit stage. Not
+   * idempotency-keyed, exactly as in Review: the server refuses an illegal
+   * transition, so a repeat is a refusal rather than a second effect.
+   */
+  async function recordCreditStatus(status: "UNDER_REVIEW" | CreditDecision) {
+    setCreditSubmitting(true);
+    setCreditError(null);
+    try {
+      await updateStatus({ orgId, applicationId, status });
+      toast.success(
+        t(
+          status === "APPROVED"
+            ? "AppApprovedSuccess"
+            : status === "REJECTED"
+              ? "AppRejectedSuccess"
+              : "AppUnderReviewSuccess"
+        )
+      );
+      setDecidingCredit(false);
+    } catch (error) {
+      // "You cannot approve your own application", an illegal transition —
+      // each names what to change. Kept in the dialog so it belongs to the
+      // attempt that earned it.
+      const message = getErrorMessage(error);
+      setCreditError(message);
+      toast.error(message);
+    } finally {
+      setCreditSubmitting(false);
+    }
   }
 
   const workflowAction = buildWorkflowAction();
@@ -796,6 +1038,227 @@ export function DealCockpit({
       // `deal` is `undefined` or `null` and the screen must not assert either.
       activeAppraisalProvider={deal?.activeAppraisalProvider ?? null}
       depositAwaitingResolution={deal?.pendingDepositResolution ?? false}
+      creditDecision={{
+        deciding: decidingCredit,
+        submitting: creditSubmitting,
+        error: creditError,
+        canApprove: canApproveApplication,
+        canReject: canReviewApplication,
+        isOwnDeal: membership?.userId != null && membership.userId === app?.salespersonId,
+        onOpenChange: setDecidingCredit,
+        onSubmit: recordCreditStatus,
+      }}
+      cancel={
+        canCancel
+          ? {
+              isClosed: app?.status === "CLOSED",
+              confirming: cancelling,
+              submitting: cancelSubmitting,
+              error: cancelError,
+              onOpenChange: setCancelling,
+              onSubmit: async (reason) => {
+                setCancelSubmitting(true);
+                setCancelError(null);
+                try {
+                  cancelKeyRef.current ??= `cancel-application:${crypto.randomUUID()}`;
+                  await cancelApplication({
+                    orgId,
+                    applicationId,
+                    reason,
+                    idempotencyKey: cancelKeyRef.current,
+                  });
+                  cancelKeyRef.current = null;
+                  toast.success(t("AppCancelledSuccess"));
+                  setCancelling(false);
+                } catch (error) {
+                  // "Disbursement funds already confirmed received" is the one
+                  // refusal an operator can do nothing about here; it says so.
+                  const message = getErrorMessage(error);
+                  setCancelError(message);
+                  toast.error(message);
+                } finally {
+                  setCancelSubmitting(false);
+                }
+              },
+            }
+          : undefined
+      }
+      settlementRoute={
+        canChooseSettlementRoute && app
+          ? {
+              route: app.supplierSettlementRoute as SupplierSettlementRoute | undefined,
+              canSettleDirectToSupplier: app.canSettleDirectToSupplier,
+              directRouteRefusal: app.directRouteRefusal as DirectRouteRefusal,
+              supplierName,
+              onChoose: async (route) => {
+                try {
+                  await setSupplierSettlementRoute({ orgId, applicationId, route });
+                } catch (error) {
+                  // No finance company, or a held deposit that has to be
+                  // settled first — both name what to do next.
+                  toast.error(getErrorMessage(error));
+                }
+              },
+            }
+          : undefined
+      }
+      documents={{
+        items: documents?.map((doc) => ({
+          _id: doc._id,
+          ruleName: doc.ruleName,
+          status: doc.status,
+          fileUrl: doc.fileUrl,
+        })),
+        // The server accepts an upload from either permission; verifying is
+        // the narrower one. Same gates as Review, read from the same server.
+        canUpload: canCreateApplication || canVerifyDocuments,
+        canVerify: canVerifyDocuments,
+        uploadingId: uploadingDocId,
+        onUpload: async (documentId, file) => {
+          setUploadingDocId(documentId);
+          try {
+            const postUrl = await generateUploadUrl({
+              orgId,
+              mimeType: file.type,
+              sizeInBytes: file.size,
+            });
+            const result = await fetch(postUrl, {
+              method: "POST",
+              headers: { "Content-Type": file.type },
+              body: file,
+            });
+            const { storageId } = await result.json();
+            await saveDocumentFile({
+              orgId,
+              documentId: documentId as Id<"applicationDocuments">,
+              fileId: storageId,
+            });
+            toast.success(t("UploadSuccess"));
+          } catch (error) {
+            toast.error(getErrorMessage(error));
+          } finally {
+            setUploadingDocId(null);
+          }
+        },
+        onVerify: async (documentId) => {
+          try {
+            await updateDocStatus({
+              orgId,
+              documentId: documentId as Id<"applicationDocuments">,
+              status: "VERIFIED",
+            });
+          } catch (error) {
+            toast.error(getErrorMessage(error));
+          }
+        },
+      }}
+      deposits={
+        showApplicationDeposits
+          ? {
+              items: applicationDeposits,
+              canResolve: canResolveDeposits,
+              resolvingId: resolvingDepositId,
+              onResolve: async (depositId, resolution, refundMethod) => {
+                setResolvingDepositId(depositId);
+                try {
+                  // Retained until the server answers, then retired. The
+                  // Accounting RC (SCRUM-313) replaces this with a
+                  // generation-aware identity at convergence; the mutation
+                  // already accepts the key today.
+                  releaseDepositKeyRef.current ??= `release-deposit:${crypto.randomUUID()}`;
+                  await releaseDeposit({
+                    orgId,
+                    depositId: depositId as Id<"deposits">,
+                    resolution,
+                    refundMethod: resolution === "REFUNDED" ? refundMethod : undefined,
+                    idempotencyKey: releaseDepositKeyRef.current,
+                  });
+                  releaseDepositKeyRef.current = null;
+                  toast.success(
+                    t(resolution === "REFUNDED" ? "DepositRefundedSuccess" : "DepositForfeitedSuccess")
+                  );
+                } catch (error) {
+                  toast.error(getErrorMessage(error));
+                  throw error;
+                } finally {
+                  setResolvingDepositId(null);
+                }
+              },
+            }
+          : undefined
+      }
+      disbursement={
+        app
+          ? {
+              financeCompany: {
+                confirming: confirmingDisbursement,
+                submitting: disbursementSubmitting,
+                amountLabel: orgCurrency.format(expectedDisbursementMinor / orgFactor),
+                onOpenChange: setConfirmingDisbursement,
+                onConfirm: async () => {
+                  if (!expectedDisbursementMinor) return;
+                  setDisbursementSubmitting(true);
+                  try {
+                    confirmDisbursementKeyRef.current ??= `confirm-disbursement:${crypto.randomUUID()}`;
+                    await confirmDisbursement({
+                      orgId,
+                      applicationId,
+                      disbursedAmountMinor: expectedDisbursementMinor,
+                      idempotencyKey: confirmDisbursementKeyRef.current,
+                    });
+                    confirmDisbursementKeyRef.current = null;
+                    toast.success(t("DisbursementConfirmedSuccess"));
+                    setConfirmingDisbursement(false);
+                  } catch (error) {
+                    toast.error(getErrorMessage(error));
+                  } finally {
+                    setDisbursementSubmitting(false);
+                  }
+                },
+              },
+              supplier: {
+                confirming: confirmingSupplierDisbursement,
+                submitting: disbursementSubmitting,
+                supplierName,
+                // The approved purchase amount — what the company approved to
+                // pay for the CAR — labelled in the currency it is denominated
+                // in, or "not recorded" rather than a confident zero.
+                amountLabel:
+                  app.approvedDealerPurchaseAmountMinor !== undefined
+                    ? formatEconomics(app.approvedDealerPurchaseAmountMinor)
+                    : t("NotRecorded"),
+                defaultAmountMajor:
+                  app.approvedDealerPurchaseAmountMinor !== undefined
+                    ? app.approvedDealerPurchaseAmountMinor / economicsFactor
+                    : undefined,
+                onOpenChange: setConfirmingSupplierDisbursement,
+                onConfirm: async (advice) => {
+                  setDisbursementSubmitting(true);
+                  try {
+                    confirmSupplierDisbursementKeyRef.current ??= `confirm-supplier-disbursement:${crypto.randomUUID()}`;
+                    await confirmSupplierDisbursement({
+                      orgId,
+                      applicationId,
+                      // Scaled by the APPLICATION's pinned economics currency —
+                      // this figure lives in that block.
+                      disbursedAmountMinor: Math.round(advice.amountMajor * economicsFactor),
+                      reference: advice.reference,
+                      disbursedAt: advice.disbursedAt,
+                      idempotencyKey: confirmSupplierDisbursementKeyRef.current,
+                    });
+                    confirmSupplierDisbursementKeyRef.current = null;
+                    toast.success(t("SupplierDisbursementConfirmedSuccess"));
+                    setConfirmingSupplierDisbursement(false);
+                  } catch (error) {
+                    toast.error(getErrorMessage(error));
+                  } finally {
+                    setDisbursementSubmitting(false);
+                  }
+                },
+              },
+            }
+          : undefined
+      }
       handover={{
         confirming: confirmingHandover,
         submitting: handoverSubmitting,
@@ -1196,9 +1659,86 @@ export function DealCockpitView({
   onRecordSupplierReceipt,
   activeAppraisalProvider = null,
   depositAwaitingResolution = false,
+  creditDecision,
+  cancel,
+  settlementRoute,
+  documents,
+  deposits,
+  disbursement,
 }: Readonly<{
   /** `undefined` while loading, `null` when the deal is not readable. */
   deal: DealCockpitData | null | undefined;
+  /** The credit-decision dialog's own state. Financed only. */
+  creditDecision?: {
+    deciding: boolean;
+    submitting: boolean;
+    error: string | null;
+    canApprove: boolean;
+    canReject: boolean;
+    isOwnDeal: boolean;
+    onOpenChange: (open: boolean) => void;
+    onSubmit: (decision: CreditDecision) => void | Promise<void>;
+  };
+  /** Present only for a caller the server would let cancel this deal. */
+  cancel?: {
+    isClosed: boolean;
+    confirming: boolean;
+    submitting: boolean;
+    error: string | null;
+    onOpenChange: (open: boolean) => void;
+    onSubmit: (reason: string | undefined) => void | Promise<void>;
+  };
+  /** Present only while the route may still be chosen (consigned, not closed, finalize permission). */
+  settlementRoute?: {
+    route: SupplierSettlementRoute | undefined;
+    canSettleDirectToSupplier: boolean;
+    directRouteRefusal: DirectRouteRefusal;
+    supplierName: string | undefined;
+    onChoose: (route: SupplierSettlementRoute) => void | Promise<void>;
+  };
+  /**
+   * The document checklist with its controls. `items` is undefined while
+   * loading or when the caller may not read `documents.getForApplication`,
+   * in which case the panel shows the cockpit payload's read-only checklist.
+   */
+  documents?: {
+    items: ReadonlyArray<DealDocument> | undefined;
+    canUpload: boolean;
+    canVerify: boolean;
+    uploadingId: string | null;
+    onUpload: (documentId: string, file: File) => void | Promise<void>;
+    onVerify: (documentId: string) => void | Promise<void>;
+  };
+  /** The deal's deposits, present only on a stopped deal that has any. */
+  deposits?: {
+    items: ReadonlyArray<DealDeposit>;
+    canResolve: boolean;
+    resolvingId: string | null;
+    onResolve: (
+      depositId: string,
+      resolution: DepositResolution,
+      refundMethod: PaymentMethod | undefined
+    ) => Promise<void>;
+  };
+  /** The two disbursement confirmations' own state. Financed only. */
+  disbursement?: {
+    financeCompany: {
+      confirming: boolean;
+      submitting: boolean;
+      amountLabel: string;
+      onOpenChange: (open: boolean) => void;
+      onConfirm: () => void | Promise<void>;
+    };
+    supplier: {
+      confirming: boolean;
+      submitting: boolean;
+      supplierName: string | undefined;
+      amountLabel: string;
+      defaultAmountMajor: number | undefined;
+      onOpenChange: (open: boolean) => void;
+      onConfirm: (advice: { amountMajor: number; reference?: string; disbursedAt?: number }) => void | Promise<void>;
+    };
+  };
   /**
    * Who actually performed the appraisal on record, as the SERVER recorded it.
    *
@@ -1716,9 +2256,27 @@ export function DealCockpitView({
             {t("DealOwner")}: <bdi>{deal.salespersonName}</bdi>
           </p>
         </div>
-        <p className="text-xs text-muted-foreground">
-          {t("LastUpdated")}: <bdi>{format(deal.updatedAt ?? deal.createdAt, "d MMM yyyy HH:mm")}</bdi>
-        </p>
+        <div className="flex flex-col items-end gap-2">
+          <p className="text-xs text-muted-foreground">
+            {t("LastUpdated")}: <bdi>{format(deal.updatedAt ?? deal.createdAt, "d MMM yyyy HH:mm")}</bdi>
+          </p>
+          {/* The exceptional action, in the header and quiet on purpose: it is
+              never the recommended next step, so it must not compete with the
+              one CTA the rail carries. Present only when the SERVER would
+              accept it from this caller. */}
+          {cancel && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-destructive hover:text-destructive"
+              data-testid="deal-cancel-application"
+              onClick={() => cancel.onOpenChange(true)}
+            >
+              <Ban className="h-4 w-4 me-2" />
+              {t("CancelApplication")}
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* --- the two records that disagree -------------------------------- */}
@@ -1813,17 +2371,39 @@ export function DealCockpitView({
           still outstanding is real customer cash sitting in a liability with
           nobody's name on it. A single bordered strip rather than a card: at
           this density an alert earns its weight from colour and position. */}
-      {depositAwaitingResolution && (
+      {(depositAwaitingResolution || deposits) && (
         <div
-          className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 dark:border-amber-900/60 dark:bg-amber-950/30"
-          data-testid="deal-deposit-awaiting-resolution"
+          className={
+            depositAwaitingResolution
+              ? "space-y-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 dark:border-amber-900/60 dark:bg-amber-950/30"
+              : "space-y-3 rounded-md border bg-muted/30 px-3 py-2"
+          }
+          data-testid={depositAwaitingResolution ? "deal-deposit-awaiting-resolution" : "deal-deposits-resolved"}
         >
-          <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
-            {t("DepositAwaitingResolutionTitle")}
-          </p>
-          <p className="text-sm text-amber-800 dark:text-amber-300">
-            {t("DepositAwaitingResolutionBody")}
-          </p>
+          {depositAwaitingResolution && (
+            <div>
+              <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+                {t("DepositAwaitingResolutionTitle")}
+              </p>
+              <p className="text-sm text-amber-800 dark:text-amber-300">
+                {t("DepositAwaitingResolutionBody")}
+              </p>
+            </div>
+          )}
+          {/* The deposits themselves, and the decision on each HELD one — the
+              action the applications list has been pointing at Review for.
+              The amounts are the org-currency majors `applications.get`
+              lists, formatted the way that dialog formatted them. */}
+          {deposits && (
+            <StoppedDealDepositsPanel
+              deposits={deposits.items}
+              canResolve={deposits.canResolve}
+              resolvingId={deposits.resolvingId}
+              formatAmount={(amount) => currency.format(amount)}
+              t={t}
+              onResolve={deposits.onResolve}
+            />
+          )}
         </div>
       )}
 
@@ -2119,37 +2699,56 @@ export function DealCockpitView({
                     )}
                   </p>
                 )}
+                {/* Beside the ownership badge that makes it a question: the car
+                    is the supplier's, so who the finance company pays has to
+                    be recorded here before the deal can close. Placed with the
+                    vehicle rather than with the close, because it is a fact
+                    about this car's ownership, and asked as soon as it can be
+                    answered rather than discovered as a refusal at finalize. */}
+                {settlementRoute && (
+                  <div className="pt-2">
+                    <SettlementRouteControl
+                      route={settlementRoute.route}
+                      canSettleDirectToSupplier={settlementRoute.canSettleDirectToSupplier}
+                      directRouteRefusal={settlementRoute.directRouteRefusal}
+                      supplierName={settlementRoute.supplierName}
+                      t={t}
+                      onChoose={settlementRoute.onChoose}
+                    />
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}
 
-          {/* ABSENT, not empty. A cash deal has no document checklist at all —
-              the rules are per finance company and their per-deal status lives
-              on the application — so an empty card would invite an operator to
-              look for an upload control that does not exist. */}
-          {deal.documents.length > 0 && (
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">{t("DocumentsHeading")}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {deal.documents.map((doc) => (
-                <div key={doc.ruleId} className="flex items-center gap-2 text-sm">
-                  {doc.status === "VERIFIED" || doc.status === "WAIVED" ? (
-                    <Check className="h-4 w-4 shrink-0 text-emerald-600" />
-                  ) : (
-                    <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  )}
-                  <bdi className="min-w-0 truncate">{doc.name}</bdi>
-                  {doc.required && doc.status !== "VERIFIED" && doc.status !== "WAIVED" && (
-                    <Badge variant="outline" className="ms-auto shrink-0 text-xs">
-                      {t("DocumentRequired")}
-                    </Badge>
-                  )}
-                </div>
-              ))}
-            </CardContent>
-          </Card>
+          {/* The checklist that also DOES something — upload, verify, view —
+              when the caller may read the document rows; the read-only list
+              from the cockpit payload otherwise. ABSENT on a cash deal, which
+              has no document checklist at all. */}
+          {documents ? (
+            <DealDocumentsPanel
+              documents={documents.items}
+              checklist={deal.documents}
+              canUpload={documents.canUpload}
+              canVerify={documents.canVerify}
+              uploadingId={documents.uploadingId}
+              t={t}
+              onUpload={documents.onUpload}
+              onVerify={documents.onVerify}
+            />
+          ) : (
+            deal.documents.length > 0 && (
+              <DealDocumentsPanel
+                documents={undefined}
+                checklist={deal.documents}
+                canUpload={false}
+                canVerify={false}
+                uploadingId={null}
+                t={t}
+                onUpload={() => {}}
+                onVerify={() => {}}
+              />
+            )
           )}
 
           <Card>
@@ -2309,6 +2908,65 @@ export function DealCockpitView({
           onOpenChange={finalize.onOpenChange}
           onSubmit={finalize.onSubmit}
         />
+      )}
+
+      {creditDecision && (
+        <CreditDecisionDialog
+          open={creditDecision.deciding}
+          submitting={creditDecision.submitting}
+          error={creditDecision.error}
+          canApprove={creditDecision.canApprove}
+          canReject={creditDecision.canReject}
+          isOwnDeal={creditDecision.isOwnDeal}
+          t={t}
+          onOpenChange={creditDecision.onOpenChange}
+          onSubmit={creditDecision.onSubmit}
+        />
+      )}
+
+      {cancel && (
+        <CancelApplicationDialog
+          open={cancel.confirming}
+          submitting={cancel.submitting}
+          error={cancel.error}
+          isClosed={cancel.isClosed}
+          t={t}
+          onOpenChange={cancel.onOpenChange}
+          onSubmit={cancel.onSubmit}
+        />
+      )}
+
+      {/* Both mounted without their own trigger: the DISBURSEMENT focus row
+          owns the action, and which of the two it opens follows the recorded
+          route. Confirming the dealership's receipt posts DR Bank; recording
+          the supplier's advice moves no dealership money. */}
+      {disbursement && (
+        <>
+          <DisbursementConfirmationDialog
+            open={disbursement.financeCompany.confirming}
+            withTrigger={false}
+            disabled={disbursement.financeCompany.submitting}
+            submitting={disbursement.financeCompany.submitting}
+            amountLabel={disbursement.financeCompany.amountLabel}
+            t={t}
+            onOpenChange={disbursement.financeCompany.onOpenChange}
+            onConfirm={disbursement.financeCompany.onConfirm}
+          />
+          <DisbursementConfirmationDialog
+            mode="SUPPLIER"
+            open={disbursement.supplier.confirming}
+            withTrigger={false}
+            disabled={disbursement.supplier.submitting}
+            submitting={disbursement.supplier.submitting}
+            supplierName={disbursement.supplier.supplierName}
+            amountLabel={disbursement.supplier.amountLabel}
+            defaultAmountMajor={disbursement.supplier.defaultAmountMajor}
+            t={t}
+            onOpenChange={disbursement.supplier.onOpenChange}
+            onConfirm={() => undefined}
+            onConfirmSupplier={disbursement.supplier.onConfirm}
+          />
+        </>
       )}
 
       {discrepancy && canCorrectAdvice && (
