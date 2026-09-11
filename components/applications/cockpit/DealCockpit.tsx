@@ -81,6 +81,12 @@ import {
 import { DisbursementConfirmationDialog } from "../DisbursementConfirmationDialog";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { FinancingPlanPanel, type FinancingPlanFacts } from "./FinancingPlanPanel";
+import {
+  HandoverCostsPanel,
+  type ActualHandoverCost,
+  type HandoverCostsData,
+  type NewHandoverCost,
+} from "./HandoverCostsPanel";
 
 /**
  * The financed-deal cockpit.
@@ -574,6 +580,15 @@ export function DealCockpit({
     api.documents.getForApplication,
     canViewApplications && deal ? { orgId, applicationId } : "skip"
   );
+  // The deal's cost lines, same permission as the document rows; skipped rather
+  // than thrown for a caller without it.
+  const dealCosts = useQuery(
+    api.financeDealCosts.listDealCosts,
+    canViewApplications && deal ? { orgId, applicationId } : "skip"
+  );
+  const recordDealFee = useMutation(api.financeDealCosts.recordDealFee);
+  const recordActualFeeAmount = useMutation(api.financeDealCosts.recordActualFeeAmount);
+  const voidDealFee = useMutation(api.financeDealCosts.voidDealFee);
   const updateStatus = useMutation(api.applications.updateStatus);
   const cancelApplication = useMutation(api.applications.cancelApplication);
   const confirmDisbursement = useMutation(api.applications.confirmDisbursement);
@@ -678,6 +693,86 @@ export function DealCockpit({
           monthlyInstallment: app.quote.monthlyInstallment,
           totalFinancedAmount: app.quote.totalFinancedAmount,
           nationalId: app.customer?.nationalId?.trim() || null,
+        }
+      : undefined;
+  /**
+   * رسوم ومصاريف تسليم السيارة — ADD / EDIT / REMOVE on the canonical
+   * `financeDealCosts` commands (c19384). `recordDealFee` is an economic
+   * command and takes a retained identity keyed on the add form's own intent;
+   * the other two are idempotent by construction (a set and a void) and the
+   * server takes no identity for them.
+   */
+  const handoverCosts =
+    app && deal
+      ? {
+          costs: dealCosts
+            ? ({
+                lines: dealCosts.fees.map((fee) => ({
+                  _id: fee._id,
+                  feeType: fee.feeType,
+                  description: fee.description,
+                  estimatedAmountMinor: fee.estimatedAmountMinor,
+                  actualAmountMinor: fee.actualAmountMinor,
+                  paidBy: fee.paidBy,
+                  paidTo: fee.paidTo,
+                  status: fee.status,
+                  paidAt: fee.paidAt,
+                  receiptReference: fee.receiptReference,
+                })),
+                summary: dealCosts.summary,
+              } satisfies HandoverCostsData)
+            : undefined,
+          currency: economicsCurrencyCode,
+          scale: scaleForCurrency(economicsCurrencyCode),
+          money: formatEconomics,
+          canManage: canCreateApplication,
+          dealClosed: app.status === "CLOSED",
+          onAdd: async (values: NewHandoverCost) => {
+            const feeIntent = `record-deal-fee:${applicationId}:${values.intentId}`;
+            try {
+              await recordDealFee({
+                orgId,
+                applicationId,
+                feeType: values.feeType,
+                description: values.description,
+                estimatedAmountMinor: values.estimatedAmountMinor,
+                actualAmountMinor: values.actualAmountMinor,
+                paidBy: "DEALER",
+                paidTo: values.paidTo,
+                accountingTreatment: values.accountingTreatment,
+                paidAt: values.paidAt,
+                receiptReference: values.receiptReference,
+                source: "MANUAL",
+                idempotencyKey: commandId.for(feeIntent),
+              });
+              commandId.retire(feeIntent);
+              toast.success(t("HandoverCostSaved"));
+            } catch (error) {
+              throw new Error(getErrorMessage(error));
+            }
+          },
+          onRecordActual: async (feeId: string, values: ActualHandoverCost) => {
+            try {
+              await recordActualFeeAmount({
+                orgId,
+                feeId: feeId as Id<"financeDealFees">,
+                actualAmountMinor: values.actualAmountMinor,
+                paidAt: values.paidAt,
+                receiptReference: values.receiptReference,
+              });
+              toast.success(t("HandoverCostSaved"));
+            } catch (error) {
+              throw new Error(getErrorMessage(error));
+            }
+          },
+          onVoid: async (feeId: string, reason: string) => {
+            try {
+              await voidDealFee({ orgId, feeId: feeId as Id<"financeDealFees">, reason });
+              toast.success(t("HandoverCostRemoved"));
+            } catch (error) {
+              throw new Error(getErrorMessage(error));
+            }
+          },
         }
       : undefined;
   const formatPlanMajor = (major: number, currency: string) =>
@@ -1237,6 +1332,7 @@ export function DealCockpit({
       deal={deal}
       financeDecision={financeDecision}
       financingPlan={financingPlan ? { facts: financingPlan, formatMajor: formatPlanMajor } : undefined}
+      handoverCosts={handoverCosts}
       workflowAction={workflowAction}
       // Both are financed-only and come straight off the wrapper's payload.
       // `?? null` / `?? false` cover the loading and unreadable cases, where
@@ -1370,15 +1466,15 @@ export function DealCockpit({
                 setResolvingDepositId(depositId);
                 try {
                   const method = resolution === "REFUNDED" ? refundMethod : "NONE";
-                  const intent = `release-deposit:${depositId}:${resolution}:${method}:gen${observedReleaseCount}`;
+                  const releaseIntent = `release-deposit:${depositId}:${resolution}:${method}:gen${observedReleaseCount}`;
                   await releaseDeposit({
                     orgId,
                     depositId: depositId as Id<"deposits">,
                     resolution,
                     refundMethod: resolution === "REFUNDED" ? refundMethod : undefined,
-                    idempotencyKey: commandId.for(intent),
+                    idempotencyKey: commandId.for(releaseIntent),
                   });
-                  commandId.retire(intent);
+                  commandId.retire(releaseIntent);
                   toast.success(
                     t(resolution === "REFUNDED" ? "DepositRefundedSuccess" : "DepositForfeitedSuccess")
                   );
@@ -1856,6 +1952,7 @@ export function DealCockpitView({
   deal,
   financeDecision,
   financingPlan,
+  handoverCosts,
   workflowAction,
   handover,
   expectedPayment,
@@ -1976,6 +2073,12 @@ export function DealCockpitView({
    * from the dealer economics in the money panel by design.
    */
   financingPlan?: { facts: FinancingPlanFacts; formatMajor: (major: number, currency: string) => string };
+  /**
+   * The handover-cost section with its three commands wired — financed deals
+   * only. When present it REPLACES the read-only expenses card: same lines,
+   * same canonical record, plus the controls.
+   */
+  handoverCosts?: Omit<React.ComponentProps<typeof HandoverCostsPanel>, "t">;
   /**
    * The action belonging to the stage the rail currently names.
    *
@@ -2877,7 +2980,7 @@ export function DealCockpitView({
                   information rather than noise. Hiding it on emptiness alone
                   silently changed a production screen from inside a PR whose
                   scope excludes touching it. */}
-              {(deal.dealKind === "FINANCED" ||
+              {!handoverCosts && (deal.dealKind === "FINANCED" ||
                 deal.money.expenses.lines.length > 0 ||
                 deal.money.expenses.actualTotalMinor !== 0) && (
               <Card>
@@ -2918,6 +3021,15 @@ export function DealCockpitView({
               )}
             </>
           )}
+
+          {/* --- رسوم ومصاريف تسليم السيارة -------------------------------- */}
+          {/* Outside the money branch on purpose: the cost RECORD is readable
+              with view:finance_applications, which is not view:finance. A
+              sales operator who cannot see the margin still records the
+              transfer fee. The read-only expenses card above is withheld
+              whenever this section is present so the same lines are not
+              listed twice. */}
+          {handoverCosts && <HandoverCostsPanel {...handoverCosts} t={t} />}
         </div>
 
         {/* --- side rail ------------------------------------------------- */}

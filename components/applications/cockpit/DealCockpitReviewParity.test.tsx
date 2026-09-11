@@ -938,3 +938,160 @@ describe("the customer's financing plan is readable on the Deal, separately from
     expect(screen.getByTestId("deal-financing-plan").textContent).not.toContain("NationalIdLabel");
   });
 });
+
+/**
+ * رسوم ومصاريف تسليم السيارة (c19384): ADD / EDIT / REMOVE on the Deal go to
+ * the three canonical `financeDealCosts` commands with exactly the payloads
+ * the backend test (`convex/handoverCostsOnDeal.test.ts`) proves against the
+ * real mutations. Cancel writes nothing; a caller without the create
+ * permission gets the record read-only.
+ */
+describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmount, voidDealFee} from the Deal", () => {
+  const COSTS_QUERY = "financeDealCosts:listDealCosts";
+  function costsPayload(lines: Array<Record<string, unknown>> = []) {
+    return {
+      fees: lines,
+      summary: {
+        lineCount: lines.length,
+        estimatedTotalMinor: 150_000,
+        actualTotalMinor: 0,
+        dealerBorneActualMinor: 0,
+        linesAwaitingActual: lines.length,
+        linesAwaitingReconciliation: 0,
+        fullyReconciled: false,
+      },
+      custody: [],
+    };
+  }
+  const transferLine = {
+    _id: "fee_1",
+    feeType: "OWNERSHIP_TRANSFER",
+    description: "Licensing department",
+    estimatedAmountMinor: 150_000,
+    paidBy: "DEALER",
+    paidTo: "GOVERNMENT",
+    status: "ESTIMATED_ONLY",
+  };
+  function readableDeal() {
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    queryResults.set(COCKPIT_QUERY, cockpit({ status: "APPROVED" }));
+    queryResults.set(GET_QUERY, application({ status: "APPROVED" }));
+  }
+
+  test("ADD sends the handover line as dealer-borne with an explicit treatment and a RETAINED identity that survives an unknown result", async () => {
+    readableDeal();
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    queryResults.set(COSTS_QUERY, costsPayload());
+    stubs.mutationFailures.set("financeDealCosts:recordDealFee", "network lost");
+    renderCockpit();
+
+    fireEvent.click(screen.getByRole("button", { name: "AddHandoverCost" }));
+    fireEvent.change(screen.getByLabelText("CostTypeLabel"), { target: { value: "LICENSING" } });
+    fireEvent.change(screen.getByLabelText("CostDescriptionLabel"), { target: { value: "Plates" } });
+    fireEvent.change(screen.getByLabelText(/CostAmountLabel/), { target: { value: "150" } });
+    fireEvent.click(screen.getByRole("button", { name: "SaveHandoverCost" }));
+    await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordDealFee")).toHaveLength(1));
+    // The refusal is shown in the form, and the form is still there for a retry.
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "SaveHandoverCost" }));
+    await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordDealFee")).toHaveLength(2));
+
+    const [first, second] = mutationCalls.get("financeDealCosts:recordDealFee") as Array<Record<string, unknown>>;
+    expect(first).toMatchObject({
+      orgId: ORG,
+      applicationId: APP,
+      feeType: "LICENSING",
+      description: "Plates",
+      // JOD, scale 3: 150 → 150,000 minor. An ESTIMATE, so no actual.
+      estimatedAmountMinor: 150_000,
+      actualAmountMinor: undefined,
+      paidBy: "DEALER",
+      paidTo: "GOVERNMENT",
+      accountingTreatment: "SELLING_EXPENSE",
+      source: "MANUAL",
+    });
+    expect(first.idempotencyKey).toMatch(/^record-deal-fee:app_2048:[0-9a-f-]{36}:[0-9a-f-]{36}$/);
+    expect(second.idempotencyKey).toBe(first.idempotencyKey);
+  });
+
+  test("cancelling the add form writes nothing", () => {
+    readableDeal();
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    queryResults.set(COSTS_QUERY, costsPayload());
+    renderCockpit();
+    fireEvent.click(screen.getByRole("button", { name: "AddHandoverCost" }));
+    fireEvent.change(screen.getByLabelText(/CostAmountLabel/), { target: { value: "150" } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByTestId("deal-handover-cost-add")).toBeNull();
+    expect(mutationCalls.get("financeDealCosts:recordDealFee")).toBeUndefined();
+  });
+
+  test("EDIT records the actual on the existing line (estimate preserved beside it), REMOVE voids it with a reason", async () => {
+    readableDeal();
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    queryResults.set(COSTS_QUERY, costsPayload([transferLine]));
+    renderCockpit();
+
+    const line = screen.getByTestId("deal-handover-cost-fee_1");
+    expect(line.textContent).toContain("CostStatusEstimated");
+    fireEvent.click(within(line).getByRole("button", { name: "RecordActualCost" }));
+    expect(screen.getByTestId("deal-handover-cost-edit-fee_1").textContent).toContain("CostEstimatePreservedNote");
+    fireEvent.change(screen.getByLabelText(/^CostActual/), { target: { value: "165.5" } });
+    fireEvent.change(screen.getByLabelText("CostPaidOnLabel"), { target: { value: "2026-09-10" } });
+    fireEvent.change(screen.getByLabelText("ReceiptReferenceLabel"), { target: { value: "LIC-0910" } });
+    fireEvent.click(screen.getByRole("button", { name: "SaveActualCost" }));
+    await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordActualFeeAmount")).toHaveLength(1));
+    expect(mutationCalls.get("financeDealCosts:recordActualFeeAmount")![0]).toEqual({
+      orgId: ORG,
+      feeId: "fee_1",
+      actualAmountMinor: 165_500,
+      paidAt: Date.UTC(2026, 8, 10),
+      receiptReference: "LIC-0910",
+    });
+    // No add, no second line: the edit is on the existing record.
+    expect(mutationCalls.get("financeDealCosts:recordDealFee")).toBeUndefined();
+
+    fireEvent.click(within(screen.getByTestId("deal-handover-cost-fee_1")).getByRole("button", { name: "RemoveHandoverCost" }));
+    expect((screen.getByRole("button", { name: "ConfirmRemoveCost" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(mutationCalls.get("financeDealCosts:voidDealFee")).toBeUndefined();
+    fireEvent.change(screen.getByLabelText("VoidReasonLabel"), { target: { value: "Not needed for this buyer" } });
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRemoveCost" }));
+    await waitFor(() => expect(mutationCalls.get("financeDealCosts:voidDealFee")).toHaveLength(1));
+    expect(mutationCalls.get("financeDealCosts:voidDealFee")![0]).toEqual({
+      orgId: ORG,
+      feeId: "fee_1",
+      reason: "Not needed for this buyer",
+    });
+  });
+
+  test("without create:finance_application the section is read-only; a non-handover line never gets controls", () => {
+    readableDeal();
+    queryResults.set(
+      COSTS_QUERY,
+      costsPayload([transferLine, { ...transferLine, _id: "fee_2", feeType: "FINANCE_COMPANY_FEE" }])
+    );
+    renderCockpit();
+    const section = screen.getByTestId("deal-handover-costs");
+    expect(within(section).queryByRole("button")).toBeNull();
+    expect(section.textContent).toContain("FeeTypeOwnershipTransfer");
+    expect(section.textContent).toContain("FeeTypeFinanceCompany");
+
+    cleanup();
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    renderCockpit();
+    expect(within(screen.getByTestId("deal-handover-cost-fee_1")).getByRole("button", { name: "RecordActualCost" })).toBeTruthy();
+    expect(within(screen.getByTestId("deal-handover-cost-fee_2")).queryByRole("button")).toBeNull();
+  });
+
+  test("totals are the server's, estimated and actual apart; a line without an amount reads as not recorded, never zero", () => {
+    readableDeal();
+    queryResults.set(COSTS_QUERY, costsPayload([{ ...transferLine, estimatedAmountMinor: undefined, status: "UNQUANTIFIED" }]));
+    renderCockpit();
+    const totals = screen.getByTestId("deal-handover-costs-totals");
+    expect(totals.textContent).toContain("CostsExpectedTotal");
+    expect(totals.textContent).toContain("CostsActualTotal");
+    const line = screen.getByTestId("deal-handover-cost-fee_1");
+    expect(line.textContent).toContain("CostStatusUnquantified");
+    expect(line.textContent).toContain("FactUnavailable");
+  });
+});
