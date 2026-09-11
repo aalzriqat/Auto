@@ -898,7 +898,12 @@ export async function runRehearsalCases(ctx) {
         },
       });
       await oneEvent("receivables", receivableId, "RECEIVABLE_CREATED", "the receivable");
-      proven["collections.createReceivable"] = { id: String(receivableId) };
+      // Scoped by the run's own title, not by the id the replay returned: a
+      // second row under a fresh id is exactly what an id-scoped check misses.
+      const titledA = await receivablesTitled({ orgId, ownerMust, title: `Rehearsal RT2 receivable ${stamp}` });
+      expectEqual(titledA.length, 1, "receivable rows carrying this run's title after create + replay");
+      expectEqual(String(titledA[0]._id), String(receivableId), "the one titled row is the one the command returned");
+      proven["collections.createReceivable"] = { id: String(receivableId), rowsTitled: titledA.length };
 
       // 2. createInstallmentPlan — the WHOLE plan: three debts, three events,
       //    and the replay returns the same three ids, not three more.
@@ -919,7 +924,13 @@ export async function runRehearsalCases(ctx) {
         planTotal += row.originalAmount ?? row.outstandingAmount ?? 0;
       }
       expectEqual(planTotal, 900, "the plan's instalments sum to the plan total");
-      proven["collections.createInstallmentPlan"] = { ids: planIds.map(String), total: planTotal };
+      const titledPlan = await receivablesTitled({ orgId, ownerMust, title: `Rehearsal RT2 plan ${stamp}` });
+      expectEqual(titledPlan.length, 3, "receivable rows carrying the plan's title after create + replay");
+      const planIdSet = new Set(planIds.map(String));
+      if (!titledPlan.every((r) => planIdSet.has(String(r._id)))) {
+        fail("a receivable carrying the plan's title is not one of the ids the plan returned — a row the replay minted");
+      }
+      proven["collections.createInstallmentPlan"] = { ids: planIds.map(String), total: planTotal, rowsTitled: titledPlan.length };
 
       // 3. fixedAssets.capitalize — one asset, one ASSET_CAPITALIZED.
       const assetId = await replayMustReturnSame({
@@ -2001,6 +2012,27 @@ async function customerNetOnAccount({ orgId, ownerMust, accountId, customerId })
   const debit = mine.reduce((s, l) => s + (l.debitMinor ?? 0), 0);
   const credit = mine.reduce((s, l) => s + (l.creditMinor ?? 0), 0);
   return { debit, credit, lines: mine.length, normalBalance: activity.account.normalBalance };
+}
+
+/**
+ * Every receivable carrying a run-stamped title. Sonnet MAX R4-A1: RT2 checked
+ * its receivable footprints by the id the replay RETURNED — so a replay that
+ * hands back the original id while minting a second row under a fresh id
+ * passed. The other six steps already scope by a run property; these do now.
+ */
+async function receivablesTitled({ orgId, ownerMust, title }) {
+  const rows = [];
+  let cursor = null;
+  for (let page = 0; page < 20; page++) {
+    const result = await ownerMust("query", "collections:listReceivables", {
+      orgId,
+      paginationOpts: { numItems: 100, cursor },
+    });
+    rows.push(...(result?.page ?? []).filter((r) => r.title === title));
+    if (result?.isDone || !result?.continueCursor) break;
+    cursor = result.continueCursor;
+  }
+  return rows;
 }
 
 /** Pages the receivable list to find ONE receivable by id. */

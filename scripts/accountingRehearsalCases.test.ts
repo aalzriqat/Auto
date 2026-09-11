@@ -119,6 +119,8 @@ type Defects = {
   receivableNotReopened?: boolean;
   /** A replayed create hands back the SAME id and posts its footprint AGAIN. */
   doubleFootprintOnReplay?: boolean;
+  /** The same, for createReceivable / createInstallmentPlan ONLY — the six other steps stay healthy (Sonnet MAX R4-A1). */
+  doubleFootprintReceivablesOnly?: boolean;
   /** A completed work order with a posted expense can be edited (and re-posted). */
   workOrderLockOpen?: boolean;
 };
@@ -294,8 +296,12 @@ function makeBackend(defects: Defects = {}) {
     return { ok: true as const, value: made };
   }
   /** A replay that hands back the same id and STILL posts again — the footprint defect. */
-  const replayedFootprint = (args: Record<string, any>) =>
-    Boolean(args.idempotencyKey && createdByKey.has(args.idempotencyKey) && defects.doubleFootprintOnReplay);
+  const replayedFootprint = (args: Record<string, any>, receivableCommand = false) =>
+    Boolean(
+      args.idempotencyKey &&
+        createdByKey.has(args.idempotencyKey) &&
+        (defects.doubleFootprintOnReplay || (receivableCommand && defects.doubleFootprintReceivablesOnly))
+    );
 
   const release = (args: Record<string, any>, authed: boolean) => {
     if (!authed && !defects.acceptUnauthenticated) {
@@ -484,7 +490,7 @@ function makeBackend(defects: Defects = {}) {
             error: "This receivable's credit account isn't obvious from its source type — specify creditSystemKey.",
           };
         }
-        const again = replayedFootprint(args);
+        const again = replayedFootprint(args, true);
         const made = replayableCreate("recv", args)!;
         if (made.ok && (!receivables.has(String(made.value)) || again)) {
           receivableRow(again ? id("recv-dup") : String(made.value), args, Number(args.amount));
@@ -494,7 +500,9 @@ function makeBackend(defects: Defects = {}) {
       case "collections:createInstallmentPlan": {
         const key = args.idempotencyKey;
         if (key && createdByKey.has(key) && !defects.duplicateOnCreateReplay && !defects.refuseCreateReplay) {
-          if (defects.doubleFootprintOnReplay) receivableRow(id("inst-dup"), args, Number(args.totalAmount) / Number(args.installmentCount));
+          if (defects.doubleFootprintOnReplay || defects.doubleFootprintReceivablesOnly) {
+            receivableRow(id("inst-dup"), args, Number(args.totalAmount) / Number(args.installmentCount));
+          }
           return { ok: true as const, value: JSON.parse(createdByKey.get(key)!) };
         }
         if (key && createdByKey.has(key) && defects.refuseCreateReplay) return { ok: false as const, error: "Duplicate request." };
@@ -1431,6 +1439,14 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
     expect(statusOf(results, "RT2")).toBe("FAIL");
     expect(detail(results, "RT2")).toMatch(/occurrences for .*: expected 1, got 2|rows .*: expected 1, got 2|after the replay: expected 1, got 2/);
   });
+  test("RT2 catches a same-id double footprint on createReceivable / createInstallmentPlan ALONE (Sonnet MAX R4-A1)", async () => {
+    // The six other steps are healthy, so only the title-scoped counts in
+    // steps 1 and 2 can turn this red — an id-scoped check could not.
+    const results = await runAgainst({ doubleFootprintReceivablesOnly: true });
+    expect(statusOf(results, "RT2")).toBe("FAIL");
+    expect(detail(results, "RT2")).toMatch(/receivable rows carrying this run's title after create \+ replay: expected 1, got 2/);
+  });
+
   test("RT2 catches a work-order state barrier that lets a posted expense be edited", async () => {
     const results = await runAgainst({ workOrderLockOpen: true });
     expect(statusOf(results, "RT2")).toBe("FAIL");
