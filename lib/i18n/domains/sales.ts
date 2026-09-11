@@ -172,17 +172,13 @@ const dealRailMessages = defineBilingualMessages({
    * action is withheld and the reason said. No conversion is offered, no
    * repair is suggested, and nothing has been posted.
    */
-  DisbursementCurrencyMismatch: [
-    "This deal's settlement is recorded in a currency that differs from the organisation's current currency. The receipt cannot be confirmed from here until the settlement is recorded in one currency end to end; nothing has been posted.",
-    "تسوية هذه الصفقة مسجّلة بعملة تختلف عن العملة الحالية للمؤسسة. لا يمكن تأكيد الاستلام من هنا حتى تُسجَّل التسوية بعملة واحدة من البداية إلى النهاية؛ لم يُرحَّل أي قيد.",
-  ],
   DisbursementCurrencyUnsupported: [
     "This deal's settlement is recorded in a currency AutoFlow does not recognise. The receipt cannot be confirmed until the recorded currency is corrected; nothing has been posted.",
     "تسوية هذه الصفقة مسجّلة بعملة لا يتعرّف عليها AutoFlow. لا يمكن تأكيد الاستلام حتى تُصحَّح العملة المسجّلة؛ لم يُرحَّل أي قيد.",
   ],
   FinalizeCurrencyMismatch: [
-    "This deal's economics are recorded in a currency that differs from the organisation's current currency. Closing it would open a receivable that cannot be settled, so the close is withheld until the settlement is recorded in one currency end to end.",
-    "اقتصاديات هذه الصفقة مسجّلة بعملة تختلف عن العملة الحالية للمؤسسة. إغلاقها سيفتح ذمّة مدينة لا يمكن تسويتها، لذا يُحجب الإغلاق حتى تُسجَّل التسوية بعملة واحدة من البداية إلى النهاية.",
+    "This deal's figures were recorded in a currency that differs from the organisation's current currency. A deal is closed in the currency its figures were recorded in, so the close is withheld until the organisation's currency is restored to the recorded one; nothing has been posted.",
+    "أرقام هذه الصفقة مسجّلة بعملة تختلف عن العملة الحالية للمؤسسة. تُغلق الصفقة بالعملة التي سُجِّلت بها أرقامها، لذا يُحجب الإغلاق حتى تُعاد عملة المؤسسة إلى العملة المسجّلة؛ لم يُرحَّل أي قيد.",
   ],
   FinalizeCurrencyUnsupported: [
     "This deal's economics are recorded in a currency AutoFlow does not recognise. The close is withheld until the recorded currency is corrected.",
@@ -190,6 +186,8 @@ const dealRailMessages = defineBilingualMessages({
   ],
   /** Prefix for the withheld figure, spelled in the currency it is recorded in. */
   RecordedSettlementAmount: ["Recorded settlement", "التسوية المسجّلة"],
+  /** Prefix for the currency a deal's figures were pinned in. */
+  RecordedEconomicsCurrency: ["Recorded currency", "العملة المسجّلة"],
   /** Prefix for the organisation's current currency beside it. */
   OrganisationCurrencyLabel: ["Organisation currency", "عملة المؤسسة"],
 

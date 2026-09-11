@@ -1,44 +1,48 @@
 import { denominationOf } from "@/convex/utils/money";
 
 /**
- * TEMPORARY UI CONTAINMENT — SCRUM-215 SN3-1, blocked on the canonical
- * settlement fix under SCRUM-241 (owner-proxy ruling 2026-09-11 10:50).
+ * The currency boundary on a financed deal, as the server enforces it
+ * (SCRUM-241, merged with the Accounting RC at main `4dd8a0ad8`), mirrored so
+ * the two UI surfaces withhold exactly the actions the backend refuses and
+ * name the reason — instead of offering a button whose only outcome is a
+ * refusal.
  *
- * A financed deal's settlement is recorded in the currency PINNED on the
- * application (`financeApplications.economicsCurrency`), and `orgSettings`
- * does not count a finance application among the rows that lock the org's
- * currency. So an org can pin a deal in JOD, switch to USD, and finalize:
- * `finalizeDeal` opens the finance-company receivable in JOD, while
- * `confirmDisbursement` builds the receipt, payment and allocation in the
- * org's CURRENT currency — and the allocation's currency assertion refuses.
- * Nothing commits (the mutation is atomic), and nothing ever can: the deal
- * is a settlement dead end from either surface.
+ * Two different rules at two different moments, and they are NOT symmetric:
  *
- * Reproduced, not reasoned: `convex/sn31CurrencyMismatchRepro.test.ts`.
+ *  - BEFORE the sale exists, `finalizeDeal` refuses a deal whose pinned
+ *    economics currency (`financeApplications.economicsCurrency`) differs
+ *    from the organisation's CURRENT currency: the plan and the receivable
+ *    take the pinned currency while the sale's own journal posts in the
+ *    org's, so finalizing would recognise the plan's integers under the
+ *    wrong label. Nothing is converted, relabelled or clipped; restoring the
+ *    org setting makes the same deal finalize. The rule holds for every
+ *    pinned deal, financier or not.
  *
- * Until the backend owner proves one recorded settlement amount+currency
- * drives receipt, payment, allocation and GL, this screen withholds the
- * action that is certain to be refused and says why — and withholds the
- * finalization that would build such a receivable in the first place. It
- * does NOT convert, relabel or guess money, and it does not suggest changing
- * the org currency as a repair (that is refused after posting anyway, and is
- * not a conversion of a recorded debt before it).
+ *  - AFTER the sale exists, `confirmDisbursement` settles the finance-company
+ *    receivable in the RECEIVABLE'S OWN denomination — the org's current
+ *    currency is not consulted again. A later drift of the org setting is
+ *    therefore not a refusal on the receipt, and this gate must not withhold
+ *    it. What the server still refuses there is a denomination it does not
+ *    recognise at all.
+ *
+ * Both halves are reproduced against the real mutations in
+ * `convex/sn31CurrencyMismatchRepro.test.ts`; this module reasons about none
+ * of the money, only about which refusal the server would give.
  */
-export type SettlementDenominationRefusal = "MISMATCH" | "UNSUPPORTED";
+export type FinalizeDenominationRefusal = "MISMATCH" | "UNSUPPORTED";
+export type DisbursementDenominationRefusal = "UNSUPPORTED";
 
 /**
- * Why the pinned denomination cannot be settled against the org's current
- * currency — or `undefined` when it can.
+ * Why the close would be refused — or `undefined` when it would not.
  *
  * An ABSENT pin is not a refusal: every writer resolves it as
- * `app.economicsCurrency ?? org`, so a frozen figure on such a row was built
- * in the org currency by construction, and the org currency cannot change
- * after the sale has posted. That is the server's rule, not a guess made here.
+ * `app.economicsCurrency ?? org`, so such a row is in the org currency by
+ * construction. That is the server's rule, not a guess made here.
  */
-export function settlementDenominationRefusal(
+export function finalizeDenominationRefusal(
   pinnedCurrency: string | undefined,
   orgCurrencyCode: string
-): SettlementDenominationRefusal | undefined {
+): FinalizeDenominationRefusal | undefined {
   if (pinnedCurrency === undefined) return undefined;
   // Canonical spelling only — the same rule the writers assert. "JD", "jod"
   // and "" are all PRESENT and meaningless, and would scale by a guessed
@@ -47,14 +51,25 @@ export function settlementDenominationRefusal(
   return pinnedCurrency === orgCurrencyCode ? undefined : "MISMATCH";
 }
 
+/**
+ * Why the dealership receipt would be refused — or `undefined` when it would
+ * not. The org's current currency is deliberately not an input: the receipt
+ * settles the receivable in the denomination it was opened in.
+ */
+export function disbursementDenominationRefusal(
+  pinnedCurrency: string | undefined
+): DisbursementDenominationRefusal | undefined {
+  if (pinnedCurrency === undefined) return undefined;
+  return denominationOf(pinnedCurrency) === null ? "UNSUPPORTED" : undefined;
+}
+
 /** Why the dealership receipt is withheld, one key per refusal. */
-export const DISBURSEMENT_DENOMINATION_REASON: Record<SettlementDenominationRefusal, string> = {
-  MISMATCH: "DisbursementCurrencyMismatch",
+export const DISBURSEMENT_DENOMINATION_REASON: Record<DisbursementDenominationRefusal, string> = {
   UNSUPPORTED: "DisbursementCurrencyUnsupported",
 };
 
 /** Why the close is withheld, one key per refusal. */
-export const FINALIZE_DENOMINATION_REASON: Record<SettlementDenominationRefusal, string> = {
+export const FINALIZE_DENOMINATION_REASON: Record<FinalizeDenominationRefusal, string> = {
   MISMATCH: "FinalizeCurrencyMismatch",
   UNSUPPORTED: "FinalizeCurrencyUnsupported",
 };

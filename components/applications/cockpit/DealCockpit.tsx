@@ -11,7 +11,8 @@ import { scaleForCurrency } from "@/components/accounting/AccountingTabShared";
 import {
   DISBURSEMENT_DENOMINATION_REASON,
   FINALIZE_DENOMINATION_REASON,
-  settlementDenominationRefusal,
+  disbursementDenominationRefusal,
+  finalizeDenominationRefusal,
 } from "@/components/applications/settlementDenomination";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -78,6 +79,7 @@ import {
   type DepositResolution,
 } from "./StoppedDealDepositsPanel";
 import { DisbursementConfirmationDialog } from "../DisbursementConfirmationDialog";
+import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 
 /**
  * The financed-deal cockpit.
@@ -337,7 +339,7 @@ function disbursementUnavailableReason(
   return "DisbursementNeedsPermission";
 }
 
-/** The withheld settlement figure and the org currency it cannot be settled against. */
+/** The recorded figure or currency, beside the org's current currency. */
 export type SettlementDenominationDetail = {
   recordedLabel: string;
   recordedAmount: string;
@@ -610,15 +612,17 @@ export function DealCockpit({
   const cancelKeyRef = useRef<string | null>(null);
   const confirmDisbursementKeyRef = useRef<string | null>(null);
   const confirmSupplierDisbursementKeyRef = useRef<string | null>(null);
-  // Deliberately NO key ref for `deposits.release`. That command pays out
+  // `deposits.release` gets a GENERATION-AWARE retained identity instead of a
+  // plain key ref (SCRUM-313; the full reasoning lives at the release path in
+  // `components/vehicles/VehicleDetailsDialog.tsx`). That command pays out
   // whatever is currently FREE on the row, so two genuine payouts of one
-  // deposit are byte-identical requests; a key retained across a lost
-  // acknowledgement would hand the second, genuinely new release the first
-  // one's stored result — no money moves and the operator is told the
-  // customer was refunded. The Review dialog omits the key for this reason
-  // and so does this caller. At-most-once on this path comes from the server
-  // recomputing the free balance; the generation-aware identity (keyed on
-  // `releaseCount`) arrives with the Accounting convergence (SCRUM-313).
+  // deposit are byte-identical requests and content alone cannot separate a
+  // retry from a second real payout — but the server's `releaseCount`, bumped
+  // in the same patch that moves the money, can. Same generation + same
+  // decision = same key (a retry is deduped, and the key survives an unknown
+  // result); a confirmed payout advances the generation, so the next genuine
+  // payout is a new command. Identical in shape to the Review dialog's caller.
+  const commandId = useCommandIdentity();
 
   // ---- the same derivations the Review dialog made, from the same payload ----
   // The dealer-side economics are denominated in the application's OWN pinned
@@ -668,26 +672,37 @@ export function DealCockpit({
       ? formatEconomics(frozenNetMinor)
       : orgCurrency.format(principalMinor / orgFactor);
   /**
-   * TEMPORARY CONTAINMENT — SN3-1 (SCRUM-215 → SCRUM-241). A deal pinned to a
-   * currency other than the org's current one cannot be settled: the
-   * receivable was opened in the pinned currency at finalization and
-   * `confirmDisbursement` posts in the org's, so the allocation refuses and
-   * nothing commits. Reproduced in `convex/sn31CurrencyMismatchRepro.test.ts`.
-   * Only a deal with a NAMED finance company settling through the dealership
-   * opens that receivable, so only that deal is gated — the receipt on a
-   * closed one, and the close itself before it. Removed once the canonical
-   * fix records one settlement currency end to end.
+   * The server's currency boundary, mirrored (SCRUM-241, see
+   * `settlementDenomination.ts`). The close is refused for EVERY pinned deal
+   * whose currency drifted from the org's current one — the sale would post
+   * under the wrong label — so it is withheld here with the reason. The
+   * receipt on a closed deal is NOT: it settles the receivable in the
+   * receivable's own denomination, whatever the org setting says now. Only a
+   * deal with a named finance company settling through the dealership has
+   * that receipt, and the one refusal left on it is an unrecognised pin.
    */
-  const settlementDenominationBlock =
+  const finalizeDenominationBlock = app
+    ? finalizeDenominationRefusal(app.economicsCurrency, orgCurrency.code)
+    : undefined;
+  const disbursementDenominationBlock =
     app?.companyId && !settlesDirectToSupplier
-      ? settlementDenominationRefusal(app.economicsCurrency, orgCurrency.code)
+      ? disbursementDenominationRefusal(app.economicsCurrency)
       : undefined;
   /**
-   * The withheld figure, in the currency it is recorded in, beside the org's.
-   * Structured rather than one string: under an RTL base the money run and
-   * its code swap order ("USD 15,625") unless each run is its own LTR isolate.
+   * The recorded currency beside the org's current one. Structured rather
+   * than one string: under an RTL base a money run and its code swap order
+   * ("USD 15,625") unless each run is its own LTR isolate.
    */
-  const settlementDenominationDetail = settlementDenominationBlock
+  const finalizeDenominationDetail =
+    finalizeDenominationBlock && app
+      ? {
+          recordedLabel: t("RecordedEconomicsCurrency"),
+          recordedAmount: app.economicsCurrency ?? orgCurrency.code,
+          orgLabel: t("OrganisationCurrencyLabel"),
+          orgCurrency: orgCurrency.code,
+        }
+      : undefined;
+  const disbursementDenominationDetail = disbursementDenominationBlock
     ? {
         recordedLabel: t("RecordedSettlementAmount"),
         recordedAmount: expectedDisbursementLabel,
@@ -713,7 +728,7 @@ export function DealCockpit({
     expectsFinanceCompanyDisbursement &&
     !settlesDirectToSupplier &&
     !app.disbursedAt &&
-    settlementDenominationBlock === undefined;
+    disbursementDenominationBlock === undefined;
   // Gated on the SERVER's own answer (`canSettleDirectToSupplier`), not on
   // `companyId`, which is unset on every MANUAL_FINANCE_COMPANY deal.
   const canConfirmSupplierDisbursement =
@@ -736,6 +751,7 @@ export function DealCockpit({
     status: deposit.status,
     method: deposit.method,
     releasedAmountMinor: deposit.releasedAmountMinor,
+    releaseCount: deposit.releaseCount,
   }));
   const showApplicationDeposits =
     app != null &&
@@ -938,13 +954,13 @@ export function DealCockpit({
       }
       // The currency boundary is named before permission or applicability:
       // it is a fact about the deal that no caller can act on from here.
-      if (settlementDenominationBlock && !app.disbursedAt) {
+      if (disbursementDenominationBlock && !app.disbursedAt) {
         return {
           stageKey: "DISBURSEMENT",
           actionKey: "ConfirmDisbursement",
           onStart: () => setConfirmingDisbursement(true),
-          unavailableReasonKey: DISBURSEMENT_DENOMINATION_REASON[settlementDenominationBlock],
-          unavailableDetail: settlementDenominationDetail,
+          unavailableReasonKey: DISBURSEMENT_DENOMINATION_REASON[disbursementDenominationBlock],
+          unavailableDetail: disbursementDenominationDetail,
         };
       }
       return {
@@ -1032,12 +1048,13 @@ export function DealCockpit({
        * is not a dead end — and bringing that control across is filed separately
        * rather than folded into this change.
        */
-      unavailableReasonKey: settlementDenominationBlock
-        ? FINALIZE_DENOMINATION_REASON[settlementDenominationBlock]
+      unavailableReasonKey: finalizeDenominationBlock
+        ? FINALIZE_DENOMINATION_REASON[finalizeDenominationBlock]
         : finalizeUnavailableReasonKey(
             settlementRouteRequired,
             hasPermission(PERMISSIONS.FINALIZE_FINANCED_DEAL)
           ),
+      unavailableDetail: finalizeDenominationDetail,
     };
   }
 
@@ -1323,15 +1340,19 @@ export function DealCockpit({
               // not provably the releasable value.
               faceValueIsReleasable: !quoteHasCommittedMoney,
               resolvingId: resolvingDepositId,
-              onResolve: async (depositId, resolution, refundMethod) => {
+              onResolve: async (depositId, resolution, refundMethod, observedReleaseCount) => {
                 setResolvingDepositId(depositId);
                 try {
+                  const method = resolution === "REFUNDED" ? refundMethod : "NONE";
+                  const intent = `release-deposit:${depositId}:${resolution}:${method}:gen${observedReleaseCount}`;
                   await releaseDeposit({
                     orgId,
                     depositId: depositId as Id<"deposits">,
                     resolution,
                     refundMethod: resolution === "REFUNDED" ? refundMethod : undefined,
+                    idempotencyKey: commandId.for(intent),
                   });
+                  commandId.retire(intent);
                   toast.success(
                     t(resolution === "REFUNDED" ? "DepositRefundedSuccess" : "DepositForfeitedSuccess")
                   );
@@ -1877,7 +1898,8 @@ export function DealCockpitView({
     onResolve: (
       depositId: string,
       resolution: DepositResolution,
-      refundMethod: PaymentMethod | undefined
+      refundMethod: PaymentMethod | undefined,
+      observedReleaseCount: number
     ) => Promise<void>;
   };
   /** The two disbursement confirmations' own state. Financed only. */

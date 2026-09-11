@@ -27,7 +27,8 @@ import { ConfirmHandoverDialog } from "./cockpit/ConfirmHandoverDialog";
 import {
   DISBURSEMENT_DENOMINATION_REASON,
   FINALIZE_DENOMINATION_REASON,
-  settlementDenominationRefusal,
+  disbursementDenominationRefusal,
+  finalizeDenominationRefusal,
 } from "./settlementDenomination";
 import { SettlementDenominationLine } from "./cockpit/DealCockpit";
 import { RegisterExpectedPaymentDialog, type ExpectedPaymentMethod } from "./RegisterExpectedPaymentDialog";
@@ -384,14 +385,24 @@ export function ApplicationDetailsDialog({
     isConsignedDeal &&
     app.status !== "CLOSED" &&
     app.status !== "CANCELLED";
-  // TEMPORARY CONTAINMENT — SN3-1 (SCRUM-215 → SCRUM-241). The same gate the
-  // Deal cockpit applies, so this dialog is not a second door into the same
-  // settlement dead end. See `settlementDenomination.ts`.
-  const settlementDenominationBlock =
+  // The server's currency boundary, mirrored exactly as the Deal cockpit
+  // mirrors it (SCRUM-241, see `settlementDenomination.ts`): the close is
+  // refused on any drifted pin; the receipt settles in the receivable's own
+  // denomination and is withheld only for an unrecognised one.
+  const finalizeDenominationBlock = finalizeDenominationRefusal(app.economicsCurrency, currency.code);
+  const disbursementDenominationBlock =
     app.companyId && !settlesDirectToSupplier
-      ? settlementDenominationRefusal(app.economicsCurrency, currency.code)
+      ? disbursementDenominationRefusal(app.economicsCurrency)
       : undefined;
-  const settlementDenominationDetail = settlementDenominationBlock
+  const finalizeDenominationDetail = finalizeDenominationBlock
+    ? {
+        recordedLabel: t("RecordedEconomicsCurrency" as any),
+        recordedAmount: app.economicsCurrency ?? currency.code,
+        orgLabel: t("OrganisationCurrencyLabel" as any),
+        orgCurrency: currency.code,
+      }
+    : undefined;
+  const disbursementDenominationDetail = disbursementDenominationBlock
     ? {
         recordedLabel: t("RecordedSettlementAmount" as any),
         recordedAmount: expectedDisbursementLabel,
@@ -410,7 +421,7 @@ export function ApplicationDetailsDialog({
     expectsFinanceCompanyDisbursement &&
     !settlesDirectToSupplier &&
     !app.disbursedAt &&
-    settlementDenominationBlock === undefined;
+    disbursementDenominationBlock === undefined;
 
   // Gated on the same facts the server enforces. Without
   // `expectsFinanceCompanyDisbursement` the button appeared on a closed direct
@@ -883,13 +894,18 @@ export function ApplicationDetailsDialog({
                   </>
                 )}
 
-                {app.status === "APPROVED" && settlementDenominationBlock && (
-                  <p className="text-sm text-muted-foreground" data-testid="review-finalize-withheld">
-                    {t(FINALIZE_DENOMINATION_REASON[settlementDenominationBlock] as any)}
-                  </p>
+                {app.status === "APPROVED" && finalizeDenominationBlock && (
+                  <div className="space-y-1" data-testid="review-finalize-withheld">
+                    <p className="text-sm text-muted-foreground">
+                      {t(FINALIZE_DENOMINATION_REASON[finalizeDenominationBlock] as any)}
+                    </p>
+                    {finalizeDenominationDetail && (
+                      <SettlementDenominationLine detail={finalizeDenominationDetail} />
+                    )}
+                  </div>
                 )}
 
-                {app.status === "APPROVED" && canFinalizeApplication && !settlementDenominationBlock && (
+                {app.status === "APPROVED" && canFinalizeApplication && !finalizeDenominationBlock && (
                   <>
                     <Button
                       onClick={handleFinalizeDeal}
@@ -912,13 +928,13 @@ export function ApplicationDetailsDialog({
                   </Badge>
                 )}
 
-                {app.status === "CLOSED" && !app.disbursedAt && settlementDenominationBlock && (
+                {app.status === "CLOSED" && !app.disbursedAt && disbursementDenominationBlock && (
                   <div className="space-y-1" data-testid="review-disbursement-withheld">
                     <p className="text-sm text-muted-foreground">
-                      {t(DISBURSEMENT_DENOMINATION_REASON[settlementDenominationBlock] as any)}
+                      {t(DISBURSEMENT_DENOMINATION_REASON[disbursementDenominationBlock] as any)}
                     </p>
-                    {settlementDenominationDetail && (
-                      <SettlementDenominationLine detail={settlementDenominationDetail} />
+                    {disbursementDenominationDetail && (
+                      <SettlementDenominationLine detail={disbursementDenominationDetail} />
                     )}
                   </div>
                 )}

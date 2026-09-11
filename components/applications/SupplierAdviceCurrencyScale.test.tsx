@@ -193,11 +193,11 @@ describe("a deal pinned to a currency the org no longer uses", () => {
 });
 
 /**
- * SN3-1 CONTAINMENT (SCRUM-215 → SCRUM-241). The same gate the Deal cockpit
- * applies, so the Review dialog is not a second door into the settlement dead
- * end reproduced in `convex/sn31CurrencyMismatchRepro.test.ts`: a deal with a
- * named finance company, settling through the dealership, whose pinned
- * currency differs from the org's current one.
+ * SN3-1 after convergence (SCRUM-241 merged). The same gate the Deal cockpit
+ * applies, mirrored from the server's two rules in
+ * `convex/sn31CurrencyMismatchRepro.test.ts`: the close on a drifted pin is
+ * refused before the sale exists; the receipt on a closed deal settles in the
+ * receivable's own denomination and is no longer withheld for drift.
  */
 describe("a through-dealership deal pinned to a currency the org no longer uses", () => {
   function throughDealershipDeal(overrides: Record<string, unknown> = {}) {
@@ -213,13 +213,19 @@ describe("a through-dealership deal pinned to a currency the org no longer uses"
     });
   }
 
-  test("CLOSED: the receipt is withheld, with the reason and the recorded figure in its own currency", () => {
+  test("CLOSED: the receipt is USABLE and offers the exact frozen net in its own currency (was withheld pre-convergence; failed first)", () => {
     renderDialog(throughDealershipDeal());
+    expect(screen.queryByTestId("review-disbursement-withheld")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmDisbursement" }));
+    const dialogText = screen.getByRole("dialog").textContent ?? "";
+    expect(dialogText).toContain("17,450 JOD");
+    expect(dialogText).not.toContain("174,500");
+  });
+
+  test("CLOSED: a pin AutoFlow does not recognise is the one refusal left on the receipt", () => {
+    renderDialog(throughDealershipDeal({ economicsCurrency: "JD" }));
     expect(screen.queryByRole("button", { name: "ConfirmDisbursement" })).toBeNull();
-    const withheld = screen.getByTestId("review-disbursement-withheld");
-    expect(withheld.textContent).toContain("DisbursementCurrencyMismatch");
-    expect(withheld.textContent).toContain("17,450 JOD");
-    expect(withheld.textContent).not.toContain("174,500");
+    expect(screen.getByTestId("review-disbursement-withheld").textContent).toContain("DisbursementCurrencyUnsupported");
     expect(mutationSpies.get("applications:confirmDisbursement")?.mock.calls ?? []).toHaveLength(0);
   });
 

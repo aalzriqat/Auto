@@ -23,6 +23,12 @@ export type DealDeposit = {
   method?: string;
   /** Minor units already paid out of this row by an earlier release. */
   releasedAmountMinor?: number;
+  /**
+   * The payout GENERATION of this row — `deposits.releaseCount`, bumped by the
+   * server in the same patch that moves the money. Captured with the operator's
+   * decision so the release identity names the generation it was taken against.
+   */
+  releaseCount?: number;
 };
 
 /**
@@ -65,13 +71,20 @@ export function StoppedDealDepositsPanel({
   onResolve: (
     depositId: string,
     resolution: DepositResolution,
-    refundMethod: PaymentMethod | undefined
+    refundMethod: PaymentMethod | undefined,
+    observedReleaseCount: number
   ) => Promise<void>;
 }>) {
   const [pending, setPending] = useState<{
     depositId: string;
     amount: number;
     resolution: DepositResolution;
+    /**
+     * `releaseCount` as observed when the operator chose the action — THIS is
+     * the intent boundary. Re-reading it at confirm time would let the
+     * generation move underneath a decision already made.
+     */
+    releaseCount: number;
   } | null>(null);
   const [refundMethod, setRefundMethod] = useState<PaymentMethod>("CASH");
 
@@ -159,7 +172,12 @@ export function StoppedDealDepositsPanel({
                     variant="outline"
                     disabled={resolvingId === deposit._id}
                     onClick={() =>
-                      setPending({ depositId: deposit._id, amount: deposit.amount, resolution: "REFUNDED" })
+                      setPending({
+                        depositId: deposit._id,
+                        amount: deposit.amount,
+                        resolution: "REFUNDED",
+                        releaseCount: deposit.releaseCount ?? 0,
+                      })
                     }
                   >
                     <Undo2 className="h-3.5 w-3.5 me-1.5" />
@@ -171,7 +189,12 @@ export function StoppedDealDepositsPanel({
                     className="text-destructive hover:text-destructive"
                     disabled={resolvingId === deposit._id}
                     onClick={() =>
-                      setPending({ depositId: deposit._id, amount: deposit.amount, resolution: "FORFEITED" })
+                      setPending({
+                        depositId: deposit._id,
+                        amount: deposit.amount,
+                        resolution: "FORFEITED",
+                        releaseCount: deposit.releaseCount ?? 0,
+                      })
                     }
                   >
                     <XCircle className="h-3.5 w-3.5 me-1.5" />
@@ -229,7 +252,8 @@ export function StoppedDealDepositsPanel({
                   void onResolve(
                     pending.depositId,
                     pending.resolution,
-                    pending.resolution === "REFUNDED" ? refundMethod : undefined
+                    pending.resolution === "REFUNDED" ? refundMethod : undefined,
+                    pending.releaseCount
                   ).then(close, () => undefined)
                 }
               >

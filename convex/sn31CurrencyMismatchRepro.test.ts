@@ -1,10 +1,20 @@
 /**
- * SN3-1 reproduction — SCRUM-215 / SCRUM-241 (owner-proxy ruling 2026-09-11 10:50).
+ * SN3-1 reproduction — SCRUM-215 / SCRUM-241.
  *
  * Question: on a deal whose pinned `economicsCurrency` differs from the org's
- * CURRENT currency, what does `confirmDisbursement` actually do when handed
- * the frozen net (the figure the Unified Deal cockpit now sends), and did the
- * cockpit change make that boundary reachable?
+ * CURRENT currency, what do `finalizeDeal` and `confirmDisbursement` actually
+ * do when handed the frozen net (the figure both UI callers send)?
+ *
+ * History, so the assertions below read correctly: at PR #301's pre-convergence
+ * checkpoint (`b5baaa213`, base `17fb50e4e`) finalization went THROUGH on a
+ * drifted deal and the receipt was then refused inside allocation — a
+ * settlement dead end, UI-contained on both surfaces. The Accounting RC merged
+ * at main `4dd8a0ad8` (SCRUM-241) moved the boundary: the drift is refused
+ * BEFORE the sale exists, and a receipt settles the receivable in the
+ * receivable's own denomination. The cases marked "MERGED INVARIANT" failed
+ * first against the new backend with their old expectations and were rewritten
+ * to the behaviour the server now proves; the UI gate
+ * (`components/applications/settlementDenomination.ts`) mirrors that.
  *
  * Executed, not reasoned: every case drives the real product mutations on
  * convex-test fixtures and asserts the committed delta afterwards.
@@ -180,6 +190,7 @@ async function finalize(s: Seeded, applicationId: Id<"financeApplications">) {
     deductedFromSettlement: false,
     actualAmountMinor: 0,
     description: "No closing costs.",
+    idempotencyKey: `sn31-fee:${applicationId}`,
   });
   await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
     orgId: s.orgId, feeId, notes: "Nothing to match.",
@@ -192,6 +203,7 @@ async function finalize(s: Seeded, applicationId: Id<"financeApplications">) {
   return await s.asUser.mutation(api.applications.finalizeDeal, {
     orgId: s.orgId,
     applicationId,
+    idempotencyKey: `sn31-finalize:${applicationId}`,
   });
 }
 
@@ -286,58 +298,57 @@ describe("SN3-1 — confirmDisbursement when the deal's pinned currency ≠ the 
     expect((await app(s, applicationId))?.economicsCurrency).toBe("JOD");
   });
 
-  test("BEFORE finalization — finalize then confirm the frozen net: the FIRST refusal is the currency assertion inside allocation, and nothing commits", async () => {
+  test("MERGED INVARIANT — BEFORE finalization, a drifted pin is refused at finalizeDeal itself: no sale, no receivable, nothing commits", async () => {
     const s = await seedDealership("pre2");
     const { applicationId } = await approvedDealWithPinnedEconomics(s);
     await switchOrgCurrencyViaProduct(s, "USD");
-
-    // Finalization itself goes through: the plan is built in the PINNED
-    // currency and the receivable is opened in it.
-    await finalize(s, applicationId);
-    const closed = await app(s, applicationId);
-    expect(closed?.status).toBe("CLOSED");
-    expect(closed?.financedSaleNetReceivableMinor).toBe(VEHICLE_PRICE * JOD_SCALE);
     const before = await settlementDelta(s, applicationId);
-    expect(before.receivable).toMatchObject({ currency: "JOD", status: "OPEN", originalAmountMinor: VEHICLE_PRICE * JOD_SCALE });
-    expect(before.financeCompanyPayments).toEqual([]);
-    expect(before.cashReceivedEvents).toBe(0);
+    expect(before.receivable).toBeNull();
 
-    // The NEW caller (Unified Deal cockpit and the Review dialog after round 2)
-    // sends the frozen net integer — the amount check passes — and the
-    // posting builds receipt/payment in the org's CURRENT currency (USD).
+    // The refusal moved from "inside the receipt's allocation" to "before the
+    // sale exists": the plan and the receivable would take the pinned JOD
+    // while the sale's own journal would post in the org's USD.
     let refusal: unknown;
     try {
-      await s.asUser.mutation(api.applications.confirmDisbursement, {
-        orgId: s.orgId,
-        applicationId,
-        disbursedAmountMinor: closed!.financedSaleNetReceivableMinor!,
-        idempotencyKey: "sn31-pre2",
-      });
+      await finalize(s, applicationId);
     } catch (error) {
       refusal = error;
     }
     expect(refusal).toBeDefined();
     const message = String((refusal as { data?: unknown; message?: string })?.data ?? (refusal as Error)?.message ?? refusal);
-    console.log("SN3-1 first refusal (new caller, switch BEFORE finalize):", message);
-    expect(message).toMatch(/currency/i);
+    console.log("SN3-1 refusal (merged backend, switch BEFORE finalize):", message);
+    expect(message).toMatch(/recorded in JOD, but the organization's currency is now USD/i);
+    expect(message).toMatch(/restore the organization's currency to JOD/i);
 
-    // Zero committed financial delta: the receivable is still OPEN in JOD,
-    // no finance-company payment, no allocation, no FINANCE_CASH_RECEIVED
-    // event, and the application is not marked disbursed.
-    const after = await settlementDelta(s, applicationId);
-    expect(after).toEqual(before);
-    expect((await app(s, applicationId))?.disbursedAt).toBeUndefined();
+    // Zero committed delta and the deal is still APPROVED — the same deal
+    // finalizes once the setting is restored.
+    expect(await settlementDelta(s, applicationId)).toEqual(before);
+    expect((await app(s, applicationId))?.status).toBe("APPROVED");
+    expect((await app(s, applicationId))?.financedSaleNetReceivableMinor).toBeUndefined();
+
+    await switchOrgCurrencyViaProduct(s, "JOD");
+    // Handover, costs and classification were already recorded by the first
+    // attempt; only the close itself is retried, with the SAME command identity.
+    await s.asUser.mutation(api.applications.finalizeDeal, {
+      orgId: s.orgId,
+      applicationId,
+      idempotencyKey: `sn31-finalize:${applicationId}`,
+    });
+    expect((await app(s, applicationId))?.status).toBe("CLOSED");
+    expect((await settlementDelta(s, applicationId)).receivable).toMatchObject({ currency: "JOD", status: "OPEN" });
   });
 
-  test("ORIGIN — the OLD caller (principal at the org's current scale) was refused on the same deal too, one check earlier", async () => {
+  test("MERGED INVARIANT — the OLD caller's figure (principal at the org's current scale) is still refused at the amount gate on a same-currency deal, zero delta", async () => {
     const s = await seedDealership("old");
     const { applicationId } = await approvedDealWithPinnedEconomics(s);
-    await switchOrgCurrencyViaProduct(s, "USD");
     await finalize(s, applicationId);
     const before = await settlementDelta(s, applicationId);
 
-    // What the pre-round-2 clients sent: `quote.totalFinancedAmount` scaled by
-    // the org's CURRENT currency factor — 20,000 × 100 under USD.
+    // What the pre-round-2 clients sent when the org scale differed from the
+    // deal's: `quote.totalFinancedAmount` scaled at USD — 20,000 × 100. The
+    // server compares the caller's integer with the recorded net and refuses
+    // the contradiction rather than reconciling it; the old figure is not
+    // waived (SCRUM-241, c19345).
     const oldCallerAmount = VEHICLE_PRICE * USD_SCALE;
     let refusal: unknown;
     try {
@@ -352,9 +363,7 @@ describe("SN3-1 — confirmDisbursement when the deal's pinned currency ≠ the 
     }
     expect(refusal).toBeDefined();
     const message = String((refusal as { data?: unknown; message?: string })?.data ?? (refusal as Error)?.message ?? refusal);
-    console.log("SN3-1 first refusal (OLD caller, switch BEFORE finalize):", message);
-    // Refused at the amount gate — before any posting — so the old caller
-    // never reached the currency assertion, and never settled either.
+    console.log("SN3-1 refusal (OLD caller figure, merged backend):", message);
     expect(message).toMatch(/not what this financing company owes/i);
     expect(await settlementDelta(s, applicationId)).toEqual(before);
     expect((await app(s, applicationId))?.disbursedAt).toBeUndefined();
@@ -374,12 +383,13 @@ describe("SN3-1 — confirmDisbursement when the deal's pinned currency ≠ the 
     expect(settings?.currency).toBe("JOD");
   });
 
-  test("AFTER finalization — a raw settings edit (support migration / data repair) reaches the same dead end", async () => {
+  test("MERGED INVARIANT — AFTER finalization, a raw settings edit (support migration / data repair) no longer strands the receipt: it settles in the receivable's own JOD", async () => {
     const s = await seedDealership("post2");
     const { applicationId } = await approvedDealWithPinnedEconomics(s);
     await finalize(s, applicationId);
     const closed = await app(s, applicationId);
     const before = await settlementDelta(s, applicationId);
+    expect(before.receivable).toMatchObject({ currency: "JOD", status: "OPEN" });
 
     // Not a product path: the only way currency changes after posting.
     await s.t.run(async (ctx) => {
@@ -387,15 +397,20 @@ describe("SN3-1 — confirmDisbursement when the deal's pinned currency ≠ the 
       await ctx.db.patch(settings!._id, { currency: "USD", currencySymbol: "$" });
     });
 
-    await expect(
-      s.asUser.mutation(api.applications.confirmDisbursement, {
-        orgId: s.orgId,
-        applicationId,
-        disbursedAmountMinor: closed!.financedSaleNetReceivableMinor!,
-        idempotencyKey: "sn31-post2",
-      })
-    ).rejects.toThrow(/currency/i);
-    expect(await settlementDelta(s, applicationId)).toEqual(before);
-    expect((await app(s, applicationId))?.disbursedAt).toBeUndefined();
+    // The org's current currency is not consulted: the debt was recorded in
+    // JOD and is settled in JOD. This is the case the UI receipt gate stopped
+    // withholding at convergence.
+    await s.asUser.mutation(api.applications.confirmDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: closed!.financedSaleNetReceivableMinor!,
+      idempotencyKey: "sn31-post2",
+    });
+    const after = await settlementDelta(s, applicationId);
+    expect((await app(s, applicationId))?.disbursedAt).toBeTypeOf("number");
+    expect(after.receivable).toMatchObject({ currency: "JOD", status: "PAID" });
+    expect(after.financeCompanyPayments).toEqual([{ currency: "JOD", amountMinor: VEHICLE_PRICE * JOD_SCALE }]);
+    expect(after.allocations).toBe(1);
+    expect(after.cashReceivedEvents).toBe(1);
   });
 });

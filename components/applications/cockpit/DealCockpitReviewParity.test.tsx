@@ -432,17 +432,16 @@ describe("disbursement — the two confirmations, from the DISBURSEMENT stage", 
   });
 
   /**
-   * SN3-1 CONTAINMENT (SCRUM-215 → SCRUM-241, owner-proxy ruling 2026-09-11).
-   *
-   * A deal pinned to a currency other than the org's current one cannot be
-   * settled: `finalizeDeal` opened its receivable in the pinned currency and
-   * `confirmDisbursement` posts in the org's, and the allocation refuses
-   * (reproduced in `convex/sn31CurrencyMismatchRepro.test.ts`). Until the
-   * canonical backend fix lands, the receipt is WITHHELD here with the reason
-   * and the recorded figure in its own currency — the round-3 display rule
-   * survives, in the withheld state. Nothing is sent, nothing is converted.
+   * SN3-1 after convergence (SCRUM-241 merged at main `4dd8a0ad8`). The
+   * receipt settles the finance-company receivable in the RECEIVABLE'S own
+   * denomination — the org's current currency is not consulted again
+   * (`convex/sn31CurrencyMismatchRepro.test.ts`, "MERGED INVARIANT — AFTER
+   * finalization"). So a closed deal pinned to another currency is no longer
+   * withheld: the exact frozen net is sent, spelled in its own currency, and
+   * nothing is converted. This case was the pre-convergence "withheld"
+   * assertion and failed first against the re-evaluated gate.
    */
-  test("a deal pinned to another currency: the receipt is withheld, the reason and the pinned-currency figure are shown, nothing is sent", () => {
+  test("a closed deal pinned to another currency: the receipt is USABLE and sends the exact frozen net, spelled in its own currency", async () => {
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages: closedStages }));
     // Economics pinned to USD (scale 2) on a JOD (scale 3) org. The frozen net
@@ -460,16 +459,18 @@ describe("disbursement — the two confirmations, from the DISBURSEMENT stage", 
     renderCockpit();
 
     const row = focusRow();
-    expect(within(row).queryByRole("button")).toBeNull();
-    expect(within(row).getByText("DisbursementCurrencyMismatch")).toBeTruthy();
-    const text = row.textContent ?? "";
-    expect(text).toContain("15,625 USD");
-    expect(text).not.toContain("1,562");
-    // Neither the generic "nothing expected" reason nor the permission one:
-    // the operator is told the actual boundary.
+    expect(within(row).queryByText("DisbursementCurrencyUnsupported")).toBeNull();
     expect(within(row).queryByText("DisbursementUnavailable")).toBeNull();
-    expect(within(row).queryByText("DisbursementNeedsPermission")).toBeNull();
-    expect(mutationCalls.get("applications:confirmDisbursement")).toBeUndefined();
+    fireEvent.click(within(row).getByRole("button", { name: "ConfirmDisbursement" }));
+    expect(screen.getByRole("dialog").textContent).toContain("15,625 USD");
+    expect(screen.getByRole("dialog").textContent).not.toContain("1,562");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+    await waitFor(() => expect(mutationCalls.get("applications:confirmDisbursement")).toHaveLength(1));
+    expect(mutationCalls.get("applications:confirmDisbursement")![0]).toMatchObject({
+      orgId: ORG,
+      applicationId: APP,
+      disbursedAmountMinor: 1_562_500,
+    });
   });
 
   test("a deal whose recorded currency AutoFlow does not recognise is withheld with its own reason, never read as the org currency", () => {
@@ -581,14 +582,54 @@ describe("held deposit on a stopped deal — deposits.release", () => {
       resolution: "REFUNDED",
       refundMethod: "CASH",
     });
-    // NO client-minted key. `deposits.release` pays out whatever is FREE on
-    // the row, so two genuine payouts of one deposit are byte-identical
-    // requests: a key retained across a lost acknowledgement would hand the
-    // second, genuinely new release the FIRST release's stored result — no
-    // money moves and the operator is told the customer was refunded. The
-    // Review dialog omits the key for exactly this reason; the generation-
-    // aware identity arrives with the Accounting convergence (SCRUM-313).
-    expect("idempotencyKey" in call).toBe(false);
+    // The GENERATION-AWARE identity (SCRUM-313): `deposits.release` pays out
+    // whatever is FREE on the row, so two genuine payouts of one deposit are
+    // byte-identical requests and only the server's `releaseCount` can tell a
+    // retry from a second real payout. The intent names deposit, decision,
+    // method and the generation observed when the operator decided.
+    expect(call.idempotencyKey).toMatch(/^release-deposit:dep_1:REFUNDED:CASH:gen0:[0-9a-f-]{36}$/);
+  });
+
+  test("an unknown result keeps the SAME release identity for the retry; a confirmed payout that advanced the generation mints a NEW one", async () => {
+    permissions.add(PERMISSIONS.APPROVE_REQUESTS);
+    queryResults.set(COCKPIT_QUERY, cockpit(rejected));
+    queryResults.set(
+      GET_QUERY,
+      application({
+        status: "REJECTED",
+        deposits: [{ _id: "dep_1", amount: 500, status: "HELD", method: "CASH", releaseCount: 2 }],
+      })
+    );
+    stubs.mutationFailures.set("deposits:release", "network lost");
+    renderCockpit();
+
+    fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(1));
+    // Retry the same decision after the lost response.
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(2));
+    const [first, second] = mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>;
+    expect(first.idempotencyKey).toMatch(/^release-deposit:dep_1:REFUNDED:CASH:gen2:/);
+    expect(second.idempotencyKey).toBe(first.idempotencyKey);
+
+    // The payout confirmed and the server bumped the generation: the next
+    // genuine release of the same row with the same decision is a NEW command.
+    queryResults.set(
+      GET_QUERY,
+      application({
+        status: "REJECTED",
+        deposits: [{ _id: "dep_1", amount: 500, status: "HELD", method: "CASH", releaseCount: 3 }],
+      })
+    );
+    cleanup();
+    renderCockpit();
+    fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(3));
+    const third = (mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[2];
+    expect(third.idempotencyKey).toMatch(/^release-deposit:dep_1:REFUNDED:CASH:gen3:/);
+    expect(third.idempotencyKey).not.toBe(first.idempotencyKey);
   });
 
   test("forfeiting carries no refund method", async () => {
@@ -708,7 +749,7 @@ describe("documents — documents.updateDocumentStatus / upload, from the checkl
   });
 });
 
-describe("the close is withheld where the payload proves it would open an unsettleable receivable — SN3-1", () => {
+describe("the close is withheld where the server would refuse the drifted pin — SN3-1 after SCRUM-241", () => {
   const settlementStages = [
     { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
     { key: "SETTLEMENT", state: "BLOCKED", blocker: "AwaitingSettlement", authority: "DEALER" },
@@ -751,14 +792,19 @@ describe("the close is withheld where the payload proves it would open an unsett
     expect(within(focusRow()).getByText("FinalizeCurrencyMismatch")).toBeTruthy();
   });
 
-  test("a deal with NO named finance company is not gated: nothing here opens a finance-company receivable", () => {
+  test("a deal with NO named finance company is gated too: finalizeDeal refuses every drifted pin, financier or not", () => {
     closeable();
     queryResults.set(
       GET_QUERY,
       application({ status: "APPROVED", economicsCurrency: "USD", companyId: undefined, hasExternalFinancier: false })
     );
     renderCockpit();
-    expect(within(focusRow()).getByRole("button", { name: "FinalizeDealAction" })).toBeTruthy();
+    expect(within(focusRow()).queryByRole("button")).toBeNull();
+    expect(within(focusRow()).getByText("FinalizeCurrencyMismatch")).toBeTruthy();
+    // The recorded currency beside the org's, each an LTR isolate.
+    const detail = within(focusRow()).getByTestId("settlement-denomination-detail");
+    expect(detail.textContent).toContain("RecordedEconomicsCurrency: USD");
+    expect(detail.textContent).toContain("OrganisationCurrencyLabel: JOD");
   });
 });
 
