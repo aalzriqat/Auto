@@ -58,6 +58,10 @@ type Defects = {
   loseThePostingWhileClosed?: boolean;
   /** The period cannot be closed at all — so the property is UNTESTED, not proven. */
   refuseClose?: boolean;
+  /** A replayed create makes a SECOND row — the double-spend. */
+  duplicateOnCreateReplay?: boolean;
+  /** A replayed create is REFUSED — safe-looking, and not safe. */
+  refuseCreateReplay?: boolean;
 };
 
 function makeBackend(defects: Defects = {}) {
@@ -70,7 +74,34 @@ function makeBackend(defects: Defects = {}) {
   const collectionPayments: Array<Record<string, any>> = [];
   const canonicalPayments = new Map<string, Record<string, any>>();
   const pendingEvents: Array<Record<string, any>> = [];
+  const createdByKey = new Map<string, string>();
+  /** quoteId -> vehicleId, because a deposit names a QUOTE and is read back by VEHICLE. */
+  const quoteVehicle = new Map<string, string>();
   let periodStatus = "OPEN";
+
+  /**
+   * The identity contract on a CREATE, modelled the way RT1 asserts it: a
+   * replayed key replays. `probe` mode returns null when the caller must go on
+   * and build the row itself, so deposits keep their own construction.
+   */
+  function replayableCreate(prefix: string, args: Record<string, any>, probe = false) {
+    const key = args.idempotencyKey;
+    if (key && createdByKey.has(key)) {
+      if (defects.refuseCreateReplay) {
+        return { ok: false as const, error: "Duplicate request." };
+      }
+      if (defects.duplicateOnCreateReplay) {
+        const fresh = id(prefix);
+        createdByKey.set(key, fresh);
+        return { ok: true as const, value: fresh };
+      }
+      return { ok: true as const, value: createdByKey.get(key)! };
+    }
+    if (probe) return null;
+    const made = id(prefix);
+    if (key) createdByKey.set(key, made);
+    return { ok: true as const, value: made };
+  }
   let seq = 0;
   const id = (p: string) => `${p}_${++seq}`;
   const vehicleOf = new Map<string, string[]>();
@@ -205,10 +236,15 @@ function makeBackend(defects: Defects = {}) {
       case "customers:create":
         return { ok: true as const, value: id("cust") };
       case "vehicles:create":
-        return { ok: true as const, value: id("veh") };
-      case "quotes:saveQuote":
-        return { ok: true as const, value: id("quote") };
+        return replayableCreate("veh", args);
+      case "quotes:saveQuote": {
+        const quoteId = id("quote");
+        quoteVehicle.set(quoteId, String(args.vehicleId ?? ""));
+        return { ok: true as const, value: quoteId };
+      }
       case "deposits:create": {
+        const replayed = replayableCreate("dep", args, true);
+        if (replayed) return replayed;
         const depositId = id("dep");
         // Taking a deposit POSTS. Modelling that is not decoration: P1's first
         // cloud run failed because it measured its journal window from before
@@ -230,9 +266,10 @@ function makeBackend(defects: Defects = {}) {
           releaseCount: 0,
           freeMinor: 2_000_000,
           committedMinor: 1_000_000,
-          vehicleId: String(args.vehicleId ?? ""),
+          vehicleId: quoteVehicle.get(String(args.quoteId)) ?? String(args.vehicleId ?? ""),
           status: "HELD",
         });
+        if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, depositId);
         return { ok: true as const, value: depositId };
       }
       case "chartOfAccounts:validateSystemAccounts":
@@ -296,7 +333,13 @@ function makeBackend(defects: Defects = {}) {
       case "deposits:release":
         return release(args, authed);
       case "deposits:listByVehicle":
-        return { ok: true as const, value: [...deposits.values()] };
+        // Actually FILTERS. Returning every deposit made RT1's "one row for this
+        // vehicle" assertion unsatisfiable against a healthy backend, which
+        // would have taught the reader that a red RT1 is normal.
+        return {
+          ok: true as const,
+          value: [...deposits.values()].filter((d) => d.vehicleId === String(args.vehicleId)),
+        };
       default:
         return { ok: false as const, error: `unmodelled function ${fnPath}` };
     }
@@ -386,8 +429,8 @@ describe("the rehearsal passes against a backend that behaves", () => {
     const declined = results.filter((r) => r.status === "UNPROVEN");
     expect(declined.map((d) => `${d.id}: ${d.detail}`)).toEqual([]);
     // And it actually ran the cases rather than finding nothing to do.
-    expect(results.length).toBeGreaterThanOrEqual(14);
-    for (const id of ["A3", "B1", "B2", "P1"]) {
+    expect(results.length).toBeGreaterThanOrEqual(15);
+    for (const id of ["A3", "B1", "B2", "P1", "RT1"]) {
       expect(statusOf(results, id), `${id} must actually execute`).toBe("PASS");
     }
   });
@@ -482,6 +525,21 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     // close a period is not evidence that closed periods behave correctly.
     const results = await runAgainst({ refuseClose: true });
     expect(statusOf(results, "P1")).toBe("UNPROVEN");
+  });
+
+  test("RT1 catches a replayed create that makes a SECOND row", async () => {
+    const results = await runAgainst({ duplicateOnCreateReplay: true });
+    expect(statusOf(results, "RT1")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "RT1")?.detail)).toMatch(/DIFFERENT id/);
+  });
+
+  test("RT1 catches a replayed create that is REFUSED", async () => {
+    // A refused retry looks safe and is not: the first command stands while the
+    // operator is told it failed, and the natural next action is to try again
+    // with fresh content — which is how one intent becomes two commands.
+    const results = await runAgainst({ refuseCreateReplay: true });
+    expect(statusOf(results, "RT1")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "RT1")?.detail)).toMatch(/refused/);
   });
 
   test("a defect in one case does not silently take the others down with it", async () => {

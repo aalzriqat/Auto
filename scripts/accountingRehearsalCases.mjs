@@ -658,6 +658,113 @@ export async function runRehearsalCases(ctx) {
       };
     }
   );
+  // ── RT1 — the retry contract on OTHER identity-guarded economic commands ───
+  //
+  // `deposits.release` has D1. It is one command out of the thirty-eight the
+  // census classifies IDENTITY_GUARDED, and the rehearsal INVOKES several of the
+  // others to build its fixtures — which is not the same as proving anything
+  // about them. Creating a deposit successfully says nothing about what a
+  // second delivery of that same create does.
+  //
+  // The contract being tested is the one SCRUM-57 states: an economic command
+  // identity is minted once per intent and preserved across retries, so a
+  // replayed intent REPLAYS — it neither fails nor happens twice.
+  //
+  // Both halves matter and they fail differently. A replay that is REFUSED
+  // (a uniqueness barrier, say) looks safe and is not: the operator is told the
+  // command failed while the first one stands, and the natural next action is to
+  // try again with fresh content. A replay that SUCCEEDS by acting twice is the
+  // double-spend. So each case asserts the replay was accepted AND that it
+  // returned the identity of the original row.
+  await recordCase(
+    results,
+    "RT1",
+    "replaying deposits.create and vehicles.create with the same identity replays rather than duplicating",
+    async () => {
+      const stamp = Date.now().toString(36);
+      const vin = `RHSRT1${stamp.replace(/[ioq]/g, "z").toUpperCase()}`.padEnd(17, "0").slice(0, 17);
+      const vehicleArgs = {
+        orgId,
+        vin,
+        make: "Toyota",
+        model: "Camry-rt1",
+        year: 2022,
+        mileage: 800,
+        color: "Blue",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        sellingPrice: 22000,
+        sourceType: "STOCK",
+        status: "AVAILABLE",
+        purchasePrice: 15000,
+        purchasePaymentMethod: "CASH",
+        idempotencyKey: `rehearsal-rt1-vehicle-${stamp}`,
+      };
+      const firstVehicle = await ownerMust("mutation", "vehicles:create", vehicleArgs);
+      const vehicleReplay = await ownerCall("mutation", "vehicles:create", vehicleArgs);
+      if (!vehicleReplay.ok) {
+        fail(
+          `replaying vehicles.create with the SAME identity was refused (${vehicleReplay.error.slice(0, 200)}). ` +
+            `A refused retry is not a safe retry: the first command stands while the operator is told it failed.`
+        );
+      }
+      if (String(vehicleReplay.value) !== String(firstVehicle)) {
+        fail(
+          `replaying vehicles.create returned a DIFFERENT id (${vehicleReplay.value} vs ${firstVehicle}) — ` +
+            `the retry created a second vehicle`
+        );
+      }
+
+      const customerId = await ownerMust("mutation", "customers:create", {
+        orgId,
+        firstName: "Rehearsal",
+        lastName: `rt1-${stamp}`,
+      });
+      const quoteId = await ownerMust("mutation", "quotes:saveQuote", {
+        orgId,
+        customerId,
+        vehicleId: firstVehicle,
+        vehicleItems: [{ vehicleId: firstVehicle, unitPrice: 22000 }],
+        mode: "CASH",
+        vehiclePrice: 22000,
+        downPayment: 0,
+        termMonths: 0,
+      });
+      const depositArgs = {
+        orgId,
+        quoteId,
+        amount: 5000,
+        idempotencyKey: `rehearsal-rt1-deposit-${stamp}`,
+      };
+      const firstDeposit = await ownerMust("mutation", "deposits:create", depositArgs);
+      const depositReplay = await ownerCall("mutation", "deposits:create", depositArgs);
+      if (!depositReplay.ok) {
+        fail(`replaying deposits.create with the SAME identity was refused: ${depositReplay.error.slice(0, 200)}`);
+      }
+      if (String(depositReplay.value) !== String(firstDeposit)) {
+        fail(
+          `replaying deposits.create returned a DIFFERENT id (${depositReplay.value} vs ${firstDeposit}) — ` +
+            `the customer's money was recorded twice`
+        );
+      }
+
+      // And the row count is the real arbiter: ids could agree while a second
+      // row existed, if the command returned something cached.
+      const rows = await ownerMust("query", "deposits:listByVehicle", { orgId, vehicleId: firstVehicle });
+      const mine = (rows ?? []).filter((r) => String(r._id) === String(firstDeposit));
+      expectEqual(mine.length, 1, "deposit rows for this vehicle after the replay");
+      expectEqual((rows ?? []).length, 1, "TOTAL deposit rows for this vehicle after the replay");
+
+      return {
+        vehicle: { id: String(firstVehicle), replayReturnedSameId: true },
+        deposit: { id: String(firstDeposit), replayReturnedSameId: true, rowsForVehicle: rows.length },
+        commandsProven: ["vehicles.create", "deposits.create"],
+        commandsStillUnproven:
+          "36 of the 38 IDENTITY_GUARDED commands have no cloud retry proof; see the rehearsal's evidence inventory",
+      };
+    }
+  );
+
   // ── P1 — a CLOSED period holds the posting; it does not half-post it ───────
   //
   // RUNS LAST, AND THAT IS STRUCTURAL. Closing the organization's only open
