@@ -16,7 +16,7 @@
  * exists for, and nothing here substitutes for it.
  */
 import { describe, expect, test } from "vitest";
-import { runRehearsalCases } from "./accountingRehearsalCases.mjs";
+import { assertBothAttemptsExecuted, runRehearsalCases } from "./accountingRehearsalCases.mjs";
 
 type Deposit = {
   _id: string;
@@ -60,6 +60,12 @@ type Defects = {
   oneWorkerCrashes?: boolean;
   /** The two workers run one after the other — nothing concurrent was measured. */
   sequentialWorkers?: boolean;
+  /** The second worker got a 503 with a non-JSON body — never reached the handler (Codex RG-01-R1). */
+  loserGetsGatewayError?: boolean;
+  /** The second worker was refused at the auth layer, HTTP 200, status error (Codex RG-01-R1). */
+  loserGetsAuthError?: boolean;
+  /** The PRODUCT refuses a same-key replay instead of serving the first result — a real defect. */
+  sameKeyReplayRefused?: boolean;
   /** The period cannot be closed at all — so the property is UNTESTED, not proven. */
   refuseClose?: boolean;
   /** A replayed create makes a SECOND row — the double-spend. */
@@ -179,6 +185,9 @@ function makeBackend(defects: Defects = {}) {
             eventVersion: deposit.releaseCount,
             payload: { depositId: deposit._id, amountMinor: deposit.releasedAmountMinor },
           });
+        }
+        if (defects.sameKeyReplayRefused) {
+          return { ok: false as const, error: "There is nothing left of this deposit to refund or forfeit." };
         }
         return { ok: true as const, value: null }; // faithful replay
       }
@@ -635,6 +644,30 @@ async function runAgainst(defects: Defects = {}) {
       let index = 0;
       for (const attempt of attempts) {
         const mine = index++;
+        if (defects.loserGetsGatewayError && mine === 1) {
+          // What rehearsalReleaseWorker.mjs emits for a non-JSON 503: exit 0,
+          // status "error", a message — everything the first gate asked for.
+          out.push({
+            label: attempt.label,
+            exitCode: 0,
+            result: { sentAt, receivedAt: sentAt + 450, httpStatus: 503, status: "error", error: "non-JSON response" },
+          });
+          continue;
+        }
+        if (defects.loserGetsAuthError && mine === 1) {
+          out.push({
+            label: attempt.label,
+            exitCode: 0,
+            result: {
+              sentAt,
+              receivedAt: sentAt + 450,
+              httpStatus: 200,
+              status: "error",
+              error: "Unauthenticated: You must be logged in.",
+            },
+          });
+          continue;
+        }
         if (defects.oneWorkerCrashes && mine === 1) {
           // Never reached the backend: no request, no product result.
           out.push({
@@ -849,6 +882,29 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     expect(String(results.find((r) => r.id === "C1")?.detail)).toMatch(/concurrency was NOT measured/);
   });
 
+  test("C1/C2 do not PASS when the loser's error never came from the product (RG-01-R1)", async () => {
+    // The first gate accepted ANY error carrying a message. A 503 whose body
+    // was not JSON, and an auth-layer refusal, both arrive as exit 0 / status
+    // "error" / a message — and the one healthy worker leaves the deposit at
+    // exactly the expected state.
+    for (const defect of ["loserGetsGatewayError", "loserGetsAuthError"] as const) {
+      const results = await runAgainst({ [defect]: true });
+      expect(statusOf(results, "C1")).toBe("UNPROVEN");
+      expect(statusOf(results, "C2")).toBe("UNPROVEN");
+      expect(String(results.find((r) => r.id === "C2")?.detail)).toMatch(/HTTP 503|not recognised as a product refusal/);
+    }
+  });
+
+  test("C1 FAILS — not UNPROVEN — when the product refuses a same-key replay", async () => {
+    // Polarity: a recognised product refusal on the SAME key is the command
+    // log failing to honour its own identity. Reporting it as a harness gap
+    // would hide a financial defect behind an infrastructure label.
+    const results = await runAgainst({ sameKeyReplayRefused: true });
+    expect(statusOf(results, "C1")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "C1")?.detail)).toMatch(/refused by the product instead of replayed/);
+    expect(statusOf(results, "C2")).toBe("PASS");
+  });
+
   test("C1/C2 do not PASS when the two workers ran one after the other (RG-01)", async () => {
     const results = await runAgainst({ sequentialWorkers: true });
     expect(statusOf(results, "C1")).toBe("UNPROVEN");
@@ -863,4 +919,42 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     expect(statusOf(results, "D1")).toBe("PASS");
     expect(statusOf(results, "C1")).toBe("PASS");
   });
+});
+
+describe("assertBothAttemptsExecuted — every branch watched failing (Sonnet MAX JOB2-F-01)", () => {
+  // Each shape below is one way a concurrency case could certify a race it
+  // never saw. A guard nobody has watched refuse is not a guard.
+  const ok = (label: string, over: Record<string, unknown> = {}) => ({
+    label,
+    exitCode: 0,
+    result: { sentAt: 100, receivedAt: 500, httpStatus: 200, status: "success", error: null, ...over },
+  });
+  const refusals = [/nothing left of this deposit/i];
+  const run = (attempts: unknown[]) => () =>
+    assertBothAttemptsExecuted(attempts as never, ["a", "b"], { productRefusals: refusals });
+
+  test("the healthy pair is certified, with both outcomes named", () => {
+    expect(run([ok("a"), ok("b")])().outcomes).toEqual({ a: "success", b: "success" });
+    expect(
+      run([ok("a"), ok("b", { status: "error", error: "There is nothing left of this deposit to refund." })])().outcomes
+    ).toEqual({ a: "success", b: "refused" });
+  });
+  test("a missing label", () => expect(run([ok("a")])).toThrow(/b: no outcome recorded/));
+  test("exit 0 with no body", () => expect(run([ok("a"), { label: "b", exitCode: 0, result: null }])).toThrow(/no result/));
+  test("exit 0 with a non-object body", () =>
+    expect(run([ok("a"), { label: "b", exitCode: 0, result: "garbage" }])).toThrow(/unparseable result/));
+  test("an unknown worker status", () => expect(run([ok("a"), ok("b", { status: "timeout" })])).toThrow(/worker status timeout/));
+  test("a non-200 transport answer", () =>
+    expect(run([ok("a"), ok("b", { httpStatus: 503, status: "error", error: "non-JSON response" })])).toThrow(/HTTP 503/));
+  test("an error the case does not recognise", () =>
+    expect(run([ok("a"), ok("b", { status: "error", error: "Unauthenticated: You must be logged in." })])).toThrow(
+      /not recognised as a product refusal/
+    ));
+  test("an error with no message", () =>
+    expect(run([ok("a"), ok("b", { status: "error", error: null })])).toThrow(/not recognised as a product refusal/));
+  test("timestamps not finite", () => expect(run([ok("a"), ok("b", { sentAt: NaN })])).toThrow(/timestamps not finite/));
+  test("timestamps reversed", () =>
+    expect(run([ok("a"), ok("b", { sentAt: 600, receivedAt: 500 })])).toThrow(/timestamps not finite\/ordered/));
+  test("intervals that do not overlap", () =>
+    expect(run([ok("a"), ok("b", { sentAt: 700, receivedAt: 900 })])).toThrow(/did NOT overlap/));
 });

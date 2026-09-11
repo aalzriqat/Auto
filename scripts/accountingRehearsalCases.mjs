@@ -365,7 +365,15 @@ export async function runRehearsalCases(ctx) {
       });
 
       // BEFORE the state is read: did both requests actually happen, together?
-      const execution = assertBothAttemptsExecuted(attempts, ["same-key-1", "same-key-2"]);
+      const execution = assertBothAttemptsExecuted(attempts, ["same-key-1", "same-key-2"], {
+        productRefusals: [NOTHING_LEFT_REFUSAL],
+      });
+      // Same key, same content: the second is a REPLAY and must be served the
+      // first's result. A product refusal here is not a harness problem — it
+      // is the command log failing to recognise its own key.
+      for (const [label, outcome] of Object.entries(execution.outcomes)) {
+        if (outcome !== "success") fail(`same-key attempt ${label} was refused by the product instead of replayed`);
+      }
 
       const after = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, ownerMust });
       expectEqual(after.releasedAmountMinor, 2_000_000, "released amount after two same-key concurrent attempts");
@@ -402,7 +410,9 @@ export async function runRehearsalCases(ctx) {
         ],
       });
 
-      const execution = assertBothAttemptsExecuted(attempts, ["distinct-key-1", "distinct-key-2"]);
+      const execution = assertBothAttemptsExecuted(attempts, ["distinct-key-1", "distinct-key-2"], {
+        productRefusals: [NOTHING_LEFT_REFUSAL],
+      });
 
       const after = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, ownerMust });
       // The whole claim: the free 2,000 left the business once, no matter how
@@ -1371,16 +1381,22 @@ async function readRetainedCredits({ orgId, customerId, ownerMust }) {
  *     parsed body: a worker that crashed or printed garbage is a TRANSPORT
  *     failure, and transport failure is UNPROVEN, never PASS and never FAIL —
  *     nothing about the product was measured;
- *   - a status of `success` or a product-level `error` WITH a message: the
- *     product refusing the loser ("nothing left of this deposit") is a valid
- *     outcome of the race, a worker_error is not;
+ *   - HTTP 200 and a status of `success`, or an `error` whose message the
+ *     CASE recognises as a product refusal: the product refusing the loser
+ *     ("nothing left of this deposit") is a valid outcome of the race. Codex
+ *     RG-01-R1, reproduced against the first fix: it accepted ANY error with
+ *     a message, so a 503 with a non-JSON body, an auth refusal or an
+ *     argument-validation error each certified an attempt that never reached
+ *     `deposits.release` — the same false pass one layer down. An error the
+ *     case does not recognise is UNPROVEN: nothing about the race was seen;
  *   - finite send/receive timestamps whose intervals OVERLAP: two requests
  *     that ran one after the other measure nothing about concurrency, however
  *     healthy each was. Overlap of client intervals is what this harness can
  *     honestly claim; it is not proof of overlap inside Convex transactions,
  *     and the evidence says so.
  */
-function assertBothAttemptsExecuted(attempts, expectedLabels) {
+export function assertBothAttemptsExecuted(attempts, expectedLabels, { productRefusals }) {
+  const outcomes = {};
   const byLabel = new Map((attempts ?? []).map((a) => [a.label, a]));
   const transportFailures = [];
   for (const label of expectedLabels) {
@@ -1398,9 +1414,22 @@ function assertBothAttemptsExecuted(attempts, expectedLabels) {
       transportFailures.push(`${label}: worker status ${String(r.status)} — ${String(r.error ?? "").slice(0, 120)}`);
       continue;
     }
-    if (r.status === "error" && !r.error) {
-      transportFailures.push(`${label}: error status with no product message`);
+    if (r.httpStatus !== 200) {
+      // Convex answers a handler's own refusal with 200 and status "error";
+      // anything else never reached the handler — gateway, auth layer, a body
+      // that was not JSON.
+      transportFailures.push(`${label}: HTTP ${String(r.httpStatus)} — ${String(r.error ?? "").slice(0, 120)}`);
       continue;
+    }
+    if (r.status === "error") {
+      const message = String(r.error ?? "");
+      if (!productRefusals.some((re) => re.test(message))) {
+        transportFailures.push(`${label}: error not recognised as a product refusal of this race — ${message.slice(0, 160)}`);
+        continue;
+      }
+      outcomes[label] = "refused";
+    } else {
+      outcomes[label] = "success";
     }
     if (!Number.isFinite(r.sentAt) || !Number.isFinite(r.receivedAt) || r.receivedAt < r.sentAt) {
       transportFailures.push(`${label}: timestamps not finite/ordered (${r.sentAt} → ${r.receivedAt})`);
@@ -1423,9 +1452,18 @@ function assertBothAttemptsExecuted(attempts, expectedLabels) {
   return {
     bothExecuted: true,
     intervalsOverlap: true,
+    outcomes,
     overlapNote: "client send/receive intervals overlap; not proof of overlap inside Convex transactions",
   };
 }
+
+/**
+ * The one refusal a healthy `deposits.release` race can produce: the loser
+ * finds nothing free. Pinned by the same pattern the product's own tests use
+ * (`convex/multiVehicleDepositAllocation.test.ts`); the product throws a plain
+ * ConvexError string here, so there is no code to pin instead.
+ */
+const NOTHING_LEFT_REFUSAL = /nothing left of this deposit/i;
 
 /** Keeps the validator's own shape out of the evidence without hiding its verdict. */
 function summarizeValidation(report) {

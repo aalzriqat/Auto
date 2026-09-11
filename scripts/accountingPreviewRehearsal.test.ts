@@ -272,3 +272,18 @@ describe("case recording keeps a failure as evidence", () => {
     });
   });
 });
+
+test("a run that both FAILED and left cases UNPROVEN names BOTH lists in the banner (Sonnet MAX LOW)", () => {
+  const banner = bannerForSummary({
+    total: 5,
+    passed: 2,
+    failed: 2,
+    failedIds: ["D2", "D3"],
+    unproven: 1,
+    unprovenIds: ["C1"],
+    complete: false,
+  });
+  expect(banner).toMatch(/FAILED: 2 of 5/);
+  expect(banner).toMatch(/D2, D3/);
+  expect(banner).toMatch(/1 UNPROVEN \(C1\)/);
+});

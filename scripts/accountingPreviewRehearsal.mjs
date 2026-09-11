@@ -551,7 +551,9 @@ export function exitCodeForSummary(summary) {
 
 export function bannerForSummary(summary) {
   if (summary.failed > 0) {
-    return `\nREHEARSAL FAILED: ${summary.failed} of ${summary.total} cases — ${summary.failedIds.join(", ")}`;
+    const unprovenTail =
+      summary.unproven > 0 ? `; ${summary.unproven} UNPROVEN (${summary.unprovenIds.join(", ")})` : "";
+    return `\nREHEARSAL FAILED: ${summary.failed} of ${summary.total} cases — ${summary.failedIds.join(", ")}${unprovenTail}`;
   }
   if (summary.unproven > 0) {
     return (
