@@ -66,6 +66,8 @@ type Defects = {
   swallowOverpayment?: boolean;
   /** Applying a retained credit does not reduce the liability. */
   ignoreRetainedApplication?: boolean;
+  /** Only part of the receipt is retained — a real shortfall, not a scale difference. */
+  shortRetention?: boolean;
   /** A returned cheque ERASES its clearing instead of reversing it. */
   eraseOnChequeReturn?: boolean;
   /** A returned cheque posts nothing at all — the books still say money arrived. */
@@ -85,6 +87,12 @@ function makeBackend(defects: Defects = {}) {
   const createdByKey = new Map<string, string>();
   const retained = new Map<string, { receiptMovementId: string; customerId: string; remainingUnappliedMinor: number; receiptPosted: boolean }>();
   const cheques = new Map<string, Record<string, any>>();
+  /**
+   * THREE decimal places, matching the deployment the rehearsal actually runs
+   * against. The fake used 100 and therefore agreed with my wrong expectation
+   * of 50,000 — two wrongs that cancelled locally and separated on the cloud.
+   */
+  const MINOR_SCALE = 1000;
   /** quoteId -> vehicleId, because a deposit names a QUOTE and is read back by VEHICLE. */
   const quoteVehicle = new Map<string, string>();
   let periodStatus = "OPEN";
@@ -280,7 +288,9 @@ function makeBackend(defects: Defects = {}) {
         if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, paymentId);
         // Money with no receivable named is money the dealership holds without
         // a claim against it: a LIABILITY, never income (ACC-9).
-        const unappliedMinor = args.receivableId ? 0 : Math.round(Number(args.amount) * 100);
+        const unappliedMinor = args.receivableId
+          ? 0
+          : Math.round(Number(args.amount) * MINOR_SCALE * (defects.shortRetention ? 0.6 : 1));
         if (unappliedMinor > 0 && !defects.swallowOverpayment) {
           const movementId = id("mov");
           retained.set(movementId, {
@@ -306,7 +316,7 @@ function makeBackend(defects: Defects = {}) {
         if (!position) return { ok: false as const, error: "Retained position not found." };
         if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, id("apply"));
         if (!defects.ignoreRetainedApplication) {
-          position.remainingUnappliedMinor -= Math.round(Number(args.requestedAmount) * 100);
+          position.remainingUnappliedMinor -= Math.round(Number(args.requestedAmount) * MINOR_SCALE);
         }
         return { ok: true as const, value: null };
       }
@@ -699,6 +709,14 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     // reads as owed, so the same 400 can be spent again.
     const results = await runAgainst({ ignoreRetainedApplication: true });
     expect(statusOf(results, "RC1")).toBe("FAIL");
+  });
+
+  test("RC1 still catches a real shortfall now that the scale is derived", async () => {
+    // Deriving the scale from the returned amount must not turn ANY amount into
+    // a valid one. 300 where 500 was received is a shortfall at every scale.
+    const results = await runAgainst({ shortRetention: true });
+    expect(statusOf(results, "RC1")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "RC1")?.detail)).toMatch(/not 500 major at any sane currency scale/);
   });
 
   test("RV1 catches a cheque return that ERASES its clearing", async () => {

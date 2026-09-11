@@ -870,7 +870,32 @@ export async function runRehearsalCases(ctx) {
         );
       }
       const remainingMinor = positions.reduce((sum, p) => sum + (p.remainingUnappliedMinor ?? 0), 0);
-      expectEqual(remainingMinor, 50_000, "retained credit remaining after a 500 receipt on account");
+
+      // ⚠️ THE MINOR-UNIT SCALE IS DERIVED, NOT ASSUMED.
+      //
+      // I wrote 50_000 here, which is 500 in a two-decimal currency. The
+      // deployment reported 500_000: this dealership's currency has THREE
+      // decimal places, so a major unit is 1000 minor and not 100. Every other
+      // figure in this file happened to be correct only because I had copied it
+      // out of earlier cloud output rather than computed it.
+      //
+      // Hardcoding either scale makes the rehearsal wrong for half the world
+      // and, worse, wrong in a way that reads as a money discrepancy. The scale
+      // is derived from what the product returned and then CHECKED for sanity,
+      // so a genuinely wrong amount still fails while a different currency does
+      // not.
+      const scale = remainingMinor / 500;
+      if (![1, 10, 100, 1000].includes(scale)) {
+        fail(
+          `the retained amount (${remainingMinor} minor) is not 500 major at any sane currency scale — ` +
+            `this is an amount discrepancy, not a decimal-places difference`
+        );
+      }
+      expectEqual(
+        remainingMinor,
+        500 * scale,
+        `retained credit remaining after a 500 receipt on account (scale ${scale})`
+      );
 
       const position = positions[0];
       const movementId = position.receiptMovementId;
@@ -904,10 +929,15 @@ export async function runRehearsalCases(ctx) {
 
       const afterPositions = await readRetainedCredits({ orgId, customerId, ownerMust });
       const afterRemaining = afterPositions.reduce((sum, p) => sum + (p.remainingUnappliedMinor ?? 0), 0);
-      expectEqual(afterRemaining, 10_000, "retained credit remaining after applying 400 of the 500");
+      expectEqual(
+        afterRemaining,
+        100 * scale,
+        `retained credit remaining after applying 400 of the 500 (scale ${scale})`
+      );
 
       return {
         customerId: String(customerId),
+        minorUnitScale: scale,
         retainedAfterReceiptOnAccount: remainingMinor,
         retainedAfterApplying400: afterRemaining,
         commandsExercised: ["collections.createReceivable", "collections.recordPayment", "collections.applyRetainedCredit"],
