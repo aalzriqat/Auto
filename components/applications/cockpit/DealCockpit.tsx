@@ -2067,6 +2067,13 @@ export function DealCockpitView({
   // rail opens rather than hiding everything behind a control nobody would
   // think to press.
   const remaining = stages.filter((s) => s.state !== "COMPLETE");
+  // Whether the close is being refused for want of the settlement route — the
+  // one case where the route control belongs on the live step itself.
+  const routeBlocksClose =
+    live?.key === "SETTLEMENT" &&
+    workflowAction?.stageKey === "SETTLEMENT" &&
+    (workflowAction.unavailableReasonKey === "FinalizeNeedsSettlementRoute" ||
+      workflowAction.unavailableReasonKey === "FinalizeNeedsRouteAndPermission");
   const supplierRow = deal.money?.parties.find((p) => p.party === "SUPPLIER");
   const canSettleSupplier =
     deal.money?.settlesDirectToSupplier === true &&
@@ -2450,7 +2457,22 @@ export function DealCockpitView({
                     : []
                 }
                 t={t}
-              />
+              >
+                {/* The route IS the blocker on this step, so the control is on
+                    the step — an operator told "record who the finance company
+                    pays" must not have to hunt for where. Rendered here INSTEAD
+                    of beside the vehicle, never in both places. */}
+                {routeBlocksClose && settlementRoute && (
+                  <SettlementRouteControl
+                    route={settlementRoute.route}
+                    canSettleDirectToSupplier={settlementRoute.canSettleDirectToSupplier}
+                    directRouteRefusal={settlementRoute.directRouteRefusal}
+                    supplierName={settlementRoute.supplierName}
+                    t={t}
+                    onChoose={settlementRoute.onChoose}
+                  />
+                )}
+              </StageFocusRow>
             ) : (
               <StageRow
                 key={stage.key}
@@ -2705,7 +2727,7 @@ export function DealCockpitView({
                     vehicle rather than with the close, because it is a fact
                     about this car's ownership, and asked as soon as it can be
                     answered rather than discovered as a refusal at finalize. */}
-                {settlementRoute && (
+                {settlementRoute && !routeBlocksClose && (
                   <div className="pt-2">
                     <SettlementRouteControl
                       route={settlementRoute.route}
@@ -3014,11 +3036,14 @@ function StageFocusRow({
   action,
   outstandingDocuments,
   t,
+  children,
 }: Readonly<{
   state: StageState;
   label: string;
   /** Whose move it is, resolved from server authority AND recorded provenance. */
   owner?: string;
+  /** A control that belongs ON this step because it is what the step waits on. */
+  children?: React.ReactNode;
   /** Whether the "AutoFlow only records their decision" sentence is TRUE here. */
   mirrorNote: boolean;
   blocker?: string;
@@ -3093,6 +3118,8 @@ function StageFocusRow({
           {action?.unavailableReasonKey && (
             <p className="text-sm text-muted-foreground">{t(action.unavailableReasonKey)}</p>
           )}
+
+          {children}
 
           {/* Only where it is TRUE — gated by recorded provenance, the same
               source as the badge above, so the two can never name different

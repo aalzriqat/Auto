@@ -544,3 +544,33 @@ describe("documents — documents.updateDocumentStatus / upload, from the checkl
     expect(screen.queryByText("Upload")).toBeNull();
   });
 });
+
+describe("the route control sits on the step that is waiting for it", () => {
+  test("when the close is refused for want of the route, the control renders inside the focus row and not beside the vehicle", () => {
+    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.REGISTER_VEHICLE_HANDOVER);
+    permissions.add(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "APPROVED",
+        expectedPaymentRegistered: true,
+        supplierSettlementRouteRequired: true,
+        stages: [
+          { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+          { key: "SETTLEMENT", state: "BLOCKED", blocker: "AwaitingSettlement", authority: "DEALER" },
+        ],
+      })
+    );
+    queryResults.set(
+      GET_QUERY,
+      application({ status: "APPROVED", vehicle: { sourceType: "SOURCED", sourcedFromName: "أبو خالد" }, canSettleDirectToSupplier: true })
+    );
+    renderCockpit();
+
+    const controls = screen.getAllByTestId("deal-settlement-route");
+    expect(controls).toHaveLength(1);
+    expect(focusRow().contains(controls[0])).toBe(true);
+    expect(within(focusRow()).getByText("FinalizeNeedsSettlementRoute")).toBeTruthy();
+  });
+});

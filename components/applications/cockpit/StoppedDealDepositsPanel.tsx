@@ -118,8 +118,11 @@ export function StoppedDealDepositsPanel({
                     <bdi className="tabular-nums">{formatAmount(deposit.amount)}</bdi>
                   </p>
                   {deposit.method && (
+                    // Translated, never the raw enum. The dictionary carries
+                    // `PaymentMethod_<METHOD>`; an unknown method falls back to
+                    // its own name rather than to nothing.
                     <p className="text-xs text-muted-foreground">
-                      <bdi>{deposit.method}</bdi>
+                      <bdi>{t(`PaymentMethod_${deposit.method}`)}</bdi>
                     </p>
                   )}
                 </div>
@@ -128,7 +131,7 @@ export function StoppedDealDepositsPanel({
                 </span>
               </div>
               {held && canResolve && (
-                <div className="grid grid-cols-2 gap-2">
+                <div className="flex flex-wrap gap-2">
                   <Button
                     size="sm"
                     variant="outline"

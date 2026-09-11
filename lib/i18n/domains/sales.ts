@@ -1045,7 +1045,7 @@ export const salesEn = {
    * record. It says where, because the control is still in the review dialog.
    */
   FinalizeNeedsSettlementRoute:
-    "This car belongs to the supplier and the deal is financed, so who the finance company pays has to be recorded before the deal can be closed. It is chosen beside the vehicle on this screen.",
+    "This car belongs to the supplier and the deal is financed, so who the finance company pays has to be recorded before the deal can be closed. Choose it here, on this step.",
   /**
    * Both blockers at once, and the pointer withheld on purpose.
    *
@@ -1965,7 +1965,7 @@ export const salesAr = {
   FinalizeDealAction: "إغلاق الصفقة",
   FinalizeNeedsPermission: "لا تملك صلاحية إغلاق الصفقة. يُكمل هذه الخطوة من يملكها.",
   FinalizeNeedsSettlementRoute:
-    "هذه المركبة تعود للمورد والصفقة ممولة، لذا يجب تسجيل الجهة التي تدفع لها شركة التمويل قبل إغلاق الصفقة. يُختار ذلك بجانب المركبة في هذه الشاشة.",
+    "هذه المركبة تعود للمورد والصفقة ممولة، لذا يجب تسجيل الجهة التي تدفع لها شركة التمويل قبل إغلاق الصفقة. اختره هنا، في هذه الخطوة.",
   FinalizeNeedsRouteAndPermission:
     "هذه الصفقة بانتظار تحديد الجهة التي تدفع لها شركة التمويل، ويُسجّل ذلك من يملك صلاحية إغلاق الصفقة نفسها. يُكمل الخطوتين من يملك تلك الصلاحية.",
   GapResolutionUnavailable:

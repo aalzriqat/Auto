@@ -130,7 +130,10 @@ export function DealDocumentsPanel({
                     <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
                   )}
                   <div className="min-w-0 flex-1">
-                    <bdi className="block truncate font-medium">{doc.ruleName}</bdi>
+                    {/* Wraps rather than truncates: a document name is what the
+                        operator matches against a physical paper, and its tail
+                        is often the distinguishing part. */}
+                    <bdi className="block break-words font-medium">{doc.ruleName}</bdi>
                     <span className="text-xs text-muted-foreground">{statusLabel(doc.status)}</span>
                   </div>
                   <div className="flex shrink-0 items-center gap-1.5">
@@ -144,9 +147,14 @@ export function DealDocumentsPanel({
                           <Eye className="h-4 w-4 me-1" />
                           {t("ViewFile")}
                         </Button>
+                        {/* Outline, not primary: the documents panel is a
+                            supporting surface. The one recommended action on
+                            this screen lives on the stage rail, and a second
+                            filled button here competed with it. */}
                         {canVerify && (
                           <Button
                             size="sm"
+                            variant="outline"
                             disabled={verified}
                             onClick={() => void onVerify(doc._id)}
                           >
@@ -170,7 +178,7 @@ export function DealDocumentsPanel({
                               e.target.value = "";
                             }}
                           />
-                          <Button size="sm" asChild disabled={uploadingId === doc._id}>
+                          <Button size="sm" variant="outline" asChild disabled={uploadingId === doc._id}>
                             <label htmlFor={`deal-doc-file-${doc._id}`} className="cursor-pointer">
                               <Upload className="h-4 w-4 me-1" />
                               {t("Upload")}
