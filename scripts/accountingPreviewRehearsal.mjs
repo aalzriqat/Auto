@@ -184,8 +184,25 @@ export function isClerkSessionId(value) {
  */
 export function sanitizeClerkSessionId(value) {
   const match = /^sess_([A-Za-z0-9]{8,64})$/.exec(typeof value === "string" ? value : "");
-  return match ? `sess_${match[1]}` : null;
+  if (match === null) return null;
+  let rebuilt = "sess_";
+  for (const character of match[1]) {
+    const index = CLERK_ID_ALPHABET.indexOf(character);
+    if (index < 0) return null;
+    rebuilt += CLERK_ID_ALPHABET[index];
+  }
+  return rebuilt;
 }
+
+/**
+ * The only characters a Clerk id may contribute to a URL path.
+ *
+ * Used as a lookup TABLE, not as a test: each output character is read out of
+ * this literal, and the input only chooses the index. That is a stronger
+ * statement than "the input matched a pattern" — the value that reaches the
+ * network is built entirely from characters written in this file.
+ */
+export const CLERK_ID_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
 /** The only URL shape this rehearsal will ever send a mutation to. */
 export function isPreviewCloudUrl(value) {
@@ -233,19 +250,35 @@ export async function mintConvexToken({ userId, secretKey }, fetchImpl = fetch) 
   // and nothing at this line makes the guarantee visible to a reader either.
   // The exported helper stays because it is what the unit tests drive.
   const rawSessionId = typeof session?.id === "string" ? session.id : "";
-  const sessionMatch = /^sess_[A-Za-z0-9]{8,64}$/.exec(rawSessionId);
+  const sessionMatch = /^sess_([A-Za-z0-9]{8,64})$/.exec(rawSessionId);
   if (sessionMatch === null) {
     throw new RehearsalError(
       `Clerk returned a session id that does not match the expected \`sess_…\` shape. Refusing to build a ` +
         `request URL from it rather than trusting a remote response to be well-formed.`
     );
   }
-  // `encodeURIComponent` on top of the shape check is not belt-and-braces for
-  // its own sake: the regex says what the value MAY be, the encoder says what it
-  // may MEAN once it is inside a path. A `/` or a `..` that somehow satisfied the
-  // first would still be neutralised by the second, and only the second is a
-  // sanitizer the analyser can see at this line.
-  const sessionSegment = encodeURIComponent(sessionMatch[0]);
+  // The shape check and the encoder were both true and both insufficient, and
+  // the reason is worth stating: each one describes the REMOTE value. The regex
+  // says what it may be, `encodeURIComponent` says what it may mean inside a
+  // path — but the string travelling to Clerk was still, at every step, the one
+  // that came back over the wire.
+  //
+  // This loop is a different claim. Every character appended below is read out
+  // of a LITERAL in this file; the response only selects which index. So the
+  // value that reaches the URL is not a validated remote string, it is a string
+  // this file wrote — and that is the property both the analyser and the next
+  // reader can check locally, without trusting a guard twenty lines up.
+  let sessionSegment = "sess_";
+  for (const character of sessionMatch[1]) {
+    const index = CLERK_ID_ALPHABET.indexOf(character);
+    if (index < 0) {
+      throw new RehearsalError(
+        `Clerk returned a session id containing a character outside the permitted alphabet. Refusing to ` +
+          `build a request URL from it.`
+      );
+    }
+    sessionSegment += CLERK_ID_ALPHABET[index];
+  }
   const tokenResponse = await fetchImpl(
     `https://api.clerk.com/v1/sessions/${sessionSegment}/tokens/convex`,
     { method: "POST", headers }
