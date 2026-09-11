@@ -31,7 +31,16 @@
     "RESULT; it never excuses the ABSENCE of one, so a renamed or deleted check",
     "is still a refusal.",
     "",
-    "Waived checks are reported as WAIVED. They are never reported as passing."
+    "Waived checks are reported as WAIVED. They are never reported as passing.",
+    "",
+    "rehearsal (SCRUM-313, F1a, owner-proxy 2026-09-11): the Accounting cloud",
+    "rehearsal against a disposable Convex preview, producer-bound to the",
+    "github-actions job in accounting-rehearsal.yml. That workflow has NO push",
+    "trigger, so a merge to main does not run it: at main tip the check is",
+    "ABSENT until the workflow is dispatched against that exact tip, and an",
+    "absent required check refuses the release - by design. The release",
+    "procedure dispatches it and verifies the run recorded tested SHA is the",
+    "tip being released. The PR green badge is never inherited. No waiver."
   ],
   "required": [
     { "producer": "github-actions", "name": "unit-and-integration" },
@@ -46,7 +55,8 @@
     { "producer": "github-actions", "name": "Analyze (actions)" },
     { "producer": "sonarqubecloud", "name": "SonarCloud Code Analysis" },
     { "producer": "github-actions", "name": "dependency-audit" },
-    { "producer": "github-actions", "name": "playwright" }
+    { "producer": "github-actions", "name": "playwright" },
+    { "producer": "github-actions", "name": "rehearsal" }
   ],
   "waivers": [
     {

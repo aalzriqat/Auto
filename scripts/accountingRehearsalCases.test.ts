@@ -16,7 +16,9 @@
  * exists for, and nothing here substitutes for it.
  */
 import { describe, expect, test } from "vitest";
-import { assertBothAttemptsExecuted, runRehearsalCases } from "./accountingRehearsalCases.mjs";
+import fs from "node:fs";
+import path from "node:path";
+import { CURRENCY_SCALES, assertBothAttemptsExecuted, runRehearsalCases } from "./accountingRehearsalCases.mjs";
 
 type Deposit = {
   _id: string;
@@ -26,6 +28,8 @@ type Deposit = {
   freeMinor: number;
   committedMinor: number;
   vehicleId: string;
+  customerId?: string;
+  amountMinor?: number;
   status: string;
 };
 
@@ -86,44 +90,186 @@ type Defects = {
   eraseOnChequeReturn?: boolean;
   /** A returned cheque posts nothing at all — the books still say money arrived. */
   silentChequeReturn?: boolean;
+  // ── the owner-proxy's evidence-floor closure (2026-09-11): the false-pass shapes it named ──
+  /** The org's currency is one the product does not denominate — expectations cannot be derived. */
+  orgCurrencyUnknown?: boolean;
+  /** Journal lines are written at a different minor-unit scale than the org's currency. */
+  linesAtWrongScale?: boolean;
+  /** The refund credits the BANK instead of cash — balanced, wrong account. */
+  refundPostsWrongAccount?: boolean;
+  /** The refund posts one minor unit short on the credit — B2 would still balance it away. */
+  refundPostsWrongAmount?: boolean;
+  /** The refund's event names no journal entry at all. */
+  refundEventUnlinked?: boolean;
+  /** A SECOND perfectly balanced entry for the same refund. */
+  duplicateRefundJournal?: boolean;
+  /** Money received on account is credited to INCOME instead of the 2110 liability (ACC-9). */
+  onAccountPostsAsIncome?: boolean;
+  /** The retained position says 500 while the 2110 control account carries less. */
+  retainedPositionDriftsFromGl?: boolean;
+  /** Applying a retained credit reduces the position but posts nothing to the GL. */
+  applicationPostsNothing?: boolean;
+  /** The reversal entry exists but nothing links it to the clearing it reverses. */
+  reversalUnlinked?: boolean;
+  /** The reversal is for HALF the clearing — linked, and wrong. */
+  reversalWrongAmount?: boolean;
+  /** The cheque bounces, the GL reverses, and the receivable still reads PAID. */
+  receivableNotReopened?: boolean;
+  /** A replayed create hands back the SAME id and posts its footprint AGAIN. */
+  doubleFootprintOnReplay?: boolean;
+  /** A completed work order with a posted expense can be edited (and re-posted). */
+  workOrderLockOpen?: boolean;
 };
 
 function makeBackend(defects: Defects = {}) {
   const deposits = new Map<string, Deposit>();
   const commands = new Map<string, string>();
-  /** The books the fake keeps, so the reconciliation cases have something to reconcile. */
+  const createdByKey = new Map<string, string>();
+  /**
+   * THE BOOKS, modelled the way the product keeps them and the way the closure
+   * cases read them: an accounting EVENT bound to a journal ENTRY bound to
+   * LINES on accounts that carry a system key, a currency and a scale. The
+   * earlier fake kept bare entries with anonymous lines, which is exactly the
+   * shape the owner-proxy found the runner asserting against — "some balanced
+   * entry appeared" — so the fake could not have caught the gap either.
+   */
   const events: Array<Record<string, any>> = [];
   const journalEntries: Array<Record<string, any>> = [];
   const journalLines = new Map<string, Array<Record<string, any>>>();
   const collectionPayments: Array<Record<string, any>> = [];
   const canonicalPayments = new Map<string, Record<string, any>>();
   const pendingEvents: Array<Record<string, any>> = [];
-  const createdByKey = new Map<string, string>();
-  const retained = new Map<string, { receiptMovementId: string; customerId: string; remainingUnappliedMinor: number; receiptPosted: boolean }>();
+  const retained = new Map<string, { receiptMovementId: string; customerId: string; remainingUnappliedMinor: number; receiptPosted: boolean; applications: number }>();
   const cheques = new Map<string, Record<string, any>>();
+  const receivables = new Map<string, Record<string, any>>();
+  const fixedAssets: Array<Record<string, any>> = [];
+  const partners: Array<Record<string, any>> = [];
+  const equityTxs: Array<Record<string, any>> = [];
+  const workOrders: Array<Record<string, any>> = [];
   /**
    * THREE decimal places, matching the deployment the rehearsal actually runs
    * against. The fake used 100 and therefore agreed with my wrong expectation
    * of 50,000 — two wrongs that cancelled locally and separated on the cloud.
+   * The runner now reads the currency from the org and derives the scale from
+   * its pinned mirror of the product's table — so this fake reports a currency,
+   * and `MINOR_SCALE` is what that currency implies.
    */
+  const ORG_CURRENCY = defects.orgCurrencyUnknown ? "XXX" : "JOD";
   const MINOR_SCALE = 1000;
+  const LINE_SCALE = defects.linesAtWrongScale ? 2 : 3;
   const vehicles = new Map<string, Record<string, any>>();
-  /** The chart, keyed the way the product keys it, so SR1 can resolve lines. */
+  /** The chart, keyed the way the product keys it, so lines resolve to system keys. */
   const CHART = [
-    { _id: "acct_cash", code: "1000", type: "ASSET", name: "Cash", systemKey: "CASH" },
-    { _id: "acct_2110", code: "2110", type: "LIABILITY", name: "Unapplied Customer Receipts", systemKey: "UNAPPLIED_CUSTOMER_RECEIPTS" },
-    { _id: "acct_comm", code: "4200", type: "REVENUE", name: "Consignment Commission", systemKey: "CONSIGNMENT_COMMISSION_REVENUE" },
-    { _id: "acct_ap", code: "2100", type: "LIABILITY", name: "AP Suppliers", systemKey: "ACCOUNTS_PAYABLE_SUPPLIERS" },
-    { _id: "acct_rev", code: "4000", type: "REVENUE", name: "Sales Revenue", systemKey: "SALES_REVENUE" },
-    { _id: "acct_cogs", code: "5000", type: "EXPENSE", name: "COGS", systemKey: "COST_OF_VEHICLES_SOLD" },
-    { _id: "acct_inv", code: "1300", type: "ASSET", name: "Vehicle Inventory", systemKey: "VEHICLE_INVENTORY" },
+    { _id: "acct_cash", code: "1000", type: "ASSET", name: "Cash", systemKey: "CASH_ON_HAND", normalBalance: "DEBIT" },
+    { _id: "acct_bank", code: "1010", type: "ASSET", name: "Bank", systemKey: "BANK_ACCOUNT", normalBalance: "DEBIT" },
+    { _id: "acct_ar", code: "1200", type: "ASSET", name: "AR Customers", systemKey: "ACCOUNTS_RECEIVABLE_CUSTOMERS", normalBalance: "DEBIT" },
+    { _id: "acct_2110", code: "2110", type: "LIABILITY", name: "Unapplied Customer Receipts", systemKey: "UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY", normalBalance: "CREDIT" },
+    { _id: "acct_depl", code: "2120", type: "LIABILITY", name: "Customer Deposits", systemKey: "CUSTOMER_DEPOSITS_LIABILITY", normalBalance: "CREDIT" },
+    { _id: "acct_comm", code: "4200", type: "REVENUE", name: "Consignment Commission", systemKey: "CONSIGNMENT_COMMISSION_REVENUE", normalBalance: "CREDIT" },
+    { _id: "acct_misc", code: "4900", type: "REVENUE", name: "Misc Income", systemKey: "MISCELLANEOUS_INCOME", normalBalance: "CREDIT" },
+    { _id: "acct_ap", code: "2100", type: "LIABILITY", name: "AP Suppliers", systemKey: "ACCOUNTS_PAYABLE_SUPPLIERS", normalBalance: "CREDIT" },
+    { _id: "acct_rev", code: "4000", type: "REVENUE", name: "Sales Revenue", systemKey: "SALES_REVENUE", normalBalance: "CREDIT" },
+    { _id: "acct_cogs", code: "5000", type: "EXPENSE", name: "COGS", systemKey: "COST_OF_VEHICLES_SOLD", normalBalance: "DEBIT" },
+    { _id: "acct_inv", code: "1300", type: "ASSET", name: "Vehicle Inventory", systemKey: "VEHICLE_INVENTORY", normalBalance: "DEBIT" },
+    { _id: "acct_fa", code: "1500", type: "ASSET", name: "Fixed Assets", systemKey: "FIXED_ASSETS", normalBalance: "DEBIT" },
+    { _id: "acct_cap", code: "3000", type: "EQUITY", name: "Partner Capital", systemKey: "PARTNER_CAPITAL", normalBalance: "CREDIT" },
+    { _id: "acct_draw", code: "3100", type: "EQUITY", name: "Partner Drawings", systemKey: "PARTNER_DRAWINGS", normalBalance: "DEBIT" },
+    { _id: "acct_exp", code: "6000", type: "EXPENSE", name: "General Expense", systemKey: "GENERAL_EXPENSE", normalBalance: "DEBIT" },
   ];
+  const accountIdOf = (key: string) => {
+    const hit = CHART.find((a) => a.systemKey === key);
+    if (!hit) throw new Error(`fake chart has no ${key}`);
+    return hit._id;
+  };
   /** quoteId -> vehicleId, because a deposit names a QUOTE and is read back by VEHICLE. */
   const quoteVehicle = new Map<string, string>();
+  const quoteCustomer = new Map<string, string>();
   let periodStatus = "OPEN";
+  let seq = 0;
+  const id = (p: string) => `${p}_${++seq}`;
+
+  type Line = { key: string; debitMinor?: number; creditMinor?: number; customerId?: string };
+  /** One economic occurrence: an event, its entry, its lines — all linked. */
+  function post(
+    eventType: string,
+    sourceType: string,
+    sourceId: string,
+    lines: Line[],
+    opts: { category?: string; unlinked?: boolean; payload?: Record<string, any> } = {}
+  ) {
+    const eventId = id("evt");
+    const entryId = id("je");
+    events.push({
+      _id: eventId,
+      eventType,
+      sourceType,
+      sourceId,
+      eventVersion: 1,
+      status: "POSTED",
+      journalEntryId: opts.unlinked ? undefined : entryId,
+      payload: opts.payload ?? {},
+    });
+    journalEntries.push({
+      _id: entryId,
+      accountingEventId: eventId,
+      sourceType,
+      sourceId,
+      category: opts.category ?? "SYSTEM",
+      status: "POSTED",
+      journalNumber: `JE-${seq}`,
+    });
+    journalLines.set(
+      entryId,
+      lines.map((l, i) => ({
+        _id: id("jl"),
+        journalEntryId: entryId,
+        lineNumber: i + 1,
+        accountId: accountIdOf(l.key),
+        debitMinor: l.debitMinor ?? 0,
+        creditMinor: l.creditMinor ?? 0,
+        currency: ORG_CURRENCY,
+        scale: LINE_SCALE,
+        customerId: l.customerId,
+      }))
+    );
+    return { eventId, entryId };
+  }
+  /** The product's reversal: the original stays, marked, and names its reverser. */
+  function reverse(eventId: string) {
+    const original = events.find((e) => e._id === eventId)!;
+    const entry = journalEntries.find((j) => j._id === original.journalEntryId)!;
+    const lines = journalLines.get(entry._id) ?? [];
+    const factor = defects.reversalWrongAmount ? 0.5 : 1;
+    const reversal = post(
+      original.eventType,
+      original.sourceType,
+      original.sourceId,
+      lines.map((l) => ({
+        key: CHART.find((a) => a._id === l.accountId)!.systemKey,
+        debitMinor: Math.round(l.creditMinor * factor),
+        creditMinor: Math.round(l.debitMinor * factor),
+        customerId: l.customerId,
+      })),
+      { category: "REVERSAL" }
+    );
+    // A reversal's event carries the reversed event's type in the product too;
+    // the case finds the ORIGINAL by status, so mark the reversal's event as
+    // such and keep it out of the "one POSTED occurrence" count.
+    const reversalEvent = events.find((e) => e._id === reversal.eventId)!;
+    reversalEvent.eventType = `${original.eventType}_REVERSAL`;
+    reversalEvent.reversalOfEventId = eventId;
+    original.status = "REVERSED";
+    entry.status = "REVERSED";
+    if (!defects.reversalUnlinked) {
+      original.reversedByEventId = reversal.eventId;
+      entry.reversedByJournalEntryId = reversal.entryId;
+      journalEntries.find((j) => j._id === reversal.entryId)!.reversalOfJournalEntryId = entry._id;
+    }
+    return reversal;
+  }
 
   /**
-   * The identity contract on a CREATE, modelled the way RT1 asserts it: a
+   * The identity contract on a CREATE, modelled the way RT1/RT2 assert it: a
    * replayed key replays. `probe` mode returns null when the caller must go on
    * and build the row itself, so deposits keep their own construction.
    */
@@ -145,9 +291,9 @@ function makeBackend(defects: Defects = {}) {
     if (key) createdByKey.set(key, made);
     return { ok: true as const, value: made };
   }
-  let seq = 0;
-  const id = (p: string) => `${p}_${++seq}`;
-  const vehicleOf = new Map<string, string[]>();
+  /** A replay that hands back the same id and STILL posts again — the footprint defect. */
+  const replayedFootprint = (args: Record<string, any>) =>
+    Boolean(args.idempotencyKey && createdByKey.has(args.idempotencyKey) && defects.doubleFootprintOnReplay);
 
   const release = (args: Record<string, any>, authed: boolean) => {
     if (!authed && !defects.acceptUnauthenticated) {
@@ -177,14 +323,7 @@ function makeBackend(defects: Defects = {}) {
         // alone is invisible to every case that reads only the row — which is
         // exactly why B1 counts the events.
         if (defects.doublePostOnReplay) {
-          events.push({
-            _id: id("evt"),
-            eventType: "DEPOSIT_REFUNDED",
-            sourceType: "deposits",
-            sourceId: deposit._id,
-            eventVersion: deposit.releaseCount,
-            payload: { depositId: deposit._id, amountMinor: deposit.releasedAmountMinor },
-          });
+          postRefundToTheBooks(deposit, deposit.releasedAmountMinor, true);
         }
         if (defects.sameKeyReplayRefused) {
           return { ok: false as const, error: "There is nothing left of this deposit to refund or forfeit." };
@@ -207,11 +346,11 @@ function makeBackend(defects: Defects = {}) {
     deposit.releaseCount += 1;
     if (deposit.freeMinor === 0 && deposit.committedMinor === 0) deposit.status = args.resolution;
     if (periodStatus === "OPEN") {
-      postRefundToTheBooks(deposit, payable);
+      postRefundToTheBooks(deposit, payable, false);
     } else {
       // No open period is a TEMPORARY HOLD: the decision stands, the posting
       // waits. Writing the journal anyway is the partial-post defect P1 hunts.
-      if (defects.partialGlWhileClosed) postRefundToTheBooks(deposit, payable);
+      if (defects.partialGlWhileClosed) postRefundToTheBooks(deposit, payable, false);
       if (!defects.loseThePostingWhileClosed) {
         pendingEvents.push({ _id: id("pev"), status: "PENDING", eventType: "DEPOSIT_REFUNDED" });
       }
@@ -220,22 +359,30 @@ function makeBackend(defects: Defects = {}) {
   };
 
   /** The ledger side of a refund — what B1 and B2 reconcile the row against. */
-  function postRefundToTheBooks(deposit: Deposit, payable: number) {
-    events.push({
-      _id: id("evt"),
-      eventType: "DEPOSIT_REFUNDED",
-      sourceType: "deposits",
-      sourceId: deposit._id,
-      eventVersion: deposit.releaseCount,
-      payload: { depositId: deposit._id, amountMinor: payable },
-    });
-    const entryId = id("je");
-    journalEntries.push({ _id: entryId });
-    journalLines.set(entryId, [
-      { debitMinor: payable, creditMinor: 0 },
-      // An unbalanced entry is a GL that does not add up — B2's whole subject.
-      { debitMinor: 0, creditMinor: defects.unbalancedJournal ? payable - 1 : payable },
-    ]);
+  function postRefundToTheBooks(deposit: Deposit, payable: number, isReplayDuplicate: boolean) {
+    const creditKey = defects.refundPostsWrongAccount ? "BANK_ACCOUNT" : "CASH_ON_HAND";
+    const creditAmount = defects.refundPostsWrongAmount ? payable - 1 : payable;
+    post(
+      "DEPOSIT_REFUNDED",
+      "deposits",
+      deposit._id,
+      [
+        { key: "CUSTOMER_DEPOSITS_LIABILITY", debitMinor: payable, customerId: deposit.customerId },
+        // An unbalanced entry is a GL that does not add up — B2's whole subject.
+        { key: creditKey, creditMinor: defects.unbalancedJournal ? payable - 1 : creditAmount, customerId: deposit.customerId },
+      ],
+      { unlinked: defects.refundEventUnlinked, payload: { depositId: deposit._id, amountMinor: payable } }
+    );
+    if (defects.duplicateRefundJournal && !isReplayDuplicate) {
+      // A second, perfectly balanced entry for the same refund — B2 passes it.
+      const entryId = id("je");
+      journalEntries.push({ _id: entryId, sourceType: "deposits", sourceId: deposit._id, category: "SYSTEM", status: "POSTED" });
+      journalLines.set(entryId, [
+        { accountId: "acct_depl", debitMinor: payable, creditMinor: 0, currency: ORG_CURRENCY, scale: LINE_SCALE },
+        { accountId: "acct_cash", debitMinor: 0, creditMinor: payable, currency: ORG_CURRENCY, scale: LINE_SCALE },
+      ]);
+    }
+    if (isReplayDuplicate) return;
     const canonicalId = id("cp");
     if (!defects.noCanonicalPayment) {
       canonicalPayments.set(canonicalId, { _id: canonicalId, amountMinor: payable, status: "SETTLED" });
@@ -246,10 +393,48 @@ function makeBackend(defects: Defects = {}) {
       reference: `Deposit refund ${deposit._id}`,
       direction: "OUT",
       method: "REFUND",
-      amount: payable / 100,
+      amount: payable / MINOR_SCALE,
       canonicalPaymentId: defects.noCanonicalPayment ? undefined : canonicalId,
     });
   }
+
+  /** A customer receipt: cash in, against AR (allocated) or 2110 (on account). */
+  function postReceipt(paymentId: string, customerId: string, amountMinor: number, allocatedMinor: number, cashKey: string) {
+    const lines: Line[] = [{ key: cashKey, debitMinor: amountMinor, customerId }];
+    if (allocatedMinor > 0) lines.push({ key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", creditMinor: allocatedMinor, customerId });
+    const unapplied = amountMinor - allocatedMinor;
+    if (unapplied > 0) {
+      lines.push({
+        key: defects.onAccountPostsAsIncome ? "MISCELLANEOUS_INCOME" : "UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY",
+        creditMinor: defects.retainedPositionDriftsFromGl ? unapplied - 50_000 : unapplied,
+        customerId,
+      });
+      if (defects.retainedPositionDriftsFromGl) lines[0].debitMinor = amountMinor - 50_000;
+    }
+    return post("COLLECTION_PAYMENT", "collectionPayments", paymentId, lines, { payload: { customerId } });
+  }
+
+  const receivableRow = (rid: string, args: Record<string, any>, amount: number) => {
+    receivables.set(rid, {
+      _id: rid,
+      customerId: String(args.customerId),
+      title: args.title,
+      originalAmount: amount,
+      outstandingAmount: amount,
+      status: "OPEN",
+    });
+    post("RECEIVABLE_CREATED", "receivables", rid, [
+      { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", debitMinor: Math.round(amount * MINOR_SCALE), customerId: String(args.customerId) },
+      { key: args.creditSystemKey ?? "MISCELLANEOUS_INCOME", creditMinor: Math.round(amount * MINOR_SCALE), customerId: String(args.customerId) },
+    ]);
+  };
+  const settle = (rid: string | undefined, amount: number) => {
+    if (!rid) return;
+    const r = receivables.get(rid);
+    if (!r) return;
+    r.outstandingAmount = Math.max(0, r.outstandingAmount - amount);
+    r.status = r.outstandingAmount === 0 ? "PAID" : "PARTIALLY_PAID";
+  };
 
   /**
    * The seated MANAGER does not hold manage:finance in this product, so a case
@@ -263,6 +448,8 @@ function makeBackend(defects: Defects = {}) {
     args: Record<string, any>
   ) => {
     switch (fnPath) {
+      case "organizations:get":
+        return { ok: true as const, value: { _id: "org_1", currency: ORG_CURRENCY } };
       case "chartOfAccounts:initialize":
         return { ok: true as const, value: null };
       case "chartOfAccounts:list":
@@ -293,8 +480,33 @@ function makeBackend(defects: Defects = {}) {
             error: "This receivable's credit account isn't obvious from its source type — specify creditSystemKey.",
           };
         }
-        return replayableCreate("recv", args)!;
+        const again = replayedFootprint(args);
+        const made = replayableCreate("recv", args)!;
+        if (made.ok && (!receivables.has(String(made.value)) || again)) {
+          receivableRow(again ? id("recv-dup") : String(made.value), args, Number(args.amount));
+        }
+        return made;
       }
+      case "collections:createInstallmentPlan": {
+        const key = args.idempotencyKey;
+        if (key && createdByKey.has(key) && !defects.duplicateOnCreateReplay && !defects.refuseCreateReplay) {
+          if (defects.doubleFootprintOnReplay) receivableRow(id("inst-dup"), args, Number(args.totalAmount) / Number(args.installmentCount));
+          return { ok: true as const, value: JSON.parse(createdByKey.get(key)!) };
+        }
+        if (key && createdByKey.has(key) && defects.refuseCreateReplay) return { ok: false as const, error: "Duplicate request." };
+        const n = Number(args.installmentCount);
+        const each = Number(args.totalAmount) / n;
+        const ids: string[] = [];
+        for (let i = 0; i < n; i++) {
+          const rid = id("inst");
+          receivableRow(rid, args, each);
+          ids.push(rid);
+        }
+        if (key) createdByKey.set(key, JSON.stringify(ids));
+        return { ok: true as const, value: ids };
+      }
+      case "collections:listReceivables":
+        return { ok: true as const, value: { page: [...receivables.values()], isDone: true, continueCursor: null } };
       case "collections:recordPayment": {
         const made = replayableCreate("pay", args, true);
         if (made) return made;
@@ -309,11 +521,13 @@ function makeBackend(defects: Defects = {}) {
         }
         const paymentId = id("pay");
         if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, paymentId);
+        const amountMinor = Math.round(Number(args.amount) * MINOR_SCALE);
         // Money with no receivable named is money the dealership holds without
         // a claim against it: a LIABILITY, never income (ACC-9).
         const unappliedMinor = args.receivableId
           ? 0
-          : Math.round(Number(args.amount) * MINOR_SCALE * (defects.shortRetention ? 0.6 : 1));
+          : Math.round(amountMinor * (defects.shortRetention ? 0.6 : 1));
+        settle(args.receivableId, Number(args.amount));
         if (unappliedMinor > 0 && !defects.swallowOverpayment) {
           const movementId = id("mov");
           retained.set(movementId, {
@@ -321,8 +535,11 @@ function makeBackend(defects: Defects = {}) {
             customerId: String(args.customerId),
             remainingUnappliedMinor: unappliedMinor,
             receiptPosted: true,
+            applications: 0,
           });
         }
+        collectionPayments.push({ _id: paymentId, direction: "IN", method: args.method, amount: Number(args.amount), receivableId: args.receivableId });
+        postReceipt(paymentId, String(args.customerId), amountMinor, args.receivableId ? amountMinor : 0, "CASH_ON_HAND");
         return { ok: true as const, value: paymentId };
       }
       case "collections:listRetainedCredits": {
@@ -337,15 +554,32 @@ function makeBackend(defects: Defects = {}) {
         if (made) return made;
         const position = retained.get(String(args.receiptMovementId));
         if (!position) return { ok: false as const, error: "Retained position not found." };
-        if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, id("apply"));
-        if (!defects.ignoreRetainedApplication) {
-          position.remainingUnappliedMinor -= Math.round(Number(args.requestedAmount) * MINOR_SCALE);
+        const applicationId = id("rcapp");
+        if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, applicationId);
+        const amountMinor = Math.round(Number(args.requestedAmount) * MINOR_SCALE);
+        if (!defects.ignoreRetainedApplication) position.remainingUnappliedMinor -= amountMinor;
+        position.applications += 1;
+        settle(args.receivableId, Number(args.requestedAmount));
+        if (!defects.applicationPostsNothing) {
+          post(
+            "RECEIPT_CREDIT_APPLIED",
+            "receiptApplications",
+            `rcapp:${position.receiptMovementId.length}:${position.receiptMovementId}:${position.applications}`,
+            [
+              { key: "UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY", debitMinor: amountMinor, customerId: position.customerId },
+              { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", creditMinor: amountMinor, customerId: position.customerId },
+            ],
+            { payload: { applicationId } }
+          );
         }
-        return { ok: true as const, value: null };
+        return {
+          ok: true as const,
+          value: { applicationId, sequence: position.applications, appliedMinor: amountMinor, remainingUnappliedMinor: position.remainingUnappliedMinor },
+        };
       }
       case "collections:registerCheque": {
         const chequeId = id("chq");
-        cheques.set(chequeId, { _id: chequeId, status: "REGISTERED" });
+        cheques.set(chequeId, { _id: chequeId, status: "REGISTERED", receivableId: args.receivableId, customerId: String(args.customerId), amount: Number(args.amount) });
         return { ok: true as const, value: chequeId };
       }
       case "collections:depositCheque": {
@@ -361,13 +595,13 @@ function makeBackend(defects: Defects = {}) {
         if (made) return made;
         if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, id("clr"));
         const cheque = cheques.get(String(args.chequeId));
-        if (cheque) cheque.status = "CLEARED";
-        const entryId = id("je");
-        journalEntries.push({ _id: entryId });
-        journalLines.set(entryId, [
-          { debitMinor: 120_000, creditMinor: 0 },
-          { debitMinor: 0, creditMinor: 120_000 },
-        ]);
+        if (!cheque) return { ok: false as const, error: "Cheque not found" };
+        cheque.status = "CLEARED";
+        const paymentId = id("pay");
+        collectionPayments.push({ _id: paymentId, direction: "IN", method: "CHEQUE", amount: cheque.amount, chequeId: cheque._id, receivableId: cheque.receivableId });
+        settle(cheque.receivableId, cheque.amount);
+        const { eventId } = postReceipt(paymentId, cheque.customerId, Math.round(cheque.amount * MINOR_SCALE), Math.round(cheque.amount * MINOR_SCALE), "BANK_ACCOUNT");
+        cheque.clearingEventId = eventId;
         return { ok: true as const, value: null };
       }
       case "collections:returnClearedCheque": {
@@ -378,20 +612,23 @@ function makeBackend(defects: Defects = {}) {
         if (made) return made;
         if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, id("ret"));
         const cheque = cheques.get(String(args.chequeId));
+        if (!cheque) return { ok: false as const, error: "Cheque not found" };
         if (defects.eraseOnChequeReturn) {
           // Balances perfectly, and destroys the record that it ever happened.
-          journalEntries.pop();
+          const original = events.find((e) => e._id === cheque.clearingEventId)!;
+          journalEntries.splice(journalEntries.findIndex((j) => j._id === original.journalEntryId), 1);
+          events.splice(events.indexOf(original), 1);
           cheques.delete(String(args.chequeId));
           return { ok: true as const, value: null };
         }
-        if (cheque) cheque.status = "RETURNED";
-        if (!defects.silentChequeReturn) {
-          const reversalId = id("je");
-          journalEntries.push({ _id: reversalId });
-          journalLines.set(reversalId, [
-            { debitMinor: 0, creditMinor: 120_000 },
-            { debitMinor: 120_000, creditMinor: 0 },
-          ]);
+        cheque.status = "RETURNED";
+        if (!defects.silentChequeReturn) reverse(cheque.clearingEventId);
+        if (!defects.receivableNotReopened) {
+          const r = receivables.get(cheque.receivableId);
+          if (r) {
+            r.outstandingAmount += cheque.amount;
+            r.status = r.outstandingAmount >= r.originalAmount ? "OPEN" : "PARTIALLY_PAID";
+          }
         }
         return { ok: true as const, value: null };
       }
@@ -407,34 +644,31 @@ function makeBackend(defects: Defects = {}) {
         const vehicle = vehicles.get(String(args.vehicleId));
         const priceMinor = Math.round(Number(args.salePrice) * MINOR_SCALE);
         const costMinor = Math.round((vehicle?.purchasePrice ?? 0) * MINOR_SCALE);
-        events.push({
-          _id: id("evt"),
-          eventType: "SALE_COMPLETED",
-          sourceType: "sales",
-          sourceId: saleId,
-          payload: { saleAmountMinor: priceMinor },
-        });
-        if (defects.silentConsignedSale) return { ok: true as const, value: saleId };
-        const entryId = id("je");
-        journalEntries.push({ _id: entryId });
+        if (defects.silentConsignedSale) {
+          events.push({ _id: id("evt"), eventType: "SALE_COMPLETED", sourceType: "sales", sourceId: saleId, status: "POSTED", payload: { saleAmountMinor: priceMinor } });
+          return { ok: true as const, value: saleId };
+        }
         const consigned = vehicle?.sourceType === "SOURCED" && !defects.postConsignedAsOwned;
-        journalLines.set(
-          entryId,
+        post(
+          "SALE_COMPLETED",
+          "sales",
+          saleId,
           consigned
             ? [
                 // Agent basis: gross arrives, the supplier's share is a
                 // liability from the instant it lands, the spread is commission.
-                { accountId: "acct_cash", debitMinor: priceMinor, creditMinor: 0 },
-                { accountId: "acct_ap", debitMinor: 0, creditMinor: costMinor },
-                { accountId: "acct_comm", debitMinor: 0, creditMinor: priceMinor - costMinor },
+                { key: "CASH_ON_HAND", debitMinor: priceMinor },
+                { key: "ACCOUNTS_PAYABLE_SUPPLIERS", creditMinor: costMinor },
+                { key: "CONSIGNMENT_COMMISSION_REVENUE", creditMinor: priceMinor - costMinor },
               ]
             : [
                 // Owned basis — WRONG for a consigned car, and it balances.
-                { accountId: "acct_cash", debitMinor: priceMinor, creditMinor: 0 },
-                { accountId: "acct_rev", debitMinor: 0, creditMinor: priceMinor },
-                { accountId: "acct_cogs", debitMinor: costMinor, creditMinor: 0 },
-                { accountId: "acct_inv", debitMinor: 0, creditMinor: costMinor },
-              ]
+                { key: "CASH_ON_HAND", debitMinor: priceMinor },
+                { key: "SALES_REVENUE", creditMinor: priceMinor },
+                { key: "COST_OF_VEHICLES_SOLD", debitMinor: costMinor },
+                { key: "VEHICLE_INVENTORY", creditMinor: costMinor },
+              ],
+          { payload: { saleAmountMinor: priceMinor } }
         );
         return { ok: true as const, value: saleId };
       }
@@ -463,6 +697,7 @@ function makeBackend(defects: Defects = {}) {
       case "quotes:saveQuote": {
         const quoteId = id("quote");
         quoteVehicle.set(quoteId, String(args.vehicleId ?? ""));
+        quoteCustomer.set(quoteId, String(args.customerId ?? ""));
         return { ok: true as const, value: quoteId };
       }
       case "deposits:create": {
@@ -474,12 +709,11 @@ function makeBackend(defects: Defects = {}) {
         // the fixture, so these ordinary open-period entries were counted as
         // postings made while the books were shut. The fake did not post on
         // create, so nothing here could reproduce it. It does now.
+        const amountMinor = Math.round(Number(args.amount) * MINOR_SCALE);
         if (periodStatus === "OPEN") {
-          const receiptEntry = id("je");
-          journalEntries.push({ _id: receiptEntry });
-          journalLines.set(receiptEntry, [
-            { debitMinor: 5_000_00, creditMinor: 0 },
-            { debitMinor: 0, creditMinor: 5_000_00 },
+          post("DEPOSIT_RECEIVED", "deposits", depositId, [
+            { key: "CASH_ON_HAND", debitMinor: amountMinor, customerId: String(args.customerId ?? "") },
+            { key: "CUSTOMER_DEPOSITS_LIABILITY", creditMinor: amountMinor, customerId: String(args.customerId ?? "") },
           ]);
         }
         deposits.set(depositId, {
@@ -490,11 +724,107 @@ function makeBackend(defects: Defects = {}) {
           freeMinor: 2_000_000,
           committedMinor: 1_000_000,
           vehicleId: quoteVehicle.get(String(args.quoteId)) ?? String(args.vehicleId ?? ""),
+          customerId: String(args.customerId ?? quoteCustomer.get(String(args.quoteId)) ?? ""),
           status: "HELD",
         });
         if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, depositId);
         return { ok: true as const, value: depositId };
       }
+      case "vehicles:createReservation": {
+        const again = replayedFootprint(args);
+        const made = replayableCreate("resv", args, true);
+        if (made && !again) return made;
+        const reservationId = again ? createdByKey.get(args.idempotencyKey)! : id("resv");
+        if (args.idempotencyKey && !again) createdByKey.set(args.idempotencyKey, reservationId);
+        const depositId = id("dep");
+        const amountMinor = Math.round(Number(args.depositAmount ?? 0) * MINOR_SCALE);
+        deposits.set(depositId, {
+          _id: depositId, releasedAmountMinor: 0, refundedAmountMinor: 0, releaseCount: 0,
+          freeMinor: amountMinor, committedMinor: 0, vehicleId: String(args.vehicleId), customerId: String(args.customerId), status: "HELD",
+          amountMinor,
+        } as Deposit);
+        post("DEPOSIT_RECEIVED", "deposits", depositId, [
+          { key: "CASH_ON_HAND", debitMinor: amountMinor, customerId: String(args.customerId) },
+          { key: "CUSTOMER_DEPOSITS_LIABILITY", creditMinor: amountMinor, customerId: String(args.customerId) },
+        ]);
+        return { ok: true as const, value: reservationId };
+      }
+      case "fixedAssets:capitalize": {
+        const again = replayedFootprint(args);
+        const made = replayableCreate("asset", args, true);
+        if (made && !again) return made;
+        const assetId = again ? createdByKey.get(args.idempotencyKey)! : id("asset");
+        if (!again && args.idempotencyKey) createdByKey.set(args.idempotencyKey, assetId);
+        fixedAssets.push({ _id: again ? id("asset-dup") : assetId, name: args.name });
+        post("ASSET_CAPITALIZED", "fixedAssets", assetId, [
+          { key: "FIXED_ASSETS", debitMinor: Number(args.costMinor) },
+          { key: "CASH_ON_HAND", creditMinor: Number(args.costMinor) },
+        ]);
+        return { ok: true as const, value: assetId };
+      }
+      case "fixedAssets:list":
+        return { ok: true as const, value: { page: [...fixedAssets], isDone: true, continueCursor: null } };
+      case "partnerEquity:add": {
+        const again = replayedFootprint(args);
+        const made = replayableCreate("partner", args, true);
+        if (made && !again) return made;
+        const partnerId = again ? createdByKey.get(args.idempotencyKey)! : id("partner");
+        if (!again && args.idempotencyKey) createdByKey.set(args.idempotencyKey, partnerId);
+        partners.push({ _id: again ? id("partner-dup") : partnerId, partnerName: args.partnerName });
+        if (args.openingContributionMinor) {
+          const txId = id("eqtx");
+          equityTxs.push({ _id: txId, partnerId, type: "CONTRIBUTION", amountMinor: Number(args.openingContributionMinor) });
+          post("CAPITAL_CONTRIBUTED", "partnerEquityTransactions", txId, [
+            { key: "CASH_ON_HAND", debitMinor: Number(args.openingContributionMinor) },
+            { key: "PARTNER_CAPITAL", creditMinor: Number(args.openingContributionMinor) },
+          ]);
+        }
+        return { ok: true as const, value: partnerId };
+      }
+      case "partnerEquity:list":
+        return { ok: true as const, value: { page: [...partners], isDone: true, continueCursor: null } };
+      case "partnerEquity:listTransactions":
+        return { ok: true as const, value: equityTxs.filter((t) => t.partnerId === String(args.partnerId)) };
+      case "partnerEquity:recordEquityMovement": {
+        const again = replayedFootprint(args);
+        const made = replayableCreate("eqtx", args, true);
+        if (made && !again) return made;
+        const txId = again ? createdByKey.get(args.idempotencyKey)! : id("eqtx");
+        if (!again && args.idempotencyKey) createdByKey.set(args.idempotencyKey, txId);
+        equityTxs.push({ _id: again ? id("eqtx-dup") : txId, partnerId: String(args.partnerId), type: args.type, amountMinor: Number(args.amountMinor) });
+        post(args.type === "DRAW" ? "PARTNER_DREW" : "CAPITAL_CONTRIBUTED", "partnerEquityTransactions", txId, [
+          { key: args.type === "DRAW" ? "PARTNER_DRAWINGS" : "CASH_ON_HAND", debitMinor: Number(args.amountMinor) },
+          { key: args.type === "DRAW" ? "CASH_ON_HAND" : "PARTNER_CAPITAL", creditMinor: Number(args.amountMinor) },
+        ]);
+        return { ok: true as const, value: txId };
+      }
+      case "workOrders:create": {
+        const again = replayedFootprint(args);
+        const made = replayableCreate("wo", args, true);
+        if (made && !again) return made;
+        const workOrderId = again ? createdByKey.get(args.idempotencyKey)! : id("wo");
+        if (!again && args.idempotencyKey) createdByKey.set(args.idempotencyKey, workOrderId);
+        const totalCost = (args.tasks ?? []).reduce((s: number, t: any) => s + t.partsCost + t.laborCost, 0);
+        let expenseId: string | undefined;
+        if (args.status === "COMPLETED" && totalCost > 0) expenseId = postExpense(totalCost);
+        workOrders.push({ _id: again ? id("wo-dup") : workOrderId, vehicleId: String(args.vehicleId), title: args.title, status: args.status, expenseId });
+        return { ok: true as const, value: workOrderId };
+      }
+      case "workOrders:update": {
+        const wo = workOrders.find((w) => w._id === String(args.workOrderId));
+        if (!wo) return { ok: false as const, error: "Work Order not found" };
+        if (wo.expenseId && !defects.workOrderLockOpen) {
+          return { ok: false as const, error: "Completed work orders with posted expenses are locked. Use a correction or reversal workflow before editing." };
+        }
+        const totalCost = (args.tasks ?? []).reduce((s: number, t: any) => s + t.partsCost + t.laborCost, 0);
+        if (args.status === "COMPLETED" && !wo.expenseId && totalCost > 0) wo.expenseId = postExpense(totalCost);
+        else if (args.status === "COMPLETED" && wo.expenseId && defects.workOrderLockOpen) postExpense(totalCost, wo.expenseId);
+        wo.title = args.title;
+        wo.status = args.status;
+        return { ok: true as const, value: null };
+      }
+      case "workOrders:list":
+        return { ok: true as const, value: workOrders.filter((w) => !args.vehicleId || w.vehicleId === String(args.vehicleId)) };
       case "chartOfAccounts:validateSystemAccounts":
         return {
           ok: true as const,
@@ -505,21 +835,29 @@ function makeBackend(defects: Defects = {}) {
       case "accountingLedger:listAccountingEvents":
         return {
           ok: true as const,
-          value: events.filter(
-            (e) => e.sourceType === args.sourceType && String(e.sourceId) === String(args.sourceId)
-          ),
+          value: args.sourceType
+            ? events.filter((e) => e.sourceType === args.sourceType && String(e.sourceId) === String(args.sourceId))
+            : [...events],
         };
       case "accountingLedger:listJournalEntries":
         // A COPY. Returning the live array handed P1 the same object twice, so
         // its before/after lengths were necessarily equal and the partial-post
         // defect walked straight past it. A real query returns a fresh result;
         // a fake that shares state silently disables the assertions built on it.
-        return { ok: true as const, value: [...journalEntries] };
-      case "accountingLedger:getJournalEntry":
+        return { ok: true as const, value: journalEntries.map((j) => ({ ...j })) };
+      case "accountingLedger:getJournalEntry": {
+        const entry = journalEntries.find((j) => j._id === String(args.journalEntryId));
         return {
           ok: true as const,
-          value: { entry: { _id: args.journalEntryId }, lines: journalLines.get(args.journalEntryId) ?? [] },
+          value: entry ? { entry: { ...entry }, lines: journalLines.get(entry._id) ?? [] } : null,
         };
+      }
+      case "accountingLedger:getAccountActivity": {
+        const account = CHART.find((a) => a._id === String(args.accountId));
+        if (!account) return { ok: true as const, value: null };
+        const lines = [...journalLines.values()].flat().filter((l) => l.accountId === account._id);
+        return { ok: true as const, value: { account, lines } };
+      }
       case "accountingOutbox:listPending":
         return {
           ok: true as const,
@@ -568,6 +906,15 @@ function makeBackend(defects: Defects = {}) {
     }
   };
 
+  /** A work-order expense: one expense row, one EXPENSE_POSTED. */
+  function postExpense(totalCost: number, existing?: string) {
+    const expenseId = existing ?? id("exp");
+    post("EXPENSE_POSTED", "expenses", expenseId, [
+      { key: "GENERAL_EXPENSE", debitMinor: Math.round(totalCost * MINOR_SCALE) },
+      { key: "CASH_ON_HAND", creditMinor: Math.round(totalCost * MINOR_SCALE) },
+    ]);
+    return expenseId;
+  }
   const authedCall = call(true);
   // The seated MANAGER: authenticated, and WITHOUT manage:finance.
   const approverCall = call(true, false);
@@ -577,7 +924,6 @@ function makeBackend(defects: Defects = {}) {
     return r.value;
   };
 
-  void vehicleOf;
   const approverMust = async (kind: string, fnPath: string, args: Record<string, any>) => {
     const r = await approverCall(kind, fnPath, args);
     if (!r.ok) throw new Error(`${fnPath} failed: ${r.error}`);
@@ -712,7 +1058,7 @@ describe("the rehearsal passes against a backend that behaves", () => {
     expect(declined.map((d) => `${d.id}: ${d.detail}`)).toEqual([]);
     // And it actually ran the cases rather than finding nothing to do.
     expect(results.length).toBeGreaterThanOrEqual(18);
-    for (const id of ["A3", "B1", "B2", "P1", "RT1", "RC1", "RV1", "SR1", "C1", "C2"]) {
+    for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "C1", "C2"]) {
       expect(statusOf(results, id), `${id} must actually execute`).toBe("PASS");
     }
   });
@@ -844,7 +1190,7 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     // a valid one. 300 where 500 was received is a shortfall at every scale.
     const results = await runAgainst({ shortRetention: true });
     expect(statusOf(results, "RC1")).toBe("FAIL");
-    expect(String(results.find((r) => r.id === "RC1")?.detail)).toMatch(/not 500 major at any sane currency scale/);
+    expect(String(results.find((r) => r.id === "RC1")?.detail)).toMatch(/expected 500000, got 300000/);
   });
 
   test("RV1 catches a cheque return that ERASES its clearing", async () => {
@@ -856,7 +1202,7 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
   test("RV1 catches a cheque that bounces with no accounting effect at all", async () => {
     const results = await runAgainst({ silentChequeReturn: true });
     expect(statusOf(results, "RV1")).toBe("FAIL");
-    expect(String(results.find((r) => r.id === "RV1")?.detail)).toMatch(/NO journal entry/);
+    expect(String(results.find((r) => r.id === "RV1")?.detail)).toMatch(/expected REVERSED, got POSTED/);
   });
 
   test("SR1 catches a consigned car posted as dealership stock", async () => {
@@ -957,4 +1303,119 @@ describe("assertBothAttemptsExecuted — every branch watched failing (Sonnet MA
     expect(run([ok("a"), ok("b", { sentAt: 600, receivedAt: 500 })])).toThrow(/timestamps not finite\/ordered/));
   test("intervals that do not overlap", () =>
     expect(run([ok("a"), ok("b", { sentAt: 700, receivedAt: 900 })])).toThrow(/did NOT overlap/));
+});
+
+/**
+ * The owner-proxy's evidence-floor closure (2026-09-11 09:51), controlled: each
+ * false-pass shape it named — wrong account, wrong amount, wrong decimal scale,
+ * a missing or unlinked reversal, a duplicate effect — turns exactly its own
+ * case red against a backend that is otherwise healthy. A reconciliation that
+ * has never been watched refusing is a title, not a reconciliation.
+ */
+describe("evidence-floor closure — the assertions detect incorrect results", () => {
+  const detail = (results: Array<Record<string, unknown>>, id: string) => String(results.find((r) => r.id === id)?.detail);
+
+  test("the runner's denomination table is a pinned MIRROR of convex/utils/money.ts, not a second opinion", () => {
+    const src = fs.readFileSync(path.join(__dirname, "..", "convex", "utils", "money.ts"), "utf8");
+    const block = src.match(/const CURRENCY_SCALES[^=]*=\s*\{([\s\S]*?)\};/);
+    if (!block) throw new Error("CURRENCY_SCALES not found in convex/utils/money.ts");
+    const product: Record<string, number> = {};
+    for (const m of block[1].matchAll(/([A-Z]{3}):\s*(\d+)/g)) product[m[1]] = Number(m[2]);
+    expect(Object.keys(product).length).toBeGreaterThan(5);
+    expect(CURRENCY_SCALES).toEqual(product);
+  });
+
+  test("an org whose currency the product does not denominate makes the money cases UNPROVEN, not PASS", async () => {
+    const results = await runAgainst({ orgCurrencyUnknown: true });
+    for (const id of ["B1", "RC1", "RV1", "RT2"]) expect(statusOf(results, id)).toBe("UNPROVEN");
+    expect(detail(results, "B1")).toMatch(/not in the rehearsal's mirror/);
+  });
+
+  // ── B1: the fourth surface, exactly ──
+  test("B1 catches a refund that credits the wrong account", async () => {
+    const results = await runAgainst({ refundPostsWrongAccount: true });
+    expect(statusOf(results, "B1")).toBe("FAIL");
+    expect(detail(results, "B1")).toMatch(/not exactly the expected posting/);
+    expect(detail(results, "B1")).toMatch(/BANK_ACCOUNT/);
+  });
+  test("B1 catches a refund posted one minor unit short (B2 balance cannot)", async () => {
+    const results = await runAgainst({ refundPostsWrongAmount: true });
+    expect(statusOf(results, "B1")).toBe("FAIL");
+    expect(detail(results, "B1")).toMatch(/not exactly the expected posting/);
+  });
+  test("B1 catches journal lines written at the wrong decimal scale", async () => {
+    const results = await runAgainst({ linesAtWrongScale: true });
+    expect(statusOf(results, "B1")).toBe("FAIL");
+    expect(detail(results, "B1")).toMatch(/minor-unit scale on a journal line: expected 3, got 2/);
+  });
+  test("B1 catches a refund event that points at no journal entry", async () => {
+    const results = await runAgainst({ refundEventUnlinked: true });
+    expect(statusOf(results, "B1")).toBe("FAIL");
+    expect(detail(results, "B1")).toMatch(/points at NO journal entry/);
+  });
+  test("B1 catches a SECOND balanced entry for the same refund", async () => {
+    const results = await runAgainst({ duplicateRefundJournal: true });
+    expect(statusOf(results, "B1")).toBe("FAIL");
+    expect(detail(results, "B1")).toMatch(/bound to none of its events/);
+    // and B2 — per-entry balance — is exactly the check that cannot see it
+    expect(statusOf(results, "B2")).toBe("PASS");
+  });
+
+  // ── RC1: independent denomination, receipts on the books, GL control ──
+  test("RC1 catches money received on account credited to INCOME instead of the 2110 liability (ACC-9)", async () => {
+    const results = await runAgainst({ onAccountPostsAsIncome: true });
+    expect(statusOf(results, "RC1")).toBe("FAIL");
+    expect(detail(results, "RC1")).toMatch(/the receipt on account: journal lines are not exactly/);
+    expect(detail(results, "RC1")).toMatch(/MISCELLANEOUS_INCOME/);
+  });
+  test("RC1 catches a retained position that disagrees with its GL control balance", async () => {
+    const results = await runAgainst({ retainedPositionDriftsFromGl: true });
+    expect(statusOf(results, "RC1")).toBe("FAIL");
+    expect(detail(results, "RC1")).toMatch(/not exactly the expected posting|2110 net credit/);
+  });
+  test("RC1 catches a credit application that reduces the position but posts nothing", async () => {
+    const results = await runAgainst({ applicationPostsNothing: true });
+    expect(statusOf(results, "RC1")).toBe("FAIL");
+    expect(detail(results, "RC1")).toMatch(/RECEIPT_CREDIT_APPLIED events .* expected 1, got 0/);
+  });
+
+  // ── RV1: exact reopening, linked and opposite ──
+  test("RV1 catches a reversal that nothing links to the clearing it reverses", async () => {
+    const results = await runAgainst({ reversalUnlinked: true });
+    expect(statusOf(results, "RV1")).toBe("FAIL");
+    expect(detail(results, "RV1")).toMatch(/names no reversing/);
+  });
+  test("RV1 catches a linked reversal for the wrong amount", async () => {
+    const results = await runAgainst({ reversalWrongAmount: true });
+    expect(statusOf(results, "RV1")).toBe("FAIL");
+    expect(detail(results, "RV1")).toMatch(/the cheque-return reversal: journal lines are not exactly/);
+  });
+  test("RV1 catches a bounced cheque whose receivable still reads PAID", async () => {
+    const results = await runAgainst({ receivableNotReopened: true });
+    expect(statusOf(results, "RV1")).toBe("FAIL");
+    expect(detail(results, "RV1")).toMatch(/outstanding on the receivable after the cheque bounced: expected 1200, got 0/);
+  });
+
+  // ── RT2: the eight named commands ──
+  test("RT2 catches a replay that mints a second identity on any of the eight", async () => {
+    const results = await runAgainst({ duplicateOnCreateReplay: true });
+    expect(statusOf(results, "RT2")).toBe("FAIL");
+    expect(detail(results, "RT2")).toMatch(/returned a DIFFERENT identity/);
+  });
+  test("RT2 catches a replay that is refused", async () => {
+    const results = await runAgainst({ refuseCreateReplay: true });
+    expect(statusOf(results, "RT2")).toBe("FAIL");
+    expect(detail(results, "RT2")).toMatch(/was refused/);
+  });
+  test("RT2 catches a replay that returns the SAME id and posts its footprint AGAIN", async () => {
+    // The shape the identity half cannot see: ids agree, the books moved twice.
+    const results = await runAgainst({ doubleFootprintOnReplay: true });
+    expect(statusOf(results, "RT2")).toBe("FAIL");
+    expect(detail(results, "RT2")).toMatch(/occurrences for .*: expected 1, got 2|rows .*: expected 1, got 2|after the replay: expected 1, got 2/);
+  });
+  test("RT2 catches a work-order state barrier that lets a posted expense be edited", async () => {
+    const results = await runAgainst({ workOrderLockOpen: true });
+    expect(statusOf(results, "RT2")).toBe("FAIL");
+    expect(detail(results, "RT2")).toMatch(/state barrier is open/);
+  });
 });

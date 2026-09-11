@@ -363,6 +363,117 @@ describe("CI must be green at the exact commit, and waivers expire", () => {
     }
   });
 
+  // ── SCRUM-313 / F1a ───────────────────────────────────────────────────────
+  //
+  // The Accounting cloud rehearsal — the only evidence that the release's
+  // money paths behave on a real Convex runtime — was a green badge that
+  // gated nothing: not a required merge check, not in this deploy policy.
+  // Sonnet MAX named it (F1a) and the owner-proxy authorised making the
+  // PRODUCER-BOUND `github-actions/rehearsal` a required deploy check with no
+  // waiver (2026-09-11 09:51). Asserted against the REAL policy, like
+  // SCRUM-127 below, so that removing the entry — or excusing it — fails here.
+  //
+  // ⚠️ accounting-rehearsal.yml has `pull_request` and `workflow_dispatch`
+  // triggers and NO `push`. A merge to main does not run it, so at main's tip
+  // this check is ABSENT until someone dispatches the workflow against that
+  // exact tip — and an absent required check is a refusal here, by design.
+  // The release procedure therefore includes that dispatch and verifies the
+  // run's recorded `REHEARSAL_TESTED_SHA` is main's tip. Inheriting the PR
+  // badge is exactly what this entry forbids.
+  describe("the cloud rehearsal is a required deploy check with no waiver (SCRUM-313 F1a)", () => {
+    const loadPolicy = async () => (await import("../.github/release-waivers.json")).default;
+    const id = (c: { producer: string; name: string }) => `${c.producer}/${c.name}`;
+    const observeAll = (
+      required: { producer: string; name: string }[],
+      over: Record<string, { status?: string; conclusion: string | null }> = {},
+      omit: string[] = []
+    ): CheckResult[] =>
+      required
+        .filter((c) => !omit.includes(c.name))
+        .map((c) => ({
+          producer: c.producer,
+          name: c.name,
+          status: c.name in over ? (over[c.name].status ?? "completed") : "completed",
+          conclusion: c.name in over ? over[c.name].conclusion : "success",
+        }));
+
+    test("the policy requires github-actions/rehearsal and carries no waiver for it", async () => {
+      const policy = await loadPolicy();
+      expect(policy.required.map(id)).toContain("github-actions/rehearsal");
+      expect(policy.waivers.map(id)).not.toContain("github-actions/rehearsal");
+      // The existing entries are untouched: adding a gate is not licence to
+      // move another one.
+      expect(policy.required.map(id)).toContain("github-actions/playwright");
+      expect(policy.required.map(id)).toContain("sonarqubecloud/SonarCloud Code Analysis");
+      expect(policy.waivers.map(id)).toEqual(["sonarqubecloud/SonarCloud Code Analysis"]);
+    });
+
+    for (const [label, over] of [
+      ["FAILED", { conclusion: "failure" }],
+      ["SKIPPED", { conclusion: "skipped" }],
+      ["CANCELLED", { conclusion: "cancelled" }],
+      ["NEUTRAL", { conclusion: "neutral" }],
+      ["still IN PROGRESS", { status: "in_progress", conclusion: null }],
+      ["QUEUED", { status: "queued", conclusion: null }],
+    ] as const) {
+      test(`a ${label} rehearsal refuses the release`, async () => {
+        const policy = await loadPolicy();
+        const verdict = evaluateRequiredChecks({
+          required: policy.required,
+          results: observeAll(policy.required, { rehearsal: over }),
+          waivers: policy.waivers,
+          now: NOW,
+        });
+        expect(verdict.ok).toBe(false);
+        expect(verdict.failures.join("\n")).toMatch(/github-actions\/rehearsal/);
+        expect(verdict.waived.map((w) => w.name)).not.toContain("rehearsal");
+        expect(verdict.passed).not.toContain("github-actions/rehearsal");
+      });
+    }
+
+    test("an ABSENT rehearsal refuses — the PR badge is not inherited by main's tip", async () => {
+      const policy = await loadPolicy();
+      const verdict = evaluateRequiredChecks({
+        required: policy.required,
+        results: observeAll(policy.required, {}, ["rehearsal"]),
+        waivers: policy.waivers,
+        now: NOW,
+      });
+      expect(verdict.ok).toBe(false);
+      expect(verdict.failures.join("\n")).toMatch(/github-actions\/rehearsal: no result at this commit/);
+    });
+
+    test("a rehearsal result from another producer does not satisfy it", async () => {
+      const policy = await loadPolicy();
+      const results = observeAll(policy.required, {}, ["rehearsal"]);
+      results.push({ producer: "commit-status", name: "rehearsal", status: "completed", conclusion: "success" });
+      const verdict = evaluateRequiredChecks({ required: policy.required, results, waivers: policy.waivers, now: NOW });
+      expect(verdict.ok).toBe(false);
+      expect(verdict.failures.join("\n")).toMatch(/github-actions\/rehearsal: no result at this commit from that producer/);
+    });
+
+    test("two rehearsal results at one commit are AMBIGUOUS, not a pass", async () => {
+      const policy = await loadPolicy();
+      const results = observeAll(policy.required);
+      results.push({ producer: "github-actions", name: "rehearsal", status: "completed", conclusion: "success" });
+      const verdict = evaluateRequiredChecks({ required: policy.required, results, waivers: policy.waivers, now: NOW });
+      expect(verdict.ok).toBe(false);
+      expect(verdict.failures.join("\n")).toMatch(/github-actions\/rehearsal: 2 results share that producer and name/);
+    });
+
+    test("a SUCCESSFUL rehearsal is reported as PASSED — and only then", async () => {
+      const policy = await loadPolicy();
+      const verdict = evaluateRequiredChecks({
+        required: policy.required,
+        results: observeAll(policy.required),
+        waivers: policy.waivers,
+        now: NOW,
+      });
+      expect(verdict.ok).toBe(true);
+      expect(verdict.passed).toContain("github-actions/rehearsal");
+    });
+  });
+
   // ── SCRUM-127 ────────────────────────────────────────────────────────────
   //
   // `dependency-audit` was waived because it failed identically on main with no

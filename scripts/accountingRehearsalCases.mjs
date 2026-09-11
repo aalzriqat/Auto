@@ -586,6 +586,60 @@ export async function runRehearsalCases(ctx) {
         "the canonical payment's amount against the deposit row's released amount"
       );
 
+      // THE JOURNAL — the surface this case NAMED and, until the owner-proxy read
+      // the runner at 1c0bd6e48, never actually fetched. Three surfaces agreed
+      // and the fourth was asserted by its title. B2's per-entry balance cannot
+      // stand in for it: a balanced entry on the wrong accounts, or a second
+      // balanced entry for the same refund, passes B2 and misstates the books.
+      //
+      // So: the ONE DEPOSIT_REFUNDED event's own journal entry, its lines
+      // resolved through the org's chart, and the posting the product's rule
+      // declares for a CASH refund — deposit liability released, cash paid out
+      // — with the amount in the org's denomination and nothing else on it.
+      const denom = await orgDenomination({ orgId, ownerMust });
+      const expectedReleasedMinor = 2000 * denom.minorPerMajor;
+      expectEqual(row.releasedAmountMinor, expectedReleasedMinor, `released amount in ${denom.currency} minor units`);
+      const { keyOf } = await chartIndex({ orgId, ownerMust });
+      const journal = await eventAndJournal({
+        orgId,
+        ownerMust,
+        sourceType: "deposits",
+        sourceId: fx.depositId,
+        eventType: "DEPOSIT_REFUNDED",
+      });
+      expectEqual(journal.entry.status, "POSTED", "the refund journal entry's status");
+      expectEqual(journal.entry.category, "SYSTEM", "the refund journal entry's category");
+      expectExactLines(
+        journal.lines,
+        keyOf,
+        [
+          { key: "CUSTOMER_DEPOSITS_LIABILITY", debitMinor: expectedReleasedMinor },
+          { key: "CASH_ON_HAND", creditMinor: expectedReleasedMinor },
+        ],
+        { currency: denom.currency, decimals: denom.decimals, what: "the deposit refund posting", customerId: fx.customerId }
+      );
+      // And every entry the ledger holds for this deposit is bound to one of the
+      // deposit's OWN events — taking the deposit posts too (DEPOSIT_RECEIVED on
+      // the same source), so "one entry for this source" would accuse the
+      // product falsely; the fake caught that before the cloud did. What must
+      // be true: no orphan entry for this source, and exactly one bound to the
+      // refund. A second balanced entry for the refund, however it got there,
+      // is the duplicate B2 cannot see.
+      const depositEvents = await ownerMust("query", "accountingLedger:listAccountingEvents", {
+        orgId, sourceType: "deposits", sourceId: String(fx.depositId), limit: 200,
+      });
+      const eventIds = new Set((depositEvents ?? []).map((e) => String(e._id)));
+      const allEntries = await ownerMust("query", "accountingLedger:listJournalEntries", { orgId, limit: 200 });
+      const forDeposit = (allEntries ?? []).filter(
+        (e) => e.sourceType === "deposits" && String(e.sourceId) === String(fx.depositId)
+      );
+      const orphans = forDeposit.filter((e) => !eventIds.has(String(e.accountingEventId)));
+      if (orphans.length > 0) {
+        fail(`${orphans.length} journal entr(y/ies) for this deposit are bound to none of its events — a posting the event log does not know about`);
+      }
+      const refundEntries = forDeposit.filter((e) => String(e.accountingEventId) === String(journal.event._id));
+      expectEqual(refundEntries.length, 1, "journal entries bound to this deposit's refund event");
+
       return {
         depositId: fx.depositId,
         row: { released: row.releasedAmountMinor, releaseCount: row.releaseCount },
@@ -599,6 +653,19 @@ export async function runRehearsalCases(ctx) {
           amountMinor: balance.payment.amountMinor,
           status: balance.payment.status ?? null,
           unappliedMinor: balance.unappliedMinor ?? null,
+        },
+        journal: {
+          entryId: String(journal.entry._id),
+          journalNumber: journal.entry.journalNumber ?? null,
+          currency: denom.currency,
+          decimals: denom.decimals,
+          lines: journal.lines.map((l) => ({
+            account: keyOf.get(String(l.accountId)) ?? "?",
+            debitMinor: l.debitMinor,
+            creditMinor: l.creditMinor,
+          })),
+          entriesForThisDeposit: forDeposit.length,
+          entriesBoundToRefund: refundEntries.length,
         },
       };
     }
@@ -780,8 +847,192 @@ export async function runRehearsalCases(ctx) {
         deposit: { id: String(firstDeposit), replayReturnedSameId: true, rowsForVehicle: rows.length },
         commandsProven: ["vehicles.create", "deposits.create"],
         commandsStillUnproven:
-          "36 of the 38 IDENTITY_GUARDED commands have no cloud retry proof; see the rehearsal's evidence inventory",
+          "RT2 covers eight more; the remaining IDENTITY_GUARDED commands have no cloud retry proof — see the evidence inventory",
       };
+    }
+  );
+
+  // ── RT2 — the retry contract on the commands the floor ORDERED by name ────
+  //
+  // The owner-proxy's list, verbatim: createReceivable, the whole
+  // createInstallmentPlan, fixedAssets.capitalize, partnerEquity.add with an
+  // opening contribution, recordEquityMovement, vehicles.createReservation,
+  // workOrders.create, and workOrders.update's state barrier. Not the census;
+  // these eight.
+  //
+  // Each proof has two halves. The IDENTITY half is RT1's contract — a replay
+  // is accepted and returns the original identity. The FOOTPRINT half is what
+  // makes the first half worth anything: exactly ONE accounting occurrence for
+  // the thing created, and exactly one row where the product lists rows. A
+  // command can hand back the same id twice and still have posted twice.
+  await recordCase(
+    results,
+    "RT2",
+    "the eight named economic commands replay once and leave one footprint each",
+    async () => {
+      const stamp = Date.now().toString(36);
+      const denom = await orgDenomination({ orgId, ownerMust });
+      const m = denom.minorPerMajor;
+      const dueDate = Date.now() + 14 * 24 * 60 * 60 * 1000;
+      const customerId = await ownerMust("mutation", "customers:create", {
+        orgId,
+        firstName: "Rehearsal",
+        lastName: `rt2-${stamp}`,
+      });
+      const oneEvent = async (sourceType, sourceId, eventType, what) => {
+        const events = await ownerMust("query", "accountingLedger:listAccountingEvents", {
+          orgId, sourceType, sourceId: String(sourceId), limit: 200,
+        });
+        const n = (events ?? []).filter((e) => e.eventType === eventType).length;
+        expectEqual(n, 1, `${eventType} occurrences for ${what}`);
+      };
+      const proven = {};
+
+      // 1. createReceivable — one debt, one RECEIVABLE_CREATED.
+      const receivableId = await replayMustReturnSame({
+        call: ownerCall, must: ownerMust, fnPath: "collections:createReceivable", what: "collections.createReceivable",
+        args: {
+          orgId, customerId, sourceType: "OTHER", creditSystemKey: "MISCELLANEOUS_INCOME",
+          title: `Rehearsal RT2 receivable ${stamp}`, amount: 300, dueDate,
+          idempotencyKey: `rehearsal-rt2-recv-${stamp}`,
+        },
+      });
+      await oneEvent("receivables", receivableId, "RECEIVABLE_CREATED", "the receivable");
+      proven["collections.createReceivable"] = { id: String(receivableId) };
+
+      // 2. createInstallmentPlan — the WHOLE plan: three debts, three events,
+      //    and the replay returns the same three ids, not three more.
+      const planIds = await replayMustReturnSame({
+        call: ownerCall, must: ownerMust, fnPath: "collections:createInstallmentPlan", what: "collections.createInstallmentPlan",
+        args: {
+          orgId, customerId, sourceType: "OTHER", creditSystemKey: "MISCELLANEOUS_INCOME",
+          title: `Rehearsal RT2 plan ${stamp}`, totalAmount: 900, installmentCount: 3, firstDueDate: dueDate,
+          idempotencyKey: `rehearsal-rt2-plan-${stamp}`,
+        },
+      });
+      if (!Array.isArray(planIds)) fail(`createInstallmentPlan returned ${JSON.stringify(planIds)} rather than the plan's receivable ids`);
+      expectEqual(planIds.length, 3, "receivables minted by a three-instalment plan");
+      let planTotal = 0;
+      for (const rid of planIds) {
+        await oneEvent("receivables", rid, "RECEIVABLE_CREATED", `instalment ${rid}`);
+        const row = await findReceivable({ orgId, ownerMust, receivableId: rid });
+        planTotal += row.originalAmount ?? row.outstandingAmount ?? 0;
+      }
+      expectEqual(planTotal, 900, "the plan's instalments sum to the plan total");
+      proven["collections.createInstallmentPlan"] = { ids: planIds.map(String), total: planTotal };
+
+      // 3. fixedAssets.capitalize — one asset, one ASSET_CAPITALIZED.
+      const assetId = await replayMustReturnSame({
+        call: ownerCall, must: ownerMust, fnPath: "fixedAssets:capitalize", what: "fixedAssets.capitalize",
+        args: {
+          orgId, name: `Rehearsal RT2 lift ${stamp}`, purchaseDate: Date.now(), costMinor: 1500 * m,
+          usefulLifeMonths: 12, paymentMethod: "CASH", idempotencyKey: `rehearsal-rt2-asset-${stamp}`,
+        },
+      });
+      await oneEvent("fixedAssets", assetId, "ASSET_CAPITALIZED", "the asset");
+      const assetsPage = await ownerMust("query", "fixedAssets:list", { orgId, paginationOpts: { numItems: 200, cursor: null } });
+      const sameName = (assetsPage?.page ?? []).filter((a) => a.name === `Rehearsal RT2 lift ${stamp}`);
+      expectEqual(sameName.length, 1, "fixed-asset rows carrying this capitalization's name");
+      proven["fixedAssets.capitalize"] = { id: String(assetId) };
+
+      // 4. partnerEquity.add WITH opening capital — one partner, one movement,
+      //    one CAPITAL_CONTRIBUTED.
+      const partnerId = await replayMustReturnSame({
+        call: ownerCall, must: ownerMust, fnPath: "partnerEquity:add", what: "partnerEquity.add",
+        args: {
+          orgId, partnerName: `Rehearsal Partner ${stamp}`, openingContributionMinor: 2500 * m, paymentMethod: "CASH",
+          idempotencyKey: `rehearsal-rt2-partner-${stamp}`,
+        },
+      });
+      const partnersPage = await ownerMust("query", "partnerEquity:list", { orgId, paginationOpts: { numItems: 200, cursor: null } });
+      const samePartner = (partnersPage?.page ?? []).filter((p) => p.partnerName === `Rehearsal Partner ${stamp}`);
+      expectEqual(samePartner.length, 1, "partner rows carrying this name after the replay");
+      let txs = await ownerMust("query", "partnerEquity:listTransactions", { orgId, partnerId });
+      expectEqual((txs ?? []).length, 1, "equity movements for the partner after add + replay");
+      await oneEvent("partnerEquityTransactions", txs[0]._id, "CAPITAL_CONTRIBUTED", "the opening contribution");
+      expectEqual(txs[0].amountMinor, 2500 * m, "the opening contribution's amount");
+      proven["partnerEquity.add"] = { id: String(partnerId), movementId: String(txs[0]._id) };
+
+      // 5. recordEquityMovement — a DRAW the balance would permit TWICE, so the
+      //    balance check is not the barrier; identity is.
+      const drawId = await replayMustReturnSame({
+        call: ownerCall, must: ownerMust, fnPath: "partnerEquity:recordEquityMovement", what: "partnerEquity.recordEquityMovement",
+        args: {
+          orgId, partnerId, type: "DRAW", amountMinor: 500 * m, paymentMethod: "CASH",
+          idempotencyKey: `rehearsal-rt2-draw-${stamp}`,
+        },
+      });
+      txs = await ownerMust("query", "partnerEquity:listTransactions", { orgId, partnerId });
+      expectEqual((txs ?? []).length, 2, "equity movements for the partner after the draw + replay");
+      await oneEvent("partnerEquityTransactions", drawId, "PARTNER_DREW", "the draw");
+      proven["partnerEquity.recordEquityMovement"] = { id: String(drawId) };
+
+      // 6. vehicles.createReservation WITH a deposit — one reservation, one
+      //    deposit row for the car, one DEPOSIT_RECEIVED.
+      const reservedVehicle = await makeVehicle({ orgId, ownerMust, label: "rt2res" });
+      const reservationId = await replayMustReturnSame({
+        call: ownerCall, must: ownerMust, fnPath: "vehicles:createReservation", what: "vehicles.createReservation",
+        args: {
+          orgId, vehicleId: reservedVehicle, customerId, depositAmount: 300, depositMethod: "CASH",
+          idempotencyKey: `rehearsal-rt2-reservation-${stamp}`,
+        },
+      });
+      const reservationDeposits = await ownerMust("query", "deposits:listByVehicle", { orgId, vehicleId: reservedVehicle });
+      expectEqual((reservationDeposits ?? []).length, 1, "deposit rows for the reserved vehicle after create + replay");
+      await oneEvent("deposits", reservationDeposits[0]._id, "DEPOSIT_RECEIVED", "the reservation deposit");
+      expectEqual(reservationDeposits[0].amountMinor ?? reservationDeposits[0].amount * m, 300 * m, "the reservation deposit's amount");
+      proven["vehicles.createReservation"] = { id: String(reservationId), depositId: String(reservationDeposits[0]._id) };
+
+      // 7. workOrders.create COMPLETED — the expense is minted BEFORE the work
+      //    order row exists, so nothing durable could identify a retry but the
+      //    intent identity. One work order, one expense, one EXPENSE_POSTED.
+      const woVehicle = await makeVehicle({ orgId, ownerMust, label: "rt2wo" });
+      const task = { id: `t-${stamp}`, description: "Brake pads", partsCost: 100, laborCost: 50, completed: true };
+      const workOrderId = await replayMustReturnSame({
+        call: ownerCall, must: ownerMust, fnPath: "workOrders:create", what: "workOrders.create",
+        args: {
+          orgId, vehicleId: woVehicle, title: `Rehearsal RT2 WO ${stamp}`, status: "COMPLETED", tasks: [task],
+          idempotencyKey: `rehearsal-rt2-wo-${stamp}`,
+        },
+      });
+      const wos = await ownerMust("query", "workOrders:list", { orgId, vehicleId: woVehicle });
+      expectEqual((wos ?? []).length, 1, "work orders for the vehicle after create + replay");
+      const wo = wos[0];
+      if (!wo.expenseId) fail("the COMPLETED work order carries no expenseId — its cost never reached the books");
+      await oneEvent("expenses", wo.expenseId, "EXPENSE_POSTED", "the work order's expense");
+      proven["workOrders.create"] = { id: String(workOrderId), expenseId: String(wo.expenseId) };
+
+      // 8. workOrders.update's STATE BARRIER — an OPEN order completed through
+      //    update posts once; a second update against the posted expense is
+      //    REFUSED as locked, and the footprint stays at one.
+      const barrierVehicle = await makeVehicle({ orgId, ownerMust, label: "rt2bar" });
+      const openId = await ownerMust("mutation", "workOrders:create", {
+        orgId, vehicleId: barrierVehicle, title: `Rehearsal RT2 barrier ${stamp}`, status: "OPEN",
+        tasks: [{ ...task, completed: false }], idempotencyKey: `rehearsal-rt2-open-${stamp}`,
+      });
+      await ownerMust("mutation", "workOrders:update", {
+        orgId, workOrderId: openId, title: `Rehearsal RT2 barrier ${stamp}`, status: "COMPLETED", tasks: [task],
+      });
+      const afterComplete = (await ownerMust("query", "workOrders:list", { orgId, vehicleId: barrierVehicle })).find(
+        (w) => String(w._id) === String(openId)
+      );
+      if (!afterComplete?.expenseId) fail("completing the work order through update posted no expense");
+      await oneEvent("expenses", afterComplete.expenseId, "EXPENSE_POSTED", "the work order completed through update");
+      const locked = await ownerCall("mutation", "workOrders:update", {
+        orgId, workOrderId: openId, title: `Rehearsal RT2 barrier ${stamp} edited`, status: "COMPLETED", tasks: [task],
+      });
+      if (locked.ok) fail("a second update against a work order with a POSTED expense was ACCEPTED — the state barrier is open");
+      if (!/locked/i.test(String(locked.error))) {
+        unproven(`the second update was refused, but not by the state barrier: ${String(locked.error).slice(0, 160)}`);
+      }
+      await oneEvent("expenses", afterComplete.expenseId, "EXPENSE_POSTED", "the work order after the refused edit");
+      const afterRefusal = (await ownerMust("query", "workOrders:list", { orgId, vehicleId: barrierVehicle })).find(
+        (w) => String(w._id) === String(openId)
+      );
+      expectEqual(afterRefusal?.title, `Rehearsal RT2 barrier ${stamp}`, "the locked work order's title after the refused edit");
+      proven["workOrders.update"] = { id: String(openId), expenseId: String(afterComplete.expenseId), refusal: String(locked.error).slice(0, 120) };
+
+      return { currency: denom.currency, commandsProven: Object.keys(proven), proven };
     }
   );
 
@@ -850,7 +1101,7 @@ export async function runRehearsalCases(ctx) {
       // things the floor asks about are genuinely two operations, and this case
       // exercises both — ALLOCATION against an invoice, then RETENTION of
       // unapplied money.
-      await ownerMust("mutation", "collections:recordPayment", {
+      const allocationPaymentId = await ownerMust("mutation", "collections:recordPayment", {
         orgId,
         receivableId: firstReceivable,
         customerId,
@@ -862,7 +1113,7 @@ export async function runRehearsalCases(ctx) {
       });
 
       // 500 on account — no receivable named, so none of it is allocated.
-      await ownerMust("mutation", "collections:recordPayment", {
+      const onAccountPaymentId = await ownerMust("mutation", "collections:recordPayment", {
         orgId,
         customerId,
         amount: 500,
@@ -891,30 +1142,52 @@ export async function runRehearsalCases(ctx) {
       }
       const remainingMinor = positions.reduce((sum, p) => sum + (p.remainingUnappliedMinor ?? 0), 0);
 
-      // ⚠️ THE MINOR-UNIT SCALE IS DERIVED, NOT ASSUMED.
+      // ⚠️ THE DENOMINATION COMES FROM THE ORGANIZATION, NEVER FROM THE AMOUNT.
       //
-      // I wrote 50_000 here, which is 500 in a two-decimal currency. The
-      // deployment reported 500_000: this dealership's currency has THREE
-      // decimal places, so a major unit is 1000 minor and not 100. Every other
-      // figure in this file happened to be correct only because I had copied it
-      // out of earlier cloud output rather than computed it.
-      //
-      // Hardcoding either scale makes the rehearsal wrong for half the world
-      // and, worse, wrong in a way that reads as a money discrepancy. The scale
-      // is derived from what the product returned and then CHECKED for sanity,
-      // so a genuinely wrong amount still fails while a different currency does
-      // not.
-      const scale = remainingMinor / 500;
-      if (![1, 10, 100, 1000].includes(scale)) {
-        fail(
-          `the retained amount (${remainingMinor} minor) is not 500 major at any sane currency scale — ` +
-            `this is an amount discrepancy, not a decimal-places difference`
-        );
-      }
+      // The first version of this case derived the scale from the retained
+      // amount itself (`scale = remaining / 500`) and then checked that
+      // `remaining == 500 * scale` — which any amount divisible by 500 passes.
+      // The owner-proxy read it and named it. The expectation is now built from
+      // the org's currency and the product's own denomination table, and the
+      // figure under test is not consulted.
+      const denom = await orgDenomination({ orgId, ownerMust });
+      const scale = denom.minorPerMajor;
+      expectEqual(remainingMinor, 500 * scale, `retained credit remaining after a 500 ${denom.currency} receipt on account`);
+
+      // THE RECEIPTS THEMSELVES, ON THE BOOKS. The allocation posts cash against
+      // the receivable; the on-account receipt posts cash against 2110 — the
+      // unapplied-receipts LIABILITY (ACC-9) — and nothing against revenue.
+      const { keyOf, accountOf } = await chartIndex({ orgId, ownerMust });
+      const allocation = await eventAndJournal({
+        orgId, ownerMust, sourceType: "collectionPayments", sourceId: allocationPaymentId, eventType: "COLLECTION_PAYMENT",
+      });
+      expectExactLines(
+        allocation.lines, keyOf,
+        [{ key: "CASH_ON_HAND", debitMinor: 1000 * scale }, { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", creditMinor: 1000 * scale }],
+        { currency: denom.currency, decimals: denom.decimals, what: "the allocated receipt", customerId }
+      );
+      const onAccount = await eventAndJournal({
+        orgId, ownerMust, sourceType: "collectionPayments", sourceId: onAccountPaymentId, eventType: "COLLECTION_PAYMENT",
+      });
+      expectExactLines(
+        onAccount.lines, keyOf,
+        [{ key: "CASH_ON_HAND", debitMinor: 500 * scale }, { key: "UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY", creditMinor: 500 * scale }],
+        { currency: denom.currency, decimals: denom.decimals, what: "the receipt on account", customerId }
+      );
+
+      // THE CONTROL BALANCE. The retained position is a subledger view; the
+      // liability the dealership actually carries is the 2110 balance for this
+      // customer in the GL. They must agree — a position that says 500 while
+      // the control account says something else is the books disagreeing with
+      // the operator's screen.
+      const unappliedAccount = accountOf.get("UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY");
+      const arAccount = accountOf.get("ACCOUNTS_RECEIVABLE_CUSTOMERS");
+      if (!unappliedAccount || !arAccount) fail("the chart carries no 2110 / AR system account to reconcile against");
+      const glBefore = await customerNetOnAccount({ orgId, ownerMust, accountId: unappliedAccount, customerId });
       expectEqual(
+        glBefore.credit - glBefore.debit,
         remainingMinor,
-        500 * scale,
-        `retained credit remaining after a 500 receipt on account (scale ${scale})`
+        "2110 net credit for this customer in the GL against the retained position"
       );
 
       const position = positions[0];
@@ -949,17 +1222,46 @@ export async function runRehearsalCases(ctx) {
 
       const afterPositions = await readRetainedCredits({ orgId, customerId, ownerMust });
       const afterRemaining = afterPositions.reduce((sum, p) => sum + (p.remainingUnappliedMinor ?? 0), 0);
-      expectEqual(
-        afterRemaining,
-        100 * scale,
-        `retained credit remaining after applying 400 of the 500 (scale ${scale})`
+      expectEqual(afterRemaining, 100 * scale, "retained credit remaining after applying 400 of the 500");
+
+      // The discharge is a posting too: 2110 down by 400, AR down by 400, and
+      // the customer's control balances land where independent arithmetic says
+      // — 2110 at 100 credit; AR at zero (1,000 + 400 owed, 1,000 + 400 settled).
+      const applicationId = String(applied.value?.applicationId ?? "");
+      if (!applicationId) fail(`applyRetainedCredit returned no applicationId: ${JSON.stringify(applied.value).slice(0, 200)}`);
+      const applied400 = await eventAndJournal({
+        orgId, ownerMust, sourceType: "receiptApplications", sourceId: applicationId, eventType: "RECEIPT_CREDIT_APPLIED",
+        pick: (e) => String(e.payload?.applicationId ?? "") === applicationId,
+      });
+      expectExactLines(
+        applied400.lines, keyOf,
+        [{ key: "UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY", debitMinor: 400 * scale }, { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", creditMinor: 400 * scale }],
+        { currency: denom.currency, decimals: denom.decimals, what: "the retained-credit application", customerId }
       );
+      const glAfter = await customerNetOnAccount({ orgId, ownerMust, accountId: unappliedAccount, customerId });
+      expectEqual(glAfter.credit - glAfter.debit, 100 * scale, "2110 net credit for this customer after applying 400");
+      expectEqual(glAfter.credit - glAfter.debit, afterRemaining, "2110 GL balance against the retained position after the application");
+      const arNet = await customerNetOnAccount({ orgId, ownerMust, accountId: arAccount, customerId });
+      expectEqual(arNet.debit, 1400 * scale, "AR debits for this customer (two receivables created)");
+      expectEqual(arNet.credit, 1400 * scale, "AR credits for this customer (1,000 allocated + 400 applied)");
 
       return {
         customerId: String(customerId),
+        currency: denom.currency,
         minorUnitScale: scale,
         retainedAfterReceiptOnAccount: remainingMinor,
         retainedAfterApplying400: afterRemaining,
+        gl: {
+          unapplied2110NetCreditBefore: glBefore.credit - glBefore.debit,
+          unapplied2110NetCreditAfter: glAfter.credit - glAfter.debit,
+          arDebits: arNet.debit,
+          arCredits: arNet.credit,
+        },
+        postings: {
+          allocation: String(allocation.entry._id),
+          onAccount: String(onAccount.entry._id),
+          application: String(applied400.entry._id),
+        },
         commandsExercised: ["collections.createReceivable", "collections.recordPayment", "collections.applyRetainedCredit"],
       };
     }
@@ -976,7 +1278,7 @@ export async function runRehearsalCases(ctx) {
   await recordCase(
     results,
     "RV1",
-    "returning a CLEARED cheque puts the receivable back and reverses rather than erases",
+    "returning a CLEARED cheque reopens the exact debt and posts a linked, equal-and-opposite reversal",
     async () => {
       const stamp = Date.now().toString(36);
       const customerId = await ownerMust("mutation", "customers:create", {
@@ -1022,10 +1324,33 @@ export async function runRehearsalCases(ctx) {
         idempotencyKey: `rehearsal-rv1-clear-${stamp}`,
       });
 
-      const entriesAfterClear = await ownerMust("query", "accountingLedger:listJournalEntries", {
-        orgId,
-        limit: 200,
+      // THE CLEARING, ON THE BOOKS. The cleared cheque is a collection payment
+      // (found by its chequeId, not by position in a list), whose ONE receipt
+      // occurrence posts bank against the receivable — 1,200, in the org's
+      // denomination, nothing else. The receivable itself reads PAID at zero.
+      const denom = await orgDenomination({ orgId, ownerMust });
+      const scale = denom.minorPerMajor;
+      const { keyOf } = await chartIndex({ orgId, ownerMust });
+      const payments = await listCollectionPayments({ orgId, ownerMust });
+      const chequePayments = payments.filter((p) => String(p.chequeId ?? "") === String(chequeId));
+      expectEqual(chequePayments.length, 1, "collection payment rows for this cheque after clearing");
+      const paymentId = chequePayments[0]._id;
+      const cleared = await eventAndJournal({
+        orgId, ownerMust, sourceType: "collectionPayments", sourceId: paymentId, eventType: "COLLECTION_PAYMENT",
       });
+      const clearingLines = [
+        { key: "BANK_ACCOUNT", debitMinor: 1200 * scale },
+        { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", creditMinor: 1200 * scale },
+      ];
+      expectExactLines(cleared.lines, keyOf, clearingLines, {
+        currency: denom.currency, decimals: denom.decimals, what: "the cheque clearing", customerId,
+      });
+      const settled = await findReceivable({ orgId, ownerMust, receivableId });
+      expectEqual(settled.outstandingAmount, 0, "outstanding on the receivable after the cheque cleared");
+      expectEqual(settled.status, "PAID", "receivable status after the cheque cleared");
+      const clearingLineShape = cleared.lines
+        .map((l) => `${keyOf.get(String(l.accountId))}|${l.debitMinor}|${l.creditMinor}`)
+        .sort();
 
       const returned = await ownerCall("mutation", "collections:returnClearedCheque", {
         orgId,
@@ -1037,24 +1362,47 @@ export async function runRehearsalCases(ctx) {
         fail(`returning the cleared cheque was refused: ${returned.error.slice(0, 200)}`);
       }
 
-      const entriesAfterReturn = await ownerMust("query", "accountingLedger:listJournalEntries", {
-        orgId,
-        limit: 200,
+      // SYMMETRY, BY IDENTITY. The clearing's event is now REVERSED and names
+      // the event that reversed it; the clearing's journal entry is still there,
+      // still POSTED-then-REVERSED with its lines intact, and names the entry
+      // that reversed it; that entry is a REVERSAL whose lines are the exact
+      // opposite of the clearing's — same accounts, same amounts, sides swapped.
+      // Org-wide counts cannot say any of this: a different balanced entry
+      // anywhere in the ledger would have satisfied "one more entry".
+      const reversedEvent = await eventAndJournal({
+        orgId, ownerMust, sourceType: "collectionPayments", sourceId: paymentId, eventType: "COLLECTION_PAYMENT",
+        expectStatus: "REVERSED",
       });
-      // A reversal ADDS. If the count fell, the original posting was removed
-      // rather than reversed, and the books no longer say the cheque ever
-      // cleared — an additions-only check would have called that "no GL effect".
-      if ((entriesAfterReturn ?? []).length < (entriesAfterClear ?? []).length) {
-        fail(
-          `journal entries went DOWN across the return (${entriesAfterClear.length} → ${entriesAfterReturn.length}) — ` +
-            `the clearing was erased instead of reversed`
-        );
+      if (!reversedEvent.event.reversedByEventId) fail("the clearing's event is REVERSED but names no reversing event");
+      expectEqual(String(reversedEvent.entry._id), String(cleared.entry._id), "the clearing's journal entry is the same entry after the return");
+      expectEqual(reversedEvent.entry.status, "REVERSED", "the clearing entry's status after the return");
+      const originalAfter = reversedEvent.lines
+        .map((l) => `${keyOf.get(String(l.accountId))}|${l.debitMinor}|${l.creditMinor}`)
+        .sort();
+      if (JSON.stringify(originalAfter) !== JSON.stringify(clearingLineShape)) {
+        fail("the clearing entry's lines CHANGED across the return — history was edited, not reversed");
       }
-      if ((entriesAfterReturn ?? []).length === (entriesAfterClear ?? []).length) {
-        fail(
-          "the return produced NO journal entry at all — the cheque bounced and the books still say the money arrived"
-        );
-      }
+      const reversalEntryId = reversedEvent.entry.reversedByJournalEntryId;
+      if (!reversalEntryId) fail("the clearing entry is REVERSED but names no reversing journal entry");
+      const reversal = await ownerMust("query", "accountingLedger:getJournalEntry", { orgId, journalEntryId: reversalEntryId });
+      if (!reversal?.entry) fail("the reversing journal entry could not be read back");
+      expectEqual(reversal.entry.category, "REVERSAL", "the reversing entry's category");
+      expectEqual(reversal.entry.status, "POSTED", "the reversing entry's status");
+      expectEqual(String(reversal.entry.reversalOfJournalEntryId), String(cleared.entry._id), "the reversing entry names the clearing it reverses");
+      expectEqual(String(reversal.entry.accountingEventId), String(reversedEvent.event.reversedByEventId), "the reversing entry belongs to the reversing event");
+      expectExactLines(
+        reversal.lines ?? [], keyOf,
+        [
+          { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", debitMinor: 1200 * scale },
+          { key: "BANK_ACCOUNT", creditMinor: 1200 * scale },
+        ],
+        { currency: denom.currency, decimals: denom.decimals, what: "the cheque-return reversal", customerId }
+      );
+
+      // THE DEBT IS OWED AGAIN — exactly, not approximately.
+      const reopened = await findReceivable({ orgId, ownerMust, receivableId });
+      expectEqual(reopened.outstandingAmount, 1200, "outstanding on the receivable after the cheque bounced");
+      if (reopened.status === "PAID") fail("the receivable still reads PAID after its cheque bounced");
 
       const chequePage = await ownerMust("query", "collections:listCheques", {
         orgId,
@@ -1062,6 +1410,7 @@ export async function runRehearsalCases(ctx) {
       });
       const mine = (chequePage?.page ?? []).find((c) => String(c._id) === String(chequeId));
       if (!mine) fail("the cheque is no longer listed after its return — the history was destroyed, not reversed");
+      expectEqual(mine.status, "RETURNED", "cheque status after the return");
 
       const failedOutbox = await ownerMust("query", "accountingOutbox:listPending", {
         orgId,
@@ -1074,10 +1423,21 @@ export async function runRehearsalCases(ctx) {
 
       return {
         chequeId: String(chequeId),
+        paymentId: String(paymentId),
+        currency: denom.currency,
         chequeStatusAfterReturn: mine.status ?? null,
-        journalEntriesAfterClear: entriesAfterClear.length,
-        journalEntriesAfterReturn: entriesAfterReturn.length,
-        reversalAddedEntries: entriesAfterReturn.length - entriesAfterClear.length,
+        clearing: { entryId: String(cleared.entry._id), statusAfterReturn: reversedEvent.entry.status, linesIntact: true },
+        reversal: {
+          entryId: String(reversalEntryId),
+          category: reversal.entry.category,
+          reversalOf: String(reversal.entry.reversalOfJournalEntryId),
+          lines: (reversal.lines ?? []).map((l) => ({
+            account: keyOf.get(String(l.accountId)) ?? "?",
+            debitMinor: l.debitMinor,
+            creditMinor: l.creditMinor,
+          })),
+        },
+        receivable: { outstandingAfterClear: settled.outstandingAmount, outstandingAfterReturn: reopened.outstandingAmount, statusAfterReturn: reopened.status },
         commandsExercised: ["collections.clearCheque", "collections.returnClearedCheque"],
       };
     }
@@ -1494,4 +1854,198 @@ async function listCollectionPayments({ orgId, ownerMust }) {
     cursor = result.continueCursor;
   }
   return rows;
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * LEDGER RECONCILIATION HELPERS — the owner-proxy's evidence-floor closure
+ * (2026-09-11 09:51). Every one of these reads the product the way its
+ * consumer would, binds a money claim to the JOURNAL LINES that carry it, and
+ * takes its expectations from somewhere other than the figure being judged.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * The product's supported denominations, MIRRORED from `convex/utils/money.ts`
+ * (`CURRENCY_SCALES`). The rehearsal cannot import that TypeScript module from
+ * plain Node on the CI runner, so it carries a copy — and
+ * `accountingRehearsalCases.test.ts` reads the product source and fails if the
+ * two ever disagree, so this is a pinned mirror rather than a second opinion.
+ *
+ * Why it exists at all: RC1 used to derive the minor-unit scale from the amount
+ * it was about to judge (`scale = remaining / 500`, then `remaining == 500 *
+ * scale`), which is circular — the owner-proxy read it and said so. The
+ * denomination now comes from the organization's own currency and this table,
+ * and the amount under test has no say in it.
+ */
+export const CURRENCY_SCALES = {
+  JOD: 3,
+  KWD: 3,
+  BHD: 3,
+  OMR: 3,
+  USD: 2,
+  EUR: 2,
+  GBP: 2,
+  SAR: 2,
+  AED: 2,
+  QAR: 2,
+  EGP: 2,
+  JPY: 0,
+};
+
+/** The organization's denomination, read from the org record — never inferred. */
+async function orgDenomination({ orgId, ownerMust }) {
+  const org = await ownerMust("query", "organizations:get", { orgId });
+  const currency = org?.currency;
+  if (typeof currency !== "string" || currency.length === 0) {
+    fail("the organization carries no currency, so no money figure in this rehearsal has a denomination");
+  }
+  const decimals = CURRENCY_SCALES[currency];
+  if (decimals === undefined) {
+    unproven(
+      `the organization's currency ${currency} is not in the rehearsal's mirror of the product's supported ` +
+        `denominations, so expected minor amounts cannot be derived independently`
+    );
+  }
+  return { currency, decimals, minorPerMajor: 10 ** decimals };
+}
+
+/** account id → system key, and system key → account id, from the org's real chart. */
+async function chartIndex({ orgId, ownerMust }) {
+  const chart = await ownerMust("query", "chartOfAccounts:list", { orgId });
+  const keyOf = new Map();
+  const accountOf = new Map();
+  for (const a of chart ?? []) {
+    keyOf.set(String(a._id), a.systemKey ?? a.code ?? "?");
+    if (a.systemKey && !accountOf.has(a.systemKey)) accountOf.set(a.systemKey, a._id);
+  }
+  return { keyOf, accountOf };
+}
+
+/**
+ * The ONE accounting event for a source and type, and the journal entry it
+ * points at. "One economic occurrence" is asserted here, on the event, because
+ * a duplicate event is the shape every row-level check is blind to.
+ */
+async function eventAndJournal({ orgId, ownerMust, sourceType, sourceId, eventType, expectStatus = "POSTED", pick }) {
+  // `pick` selects by payload when the source id is a composed string the
+  // product formats internally (a receipt application); otherwise the event is
+  // addressed by its source, the way the ledger indexes it.
+  const events = await ownerMust(
+    "query",
+    "accountingLedger:listAccountingEvents",
+    pick ? { orgId, limit: 200 } : { orgId, sourceType, sourceId: String(sourceId), limit: 200 }
+  );
+  const matching = (events ?? []).filter((e) => e.eventType === eventType && (!pick || pick(e)));
+  expectEqual(matching.length, 1, `${eventType} events for ${sourceType} ${sourceId} (one economic occurrence)`);
+  const event = matching[0];
+  if (pick) sourceId = event.sourceId;
+  expectEqual(event.status, expectStatus, `status of the ${eventType} event for ${sourceType} ${sourceId}`);
+  if (!event.journalEntryId) {
+    fail(`the ${eventType} event for ${sourceType} ${sourceId} points at NO journal entry — the books were not reached`);
+  }
+  const detail = await ownerMust("query", "accountingLedger:getJournalEntry", {
+    orgId,
+    journalEntryId: event.journalEntryId,
+  });
+  if (!detail?.entry) fail(`journal entry ${event.journalEntryId} for ${eventType} could not be read back`);
+  // The binding runs BOTH ways: the entry must name the same source the event
+  // does, and the same event. An entry found through an id is not evidence
+  // until it says, itself, what it is for.
+  expectEqual(String(detail.entry.accountingEventId), String(event._id), "the journal entry's accountingEventId");
+  expectEqual(detail.entry.sourceType, sourceType, "the journal entry's sourceType");
+  expectEqual(String(detail.entry.sourceId), String(sourceId), "the journal entry's sourceId");
+  return { event, entry: detail.entry, lines: detail.lines ?? [] };
+}
+
+/**
+ * Exact lines: the multiset of (system key, debit, credit) must equal the
+ * expectation — no missing line, no extra line, no amount off by a minor unit
+ * — and every line must be denominated in the organization's currency at its
+ * scale. A balanced entry on the wrong accounts, or the right accounts in the
+ * wrong denomination, fails here; per-entry balance (B2) cannot see either.
+ */
+function expectExactLines(lines, keyOf, expected, { currency, decimals, what, customerId }) {
+  const shape = (key, debit, credit) => `${key} Dr ${debit} Cr ${credit}`;
+  const actual = lines.map((l) => shape(keyOf.get(String(l.accountId)) ?? "?", l.debitMinor ?? 0, l.creditMinor ?? 0)).sort();
+  const wanted = expected.map((e) => shape(e.key, e.debitMinor ?? 0, e.creditMinor ?? 0)).sort();
+  if (JSON.stringify(actual) !== JSON.stringify(wanted)) {
+    fail(`${what}: journal lines are not exactly the expected posting.\n  expected ${JSON.stringify(wanted)}\n  actual   ${JSON.stringify(actual)}`);
+  }
+  for (const l of lines) {
+    expectEqual(l.currency, currency, `${what}: currency on a journal line`);
+    expectEqual(l.scale, decimals, `${what}: minor-unit scale on a journal line`);
+    if (customerId !== undefined) {
+      expectEqual(String(l.customerId), String(customerId), `${what}: customer dimension on a journal line`);
+    }
+  }
+}
+
+/** A customer's net position on one control account, from the GL itself. */
+async function customerNetOnAccount({ orgId, ownerMust, accountId, customerId }) {
+  const activity = await ownerMust("query", "accountingLedger:getAccountActivity", {
+    orgId,
+    accountId,
+    limit: 500,
+  });
+  if (!activity?.account) fail(`account ${accountId} could not be read back for its activity`);
+  const mine = (activity.lines ?? []).filter((l) => String(l.customerId) === String(customerId));
+  const debit = mine.reduce((s, l) => s + (l.debitMinor ?? 0), 0);
+  const credit = mine.reduce((s, l) => s + (l.creditMinor ?? 0), 0);
+  return { debit, credit, lines: mine.length, normalBalance: activity.account.normalBalance };
+}
+
+/** Pages the receivable list to find ONE receivable by id. */
+async function findReceivable({ orgId, ownerMust, receivableId }) {
+  let cursor = null;
+  for (let page = 0; page < 20; page++) {
+    const result = await ownerMust("query", "collections:listReceivables", {
+      orgId,
+      paginationOpts: { numItems: 100, cursor },
+    });
+    const hit = (result?.page ?? []).find((r) => String(r._id) === String(receivableId));
+    if (hit) return hit;
+    if (result?.isDone || !result?.continueCursor) break;
+    cursor = result.continueCursor;
+  }
+  fail(`receivable ${receivableId} is not listed at all`);
+}
+
+/** A fresh STOCK vehicle for cases that need a car nobody else is committed to. */
+async function makeVehicle({ orgId, ownerMust, label }) {
+  const stamp = Date.now().toString(36);
+  const vin = `RHS${label}${stamp}`.replace(/[ioq]/gi, "z").toUpperCase().padEnd(17, "0").slice(0, 17);
+  return ownerMust("mutation", "vehicles:create", {
+    orgId,
+    vin,
+    make: "Toyota",
+    model: `Camry-${label}`,
+    year: 2022,
+    mileage: 800,
+    color: "Blue",
+    fuelType: "Gasoline",
+    transmission: "Automatic",
+    sellingPrice: 22000,
+    sourceType: "STOCK",
+    status: "AVAILABLE",
+    purchasePrice: 15000,
+    purchasePaymentMethod: "CASH",
+    idempotencyKey: `rehearsal-${label}-vehicle-${stamp}-${uuid()}`,
+  });
+}
+
+/**
+ * The retry contract, asserted the same way for every command: the replay is
+ * ACCEPTED (a refused retry leaves the operator retrying with fresh content)
+ * and returns the ORIGINAL identity (a fresh one is the double-spend).
+ */
+async function replayMustReturnSame({ call, must, fnPath, args, what }) {
+  const first = await must("mutation", fnPath, args);
+  const replay = await call("mutation", fnPath, args);
+  if (!replay.ok) {
+    fail(`replaying ${what} with the SAME identity was refused (${String(replay.error).slice(0, 200)}) — a refused retry is not a safe retry`);
+  }
+  const norm = (v) => JSON.stringify(Array.isArray(v) ? v.map(String).sort() : String(v));
+  if (norm(replay.value) !== norm(first)) {
+    fail(`replaying ${what} returned a DIFFERENT identity (${norm(replay.value)} vs ${norm(first)}) — the retry acted twice`);
+  }
+  return first;
 }
