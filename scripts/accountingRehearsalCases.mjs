@@ -1891,13 +1891,23 @@ export const CURRENCY_SCALES = {
   JPY: 0,
 };
 
-/** The organization's denomination, read from the org record — never inferred. */
+/**
+ * The product's own default when an organization has never set a currency —
+ * `getOrgCurrency` in `convex/accounting/workflowHooks.ts` returns
+ * `settings?.currency ?? "JOD"`. Mirrored and pinned by the same test as the
+ * scale table. The first cloud run of this closure failed all four money cases
+ * on "the organization carries no currency": the runner read the
+ * `organizations` row, which has no such field, while the product resolves
+ * the denomination from `orgSettings` with this default. The org/currency
+ * contract is the product's resolver, not a field I assumed.
+ */
+export const DEFAULT_ORG_CURRENCY = "JOD";
+
+/** The organization's denomination, resolved the way the product resolves it. */
 async function orgDenomination({ orgId, ownerMust }) {
-  const org = await ownerMust("query", "organizations:get", { orgId });
-  const currency = org?.currency;
-  if (typeof currency !== "string" || currency.length === 0) {
-    fail("the organization carries no currency, so no money figure in this rehearsal has a denomination");
-  }
+  const settings = await ownerMust("query", "orgSettings:get", { orgId });
+  const explicit = typeof settings?.currency === "string" && settings.currency.length > 0 ? settings.currency : null;
+  const currency = explicit ?? DEFAULT_ORG_CURRENCY;
   const decimals = CURRENCY_SCALES[currency];
   if (decimals === undefined) {
     unproven(
@@ -1905,7 +1915,7 @@ async function orgDenomination({ orgId, ownerMust }) {
         `denominations, so expected minor amounts cannot be derived independently`
     );
   }
-  return { currency, decimals, minorPerMajor: 10 ** decimals };
+  return { currency, decimals, minorPerMajor: 10 ** decimals, source: explicit ? "orgSettings.currency" : "product default" };
 }
 
 /** account id → system key, and system key → account id, from the org's real chart. */

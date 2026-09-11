@@ -18,7 +18,7 @@
 import { describe, expect, test } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { CURRENCY_SCALES, assertBothAttemptsExecuted, runRehearsalCases } from "./accountingRehearsalCases.mjs";
+import { CURRENCY_SCALES, DEFAULT_ORG_CURRENCY, assertBothAttemptsExecuted, runRehearsalCases } from "./accountingRehearsalCases.mjs";
 
 type Deposit = {
   _id: string;
@@ -93,6 +93,8 @@ type Defects = {
   // ── the owner-proxy's evidence-floor closure (2026-09-11): the false-pass shapes it named ──
   /** The org's currency is one the product does not denominate — expectations cannot be derived. */
   orgCurrencyUnknown?: boolean;
+  /** No orgSettings row exists at all — the shape of a FRESH organization on the cloud. */
+  noOrgSettingsRow?: boolean;
   /** Journal lines are written at a different minor-unit scale than the org's currency. */
   linesAtWrongScale?: boolean;
   /** The refund credits the BANK instead of cash — balanced, wrong account. */
@@ -448,8 +450,10 @@ function makeBackend(defects: Defects = {}) {
     args: Record<string, any>
   ) => {
     switch (fnPath) {
-      case "organizations:get":
-        return { ok: true as const, value: { _id: "org_1", currency: ORG_CURRENCY } };
+      case "orgSettings:get":
+        // The product resolves the denomination from orgSettings, defaulting to
+        // JOD when no row exists; the fake exposes the explicit form.
+        return { ok: true as const, value: defects.noOrgSettingsRow ? null : { orgId: "org_1", currency: ORG_CURRENCY } };
       case "chartOfAccounts:initialize":
         return { ok: true as const, value: null };
       case "chartOfAccounts:list":
@@ -1323,6 +1327,20 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
     for (const m of block[1].matchAll(/([A-Z]{3}):\s*(\d+)/g)) product[m[1]] = Number(m[2]);
     expect(Object.keys(product).length).toBeGreaterThan(5);
     expect(CURRENCY_SCALES).toEqual(product);
+    // and the default the product applies when an org never chose a currency
+    const hooks = fs.readFileSync(path.join(__dirname, "..", "convex", "accounting", "workflowHooks.ts"), "utf8");
+    const def = hooks.match(/settings\?\.currency \?\? "([A-Z]{3})"/);
+    if (!def) throw new Error("getOrgCurrency default not found in workflowHooks.ts");
+    expect(DEFAULT_ORG_CURRENCY).toBe(def[1]);
+  });
+
+  test("a FRESH org with no settings row resolves to the product default and every money case still passes", async () => {
+    // The shape the cloud actually presents: the first run of this closure
+    // failed all four money cases because the runner read a field the org
+    // record does not carry. The product default is the contract.
+    const results = await runAgainst({ noOrgSettingsRow: true });
+    for (const id of ["B1", "RC1", "RV1", "RT2"]) expect(statusOf(results, id)).toBe("PASS");
+    expect((results.find((r) => r.id === "B1")?.detail as any)?.journal?.currency).toBe("JOD");
   });
 
   test("an org whose currency the product does not denominate makes the money cases UNPROVEN, not PASS", async () => {
