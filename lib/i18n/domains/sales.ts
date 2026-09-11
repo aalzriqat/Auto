@@ -211,6 +211,35 @@ const dealRailMessages = defineBilingualMessages({
   /** A fact the record does not carry; never rendered as a zero. */
   FactUnavailable: ["Not recorded", "غير مسجّل"],
 
+  /** The Deals list — one entry per deal, the needs-action queue first. */
+  DealsTitle: ["Deals", "الصفقات"],
+  NewDeal: ["New deal", "صفقة جديدة"],
+  DealsNeedsAction: ["Needs action", "تحتاج إجراءً"],
+  DealsWaitingOnOthers: ["Waiting on others", "بانتظار أطراف أخرى"],
+  DealsAll: ["All deals", "كل الصفقات"],
+  DealKindCash: ["Cash", "نقدي"],
+  DealKindFinanced: ["Financed", "مموَّل"],
+  SearchDeals: ["Search deals by customer, vehicle, financier or owner", "ابحث في الصفقات بالعميل أو السيارة أو جهة التمويل أو المسؤول"],
+  LoadingDeals: ["Loading deals…", "جارٍ تحميل الصفقات…"],
+  NoDealsFound: ["No deals match these filters.", "لا توجد صفقات مطابقة لهذه التصفية."],
+  DealsQueueEmpty: ["Nothing is waiting on the dealership right now.", "لا شيء بانتظار المعرض حاليًا."],
+  DealsReasonColumn: ["Waiting on", "بانتظار"],
+  DealsCustomerVehicleColumn: ["Customer · vehicle", "العميل · السيارة"],
+  DealsTypeColumn: ["Type · financier", "النوع · جهة التمويل"],
+  DealsSinceColumn: ["Since", "منذ"],
+  OpenDeal: ["Open deal", "فتح الصفقة"],
+  DealsShownOf: ["shown of", "معروضة من"],
+  DealsLoadedMoreAvailable: ["loaded — more can be loaded; counts are of loaded rows", "محمّلة — يمكن تحميل المزيد؛ الأعداد للصفوف المحمّلة فقط"],
+  DealsLoadedAll: ["loaded — that is every deal", "محمّلة — وهذه كل الصفقات"],
+  ReasonDepositPending: ["Held deposit to resolve", "عربون محتجز بحاجة لحسم"],
+  ReasonDocsPending: ["Documents to complete", "مستندات ناقصة"],
+  ReasonAwaitingDecision: ["Financier decision", "قرار جهة التمويل"],
+  ReasonReadyForHandover: ["Handover and close", "التسليم والإغلاق"],
+  ReasonAwaitingReceipt: ["Financier payment to the dealership", "دفعة جهة التمويل للمعرض"],
+  ReasonCashPending: ["Cash sale to complete", "بيع نقدي لإتمامه"],
+  SaleStatusPending: ["In progress", "قيد الإنجاز"],
+  SaleStatusCompleted: ["Completed", "مكتملة"],
+
   /** رسوم ومصاريف تسليم السيارة — the handover-cost section on the Deal. */
   HandoverCostsHeading: ["Vehicle handover fees and costs", "رسوم ومصاريف تسليم السيارة"],
   HandoverCostsNote: [

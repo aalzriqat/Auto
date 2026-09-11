@@ -46,7 +46,9 @@ export const mainNavigation: NavItem[] = [
   { name: "Customers", href: "/customers", icon: Users, permission: "view:customers" },
   { name: "Leads", href: "/leads", icon: Target, permission: "view:leads" },
   { name: "SocialInbox", href: "/social-inbox", icon: MessageCircle, permission: "view:leads" },
-  { name: "FinanceApplications", href: "/applications", icon: ClipboardList, permission: "view:sales" },
+  // The Deals list is the one entry into every deal, cash or financed; the
+  // legacy `/applications` list stays reachable by URL (SCRUM-215).
+  { name: "DealsTitle", href: "/deals", icon: ClipboardList, permission: "view:sales" },
   { name: "Sourcing", href: "/sourcing", icon: Truck, permission: "view:finance" },
   { name: "Sales", href: "/sales", icon: BadgeDollarSign, permission: "view:sales" },
   { name: "Commissions", href: "/commissions", icon: TrendingUp, permission: "view:commissions" },
