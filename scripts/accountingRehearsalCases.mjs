@@ -682,7 +682,8 @@ export async function runRehearsalCases(ctx) {
         unproven("no OPEN period existed to close, so the closed-period behaviour was never exercised");
       }
 
-      const beforeEntries = await ownerMust("query", "accountingLedger:listJournalEntries", { orgId, limit: 200 });
+      // The fixture is built while the period is still OPEN, on purpose: taking
+      // a deposit and allocating it are ordinary trading and they post normally.
       const fx = await makePartiallyCommittedDeposit({ orgId, ownerMust, label: "p1" });
 
       // Close through the real mutation. If the product refuses — a close
@@ -697,6 +698,19 @@ export async function runRehearsalCases(ctx) {
       if (!closed.ok) {
         unproven(`the period could not be closed through the supported mutation: ${closed.error.slice(0, 200)}`);
       }
+
+      // ⚠️ THE BASELINE IS TAKEN HERE, AFTER THE CLOSE — and the first cloud run
+      // of this case failed because it was taken before the fixture instead.
+      // Creating the deposit and allocating it posted three journal entries
+      // while the period was still open, and those landed inside the measured
+      // window, so the case reported "3 journals written while no period is
+      // OPEN" about entries the product was entirely right to write.
+      //
+      // That is a false accusation of a financial defect, which is worse than a
+      // missed one: it burns a real investigation and, repeated, it teaches
+      // everyone to discount the case. The window has to contain the release
+      // and nothing else.
+      const beforeEntries = await ownerMust("query", "accountingLedger:listJournalEntries", { orgId, limit: 200 });
 
       const release = await resolverCall("mutation", "deposits:release", {
         orgId,

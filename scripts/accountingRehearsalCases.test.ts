@@ -210,6 +210,19 @@ function makeBackend(defects: Defects = {}) {
         return { ok: true as const, value: id("quote") };
       case "deposits:create": {
         const depositId = id("dep");
+        // Taking a deposit POSTS. Modelling that is not decoration: P1's first
+        // cloud run failed because it measured its journal window from before
+        // the fixture, so these ordinary open-period entries were counted as
+        // postings made while the books were shut. The fake did not post on
+        // create, so nothing here could reproduce it. It does now.
+        if (periodStatus === "OPEN") {
+          const receiptEntry = id("je");
+          journalEntries.push({ _id: receiptEntry });
+          journalLines.set(receiptEntry, [
+            { debitMinor: 5_000_00, creditMinor: 0 },
+            { debitMinor: 0, creditMinor: 5_000_00 },
+          ]);
+        }
         deposits.set(depositId, {
           _id: depositId,
           releasedAmountMinor: 0,
