@@ -116,6 +116,96 @@ async function ensureFinanceCompanyReceivable(
   });
 }
 
+/**
+ * The ONE figure a finance-company receipt may settle, proven from the deal's
+ * own records before anything is written (SCRUM-241).
+ *
+ * Three records describe what the company owes on a finalized deal: the frozen
+ * recognition figure on the application, the canonical receivable the
+ * finalization opened, and what the caller says arrived. They are read together
+ * and must agree — with each other, on the counterparty, and on the fact that
+ * nothing of the debt has been settled yet — or the receipt is refused with no
+ * cheque, payment, allocation or posting written. Contradiction is never
+ * reconciled by taking the smaller number.
+ *
+ * The denomination comes from the receivable itself. A debt recorded in JOD is
+ * settled in JOD; the organisation's current default currency was consulted
+ * when the debt was recorded and is not consulted again, so a later change to
+ * that setting neither relabels the integer nor decides which currency this
+ * money is in. This is same-currency settlement of an existing obligation, not
+ * currency conversion.
+ */
+async function proveFinanceReceiptAuthority(
+  ctx: MutationCtx,
+  args: {
+    app: Doc<"financeApplications">;
+    quote: Doc<"quotes"> | null;
+    callerAmountMinor: number;
+  }
+): Promise<{ receivable: Doc<"receivableDocuments">; receiptMinor: number; currency: string }> {
+  const { app, quote } = args;
+  const receivable = await ctx.db
+    .query("receivableDocuments")
+    .withIndex("by_org_source", (q) =>
+      q.eq("orgId", app.orgId).eq("sourceType", FINANCE_APP_RECEIVABLE_SOURCE).eq("sourceId", app._id)
+    )
+    .unique();
+  if (!receivable) {
+    throw new ConvexError(
+      "No finance-company receivable is recorded for this deal, so there is nothing for this payment to settle. The deal must be finalized, with its receivable opened, before the company's payment can be received."
+    );
+  }
+  if (receivable.payerType !== "FINANCE_COMPANY" || receivable.financeCompanyId !== app.companyId) {
+    throw new ConvexError(
+      "The receivable recorded for this deal is not owed by this deal's financing company, so this payment cannot settle it."
+    );
+  }
+  assertSupportedDenomination(receivable.currency, "receiving this disbursement");
+
+  // What the company actually owed when the sale was recognised, frozen at
+  // finalization. The customer's financing principal is what THEY borrow; it
+  // is not what the company transfers, and the two differ by every deposit the
+  // dealership holds and every cost the company withholds. Deals finalized
+  // before the plan existed carry only the quote's financed amount, in the
+  // currency their receivable was opened in.
+  let recognisedMinor: number;
+  if (app.financedSaleNetReceivableMinor !== undefined) {
+    recognisedMinor = app.financedSaleNetReceivableMinor;
+  } else if (quote?.totalFinancedAmount !== undefined) {
+    recognisedMinor = toMinorUnits(quote.totalFinancedAmount, receivable.currency);
+  } else {
+    throw new ConvexError(
+      "This deal carries no recorded figure for what the financing company owes the dealership, so a payment from the company cannot be checked against it and is not received."
+    );
+  }
+  if (args.callerAmountMinor !== recognisedMinor) {
+    throw new ConvexError(
+      `The amount received (${args.callerAmountMinor}) is not what this financing company owes the dealership on this deal (${recognisedMinor}).`
+    );
+  }
+  if (receivable.originalAmountMinor !== recognisedMinor) {
+    throw new ConvexError(
+      `The receivable recorded for this deal (${receivable.originalAmountMinor}) does not match what the sale recognised as owed by the financing company (${recognisedMinor}). The deal's records disagree with each other and must be corrected before the company's payment is received.`
+    );
+  }
+  if (receivable.status !== "OPEN") {
+    throw new ConvexError(
+      `The finance-company receivable for this deal is ${receivable.status}, not open, so this payment cannot settle it.`
+    );
+  }
+  // This mutation records the single full receipt that settles the deal. A
+  // receivable already carrying an allocation is not that deal any more, and
+  // applying "whatever is left" to it would be the min() reconciliation this
+  // guard exists to refuse.
+  const activeAllocations = await getActiveReceivableAllocations(ctx, receivable._id);
+  if (activeAllocations.length > 0) {
+    throw new ConvexError(
+      "Part of this deal's finance-company receivable has already been settled, so it cannot be received as a single full payment. Review the existing allocation before recording this receipt."
+    );
+  }
+  return { receivable, receiptMinor: recognisedMinor, currency: receivable.currency };
+}
+
 function receivableStatusForBalance(
   originalAmountMinor: number,
   allocatedMinor: number
@@ -3329,6 +3419,24 @@ export const finalizeDeal = mutation({
         // just a longer road to the same wrong figure.
         assertSupportedDenomination(app.economicsCurrency, "finalizing this deal");
 
+        // The plan and the receivable take the deal's pinned economicsCurrency;
+        // the sale's own journal posts in the organisation's CURRENT currency
+        // (completeSale). Pinning the economics does not lock the org setting —
+        // nothing financial exists yet — so the two can have drifted apart by
+        // now, and finalizing would then recognise the plan's integers under
+        // the wrong label and open a debt the receipt path settles in another
+        // currency. Refused before the sale exists (SCRUM-241): nothing is
+        // converted, relabelled or clipped. Restoring the setting makes the
+        // same deal finalize.
+        if (app.economicsCurrency !== undefined) {
+          const orgCurrencyNow = await getOrgCurrency(ctx, args.orgId);
+          if (app.economicsCurrency !== orgCurrencyNow) {
+            throw new ConvexError(
+              `This deal's figures were recorded in ${app.economicsCurrency}, but the organization's currency is now ${orgCurrencyNow}. A deal is finalized in the currency its figures were recorded in — restore the organization's currency to ${app.economicsCurrency} before finalizing it.`
+            );
+          }
+        }
+
         // On a consigned car financed by an external company, the route decides
         // opposite balance sheets from the same sale — a payable to the supplier
         // for his whole entitlement, or a claim on him for the margin. An absent
@@ -3773,28 +3881,15 @@ export const confirmDisbursement = mutation({
         }
 
         const quote = await ctx.db.get(app.quoteId);
-        // What the company actually owed when the sale was recognised, frozen at
-        // finalization. The customer's financing principal is what THEY borrow;
-        // it is not what the company transfers, and the two differ by every
-        // deposit the dealership holds and every cost the company withholds. A
-        // receipt of the correct amount was being refused for not matching the
-        // principal, and a receipt short by exactly the withheld fees was being
-        // accepted whenever the two happened to coincide.
-        if (app.financedSaleNetReceivableMinor !== undefined) {
-          if (args.disbursedAmountMinor !== app.financedSaleNetReceivableMinor) {
-            throw new ConvexError(
-              `The amount received (${args.disbursedAmountMinor}) is not what this financing company owes the dealership on this deal (${app.financedSaleNetReceivableMinor}).`
-            );
-          }
-        } else if (quote?.totalFinancedAmount !== undefined) {
-          const currency = await getOrgCurrency(ctx, args.orgId);
-          const expectedAmountMinor = toMinorUnits(quote.totalFinancedAmount, currency);
-          if (args.disbursedAmountMinor !== expectedAmountMinor) {
-            throw new ConvexError(
-              `Disbursed amount (${args.disbursedAmountMinor}) does not match the financed amount on the deal (${expectedAmountMinor}).`
-            );
-          }
-        }
+        // Everything below settles exactly this figure in exactly this
+        // currency, both proven from the deal's own records before the first
+        // write. The caller's amount is checked against them; it never becomes
+        // the amount, and the organisation's current currency is not consulted.
+        const { receivable, receiptMinor, currency } = await proveFinanceReceiptAuthority(ctx, {
+          app,
+          quote,
+          callerAmountMinor: args.disbursedAmountMinor,
+        });
 
         // registerExpectedPayment always opens a HELD postDatedCheques row when
         // the registered method is CHEQUE — link this confirmation to it so the
@@ -3824,7 +3919,7 @@ export const confirmDisbursement = mutation({
         const now = Date.now();
         await ctx.db.patch(args.applicationId, {
           disbursedAt: now,
-          disbursedAmountMinor: args.disbursedAmountMinor,
+          disbursedAmountMinor: receiptMinor,
           disbursementIdempotencyKey: args.idempotencyKey,
           updatedAt: now,
           // This mutation still accepts a single full receipt only, so
@@ -3850,32 +3945,22 @@ export const confirmDisbursement = mutation({
         // Post the actual receipt of funds: DR Bank / CR Accounts Receivable —
         // Finance Companies. Without this the finance-company receivable opened
         // at finalizeDeal stays open forever even after the money arrives.
-        const currency = await getOrgCurrency(ctx, args.orgId);
         await hookFinanceCashReceived(ctx, {
           orgId: args.orgId,
           applicationId: args.applicationId,
           financeCompanyId: app.companyId,
           customerId: app.customerId,
-          amountMinor: args.disbursedAmountMinor,
+          amountMinor: receiptMinor,
           currency,
           actorId: user._id,
           occurredAt: now,
         });
 
         // Record the money in the canonical subledger and settle the
-        // finance-company receivable opened at finalizeDeal. Deals finalized
-        // before that receivable existed get one created here so the
-        // settlement always has a document to allocate against.
-        const receivableDocumentId = await ensureFinanceCompanyReceivable(ctx, {
-          orgId: args.orgId,
-          applicationId: args.applicationId,
-          financeCompanyId: app.companyId,
-          customerId: app.customerId,
-          amountMinor: args.disbursedAmountMinor,
-          currency,
-          actorId: user._id,
-          now,
-        });
+        // finance-company receivable the finalization opened — the one just
+        // proven, never one created here to give the settlement something to
+        // allocate against.
+        const receivableDocumentId = receivable._id;
         // Reflects whatever method was registered before finalization
         // (registerExpectedPayment) instead of assuming bank transfer.
         const disbursementMethod =
@@ -3888,7 +3973,7 @@ export const confirmDisbursement = mutation({
           payerType: "FINANCE_COMPANY",
           financeCompanyId: app.companyId,
           method: disbursementMethod,
-          amountMinor: args.disbursedAmountMinor,
+          amountMinor: receiptMinor,
           currency,
           idempotencyKey: `finance_disbursement_${args.applicationId}`,
           actorId: user._id,
@@ -3896,31 +3981,22 @@ export const confirmDisbursement = mutation({
           externalReference: `Finance disbursement for application ${args.applicationId}`,
           receivedAt: now,
         });
-        const receivableDoc = await ctx.db.get(receivableDocumentId);
-        if (receivableDoc) {
-          const activeAllocations = await ctx.db
-            .query("paymentAllocations")
-            .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", receivableDocumentId))
-            .filter((q) => q.eq(q.field("status"), "ACTIVE"))
-            .collect();
-          const allocatedMinor = activeAllocations.reduce((sum, a) => sum + a.amountMinor, 0);
-          const outstandingMinor = Math.max(0, receivableDoc.originalAmountMinor - allocatedMinor);
-          const allocationMinor = Math.min(outstandingMinor, args.disbursedAmountMinor);
-          if (allocationMinor > 0) {
-            await allocatePaymentToReceivable(ctx, {
-              orgId: args.orgId,
-              paymentId: canonicalPaymentId,
-              receivableDocumentId,
-              amountMinor: allocationMinor,
-              actorId: user._id,
-            });
-          }
-        }
+        // The full proved figure, not min(outstanding, caller): the authority
+        // check above already established that the receivable is open, whole
+        // and equal to it, so anything else here would be a different amount
+        // than the payment and the posting just recorded.
+        await allocatePaymentToReceivable(ctx, {
+          orgId: args.orgId,
+          paymentId: canonicalPaymentId,
+          receivableDocumentId,
+          amountMinor: receiptMinor,
+          actorId: user._id,
+        });
 
         const actorName = await getActorName(ctx);
         await notifyManagers(ctx, args.orgId, "application.created" as const, {
           actorName,
-          amount: String(args.disbursedAmountMinor),
+          amount: String(receiptMinor),
         }, { link: `/${args.orgId}/accounting` });
       }
     );

@@ -594,6 +594,18 @@ describe("Phase 9 — finance disbursement receipt", () => {
         createdAt: Date.now(), updatedAt: Date.now(),
       })
     );
+    // The receivable finalizeDeal opens for the company's remittance. A CLOSED
+    // application inserted without one is a pre-receivable legacy shape that
+    // confirmDisbursement no longer completes on the company's behalf: the
+    // receipt settles the recorded receivable or is refused (SCRUM-241).
+    await t.run((ctx) =>
+      ctx.db.insert("receivableDocuments", {
+        orgId, documentType: "INVOICE", documentNumber: "RCV-GL1", payerType: "FINANCE_COMPANY",
+        customerId, financeCompanyId: financeCompanyId, sourceType: "finance_application", sourceId: appId,
+        originalAmountMinor: 10_000_000, currency: "JOD", scale: 3, issueDate: Date.now(), dueDate: Date.now(),
+        status: "OPEN", createdAt: Date.now(), createdBy: userId,
+      })
+    );
 
     await asUser.mutation(api.applications.confirmDisbursement, {
       orgId, applicationId: appId, disbursedAmountMinor: 10_000_000,

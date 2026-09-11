@@ -133,10 +133,37 @@ describe("protected source content pins", () => {
        *
        * Both constants were recomputed FROM THE FILE, with this test's own
        * normalization, not copied from a report or a Jira comment.
+       *
+       * -- RENEWAL 2026-09-11 - SCRUM-241 (in the SCRUM-313 RC lane) --------
+       *
+       * Previous reviewed postimage, superseded by this entry:
+       *
+       *   bytes:  215115
+       *   sha256: 65cfe8d241f2e745e5b8e93cd2493d499dd49fb822e091c9d90ef1c15bd5501f
+       *
+       * Renewed because SCRUM-241's canonical correction (owner-proxy c19230,
+       * SCRUM-313 c19303) changes what `confirmDisbursement` settles and what
+       * `finalizeDeal` accepts. Three hunks: a new `proveFinanceReceiptAuthority`
+       * helper that loads the deal's finance-company receivable by
+       * `by_org_source` and refuses on missing, foreign, non-OPEN, already
+       * allocated or contradictory records BEFORE any write; `finalizeDeal`
+       * refusing a pinned `economicsCurrency` that no longer equals the
+       * organisation's currency; and `confirmDisbursement` settling the proved
+       * figure in the receivable's own currency instead of the caller's amount
+       * in the organisation's current currency, with the `min(outstanding,
+       * caller)` allocation and the create-a-receivable-here fallback removed.
+       * The new `ctx.db` access is one indexed `.unique()` read in the helper.
+       * Read the three hunks; do not take this note's word for their scope.
+       *
+       * Renewed under the explicit owner-proxy authorization above, with the
+       * same instruction: the pin is not weakened, bypassed, deleted,
+       * generalized or made vacuous. Same exact byte + sha256 pin, same negative
+       * control, same normalization and bare-CR rejection. Both constants were
+       * recomputed FROM THE FILE with this test's own normalization.
        */
       file: "convex/applications.ts",
-      bytes: 215115,
-      sha256: "65cfe8d241f2e745e5b8e93cd2493d499dd49fb822e091c9d90ef1c15bd5501f",
+      bytes: 219221,
+      sha256: "8762cdd63a98cfff9a4558cd77615db95108ff073ea8509bd319c1cc49772dd8",
     },
     {
       /**
