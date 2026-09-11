@@ -240,8 +240,14 @@ export async function mintConvexToken({ userId, secretKey }, fetchImpl = fetch) 
         `request URL from it rather than trusting a remote response to be well-formed.`
     );
   }
+  // `encodeURIComponent` on top of the shape check is not belt-and-braces for
+  // its own sake: the regex says what the value MAY be, the encoder says what it
+  // may MEAN once it is inside a path. A `/` or a `..` that somehow satisfied the
+  // first would still be neutralised by the second, and only the second is a
+  // sanitizer the analyser can see at this line.
+  const sessionSegment = encodeURIComponent(sessionMatch[0]);
   const tokenResponse = await fetchImpl(
-    `https://api.clerk.com/v1/sessions/${sessionMatch[0]}/tokens/convex`,
+    `https://api.clerk.com/v1/sessions/${sessionSegment}/tokens/convex`,
     { method: "POST", headers }
   );
   if (!tokenResponse.ok) {
@@ -309,13 +315,22 @@ export async function fireConcurrentReleases({ convexUrl, attempts, leadMs = 250
       new Promise((resolve) => {
         const child = spawn(
           process.execPath,
-          [
-            path.join(HERE, "rehearsalReleaseWorker.mjs"),
-            convexUrl,
-            String(startAt),
-            JSON.stringify(attempt.args),
-          ],
-          { env: { ...process.env, REHEARSAL_TOKEN: attempt.token }, stdio: ["ignore", "pipe", "pipe"] }
+          [path.join(HERE, "rehearsalReleaseWorker.mjs"), String(startAt), JSON.stringify(attempt.args)],
+          {
+            // The target travels in the ENVIRONMENT, not argv, for the same
+            // reason the token already does: argv is readable from the process
+            // table by anything else on the box, and this child is handed a live
+            // session token aimed at whatever host it is told to use. Keeping
+            // the credential and its destination together also removes the
+            // "faulty CLI argument redirects an authenticated request" shape
+            // outright, rather than validating it after the fact.
+            env: {
+              ...process.env,
+              REHEARSAL_TOKEN: attempt.token,
+              REHEARSAL_CONVEX_URL: convexUrl,
+            },
+            stdio: ["ignore", "pipe", "pipe"],
+          }
         );
         let out = "";
         let err = "";

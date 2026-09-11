@@ -17,9 +17,15 @@
  * The child prints ONE json object and exits. It deliberately does not interpret
  * the result: the parent reads the economic state back and decides.
  *
- * argv: <convexUrl> <startAtEpochMs> <argsJson>   ·   env: REHEARSAL_TOKEN
+ * argv: <startAtEpochMs> <argsJson>   ·   env: REHEARSAL_TOKEN, REHEARSAL_CONVEX_URL
+ *
+ * The destination travels in the environment rather than argv, alongside the
+ * credential it is used with. argv is readable from the process table; a token
+ * and the host it will be sent to are the same secret in two halves, and there
+ * is no reason to put one of them where anything on the machine can read it.
  */
-const [, , convexUrl, startAtRaw, argsJson] = process.argv;
+const [, , startAtRaw, argsJson] = process.argv;
+const convexUrl = process.env.REHEARSAL_CONVEX_URL;
 
 async function run() {
   // ⚠️ VALIDATED INLINE, NOT IN A HELPER, and that is a deliberate concession to
@@ -29,8 +35,11 @@ async function run() {
   // to the analyser and to whoever reads this line next.
   //
   // The concern is real rather than theoretical here. This process attaches a
-  // LIVE SESSION TOKEN to whatever host it is pointed at, so a wrong argument
-  // must produce a refusal, not a credential delivered somewhere unintended.
+  // LIVE SESSION TOKEN to whatever host it is pointed at, so a wrong value —
+  // from the environment, a typo in the caller, or a preview name resolved
+  // against the wrong deployment — must produce a refusal, not a credential
+  // delivered somewhere unintended. Moving the URL out of argv removed one way
+  // to set it wrongly; it did not remove the need to check.
   const targetMatch = /^https:\/\/[a-z0-9-]{1,64}\.convex\.cloud$/.exec(
     typeof convexUrl === "string" ? convexUrl : ""
   );
