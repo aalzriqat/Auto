@@ -1098,10 +1098,11 @@ export async function runRehearsalCases(ctx) {
         sourceType: "SOURCED",
         sourcedFromName: `Rehearsal Supplier ${stamp}`,
         status: "AVAILABLE",
-        // The supplier's ENTITLEMENT — what he is owed for the car. Not a cost
-        // of goods, because these were never the dealership's goods.
-        purchasePrice: 15000,
-        purchasePaymentMethod: "CASH",
+        // The supplier's ENTITLEMENT — what he is owed for the car. It is
+        // `sourceCost`, not `purchasePrice`, and the product refuses the wrong
+        // field by name: these were never the dealership's goods, so there is
+        // no purchase, and the two numbers are kept apart on purpose.
+        sourceCost: 15000,
         idempotencyKey: `rehearsal-sr1-vehicle-${stamp}`,
       });
       const customerId = await ownerMust("mutation", "customers:create", {

@@ -434,11 +434,16 @@ function makeBackend(defects: Defects = {}) {
       case "vehicles:create":
         // Non-probe mode never returns null; the assertion keeps that visible
         // to the type checker instead of widening every caller's result.
+        // The product refuses a SOURCED vehicle without `sourceCost` — and
+        // ignores `purchasePrice` for it. Modelled so the wrong field fails here.
+        if (args.sourceType === "SOURCED" && (args.sourceCost === undefined || args.sourceCost === null)) {
+          return { ok: false as const, error: "Sourced vehicles require a supplier cost (sourceCost)." };
+        }
         const madeVehicle = replayableCreate("veh", args)!;
         if (madeVehicle.ok) {
           vehicles.set(String(madeVehicle.value), {
             sourceType: args.sourceType,
-            purchasePrice: Number(args.purchasePrice ?? 0),
+            purchasePrice: Number(args.sourceType === "SOURCED" ? args.sourceCost : (args.purchasePrice ?? 0)),
           });
         }
         return madeVehicle;
