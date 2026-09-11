@@ -4,7 +4,7 @@ import { Text } from "react-native";
 import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileSale } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { PAGE_SIZE, commissionAmountLabel, commissionStatusLabel, idempotencyKey, useGenericError, PrimaryButton, RecordCard, ModuleList } from "./moduleShared";
+import { PAGE_SIZE, commissionAmountLabel, commissionStatusLabel, useCommandIdentity, useGenericError, PrimaryButton, RecordCard, ModuleList } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 export function CommissionsModule({ orgId }: { orgId: string }) {
@@ -20,6 +20,7 @@ export function CommissionsModule({ orgId }: { orgId: string }) {
     { initialNumItems: PAGE_SIZE }
   );
   const markPaid = useMutation(api.sales.markCommissionPaid);
+  const commandId = useCommandIdentity();
 
   // ModuleList advances pages from FlatList's onEndReached, which never fires
   // when there is nothing to scroll. A page reads a fixed number of sale
@@ -36,8 +37,18 @@ export function CommissionsModule({ orgId }: { orgId: string }) {
   }, [results.length, status, loadMore]);
 
   async function pay(sale: MobileSale) {
+    // Scoped to the SALE, not to the attempt: a lost response followed by a
+    // second tap must be the same commission payment, not a second one.
+    // Retired only on success, so a genuine later payment gets a new identity.
+    const intent = `commission-pay:${String(sale._id)}`;
     try {
-      await markPaid({ orgId, saleId: sale._id, paymentMethod: "CASH", idempotencyKey: idempotencyKey("sales.markCommissionPaid") });
+      await markPaid({
+        orgId,
+        saleId: sale._id,
+        paymentMethod: "CASH",
+        idempotencyKey: commandId.for(intent),
+      });
+      commandId.retire(intent);
     } catch (error) {
       reportError("Mobile commission pay failed", error);
     }

@@ -25,7 +25,7 @@ import { SOCIAL_CONVERSATION_GENERATION } from "./utils/materialization";
  *
  * The hazard that introduces is not a slow query, it is a *stale* one. The
  * grouping key — (platform, customer, kind, postId) — is mutated after insert:
- * `socialInboxBackfill` patches `postId`, and a customer merge repoints
+ * `socialInboxBackfill` patches `postId`, and repointing an event moves its
  * `customerId`. A materialised thread therefore has to handle **re-keying**,
  * not just insert and delete, and a row left behind under the old key is a
  * conversation the inbox shows that no longer exists.
@@ -710,63 +710,6 @@ describe.each(["legacy", "materialized"] as const)(
     }
   });
 
-  test("a real customer merge carries the thread to the survivor", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    // `mergeCustomers` needs its own permission, so this org's role gets it.
-    const orgId = await t.run(async (ctx) =>
-      ctx.db.insert("organizations", { name: "Merge Org", createdAt: Date.now() })
-    );
-    await t.run(async (ctx) =>
-      ctx.db.insert("subscriptions", {
-        orgId, plan: "professional", status: "active",
-        createdAt: Date.now(), updatedAt: Date.now(),
-      })
-    );
-    const userId = await t.run(async (ctx) =>
-      ctx.db.insert("users", { clerkId: "conv_merger", email: "merger@test.com", name: "Merger" })
-    );
-    const roleId = await t.run(async (ctx) =>
-      ctx.db.insert("roles", {
-        orgId, name: "MANAGER",
-        permissions: ["view:leads", "view:customers", "merge:customers"],
-      })
-    );
-    await t.run(async (ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
-    // This org is built by hand rather than through `seedOrg`, so it needs the
-    // readiness record the variant would otherwise have added.
-    if (currentSource === "materialized") await markMaterializationReady(t, orgId);
-    const asMerger = t.withIdentity({ subject: "conv_merger" });
-
-    const survivorId = await makeCustomer(t, orgId, "Survivor", "Customer");
-    const loserId = await makeCustomer(t, orgId, "Loser", "Customer");
-
-    await t.run((ctx) =>
-      ctx.db.insert("facebookEvents", {
-        orgId, externalId: "merge_evt", kind: "dm", senderFacebookId: "fb_loser",
-        customerId: loserId, text: "from the duplicate",
-      })
-    );
-    expect((await actualConversations(asMerger, orgId))[0].customerId).toBe(loserId);
-
-    await asMerger.mutation(api.customers.mergeCustomers, { orgId, survivorId, loserId });
-
-    // `socialConversations` is deliberately absent from
-    // CUSTOMER_REFERENCING_TABLES: its `conversationKey` embeds the customer
-    // id, so a blind `customerId` patch would leave the key naming the loser
-    // and the next message would open a second thread beside the orphan. The
-    // merge repoints the *events*; the trigger rebuilds from those. This is the
-    // test that the exemption is a design decision and not a gap.
-    const after = await actualConversations(asMerger, orgId);
-    expect(after).toHaveLength(1);
-    expect(after[0].customerId).toBe(survivorId);
-
-    const rows = await t.run((ctx) => ctx.db.query("socialConversations").collect());
-    expect(rows).toHaveLength(1);
-    expect(rows[0].customerId).toBe(survivorId);
-    expect(rows[0].conversationKey).toContain(survivorId);
-    expect(rows[0].conversationKey).not.toContain(loserId);
-  });
-
   /**
    * The bulk paths recompute each touched thread ONCE, not once per event.
    *
@@ -793,47 +736,65 @@ describe.each(["legacy", "materialized"] as const)(
    * there is no longer anything for a build-time guard to police.
    *
    * What replaces it is below, and it is stronger because it is behavioural:
-   * `customers.mergeCustomers` and `socialInbox.setConversationVehicle` now
-   * contain ZERO settlement code, and these tests still assert that the
-   * conversations they touch end up correct and recomputed a bounded number of
-   * times. Verified by mutation: emptying the builder's `onSuccess` turns eight
-   * of them red across both reader sources.
+   * `socialInbox.setConversationVehicle` contains ZERO settlement code, and
+   * these tests still assert that the conversations it touches end up correct
+   * and recomputed a bounded number of times. Verified by mutation: emptying
+   * the builder's `onSuccess` turned eight of them red across both reader
+   * sources — measured when `customers.mergeCustomers` was still a second
+   * caller of this builder, before SCRUM-314 removed that feature.
    */
   describe("bulk operations defer the thread recompute", () => {
-    test("merging 200 events in one thread recomputes it a bounded number of times", async () => {
+    test("patching 200 events in one thread recomputes it a bounded number of times", async () => {
       const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-      const { orgId, asUser } = await seedOrg(t, "bulk_merge_1", MANAGER_PERMISSIONS);
-      const survivorId = await makeCustomer(t, orgId, "Survivor", "C");
-      const loserId = await makeCustomer(t, orgId, "Loser", "C");
+      const { orgId, asUser } = await seedOrg(t, "bulk_patch_1", MANAGER_PERMISSIONS);
+      const customerId = await makeCustomer(t, orgId, "Chatty", "C");
+      const vehicleId = await t.run((ctx) =>
+        ctx.db.insert("vehicles", {
+          orgId, vin: "VINBULK200", make: "Kia", model: "Sportage", year: 2023,
+          mileage: 10, color: "Blue", fuelType: "Gas", transmission: "Automatic",
+          sellingPrice: 20000, status: "AVAILABLE", createdAt: Date.now(),
+        })
+      );
 
       await t.run(async (ctx) => {
         for (let i = 0; i < 200; i += 1) {
           await ctx.db.insert("facebookEvents", {
             orgId, externalId: "bulk_" + i, kind: "dm",
-            senderFacebookId: "fb_bulk", customerId: loserId, text: "m" + i,
+            senderFacebookId: "fb_bulk", customerId, text: "m" + i,
           });
         }
       });
 
       resetSocialConversationSyncCount();
-      await asUser.mutation(api.customers.mergeCustomers, { orgId, survivorId, loserId });
+      await asUser.mutation(api.socialInbox.setConversationVehicle, {
+        orgId, customerId, vehicleId,
+      });
       const recomputes = readSocialConversationSyncCount();
 
-      // Two threads are affected — the loser's (emptied) and the survivor's
-      // (filled) — so two recomputes. Before the deferred writer this was 400.
-      expect(recomputes).toBe(2);
+      // One thread is affected — `vehicleId` is not part of the conversation
+      // key, so all 200 patches collapse to a single recompute. Before the
+      // deferred writer this was 400: one per patch, each re-reading the whole
+      // thread.
+      expect(recomputes).toBe(1);
 
       const after = await actualConversations(asUser, orgId);
       expect(after).toHaveLength(1);
-      expect(after[0].customerId).toBe(survivorId);
+      expect(after[0].customerId).toBe(customerId);
       expect(after[0].eventCount).toBe(200);
+      expect(after[0].vehicleCount).toBe(1);
     }, 300000);
 
     test("events spread across four threads recompute four times, not once per event", async () => {
       const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-      const { orgId, asUser } = await seedOrg(t, "bulk_merge_2", MANAGER_PERMISSIONS);
-      const survivorId = await makeCustomer(t, orgId, "Survivor", "C");
-      const loserId = await makeCustomer(t, orgId, "Loser", "C");
+      const { orgId, asUser } = await seedOrg(t, "bulk_patch_2", MANAGER_PERMISSIONS);
+      const customerId = await makeCustomer(t, orgId, "Chatty", "C");
+      const vehicleId = await t.run((ctx) =>
+        ctx.db.insert("vehicles", {
+          orgId, vin: "VINBULK4T", make: "Kia", model: "Sportage", year: 2023,
+          mileage: 10, color: "Blue", fuelType: "Gas", transmission: "Automatic",
+          sellingPrice: 20000, status: "AVAILABLE", createdAt: Date.now(),
+        })
+      );
 
       // 4 threads: an IG DM, an FB DM, and two IG comment threads on different
       // posts — 200 events total.
@@ -841,29 +802,31 @@ describe.each(["legacy", "materialized"] as const)(
         for (let i = 0; i < 50; i += 1) {
           await ctx.db.insert("instagramEvents", {
             orgId, externalId: "ig_dm_" + i, kind: "dm",
-            senderInstagramId: "ig_b", customerId: loserId, text: "a" + i,
+            senderInstagramId: "ig_b", customerId, text: "a" + i,
           });
           await ctx.db.insert("facebookEvents", {
             orgId, externalId: "fb_dm_" + i, kind: "dm",
-            senderFacebookId: "fb_b", customerId: loserId, text: "b" + i,
+            senderFacebookId: "fb_b", customerId, text: "b" + i,
           });
           await ctx.db.insert("instagramEvents", {
             orgId, externalId: "ig_p1_" + i, kind: "comment", postId: "p1",
-            senderInstagramId: "ig_b", customerId: loserId, text: "c" + i,
+            senderInstagramId: "ig_b", customerId, text: "c" + i,
           });
           await ctx.db.insert("instagramEvents", {
             orgId, externalId: "ig_p2_" + i, kind: "comment", postId: "p2",
-            senderInstagramId: "ig_b", customerId: loserId, text: "d" + i,
+            senderInstagramId: "ig_b", customerId, text: "d" + i,
           });
         }
       });
 
       resetSocialConversationSyncCount();
-      await asUser.mutation(api.customers.mergeCustomers, { orgId, survivorId, loserId });
+      await asUser.mutation(api.socialInbox.setConversationVehicle, {
+        orgId, customerId, vehicleId,
+      });
 
-      // 4 loser threads + 4 survivor threads. Proportional to threads, not to
+      // 4 touched threads, one recompute each. Proportional to threads, not to
       // the 200 events — the whole point.
-      expect(readSocialConversationSyncCount()).toBe(8);
+      expect(readSocialConversationSyncCount()).toBe(4);
       expect(await actualConversations(asUser, orgId)).toHaveLength(4);
     }, 300000);
 
@@ -872,23 +835,31 @@ describe.each(["legacy", "materialized"] as const)(
       for (const n of [100, 200, 400]) {
         const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
         const { orgId, asUser } = await seedOrg(t, "bulk_scale_" + n, MANAGER_PERMISSIONS);
-        const survivorId = await makeCustomer(t, orgId, "S", "C");
-        const loserId = await makeCustomer(t, orgId, "L", "C");
+        const customerId = await makeCustomer(t, orgId, "S", "C");
+        const vehicleId = await t.run((ctx) =>
+          ctx.db.insert("vehicles", {
+            orgId, vin: "VINSCALE" + n, make: "Kia", model: "Sportage", year: 2023,
+            mileage: 10, color: "Blue", fuelType: "Gas", transmission: "Automatic",
+            sellingPrice: 20000, status: "AVAILABLE", createdAt: Date.now(),
+          })
+        );
         await t.run(async (ctx) => {
           for (let i = 0; i < n; i += 1) {
             await ctx.db.insert("facebookEvents", {
               orgId, externalId: "s_" + i, kind: "dm",
-              senderFacebookId: "fb_s", customerId: loserId, text: "m" + i,
+              senderFacebookId: "fb_s", customerId, text: "m" + i,
             });
           }
         });
         resetSocialConversationSyncCount();
-        await asUser.mutation(api.customers.mergeCustomers, { orgId, survivorId, loserId });
+        await asUser.mutation(api.socialInbox.setConversationVehicle, {
+          orgId, customerId, vehicleId,
+        });
         counts.push(readSocialConversationSyncCount());
       }
 
-      // Quadratic would give 200 / 400 / 800 here. Constant is the fix.
-      expect(counts).toEqual([2, 2, 2]);
+      // Quadratic would give 100 / 200 / 400 here. Constant is the fix.
+      expect(counts).toEqual([1, 1, 1]);
     }, 600000);
 
     test("linking a vehicle across a customer's whole history recomputes once per thread", async () => {
@@ -929,10 +900,11 @@ describe.each(["legacy", "materialized"] as const)(
       expect(after[0].eventCount).toBe(60);
     }, 300000);
 
-    // Scope, stated honestly: deleting the survivor makes `mergeCustomers`
-    // throw in its survivor lookup (`customers.ts`, before the reassignment
-    // loop), so what this proves is that a merge which fails *before* patching
-    // leaves both the events and the materialised rows untouched.
+    // Scope, stated honestly: a vehicle belonging to another org makes
+    // `setConversationVehicle` throw in its vehicle lookup (`socialInbox.ts`,
+    // before the repointing loop), so what this proves is that a bulk mutation
+    // which fails *before* patching leaves both the events and the materialised
+    // rows untouched.
     //
     // The window it does NOT reach is a throw after the event patches and
     // during `syncDeferredSocialThreads` — the one the deferred writer newly
@@ -943,32 +915,41 @@ describe.each(["legacy", "materialized"] as const)(
     // transaction atomicity, which is a platform guarantee rather than
     // something this code can get wrong — a throw anywhere in the mutation
     // rolls back every write in it, patches included.
-    test("a merge that fails before patching leaves events and threads untouched", async () => {
+    test("a bulk mutation that fails before patching leaves events and threads untouched", async () => {
       const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
       const { orgId, asUser } = await seedOrg(t, "bulk_rollback", MANAGER_PERMISSIONS);
-      const survivorId = await makeCustomer(t, orgId, "Survivor", "C");
-      const loserId = await makeCustomer(t, orgId, "Loser", "C");
+      const customerId = await makeCustomer(t, orgId, "Chatty", "C");
 
       await t.run((ctx) =>
         ctx.db.insert("facebookEvents", {
           orgId, externalId: "rb_1", kind: "dm",
-          senderFacebookId: "fb_rb", customerId: loserId, text: "keep me",
+          senderFacebookId: "fb_rb", customerId, text: "keep me",
         })
       );
 
-      // Deleting the survivor makes the merge throw in its survivor lookup,
-      // which runs before the reassignment loop.
-      await t.run((ctx) => ctx.db.delete(survivorId));
+      // Deleting the vehicle makes the mutation throw in its vehicle lookup,
+      // which runs before the repointing loop.
+      const vehicleId = await t.run((ctx) =>
+        ctx.db.insert("vehicles", {
+          orgId, vin: "VINRB1", make: "Kia", model: "Sportage", year: 2023,
+          mileage: 10, color: "Blue", fuelType: "Gas", transmission: "Automatic",
+          sellingPrice: 20000, status: "AVAILABLE", createdAt: Date.now(),
+        })
+      );
+      await t.run((ctx) => ctx.db.delete(vehicleId));
       await expect(
-        asUser.mutation(api.customers.mergeCustomers, { orgId, survivorId, loserId })
+        asUser.mutation(api.socialInbox.setConversationVehicle, {
+          orgId, customerId, vehicleId,
+        })
       ).rejects.toThrow();
 
       const events = await t.run((ctx) => ctx.db.query("facebookEvents").collect());
       expect(events).toHaveLength(1);
-      expect(events[0].customerId).toBe(loserId);
+      expect(events[0].vehicleId).toBeUndefined();
       const rows = await t.run((ctx) => ctx.db.query("socialConversations").collect());
       expect(rows).toHaveLength(1);
-      expect(rows[0].customerId).toBe(loserId);
+      expect(rows[0].customerId).toBe(customerId);
+      expect(rows[0].vehicleCount).toBe(0);
     }, 300000);
 
     test("ordinary single-event writes still sync synchronously", async () => {
@@ -996,16 +977,22 @@ describe.each(["legacy", "materialized"] as const)(
       const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
       const { orgId, asUser } = await seedOrg(t, "bulk_iso_a", MANAGER_PERMISSIONS);
       const { orgId: otherOrgId } = await seedOrg(t, "bulk_iso_b", MANAGER_PERMISSIONS);
-      const survivorId = await makeCustomer(t, orgId, "S", "C");
-      const loserId = await makeCustomer(t, orgId, "L", "C");
+      const customerId = await makeCustomer(t, orgId, "S", "C");
       const otherCustomerId = await makeCustomer(t, otherOrgId, "Other", "C");
+      const vehicleId = await t.run((ctx) =>
+        ctx.db.insert("vehicles", {
+          orgId, vin: "VINISO1", make: "Kia", model: "Sportage", year: 2023,
+          mileage: 10, color: "Blue", fuelType: "Gas", transmission: "Automatic",
+          sellingPrice: 20000, status: "AVAILABLE", createdAt: Date.now(),
+        })
+      );
 
       // Same platform and the same sender id in both orgs.
       for (const i of [0, 1]) {
         await t.run((ctx) =>
           ctx.db.insert("facebookEvents", {
             orgId, externalId: "iso_a_" + i, kind: "dm",
-            senderFacebookId: "shared_sender", customerId: loserId, text: "mine",
+            senderFacebookId: "shared_sender", customerId, text: "mine",
           })
         );
         await t.run((ctx) =>
@@ -1016,14 +1003,18 @@ describe.each(["legacy", "materialized"] as const)(
         );
       }
 
-      await asUser.mutation(api.customers.mergeCustomers, { orgId, survivorId, loserId });
+      await asUser.mutation(api.socialInbox.setConversationVehicle, {
+        orgId, customerId, vehicleId,
+      });
 
       const mine = await actualConversations(asUser, orgId);
       expect(mine).toHaveLength(1);
-      expect(mine[0].customerId).toBe(survivorId);
+      expect(mine[0].customerId).toBe(customerId);
       expect(mine[0].eventCount).toBe(2);
+      expect(mine[0].vehicleCount).toBe(1);
 
-      // The other org's thread is untouched by a merge it had nothing to do with.
+      // The other org's thread is untouched by a bulk operation it had nothing
+      // to do with, despite sharing a sender id.
       const theirs = await t.run((ctx) =>
         ctx.db
           .query("socialConversations")
@@ -1038,30 +1029,38 @@ describe.each(["legacy", "materialized"] as const)(
     test("an event written after the deferred sync is still materialised", async () => {
       const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
       const { orgId, asUser } = await seedOrg(t, "bulk_after", MANAGER_PERMISSIONS);
-      const survivorId = await makeCustomer(t, orgId, "S", "C");
-      const loserId = await makeCustomer(t, orgId, "L", "C");
+      const customerId = await makeCustomer(t, orgId, "S", "C");
+      const vehicleId = await t.run((ctx) =>
+        ctx.db.insert("vehicles", {
+          orgId, vin: "VINAFTER1", make: "Kia", model: "Sportage", year: 2023,
+          mileage: 10, color: "Blue", fuelType: "Gas", transmission: "Automatic",
+          sellingPrice: 20000, status: "AVAILABLE", createdAt: Date.now(),
+        })
+      );
 
       await t.run((ctx) =>
         ctx.db.insert("facebookEvents", {
           orgId, externalId: "after_1", kind: "dm",
-          senderFacebookId: "fb_after", customerId: loserId, text: "before merge",
+          senderFacebookId: "fb_after", customerId, text: "before the bulk op",
         })
       );
-      await asUser.mutation(api.customers.mergeCustomers, { orgId, survivorId, loserId });
+      await asUser.mutation(api.socialInbox.setConversationVehicle, {
+        orgId, customerId, vehicleId,
+      });
 
       // A webhook arriving after the bulk operation goes through the normal
       // writer, so suppression cannot leak past the mutation that opted into it.
       await t.run((ctx) =>
         ctx.db.insert("facebookEvents", {
           orgId, externalId: "after_2", kind: "dm",
-          senderFacebookId: "fb_after", customerId: survivorId, text: "after merge",
+          senderFacebookId: "fb_after", customerId, text: "after the bulk op",
         })
       );
 
       const after = await actualConversations(asUser, orgId);
       expect(after).toHaveLength(1);
       expect(after[0].eventCount).toBe(2);
-      expect(after[0].latestText).toBe("after merge");
+      expect(after[0].latestText).toBe("after the bulk op");
     }, 300000);
   });
 

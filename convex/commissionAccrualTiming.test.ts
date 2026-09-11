@@ -16,6 +16,7 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
+import { settleOutbox, makeDue } from "../test-utils/outboxWork";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { ruleCommissionAdjusted } from "./accounting/postingRules";
@@ -237,7 +238,7 @@ async function closePriorYearPeriod(d: Dealer, priorYear: number) {
 }
 
 async function completedSale(d: Dealer, saleDate = Date.now(), salePrice = 15000) {
-  return await d.asAdmin.mutation(api.sales.create, {
+  return await d.asAdmin.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
     orgId: d.orgId,
     vehicleId: d.vehicleId,
     customerId: d.customerId,
@@ -307,7 +308,7 @@ describe("a MANUAL commission is recognized when it becomes measurable", () => {
     // A draft has earned nothing — probable, but not yet incurred.
     expect(await commissionPayableMinor(d)).toBe(0);
 
-    await d.asAdmin.mutation(api.sales.completeDraft, { orgId: d.orgId, saleId });
+    await d.asAdmin.mutation(api.sales.completeDraft, { idempotencyKey: crypto.randomUUID(), orgId: d.orgId, saleId });
 
     // Pre-change MANUAL deferred this to payment, so completing the sale left
     // the ledger showing no liability for an amount already decided.
@@ -536,7 +537,7 @@ describe("settlement clears exactly what was recognized", () => {
       commissionAmount: 400,
     });
 
-    await d.asAdmin.mutation(api.sales.markCommissionPaid, {
+    await d.asAdmin.mutation(api.sales.markCommissionPaid, { idempotencyKey: crypto.randomUUID(),
       orgId: d.orgId,
       saleId,
       paymentMethod: "CASH",
@@ -702,7 +703,7 @@ describe("the reconciliation is point-in-time on BOTH sides", () => {
       commissionAmount: 250,
     });
     // Paid now — i.e. after the prior-year period ended.
-    await d.asAdmin.mutation(api.sales.markCommissionPaid, {
+    await d.asAdmin.mutation(api.sales.markCommissionPaid, { idempotencyKey: crypto.randomUUID(),
       orgId: d.orgId,
       saleId,
       paymentMethod: "CASH",
@@ -800,7 +801,7 @@ describe("the backlog backfill", () => {
       saleId: paidSale,
       commissionAmount: 250,
     });
-    await d.asAdmin.mutation(api.sales.markCommissionPaid, {
+    await d.asAdmin.mutation(api.sales.markCommissionPaid, { idempotencyKey: crypto.randomUUID(),
       orgId: d.orgId,
       saleId: paidSale,
       paymentMethod: "CASH",
@@ -893,7 +894,7 @@ describe("no commission entry may overtake the entries it depends on", () => {
     // regression: it also refused paying a commission that had already posted
     // before its month closed, which is the ordinary month-end flow.
     await expect(
-      d.asAdmin.mutation(api.sales.markCommissionPaid, {
+      d.asAdmin.mutation(api.sales.markCommissionPaid, { idempotencyKey: crypto.randomUUID(),
         orgId: d.orgId,
         saleId,
         paymentMethod: "CASH",
@@ -1053,7 +1054,7 @@ describe("the outbox will not drain a settlement ahead of its own accrual", () =
     await asAdmin.mutation(api.chartOfAccounts.initialize, { orgId });
 
     const year = new Date().getUTCFullYear();
-    const saleId = await asAdmin.mutation(api.sales.create, {
+    const saleId = await asAdmin.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 15000, saleDate: Date.UTC(year, 0, 15),
       status: "COMPLETED", financingType: "CASH",
@@ -1062,7 +1063,7 @@ describe("the outbox will not drain a settlement ahead of its own accrual", () =
       orgId, saleId, commissionAmount: 250,
     });
     if (pay) {
-      await asAdmin.mutation(api.sales.markCommissionPaid, {
+      await asAdmin.mutation(api.sales.markCommissionPaid, { idempotencyKey: crypto.randomUUID(),
         orgId, saleId, paymentMethod: "CASH",
       });
     }
@@ -1093,7 +1094,7 @@ describe("the outbox will not drain a settlement ahead of its own accrual", () =
     });
     const period = (await asAdmin.query(api.accountingPeriods.list, { orgId }))[0];
     await asAdmin.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
-    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    await settleOutbox(t, orgId);
 
     // Before the drain-side guard, COMMISSION_PAID posted here on its own and
     // Commission Payable sat at -25,000 until somebody opened a period nobody
@@ -1133,7 +1134,7 @@ describe("the outbox will not drain a settlement ahead of its own accrual", () =
     });
     const period = (await asAdmin.query(api.accountingPeriods.list, { orgId }))[0];
     await asAdmin.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
-    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    await settleOutbox(t, orgId);
 
     expect(await commissionPayableMinor({ t, orgId })).toBe(0);
     expect(await commissionExpenseMinor({ t, orgId })).toBe(0);
@@ -1164,9 +1165,13 @@ describe("the outbox will not drain a settlement ahead of its own accrual", () =
     const period = (await asAdmin.query(api.accountingPeriods.list, { orgId }))[0];
     await asAdmin.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
 
-    // Returns rather than throwing, and never leaves the payable negative.
-    const result = await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
-    expect(result).toBeTruthy();
+    // ⚠️ ROW ISOLATION IS NOW STRUCTURAL, NOT A CATCH (SCRUM-222). The guard
+    // still throws on this malformed row, but the throw now aborts only that
+    // row's OWN worker transaction — which is what a per-row `try` was
+    // approximating, without the part where a caught throw commits whatever the
+    // row had already written. So the drain completing without throwing is
+    // still the property, and the payable is still never left negative.
+    await expect(settleOutbox(t, orgId)).resolves.toBeUndefined();
     expect(await commissionPayableMinor({ t, orgId })).toBeGreaterThanOrEqual(0);
   });
 
@@ -1183,8 +1188,8 @@ describe("the outbox will not drain a settlement ahead of its own accrual", () =
     const period = (await asAdmin.query(api.accountingPeriods.list, { orgId }))[0];
     await asAdmin.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
     // Twice: the first drain posts the accrual, which unblocks the payment.
-    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
-    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    await settleOutbox(t, orgId);
+    await settleOutbox(t, orgId);
 
     expect(await commissionPayableMinor({ t, orgId })).toBe(0);
     expect(await commissionExpenseMinor({ t, orgId })).toBe(25_000);
@@ -1239,7 +1244,7 @@ describe("commission entries are dated by one rule everywhere", () => {
     const asAdmin = t.withIdentity({ subject: "nochart", clerkId: "nochart" });
 
     const saleDate = Date.UTC(new Date().getUTCFullYear(), 0, 20);
-    const saleId = await asAdmin.mutation(api.sales.create, {
+    const saleId = await asAdmin.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 15000, saleDate, status: "COMPLETED", financingType: "CASH",
     });
@@ -1309,7 +1314,7 @@ describe("a commission never outruns the sale that earned it", () => {
 
     const run = await d.t.mutation(internal.migrateCommissionAccruals.backfillCommissionAccruals, {});
     expect(run.accruedCount).toBe(1);
-    await d.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: d.orgId });
+    await settleOutbox(d.t, d.orgId);
 
     expect(await commissionPayableMinor(d)).toBe(25_000);
     expect(saleId).toBeTruthy();
@@ -1420,7 +1425,7 @@ describe("round-3 review fixes", () => {
     // Paying would debit 900 against a 250 credit and leave the payable at
     // -650, with every later correction computing from the already-wrong row.
     await expect(
-      d.asAdmin.mutation(api.sales.markCommissionPaid, {
+      d.asAdmin.mutation(api.sales.markCommissionPaid, { idempotencyKey: crypto.randomUUID(),
         orgId: d.orgId,
         saleId,
         paymentMethod: "CASH",
@@ -1743,7 +1748,7 @@ describe("round-3 review fixes", () => {
   });
 
   test("a dead-lettered ledger entry is reported as needing a retry, not as a closed period", async () => {
-    // drainPendingForOrg reads only PENDING rows, so "open the period" is
+    // the sweep selects only PENDING rows, so "open the period" is
     // advice that provably cannot work for a FAILED entry — the same cry-wolf
     // failure this work removed from the close checklist.
     const d = await seedDealer("failed_entry_message");
@@ -1985,7 +1990,7 @@ describe("a closed period blocks a commission only when something must post into
     // normal course of business, not an edge case.
     await closePriorYearPeriod(d, priorYear);
 
-    await d.asAdmin.mutation(api.sales.markCommissionPaid, {
+    await d.asAdmin.mutation(api.sales.markCommissionPaid, { idempotencyKey: crypto.randomUUID(),
       orgId: d.orgId,
       saleId,
       paymentMethod: "CASH",
@@ -2014,7 +2019,7 @@ describe("a closed period blocks a commission only when something must post into
     await closePriorYearPeriod(d, priorYear);
 
     await expect(
-      d.asAdmin.mutation(api.sales.markCommissionPaid, {
+      d.asAdmin.mutation(api.sales.markCommissionPaid, { idempotencyKey: crypto.randomUUID(),
         orgId: d.orgId,
         saleId,
         paymentMethod: "CASH",
@@ -2070,7 +2075,7 @@ describe("a closed period blocks a commission only when something must post into
         status: "AVAILABLE",
       })
     );
-    const liveSaleId = await d.asAdmin.mutation(api.sales.create, {
+    const liveSaleId = await d.asAdmin.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId: d.orgId,
       vehicleId: liveVehicleId,
       customerId: d.customerId,
@@ -2177,7 +2182,7 @@ describe("the period that must accept a payment is today's, not the sale's", () 
     await closePriorYearPeriod(d, new Date().getUTCFullYear());
 
     await expect(
-      d.asAdmin.mutation(api.sales.markCommissionPaid, {
+      d.asAdmin.mutation(api.sales.markCommissionPaid, { idempotencyKey: crypto.randomUUID(),
         orgId: d.orgId,
         saleId,
         paymentMethod: "CASH",
@@ -2369,7 +2374,7 @@ describe("a commission whose month has no period is deferred, never dropped", ()
       orgId: d.orgId,
       periodId: created!._id,
     });
-    await d.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: d.orgId });
+    await settleOutbox(d.t, d.orgId);
 
     await d.asAdmin.mutation(api.payroll.payRun, { orgId: d.orgId, runId, method: "CASH" });
     const run = await d.t.run(async (ctx) => await ctx.db.get(runId));
@@ -2436,7 +2441,7 @@ describe("the close checklist names the remedy that fits each unrecognized commi
         mileage: 500, purchasePrice: 8000, sellingPrice: 12000, status: "AVAILABLE",
       })
     );
-    const noPeriodSaleId = await d.asAdmin.mutation(api.sales.create, {
+    const noPeriodSaleId = await d.asAdmin.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId: d.orgId,
       vehicleId: noPeriodVehicleId,
       customerId: d.customerId,
@@ -2487,7 +2492,7 @@ describe("approval reports the commissions it left out", () => {
         mileage: 1000, purchasePrice: 9000, sellingPrice: 14000, status: "AVAILABLE",
       })
     );
-    const liveSaleId = await d.asAdmin.mutation(api.sales.create, {
+    const liveSaleId = await d.asAdmin.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId: d.orgId, vehicleId: liveVehicleId, customerId: d.customerId,
       salespersonId: d.userId, salePrice: 14000, saleDate: Date.now(),
       status: "COMPLETED", financingType: "CASH",
@@ -2644,7 +2649,7 @@ describe("a posted entry with an unreadable amount fails closed", () => {
     // 400 did not match it, and the user was told the amounts diverge — a
     // different and wrong diagnosis. Now recognition is refused outright.
     await expect(
-      d.asAdmin.mutation(api.sales.markCommissionPaid, {
+      d.asAdmin.mutation(api.sales.markCommissionPaid, { idempotencyKey: crypto.randomUUID(),
         orgId: d.orgId,
         saleId,
         paymentMethod: "CASH",
@@ -2655,3 +2660,4 @@ describe("a posted entry with an unreadable amount fails closed", () => {
     expect(sale?.commissionPaidAt ?? null).toBeNull();
   });
 });
+

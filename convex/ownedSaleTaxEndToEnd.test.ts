@@ -16,6 +16,7 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
+import { settleOutbox } from "../test-utils/outboxWork";
 import { api } from "./_generated/api";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 
@@ -136,7 +137,7 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
   test("the GL receivable, the subledger document and the invoice all agree", async () => {
     const { t, orgId, userId, customerId, vehicleId, asUser } = await seedDealer("agree");
 
-    const saleId = await asUser.mutation(api.sales.create, {
+    const saleId = await asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       customerId,
@@ -189,7 +190,7 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     const { t, orgId, userId, customerId, vehicleId, asUser } = await seedDealer("overtax");
 
     await expect(
-      asUser.mutation(api.sales.create, {
+      asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
         orgId,
         vehicleId,
         customerId,
@@ -216,7 +217,7 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     // the whole ticket exists to make work.
     const { t, orgId, userId, customerId, vehicleId, asUser } = await seedDealer("edgetax");
 
-    await asUser.mutation(api.sales.create, {
+    await asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       customerId,
@@ -256,7 +257,7 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     // ...and completing it while still unpriced is refused, without the draft
     // being consumed. It remains a draft that can be repriced.
     await expect(
-      s.asUser.mutation(api.sales.completeDraft, { orgId: s.orgId, saleId: draftId })
+      s.asUser.mutation(api.sales.completeDraft, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, saleId: draftId })
     ).rejects.toThrow(/price/i);
     expect((await s.t.run((ctx) => ctx.db.get(draftId)))?.status).toBe("PENDING");
     expect(
@@ -272,7 +273,7 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     // vehicle SOLD — an input `main` refuses.
     const s = await seedDealer("subprec");
     await expect(
-      s.asUser.mutation(api.sales.create, {
+      s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId,
         vehicleId: s.vehicleId,
         customerId: s.customerId,
@@ -300,7 +301,7 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     // by magnitude rather than by representability, and the sub-precision test
     // would still pass.
     const s = await seedDealer("minprice");
-    await s.asUser.mutation(api.sales.create, {
+    await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       vehicleId: s.vehicleId,
       customerId: s.customerId,
@@ -326,7 +327,7 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     const priorYear = new Date().getUTCFullYear() - 1;
 
     await expect(
-      s.asUser.mutation(api.sales.create, {
+      s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId,
         vehicleId: s.vehicleId,
         customerId: s.customerId,
@@ -363,7 +364,7 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     // while the arithmetic was refusing these by accident.
     const withFees = await seedDealer("zeroprice");
     await expect(
-      withFees.asUser.mutation(api.sales.create, {
+      withFees.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
         orgId: withFees.orgId,
         vehicleId: withFees.vehicleId,
         customerId: withFees.customerId,
@@ -383,7 +384,7 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     // the one above did not; the point of the floor is that they agree.
     const bare = await seedDealer("zeroprice2");
     await expect(
-      bare.asUser.mutation(api.sales.create, {
+      bare.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
         orgId: bare.orgId,
         vehicleId: bare.vehicleId,
         customerId: bare.customerId,
@@ -413,7 +414,7 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     // reach that branch; closing the seeded period instead runs an unrelated
     // close checklist that has nothing to do with this invariant.
     const priorYear = new Date().getUTCFullYear() - 1;
-    const saleId = await asUser.mutation(api.sales.create, {
+    const saleId = await asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       customerId,
@@ -451,6 +452,9 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     expect(priorPeriod).toBeTruthy();
     await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: priorPeriod!._id });
     await asUser.mutation(api.accountingOutbox.redrive, { orgId });
+    // The redrive queues the work; the worker performs it in its own
+    // transaction, which is what makes a failure roll back (SCRUM-222).
+    await settleOutbox(t, orgId);
 
     const invoiceMinor = jod(23_200);
     const arDebitMinor = await netOnAccount(t, orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS);
@@ -474,7 +478,7 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     // recorded, so it is pinned at the same level as the taxed one.
     const { t, orgId, userId, customerId, vehicleId, asUser } = await seedDealer("plain");
 
-    const saleId = await asUser.mutation(api.sales.create, {
+    const saleId = await asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       customerId,
@@ -498,3 +502,4 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     expect(await netOnAccount(t, orgId, SYSTEM_KEYS.SALES_REVENUE)).toBe(-jod(20_000));
   });
 });
+

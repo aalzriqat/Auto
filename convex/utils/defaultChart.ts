@@ -8,6 +8,42 @@ export const SYSTEM_KEYS = {
   RECEIVABLE_FROM_SUPPLIERS: "RECEIVABLE_FROM_SUPPLIERS",
   CONSIGNMENT_COMMISSION_REVENUE: "CONSIGNMENT_COMMISSION_REVENUE",
   UNAPPLIED_CUSTOMER_CASH: "UNAPPLIED_CUSTOMER_CASH",
+  /**
+   * 2110 — customer money received that no receivable has yet absorbed
+   * (SCRUM-218-C; owner-proxy c17653).
+   *
+   * ⚠️ THE "SEEDED BY SCRUM-231" SPLIT IS RETRACTED — RC-FRESH-CHART-2110.
+   *
+   * This block used to read: "DECLARED HERE, SEEDED BY SCRUM-231, AND THAT
+   * SPLIT IS DELIBERATE ... absent from `DEFAULT_CHART` and from
+   * `REQUIRED_SYSTEM_KEYS` on purpose". That was correct while SCRUM-231's
+   * cutover TRANSFORMED the existing production deployment. The launch
+   * architecture is now a NEW EMPTY production deployment, so there is no
+   * cutover step left to seed it in, and 231's preserved requirement became an
+   * Accounting-RC obligation (owner ruling, SCRUM-313). A fresh organization
+   * must receive 2110 at bootstrap, BEFORE any economic activity.
+   *
+   * It is therefore now in `DEFAULT_CHART` and in `REQUIRED_SYSTEM_KEYS`.
+   *
+   * ⚠️ WHAT HAS NOT CHANGED, AND MUST NOT. The account row is still never
+   * created, adopted, reclassified or substituted AT POSTING TIME. Membership of
+   * `REQUIRED_SYSTEM_KEYS` was verified to be read-only before it was added —
+   * see the note on the list itself. An org whose chart lacks 2110 still leaves
+   * the receipt committed with ZERO GL and hands the obligation to the SCRUM-222
+   * worker; it does not self-heal the way GENERAL_EXPENSE does. Bootstrap and
+   * runtime invention are different things, and only the first one moved.
+   *
+   * ⚠️ Nor does this back-fill an EXISTING org. `chartOfAccounts.initialize`
+   * refuses an already-initialized chart, so no existing org's books silently
+   * acquire a liability account nobody classified — they are told it is missing
+   * and a human decides.
+   *
+   * ⚠️ NOT `UNAPPLIED_CUSTOMER_CASH` above. That is 1220, ASSET / DEBIT — the
+   * wrong side of the balance sheet for money the dealership OWES back. The two
+   * names are one word apart and mean opposite things, which is exactly why the
+   * substitution has to be prohibited rather than merely discouraged.
+   */
+  UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY: "UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY",
   CUSTOMER_DEPOSITS_LIABILITY: "CUSTOMER_DEPOSITS_LIABILITY",
   CHEQUES_IN_HAND: "CHEQUES_IN_HAND",
   CHEQUES_UNDER_COLLECTION: "CHEQUES_UNDER_COLLECTION",
@@ -177,16 +213,26 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     allowManualPosting: false,
     systemKey: SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS,
   },
-  {
-    code: "1220",
-    name: "Unapplied Customer Cash",
-    nameAr: "نقد عملاء غير مطبق",
-    type: "ASSET",
-    normalBalance: "DEBIT",
-    isControlAccount: false,
-    allowManualPosting: false,
-    systemKey: SYSTEM_KEYS.UNAPPLIED_CUSTOMER_CASH,
-  },
+  // ⚠️ 1220 "Unapplied Customer Cash" IS DELIBERATELY NO LONGER SEEDED —
+  // RC-FRESH-CHART-2110.
+  //
+  // It was ASSET / DEBIT: the wrong side of the balance sheet for money the
+  // dealership OWES back to a customer. 2110 above is the correct model and is
+  // what every posting rule names. Nothing in production ever referenced
+  // `UNAPPLIED_CUSTOMER_CASH` — checked, not assumed: at this head the only
+  // occurrences repo-wide are this file, a warning comment in
+  // `accounting/receiptMovement.ts` telling the retained-credit rule never to
+  // fall back to it, and the test that pins that refusal.
+  //
+  // The SYSTEM KEY is kept. Historical rows in a pre-cutover database still
+  // carry it and must stay describable; removing the name would make them
+  // unreadable rather than unwritable. What is removed is a FRESH org receiving
+  // the wrong-sided account at all, which is the confusion risk removed at
+  // source rather than guarded against.
+  //
+  // ⚠️ This does NOT delete 1220 from any existing chart. `initialize` refuses
+  // an already-initialized org and nothing here back-fills or reclassifies, so
+  // an org that already has the row keeps it, inert.
   {
     code: "1230",
     name: "Employee Advances",
@@ -270,6 +316,21 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     isControlAccount: true,
     allowManualPosting: false,
     systemKey: SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY,
+  },
+  {
+    // RC-FRESH-CHART-2110. Customer money received that no receivable has yet
+    // absorbed. LIABILITY / CREDIT because the dealership OWES it back; a
+    // control account because the receipt subledger is its detail; no manual
+    // posting because only `ruleCollectionPayment` and the retained-credit
+    // application rule may move it. See the retraction on the system key.
+    code: "2110",
+    name: "Unapplied Customer Receipts",
+    nameAr: "مقبوضات عملاء غير مطبقة",
+    type: "LIABILITY",
+    normalBalance: "CREDIT",
+    isControlAccount: true,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY,
   },
   {
     code: "2200",
@@ -706,4 +767,24 @@ export const REQUIRED_SYSTEM_KEYS: SystemKey[] = [
   SYSTEM_KEYS.VEHICLE_INVENTORY,
   SYSTEM_KEYS.SALES_REVENUE,
   SYSTEM_KEYS.COST_OF_VEHICLES_SOLD,
+  /**
+   * RC-FRESH-CHART-2110.
+   *
+   * ⚠️ ADDED ONLY AFTER CHECKING WHAT THIS LIST DOES AT RUNTIME, because
+   * SCRUM-218 forbids inventing or adopting 2110 for a received payment and a
+   * list that auto-created accounts would violate that.
+   *
+   * Both consumers are READ-ONLY QUERIES: `chartOfAccounts.validateSystemAccounts`
+   * and `accountingSetup.status`. Each looks the key up and appends to a
+   * `missing` array. Neither inserts, adopts, reclassifies or self-heals, and
+   * membership here does not reach `ensureSystemAccount` — that is a separate
+   * mechanism keyed on an explicit CODE at explicit call sites, none of which
+   * names 2110.
+   *
+   * So this makes an org whose chart lacks 2110 REPORT it on Accounting → Setup.
+   * It does not make one appear. A fresh org gets the account from
+   * `DEFAULT_CHART` at bootstrap, before any economic activity; an existing org
+   * is told, and a human decides.
+   */
+  SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY,
 ];

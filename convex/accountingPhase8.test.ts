@@ -488,6 +488,7 @@ describe("Phase 8 — payment intent settlement", () => {
     const { t, orgId, asUser, customerId } = await seedDealer("pi_legacy");
 
     const receivableId = await asUser.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "PAYMENT_LINK",
@@ -538,6 +539,7 @@ describe("Phase 8 — payment intent settlement", () => {
     const { orgId, asUser, customerId } = await seedDealer("pi_overpay");
 
     const receivableId = await asUser.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "PAYMENT_LINK",
@@ -563,7 +565,7 @@ describe("Phase 8 — payment intent settlement", () => {
   test("expiring a pending intent marks it EXPIRED without posting GL", async () => {
     const { t, orgId, asUser, customerId } = await seedDealer("pi3");
 
-    const intentId = await asUser.mutation(api.paymentIntents.create, {
+    const intentId = await asUser.mutation(api.paymentIntents.create, { idempotencyKey: crypto.randomUUID(),
       orgId, customerId, amountMinor: 500_000, currency: "JOD", provider: "telr",
     });
 
@@ -614,6 +616,18 @@ describe("Phase 8 — finance disbursement", () => {
         createdAt: Date.now(), updatedAt: Date.now(),
       })
     );
+    // The receivable finalizeDeal opens for the company's remittance. A CLOSED
+    // application inserted without one is a pre-receivable legacy shape that
+    // confirmDisbursement no longer completes on the company's behalf: the
+    // receipt settles the recorded receivable or is refused (SCRUM-241).
+    await t.run((ctx) =>
+      ctx.db.insert("receivableDocuments", {
+        orgId, documentType: "INVOICE", documentNumber: "RCV-FIN1", payerType: "FINANCE_COMPANY",
+        customerId, financeCompanyId: financeCompanyId, sourceType: "finance_application", sourceId: appId,
+        originalAmountMinor: 10_000_000, currency: "JOD", scale: 3, issueDate: Date.now(), dueDate: Date.now(),
+        status: "OPEN", createdAt: Date.now(), createdBy: userId,
+      })
+    );
 
     await asUser.mutation(api.applications.confirmDisbursement, {
       orgId, applicationId: appId,
@@ -661,7 +675,7 @@ describe("Phase 8 — finance disbursement", () => {
     );
 
     await expect(
-      asUser.mutation(api.applications.confirmDisbursement, {
+      asUser.mutation(api.applications.confirmDisbursement, { idempotencyKey: crypto.randomUUID(),
         orgId, applicationId: appId, disbursedAmountMinor: 5_000_000,
       })
     ).rejects.toThrow("Disbursement has already been confirmed");

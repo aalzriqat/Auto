@@ -30,9 +30,9 @@ import * as functions from "./functions";
  * ## Where the rest of the proof lives
  *
  * - `socialInboxConversations.test.ts` proves finalisation actually runs, on
- *   real writes: `mergeCustomers` and `setConversationVehicle` contain zero
- *   settlement code, their conversations still come out correct and bounded,
- *   and emptying the builder's `onSuccess` turns eight of those cases red.
+ *   real writes: `setConversationVehicle` contains zero settlement code, its
+ *   conversations still come out correct and bounded, and emptying the
+ *   builder's `onSuccess` turns nine of those cases red.
  * - `aggregateWiring.test.ts` pins that the deferred triggers record rather
  *   than recompute.
  *

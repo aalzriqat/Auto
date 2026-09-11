@@ -103,10 +103,67 @@ describe("protected source content pins", () => {
        * an owner authorization, granted for one token, to content that
        * authorization never covered. Read the 32 lines; do not take this
        * comment's word for their pedigree.
+       *
+       * -- RENEWAL 2026-09-08 - SCRUM-57 ---------------------------------
+       *
+       * Previous reviewed postimage, superseded by this entry:
+       *
+       *   bytes:  214777
+       *   sha256: 2ae2518ea68d67d320a19d76402f55683d8030e1e10284ef86af2c9ad560eab6
+       *
+       * Renewed because SCRUM-57 makes economic command identity mandatory, and
+       * five mutations in this file are economic. The delta is five hunks of one
+       * shape - `idempotencyKey: v.optional(v.string())` becomes `v.string()` and
+       * `economic: true` is added to the `runWithIdempotency` args - for
+       * `cancelApplication`, `finalizeDeal`, `confirmDisbursement`,
+       * `confirmSupplierDisbursement` and `amendSupplierDisbursementAdvice`, plus
+       * a `fingerprint` for `finalizeDeal`, which previously had none.
+       *
+       * No control flow, query, predicate or `ctx.db` access changed, so none of
+       * the constructs this ratchet exists to catch are touched by the delta.
+       * Read the five hunks; do not take this note's word for their scope.
+       *
+       * Renewed under explicit owner authorization for SCRUM-57's integration
+       * repair, with the instruction that the pin must not be weakened, bypassed,
+       * deleted, generalized or made vacuous to obtain a green check. It was not:
+       * this is still an exact byte + sha256 pin on the same two files, the
+       * negative control below is untouched, and normalization and the bare-CR
+       * rejection are unchanged. Cross-lane notice to the owning ratchet lane was
+       * posted BEFORE this change - Jira SCRUM-215 `c18246`.
+       *
+       * Both constants were recomputed FROM THE FILE, with this test's own
+       * normalization, not copied from a report or a Jira comment.
+       *
+       * -- RENEWAL 2026-09-11 - SCRUM-241 (in the SCRUM-313 RC lane) --------
+       *
+       * Previous reviewed postimage, superseded by this entry:
+       *
+       *   bytes:  215115
+       *   sha256: 65cfe8d241f2e745e5b8e93cd2493d499dd49fb822e091c9d90ef1c15bd5501f
+       *
+       * Renewed because SCRUM-241's canonical correction (owner-proxy c19230,
+       * SCRUM-313 c19303) changes what `confirmDisbursement` settles and what
+       * `finalizeDeal` accepts. Three hunks: a new `proveFinanceReceiptAuthority`
+       * helper that loads the deal's finance-company receivable by
+       * `by_org_source` and refuses on missing, foreign, non-OPEN, already
+       * allocated or contradictory records BEFORE any write; `finalizeDeal`
+       * refusing a pinned `economicsCurrency` that no longer equals the
+       * organisation's currency; and `confirmDisbursement` settling the proved
+       * figure in the receivable's own currency instead of the caller's amount
+       * in the organisation's current currency, with the `min(outstanding,
+       * caller)` allocation and the create-a-receivable-here fallback removed.
+       * The new `ctx.db` access is one indexed `.unique()` read in the helper.
+       * Read the three hunks; do not take this note's word for their scope.
+       *
+       * Renewed under the explicit owner-proxy authorization above, with the
+       * same instruction: the pin is not weakened, bypassed, deleted,
+       * generalized or made vacuous. Same exact byte + sha256 pin, same negative
+       * control, same normalization and bare-CR rejection. Both constants were
+       * recomputed FROM THE FILE with this test's own normalization.
        */
       file: "convex/applications.ts",
-      bytes: 214777,
-      sha256: "2ae2518ea68d67d320a19d76402f55683d8030e1e10284ef86af2c9ad560eab6",
+      bytes: 219221,
+      sha256: "8762cdd63a98cfff9a4558cd77615db95108ff073ea8509bd319c1cc49772dd8",
     },
     {
       /**

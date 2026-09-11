@@ -26,12 +26,20 @@ import { getErrorMessage } from "@/lib/errors";
 import { ConfirmHandoverDialog } from "./cockpit/ConfirmHandoverDialog";
 import { RegisterExpectedPaymentDialog, type ExpectedPaymentMethod } from "./RegisterExpectedPaymentDialog";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
+import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 
 type DepositResolution = "REFUNDED" | "FORFEITED";
 type PendingDepositResolution = {
   depositId: Id<"deposits">;
   amount: number;
   resolution: DepositResolution;
+  /**
+   * The payout GENERATION this decision was taken against — `deposits.releaseCount`
+   * as observed when the operator chose the action, captured here because THIS is
+   * the user-intent boundary. Re-reading it at confirm time would let the number
+   * move underneath a decision the operator has already made.
+   */
+  releaseCount: number;
 } | null;
 
 export function ApplicationDetailsDialog({
@@ -87,6 +95,7 @@ export function ApplicationDetailsDialog({
   const registerVehicleHandover = useMutation(api.applications.registerVehicleHandover);
   const registerExpectedPayment = useMutation(api.applications.registerExpectedPayment);
   const releaseDeposit = useMutation(api.deposits.release);
+  const commandId = useCommandIdentity();
   const updateDocStatus = useMutation(api.documents.updateDocumentStatus);
   const generateUploadUrl = useMutation(api.documents.generateUploadUrl);
   const saveDocumentFile = useMutation(api.documents.saveDocumentFile);
@@ -169,17 +178,30 @@ export function ApplicationDetailsDialog({
 
   const handleResolveDeposit = async (
     depositId: Id<"deposits">,
-    resolution: DepositResolution
+    resolution: DepositResolution,
+    observedReleaseCount: number
   ) => {
     if (!activeOrgId) return;
     setResolvingDepositId(depositId);
     try {
+      // SCRUM-313 — a GENERATION-AWARE retained identity, identical in shape to
+      // the release path in `components/vehicles/VehicleDetailsDialog.tsx`,
+      // which carries the full reasoning. In short: `deposits.release` pays out
+      // whatever is currently FREE, so content alone cannot separate a retry
+      // from a second genuine payout — but the server's `releaseCount`, bumped
+      // in the same patch that moves the money, can. Same generation and same
+      // decision means the same key (a retry is deduped); a confirmed payout
+      // advances the generation, so a later genuine payout is a new command.
+      const method = resolution === "REFUNDED" ? refundMethod : "NONE";
+      const intent = `release-deposit:${String(depositId)}:${resolution}:${method}:gen${observedReleaseCount}`;
       await releaseDeposit({
         orgId: activeOrgId,
         depositId,
         resolution,
         refundMethod: resolution === "REFUNDED" ? refundMethod : undefined,
+        idempotencyKey: commandId.for(intent),
       });
+      commandId.retire(intent);
       toast.success(
         resolution === "REFUNDED"
           ? t("DepositRefundedSuccess")
@@ -953,6 +975,7 @@ export function ApplicationDetailsDialog({
                                     setPendingDepositResolution({
                                       depositId: deposit._id,
                                       amount: deposit.amount,
+                                      releaseCount: deposit.releaseCount ?? 0,
                                       resolution: "REFUNDED",
                                     })
                                   }
@@ -969,6 +992,7 @@ export function ApplicationDetailsDialog({
                                     setPendingDepositResolution({
                                       depositId: deposit._id,
                                       amount: deposit.amount,
+                                      releaseCount: deposit.releaseCount ?? 0,
                                       resolution: "FORFEITED",
                                     })
                                   }
@@ -1163,7 +1187,8 @@ export function ApplicationDetailsDialog({
                 onClick={() =>
                   handleResolveDeposit(
                     pendingDepositResolution.depositId,
-                    pendingDepositResolution.resolution
+                    pendingDepositResolution.resolution,
+                    pendingDepositResolution.releaseCount
                   )
                 }
               >

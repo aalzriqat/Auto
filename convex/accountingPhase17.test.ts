@@ -245,6 +245,7 @@ describe("Phase 17 — minor-unit backfills", () => {
     );
     // A fully Phase-11 asset should be left alone (already on minor units).
     const modernId = await ctx.asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: ctx.orgId, name: "New Asset", purchaseDate: Date.now(), costMinor: 400_000, usefulLifeMonths: 24,
     });
 
@@ -349,8 +350,19 @@ describe("Phase 17 — parallel reporting and sign-off", () => {
 
   test("signOffCutover records a point-in-time snapshot that listSignOffs returns", async () => {
     const ctx = await seedCutoverDealer();
+    // ⚠️ RE-POINTED FROM COLLECTION_PAYMENT TO EXPENSE during RC integration
+    // (SCRUM-313). The category was always incidental here — every assertion
+    // below is about the SIGN-OFF SNAPSHOT's counts and balance, which is why
+    // the migration test above already uses EXPENSE rows for the same machinery.
+    //
+    // It is no longer optional. Seeding a legacy COLLECTION_PAYMENT means asking
+    // the engine for the RESERVED receipt occurrence tuple from a generic
+    // caller, which SCRUM-249 refuses, while SCRUM-234 refuses the
+    // `transactions` source directly — so no path can manufacture one. The full
+    // reasoning, and 218-C's `applied = received` rule preserved unreachable,
+    // are in `test-utils/legacyMigrationSeed.ts`.
     const transactionId = await ctx.t.run((c) =>
-      c.db.insert("transactions", { orgId: ctx.orgId, type: "IN", amount: 200, date: Date.now(), category: "COLLECTION_PAYMENT", description: "Legacy collection" })
+      c.db.insert("transactions", { orgId: ctx.orgId, type: "OUT", amount: 200, date: Date.now(), category: "EXPENSE", description: "Legacy expense" })
     );
     await ctx.t.run((c) => postLegacyTransactionEvent(c, { orgId: ctx.orgId, transactionId, actorId: ctx.userId }));
 
@@ -390,6 +402,7 @@ describe("Phase 17 — parallel reporting and sign-off", () => {
     // production path an operator actually arrives on.
     const ctx = await seedCutoverDealer();
     await ctx.asOwner.mutation(api.expenses.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: ctx.orgId,
       title: "Ordinary paid expense",
       amount: 100,

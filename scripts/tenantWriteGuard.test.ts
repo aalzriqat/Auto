@@ -489,10 +489,65 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // `sweepAuthorityWork`, which took an `orgId` and was analysed, was deleted
   // with the drain-riding retry it implemented; the three replacements above
   // are all `workId`-only and the cron selector takes nothing.
+  // Then 481→485 / skippedNoOrgId 151→155, `analysed` unchanged at 315, by the
+  // four SCRUM-222 outbox posting mutations:
+  //
+  // `accountingOutbox.dispatchDueOutboxWork`, `accountingOutbox.claimOutboxRow`,
+  // `accountingOutbox.postOutboxRow` and `accountingOutbox.observeOutboxAttempt`:
+  //
+  // The GL half of exactly the split SCRUM-208 made for the authority half
+  // above, and they take the same shape for the same reason.
+  // `dispatchDueOutboxWork` is the cron selector and has no tenant: it reads the
+  // global `by_dispatch_next_action` range and does nothing but SCHEDULE one
+  // per-row mutation each, writing no tenant data at all. The other three take
+  // only a `rowId` — plus, for the worker, the attempt identity and generation
+  // it must validate — which is STRONGER than taking an `orgId`: the tenant is
+  // read from the stored `pendingAccountingEvents` row and every subsequent read
+  // is scoped by it, so there is no caller-supplied organization for a caller to
+  // get wrong or to forge. All four are `internalMutation`s reachable only from
+  // the scheduler or the `dispatch-outbox-work` cron, with no public entry point.
+  // Then 485→484 / analysed 315→314 (SCRUM-314), by the REMOVAL of
+  // `customers.mergeCustomers`. The customer-merge feature was deleted outright
+  // rather than fenced: SCRUM-250 existed only because a generic merge loop
+  // could raw-reassign `customerId` on receipt-authority rows, and with no loop
+  // there is no reachability left to fence. It took an `orgId` and was
+  // analysed, so both counts fall by one while the two skip counts hold.
+  //
+  // ⚠️ Re-pinning is legitimate ONLY for a surface that genuinely changed. This
+  // ratchet exists to make a SILENT shrink impossible — a mutation that stops
+  // being analysed because it lost its `orgId`, or an analyser that quietly
+  // stops seeing a file, must fail here. Lowering the pin to turn a red test
+  // green, without a removal in the same commit that explains it, is the exact
+  // failure it is built to catch.
+  //
+  // Then 484→485 / analysed 314→315 (SCRUM-218-C), by the one mutation that
+  // slice adds:
+  //
+  // `collections.applyRetainedCredit` — applies retained customer credit to a
+  // receivable. It takes an explicit `orgId` and is therefore ANALYSED rather
+  // than skipped, which is the outcome to want: every row it touches (the
+  // movement, its retained position, the receivable and the canonical
+  // allocation) is re-read and checked against that tenant before any write.
+  //
+  // Net across the two changes in this lane: 485 → 484 → 485 and 315 → 314 →
+  // 315, one mutation removed and one added. The counts returning to their
+  // earlier values is a COINCIDENCE of two independent changes, not evidence
+  // that nothing moved — which is why both steps are recorded separately above
+  // rather than being netted into a single "unchanged" note. These numbers were
+  // MEASURED after both changes, not arithmetic from the artifact's own pin.
+  //
+  // ─── RC INTEGRATION (SCRUM-313): the Playwright lane merged in here ───
+  //
+  // The two reasons below arrived from the OTHER side of this merge, on
+  // protected main `17fb50e4e` (PR #300 / SCRUM-143). Their reasoning is kept
+  // verbatim in substance; only the numbers are restated, because the two lanes
+  // moved the same counters independently and main's "151 to 153" was measured
+  // against a tree that had none of the Accounting changes above.
   //
   // `e2eBootstrap.markPreviewDeployment` / `.bootstrapE2EOrganization`
   // (SCRUM-143) — the fifth stated reason, and the two mutations that take
-  // `skippedNoOrgId` from 151 to 153:
+  // `skippedNoOrgId` from 155 to 157 in the COMBINED tree (they took it from
+  // 151 to 153 on main, where the Accounting slices were absent):
   //
   // Neither takes an `orgId` because on the deployment they are allowed to run
   // on there is no tenant to name. `markPreviewDeployment` refuses unless the
@@ -503,12 +558,19 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // ids they do write are ones the same transaction just minted. Both are
   // `internalMutation`s with no public entry point, reachable only through an
   // admin/deploy key.
+  //
+  // ⚠️ THE COMBINED PINS BELOW WERE RE-MEASURED ON THE MERGED TREE, not derived
+  // by adding main's delta to the RC's. Arithmetic would have produced the same
+  // four numbers here, which is exactly why it is not evidence: it would equally
+  // have "confirmed" a count that silently lost a mutation on one side of the
+  // merge. The ratchet's whole purpose is to make a silent shrink impossible, so
+  // an integration re-measures rather than reconciles on paper.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 483,
+      totalMutations: 487,
       analysed: 315,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 153,
+      skippedNoOrgId: 157,
     });
   });
 });

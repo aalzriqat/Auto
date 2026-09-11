@@ -78,6 +78,7 @@ const vehicleSourceType = v.optional(v.union(v.literal("STOCK"), v.literal("SOUR
 
 import { paginationOptsValidator } from "convex/server";
 import { retroactiveOwnershipChangeRefusal } from "./utils/vehicleOwnership";
+import { runWithIdempotency } from "./utils/idempotency";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -765,9 +766,45 @@ export const create = mutation({
     /** How the dealer paid for the vehicle — drives the GL credit side (Cash/Bank/Cheque/Card/AP-Suppliers for ON_ACCOUNT). Ignored for SOURCED vehicles, which never capitalize into inventory. */
     purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
     ...trustPassportFieldValidators,
+    // SCRUM-313 census. This path calls `postVehicleAcquisitionIfOwned`, which
+    // has NO posted-check, with the vehicle id minted by the insert below. A
+    // lost-response retry therefore mints vehicle B, accounting key B and a
+    // SECOND acquisition posting: duplicate inventory capitalization and a
+    // duplicate credit (cash/bank or AP-Suppliers).
+    //
+    // VIN cannot serve as the retry barrier: it is OPTIONAL here, so it is
+    // absent exactly when a dealer is recording stock in a hurry, and a
+    // uniqueness check on an absent value protects nothing.
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "vehicles.create",
+        economic: true,
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+        // Identity of the physical car plus everything that decides the
+        // acquisition economics. A same-key call differing in any of these is a
+        // different intent and is refused, not deduped.
+        fingerprint: JSON.stringify({
+          vin: args.vin?.trim() || null,
+          make: args.make.trim(),
+          model: args.model.trim(),
+          year: args.year,
+          sourceType: args.sourceType,
+          purchasePrice: args.purchasePrice ?? null,
+          sourceCost: args.sourceCost ?? null,
+          sellingPrice: args.sellingPrice,
+          purchasePaymentMethod: args.purchasePaymentMethod ?? null,
+        }),
+      },
+      async () => {
+    // NOTE: the body below is unchanged and deliberately NOT re-indented, so
+    // the diff shows the identity boundary rather than 130 reformatted lines.
 
     const vehicleGate = await ctx.runQuery(internal.subscriptions.canAddVehicle, { orgId: args.orgId });
     if (!vehicleGate.allowed) {
@@ -881,7 +918,10 @@ export const create = mutation({
       actorId: user._id,
     });
 
-    const { orgId: _, ...payloadArgs } = args;
+    // `idempotencyKey` is a TRANSPORT concern, not part of the vehicle payload:
+    // this spread is persisted into a vehicleEdits row whose schema rejects
+    // unknown fields, so leaving it in made every approval-path create fail.
+    const { orgId: _, idempotencyKey: __, ...payloadArgs } = args;
     await ctx.db.insert("vehicleEdits", {
       orgId: args.orgId,
       requestedBy: user._id,
@@ -903,6 +943,8 @@ export const create = mutation({
     );
 
     return id;
+      }
+    );
   },
 });
 
@@ -1546,9 +1588,42 @@ export const createReservation = mutation({
      */
     dealQuoteId: v.optional(v.id("quotes")),
     dealDepositId: v.optional(v.id("deposits")),
+    // SCRUM-313 census. With a deposit this reaches `recordHeldDeposit`, which
+    // mints a `deposits` id (plus a collectionPayment and a voucher) and posts
+    // DEPOSIT_RECEIVED keyed on it — so a retry books the customer's money a
+    // second time.
+    //
+    // "The vehicle is already committed" is deliberately NOT used as the retry
+    // barrier. The commitment system intentionally lets an operation with valid
+    // lineage JOIN an existing root: commitment ownership answers WHICH DEAL
+    // owns the car, never whether THIS client command already happened. A
+    // retry carrying the same lineage would legitimately join and then mint a
+    // fresh reservation and deposit occurrence. Identity is the honest
+    // boundary; commitment is an authority model, not a de-duplicator.
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "vehicles.createReservation",
+        economic: true,
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+        fingerprint: JSON.stringify({
+          vehicleId: args.vehicleId.toString(),
+          customerId: args.customerId.toString(),
+          depositAmount: args.depositAmount ?? null,
+          depositMethod: args.depositMethod ?? null,
+          dealQuoteId: args.dealQuoteId?.toString() ?? null,
+          dealDepositId: args.dealDepositId?.toString() ?? null,
+        }),
+      },
+      async () => {
+    // NOTE: body unchanged and deliberately NOT re-indented, so the diff shows
+    // the identity boundary rather than a reformat.
 
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
@@ -1751,6 +1826,8 @@ export const createReservation = mutation({
     await syncVehicleHoldStatus(ctx, args.vehicleId, user._id);
 
     return reservationId;
+      }
+    );
   },
 });
 

@@ -34,7 +34,7 @@ describe("expenses.create", () => {
     const { t, orgId, asUser } = await setup();
     const expenseDate = Date.now();
 
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       title: "Office Rent",
       amount: 5000,
@@ -66,7 +66,7 @@ describe("expenses.create", () => {
     const { t, orgId } = await setup();
 
     await expect(
-      t.mutation(api.expenses.create, {
+      t.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
         orgId,
         title: "Test",
         amount: 100,
@@ -99,7 +99,7 @@ describe("expenses.create", () => {
     );
 
     await expect(
-      asUser.mutation(api.expenses.create, {
+      asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
         orgId,
         vehicleId: foreignVehicleId,
         title: "Repair",
@@ -129,7 +129,7 @@ describe("expenses.create", () => {
       })
     );
 
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       title: "Oil Change",
@@ -154,7 +154,7 @@ describe("expenses.create", () => {
   test("creates PENDING expense without cash transaction or accounting event", async () => {
     const { t, orgId, asUser } = await setup();
 
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       title: "Vendor invoice awaiting payment",
       amount: 750,
@@ -189,7 +189,7 @@ describe("expenses.update", () => {
   test("marking a PENDING expense PAID records the cash transaction and accounting event", async () => {
     const { t, orgId, asUser } = await setup();
 
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       title: "Pending utility bill",
       amount: 300,
@@ -231,7 +231,7 @@ describe("expenses.update", () => {
     const { t, orgId, asUser } = await setup();
 
     const originalDate = Date.now();
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       title: "Utility Bill",
       amount: 300,
@@ -269,7 +269,7 @@ describe("Phase 2 — amortization start date can't predate the expense's month"
   test("create rejects a start date in an earlier calendar month than the expense", async () => {
     const { orgId, asUser } = await setup();
     await expect(
-      asUser.mutation(api.expenses.create, {
+      asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
         orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 2, 1), // March 2026
         category: "FEES", isPrepaid: true, amortizationMonths: 12,
         amortizationStartDate: Date.UTC(2026, 1, 15), // February — before March
@@ -279,7 +279,7 @@ describe("Phase 2 — amortization start date can't predate the expense's month"
 
   test("create accepts a start date earlier in the SAME calendar month as the expense (month-level, not day-level)", async () => {
     const { orgId, asUser } = await setup();
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 2, 20),
       category: "FEES", isPrepaid: true, amortizationMonths: 12,
       amortizationStartDate: Date.UTC(2026, 2, 1), // same month, earlier day — allowed
@@ -289,7 +289,7 @@ describe("Phase 2 — amortization start date can't predate the expense's month"
 
   test("create accepts a start date after the expense's month (coverage begins later)", async () => {
     const { orgId, asUser } = await setup();
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 2, 1),
       category: "FEES", isPrepaid: true, amortizationMonths: 12,
       amortizationStartDate: Date.UTC(2026, 4, 1), // May — allowed
@@ -301,7 +301,7 @@ describe("Phase 2 — amortization start date can't predate the expense's month"
     const { orgId, asUser } = await setup();
     // PENDING so the update isn't blocked by the separate "posted expenses are
     // locked" guard, which would otherwise fire first and mask this check.
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 2, 1),
       category: "FEES", status: "PENDING", isPrepaid: true, amortizationMonths: 12,
     });
@@ -314,7 +314,7 @@ describe("Phase 2 — amortization start date can't predate the expense's month"
 
   test("update rejects moving the expense date later than an already-set start date", async () => {
     const { orgId, asUser } = await setup();
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 2, 1),
       category: "FEES", status: "PENDING", isPrepaid: true, amortizationMonths: 12,
       amortizationStartDate: Date.UTC(2026, 2, 1),
@@ -328,7 +328,7 @@ describe("Phase 2 — amortization start date can't predate the expense's month"
 
   test("update accepts null to explicitly clear a previously-set start date (distinct from omitting the field)", async () => {
     const { t, orgId, asUser } = await setup();
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 2, 1),
       category: "FEES", status: "PENDING", isPrepaid: true, amortizationMonths: 12,
       amortizationStartDate: Date.UTC(2026, 4, 1), // May — later than the expense's own March date
@@ -342,7 +342,7 @@ describe("Phase 2 — amortization start date can't predate the expense's month"
 
   test("update omitting amortizationStartDate leaves an existing value untouched (undefined means 'no change', not 'clear')", async () => {
     const { t, orgId, asUser } = await setup();
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 2, 1),
       category: "FEES", status: "PENDING", isPrepaid: true, amortizationMonths: 12,
       amortizationStartDate: Date.UTC(2026, 4, 1),
@@ -359,7 +359,7 @@ describe("expenses.remove", () => {
   test("rejects deletion after an expense is posted", async () => {
     const { t, orgId, asUser } = await setup();
 
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       title: "Delete Me",
       amount: 200,
@@ -380,7 +380,7 @@ describe("expenses.remove", () => {
   test("leaves the linked transaction row active when deletion is rejected", async () => {
     const { t, orgId, asUser } = await setup();
 
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       title: "Remove With TX",
       amount: 100,
@@ -447,7 +447,7 @@ describe("expenses.reverseExpense", () => {
   test("cancels a queued (not yet actually posted) expense post and removes the expense", async () => {
     const { t, orgId, asUser } = await setupPendingOnly();
 
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       title: "No chart yet",
       amount: 50,
@@ -474,7 +474,7 @@ describe("expenses.reverseExpense", () => {
   test("reverses a fully posted expense with a real offsetting journal entry", async () => {
     const { t, orgId, asUser } = await setupFullyPosted();
 
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       title: "Fully posted",
       amount: 75,
@@ -512,7 +512,7 @@ describe("expenses.reverseExpense", () => {
   test("requires a non-empty reason", async () => {
     const { orgId, asUser } = await setupPendingOnly();
 
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       title: "No reason given",
       amount: 20,
@@ -528,7 +528,7 @@ describe("expenses.reverseExpense", () => {
   test("a user without manage:finance cannot reverse an expense", async () => {
     const { t, orgId, asUser: asFinanceUser } = await setupPendingOnly();
 
-    const expenseId = await asFinanceUser.mutation(api.expenses.create, {
+    const expenseId = await asFinanceUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       title: "Restricted",
       amount: 20,
@@ -590,7 +590,7 @@ describe("expenses VAT split (Phase 41)", () => {
   test("an expense with a VAT amount splits the ledger into net expense + VAT receivable", async () => {
     const { t, orgId, asUser } = await setupFullyPosted();
 
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       title: "Office rent with VAT",
       amount: 1100,
@@ -635,7 +635,7 @@ describe("expenses VAT split (Phase 41)", () => {
   test("an expense without a VAT amount posts the plain two-line entry (unchanged behavior)", async () => {
     const { t, orgId, asUser } = await setupFullyPosted();
 
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       title: "No VAT",
       amount: 200,
@@ -662,7 +662,7 @@ describe("expenses VAT split (Phase 41)", () => {
   test("a MARKETING expense debits the dedicated Marketing Expense account, not GENERAL_EXPENSE", async () => {
     const { t, orgId, asUser } = await setupFullyPosted();
 
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       title: "Social ad spend",
       amount: 400,
@@ -709,7 +709,7 @@ describe("expenses VAT split (Phase 41)", () => {
       await ctx.db.delete(rentAccount!._id);
     });
 
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       title: "Showroom rent",
       amount: 900,

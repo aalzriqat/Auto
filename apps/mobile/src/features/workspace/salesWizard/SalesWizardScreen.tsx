@@ -27,7 +27,7 @@ import { useLocale } from "../../../providers/LocaleProvider";
 import { type AppTheme } from "../../../theme";
 import { useAppTheme, useThemedStyles } from "../../../providers/ThemeProvider";
 import { compactInitials } from "../nativeModules";
-import { idempotencyKey, money, parseOptionalNumber, useGenericError, SearchInput } from "../modules/moduleShared";
+import { useCommandIdentity, money, parseOptionalNumber, useGenericError, SearchInput } from "../modules/moduleShared";
 import { calculateUnifiedMurabaha, type UnifiedMurabahaResult } from "./murabaha";
 
 export type WizardPaymentType = "CASH" | "INSTALLMENT";
@@ -203,6 +203,7 @@ export function SalesWizardScreen({
   const saveQuote = useMutation(api.quotes.saveQuote);
   const updateQuoteStatus = useMutation(api.quotes.updateQuoteStatus);
   const createDeposit = useMutation(api.deposits.create);
+  const commandId = useCommandIdentity();
   const saveDraft = useMutation(api.wizardDrafts.saveDraft);
   const clearDraft = useMutation(api.wizardDrafts.clearDraft);
   const dbDraft = useQuery(api.wizardDrafts.getMyDraft, { orgId });
@@ -522,13 +523,17 @@ export function SalesWizardScreen({
     const amount = parseOptionalNumber(depositAmount);
     if (!quoteId || !amount || amount <= 0) return;
     setSaving(true);
+    // Scoped to the QUOTE this wizard is building, so a lost response and a
+    // second tap take the customer's deposit ONCE. Retired only on success.
+    const depositIntent = `wizard-deposit:${String(quoteId)}`;
     try {
       const newDepositId = await createDeposit({
         orgId,
         quoteId,
         amount,
-        idempotencyKey: idempotencyKey("deposits.create"),
+        idempotencyKey: commandId.for(depositIntent),
       });
+      commandId.retire(depositIntent);
       setDepositId(newDepositId);
       setDepositDone(true);
       setDepositOpen(false);
@@ -542,8 +547,12 @@ export function SalesWizardScreen({
   async function handleCompleteSale() {
     if (!quoteId) return;
     setSaving(true);
+    // Completing a quote recognises the sale and posts to the GL — one intent
+    // per quote, held across attempts.
+    const completeIntent = `wizard-complete:${String(quoteId)}`;
     try {
-      await completeFromQuote({ orgId, quoteId, idempotencyKey: idempotencyKey("sales.completeFromQuote") });
+      await completeFromQuote({ orgId, quoteId, idempotencyKey: commandId.for(completeIntent) });
+      commandId.retire(completeIntent);
       setSaleCompleted(true);
     } catch (error) {
       reportError("Mobile wizard complete sale failed", error);

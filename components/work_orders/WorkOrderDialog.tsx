@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -44,6 +44,11 @@ export function WorkOrderDialog({ open, onOpenChange, vehicleId, workOrder }: Wo
   const { activeOrgId } = useOrg();
 
   const createWO = useMutation(api.workOrders.create);
+  // Minted at the user-intent boundary and held across attempts. A COMPLETED
+  // work order posts an expense to the GL before its own row exists, so a
+  // per-attempt key would let a lost response post the expense twice.
+  // `update` needs no key: it refuses on the work order's own expenseId.
+  const idempotencyKeyRef = useRef<string | null>(null);
   const updateWO = useMutation(api.workOrders.update);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -98,7 +103,9 @@ export function WorkOrderDialog({ open, onOpenChange, vehicleId, workOrder }: Wo
         });
         toast.success("Work order updated successfully");
       } else {
+        idempotencyKeyRef.current ??= `work-order-create:${crypto.randomUUID()}`;
         await createWO({
+          idempotencyKey: idempotencyKeyRef.current,
           orgId: activeOrgId,
           vehicleId,
           title: values.title,
@@ -106,6 +113,8 @@ export function WorkOrderDialog({ open, onOpenChange, vehicleId, workOrder }: Wo
           tasks: values.tasks,
           notes: values.notes,
         });
+        // Only a SUCCESS retires the identity.
+        idempotencyKeyRef.current = null;
         toast.success("Work order created successfully!");
       }
       onOpenChange(false);

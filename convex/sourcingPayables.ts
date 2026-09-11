@@ -218,7 +218,7 @@ export const markPaid = mutation({
     /** The bank or cash account the money left. */
     paymentAccountId: v.optional(v.id("chartOfAccounts")),
     taxAmount: v.optional(v.number()),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -229,6 +229,7 @@ export const markPaid = mutation({
       {
         orgId: args.orgId,
         operation: "sourcingPayables.markPaid",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
         fingerprint: JSON.stringify({ payableId: args.payableId, paymentMethod, taxAmount: args.taxAmount ?? null }),
@@ -342,7 +343,7 @@ export const recordPartialPayment = mutation({
     paymentReference: v.optional(v.string()),
     paymentAccountId: v.optional(v.id("chartOfAccounts")),
     paymentNotes: v.optional(v.string()),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -353,6 +354,7 @@ export const recordPartialPayment = mutation({
       {
         orgId: args.orgId,
         operation: "sourcingPayables.recordPartialPayment",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
         fingerprint: JSON.stringify({

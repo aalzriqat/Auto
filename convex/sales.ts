@@ -349,7 +349,7 @@ export const create = mutation({
     gapTermMonths: v.optional(v.number()),
     supplierSettlementRoute: v.optional(supplierSettlementRouteValidator),
     depositResolution: v.optional(depositResolutionValidator),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
@@ -366,8 +366,47 @@ export const create = mutation({
       {
         orgId: args.orgId,
         operation: "sales.create",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
+        // Counterparty (customer), subject (vehicle), amount and effective date,
+        // plus every money term that changes what the sale posts. Reusing an
+        // identity after editing any of these is a different deal.
+        fingerprint: JSON.stringify({
+          vehicleId: args.vehicleId,
+          customerId: args.customerId,
+          salespersonId: args.salespersonId,
+          salePrice: args.salePrice,
+          saleDate: args.saleDate,
+          quoteId: args.quoteId ?? null,
+          taxAmount: args.taxAmount ?? null,
+          taxRate: args.taxRate ?? null,
+          dealerFees: args.dealerFees ?? null,
+          downPayment: args.downPayment ?? null,
+          tradeInVehicleId: args.tradeInVehicleId ?? null,
+          tradeInValue: args.tradeInValue ?? null,
+          financingType: args.financingType ?? null,
+          loanAmount: args.loanAmount ?? null,
+          apr: args.apr ?? null,
+          termMonths: args.termMonths ?? null,
+          warrantySold: args.warrantySold ?? null,
+          warrantyCost: args.warrantyCost ?? null,
+          warrantyTermMonths: args.warrantyTermMonths ?? null,
+          gapSold: args.gapSold ?? null,
+          gapCost: args.gapCost ?? null,
+          gapTermMonths: args.gapTermMonths ?? null,
+          supplierSettlementRoute: args.supplierSettlementRoute ?? null,
+          // Decides whether a held deposit is refunded, forfeited or applied.
+          // Omitting it let two economically DIFFERENT sales share one
+          // fingerprint, so a reused identity would replay the first and apply
+          // the wrong treatment to the customer's money. Found in review.
+          depositResolution: args.depositResolution ?? null,
+        }),
+        // `orgId` is part of the lookup key rather than the fingerprint, and
+        // `status` is the literal "COMPLETED" for this door — every other
+        // accepted argument is material and is hashed above. A field added to
+        // the validator without being added here silently widens what counts
+        // as "the same command".
       },
       async () => {
         // SCRUM-195 M3, DOOR 1. A direct completed sale, no quote wizard — and
@@ -398,7 +437,7 @@ export const completeFromQuote = mutation({
     quoteId: v.id("quotes"),
     supplierSettlementRoute: v.optional(supplierSettlementRouteValidator),
     depositResolution: v.optional(depositResolutionValidator),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
@@ -413,9 +452,18 @@ export const completeFromQuote = mutation({
       {
         orgId: args.orgId,
         operation: "sales.completeFromQuote",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
-        fingerprint: JSON.stringify({ quoteId: args.quoteId }),
+        // Both of these are forwarded to completeSalesForLineItems and change
+        // what the completion does with the supplier settlement and any held
+        // deposit. Fingerprinting the quote alone let a reused identity replay
+        // the first completion and silently discard changed instructions.
+        fingerprint: JSON.stringify({
+          quoteId: args.quoteId,
+          supplierSettlementRoute: args.supplierSettlementRoute ?? null,
+          depositResolution: args.depositResolution ?? null,
+        }),
       },
       async () => {
         const quote = await ctx.db.get(args.quoteId);
@@ -502,6 +550,7 @@ export const createDraft = mutation({
       {
         orgId: args.orgId,
         operation: "sales.createDraft",
+        economic: false,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
       },
@@ -518,7 +567,7 @@ export const completeDraft = mutation({
     orgId: v.id("organizations"),
     saleId: v.id("sales"),
     depositResolution: v.optional(depositResolutionValidator),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
@@ -533,8 +582,15 @@ export const completeDraft = mutation({
       {
         orgId: args.orgId,
         operation: "sales.completeDraft",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
+        // The draft carries the money terms; what this command adds is WHICH
+        // draft is being completed and how any held deposit is treated.
+        fingerprint: JSON.stringify({
+          saleId: args.saleId,
+          depositResolution: args.depositResolution ?? null,
+        }),
       },
       async () => {
         // SCRUM-195 M3, DOOR 3. A draft commits nothing, so the barrier
@@ -1376,7 +1432,7 @@ export const markCommissionPaid = mutation({
     orgId: v.id("organizations"),
     saleId: v.id("sales"),
     paymentMethod: v.optional(paymentMethodValidator),
-    idempotencyKey: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_COMMISSIONS]);
@@ -1387,6 +1443,7 @@ export const markCommissionPaid = mutation({
       {
         orgId: args.orgId,
         operation: "sales.markCommissionPaid",
+        economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
         fingerprint: JSON.stringify({ saleId: args.saleId, paymentMethod }),

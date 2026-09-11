@@ -666,21 +666,21 @@ export function resetSocialConversationSyncCount(): void {
  * events in a loop, because each patch fires a sync that re-reads the whole
  * thread: N patches cost O(N²) reads. Measured superlinear (2x the events gave
  * ~3x the time at n=200, converging on quadratic at higher n). The loops with
- * this shape are `customers.mergeCustomers`, `socialInbox.setConversationVehicle`
- * called without a platform, and the org purge. On a long Messenger thread that
- * can reach Convex's per-transaction read ceiling, and a throw there rolls the
- * whole mutation back — so the merge would fail outright rather than degrade.
+ * this shape are `socialInbox.setConversationVehicle` called without a platform,
+ * and the org purge. On a long Messenger thread that can reach Convex's
+ * per-transaction read ceiling, and a throw there rolls the whole mutation back
+ * — so such a loop fails outright rather than degrading.
  *
  * A per-transaction memo does NOT fix that, which is worth stating because it
  * is the obvious first idea: each patch invalidates the very thread the next
  * patch re-reads, so the cache never hits. The fix has to be to stop
  * recomputing per write at all.
  *
- * All three loops now avoid it. The backfills dedupe thread keys within a
- * batch; `customers.mergeCustomers` and `socialInbox.setConversationVehicle`
- * opt into `deferredThreadTriggers`, which suppresses the per-write recompute
- * so the loop can sync each touched thread exactly once at the end. Measured
- * on the merge path: 400 recomputes for 200 repointed events before, 2 after.
+ * All of these loops now avoid it. The backfills dedupe thread keys within a
+ * batch; `socialInbox.setConversationVehicle` opts into
+ * `deferredThreadTriggers`, which suppresses the per-write recompute so the
+ * loop can sync each touched thread exactly once at the end. Measured when this
+ * was introduced: 400 recomputes for 200 repointed events before, 2 after.
  *
  * The one loop still recomputing eagerly is the org purge
  * (`ORGANIZATION_DELETION_STEPS` in `adminOrgs.ts`). Each event delete
@@ -834,8 +834,8 @@ aggregateTriggers.register("facebookEvents", async (ctx, change) => {
  * Measured superlinear — 2x the events gave ~3x the time at n=200, converging
  * on quadratic — and on a long Messenger history that reaches Convex's
  * per-transaction read ceiling. The throw then rolls the whole mutation back,
- * so `mergeCustomers` would fail outright for exactly the contacts that most
- * need merging: the same person arriving once on Instagram and once on Facebook.
+ * so such a loop fails outright for exactly the contacts with the richest
+ * history: the same person arriving on both Instagram and Facebook.
  *
  * ## Why not a scheduled repoint
  *
@@ -978,8 +978,8 @@ function prepareDeferredThreadMutation(ctx: MutationCtx): {
  * `_generated/server` — which is what `aggregateWiring.test.ts` forbids — while
  * still preserving the builder's precise type. Widening it to
  * `MutationBuilder<DataModel, "public">` compiled but degraded inference inside
- * every handler built on it, turning `q` into an implicit `any` in
- * `customers.mergeCustomers`.
+ * every handler built on it, turning `q` into an implicit `any` inside the
+ * handlers built with it.
  */
 type RawMutationBuilder = typeof import("./_generated/server").mutation;
 

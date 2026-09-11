@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { usePaginatedQuery, useMutation, useQuery } from "convex/react";
@@ -219,6 +219,10 @@ function AddPartnerDialog({
 }>) {
   const { t } = useLanguage();
   const addPartner = useMutation(api.partnerEquity.add);
+  // Minted at the user-intent boundary and held across attempts — a key minted
+  // per attempt would let a lost response create a second partner and a second
+  // opening-capital posting.
+  const idempotencyKeyRef = useRef<string | null>(null);
   const { submitting, submitWithFeedback } = useAccountingSubmit();
 
   const form = useForm<AddPartnerFormValues>({
@@ -234,13 +238,17 @@ function AddPartnerDialog({
   async function onSubmit(values: AddPartnerFormValues) {
     const openingMinor = Math.round(values.openingContribution * factor);
     await submitWithFeedback(async () => {
+      idempotencyKeyRef.current ??= `partner-add:${crypto.randomUUID()}`;
       await addPartner({
+        idempotencyKey: idempotencyKeyRef.current,
         orgId,
         partnerName: values.name.trim(),
         notes: values.notes?.trim() || undefined,
         openingContributionMinor: openingMinor > 0 ? openingMinor : undefined,
         paymentMethod: openingMinor > 0 ? values.paymentMethod : undefined,
       });
+      // Only a SUCCESS retires the identity.
+      idempotencyKeyRef.current = null;
       toast.success(t("PartnerAdded" as any));
       handleOpenChange(false);
     });
@@ -255,7 +263,7 @@ function AddPartnerDialog({
         </DialogHeader>
 
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+          <form onSubmit={(e) => void form.handleSubmit(onSubmit)(e)} className="space-y-4">
             <FormField
               control={form.control}
               name="name"
@@ -318,7 +326,7 @@ function AddPartnerDialog({
                 cancelLabel={t("Cancel" as any)}
                 confirmLabel={t("AddPartner" as any)}
                 onCancel={() => handleOpenChange(false)}
-                onConfirm={form.handleSubmit(onSubmit)}
+                onConfirm={() => void form.handleSubmit(onSubmit)()}
                 submitting={submitting}
               />
             </DialogFooter>
@@ -348,6 +356,7 @@ function MovementDialog({
 }>) {
   const { t } = useLanguage();
   const recordMovement = useMutation(api.partnerEquity.recordEquityMovement);
+  const idempotencyKeyRef = useRef<string | null>(null);
   const { submitting, submitWithFeedback } = useAccountingSubmit();
 
   const meta = MOVEMENT_META[type];
@@ -359,7 +368,9 @@ function MovementDialog({
 
   async function onSubmit(values: MovementFormValues) {
     await submitWithFeedback(async () => {
+      idempotencyKeyRef.current ??= `equity-movement:${crypto.randomUUID()}`;
       await recordMovement({
+        idempotencyKey: idempotencyKeyRef.current,
         orgId,
         partnerId: partner._id,
         type,
@@ -367,6 +378,8 @@ function MovementDialog({
         paymentMethod: meta.needsPayment ? values.paymentMethod : undefined,
         notes: values.notes?.trim() || undefined,
       });
+      // Only a SUCCESS retires the identity.
+      idempotencyKeyRef.current = null;
       toast.success(t("EquityMovementRecorded" as any));
       onOpenChange(false);
     });
@@ -381,7 +394,7 @@ function MovementDialog({
         </DialogHeader>
 
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+          <form onSubmit={(e) => void form.handleSubmit(onSubmit)(e)} className="space-y-4">
             <AmountSummary
               label={t("CurrentBalance" as any)}
               value={formatCurrency(partner.balanceMinor / factor, scale)}
@@ -436,7 +449,7 @@ function MovementDialog({
                 cancelLabel={t("Cancel" as any)}
                 confirmLabel={t(meta.titleKey as any)}
                 onCancel={() => onOpenChange(false)}
-                onConfirm={form.handleSubmit(onSubmit)}
+                onConfirm={() => void form.handleSubmit(onSubmit)()}
                 submitting={submitting}
               />
             </DialogFooter>

@@ -184,10 +184,12 @@ describe("SCRUM-234 — modern collection receipts can no longer be double-poste
     const { t, orgId, customerId, asOwner } = dealer;
 
     const receivableId = await asOwner.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId, sourceType: "INTERNAL_INSTALLMENT", title: "Installment",
       amount: 1000, dueDate: Date.now() + 86_400_000, creditSystemKey: "MISCELLANEOUS_INCOME",
     });
     await asOwner.mutation(api.collections.recordPayment, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, receivableId, amount: 300, method: "CASH", paymentDate: Date.now(),
     });
 
@@ -210,6 +212,7 @@ describe("SCRUM-234 — modern collection receipts can no longer be double-poste
     const { t, orgId, customerId, asOwner } = dealer;
 
     const receivableId = await asOwner.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId, sourceType: "CHEQUE", title: "Cheque receivable",
       amount: 800, dueDate: Date.now() + 86_400_000, creditSystemKey: "MISCELLANEOUS_INCOME",
     });
@@ -217,7 +220,7 @@ describe("SCRUM-234 — modern collection receipts can no longer be double-poste
       orgId, receivableId, customerId, bank: "Arab Bank", chequeNumber: "S234-1",
       chequeDate: Date.now() + 86_400_000, amount: 800,
     });
-    await asOwner.mutation(api.collections.clearCheque, { orgId, chequeId });
+    await asOwner.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
 
     const collectionEvents = await eventsOfType(t, orgId, "COLLECTION_PAYMENT");
     expect(collectionEvents).toHaveLength(1);
@@ -236,6 +239,7 @@ describe("SCRUM-234 — the EXPENSE_POSTED family reproduced in c18041", () => {
     const { t, orgId, asOwner } = dealer;
 
     await asOwner.mutation(api.expenses.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, title: "Office supplies", amount: 100, date: Date.now(),
       category: "OTHER", status: "PAID", paymentMethod: "CASH",
     });

@@ -21,6 +21,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast } from "@/components/ui/sonner";
+import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { Wallet, Coins, CalendarClock } from "lucide-react";
 
 const METHODS = ["CASH", "BANK_TRANSFER", "CHEQUE", "CARD"] as const;
@@ -45,6 +46,7 @@ export default function PayrollPage() {
 
   const setCompensation = useMutation(api.payroll.setCompensation);
   const recordAdvance = useMutation(api.payroll.recordAdvance);
+  const commandId = useCommandIdentity();
   const recoverAdvance = useMutation(api.payroll.recoverAdvance);
   const createRun = useMutation(api.payroll.createRun);
   const approveRun = useMutation(api.payroll.approveRun);
@@ -90,12 +92,16 @@ export default function PayrollPage() {
     if (!activeOrgId || !advUser || submittingAdvance) return;
     const value = Number.parseFloat(advAmount);
     if (Number.isNaN(value) || value <= 0) return;
-    // Issuing an advance disburses cash — an idempotency key + in-flight lock
-    // prevent a double-click or retry from booking (and paying out) it twice.
-    const idempotencyKey = crypto.randomUUID();
+    // Issuing an advance disburses cash. SCRUM-57: the identity is held for
+    // THIS intent across retries — a fresh key per attempt would have made a
+    // lost response into a second disbursement, which the in-flight lock cannot
+    // prevent because it only guards concurrent clicks within one mount.
+    const intent = `record-advance:${advUser}`;
+    const idempotencyKey = commandId.for(intent);
     setSubmittingAdvance(true);
     try {
       await recordAdvance({ orgId: activeOrgId, userId: advUser as Id<"users">, amount: value, method: advMethod, idempotencyKey });
+      commandId.retire(intent);
       toast.success(t("AdvanceRecorded" as any));
       setAdvUser(""); setAdvAmount("");
     } catch (e) {
@@ -121,12 +127,15 @@ export default function PayrollPage() {
       amount = parsed;
     }
     const method = recoverMethods[advanceId] ?? "CASH";
-    // Stable key for THIS submission so an automatic network retry dedupes
-    // server-side; a fresh submission after success gets a fresh key.
-    const idempotencyKey = crypto.randomUUID();
+    // SCRUM-57: held for THIS repayment intent across retries, and retired on
+    // success so a later genuine repayment of the same advance is a new
+    // command. A fresh key per attempt deduped nothing after a lost response.
+    const intent = `recover-advance:${advanceId}`;
+    const idempotencyKey = commandId.for(intent);
     setRecoveringIds((s) => new Set(s).add(advanceId));
     try {
       await recoverAdvance({ orgId: activeOrgId, advanceId: advanceId as Id<"employeeAdvances">, method, amount, idempotencyKey });
+      commandId.retire(intent);
       toast.success(t("AdvanceRecovered" as any));
       setRecoverAmounts((m) => { const n = { ...m }; delete n[advanceId]; return n; });
     } catch (e) {

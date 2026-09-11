@@ -12,17 +12,33 @@
 import { ConvexError } from "convex/values";
 import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
-import { postAccountingEvent, PostCommand } from "./postingEngine";
-import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting, type FinancedSalePlanPayload } from "./postingRules";
+import {
+  postAccountingEvent,
+  PostCommand,
+  proveReservedReceiptAuthority,
+  assertExistingRowIsSameOccurrence,
+} from "./postingEngine";
+import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting, simplePayloadHash, RECEIPT_CREDIT_APPLIED_EVENT_TYPE, RECEIPT_CREDIT_APPLIED_SOURCE_TYPE, type FinancedSalePlanPayload } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate, checkPostingAllowed } from "../accountingPeriods";
-import { isChartInitialized, ensureCommissionAccounts, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureConsignmentAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount, ensurePayrollAccounts, ensureFinancedSettlementAccounts } from "../chartOfAccounts";
+import { SYSTEM_KEYS, type SystemKey } from "../utils/defaultChart";
+import { isChartInitialized, isSystemAccountMapped, ensureCommissionAccounts, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureConsignmentAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount, ensurePayrollAccounts, ensureFinancedSettlementAccounts } from "../chartOfAccounts";
 import {
   enqueuePendingPost,
   enqueuePendingReversal,
   cancelPendingPostByKey,
   cancelPendingPostsBySource,
 } from "../accountingOutbox";
+import {
+  ReceiptOccurrenceIdentity,
+  PostReceiptOccurrenceArgs,
+  ReverseReceiptOccurrenceArgs,
+  assertTrustedOccurrence,
+  occurrenceIdempotencyKey,
+  occurrenceReversalIdempotencyKey,
+  occurrenceIndexRange,
+  describeOccurrence,
+} from "./receiptOccurrence";
 
 export async function getOrgCurrency(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">): Promise<string> {
   const settings = await ctx.db
@@ -68,7 +84,28 @@ export async function isPostableNow(
  * to the durable outbox for retry. This is the single choke point that replaced
  * the previous "silently return if not postable" behavior.
  */
-async function postOrEnqueue(ctx: MutationCtx, cmd: PostCommand): Promise<void> {
+async function postOrEnqueue(
+  ctx: MutationCtx,
+  cmd: PostCommand,
+  /**
+   * System accounts this event's journal cannot be written without (SCRUM-218-C).
+   *
+   * ⚠️ A PRECONDITION, NOT A SELF-HEAL. `shouldPost` below only asks whether the
+   * org has a chart AT ALL, which is too coarse for an event needing a specific
+   * account: an org with a chart but no 2110 passes that check, posts
+   * synchronously, and `resolveSystemAccount` throws INSIDE the caller's
+   * transaction. Nothing catches it, so Convex rolls back the confirmed receipt
+   * — the customer's money vanishes because an account was unmapped. Naming the
+   * requirement here routes the event to the durable outbox instead, where the
+   * SCRUM-222 worker retries it and fails VISIBLY.
+   *
+   * Deliberately NOT an `ensure*Account` call. Those exist for keys with a known
+   * correct definition that a legacy chart merely lacks; 2110's classification
+   * is a SCRUM-231 cutover decision with no reclassification door afterwards, so
+   * inventing one at runtime is exactly the substitution c17653 prohibits.
+   */
+  opts?: { requiredSystemKeys?: readonly SystemKey[] }
+): Promise<void> {
   // Period integrity: if this exact domain event is already captured but not yet
   // posted in the outbox, it will post with ITS ORIGINAL accounting date once the
   // period opens. A second hook call for the same event (e.g. a commission
@@ -79,6 +116,15 @@ async function postOrEnqueue(ctx: MutationCtx, cmd: PostCommand): Promise<void> 
   // no-op; the queued original is the source of truth. (postAccountingEvent only
   // dedupes against POSTED events, so this pending-side guard is the only thing
   // that prevents the cross-period duplicate.)
+  //
+  // ⚠️ SCRUM-249 — THIS SHORT-CIRCUIT IS KEY-ONLY, AND IT FIRES BEFORE THE
+  // POSTING ENGINE IS REACHED AT ALL. For an ordinary event family that is
+  // exactly the intended behaviour and nothing below changes it. For the
+  // reserved receipt occurrence it is a silent-drop surface: a row queued under
+  // this key by something that is NOT this occurrence would make the certified
+  // receipt return here having posted nothing and raised nothing. Prove the
+  // reservation first, then prove the row found is really this occurrence.
+  const reservedAuthority = proveReservedReceiptAuthority(cmd);
   const queued = await ctx.db
     .query("pendingAccountingEvents")
     .withIndex("by_org_idempotency", (q) =>
@@ -86,7 +132,32 @@ async function postOrEnqueue(ctx: MutationCtx, cmd: PostCommand): Promise<void> 
     )
     .filter((q) => q.and(q.eq(q.field("kind"), "POST"), q.neq(q.field("status"), "POSTED")))
     .first();
-  if (queued) return;
+  if (queued) {
+    if (reservedAuthority) {
+      // A queued row carries its own payload, so "the same work is already
+      // waiting" is checkable rather than assumed.
+      //
+      // ASYMMETRY WITH THE DRAIN, DELIBERATELY NOT "FIXED" (SCRUM-249 / Sonnet F2).
+      // `accountingOutbox.postPendingEntry` rebuilds the command with
+      // `occurredAt: p.occurredAt ?? p.accountingDate`, because the pending
+      // column is optional. The row is passed here WITHOUT that fallback, so an
+      // absent `occurredAt` diverges from any real `cmd.occurredAt` and refuses.
+      //
+      // Mirroring the drain's fallback here was proposed and DECLINED: it would
+      // turn a refusal into a MATCH whenever the queued row's `accountingDate`
+      // happened to equal the incoming `occurredAt`, which is absorption — the
+      // exact outcome this ticket exists to prevent. Fail-closed is the correct
+      // asymmetry, not an oversight, and it is unreachable either way:
+      // `enqueuePendingPost` is the only POST-kind writer and always sets
+      // `occurredAt`, and `PostCommand.occurredAt` is non-optional.
+      assertExistingRowIsSameOccurrence(
+        { ...queued, payloadHash: await simplePayloadHash((queued.payload ?? {}) as Record<string, unknown>) },
+        cmd,
+        await simplePayloadHash(cmd.payload)
+      );
+    }
+    return;
+  }
 
   // Already on the books? Then there is nothing to queue. postAccountingEvent
   // dedupes on this key, so the enqueued row could never post anything — it
@@ -104,7 +175,21 @@ async function postOrEnqueue(ctx: MutationCtx, cmd: PostCommand): Promise<void> 
     )
     .filter((q) => q.eq(q.field("status"), "POSTED"))
     .first();
-  if (alreadyPosted) return;
+  if (alreadyPosted) {
+    // ⚠️ SCRUM-249 §3 K1 REPRODUCED HERE. Before this check existed, a POSTED
+    // row holding the receipt's derived key under a DIFFERENT tuple made the
+    // genuine receipt return from this line: nothing posted, nothing queued,
+    // nothing thrown, and `findPostedReceiptOccurrence` reporting null forever
+    // after. The engine's own guard could not help — it is never reached.
+    if (reservedAuthority) {
+      assertExistingRowIsSameOccurrence(
+        alreadyPosted,
+        cmd,
+        await simplePayloadHash(cmd.payload)
+      );
+    }
+    return;
+  }
 
   // Self-heal: make sure the GENERAL_EXPENSE system account is mapped for this
   // org before the engine tries to resolve it (older charts lack the key).
@@ -113,6 +198,19 @@ async function postOrEnqueue(ctx: MutationCtx, cmd: PostCommand): Promise<void> 
   if (await isChartInitialized(ctx, cmd.orgId)) {
     await ensureGeneralExpenseAccount(ctx, cmd.orgId, cmd.actorId);
     await ensureSupplierAPAccount(ctx, cmd.orgId, cmd.actorId);
+  }
+  // Checked BEFORE shouldPost, because an unmapped required account is a reason
+  // to queue even when the chart exists and the period is open — the two
+  // conditions are independent and only one of them is what `shouldPost` sees.
+  for (const key of opts?.requiredSystemKeys ?? []) {
+    if (!(await isSystemAccountMapped(ctx, cmd.orgId, key))) {
+      await enqueuePendingPost(
+        ctx,
+        cmd,
+        `System account "${key}" is not mapped for this organization at operation time`
+      );
+      return;
+    }
   }
   if (await shouldPost(ctx, cmd.orgId, cmd.accountingDate)) {
     await postAccountingEvent(ctx, cmd);
@@ -173,12 +271,44 @@ async function postDomainEvent(
  *    entry is STILL POSTED until the outbox drains, and anything that treats
  *    the amount as recovered before then is spending money the ledger still
  *    shows as spent.
- *  - NOT_POSTED — there was nothing to reverse (the forward entry never posted,
- *    and any queued copy of it has been cancelled).
+ *  - NOT_POSTED — no live POSTED forward occurrence remains, and no queued
+ *    forward post survives. An OPERATIONAL statement about the ledger NOW,
+ *    never a claim about history.
  *
  * Returned rather than swallowed because the caller has to tell DEFERRED from
  * REVERSED. Collapsing the two is what let a slice be refunded in cash while
  * its original application was still live in the general ledger.
+ *
+ * ## Why NOT_POSTED is operational and not historical (owner ruling c17613 §1)
+ *
+ * This used to read "the forward entry never posted, and any queued copy of it
+ * has been cancelled" — a claim about history, and a FALSE one in a case the
+ * suite deliberately accepts. `clearCheque`'s return path in `collections.ts`
+ * reverses a `collectionPayments` occurrence under
+ * `cheque_return_after_clear_<chequeId>`, a key this module can never mint. An
+ * occurrence reversed that way DID post; asked afterwards, the helpers below
+ * find no POSTED row and answer NOT_POSTED. Reproduced through the real outbox
+ * worker in `accountingReceiptOccurrenceIdentity.test.ts` §12 OB2.
+ *
+ * The already-reversed case is NOT given an outcome of its own, because no
+ * consumer needs the distinction. The enumeration, current and planned:
+ *
+ *   - `utils/depositApplications.ts` `reverseDepositApplicationsForSale` is the
+ *     ONLY production branch on this type at all: `journalReversed = outcome
+ *     !== "DEFERRED"`. Downstream (`utils/saleCancellation.ts`) reads that
+ *     boolean and never the outcome. It asks "is a forward journal still
+ *     standing?" — for which never-posted and already-reversed are one answer.
+ *   - `reverseReceiptOccurrence` has NO production caller; the facade is
+ *     interface-only at this revision.
+ *   - SCRUM-236 needs proof that one producer owns an occurrence identity.
+ *   - SCRUM-130 needs the cheque's GL reversal and its debt reopening to move
+ *     together, and the reopening to use the outstanding balance.
+ *
+ * None of the four needs the history. Add a fourth outcome when a consumer
+ * actually requires it — and note that `depositApplications`' own comment
+ * already records the stronger lesson: that guard was rewritten to read the
+ * LEDGER rather than the caller's `ReversalOutcome`, precisely because an
+ * outcome describes one branch's path and not the state of the books.
  */
 export type ReversalOutcome = "REVERSED" | "DEFERRED" | "NOT_POSTED";
 
@@ -272,6 +402,376 @@ async function reverseEventIfPosted(
   // it so it never posts (net GL effect of the round trip is zero).
   await cancelPendingPostByKey(ctx, args.orgId, args.pendingPostIdempotencyKey);
   return "NOT_POSTED";
+}
+
+/* ------------------------------------------------------------------------- *
+ * SCRUM-237 — the v2 receipt occurrence facade (owner-proxy c17593 §6)
+ *
+ * The three generic helpers above take `sourceType`, `sourceId`, `eventType`,
+ * `eventVersion` and the idempotency keys as INDEPENDENT arguments. That is the
+ * defect: one receipt's identity is assembled separately at each call site, so
+ * the forward post, the outbox key, the causal check and the reversal can drift
+ * apart and nothing fails when they do.
+ *
+ * These three entry points take the identity as ONE value and derive every one
+ * of those fields from it, so a v2 receipt producer has no parameter through
+ * which to re-split the tuple. The generic helpers stay exactly as they are for
+ * the unrelated event families that still use them.
+ *
+ * Nothing calls these yet, by design. SCRUM-236 rewires `recordPayment` /
+ * `clearCheque` onto them and removes the old `hookCollectionPayment`;
+ * SCRUM-218-C persists and consumes the identity. This commit defines the
+ * surface those two build against and changes no production behavior.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Post — or durably enqueue — the receipt occurrence named by `identity`.
+ *
+ * The idempotency key is DERIVED here rather than accepted, which is what makes
+ * `postOrEnqueue`'s POSTED short-circuit (keyed by `by_org_idempotency`) and
+ * `postAccountingEvent`'s dedupe (keyed by the economic tuple) the same fact
+ * instead of two conventions that happen to agree today.
+ */
+export async function postReceiptOccurrence(
+  ctx: MutationCtx,
+  args: PostReceiptOccurrenceArgs
+): Promise<void> {
+  const id = args.identity;
+  // ⚠️ REFUSE AN UNMINTED IDENTITY BEFORE THE FIRST WRITE (c17632). This is the
+  // door B237-HEAD-01 walked through: a spread clone carrying a forged
+  // `eventType` selected a different posting rule and put a cash receipt in the
+  // bank account, while `postOrEnqueue`'s key-only short-circuit later absorbed
+  // the genuine post. The tuple below is only trustworthy because of this line.
+  assertTrustedOccurrence(id);
+  await postOrEnqueue(ctx, {
+    orgId: id.orgId,
+    eventType: id.eventType,
+    sourceType: id.sourceType,
+    sourceId: id.sourceId,
+    eventVersion: id.eventVersion,
+    accountingDate: args.occurredAt,
+    occurredAt: args.occurredAt,
+    currency: args.currency,
+    idempotencyKey: occurrenceIdempotencyKey(id),
+    payload: args.payload,
+    actorId: args.actorId,
+    // SCRUM-249 — the capability that distinguishes this producer from the
+    // generic ingress. Carried, never persisted: `enqueuePendingPost` stores an
+    // explicit column list, and the drain re-establishes authority from that
+    // stored row instead of from anything held in memory.
+    receiptAuthority: id,
+  }, { requiredSystemKeys: args.requiredSystemKeys });
+}
+
+/**
+ * The causal check: is THIS occurrence on the books?
+ *
+ * Eligibility is exactly what c17593 §7 fixes it at — the exact
+ * `accountingEvents` occurrence exists AND its status is POSTED. An outbox row
+ * marked POSTED, a matching idempotency key, or a legacy `transactions` token
+ * is never a substitute, and REVERSED / FAILED / PENDING / missing are all
+ * ineligible.
+ *
+ * Addressed through `occurrenceIndexRange`, so every economic field must match.
+ * There is deliberately no key-only fallback: a lookup whose identity is wrong
+ * in any field must MISS, not quietly match something else.
+ *
+ * ## Ambiguity REFUSES rather than choosing
+ *
+ * Convex has no unique indexes, so nothing in the schema guarantees this exact
+ * range holds at most one row. An earlier revision filtered to POSTED and took
+ * `.first()`, which meant a corrupt pair — the same exact tuple present twice,
+ * one POSTED and one REVERSED — would be reported as a live POSTED occurrence,
+ * choosing the favourable row and hiding the corruption. `postAccountingEvent`
+ * reads the same tuple with `.unique()` and therefore fails closed; a causal
+ * check that is laxer than the writer it guards is worse than no check.
+ *
+ * So the range is read WITHOUT the status filter and refuses on more than one
+ * row. That converts silent corruption into an explicit operational error, and
+ * a caller cannot obtain an eligible occurrence it should not have. Status is
+ * applied afterwards: only POSTED is eligible — REVERSED, FAILED, PENDING and
+ * missing are all ineligible, and an outbox POSTED row or a matching
+ * idempotency key is never a substitute.
+ */
+export async function findPostedReceiptOccurrence(
+  // Read-only, so it accepts a QueryCtx too (SCRUM-218-C). Widened rather than
+  // cast at the call site: `listRetainedCredits` needs the same causal check a
+  // mutation does, and casting a QueryCtx to a MutationCtx to get it would be a
+  // type lie that happens to work only because this function never writes.
+  ctx: QueryCtx | MutationCtx,
+  identity: ReceiptOccurrenceIdentity
+): Promise<Doc<"accountingEvents"> | null> {
+  const range = occurrenceIndexRange(identity);
+  const rows = await ctx.db
+    .query("accountingEvents")
+    .withIndex(range.index, (q) =>
+      q
+        .eq("orgId", range.orgId)
+        .eq("eventType", range.eventType)
+        .eq("sourceType", range.sourceType)
+        .eq("sourceId", range.sourceId)
+        .eq("eventVersion", range.eventVersion)
+    )
+    .take(2);
+  if (rows.length > 1) {
+    throw new Error(
+      `ambiguous receipt occurrence ${describeOccurrence(identity)}: more than one accountingEvents row shares this exact economic tuple`
+    );
+  }
+  const row = rows[0];
+  return row && row.status === "POSTED" ? row : null;
+}
+
+/**
+ * Reverse the receipt occurrence named by `identity`.
+ *
+ * Two things this closes that the generic helper leaves open:
+ *
+ * 1. `eventVersion` is ALWAYS supplied. `reverseEventIfPosted` falls back to a
+ *    `by_org_source` scan with `.first()` when it is undefined, which reverses
+ *    whichever event happens to come first — for a source with several
+ *    occurrences that is a reversal aimed at one receipt landing on another.
+ *    Carrying the identity makes the exact-address branch unconditional FOR
+ *    THIS FACADE'S OWN CALLS. It does not make that fallback dead code: the
+ *    generic `makeReversalHook` factory in this file still omits `eventVersion`
+ *    for other event families, and that is out of scope here.
+ * 2. `pendingPostIdempotencyKey` is derived from the SAME identity as the
+ *    forward post, so `cancelPendingPostByKey` cancels the entry that forward
+ *    post actually enqueued. Supplied independently, a mismatch cancels nothing
+ *    and leaves an unposted forward entry alive behind a NOT_POSTED result.
+ * 3. Cardinality is refused BEFORE anything mutates.
+ *
+ * On (3), which the Codex seat found at `45dd608b0`: pinning `eventVersion`
+ * addresses the right ROW RANGE but says nothing about how many rows are in it.
+ * `reverseEventIfPosted`'s exact-version branch filters POSTED and takes
+ * `.first()`, so against two rows sharing one exact economic tuple it reverses
+ * one, leaves the other POSTED, and returns REVERSED. Convex has no unique
+ * indexes, so nothing in the schema prevents that pair from existing.
+ *
+ * The read path (`findPostedReceiptOccurrence`) already refused this. The
+ * MUTATING path did not — the wrong way round, since the read merely reports
+ * while the write moves money. Calling the read guard first reuses the exact
+ * same cardinality assertion and makes the refusal happen before any write.
+ *
+ * The `.first()` in `reverseEventIfPosted` itself is deliberately NOT changed:
+ * it is pre-existing, shared with `reverseDepositApplication`, and outside this
+ * change's frozen scope. Closing it at the facade removes the path this diff
+ * makes reachable; the generic helper's own cardinality behaviour is recorded
+ * as follow-up rather than widened into this PR.
+ */
+export async function reverseReceiptOccurrence(
+  ctx: MutationCtx,
+  args: ReverseReceiptOccurrenceArgs
+): Promise<ReversalOutcome> {
+  const id = args.identity;
+  // ⚠️ OBTAINABILITY BEFORE ANYTHING ELSE (c17632). Refuse a value this process
+  // did not mint — a spread clone, a JSON round trip, a hand-built object —
+  // before a single read, let alone a write. The key derivations assert this
+  // too; asserting at the door as well means a facade that later grows a write
+  // before its first key derivation cannot lose the check by accident.
+  assertTrustedOccurrence(id);
+  // Throws on an ambiguous exact tuple. Its return value is deliberately
+  // unused: NOT_POSTED is a legitimate outcome that reverseEventIfPosted below
+  // determines for itself, so this call is here purely for its refusal.
+  await findPostedReceiptOccurrence(ctx, id);
+  return await reverseEventIfPosted(ctx, {
+    orgId: id.orgId,
+    sourceType: id.sourceType,
+    sourceId: id.sourceId,
+    eventType: id.eventType,
+    eventVersion: id.eventVersion,
+    reason: args.reason,
+    actorId: args.actorId,
+    reversalDate: args.reversalDate,
+    reversalIdempotencyKey: occurrenceReversalIdempotencyKey(id),
+    pendingPostIdempotencyKey: occurrenceIdempotencyKey(id),
+  });
+}
+
+/* ------------------------------------------------------------------------- *
+ * SCRUM-130 — THE SANCTIONED RECEIPT-REVOCATION SURFACE
+ *
+ * Two entry points, and deliberately only two. A cheque return has to make an
+ * occurrence STOP EXISTING economically, and that is not the same operation as
+ * "reverse it": an occurrence still sitting in the outbox has nothing to
+ * reverse, yet it is the one that can still hurt you. `reverseReceiptOccurrence`
+ * cancels the forward obligation ONLY on the branch where no posted row was
+ * found — which is exactly the asymmetry owner-proxy `c17763` names, and exactly
+ * the resurrection SCRUM-249 Round 3 reproduced:
+ *
+ *     canonical receipt POST still PENDING
+ *   + a receipt row at the SAME reserved tuple under a FOREIGN key, POSTED
+ *   -> the return finds and reverses the sibling and returns REVERSED
+ *   -> the canonical pending obligation is never cancelled
+ *   -> a later drain publishes it and mints a SECOND POSTED row at the reserved
+ *      tuple, for a tender the bank took back.
+ *
+ * These two functions are the narrow interface SCRUM-256 may structurally wrap.
+ * They create no new authority: every key and every address is derived from a
+ * trusted identity or from the persisted lineage row itself, never accepted.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Revoke the receipt occurrence named by `identity`: the forward obligation can
+ * no longer publish, AND any posted journal is reversed.
+ *
+ * ⚠️ THE CANCEL IS UNCONDITIONAL, AND THAT IS THE WHOLE POINT. It runs whether
+ * or not a posted row is found, so no branch can leave an eligible forward
+ * obligation alive behind a `REVERSED` outcome. Both writes happen in the
+ * caller's single Convex transaction, so the tender's death and the obligation's
+ * death commit together or not at all.
+ *
+ * `cancelledPendingForward` is returned rather than inferred: "was there an
+ * obligation to kill?" is a different question from "was anything posted?", and
+ * a caller that needs to report on the lifecycle should not have to guess.
+ */
+export async function revokeReceiptOccurrence(
+  ctx: MutationCtx,
+  args: ReverseReceiptOccurrenceArgs
+): Promise<{ outcome: ReversalOutcome; cancelledPendingForward: boolean }> {
+  const id = args.identity;
+  // Same door discipline as the other three facades: refuse a value this
+  // process did not mint before it can address a row or derive a key.
+  assertTrustedOccurrence(id);
+  const cancelledPendingForward = await cancelPendingPostByKey(
+    ctx,
+    id.orgId,
+    occurrenceIdempotencyKey(id)
+  );
+  const outcome = await reverseReceiptOccurrence(ctx, args);
+  return { outcome, cancelledPendingForward };
+}
+
+/**
+ * Revoke ONE persisted retained-credit application occurrence.
+ *
+ * ⚠️ ADDRESSED FROM THE ROW, NOT FROM ARGUMENTS. `sourceId`, `eventVersion` and
+ * the forward idempotency key all come off the `receiptApplications` document
+ * that `recordRetainedApplication` sealed, so a caller has no parameter through
+ * which to re-split the tuple and reverse a different application than the one
+ * it named. Application #1 and #2 against one receipt are two legitimate
+ * economic occurrences; reversing #2 must never land on #1.
+ *
+ * The reversal key uses the `reversed_` PREFIX form rather than a suffix. A
+ * suffix is the defect `occurrenceReversalIdempotencyKey` documents at length:
+ * `key + "_reversal"` collides with a forward key whose source id happens to end
+ * in `_reversal`. A prefix cannot collide, because every forward key in this
+ * family begins with its own channel prefix. It is also outside the reserved
+ * receipt namespace (`isReservedReceiptKey` reserves `collection_payment_`,
+ * `occv` and `occr`), so SCRUM-249's reversal-side namespace guard does not and
+ * must not fire here — this is a different event family.
+ */
+export async function revokeReceiptApplicationOccurrence(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    application: Doc<"receiptApplications">;
+    reason: string;
+    actorId: Id<"users">;
+    reversalDate: number;
+  }
+): Promise<ReversalOutcome> {
+  const { application } = args;
+  // Tenancy is re-derived, never taken from the row alone: a document handed in
+  // from anywhere must still belong to the org the caller was authorised for.
+  if (application.orgId !== args.orgId) {
+    throw new ConvexError("Receipt application does not belong to this organization.");
+  }
+  const occurrence = application.occurrence;
+  // Cross-family refusal, in the same spirit as `rehydrateReceiptOccurrence`'s.
+  // A row whose stored occurrence is not this contract's is not something to
+  // reverse "generically" — it is a row that should not exist.
+  if (
+    occurrence.eventType !== RECEIPT_CREDIT_APPLIED_EVENT_TYPE ||
+    occurrence.sourceType !== RECEIPT_CREDIT_APPLIED_SOURCE_TYPE
+  ) {
+    throw new ConvexError(
+      `Receipt application ${application._id} carries occurrence ` +
+        `${occurrence.eventType}/${occurrence.sourceType}, which is outside the ` +
+        `retained-credit application contract.`
+    );
+  }
+
+  // Unconditional, for the same reason as `revokeReceiptOccurrence`: an
+  // application dated into a period that was not open never posted, so there is
+  // nothing to reverse — and it is precisely that queued obligation which would
+  // otherwise drain later and debit 2110 for a tender that no longer exists.
+  await cancelPendingPostByKey(ctx, args.orgId, application.eventIdempotencyKey);
+
+  return await reverseEventIfPosted(ctx, {
+    orgId: args.orgId,
+    sourceType: occurrence.sourceType,
+    sourceId: occurrence.sourceId,
+    eventType: occurrence.eventType as EventType,
+    eventVersion: occurrence.eventVersion,
+    reason: args.reason,
+    actorId: args.actorId,
+    reversalDate: args.reversalDate,
+    reversalIdempotencyKey: `reversed_${application.eventIdempotencyKey}`,
+    pendingPostIdempotencyKey: application.eventIdempotencyKey,
+  });
+}
+
+/**
+ * SCRUM-218-C — one later application of retained customer credit.
+ *
+ * ⚠️ NOT A SECOND RECEIPT. The cash arrived and was banked when the
+ * COLLECTION_PAYMENT posted; this event only converts an existing 2110 liability
+ * into relief of a receivable. `ruleReceiptCreditApplied` therefore writes no
+ * cash or bank line at all.
+ *
+ * `sourceId` and `idempotencyKey` are both derived by `receiptMovement` from
+ * (movement, sequence) and passed through unchanged — the sequence is part of
+ * the accounting identity, so application #2 can never be swallowed by #1's
+ * dedup tuple.
+ *
+ * 2110 is required rather than optional here: it is the DEBIT of this journal,
+ * so without it there is no entry to write. If the mapping has been removed
+ * since the receipt posted, the application defers to the outbox and surfaces
+ * there instead of throwing inside the caller's money transaction.
+ */
+export async function hookReceiptCreditApplied(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    sourceId: string;
+    idempotencyKey: string;
+    receiptMovementId: string;
+    applicationId: string;
+    sequence: number;
+    amountMinor: number;
+    currency: string;
+    customerId: string;
+    receivableDocumentId: string;
+    occurredAt: number;
+    actorId: Id<"users">;
+  }
+): Promise<void> {
+  await postOrEnqueue(
+    ctx,
+    {
+      orgId: args.orgId,
+      eventType: RECEIPT_CREDIT_APPLIED_EVENT_TYPE,
+      sourceType: RECEIPT_CREDIT_APPLIED_SOURCE_TYPE,
+      sourceId: args.sourceId,
+      eventVersion: 1,
+      accountingDate: args.occurredAt,
+      occurredAt: args.occurredAt,
+      currency: args.currency,
+      idempotencyKey: args.idempotencyKey,
+      payload: {
+        receiptMovementId: args.receiptMovementId,
+        applicationId: args.applicationId,
+        sequence: args.sequence,
+        amountMinor: args.amountMinor,
+        currency: args.currency,
+        customerId: args.customerId,
+        receivableDocumentId: args.receivableDocumentId,
+      },
+      actorId: args.actorId,
+    },
+    { requiredSystemKeys: [SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY] }
+  );
 }
 
 export async function hookDepositReceived(
@@ -807,7 +1307,32 @@ type CollectionHookArgs = {
   occurredAt: number;
 };
 
-function makeCollectionHook(eventType: "COLLECTION_PAYMENT" | "COLLECTION_REFUND", keyPrefix: string) {
+/**
+ * Forward-posting factory for the collection event families.
+ *
+ * ⚠️ `COLLECTION_PAYMENT` IS DELIBERATELY ABSENT FROM THIS UNION, AND ITS
+ * ABSENCE IS THE MECHANISM (SCRUM-236; owner-proxy c17538 mechanism B, c17641
+ * requirement 5). The receipt occurrence
+ * `COLLECTION_PAYMENT / collectionPayments / <collectionPaymentId>` now has
+ * exactly ONE forward producer — `postReceiptOccurrence`, called from
+ * `recordPayment` and `clearCheque` in `collections.ts` — and this factory must
+ * not be able to mint a second one addressing the same identity.
+ *
+ * Deleting the `hookCollectionPayment` INSTANCE alone would have left
+ * `makeCollectionHook("COLLECTION_PAYMENT", "collection_payment")` compiling, so
+ * the retirement would have been a convention rather than a boundary — and a
+ * safety property stated in prose is not enforced. Narrowing the parameter makes
+ * reintroducing that writer a COMPILE ERROR. That is the entire reason the
+ * parameter survives with a single member: the parameter IS the constraint.
+ *
+ * The shared body is otherwise untouched and `COLLECTION_REFUND` keeps posting
+ * exactly as before. A refund is a real economic movement against a different
+ * occurrence identity (`COLLECTION_REFUND / collectionPayments / <id>`), which
+ * is why the retirement happens in this signature and not inside the body —
+ * owner-proxy c17538 rejected the latter as Option C precisely because it was
+ * the one mechanism that would have silently disabled refunds.
+ */
+function makeCollectionHook(eventType: "COLLECTION_REFUND", keyPrefix: string) {
   return async (ctx: MutationCtx, args: CollectionHookArgs) =>
     postDomainEvent(ctx, {
       orgId: args.orgId,
@@ -828,7 +1353,25 @@ function makeCollectionHook(eventType: "COLLECTION_PAYMENT" | "COLLECTION_REFUND
     });
 }
 
-export const hookCollectionPayment = makeCollectionHook("COLLECTION_PAYMENT", "collection_payment");
+/*
+ * `hookCollectionPayment` USED TO BE INSTANTIATED HERE AND IS RETIRED, NOT
+ * MISSING (SCRUM-236).
+ *
+ * It was `makeCollectionHook("COLLECTION_PAYMENT", "collection_payment")`, and
+ * `recordPayment` / `clearCheque` called it synchronously to post the legacy
+ * gross receipt journal. Both now go through `postReceiptOccurrence` above,
+ * which derives the whole occurrence — event type, source type, source id,
+ * occurrence version and idempotency key — from ONE `directCollectionReceipt`
+ * identity instead of assembling them independently at each call site.
+ *
+ * The stored key bytes did not change: `occurrenceIdempotencyKey` returns
+ * `collection_payment_<paymentId>` for occurrence 1, exactly what this hook
+ * wrote, so already-POSTED production rows still match their own replay check
+ * and the `cancelPendingPostByKey` call in `returnCheque` still finds the entry
+ * it is meant to cancel.
+ *
+ * Do not reintroduce this line. It no longer compiles — see the factory above.
+ */
 
 /**
  * Posts the cash-out + AR-reopening entry for an approved collection refund:
@@ -1378,7 +1921,7 @@ export async function isEventQueued(
  *
  * The distinction is the difference between a message that helps and one that
  * misleads. A PENDING entry really is waiting for its period to open. A FAILED
- * one has exhausted its retries: `drainPendingForOrg` reads only PENDING rows,
+ * one has exhausted its retries: the due-work sweep selects only PENDING rows,
  * so opening a period does nothing for it, and telling someone to do that sends
  * them somewhere they cannot fix it.
  */
