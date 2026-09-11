@@ -226,11 +226,12 @@ export async function createFinancedApplication(
   await startApplication.click();
 
   // Creating the application does not open it. The wizard swaps the button for
-  // "View Application", and that goes to the LIST — so the deal is reached the
-  // way an operator reaches it from there: by its own row.
+  // "View Application", and that goes to the Deals LIST — so the deal is
+  // reached the way an operator reaches it from there: by its own row on the
+  // needs-action queue (a fresh application is waiting on the dealership).
   await expect(page.getByText(/View Application/)).toBeVisible();
 
-  await gotoOrgRoute(page, "applications");
+  await gotoOrgRoute(page, "deals");
   await dismissOverlays(page);
   const row = page.getByRole("row").filter({ hasText: fixtures.customer }).first();
   await expect(row).toBeVisible();
@@ -238,16 +239,6 @@ export async function createFinancedApplication(
 
   await page.waitForURL(/\/applications\/[^/]+\/deal$/, { timeout: 60_000 });
   return page.url();
-}
-
-/** Opens one application's review dialog from the list, by its customer. */
-export async function openReviewDialog(page: Page, customer: string) {
-  await gotoOrgRoute(page, "applications");
-  await dismissOverlays(page);
-  const row = page.getByRole("row").filter({ hasText: customer }).first();
-  await expect(row).toBeVisible();
-  await row.getByRole("button", { name: "Review", exact: true }).click();
-  return page.getByRole("dialog");
 }
 
 /**

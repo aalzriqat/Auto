@@ -234,7 +234,7 @@ export default function SalesPage() {
                       <div className="flex flex-col gap-1">
                         <span>{sale.salespersonName}</span>
                         {(sale as any).applicationId && (
-                          <Link href={`/${activeOrgId}/applications`} className="flex items-center gap-1 text-[10px] text-blue-500 hover:underline">
+                          <Link href={`/${activeOrgId}/deals`} className="flex items-center gap-1 text-[10px] text-blue-500 hover:underline">
                             <ExternalLink className="h-2.5 w-2.5" /> Finance app
                           </Link>
                         )}

@@ -418,7 +418,7 @@ export function Step4QuoteSuccess({
           {paymentType === "INSTALLMENT" && (
             applicationId ? (
               <Button asChild variant="outline" size="lg" className="min-w-[200px] border-emerald-500/40 text-emerald-600 hover:bg-emerald-500/10">
-                <Link href={activeOrgId ? `/${activeOrgId}/applications` : "#"}>
+                <Link href={activeOrgId ? `/${activeOrgId}/deals` : "#"}>
                   <FileText className="w-4 h-4 me-2" />
                   {t("ViewApplication" as any) ?? "View Application →"}
                 </Link>
