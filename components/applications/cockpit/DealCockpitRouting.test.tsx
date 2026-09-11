@@ -13,7 +13,8 @@
  * The rule these tests pin:
  *
  *   - `/sales/{saleId}/deal` renders BOTH kinds and never navigates away.
- *   - A financed sale's money still comes from `applications.dealCockpit`, so
+ *   - A financed sale's money still comes from the financed cockpit read model
+ *     (now `dealWorkspace.financedDealCockpit`, which composes it), so
  *     there is no second source of truth for a figure that moves real money.
  *   - `/applications/{applicationId}/deal` canonicalizes to the sale URL once a
  *     sale exists.
@@ -69,7 +70,7 @@ const SALE = "sale1" as Id<"sales">;
 const APP = "app_2048" as Id<"financeApplications">;
 const SCALE = 1_000;
 
-/** The financed shape, as `applications.dealCockpit` returns it. */
+/** The financed shape, as `dealWorkspace.financedDealCockpit` returns it. */
 function financedDeal(overrides: Record<string, unknown> = {}): DealCockpitData {
   return {
     dealKind: "FINANCED",
@@ -179,7 +180,7 @@ describe("the sale URL is the deal's one address", () => {
    */
   test("a FINANCED sale renders ON the sale route rather than redirecting away", () => {
     queryResults.set("sales:dealCockpit", cashDeal({ financingApplicationId: APP, money: null }));
-    queryResults.set("applications:dealCockpit", financedDeal());
+    queryResults.set("dealWorkspace:financedDealCockpit", financedDeal());
 
     render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
 
@@ -196,7 +197,7 @@ describe("the sale URL is the deal's one address", () => {
     // on the application route — reached through the SALE route.
     queryResults.set("sales:dealCockpit", cashDeal({ financingApplicationId: APP, money: null }));
     queryResults.set(
-      "applications:dealCockpit",
+      "dealWorkspace:financedDealCockpit",
       financedDeal({ saleId: SALE, canonicalSaleId: SALE })
     );
 
@@ -209,7 +210,7 @@ describe("the sale URL is the deal's one address", () => {
 describe("the application URL hands a finalized deal to the sale", () => {
   test("a finalized application canonicalizes to the sale URL", () => {
     queryResults.set(
-      "applications:dealCockpit",
+      "dealWorkspace:financedDealCockpit",
       financedDeal({ saleId: SALE, canonicalSaleId: SALE })
     );
 
@@ -223,7 +224,7 @@ describe("the application URL hands a finalized deal to the sale", () => {
    * still the deal's only address and must render normally.
    */
   test("an application with no sale yet stays where it is", () => {
-    queryResults.set("applications:dealCockpit", financedDeal({ saleId: null }));
+    queryResults.set("dealWorkspace:financedDealCockpit", financedDeal({ saleId: null }));
 
     render(<DealCockpit orgId={ORG} applicationId={APP} />);
 
@@ -244,7 +245,7 @@ describe("the application URL hands a finalized deal to the sale", () => {
    */
   test("a finalized application whose sale is unreadable stays put and renders", () => {
     queryResults.set(
-      "applications:dealCockpit",
+      "dealWorkspace:financedDealCockpit",
       financedDeal({ saleId: SALE, canonicalSaleId: null })
     );
 
@@ -257,7 +258,7 @@ describe("the application URL hands a finalized deal to the sale", () => {
   test("a deal still loading is not redirected on absent evidence", () => {
     // `useQuery` returns undefined while in flight. Redirecting here would send
     // the operator away from a deal that may have no sale at all.
-    queryResults.set("applications:dealCockpit", undefined);
+    queryResults.set("dealWorkspace:financedDealCockpit", undefined);
 
     render(<DealCockpit orgId={ORG} applicationId={APP} />);
 

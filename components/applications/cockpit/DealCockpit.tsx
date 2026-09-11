@@ -109,9 +109,82 @@ const STAGE_LABEL: Record<string, string> = {
   GAP_RESOLUTION: "StageGapResolution",
   APPROVED_PURCHASE: "StageApprovedPurchase",
   DELIVERY_ACTIONS: "StageDeliveryActions",
+  /**
+   * The stage the backend already emits and this build is the first to name.
+   *
+   * Until now the map had no entry, so the rail fell through to `t(rawKey)` and
+   * `t()` returns the KEY it cannot resolve — the operator would have read a
+   * bare "DISBURSEMENT". The previous release covered that with a transitional
+   * dictionary entry under the raw key; this entry is what makes that crutch
+   * unnecessary GOING FORWARD. It is deliberately NOT the signal to delete it —
+   * see the note on `DISBURSEMENT` in `lib/i18n/domains/sales.ts`.
+   */
+  DISBURSEMENT: "StageDisbursement",
   HANDOVER: "StageHandover",
   SETTLEMENT: "StageSettlement",
 };
+
+/**
+ * Whose move a stage is — the single question the rail exists to answer.
+ *
+ * `authority` already travels on every stage: MIRROR means the finance company
+ * acts and AutoFlow only records what they decided, DEALER means the dealership
+ * acts. Rendering that verbatim is right for every stage but one.
+ *
+ * ⚠️ `APPRAISAL` is the exception, and getting it wrong is the defect this
+ * function was written for. Its authority is MIRROR because the dealership never
+ * values the vehicle itself — but the valuation may have been done by an
+ * INDEPENDENT appraiser rather than by the finance company. Reading MIRROR as
+ * "finance company" told the operator the deal was waiting on a party that was
+ * not involved. The provider is therefore taken from RECORDED SERVER
+ * PROVENANCE, never inferred from the stage's authority or from any other
+ * financing state.
+ *
+ * A `null` provider is not a third party to name: it means no active appraisal
+ * is on record, or the one on record is a dealer estimate, which is neither of
+ * the two parties this label can truthfully name. It says so instead of
+ * defaulting to either.
+ */
+function stageOwnerLabel(
+  stage: Readonly<{ key: string; authority?: string }>,
+  activeAppraisalProvider: ActiveAppraisalProvider,
+  t: (key: string) => string
+): string | undefined {
+  if (stage.key === "APPRAISAL") {
+    if (activeAppraisalProvider === "FINANCE_COMPANY") return t("AppraisalByFinanceCompany");
+    if (activeAppraisalProvider === "INDEPENDENT") return t("AppraisalByIndependent");
+    return t("StageOwnerAppraiserNotRecorded");
+  }
+  if (stage.authority === "MIRROR") return t("StageOwnerFinanceCompany");
+  if (stage.authority === "DEALER") return t("StageOwnerDealership");
+  // An authority the client does not recognise says nothing rather than
+  // guessing — a new server value must not silently render as "Dealership".
+  return undefined;
+}
+
+/**
+ * Whether the "this step belongs to the finance company" note is TRUE here.
+ *
+ * Gated by the same recorded provenance that drives the rail badge, because
+ * the two surfaces answer the same question and must not answer it from
+ * different sources. `APPRAISAL` carries a static `authority: "MIRROR"`, so
+ * keying the note on authority alone asserted the finance company owned an
+ * appraisal an INDEPENDENT appraiser had performed — while the badge two
+ * elements above correctly named the appraiser. One step, two parties, one
+ * screen.
+ *
+ * A `null` provider does not license the note either: it means no active
+ * appraisal is on record, or the one on record is a dealer estimate. Neither
+ * is the finance company.
+ */
+function stageShowsMirrorNote(
+  stage: Readonly<{ key: string; authority?: string }>,
+  activeAppraisalProvider: ActiveAppraisalProvider
+): boolean {
+  if (stage.authority !== "MIRROR") return false;
+  if (stage.key === "APPRAISAL") return activeAppraisalProvider === "FINANCE_COMPANY";
+  return true;
+}
 
 const PARTY_LABEL: Record<string, string> = {
   CUSTOMER: "PartyCustomer",
@@ -243,8 +316,24 @@ function Money({ children }: Readonly<{ children: React.ReactNode }>) {
  * thing that must not be shared is the headline: see `MoneyPanel`.
  */
 export type DealCockpitData =
-  | NonNullable<(typeof api.applications.dealCockpit)["_returnType"]>
+  | NonNullable<(typeof api.dealWorkspace.financedDealCockpit)["_returnType"]>
   | NonNullable<(typeof api.sales.dealCockpit)["_returnType"]>;
+
+/**
+ * The financed-only additions, kept OUT of the spine type on purpose.
+ *
+ * `financedDealCockpit` returns everything `applications.dealCockpit` does plus
+ * `activeAppraisalProvider` and `pendingDepositResolution`. The cash rail has
+ * neither — it has no finance application to appraise and no financing deposit
+ * to strand — so folding them into `DealCockpitData` would put fields on the
+ * cash variant that can never be populated, and every read of them would need a
+ * narrowing dance to prove which member is in hand.
+ *
+ * They travel as explicit props instead: the view states plainly that these are
+ * financed-only, the cash container simply omits them, and the compiler keeps
+ * that honest without a discriminant check at every use site.
+ */
+export type ActiveAppraisalProvider = "FINANCE_COMPANY" | "INDEPENDENT" | null;
 
 /**
  * The data half: one query, one mutation, no presentation.
@@ -278,7 +367,18 @@ export function DealCockpit({
    */
   canonicalizeUrl?: boolean;
 }>) {
-  const deal = useQuery(api.applications.dealCockpit, { orgId, applicationId });
+  /**
+   * The financed read model, now served by the wrapper rather than by
+   * `applications.dealCockpit` directly.
+   *
+   * The wrapper composes that same authority through `ctx.runQuery` — one query
+   * for the client, one read snapshot — and adds the two facts this screen
+   * could not previously answer: who actually appraised the vehicle, and
+   * whether a stopped deal is still sitting on the customer's money. Nothing
+   * about the spine changed, which is why the cash rail below still calls
+   * `sales.dealCockpit` and renders through the same view.
+   */
+  const deal = useQuery(api.dealWorkspace.financedDealCockpit, { orgId, applicationId });
   // The container raises its own toasts, so it needs its own translator — the
   // view's `t` is not in scope here, and an English string in a toast is how a
   // screen that is otherwise fully Arabic starts leaking its source language.
@@ -711,6 +811,11 @@ export function DealCockpit({
       deal={deal}
       financeDecision={financeDecision}
       workflowAction={workflowAction}
+      // Both are financed-only and come straight off the wrapper's payload.
+      // `?? null` / `?? false` cover the loading and unreadable cases, where
+      // `deal` is `undefined` or `null` and the screen must not assert either.
+      activeAppraisalProvider={deal?.activeAppraisalProvider ?? null}
+      depositAwaitingResolution={deal?.pendingDepositResolution ?? false}
       handover={{
         confirming: confirmingHandover,
         submitting: handoverSubmitting,
@@ -1109,9 +1214,38 @@ export function DealCockpitView({
   canCorrectAdvice = false,
   onCorrectSettlementAdvice,
   onRecordSupplierReceipt,
+  activeAppraisalProvider = null,
+  depositAwaitingResolution = false,
 }: Readonly<{
   /** `undefined` while loading, `null` when the deal is not readable. */
   deal: DealCockpitData | null | undefined;
+  /**
+   * Who actually performed the appraisal on record, as the SERVER recorded it.
+   *
+   * `APPRAISAL` is a MIRROR stage, and the rail used to render every MIRROR
+   * stage as the finance company's. That is wrong whenever an INDEPENDENT
+   * appraiser did the work: the operator was told the deal was waiting on the
+   * finance company when it was not, which is the opposite of what the badge
+   * exists to tell them.
+   *
+   * `null` means the question has no truthful answer yet — no active appraisal,
+   * or one recorded as a dealer estimate, which is neither of the two parties
+   * this badge can name. It is rendered as an explicit "not recorded" rather
+   * than defaulted to either side, because guessing here is the defect.
+   *
+   * Financed deals only; the cash rail has no appraisal stage at all.
+   */
+  activeAppraisalProvider?: ActiveAppraisalProvider;
+  /**
+   * A rejected or cancelled deal still holding a HELD customer deposit that
+   * nobody has refunded or forfeited — real cash in a liability with no owner.
+   *
+   * The applications LIST has always surfaced this as `DEPOSIT_PENDING`. The
+   * deal screen did not answer it at all: the same deal read as a plain
+   * "Rejected" here while the list said money was outstanding. Financed deals
+   * only.
+   */
+  depositAwaitingResolution?: boolean;
   /**
    * Absent on a cash deal, and while the economics query is still loading or
    * was skipped for want of `view:finance_applications`.
@@ -1709,6 +1843,31 @@ export function DealCockpitView({
         </div>
       )}
 
+      {/* --- held customer deposit on a stopped deal ----------------------
+          Above the rail on purpose. On a rejected or cancelled deal the rail
+          has nothing left to say — every stage is STOPPED — while the one thing
+          still outstanding is real customer cash sitting in a liability with
+          nobody's name on it. The applications LIST has always shown this as
+          `DEPOSIT_PENDING`; this screen showed a plain "Rejected" beside it and
+          said nothing about the money.
+
+          A single bordered strip rather than a card: at this density an alert
+          earns its weight from colour and position, not from another nested
+          panel. */}
+      {depositAwaitingResolution && (
+        <div
+          className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 dark:border-amber-900/60 dark:bg-amber-950/30"
+          data-testid="deal-deposit-awaiting-resolution"
+        >
+          <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+            {t("DepositAwaitingResolutionTitle")}
+          </p>
+          <p className="text-sm text-amber-800 dark:text-amber-300">
+            {t("DepositAwaitingResolutionBody")}
+          </p>
+        </div>
+      )}
+
       {/* --- stage rail: the signature element ---------------------------- */}
       <Card>
         <CardContent className="space-y-3 pt-6">
@@ -1736,6 +1895,7 @@ export function DealCockpitView({
               state={stage.state as StageState}
               label={t(STAGE_LABEL[stage.key] ?? stage.key)}
               blocker={stage.blocker ? t(`Blocker${stage.blocker}`) : undefined}
+              owner={stageOwnerLabel(stage, activeAppraisalProvider, t)}
               isFocus={live?.key === stage.key}
             />
           ))}
@@ -1770,6 +1930,14 @@ export function DealCockpitView({
             </div>
             {live.blocker && (
               <p className="text-sm text-muted-foreground">{t(`Blocker${live.blocker}`)}</p>
+            )}
+            {/* Why there is no button on a step that belongs to the finance
+                company. Without this the block names a step, offers nothing,
+                and gives no reason — so the operator goes hunting for an action
+                that must not exist. Stated once, here, rather than on every
+                rail row, because this is the block the operator acts from. */}
+            {stageShowsMirrorNote(live, activeAppraisalProvider) && (
+              <p className="text-sm text-muted-foreground">{t("StageMirrorNote")}</p>
             )}
             {/* Why the named step is not actionable BY THIS CALLER. Silence
                 here is the defect this issue exists to remove. */}
@@ -2239,8 +2407,25 @@ function StageRow({
   state,
   label,
   blocker,
+  owner,
   isFocus,
-}: Readonly<{ state: StageState; label: string; blocker?: string; isFocus: boolean }>) {
+}: Readonly<{
+  state: StageState;
+  label: string;
+  blocker?: string;
+  /**
+   * Whose move this step is, already resolved to display text.
+   *
+   * Typography and alignment rather than a pill: this is an operator console at
+   * high information density, where a box around every row's owner would spend
+   * the space the rail itself needs and turn a scannable list into a stack of
+   * cards. The trailing edge comes from the SIBLING `min-w-0 flex-1` label
+   * column absorbing the free space, so this reads correctly in Arabic and
+   * English without a directional utility of its own.
+   */
+  owner?: string;
+  isFocus: boolean;
+}>) {
   const icon = STAGE_ICON[state] ?? STAGE_ICON.PENDING;
 
   return (
@@ -2250,12 +2435,20 @@ function StageRow({
       }`}
     >
       <span className="mt-0.5 shrink-0">{icon}</span>
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1">
         <p className={`text-sm ${isFocus ? "font-medium" : state === "COMPLETE" ? "text-muted-foreground" : ""}`}>
           {label}
         </p>
         {blocker && <p className="text-xs text-amber-700 dark:text-amber-400">{blocker}</p>}
       </div>
+      {owner && (
+        // `bdi` because the owner can be an Arabic party name rendered beside
+        // Latin text, and vice versa; without it the bidi algorithm reorders
+        // the run against the surrounding paragraph direction.
+        <span className="mt-0.5 shrink-0 text-xs text-muted-foreground">
+          <bdi>{owner}</bdi>
+        </span>
+      )}
     </div>
   );
 }

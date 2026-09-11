@@ -25,18 +25,32 @@ const dealRailMessages = defineBilingualMessages({
   StageDisbursement: ["Finance company payment", "صرف شركة التمويل"],
 
   /**
-   * TRANSITIONAL, and load-bearing for exactly one release.
+   * TRANSITIONAL. It did its job in the previous release; it is kept here as
+   * DEFERRED CLEANUP, not as a compatibility requirement.
    *
-   * This release ships the DISBURSEMENT stage from the backend while the
-   * deployed cockpit is still the previous build. That build resolves a stage
-   * label as `t(STAGE_LABEL[key] ?? key)`, and `t()` returns the KEY when it
-   * knows no translation — so without this entry the rail would render the bare
+   * ## What it was for
+   *
+   * The previous release shipped the DISBURSEMENT stage from the backend while
+   * the deployed cockpit was still the build before it. That build resolves a
+   * stage label as `t(STAGE_LABEL[key] ?? key)`, and `t()` returns the KEY when
+   * it knows no translation — so without this entry the rail rendered the bare
    * string "DISBURSEMENT" to operators, in Arabic as well as English, for the
-   * whole window between this deploy and the frontend release that follows it.
+   * window between that backend deploy and this frontend release.
    *
-   * The new cockpit never reads this key; it uses `StageDisbursement` above.
-   * Remove this once that frontend is live.
-   * `lib/i18n/deployedStageLabels.test.ts` is what keeps it honest meanwhile.
+   * ## Why keeping it is NOT a compatibility claim
+   *
+   * ⚠️ An earlier version of this note, and the PR description that quoted it,
+   * justified retention as "an older deployed frontend may still need it".
+   * That mechanism is wrong and is corrected here rather than quietly dropped.
+   * Each deployment is an IMMUTABLE, SELF-CONTAINED bundle carrying its own
+   * frozen copy of this dictionary, served from its own content-hashed chunks.
+   * No running frontend reads this source entry, so deleting it could not
+   * affect one — including a rollback, which would serve its own embedded copy.
+   *
+   * Deleting it is therefore safe. It stays only because retiring it also means
+   * retiring `lib/i18n/deployedStageLabels.test.ts`, which is cleanup this
+   * frontend-consumption PR was not scoped to do. The cockpit in this build
+   * never reads it; it uses `StageDisbursement` above.
    */
   DISBURSEMENT: ["Finance company payment", "صرف شركة التمويل"],
 
@@ -73,6 +87,43 @@ const dealRailMessages = defineBilingualMessages({
   BlockerAwaitingDisbursement: [
     "Waiting on the finance company to pay",
     "بانتظار صرف شركة التمويل",
+  ],
+
+  /**
+   * The appraisal stage when the appraiser is NOT on record.
+   *
+   * Deliberately not "the finance company". `APPRAISAL` is a MIRROR stage, so
+   * the rail would otherwise name them by default — but the vehicle may be
+   * valued by an independent appraiser instead, and a deal with no active
+   * appraisal at all has no appraiser to name. Saying "not recorded" is the
+   * truthful answer; naming a party the server never recorded is the defect
+   * this key exists to prevent.
+   *
+   * Also covers a DEALER_ESTIMATE, which is neither party the badge can name.
+   */
+  StageOwnerAppraiserNotRecorded: ["Appraiser not recorded", "جهة التخمين غير مسجّلة"],
+
+  /**
+   * A rejected or cancelled deal that is still holding the customer's deposit.
+   *
+   * The wording avoids naming a resolution: refunding and forfeiting are
+   * different decisions with different accounting, and this screen does not
+   * make either. It says money is being held and that somebody must decide —
+   * which is exactly what the applications list has always said, and what this
+   * screen used to omit entirely.
+   */
+  DepositAwaitingResolutionTitle: [
+    "A customer deposit is still being held",
+    // `عربون` is MASCULINE, so `ما زال … محتجزاً`, not the feminine agreement.
+    // The first draft read `ما زالت … محتجزة` and contradicted this entry's own
+    // body, which refers back to the deposit as `مصادرته`. Caught by RENDERING
+    // the screen in Arabic — the tests use an identity `t`, so they never
+    // display real copy and no assertion here could have failed.
+    "ما زال عربون العميل محتجزاً",
+  ],
+  DepositAwaitingResolutionBody: [
+    "This deal is closed, but the deposit has not been refunded or forfeited. Until it is, the money sits against the customer with no outcome recorded.",
+    "أُغلقت هذه الصفقة دون ردّ العربون أو مصادرته. وحتى يتم ذلك، يبقى المبلغ مقيّداً على العميل دون نتيجة مسجّلة.",
   ],
 });
 
@@ -1018,7 +1069,7 @@ export const salesEn = {
   QuotationAmountInvalid: "Enter an amount greater than zero.",
   QuotationRecorded: "Quotation recorded",
 
-  TheirAppraisalLabel: "Their appraisal of the vehicle",
+  TheirAppraisalLabel: "Recorded appraisal of the vehicle",
   RecordAppraisalAction: "Record appraisal",
   AppraisalNeedsReviewer:
     "A manager records the appraisal. The deal's stage rail waits on it once the quotation has gone out.",
@@ -1060,17 +1111,17 @@ export const salesEn = {
     "The amount the finance company said it will buy the vehicle at. Recording it here puts their decision on the record; it does not make one.",
   ApprovedAmountLabel: "Approved amount",
   ApprovalBasisLabel: "What they based it on",
-  BasisAppraisal: "Their appraisal",
+  BasisAppraisal: "The recorded appraisal",
   BasisAppraisalHint: "Equal to the appraisal on file.",
   BasisQuotationException: "Our quotation, as an exception",
   BasisQuotationExceptionHint:
-    "They approved at the amount we submitted even though their appraisal is lower. Their own tolerance rule decides whether this is allowed.",
+    "They approved at the amount we submitted even though the recorded appraisal is lower. Their own tolerance rule decides whether this is allowed.",
   BasisManual: "Another amount they named",
   BasisManualNotesLabel: "What they told us",
   BasisManualNotesPlaceholder: "e.g. approved at 18,900 by the branch's credit officer",
   BasisManualNotesRequired: "Record what the finance company said. It is kept on the audit record.",
   NoAppraisalOnFile:
-    "No appraisal from the finance company is recorded on this deal, so only an amount they named directly can be recorded.",
+    "No appraisal is recorded on this deal, so only an amount they named directly can be recorded.",
   ApprovedAmountInvalid: "Enter an amount greater than zero.",
   ApprovedPurchaseRecorded: "Approved amount recorded",
   ApprovedPurchaseReopened: "Reopened for correction — record the correct amount",
@@ -1906,7 +1957,7 @@ export const salesAr = {
   QuotationAmountInvalid: "أدخل مبلغاً أكبر من صفر.",
   QuotationRecorded: "تم تسجيل عرض السعر",
 
-  TheirAppraisalLabel: "تخمين شركة التمويل للمركبة",
+  TheirAppraisalLabel: "التخمين المسجَّل للمركبة",
   RecordAppraisalAction: "تسجيل التخمين",
   AppraisalNeedsReviewer:
     "يسجّل التخمين المدير. تتوقّف مراحل الصفقة عنده بعد إرسال عرض السعر.",
@@ -1941,17 +1992,17 @@ export const salesAr = {
     "المبلغ الذي أبلغت شركة التمويل أنها ستشتري به المركبة. تسجيله هنا يوثّق قرارها، ولا يصنع قراراً.",
   ApprovedAmountLabel: "المبلغ المعتمد",
   ApprovalBasisLabel: "أساس الاعتماد",
-  BasisAppraisal: "تخمينها",
+  BasisAppraisal: "التخمين المسجَّل",
   BasisAppraisalHint: "مساوٍ للتخمين المسجَّل على الصفقة.",
   BasisQuotationException: "عرض السعر المُرسَل، استثناءً",
   BasisQuotationExceptionHint:
-    "اعتمدت المبلغ الذي أرسلناه رغم أن تخمينها أقل. قاعدة التفاوت لديها هي التي تحدّد ما إذا كان ذلك مسموحاً.",
+    "اعتمدت المبلغ الذي أرسلناه رغم أن التخمين المسجَّل أقل. قاعدة التفاوت لديها هي التي تحدّد ما إذا كان ذلك مسموحاً.",
   BasisManual: "مبلغ آخر حدّدته",
   BasisManualNotesLabel: "ما أبلغتنا به",
   BasisManualNotesPlaceholder: "مثال: اعتُمد بمبلغ 18,900 من ضابط الائتمان في الفرع",
   BasisManualNotesRequired: "سجِّل ما أبلغت به شركة التمويل. يُحفظ في سجل التدقيق.",
   NoAppraisalOnFile:
-    "لا يوجد تخمين من شركة التمويل مسجَّل على هذه الصفقة، لذلك يمكن تسجيل المبلغ الذي حدّدته مباشرة فقط.",
+    "لا يوجد تخمين مسجَّل على هذه الصفقة، لذلك يمكن تسجيل المبلغ الذي حدّدته مباشرة فقط.",
   ApprovedAmountInvalid: "أدخل مبلغاً أكبر من صفر.",
   ApprovedPurchaseRecorded: "تم تسجيل المبلغ المعتمد",
   ApprovedPurchaseReopened: "أُعيد الفتح للتصحيح — سجِّل المبلغ الصحيح",
