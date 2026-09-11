@@ -27,8 +27,8 @@ export const internalMutation = customMutation(
 );
 
 /**
- * Builder for the two mutations that patch many of one customer's social events
- * in a loop: `customers.mergeCustomers` and `socialInbox.setConversationVehicle`.
+ * Builder for mutations that patch many of one customer's social events in a
+ * loop — today that is `socialInbox.setConversationVehicle`.
  *
  * Everything `mutation` maintains is still maintained here *except* the
  * per-write conversation recompute, which is what makes those loops O(N²) — see

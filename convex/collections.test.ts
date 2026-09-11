@@ -4,6 +4,10 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { ruleCollectionRefund } from "./accounting/postingRules";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
+import {
+  occurrenceReversalIdempotencyKey,
+  rehydrateReceiptOccurrence,
+} from "./accounting/receiptOccurrence";
 
 /**
  * Two tests here queue collection reminders, which schedule
@@ -226,6 +230,7 @@ describe("Collections", () => {
     const { orgId, customerId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -235,7 +240,7 @@ describe("Collections", () => {
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
 
-    await asFinance.mutation(api.collections.recordPayment, {
+    await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
       orgId,
       receivableId,
       amount: 300,
@@ -285,6 +290,7 @@ describe("Collections", () => {
     const { orgId, customerId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "CHEQUE",
@@ -303,7 +309,7 @@ describe("Collections", () => {
       amount: 500,
     });
 
-    await asFinance.mutation(api.collections.clearCheque, { orgId, chequeId });
+    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
 
     await t.run(async (ctx) => {
       const cheque = await ctx.db.get(chequeId);
@@ -366,6 +372,7 @@ describe("Collections", () => {
     const { orgId, customerId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "CHEQUE",
@@ -383,7 +390,7 @@ describe("Collections", () => {
       chequeDate: Date.now() + 3 * 24 * 60 * 60 * 1000,
       amount: 500,
     });
-    await asFinance.mutation(api.collections.clearCheque, { orgId, chequeId });
+    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
 
     await expect(
       asFinance.mutation(api.collections.returnClearedCheque, {
@@ -400,6 +407,7 @@ describe("Collections", () => {
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "RESERVATION_PAYMENT",
@@ -407,7 +415,7 @@ describe("Collections", () => {
       amount: 1000,
       dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
     });
-    await asFinance.mutation(api.collections.recordPayment, {
+    await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
       orgId,
       receivableId,
       amount: 1000,
@@ -423,7 +431,7 @@ describe("Collections", () => {
       reason: "Customer overpaid",
     });
 
-    await asApprover.mutation(api.collections.respondToApproval, {
+    await asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: crypto.randomUUID(),
       orgId,
       requestId,
       status: "APPROVED",
@@ -484,6 +492,7 @@ describe("Collections", () => {
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -499,7 +508,7 @@ describe("Collections", () => {
       reason: "Deal fell through",
     });
 
-    await asApprover.mutation(api.collections.respondToApproval, {
+    await asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: crypto.randomUUID(),
       orgId,
       requestId,
       status: "APPROVED",
@@ -555,6 +564,7 @@ describe("Collections", () => {
     await asFinance.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -581,7 +591,7 @@ describe("Collections", () => {
       requestType: "CANCEL_RECEIVABLE",
       reason: "Deal fell through",
     });
-    await asApprover.mutation(api.collections.respondToApproval, {
+    await asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: crypto.randomUUID(),
       orgId,
       requestId,
       status: "APPROVED",
@@ -637,6 +647,7 @@ describe("Collections", () => {
     );
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       saleId,
@@ -664,7 +675,7 @@ describe("Collections", () => {
     });
 
     await expect(
-      asApprover.mutation(api.collections.respondToApproval, { orgId, requestId, status: "APPROVED" })
+      asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: crypto.randomUUID(), orgId, requestId, status: "APPROVED" })
     ).resolves.not.toThrow();
 
     await t.run(async (ctx) => {
@@ -678,6 +689,7 @@ describe("Collections", () => {
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -686,7 +698,7 @@ describe("Collections", () => {
       dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
-    await asFinance.mutation(api.collections.recordPayment, {
+    await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
       orgId,
       receivableId,
       amount: 500,
@@ -702,7 +714,7 @@ describe("Collections", () => {
       reason: "Customer cancelled after bank payment",
     });
 
-    await asApprover.mutation(api.collections.respondToApproval, {
+    await asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: crypto.randomUUID(),
       orgId,
       requestId,
       status: "APPROVED",
@@ -740,6 +752,7 @@ describe("Collections", () => {
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -748,7 +761,7 @@ describe("Collections", () => {
       dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
-    await asFinance.mutation(api.collections.recordPayment, {
+    await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
       orgId,
       receivableId,
       amount: 400,
@@ -763,7 +776,7 @@ describe("Collections", () => {
     });
 
     await expect(
-      asApprover.mutation(api.collections.respondToApproval, {
+      asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: crypto.randomUUID(),
         orgId,
         requestId,
         status: "APPROVED",
@@ -776,6 +789,7 @@ describe("Collections", () => {
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -784,7 +798,7 @@ describe("Collections", () => {
       dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
-    await asFinance.mutation(api.collections.recordPayment, {
+    await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
       orgId,
       receivableId,
       amount: 300,
@@ -800,7 +814,7 @@ describe("Collections", () => {
       reason: "Customer requested card reversal",
     });
 
-    await asApprover.mutation(api.collections.respondToApproval, {
+    await asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: crypto.randomUUID(),
       orgId,
       requestId,
       status: "APPROVED",
@@ -851,6 +865,7 @@ describe("Collections", () => {
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -859,7 +874,7 @@ describe("Collections", () => {
       dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
-    await asFinance.mutation(api.collections.recordPayment, {
+    await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
       orgId,
       receivableId,
       amount: 600,
@@ -875,7 +890,7 @@ describe("Collections", () => {
       reason: "Refund by dealership cheque",
     });
 
-    await asApprover.mutation(api.collections.respondToApproval, {
+    await asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: crypto.randomUUID(),
       orgId,
       requestId,
       status: "APPROVED",
@@ -906,6 +921,7 @@ describe("Collections", () => {
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -931,7 +947,7 @@ describe("Collections", () => {
     });
 
     await expect(
-      asApprover.mutation(api.collections.respondToApproval, {
+      asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: crypto.randomUUID(),
         orgId,
         requestId,
         status: "APPROVED",
@@ -945,6 +961,7 @@ describe("Collections", () => {
     const tomorrow = Date.now() + 24 * 60 * 60 * 1000;
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -961,7 +978,7 @@ describe("Collections", () => {
       reason: "Customer requested a new payment date",
     });
 
-    await asApprover.mutation(api.collections.respondToApproval, {
+    await asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: crypto.randomUUID(),
       orgId,
       requestId,
       status: "APPROVED",
@@ -1196,6 +1213,11 @@ describe("Collections", () => {
       amount: 450,
       dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
       creditSystemKey: "MISCELLANEOUS_INCOME" as const,
+      // SCRUM-57: every probe below is a REFUSAL, and an uncaught throw rolls
+      // the whole mutation back, so no command row survives any of them and one
+      // shared identity cannot collide. If that ever stopped being true the
+      // conflict would surface as a failed expectation here, not as a silent pass.
+      idempotencyKey: crypto.randomUUID(),
     };
 
     await expect(asFinance.mutation(api.collections.createReceivable, { ...baseArgs, amount: 0 })).rejects.toThrow("Amount must be greater than 0");
@@ -1213,6 +1235,7 @@ describe("Collections", () => {
     })).rejects.toThrow("credit account");
 
     const saleLinkedReceivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       vehicleId: related.vehicleId,
@@ -1242,6 +1265,7 @@ describe("Collections", () => {
     });
 
     await expect(asFinance.mutation(api.collections.createInstallmentPlan, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       title: "Bad plan",
@@ -1251,6 +1275,7 @@ describe("Collections", () => {
       creditSystemKey: "MISCELLANEOUS_INCOME",
     })).rejects.toThrow("Total amount must be greater than 0");
     await expect(asFinance.mutation(api.collections.createInstallmentPlan, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       title: "Bad plan",
@@ -1260,6 +1285,7 @@ describe("Collections", () => {
       creditSystemKey: "MISCELLANEOUS_INCOME",
     })).rejects.toThrow("Installment count must be between 1 and 120");
     await expect(asFinance.mutation(api.collections.createInstallmentPlan, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       title: "Bad plan",
@@ -1270,6 +1296,7 @@ describe("Collections", () => {
       creditSystemKey: "MISCELLANEOUS_INCOME",
     })).rejects.toThrow("Installment interval must be between 1 and 12");
     await expect(asFinance.mutation(api.collections.createInstallmentPlan, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       title: "   ",
@@ -1281,6 +1308,7 @@ describe("Collections", () => {
 
     const firstDueDate = Date.UTC(2026, 0, 15);
     const planIds = await asFinance.mutation(api.collections.createInstallmentPlan, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       vehicleId: related.vehicleId,
@@ -1319,6 +1347,7 @@ describe("Collections", () => {
       vin: "PAYCHEQUE00001",
     });
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       vehicleId,
@@ -1329,20 +1358,20 @@ describe("Collections", () => {
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
 
-    await expect(asFinance.mutation(api.collections.recordPayment, {
+    await expect(asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
       orgId,
       amount: 10,
       method: "CASH",
       paymentDate: Date.now(),
     })).rejects.toThrow("Customer is required");
-    await expect(asFinance.mutation(api.collections.recordPayment, {
+    await expect(asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
       orgId,
       receivableId,
       amount: 10,
       method: "REFUND",
       paymentDate: Date.now(),
     })).rejects.toThrow("Refunds require manager approval");
-    await expect(asFinance.mutation(api.collections.recordPayment, {
+    await expect(asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
       orgId,
       receivableId,
       amount: 101,
@@ -1376,7 +1405,7 @@ describe("Collections", () => {
       expect(canonical?.method).toBe("CASH");
     });
 
-    await expect(asFinance.mutation(api.collections.recordPayment, {
+    await expect(asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       amount: 10,
@@ -1384,7 +1413,7 @@ describe("Collections", () => {
       paymentDate: Date.now(),
     })).rejects.toThrow("OTHER is not accepted");
 
-    const appliedDepositPaymentId = await asFinance.mutation(api.collections.recordPayment, {
+    const appliedDepositPaymentId = await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       amount: 5,
@@ -1397,14 +1426,14 @@ describe("Collections", () => {
       expect(canonical?.method).toBe("OTHER");
     });
 
-    await asFinance.mutation(api.collections.recordPayment, {
+    await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
       orgId,
       receivableId,
       amount: 100,
       method: "CASH",
       paymentDate: Date.now(),
     });
-    await expect(asFinance.mutation(api.collections.recordPayment, {
+    await expect(asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
       orgId,
       receivableId,
       amount: 1,
@@ -1564,7 +1593,7 @@ describe("Collections", () => {
         updatedAt: Date.now(),
       })
     );
-    await expect(asFinance.mutation(api.collections.clearCheque, {
+    await expect(asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(),
       orgId,
       chequeId: financeLinkedChequeId,
     })).rejects.toThrow("confirm disbursement from the Applications page");
@@ -1589,7 +1618,7 @@ describe("Collections", () => {
         updatedAt: Date.now(),
       });
     });
-    await expect(asFinance.mutation(api.collections.clearCheque, {
+    await expect(asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(),
       orgId,
       chequeId: otherOrgChequeId,
     })).rejects.toThrow("Cheque not found");
@@ -1608,7 +1637,7 @@ describe("Collections", () => {
         updatedAt: Date.now(),
       })
     );
-    await expect(asFinance.mutation(api.collections.clearCheque, {
+    await expect(asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(),
       orgId,
       chequeId: returnedChequeId,
     })).rejects.toThrow("Only held or deposited cheques can be cleared");
@@ -1635,7 +1664,7 @@ describe("Collections", () => {
         updatedAt: Date.now(),
       })
     );
-    await expect(asFinance.mutation(api.collections.clearCheque, {
+    await expect(asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(),
       orgId,
       chequeId: oversizedChequeId,
     })).rejects.toThrow("Cheque amount cannot exceed");
@@ -1650,6 +1679,7 @@ describe("Collections", () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -1702,18 +1732,18 @@ describe("Collections", () => {
       requestedByName: "Collections User",
     });
 
-    await expect(asFinance.mutation(api.collections.respondToApproval, {
+    await expect(asFinance.mutation(api.collections.respondToApproval, { idempotencyKey: crypto.randomUUID(),
       orgId,
       requestId,
       status: "APPROVED",
     })).rejects.toThrow("Requester cannot approve");
-    await asApprover.mutation(api.collections.respondToApproval, {
+    await asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: crypto.randomUUID(),
       orgId,
       requestId,
       status: "REJECTED",
       decisionNotes: "Customer needs documentation first",
     });
-    await expect(asApprover.mutation(api.collections.respondToApproval, {
+    await expect(asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: crypto.randomUUID(),
       orgId,
       requestId,
       status: "APPROVED",
@@ -1738,13 +1768,14 @@ describe("Collections", () => {
         updatedAt: Date.now(),
       })
     );
-    await expect(asApprover.mutation(api.collections.respondToApproval, {
+    await expect(asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: crypto.randomUUID(),
       orgId,
       requestId: missingDueRequestId,
       status: "APPROVED",
     })).rejects.toThrow("Requested due date is missing");
 
     const paidReceivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -1753,7 +1784,7 @@ describe("Collections", () => {
       dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
-    await asFinance.mutation(api.collections.recordPayment, {
+    await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
       orgId,
       receivableId: paidReceivableId,
       amount: 100,
@@ -1774,7 +1805,7 @@ describe("Collections", () => {
         updatedAt: Date.now(),
       })
     );
-    await expect(asApprover.mutation(api.collections.respondToApproval, {
+    await expect(asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: crypto.randomUUID(),
       orgId,
       requestId: missingDisbursementRequestId,
       status: "APPROVED",
@@ -1796,7 +1827,7 @@ describe("Collections", () => {
       await ctx.db.delete(deletedReceivableId);
       return id;
     });
-    await expect(asApprover.mutation(api.collections.respondToApproval, {
+    await expect(asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: crypto.randomUUID(),
       orgId,
       requestId: orphanedRequestId,
       status: "APPROVED",
@@ -1808,6 +1839,7 @@ describe("Collections", () => {
     const { orgId, customerId, asFinance, asApprover, userId } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "INTERNAL_INSTALLMENT",
@@ -1816,14 +1848,14 @@ describe("Collections", () => {
       dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
-    await asFinance.mutation(api.collections.recordPayment, {
+    await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
       orgId,
       receivableId,
       amount: 100,
       method: "CASH",
       paymentDate: Date.now() - 1_000,
     });
-    await asFinance.mutation(api.collections.recordPayment, {
+    await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
       orgId,
       receivableId,
       amount: 200,
@@ -1838,7 +1870,7 @@ describe("Collections", () => {
       disbursementMethod: "CASH",
       reason: "Partial refund across multiple allocations",
     });
-    await asApprover.mutation(api.collections.respondToApproval, {
+    await asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: crypto.randomUUID(),
       orgId,
       requestId: partialRefundRequestId,
       status: "APPROVED",
@@ -1880,7 +1912,7 @@ describe("Collections", () => {
       disbursementMethod: "CASH",
       reason: "Legacy data repair case",
     });
-    await expect(asApprover.mutation(api.collections.respondToApproval, {
+    await expect(asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: crypto.randomUUID(),
       orgId,
       requestId: legacyRefundRequestId,
       status: "APPROVED",
@@ -1912,6 +1944,7 @@ describe("Collections", () => {
     await asFinance.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       sourceType: "CHEQUE",
@@ -1929,7 +1962,7 @@ describe("Collections", () => {
       chequeDate: Date.now(),
       amount: 250,
     });
-    await asFinance.mutation(api.collections.clearCheque, { orgId, chequeId });
+    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
     await asFinance.mutation(api.accountingPeriods.close, { orgId, periodId: period._id });
 
     await asFinance.mutation(api.collections.returnClearedCheque, {
@@ -1939,11 +1972,39 @@ describe("Collections", () => {
       idempotencyKey: "posted-cheque-return-no-open-period",
     });
 
+    // ⚠️ THE DEFERRED REVERSAL'S KEY CHANGED, DELIBERATELY (SCRUM-130).
+    //
+    // It was the hand-built literal `cheque_return_after_clear_<chequeId>`, which
+    // `reversals.ts` records as an OPEN BOUNDARY: a reversal of a
+    // `collectionPayments`-sourced event written under a key OUTSIDE SCRUM-249's
+    // reserved namespace, addressed with `by_org_source` + `.first()` — no
+    // eventType, no eventVersion, no cardinality refusal. The return now goes
+    // through `revokeReceiptOccurrence`, so the key is DERIVED from the same
+    // identity as the forward post by `occurrenceReversalIdempotencyKey`.
+    //
+    // The key is recomputed here from the movement's own persisted snapshot
+    // rather than hard-coded, so this test cannot drift from the encoder: a
+    // change to the framing breaks the encoder's own suite, not this one.
     await t.run(async (ctx) => {
+      const payment = await ctx.db
+        .query("collectionPayments")
+        .withIndex("by_cheque", (q) => q.eq("chequeId", chequeId))
+        .first();
+      const movement = await ctx.db
+        .query("receiptMovements")
+        .withIndex("by_org_payment", (q) =>
+          q.eq("orgId", orgId).eq("collectionPaymentId", payment!._id)
+        )
+        .unique();
+      const derivedKey = occurrenceReversalIdempotencyKey(
+        rehydrateReceiptOccurrence({ orgId, snapshot: movement!.occurrence })
+      );
+      expect(derivedKey).not.toBe(`cheque_return_after_clear_${chequeId}`);
+
       const pendingReversal = await ctx.db
         .query("pendingAccountingEvents")
         .withIndex("by_org_idempotency", (q) =>
-          q.eq("orgId", orgId).eq("idempotencyKey", `cheque_return_after_clear_${chequeId}`)
+          q.eq("orgId", orgId).eq("idempotencyKey", derivedKey)
         )
         .unique();
       expect(pendingReversal).toMatchObject({
@@ -1960,7 +2021,7 @@ describe("Collections", () => {
     const now = Date.now();
     const receivableId = await insertReceivable(t, { orgId, customerId, createdBy: userId, amount: 100 });
 
-    await asFinance.mutation(api.collections.recordPayment, {
+    await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
       orgId,
       receivableId,
       amount: 100,
@@ -1999,7 +2060,7 @@ describe("Collections", () => {
     const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: now });
     expect(draft).toMatchObject({ expectedCash: 70, paymentCount: 2 });
 
-    await expect(asFinance.mutation(api.collections.submitCashierReconciliation, {
+    await expect(asFinance.mutation(api.collections.submitCashierReconciliation, { idempotencyKey: crypto.randomUUID(),
       orgId,
       businessDate: now,
       countedCash: -1,
@@ -2212,7 +2273,7 @@ describe("refund eligibility", () => {
       requestType: "CANCEL_RECEIVABLE",
       reason: "Customer defaulted; writing off",
     });
-    await asApprover.mutation(api.collections.respondToApproval, {
+    await asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: crypto.randomUUID(),
       orgId,
       requestId: cancelRequestId,
       status: "APPROVED",
@@ -2268,7 +2329,7 @@ describe("refund eligibility", () => {
     );
 
     await expect(
-      asApprover.mutation(api.collections.respondToApproval, {
+      asApprover.mutation(api.collections.respondToApproval, { idempotencyKey: crypto.randomUUID(),
         orgId,
         requestId: refundRequestId,
         status: "APPROVED",

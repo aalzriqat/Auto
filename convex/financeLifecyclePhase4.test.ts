@@ -364,7 +364,7 @@ describe("Finance lifecycle Phase 4", () => {
     });
 
     await expect(
-      asLimitedUser.mutation(api.applications.finalizeDeal, { orgId, applicationId })
+      asLimitedUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId })
     ).rejects.toThrow(/finalize:financed_deal/);
 
     await registerHandover(asFinalizer, api, orgId, applicationId);
@@ -375,7 +375,7 @@ describe("Finance lifecycle Phase 4", () => {
       expectedDate: Date.now(),
     });
 
-    const saleId = await asFinalizer.mutation(api.applications.finalizeDeal, {
+    const saleId = await asFinalizer.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId,
       applicationId,
     });
@@ -385,23 +385,35 @@ describe("Finance lifecycle Phase 4", () => {
   test("confirmDisbursement requires CONFIRM_FINANCE_DISBURSEMENT permission", async () => {
     const { t, orgId, salespersonId, customerId, asLimitedUser, asAccountant } =
       await seedFinanceLifecycleDealer("disbursement");
-    const { applicationId } = await seedFinanceApplication(t, {
+    const { applicationId, financeCompanyId } = await seedFinanceApplication(t, {
       orgId,
       customerId,
       salespersonId,
       status: "CLOSED",
       withFinanceCompany: true,
     });
+    // The receivable finalizeDeal opens for the company's remittance. A CLOSED
+    // application inserted without one is a pre-receivable legacy shape that
+    // confirmDisbursement no longer completes on the company's behalf: the
+    // receipt settles the recorded receivable or is refused (SCRUM-241).
+    await t.run((ctx) =>
+      ctx.db.insert("receivableDocuments", {
+        orgId, documentType: "INVOICE", documentNumber: "RCV-P4", payerType: "FINANCE_COMPANY",
+        customerId, financeCompanyId: financeCompanyId, sourceType: "finance_application", sourceId: applicationId,
+        originalAmountMinor: 20_000_000, currency: "JOD", scale: 3, issueDate: Date.now(), dueDate: Date.now(),
+        status: "OPEN", createdAt: Date.now(), createdBy: salespersonId,
+      })
+    );
 
     await expect(
-      asLimitedUser.mutation(api.applications.confirmDisbursement, {
+      asLimitedUser.mutation(api.applications.confirmDisbursement, { idempotencyKey: crypto.randomUUID(),
         orgId,
         applicationId,
         disbursedAmountMinor: 20_000_000,
       })
     ).rejects.toThrow(/confirm:finance_disbursement/);
 
-    await asAccountant.mutation(api.applications.confirmDisbursement, {
+    await asAccountant.mutation(api.applications.confirmDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId,
       applicationId,
       disbursedAmountMinor: 20_000_000,

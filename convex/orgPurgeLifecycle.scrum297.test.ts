@@ -80,7 +80,23 @@ async function executeEconomicCommand(
   return await t.run(async (ctx) =>
     runWithIdempotency(
       ctx,
-      { orgId, operation: "scrum297.genericEconomicCommand", idempotencyKey: key },
+      {
+        orgId,
+        operation: "scrum297.genericEconomicCommand",
+        // SCRUM-57 makes the classification explicit and non-defaulting: an
+        // economic command must carry BOTH a minted identity and a canonical
+        // fingerprint. This helper models exactly that, so it declares itself
+        // economic rather than being adapted to the permissive branch.
+        economic: true,
+        idempotencyKey: key,
+        // The material inputs of the advance this command writes. Deliberately
+        // NOT the `date`, which is generated inside the callback rather than
+        // submitted as an input — fingerprinting it would make an identity that
+        // can never replay. Constant across these tests, which mint one identity
+        // per test and never replay or reuse it with a changed intent, so no
+        // SCRUM-297 assertion changes what it exercises.
+        fingerprint: JSON.stringify({ userId: ownerId, amountMinor: 40000, currency: "JOD" }),
+      },
       async () => {
         const now = Date.now();
         const provenanceId = await ctx.db.insert("employeeAdvances", {

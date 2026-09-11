@@ -67,6 +67,40 @@ export async function isChartInitialized(
 }
 
 /**
+ * Is one system key resolvable for this org RIGHT NOW — read-only, never
+ * creating, adopting or reclassifying anything (SCRUM-218-C).
+ *
+ * `isChartInitialized` above answers "does this org have a chart at all", which
+ * is what `shouldPost` uses. That is too coarse for an event whose journal needs
+ * a SPECIFIC account: an org with a chart but without 2110 passes
+ * `isChartInitialized`, posts synchronously, and `resolveSystemAccount` then
+ * throws INSIDE the receipt transaction. Because nothing catches it, Convex
+ * rolls back the confirmed receipt — the money the customer actually handed over
+ * disappears because a chart account was missing. That failure is not
+ * hypothetical; it is the CRITICAL that ended SCRUM-218's round-3 design.
+ *
+ * So this exists to let a producer ask the narrow question BEFORE choosing to
+ * post, and enqueue instead when the answer is no.
+ *
+ * Mirrors `resolveSystemAccount`'s liveness rule exactly — a row must exist AND
+ * at least one must be active — because a check that is laxer than the resolver
+ * it guards would send the event down the synchronous path to throw anyway.
+ * Deliberately does NOT reuse the earliest-created tie-break: this answers
+ * "would resolution succeed", not "which row wins".
+ */
+export async function isSystemAccountMapped(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  systemKey: SystemKey
+): Promise<boolean> {
+  const accounts = await ctx.db
+    .query("chartOfAccounts")
+    .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", systemKey))
+    .collect();
+  return accounts.some((a) => a.active);
+}
+
+/**
  * Self-healing backfill for the GENERAL_EXPENSE system account.
  *
  * Charts seeded before GENERAL_EXPENSE was introduced have a "General Expenses"

@@ -285,7 +285,7 @@ describe("P1-M1 the acting root is decided in exactly one place", () => {
     const seed = await seedDealer("m1a");
     const v = await vehicle(seed);
     const quoteId = await cashQuote(seed, seed.customerA, v);
-    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount: 2_000 });
 
     const roots = await rootsOn(seed, v);
     expect(roots.length, "one physical car, one root").toBe(1);
@@ -304,7 +304,7 @@ describe("P1-M1 the acting root is decided in exactly one place", () => {
     const seed = await seedDealer("m1b");
     const v = await vehicle(seed);
     const first = await cashQuote(seed, seed.customerA, v);
-    await seed.asUser.mutation(api.deposits.create, {
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       quoteId: first,
       amount: 2_000,
@@ -312,7 +312,7 @@ describe("P1-M1 the acting root is decided in exactly one place", () => {
 
     const second = await cashQuote(seed, seed.customerA, v);
     await expectRefusal(
-      seed.asUser.mutation(api.deposits.create, {
+      seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         quoteId: second,
         amount: 1_000,
@@ -327,7 +327,7 @@ describe("P1-M1 the acting root is decided in exactly one place", () => {
     const seed = await seedDealer("m1c");
     const v = await vehicle(seed);
     const first = await cashQuote(seed, seed.customerA, v);
-    await seed.asUser.mutation(api.deposits.create, {
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       quoteId: first,
       amount: 2_000,
@@ -336,7 +336,7 @@ describe("P1-M1 the acting root is decided in exactly one place", () => {
 
     const rival = await cashQuote(seed, seed.customerB, v);
     await expectRefusal(
-      seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId: rival, amount: 500 }),
+      seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId: rival, amount: 500 }),
       HELD,
       "1.3"
     );
@@ -354,8 +354,8 @@ describe("P1-M1 the acting root is decided in exactly one place", () => {
     const seed = await seedDealer("m1d");
     const v = await vehicle(seed);
     const quoteId = await cashQuote(seed, seed.customerA, v);
-    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
-    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 1_000 });
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount: 2_000 });
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount: 1_000 });
 
     expect((await rootsOn(seed, v)).length, "one deal, one root, two instalments").toBe(1);
     const claims = await claimsOn(seed, v);
@@ -382,7 +382,7 @@ describe("P1-M1 the acting root is decided in exactly one place", () => {
     const seed = await seedDealer("m1e");
     const v = await vehicle(seed);
     const quoteId = await cashQuote(seed, seed.customerA, v);
-    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount: 2_000 });
 
     const decision = await seed.t.run((ctx) =>
       resolveActingRoot(ctx, {
@@ -418,7 +418,7 @@ describe("P1-M1 the acting root is decided in exactly one place", () => {
     const seed = await seedDealer("m1f");
     const v = await vehicle(seed);
     const quoteId = await cashQuote(seed, seed.customerA, v);
-    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount: 2_000 });
 
     await seed.t.run((ctx) =>
       ctx.db.insert("commitmentRoots", {
@@ -470,7 +470,7 @@ describe("P1-M1 the acting root is decided in exactly one place", () => {
       "a foreign root is not this tenant's ownership"
     ).toBe("FREE");
     const quoteId = await cashQuote(seed, seed.customerA, v);
-    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount: 2_000 });
     const mine = (await rootsOn(seed, v)).filter((r) => String(r.orgId) === String(seed.orgId));
     expect(mine.length, "and this tenant opens its own root normally").toBe(1);
   });
@@ -492,6 +492,7 @@ describe("P1-M2 evidence is tagged and carried", () => {
     const seed = await seedDealer("m2a");
     const v = await vehicle(seed);
     const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: v,
       customerId: seed.customerA,
@@ -517,7 +518,7 @@ describe("P1-M2 evidence is tagged and carried", () => {
     const seed = await seedDealer("m2b");
     const v = await vehicle(seed);
     const quoteId = await cashQuote(seed, seed.customerA, v);
-    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount: 2_000 });
 
     const claims = await claimsOn(seed, v);
     expect(claims.length).toBe(1);
@@ -535,6 +536,7 @@ describe("P1-M2 evidence is tagged and carried", () => {
     const seed = await seedDealer("m2c");
     const v = await vehicle(seed);
     const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: v,
       customerId: seed.customerA,
@@ -588,7 +590,7 @@ describe("P1-M2 evidence is tagged and carried", () => {
     const v = await vehicle(seed);
     const other = await vehicle(seed);
     const quoteId = await cashQuote(seed, seed.customerA, v);
-    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount: 2_000 });
     const live = (await claimsOn(seed, v))[0];
     const depositId = live.depositId as Id<"deposits">;
 
@@ -612,7 +614,7 @@ describe("P1-M2 evidence is tagged and carried", () => {
     );
     const terminal = await seed.t.run((ctx) => ctx.db.get(live._id));
     const otherQuote = await cashQuote(seed, seed.customerB, other);
-    await seed.asUser.mutation(api.deposits.create, {
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       quoteId: otherQuote,
       amount: 1_000,
@@ -662,7 +664,7 @@ describe("P1-W the five reachable acquisition writers", () => {
       downPayment: 0,
       termMonths: 0,
     });
-    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 6_000 });
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount: 6_000 });
     await seed.asUser.mutation(api.deposits.allocateToVehicles, {
       orgId: seed.orgId,
       quoteId,
@@ -866,7 +868,7 @@ describe("P1-W the five reachable acquisition writers", () => {
       termMonths: 36,
       totalFinancedAmount: 25_000,
     });
-    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount: 2_000 });
     await seed.asUser.mutation(api.applications.createFromQuote, { orgId: seed.orgId, quoteId });
 
     expect((await rootsOn(seed, v)).length, "one deal, one root").toBe(1);
@@ -886,7 +888,7 @@ describe("P1-W the five reachable acquisition writers", () => {
     const seed = await seedDealer("w6");
     const v = await vehicle(seed);
     const held = await cashQuote(seed, seed.customerA, v);
-    await seed.asUser.mutation(api.deposits.create, {
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       quoteId: held,
       amount: 2_000,
@@ -929,6 +931,7 @@ describe("P1-A continuation is proven, never inferred", () => {
   async function reserved(seed: Seed) {
     const v = await vehicle(seed);
     const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: v,
       customerId: seed.customerA,
@@ -943,7 +946,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     const rootBefore = (await rootsOn(seed, v))[0];
 
     const quoteId = await cashQuote(seed, seed.customerA, v);
-    await seed.asUser.mutation(api.deposits.create, {
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       quoteId,
       amount: 2_000,
@@ -969,7 +972,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     const seed = await seedDealer("a2");
     const { v, reservationId } = await reserved(seed);
     const quoteId = await cashQuote(seed, seed.customerA, v);
-    await seed.asUser.mutation(api.deposits.create, {
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       quoteId,
       amount: 2_000,
@@ -979,7 +982,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     // No adoption argument this time. The root has been re-headed, so the quote
     // alone is now sufficient proof — which is what makes the conversion a
     // one-time, auditable event rather than a flag every door must remember.
-    await seed.asUser.mutation(api.deposits.create, {
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       quoteId,
       amount: 500,
@@ -996,6 +999,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     const { v } = await reserved(seed);
     const other = await vehicle(seed);
     const otherReservation = await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: other,
       customerId: seed.customerA,
@@ -1004,7 +1008,7 @@ describe("P1-A continuation is proven, never inferred", () => {
 
     const quoteId = await cashQuote(seed, seed.customerA, v);
     await expectRefusal(
-      seed.asUser.mutation(api.deposits.create, {
+      seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         quoteId,
         amount: 2_000,
@@ -1035,7 +1039,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     const before = await snapshot(seed, v);
 
     await expectRefusal(
-      seed.asUser.mutation(api.deposits.create, {
+      seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         quoteId: rivalQuote,
         amount: 1_000,
@@ -1072,7 +1076,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     const ownQuote = await cashQuote(seed, seed.customerA, v);
     const rootBefore = (await rootsOn(seed, v))[0];
 
-    await seed.asUser.mutation(api.deposits.create, {
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       quoteId: ownQuote,
       amount: 2_000,
@@ -1089,7 +1093,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     // And from here the deal proves itself by quote, with no adoption argument
     // at all — the conversion is a one-time event, not a flag every door
     // repeats.
-    await seed.asUser.mutation(api.deposits.create, {
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       quoteId: ownQuote,
       amount: 500,
@@ -1101,10 +1105,11 @@ describe("P1-A continuation is proven, never inferred", () => {
     const seed = await seedDealer("a5");
     const v = await vehicle(seed);
     const quoteId = await cashQuote(seed, seed.customerA, v);
-    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount: 2_000 });
     const rootBefore = (await rootsOn(seed, v))[0];
 
     await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: v,
       customerId: seed.customerA,
@@ -1127,10 +1132,11 @@ describe("P1-A continuation is proven, never inferred", () => {
     const seed = await seedDealer("a6");
     const v = await vehicle(seed);
     const quoteId = await cashQuote(seed, seed.customerA, v);
-    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount: 2_000 });
 
     await expectRefusal(
       seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         vehicleId: v,
         customerId: seed.customerA,
@@ -1176,7 +1182,7 @@ describe("P1-A continuation is proven, never inferred", () => {
       downPayment: 0,
       termMonths: 0,
     });
-    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount });
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount });
     return await seed.t.run(async (ctx) => {
       const deposit = (await ctx.db.query("deposits").collect()).find((d) => d.quoteId === quoteId)!;
       const holds = (await ctx.db.query("depositVehicleHolds").collect()).filter(
@@ -1344,7 +1350,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     const first = await multiVehicleDeposit(seed, [car, second], 4_000);
     // A further instalment on the SAME deal: joins the same root, opens its own
     // episode, and writes its own holds.
-    await seed.asUser.mutation(api.deposits.create, {
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       quoteId: first.quoteId,
       amount: 3_000,
@@ -1510,6 +1516,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     const seed = await seedDealer("a8");
     const other = await secondTenant(seed);
     const foreign = await other.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: other.orgId,
       vehicleId: other.vehicleId,
       customerId: other.customerId,
@@ -1518,11 +1525,11 @@ describe("P1-A continuation is proven, never inferred", () => {
 
     const v = await vehicle(seed);
     const quoteId = await cashQuote(seed, seed.customerA, v);
-    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount: 2_000 });
 
     const before = await snapshot(seed, v);
     await expectRefusal(
-      seed.asUser.mutation(api.deposits.create, {
+      seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         quoteId,
         amount: 1_000,
@@ -1535,7 +1542,7 @@ describe("P1-A continuation is proven, never inferred", () => {
 
     // THE CONTROL. The identical call without the adoption argument joins, so
     // the refusal above was caused by the adoption and nothing else.
-    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 1_000 });
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount: 1_000 });
     expect((await rootsOn(seed, v)).length, "the quote alone really would have joined").toBe(1);
   });
 
@@ -1551,7 +1558,7 @@ describe("P1-A continuation is proven, never inferred", () => {
       quoteId,
       adoptReservationId: reservationId,
     });
-    await seed.asUser.mutation(api.applications.cancelApplication, {
+    await seed.asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       applicationId,
       reason: "Customer changed their mind about financing",
@@ -1561,7 +1568,7 @@ describe("P1-A continuation is proven, never inferred", () => {
 
     const before = await snapshot(seed, v);
     await expectRefusal(
-      seed.asUser.mutation(api.deposits.create, {
+      seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         quoteId,
         amount: 2_000,
@@ -1587,7 +1594,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     const rootsBeforeControl = await rootsOn(seed, v);
     expect(await openRootsOn(seed, v), "the cancellation really did free the car").toEqual([]);
 
-    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount: 2_000 });
 
     const liveAfterControl = await openRootsOn(seed, v);
     expect(liveAfterControl.length, "the quote alone really was admitted").toBe(1);
@@ -1603,13 +1610,14 @@ describe("P1-A continuation is proven, never inferred", () => {
     const seed = await seedDealer("a10");
     const v = await vehicle(seed);
     const quoteId = await cashQuote(seed, seed.customerA, v);
-    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount: 2_000 });
 
     // The SAME customer's own reservation — but on a car that has nothing to do
     // with this quote. Same customer is not evidence of the same deal, and an
     // unrelated live reservation is not a licence to keep going.
     const unrelated = await vehicle(seed);
     const otherReservation = await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: unrelated,
       customerId: seed.customerA,
@@ -1618,7 +1626,7 @@ describe("P1-A continuation is proven, never inferred", () => {
 
     const before = await snapshot(seed, v);
     await expectRefusal(
-      seed.asUser.mutation(api.deposits.create, {
+      seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         quoteId,
         amount: 1_000,
@@ -1643,8 +1651,9 @@ describe("P1-A continuation is proven, never inferred", () => {
     const seed = await seedDealer("a12");
     const v = await vehicle(seed);
     const quoteId = await cashQuote(seed, seed.customerA, v);
-    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount: 2_000 });
     const joined = await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: v,
       customerId: seed.customerA,
@@ -1658,7 +1667,7 @@ describe("P1-A continuation is proven, never inferred", () => {
 
     const before = await snapshot(seed, v);
     await expectRefusal(
-      seed.asUser.mutation(api.deposits.create, {
+      seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         quoteId,
         amount: 1_000,
@@ -1671,7 +1680,7 @@ describe("P1-A continuation is proven, never inferred", () => {
 
     // THE CONTROL — the deal really can carry on, just not by claiming this
     // reservation started it.
-    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 1_000 });
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount: 1_000 });
     expect((await rootsOn(seed, v)).length, "the quote alone really would have joined").toBe(1);
   });
 
@@ -1712,7 +1721,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     const seed = await seedDealer("a14");
     const v = await vehicle(seed);
     const quoteId = await cashQuote(seed, seed.customerA, v);
-    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount: 2_000 });
     const depositId = await seed.t.run(async (ctx) => {
       const rows = await ctx.db.query("deposits").collect();
       return rows.find((d) => d.vehicleId === v)!._id;
@@ -1753,7 +1762,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     const seed = await seedDealer("a15");
     const v = await vehicle(seed);
     const quoteId = await cashQuote(seed, seed.customerA, v);
-    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount: 2_000 });
     const depositId = await seed.t.run(async (ctx) => {
       const rows = await ctx.db.query("deposits").collect();
       return rows.find((d) => d.vehicleId === v)!._id;
@@ -1763,6 +1772,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     let threw: unknown = null;
     try {
       await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         vehicleId: v,
         customerId: seed.customerB,
@@ -1798,6 +1808,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     const before = await snapshot(seed, v);
     await expectRefusal(
       seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         vehicleId: v,
         customerId: seed.customerB,
@@ -1811,6 +1822,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     // THE CONTROL — the very same call for the quote's OWN customer is allowed,
     // so the refusal above is about the mismatch and not about the door.
     await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: v,
       customerId: seed.customerA,
@@ -1853,7 +1865,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     const seed = await seedDealer("a18");
     const v = await vehicle(seed);
     const quoteId = await cashQuote(seed, seed.customerA, v);
-    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount: 2_000 });
     const depositId = await seed.t.run(async (ctx) => {
       const rows = await ctx.db.query("deposits").collect();
       return rows.find((d) => d.vehicleId === v)!._id;
@@ -1883,7 +1895,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     const seed = await seedDealer("a19");
     const v = await vehicle(seed);
     const first = await cashQuote(seed, seed.customerA, v);
-    await seed.asUser.mutation(api.deposits.create, {
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       quoteId: first,
       amount: 2_000,
@@ -1929,6 +1941,7 @@ describe("P1-A continuation is proven, never inferred", () => {
     const reservedCar = await vehicle(seed);
     const secondCar = await vehicle(seed);
     const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: reservedCar,
       customerId: seed.customerA,
@@ -1949,7 +1962,7 @@ describe("P1-A continuation is proven, never inferred", () => {
       termMonths: 0,
     });
 
-    await seed.asUser.mutation(api.deposits.create, {
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       quoteId,
       amount: 4_000,
@@ -2023,6 +2036,7 @@ describe("P1-C2 a supplied lineage proof is proved, not taken on trust", () => {
 
     await expectRefusal(
       seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         vehicleId: free,
         customerId: seed.customerA,
@@ -2043,6 +2057,7 @@ describe("P1-C2 a supplied lineage proof is proved, not taken on trust", () => {
 
     await expectRefusal(
       seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         vehicleId: free,
         customerId: seed.customerA,
@@ -2062,6 +2077,7 @@ describe("P1-C2 a supplied lineage proof is proved, not taken on trust", () => {
 
     await expectRefusal(
       seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         vehicleId: free,
         customerId: seed.customerA,
@@ -2080,6 +2096,7 @@ describe("P1-C2 a supplied lineage proof is proved, not taken on trust", () => {
     const quoteId = await cashQuote(seed, seed.customerA, free);
 
     await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: free,
       customerId: seed.customerA,
@@ -2098,7 +2115,7 @@ describe("P1-C2 a supplied lineage proof is proved, not taken on trust", () => {
     const otherCar = await vehicle(seed);
     const free = await vehicle(seed);
     const quoteId = await cashQuote(seed, seed.customerA, otherCar);
-    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount: 2_000 });
     const depositId = await seed.t.run(async (ctx) => {
       const rows = await ctx.db.query("deposits").collect();
       return rows.find((d) => String(d.vehicleId) === String(otherCar))!._id;
@@ -2106,6 +2123,7 @@ describe("P1-C2 a supplied lineage proof is proved, not taken on trust", () => {
 
     await expectRefusal(
       seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         vehicleId: free,
         customerId: seed.customerA,
@@ -2131,7 +2149,7 @@ describe("P1-C2 a supplied lineage proof is proved, not taken on trust", () => {
     const otherCar = await vehicle(seed);
     const free = await vehicle(seed);
     const quoteId = await cashQuote(seed, seed.customerA, otherCar);
-    await seed.asUser.mutation(api.deposits.create, { orgId: seed.orgId, quoteId, amount: 2_000 });
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount: 2_000 });
     const depositId = await seed.t.run(async (ctx) => {
       const rows = await ctx.db.query("deposits").collect();
       return rows.find((d) => String(d.vehicleId) === String(otherCar))!._id;
@@ -2315,6 +2333,7 @@ describe("P1-C2 a supplied lineage proof is proved, not taken on trust", () => {
     const seed = await seedDealer("c28");
     const reservedCar = await vehicle(seed);
     const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: reservedCar,
       customerId: seed.customerA,
@@ -2361,6 +2380,7 @@ describe("P1-C4 an idempotency key does not launder a changed adoption", () => {
 
   async function reservationOn(seed: Seed, v: Id<"vehicles">) {
     return await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: v,
       customerId: seed.customerA,
@@ -2505,6 +2525,7 @@ describe("P1-S the multi-vehicle narrowing refuses what it must", () => {
 
     // A: this deal's own reservation, genuinely adoptable.
     const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: carA,
       customerId: seed.customerA,
@@ -2512,7 +2533,7 @@ describe("P1-S the multi-vehicle narrowing refuses what it must", () => {
     });
     // B: somebody else's deal, already holding it.
     const rivalQuote = await cashQuote(seed, seed.customerB, carB);
-    await seed.asUser.mutation(api.deposits.create, {
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       quoteId: rivalQuote,
       amount: 2_000,
@@ -2539,7 +2560,7 @@ describe("P1-S the multi-vehicle narrowing refuses what it must", () => {
     );
 
     await expectRefusal(
-      seed.asUser.mutation(api.deposits.create, {
+      seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         quoteId,
         amount: 4_000,
@@ -2568,6 +2589,7 @@ describe("P1-S the multi-vehicle narrowing refuses what it must", () => {
     // valid, so an authority that checked adoption only where it could JOIN
     // would have opened the root and ignored the claim entirely.
     const dangling = await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: await vehicle(seed),
       customerId: seed.customerA,
@@ -2575,7 +2597,7 @@ describe("P1-S the multi-vehicle narrowing refuses what it must", () => {
     await seed.t.run((ctx) => ctx.db.delete(dangling));
 
     await expectRefusal(
-      seed.asUser.mutation(api.deposits.create, {
+      seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         quoteId,
         amount: 2_000,
@@ -2597,7 +2619,7 @@ describe("P1-S the multi-vehicle narrowing refuses what it must", () => {
 
     // The matched positive: the identical call without the false claim works,
     // so the refusal above is the adoption and not the fixture.
-    await seed.asUser.mutation(api.deposits.create, {
+    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       quoteId,
       amount: 2_000,
@@ -2740,6 +2762,7 @@ describe("P1-C2E a reservation proof must still be LIVE, not merely ACTIVE", () 
   async function adoptableButExpiring(seed: Seed) {
     const v = await vehicle(seed);
     const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: v,
       customerId: seed.customerA,
@@ -2796,7 +2819,7 @@ describe("P1-C2E a reservation proof must still be LIVE, not merely ACTIVE", () 
     );
 
     await expectRefusal(
-      seed.asUser.mutation(api.deposits.create, {
+      seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         quoteId,
         amount: 2_000,

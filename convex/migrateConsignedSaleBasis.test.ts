@@ -11,6 +11,7 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
+import { settleOutbox, makeDue } from "../test-utils/outboxWork";
 import { api, internal } from "./_generated/api";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 
@@ -296,7 +297,7 @@ describe("re-running it", () => {
         sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
       })
     );
-    await s.asUser.mutation(api.sales.create, {
+    await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
       salePrice: SALE_PRICE, saleDate: Date.now(), status: "COMPLETED" as const,
     });
@@ -379,7 +380,7 @@ describe("what it refuses to touch", () => {
         status: "AVAILABLE", sourceType: "STOCK", purchasePrice: 6_000,
       })
     );
-    await s.asUser.mutation(api.sales.create, {
+    await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
       salePrice: 8_000, saleDate: Date.now(), status: "COMPLETED" as const,
     });
@@ -536,7 +537,7 @@ describe("a correction that could only queue", () => {
     const periods = await s.asUser.query(api.accountingPeriods.list, { orgId: s.orgId });
     const reopened = periods.find((p) => p.fiscalYear === fiscalYear)!;
     await s.asUser.mutation(api.accountingPeriods.open, { orgId: s.orgId, periodId: reopened._id });
-    await s.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: s.orgId });
+    await settleOutbox(s.t, s.orgId);
 
     const report = await runMigration(s);
     expect(report.reconciledToPosted).toBe(1);
@@ -569,7 +570,7 @@ describe("a correction that could only queue", () => {
     const periods = await s.asUser.query(api.accountingPeriods.list, { orgId: s.orgId });
     const reopened = periods.find((p) => p.fiscalYear === fiscalYear)!;
     await s.asUser.mutation(api.accountingPeriods.open, { orgId: s.orgId, periodId: reopened._id });
-    await s.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: s.orgId });
+    await settleOutbox(s.t, s.orgId);
 
     const result = await s.t.mutation(
       internal.migrateConsignedSaleBasis.reconcileConsignedSaleCorrections,
@@ -650,7 +651,7 @@ describe("a correction that both queues AND needs a human", () => {
     const periods = await s.asUser.query(api.accountingPeriods.list, { orgId: s.orgId });
     const reopened = periods.find((p) => p.fiscalYear === fiscalYear)!;
     await s.asUser.mutation(api.accountingPeriods.open, { orgId: s.orgId, periodId: reopened._id });
-    await s.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: s.orgId });
+    await settleOutbox(s.t, s.orgId);
   }
 
   test("records both facts separately rather than collapsing them", async () => {
@@ -709,3 +710,4 @@ describe("a correction that both queues AND needs a human", () => {
     expect(org.totals.revenueOverstatementMinor).toBe(0);
   });
 });
+

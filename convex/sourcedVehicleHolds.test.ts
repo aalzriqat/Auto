@@ -122,7 +122,7 @@ describe("deposit hold on a sourced vehicle", () => {
       termMonths: 0,
     });
 
-    await asUser.mutation(api.deposits.create, {
+    await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       quoteId,
       amount: 500,
@@ -149,14 +149,14 @@ describe("deposit hold on a sourced vehicle", () => {
       downPayment: 1000,
       termMonths: 0,
     });
-    const depositId = await asUser.mutation(api.deposits.create, {
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       quoteId,
       amount: 500,
       method: "CASH",
     });
 
-    await asApprover.mutation(api.deposits.release, {
+    await asApprover.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(),
       orgId,
       depositId,
       resolution: "REFUNDED",
@@ -182,7 +182,7 @@ describe("deposit hold on a sourced vehicle", () => {
       downPayment: 1000,
       termMonths: 0,
     });
-    const depositId = await asUser.mutation(api.deposits.create, {
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       quoteId,
       amount: 500,
@@ -190,7 +190,7 @@ describe("deposit hold on a sourced vehicle", () => {
     });
     expect((await getVehicle(t, vehicleId)).status).toBe("RESERVED");
 
-    await asApprover.mutation(api.deposits.release, {
+    await asApprover.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(),
       orgId,
       depositId,
       resolution: "REFUNDED",
@@ -207,6 +207,7 @@ describe("createReservation on a sourced vehicle", () => {
     const vehicleId = await makeSourcedVehicle(t, orgId);
 
     await asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       customerId,
@@ -229,7 +230,7 @@ describe("createReservation on a sourced vehicle", () => {
       downPayment: 1000,
       termMonths: 0,
     });
-    await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 500, method: "CASH" });
+    await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 500, method: "CASH" });
 
     // createReservation calls syncVehicleHoldStatus *before* it checks the
     // status, so the deposit hold promotes the car to RESERVED first. Rejecting
@@ -240,6 +241,7 @@ describe("createReservation on a sourced vehicle", () => {
     // own customer's deposit holds is ordinary work; reserving one somebody
     // else's deal holds is not, and only explicit proof separates them.
     await asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       customerId,
@@ -265,10 +267,11 @@ describe("createReservation on a sourced vehicle", () => {
       downPayment: 1000,
       termMonths: 0,
     });
-    await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 500, method: "CASH" });
+    await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 500, method: "CASH" });
 
     await expect(
       asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
         orgId,
         vehicleId,
         customerId: otherCustomerId,
@@ -318,6 +321,7 @@ describe("multi-vehicle deposits hold their secondary vehicles too", () => {
     // Checking only deposits.by_vehicle_hold reports this car as unheld.
     await expect(
       asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
         orgId,
         vehicleId: secondaryId,
         customerId: otherCustomerId,
@@ -376,7 +380,7 @@ describe("getReservationHistory", () => {
       downPayment: 1000,
       termMonths: 0,
     });
-    await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 500, method: "CASH" });
+    await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 500, method: "CASH" });
 
     const history = await asUser.query(api.vehicles.getReservationHistory, { orgId, vehicleId });
 
@@ -400,7 +404,7 @@ describe("getReservationHistory", () => {
       downPayment: 1000,
       termMonths: 0,
     });
-    const depositId = await asUser.mutation(api.deposits.create, {
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       quoteId,
       amount: 500,
@@ -432,7 +436,7 @@ describe("markSourcedVehicleArrived", () => {
       downPayment: 1000,
       termMonths: 0,
     });
-    await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 500, method: "CASH" });
+    await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 500, method: "CASH" });
 
     await asUser.mutation(api.vehicles.markSourcedVehicleArrived, { orgId, vehicleId });
 
@@ -563,13 +567,13 @@ describe("hold detection is not truncated by reservation history", () => {
       downPayment: 1000,
       termMonths: 0,
     });
-    const depositId = await asUser.mutation(api.deposits.create, {
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       quoteId,
       amount: 500,
       method: "CASH",
     });
-    await asApprover.mutation(api.deposits.release, {
+    await asApprover.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(),
       orgId,
       depositId,
       resolution: "REFUNDED",
@@ -594,7 +598,7 @@ describe("preHoldStatus does not outlive its meaning", () => {
       downPayment: 1000,
       termMonths: 0,
     });
-    const depositId = await asUser.mutation(api.deposits.create, {
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       quoteId,
       amount: 500,
@@ -608,7 +612,7 @@ describe("preHoldStatus does not outlive its meaning", () => {
       ctx.db.patch(vehicleId, { sourceType: "STOCK", purchasePrice: 12800 })
     );
 
-    await asApprover.mutation(api.deposits.release, {
+    await asApprover.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(),
       orgId,
       depositId,
       resolution: "REFUNDED",
@@ -682,7 +686,7 @@ describe("sourcing pipeline", () => {
       downPayment: 1000,
       termMonths: 0,
     });
-    await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 500, method: "CASH" });
+    await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 500, method: "CASH" });
 
     const pipeline = await asUser.query(api.sourcingPayables.listPipeline, { orgId });
 

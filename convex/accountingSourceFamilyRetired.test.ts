@@ -47,6 +47,7 @@ import type { Id } from "./_generated/dataModel";
 import { postLegacyTransactionEvent } from "../test-utils/legacyMigrationSeed";
 import { reverseAccountingEvent } from "./accounting/reversals";
 import { enqueuePendingPost } from "./accountingOutbox";
+import { settleOutbox, makeDue } from "../test-utils/outboxWork";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -257,7 +258,7 @@ describe("SCRUM-234 — a retired posting DEAD-LETTERS, it does not sit held for
 
   test("a retired POST caught by a temporary-hold guard still dead-letters", async () => {
     const dealer = await seedDealer();
-    const { t, orgId, userId, asOwner } = dealer;
+    const { t, orgId, userId } = dealer;
 
     // PREPAID_EXPENSE_AMORTIZED with no `scheduleId` trips the prepaid
     // dependency guard, which is a HOLD — the entry is not broken, it is
@@ -277,7 +278,22 @@ describe("SCRUM-234 — a retired posting DEAD-LETTERS, it does not sit held for
       )
     );
 
-    for (let i = 0; i < 10; i++) await asOwner.mutation(api.accountingOutbox.redrive, { orgId });
+    // ⚠️ THE WORKER MUST BE DRIVEN, NOT JUST THE DRAIN (SCRUM-222 integration).
+    // The refusal used to happen inline inside `redrive`. It now happens in
+    // `postOutboxRow`, a separate transaction reached via the scheduler, so ten
+    // bare redrives would schedule claims and prove nothing about the
+    // disposition — and `claimOutboxRow` refuses a row that already carries an
+    // outstanding attempt, so they would collapse to one claim anyway.
+    //
+    // Each round therefore runs the worker to completion and then makes the row
+    // due again, because a refusal deliberately sets a backoff so a permanently
+    // refused row cannot re-select on every tick and starve the rows behind it.
+    // Ten rounds, ten burned attempts, which is exactly the budget the old
+    // inline path spent — the attempt accounting is preserved, not relaxed.
+    for (let i = 0; i < 10; i++) {
+      await settleOutbox(t, orgId);
+      await makeDue(t, orgId);
+    }
 
     const rows = await t.run((ctx) => ctx.db.query("pendingAccountingEvents").collect());
     const row = rows.find((r) => r.idempotencyKey === "held_legacy_key");
@@ -299,7 +315,7 @@ describe("SCRUM-234 — a retired posting DEAD-LETTERS, it does not sit held for
     // The existing claims-retirement suite opens the period BEFORE queueing, so
     // it never exercises the held branch for event types.
     const dealer = await seedDealer();
-    const { t, orgId, userId, asOwner } = dealer;
+    const { t, orgId, userId } = dealer;
 
     await t.run((ctx) =>
       enqueuePendingPost(
@@ -323,7 +339,22 @@ describe("SCRUM-234 — a retired posting DEAD-LETTERS, it does not sit held for
       if (row) await ctx.db.patch(row._id, { eventType: "CLAIM_SETTLED" });
     });
 
-    for (let i = 0; i < 10; i++) await asOwner.mutation(api.accountingOutbox.redrive, { orgId });
+    // ⚠️ THE WORKER MUST BE DRIVEN, NOT JUST THE DRAIN (SCRUM-222 integration).
+    // The refusal used to happen inline inside `redrive`. It now happens in
+    // `postOutboxRow`, a separate transaction reached via the scheduler, so ten
+    // bare redrives would schedule claims and prove nothing about the
+    // disposition — and `claimOutboxRow` refuses a row that already carries an
+    // outstanding attempt, so they would collapse to one claim anyway.
+    //
+    // Each round therefore runs the worker to completion and then makes the row
+    // due again, because a refusal deliberately sets a backoff so a permanently
+    // refused row cannot re-select on every tick and starve the rows behind it.
+    // Ten rounds, ten burned attempts, which is exactly the budget the old
+    // inline path spent — the attempt accounting is preserved, not relaxed.
+    for (let i = 0; i < 10; i++) {
+      await settleOutbox(t, orgId);
+      await makeDue(t, orgId);
+    }
 
     const rows = await t.run((ctx) => ctx.db.query("pendingAccountingEvents").collect());
     const row = rows.find((r) => r.idempotencyKey === "held_retired_evt_key");
@@ -378,7 +409,19 @@ describe("SCRUM-234 — a retired posting DEAD-LETTERS, it does not sit held for
     const result = await asOwner.mutation(api.prepaidExpenses.redriveScheduleEvents, { orgId, scheduleId });
 
     // Nothing was written, so nothing may be counted.
-    expect(result.failed).toBe(0);
+    //
+    // ⚠️ THE COUNTER CHANGED NAME BUT NOT MEANING (SCRUM-222 integration).
+    // Posting is asynchronous now, so this mutation reports what it QUEUED
+    // rather than what it posted, and the old `failed` counter no longer
+    // exists. The rule it pinned is unchanged and is now carried by `revived`:
+    // a permanently retired row is refused revival by `reviveFailedEntry`, so
+    // nothing is written onto it and nothing may be counted. `scheduled` is
+    // asserted alongside because "not revived" must also mean "not dispatched"
+    // — a row that was counted as unrevived but still handed to a worker would
+    // pass the first assertion while re-entering the retry budget by the back
+    // door, which is the same defect one refusal further on.
+    expect(result.revived).toBe(0);
+    expect(result.scheduled).toBe(0);
 
     const row = (await t.run((ctx) => ctx.db.query("pendingAccountingEvents").collect()))
       .find((r) => r.idempotencyKey === `expense_posted_${expenseId}`);
@@ -389,7 +432,7 @@ describe("SCRUM-234 — a retired posting DEAD-LETTERS, it does not sit held for
 
   test("CONTROL — a MODERN entry blocked by the same guard is still HELD, not failed", async () => {
     const dealer = await seedDealer();
-    const { t, orgId, userId, asOwner } = dealer;
+    const { t, orgId, userId } = dealer;
 
     // The control that isolates the fix to the retirement rather than to the
     // hold guard: identical event, identical missing dependency, modern source.
@@ -411,7 +454,22 @@ describe("SCRUM-234 — a retired posting DEAD-LETTERS, it does not sit held for
       )
     );
 
-    for (let i = 0; i < 10; i++) await asOwner.mutation(api.accountingOutbox.redrive, { orgId });
+    // ⚠️ THE WORKER MUST BE DRIVEN, NOT JUST THE DRAIN (SCRUM-222 integration).
+    // The refusal used to happen inline inside `redrive`. It now happens in
+    // `postOutboxRow`, a separate transaction reached via the scheduler, so ten
+    // bare redrives would schedule claims and prove nothing about the
+    // disposition — and `claimOutboxRow` refuses a row that already carries an
+    // outstanding attempt, so they would collapse to one claim anyway.
+    //
+    // Each round therefore runs the worker to completion and then makes the row
+    // due again, because a refusal deliberately sets a backoff so a permanently
+    // refused row cannot re-select on every tick and starve the rows behind it.
+    // Ten rounds, ten burned attempts, which is exactly the budget the old
+    // inline path spent — the attempt accounting is preserved, not relaxed.
+    for (let i = 0; i < 10; i++) {
+      await settleOutbox(t, orgId);
+      await makeDue(t, orgId);
+    }
 
     const rows = await t.run((ctx) => ctx.db.query("pendingAccountingEvents").collect());
     const row = rows.find((r) => r.idempotencyKey === "held_modern_key");

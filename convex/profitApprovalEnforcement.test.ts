@@ -321,7 +321,7 @@ describe("applications.finalizeDeal re-verifies at the commit point", () => {
       legalInvoiceDate: Date.now(),
       issuedTo: "FINANCE_COMPANY",
     });
-    const feeId = await ids.asOwner.mutation(api.financeDealCosts.recordDealFee, {
+    const feeId = await ids.asOwner.mutation(api.financeDealCosts.recordDealFee, { idempotencyKey: crypto.randomUUID(),
       orgId: ids.orgId,
       applicationId,
       feeType: "OTHER_CLOSING_EXPENSE",
@@ -353,7 +353,7 @@ describe("applications.finalizeDeal re-verifies at the commit point", () => {
     await t.run((ctx: any) => ctx.db.patch(ids.vehicleId, { minimumProfit: 5000 }));
 
     await expect(
-      ids.asOwner.mutation(api.applications.finalizeDeal, { orgId: ids.orgId, applicationId })
+      ids.asOwner.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: ids.orgId, applicationId })
     ).rejects.toThrow(/below the minimum profit/i);
 
     const sales = await t.run((ctx: any) =>
@@ -367,7 +367,7 @@ describe("applications.finalizeDeal re-verifies at the commit point", () => {
     const ids = await seedOrg(t, "clears", 1000);
     const { applicationId } = await readyToFinalize(t, ids, 1500);
 
-    const saleId = await ids.asOwner.mutation(api.applications.finalizeDeal, {
+    const saleId = await ids.asOwner.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId: ids.orgId,
       applicationId,
     });
@@ -384,7 +384,7 @@ describe("applications.finalizeDeal re-verifies at the commit point", () => {
     await t.run((ctx: any) => ctx.db.patch(quoteId, { desiredProfit: undefined }));
     await t.run((ctx: any) => ctx.db.patch(ids.vehicleId, { minimumProfit: 5000 }));
 
-    const saleId = await ids.asOwner.mutation(api.applications.finalizeDeal, {
+    const saleId = await ids.asOwner.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId: ids.orgId,
       applicationId,
     });

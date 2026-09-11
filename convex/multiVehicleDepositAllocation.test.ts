@@ -27,6 +27,7 @@ import { join } from "node:path";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
+import { settleOutbox } from "../test-utils/outboxWork";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { COMMITMENT_AUTHORITY_V1 } from "./utils/commitmentKernel";
@@ -141,7 +142,7 @@ type Seed = Awaited<ReturnType<typeof seed>>;
 
 /** The real path: one deposit row plus a hold row per car. */
 async function payDeposit(s: Seed, amount = DEPOSIT) {
-  await s.asUser.mutation(api.deposits.create, {
+  await s.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
     orgId: s.orgId,
     quoteId: s.quoteId,
     amount,
@@ -162,7 +163,7 @@ async function sell(
   salePrice: number,
   opts: { actor?: Seed["asUser"] } = {}
 ) {
-  return await (opts.actor ?? s.asUser).mutation(api.sales.create, {
+  return await (opts.actor ?? s.asUser).mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
     orgId: s.orgId,
     vehicleId,
     customerId: s.customerId,
@@ -485,7 +486,7 @@ describe("an allocation larger than that car's invoice", () => {
     ]);
 
     await expect(
-      s.asManager.mutation(api.sales.create, {
+      s.asManager.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId,
         vehicleId: s.vehicleA,
         customerId: s.customerId,
@@ -996,7 +997,7 @@ describe("refunding what is left of a shared deposit", () => {
     const depositId = await s.t.run(async (ctx) =>
       (await ctx.db.query("deposits").collect()).find((d) => d.orgId === s.orgId)!._id
     );
-    await s.asManager.mutation(api.deposits.release, {
+    await s.asManager.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       depositId,
       resolution: "REFUNDED" as const,
@@ -1029,7 +1030,7 @@ describe("refunding what is left of a shared deposit", () => {
       (await ctx.db.query("deposits").collect()).find((d) => d.orgId === s.orgId)!._id
     );
     await expect(
-      s.asManager.mutation(api.deposits.release, {
+      s.asManager.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId,
         depositId,
         resolution: "REFUNDED" as const,
@@ -1046,7 +1047,7 @@ describe("refunding what is left of a shared deposit", () => {
     const depositId = await s.t.run(async (ctx) =>
       (await ctx.db.query("deposits").collect()).find((d) => d.orgId === s.orgId)!._id
     );
-    await s.asManager.mutation(api.deposits.release, {
+    await s.asManager.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       depositId,
       resolution: "REFUNDED" as const,
@@ -1298,7 +1299,7 @@ const release = (
   resolution: "REFUNDED" | "FORFEITED" = "REFUNDED",
   idempotencyKey?: string
 ) =>
-  s.asManager.mutation(api.deposits.release, {
+  s.asManager.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(),
     orgId: s.orgId,
     depositId,
     resolution,
@@ -1532,9 +1533,7 @@ describe("a reversal that has to wait for an accounting period", () => {
       periodId: period._id,
       reason: "Backdated cancellation needs its reversal posted",
     });
-    await s.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, {
-      orgId: s.orgId,
-    });
+    await settleOutbox(s.t, s.orgId);
 
     const application = await s.t.run(async (ctx) =>
       (await ctx.db.query("depositApplications").collect()).find(
@@ -1933,7 +1932,7 @@ describe("releasing the same row twice from the same screen", () => {
     return { s, depositId, key };
   }
 
-  test("the deposit screen sends no fixed key, because a row can be released again", async () => {
+  test("the deposit screen's key carries the payout GENERATION, never the deposit alone", async () => {
     // The screen used to send `deposit_release_<depositId>_<resolution>`. A row
     // can now be released more than once — the free part today, the rest when
     // the cars it was held against fall away — so the SECOND genuine payout
@@ -1943,17 +1942,60 @@ describe("releasing the same row twice from the same screen", () => {
     //
     // There is nothing the server can do about it: a retry of one release and a
     // second, different release both arrive after the first has committed, so
-    // no fingerprint can separate them. The key has to identify one attempt,
+    // no fingerprint can separate them. The key has to identify one ATTEMPT,
     // which means the screen must not derive it from the deposit alone.
+    //
+    // SCRUM-57 made an identity mandatory on this command, so "sends no key at
+    // all" stopped being an available answer — and asserting the ABSENCE of the
+    // string would now pass only by breaking the mutation. The invariant is
+    // unchanged and is re-pinned here against the mechanism that replaced it.
+    //
+    // SCRUM-313 SUPERSEDES the mechanism this test previously pinned. It used
+    // to demand a per-attempt mint (`renew`), which does keep two genuine
+    // payouts distinct — by giving up retry safety altogether: a lost response
+    // plus one more tap is two payouts of the same free balance. Both answers
+    // were wrong, in opposite directions.
+    //
+    // The correct discriminator is state the SERVER owns. `releaseCount` is
+    // incremented inside the same `ctx.db.patch` that moves the money
+    // (`convex/utils/depositHelpers.ts`), so the observed value names the
+    // GENERATION of this payout. A retained key over (deposit, resolution,
+    // refund method, generation) is a retry within its generation and a NEW
+    // command once the generation advances — safe in both directions.
+    //
+    // `convex/deposits.test.ts` proves all four cases behaviourally, including
+    // that a STALE generation still suppresses (which is why it must advance),
+    // and `hooks/useCommandIdentity.test.tsx` proves the client lifecycle.
     const source = readFileSync(
       join(process.cwd(), "components/vehicles/VehicleDetailsDialog.tsx"),
       "utf8"
     );
-    const releaseCall = source.slice(
-      source.indexOf("await releaseDeposit({"),
-      source.indexOf("});", source.indexOf("await releaseDeposit({"))
-    );
-    expect(releaseCall).not.toContain("idempotencyKey");
+    const start = source.indexOf("await releaseDeposit({");
+    expect(start).toBeGreaterThan(-1);
+    const releaseCall = source.slice(start, source.indexOf("});", start));
+
+    // The identity field must be WIRED to the retained minter, not merely
+    // present alongside it. Asserting the two strings separately would pass if
+    // a future edit pointed `idempotencyKey` at something stale while
+    // `commandId.for(...)` fed an unrelated field — flagged in review.
+    expect(releaseCall).toMatch(/idempotencyKey:\s*commandId\.for\(/);
+    // A per-attempt mint on this path is the second defect, not a style choice.
+    expect(releaseCall).not.toContain("commandId.renew(");
+    // And the retained key is safe ONLY because the intent carries the
+    // generation. Asserting `for(` alone would pass a permanently-held key,
+    // which is exactly the original incident.
+    const intentLine = /const\s+intent\s*=\s*([^;]+);/.exec(source.slice(0, start));
+    expect(intentLine, "the release intent must be a readable local").not.toBeNull();
+    // Narrowed rather than asserted non-null: an unreadable intent must FAIL
+    // this assertion with a useful message, not throw a TypeError above it.
+    const intentExpression = intentLine ? intentLine[1] : "<no intent found>";
+    expect(
+      intentExpression,
+      "the release intent must carry the payout generation"
+    ).toMatch(/gen\$\{/);
+    // The literal key shape that caused the original incident must not return.
+    expect(releaseCall).not.toMatch(/deposit_release_/);
+    expect(releaseCall).not.toMatch(/idempotencyKey:\s*`?deposit/);
   });
 
   test("a genuine retry of the SAME release replays rather than paying twice", async () => {
@@ -2902,3 +2944,4 @@ describe("a zero share whose sale is cancelled", () => {
     expect(roots.length, "the funded car has a commitment history at all").toBeGreaterThan(0);
   });
 });
+

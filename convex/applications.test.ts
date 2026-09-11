@@ -107,7 +107,7 @@ describe("applications.finalizeDeal", () => {
       method: "CASH",
       expectedDate: Date.now(),
     });
-    await asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId });
+    await asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId });
 
     await t.run(async (ctx) => {
       const lead = await ctx.db.get(leadId);
@@ -607,7 +607,7 @@ describe("applications hold release and deposit resolution", () => {
       downPayment: 3000,
       termMonths: 48,
     });
-    const depositId = await asUser.mutation(api.deposits.create, {
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       quoteId,
       amount: 1000,
@@ -727,6 +727,7 @@ describe("applications hold release and deposit resolution", () => {
     const { t, orgId, userId, customerId, vehicleId, asUser } = await setup();
 
     const reservationId = await asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       customerId,
@@ -750,7 +751,7 @@ describe("applications hold release and deposit resolution", () => {
       adoptReservationId: reservationId,
     });
 
-    await asUser.mutation(api.applications.cancelApplication, {
+    await asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
       orgId,
       applicationId,
       reason: "Customer changed vehicles",
@@ -777,6 +778,7 @@ describe("applications hold release and deposit resolution", () => {
     const { t, orgId, userId, customerId, vehicleId, asUser } = await setup();
 
     const reservationId = await asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       customerId,
@@ -801,7 +803,7 @@ describe("applications hold release and deposit resolution", () => {
       adoptReservationId: reservationId,
     });
 
-    await asUser.mutation(api.applications.cancelApplication, {
+    await asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
       orgId,
       applicationId,
       reason: "Customer changed vehicles",
@@ -826,6 +828,7 @@ describe("applications hold release and deposit resolution", () => {
     const { t, orgId, userId, customerId, vehicleId, asUser } = await setup();
 
     const reservationId = await asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       customerId,
@@ -850,7 +853,7 @@ describe("applications hold release and deposit resolution", () => {
 
     await t.run((ctx) => ctx.db.patch(applicationId, { status: "CANCELLED" }));
 
-    await asUser.mutation(api.applications.cancelApplication, {
+    await asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
       orgId,
       applicationId,
       reason: "Retry stale hold cleanup",
@@ -892,7 +895,7 @@ describe("applications hold release and deposit resolution", () => {
       });
     });
     await expect(
-      asUser.mutation(api.applications.cancelApplication, { orgId, applicationId: otherApplicationId })
+      asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(), orgId, applicationId: otherApplicationId })
     ).rejects.toThrow(/application not found/i);
 
     const limitedUserId = await t.run((ctx) =>
@@ -926,7 +929,7 @@ describe("applications hold release and deposit resolution", () => {
     });
     await t.run((ctx) => ctx.db.patch(approvedApplicationId, { status: "APPROVED" }));
     await expect(
-      asLimited.mutation(api.applications.cancelApplication, {
+      asLimited.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
         orgId,
         applicationId: approvedApplicationId,
       })
@@ -939,7 +942,7 @@ describe("applications hold release and deposit resolution", () => {
       })
     );
     await expect(
-      asUser.mutation(api.applications.cancelApplication, {
+      asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
         orgId,
         applicationId: approvedApplicationId,
       })
@@ -961,7 +964,7 @@ describe("applications hold release and deposit resolution", () => {
       await ctx.db.patch(app.finalizedSaleId, { commissionAmount: 250 });
     });
 
-    await asUser.mutation(api.applications.cancelApplication, {
+    await asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
       orgId,
       applicationId,
       reason: "Commission reversal coverage",
@@ -1020,7 +1023,7 @@ async function classifyFinancedDeal(
     legalInvoiceDate: Date.now(),
     issuedTo: "FINANCE_COMPANY",
   });
-  const feeId = await asUser.mutation(api.financeDealCosts.recordDealFee, {
+  const feeId = await asUser.mutation(api.financeDealCosts.recordDealFee, { idempotencyKey: crypto.randomUUID(),
     orgId,
     applicationId,
     feeType: "OTHER_CLOSING_EXPENSE",
@@ -1074,7 +1077,7 @@ async function setupFinalizedFinancedDeal() {
     totalFinancedAmount: 17000,
   });
 
-  const depositId = await asUser.mutation(api.deposits.create, {
+  const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
     orgId,
     quoteId,
     amount: 3000,
@@ -1104,7 +1107,7 @@ async function setupFinalizedFinancedDeal() {
     expectedDate: Date.now(),
   });
   await classifyFinancedDeal({ orgId, applicationId, asUser }, 20000);
-  await asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId });
+  await asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId });
 
   const getFinanceReceivable = () =>
     t.run((ctx) =>
@@ -1167,7 +1170,7 @@ describe("applications finance-company canonical receivable", () => {
       expect(customerOutstanding + financeOutstanding).toBe(17_000_000);
     });
 
-    await asUser.mutation(api.applications.confirmDisbursement, {
+    await asUser.mutation(api.applications.confirmDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId,
       applicationId,
       disbursedAmountMinor: 17_000_000,
@@ -1202,7 +1205,7 @@ describe("applications finance-company canonical receivable", () => {
     const { orgId, applicationId, asUser } = await setupFinalizedFinancedDeal();
 
     await expect(
-      asUser.mutation(api.applications.confirmDisbursement, {
+      asUser.mutation(api.applications.confirmDisbursement, { idempotencyKey: crypto.randomUUID(),
         orgId,
         applicationId,
         disbursedAmountMinor: 16_999_999,
@@ -1218,7 +1221,7 @@ describe("applications finance-company canonical receivable", () => {
     const { t, orgId, applicationId, depositId, asUser, getFinanceReceivable, getCustomerReceivable } =
       await setupFinalizedFinancedDeal();
 
-    await asUser.mutation(api.applications.cancelApplication, {
+    await asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
       orgId,
       applicationId,
       reason: "Deal fell through before disbursement",
@@ -1304,12 +1307,12 @@ describe("applications logs, expected payment, and finalization guards", () => {
     await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
 
     await expect(
-      asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId })
+      asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId })
     ).rejects.toThrow(/register the vehicle handover/i);
 
     await registerHandover(asUser, api, orgId, applicationId);
     await expect(
-      asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId })
+      asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId })
     ).rejects.toThrow(/register how and when the payment is expected/i);
 
     await expect(
@@ -1329,7 +1332,7 @@ describe("applications logs, expected payment, and finalization guards", () => {
       const app = await ctx.db.get(applicationId);
       return app?.finalizedSaleId;
     });
-    await expect(asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId })).resolves.toBe(closedSaleId);
+    await expect(asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId })).resolves.toBe(closedSaleId);
 
     const mismatched = await setup();
     const quoteId = await mismatched.asUser.mutation(api.quotes.saveQuote, {
@@ -1371,7 +1374,7 @@ describe("applications logs, expected payment, and finalization guards", () => {
     });
 
     await expect(
-      mismatched.asUser.mutation(api.applications.finalizeDeal, {
+      mismatched.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
         orgId: mismatched.orgId,
         applicationId: applicationIdToMismatch,
       })
@@ -1423,7 +1426,7 @@ describe("applications logs, expected payment, and finalization guards", () => {
     await t.run((ctx) => ctx.db.patch(quoteId, { companyId: companyIds.secondCompanyId }));
 
     await expect(
-      asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId })
+      asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId })
     ).rejects.toThrow(/finance company does not match/i);
   });
 });
@@ -1475,7 +1478,7 @@ async function setupFinalizedFinancedDealWithCheque() {
     chequeDetails: { bank: "Arab Bank", chequeNumber: "CHQ-001" },
   });
   await classifyFinancedDeal({ orgId, applicationId, asUser }, 20000);
-  await asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId });
+  await asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId });
 
   const getCheque = () =>
     t.run((ctx) =>
@@ -1495,7 +1498,7 @@ describe("applications.confirmDisbursement cheque linking", () => {
     const chequeBefore = await getCheque();
     expect(chequeBefore?.status).toBe("HELD");
 
-    await asUser.mutation(api.applications.confirmDisbursement, {
+    await asUser.mutation(api.applications.confirmDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId,
       applicationId,
       disbursedAmountMinor: 20_000_000,
@@ -1517,7 +1520,7 @@ describe("applications.confirmDisbursement cheque linking", () => {
     });
 
     await expect(
-      asUser.mutation(api.applications.confirmDisbursement, {
+      asUser.mutation(api.applications.confirmDisbursement, { idempotencyKey: crypto.randomUUID(),
         orgId,
         applicationId,
         disbursedAmountMinor: 20_000_000,
@@ -1530,7 +1533,7 @@ describe("applications.confirmDisbursement cheque linking", () => {
     const cheque = await getCheque();
 
     await expect(
-      asUser.mutation(api.collections.clearCheque, { orgId, chequeId: cheque!._id })
+      asUser.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId: cheque!._id })
     ).rejects.toThrow(/confirm disbursement from the Applications page/i);
   });
 
@@ -1547,7 +1550,7 @@ describe("applications.confirmDisbursement cheque linking", () => {
       amount: originalCheque!.amount,
     });
 
-    await asUser.mutation(api.applications.confirmDisbursement, {
+    await asUser.mutation(api.applications.confirmDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId,
       applicationId,
       disbursedAmountMinor: 20_000_000,
@@ -1565,7 +1568,7 @@ describe("applications.confirmDisbursement cheque linking", () => {
     await t.run((ctx) => ctx.db.patch(cheque!._id, { isDeleted: true }));
 
     await expect(
-      asUser.mutation(api.applications.confirmDisbursement, {
+      asUser.mutation(api.applications.confirmDisbursement, { idempotencyKey: crypto.randomUUID(),
         orgId,
         applicationId,
         disbursedAmountMinor: 20_000_000,

@@ -176,6 +176,7 @@ describe("SCRUM-302 F1/F2 — payment webhook internal settlement vs org lifecyc
     const t = convexTestWithComponents(schema, MODULE_GLOB);
     const dealer = await seedDealer(t, "f1");
     const intentId = await dealer.asUser.mutation(api.paymentIntents.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: dealer.orgId,
       customerId: dealer.customerId,
       amountMinor: 1_000_000,
@@ -205,6 +206,7 @@ describe("SCRUM-302 F1/F2 — payment webhook internal settlement vs org lifecyc
     const t = convexTestWithComponents(schema, MODULE_GLOB);
     const dealer = await seedDealer(t, "f1ctl");
     const intentId = await dealer.asUser.mutation(api.paymentIntents.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: dealer.orgId,
       customerId: dealer.customerId,
       amountMinor: 1_000_000,
@@ -230,6 +232,7 @@ describe("SCRUM-302 F1/F2 — payment webhook internal settlement vs org lifecyc
     const t = convexTestWithComponents(schema, MODULE_GLOB);
     const dealer = await seedDealer(t, "f2");
     await dealer.asUser.mutation(api.paymentIntents.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: dealer.orgId,
       customerId: dealer.customerId,
       amountMinor: 1_000_000,
@@ -257,6 +260,7 @@ describe("SCRUM-302 F1/F2 — payment webhook internal settlement vs org lifecyc
     const blocked = await seedDealer(t, "xorga");
     const healthy = await seedDealer(t, "xorgb");
     await blocked.asUser.mutation(api.paymentIntents.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: blocked.orgId,
       customerId: blocked.customerId,
       amountMinor: 1_000_000,
@@ -265,6 +269,7 @@ describe("SCRUM-302 F1/F2 — payment webhook internal settlement vs org lifecyc
       externalId: "tap_xa",
     });
     const healthyIntentId = await healthy.asUser.mutation(api.paymentIntents.create, {
+      idempotencyKey: crypto.randomUUID(),
       orgId: healthy.orgId,
       customerId: healthy.customerId,
       amountMinor: 1_000_000,
@@ -471,6 +476,7 @@ async function seedActivePrepaidSchedule(
 ) {
   const fiscalYear = new Date().getUTCFullYear();
   await dealer.asUser.mutation(api.expenses.create, {
+      idempotencyKey: crypto.randomUUID(),
     orgId: dealer.orgId,
     title: "Annual insurance",
     amount: 1_200,

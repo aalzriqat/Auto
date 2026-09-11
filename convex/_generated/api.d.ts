@@ -11,6 +11,8 @@
 import type * as accounting_accountSnapshots from "../accounting/accountSnapshots.js";
 import type * as accounting_postingEngine from "../accounting/postingEngine.js";
 import type * as accounting_postingRules from "../accounting/postingRules.js";
+import type * as accounting_receiptMovement from "../accounting/receiptMovement.js";
+import type * as accounting_receiptOccurrence from "../accounting/receiptOccurrence.js";
 import type * as accounting_reversals from "../accounting/reversals.js";
 import type * as accounting_workflowHooks from "../accounting/workflowHooks.js";
 import type * as accountingCutover from "../accountingCutover.js";
@@ -179,7 +181,6 @@ import type * as utils_leadAssignment from "../utils/leadAssignment.js";
 import type * as utils_leadStageHelpers from "../utils/leadStageHelpers.js";
 import type * as utils_marketplaceMatching from "../utils/marketplaceMatching.js";
 import type * as utils_materialization from "../utils/materialization.js";
-import type * as utils_mergeHelpers from "../utils/mergeHelpers.js";
 import type * as utils_metaText from "../utils/metaText.js";
 import type * as utils_money from "../utils/money.js";
 import type * as utils_notifications from "../utils/notifications.js";
@@ -238,6 +239,8 @@ declare const fullApi: ApiFromModules<{
   "accounting/accountSnapshots": typeof accounting_accountSnapshots;
   "accounting/postingEngine": typeof accounting_postingEngine;
   "accounting/postingRules": typeof accounting_postingRules;
+  "accounting/receiptMovement": typeof accounting_receiptMovement;
+  "accounting/receiptOccurrence": typeof accounting_receiptOccurrence;
   "accounting/reversals": typeof accounting_reversals;
   "accounting/workflowHooks": typeof accounting_workflowHooks;
   accountingCutover: typeof accountingCutover;
@@ -406,7 +409,6 @@ declare const fullApi: ApiFromModules<{
   "utils/leadStageHelpers": typeof utils_leadStageHelpers;
   "utils/marketplaceMatching": typeof utils_marketplaceMatching;
   "utils/materialization": typeof utils_materialization;
-  "utils/mergeHelpers": typeof utils_mergeHelpers;
   "utils/metaText": typeof utils_metaText;
   "utils/money": typeof utils_money;
   "utils/notifications": typeof utils_notifications;

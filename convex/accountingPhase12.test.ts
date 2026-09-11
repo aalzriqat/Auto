@@ -110,10 +110,12 @@ describe("Phase 12 — capital contribution", () => {
   test("contribution posts DR Cash / CR Partner Capital and raises the derived balance", async () => {
     const { t, orgId, asOwner } = await seedEquityDealer();
     const partnerId = await asOwner.mutation(api.partnerEquity.add, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, partnerName: "Partner A",
     });
 
     await asOwner.mutation(api.partnerEquity.recordEquityMovement, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, partnerId, type: "CONTRIBUTION", amountMinor: 1_000_000, paymentMethod: "CASH",
     });
 
@@ -137,6 +139,7 @@ describe("Phase 12 — capital contribution", () => {
   test("adding a partner with an opening contribution posts it to the GL", async () => {
     const { t, orgId, asOwner } = await seedEquityDealer();
     const partnerId = await asOwner.mutation(api.partnerEquity.add, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, partnerName: "Partner B", openingContributionMinor: 500_000, paymentMethod: "BANK_TRANSFER",
     });
 
@@ -152,17 +155,20 @@ describe("Phase 12 — capital contribution", () => {
   test("rejects an unsupported payment method", async () => {
     const { orgId, asOwner } = await seedEquityDealer();
     const partnerId = await asOwner.mutation(api.partnerEquity.add, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, partnerName: "Partner C",
     });
 
     await expect(
       asOwner.mutation(api.partnerEquity.recordEquityMovement, {
+      idempotencyKey: crypto.randomUUID(),
         orgId, partnerId, type: "CONTRIBUTION", amountMinor: 1_000_000, paymentMethod: "OTHER" as any,
       })
     ).rejects.toThrow(/Validator error/i);
 
     await expect(
       asOwner.mutation(api.partnerEquity.recordEquityMovement, {
+      idempotencyKey: crypto.randomUUID(),
         orgId, partnerId, type: "CONTRIBUTION", amountMinor: 1_000_000, paymentMethod: "WIRE" as any,
       })
     ).rejects.toThrow(/Validator error/i);
@@ -173,10 +179,12 @@ describe("Phase 12 — partner draw", () => {
   test("draw posts DR Partner Drawings / CR Cash and lowers the derived balance", async () => {
     const { t, orgId, asOwner } = await seedEquityDealer();
     const partnerId = await asOwner.mutation(api.partnerEquity.add, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, partnerName: "Drawer", openingContributionMinor: 800_000,
     });
 
     await asOwner.mutation(api.partnerEquity.recordEquityMovement, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, partnerId, type: "DRAW", amountMinor: 300_000, paymentMethod: "CASH",
     });
 
@@ -198,10 +206,12 @@ describe("Phase 12 — partner draw", () => {
   test("a draw paid by cheque credits the bank account, not cheques-in-hand", async () => {
     const { t, orgId, asOwner } = await seedEquityDealer();
     const partnerId = await asOwner.mutation(api.partnerEquity.add, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, partnerName: "Cheque Drawer", openingContributionMinor: 400_000,
     });
 
     await asOwner.mutation(api.partnerEquity.recordEquityMovement, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, partnerId, type: "DRAW", amountMinor: 100_000, paymentMethod: "CHEQUE",
     });
 
@@ -216,11 +226,13 @@ describe("Phase 12 — partner draw", () => {
   test("a draw exceeding the partner's balance is rejected", async () => {
     const { orgId, asOwner } = await seedEquityDealer();
     const partnerId = await asOwner.mutation(api.partnerEquity.add, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, partnerName: "Overdrawer", openingContributionMinor: 100_000,
     });
 
     await expect(
       asOwner.mutation(api.partnerEquity.recordEquityMovement, {
+      idempotencyKey: crypto.randomUUID(),
         orgId, partnerId, type: "DRAW", amountMinor: 150_000,
       })
     ).rejects.toThrow(/exceeds this partner's equity balance/i);
@@ -231,10 +243,12 @@ describe("Phase 12 — profit distribution", () => {
   test("distribution posts DR Retained Earnings / CR Partner Capital with no cash line", async () => {
     const { t, orgId, asOwner } = await seedEquityDealer();
     const partnerId = await asOwner.mutation(api.partnerEquity.add, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, partnerName: "Profit Taker",
     });
 
     await asOwner.mutation(api.partnerEquity.recordEquityMovement, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, partnerId, type: "PROFIT_DISTRIBUTION", amountMinor: 250_000,
     });
 
@@ -257,6 +271,7 @@ describe("Phase 12 — profit distribution", () => {
     // Distribution raises the balance the partner can subsequently draw.
     expect(await partnerBalanceMinor(asOwner, orgId, partnerId)).toBe(250_000);
     await asOwner.mutation(api.partnerEquity.recordEquityMovement, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, partnerId, type: "DRAW", amountMinor: 250_000,
     });
     expect(await partnerBalanceMinor(asOwner, orgId, partnerId)).toBe(0);
@@ -267,6 +282,7 @@ describe("Phase 12 — no direct balance edits", () => {
   test("update no longer accepts initialCapital/currentBalance", async () => {
     const { orgId, asOwner } = await seedEquityDealer();
     const partnerId = await asOwner.mutation(api.partnerEquity.add, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, partnerName: "Immutable",
     });
 
@@ -294,6 +310,7 @@ describe("Phase 12 — no direct balance edits", () => {
     expect(await partnerBalanceMinor(asOwner, orgId, partnerId)).toBe(500_000);
 
     await asOwner.mutation(api.partnerEquity.recordEquityMovement, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, partnerId, type: "DRAW", amountMinor: 200_000,
     });
     expect(await partnerBalanceMinor(asOwner, orgId, partnerId)).toBe(300_000);
@@ -302,6 +319,7 @@ describe("Phase 12 — no direct balance edits", () => {
   test("a partner with a nonzero GL-backed balance cannot be removed", async () => {
     const { orgId, asOwner } = await seedEquityDealer();
     const partnerId = await asOwner.mutation(api.partnerEquity.add, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, partnerName: "Sticky", openingContributionMinor: 50_000,
     });
 
@@ -310,6 +328,7 @@ describe("Phase 12 — no direct balance edits", () => {
     ).rejects.toThrow(/still has an equity balance/i);
 
     await asOwner.mutation(api.partnerEquity.recordEquityMovement, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, partnerId, type: "DRAW", amountMinor: 50_000,
     });
     await asOwner.mutation(api.partnerEquity.remove, { orgId, equityId: partnerId });

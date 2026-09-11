@@ -94,7 +94,7 @@ async function seed(tag: string) {
     })
   );
 
-  const saleId = await asUser.mutation(api.sales.create, {
+  const saleId = await asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
     orgId, vehicleId, customerId, salespersonId: userId,
     salePrice: SALE_PRICE, saleDate: Date.now(), status: "COMPLETED" as const,
     supplierSettlementRoute: "DIRECT_TO_SUPPLIER" as const,
@@ -159,7 +159,7 @@ describe("the claim a direct-settled sale opens", () => {
         sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
       })
     );
-    const saleId = await s.asUser.mutation(api.sales.create, {
+    const saleId = await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
       salePrice: SALE_PRICE, saleDate: Date.now(), status: "COMPLETED" as const,
       supplierSettlementRoute: "THROUGH_DEALERSHIP" as const,
@@ -180,7 +180,7 @@ describe("the claim a direct-settled sale opens", () => {
 describe("collecting it", () => {
   test("a part payment moves the subledger and the ledger by the same amount", async () => {
     const s = await seed("partial");
-    const result = await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+    const result = await s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       receivableId: s.receivable._id,
       amount: 1_000,
@@ -205,16 +205,16 @@ describe("collecting it", () => {
 
   test("instalments accumulate and the last one settles the claim to zero", async () => {
     const s = await seed("instal");
-    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, receivableId: s.receivable._id, amount: 1_000, receiptMethod: "CASH",
     });
     // The same amount again: a distinct receipt, not a duplicate the outbox
     // should suppress. That is what the receipt sequence in the idempotency key
     // is for.
-    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, receivableId: s.receivable._id, amount: 1_000, receiptMethod: "CASH",
     });
-    const final = await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+    const final = await s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, receivableId: s.receivable._id, amount: 1_000, receiptMethod: "CASH",
     });
 
@@ -233,11 +233,11 @@ describe("collecting it", () => {
 
   test("collecting more than is owed is refused rather than absorbed", async () => {
     const s = await seed("over");
-    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, receivableId: s.receivable._id, amount: 2_500, receiptMethod: "CASH",
     });
     await expect(
-      s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+      s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId, receivableId: s.receivable._id, amount: 1_000, receiptMethod: "CASH",
       })
     ).rejects.toThrow(/would record 3500 against 3000 owed/i);
@@ -251,7 +251,7 @@ describe("collecting it", () => {
     const s = await seed("zero");
     for (const amount of [0, -100]) {
       await expect(
-        s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+        s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
           orgId: s.orgId, receivableId: s.receivable._id, amount, receiptMethod: "CASH",
         })
       ).rejects.toThrow(/greater than zero/i);
@@ -260,11 +260,11 @@ describe("collecting it", () => {
 
   test("a settled claim cannot be collected against again", async () => {
     const s = await seed("resettle");
-    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, receivableId: s.receivable._id, amount: MARGIN, receiptMethod: "CASH",
     });
     await expect(
-      s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+      s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId, receivableId: s.receivable._id, amount: 1, receiptMethod: "CASH",
       })
     ).rejects.toThrow(/already settled in full/i);
@@ -280,7 +280,7 @@ describe("disputes", () => {
     });
 
     await expect(
-      s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+      s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId, receivableId: s.receivable._id, amount: 500, receiptMethod: "CASH",
       })
     ).rejects.toThrow(/under dispute/i);
@@ -321,7 +321,7 @@ describe("cancellation", () => {
     // Unwinding a receipt is a correction somebody makes deliberately, not
     // something a cancellation does on its way past.
     const s = await seed("cancelPaid");
-    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, receivableId: s.receivable._id, amount: 500, receiptMethod: "CASH",
     });
 
@@ -339,7 +339,7 @@ describe("cancellation", () => {
 describe("what a supplier still owes", () => {
   test("the outstanding summary totals the claims the GL balance cannot break down", async () => {
     const s = await seed("summary");
-    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, receivableId: s.receivable._id, amount: 1_000, receiptMethod: "CASH",
     });
 
@@ -384,7 +384,7 @@ describe("tenancy", () => {
     // shape `requireOwnedRow` exists for: the caller may act in the org they
     // named, which says nothing about the row they are about to touch.
     await expect(
-      asOther.mutation(api.supplierReceivables.recordReceipt, {
+      asOther.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
         orgId: otherOrgId, receivableId: a.receivable._id, amount: 100, receiptMethod: "CASH",
       })
     ).rejects.toThrow(/not found/i);
@@ -432,7 +432,7 @@ describe("a deposit applied to the settlement", () => {
       })
     );
 
-    const saleId = await base.asUser.mutation(api.sales.create, {
+    const saleId = await base.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId: base.orgId, vehicleId, customerId: base.customerId, salespersonId: base.userId,
       salePrice: SALE_PRICE, saleDate: Date.now(), status: "COMPLETED" as const,
       quoteId: quote2,

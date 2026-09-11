@@ -119,6 +119,7 @@ describe("Phase 11 — asset capitalization", () => {
     const { t, orgId, asOwner } = await seedAssetDealer();
 
     const assetId = await asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       name: "Forklift",
       purchaseDate: Date.now(),
@@ -154,6 +155,7 @@ describe("Phase 11 — asset capitalization", () => {
     const { orgId, asOwner } = await seedAssetDealer();
     await expect(
       asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
         orgId,
         name: "Forklift",
         purchaseDate: Date.now(),
@@ -166,6 +168,7 @@ describe("Phase 11 — asset capitalization", () => {
 
     await expect(
       asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
         orgId,
         name: "Forklift 2",
         purchaseDate: Date.now(),
@@ -181,6 +184,7 @@ describe("Phase 11 — asset capitalization", () => {
     const { orgId, asOwner } = await seedAssetDealer();
     await expect(
       asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
         orgId,
         name: "Bad asset",
         purchaseDate: Date.now(),
@@ -195,6 +199,7 @@ describe("Phase 11 — asset capitalization", () => {
     const { orgId, asOwner } = await seedAssetDealer();
     await expect(
       asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
         orgId,
         name: "Free asset",
         purchaseDate: Date.now(),
@@ -207,6 +212,7 @@ describe("Phase 11 — asset capitalization", () => {
   test("capitalize paid by cheque credits the bank account, not cheques-in-hand", async () => {
     const { t, orgId, asOwner } = await seedAssetDealer();
     await asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       name: "Cheque-Paid Lift",
       purchaseDate: Date.now(),
@@ -230,6 +236,7 @@ describe("Phase 11 — asset capitalization", () => {
     const { orgId, asViewer } = await seedAssetDealer();
     await expect(
       asViewer.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
         orgId,
         name: "Unauthorized asset",
         purchaseDate: Date.now(),
@@ -244,6 +251,7 @@ describe("Phase 11 — monthly depreciation", () => {
   test("posts a balanced entry and is idempotent for the same month", async () => {
     const { t, orgId, userId, asOwner } = await seedAssetDealer();
     const assetId = await asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       name: "Delivery Van",
       purchaseDate: PAST_PURCHASE_DATE,
@@ -289,6 +297,7 @@ describe("Phase 11 — monthly depreciation", () => {
   test("fully depreciates over the asset's useful life and then stops without exceeding cost", async () => {
     const { t, orgId, userId, asOwner } = await seedAssetDealer();
     const assetId = await asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       name: "Office Equipment",
       purchaseDate: PAST_PURCHASE_DATE,
@@ -330,6 +339,7 @@ describe("Phase 11 — monthly depreciation", () => {
   test("skips a non-ACTIVE asset", async () => {
     const { t, orgId, userId, asOwner } = await seedAssetDealer();
     const assetId = await asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       name: "Soon Disposed",
       purchaseDate: PAST_PURCHASE_DATE,
@@ -349,6 +359,7 @@ describe("Phase 11 — monthly depreciation", () => {
     const { t, orgId, userId, asOwner } = await seedAssetDealer();
     const purchase = Date.UTC(2026, 0, 15); // Jan 2026
     const assetId = await asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       name: "Future Starter",
       purchaseDate: purchase,
@@ -375,6 +386,7 @@ describe("Phase 11 — monthly depreciation", () => {
     // floor(100 / 240) = 0 — the schedule must degrade to 1/minor-unit-a-month,
     // not dump the full 100 into the first month.
     const assetId = await asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       name: "Tiny Base Asset",
       purchaseDate: PAST_PURCHASE_DATE,
@@ -398,6 +410,7 @@ describe("Phase 11 — monthly depreciation", () => {
     // and needed a 4th month to absorb the leftover 1, missing the
     // contractual 3-month useful life. The fix must finish in exactly 3.
     const assetId = await asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       name: "Non-Divisible Base Asset",
       purchaseDate: PAST_PURCHASE_DATE,
@@ -432,6 +445,7 @@ describe("Phase 11 — monthly depreciation", () => {
   test("rejects an out-of-order (earlier) yearMonth", async () => {
     const { t, orgId, userId, asOwner } = await seedAssetDealer();
     const assetId = await asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       name: "Out Of Order Asset",
       purchaseDate: PAST_PURCHASE_DATE,
@@ -457,6 +471,7 @@ describe("Phase 11 — monthly depreciation", () => {
     const { t, orgId, asOwner } = await seedAssetDealer();
     for (let i = 0; i < 3; i++) {
       await asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
         orgId,
         name: `Paged Asset ${i}`,
         purchaseDate: Date.now(),
@@ -479,6 +494,7 @@ describe("Phase 11 — monthly depreciation", () => {
   test("the monthly depreciation cron posts through the action end-to-end", async () => {
     const { t, orgId, asOwner } = await seedAssetDealer();
     await asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       name: "Cron Asset",
       purchaseDate: Date.now(),
@@ -503,6 +519,7 @@ describe("Phase 11 — impairment", () => {
   test("posts a balanced entry and marks the asset IMPAIRED", async () => {
     const { t, orgId, userId, asOwner } = await seedAssetDealer();
     const assetId = await asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       name: "Aging Machine",
       purchaseDate: PAST_PURCHASE_DATE,
@@ -533,6 +550,7 @@ describe("Phase 11 — impairment", () => {
   test("rejects an impairment amount exceeding net book value", async () => {
     const { orgId, asOwner } = await seedAssetDealer();
     const assetId = await asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       name: "Small Value Asset",
       purchaseDate: Date.now(),
@@ -548,6 +566,7 @@ describe("Phase 11 — impairment", () => {
   test("rejects impairing an asset that is not ACTIVE", async () => {
     const { orgId, asOwner } = await seedAssetDealer();
     const assetId = await asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       name: "Already Impaired",
       purchaseDate: Date.now(),
@@ -566,6 +585,7 @@ describe("Phase 11 — disposal", () => {
   test("disposing at a loss posts a balanced entry with a loss line", async () => {
     const { t, orgId, asOwner } = await seedAssetDealer();
     const assetId = await asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       name: "Sold Below Book",
       purchaseDate: Date.now(),
@@ -595,6 +615,7 @@ describe("Phase 11 — disposal", () => {
   test("disposing at a gain posts a balanced entry with a gain line", async () => {
     const { t, orgId, userId, asOwner } = await seedAssetDealer();
     const assetId = await asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       name: "Sold Above Book",
       purchaseDate: PAST_PURCHASE_DATE,
@@ -622,6 +643,7 @@ describe("Phase 11 — disposal", () => {
   test("disposing at exactly net book value posts no gain/loss line but stays balanced", async () => {
     const { t, orgId, userId, asOwner } = await seedAssetDealer();
     const assetId = await asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       name: "Sold At Book",
       purchaseDate: PAST_PURCHASE_DATE,
@@ -649,6 +671,7 @@ describe("Phase 11 — disposal", () => {
   test("rejects disposing an asset that has already been disposed", async () => {
     const { orgId, asOwner } = await seedAssetDealer();
     const assetId = await asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       name: "Double Disposed",
       purchaseDate: Date.now(),
@@ -683,6 +706,7 @@ describe("Phase 11 — soft delete guard", () => {
   test("a capitalized asset cannot be removed while its cost is on the ledger", async () => {
     const { orgId, asOwner } = await seedAssetDealer();
     const assetId = await asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       name: "On The Books",
       purchaseDate: Date.now(),
@@ -699,6 +723,7 @@ describe("Phase 11 — soft delete guard", () => {
     const { t, orgId, asOwner } = await seedAssetDealer();
 
     const disposedId = await asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
       orgId,
       name: "Disposed Then Removed",
       purchaseDate: Date.now(),

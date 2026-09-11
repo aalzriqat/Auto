@@ -40,7 +40,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { TestDriveDialog } from "@/components/test_drives/TestDriveDialog";
 import { WorkOrderDialog } from "@/components/work_orders/WorkOrderDialog";
 import { VehicleValuationsTab } from "@/components/vehicles/VehicleValuationsTab";
@@ -50,6 +50,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import { getErrorMessage } from "@/lib/errors";
+import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 
 interface VehicleDetailsDialogProps {
   vehicle: Doc<"vehicles"> | null;
@@ -103,8 +104,13 @@ export function VehicleDetailsDialog({
       : "skip"
   );
   const releaseDeposit = useMutation(api.deposits.release);
+  const commandId = useCommandIdentity();
   const upsertLandedCosts = useMutation(api.vehicles.upsertLandedCosts);
   const createReservation = useMutation(api.vehicles.createReservation);
+  // Minted at the user-intent boundary and held across attempts. With a deposit
+  // this books real customer money, so a per-attempt key would take the deposit
+  // twice on a lost response.
+  const reservationKeyRef = useRef<string | null>(null);
   const releaseReservation = useMutation(api.vehicles.releaseReservation);
   const [releasingDepositId, setReleasingDepositId] = useState<string | null>(null);
   const [refundMethodByDeposit, setRefundMethodByDeposit] = useState<Record<string, PaymentMethod>>({});
@@ -184,13 +190,17 @@ export function VehicleDetailsDialog({
     if (!activeOrgId || !vehicle || !reservationCustomerId) return;
     setSavingReservation(true);
     try {
+      reservationKeyRef.current ??= `vehicle-reservation:${crypto.randomUUID()}`;
       await createReservation({
+        idempotencyKey: reservationKeyRef.current,
         orgId: activeOrgId,
         vehicleId: vehicle._id,
         customerId: reservationCustomerId as any,
         depositAmount: reservationDeposit ? Number(reservationDeposit) : undefined,
         expiresAt: reservationExpiresAt ? new Date(reservationExpiresAt).getTime() : undefined,
       });
+      // Only a SUCCESS retires the identity.
+      reservationKeyRef.current = null;
       setReservationCustomerId("");
       setReservationDeposit("");
       setReservationExpiresAt("");
@@ -215,25 +225,52 @@ export function VehicleDetailsDialog({
     }
   };
 
-  const handleReleaseDeposit = async (depositId: any, resolution: "REFUNDED" | "FORFEITED") => {
+  const handleReleaseDeposit = async (
+    depositId: any,
+    resolution: "REFUNDED" | "FORFEITED",
+    observedReleaseCount: number
+  ) => {
     if (!activeOrgId) return;
     setReleasingDepositId(depositId);
+    const refundMethod = resolution === "REFUNDED" ? (refundMethodByDeposit[depositId] ?? "CASH") : "NONE";
     try {
+      // SCRUM-313 — a GENERATION-AWARE retained identity. This line has been
+      // wrong twice in two opposite directions, so both failures are recorded:
+      //
+      //   1. A key DERIVED from (deposit, resolution) held FOREVER. The SECOND
+      //      genuine payout — the free part today, the rest when the cars it was
+      //      held against fall away — matched the first's stored command: the
+      //      mutation returned without running, moved no money, and the operator
+      //      was told the customer had been refunded.
+      //   2. A key minted PER ATTEMPT (`renew`) to escape (1). That fixes the
+      //      second payout by giving up retry safety entirely: a lost response
+      //      plus one more tap is two payouts of the same free balance.
+      //
+      // Both are avoidable because the server keeps an authoritative monotonic
+      // discriminator. `releaseCount` is incremented inside the same patch that
+      // pays the money out (`convex/utils/depositHelpers.ts`), so it names the
+      // GENERATION of this payout:
+      //
+      //   same generation + same decision -> same key -> a retry is deduped;
+      //   an unknown/lost response        -> the key is NOT retired, so the
+      //                                      retry reuses it;
+      //   a confirmed payout              -> releaseCount advances, so a later
+      //                                      genuine payout is a NEW generation
+      //                                      and gets its OWN identity.
+      //
+      // The refund method is in the intent because it is part of the decision
+      // being made, not a presentation detail: refunding to CASH and refunding
+      // to BANK_TRANSFER are different commands and must not share an identity.
+      const generation = observedReleaseCount;
+      const intent = `release-deposit:${String(depositId)}:${resolution}:${refundMethod}:gen${generation}`;
       await releaseDeposit({
         orgId: activeOrgId,
         depositId,
         resolution,
         refundMethod: resolution === "REFUNDED" ? (refundMethodByDeposit[depositId] ?? "CASH") : undefined,
-        // Deliberately no idempotency key. A row can now be released more than
-        // once — the free part today, the rest when the cars it was held
-        // against fall away — and a key derived from the deposit and the
-        // resolution made the SECOND genuine payout match the first's stored
-        // command: the mutation returned without running, moved no money, and
-        // the operator was told the customer had been refunded.
-        //
-        // A double submit is already safe without one: the two calls serialize,
-        // and the second recomputes the free balance as zero and is refused.
+        idempotencyKey: commandId.for(intent),
       });
+      commandId.retire(intent);
       toast.success(
         resolution === "REFUNDED"
           ? (t("DepositRefundedSuccess" as any) ?? "Deposit refunded")
@@ -481,7 +518,7 @@ export function VehicleDetailsDialog({
                                 size="sm"
                                 className="h-7 text-xs"
                                 disabled={releasingDepositId === deposit._id}
-                                onClick={() => handleReleaseDeposit(deposit._id, "REFUNDED")}
+                                onClick={() => handleReleaseDeposit(deposit._id, "REFUNDED", deposit.releaseCount ?? 0)}
                               >
                                 {t("Refund" as any) ?? "Refund"}
                               </Button>
@@ -490,7 +527,7 @@ export function VehicleDetailsDialog({
                                 size="sm"
                                 className="h-7 text-xs text-destructive hover:text-destructive"
                                 disabled={releasingDepositId === deposit._id}
-                                onClick={() => handleReleaseDeposit(deposit._id, "FORFEITED")}
+                                onClick={() => handleReleaseDeposit(deposit._id, "FORFEITED", deposit.releaseCount ?? 0)}
                               >
                                 {t("Forfeit" as any) ?? "Forfeit"}
                               </Button>

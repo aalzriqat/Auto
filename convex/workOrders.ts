@@ -8,6 +8,7 @@ import { hookExpensePosted, getOrgCurrency } from "./accounting/workflowHooks";
 import { toMinorUnits, assertFiniteNumber } from "./utils/money";
 import { Id } from "./_generated/dataModel";
 import { MutationCtx } from "./_generated/server";
+import { runWithIdempotency } from "./utils/idempotency";
 
 async function createWorkOrderExpense(
   ctx: MutationCtx,
@@ -121,6 +122,16 @@ export const create = mutation({
       })
     ),
     notes: v.optional(v.string()),
+    // SCRUM-313 census. A COMPLETED work order calls `createWorkOrderExpense`,
+    // which mints an `expenses` id, writes a legacy `transactions` row and
+    // posts EXPENSE_POSTED keyed on that fresh id — all BEFORE the work-order
+    // row itself exists. So there is no durable object a retry could look at:
+    // the state that would identify the retry is created last.
+    //
+    // That is precisely why `create` needs intent identity while `update` does
+    // NOT (see the state guard on `update` below): `update` has an existing
+    // work order carrying `expenseId`, and refuses on it.
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
@@ -128,6 +139,22 @@ export const create = mutation({
     assertTaskCostsFinite(args.tasks);
     const totalCost = args.tasks.reduce((sum, task) => sum + task.partsCost + task.laborCost, 0);
 
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "workOrders.create",
+        economic: true,
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+        fingerprint: JSON.stringify({
+          vehicleId: args.vehicleId.toString(),
+          title: args.title,
+          status: args.status,
+          totalCost,
+        }),
+      },
+      async () => {
     let expenseId: Id<"expenses"> | undefined = undefined;
 
     // If creating a COMPLETED work order, sync to expenses with transaction + GL hook
@@ -163,6 +190,8 @@ export const create = mutation({
     );
 
     return workOrderId;
+      }
+    );
   },
 });
 

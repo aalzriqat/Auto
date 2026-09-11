@@ -112,7 +112,7 @@ describe("deposits.create", () => {
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
 
     await expect(
-      asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1500, method: "OTHER" })
+      asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500, method: "OTHER" })
     ).rejects.toThrow(/OTHER is not accepted/i);
   });
 
@@ -120,7 +120,7 @@ describe("deposits.create", () => {
     const { t, orgId, customerId, vehicleId, asUser } = await setup();
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
 
-    const depositId = await asUser.mutation(api.deposits.create, {
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       quoteId,
       amount: 1500,
@@ -172,7 +172,7 @@ describe("deposits.create", () => {
     // second deposit did to the deal that already held the car.
     const { t, orgId, customerId, vehicleId, asUser } = await setup();
     const quoteId1 = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    await asUser.mutation(api.deposits.create, { orgId, quoteId: quoteId1, amount: 1000 });
+    await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId: quoteId1, amount: 1000 });
 
     const customer2Id = await t.run((ctx) =>
       ctx.db.insert("customers", { orgId, firstName: "Omar", lastName: "Saleh" })
@@ -180,7 +180,7 @@ describe("deposits.create", () => {
     const quoteId2 = await makeQuote(t, asUser, orgId, customer2Id, vehicleId);
 
     await expect(
-      asUser.mutation(api.deposits.create, { orgId, quoteId: quoteId2, amount: 2000 })
+      asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId: quoteId2, amount: 2000 })
     ).rejects.toThrow(/already committed to another deal/i);
 
     await t.run(async (ctx) => {
@@ -201,11 +201,11 @@ describe("deposits.create", () => {
     const quoteId = await makeQuote(null, asUser, orgId, customerId, vehicleId);
 
     await expect(
-      asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 0 })
+      asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 0 })
     ).rejects.toThrow(/greater than 0/i);
 
     await expect(
-      asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 0.0001 })
+      asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 0.0001 })
     ).rejects.toThrow(/decimal places|minor-unit/i);
   });
 
@@ -214,7 +214,7 @@ describe("deposits.create", () => {
     const quoteId = await makeQuote(null, asUser, orgId, customerId, vehicleId);
 
     await expect(
-      asUser.mutation(api.deposits.create, {
+      asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
         orgId,
         quoteId,
         amount: 100,
@@ -227,10 +227,10 @@ describe("deposits.create", () => {
     const { orgId, customerId, vehicleId, asUser } = await setup();
     const quoteId = await makeQuote(null, asUser, orgId, customerId, vehicleId);
 
-    await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 21_000 });
+    await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 21_000 });
 
     await expect(
-      asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1_001 })
+      asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1_001 })
     ).rejects.toThrow(/cannot exceed the quote amount/i);
   });
 
@@ -260,9 +260,9 @@ describe("deposits.release", () => {
   test("REFUNDED releases the vehicle hold and books a reversing OUT transaction", async () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1500 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
-    await asApprover.mutation(api.deposits.release, { orgId, depositId, resolution: "REFUNDED", refundMethod: "CASH" });
+    await asApprover.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(), orgId, depositId, resolution: "REFUNDED", refundMethod: "CASH" });
 
     await t.run(async (ctx) => {
       const deposit = await ctx.db.get(depositId);
@@ -300,10 +300,10 @@ describe("deposits.release", () => {
   test("rejects a refund with no refund method", async () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1500 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
     await expect(
-      asApprover.mutation(api.deposits.release, { orgId, depositId, resolution: "REFUNDED" })
+      asApprover.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(), orgId, depositId, resolution: "REFUNDED" })
     ).rejects.toThrow(/refund payment method is required/i);
   });
 
@@ -311,9 +311,9 @@ describe("deposits.release", () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     await openAccountingPeriod(asUser, orgId);
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1500 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
-    await asApprover.mutation(api.deposits.release, {
+    await asApprover.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(),
       orgId, depositId, resolution: "REFUNDED", refundMethod: "BANK_TRANSFER",
     });
 
@@ -343,9 +343,9 @@ describe("deposits.release", () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     await openAccountingPeriod(asUser, orgId);
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1500 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
-    await asApprover.mutation(api.deposits.release, {
+    await asApprover.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(),
       orgId, depositId, resolution: "REFUNDED", refundMethod: "PAYMENT_LINK",
     });
 
@@ -373,10 +373,10 @@ describe("deposits.release", () => {
   test("rejects OTHER as a refund method", async () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1500 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
     await expect(
-      asApprover.mutation(api.deposits.release, {
+      asApprover.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(),
         orgId, depositId, resolution: "REFUNDED", refundMethod: "OTHER",
       })
     ).rejects.toThrow(/OTHER is not accepted/i);
@@ -385,7 +385,7 @@ describe("deposits.release", () => {
   test("ledger enrichment uses each transaction's exact deposit link", async () => {
     const { t, orgId, customerId, vehicleId, asUser } = await setup();
     const firstQuoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    const firstDepositId = await asUser.mutation(api.deposits.create, {
+    const firstDepositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       quoteId: firstQuoteId,
       amount: 1500,
@@ -419,7 +419,7 @@ describe("deposits.release", () => {
       })
     );
     const secondQuoteId = await makeQuote(t, asUser, orgId, secondCustomerId, secondVehicleId);
-    const secondDepositId = await asUser.mutation(api.deposits.create, {
+    const secondDepositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       quoteId: secondQuoteId,
       amount: 1500,
@@ -441,9 +441,9 @@ describe("deposits.release", () => {
   test("FORFEITED releases the hold without a reversing transaction", async () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1500 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
-    await asApprover.mutation(api.deposits.release, { orgId, depositId, resolution: "FORFEITED" });
+    await asApprover.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(), orgId, depositId, resolution: "FORFEITED" });
 
     await t.run(async (ctx) => {
       const deposit = await ctx.db.get(depositId);
@@ -465,9 +465,9 @@ describe("deposits.release", () => {
     const { orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     await openAccountingPeriod(asUser, orgId);
     const quoteId = await makeQuote(null, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1500 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
-    await asApprover.mutation(api.deposits.release, { orgId, depositId, resolution: "FORFEITED" });
+    await asApprover.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(), orgId, depositId, resolution: "FORFEITED" });
 
     const events = await asUser.query(api.accountingLedger.listAccountingEvents, {
       orgId,
@@ -484,7 +484,7 @@ describe("deposits.voidDeposit", () => {
   test("marks deposit VOIDED, releases vehicle hold, and soft-deletes the original IN transaction", async () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1500 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
     await asApprover.mutation(api.deposits.voidDeposit, {
       orgId,
@@ -525,7 +525,7 @@ describe("deposits.voidDeposit", () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     await openAccountingPeriod(asUser, orgId);
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1500 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
     await asApprover.mutation(api.deposits.voidDeposit, {
       orgId,
@@ -563,9 +563,9 @@ describe("deposits.voidDeposit", () => {
   test("rejects void on an already-resolved deposit", async () => {
     const { orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const quoteId = await makeQuote(null, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1500 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
-    await asApprover.mutation(api.deposits.release, { orgId, depositId, resolution: "REFUNDED", refundMethod: "CASH" });
+    await asApprover.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(), orgId, depositId, resolution: "REFUNDED", refundMethod: "CASH" });
 
     await expect(
       asApprover.mutation(api.deposits.voidDeposit, { orgId, depositId })
@@ -575,12 +575,12 @@ describe("deposits.voidDeposit", () => {
   test("voided deposits are excluded from the cumulative deposit cap", async () => {
     const { orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const quoteId = await makeQuote(null, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 21000 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 21000 });
 
     await asApprover.mutation(api.deposits.voidDeposit, { orgId, depositId });
 
     await expect(
-      asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 21000 })
+      asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 21000 })
     ).resolves.toBeDefined();
   });
 });
@@ -632,7 +632,7 @@ describe("deposits multi-vehicle holds", () => {
     const secondVehicleId = await makeSecondVehicle(t, orgId);
     const quoteId = await makeMultiVehicleQuote(t, asUser, orgId, customerId, vehicleId, secondVehicleId);
 
-    await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 5000 });
+    await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 5000 });
 
     await t.run(async (ctx) => {
       const primary = await ctx.db.get(vehicleId);
@@ -646,9 +646,9 @@ describe("deposits multi-vehicle holds", () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const secondVehicleId = await makeSecondVehicle(t, orgId);
     const quoteId = await makeMultiVehicleQuote(t, asUser, orgId, customerId, vehicleId, secondVehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 5000 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 5000 });
 
-    await asApprover.mutation(api.deposits.release, { orgId, depositId, resolution: "REFUNDED", refundMethod: "CASH" });
+    await asApprover.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(), orgId, depositId, resolution: "REFUNDED", refundMethod: "CASH" });
 
     await t.run(async (ctx) => {
       const primary = await ctx.db.get(vehicleId);
@@ -662,7 +662,7 @@ describe("deposits multi-vehicle holds", () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const secondVehicleId = await makeSecondVehicle(t, orgId);
     const quoteId = await makeMultiVehicleQuote(t, asUser, orgId, customerId, vehicleId, secondVehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 5000 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 5000 });
 
     await asApprover.mutation(api.deposits.voidDeposit, { orgId, depositId, reason: "test" });
 
@@ -678,7 +678,7 @@ describe("deposits multi-vehicle holds", () => {
     const { t, orgId, customerId, vehicleId, asUser } = await setup();
     const secondVehicleId = await makeSecondVehicle(t, orgId);
     const quoteId = await makeMultiVehicleQuote(t, asUser, orgId, customerId, vehicleId, secondVehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 5000 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 5000 });
 
     // A quote with more than one car cannot be finalized until somebody says
     // how its one deposit divides between them — the split is the customer's
@@ -692,7 +692,7 @@ describe("deposits multi-vehicle holds", () => {
       ],
     });
 
-    await asUser.mutation(api.sales.completeFromQuote, { orgId, quoteId });
+    await asUser.mutation(api.sales.completeFromQuote, { idempotencyKey: crypto.randomUUID(), orgId, quoteId });
 
     await t.run(async (ctx) => {
       const primary = await ctx.db.get(vehicleId);
@@ -710,7 +710,7 @@ describe("deposits multi-vehicle holds", () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const secondVehicleId = await makeSecondVehicle(t, orgId);
     const quoteId = await makeMultiVehicleQuote(t, asUser, orgId, customerId, vehicleId, secondVehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 5000 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 5000 });
     await asUser.mutation(api.deposits.allocateToVehicles, {
       orgId,
       quoteId,
@@ -720,7 +720,7 @@ describe("deposits multi-vehicle holds", () => {
       ],
     });
 
-    const saleIds = await asUser.mutation(api.sales.completeFromQuote, { orgId, quoteId });
+    const saleIds = await asUser.mutation(api.sales.completeFromQuote, { idempotencyKey: crypto.randomUUID(), orgId, quoteId });
 
     // Unwinding the whole deal cancels each vehicle's own sale row in turn, and
     // each cancellation touches only its own car.
@@ -770,7 +770,7 @@ describe("deposits multi-vehicle holds", () => {
     const { t, orgId, customerId, vehicleId, asUser } = await setup();
     const secondVehicleId = await makeSecondVehicle(t, orgId);
     const quoteId = await makeMultiVehicleQuote(t, asUser, orgId, customerId, vehicleId, secondVehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 5000 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 5000 });
 
     const secondaryDeposits = await asUser.query(api.deposits.listByVehicle, {
       orgId,
@@ -790,9 +790,9 @@ describe("sales.create resolves deposits", () => {
   test("a sale created from a quote resolves its deposit to APPLIED and excludes it from the sale transaction amount", async () => {
     const { t, orgId, userId, customerId, vehicleId, asUser } = await setup();
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 2000 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 2000 });
 
-    const saleId = await asUser.mutation(api.sales.create, {
+    const saleId = await asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
       customerId,
@@ -834,7 +834,7 @@ describe("applications deposit hooks", () => {
   test("rejecting an application releases the vehicle hold but leaves the deposit HELD", async () => {
     const { t, orgId, customerId, vehicleId, asUser } = await setup();
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1500 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
     const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
     await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "REJECTED" });
@@ -852,7 +852,7 @@ describe("applications deposit hooks", () => {
   test("finalizing a deal resolves the deposit to APPLIED", async () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
-    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1500 });
+    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
     const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
     await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
@@ -864,7 +864,7 @@ describe("applications deposit hooks", () => {
       method: "CASH",
       expectedDate: Date.now(),
     });
-    await asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId });
+    await asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId });
 
     await t.run(async (ctx) => {
       const deposit = await ctx.db.get(depositId);
@@ -873,5 +873,257 @@ describe("applications deposit hooks", () => {
       const vehicle = await ctx.db.get(vehicleId);
       expect(vehicle?.status).toBe("SOLD");
     });
+  });
+});
+
+/**
+ * SCRUM-313 — the GENERATION-AWARE command identity for `deposits.release`.
+ *
+ * This command is the one place in the protected topology where neither naive
+ * identity works, and both wrong answers have already shipped:
+ *
+ *   - a key derived from (deposit, resolution) and held forever made the SECOND
+ *     genuine payout replay the first one's stored result: no money moved, and
+ *     the operator was told the customer had been refunded;
+ *   - a key minted per ATTEMPT escaped that by surrendering retry safety, so a
+ *     lost response plus one more tap is two payouts.
+ *
+ * The reason content cannot decide it is economic, not incidental: `release`
+ * pays out whatever is currently FREE on the row. Two genuine payouts of the
+ * same deposit with the same resolution and the same refund method are
+ * byte-identical requests — and, as the tests below execute rather than assume,
+ * that is a REAL operational sequence: the free part is refunded today, and the
+ * rest once the car it was held against falls away.
+ *
+ * What separates them is state the SERVER owns: `releaseCount`, incremented
+ * inside the same `ctx.db.patch` that moves the money
+ * (`convex/utils/depositHelpers.ts`). The client puts that observed generation
+ * in the intent, so:
+ *
+ *   same generation + same decision -> same key   -> a retry is deduped;
+ *   an advanced generation          -> a new key  -> a genuine payout proceeds.
+ *
+ * EVIDENCE BOUNDARY: `convex-test` is repository behaviour. It serialises
+ * everything and models NO OCC, so nothing here proves anything about two
+ * CONCURRENT releases with distinct keys racing for one free balance. That is
+ * named explicitly as a runtime-rehearsal obligation, not something these tests
+ * quietly cover.
+ */
+describe("deposits.release · generation-aware command identity", () => {
+  async function multiVehicleQuote(asUser: any, orgId: any, customerId: any, a: any, b: any) {
+    return await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId: a,
+      vehicleItems: [
+        { vehicleId: a, unitPrice: 22000 },
+        { vehicleId: b, unitPrice: 18000 },
+      ],
+      mode: "CASH",
+      vehiclePrice: 40000,
+      downPayment: 0,
+      termMonths: 0,
+    });
+  }
+
+  async function secondVehicle(t: any, orgId: any) {
+    return await t.run((ctx: any) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "1HGCM82633A444444",
+        make: "Toyota",
+        model: "Camry",
+        year: 2022,
+        color: "Blue",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        mileage: 800,
+        sellingPrice: 18000,
+        status: "AVAILABLE",
+      })
+    );
+  }
+
+  /**
+   * A deposit whose free part is only PART of the row: 5000 taken, 3000 of it
+   * committed to the two cars on the deal, so 2000 is free to pay out now and
+   * the rest becomes free later. This is the shape that makes a second genuine
+   * payout possible at all — a fully free deposit closes on its first release.
+   */
+  async function partiallyCommittedDeposit() {
+    const s = await setup();
+    await openAccountingPeriod(s.asUser, s.orgId);
+    const v2 = await secondVehicle(s.t, s.orgId);
+    const quoteId = await multiVehicleQuote(s.asUser, s.orgId, s.customerId, s.vehicleId, v2);
+    const depositId = await s.asUser.mutation(api.deposits.create, {
+      idempotencyKey: crypto.randomUUID(),
+      orgId: s.orgId,
+      quoteId,
+      amount: 5000,
+    });
+    await s.asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId: s.orgId,
+      quoteId,
+      allocations: [
+        { vehicleId: s.vehicleId, amount: 2000 },
+        { vehicleId: v2, amount: 1000 },
+      ],
+    });
+    return { ...s, v2, quoteId, depositId };
+  }
+
+  const readDeposit = (t: any, depositId: any) => t.run((ctx: any) => ctx.db.get(depositId));
+
+  const countRefundsOut = (t: any, orgId: any) =>
+    t.run(async (ctx: any) => {
+      const rows = await ctx.db
+        .query("transactions")
+        .withIndex("by_org", (q: any) => q.eq("orgId", orgId))
+        .collect();
+      return rows.filter((r: any) => r.type === "OUT" && r.category === "DEPOSIT" && !r.isDeleted);
+    });
+
+  test("PROOF 1 — a same-generation retry pays ONCE", async () => {
+    const { t, orgId, depositId, asApprover } = await partiallyCommittedDeposit();
+
+    // The client observed releaseCount 0 and built its intent from it. The
+    // response to the first call never arrived, so the key was never retired
+    // and the operator submitted again with the SAME key and the SAME content.
+    const gen0Key = "release-deposit:dep:REFUNDED:CASH:gen0";
+    const args = { orgId, depositId, resolution: "REFUNDED" as const, refundMethod: "CASH" as const };
+
+    await asApprover.mutation(api.deposits.release, { ...args, idempotencyKey: gen0Key });
+    await asApprover.mutation(api.deposits.release, { ...args, idempotencyKey: gen0Key });
+
+    const deposit = await readDeposit(t, depositId);
+    // One payout, not two: the free 2000 left the business once.
+    expect(deposit?.releasedAmountMinor).toBe(2_000_000);
+    expect(deposit?.refundedAmountMinor).toBe(2_000_000);
+    // The generation advanced exactly once, which is what makes the NEXT
+    // genuine payout distinguishable from this retry.
+    expect(deposit?.releaseCount).toBe(1);
+    // And the money moved once in the ledger, not just in the deposit row.
+    expect(await countRefundsOut(t, orgId)).toHaveLength(1);
+  });
+
+  test("PROOF 2 — the same key with a DIFFERENT decision is refused, not silently deduped", async () => {
+    const { orgId, depositId, asApprover } = await partiallyCommittedDeposit();
+    const gen0Key = "release-deposit:dep:REFUNDED:CASH:gen0";
+
+    await asApprover.mutation(api.deposits.release, {
+      idempotencyKey: gen0Key,
+      orgId,
+      depositId,
+      resolution: "REFUNDED",
+      refundMethod: "CASH",
+    });
+
+    // Refunding to a bank account is a DIFFERENT command from refunding cash.
+    // If the client ever reused one key across that change, the server must say
+    // so rather than quietly returning the cash refund's stored result — which
+    // would report a bank transfer that never happened.
+    await expect(
+      asApprover.mutation(api.deposits.release, {
+        idempotencyKey: gen0Key,
+        orgId,
+        depositId,
+        resolution: "REFUNDED",
+        refundMethod: "BANK_TRANSFER",
+      })
+    ).rejects.toThrow(/different request content/i);
+  });
+
+  test("PROOF 3 — the NEXT generation is a new command and the second genuine payout proceeds", async () => {
+    const { t, orgId, quoteId, vehicleId, v2, depositId, asUser, asApprover } =
+      await partiallyCommittedDeposit();
+
+    await asApprover.mutation(api.deposits.release, {
+      idempotencyKey: "release-deposit:dep:REFUNDED:CASH:gen0",
+      orgId,
+      depositId,
+      resolution: "REFUNDED",
+      refundMethod: "CASH",
+    });
+    const afterFirst = await readDeposit(t, depositId);
+    expect(afterFirst?.releaseCount).toBe(1);
+    // The row is NOT closed — one car's share is still committed to the deal.
+    expect(afterFirst?.status).toBe("HELD");
+
+    // The second car falls away, freeing its share. This is the real sequence
+    // the original incident described, not a contrived one.
+    await asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId,
+      quoteId,
+      allocations: [
+        { vehicleId, amount: 2000 },
+        { vehicleId: v2, amount: 0 },
+      ],
+    });
+
+    // The client now observes releaseCount 1, so its intent — and therefore its
+    // key — is a new generation. Same resolution, same method, same everything
+    // else: ONLY the generation separates this from the payout above.
+    await asApprover.mutation(api.deposits.release, {
+      idempotencyKey: "release-deposit:dep:REFUNDED:CASH:gen1",
+      orgId,
+      depositId,
+      resolution: "REFUNDED",
+      refundMethod: "CASH",
+    });
+
+    const afterSecond = await readDeposit(t, depositId);
+    expect(afterSecond?.releaseCount).toBe(2);
+    // 2000 then 1000 — the second genuine payout was NOT suppressed.
+    expect(afterSecond?.releasedAmountMinor).toBe(3_000_000);
+    expect(afterSecond?.refundedAmountMinor).toBe(3_000_000);
+    expect(await countRefundsOut(t, orgId)).toHaveLength(2);
+  });
+
+  test("PROOF 4 — a STALE generation would suppress a genuine payout, which is why it must advance", async () => {
+    const { t, orgId, quoteId, vehicleId, v2, depositId, asUser, asApprover } =
+      await partiallyCommittedDeposit();
+
+    const gen0Key = "release-deposit:dep:REFUNDED:CASH:gen0";
+    await asApprover.mutation(api.deposits.release, {
+      idempotencyKey: gen0Key,
+      orgId,
+      depositId,
+      resolution: "REFUNDED",
+      refundMethod: "CASH",
+    });
+    await asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId,
+      quoteId,
+      allocations: [
+        { vehicleId, amount: 2000 },
+        { vehicleId: v2, amount: 0 },
+      ],
+    });
+
+    // The genuinely-new payout submitted under the OLD generation's key. The
+    // command log recognises the key, returns the stored result, and pays
+    // NOTHING — while reporting success. This is the original incident, and it
+    // is reproduced here deliberately: it is the exact failure the generation
+    // exists to prevent, and it stays reproducible for as long as a key can be
+    // reused across a completed payout.
+    await asApprover.mutation(api.deposits.release, {
+      idempotencyKey: gen0Key,
+      orgId,
+      depositId,
+      resolution: "REFUNDED",
+      refundMethod: "CASH",
+    });
+
+    const deposit = await readDeposit(t, depositId);
+    // Still one payout: the second 1000 did not move, despite a successful call.
+    expect(deposit?.releasedAmountMinor).toBe(2_000_000);
+    expect(deposit?.releaseCount).toBe(1);
+    expect(await countRefundsOut(t, orgId)).toHaveLength(1);
+
+    // The client cannot produce that stale key, for two independent reasons,
+    // and BOTH are pinned in `hooks/useCommandIdentity.test.tsx`: the observed
+    // generation advances after a confirmed payout, and the identity is retired
+    // on success so even a stale read mints afresh. This test states the cost of
+    // getting it wrong; those state that it is not gettable wrong.
   });
 });

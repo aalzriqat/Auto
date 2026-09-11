@@ -94,7 +94,7 @@ async function seed(tag: string) {
     })
   );
 
-  const saleId = await asUser.mutation(api.sales.create, {
+  const saleId = await asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
     orgId, vehicleId, customerId, salespersonId: userId,
     salePrice: SALE_PRICE, saleDate: Date.now(), status: "COMPLETED" as const,
     supplierSettlementRoute: "THROUGH_DEALERSHIP" as const,
@@ -139,10 +139,10 @@ describe("instalments actually reach the ledger", () => {
     const s = await seed("instal");
     expect(s.payable.amountDue).toBe(ENTITLEMENT);
 
-    await s.asUser.mutation(api.sourcingPayables.recordPartialPayment, {
+    await s.asUser.mutation(api.sourcingPayables.recordPartialPayment, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, payableId: s.payable._id, amount: 4_000, paymentMethod: "CASH",
     });
-    await s.asUser.mutation(api.sourcingPayables.recordPartialPayment, {
+    await s.asUser.mutation(api.sourcingPayables.recordPartialPayment, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, payableId: s.payable._id, amount: ENTITLEMENT - 4_000, paymentMethod: "CASH",
     });
 
@@ -160,10 +160,10 @@ describe("instalments actually reach the ledger", () => {
     // Posting `amountDue` here would discharge AP a second time for the
     // instalment already posted, leaving the account short by exactly that.
     const s = await seed("remainder");
-    await s.asUser.mutation(api.sourcingPayables.recordPartialPayment, {
+    await s.asUser.mutation(api.sourcingPayables.recordPartialPayment, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, payableId: s.payable._id, amount: 2_000, paymentMethod: "CASH",
     });
-    await s.asUser.mutation(api.sourcingPayables.markPaid, {
+    await s.asUser.mutation(api.sourcingPayables.markPaid, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, payableId: s.payable._id, paymentMethod: "CASH",
     });
 
@@ -178,7 +178,7 @@ describe("instalments actually reach the ledger", () => {
     // instalment returns "already posted" and the ledger loses it.
     const s = await seed("sameamt");
     for (let i = 0; i < 2; i++) {
-      await s.asUser.mutation(api.sourcingPayables.recordPartialPayment, {
+      await s.asUser.mutation(api.sourcingPayables.recordPartialPayment, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId, payableId: s.payable._id, amount: 1_000, paymentMethod: "CASH",
       });
     }

@@ -63,6 +63,11 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const createVehicle = useMutation(api.vehicles.create);
+  // Minted at the user-intent boundary and held across attempts. Creating a
+  // vehicle posts its acquisition to the GL keyed on the freshly minted vehicle
+  // id, so a per-attempt key would let a lost response capitalize the same car
+  // twice. VIN cannot stand in for this — it is optional.
+  const createVehicleKeyRef = useRef<string | null>(null);
   const updateVehicle = useMutation(api.vehicles.update);
   const requestCreate = useMutation(api.vehicleEdits.requestCreate);
   const requestUpdate = useMutation(api.vehicleEdits.requestUpdate);
@@ -336,13 +341,17 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
         }
       } else {
         if (canCreate) {
+          createVehicleKeyRef.current ??= `vehicle-create:${crypto.randomUUID()}`;
           const newId = await createVehicle({
+            idempotencyKey: createVehicleKeyRef.current,
             orgId: activeOrgId,
             ...restValues,
             purchasePaymentMethod,
             ...trustPassportFields,
             imageIds: imageIds as Id<"_storage">[],
           });
+          // Only a SUCCESS retires the identity.
+          createVehicleKeyRef.current = null;
           if (newId) await saveCustomFields(activeOrgId, "vehicle", newId, customFieldValues);
           toast.success(t("VehicleAdded" as any));
         } else {

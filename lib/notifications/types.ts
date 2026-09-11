@@ -36,7 +36,6 @@ export const NOTIFICATION_TYPES = {
   "customer.created": { category: "sales", priority: "normal", criticalDefault: false },
   "customer.updated": { category: "sales", priority: "low", criticalDefault: false },
   "customer.deleted": { category: "sales", priority: "normal", criticalDefault: false },
-  "customer.merged": { category: "sales", priority: "normal", criticalDefault: false },
   "lead.created": { category: "sales", priority: "normal", criticalDefault: false },
   "lead.assigned": { category: "sales", priority: "normal", criticalDefault: false },
   "lead.updated": { category: "sales", priority: "low", criticalDefault: false },

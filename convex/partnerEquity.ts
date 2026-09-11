@@ -14,6 +14,7 @@ import {
   getOrgCurrency,
 } from "./accounting/workflowHooks";
 import { paymentMethodValidator, PaymentMethod } from "./utils/paymentMethods";
+import { runWithIdempotency } from "./utils/idempotency";
 
 const movementTypeValidator = v.union(
   v.literal("CONTRIBUTION"),
@@ -105,6 +106,19 @@ export const add = mutation({
     // contribution — replaces the old free-typed initialCapital/currentBalance.
     openingContributionMinor: v.optional(v.number()),
     paymentMethod: v.optional(paymentMethodValidator),
+    // SCRUM-313 census. With an opening contribution this calls
+    // `recordMovement`, which mints a `partnerEquityTransactions` id and posts
+    // a CAPITAL_CONTRIBUTED event keyed on it, so a retry mints a new id, a new
+    // key and a SECOND contribution journal.
+    //
+    // Identity is required UNCONDITIONALLY, not only when a contribution is
+    // present. The command is only *conditionally* economic, and a compile-time
+    // `economic: true | false` discriminant cannot express a runtime condition;
+    // making it conditional would put the discriminant back at the mercy of a
+    // payload value, which is the exact failure this design removes. Guarding
+    // the whole command also removes the duplicate partner row a retry creates
+    // even when no opening capital is supplied.
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -113,29 +127,46 @@ export const add = mutation({
       throw new ConvexError("Partner name is required.");
     }
 
-    const partnerId = await ctx.db.insert("partnerEquity", {
-      orgId: args.orgId,
-      partnerName: args.partnerName.trim(),
-      notes: args.notes,
-    });
-
-    if (args.openingContributionMinor != null && args.openingContributionMinor > 0) {
-      await recordMovement(ctx, {
+    return await runWithIdempotency(
+      ctx,
+      {
         orgId: args.orgId,
-        partnerId,
-        type: "CONTRIBUTION",
-        amountMinor: args.openingContributionMinor,
-        paymentMethod: args.paymentMethod,
+        operation: "partnerEquity.add",
+        economic: true,
+        idempotencyKey: args.idempotencyKey,
         actorId: user._id,
-      });
-    }
+        fingerprint: JSON.stringify({
+          partnerName: args.partnerName.trim(),
+          openingContributionMinor: args.openingContributionMinor ?? null,
+          paymentMethod: args.paymentMethod ?? null,
+        }),
+      },
+      async () => {
+        const partnerId = await ctx.db.insert("partnerEquity", {
+          orgId: args.orgId,
+          partnerName: args.partnerName.trim(),
+          notes: args.notes,
+        });
 
-    const actorName = await getActorName(ctx);
-    await notifyOwner(ctx, args.orgId, "partnerEquity.changed", { actorName }, {
-      link: `/${args.orgId}/accounting`,
-    });
+        if (args.openingContributionMinor != null && args.openingContributionMinor > 0) {
+          await recordMovement(ctx, {
+            orgId: args.orgId,
+            partnerId,
+            type: "CONTRIBUTION",
+            amountMinor: args.openingContributionMinor,
+            paymentMethod: args.paymentMethod,
+            actorId: user._id,
+          });
+        }
 
-    return partnerId;
+        const actorName = await getActorName(ctx);
+        await notifyOwner(ctx, args.orgId, "partnerEquity.changed", { actorName }, {
+          link: `/${args.orgId}/accounting`,
+        });
+
+        return partnerId;
+      }
+    );
   },
 });
 
@@ -197,6 +228,12 @@ export const recordEquityMovement = mutation({
     paymentMethod: v.optional(paymentMethodValidator),
     notes: v.optional(v.string()),
     occurredAt: v.optional(v.number()),
+    // SCRUM-313 census. `recordMovement` mints a `partnerEquityTransactions`
+    // id and the equity hooks key their accounting event on it, so a retry
+    // produces a second movement and a second journal. The DRAW balance check
+    // is NOT a retry barrier: a repeated draw of 500 against 5,000 succeeds
+    // twice, because the balance still permits it.
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -216,23 +253,42 @@ export const recordEquityMovement = mutation({
       }
     }
 
-    const transactionId = await recordMovement(ctx, {
-      orgId: args.orgId,
-      partnerId: args.partnerId,
-      type: args.type,
-      amountMinor: args.amountMinor,
-      paymentMethod: args.paymentMethod,
-      notes: args.notes,
-      occurredAt: args.occurredAt,
-      actorId: user._id,
-    });
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "partnerEquity.recordEquityMovement",
+        economic: true,
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+        fingerprint: JSON.stringify({
+          partnerId: args.partnerId.toString(),
+          type: args.type,
+          amountMinor: args.amountMinor,
+          paymentMethod: args.paymentMethod ?? null,
+          occurredAt: args.occurredAt ?? null,
+        }),
+      },
+      async () => {
+        const transactionId = await recordMovement(ctx, {
+          orgId: args.orgId,
+          partnerId: args.partnerId,
+          type: args.type,
+          amountMinor: args.amountMinor,
+          paymentMethod: args.paymentMethod,
+          notes: args.notes,
+          occurredAt: args.occurredAt,
+          actorId: user._id,
+        });
 
-    const actorName = await getActorName(ctx);
-    await notifyOwner(ctx, args.orgId, "partnerEquity.changed", { actorName }, {
-      link: `/${args.orgId}/accounting`,
-    });
+        const actorName = await getActorName(ctx);
+        await notifyOwner(ctx, args.orgId, "partnerEquity.changed", { actorName }, {
+          link: `/${args.orgId}/accounting`,
+        });
 
-    return transactionId;
+        return transactionId;
+      }
+    );
   },
 });
 

@@ -11,6 +11,7 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
+import { settleOutbox, makeDue } from "../test-utils/outboxWork";
 import { api, internal } from "./_generated/api";
 
 vi.mock("./rateLimit", () => ({
@@ -110,7 +111,7 @@ describe("Phase 9 — expense account mapping", () => {
   test("general expense posts to General Expenses (6300), not Commission Expense (6100)", async () => {
     const { orgId, asUser } = await seedDealer("exp");
 
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Miscellaneous expense", amount: 120, date: Date.now(),
       category: "OTHER", status: "PAID",
     });
@@ -126,7 +127,7 @@ describe("Phase 9 — expense account mapping", () => {
   test("bank-transfer expense stores method and credits Bank", async () => {
     const { t, orgId, asUser } = await seedDealer("exp_method");
 
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       title: "Bank paid repair",
       amount: 80,
@@ -266,7 +267,7 @@ describe("Phase 9 — accounting outbox", () => {
   test("event with no open period is enqueued, then posts when a period opens", async () => {
     const { t, orgId, asUser } = await seedDealer("outbox", /* openPeriod */ false);
 
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Pre-period expense", amount: 75, date: Date.now(),
       category: "OFFICE", status: "PAID",
     });
@@ -287,7 +288,7 @@ describe("Phase 9 — accounting outbox", () => {
     });
     const period = (await asUser.query(api.accountingPeriods.list, { orgId }))[0];
     await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
-    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    await settleOutbox(t, orgId);
 
     const after = await eventForSource(asUser, orgId, "expenses", expenseId.toString());
     expect(after).toBeTruthy();
@@ -299,7 +300,7 @@ describe("Phase 9 — accounting outbox", () => {
   test("an event that keeps failing moves to FAILED after 10 attempts and stops being drained", async () => {
     const { t, orgId, asUser } = await seedDealer("outbox_deadletter", /* openPeriod */ false);
 
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Never posts", amount: 40, date: Date.now(),
       category: "OFFICE", status: "PAID",
     });
@@ -314,7 +315,10 @@ describe("Phase 9 — accounting outbox", () => {
     await openFullYearPeriod(asUser, orgId);
 
     for (let i = 0; i < 10; i++) {
-      await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+      // Each failed attempt applies a backoff, so the row is not due again
+      // until the clock moves — which the one-minute cron does in production.
+      await makeDue(t, orgId);
+      await settleOutbox(t, orgId);
     }
 
     const failed = await asUser.query(api.accountingOutbox.listPending, { orgId, status: "FAILED" });
@@ -323,7 +327,7 @@ describe("Phase 9 — accounting outbox", () => {
     expect(failed[0].attempts).toBe(10);
 
     // An 11th drain must not touch it further — it's no longer PENDING.
-    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    await settleOutbox(t, orgId);
     const stillFailed = await asUser.query(api.accountingOutbox.listPending, { orgId, status: "FAILED" });
     expect(stillFailed[0].attempts).toBe(10);
     const pending = await asUser.query(api.accountingOutbox.listPending, { orgId, status: "PENDING" });
@@ -335,7 +339,7 @@ describe("Phase 9 — accounting outbox", () => {
 
     const fiscalYear = new Date().getUTCFullYear();
     // Dated in December — the org will not open that period until year end.
-    const decemberExpenseId = await asUser.mutation(api.expenses.create, {
+    const decemberExpenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "December expense", amount: 90,
       date: Date.UTC(fiscalYear, 11, 15),
       category: "OFFICE", status: "PAID",
@@ -356,7 +360,8 @@ describe("Phase 9 — accounting outbox", () => {
       const periods = await asUser.query(api.accountingPeriods.list, { orgId });
       const thisMonth = periods.find((p) => p.periodNumber === month + 1)!;
       await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: thisMonth._id });
-      await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+      await makeDue(t, orgId);
+      await settleOutbox(t, orgId);
     }
 
     const failed = await asUser.query(api.accountingOutbox.listPending, { orgId, status: "FAILED" });
@@ -371,7 +376,8 @@ describe("Phase 9 — accounting outbox", () => {
     const allPeriods = await asUser.query(api.accountingPeriods.list, { orgId });
     const december = allPeriods.find((p) => p.periodNumber === 12)!;
     await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: december._id });
-    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    await makeDue(t, orgId);
+    await settleOutbox(t, orgId);
 
     const posted = await eventForSource(asUser, orgId, "expenses", decemberExpenseId.toString());
     expect(posted?.status).toBe("POSTED");
@@ -380,7 +386,7 @@ describe("Phase 9 — accounting outbox", () => {
   test("retryFailed resets a FAILED event back to PENDING for another drain attempt", async () => {
     const { t, orgId, asUser } = await seedDealer("outbox_retry", /* openPeriod */ false);
 
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Fails then recovers", amount: 60, date: Date.now(),
       category: "OFFICE", status: "PAID",
     });
@@ -389,7 +395,10 @@ describe("Phase 9 — accounting outbox", () => {
     await openFullYearPeriod(asUser, orgId);
 
     for (let i = 0; i < 10; i++) {
-      await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+      // Each failed attempt applies a backoff, so the row is not due again
+      // until the clock moves — which the one-minute cron does in production.
+      await makeDue(t, orgId);
+      await settleOutbox(t, orgId);
     }
     const failed = await asUser.query(api.accountingOutbox.listPending, { orgId, status: "FAILED" });
     expect(failed).toHaveLength(1);
@@ -402,7 +411,7 @@ describe("Phase 9 — accounting outbox", () => {
     expect(afterRetry).toHaveLength(1);
     expect(afterRetry[0].attempts).toBe(0);
 
-    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    await settleOutbox(t, orgId);
     const after = await eventForSource(asUser, orgId, "expenses", expenseId.toString());
     expect(after.status).toBe("POSTED");
   });
@@ -410,7 +419,7 @@ describe("Phase 9 — accounting outbox", () => {
   test("retryFailed rejects a non-FAILED event", async () => {
     const { t, orgId, asUser } = await seedDealer("outbox_retry_reject", /* openPeriod */ false);
 
-    await asUser.mutation(api.expenses.create, {
+    await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Still pending", amount: 20, date: Date.now(),
       category: "OFFICE", status: "PAID",
     });
@@ -459,7 +468,7 @@ describe("Phase 9 — reversal audit log", () => {
   test("reversing an event writes a REVERSE_EVENT audit entry", async () => {
     const { orgId, asUser } = await seedDealer("rev");
 
-    const expenseId = await asUser.mutation(api.expenses.create, {
+    const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId, title: "Reversible expense", amount: 60, date: Date.now(),
       category: "OTHER", status: "PAID",
     });
@@ -518,6 +527,7 @@ describe("Phase 9 — cheque GL posting", () => {
     const { orgId, asUser, customerId } = await seedDealer("chq");
 
     const receivableId = await asUser.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
       orgId, customerId, sourceType: "CHEQUE", title: "Cheque receivable",
       amount: 1000, dueDate: Date.now() + 86_400_000,
       creditSystemKey: "MISCELLANEOUS_INCOME",
@@ -582,6 +592,18 @@ describe("Phase 9 — finance disbursement receipt", () => {
         orgId, customerId, vehicleId, companyId: financeCompanyId,
         quoteId, salespersonId: userId, status: "CLOSED",
         createdAt: Date.now(), updatedAt: Date.now(),
+      })
+    );
+    // The receivable finalizeDeal opens for the company's remittance. A CLOSED
+    // application inserted without one is a pre-receivable legacy shape that
+    // confirmDisbursement no longer completes on the company's behalf: the
+    // receipt settles the recorded receivable or is refused (SCRUM-241).
+    await t.run((ctx) =>
+      ctx.db.insert("receivableDocuments", {
+        orgId, documentType: "INVOICE", documentNumber: "RCV-GL1", payerType: "FINANCE_COMPANY",
+        customerId, financeCompanyId: financeCompanyId, sourceType: "finance_application", sourceId: appId,
+        originalAmountMinor: 10_000_000, currency: "JOD", scale: 3, issueDate: Date.now(), dueDate: Date.now(),
+        status: "OPEN", createdAt: Date.now(), createdBy: userId,
       })
     );
 
@@ -742,7 +764,7 @@ describe("payment intent settlement clamping", () => {
       })
     );
 
-    const intentId = await asUser.mutation(api.paymentIntents.create, {
+    const intentId = await asUser.mutation(api.paymentIntents.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       amountMinor: 1_000_000,
@@ -786,3 +808,5 @@ describe("payment intent settlement clamping", () => {
     expect(intent?.canonicalPaymentId).toBeTruthy();
   });
 });
+
+
