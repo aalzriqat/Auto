@@ -125,6 +125,17 @@ type Defects = {
   duplicateReservationRowOnly?: boolean;
   /** A completed work order with a posted expense can be edited (and re-posted). */
   workOrderLockOpen?: boolean;
+  // ── FD1 — the finance-company receipt (SCRUM-241) ──
+  /** The receipt accepts any amount and allocates min(outstanding, caller) — the customer's principal settles the net. */
+  financeReceiptClipsToOutstanding?: boolean;
+  /** The FINANCE_CASH_RECEIVED journal is posted for one minor unit more than the payment and allocation. */
+  financeReceiptPostsWrongAmount?: boolean;
+  /** The payment and allocation are built in a currency other than the receivable's. */
+  financeReceiptInDifferentCurrency?: boolean;
+  /** A same-key replay of the receipt posts and allocates a second time. */
+  financeReceiptDoubleOnReplay?: boolean;
+  /** The receipt posts and allocates but the canonical receivable is left OPEN. */
+  financeReceivableNotSettled?: boolean;
 };
 
 function makeBackend(defects: Defects = {}) {
@@ -182,7 +193,15 @@ function makeBackend(defects: Defects = {}) {
     { _id: "acct_cap", code: "3000", type: "EQUITY", name: "Partner Capital", systemKey: "PARTNER_CAPITAL", normalBalance: "CREDIT" },
     { _id: "acct_draw", code: "3100", type: "EQUITY", name: "Partner Drawings", systemKey: "PARTNER_DRAWINGS", normalBalance: "DEBIT" },
     { _id: "acct_exp", code: "6000", type: "EXPENSE", name: "General Expense", systemKey: "GENERAL_EXPENSE", normalBalance: "DEBIT" },
+    { _id: "acct_arfc", code: "1210", type: "ASSET", name: "AR Finance Companies", systemKey: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", normalBalance: "DEBIT" },
   ];
+  /** Financed deals, their canonical finance-company receivables and allocations (FD1). */
+  const financeApps = new Map<string, Record<string, any>>();
+  const financeReceivables = new Map<string, Record<string, any>>();
+  const allocations: Array<Record<string, any>> = [];
+  const quotePrice = new Map<string, number>();
+  const quoteCompany = new Map<string, string>();
+  const disbursementByKey = new Map<string, string>();
   const accountIdOf = (key: string) => {
     const hit = CHART.find((a) => a.systemKey === key);
     if (!hit) throw new Error(`fake chart has no ${key}`);
@@ -717,6 +736,8 @@ function makeBackend(defects: Defects = {}) {
         const quoteId = id("quote");
         quoteVehicle.set(quoteId, String(args.vehicleId ?? ""));
         quoteCustomer.set(quoteId, String(args.customerId ?? ""));
+        quotePrice.set(quoteId, Number(args.vehiclePrice ?? 0));
+        quoteCompany.set(quoteId, String(args.companyId ?? ""));
         return { ok: true as const, value: quoteId };
       }
       case "deposits:create": {
@@ -936,6 +957,128 @@ function makeBackend(defects: Defects = {}) {
           ok: true as const,
           value: [...deposits.values()].filter((d) => d.vehicleId === String(args.vehicleId)),
         };
+      // ── FD1: a financed deal, its receivable, and the company's receipt ──
+      case "finance:createCompany":
+        return { ok: true as const, value: id("fco") };
+      case "applications:createFromQuote": {
+        const appId = id("fapp");
+        financeApps.set(appId, {
+          _id: appId,
+          quoteId: String(args.quoteId),
+          customerId: quoteCustomer.get(String(args.quoteId)),
+          companyId: quoteCompany.get(String(args.quoteId)),
+          status: "DRAFT",
+          withheldMinor: 0,
+        });
+        return { ok: true as const, value: appId };
+      }
+      case "applications:updateStatus": {
+        const app = financeApps.get(String(args.applicationId));
+        if (!app) return { ok: false as const, error: "Application not found." };
+        app.status = args.status;
+        return { ok: true as const, value: null };
+      }
+      case "financingEconomics:recordSubmittedQuotation":
+      case "financingEconomics:approveDealerPurchaseAmount":
+      case "applications:registerVehicleHandover":
+      case "applications:registerExpectedPayment":
+      case "financeDealCosts:recordLegalInvoice":
+      case "financeDealCosts:reconcileDealFee":
+      case "financeDealCosts:classifyDealAccounting":
+        return { ok: true as const, value: null };
+      case "applications:handoverStamp":
+        return { ok: true as const, value: { stamp: "economics" } };
+      case "financeDealCosts:recordDealFee": {
+        const app = financeApps.get(String(args.applicationId));
+        if (!app) return { ok: false as const, error: "Application not found." };
+        if (args.deductedFromSettlement) app.withheldMinor += Number(args.actualAmountMinor ?? 0);
+        return { ok: true as const, value: id("fee") };
+      }
+      case "applications:finalizeDeal": {
+        const app = financeApps.get(String(args.applicationId));
+        if (!app) return { ok: false as const, error: "Application not found." };
+        if (app.status === "CLOSED") return { ok: true as const, value: app.saleId };
+        const gross = Math.round((quotePrice.get(app.quoteId) ?? 0) * MINOR_SCALE);
+        const net = gross - app.withheldMinor;
+        app.status = "CLOSED";
+        app.financedSaleNetReceivableMinor = net;
+        app.saleId = id("sale");
+        const rid = id("rdoc");
+        financeReceivables.set(rid, {
+          _id: rid,
+          sourceType: "finance_application",
+          sourceId: app._id,
+          payerType: "FINANCE_COMPANY",
+          financeCompanyId: app.companyId,
+          customerId: app.customerId,
+          originalAmountMinor: net,
+          currency: ORG_CURRENCY,
+          scale: 3,
+          status: "OPEN",
+        });
+        app.receivableId = rid;
+        return { ok: true as const, value: app.saleId };
+      }
+      case "applications:get":
+        return { ok: true as const, value: financeApps.get(String(args.applicationId)) ?? null };
+      case "subledger:listReceivables":
+        return {
+          ok: true as const,
+          value: [...financeReceivables.values()].filter((r) => !args.customerId || r.customerId === String(args.customerId)),
+        };
+      case "subledger:getReceivableBalance": {
+        const doc = financeReceivables.get(String(args.receivableDocumentId));
+        if (!doc) return { ok: true as const, value: null };
+        const allocated = allocations
+          .filter((a) => a.receivableDocumentId === doc._id && a.status === "ACTIVE")
+          .reduce((n, a) => n + a.amountMinor, 0);
+        return { ok: true as const, value: { doc, outstandingMinor: Math.max(0, doc.originalAmountMinor - allocated) } };
+      }
+      case "subledger:listAllocations":
+        return {
+          ok: true as const,
+          value: allocations.filter((a) => a.receivableDocumentId === String(args.receivableDocumentId)),
+        };
+      case "applications:confirmDisbursement": {
+        const app = financeApps.get(String(args.applicationId));
+        if (!app) return { ok: false as const, error: "Application not found." };
+        if (app.status !== "CLOSED") return { ok: false as const, error: "Disbursement can only be confirmed on a closed application." };
+        const key = String(args.idempotencyKey);
+        if (app.disbursedAt !== undefined) {
+          if (disbursementByKey.get(key) !== app._id) {
+            return { ok: false as const, error: "Disbursement has already been confirmed for this application." };
+          }
+          if (!defects.financeReceiptDoubleOnReplay) return { ok: true as const, value: null };
+        }
+        const receivable = financeReceivables.get(app.receivableId);
+        if (!receivable) return { ok: false as const, error: "No finance-company receivable is recorded for this deal." };
+        const net = app.financedSaleNetReceivableMinor;
+        let amount = Number(args.disbursedAmountMinor);
+        if (amount !== net) {
+          if (!defects.financeReceiptClipsToOutstanding) {
+            return {
+              ok: false as const,
+              error: `The amount received (${amount}) is not what this financing company owes the dealership on this deal (${net}).`,
+            };
+          }
+          amount = Math.min(amount, net);
+        }
+        const currency = defects.financeReceiptInDifferentCurrency ? "USD" : receivable.currency;
+        disbursementByKey.set(key, app._id);
+        app.disbursedAt = Date.now();
+        app.disbursedAmountMinor = amount;
+        app.settlementStatus = "FULLY_SETTLED";
+        const posted = defects.financeReceiptPostsWrongAmount ? amount + 1 : amount;
+        post("FINANCE_CASH_RECEIVED", "financeApplications", `disbursement_${app._id}`, [
+          { key: "BANK_ACCOUNT", debitMinor: posted },
+          { key: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", creditMinor: posted },
+        ]);
+        const paymentId = id("cpay");
+        canonicalPayments.set(paymentId, { _id: paymentId, payerType: "FINANCE_COMPANY", amountMinor: amount, currency, scale: 3, status: "SETTLED" });
+        allocations.push({ _id: id("alloc"), paymentId, receivableDocumentId: receivable._id, amountMinor: amount, currency, status: "ACTIVE" });
+        if (!defects.financeReceivableNotSettled) receivable.status = amount >= receivable.originalAmountMinor ? "PAID" : "PARTIALLY_PAID";
+        return { ok: true as const, value: null };
+      }
       default:
         return { ok: false as const, error: `unmodelled function ${fnPath}` };
     }
@@ -1093,7 +1236,7 @@ describe("the rehearsal passes against a backend that behaves", () => {
     expect(declined.map((d) => `${d.id}: ${d.detail}`)).toEqual([]);
     // And it actually ran the cases rather than finding nothing to do.
     expect(results.length).toBeGreaterThanOrEqual(18);
-    for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "C1", "C2"]) {
+    for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "FD1", "C1", "C2"]) {
       expect(statusOf(results, id), `${id} must actually execute`).toBe("PASS");
     }
   });
@@ -1468,6 +1611,37 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
     const results = await runAgainst({ doubleFootprintReceivablesOnly: true });
     expect(statusOf(results, "RT2")).toBe("FAIL");
     expect(detail(results, "RT2")).toMatch(/receivable rows carrying this run's title after create \+ replay: expected 1, got 2/);
+  });
+
+  // ── FD1 — the finance-company receipt (SCRUM-241) ──
+  test("FD1 catches a receipt that clips the customer's principal to the outstanding net instead of refusing it", async () => {
+    const results = await runAgainst({ financeReceiptClipsToOutstanding: true });
+    expect(statusOf(results, "FD1")).toBe("FAIL");
+    expect(detail(results, "FD1")).toMatch(/PRINCIPAL was accepted/);
+  });
+
+  test("FD1 catches a cash-receipt journal posted for a different amount than the payment and allocation", async () => {
+    const results = await runAgainst({ financeReceiptPostsWrongAmount: true });
+    expect(statusOf(results, "FD1")).toBe("FAIL");
+    expect(detail(results, "FD1")).toMatch(/finance cash receipt posting: journal lines are not exactly the expected posting/);
+  });
+
+  test("FD1 catches a payment and allocation built in a currency other than the receivable's", async () => {
+    const results = await runAgainst({ financeReceiptInDifferentCurrency: true });
+    expect(statusOf(results, "FD1")).toBe("FAIL");
+    expect(detail(results, "FD1")).toMatch(/allocation's currency: expected JOD, got USD/);
+  });
+
+  test("FD1 catches a replayed receipt that posts and allocates a second time", async () => {
+    const results = await runAgainst({ financeReceiptDoubleOnReplay: true });
+    expect(statusOf(results, "FD1")).toBe("FAIL");
+    expect(detail(results, "FD1")).toMatch(/ACTIVE allocations on the receivable \(one receipt, replayed once\): expected 1, got 2/);
+  });
+
+  test("FD1 catches a receipt that posts and allocates but leaves the receivable OPEN", async () => {
+    const results = await runAgainst({ financeReceivableNotSettled: true });
+    expect(statusOf(results, "FD1")).toBe("FAIL");
+    expect(detail(results, "FD1")).toMatch(/receivable's status after the receipt: expected PAID, got OPEN/);
   });
 
   test("RT2 catches a replayed reservation that inserts a second PRIMARY row while returning the same id (Codex A-RT2-RESERVATION)", async () => {

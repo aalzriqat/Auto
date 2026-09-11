@@ -1615,6 +1615,234 @@ export async function runRehearsalCases(ctx) {
     }
   );
 
+  // ── FD1 — the financed deal's cash receipt settles the exact recorded debt ──
+  //
+  // SCRUM-241's supported-path confirmation on a real deployment (owner-proxy
+  // c19230: "include the supported-path result in the real-preview floor").
+  // A through-dealership financed deal is walked with the product's own
+  // mutations by its two seats — the OWNER submits and the MANAGER approves,
+  // the same segregation SETUP explains — to finalization, and the company's
+  // payment is then received. What is asserted is that ONE server-proven
+  // figure, in the receivable's own denomination, is what the application
+  // records, what the canonical payment carries, what the allocation settles
+  // and what the GL posts: the frozen recognition figure, the canonical
+  // receivable and the receipt all agree, and a receipt that disagrees is
+  // refused with nothing written. The cross-currency refusals themselves are
+  // proven in `convex/scrum241FinanceReceiptAuthority.test.ts`; changing this
+  // shared organization's currency is not something a rehearsal may do.
+  await recordCase(
+    results,
+    "FD1",
+    "a financed deal's cash receipt settles the exact recorded finance-company receivable in its own currency",
+    async () => {
+      const stamp = Date.now().toString(36);
+      const denom = await orgDenomination({ orgId, ownerMust });
+      const m = denom.minorPerMajor;
+      const { keyOf } = await chartIndex({ orgId, ownerMust });
+
+      const vehicleId = await makeVehicle({ orgId, ownerMust, label: `fd1${stamp}` });
+      const customerId = await ownerMust("mutation", "customers:create", {
+        orgId,
+        firstName: "Rehearsal",
+        lastName: `fd1-${stamp}`,
+      });
+      const companyId = await ownerMust("mutation", "finance:createCompany", {
+        orgId,
+        name: `Rehearsal Finance ${stamp}`,
+        profitRate: 5,
+        maxTermMonths: 60,
+        gracePeriodMonths: 0,
+        isActive: true,
+      });
+      const price = 22000;
+      const quoteId = await ownerMust("mutation", "quotes:saveQuote", {
+        orgId,
+        customerId,
+        vehicleId,
+        vehiclePrice: price,
+        downPayment: 0,
+        termMonths: 48,
+        mode: "CONFIGURED_FINANCE_COMPANY",
+        companyId,
+        totalFinancedAmount: price,
+      });
+      const applicationId = await ownerMust("mutation", "applications:createFromQuote", { orgId, quoteId });
+      await ownerMust("mutation", "applications:updateStatus", { orgId, applicationId, status: "UNDER_REVIEW" });
+      await resolverMust("mutation", "applications:updateStatus", { orgId, applicationId, status: "APPROVED" });
+      // Pins the deal's economics — and its denomination — to what the org uses now.
+      await ownerMust("mutation", "financingEconomics:recordSubmittedQuotation", {
+        orgId,
+        applicationId,
+        submittedQuotationMinor: price * m,
+        source: "MANUAL_ENTRY",
+      });
+      await resolverMust("mutation", "financingEconomics:approveDealerPurchaseAmount", {
+        orgId,
+        applicationId,
+        approvedAmountMinor: price * m,
+        basis: "MANUAL",
+        notes: "Approved at the quotation.",
+      });
+      const economicsStamp = await ownerMust("query", "applications:handoverStamp", { orgId, applicationId });
+      await ownerMust("mutation", "applications:registerVehicleHandover", { orgId, applicationId, economicsStamp });
+      await ownerMust("mutation", "applications:registerExpectedPayment", {
+        orgId,
+        applicationId,
+        method: "BANK_TRANSFER",
+        expectedDate: Date.now(),
+      });
+      await ownerMust("mutation", "financeDealCosts:recordLegalInvoice", {
+        orgId,
+        applicationId,
+        legalInvoiceAmountMinor: price * m,
+        legalInvoiceNumber: `INV-FD1-${stamp}`,
+        legalInvoiceDate: Date.now(),
+        issuedTo: "FINANCE_COMPANY",
+      });
+      // A cost the company WITHHOLDS, so the figure it remits is the net, not
+      // the customer's principal — the distinction the receipt gate exists for.
+      const withheld = 375 * m;
+      const feeId = await ownerMust("mutation", "financeDealCosts:recordDealFee", {
+        idempotencyKey: `rehearsal-fd1-fee-${stamp}`,
+        orgId,
+        applicationId,
+        feeType: "LICENSING",
+        paidBy: "DEALER",
+        paidTo: "FINANCE_COMPANY",
+        accountingTreatment: "FINANCE_COMPANY_COMMISSION",
+        deductedFromSettlement: true,
+        actualAmountMinor: withheld,
+        description: "Withheld by the company.",
+      });
+      await ownerMust("mutation", "financeDealCosts:reconcileDealFee", { orgId, feeId, notes: "Matched." });
+      await ownerMust("mutation", "financeDealCosts:classifyDealAccounting", {
+        orgId,
+        applicationId,
+        notes: "Invoice and settlement advice on file.",
+      });
+      const saleId = await ownerMust("mutation", "applications:finalizeDeal", {
+        idempotencyKey: `rehearsal-fd1-finalize-${stamp}`,
+        orgId,
+        applicationId,
+      });
+
+      const closed = await ownerMust("query", "applications:get", { orgId, applicationId });
+      expectEqual(closed?.status, "CLOSED", "application status after finalizeDeal");
+      const net = price * m - withheld;
+      expectEqual(closed?.financedSaleNetReceivableMinor, net, "the frozen figure the company owes (gross − withheld)");
+
+      // The canonical receivable the finalization opened, in the pinned denomination.
+      const receivables = await ownerMust("query", "subledger:listReceivables", { orgId, customerId, limit: 50 });
+      const financeReceivables = (receivables ?? []).filter(
+        (r) => r.sourceType === "finance_application" && String(r.sourceId) === String(applicationId)
+      );
+      expectEqual(financeReceivables.length, 1, "finance-company receivables for the application");
+      const receivable = financeReceivables[0];
+      expectEqual(receivable.payerType, "FINANCE_COMPANY", "the receivable's payer type");
+      expectEqual(String(receivable.financeCompanyId), String(companyId), "the receivable's finance company");
+      expectEqual(receivable.originalAmountMinor, net, "the receivable's original amount");
+      expectEqual(receivable.currency, denom.currency, "the receivable's currency");
+      expectEqual(receivable.scale, denom.decimals, "the receivable's minor-unit scale");
+      expectEqual(receivable.status, "OPEN", "the receivable's status before the receipt");
+
+      // The customer's principal is not what the company owes: refused, and
+      // nothing is written — no payment, no allocation, no event.
+      const wrongAmount = await ownerCall("mutation", "applications:confirmDisbursement", {
+        orgId,
+        applicationId,
+        disbursedAmountMinor: price * m,
+        idempotencyKey: `rehearsal-fd1-principal-${stamp}`,
+      });
+      if (wrongAmount.ok) fail("a receipt of the customer's PRINCIPAL was accepted on a deal whose net remittance is smaller");
+      if (!/not what this financing company owes/i.test(String(wrongAmount.error ?? ""))) {
+        fail(`the principal was refused for the wrong reason: ${String(wrongAmount.error ?? "").slice(0, 200)}`);
+      }
+      const afterRefusal = await ownerMust("query", "applications:get", { orgId, applicationId });
+      if (afterRefusal?.disbursedAt !== undefined) fail("the refused receipt still marked the application disbursed");
+      const allocationsAfterRefusal = await ownerMust("query", "subledger:listAllocations", { orgId, receivableDocumentId: receivable._id });
+      expectEqual((allocationsAfterRefusal ?? []).length, 0, "allocations after the refused receipt");
+      const eventsAfterRefusal = await ownerMust("query", "accountingLedger:listAccountingEvents", {
+        orgId,
+        sourceType: "financeApplications",
+        sourceId: `disbursement_${applicationId}`,
+        limit: 50,
+      });
+      expectEqual((eventsAfterRefusal ?? []).length, 0, "FINANCE_CASH_RECEIVED events after the refused receipt");
+
+      // The actual remittance: accepted once, and it replays to the same outcome.
+      const confirmArgs = {
+        orgId,
+        applicationId,
+        disbursedAmountMinor: net,
+        idempotencyKey: `rehearsal-fd1-receipt-${stamp}`,
+      };
+      await ownerMust("mutation", "applications:confirmDisbursement", confirmArgs);
+      await ownerMust("mutation", "applications:confirmDisbursement", confirmArgs);
+
+      const settled = await ownerMust("query", "applications:get", { orgId, applicationId });
+      expectEqual(settled?.disbursedAmountMinor, net, "the amount the application records as received");
+      expectEqual(settled?.settlementStatus, "FULLY_SETTLED", "the application's settlement status");
+
+      const balance = await ownerMust("query", "subledger:getReceivableBalance", { orgId, receivableDocumentId: receivable._id });
+      expectEqual(balance?.doc?.status, "PAID", "the receivable's status after the receipt");
+      expectEqual(balance?.outstandingMinor, 0, "the receivable's outstanding after the receipt");
+
+      const allocations = await ownerMust("query", "subledger:listAllocations", { orgId, receivableDocumentId: receivable._id });
+      const active = (allocations ?? []).filter((a) => a.status === "ACTIVE");
+      expectEqual(active.length, 1, "ACTIVE allocations on the receivable (one receipt, replayed once)");
+      expectEqual(active[0].amountMinor, net, "the allocation's amount");
+      expectEqual(active[0].currency, denom.currency, "the allocation's currency");
+      const payment = await ownerMust("query", "subledger:getPaymentBalance", { orgId, paymentId: active[0].paymentId });
+      expectEqual(payment?.payment?.payerType, "FINANCE_COMPANY", "the canonical payment's payer type");
+      expectEqual(payment?.payment?.amountMinor, net, "the canonical payment's amount");
+      expectEqual(payment?.payment?.currency, denom.currency, "the canonical payment's currency");
+      expectEqual(payment?.payment?.scale, denom.decimals, "the canonical payment's scale");
+      expectEqual(payment?.unappliedMinor, 0, "the canonical payment's unapplied remainder");
+
+      // One FINANCE_CASH_RECEIVED occurrence, bound to its journal, posting
+      // exactly Dr Bank / Cr AR-Finance Companies for the net, in the
+      // receivable's denomination.
+      const cash = await eventAndJournal({
+        orgId,
+        ownerMust,
+        sourceType: "financeApplications",
+        sourceId: `disbursement_${applicationId}`,
+        eventType: "FINANCE_CASH_RECEIVED",
+      });
+      expectExactLines(
+        cash.lines,
+        keyOf,
+        [
+          { key: "BANK_ACCOUNT", debitMinor: net },
+          { key: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", creditMinor: net },
+        ],
+        { currency: denom.currency, decimals: denom.decimals, what: "the finance cash receipt posting" }
+      );
+
+      return {
+        applicationId: String(applicationId),
+        saleId: String(saleId),
+        currency: denom.currency,
+        minorUnitScale: m,
+        principalMinor: price * m,
+        withheldMinor: withheld,
+        netRemittanceMinor: net,
+        receivable: { id: String(receivable._id), originalAmountMinor: receivable.originalAmountMinor, statusAfter: balance?.doc?.status },
+        payment: { id: String(active[0].paymentId), amountMinor: payment?.payment?.amountMinor, currency: payment?.payment?.currency },
+        allocationMinor: active[0].amountMinor,
+        journal: { entryId: String(cash.entry._id), journalNumber: cash.entry.journalNumber },
+        principalRefused: true,
+        commandsExercised: [
+          "finance.createCompany", "quotes.saveQuote", "applications.createFromQuote", "applications.updateStatus",
+          "financingEconomics.recordSubmittedQuotation", "financingEconomics.approveDealerPurchaseAmount",
+          "applications.registerVehicleHandover", "applications.registerExpectedPayment",
+          "financeDealCosts.recordLegalInvoice", "financeDealCosts.recordDealFee", "financeDealCosts.reconcileDealFee",
+          "financeDealCosts.classifyDealAccounting", "applications.finalizeDeal", "applications.confirmDisbursement",
+        ],
+      };
+    }
+  );
+
   // ── P1 — a CLOSED period holds the posting; it does not half-post it ───────
   //
   // RUNS LAST, AND THAT IS STRUCTURAL. Closing the organization's only open
