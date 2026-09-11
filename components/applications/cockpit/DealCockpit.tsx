@@ -615,7 +615,8 @@ export function DealCockpit({
    * server-projected authority; until then the frozen snapshot is read here.
    */
   const principalMinor = Math.round((app?.quote?.totalFinancedAmount ?? 0) * orgFactor);
-  const expectedDisbursementMinor = app?.financedSaleNetReceivableMinor ?? principalMinor;
+  const frozenNetMinor = app?.financedSaleNetReceivableMinor;
+  const expectedDisbursementMinor = frozenNetMinor ?? principalMinor;
   const expectsFinanceCompanyDisbursement = Boolean(app?.companyId && expectedDisbursementMinor > 0);
   const isConsignedDeal = app?.vehicle?.sourceType === "SOURCED";
   const settlesDirectToSupplier =
@@ -625,6 +626,18 @@ export function DealCockpit({
     `${(minor / economicsFactor).toLocaleString()} ${
       economicsCurrencyCode === orgCurrency.code ? orgCurrency.displayLabel : economicsCurrencyCode
     }`;
+  /**
+   * The frozen net is built in the deal's PINNED currency
+   * (`resolveFinancedSalePlan` runs in `app.economicsCurrency ?? org`), so it is
+   * spelled at that scale with that label. The legacy principal is a
+   * quote-major figure the server scales by the ORG currency, so it keeps the
+   * org denomination. Mixing the two — a JOD-scale factor over a USD-pinned
+   * integer — is a 10× lie beside a confirm button.
+   */
+  const expectedDisbursementLabel =
+    frozenNetMinor !== undefined
+      ? formatEconomics(frozenNetMinor)
+      : orgCurrency.format(principalMinor / orgFactor);
   // The route is a decision about a deal that has not posted yet; once it
   // closes, changing it is a correction and the server refuses it there too.
   // Keyed on FINALIZE_FINANCED_DEAL, matching the server.
@@ -1267,7 +1280,7 @@ export function DealCockpit({
               financeCompany: {
                 confirming: confirmingDisbursement,
                 submitting: disbursementSubmitting,
-                amountLabel: orgCurrency.format(expectedDisbursementMinor / orgFactor),
+                amountLabel: expectedDisbursementLabel,
                 onOpenChange: setConfirmingDisbursement,
                 onConfirm: async () => {
                   if (!expectedDisbursementMinor) return;

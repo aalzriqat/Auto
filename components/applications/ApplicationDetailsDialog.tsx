@@ -306,7 +306,16 @@ export function ApplicationDetailsDialog({
   const confirmedDisbursementLabel = app.disbursedAmountMinor !== undefined
     ? currency.format(app.disbursedAmountMinor / currencyFactor)
     : null;
-  const expectedDisbursementLabel = currency.format(expectedDisbursementMinor / currencyFactor);
+  // Spelled in the currency the figure is denominated in: the frozen net is
+  // built in the application's pinned economics currency, the legacy
+  // principal at the org's. `formatEconomics` is declared below and hoisted
+  // as a function declaration would not be, so the label is derived lazily.
+  const expectedDisbursementLabel =
+    app.financedSaleNetReceivableMinor !== undefined
+      ? `${(app.financedSaleNetReceivableMinor / Math.pow(10, scaleForCurrency(app.economicsCurrency ?? currency.code))).toLocaleString()} ${
+          (app.economicsCurrency ?? currency.code) === currency.code ? currency.displayLabel : app.economicsCurrency
+        }`
+      : currency.format(expectedDisbursementMinor / currencyFactor);
   // What the finance company approved to pay for the CAR, which is what it
   // sends the supplier. Absent on deals whose approved amount was never
   // recorded, where showing a confident-looking zero would be worse than

@@ -420,13 +420,44 @@ describe("disbursement — the two confirmations, from the DISBURSEMENT stage", 
     renderCockpit();
 
     fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
-    // The figure the operator confirms is the one that will be sent.
-    expect(screen.getByRole("dialog").textContent).toContain("JD 15625");
+    // The figure the operator confirms is the one that will be sent — spelled
+    // in the DEAL's pinned currency, which is what the frozen net is built in.
+    expect(screen.getByRole("dialog").textContent).toContain("15,625");
     fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
 
     await waitFor(() => expect(mutationCalls.get("applications:confirmDisbursement")).toHaveLength(1));
     expect(mutationCalls.get("applications:confirmDisbursement")![0]).toMatchObject({
       disbursedAmountMinor: 15_625_000,
+    });
+  });
+
+  test("a frozen net on a deal pinned to another currency is spelled at THAT currency's scale and label", async () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages: closedStages }));
+    // Economics pinned to USD (scale 2) on a JOD (scale 3) org. The frozen net
+    // is 15,625.00 USD = 1,562,500 minor. Dividing by the ORG factor would have
+    // shown 1,562.5 and labelled it in dinars.
+    queryResults.set(
+      GET_QUERY,
+      application({
+        status: "CLOSED",
+        economicsCurrency: "USD",
+        quote: { totalFinancedAmount: 20000, downPayment: 500, vehiclePrice: 22000 },
+        financedSaleNetReceivableMinor: 1_562_500,
+      })
+    );
+    renderCockpit();
+
+    fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+    const dialog = screen.getByRole("dialog").textContent ?? "";
+    expect(dialog).toContain("15,625 USD");
+    expect(dialog).not.toContain("1,562");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+
+    await waitFor(() => expect(mutationCalls.get("applications:confirmDisbursement")).toHaveLength(1));
+    // The integer itself is sent untouched.
+    expect(mutationCalls.get("applications:confirmDisbursement")![0]).toMatchObject({
+      disbursedAmountMinor: 1_562_500,
     });
   });
 
