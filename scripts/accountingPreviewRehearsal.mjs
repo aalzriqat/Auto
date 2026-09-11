@@ -521,26 +521,46 @@ export async function main(env = process.env) {
 
   evidence.summary = summarize(results);
   console.log(JSON.stringify(evidence, null, 2));
-  if (evidence.summary.failed > 0) {
-    console.error(
-      `\nREHEARSAL FAILED: ${evidence.summary.failed} of ${evidence.summary.total} cases — ` +
-        evidence.summary.failedIds.join(", ")
-    );
-    return 1;
-  }
-  if (evidence.summary.unproven > 0) {
-    // Not an exit code, because nothing is broken — but it must not read as a
-    // completed rehearsal either. The banner says exactly what was and was not
-    // put to the test, so this line cannot be quoted as a full pass.
-    console.error(
-      `\nREHEARSAL PASSED BUT INCOMPLETE: ${evidence.summary.passed} of ${evidence.summary.total} cases passed, ` +
-        `${evidence.summary.unproven} UNPROVEN (${evidence.summary.unprovenIds.join(", ")}). ` +
-        `An unproven case is not evidence of anything.`
-    );
-    return 0;
-  }
-  console.error(`\nREHEARSAL PASSED: ${evidence.summary.passed} of ${evidence.summary.total} cases.`);
+  console.error(bannerForSummary(evidence.summary));
+  return exitCodeForSummary(evidence.summary);
+}
+
+/**
+ * The ONE place a summary becomes a process exit code.
+ *
+ * Both reviewer seats found the same defect here independently (Sonnet F1b,
+ * Codex RG-02): an UNPROVEN case returned 0, so an incomplete rehearsal was a
+ * GREEN job. That was my deliberate design — "nothing is broken, so not a
+ * failure code" — and it was wrong by this repository's own rule: an
+ * unexecuted gate is UNAVAILABLE, never PASS. A validator that returns success
+ * when the evidence it exists to produce is missing has failed open.
+ *
+ * UNPROVEN and FAIL stay DISTINCT in the JSON and the banner, because they
+ * mean different things and invite different responses — one is a defect, the
+ * other is a precondition to restore. They are identical to the process
+ * boundary, because to a release gate "could not test it" and "it failed" are
+ * the same answer: not certified.
+ *
+ * Pure, so it can be unit-tested for every branch without running a rehearsal.
+ */
+export function exitCodeForSummary(summary) {
+  if (summary.failed > 0) return 1;
+  if (summary.unproven > 0) return 1;
   return 0;
+}
+
+export function bannerForSummary(summary) {
+  if (summary.failed > 0) {
+    return `\nREHEARSAL FAILED: ${summary.failed} of ${summary.total} cases — ${summary.failedIds.join(", ")}`;
+  }
+  if (summary.unproven > 0) {
+    return (
+      `\nREHEARSAL INCOMPLETE — NOT CERTIFIED: ${summary.passed} of ${summary.total} cases passed, ` +
+      `${summary.unproven} UNPROVEN (${summary.unprovenIds.join(", ")}). ` +
+      `An unproven case is not evidence of anything, and this run exits non-zero for it.`
+    );
+  }
+  return `\nREHEARSAL PASSED: ${summary.passed} of ${summary.total} cases.`;
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

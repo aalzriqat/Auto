@@ -18,6 +18,8 @@ import {
   sanitizeClerkSessionId,
   summarize,
   unproven,
+  exitCodeForSummary,
+  bannerForSummary,
 } from "./accountingPreviewRehearsal.mjs";
 import { previewNameForRef } from "./e2ePreviewBootstrap.mjs";
 
@@ -237,6 +239,25 @@ describe("case recording keeps a failure as evidence", () => {
     expect(summary.unproven).toBe(1);
     expect(summary.unprovenIds).toEqual(["P1"]);
     expect(summary.complete).toBe(false);
+  });
+
+  test("the process exit code is non-zero for UNPROVEN, not only for FAIL (Sonnet F1b / Codex RG-02)", () => {
+    // Both seats found this independently: an UNPROVEN case returned 0, so an
+    // INCOMPLETE rehearsal was a GREEN job. That was my deliberate design and it
+    // was wrong by this repository's own rule — an unexecuted gate is
+    // UNAVAILABLE, never PASS. To a release gate, 'could not test it' and 'it
+    // failed' are the same answer: not certified. The JSON and the banner keep
+    // the two distinct because they invite different responses.
+    const base = { total: 3, passed: 3, failed: 0, failedIds: [], unproven: 0, unprovenIds: [], complete: true };
+    expect(exitCodeForSummary(base)).toBe(0);
+    expect(exitCodeForSummary({ ...base, passed: 2, failed: 1, failedIds: ["D2"], complete: false })).toBe(1);
+    expect(exitCodeForSummary({ ...base, passed: 2, unproven: 1, unprovenIds: ["P1"], complete: false })).toBe(1);
+    // Distinguishable in the banner, identical at the process boundary.
+    expect(bannerForSummary({ ...base, passed: 2, unproven: 1, unprovenIds: ["P1"], complete: false })).toMatch(
+      /INCOMPLETE — NOT CERTIFIED.*P1/
+    );
+    expect(bannerForSummary({ ...base, passed: 2, failed: 1, failedIds: ["D2"], complete: false })).toMatch(/FAILED.*D2/);
+    expect(bannerForSummary(base)).toMatch(/REHEARSAL PASSED: 3 of 3/);
   });
 
   test("an all-passing run reports no failures", () => {

@@ -86,6 +86,16 @@ export function classifyKeyExpression(
   // read a ref and still mint (`keyRef.current = randomUUID()`), and minting is
   // the property that decides safety.
   if (MINTS_INLINE.test(keyExpr)) return "PER_ATTEMPT";
+  // VOLATILE is the SECOND blind spot of exactly the `.renew(` shape, and the
+  // Sonnet MAX seat found it by reading one paragraph up (F2): this file already
+  // named `Date.now()`, `Math.random()` and `performance.now()` as values that
+  // differ on every evaluation — and consulted that list only for fingerprint
+  // arguments, never for the key itself. A key built from any of them is a
+  // fresh identity per attempt however literal the rest of the template looks,
+  // so `k-${Date.now()}` passed the very ratchet built to catch per-attempt
+  // minting. Tested before RETAINED for the same reason MINTS_INLINE is:
+  // minting is the property that decides safety.
+  if (VOLATILE.test(keyExpr)) return "PER_ATTEMPT";
   if (RETAINED.test(keyExpr)) return "RETAINED";
   return "LITERAL_OR_DERIVED";
 }

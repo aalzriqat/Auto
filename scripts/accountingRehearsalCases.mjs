@@ -159,8 +159,13 @@ async function openTheBooks({ orgId, ownerCall }) {
   return notes;
 }
 
+let unproven = (reason) => {
+  throw new Error(`UNPROVEN (no recorder bound): ${reason}`);
+};
+
 export async function runRehearsalCases(ctx) {
-  const { results, orgId, recordCase, fireConcurrentReleases, tokens, config, unproven } = ctx;
+  const { results, orgId, recordCase, fireConcurrentReleases, tokens, config } = ctx;
+  unproven = ctx.unproven;
 
   // TWO PEOPLE, AND THE PRODUCT INSISTS ON IT.
   //
@@ -359,10 +364,13 @@ export async function runRehearsalCases(ctx) {
         ],
       });
 
+      // BEFORE the state is read: did both requests actually happen, together?
+      const execution = assertBothAttemptsExecuted(attempts, ["same-key-1", "same-key-2"]);
+
       const after = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, ownerMust });
       expectEqual(after.releasedAmountMinor, 2_000_000, "released amount after two same-key concurrent attempts");
       expectEqual(after.releaseCount, 1, "releaseCount after two same-key concurrent attempts");
-      return { attempts, after: { released: after.releasedAmountMinor, releaseCount: after.releaseCount } };
+      return { execution, attempts, after: { released: after.releasedAmountMinor, releaseCount: after.releaseCount } };
     }
   );
 
@@ -394,13 +402,15 @@ export async function runRehearsalCases(ctx) {
         ],
       });
 
+      const execution = assertBothAttemptsExecuted(attempts, ["distinct-key-1", "distinct-key-2"]);
+
       const after = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, ownerMust });
       // The whole claim: the free 2,000 left the business once, no matter how
       // many distinct identities asked for it simultaneously.
       expectEqual(after.releasedAmountMinor, 2_000_000, "released amount after two distinct-key concurrent attempts");
       expectEqual(after.refundedAmountMinor, 2_000_000, "refunded amount after two distinct-key concurrent attempts");
       expectEqual(after.releaseCount, 1, "releaseCount after two distinct-key concurrent attempts");
-      return { attempts, after: { released: after.releasedAmountMinor, releaseCount: after.releaseCount } };
+      return { execution, attempts, after: { released: after.releasedAmountMinor, releaseCount: after.releaseCount } };
     }
   );
 
@@ -1342,6 +1352,79 @@ async function readRetainedCredits({ orgId, customerId, ownerMust }) {
     cursor = result.continueCursor;
   }
   return rows;
+}
+
+/**
+ * Proves that BOTH concurrent attempts actually reached the backend, in flight
+ * together — before the final state is allowed to mean anything.
+ *
+ * Codex RG-01, reproduced: C1 and C2 recorded their `attempts` in the evidence
+ * and asserted only the deposit's final state. One worker succeeding and one
+ * crashing before it ever sent a request produces EXACTLY the expected result
+ * — 2,000,000 released, releaseCount 1 — so a rehearsal that ran one request
+ * would have certified concurrency it never measured. The certified run's own
+ * artifact happened to show both workers healthy; the case could not have
+ * told the difference.
+ *
+ * What is required, and why each part:
+ *   - exactly the labelled attempts expected, each with exit code 0 and a
+ *     parsed body: a worker that crashed or printed garbage is a TRANSPORT
+ *     failure, and transport failure is UNPROVEN, never PASS and never FAIL —
+ *     nothing about the product was measured;
+ *   - a status of `success` or a product-level `error` WITH a message: the
+ *     product refusing the loser ("nothing left of this deposit") is a valid
+ *     outcome of the race, a worker_error is not;
+ *   - finite send/receive timestamps whose intervals OVERLAP: two requests
+ *     that ran one after the other measure nothing about concurrency, however
+ *     healthy each was. Overlap of client intervals is what this harness can
+ *     honestly claim; it is not proof of overlap inside Convex transactions,
+ *     and the evidence says so.
+ */
+function assertBothAttemptsExecuted(attempts, expectedLabels) {
+  const byLabel = new Map((attempts ?? []).map((a) => [a.label, a]));
+  const transportFailures = [];
+  for (const label of expectedLabels) {
+    const a = byLabel.get(label);
+    if (!a) {
+      transportFailures.push(`${label}: no outcome recorded`);
+      continue;
+    }
+    const r = a.result;
+    if (a.exitCode !== 0 || !r || typeof r !== "object") {
+      transportFailures.push(`${label}: exit ${a.exitCode}, ${r ? "unparseable result" : "no result"}`);
+      continue;
+    }
+    if (r.status === "worker_error" || (r.status !== "success" && r.status !== "error")) {
+      transportFailures.push(`${label}: worker status ${String(r.status)} — ${String(r.error ?? "").slice(0, 120)}`);
+      continue;
+    }
+    if (r.status === "error" && !r.error) {
+      transportFailures.push(`${label}: error status with no product message`);
+      continue;
+    }
+    if (!Number.isFinite(r.sentAt) || !Number.isFinite(r.receivedAt) || r.receivedAt < r.sentAt) {
+      transportFailures.push(`${label}: timestamps not finite/ordered (${r.sentAt} → ${r.receivedAt})`);
+    }
+  }
+  if (transportFailures.length > 0) {
+    unproven(
+      `concurrency was NOT measured — ${transportFailures.join("; ")}. A worker that never reached the backend ` +
+        `says nothing about the product; this is a harness failure, not a product result.`
+    );
+  }
+  const [x, y] = expectedLabels.map((l) => byLabel.get(l).result);
+  const overlap = x.sentAt <= y.receivedAt && y.sentAt <= x.receivedAt;
+  if (!overlap) {
+    unproven(
+      `the two attempts did NOT overlap in flight (${x.sentAt}→${x.receivedAt} vs ${y.sentAt}→${y.receivedAt}); ` +
+        `sequential requests measure nothing about concurrency`
+    );
+  }
+  return {
+    bothExecuted: true,
+    intervalsOverlap: true,
+    overlapNote: "client send/receive intervals overlap; not proof of overlap inside Convex transactions",
+  };
 }
 
 /** Keeps the validator's own shape out of the evidence without hiding its verdict. */

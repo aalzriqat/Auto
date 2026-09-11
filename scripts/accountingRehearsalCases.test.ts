@@ -56,6 +56,10 @@ type Defects = {
   partialGlWhileClosed?: boolean;
   /** Money leaves while the books are shut and nothing is queued to catch up. */
   loseThePostingWhileClosed?: boolean;
+  /** One concurrency worker crashes before it sends — the RG-01 false pass. */
+  oneWorkerCrashes?: boolean;
+  /** The two workers run one after the other — nothing concurrent was measured. */
+  sequentialWorkers?: boolean;
   /** The period cannot be closed at all — so the property is UNTESTED, not proven. */
   refuseClose?: boolean;
   /** A replayed create makes a SECOND row — the double-spend. */
@@ -620,11 +624,39 @@ async function runAgainst(defects: Defects = {}) {
     // The harness cannot interleave; it issues each attempt in turn. That is
     // enough to exercise the ASSERTIONS, and is precisely why the cloud run is
     // not optional.
+    // The harness cannot interleave, so it FAKES the shape of two overlapping
+    // workers: both "sent" at one instant, each "received" a little later. That
+    // is enough to exercise the execution assertions, and it is why the two
+    // defects below exist — a crashed worker and a sequential pair are the two
+    // ways a concurrency case can pass while measuring nothing (Codex RG-01).
     fireConcurrentReleases: async ({ attempts }: any) => {
       const out = [];
+      const sentAt = 1_700_000_000_000;
+      let index = 0;
       for (const attempt of attempts) {
-        const r = await backend.authedCall("mutation", "deposits:release", attempt.args);
-        out.push({ label: attempt.label, exitCode: 0, result: { status: r.ok ? "success" : "error" } });
+        const mine = index++;
+        if (defects.oneWorkerCrashes && mine === 1) {
+          // Never reached the backend: no request, no product result.
+          out.push({
+            label: attempt.label,
+            exitCode: 1,
+            result: { status: "worker_error", error: "REHEARSAL_TOKEN is required" },
+          });
+          continue;
+        }
+        const r = await backend.approverCall("mutation", "deposits:release", attempt.args);
+        const start = defects.sequentialWorkers ? sentAt + mine * 1000 : sentAt;
+        out.push({
+          label: attempt.label,
+          exitCode: 0,
+          result: {
+            sentAt: start,
+            receivedAt: start + 400 + mine * 50,
+            httpStatus: 200,
+            status: r.ok ? "success" : "error",
+            error: r.ok ? null : r.error,
+          },
+        });
       }
       return out;
     },
@@ -647,7 +679,7 @@ describe("the rehearsal passes against a backend that behaves", () => {
     expect(declined.map((d) => `${d.id}: ${d.detail}`)).toEqual([]);
     // And it actually ran the cases rather than finding nothing to do.
     expect(results.length).toBeGreaterThanOrEqual(18);
-    for (const id of ["A3", "B1", "B2", "P1", "RT1", "RC1", "RV1", "SR1"]) {
+    for (const id of ["A3", "B1", "B2", "P1", "RT1", "RC1", "RV1", "SR1", "C1", "C2"]) {
       expect(statusOf(results, id), `${id} must actually execute`).toBe("PASS");
     }
   });
@@ -806,6 +838,22 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     const results = await runAgainst({ silentConsignedSale: true });
     expect(statusOf(results, "SR1")).toBe("FAIL");
     expect(String(results.find((r) => r.id === "SR1")?.detail)).toMatch(/NO journal entry/);
+  });
+
+  test("C1/C2 do not PASS when one worker never reached the backend (RG-01)", async () => {
+    // The single healthy worker produces EXACTLY the expected final state —
+    // 2,000,000 released, count 1 — which is why the old cases could not tell.
+    const results = await runAgainst({ oneWorkerCrashes: true });
+    expect(statusOf(results, "C1")).toBe("UNPROVEN");
+    expect(statusOf(results, "C2")).toBe("UNPROVEN");
+    expect(String(results.find((r) => r.id === "C1")?.detail)).toMatch(/concurrency was NOT measured/);
+  });
+
+  test("C1/C2 do not PASS when the two workers ran one after the other (RG-01)", async () => {
+    const results = await runAgainst({ sequentialWorkers: true });
+    expect(statusOf(results, "C1")).toBe("UNPROVEN");
+    expect(statusOf(results, "C2")).toBe("UNPROVEN");
+    expect(String(results.find((r) => r.id === "C2")?.detail)).toMatch(/did NOT overlap/);
   });
 
   test("a defect in one case does not silently take the others down with it", async () => {

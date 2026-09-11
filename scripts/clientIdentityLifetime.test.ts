@@ -106,6 +106,31 @@ describe("analyzer self-tests — the faults this census actually had", () => {
     expect(classifyKeyExpression("commandId.for(intent)", false)).toBe("LITERAL_OR_DERIVED");
   });
 
+  test("FAULT 5: a key built from a VOLATILE primitive is PER_ATTEMPT (Sonnet MAX F2)", () => {
+    // The SECOND blind spot of exactly the FAULT 4 shape, found by the Sonnet
+    // MAX seat at c06a989b8 by reading one paragraph up from the classifier:
+    // this file already named Date.now(), Math.random() and performance.now()
+    // as values that differ on every evaluation — and consulted that list only
+    // for fingerprint arguments, never for the key. So a template that embeds
+    // one of them looked LITERAL_OR_DERIVED to the ratchet built to catch
+    // per-attempt minting, and the population-level test would have reported a
+    // clean [] over such a caller. No caller does this today; that is exactly
+    // why it is pinned on the CLASSIFIER and not on the tree.
+    expect(
+      classifyKeyExpression("`release-deposit:${depositId}:gen${generation}:${Date.now()}`", false)
+    ).toBe("PER_ATTEMPT");
+    expect(classifyKeyExpression("`release-deposit:${depositId}:${Math.random()}`", false)).toBe("PER_ATTEMPT");
+    expect(classifyKeyExpression("`k-${performance.now()}`", false)).toBe("PER_ATTEMPT");
+    expect(classifyKeyExpression("`k-${new Date()}`", false)).toBe("PER_ATTEMPT");
+    // And the safe shape stays safe: a generation-bearing intent with no
+    // volatile primitive is DERIVED, so the fix cannot be a blanket that
+    // sweeps every template literal into PER_ATTEMPT.
+    expect(
+      classifyKeyExpression("`release-deposit:${depositId}:${resolution}:gen${generation}`", false)
+    ).toBe("LITERAL_OR_DERIVED");
+    expect(classifyKeyExpression("commandId.for(intent)", false)).toBe("LITERAL_OR_DERIVED");
+  });
+
   test("minting inside a retained holder is still PER_ATTEMPT", () => {
     // Ordering matters in the classifier. An expression can read a ref AND mint
     // (`keyRef.current = crypto.randomUUID()`); minting is the property that
