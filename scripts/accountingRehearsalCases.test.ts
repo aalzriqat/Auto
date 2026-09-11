@@ -236,7 +236,9 @@ function makeBackend(defects: Defects = {}) {
       case "customers:create":
         return { ok: true as const, value: id("cust") };
       case "vehicles:create":
-        return replayableCreate("veh", args);
+        // Non-probe mode never returns null; the assertion keeps that visible
+        // to the type checker instead of widening every caller's result.
+        return replayableCreate("veh", args)!;
       case "quotes:saveQuote": {
         const quoteId = id("quote");
         quoteVehicle.set(quoteId, String(args.vehicleId ?? ""));
