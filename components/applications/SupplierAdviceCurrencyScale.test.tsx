@@ -191,3 +191,53 @@ describe("a deal pinned to a currency the org no longer uses", () => {
     expect(sent.disbursedAmountMinor).toBe(1_745_000);
   });
 });
+
+/**
+ * SN3-1 CONTAINMENT (SCRUM-215 → SCRUM-241). The same gate the Deal cockpit
+ * applies, so the Review dialog is not a second door into the settlement dead
+ * end reproduced in `convex/sn31CurrencyMismatchRepro.test.ts`: a deal with a
+ * named finance company, settling through the dealership, whose pinned
+ * currency differs from the org's current one.
+ */
+describe("a through-dealership deal pinned to a currency the org no longer uses", () => {
+  function throughDealershipDeal(overrides: Record<string, unknown> = {}) {
+    return jodPinnedDeal({
+      companyId: "company_1",
+      company: { name: "Jordan Auto Finance" },
+      quoteModeAtSubmission: "CONFIGURED_FINANCE_COMPANY",
+      manualFinanceSnapshot: undefined,
+      canSettleDirectToSupplier: false,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      financedSaleNetReceivableMinor: 17_450_000,
+      ...overrides,
+    });
+  }
+
+  test("CLOSED: the receipt is withheld, with the reason and the recorded figure in its own currency", () => {
+    renderDialog(throughDealershipDeal());
+    expect(screen.queryByRole("button", { name: "ConfirmDisbursement" })).toBeNull();
+    const withheld = screen.getByTestId("review-disbursement-withheld");
+    expect(withheld.textContent).toContain("DisbursementCurrencyMismatch");
+    expect(withheld.textContent).toContain("17,450 JOD");
+    expect(withheld.textContent).not.toContain("174,500");
+    expect(mutationSpies.get("applications:confirmDisbursement")?.mock.calls ?? []).toHaveLength(0);
+  });
+
+  test("APPROVED: the close is withheld with the reason, so no unsettleable receivable is opened", () => {
+    renderDialog(
+      throughDealershipDeal({
+        status: "APPROVED",
+        vehicleHandoverAt: Date.UTC(2026, 7, 2),
+        expectedPaymentMethod: "BANK_TRANSFER",
+      })
+    );
+    expect(screen.queryByRole("button", { name: "FinalizeDealClose" })).toBeNull();
+    expect(screen.getByTestId("review-finalize-withheld").textContent).toContain("FinalizeCurrencyMismatch");
+  });
+
+  test("CONTROL — the same deal pinned to the org's own currency offers both actions", () => {
+    renderDialog(throughDealershipDeal({ economicsCurrency: "USD", financedSaleNetReceivableMinor: 1_745_000 }));
+    expect(screen.getByRole("button", { name: "ConfirmDisbursement" })).toBeTruthy();
+    expect(screen.queryByTestId("review-disbursement-withheld")).toBeNull();
+  });
+});

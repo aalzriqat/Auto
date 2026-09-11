@@ -431,7 +431,18 @@ describe("disbursement — the two confirmations, from the DISBURSEMENT stage", 
     });
   });
 
-  test("a frozen net on a deal pinned to another currency is spelled at THAT currency's scale and label", async () => {
+  /**
+   * SN3-1 CONTAINMENT (SCRUM-215 → SCRUM-241, owner-proxy ruling 2026-09-11).
+   *
+   * A deal pinned to a currency other than the org's current one cannot be
+   * settled: `finalizeDeal` opened its receivable in the pinned currency and
+   * `confirmDisbursement` posts in the org's, and the allocation refuses
+   * (reproduced in `convex/sn31CurrencyMismatchRepro.test.ts`). Until the
+   * canonical backend fix lands, the receipt is WITHHELD here with the reason
+   * and the recorded figure in its own currency — the round-3 display rule
+   * survives, in the withheld state. Nothing is sent, nothing is converted.
+   */
+  test("a deal pinned to another currency: the receipt is withheld, the reason and the pinned-currency figure are shown, nothing is sent", () => {
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages: closedStages }));
     // Economics pinned to USD (scale 2) on a JOD (scale 3) org. The frozen net
@@ -448,17 +459,42 @@ describe("disbursement — the two confirmations, from the DISBURSEMENT stage", 
     );
     renderCockpit();
 
-    fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
-    const dialog = screen.getByRole("dialog").textContent ?? "";
-    expect(dialog).toContain("15,625 USD");
-    expect(dialog).not.toContain("1,562");
-    fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+    const row = focusRow();
+    expect(within(row).queryByRole("button")).toBeNull();
+    expect(within(row).getByText("DisbursementCurrencyMismatch")).toBeTruthy();
+    const text = row.textContent ?? "";
+    expect(text).toContain("15,625 USD");
+    expect(text).not.toContain("1,562");
+    // Neither the generic "nothing expected" reason nor the permission one:
+    // the operator is told the actual boundary.
+    expect(within(row).queryByText("DisbursementUnavailable")).toBeNull();
+    expect(within(row).queryByText("DisbursementNeedsPermission")).toBeNull();
+    expect(mutationCalls.get("applications:confirmDisbursement")).toBeUndefined();
+  });
 
+  test("a deal whose recorded currency AutoFlow does not recognise is withheld with its own reason, never read as the org currency", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages: closedStages }));
+    queryResults.set(
+      GET_QUERY,
+      application({ status: "CLOSED", economicsCurrency: "JD", financedSaleNetReceivableMinor: 15_625_000 })
+    );
+    renderCockpit();
+    expect(within(focusRow()).queryByRole("button")).toBeNull();
+    expect(within(focusRow()).getByText("DisbursementCurrencyUnsupported")).toBeTruthy();
+  });
+
+  test("CONTROL — an absent pin is the org currency by construction and is NOT withheld", async () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages: closedStages }));
+    queryResults.set(
+      GET_QUERY,
+      application({ status: "CLOSED", economicsCurrency: undefined, financedSaleNetReceivableMinor: 15_625_000 })
+    );
+    renderCockpit();
+    fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
     await waitFor(() => expect(mutationCalls.get("applications:confirmDisbursement")).toHaveLength(1));
-    // The integer itself is sent untouched.
-    expect(mutationCalls.get("applications:confirmDisbursement")![0]).toMatchObject({
-      disbursedAmountMinor: 1_562_500,
-    });
   });
 
   test("direct to the supplier: the advice is recorded through confirmSupplierDisbursement, scaled by the deal's currency", async () => {
@@ -669,6 +705,60 @@ describe("documents — documents.updateDocumentStatus / upload, from the checkl
     expect(panel.textContent).toContain("National ID");
     expect(within(panel).queryByRole("button")).toBeNull();
     expect(screen.queryByText("Upload")).toBeNull();
+  });
+});
+
+describe("the close is withheld where the payload proves it would open an unsettleable receivable — SN3-1", () => {
+  const settlementStages = [
+    { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+    { key: "SETTLEMENT", state: "BLOCKED", blocker: "AwaitingSettlement", authority: "DEALER" },
+  ];
+  function closeable() {
+    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.REGISTER_VEHICLE_HANDOVER);
+    permissions.add(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ status: "APPROVED", expectedPaymentRegistered: true, stages: settlementStages })
+    );
+  }
+
+  test("CONTROL — same currency: the close is offered", () => {
+    closeable();
+    queryResults.set(GET_QUERY, application({ status: "APPROVED", economicsCurrency: "JOD" }));
+    renderCockpit();
+    expect(within(focusRow()).getByRole("button", { name: "FinalizeDealAction" })).toBeTruthy();
+  });
+
+  test("a deal with a named finance company pinned to another currency: the close is withheld and the reason names the boundary", () => {
+    closeable();
+    queryResults.set(GET_QUERY, application({ status: "APPROVED", economicsCurrency: "USD" }));
+    renderCockpit();
+    expect(within(focusRow()).queryByRole("button")).toBeNull();
+    expect(within(focusRow()).getByText("FinalizeCurrencyMismatch")).toBeTruthy();
+    expect(within(focusRow()).queryByText("FinalizeNeedsPermission")).toBeNull();
+  });
+
+  test("the prerequisite is named before the permission: a caller who cannot close anyway still sees the currency boundary", () => {
+    permissions.add(PERMISSIONS.REGISTER_VEHICLE_HANDOVER);
+    permissions.add(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ status: "APPROVED", expectedPaymentRegistered: true, stages: settlementStages })
+    );
+    queryResults.set(GET_QUERY, application({ status: "APPROVED", economicsCurrency: "USD" }));
+    renderCockpit();
+    expect(within(focusRow()).getByText("FinalizeCurrencyMismatch")).toBeTruthy();
+  });
+
+  test("a deal with NO named finance company is not gated: nothing here opens a finance-company receivable", () => {
+    closeable();
+    queryResults.set(
+      GET_QUERY,
+      application({ status: "APPROVED", economicsCurrency: "USD", companyId: undefined, hasExternalFinancier: false })
+    );
+    renderCockpit();
+    expect(within(focusRow()).getByRole("button", { name: "FinalizeDealAction" })).toBeTruthy();
   });
 });
 

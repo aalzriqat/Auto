@@ -24,6 +24,12 @@ import { getErrorMessage } from "@/lib/errors";
 // dialog this replaced (`VehicleHandoverDialog`, deleted) showed no figures, so
 // nothing an operator confirmed on it was ever about a number.
 import { ConfirmHandoverDialog } from "./cockpit/ConfirmHandoverDialog";
+import {
+  DISBURSEMENT_DENOMINATION_REASON,
+  FINALIZE_DENOMINATION_REASON,
+  settlementDenominationRefusal,
+} from "./settlementDenomination";
+import { SettlementDenominationLine } from "./cockpit/DealCockpit";
 import { RegisterExpectedPaymentDialog, type ExpectedPaymentMethod } from "./RegisterExpectedPaymentDialog";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 
@@ -356,6 +362,21 @@ export function ApplicationDetailsDialog({
     isConsignedDeal &&
     app.status !== "CLOSED" &&
     app.status !== "CANCELLED";
+  // TEMPORARY CONTAINMENT — SN3-1 (SCRUM-215 → SCRUM-241). The same gate the
+  // Deal cockpit applies, so this dialog is not a second door into the same
+  // settlement dead end. See `settlementDenomination.ts`.
+  const settlementDenominationBlock =
+    app.companyId && !settlesDirectToSupplier
+      ? settlementDenominationRefusal(app.economicsCurrency, currency.code)
+      : undefined;
+  const settlementDenominationDetail = settlementDenominationBlock
+    ? {
+        recordedLabel: t("RecordedSettlementAmount" as any),
+        recordedAmount: expectedDisbursementLabel,
+        orgLabel: t("OrganisationCurrencyLabel" as any),
+        orgCurrency: currency.code,
+      }
+    : undefined;
 
   // On the direct route the company pays the supplier, so there is no
   // dealership receipt to confirm — `confirmDisbursement` posts DR Bank and
@@ -366,7 +387,8 @@ export function ApplicationDetailsDialog({
     app.status === "CLOSED" &&
     expectsFinanceCompanyDisbursement &&
     !settlesDirectToSupplier &&
-    !app.disbursedAt;
+    !app.disbursedAt &&
+    settlementDenominationBlock === undefined;
 
   // Gated on the same facts the server enforces. Without
   // `expectsFinanceCompanyDisbursement` the button appeared on a closed direct
@@ -839,7 +861,13 @@ export function ApplicationDetailsDialog({
                   </>
                 )}
 
-                {app.status === "APPROVED" && canFinalizeApplication && (
+                {app.status === "APPROVED" && settlementDenominationBlock && (
+                  <p className="text-sm text-muted-foreground" data-testid="review-finalize-withheld">
+                    {t(FINALIZE_DENOMINATION_REASON[settlementDenominationBlock] as any)}
+                  </p>
+                )}
+
+                {app.status === "APPROVED" && canFinalizeApplication && !settlementDenominationBlock && (
                   <>
                     <Button
                       onClick={handleFinalizeDeal}
@@ -860,6 +888,17 @@ export function ApplicationDetailsDialog({
                   <Badge variant="outline" className="justify-center py-2">
                     {t("DisbursementReceived" as any)}: {confirmedDisbursementLabel}
                   </Badge>
+                )}
+
+                {app.status === "CLOSED" && !app.disbursedAt && settlementDenominationBlock && (
+                  <div className="space-y-1" data-testid="review-disbursement-withheld">
+                    <p className="text-sm text-muted-foreground">
+                      {t(DISBURSEMENT_DENOMINATION_REASON[settlementDenominationBlock] as any)}
+                    </p>
+                    {settlementDenominationDetail && (
+                      <SettlementDenominationLine detail={settlementDenominationDetail} />
+                    )}
+                  </div>
                 )}
 
                 {canConfirmDisbursement && (

@@ -165,6 +165,34 @@ const dealRailMessages = defineBilingualMessages({
     "لا يمكن تسجيل دفعة المورّد على هذه الصفقة: المسار المباشر غير متاح، أو أن الإشعار مسجّل بالفعل.",
   ],
 
+  /**
+   * TEMPORARY CONTAINMENT (SCRUM-215 SN3-1 → SCRUM-241). The deal's settlement
+   * is recorded in a currency other than the organisation's current one, and
+   * confirming the receipt is certain to be refused by the ledger — so the
+   * action is withheld and the reason said. No conversion is offered, no
+   * repair is suggested, and nothing has been posted.
+   */
+  DisbursementCurrencyMismatch: [
+    "This deal's settlement is recorded in a currency that differs from the organisation's current currency. The receipt cannot be confirmed from here until the settlement is recorded in one currency end to end; nothing has been posted.",
+    "تسوية هذه الصفقة مسجّلة بعملة تختلف عن العملة الحالية للمؤسسة. لا يمكن تأكيد الاستلام من هنا حتى تُسجَّل التسوية بعملة واحدة من البداية إلى النهاية؛ لم يُرحَّل أي قيد.",
+  ],
+  DisbursementCurrencyUnsupported: [
+    "This deal's settlement is recorded in a currency AutoFlow does not recognise. The receipt cannot be confirmed until the recorded currency is corrected; nothing has been posted.",
+    "تسوية هذه الصفقة مسجّلة بعملة لا يتعرّف عليها AutoFlow. لا يمكن تأكيد الاستلام حتى تُصحَّح العملة المسجّلة؛ لم يُرحَّل أي قيد.",
+  ],
+  FinalizeCurrencyMismatch: [
+    "This deal's economics are recorded in a currency that differs from the organisation's current currency. Closing it would open a receivable that cannot be settled, so the close is withheld until the settlement is recorded in one currency end to end.",
+    "اقتصاديات هذه الصفقة مسجّلة بعملة تختلف عن العملة الحالية للمؤسسة. إغلاقها سيفتح ذمّة مدينة لا يمكن تسويتها، لذا يُحجب الإغلاق حتى تُسجَّل التسوية بعملة واحدة من البداية إلى النهاية.",
+  ],
+  FinalizeCurrencyUnsupported: [
+    "This deal's economics are recorded in a currency AutoFlow does not recognise. The close is withheld until the recorded currency is corrected.",
+    "اقتصاديات هذه الصفقة مسجّلة بعملة لا يتعرّف عليها AutoFlow. يُحجب الإغلاق حتى تُصحَّح العملة المسجّلة.",
+  ],
+  /** Prefix for the withheld figure, spelled in the currency it is recorded in. */
+  RecordedSettlementAmount: ["Recorded settlement", "التسوية المسجّلة"],
+  /** Prefix for the organisation's current currency beside it. */
+  OrganisationCurrencyLabel: ["Organisation currency", "عملة المؤسسة"],
+
   /** A document rule the finance company waived for this deal. */
   DocWaived: ["Waived", "مُعفى"],
 

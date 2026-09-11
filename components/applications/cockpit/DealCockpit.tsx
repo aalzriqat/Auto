@@ -8,6 +8,11 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import { scaleForCurrency } from "@/components/accounting/AccountingTabShared";
+import {
+  DISBURSEMENT_DENOMINATION_REASON,
+  FINALIZE_DENOMINATION_REASON,
+  settlementDenominationRefusal,
+} from "@/components/applications/settlementDenomination";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -332,6 +337,30 @@ function disbursementUnavailableReason(
   return "DisbursementNeedsPermission";
 }
 
+/** The withheld settlement figure and the org currency it cannot be settled against. */
+export type SettlementDenominationDetail = {
+  recordedLabel: string;
+  recordedAmount: string;
+  orgLabel: string;
+  orgCurrency: string;
+};
+
+/**
+ * "Recorded settlement: 15,625 USD · Organisation currency: JOD", with each
+ * money run isolated LTR so an RTL paragraph cannot reorder "15,625 USD" into
+ * "USD 15,625".
+ */
+export function SettlementDenominationLine({
+  detail,
+}: Readonly<{ detail: SettlementDenominationDetail }>) {
+  return (
+    <p className="text-sm" data-testid="settlement-denomination-detail">
+      {detail.recordedLabel}: <bdi dir="ltr">{detail.recordedAmount}</bdi> · {detail.orgLabel}:{" "}
+      <bdi dir="ltr">{detail.orgCurrency}</bdi>
+    </p>
+  );
+}
+
 /** A money run is Latin digits inside Arabic prose; `<bdi>` keeps it whole. */
 function Money({ children }: Readonly<{ children: React.ReactNode }>) {
   return <bdi className="tabular-nums">{children}</bdi>;
@@ -638,6 +667,34 @@ export function DealCockpit({
     frozenNetMinor !== undefined
       ? formatEconomics(frozenNetMinor)
       : orgCurrency.format(principalMinor / orgFactor);
+  /**
+   * TEMPORARY CONTAINMENT — SN3-1 (SCRUM-215 → SCRUM-241). A deal pinned to a
+   * currency other than the org's current one cannot be settled: the
+   * receivable was opened in the pinned currency at finalization and
+   * `confirmDisbursement` posts in the org's, so the allocation refuses and
+   * nothing commits. Reproduced in `convex/sn31CurrencyMismatchRepro.test.ts`.
+   * Only a deal with a NAMED finance company settling through the dealership
+   * opens that receivable, so only that deal is gated — the receipt on a
+   * closed one, and the close itself before it. Removed once the canonical
+   * fix records one settlement currency end to end.
+   */
+  const settlementDenominationBlock =
+    app?.companyId && !settlesDirectToSupplier
+      ? settlementDenominationRefusal(app.economicsCurrency, orgCurrency.code)
+      : undefined;
+  /**
+   * The withheld figure, in the currency it is recorded in, beside the org's.
+   * Structured rather than one string: under an RTL base the money run and
+   * its code swap order ("USD 15,625") unless each run is its own LTR isolate.
+   */
+  const settlementDenominationDetail = settlementDenominationBlock
+    ? {
+        recordedLabel: t("RecordedSettlementAmount"),
+        recordedAmount: expectedDisbursementLabel,
+        orgLabel: t("OrganisationCurrencyLabel"),
+        orgCurrency: orgCurrency.code,
+      }
+    : undefined;
   // The route is a decision about a deal that has not posted yet; once it
   // closes, changing it is a correction and the server refuses it there too.
   // Keyed on FINALIZE_FINANCED_DEAL, matching the server.
@@ -655,7 +712,8 @@ export function DealCockpit({
     app.status === "CLOSED" &&
     expectsFinanceCompanyDisbursement &&
     !settlesDirectToSupplier &&
-    !app.disbursedAt;
+    !app.disbursedAt &&
+    settlementDenominationBlock === undefined;
   // Gated on the SERVER's own answer (`canSettleDirectToSupplier`), not on
   // `companyId`, which is unset on every MANUAL_FINANCE_COMPANY deal.
   const canConfirmSupplierDisbursement =
@@ -878,6 +936,17 @@ export function DealCockpit({
           ),
         };
       }
+      // The currency boundary is named before permission or applicability:
+      // it is a fact about the deal that no caller can act on from here.
+      if (settlementDenominationBlock && !app.disbursedAt) {
+        return {
+          stageKey: "DISBURSEMENT",
+          actionKey: "ConfirmDisbursement",
+          onStart: () => setConfirmingDisbursement(true),
+          unavailableReasonKey: DISBURSEMENT_DENOMINATION_REASON[settlementDenominationBlock],
+          unavailableDetail: settlementDenominationDetail,
+        };
+      }
       return {
         stageKey: "DISBURSEMENT",
         actionKey: "ConfirmDisbursement",
@@ -963,10 +1032,12 @@ export function DealCockpit({
        * is not a dead end — and bringing that control across is filed separately
        * rather than folded into this change.
        */
-      unavailableReasonKey: finalizeUnavailableReasonKey(
-        settlementRouteRequired,
-        hasPermission(PERMISSIONS.FINALIZE_FINANCED_DEAL)
-      ),
+      unavailableReasonKey: settlementDenominationBlock
+        ? FINALIZE_DENOMINATION_REASON[settlementDenominationBlock]
+        : finalizeUnavailableReasonKey(
+            settlementRouteRequired,
+            hasPermission(PERMISSIONS.FINALIZE_FINANCED_DEAL)
+          ),
     };
   }
 
@@ -1871,6 +1942,8 @@ export function DealCockpitView({
     onStart: () => void;
     /** Set when the step cannot be taken; the button is withheld and this is shown. */
     unavailableReasonKey?: string;
+    /** The withheld figure in its own currency, shown under the reason. */
+    unavailableDetail?: SettlementDenominationDetail;
   };
   /** The handover confirmation's own state — absent on a deal that cannot reach it. */
   handover?: {
@@ -3141,6 +3214,7 @@ function StageFocusRow({
     actionKey: string;
     onStart: () => void;
     unavailableReasonKey?: string;
+    unavailableDetail?: SettlementDenominationDetail;
   };
   outstandingDocuments: ReadonlyArray<{ ruleId: string; name: string }>;
   t: (key: string) => string;
@@ -3207,6 +3281,12 @@ function StageFocusRow({
               is the dead end this screen exists to remove. */}
           {action?.unavailableReasonKey && (
             <p className="text-sm text-muted-foreground">{t(action.unavailableReasonKey)}</p>
+          )}
+          {/* The figure the refusal is about, in the currency it is recorded
+              in. Each money run is its own LTR isolate, or under an RTL base
+              the amount and its code swap places. */}
+          {action?.unavailableReasonKey && action.unavailableDetail && (
+            <SettlementDenominationLine detail={action.unavailableDetail} />
           )}
 
           {children}
