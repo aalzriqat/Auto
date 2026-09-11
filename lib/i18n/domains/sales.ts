@@ -237,8 +237,9 @@ const dealRailMessages = defineBilingualMessages({
   ReasonReadyForHandover: ["Handover and close", "التسليم والإغلاق"],
   ReasonAwaitingReceipt: ["Financier payment to the dealership", "دفعة جهة التمويل للمعرض"],
   ReasonCashPending: ["Cash sale to complete", "بيع نقدي لإتمامه"],
-  SaleStatusPending: ["In progress", "قيد الإنجاز"],
-  SaleStatusCompleted: ["Completed", "مكتملة"],
+  /** The two panes under the money on the Deal. */
+  DealTabDocuments: ["Documents", "المستندات"],
+  DealTabActivity: ["Activity", "السجل"],
 
   /** رسوم ومصاريف تسليم السيارة — the handover-cost section on the Deal. */
   HandoverCostsHeading: ["Vehicle handover fees and costs", "رسوم ومصاريف تسليم السيارة"],

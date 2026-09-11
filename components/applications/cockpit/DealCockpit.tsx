@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "@/components/ui/sonner";
 import { getErrorMessage } from "@/lib/errors";
 import { format, isValid } from "date-fns";
@@ -2565,7 +2566,14 @@ export function DealCockpitView({
   return (
     <div className="space-y-6">
       {/* --- header ------------------------------------------------------ */}
-      <div className="flex flex-wrap items-start justify-between gap-4">
+      {/* Sticky: the deal's identity, status and the exceptional action stay
+          in view while the operator works down the rail and the money —
+          the owner's workspace shell. Negative margins let the bar span the
+          page padding; the backdrop keeps it legible over scrolled content. */}
+      <div
+        className="sticky top-0 z-20 -mx-4 -mt-6 flex flex-wrap items-start justify-between gap-4 border-b bg-background/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 md:-mx-8 md:px-8"
+        data-testid="deal-header"
+      >
         <div className="space-y-1">
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-semibold tracking-tight">
@@ -3030,6 +3038,86 @@ export function DealCockpitView({
               whenever this section is present so the same lines are not
               listed twice. */}
           {handoverCosts && <HandoverCostsPanel {...handoverCosts} t={t} />}
+
+          {/* --- documents · activity ------------------------------------- */}
+          {/* One card, two tabs, below the money: the checklist that also DOES
+              something (upload, verify, view) and the status history — the
+              owner's workspace shell. Documents lead when the deal has a
+              checklist because they are actionable; a cash deal has none and
+              opens on its history. Both panes stay mounted so a search or a
+              test finds either without a click. */}
+          {(() => {
+            const hasDocuments = documents !== undefined || deal.documents.length > 0;
+            const documentsPane = documents ? (
+              <DealDocumentsPanel
+                documents={documents.items}
+                checklist={deal.documents}
+                canUpload={documents.canUpload}
+                canVerify={documents.canVerify}
+                uploadingId={documents.uploadingId}
+                t={t}
+                onUpload={documents.onUpload}
+                onVerify={documents.onVerify}
+              />
+            ) : deal.documents.length > 0 ? (
+              <DealDocumentsPanel
+                documents={undefined}
+                checklist={deal.documents}
+                canUpload={false}
+                canVerify={false}
+                uploadingId={null}
+                t={t}
+                onUpload={() => {}}
+                onVerify={() => {}}
+              />
+            ) : null;
+            const activityPane = (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">{t("StatusLogHeading")}</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {deal.timeline.map((entry, index) => (
+                <div key={`${entry.changedAt ?? "no-date"}-${index}`} className="flex gap-3 text-sm">
+                  <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <div className="min-w-0">
+                    <p>{t(STATUS_LABEL[entry.toStatus] ?? entry.toStatus)}</p>
+                    <p className="text-xs text-muted-foreground">
+                      <bdi>{entry.actorName}</bdi>
+                      {/* The transition is stated whether or not its moment is
+                          known. `changedAt` is optional precisely so a status is
+                          never withheld for want of a timestamp — and `format`
+                          throws `RangeError` on an unrenderable input, which
+                          during render loses the whole screen, not one row. */}
+                      {isRenderableMoment(entry.changedAt) && (
+                        <>
+                          {" · "}
+                          <bdi>{format(entry.changedAt, "d MMM yyyy HH:mm")}</bdi>
+                        </>
+                      )}
+                    </p>
+                  </div>
+                </div>
+              ))}
+                </CardContent>
+              </Card>
+            );
+            if (!hasDocuments) return activityPane;
+            return (
+              <Tabs defaultValue="documents" className="space-y-3" data-testid="deal-lower-tabs">
+                <TabsList>
+                  <TabsTrigger value="documents">{t("DealTabDocuments")}</TabsTrigger>
+                  <TabsTrigger value="activity">{t("DealTabActivity")}</TabsTrigger>
+                </TabsList>
+                <TabsContent value="documents" forceMount className="data-[state=inactive]:hidden">
+                  {documentsPane}
+                </TabsContent>
+                <TabsContent value="activity" forceMount className="data-[state=inactive]:hidden">
+                  {activityPane}
+                </TabsContent>
+              </Tabs>
+            );
+          })()}
         </div>
 
         {/* --- side rail ------------------------------------------------- */}
@@ -3090,65 +3178,6 @@ export function DealCockpitView({
             />
           )}
 
-          {/* The checklist that also DOES something — upload, verify, view —
-              when the caller may read the document rows; the read-only list
-              from the cockpit payload otherwise. ABSENT on a cash deal, which
-              has no document checklist at all. */}
-          {documents ? (
-            <DealDocumentsPanel
-              documents={documents.items}
-              checklist={deal.documents}
-              canUpload={documents.canUpload}
-              canVerify={documents.canVerify}
-              uploadingId={documents.uploadingId}
-              t={t}
-              onUpload={documents.onUpload}
-              onVerify={documents.onVerify}
-            />
-          ) : (
-            deal.documents.length > 0 && (
-              <DealDocumentsPanel
-                documents={undefined}
-                checklist={deal.documents}
-                canUpload={false}
-                canVerify={false}
-                uploadingId={null}
-                t={t}
-                onUpload={() => {}}
-                onVerify={() => {}}
-              />
-            )
-          )}
-
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">{t("StatusLogHeading")}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {deal.timeline.map((entry, index) => (
-                <div key={`${entry.changedAt ?? "no-date"}-${index}`} className="flex gap-3 text-sm">
-                  <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <div className="min-w-0">
-                    <p>{t(STATUS_LABEL[entry.toStatus] ?? entry.toStatus)}</p>
-                    <p className="text-xs text-muted-foreground">
-                      <bdi>{entry.actorName}</bdi>
-                      {/* The transition is stated whether or not its moment is
-                          known. `changedAt` is optional precisely so a status is
-                          never withheld for want of a timestamp — and `format`
-                          throws `RangeError` on an unrenderable input, which
-                          during render loses the whole screen, not one row. */}
-                      {isRenderableMoment(entry.changedAt) && (
-                        <>
-                          {" · "}
-                          <bdi>{format(entry.changedAt, "d MMM yyyy HH:mm")}</bdi>
-                        </>
-                      )}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
         </div>
       </div>
 

@@ -181,7 +181,7 @@ export function DealsListView({
       </div>
 
       {/* Views: the queue, the ones somebody else is holding, the register. */}
-      <div role="tablist" aria-label={t("DealsTitle")} className="flex gap-1 border-b">
+      <div role="tablist" aria-label={t("DealsTitle")} className="flex gap-1 overflow-x-auto border-b">
         {(
           [
             ["needs", "DealsNeedsAction", counts.needs],
@@ -199,7 +199,7 @@ export function DealsListView({
               setReason(null);
             }}
             className={cn(
-              "-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm",
+              "-mb-px flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2 text-sm",
               view === key
                 ? "border-primary font-medium text-foreground"
                 : "border-transparent text-muted-foreground hover:text-foreground"
