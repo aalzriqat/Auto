@@ -109,9 +109,78 @@ const STAGE_LABEL: Record<string, string> = {
   GAP_RESOLUTION: "StageGapResolution",
   APPROVED_PURCHASE: "StageApprovedPurchase",
   DELIVERY_ACTIONS: "StageDeliveryActions",
+  /**
+   * The stage the backend already emits and this build is the first to name.
+   *
+   * Until now the map had no entry, so the rail fell through to `t(rawKey)` —
+   * covered only by a transitional dictionary entry under the raw key. This
+   * entry is what makes that crutch unnecessary going forward; it is
+   * deliberately NOT the signal to delete it — see the note on `DISBURSEMENT`
+   * in `lib/i18n/domains/sales.ts`.
+   */
+  DISBURSEMENT: "StageDisbursement",
   HANDOVER: "StageHandover",
   SETTLEMENT: "StageSettlement",
 };
+
+/**
+ * Who actually performed the appraisal on record, as the SERVER recorded it.
+ * `null` means no active appraisal, or one recorded as a dealer estimate —
+ * neither of the two parties a badge can truthfully name.
+ */
+export type ActiveAppraisalProvider = "FINANCE_COMPANY" | "INDEPENDENT" | null;
+
+/**
+ * Whose move a stage is — the single question the rail exists to answer.
+ *
+ * `authority` already travels on every stage: MIRROR means the finance company
+ * acts and AutoFlow only records what they decided, DEALER means the dealership
+ * acts. Rendering that verbatim is right for every stage but one.
+ *
+ * ⚠️ `APPRAISAL` is the exception, and getting it wrong is the defect this
+ * function was written for. Its authority is MIRROR because the dealership never
+ * values the vehicle itself — but the valuation may have been done by an
+ * INDEPENDENT appraiser rather than by the finance company. Reading MIRROR as
+ * "finance company" told the operator the deal was waiting on a party that was
+ * not involved. The provider is therefore taken from RECORDED SERVER
+ * PROVENANCE, never inferred from the stage's authority.
+ *
+ * An authority the client does not recognise names nobody rather than guessing:
+ * a new server value must not silently render as "Dealership".
+ */
+function stageOwnerLabel(
+  stage: Readonly<{ key: string; authority?: string }>,
+  activeAppraisalProvider: ActiveAppraisalProvider,
+  t: (key: string) => string
+): string | undefined {
+  if (stage.key === "APPRAISAL") {
+    if (activeAppraisalProvider === "FINANCE_COMPANY") return t("AppraisalByFinanceCompany");
+    if (activeAppraisalProvider === "INDEPENDENT") return t("AppraisalByIndependent");
+    return t("StageOwnerAppraiserNotRecorded");
+  }
+  if (stage.authority === "MIRROR") return t("StageOwnerFinanceCompany");
+  if (stage.authority === "DEALER") return t("StageOwnerDealership");
+  return undefined;
+}
+
+/**
+ * Whether the "this step belongs to the finance company" note is TRUE here.
+ *
+ * Gated by the same recorded provenance that drives the owner label, because
+ * the two surfaces answer the same question and must not answer it from
+ * different sources. `APPRAISAL` carries a static `authority: "MIRROR"`, so
+ * keying the note on authority alone asserted the finance company owned an
+ * appraisal an INDEPENDENT appraiser had performed — one step, two parties,
+ * one screen. A `null` provider does not license the note either.
+ */
+function stageShowsMirrorNote(
+  stage: Readonly<{ key: string; authority?: string }>,
+  activeAppraisalProvider: ActiveAppraisalProvider
+): boolean {
+  if (stage.authority !== "MIRROR") return false;
+  if (stage.key === "APPRAISAL") return activeAppraisalProvider === "FINANCE_COMPANY";
+  return true;
+}
 
 const PARTY_LABEL: Record<string, string> = {
   CUSTOMER: "PartyCustomer",
@@ -243,7 +312,7 @@ function Money({ children }: Readonly<{ children: React.ReactNode }>) {
  * thing that must not be shared is the headline: see `MoneyPanel`.
  */
 export type DealCockpitData =
-  | NonNullable<(typeof api.applications.dealCockpit)["_returnType"]>
+  | NonNullable<(typeof api.dealWorkspace.financedDealCockpit)["_returnType"]>
   | NonNullable<(typeof api.sales.dealCockpit)["_returnType"]>;
 
 /**
@@ -278,7 +347,18 @@ export function DealCockpit({
    */
   canonicalizeUrl?: boolean;
 }>) {
-  const deal = useQuery(api.applications.dealCockpit, { orgId, applicationId });
+  /**
+   * The financed read model, served by the `dealWorkspace` wrapper rather than
+   * by `applications.dealCockpit` directly.
+   *
+   * The wrapper composes that same authority through `ctx.runQuery` — one query
+   * for the client, one read snapshot — and adds the two facts this screen
+   * could not previously answer: who actually appraised the vehicle, and
+   * whether a stopped deal is still sitting on the customer's money. Nothing
+   * about the spine changed, which is why the cash rail below still calls
+   * `sales.dealCockpit` and renders through the same view.
+   */
+  const deal = useQuery(api.dealWorkspace.financedDealCockpit, { orgId, applicationId });
   // The container raises its own toasts, so it needs its own translator — the
   // view's `t` is not in scope here, and an English string in a toast is how a
   // screen that is otherwise fully Arabic starts leaking its source language.
@@ -711,6 +791,11 @@ export function DealCockpit({
       deal={deal}
       financeDecision={financeDecision}
       workflowAction={workflowAction}
+      // Both are financed-only and come straight off the wrapper's payload.
+      // `?? null` / `?? false` cover the loading and unreadable cases, where
+      // `deal` is `undefined` or `null` and the screen must not assert either.
+      activeAppraisalProvider={deal?.activeAppraisalProvider ?? null}
+      depositAwaitingResolution={deal?.pendingDepositResolution ?? false}
       handover={{
         confirming: confirmingHandover,
         submitting: handoverSubmitting,
@@ -1109,9 +1194,28 @@ export function DealCockpitView({
   canCorrectAdvice = false,
   onCorrectSettlementAdvice,
   onRecordSupplierReceipt,
+  activeAppraisalProvider = null,
+  depositAwaitingResolution = false,
 }: Readonly<{
   /** `undefined` while loading, `null` when the deal is not readable. */
   deal: DealCockpitData | null | undefined;
+  /**
+   * Who actually performed the appraisal on record, as the SERVER recorded it.
+   *
+   * `APPRAISAL` is a MIRROR stage, and the rail would otherwise render every
+   * MIRROR stage as the finance company's — wrong whenever an INDEPENDENT
+   * appraiser did the work. `null` is rendered as an explicit "not recorded"
+   * rather than defaulted to either side, because guessing here is the defect.
+   * Financed deals only; the cash rail has no appraisal stage at all.
+   */
+  activeAppraisalProvider?: ActiveAppraisalProvider;
+  /**
+   * A rejected or cancelled deal still holding a HELD customer deposit that
+   * nobody has refunded or forfeited — real cash in a liability with no owner.
+   * The applications LIST has always surfaced this as `DEPOSIT_PENDING`; the
+   * deal screen used to read as a plain "Rejected" beside it. Financed only.
+   */
+  depositAwaitingResolution?: boolean;
   /**
    * Absent on a cash deal, and while the economics query is still loading or
    * was skipped for want of `view:finance_applications`.
@@ -1703,6 +1807,26 @@ export function DealCockpitView({
         </div>
       )}
 
+      {/* --- held customer deposit on a stopped deal ----------------------
+          Above the rail on purpose. On a rejected or cancelled deal the rail
+          has nothing left to say — every stage is STOPPED — while the one thing
+          still outstanding is real customer cash sitting in a liability with
+          nobody's name on it. A single bordered strip rather than a card: at
+          this density an alert earns its weight from colour and position. */}
+      {depositAwaitingResolution && (
+        <div
+          className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 dark:border-amber-900/60 dark:bg-amber-950/30"
+          data-testid="deal-deposit-awaiting-resolution"
+        >
+          <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+            {t("DepositAwaitingResolutionTitle")}
+          </p>
+          <p className="text-sm text-amber-800 dark:text-amber-300">
+            {t("DepositAwaitingResolutionBody")}
+          </p>
+        </div>
+      )}
+
       {/* --- stage rail: the signature element ---------------------------- */}
       <Card>
         <CardContent className="space-y-3 pt-6">
@@ -1724,69 +1848,49 @@ export function DealCockpitView({
             </button>
           )}
 
-          {(showCompleted ? stages : remaining).map((stage) => (
-            <StageRow
-              key={stage.key}
-              state={stage.state as StageState}
-              label={t(STAGE_LABEL[stage.key] ?? stage.key)}
-              blocker={stage.blocker ? t(`Blocker${stage.blocker}`) : undefined}
-              isFocus={live?.key === stage.key}
-            />
-          ))}
+          {(showCompleted ? stages : remaining).map((stage) =>
+            live?.key === stage.key ? (
+              /* The stage the deal is actually on, opened in place. It carries
+                 the action, so the rail is the working panel rather than a
+                 progress ornament sitting above one. */
+              <StageFocusRow
+                key={stage.key}
+                state={stage.state as StageState}
+                label={t(STAGE_LABEL[stage.key] ?? stage.key)}
+                owner={stageOwnerLabel(stage, activeAppraisalProvider, t)}
+                mirrorNote={stageShowsMirrorNote(stage, activeAppraisalProvider)}
+                blocker={stage.blocker ? t(`Blocker${stage.blocker}`) : undefined}
+                action={workflowAction?.stageKey === stage.key ? workflowAction : undefined}
+                outstandingDocuments={
+                  stage.blocker === "DocumentsIncomplete"
+                    ? deal.documents.filter(
+                        (doc) =>
+                          doc.required && doc.status !== "VERIFIED" && doc.status !== "WAIVED"
+                      )
+                    : []
+                }
+                t={t}
+              />
+            ) : (
+              <StageRow
+                key={stage.key}
+                state={stage.state as StageState}
+                label={t(STAGE_LABEL[stage.key] ?? stage.key)}
+                owner={stageOwnerLabel(stage, activeAppraisalProvider, t)}
+                blocker={stage.blocker ? t(`Blocker${stage.blocker}`) : undefined}
+              />
+            )
+          )}
         </CardContent>
       </Card>
 
-      {/* --- next step ----------------------------------------------------
-          The test id anchors the E2E to the BLOCK rather than to a button
-          name. Every stage name appears twice on this screen — once on the
-          rail, once here — so a spec selecting globally can pass against the
-          rail while the block that is supposed to carry the action says
-          nothing, which is the exact defect this issue is about. */}
-      {live && (
-        <Card className="border-primary/40 bg-primary/[0.03]" data-testid="deal-next-step">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">{t("NextStepHeading")}</CardTitle>
-          </CardHeader>
-          <CardContent className="max-w-2xl space-y-2">
-            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-              <p className="font-medium">{t(STAGE_LABEL[live.key] ?? live.key)}</p>
-              {/* The action for the step this block NAMES.
-                  Until now the rail announced "vehicle handover" and offered
-                  nothing that performs it, so the operator went looking for a
-                  screen — Finance Applications -> Review — that the rail never
-                  mentions. A step worth naming is a step worth doing here. */}
-              {workflowAction?.stageKey === live.key &&
-                workflowAction.unavailableReasonKey === undefined && (
-                  <Button size="sm" onClick={workflowAction.onStart}>
-                    {t(workflowAction.actionKey)}
-                  </Button>
-                )}
-            </div>
-            {live.blocker && (
-              <p className="text-sm text-muted-foreground">{t(`Blocker${live.blocker}`)}</p>
-            )}
-            {/* Why the named step is not actionable BY THIS CALLER. Silence
-                here is the defect this issue exists to remove. */}
-            {workflowAction?.stageKey === live.key && workflowAction.unavailableReasonKey && (
-              <p className="text-sm text-muted-foreground">
-                {t(workflowAction.unavailableReasonKey)}
-              </p>
-            )}
-            {live.blocker === "DocumentsIncomplete" && (
-              <ul className="space-y-1 pt-1">
-                {deal.documents
-                  .filter((doc) => doc.required && doc.status !== "VERIFIED" && doc.status !== "WAIVED")
-                  .map((doc) => (
-                    <li key={doc.ruleId} className="flex items-center gap-2 text-sm">
-                      <Minus className="h-3.5 w-3.5 text-muted-foreground" />
-                      <bdi>{doc.name}</bdi>
-                    </li>
-                  ))}
-              </ul>
-            )}
-          </CardContent>
-        </Card>
-      )}
+      {/* The next-step card that used to stand here is gone. It restated the
+          stage the rail was already naming, so the current step existed twice
+          on one screen and the two could disagree — the rail said one thing
+          and the card carried the button for it. The rail IS the working panel
+          now: `StageFocusRow` above holds the name, the owner, the blocker and
+          the action in one place, and keeps the `deal-next-step` test id so the
+          specs still anchor to the block that carries the action. */}
 
       {/* --- what the finance company told us ----------------------------- */}
       {/* Under the next step, not inside the money column: this is the ACTION
@@ -2229,27 +2333,155 @@ export function DealCockpitView({
   );
 }
 
-function StageRow({
+/**
+ * The stage the deal is on, opened inside the rail.
+ *
+ * The rail used to be a read-only progress list with a separate "next step"
+ * card underneath repeating whichever stage was current and holding its
+ * button. Two representations of one fact, which is how the rail came to
+ * announce a step the card could not perform. Everything the operator needs
+ * for the current step now lives on the step itself — what it is, whose move
+ * it is, what is being waited on, and the action.
+ *
+ * It keeps `data-testid="deal-next-step"` deliberately. The id names the block
+ * that carries the action, which is exactly what this is; a spec scoped to this
+ * block cannot pass against a stage name rendered somewhere else.
+ */
+function StageFocusRow({
   state,
   label,
+  owner,
+  mirrorNote,
   blocker,
-  isFocus,
-}: Readonly<{ state: StageState; label: string; blocker?: string; isFocus: boolean }>) {
+  action,
+  outstandingDocuments,
+  t,
+}: Readonly<{
+  state: StageState;
+  label: string;
+  /** Whose move it is, resolved from server authority AND recorded provenance. */
+  owner?: string;
+  /** Whether the "AutoFlow only records their decision" sentence is TRUE here. */
+  mirrorNote: boolean;
+  blocker?: string;
+  action?: {
+    actionKey: string;
+    onStart: () => void;
+    unavailableReasonKey?: string;
+  };
+  outstandingDocuments: ReadonlyArray<{ ruleId: string; name: string }>;
+  t: (key: string) => string;
+}>) {
   const icon = STAGE_ICON[state] ?? STAGE_ICON.PENDING;
 
   return (
     <div
-      className={`flex items-start gap-3 rounded-md px-2 py-1.5 ${
-        isFocus ? "bg-primary/[0.06]" : ""
-      }`}
+      className="rounded-md border border-primary/30 bg-primary/[0.04] p-3"
+      data-testid="deal-next-step"
     >
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 shrink-0">{icon}</span>
+        <div className="min-w-0 flex-1 space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <p className="font-medium">{label}</p>
+              {/* Whose move it is, said before anything else on the step. An
+                  operator who reads "finance company" stops looking for a
+                  button that must never exist. `bdi` because the owner can be
+                  an Arabic party name beside Latin text. */}
+              {owner && (
+                <Badge variant="outline" className="font-normal">
+                  <bdi>{owner}</bdi>
+                </Badge>
+              )}
+            </div>
+            {/* The action for the step this block NAMES. A step worth naming
+                is a step worth doing here — the one recommended action, and
+                exactly one. */}
+            {action && action.unavailableReasonKey === undefined && (
+              <Button size="sm" onClick={action.onStart}>
+                {t(action.actionKey)}
+              </Button>
+            )}
+          </div>
+
+          {/* What is being waited on. A stage with nothing outstanding says so
+              rather than going silent — but in the MUTED colour. Amber on
+              "nothing is outstanding" painted a warning over the absence of a
+              problem. */}
+          <p
+            className={
+              blocker
+                ? "text-sm text-amber-700 dark:text-amber-400"
+                : "text-sm text-muted-foreground"
+            }
+          >
+            {blocker ?? t("StageReadyToProceed")}
+          </p>
+
+          {outstandingDocuments.length > 0 && (
+            <ul className="space-y-1">
+              {outstandingDocuments.map((doc) => (
+                <li key={doc.ruleId} className="flex items-center gap-2 text-sm">
+                  <Minus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <bdi className="min-w-0">{doc.name}</bdi>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {/* Why the named step is not actionable BY THIS CALLER. Silence here
+              is the dead end this screen exists to remove. */}
+          {action?.unavailableReasonKey && (
+            <p className="text-sm text-muted-foreground">{t(action.unavailableReasonKey)}</p>
+          )}
+
+          {/* Only where it is TRUE — gated by recorded provenance, the same
+              source as the badge above, so the two can never name different
+              parties for one step. On a DEALER stage the badge has already
+              said whose move it is; a second line restating it would push the
+              real content down. */}
+          {mirrorNote && <p className="text-xs text-muted-foreground">{t("StageMirrorNote")}</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StageRow({
+  state,
+  label,
+  owner,
+  blocker,
+}: Readonly<{
+  state: StageState;
+  label: string;
+  /**
+   * Whose move this step is, already resolved to display text.
+   *
+   * Typography and alignment rather than a pill: this is an operator console
+   * at high density, where a box around every row's owner would spend the
+   * space the rail needs. The trailing edge comes from the SIBLING
+   * `min-w-0 flex-1` label column absorbing the free space, so this reads
+   * correctly in Arabic and English without a directional utility.
+   */
+  owner?: string;
+  blocker?: string;
+}>) {
+  const icon = STAGE_ICON[state] ?? STAGE_ICON.PENDING;
+
+  return (
+    <div className="flex items-start gap-3 rounded-md px-2 py-1.5">
       <span className="mt-0.5 shrink-0">{icon}</span>
-      <div className="min-w-0">
-        <p className={`text-sm ${isFocus ? "font-medium" : state === "COMPLETE" ? "text-muted-foreground" : ""}`}>
-          {label}
-        </p>
+      <div className="min-w-0 flex-1">
+        <p className={`text-sm ${state === "COMPLETE" ? "text-muted-foreground" : ""}`}>{label}</p>
         {blocker && <p className="text-xs text-amber-700 dark:text-amber-400">{blocker}</p>}
       </div>
+      {owner && (
+        <span className="mt-0.5 shrink-0 text-xs text-muted-foreground">
+          <bdi>{owner}</bdi>
+        </span>
+      )}
     </div>
   );
 }

@@ -88,7 +88,7 @@ const { queryResults, permissions, mutationCalls, mutationFailures } = stubs;
 const ORG = "org1" as Id<"organizations">;
 const APP = "app_2048" as Id<"financeApplications">;
 
-const COCKPIT_QUERY = "applications:dealCockpit";
+const COCKPIT_QUERY = "dealWorkspace:financedDealCockpit";
 const HANDOVER_MUTATION = "applications:registerVehicleHandover";
 const EXPECTED_PAYMENT_MUTATION = "applications:registerExpectedPayment";
 const FINALIZE_MUTATION = "applications:finalizeDeal";

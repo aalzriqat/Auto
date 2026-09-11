@@ -857,3 +857,294 @@ describe("the correction form and the evidence it was not asked to change", () =
     );
   });
 });
+
+
+/**
+ * Whose move the rail says it is — and the one stage where the rail's own
+ * authority field is not allowed to answer that question.
+ *
+ * `APPRAISAL` carries authority MIRROR because the dealership never values the
+ * vehicle itself. Reading MIRROR as "the finance company" is right for every
+ * other mirrored stage and WRONG here: the valuation may have been done by an
+ * independent appraiser, and telling the operator the deal waits on the finance
+ * company sends them chasing a party that was never involved.
+ *
+ * These assert against RECORDED SERVER PROVENANCE only. `t` is the identity
+ * function in this file, so an unresolved key appears as itself and a wrongly
+ * named party is stated out loud rather than silently mistranslated.
+ */
+describe("the rail names the party that actually owns each step", () => {
+  function appraisalAt(provider: "FINANCE_COMPANY" | "INDEPENDENT" | null) {
+    return render(
+      <DealCockpitView
+        deal={dealFixture({
+          stages: [{ key: "APPRAISAL", state: "CURRENT", authority: "MIRROR" }],
+        })}
+        activeAppraisalProvider={provider}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+  }
+
+  test("an INDEPENDENT appraisal is never presented as the finance company's", () => {
+    appraisalAt("INDEPENDENT");
+
+    expect(screen.getAllByText("AppraisalByIndependent").length).toBeGreaterThan(0);
+    // The precise defect: MIRROR must not be rendered as "finance company" here.
+    expect(screen.queryByText("StageOwnerFinanceCompany")).toBeNull();
+    expect(screen.queryByText("AppraisalByFinanceCompany")).toBeNull();
+  });
+
+  test("a FINANCE_COMPANY appraisal names the finance company", () => {
+    appraisalAt("FINANCE_COMPANY");
+
+    expect(screen.getAllByText("AppraisalByFinanceCompany").length).toBeGreaterThan(0);
+    expect(screen.queryByText("AppraisalByIndependent")).toBeNull();
+  });
+
+  test("an unrecorded appraiser names NEITHER party", () => {
+    appraisalAt(null);
+
+    expect(screen.getAllByText("StageOwnerAppraiserNotRecorded").length).toBeGreaterThan(0);
+    // Covers "no appraisal recorded yet" AND a DEALER_ESTIMATE, neither of
+    // which this badge may represent as one of the two nameable parties.
+    expect(screen.queryByText("AppraisalByIndependent")).toBeNull();
+    expect(screen.queryByText("AppraisalByFinanceCompany")).toBeNull();
+    expect(screen.queryByText("StageOwnerFinanceCompany")).toBeNull();
+  });
+
+  test("a mirrored stage that is NOT the appraisal still reads as the finance company", () => {
+    render(
+      <DealCockpitView
+        deal={dealFixture({
+          stages: [{ key: "CREDIT_DECISION", state: "CURRENT", authority: "MIRROR" }],
+        })}
+        activeAppraisalProvider={null}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    expect(screen.getAllByText("StageOwnerFinanceCompany").length).toBeGreaterThan(0);
+    // …and says why no button is offered, in the focus row the operator acts from.
+    expect(screen.getAllByText("StageMirrorNote").length).toBeGreaterThan(0);
+  });
+
+  test("a dealership stage reads as the dealership and carries no mirror note", () => {
+    render(
+      <DealCockpitView
+        deal={dealFixture({
+          stages: [{ key: "HANDOVER", state: "CURRENT", authority: "DEALER" }],
+        })}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    expect(screen.getAllByText("StageOwnerDealership").length).toBeGreaterThan(0);
+    expect(screen.queryByText("StageMirrorNote")).toBeNull();
+  });
+
+  test("an authority the client does not recognise names nobody", () => {
+    // Fails CLOSED. A future server authority must render no owner at all
+    // rather than defaulting into "Dealership", which would be a confident lie.
+    render(
+      <DealCockpitView
+        deal={dealFixture({
+          stages: [{ key: "HANDOVER", state: "CURRENT", authority: "SOMETHING_NEW" }],
+        })}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    expect(screen.queryByText("StageOwnerDealership")).toBeNull();
+    expect(screen.queryByText("StageOwnerFinanceCompany")).toBeNull();
+  });
+
+  test("the disbursement stage is named, not printed as its raw key", () => {
+    // The whole reason the previous release shipped a transitional dictionary
+    // entry. This build maps the stage, so "DISBURSEMENT" must never be read
+    // by an operator.
+    render(
+      <DealCockpitView
+        deal={dealFixture({
+          stages: [
+            {
+              key: "DISBURSEMENT",
+              state: "BLOCKED",
+              blocker: "AwaitingDisbursement",
+              authority: "MIRROR",
+            },
+          ],
+        })}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    expect(screen.getAllByText("StageDisbursement").length).toBeGreaterThan(0);
+    expect(screen.queryByText("DISBURSEMENT")).toBeNull();
+    expect(screen.getAllByText("BlockerAwaitingDisbursement").length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Customer money still held on a deal that is over.
+ *
+ * The applications LIST has always surfaced this as `DEPOSIT_PENDING`. The deal
+ * screen said nothing, so the same deal read as a plain "Rejected" here while
+ * the list said cash was outstanding. Presentational only: this asserts that
+ * the screen SAYS it, never what anyone may do about it.
+ */
+describe("a stopped deal still holding the customer's deposit says so", () => {
+  test("the deal screen surfaces an unresolved held deposit", () => {
+    render(
+      <DealCockpitView
+        deal={dealFixture({ status: "REJECTED" })}
+        depositAwaitingResolution
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    expect(screen.getByTestId("deal-deposit-awaiting-resolution")).toBeTruthy();
+    expect(screen.getAllByText("DepositAwaitingResolutionTitle").length).toBeGreaterThan(0);
+  });
+
+  test("nothing is claimed when no deposit is outstanding", () => {
+    // The negative half. Without it the assertion above passes just as well
+    // against a strip that is rendered unconditionally.
+    render(
+      <DealCockpitView
+        deal={dealFixture({ status: "REJECTED" })}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    expect(screen.queryByTestId("deal-deposit-awaiting-resolution")).toBeNull();
+    expect(screen.queryByText("DepositAwaitingResolutionTitle")).toBeNull();
+  });
+});
+
+/**
+ * One workflow state, one owner — across EVERY surface that names one.
+ *
+ * The rail badge and the next-step note both answer "whose move is this?", and
+ * they answered it from different sources: the badge from RECORDED SERVER
+ * PROVENANCE (`activeAppraisalProvider`), the note from the stage's static
+ * `authority`. `APPRAISAL` carries `authority: "MIRROR"`, so a deal appraised
+ * by an INDEPENDENT appraiser rendered "An independent appraiser" in the rail
+ * and "This step is the finance company's" directly beneath it — the same
+ * screen naming two different parties for one step.
+ *
+ * That is worse than the original defect this issue fixed, because the screen
+ * now contradicts ITSELF rather than merely being wrong once.
+ *
+ * This was VISIBLE in the Gate B render and reported as clean. Rendering
+ * produced the evidence; reading it missed the contradiction. So the property
+ * is asserted mechanically here rather than left to a human reading a
+ * screenshot: no surface may name a party the provenance does not support.
+ */
+describe("two surfaces describing one step must not name different parties", () => {
+  function appraisalScreen(provider: "FINANCE_COMPANY" | "INDEPENDENT" | null) {
+    return render(
+      <DealCockpitView
+        deal={dealFixture({
+          stages: [{ key: "APPRAISAL", state: "CURRENT", authority: "MIRROR" }],
+        })}
+        activeAppraisalProvider={provider}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+  }
+
+  test("an INDEPENDENT appraisal is not called the finance company's by the note", () => {
+    appraisalScreen("INDEPENDENT");
+
+    // The badge is right — and was already right before this fix.
+    expect(screen.getAllByText("AppraisalByIndependent").length).toBeGreaterThan(0);
+    // The note was the surface still asserting the other party.
+    expect(screen.queryByText("StageMirrorNote")).toBeNull();
+  });
+
+  test("an unrecorded appraiser is not called the finance company's by the note", () => {
+    appraisalScreen(null);
+
+    expect(screen.getAllByText("StageOwnerAppraiserNotRecorded").length).toBeGreaterThan(0);
+    // `null` means "not on record, or a dealer estimate". Neither of those
+    // licenses the note to name the finance company.
+    expect(screen.queryByText("StageMirrorNote")).toBeNull();
+  });
+
+  test("a FINANCE_COMPANY appraisal DOES carry the note, because there it is true", () => {
+    // The positive control. Without it the two assertions above pass equally
+    // well against a note that was simply deleted, which would remove the
+    // operator's only explanation for why the step has no button.
+    appraisalScreen("FINANCE_COMPANY");
+
+    expect(screen.getAllByText("AppraisalByFinanceCompany").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("StageMirrorNote").length).toBeGreaterThan(0);
+  });
+
+  test("a non-appraisal mirrored step is untouched by the provenance gate", () => {
+    // The fix must narrow the note for APPRAISAL only. A stage whose owner
+    // genuinely IS the finance company keeps both surfaces agreeing on it,
+    // even when no appraisal provider is on record.
+    render(
+      <DealCockpitView
+        deal={dealFixture({
+          stages: [{ key: "CREDIT_DECISION", state: "CURRENT", authority: "MIRROR" }],
+        })}
+        activeAppraisalProvider={null}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    expect(screen.getAllByText("StageOwnerFinanceCompany").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("StageMirrorNote").length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The live stage exists ONCE on the screen.
+ *
+ * The rail used to name the current stage and a separate "next step" card
+ * beneath it named the same stage again and held its button — two
+ * representations of one fact, free to disagree. The stage the deal is on now
+ * opens IN PLACE inside the rail, and the block carrying the action keeps the
+ * `deal-next-step` id so the specs anchored to it still find the action.
+ */
+describe("the current stage is represented exactly once, inside the rail", () => {
+  test("the live stage's name appears once and the action lives on it", () => {
+    render(
+      <DealCockpitView
+        deal={dealFixture({
+          stages: [
+            { key: "APPLICATION", state: "COMPLETE", authority: "DEALER" },
+            { key: "HANDOVER", state: "CURRENT", authority: "DEALER" },
+            { key: "SETTLEMENT", state: "PENDING", authority: "DEALER" },
+          ],
+        })}
+        workflowAction={{ stageKey: "HANDOVER", actionKey: "RegisterHandoverAction", onStart: () => {} }}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    expect(screen.getAllByText("StageHandover")).toHaveLength(1);
+    expect(screen.queryByText("NextStepHeading")).toBeNull();
+    const focus = screen.getByTestId("deal-next-step");
+    expect(focus.textContent).toContain("StageHandover");
+    expect(focus.textContent).toContain("RegisterHandoverAction");
+    // Exactly one recommended CTA on the whole screen.
+    expect(screen.getAllByRole("button", { name: "RegisterHandoverAction" })).toHaveLength(1);
+  });
+
+  test("a stage with nothing outstanding says so in the focus row, and a blocker replaces it", () => {
+    render(
+      <DealCockpitView
+        deal={dealFixture({
+          stages: [{ key: "DELIVERY_ACTIONS", state: "BLOCKED", blocker: "DocumentsIncomplete", authority: "DEALER" }],
+        })}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+    expect(screen.getByTestId("deal-next-step").textContent).toContain("BlockerDocumentsIncomplete");
+    expect(screen.queryByText("StageReadyToProceed")).toBeNull();
+  });
+});

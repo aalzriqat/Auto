@@ -78,9 +78,9 @@ const JOD = 1_000;
 
 const SUGGESTION_QUERY = "financingEconomics:suggestQuotationForApplication";
 const ECONOMICS_QUERY = "financingEconomics:getEconomics";
-const COCKPIT_QUERY = "applications:dealCockpit";
+const COCKPIT_QUERY = "dealWorkspace:financedDealCockpit";
 
-/** `applications.dealCockpit`'s payload, trimmed to what the container reads. */
+/** `dealWorkspace.financedDealCockpit`'s payload, trimmed to what the container reads. */
 function cockpit(approvedPurchaseComplete: boolean) {
   return {
     dealKind: "FINANCED",
