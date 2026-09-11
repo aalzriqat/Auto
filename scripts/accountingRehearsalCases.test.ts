@@ -62,6 +62,14 @@ type Defects = {
   duplicateOnCreateReplay?: boolean;
   /** A replayed create is REFUSED — safe-looking, and not safe. */
   refuseCreateReplay?: boolean;
+  /** An over-payment settles the invoice and the excess simply disappears. */
+  swallowOverpayment?: boolean;
+  /** Applying a retained credit does not reduce the liability. */
+  ignoreRetainedApplication?: boolean;
+  /** A returned cheque ERASES its clearing instead of reversing it. */
+  eraseOnChequeReturn?: boolean;
+  /** A returned cheque posts nothing at all — the books still say money arrived. */
+  silentChequeReturn?: boolean;
 };
 
 function makeBackend(defects: Defects = {}) {
@@ -75,6 +83,8 @@ function makeBackend(defects: Defects = {}) {
   const canonicalPayments = new Map<string, Record<string, any>>();
   const pendingEvents: Array<Record<string, any>> = [];
   const createdByKey = new Map<string, string>();
+  const retained = new Map<string, { receiptMovementId: string; customerId: string; remainingUnappliedMinor: number; receiptPosted: boolean }>();
+  const cheques = new Map<string, Record<string, any>>();
   /** quoteId -> vehicleId, because a deposit names a QUOTE and is read back by VEHICLE. */
   const quoteVehicle = new Map<string, string>();
   let periodStatus = "OPEN";
@@ -229,6 +239,93 @@ function makeBackend(defects: Defects = {}) {
         }
         periodStatus = "CLOSED";
         return { ok: true as const, value: null };
+      case "collections:createReceivable":
+        return replayableCreate("recv", args)!;
+      case "collections:recordPayment": {
+        const made = replayableCreate("pay", args, true);
+        if (made) return made;
+        const paymentId = id("pay");
+        if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, paymentId);
+        // The excess is a LIABILITY, not income. A backend that keeps the
+        // change is the defect RC1 exists to catch.
+        const overMinor = Math.round((Number(args.amount) - 1000) * 100);
+        if (overMinor > 0 && !defects.swallowOverpayment) {
+          const movementId = id("mov");
+          retained.set(movementId, {
+            receiptMovementId: movementId,
+            customerId: String(args.customerId),
+            remainingUnappliedMinor: overMinor,
+            receiptPosted: true,
+          });
+        }
+        return { ok: true as const, value: paymentId };
+      }
+      case "collections:listRetainedCredits": {
+        const all = [...retained.values()].filter(
+          (r) => !args.customerId || r.customerId === String(args.customerId)
+        );
+        const visible = args.onlyRemaining ? all.filter((r) => r.remainingUnappliedMinor > 0) : all;
+        return { ok: true as const, value: { page: visible, isDone: true, continueCursor: null } };
+      }
+      case "collections:applyRetainedCredit": {
+        const made = replayableCreate("apply", args, true);
+        if (made) return made;
+        const position = retained.get(String(args.receiptMovementId));
+        if (!position) return { ok: false as const, error: "Retained position not found." };
+        if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, id("apply"));
+        if (!defects.ignoreRetainedApplication) {
+          position.remainingUnappliedMinor -= Math.round(Number(args.requestedAmount) * 100);
+        }
+        return { ok: true as const, value: null };
+      }
+      case "collections:registerCheque": {
+        const chequeId = id("chq");
+        cheques.set(chequeId, { _id: chequeId, status: "REGISTERED" });
+        return { ok: true as const, value: chequeId };
+      }
+      case "collections:depositCheque": {
+        const cheque = cheques.get(String(args.chequeId));
+        if (cheque) cheque.status = "DEPOSITED";
+        return { ok: true as const, value: null };
+      }
+      case "collections:clearCheque": {
+        const made = replayableCreate("clr", args, true);
+        if (made) return made;
+        if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, id("clr"));
+        const cheque = cheques.get(String(args.chequeId));
+        if (cheque) cheque.status = "CLEARED";
+        const entryId = id("je");
+        journalEntries.push({ _id: entryId });
+        journalLines.set(entryId, [
+          { debitMinor: 120_000, creditMinor: 0 },
+          { debitMinor: 0, creditMinor: 120_000 },
+        ]);
+        return { ok: true as const, value: null };
+      }
+      case "collections:returnClearedCheque": {
+        const made = replayableCreate("ret", args, true);
+        if (made) return made;
+        if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, id("ret"));
+        const cheque = cheques.get(String(args.chequeId));
+        if (defects.eraseOnChequeReturn) {
+          // Balances perfectly, and destroys the record that it ever happened.
+          journalEntries.pop();
+          cheques.delete(String(args.chequeId));
+          return { ok: true as const, value: null };
+        }
+        if (cheque) cheque.status = "RETURNED";
+        if (!defects.silentChequeReturn) {
+          const reversalId = id("je");
+          journalEntries.push({ _id: reversalId });
+          journalLines.set(reversalId, [
+            { debitMinor: 0, creditMinor: 120_000 },
+            { debitMinor: 120_000, creditMinor: 0 },
+          ]);
+        }
+        return { ok: true as const, value: null };
+      }
+      case "collections:listCheques":
+        return { ok: true as const, value: { page: [...cheques.values()], isDone: true, continueCursor: null } };
       case "organizations:create":
         // A genuinely different organization the caller owns — what the TEN case
         // needs in order to test OWNERSHIP rather than id syntax.
@@ -431,8 +528,8 @@ describe("the rehearsal passes against a backend that behaves", () => {
     const declined = results.filter((r) => r.status === "UNPROVEN");
     expect(declined.map((d) => `${d.id}: ${d.detail}`)).toEqual([]);
     // And it actually ran the cases rather than finding nothing to do.
-    expect(results.length).toBeGreaterThanOrEqual(15);
-    for (const id of ["A3", "B1", "B2", "P1", "RT1"]) {
+    expect(results.length).toBeGreaterThanOrEqual(17);
+    for (const id of ["A3", "B1", "B2", "P1", "RT1", "RC1", "RV1"]) {
       expect(statusOf(results, id), `${id} must actually execute`).toBe("PASS");
     }
   });
@@ -542,6 +639,33 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     const results = await runAgainst({ refuseCreateReplay: true });
     expect(statusOf(results, "RT1")).toBe("FAIL");
     expect(String(results.find((r) => r.id === "RT1")?.detail)).toMatch(/refused/);
+  });
+
+  test("RC1 catches an over-payment whose excess simply disappears", async () => {
+    // The customer's 500 is the dealership's liability, not its income. A
+    // backend that keeps the change balances perfectly and is stealing.
+    const results = await runAgainst({ swallowOverpayment: true });
+    expect(statusOf(results, "RC1")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "RC1")?.detail)).toMatch(/unaccounted for/);
+  });
+
+  test("RC1 catches a retained credit that is applied but never reduced", async () => {
+    // Worse than a refusal: the invoice is settled from a liability that still
+    // reads as owed, so the same 400 can be spent again.
+    const results = await runAgainst({ ignoreRetainedApplication: true });
+    expect(statusOf(results, "RC1")).toBe("FAIL");
+  });
+
+  test("RV1 catches a cheque return that ERASES its clearing", async () => {
+    // Balances perfectly and destroys the history. ACC-3: a reversal ADDS.
+    const results = await runAgainst({ eraseOnChequeReturn: true });
+    expect(statusOf(results, "RV1")).toBe("FAIL");
+  });
+
+  test("RV1 catches a cheque that bounces with no accounting effect at all", async () => {
+    const results = await runAgainst({ silentChequeReturn: true });
+    expect(statusOf(results, "RV1")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "RV1")?.detail)).toMatch(/NO journal entry/);
   });
 
   test("a defect in one case does not silently take the others down with it", async () => {

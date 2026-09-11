@@ -765,6 +765,232 @@ export async function runRehearsalCases(ctx) {
     }
   );
 
+  // ── RC1 — receipt allocation, and the money the dealership still OWES ──────
+  //
+  // A customer pays MORE than the invoice. The excess is not income and it is
+  // not the dealership's — it is a liability that must be visible, discoverable
+  // and dischargeable (ACC-9). The floor asks for receipt allocation AND
+  // retained-money reconciliation together, because the failure that matters is
+  // the pair coming apart: an over-payment that settles the receivable and then
+  // cannot be found, or is found and quietly counted as revenue.
+  //
+  // Driven end to end through public mutations: receivable → over-payment →
+  // read the retained position back → apply it to a SECOND receivable and watch
+  // the liability fall to nothing.
+  await recordCase(
+    results,
+    "RC1",
+    "an over-payment settles the invoice and the remainder is retained as a discoverable liability",
+    async () => {
+      const stamp = Date.now().toString(36);
+      const customerId = await ownerMust("mutation", "customers:create", {
+        orgId,
+        firstName: "Rehearsal",
+        lastName: `rc1-${stamp}`,
+      });
+      const dueDate = Date.now() + 7 * 24 * 60 * 60 * 1000;
+      const firstReceivable = await ownerMust("mutation", "collections:createReceivable", {
+        orgId,
+        customerId,
+        sourceType: "OTHER",
+        title: `Rehearsal invoice A ${stamp}`,
+        amount: 1000,
+        dueDate,
+        idempotencyKey: `rehearsal-rc1-recv-a-${stamp}`,
+      });
+      const secondReceivable = await ownerMust("mutation", "collections:createReceivable", {
+        orgId,
+        customerId,
+        sourceType: "OTHER",
+        title: `Rehearsal invoice B ${stamp}`,
+        amount: 400,
+        dueDate,
+        idempotencyKey: `rehearsal-rc1-recv-b-${stamp}`,
+      });
+
+      // 1,500 against a 1,000 invoice: 1,000 allocated, 500 retained.
+      await ownerMust("mutation", "collections:recordPayment", {
+        orgId,
+        receivableId: firstReceivable,
+        customerId,
+        amount: 1500,
+        method: "CASH",
+        paymentDate: Date.now(),
+        reference: `Rehearsal RC1 ${stamp}`,
+        idempotencyKey: `rehearsal-rc1-pay-${stamp}`,
+      });
+
+      // The retained position is read through the operator-facing query, not
+      // reconstructed here. A liability with no discoverable discharge path is
+      // the defect SCRUM-218-C exists to have closed, so reading it the way an
+      // operator would IS part of the assertion.
+      //
+      // PAGED PROPERLY, because `onlyRemaining` filters the PAGE and not the
+      // query: a page can come back EMPTY while `isDone` is still false. A
+      // single read would have reported "no retained credit" -- a financial
+      // accusation -- for a position sitting on page two. The query documents
+      // this in its own argument doc; I wrote the single-read version first.
+      const positions = await readRetainedCredits({ orgId, customerId, ownerMust });
+      if (positions.length === 0) {
+        fail(
+          "the over-payment left NO retained-credit position - 500 of the customer's money is unaccounted for, " +
+            "and an operator has no supported way to find or return it"
+        );
+      }
+      const remainingMinor = positions.reduce((sum, p) => sum + (p.remainingUnappliedMinor ?? 0), 0);
+      expectEqual(remainingMinor, 50_000, "retained credit remaining after a 1,500 payment on a 1,000 invoice");
+
+      const position = positions[0];
+      const movementId = position.receiptMovementId;
+      if (!movementId) {
+        fail(
+          `the retained position carries no receipt-movement id, so applyRetainedCredit has no supported way to ` +
+            `obtain its own argument: ${JSON.stringify(position).slice(0, 300)}`
+        );
+      }
+      // The product states this precondition itself: a credit whose own journal
+      // is still queued is visible but not yet applicable. Applying anyway and
+      // then reporting the refusal as a defect would be an accusation about
+      // timing rather than about behaviour.
+      if (position.receiptPosted === false) {
+        unproven(
+          "the receipt's own journal has not posted yet, so applyRetainedCredit is legitimately not applicable; " +
+            "the retained POSITION is proven, its discharge is not"
+        );
+      }
+
+      const applied = await ownerCall("mutation", "collections:applyRetainedCredit", {
+        orgId,
+        receiptMovementId: movementId,
+        receivableId: secondReceivable,
+        requestedAmount: 400,
+        idempotencyKey: `rehearsal-rc1-apply-${stamp}`,
+      });
+      if (!applied.ok) {
+        fail(`applying the retained credit to a second invoice was refused: ${applied.error.slice(0, 200)}`);
+      }
+
+      const afterPositions = await readRetainedCredits({ orgId, customerId, ownerMust });
+      const afterRemaining = afterPositions.reduce((sum, p) => sum + (p.remainingUnappliedMinor ?? 0), 0);
+      expectEqual(afterRemaining, 10_000, "retained credit remaining after applying 400 of the 500");
+
+      return {
+        customerId: String(customerId),
+        retainedAfterOverpayment: remainingMinor,
+        retainedAfterApplying400: afterRemaining,
+        commandsExercised: ["collections.createReceivable", "collections.recordPayment", "collections.applyRetainedCredit"],
+      };
+    }
+  );
+
+  // ── RV1 — a cleared cheque that BOUNCES reverses; it does not vanish ───────
+  //
+  // ACC-3: every new way to spend creates new reversal obligations, and the
+  // reversal must be SYMMETRIC — the money comes back off, and the history of
+  // it having happened stays. A return implemented as a deletion balances just
+  // as well and destroys the audit trail, so "the receivable is owed again" is
+  // only half the assertion; the other half is that the original posting is
+  // still there with a reversing entry against it.
+  await recordCase(
+    results,
+    "RV1",
+    "returning a CLEARED cheque puts the receivable back and reverses rather than erases",
+    async () => {
+      const stamp = Date.now().toString(36);
+      const customerId = await ownerMust("mutation", "customers:create", {
+        orgId,
+        firstName: "Rehearsal",
+        lastName: `rv1-${stamp}`,
+      });
+      const dueDate = Date.now() + 7 * 24 * 60 * 60 * 1000;
+      const receivableId = await ownerMust("mutation", "collections:createReceivable", {
+        orgId,
+        customerId,
+        sourceType: "CHEQUE",
+        title: `Rehearsal cheque invoice ${stamp}`,
+        amount: 1200,
+        dueDate,
+        idempotencyKey: `rehearsal-rv1-recv-${stamp}`,
+      });
+
+      const chequeId = await ownerMust("mutation", "collections:registerCheque", {
+        orgId,
+        receivableId,
+        customerId,
+        bank: "Rehearsal Bank",
+        chequeNumber: `RV1${stamp}`.slice(0, 20),
+        chequeDate: dueDate,
+        amount: 1200,
+      });
+
+      await ownerMust("mutation", "collections:depositCheque", { orgId, chequeId });
+      await resolverMust("mutation", "collections:clearCheque", {
+        orgId,
+        chequeId,
+        idempotencyKey: `rehearsal-rv1-clear-${stamp}`,
+      });
+
+      const entriesAfterClear = await ownerMust("query", "accountingLedger:listJournalEntries", {
+        orgId,
+        limit: 200,
+      });
+
+      const returned = await resolverCall("mutation", "collections:returnClearedCheque", {
+        orgId,
+        chequeId,
+        returnReason: "Rehearsal bounce",
+        idempotencyKey: `rehearsal-rv1-return-${stamp}`,
+      });
+      if (!returned.ok) {
+        fail(`returning the cleared cheque was refused: ${returned.error.slice(0, 200)}`);
+      }
+
+      const entriesAfterReturn = await ownerMust("query", "accountingLedger:listJournalEntries", {
+        orgId,
+        limit: 200,
+      });
+      // A reversal ADDS. If the count fell, the original posting was removed
+      // rather than reversed, and the books no longer say the cheque ever
+      // cleared — an additions-only check would have called that "no GL effect".
+      if ((entriesAfterReturn ?? []).length < (entriesAfterClear ?? []).length) {
+        fail(
+          `journal entries went DOWN across the return (${entriesAfterClear.length} → ${entriesAfterReturn.length}) — ` +
+            `the clearing was erased instead of reversed`
+        );
+      }
+      if ((entriesAfterReturn ?? []).length === (entriesAfterClear ?? []).length) {
+        fail(
+          "the return produced NO journal entry at all — the cheque bounced and the books still say the money arrived"
+        );
+      }
+
+      const chequePage = await ownerMust("query", "collections:listCheques", {
+        orgId,
+        paginationOpts: { numItems: 100, cursor: null },
+      });
+      const mine = (chequePage?.page ?? []).find((c) => String(c._id) === String(chequeId));
+      if (!mine) fail("the cheque is no longer listed after its return — the history was destroyed, not reversed");
+
+      const failedOutbox = await ownerMust("query", "accountingOutbox:listPending", {
+        orgId,
+        status: "FAILED",
+        limit: 200,
+      });
+      if ((failedOutbox ?? []).length > 0) {
+        fail(`the reversal left ${failedOutbox.length} FAILED accounting event(s) behind`);
+      }
+
+      return {
+        chequeId: String(chequeId),
+        chequeStatusAfterReturn: mine.status ?? null,
+        journalEntriesAfterClear: entriesAfterClear.length,
+        journalEntriesAfterReturn: entriesAfterReturn.length,
+        reversalAddedEntries: entriesAfterReturn.length - entriesAfterClear.length,
+        commandsExercised: ["collections.clearCheque", "collections.returnClearedCheque"],
+      };
+    }
+  );
+
   // ── P1 — a CLOSED period holds the posting; it does not half-post it ───────
   //
   // RUNS LAST, AND THAT IS STRUCTURAL. Closing the organization's only open
@@ -874,6 +1100,31 @@ export async function runRehearsalCases(ctx) {
       };
     }
   );
+}
+
+/**
+ * Every remaining retained position for a customer, paged to exhaustion.
+ *
+ * `collections:listRetainedCredits` documents that `onlyRemaining` filters the
+ * PAGE rather than the query, so `page.length < numItems` -- including zero --
+ * is not the end of the results. Stopping at the first page would let this
+ * rehearsal report a customer's money as missing because it sat on page two.
+ */
+async function readRetainedCredits({ orgId, customerId, ownerMust }) {
+  const rows = [];
+  let cursor = null;
+  for (let page = 0; page < 20; page++) {
+    const result = await ownerMust("query", "collections:listRetainedCredits", {
+      orgId,
+      customerId,
+      onlyRemaining: true,
+      paginationOpts: { numItems: 50, cursor },
+    });
+    rows.push(...(result?.page ?? []));
+    if (result?.isDone || !result?.continueCursor) break;
+    cursor = result.continueCursor;
+  }
+  return rows;
 }
 
 /** Keeps the validator's own shape out of the evidence without hiding its verdict. */
