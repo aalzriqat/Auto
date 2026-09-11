@@ -68,6 +68,10 @@ type Defects = {
   ignoreRetainedApplication?: boolean;
   /** Only part of the receipt is retained — a real shortfall, not a scale difference. */
   shortRetention?: boolean;
+  /** A consigned sale is posted as if the dealership owned the car — ACC-1. */
+  postConsignedAsOwned?: boolean;
+  /** The consigned sale posts no journal at all. */
+  silentConsignedSale?: boolean;
   /** A returned cheque ERASES its clearing instead of reversing it. */
   eraseOnChequeReturn?: boolean;
   /** A returned cheque posts nothing at all — the books still say money arrived. */
@@ -93,6 +97,17 @@ function makeBackend(defects: Defects = {}) {
    * of 50,000 — two wrongs that cancelled locally and separated on the cloud.
    */
   const MINOR_SCALE = 1000;
+  const vehicles = new Map<string, Record<string, any>>();
+  /** The chart, keyed the way the product keys it, so SR1 can resolve lines. */
+  const CHART = [
+    { _id: "acct_cash", code: "1000", type: "ASSET", name: "Cash", systemKey: "CASH" },
+    { _id: "acct_2110", code: "2110", type: "LIABILITY", name: "Unapplied Customer Receipts", systemKey: "UNAPPLIED_CUSTOMER_RECEIPTS" },
+    { _id: "acct_comm", code: "4200", type: "REVENUE", name: "Consignment Commission", systemKey: "CONSIGNMENT_COMMISSION_REVENUE" },
+    { _id: "acct_ap", code: "2100", type: "LIABILITY", name: "AP Suppliers", systemKey: "ACCOUNTS_PAYABLE_SUPPLIERS" },
+    { _id: "acct_rev", code: "4000", type: "REVENUE", name: "Sales Revenue", systemKey: "SALES_REVENUE" },
+    { _id: "acct_cogs", code: "5000", type: "EXPENSE", name: "COGS", systemKey: "COST_OF_VEHICLES_SOLD" },
+    { _id: "acct_inv", code: "1300", type: "ASSET", name: "Vehicle Inventory", systemKey: "VEHICLE_INVENTORY" },
+  ];
   /** quoteId -> vehicleId, because a deposit names a QUOTE and is read back by VEHICLE. */
   const quoteVehicle = new Map<string, string>();
   let periodStatus = "OPEN";
@@ -240,12 +255,7 @@ function makeBackend(defects: Defects = {}) {
       case "chartOfAccounts:list":
         return {
           ok: true as const,
-          value: defects.noUnappliedLiability
-            ? [{ code: "1000", type: "ASSET", name: "Cash" }]
-            : [
-                { code: "1000", type: "ASSET", name: "Cash" },
-                { code: "2110", type: "LIABILITY", name: "Unapplied Customer Receipts" },
-              ],
+          value: defects.noUnappliedLiability ? CHART.filter((a) => a.code !== "2110") : CHART,
         };
       case "accountingPeriods:create":
         return { ok: true as const, value: id("period") };
@@ -374,6 +384,47 @@ function makeBackend(defects: Defects = {}) {
       }
       case "collections:listCheques":
         return { ok: true as const, value: { page: [...cheques.values()], isDone: true, continueCursor: null } };
+      case "users:getMe":
+        return { ok: true as const, value: { _id: "user_owner" } };
+      case "sales:create": {
+        const made = replayableCreate("sale", args, true);
+        if (made) return made;
+        const saleId = id("sale");
+        if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, saleId);
+        const vehicle = vehicles.get(String(args.vehicleId));
+        const priceMinor = Math.round(Number(args.salePrice) * MINOR_SCALE);
+        const costMinor = Math.round((vehicle?.purchasePrice ?? 0) * MINOR_SCALE);
+        events.push({
+          _id: id("evt"),
+          eventType: "SALE_COMPLETED",
+          sourceType: "sales",
+          sourceId: saleId,
+          payload: { saleAmountMinor: priceMinor },
+        });
+        if (defects.silentConsignedSale) return { ok: true as const, value: saleId };
+        const entryId = id("je");
+        journalEntries.push({ _id: entryId });
+        const consigned = vehicle?.sourceType === "SOURCED" && !defects.postConsignedAsOwned;
+        journalLines.set(
+          entryId,
+          consigned
+            ? [
+                // Agent basis: gross arrives, the supplier's share is a
+                // liability from the instant it lands, the spread is commission.
+                { accountId: "acct_cash", debitMinor: priceMinor, creditMinor: 0 },
+                { accountId: "acct_ap", debitMinor: 0, creditMinor: costMinor },
+                { accountId: "acct_comm", debitMinor: 0, creditMinor: priceMinor - costMinor },
+              ]
+            : [
+                // Owned basis — WRONG for a consigned car, and it balances.
+                { accountId: "acct_cash", debitMinor: priceMinor, creditMinor: 0 },
+                { accountId: "acct_rev", debitMinor: 0, creditMinor: priceMinor },
+                { accountId: "acct_cogs", debitMinor: costMinor, creditMinor: 0 },
+                { accountId: "acct_inv", debitMinor: 0, creditMinor: costMinor },
+              ]
+        );
+        return { ok: true as const, value: saleId };
+      }
       case "organizations:create":
         // A genuinely different organization the caller owns — what the TEN case
         // needs in order to test OWNERSHIP rather than id syntax.
@@ -383,7 +434,14 @@ function makeBackend(defects: Defects = {}) {
       case "vehicles:create":
         // Non-probe mode never returns null; the assertion keeps that visible
         // to the type checker instead of widening every caller's result.
-        return replayableCreate("veh", args)!;
+        const madeVehicle = replayableCreate("veh", args)!;
+        if (madeVehicle.ok) {
+          vehicles.set(String(madeVehicle.value), {
+            sourceType: args.sourceType,
+            purchasePrice: Number(args.purchasePrice ?? 0),
+          });
+        }
+        return madeVehicle;
       case "quotes:saveQuote": {
         const quoteId = id("quote");
         quoteVehicle.set(quoteId, String(args.vehicleId ?? ""));
@@ -583,8 +641,8 @@ describe("the rehearsal passes against a backend that behaves", () => {
     const declined = results.filter((r) => r.status === "UNPROVEN");
     expect(declined.map((d) => `${d.id}: ${d.detail}`)).toEqual([]);
     // And it actually ran the cases rather than finding nothing to do.
-    expect(results.length).toBeGreaterThanOrEqual(17);
-    for (const id of ["A3", "B1", "B2", "P1", "RT1", "RC1", "RV1"]) {
+    expect(results.length).toBeGreaterThanOrEqual(18);
+    for (const id of ["A3", "B1", "B2", "P1", "RT1", "RC1", "RV1", "SR1"]) {
       expect(statusOf(results, id), `${id} must actually execute`).toBe("PASS");
     }
   });
@@ -729,6 +787,20 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     const results = await runAgainst({ silentChequeReturn: true });
     expect(statusOf(results, "RV1")).toBe("FAIL");
     expect(String(results.find((r) => r.id === "RV1")?.detail)).toMatch(/NO journal entry/);
+  });
+
+  test("SR1 catches a consigned car posted as dealership stock", async () => {
+    // ACC-1. Same bottom line, revenue overstated by the price of the car,
+    // and every entry balances — which is why nothing else notices.
+    const results = await runAgainst({ postConsignedAsOwned: true });
+    expect(statusOf(results, "SR1")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "SR1")?.detail)).toMatch(/no commission revenue|was touched/);
+  });
+
+  test("SR1 catches a consigned sale that posts nothing", async () => {
+    const results = await runAgainst({ silentConsignedSale: true });
+    expect(statusOf(results, "SR1")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "SR1")?.detail)).toMatch(/NO journal entry/);
   });
 
   test("a defect in one case does not silently take the others down with it", async () => {

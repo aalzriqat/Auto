@@ -1063,6 +1063,150 @@ export async function runRehearsalCases(ctx) {
     }
   );
 
+  // ── SR1 — a SOURCED car is sold as the supplier's AGENT, never as stock ────
+  //
+  // ACC-1: the dealership never owns a consigned vehicle, so its economics are
+  // agent-sale economics. The only revenue is the spread over the supplier's
+  // entitlement; the sale price is never revenue, the supplier's cost is never
+  // COGS, and nothing ever sat in inventory to be relieved. Posting it as an
+  // owned sale reaches the same bottom line — which is exactly why it goes
+  // unnoticed — while overstating revenue by the entire price of the car.
+  //
+  // The assertion reads the journal the sale ACTUALLY posted and checks every
+  // line against the chart by system key: commission revenue for the margin,
+  // AP-Suppliers for the entitlement, and NO line on sales revenue, COGS or
+  // vehicle inventory. A rule that had quietly fallen through to the owned
+  // branch would fail all three.
+  await recordCase(
+    results,
+    "SR1",
+    "a consigned sale posts commission on the spread and touches neither sales revenue, COGS nor inventory",
+    async () => {
+      const stamp = Date.now().toString(36);
+      const vin = `RHSSR1${stamp.replace(/[ioq]/g, "z").toUpperCase()}`.padEnd(17, "0").slice(0, 17);
+      const vehicleId = await ownerMust("mutation", "vehicles:create", {
+        orgId,
+        vin,
+        make: "Toyota",
+        model: "Camry-sr1",
+        year: 2022,
+        mileage: 800,
+        color: "Blue",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        sellingPrice: 22000,
+        sourceType: "SOURCED",
+        sourcedFromName: `Rehearsal Supplier ${stamp}`,
+        status: "AVAILABLE",
+        // The supplier's ENTITLEMENT — what he is owed for the car. Not a cost
+        // of goods, because these were never the dealership's goods.
+        purchasePrice: 15000,
+        purchasePaymentMethod: "CASH",
+        idempotencyKey: `rehearsal-sr1-vehicle-${stamp}`,
+      });
+      const customerId = await ownerMust("mutation", "customers:create", {
+        orgId,
+        firstName: "Rehearsal",
+        lastName: `sr1-${stamp}`,
+      });
+      const me = await ownerMust("query", "users:getMe", {});
+      if (!me?._id) fail("users:getMe returned no user for the OWNER token — the sale has no salesperson to name");
+
+      const entriesBefore = await ownerMust("query", "accountingLedger:listJournalEntries", { orgId, limit: 200 });
+      const saleId = await ownerMust("mutation", "sales:create", {
+        orgId,
+        vehicleId,
+        customerId,
+        salespersonId: me._id,
+        salePrice: 22000,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+        financingType: "CASH",
+        idempotencyKey: `rehearsal-sr1-sale-${stamp}`,
+      });
+
+      // The journal this sale posted, found through its accounting event
+      // rather than by assuming it is the newest entry.
+      const events = await ownerMust("query", "accountingLedger:listAccountingEvents", {
+        orgId,
+        sourceType: "sales",
+        sourceId: String(saleId),
+        limit: 50,
+      });
+      const completed = (events ?? []).filter((e) => e.eventType === "SALE_COMPLETED");
+      expectEqual(completed.length, 1, "SALE_COMPLETED accounting events for this sale");
+
+      const entriesAfter = await ownerMust("query", "accountingLedger:listJournalEntries", { orgId, limit: 200 });
+      const newEntries = (entriesAfter ?? []).filter(
+        (e) => !(entriesBefore ?? []).some((b) => String(b._id) === String(e._id))
+      );
+      if (newEntries.length === 0) {
+        fail("the consigned sale posted NO journal entry — the supplier is owed money the books do not record");
+      }
+
+      // Resolve every line to its system key through the chart.
+      const chart = await ownerMust("query", "chartOfAccounts:list", { orgId });
+      const keyOf = new Map((chart ?? []).map((a) => [String(a._id), a.systemKey ?? a.code ?? "?"]));
+      const totals = {};
+      let linesRead = 0;
+      for (const entry of newEntries) {
+        const detail = await ownerMust("query", "accountingLedger:getJournalEntry", {
+          orgId,
+          journalEntryId: entry._id,
+        });
+        for (const l of detail?.lines ?? []) {
+          linesRead += 1;
+          const key = keyOf.get(String(l.accountId)) ?? "?";
+          const t = totals[key] ?? { debit: 0, credit: 0 };
+          t.debit += l.debitMinor ?? 0;
+          t.credit += l.creditMinor ?? 0;
+          totals[key] = t;
+        }
+      }
+
+      const commission = totals.CONSIGNMENT_COMMISSION_REVENUE ?? { debit: 0, credit: 0 };
+      const supplier = totals.ACCOUNTS_PAYABLE_SUPPLIERS ?? { debit: 0, credit: 0 };
+      if (commission.credit <= 0) {
+        fail(`no commission revenue was credited for a consigned sale: ${JSON.stringify(totals).slice(0, 400)}`);
+      }
+      // Scale derived from the commission the product posted, sanity-checked
+      // the same way RC1 does it, so the assertion is about the RATIO of
+      // margin to entitlement and not about the dealership's decimal places.
+      const scale = commission.credit / 7000;
+      if (![1, 10, 100, 1000].includes(scale)) {
+        fail(
+          `commission credited (${commission.credit} minor) is not the 7,000 spread at any sane scale — ` +
+            `the margin was measured wrongly, not merely in different units`
+        );
+      }
+      expectEqual(commission.credit, 7000 * scale, `commission revenue = sale price − entitlement (scale ${scale})`);
+      expectEqual(supplier.credit, 15000 * scale, `AP-Suppliers credited for the supplier's entitlement (scale ${scale})`);
+
+      // The three lines that would mean the car was posted as the dealership's.
+      for (const forbidden of ["SALES_REVENUE", "COST_OF_VEHICLES_SOLD", "VEHICLE_INVENTORY"]) {
+        const t = totals[forbidden];
+        if (t && (t.debit !== 0 || t.credit !== 0)) {
+          fail(
+            `${forbidden} was touched (${JSON.stringify(t)}) on a CONSIGNED sale — the car was posted as ` +
+              `dealership stock, overstating revenue by the price of the vehicle`
+          );
+        }
+      }
+
+      return {
+        saleId: String(saleId),
+        vehicleId: String(vehicleId),
+        minorUnitScale: scale,
+        journalEntriesPosted: newEntries.length,
+        journalLinesRead: linesRead,
+        commissionRevenueMinor: commission.credit,
+        supplierPayableMinor: supplier.credit,
+        forbiddenAccountsTouched: [],
+        commandsExercised: ["vehicles.create (SOURCED)", "sales.create"],
+      };
+    }
+  );
+
   // ── P1 — a CLOSED period holds the posting; it does not half-post it ───────
   //
   // RUNS LAST, AND THAT IS STRUCTURAL. Closing the organization's only open
