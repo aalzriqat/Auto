@@ -17,6 +17,7 @@ import {
   rehearsalRefScope,
   sanitizeClerkSessionId,
   summarize,
+  unproven,
 } from "./accountingPreviewRehearsal.mjs";
 import { previewNameForRef } from "./e2ePreviewBootstrap.mjs";
 
@@ -209,7 +210,33 @@ describe("case recording keeps a failure as evidence", () => {
     await recordCase(results, "X2", "a case that passes", () => ({ released: 2000 }));
     expect(results.map((r) => r.status)).toEqual(["FAIL", "PASS"]);
     expect(results[0].detail).toMatch(/released 4000/);
-    expect(summarize(results)).toEqual({ total: 2, passed: 1, failed: 1, failedIds: ["X1"] });
+    expect(summarize(results)).toEqual({
+      total: 2,
+      passed: 1,
+      failed: 1,
+      failedIds: ["X1"],
+      unproven: 0,
+      unprovenIds: [],
+      complete: false,
+    });
+  });
+
+  test("a case that could not be tested is UNPROVEN, and the run is not complete", async () => {
+    // The whole point of the third status: this run found no defect AND
+    // demonstrated nothing. Counting it as a pass would let a rehearsal that
+    // skipped a requirement be quoted as one that met it.
+    const results: Array<Record<string, unknown>> = [];
+    await recordCase(results, "P1", "a case that could not run", () => {
+      unproven("no OPEN period existed to close");
+    });
+    await recordCase(results, "A1", "a case that ran", () => ({ ok: true }));
+    expect(results.map((r) => r.status)).toEqual(["UNPROVEN", "PASS"]);
+    const summary = summarize(results);
+    expect(summary.failed).toBe(0);
+    expect(summary.passed).toBe(1);
+    expect(summary.unproven).toBe(1);
+    expect(summary.unprovenIds).toEqual(["P1"]);
+    expect(summary.complete).toBe(false);
   });
 
   test("an all-passing run reports no failures", () => {
@@ -218,6 +245,9 @@ describe("case recording keeps a failure as evidence", () => {
       passed: 1,
       failed: 0,
       failedIds: [],
+      unproven: 0,
+      unprovenIds: [],
+      complete: true,
     });
   });
 });

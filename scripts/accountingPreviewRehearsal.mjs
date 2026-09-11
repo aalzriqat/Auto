@@ -389,6 +389,23 @@ export async function fireConcurrentReleases({ convexUrl, attempts, leadMs = 250
 }
 
 /** Records one case outcome. Never throws — a failed case is evidence too. */
+/**
+ * The marker that separates "this property is false" from "this run could not
+ * put the property to the test".
+ *
+ * Both of those are non-PASS and only one of them is a defect. Collapsing them
+ * loses the distinction in the direction that flatters the run: a case that
+ * could not execute, reported as a failure, invites someone to "fix" it by
+ * weakening the assertion — and reported as a pass, it is simply a lie. So a
+ * case may declare itself UNPROVEN, and the summary counts those separately and
+ * refuses to describe the run as complete while any remain.
+ */
+export class Unproven extends Error {}
+
+export function unproven(reason) {
+  throw new Unproven(reason);
+}
+
 export function recordCase(results, id, description, assertion) {
   return Promise.resolve()
     .then(assertion)
@@ -396,17 +413,29 @@ export function recordCase(results, id, description, assertion) {
       results.push({ id, description, status: "PASS", detail: detail ?? null });
     })
     .catch((error) => {
-      results.push({ id, description, status: "FAIL", detail: String(error?.message ?? error) });
+      results.push({
+        id,
+        description,
+        status: error instanceof Unproven ? "UNPROVEN" : "FAIL",
+        detail: String(error?.message ?? error),
+      });
     });
 }
 
 export function summarize(results) {
   const failed = results.filter((r) => r.status === "FAIL");
+  const unprovenCases = results.filter((r) => r.status === "UNPROVEN");
   return {
     total: results.length,
-    passed: results.length - failed.length,
+    passed: results.filter((r) => r.status === "PASS").length,
     failed: failed.length,
     failedIds: failed.map((r) => r.id),
+    unproven: unprovenCases.length,
+    unprovenIds: unprovenCases.map((r) => r.id),
+    // The run is only "complete" when nothing was skipped. A green exit code
+    // beside a non-empty unproven list is how a partial rehearsal gets quoted
+    // as a full one.
+    complete: failed.length === 0 && unprovenCases.length === 0,
   };
 }
 
@@ -486,6 +515,7 @@ export async function main(env = process.env) {
     salesMust,
     approverMust,
     recordCase,
+    unproven,
     fireConcurrentReleases,
   });
 
@@ -497,6 +527,17 @@ export async function main(env = process.env) {
         evidence.summary.failedIds.join(", ")
     );
     return 1;
+  }
+  if (evidence.summary.unproven > 0) {
+    // Not an exit code, because nothing is broken — but it must not read as a
+    // completed rehearsal either. The banner says exactly what was and was not
+    // put to the test, so this line cannot be quoted as a full pass.
+    console.error(
+      `\nREHEARSAL PASSED BUT INCOMPLETE: ${evidence.summary.passed} of ${evidence.summary.total} cases passed, ` +
+        `${evidence.summary.unproven} UNPROVEN (${evidence.summary.unprovenIds.join(", ")}). ` +
+        `An unproven case is not evidence of anything.`
+    );
+    return 0;
   }
   console.error(`\nREHEARSAL PASSED: ${evidence.summary.passed} of ${evidence.summary.total} cases.`);
   return 0;

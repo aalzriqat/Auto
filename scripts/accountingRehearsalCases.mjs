@@ -160,7 +160,7 @@ async function openTheBooks({ orgId, ownerCall }) {
 }
 
 export async function runRehearsalCases(ctx) {
-  const { results, orgId, recordCase, fireConcurrentReleases, tokens, config } = ctx;
+  const { results, orgId, recordCase, fireConcurrentReleases, tokens, config, unproven } = ctx;
 
   // TWO PEOPLE, AND THE PRODUCT INSISTS ON IT.
   //
@@ -469,6 +469,319 @@ export async function runRehearsalCases(ctx) {
     }
     const after = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, ownerMust });
     expectEqual(after.releasedAmountMinor ?? 0, 0, "released amount after the refused cross-tenant release");
+    expectEqual(after.releaseCount ?? 0, 0, "releaseCount after the refused cross-tenant release");
+    expectEqual(after.status, "HELD", "deposit status after the refused cross-tenant release");
     return { foreignOrgId, refusal: attempt.error.slice(0, 200) };
   });
+
+  // ── A3 — the chart is not merely present, it is COMPLETE ──────────────────
+  //
+  // A1 proves 2110 exists and is a liability. That is one account. The product
+  // has a set of accounts it requires by systemKey, and a chart missing any of
+  // them posts into nothing — so the chart's own validator is the assertion,
+  // rather than a list of codes this file would have to keep in step by hand.
+  await recordCase(results, "A3", "the fresh chart satisfies the product's own system-account validator", async () => {
+    const report = await ownerMust("query", "chartOfAccounts:validateSystemAccounts", { orgId });
+    const missing = report?.missing ?? [];
+    if (missing.length > 0) {
+      fail(`the chart is missing required system accounts: ${missing.join(", ")}`);
+    }
+    return { missingSystemAccounts: missing.length, report: summarizeValidation(report) };
+  });
+
+  // ── B1 — the deposit row is reconciled TO THE BOOKS, not instead of them ───
+  //
+  // Every deposit case above reads `releasedAmountMinor` and `releaseCount` off
+  // the deposit row. That is the row agreeing with itself. A release also emits
+  // a domain event, a canonical payment and a journal, and the defect that
+  // matters most in this lane — money reported as moved that did not move, or
+  // moved twice — can sit entirely in the gap between the row and the ledger.
+  //
+  // So this case performs a release and then reconciles FOUR independent
+  // surfaces for the same money: the deposit row, the accounting event, the
+  // canonical payment, and the journal. It also replays the identical intent,
+  // because a retry that quietly posted a SECOND event while leaving the row
+  // untouched would pass every D-case in this file.
+  await recordCase(
+    results,
+    "B1",
+    "a release reconciles exactly across deposit row, accounting event, canonical payment and journal",
+    async () => {
+      const fx = await makePartiallyCommittedDeposit({ orgId, ownerMust, label: "b1" });
+      const args = {
+        orgId,
+        depositId: fx.depositId,
+        resolution: "REFUNDED",
+        refundMethod: "CASH",
+        idempotencyKey: `release-deposit:${fx.depositId}:REFUNDED:CASH:gen0`,
+      };
+      await resolverMust("mutation", "deposits:release", args);
+      const replay = await resolverCall("mutation", "deposits:release", args);
+      if (!replay.ok) fail(`the faithful replay was refused: ${replay.error.slice(0, 200)}`);
+
+      const row = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, ownerMust });
+      expectEqual(row.releasedAmountMinor, 2_000_000, "released amount on the deposit row");
+      expectEqual(row.releaseCount, 1, "releaseCount on the deposit row");
+
+      // ONE event for this deposit, carrying the SAME amount the row claims.
+      const events = await ownerMust("query", "accountingLedger:listAccountingEvents", {
+        orgId,
+        sourceType: "deposits",
+        sourceId: String(fx.depositId),
+        limit: 200,
+      });
+      const refunds = (events ?? []).filter((e) => e.eventType === "DEPOSIT_REFUNDED");
+      expectEqual(refunds.length, 1, "DEPOSIT_REFUNDED events for this deposit (the replay must not post a second)");
+      expectEqual(
+        refunds[0]?.payload?.amountMinor,
+        row.releasedAmountMinor,
+        "the accounting event's amount against the deposit row's released amount"
+      );
+
+      // The canonical payment for that refund, found through the supported
+      // listing rather than by constructing an id.
+      // Matched on the REFERENCE, which the product writes as
+      // `Deposit refund <depositId>`, rather than on the vehicle. The deposit's
+      // vehicle is derived from the quote rather than passed in, so filtering by
+      // vehicle would have been an assumption about a field this rehearsal never
+      // sets — and one that would silently widen if a fixture ever shared a car.
+      const payments = await listCollectionPayments({ orgId, ownerMust });
+      const refundRows = payments.filter(
+        (p) =>
+          p.direction === "OUT" &&
+          p.method === "REFUND" &&
+          String(p.reference ?? "").includes(String(fx.depositId))
+      );
+      expectEqual(refundRows.length, 1, "outbound REFUND collection payments for this deposit");
+      const canonicalId = refundRows[0]?.canonicalPaymentId;
+      if (!canonicalId) fail("the refund collection payment carries no canonicalPaymentId — the books were not reached");
+      const balance = await ownerMust("query", "subledger:getPaymentBalance", {
+        orgId,
+        paymentId: canonicalId,
+      });
+      if (!balance?.payment) fail("the canonical payment for this refund could not be read back");
+      expectEqual(
+        balance.payment.amountMinor,
+        row.releasedAmountMinor,
+        "the canonical payment's amount against the deposit row's released amount"
+      );
+
+      return {
+        depositId: fx.depositId,
+        row: { released: row.releasedAmountMinor, releaseCount: row.releaseCount },
+        event: {
+          count: refunds.length,
+          amountMinor: refunds[0]?.payload?.amountMinor ?? null,
+          eventVersion: refunds[0]?.eventVersion ?? null,
+        },
+        canonicalPayment: {
+          id: String(canonicalId),
+          amountMinor: balance.payment.amountMinor,
+          status: balance.payment.status ?? null,
+          unappliedMinor: balance.unappliedMinor ?? null,
+        },
+      };
+    }
+  );
+
+  // ── B2 — every journal entry balances, and nothing is stuck in the outbox ──
+  //
+  // Per-entry balance is the floor's wording and it is the right level: a GL
+  // whose TOTAL debits equal its total credits can still contain two entries
+  // that are individually wrong in opposite directions. Checking each entry
+  // catches that; checking the sum does not.
+  //
+  // The outbox is the other half. A posting that failed on its way to the
+  // ledger leaves the deposit row looking settled while the books never
+  // received it, which is precisely the shape that would make every case above
+  // pass while the dealership's accounts are wrong.
+  await recordCase(
+    results,
+    "B2",
+    "every journal entry balances per entry and no accounting event is stuck FAILED",
+    async () => {
+      const entries = await ownerMust("query", "accountingLedger:listJournalEntries", { orgId, limit: 200 });
+      const unbalanced = [];
+      let linesRead = 0;
+      for (const entry of entries ?? []) {
+        // `listJournalEntries` returns the ENTRY rows only; the lines live in a
+        // separate table and arrive through `getJournalEntry`. Summing a `lines`
+        // field that the list query never returns would have made every entry
+        // balance at 0 === 0 — a green check measuring nothing.
+        const detail = await ownerMust("query", "accountingLedger:getJournalEntry", {
+          orgId,
+          journalEntryId: entry._id,
+        });
+        const lines = detail?.lines ?? [];
+        if (lines.length === 0) {
+          unbalanced.push({ entryId: String(entry._id), reason: "entry has no journal lines" });
+          continue;
+        }
+        linesRead += lines.length;
+        const debit = lines.reduce((sum, l) => sum + (l.debitMinor ?? 0), 0);
+        const credit = lines.reduce((sum, l) => sum + (l.creditMinor ?? 0), 0);
+        if (debit !== credit) {
+          unbalanced.push({ entryId: String(entry._id), debit, credit });
+        }
+      }
+      if (unbalanced.length > 0) {
+        fail(`journal entries that do not balance: ${JSON.stringify(unbalanced).slice(0, 400)}`);
+      }
+
+      const failed = await ownerMust("query", "accountingOutbox:listPending", {
+        orgId,
+        status: "FAILED",
+        limit: 200,
+      });
+      if ((failed ?? []).length > 0) {
+        fail(
+          `${failed.length} accounting event(s) are FAILED in the outbox — the rows above are settled but the ` +
+            `books never received them: ${JSON.stringify(failed.slice(0, 3)).slice(0, 400)}`
+        );
+      }
+      const pending = await ownerMust("query", "accountingOutbox:listPending", {
+        orgId,
+        status: "PENDING",
+        limit: 200,
+      });
+
+      // An empty ledger would pass both checks above vacuously.
+      if ((entries ?? []).length === 0) {
+        fail("no journal entries exist at all — a balance check over nothing is not evidence");
+      }
+      return {
+        journalEntries: entries.length,
+        journalLinesChecked: linesRead,
+        unbalancedEntries: 0,
+        failedOutboxEvents: 0,
+        pendingOutboxEvents: (pending ?? []).length,
+      };
+    }
+  );
+  // ── P1 — a CLOSED period holds the posting; it does not half-post it ───────
+  //
+  // RUNS LAST, AND THAT IS STRUCTURAL. Closing the organization's only open
+  // period changes the world for every case after it: postings would be held
+  // for a reason those cases do not know about, and they would go red while the
+  // product behaved correctly. A case whose side effects invalidate its
+  // neighbours has to be the last thing that happens.
+  //
+  // The property under test is the one the posting engine documents: no open
+  // period is a TEMPORARY HOLD. The money decision is recorded, the event waits
+  // in the outbox, and the general ledger is not touched — not touched
+  // *partially* least of all, which is the outcome that would leave a
+  // dealership's accounts internally inconsistent with no error anywhere.
+  await recordCase(
+    results,
+    "P1",
+    "with no OPEN period the posting is HELD in the outbox and the GL is not partially written",
+    async () => {
+      const periods = await ownerMust("query", "accountingPeriods:list", { orgId });
+      const open = (periods ?? []).filter((p) => p.status === "OPEN");
+      if (open.length === 0) {
+        unproven("no OPEN period existed to close, so the closed-period behaviour was never exercised");
+      }
+
+      const beforeEntries = await ownerMust("query", "accountingLedger:listJournalEntries", { orgId, limit: 200 });
+      const fx = await makePartiallyCommittedDeposit({ orgId, ownerMust, label: "p1" });
+
+      // Close through the real mutation. If the product refuses — a close
+      // checklist that is not clean is a legitimate refusal, not a defect —
+      // this case reports UNPROVEN rather than inventing a way through. Forcing
+      // the period shut by another route would be exactly the "manual state
+      // forcing that bypasses the behaviour under test" the floor prohibits.
+      const closed = await ownerCall("mutation", "accountingPeriods:close", {
+        orgId,
+        periodId: open[0]._id,
+      });
+      if (!closed.ok) {
+        unproven(`the period could not be closed through the supported mutation: ${closed.error.slice(0, 200)}`);
+      }
+
+      const release = await resolverCall("mutation", "deposits:release", {
+        orgId,
+        depositId: fx.depositId,
+        resolution: "REFUNDED",
+        refundMethod: "CASH",
+        idempotencyKey: `release-deposit:${fx.depositId}:REFUNDED:CASH:gen0`,
+      });
+
+      const afterEntries = await ownerMust("query", "accountingLedger:listJournalEntries", { orgId, limit: 200 });
+      const pending = await ownerMust("query", "accountingOutbox:listPending", {
+        orgId,
+        status: "PENDING",
+        limit: 200,
+      });
+      const failed = await ownerMust("query", "accountingOutbox:listPending", {
+        orgId,
+        status: "FAILED",
+        limit: 200,
+      });
+
+      // Whichever disposition the product chose — refuse the command outright,
+      // or accept it and hold the posting — the GL must be untouched. A NEW
+      // journal entry written while no period is open is the partial-post
+      // outcome this case exists to rule out.
+      expectEqual(
+        (afterEntries ?? []).length,
+        (beforeEntries ?? []).length,
+        "journal entries written while no accounting period is OPEN"
+      );
+      if ((failed ?? []).length > 0) {
+        fail(
+          `a posting DEAD-LETTERED rather than being held while the period was closed: ` +
+            `${JSON.stringify(failed.slice(0, 2)).slice(0, 300)}`
+        );
+      }
+      if (release.ok && (pending ?? []).length === 0) {
+        fail(
+          "the release was accepted, no journal was written, and nothing is waiting in the outbox — " +
+            "the money decision exists on the deposit row with no path to the books at all"
+        );
+      }
+
+      const row = await readDeposit({ orgId, vehicleId: fx.vehicleA, depositId: fx.depositId, ownerMust });
+      return {
+        closedPeriodId: String(open[0]._id),
+        releaseAccepted: release.ok,
+        releaseRefusal: release.ok ? null : release.error.slice(0, 200),
+        journalEntriesBefore: (beforeEntries ?? []).length,
+        journalEntriesAfter: (afterEntries ?? []).length,
+        pendingOutboxEvents: (pending ?? []).length,
+        failedOutboxEvents: (failed ?? []).length,
+        depositRow: { released: row.releasedAmountMinor ?? 0, releaseCount: row.releaseCount ?? 0 },
+      };
+    }
+  );
+}
+
+/** Keeps the validator's own shape out of the evidence without hiding its verdict. */
+function summarizeValidation(report) {
+  if (!report || typeof report !== "object") return null;
+  return {
+    missing: report.missing ?? [],
+    ...(typeof report.valid === "boolean" ? { valid: report.valid } : {}),
+  };
+}
+
+/**
+ * Every collection payment for the org, through the paginated public query.
+ *
+ * Paginated on purpose rather than with a large page size: the page cap is the
+ * product's, and a rehearsal that assumed one page would silently stop
+ * reconciling as soon as the fixture count grew past it.
+ */
+async function listCollectionPayments({ orgId, ownerMust }) {
+  const rows = [];
+  let cursor = null;
+  for (let page = 0; page < 20; page++) {
+    const result = await ownerMust("query", "collections:listPayments", {
+      orgId,
+      paginationOpts: { numItems: 100, cursor },
+    });
+    rows.push(...(result?.page ?? []));
+    if (result?.isDone || !result?.continueCursor) break;
+    cursor = result.continueCursor;
+  }
+  return rows;
 }
