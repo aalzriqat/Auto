@@ -6,6 +6,7 @@ import {
   classifyDeployKey,
   classifyMaterializationReport,
   decideCommitAuthority,
+  decideEmptyRollout,
   decidePollOutcome,
   evaluateRequiredChecks,
   forLog,
@@ -22,6 +23,8 @@ import {
   type CheckResult,
   type OrgReport,
   type PlatformReport,
+  type ReportWalk,
+  type Verdict,
 } from "./releaseGuard";
 
 const TIP = "a".repeat(40);
@@ -1060,6 +1063,121 @@ describe("polling stops for the right reasons", () => {
       expect(interval, `${m}m`).toBeGreaterThanOrEqual(previous);
       previous = interval;
     }
+  });
+});
+
+describe("an EMPTY deployment is a distinct, fail-closed outcome (SCRUM-313 c19303)", () => {
+  // A brand-new production deployment has no organizations, so the ordinary
+  // verdict (which demands orgCount > 0) can never verify it: the poll would
+  // run to the deadline and report a red run over a backend that deployed
+  // fine. "Nothing to materialise" is therefore its own terminal outcome —
+  // reached only when two complete, identity-checked, problem-free walks of
+  // the report both saw zero organizations and no fan-out did any work.
+  const emptyWalk = (over: Partial<ReportWalk> = {}): ReportWalk => ({
+    complete: true,
+    identityVerified: true,
+    verdict: classifyMaterializationReport([]),
+    ...over,
+  });
+
+  test("two complete, identity-checked, empty walks with no fan-out → nothingToMaterialise", () => {
+    expect(decideEmptyRollout({ baseline: emptyWalk(), confirmation: emptyWalk() })).toEqual({
+      ok: true,
+      outcome: "nothingToMaterialise",
+    });
+  });
+
+  test("a fan-out that was invoked must itself report zero work, explicitly", () => {
+    expect(
+      decideEmptyRollout({ baseline: emptyWalk(), confirmation: emptyWalk(), fanOut: { started: 0, skipped: 0, isDone: true } })
+    ).toMatchObject({ ok: true });
+    expect(
+      decideEmptyRollout({ baseline: emptyWalk(), confirmation: emptyWalk(), fanOut: { started: 1, skipped: 0, isDone: true } })
+    ).toMatchObject({ ok: false, reason: expect.stringMatching(/fan-out/i) });
+    expect(
+      decideEmptyRollout({ baseline: emptyWalk(), confirmation: emptyWalk(), fanOut: { started: 0, skipped: 2, isDone: true } })
+    ).toMatchObject({ ok: false, reason: expect.stringMatching(/fan-out/i) });
+    expect(
+      decideEmptyRollout({ baseline: emptyWalk(), confirmation: emptyWalk(), fanOut: { started: 0, skipped: 0, isDone: false } })
+    ).toMatchObject({ ok: false, reason: expect.stringMatching(/fan-out/i) });
+  });
+
+  test("a walk that did not reach the end of the report is not evidence of emptiness", () => {
+    expect(decideEmptyRollout({ baseline: emptyWalk({ complete: false }), confirmation: emptyWalk() })).toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/incomplete/i),
+    });
+    expect(decideEmptyRollout({ baseline: emptyWalk(), confirmation: emptyWalk({ complete: false }) })).toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/incomplete/i),
+    });
+  });
+
+  test("a walk whose deployment identity was not verified is not evidence of anything", () => {
+    expect(decideEmptyRollout({ baseline: emptyWalk({ identityVerified: false }), confirmation: emptyWalk() })).toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/identity/i),
+    });
+    expect(decideEmptyRollout({ baseline: emptyWalk(), confirmation: emptyWalk({ identityVerified: false }) })).toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/identity/i),
+    });
+  });
+
+  test("a NON-EMPTY baseline followed by an empty report is a lost page, never an empty deployment", () => {
+    const populated = emptyWalk({ verdict: classifyMaterializationReport([org()]) });
+    expect(decideEmptyRollout({ baseline: populated, confirmation: emptyWalk() })).toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/1 organization/i),
+    });
+    expect(decideEmptyRollout({ baseline: emptyWalk(), confirmation: populated })).toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/1 organization/i),
+    });
+    // And the ordinary poll keeps waiting on such a report rather than passing it.
+    expect(decidePollOutcome({ verdict: classifyMaterializationReport([]), elapsedMs: 0, timeoutMs: 60_000 })).toBe("continue");
+    expect(decidePollOutcome({ verdict: classifyMaterializationReport([]), elapsedMs: 60_000, timeoutMs: 60_000 })).toBe("timedOut");
+  });
+
+  test("a report with problems or in-flight work is not empty, whatever its org count says", () => {
+    const withProblem: Verdict = { ...classifyMaterializationReport([]), problems: [{ org: "x", platform: null, kind: "k", detail: "d" }] };
+    expect(decideEmptyRollout({ baseline: emptyWalk({ verdict: withProblem }), confirmation: emptyWalk() })).toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/problem/i),
+    });
+    const withInFlight: Verdict = { ...classifyMaterializationReport([]), inFlight: [{ org: "x", platform: null, kind: "k", detail: "d" }] };
+    expect(decideEmptyRollout({ baseline: emptyWalk(), confirmation: emptyWalk({ verdict: withInFlight }) })).toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/in flight/i),
+    });
+  });
+
+  test("a verdict that claims completed organizations while counting none is a contradiction", () => {
+    const contradictory: Verdict = { ...classifyMaterializationReport([]), completedOrgCount: 1 };
+    expect(decideEmptyRollout({ baseline: emptyWalk({ verdict: contradictory }), confirmation: emptyWalk() })).toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/contradict/i),
+    });
+  });
+
+  test("the summary names the outcome as EMPTY, never as N/N materialised, and scopes what it proves", () => {
+    const summary = renderReleaseSummary({
+      sha: TIP,
+      deployment: "fresh-deployment-123",
+      verdict: classifyMaterializationReport([]),
+      outcome: "nothingToMaterialise",
+    });
+    expect(summary).toMatch(/nothing to materialise/i);
+    expect(summary).toMatch(/0 organizations/i);
+    expect(summary).not.toMatch(/rollout verified/i);
+    expect(summary).not.toMatch(/Do not record SCRUM-21 as closed/);
+    expect(summary).toMatch(/Social Inbox/);
+    expect(summary).toMatch(/not.*Accounting/i);
+  });
+
+  test("the ordinary non-empty rollout is unchanged by the new outcome", () => {
+    expect(decidePollOutcome({ verdict: classifyMaterializationReport([org()]), elapsedMs: 0, timeoutMs: 1000 })).toBe("verified");
+    expect(decideEmptyRollout({ baseline: emptyWalk({ verdict: classifyMaterializationReport([org()]) }), confirmation: emptyWalk({ verdict: classifyMaterializationReport([org()]) }) })).toMatchObject({ ok: false });
   });
 });
 

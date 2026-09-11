@@ -867,7 +867,82 @@ export function mergeVerdicts(verdicts: Verdict[]): Verdict {
   };
 }
 
-export type PollOutcome = "verified" | "failed" | "continue" | "timedOut";
+export type PollOutcome = "verified" | "failed" | "continue" | "timedOut" | "nothingToMaterialise";
+
+/**
+ * One walk of the materialisation report as the rollout script observed it:
+ * whether it read every page to the end, whether the answering deployment
+ * proved to be the expected one, and what the pages classified to.
+ */
+export type ReportWalk = {
+  /** The walk reached `isDone: true`; no page was lost or left unread. */
+  complete: boolean;
+  /** `assertDeploymentIdentity` agreed on the deployment that answered. */
+  identityVerified: boolean;
+  verdict: Verdict;
+};
+
+/** What `startSocialConversationBackfills` reported, when it was invoked. */
+export type FanOutReport = { started: number; skipped: number; isDone: boolean };
+
+/**
+ * Whether a deployment with NO organizations may finish the rollout as
+ * "nothing to materialise" (SCRUM-313 c19303).
+ *
+ * The ordinary verdict demands `orgCount > 0`, so on a fresh, empty production
+ * deployment the poll could only ever run to its deadline and paint a red run
+ * over a backend that deployed correctly. This is the one other way out, and
+ * it is narrower than the ordinary one, not wider: it takes TWO complete,
+ * identity-checked walks that both classified to zero organizations with no
+ * problem and nothing in flight, and — if a fan-out was invoked at all — a
+ * fan-out that itself says it started nothing, skipped nothing and finished.
+ * A populated baseline followed by an empty report is a lost page, not an
+ * empty deployment; a walk that stopped early, or whose deployment identity
+ * never checked out, is not evidence of anything. It says nothing about
+ * Accounting bootstrap or readiness — only that the Social Inbox rollout had
+ * no organization to act on.
+ */
+export function decideEmptyRollout(input: {
+  baseline: ReportWalk;
+  confirmation: ReportWalk;
+  fanOut?: FanOutReport | null;
+}): { ok: true; outcome: "nothingToMaterialise" } | { ok: false; reason: string } {
+  const walks: Array<[string, ReportWalk]> = [
+    ["baseline", input.baseline],
+    ["confirmation", input.confirmation],
+  ];
+  for (const [name, walk] of walks) {
+    if (!walk.complete) {
+      return { ok: false, reason: `The ${name} walk of the materialisation report was incomplete; an unread page cannot be called empty.` };
+    }
+    if (!walk.identityVerified) {
+      return { ok: false, reason: `The ${name} walk did not verify the deployment's identity; an unverified deployment cannot be called empty.` };
+    }
+    const v = walk.verdict;
+    if (v.problems.length > 0) {
+      return { ok: false, reason: `The ${name} walk reported ${v.problems.length} problem(s); a report with problems is not empty.` };
+    }
+    if (v.inFlight.length > 0) {
+      return { ok: false, reason: `The ${name} walk reported ${v.inFlight.length} organization(s) in flight; a report with work in flight is not empty.` };
+    }
+    if (v.orgCount !== 0) {
+      return { ok: false, reason: `The ${name} walk saw ${v.orgCount} organization(s); this deployment is not empty, so the rollout must be verified, not skipped.` };
+    }
+    if (v.completedOrgCount !== 0) {
+      return { ok: false, reason: `The ${name} walk counted no organizations yet ${v.completedOrgCount} completed; the report contradicts itself.` };
+    }
+  }
+  const fanOut = input.fanOut;
+  if (fanOut !== undefined && fanOut !== null) {
+    if (fanOut.started !== 0 || fanOut.skipped !== 0 || fanOut.isDone !== true) {
+      return {
+        ok: false,
+        reason: `The fan-out reported started=${fanOut.started}, skipped=${fanOut.skipped}, isDone=${fanOut.isDone}; a fan-out that found work to do or did not finish is not an empty deployment.`,
+      };
+    }
+  }
+  return { ok: true, outcome: "nothingToMaterialise" };
+}
 
 /**
  * Whether to poll again, and what to conclude if not.
@@ -967,6 +1042,7 @@ export function renderReleaseSummary(input: {
 
   const HEADINGS: Record<PollOutcome, string> = {
     verified: "✅ Production rollout verified",
+    nothingToMaterialise: "✅ Deployed to an EMPTY deployment — nothing to materialise",
     timedOut: "⏳ Deployed, but the rollout did not finish in time",
     failed: "❌ Deployed, but the rollout is incomplete",
     continue: "❌ Deployed, but the rollout is incomplete",
@@ -983,7 +1059,18 @@ export function renderReleaseSummary(input: {
     "",
   ];
 
-  if (outcome !== "verified") {
+  if (outcome === "nothingToMaterialise") {
+    // Deliberately not "N/N materialised": nothing was materialised, because
+    // there was nothing to materialise. And deliberately scoped: this proves
+    // the Social Inbox rollout had no organization to act on, not that the
+    // Accounting bootstrap has happened or that the deployment is ready.
+    lines.push(
+      "> **Production is deployed and holds 0 organizations.** The Social Inbox rollout had nothing to do,",
+      "> verified by two complete, identity-checked walks of the report. This is not Accounting bootstrap",
+      "> or readiness evidence; those are verified separately at the bootstrap boundary.",
+      ""
+    );
+  } else if (outcome !== "verified") {
     lines.push(
       "> **Production is deployed. The rollout is not complete.**",
       "> Do not record SCRUM-21 as closed.",

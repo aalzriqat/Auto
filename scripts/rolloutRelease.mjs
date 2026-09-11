@@ -23,6 +23,7 @@ import {
   assertDeploymentIdentity,
   captureRunBaseline,
   classifyMaterializationReport,
+  decideEmptyRollout,
   decidePollOutcome,
   describeConvexFailure,
   forLog,
@@ -168,7 +169,11 @@ function collectReport(baseline) {
     orgs.push(...value.page);
     verdicts.push(classifyMaterializationReport(value.page, baseline));
 
-    if (value.isDone === true) return { ok: true, verdict: mergeVerdicts(verdicts), orgs };
+    if (value.isDone === true) {
+      // `complete` and `identityVerified` are stated, not implied, because the
+      // empty-deployment decision below consumes them as evidence.
+      return { ok: true, verdict: mergeVerdicts(verdicts), orgs, complete: true, identityVerified: identityChecked };
+    }
 
     const next = value.continueCursor;
     if (typeof next !== "string" || next === cursor) {
@@ -207,6 +212,38 @@ const before = collectReport(undefined);
 if (!before.ok) fail(before.reason);
 const baseline = captureRunBaseline(before.orgs);
 console.log(`  baseline captured for ${before.orgs.length} organizations`);
+
+// ─── 1b. A deployment with NO organizations has nothing to roll out ─────────
+
+// A fresh production deployment (SCRUM-231's clean slate) holds no
+// organizations, so the ordinary verdict — which demands at least one on the
+// materialised path — could never verify it, and this step would poll to the
+// deadline and paint a red run over a backend that deployed correctly. Read-
+// only: the report is walked a second time and both walks must agree it is
+// empty; the fan-out is not started, so nothing is scheduled on an empty
+// deployment for no reason. Anything short of that evidence — a walk that
+// stopped early, an unverified identity, a problem, or an organization that
+// appeared between the two walks — refuses the run rather than guessing; a
+// re-run then takes whichever path the deployment actually warrants.
+if (before.verdict.orgCount === 0) {
+  console.log(`  no organizations on this deployment; confirming with a second walk before concluding…`);
+  const confirmation = collectReport(undefined);
+  if (!confirmation.ok) fail(confirmation.reason);
+  const empty = decideEmptyRollout({
+    baseline: { complete: before.complete, identityVerified: before.identityVerified, verdict: before.verdict },
+    confirmation: { complete: confirmation.complete, identityVerified: confirmation.identityVerified, verdict: confirmation.verdict },
+    fanOut: null,
+  });
+  if (!empty.ok) fail(empty.reason);
+  lastVerdict = confirmation.verdict;
+  lastOutcome = empty.outcome;
+  writeSummary(null);
+  console.log(
+    `\n✔ ${EXPECTED_DEPLOYMENT} holds no organizations: nothing to materialise. ` +
+      `This verifies the Social Inbox rollout only, not Accounting bootstrap or readiness.\n`
+  );
+  process.exit(0);
+}
 
 // ─── 2. Start the backfills ─────────────────────────────────────────────────
 
