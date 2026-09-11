@@ -924,7 +924,10 @@ export async function runRehearsalCases(ctx) {
         planTotal += row.originalAmount ?? row.outstandingAmount ?? 0;
       }
       expectEqual(planTotal, 900, "the plan's instalments sum to the plan total");
-      const titledPlan = await receivablesTitled({ orgId, ownerMust, title: `Rehearsal RT2 plan ${stamp}` });
+      // Instalments are titled "<plan> #i"; the plan itself is the product's own
+      // grouping key, paymentPlanLabel. The first cloud run of this check read
+      // the plan title verbatim and found 0 of 3 — the fake had been too kind.
+      const titledPlan = await receivablesTitled({ orgId, ownerMust, planLabel: `Rehearsal RT2 plan ${stamp}` });
       expectEqual(titledPlan.length, 3, "receivable rows carrying the plan's title after create + replay");
       const planIdSet = new Set(planIds.map(String));
       if (!titledPlan.every((r) => planIdSet.has(String(r._id)))) {
@@ -2020,7 +2023,7 @@ async function customerNetOnAccount({ orgId, ownerMust, accountId, customerId })
  * hands back the original id while minting a second row under a fresh id
  * passed. The other six steps already scope by a run property; these do now.
  */
-async function receivablesTitled({ orgId, ownerMust, title }) {
+async function receivablesTitled({ orgId, ownerMust, title, planLabel }) {
   const rows = [];
   let cursor = null;
   for (let page = 0; page < 20; page++) {
@@ -2028,7 +2031,9 @@ async function receivablesTitled({ orgId, ownerMust, title }) {
       orgId,
       paginationOpts: { numItems: 100, cursor },
     });
-    rows.push(...(result?.page ?? []).filter((r) => r.title === title));
+    rows.push(
+      ...(result?.page ?? []).filter((r) => (planLabel ? r.paymentPlanLabel === planLabel : r.title === title))
+    );
     if (result?.isDone || !result?.continueCursor) break;
     cursor = result.continueCursor;
   }

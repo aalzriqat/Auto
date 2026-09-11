@@ -422,11 +422,15 @@ function makeBackend(defects: Defects = {}) {
     return post("COLLECTION_PAYMENT", "collectionPayments", paymentId, lines, { payload: { customerId } });
   }
 
-  const receivableRow = (rid: string, args: Record<string, any>, amount: number) => {
+  const receivableRow = (rid: string, args: Record<string, any>, amount: number, instalment?: number) => {
     receivables.set(rid, {
       _id: rid,
       customerId: String(args.customerId),
-      title: args.title,
+      // The product titles instalments "<plan> #i" and groups them by
+      // paymentPlanLabel; a fake that kept the plan title verbatim let RT2
+      // reach the cloud with the wrong match key.
+      title: instalment ? `${String(args.title).trim()} #${instalment}` : args.title,
+      paymentPlanLabel: instalment ? String(args.title).trim() : undefined,
       originalAmount: amount,
       outstandingAmount: amount,
       status: "OPEN",
@@ -501,7 +505,7 @@ function makeBackend(defects: Defects = {}) {
         const key = args.idempotencyKey;
         if (key && createdByKey.has(key) && !defects.duplicateOnCreateReplay && !defects.refuseCreateReplay) {
           if (defects.doubleFootprintOnReplay || defects.doubleFootprintReceivablesOnly) {
-            receivableRow(id("inst-dup"), args, Number(args.totalAmount) / Number(args.installmentCount));
+            receivableRow(id("inst-dup"), args, Number(args.totalAmount) / Number(args.installmentCount), 1);
           }
           return { ok: true as const, value: JSON.parse(createdByKey.get(key)!) };
         }
@@ -511,7 +515,7 @@ function makeBackend(defects: Defects = {}) {
         const ids: string[] = [];
         for (let i = 0; i < n; i++) {
           const rid = id("inst");
-          receivableRow(rid, args, each);
+          receivableRow(rid, args, each, i + 1);
           ids.push(rid);
         }
         if (key) createdByKey.set(key, JSON.stringify(ids));
