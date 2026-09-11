@@ -215,7 +215,17 @@ function makeBackend(defects: Defects = {}) {
     });
   }
 
-  const call = (authed: boolean) => async (kind: string, fnPath: string, args: Record<string, any>) => {
+  /**
+   * The seated MANAGER does not hold manage:finance in this product, so a case
+   * that routes a finance mutation through the approver is refused. Modelled
+   * because the fake's permissive version let RV1 reach the cloud before
+   * anything told me.
+   */
+  const call = (authed: boolean, canManageFinance = true) => async (
+    kind: string,
+    fnPath: string,
+    args: Record<string, any>
+  ) => {
     switch (fnPath) {
       case "chartOfAccounts:initialize":
         return { ok: true as const, value: null };
@@ -257,17 +267,26 @@ function makeBackend(defects: Defects = {}) {
       case "collections:recordPayment": {
         const made = replayableCreate("pay", args, true);
         if (made) return made;
+        // An allocation may not exceed what is owed. The product enforces this
+        // and the fake did not, so my "over-payment becomes a credit" model
+        // survived locally and died on the cloud.
+        if (args.receivableId && Number(args.amount) > 1000) {
+          return {
+            ok: false as const,
+            error: "Payment amount cannot exceed the outstanding receivable amount.",
+          };
+        }
         const paymentId = id("pay");
         if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, paymentId);
-        // The excess is a LIABILITY, not income. A backend that keeps the
-        // change is the defect RC1 exists to catch.
-        const overMinor = Math.round((Number(args.amount) - 1000) * 100);
-        if (overMinor > 0 && !defects.swallowOverpayment) {
+        // Money with no receivable named is money the dealership holds without
+        // a claim against it: a LIABILITY, never income (ACC-9).
+        const unappliedMinor = args.receivableId ? 0 : Math.round(Number(args.amount) * 100);
+        if (unappliedMinor > 0 && !defects.swallowOverpayment) {
           const movementId = id("mov");
           retained.set(movementId, {
             receiptMovementId: movementId,
             customerId: String(args.customerId),
-            remainingUnappliedMinor: overMinor,
+            remainingUnappliedMinor: unappliedMinor,
             receiptPosted: true,
           });
         }
@@ -302,6 +321,9 @@ function makeBackend(defects: Defects = {}) {
         return { ok: true as const, value: null };
       }
       case "collections:clearCheque": {
+        if (!canManageFinance) {
+          return { ok: false as const, error: "Forbidden: Missing required permissions: manage:finance" };
+        }
         const made = replayableCreate("clr", args, true);
         if (made) return made;
         if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, id("clr"));
@@ -316,6 +338,9 @@ function makeBackend(defects: Defects = {}) {
         return { ok: true as const, value: null };
       }
       case "collections:returnClearedCheque": {
+        if (!canManageFinance) {
+          return { ok: false as const, error: "Forbidden: Missing required permissions: manage:finance" };
+        }
         const made = replayableCreate("ret", args, true);
         if (made) return made;
         if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, id("ret"));
@@ -458,6 +483,8 @@ function makeBackend(defects: Defects = {}) {
   };
 
   const authedCall = call(true);
+  // The seated MANAGER: authenticated, and WITHOUT manage:finance.
+  const approverCall = call(true, false);
   const must = async (kind: string, fnPath: string, args: Record<string, any>) => {
     const r = await authedCall(kind, fnPath, args);
     if (!r.ok) throw new Error(`${fnPath} failed: ${r.error}`);
@@ -465,7 +492,12 @@ function makeBackend(defects: Defects = {}) {
   };
 
   void vehicleOf;
-  return { authedCall, anonymousCall: call(false), must, deposits };
+  const approverMust = async (kind: string, fnPath: string, args: Record<string, any>) => {
+    const r = await approverCall(kind, fnPath, args);
+    if (!r.ok) throw new Error(`${fnPath} failed: ${r.error}`);
+    return r.value;
+  };
+  return { authedCall, approverCall, anonymousCall: call(false), must, approverMust, deposits };
 }
 
 /** Mirrors the real recorder: a failure is captured as evidence, never thrown. */
@@ -501,10 +533,10 @@ async function runAgainst(defects: Defects = {}) {
     config: { convexUrl: "https://x.convex.cloud" },
     tokens: { sales: "t-sales", approver: "t-approver" },
     asSales: backend.authedCall,
-    asApprover: backend.authedCall,
+    asApprover: backend.approverCall,
     anonymousCall: backend.anonymousCall,
     salesMust: backend.must,
-    approverMust: backend.must,
+    approverMust: backend.approverMust,
     recordCase,
     unproven: (reason: string) => {
       const error = new Error(reason);

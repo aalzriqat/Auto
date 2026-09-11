@@ -780,7 +780,7 @@ export async function runRehearsalCases(ctx) {
   await recordCase(
     results,
     "RC1",
-    "an over-payment settles the invoice and the remainder is retained as a discoverable liability",
+    "money received beyond any claim is retained as a discoverable, dischargeable liability",
     async () => {
       const stamp = Date.now().toString(36);
       const customerId = await ownerMust("mutation", "customers:create", {
@@ -816,16 +816,40 @@ export async function runRehearsalCases(ctx) {
         idempotencyKey: `rehearsal-rc1-recv-b-${stamp}`,
       });
 
-      // 1,500 against a 1,000 invoice: 1,000 allocated, 500 retained.
+      // ⚠️ RETAINED CREDIT DOES NOT COME FROM OVER-PAYING AN INVOICE.
+      //
+      // My first version paid 1,500 against the 1,000 invoice and expected 500
+      // to be retained. The product refused: "Payment amount cannot exceed the
+      // outstanding receivable amount." That guard is right — an allocation
+      // that exceeds what is owed is not an over-payment, it is a mis-keyed
+      // allocation, and silently turning it into a credit would hide the
+      // mistake.
+      //
+      // Money the dealership holds without a claim against it arrives as a
+      // receipt ON ACCOUNT: a payment with no receivable named. So the two
+      // things the floor asks about are genuinely two operations, and this case
+      // exercises both — ALLOCATION against an invoice, then RETENTION of
+      // unapplied money.
       await ownerMust("mutation", "collections:recordPayment", {
         orgId,
         receivableId: firstReceivable,
         customerId,
-        amount: 1500,
+        amount: 1000,
         method: "CASH",
         paymentDate: Date.now(),
-        reference: `Rehearsal RC1 ${stamp}`,
+        reference: `Rehearsal RC1 allocation ${stamp}`,
         idempotencyKey: `rehearsal-rc1-pay-${stamp}`,
+      });
+
+      // 500 on account — no receivable named, so none of it is allocated.
+      await ownerMust("mutation", "collections:recordPayment", {
+        orgId,
+        customerId,
+        amount: 500,
+        method: "CASH",
+        paymentDate: Date.now(),
+        reference: `Rehearsal RC1 on account ${stamp}`,
+        idempotencyKey: `rehearsal-rc1-onaccount-${stamp}`,
       });
 
       // The retained position is read through the operator-facing query, not
@@ -841,12 +865,12 @@ export async function runRehearsalCases(ctx) {
       const positions = await readRetainedCredits({ orgId, customerId, ownerMust });
       if (positions.length === 0) {
         fail(
-          "the over-payment left NO retained-credit position - 500 of the customer's money is unaccounted for, " +
-            "and an operator has no supported way to find or return it"
+          "the receipt on account left NO retained-credit position - 500 of the customer's money is unaccounted " +
+            "for, and an operator has no supported way to find or return it"
         );
       }
       const remainingMinor = positions.reduce((sum, p) => sum + (p.remainingUnappliedMinor ?? 0), 0);
-      expectEqual(remainingMinor, 50_000, "retained credit remaining after a 1,500 payment on a 1,000 invoice");
+      expectEqual(remainingMinor, 50_000, "retained credit remaining after a 500 receipt on account");
 
       const position = positions[0];
       const movementId = position.receiptMovementId;
@@ -884,7 +908,7 @@ export async function runRehearsalCases(ctx) {
 
       return {
         customerId: String(customerId),
-        retainedAfterOverpayment: remainingMinor,
+        retainedAfterReceiptOnAccount: remainingMinor,
         retainedAfterApplying400: afterRemaining,
         commandsExercised: ["collections.createReceivable", "collections.recordPayment", "collections.applyRetainedCredit"],
       };
@@ -933,7 +957,16 @@ export async function runRehearsalCases(ctx) {
       });
 
       await ownerMust("mutation", "collections:depositCheque", { orgId, chequeId });
-      await resolverMust("mutation", "collections:clearCheque", {
+      // OWNER, not the MANAGER. `clearCheque` requires manage:finance and the
+      // seated MANAGER does not hold it, so the cloud run refused with
+      // "Forbidden: Missing required permissions: manage:finance".
+      //
+      // Worth being precise about why this is not the deposits.release
+      // situation: there the product REFUSES the deposit's creator on purpose,
+      // so using two people is the behaviour under test. Here it is an ordinary
+      // permission, and routing the call through an identity that legitimately
+      // holds it is fixture correctness, not a weakened guard.
+      await ownerMust("mutation", "collections:clearCheque", {
         orgId,
         chequeId,
         idempotencyKey: `rehearsal-rv1-clear-${stamp}`,
@@ -944,7 +977,7 @@ export async function runRehearsalCases(ctx) {
         limit: 200,
       });
 
-      const returned = await resolverCall("mutation", "collections:returnClearedCheque", {
+      const returned = await ownerCall("mutation", "collections:returnClearedCheque", {
         orgId,
         chequeId,
         returnReason: "Rehearsal bounce",
