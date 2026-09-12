@@ -253,21 +253,25 @@ const dealRailMessages = defineBilingualMessages({
     "لا يمكن قراءة بنود التكاليف بصلاحياتك الحالية.",
   ],
   HandoverCostsLoading: ["Loading cost lines…", "جارٍ تحميل بنود التكاليف…"],
-  HandoverCostsNeedPin: [
-    "Costs can be added once the deal's economics are recorded, which fixes the currency they are recorded in.",
-    "يمكن إضافة المصاريف بعد تسجيل اقتصاديات الصفقة، وهو ما يثبّت العملة التي تُسجَّل بها.",
-  ],
   HandoverCostsMixedCurrency: [
-    "These lines were recorded in more than one currency; totals are not shown.",
-    "سُجّلت هذه البنود بأكثر من عملة؛ لا تُعرض الإجماليات.",
+    "These lines are not all in the deal's currency; totals are not available until the records agree.",
+    "ليست كل هذه البنود بعملة الصفقة؛ الإجماليات غير متاحة حتى تتوافق السجلات.",
+  ],
+  HandoverCostOutcomeUnknown: [
+    "The last attempt's result never arrived, so that cost may already be recorded. Check the lines above before adding it again.",
+    "لم تصل نتيجة المحاولة الأخيرة، لذا قد يكون ذلك المصروف مسجّلاً بالفعل. راجع البنود أعلاه قبل إضافته من جديد.",
   ],
   HandoverCostCurrencyDiffers: [
     "Recorded in a different currency from the deal's; not editable here.",
     "مسجّل بعملة تختلف عن عملة الصفقة؛ لا يمكن تعديله هنا.",
   ],
   HandoverCostRetryFrozen: [
-    "An attempt was already sent. Retry sends exactly what was entered; to change anything, cancel and add the cost again.",
-    "أُرسلت محاولة بالفعل. تُعيد المحاولة إرسال ما أُدخل بالضبط؛ لتغيير أي شيء، ألغِ وأضف المصروف من جديد.",
+    "The server refused this attempt; nothing was recorded. Retry sends exactly what was entered; to change anything, cancel and add the cost again.",
+    "رفض الخادم هذه المحاولة ولم يُسجَّل شيء. تُعيد المحاولة إرسال ما أُدخل بالضبط؛ لتغيير أي شيء، ألغِ وأضف المصروف من جديد.",
+  ],
+  HandoverCostRetryFrozenUnknown: [
+    "The result of this attempt never arrived; the cost may already be recorded. Retry resends the same request without duplicating it. Cancelling does not undo a recorded cost.",
+    "لم تصل نتيجة هذه المحاولة؛ قد يكون المصروف مسجّلاً بالفعل. تُعيد المحاولة إرسال الطلب نفسه دون تكراره. الإلغاء لا يلغي مصروفاً مسجّلاً.",
   ],
   RetryHandoverCost: ["Retry", "إعادة المحاولة"],
   NoHandoverCosts: ["No handover costs recorded yet.", "لم تُسجَّل مصاريف تسليم بعد."],

@@ -49,6 +49,7 @@ vi.mock("@/hooks/use-permissions", () => ({
 
 vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
+  const { ConvexError } = await import("convex/values");
   return {
     useQuery: (reference: never, args: unknown) =>
       args === "skip" ? undefined : stubs.queryResults.get(getFunctionName(reference)),
@@ -61,6 +62,9 @@ vi.mock("convex/react", async () => {
         const failure = stubs.mutationFailures.get(name);
         if (failure !== undefined) {
           stubs.mutationFailures.delete(name);
+          // "refused:<message>" is the server's OWN answer (thrown inside the
+          // mutation, nothing committed); anything else is a lost response.
+          if (failure.startsWith("refused:")) throw new ConvexError(failure.slice("refused:".length));
           throw new Error(failure);
         }
         return null;
@@ -948,18 +952,39 @@ describe("the customer's financing plan is readable on the Deal, separately from
  */
 describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmount, voidDealFee} from the Deal", () => {
   const COSTS_QUERY = "financeDealCosts:listDealCosts";
-  function costsPayload(lines: Array<Record<string, unknown>> = []) {
+  /**
+   * `listDealCosts` as the SCRUM-319 backend serves it: the deal's currency
+   * (pin, else the org's verified currency), and a summary that is NULL with
+   * a reason whenever the lines do not all share that currency.
+   */
+  function costsPayload(lines: Array<Record<string, unknown>> = [], currency = "JOD") {
+    const lineCurrencies = [...new Set(lines.map((line) => line.currency as string))];
+    const foreign = lineCurrencies.filter((code) => code !== currency);
+    const summaryUnavailable =
+      foreign.length > 0
+        ? {
+            reason: "MIXED_DENOMINATION" as const,
+            dealCurrency: currency,
+            lineCurrencies,
+            message: `Costs on this deal are recorded in ${lineCurrencies.join(", ")} while the deal is in ${currency}; totals are unavailable until the records agree.`,
+          }
+        : null;
     return {
+      currency,
       fees: lines,
-      summary: {
-        lineCount: lines.length,
-        estimatedTotalMinor: 150_000,
-        actualTotalMinor: 0,
-        dealerBorneActualMinor: 0,
-        linesAwaitingActual: lines.length,
-        linesAwaitingReconciliation: 0,
-        fullyReconciled: false,
-      },
+      summary:
+        summaryUnavailable === null
+          ? {
+              lineCount: lines.length,
+              estimatedTotalMinor: 150_000,
+              actualTotalMinor: 0,
+              dealerBorneActualMinor: 0,
+              linesAwaitingActual: lines.length,
+              linesAwaitingReconciliation: 0,
+              fullyReconciled: false,
+            }
+          : null,
+      summaryUnavailable,
       custody: [],
     };
   }
@@ -997,7 +1022,9 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     // fingerprint of the material amounts, not of every field, so a retry must
     // resend exactly what went out the first time.
     await screen.findByRole("alert");
-    expect(screen.getByTestId("deal-handover-cost-add-frozen")).toBeTruthy();
+    // A lost response is an UNKNOWN outcome: the note says the cost may
+    // already exist and that cancelling does not undo it.
+    expect(screen.getByTestId("deal-handover-cost-add-frozen").textContent).toBe("HandoverCostRetryFrozenUnknown");
     expect(screen.getByLabelText("CostDescriptionLabel").closest("fieldset")?.disabled).toBe(true);
     expect(screen.queryByRole("button", { name: "SaveHandoverCost" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "RetryHandoverCost" }));
@@ -1009,7 +1036,9 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
       applicationId: APP,
       feeType: "LICENSING",
       description: "Plates",
-      // JOD, scale 3: 150 → 150,000 minor. An ESTIMATE, so no actual.
+      // JOD, scale 3: 150 → 150,000 minor. An ESTIMATE, so no actual. The
+      // currency the integer was counted in is NAMED (SCRUM-319).
+      expectedCurrency: "JOD",
       estimatedAmountMinor: 150_000,
       actualAmountMinor: undefined,
       paidBy: "DEALER",
@@ -1019,6 +1048,8 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     });
     expect(first.idempotencyKey).toMatch(/^record-deal-fee:app_2048:[0-9a-f-]{36}:[0-9a-f-]{36}$/);
     expect(second.idempotencyKey).toBe(first.idempotencyKey);
+    // The retry is the SAME request: same currency, same integer, same everything.
+    expect(second).toEqual(first);
 
     // The retry succeeded and the form closed. A NEW form is a NEW command,
     // and cancelling an attempted form ends its intent for good.
@@ -1032,24 +1063,75 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     expect(third.idempotencyKey).not.toBe(first.idempotencyKey);
     await screen.findByRole("alert");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    // Cancelling after a LOST response ends the intent but cannot undo a fee
+    // the server may have committed: the section says so, and never
+    // "cancelled". It stays until an attempt on this section succeeds.
+    expect(screen.getByTestId("deal-handover-costs-uncertain").textContent).toBe("HandoverCostOutcomeUnknown");
     fireEvent.click(screen.getByRole("button", { name: "AddHandoverCost" }));
     fireEvent.change(screen.getByLabelText(/CostAmountLabel/), { target: { value: "150" } });
     fireEvent.click(screen.getByRole("button", { name: "SaveHandoverCost" }));
     await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordDealFee")).toHaveLength(4));
     const fourth = mutationCalls.get("financeDealCosts:recordDealFee")![3] as Record<string, unknown>;
     expect(fourth.idempotencyKey).not.toBe(third.idempotencyKey);
+    await waitFor(() => expect(screen.queryByTestId("deal-handover-costs-uncertain")).toBeNull());
   });
 
-  test("AF-215-01 — no pinned economics currency: adding is withheld with the reason; lines still read in their own currency", () => {
+  test("SCRUM-319 — a REFUSED attempt is the server's answer: nothing committed, no uncertainty notice on cancel", async () => {
+    readableDeal();
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    queryResults.set(COSTS_QUERY, costsPayload());
+    stubs.mutationFailures.set(
+      "financeDealCosts:recordDealFee",
+      "refused:This cost was entered in JOD, but the deal's costs are kept in USD."
+    );
+    renderCockpit();
+    fireEvent.click(screen.getByRole("button", { name: "AddHandoverCost" }));
+    fireEvent.change(screen.getByLabelText(/CostAmountLabel/), { target: { value: "150" } });
+    fireEvent.click(screen.getByRole("button", { name: "SaveHandoverCost" }));
+    await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordDealFee")).toHaveLength(1));
+    expect((await screen.findByRole("alert")).textContent).toContain("kept in USD");
+    expect(screen.getByTestId("deal-handover-cost-add-frozen").textContent).toBe("HandoverCostRetryFrozen");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByTestId("deal-handover-costs-uncertain")).toBeNull();
+    expect(screen.queryByTestId("deal-handover-cost-add")).toBeNull();
+  });
+
+  test("SCRUM-319 — the currency is CAPTURED when the form opens: a served change while it is open does not reinterpret the amount", async () => {
     readableDeal();
     permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
     queryResults.set(GET_QUERY, application({ status: "APPROVED", economicsCurrency: undefined }));
-    queryResults.set(COSTS_QUERY, costsPayload([transferLine]));
+    queryResults.set(COSTS_QUERY, costsPayload([], "JOD"));
+    const view = renderCockpit();
+    fireEvent.click(screen.getByRole("button", { name: "AddHandoverCost" }));
+    expect(screen.getByLabelText(/CostAmountLabel/).closest("div")?.textContent).toContain("JOD");
+    // The org's setting moves under the open form (out of contract on a
+    // live deal, but exactly the case the capture exists for).
+    queryResults.set(COSTS_QUERY, costsPayload([], "USD"));
+    view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+    expect(screen.getByLabelText(/CostAmountLabel/).closest("div")?.textContent).toContain("JOD");
+    fireEvent.change(screen.getByLabelText(/CostAmountLabel/), { target: { value: "150" } });
+    fireEvent.click(screen.getByRole("button", { name: "SaveHandoverCost" }));
+    await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordDealFee")).toHaveLength(1));
+    // JOD scale 3 and the JOD code — what the operator saw, not the new setting.
+    expect(mutationCalls.get("financeDealCosts:recordDealFee")![0]).toMatchObject({ expectedCurrency: "JOD", estimatedAmountMinor: 150_000 });
+  });
+
+  test("SCRUM-319 — no pinned economics currency: an early cost is ADDED in the currency the server serves, which the first cost then fixes", async () => {
+    readableDeal();
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    queryResults.set(GET_QUERY, application({ status: "APPROVED", economicsCurrency: undefined }));
+    // The server serves the deal's currency (the org's verified one); the
+    // client no longer withholds ADD for want of a pin — the org lock now
+    // refuses to move the currency once this application exists.
+    queryResults.set(COSTS_QUERY, costsPayload([transferLine], "JOD"));
     renderCockpit();
-    const section = screen.getByTestId("deal-handover-costs");
-    expect(within(section).queryByRole("button", { name: "AddHandoverCost" })).toBeNull();
-    expect(screen.getByTestId("deal-handover-costs-unpinned").textContent).toBe("HandoverCostsNeedPin");
-    // The JOD line on a JOD org is still the deal's denomination: editable, totals shown.
+    expect(screen.queryByTestId("deal-handover-costs-unpinned")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "AddHandoverCost" }));
+    fireEvent.change(screen.getByLabelText(/CostAmountLabel/), { target: { value: "25" } });
+    fireEvent.click(screen.getByRole("button", { name: "SaveHandoverCost" }));
+    await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordDealFee")).toHaveLength(1));
+    expect(mutationCalls.get("financeDealCosts:recordDealFee")![0]).toMatchObject({ expectedCurrency: "JOD", estimatedAmountMinor: 25_000 });
+    // The JOD line on a JOD deal is the deal's denomination: editable, totals shown.
     expect(within(screen.getByTestId("deal-handover-cost-fee_1")).getByRole("button", { name: "RecordActualCost" })).toBeTruthy();
     expect(screen.getByTestId("deal-handover-costs-totals")).toBeTruthy();
   });
@@ -1068,8 +1150,11 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     expect(usd.textContent).not.toContain("4 Jordanian");
     expect(within(usd).queryByRole("button")).toBeNull();
     expect(screen.getByTestId("deal-handover-cost-fee_usd-currency").textContent).toBe("HandoverCostCurrencyDiffers");
+    // `summary: null` from the server, with its reason — no total is invented from the lines.
     expect(screen.queryByTestId("deal-handover-costs-totals")).toBeNull();
-    expect(screen.getByTestId("deal-handover-costs-mixed")).toBeTruthy();
+    expect(screen.getByTestId("deal-handover-costs-mixed").textContent).toContain("HandoverCostsMixedCurrency");
+    expect(screen.getByTestId("deal-handover-costs-mixed").textContent).toContain("JOD, USD");
+    expect(screen.getByTestId("deal-handover-costs-mixed").textContent).toContain("/ JOD");
     // The JOD line keeps its controls.
     expect(within(screen.getByTestId("deal-handover-cost-fee_1")).getByRole("button", { name: "RecordActualCost" })).toBeTruthy();
   });
@@ -1079,13 +1164,18 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
     // A USD-pinned deal with a USD line: 165.5 → 16,550 minor (scale 2), not 165,500.
     queryResults.set(GET_QUERY, application({ status: "APPROVED", economicsCurrency: "USD" }));
-    queryResults.set(COSTS_QUERY, costsPayload([{ ...transferLine, currency: "USD", estimatedAmountMinor: 15_000 }]));
+    queryResults.set(COSTS_QUERY, costsPayload([{ ...transferLine, currency: "USD", estimatedAmountMinor: 15_000 }], "USD"));
     renderCockpit();
     fireEvent.click(within(screen.getByTestId("deal-handover-cost-fee_1")).getByRole("button", { name: "RecordActualCost" }));
     fireEvent.change(screen.getByLabelText(/^CostActual/), { target: { value: "165.5" } });
     fireEvent.click(screen.getByRole("button", { name: "SaveActualCost" }));
     await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordActualFeeAmount")).toHaveLength(1));
-    expect(mutationCalls.get("financeDealCosts:recordActualFeeAmount")![0]).toMatchObject({ feeId: "fee_1", actualAmountMinor: 16_550 });
+    // The LINE's stored currency is named, never the org's current one (SCRUM-319).
+    expect(mutationCalls.get("financeDealCosts:recordActualFeeAmount")![0]).toMatchObject({
+      feeId: "fee_1",
+      expectedCurrency: "USD",
+      actualAmountMinor: 16_550,
+    });
   });
 
   test("SM-R4-3 — while permissions or the rows are still loading the section says loading, not 'not readable with your permissions'", () => {
@@ -1126,6 +1216,7 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     expect(mutationCalls.get("financeDealCosts:recordActualFeeAmount")![0]).toEqual({
       orgId: ORG,
       feeId: "fee_1",
+      expectedCurrency: "JOD",
       actualAmountMinor: 165_500,
       paidAt: Date.UTC(2026, 8, 10),
       receiptReference: "LIC-0910",

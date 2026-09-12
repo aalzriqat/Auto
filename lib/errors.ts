@@ -62,7 +62,14 @@ function usableMessage(value: string): string | null {
   return trimmed;
 }
 
-function isConvexError(error: unknown): error is { data: unknown } {
+/**
+ * Whether a caught value is the server's own refusal (`ConvexError`) rather
+ * than a transport failure. The distinction matters to a caller deciding what
+ * it knows: a `ConvexError` is thrown inside the mutation and rolls it back,
+ * so nothing was committed; anything else may have committed before the
+ * response was lost.
+ */
+export function isConvexError(error: unknown): error is { data: unknown } {
   if (typeof error !== "object" || error === null) return false;
   const candidate = error as Record<PropertyKey, unknown>;
   return candidate[CONVEX_ERROR_MARKER] === true || candidate.name === "ConvexError";

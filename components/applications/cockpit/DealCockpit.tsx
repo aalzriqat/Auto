@@ -21,7 +21,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "@/components/ui/sonner";
-import { getErrorMessage } from "@/lib/errors";
+import { getErrorMessage, isConvexError } from "@/lib/errors";
 import { format, isValid } from "date-fns";
 import {
   AlertTriangle,
@@ -83,6 +83,7 @@ import { DisbursementConfirmationDialog } from "../DisbursementConfirmationDialo
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { FinancingPlanPanel, type FinancingPlanFacts } from "./FinancingPlanPanel";
 import {
+  HandoverCostAttemptError,
   HandoverCostsPanel,
   type ActualHandoverCost,
   type HandoverCostsData,
@@ -725,13 +726,16 @@ export function DealCockpit({
                   paidAt: fee.paidAt,
                   receiptReference: fee.receiptReference,
                 })),
+                // Null over mixed rows, with the reason beside it — served as
+                // such, never turned into a zero or a cast here.
                 summary: dealCosts.summary,
+                summaryUnavailable: dealCosts.summaryUnavailable,
               } satisfies HandoverCostsData)
             : undefined,
-          // A new line is recorded in the PINNED currency; unpinned means the
-          // server would take the org's current setting, which the lock does
-          // not freeze for fee rows (SCRUM-319) — so adding waits for the pin.
-          denomination: { code: economicsCurrencyCode, pinned: app.economicsCurrency !== undefined },
+          // The currency a new line is recorded in, as the SERVER resolves it
+          // for its own writers (pin, else the org's verified currency, which
+          // the first cost fixes — SCRUM-319). Not derived client-side.
+          denomination: { code: dealCosts?.currency ?? economicsCurrencyCode },
           scaleOf: scaleForCurrency,
           money: (minor: number, currency: string) =>
             `${(minor / Math.pow(10, scaleForCurrency(currency))).toLocaleString()} ${
@@ -745,6 +749,9 @@ export function DealCockpit({
               await recordDealFee({
                 orgId,
                 applicationId,
+                // REQUIRED: the currency the form was opened under and the
+                // amount counted in. A retry replays this captured value.
+                expectedCurrency: values.currency,
                 feeType: values.feeType,
                 description: values.description,
                 estimatedAmountMinor: values.estimatedAmountMinor,
@@ -760,7 +767,10 @@ export function DealCockpit({
               commandId.retire(feeIntent);
               toast.success(t("HandoverCostSaved"));
             } catch (error) {
-              throw new Error(getErrorMessage(error));
+              // The server's own refusal is thrown inside the mutation and
+              // rolls it back: nothing committed. Anything else is a lost
+              // response, and the cost may already exist.
+              throw new HandoverCostAttemptError(getErrorMessage(error), isConvexError(error) ? "REFUSED" : "UNKNOWN");
             }
           },
           onAbandonAdd: (intentId: string) => {
@@ -771,6 +781,9 @@ export function DealCockpit({
               await recordActualFeeAmount({
                 orgId,
                 feeId: feeId as Id<"financeDealFees">,
+                // REQUIRED: the LINE's stored currency, which the amount was
+                // scaled at — never the org's current one.
+                expectedCurrency: values.currency,
                 actualAmountMinor: values.actualAmountMinor,
                 paidAt: values.paidAt,
                 receiptReference: values.receiptReference,
