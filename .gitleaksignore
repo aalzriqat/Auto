@@ -7,3 +7,9 @@
 # (adjective-noun-number); generic-api-key matched it on entropy beside the
 # word "credential". An address, not a credential.
 28b4ce35639fc20a384e0d38736626370ba59bfd:scripts/zeroState.test.ts:generic-api-key:200
+#
+# aa12d3c97 .gitleaksignore:5 — this file's OWN explanatory comment, in the commit
+# that introduced it, quoted the fixture verbatim and tripped the same rule; the
+# comment was reworded in the next commit, but the historical blob is still in
+# the scanned range. A comment about a deployment name, not a credential.
+aa12d3c97d707fc8044123167f3dbe49e1ae01c2:.gitleaksignore:generic-api-key:5
