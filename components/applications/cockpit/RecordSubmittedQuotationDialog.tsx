@@ -111,18 +111,54 @@ export function RecordSubmittedQuotationDialog({
   const [reason, setReason] = useState("");
   const [ltvPercent, setLtvPercent] = useState("");
 
+  /**
+   * Whether the operator has touched the amount since the dialog opened.
+   *
+   * The prefill below is allowed to write the field exactly while this is
+   * false. "Pristine" is about the OPERATOR, not the value: a field they typed
+   * into and then emptied is theirs, and a calculation landing afterwards must
+   * not refill it any more than it may overwrite a figure they are still
+   * typing (SCRUM-321).
+   */
+  const touchedRef = useRef(false);
+  /** The calculation already offered into the field this opening — a one-shot. */
+  const prefilledRef = useRef(false);
+
   // Reset on the closed -> open TRANSITION only. `calculatedMinor` comes from a
   // live query, so resetting whenever it changed would wipe what the operator
   // had typed off the paperwork mid-entry.
+  //
+  // When the calculation is already AVAILABLE at that transition, the amount
+  // opens carrying it: the sent quotation is the calculated figure on the
+  // ordinary deal, and an empty box with a "use calculated" link made the
+  // operator retype (or mis-type) what AutoFlow already knew. Opening never
+  // records anything; the explicit Record press below still does.
   const wasOpenRef = useRef(false);
   useEffect(() => {
     const justOpened = open && !wasOpenRef.current;
     wasOpenRef.current = open;
     if (!justOpened) return;
-    setAmount("");
+    touchedRef.current = false;
+    const initial = calculation.state === "AVAILABLE" ? String(calculation.minor / factor) : "";
+    prefilledRef.current = initial !== "";
+    setAmount(initial);
     setReason("");
     setLtvPercent("");
+    // Deliberately only `open`: the calculation is read at the moment of
+    // opening; a figure arriving LATER is handled by the one-shot effect below,
+    // and a figure CHANGING later must not move what the operator is looking at.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  // The calculation arrived after the dialog opened. Fill the field ONCE, and
+  // only if the operator has not touched it — their typing, or their choice to
+  // leave it empty, always wins over a suggestion that came second.
+  useEffect(() => {
+    if (!open || prefilledRef.current || touchedRef.current) return;
+    if (calculation.state !== "AVAILABLE") return;
+    prefilledRef.current = true;
+    setAmount(String(calculation.minor / factor));
+  }, [open, calculation, factor]);
 
   const parsed = Number(amount);
   const entered = amount.trim() !== "";
@@ -185,7 +221,10 @@ export function RecordSubmittedQuotationDialog({
               inputMode="decimal"
               value={amount}
               aria-invalid={amountInvalid}
-              onChange={(event) => setAmount(event.target.value)}
+              onChange={(event) => {
+                touchedRef.current = true;
+                setAmount(event.target.value);
+              }}
               className="tabular-nums"
             />
             {amountInvalid && (

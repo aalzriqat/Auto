@@ -1643,3 +1643,183 @@ describe("a flagged amount does not look ordinary at the one-way door", () => {
     expect(within(dialog).getByText("HandoverSealsApprovedAmount")).toBeTruthy();
   });
 });
+
+/**
+ * SCRUM-321 — the submitted quotation is PREFILLED from the calculation.
+ *
+ * Owner-proxy 2026-09-12 20:45: when AutoFlow has a server calculation, the
+ * amount opens already carrying it and the operator explicitly records it;
+ * a calculation that lands while the dialog is open fills the field ONCE and
+ * only while it is still pristine — the operator's own typing is never
+ * overwritten. Provenance follows the amount exactly as before: untouched
+ * prefill → SYSTEM_CALCULATED, edited → CALCULATED_WITH_OVERRIDE + reason,
+ * no calculation → MANUAL_ENTRY.
+ */
+describe("the submitted quotation is prefilled from the calculation", () => {
+  type DialogProps = Parameters<typeof RecordSubmittedQuotationDialog>[0];
+  function dialogProps(overrides: Partial<DialogProps> = {}): DialogProps {
+    return {
+      open: true,
+      submitting: false,
+      error: null,
+      calculation: { state: "AVAILABLE", minor: 12_500 * JOD },
+      requiresLtvPercent: false,
+      canSetLtvPercent: true,
+      factor: JOD,
+      money: (minor: number) => `${minor / JOD} JOD`,
+      t: (key: string) => key,
+      onOpenChange: () => {},
+      onSubmit: () => {},
+      ...overrides,
+    };
+  }
+  const amountField = () => screen.getByLabelText("QuotationAmountLabel") as HTMLInputElement;
+  const submitButton = () =>
+    screen.getByRole("button", { name: "RecordQuotationAction" }) as HTMLButtonElement;
+
+  test("a calculation available at open is already in the field, and an untouched save records it as calculated", () => {
+    const onSubmit = vi.fn();
+    render(<RecordSubmittedQuotationDialog {...dialogProps({ onSubmit })} />);
+
+    expect(amountField().value).toBe("12500");
+    expect(screen.getByText("QuotationMatchesCalculation")).toBeTruthy();
+    // Explicit save is still required: nothing was recorded by opening.
+    expect(onSubmit).not.toHaveBeenCalled();
+    fireEvent.click(submitButton());
+    expect(onSubmit).toHaveBeenCalledWith({
+      submittedQuotationMinor: 12_500 * JOD,
+      source: "SYSTEM_CALCULATED",
+      overrideReason: undefined,
+    });
+  });
+
+  test("opened while the calculator is still answering, a pristine field is filled once when the figure arrives", () => {
+    const view = render(
+      <RecordSubmittedQuotationDialog {...dialogProps({ calculation: { state: "LOADING" } })} />
+    );
+    expect(amountField().value).toBe("");
+    expect(submitButton().disabled).toBe(true);
+
+    view.rerender(
+      <RecordSubmittedQuotationDialog
+        {...dialogProps({ calculation: { state: "AVAILABLE", minor: 12_500 * JOD } })}
+      />
+    );
+    expect(amountField().value).toBe("12500");
+    expect(screen.getByText("QuotationMatchesCalculation")).toBeTruthy();
+    expect(submitButton().disabled).toBe(false);
+  });
+
+  test("a figure the operator already typed is NEVER overwritten by a calculation that arrives later", () => {
+    const onSubmit = vi.fn();
+    const view = render(
+      <RecordSubmittedQuotationDialog
+        {...dialogProps({ calculation: { state: "LOADING" }, onSubmit })}
+      />
+    );
+    fireEvent.change(amountField(), { target: { value: "13000" } });
+
+    view.rerender(
+      <RecordSubmittedQuotationDialog
+        {...dialogProps({ calculation: { state: "AVAILABLE", minor: 12_500 * JOD }, onSubmit })}
+      />
+    );
+    expect(amountField().value).toBe("13000");
+    // The typed figure departs from the calculation, so it is an override and
+    // needs its reason — the prefill did not silently reclassify it.
+    expect(screen.getByText("QuotationDiffersFromCalculation")).toBeTruthy();
+    expect(submitButton().disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("QuotationOverrideReasonLabel"), {
+      target: { value: "the sent document carried 13,000" },
+    });
+    fireEvent.click(submitButton());
+    expect(onSubmit).toHaveBeenCalledWith({
+      submittedQuotationMinor: 13_000 * JOD,
+      source: "CALCULATED_WITH_OVERRIDE",
+      overrideReason: "the sent document carried 13,000",
+    });
+  });
+
+  test("a field the operator cleared stays cleared when the figure arrives — pristine means untouched, not empty", () => {
+    const view = render(
+      <RecordSubmittedQuotationDialog {...dialogProps({ calculation: { state: "LOADING" } })} />
+    );
+    fireEvent.change(amountField(), { target: { value: "13000" } });
+    fireEvent.change(amountField(), { target: { value: "" } });
+
+    view.rerender(
+      <RecordSubmittedQuotationDialog
+        {...dialogProps({ calculation: { state: "AVAILABLE", minor: 12_500 * JOD } })}
+      />
+    );
+    expect(amountField().value).toBe("");
+  });
+
+  test("editing the prefilled figure turns it into an override that requires a reason", () => {
+    const onSubmit = vi.fn();
+    render(<RecordSubmittedQuotationDialog {...dialogProps({ onSubmit })} />);
+    fireEvent.change(amountField(), { target: { value: "12400" } });
+    expect(screen.getByText("QuotationDiffersFromCalculation")).toBeTruthy();
+    expect(submitButton().disabled).toBe(true);
+    fireEvent.click(submitButton());
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  test("with no calculation the field opens empty and the entry stays manual", () => {
+    const onSubmit = vi.fn();
+    render(
+      <RecordSubmittedQuotationDialog
+        {...dialogProps({ calculation: { state: "UNAVAILABLE" }, onSubmit })}
+      />
+    );
+    expect(amountField().value).toBe("");
+    expect(screen.getByText("QuotationCalculatorUnavailable")).toBeTruthy();
+    fireEvent.change(amountField(), { target: { value: "11500" } });
+    fireEvent.click(submitButton());
+    expect(onSubmit).toHaveBeenCalledWith({
+      submittedQuotationMinor: 11_500 * JOD,
+      source: "MANUAL_ENTRY",
+      overrideReason: undefined,
+    });
+  });
+
+  test("closing and reopening resets to the CURRENT calculation, discarding the previous entry", () => {
+    const view = render(<RecordSubmittedQuotationDialog {...dialogProps()} />);
+    fireEvent.change(amountField(), { target: { value: "13000" } });
+
+    view.rerender(<RecordSubmittedQuotationDialog {...dialogProps({ open: false })} />);
+    view.rerender(
+      <RecordSubmittedQuotationDialog
+        {...dialogProps({ calculation: { state: "AVAILABLE", minor: 12_750 * JOD } })}
+      />
+    );
+    expect(amountField().value).toBe("12750");
+    expect(screen.getByText("QuotationMatchesCalculation")).toBeTruthy();
+  });
+
+  test("a later CHANGE of an available calculation does not move a prefilled figure the operator has already seen", () => {
+    // The prefill is a one-shot: once the field carries a figure — prefilled or
+    // typed — a live query moving underneath must not rewrite what is on
+    // screen. The operator still sees "differs from the calculation".
+    const view = render(<RecordSubmittedQuotationDialog {...dialogProps()} />);
+    expect(amountField().value).toBe("12500");
+    view.rerender(
+      <RecordSubmittedQuotationDialog
+        {...dialogProps({ calculation: { state: "AVAILABLE", minor: 12_750 * JOD } })}
+      />
+    );
+    expect(amountField().value).toBe("12500");
+    expect(screen.getByText("QuotationDiffersFromCalculation")).toBeTruthy();
+  });
+
+  test("renders right-to-left in Arabic with the prefilled figure present", () => {
+    language.locale = "ar";
+    try {
+      render(<RecordSubmittedQuotationDialog {...dialogProps()} />);
+      expect(amountField().value).toBe("12500");
+      expect(screen.getByRole("dialog")).toBeTruthy();
+    } finally {
+      language.locale = "ar";
+    }
+  });
+});
