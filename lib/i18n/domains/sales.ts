@@ -275,6 +275,80 @@ const dealRailMessages = defineBilingualMessages({
   ],
   RetryHandoverCost: ["Retry", "إعادة المحاولة"],
   HandoverCostAcknowledgeChecked: ["I have checked the lines", "راجعتُ البنود"],
+
+  // --- Appraisal gap resolution (SCRUM-83) — the GAP_RESOLUTION stage's one action.
+  ResolveGapAction: ["Resolve appraisal gap", "حل فرق التخمين"],
+  GapResolved: ["Recorded who covers the appraisal gap.", "سُجِّلت الجهة التي تتحمّل فرق التخمين."],
+  GapResolutionNeedsPermission: [
+    "Agreeing who covers the difference is recorded by whoever approves the purchase amount for this deal.",
+    "تسجيل الجهة التي تتحمّل الفرق يقوم به من يعتمد مبلغ الشراء لهذه الصفقة.",
+  ],
+  // A DIFFERENT obstacle: this person may record the agreement, but the deal's
+  // figures are not shown to them, and the shortfall is one of those figures.
+  GapResolutionNeedsDealFigures: [
+    "This deal's figures are not available to you, so the difference cannot be settled here.",
+    "أرقام هذه الصفقة غير متاحة لك، لذا لا يمكن تسوية الفرق من هنا.",
+  ],
+  // The deal has moved past the point where this can be agreed: handover seals
+  // the figures and closing writes the sale against them, so the server refuses.
+  GapResolutionSealed: [
+    "This deal has already moved on, so who covers the difference can no longer be recorded here.",
+    "تجاوزت هذه الصفقة هذه المرحلة، فلم يعد بالإمكان تسجيل الجهة التي تتحمّل الفرق من هنا.",
+  ],
+  GapResolutionSelfDeal: [
+    "You cannot settle the appraisal gap on your own deal. A manager or the dealership owner records it.",
+    "لا يمكنك تسوية فرق التخمين على صفقتك أنت. يسجّلها مدير أو مالك المعرض.",
+  ],
+  ResolveGapTitle: ["Resolve the appraisal gap", "حل فرق التخمين"],
+  ResolveGapDescription: [
+    "The finance company approved less than the quotation. Record what the customer and the dealership each cover, and where the customer's part is actually paid.",
+    "اعتمدت شركة التمويل مبلغاً أقل من عرض السعر. سجّل ما يتحمّله العميل وما يتحمّله المعرض، وأين يُدفع نصيب العميل فعلياً.",
+  ],
+  GapRecordedQuotation: ["Submitted quotation", "عرض السعر المرسل"],
+  GapApprovedAmount: ["Approved by the finance company", "المبلغ المعتمد من شركة التمويل"],
+  ResolveGapAmount: ["The appraisal gap", "فرق التخمين"],
+  ResolveGapWhoAbsorbs: ["Who covers it", "من يتحمّله"],
+  GapCustomerAbsorbs: ["The customer covers it", "يتحمّله العميل"],
+  GapCustomerAbsorbsHint: ["The customer covers the whole difference.", "يتحمّل العميل الفرق كاملاً."],
+  GapSplit: ["Customer and dealership split it", "يتقاسمه العميل والمعرض"],
+  GapSplitHint: ["Enter the customer's part; the dealership's is what remains.", "أدخل نصيب العميل، ويتحمّل المعرض الباقي."],
+  GapDealerAbsorbs: ["The dealership covers it", "يتحمّله المعرض"],
+  GapDealerAbsorbsHint: [
+    "The dealership covers the whole difference; nothing is collected from the customer for it.",
+    "يتحمّل المعرض الفرق كاملاً، ولا يُحصَّل شيء من العميل مقابله.",
+  ],
+  GapCustomerShare: ["The customer's part", "نصيب العميل"],
+  GapDealerShare: ["The dealership then covers", "ويتحمّل المعرض"],
+  GapWhereCustomerPays: ["Where the customer's part is paid", "أين يُدفع نصيب العميل"],
+  GapWhereCustomerPaysHint: [
+    "Money paid to the dealership is dealership income. Money paid to the finance company is not, so it is recorded separately rather than assumed.",
+    "ما يُدفع للمعرض دخلٌ للمعرض. أما ما يُدفع لشركة التمويل فليس كذلك، لذا يُسجَّل على حدة بدل افتراضه.",
+  ],
+  GapCashToDealer: ["Cash to us", "نقداً لنا"],
+  GapInstallmentsToDealer: ["Instalments to us", "أقساطاً لنا"],
+  GapToFinanceCompany: ["To the finance company", "لشركة التمويل"],
+  // Shown INSTEAD of the all-placed line while any destination is blank. It has
+  // to name the remedy, because the Confirm button is disabled at this point.
+  GapDestinationsIncomplete: [
+    "Enter an amount in every box — put 0 where nothing was paid that way.",
+    "أدخل مبلغاً في كل خانة، وضع 0 حيث لم يُدفع شيء بتلك الطريقة.",
+  ],
+  GapShareMissing: ["Enter the customer's part of the difference.", "أدخل نصيب العميل من الفرق."],
+  // The remedy is the OTHER option, not a different number.
+  GapSplitIsWholeGap: [
+    "The customer's part equals the whole difference — choose \"The customer covers it\" instead.",
+    "نصيب العميل يساوي الفرق كاملاً — اختر «يتحمّله العميل» بدلاً من ذلك.",
+  ],
+  GapSplitLeavesCustomerNothing: [
+    "A split must leave the customer a part — choose \"The dealership covers it\" instead.",
+    "التقاسم يستلزم نصيباً للعميل — اختر «يتحمّله المعرض» بدلاً من ذلك.",
+  ],
+  GapAllocationMismatch: [
+    "The three amounts must add up to exactly the customer's part.",
+    "يجب أن يساوي مجموع المبالغ الثلاثة نصيب العميل بالضبط.",
+  ],
+  GapAllocationComplete: ["Everything is accounted for.", "كل شيء محسوب."],
+  GapNotes: ["Notes (optional)", "ملاحظات (اختياري)"],
   NoHandoverCosts: ["No handover costs recorded yet.", "لم تُسجَّل مصاريف تسليم بعد."],
   AddHandoverCost: ["Add cost", "إضافة مصروف"],
   SaveHandoverCost: ["Save cost", "حفظ المصروف"],
@@ -1236,17 +1310,6 @@ export const salesEn = {
    */
   FinalizeNeedsRouteAndPermission:
     "This deal is waiting on who the finance company pays, and that is recorded by the same person who closes the deal. Someone with permission to close it completes both.",
-  /**
-   * The stage with no exit, said out loud.
-   *
-   * Nothing in AutoFlow writes a gap resolution yet, so this stage can never
-   * complete — and the rail is sequential, so it hides every step after it. The
-   * server does not consult the gap at all, so the deal really can be finished;
-   * this points at the screen where those steps still work rather than leaving
-   * the operator on a page that names a step nobody can take. SCRUM-83.
-   */
-  GapResolutionUnavailable:
-    "The finance company approved less than the quotation, and recording who covers the difference is not available in AutoFlow yet — so this step cannot be completed here.",
   ConfirmFinalizeTitle: "Close the deal",
   ConfirmFinalizeDesc:
     "The handover and the expected payment are on file, so the deal can be closed.",
@@ -2132,8 +2195,6 @@ export const salesAr = {
     "هذه المركبة تعود للمورد والصفقة ممولة، لذا يجب تسجيل الجهة التي تدفع لها شركة التمويل قبل إغلاق الصفقة. اختره هنا، في هذه الخطوة.",
   FinalizeNeedsRouteAndPermission:
     "هذه الصفقة بانتظار تحديد الجهة التي تدفع لها شركة التمويل، ويُسجّل ذلك من يملك صلاحية إغلاق الصفقة نفسها. يُكمل الخطوتين من يملك تلك الصلاحية.",
-  GapResolutionUnavailable:
-    "اعتمدت شركة التمويل مبلغاً أقل من عرض السعر، وتسجيل الجهة التي تتحمّل الفرق غير متاح في أوتوفلو بعد، لذا لا يمكن إتمام هذه الخطوة هنا.",
   ConfirmFinalizeTitle: "إغلاق الصفقة",
   ConfirmFinalizeDesc: "التسليم والدفعة المتوقعة مسجَّلان، ويمكن إغلاق الصفقة.",
   FinalizeCreatesTheSale:

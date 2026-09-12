@@ -565,10 +565,18 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // have "confirmed" a count that silently lost a mutation on one side of the
   // merge. The ratchet's whole purpose is to make a silent shrink impossible, so
   // an integration re-measures rather than reconciles on paper.
+  //
+  // `financingEconomics.resolveAppraisalGap` (SCRUM-83) — 487 → 488 total,
+  // 315 → 316 analysed. It takes `orgId` AND a caller-supplied
+  // `applicationId`, and reads the row through `requireOwnedRow` after
+  // `requireTenantAuth`, which is exactly the shape this guard exists to
+  // enforce; the analyser found it and counted it in the analysed set. The
+  // skipped counts are unchanged. Pinned FROM THE ANALYSER'S OUTPUT on this
+  // tree, not by adding one to the previous line.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 487,
-      analysed: 315,
+      totalMutations: 488,
+      analysed: 316,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 157,
     });

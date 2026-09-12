@@ -1,5 +1,6 @@
 /**
- * The 113-entry economic-command classification ratchet (SCRUM-313).
+ * The 114-entry economic-command classification ratchet (SCRUM-313; 113 at the
+ * RC, +1 for SCRUM-83's `financingEconomics.resolveAppraisalGap`).
  *
  * OWNER RULING: every public mutation that can reach a money-bearing sink must
  * carry EXACTLY ONE classification, and this must FAIL whenever a new public
@@ -100,6 +101,7 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "financingEconomics.recordAppraisal": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "financingEconomics.recordSubmittedQuotation": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "financingEconomics.reopenApproval": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
+  "financingEconomics.resolveAppraisalGap": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table (financeApplications gap shares/destinations) only through the patch heuristic; no posting call is reachable from its own body. Replay-safe by state: refuses once gapResolution is CUSTOMER_ABSORBS/SPLIT/DEALER_ABSORBS and checks the economics stamp before any write (SCRUM-83)" },
   "financingEconomics.resolveFinancingReconciliation": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "fixedAssets.capitalize": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "fixedAssets.dispose": { bucket: "STATE_GUARDED", mechanism: "hookAssetDisposed keys on `asset_disposed_${assetId}` — the PRE-EXISTING asset, so a retry reproduces the key and the posting engine dedupes it" },
@@ -254,7 +256,7 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     // that no longer exists fails too rather than rotting.
     expect(population.filter((p) => !CLASSIFICATION[p])).toEqual([]);
     expect(classified.filter((c) => !forward.has(c))).toEqual([]);
-    expect(population.length).toBe(113);
+    expect(population.length).toBe(114);
   });
 
   test("every entry carries exactly one bucket and a stated mechanism", () => {

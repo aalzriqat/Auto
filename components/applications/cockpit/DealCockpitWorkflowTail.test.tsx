@@ -319,29 +319,175 @@ describe("a step the server would refuse is not offered as a step", () => {
   });
 });
 
-describe("the stage that nothing can clear", () => {
+describe("the appraisal-gap stage", () => {
   /**
-   * SCRUM-83, found by this issue's own E2E once it stopped driving the review
-   * dialog. A finance company approving BELOW the quotation — the ordinary case,
-   * and the whole reason an appraisal gap exists — leaves `gapResolution` at
-   * PENDING_NEGOTIATION, and nothing in the product writes the values that would
-   * resolve it. The rail is strictly sequential, so that stage hides handover,
-   * settlement and every action after it.
+   * SCRUM-83, and this block used to assert the opposite.
    *
-   * The deal is genuinely completable: no server mutation consults
-   * `gapResolution`. Pinned here so the state is characterised rather than
-   * discovered again, and so nobody later "fixes" it by quietly treating
+   * A finance company approving BELOW the quotation — the ordinary case, and the
+   * whole reason an appraisal gap exists — left `gapResolution` at
+   * PENDING_NEGOTIATION with nothing in the product able to write the values
+   * that resolve it. The rail is strictly sequential, so that stage hid
+   * handover, settlement and every action after it. This suite pinned that dead
+   * end deliberately so it could not be "fixed" by quietly treating
    * PENDING_NEGOTIATION as resolved.
+   *
+   * It is now fixed the other way: the stage has a real action
+   * (`resolveAppraisalGap`), and the blocked state is still not softened. The
+   * assertions are the SAME contract read forward — the blocker text stays, and
+   * the step is offered rather than explained away.
    */
-  test("says why it cannot be cleared here, and offers no action", () => {
+  const GAP_MONEY = {
+    currency: "JOD",
+    settlesDirectToSupplier: false,
+    routeKnown: true,
+    profit: { available: false, reason: "NoSupplierSettlement" },
+    expenses: { lines: [], actualTotalMinor: 0, awaitingActuals: 0 },
+    parties: [],
+    // The shortfall travels with the other AMOUNTS, under the same gate as the
+    // rest of the money — the stage rail is deliberately qualitative.
+    appraisalGapMinor: 1_000_000,
+  };
+  const GAP_STAGES = [
+    { key: "APPRAISAL", state: "COMPLETE" },
+    { key: "GAP_RESOLUTION", state: "BLOCKED", blocker: "GapUnresolved" },
+    { key: "HANDOVER", state: "PENDING" },
+    { key: "SETTLEMENT", state: "PENDING" },
+  ];
+  const GAP_MUTATION = "financingEconomics:resolveAppraisalGap";
+  const ECONOMICS_QUERY = "financingEconomics:getEconomics";
+
+  /** The economics row the cockpit reads the recorded figures from. */
+  function economicsRow(overrides: Record<string, unknown> = {}) {
+    return {
+      application: {
+        _id: APP,
+        status: "APPROVED",
+        salespersonId: "user_other",
+        economicsCurrency: "JOD",
+        submittedQuotationMinor: 12_500_000,
+        approvedDealerPurchaseAmountMinor: 11_500_000,
+        rawAppraisalGapMinor: 1_000_000,
+        gapResolution: "PENDING_NEGOTIATION",
+        financeCompanyFundedPortionMinor: 9_775_000,
+        unfinancedPortionMinor: 1_725_000,
+        dealerContributionMinor: 1_225_000,
+        appliedLtvPercent: 85,
+        ...overrides,
+      },
+      appraisals: [],
+      overrides: [],
+      approvedAmountIsFarFromEvidence: false,
+    };
+  }
+
+  function gapDeal(overrides: Record<string, unknown> = {}) {
+    return cockpit({ stages: GAP_STAGES, money: GAP_MONEY, economicsStamp: "v2|7", ...overrides });
+  }
+
+  test("offers the resolution action, without softening the blocked state", () => {
     grantTheWholeTail();
+    // Granted SEPARATELY from the tail's own permissions on purpose: agreeing
+    // who covers a shortfall is the approval authority, not the handover one.
+    permissions.add(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
+    permissions.add(PERMISSIONS.VIEW_FINANCE);
+    queryResults.set(COCKPIT_QUERY, gapDeal());
+
+    renderCockpit();
+
+    const block = nextStepBlock();
+    // The blocker itself still says the gap is unresolved — true until somebody
+    // records who covers the shortfall, and the action is how they do that.
+    expect(within(block).getByText("BlockerGapUnresolved")).toBeTruthy();
+    expect(within(block).getByRole("button", { name: "ResolveGapAction" })).toBeTruthy();
+    // The old dead-end explanation is gone, because it is no longer true.
+    expect(within(block).queryByText("GapResolutionUnavailable")).toBeNull();
+  });
+
+  test("withholds the action from a caller whose money is withheld, and names THAT obstacle", () => {
+    grantTheWholeTail();
+    permissions.add(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
+    permissions.add(PERMISSIONS.VIEW_FINANCE);
+    // The permission is GRANTED, so the only thing missing is the money.
+    queryResults.set(COCKPIT_QUERY, gapDeal({ money: null }));
+
+    renderCockpit();
+
+    const block = nextStepBlock();
+    expect(within(block).queryByRole("button", { name: "ResolveGapAction" })).toBeNull();
+    expect(within(block).getByText("GapResolutionNeedsDealFigures")).toBeTruthy();
+    expect(within(block).queryByText("GapResolutionNeedsPermission")).toBeNull();
+  });
+
+  test("a caller without the approval permission is told THAT, not something else", () => {
+    grantTheWholeTail();
+    permissions.add(PERMISSIONS.VIEW_FINANCE);
+    // NOT granting APPROVE_FINANCE_APPLICATION; the money IS visible.
+    queryResults.set(COCKPIT_QUERY, gapDeal());
+
+    renderCockpit();
+
+    const block = nextStepBlock();
+    expect(within(block).queryByRole("button", { name: "ResolveGapAction" })).toBeNull();
+    expect(within(block).getByText("GapResolutionNeedsPermission")).toBeTruthy();
+    expect(within(block).queryByText("GapResolutionNeedsDealFigures")).toBeNull();
+    expect(within(block).queryByText("GapResolutionSealed")).toBeNull();
+  });
+
+  test("the salesperson is not offered the resolution on their own deal", () => {
+    grantTheWholeTail();
+    permissions.add(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
+    permissions.add(PERMISSIONS.VIEW_FINANCE);
+    queryResults.set(COCKPIT_QUERY, gapDeal());
+    // The harness's caller is `user_sales`; make the deal theirs.
+    queryResults.set("applications:get", {
+      _id: APP,
+      quoteId: "quote_1",
+      status: "APPROVED",
+      salespersonId: "user_sales",
+      companyId: "company_1",
+      economicsCurrency: "JOD",
+      quote: { totalFinancedAmount: 15000 },
+      vehicle: { sourceType: "OWNED" },
+      deposits: [],
+      hasExternalFinancier: true,
+      canSettleDirectToSupplier: false,
+      directRouteRefusal: null,
+    });
+
+    renderCockpit();
+
+    const block = nextStepBlock();
+    expect(within(block).queryByRole("button", { name: "ResolveGapAction" })).toBeNull();
+    expect(within(block).getByText("GapResolutionSelfDeal")).toBeTruthy();
+  });
+
+  test("a CLOSED deal is not offered a gap resolution the server would refuse", () => {
+    grantTheWholeTail();
+    permissions.add(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
+    permissions.add(PERMISSIONS.VIEW_FINANCE);
+    queryResults.set(COCKPIT_QUERY, gapDeal({ status: "CLOSED" }));
+
+    renderCockpit();
+
+    const block = nextStepBlock();
+    expect(within(block).queryByRole("button", { name: "ResolveGapAction" })).toBeNull();
+    expect(within(block).getByText("GapResolutionSealed")).toBeTruthy();
+  });
+
+  test("a handed-over deal is not offered a gap resolution either", () => {
+    // Handover SEALS these figures, and the server refuses on
+    // `vehicleHandoverAt` independently of status — a handed-over deal is still
+    // APPROVED, which is precisely the state a bare status check would miss.
+    grantTheWholeTail();
+    permissions.add(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
+    permissions.add(PERMISSIONS.VIEW_FINANCE);
     queryResults.set(
       COCKPIT_QUERY,
-      cockpit({
+      gapDeal({
         stages: [
           { key: "APPRAISAL", state: "COMPLETE" },
           { key: "GAP_RESOLUTION", state: "BLOCKED", blocker: "GapUnresolved" },
-          { key: "HANDOVER", state: "PENDING" },
+          { key: "HANDOVER", state: "COMPLETE" },
           { key: "SETTLEMENT", state: "PENDING" },
         ],
       })
@@ -350,15 +496,129 @@ describe("the stage that nothing can clear", () => {
     renderCockpit();
 
     const block = nextStepBlock();
-    // The blocker itself still says the gap is unresolved. This must not be
-    // softened — it is true, and the money question behind it is unanswered.
-    expect(within(block).getByText("BlockerGapUnresolved")).toBeTruthy();
-    // And now it also says why the step cannot be taken here, which is the
-    // difference between a blocked stage and a dead end.
-    expect(within(block).getByText("GapResolutionUnavailable")).toBeTruthy();
-    // No action, because there is none — not even a disabled one pretending
-    // the workflow exists.
-    expect(within(block).queryByRole("button")).toBeNull();
+    expect(within(block).queryByRole("button", { name: "ResolveGapAction" })).toBeNull();
+    expect(within(block).getByText("GapResolutionSealed")).toBeTruthy();
+  });
+
+  test("the dialog shows the recorded quotation, the approved amount and the exact gap, and records a customer-absorbs split against the stamp the screen was opened with", async () => {
+    grantTheWholeTail();
+    permissions.add(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
+    permissions.add(PERMISSIONS.VIEW_FINANCE);
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    queryResults.set(COCKPIT_QUERY, gapDeal());
+    queryResults.set(ECONOMICS_QUERY, economicsRow());
+
+    renderCockpit();
+    fireEvent.click(within(nextStepBlock()).getByRole("button", { name: "ResolveGapAction" }));
+    const dialog = screen.getByRole("dialog");
+
+    // The three figures, from the SERVER's row — never derived on this side.
+    const figures = within(dialog).getByTestId("gap-figures");
+    expect(figures.textContent).toContain("12,500");
+    expect(figures.textContent).toContain("11,500");
+    expect(within(dialog).getByTestId("gap-amount").textContent).toContain("1,000");
+
+    // Customer absorbs (default): nothing to type for the share; the three
+    // destinations must each be decided — blank is not zero.
+    const submit = within(dialog).getByRole("button", { name: "ResolveGapAction" }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    expect(within(dialog).getByTestId("gap-readiness").textContent).toBe("GapDestinationsIncomplete");
+    fireEvent.change(within(dialog).getByLabelText("GapCashToDealer"), { target: { value: "700" } });
+    fireEvent.change(within(dialog).getByLabelText("GapInstallmentsToDealer"), { target: { value: "0" } });
+    fireEvent.change(within(dialog).getByLabelText("GapToFinanceCompany"), { target: { value: "300" } });
+    expect(within(dialog).getByTestId("gap-readiness").textContent).toBe("GapAllocationComplete");
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(mutationCalls.get(GAP_MUTATION)).toHaveLength(1));
+    expect(mutationCalls.get(GAP_MUTATION)?.[0]).toEqual({
+      orgId: ORG,
+      applicationId: APP,
+      economicsStamp: "v2|7",
+      customerGapShareMinor: 1_000_000,
+      dealerGapShareMinor: 0,
+      customerGapCashToDealerMinor: 700_000,
+      customerGapInstallmentToDealerMinor: 0,
+      customerGapToFinanceCompanyMinor: 300_000,
+      notes: undefined,
+    });
+  });
+
+  test("dealer absorbs all: no customer part, no destinations to place, zeros sent by arithmetic", async () => {
+    grantTheWholeTail();
+    permissions.add(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
+    permissions.add(PERMISSIONS.VIEW_FINANCE);
+    queryResults.set(COCKPIT_QUERY, gapDeal());
+
+    renderCockpit();
+    fireEvent.click(within(nextStepBlock()).getByRole("button", { name: "ResolveGapAction" }));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("radio", { name: /GapDealerAbsorbs/ }));
+    expect(within(dialog).queryByLabelText("GapCashToDealer")).toBeNull();
+    const submit = within(dialog).getByRole("button", { name: "ResolveGapAction" }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(mutationCalls.get(GAP_MUTATION)).toHaveLength(1));
+    expect(mutationCalls.get(GAP_MUTATION)?.[0]).toMatchObject({
+      customerGapShareMinor: 0,
+      dealerGapShareMinor: 1_000_000,
+      customerGapCashToDealerMinor: 0,
+      customerGapInstallmentToDealerMinor: 0,
+      customerGapToFinanceCompanyMinor: 0,
+    });
+  });
+
+  test("a split: the customer's part is typed, the dealership's is derived, and destinations that do not add up keep the button dead", async () => {
+    grantTheWholeTail();
+    permissions.add(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
+    permissions.add(PERMISSIONS.VIEW_FINANCE);
+    queryResults.set(COCKPIT_QUERY, gapDeal());
+
+    renderCockpit();
+    fireEvent.click(within(nextStepBlock()).getByRole("button", { name: "ResolveGapAction" }));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("radio", { name: /^GapSplit/ }));
+    fireEvent.change(within(dialog).getByLabelText("GapCustomerShare"), { target: { value: "600" } });
+    expect(within(dialog).getByText("GapDealerShare").parentElement?.textContent).toContain("400");
+    fireEvent.change(within(dialog).getByLabelText("GapCashToDealer"), { target: { value: "500" } });
+    fireEvent.change(within(dialog).getByLabelText("GapInstallmentsToDealer"), { target: { value: "0" } });
+    fireEvent.change(within(dialog).getByLabelText("GapToFinanceCompany"), { target: { value: "0" } });
+    const submit = within(dialog).getByRole("button", { name: "ResolveGapAction" }) as HTMLButtonElement;
+    // 500 ≠ 600: the shared identity refuses, and the reason is named.
+    expect(submit.disabled).toBe(true);
+    expect(within(dialog).getByTestId("gap-readiness").textContent).toBe("GapAllocationMismatch");
+    fireEvent.change(within(dialog).getByLabelText("GapInstallmentsToDealer"), { target: { value: "100" } });
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(mutationCalls.get(GAP_MUTATION)).toHaveLength(1));
+    expect(mutationCalls.get(GAP_MUTATION)?.[0]).toMatchObject({
+      customerGapShareMinor: 600_000,
+      dealerGapShareMinor: 400_000,
+      customerGapCashToDealerMinor: 500_000,
+      customerGapInstallmentToDealerMinor: 100_000,
+      customerGapToFinanceCompanyMinor: 0,
+    });
+  });
+
+  test("the server's refusal is shown in the dialog, which stays open", async () => {
+    grantTheWholeTail();
+    permissions.add(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
+    permissions.add(PERMISSIONS.VIEW_FINANCE);
+    queryResults.set(COCKPIT_QUERY, gapDeal());
+    mutationFailures.set(GAP_MUTATION, "This deal's figures changed while you were agreeing the split.");
+
+    renderCockpit();
+    fireEvent.click(within(nextStepBlock()).getByRole("button", { name: "ResolveGapAction" }));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("radio", { name: /GapDealerAbsorbs/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "ResolveGapAction" }));
+
+    await waitFor(() =>
+      expect(within(dialog).getByRole("alert").textContent).toContain("figures changed")
+    );
+    expect(screen.getByRole("dialog")).toBeTruthy();
   });
 
   test("does not offer handover from behind the blocked gap", () => {
