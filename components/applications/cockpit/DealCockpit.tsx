@@ -706,6 +706,10 @@ export function DealCockpit({
   const handoverCosts =
     app && deal
       ? {
+          // Undefined is "loading" until the permission has resolved AND, for a
+          // caller who holds it, the query has answered; only a resolved caller
+          // WITHOUT the permission is told the rows are not theirs to read.
+          loading: permissionsLoading || (canViewApplications && dealCosts === undefined),
           costs: dealCosts
             ? ({
                 lines: dealCosts.fees.map((fee) => ({
@@ -716,6 +720,7 @@ export function DealCockpit({
                   actualAmountMinor: fee.actualAmountMinor,
                   paidBy: fee.paidBy,
                   paidTo: fee.paidTo,
+                  currency: fee.currency,
                   status: fee.status,
                   paidAt: fee.paidAt,
                   receiptReference: fee.receiptReference,
@@ -723,9 +728,15 @@ export function DealCockpit({
                 summary: dealCosts.summary,
               } satisfies HandoverCostsData)
             : undefined,
-          currency: economicsCurrencyCode,
-          scale: scaleForCurrency(economicsCurrencyCode),
-          money: formatEconomics,
+          // A new line is recorded in the PINNED currency; unpinned means the
+          // server would take the org's current setting, which the lock does
+          // not freeze for fee rows (SCRUM-319) — so adding waits for the pin.
+          denomination: { code: economicsCurrencyCode, pinned: app.economicsCurrency !== undefined },
+          scaleOf: scaleForCurrency,
+          money: (minor: number, currency: string) =>
+            `${(minor / Math.pow(10, scaleForCurrency(currency))).toLocaleString()} ${
+              currency === orgCurrency.code ? orgCurrency.displayLabel : currency
+            }`,
           canManage: canCreateApplication,
           dealClosed: app.status === "CLOSED",
           onAdd: async (values: NewHandoverCost) => {
@@ -751,6 +762,9 @@ export function DealCockpit({
             } catch (error) {
               throw new Error(getErrorMessage(error));
             }
+          },
+          onAbandonAdd: (intentId: string) => {
+            commandId.retire(`record-deal-fee:${applicationId}:${intentId}`);
           },
           onRecordActual: async (feeId: string, values: ActualHandoverCost) => {
             try {

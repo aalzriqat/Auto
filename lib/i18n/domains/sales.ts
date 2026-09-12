@@ -227,7 +227,7 @@ const dealRailMessages = defineBilingualMessages({
   DealsCustomerVehicleColumn: ["Customer · vehicle", "العميل · السيارة"],
   DealsTypeColumn: ["Type · financier", "النوع · جهة التمويل"],
   DealsSinceColumn: ["Since", "منذ"],
-  OpenDeal: ["Open deal", "فتح الصفقة"],
+  OpenDealRow: ["Open deal", "فتح الصفقة"],
   DealsShownOf: ["shown of", "معروضة من"],
   DealsLoadedMoreAvailable: ["loaded — more can be loaded; counts are of loaded rows", "محمّلة — يمكن تحميل المزيد؛ الأعداد للصفوف المحمّلة فقط"],
   DealsLoadedAll: ["loaded — that is every deal", "محمّلة — وهذه كل الصفقات"],
@@ -237,6 +237,7 @@ const dealRailMessages = defineBilingualMessages({
   ReasonReadyForHandover: ["Handover and close", "التسليم والإغلاق"],
   ReasonAwaitingReceipt: ["Financier payment to the dealership", "دفعة جهة التمويل للمعرض"],
   ReasonCashPending: ["Cash sale to complete", "بيع نقدي لإتمامه"],
+  ReasonSalePending: ["Sale to complete", "بيع لإتمامه"],
   /** The two panes under the money on the Deal. */
   DealTabDocuments: ["Documents", "المستندات"],
   DealTabActivity: ["Activity", "السجل"],
@@ -251,6 +252,24 @@ const dealRailMessages = defineBilingualMessages({
     "Cost lines are not readable with your permissions.",
     "لا يمكن قراءة بنود التكاليف بصلاحياتك الحالية.",
   ],
+  HandoverCostsLoading: ["Loading cost lines…", "جارٍ تحميل بنود التكاليف…"],
+  HandoverCostsNeedPin: [
+    "Costs can be added once the deal's economics are recorded, which fixes the currency they are recorded in.",
+    "يمكن إضافة المصاريف بعد تسجيل اقتصاديات الصفقة، وهو ما يثبّت العملة التي تُسجَّل بها.",
+  ],
+  HandoverCostsMixedCurrency: [
+    "These lines were recorded in more than one currency; totals are not shown.",
+    "سُجّلت هذه البنود بأكثر من عملة؛ لا تُعرض الإجماليات.",
+  ],
+  HandoverCostCurrencyDiffers: [
+    "Recorded in a different currency from the deal's; not editable here.",
+    "مسجّل بعملة تختلف عن عملة الصفقة؛ لا يمكن تعديله هنا.",
+  ],
+  HandoverCostRetryFrozen: [
+    "An attempt was already sent. Retry sends exactly what was entered; to change anything, cancel and add the cost again.",
+    "أُرسلت محاولة بالفعل. تُعيد المحاولة إرسال ما أُدخل بالضبط؛ لتغيير أي شيء، ألغِ وأضف المصروف من جديد.",
+  ],
+  RetryHandoverCost: ["Retry", "إعادة المحاولة"],
   NoHandoverCosts: ["No handover costs recorded yet.", "لم تُسجَّل مصاريف تسليم بعد."],
   AddHandoverCost: ["Add cost", "إضافة مصروف"],
   SaveHandoverCost: ["Save cost", "حفظ المصروف"],

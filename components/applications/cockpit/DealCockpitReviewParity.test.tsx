@@ -970,6 +970,7 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     estimatedAmountMinor: 150_000,
     paidBy: "DEALER",
     paidTo: "GOVERNMENT",
+    currency: "JOD",
     status: "ESTIMATED_ONLY",
   };
   function readableDeal() {
@@ -991,9 +992,15 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     fireEvent.change(screen.getByLabelText(/CostAmountLabel/), { target: { value: "150" } });
     fireEvent.click(screen.getByRole("button", { name: "SaveHandoverCost" }));
     await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordDealFee")).toHaveLength(1));
-    // The refusal is shown in the form, and the form is still there for a retry.
+    // The refusal is shown in the form, and the form is still there for a
+    // retry — FROZEN (AF-215-02): the server deduplicates by identity plus a
+    // fingerprint of the material amounts, not of every field, so a retry must
+    // resend exactly what went out the first time.
     await screen.findByRole("alert");
-    fireEvent.click(screen.getByRole("button", { name: "SaveHandoverCost" }));
+    expect(screen.getByTestId("deal-handover-cost-add-frozen")).toBeTruthy();
+    expect(screen.getByLabelText("CostDescriptionLabel").closest("fieldset")?.disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: "SaveHandoverCost" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "RetryHandoverCost" }));
     await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordDealFee")).toHaveLength(2));
 
     const [first, second] = mutationCalls.get("financeDealCosts:recordDealFee") as Array<Record<string, unknown>>;
@@ -1012,6 +1019,81 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     });
     expect(first.idempotencyKey).toMatch(/^record-deal-fee:app_2048:[0-9a-f-]{36}:[0-9a-f-]{36}$/);
     expect(second.idempotencyKey).toBe(first.idempotencyKey);
+
+    // The retry succeeded and the form closed. A NEW form is a NEW command,
+    // and cancelling an attempted form ends its intent for good.
+    await waitFor(() => expect(screen.queryByTestId("deal-handover-cost-add")).toBeNull());
+    stubs.mutationFailures.set("financeDealCosts:recordDealFee", "network lost again");
+    fireEvent.click(screen.getByRole("button", { name: "AddHandoverCost" }));
+    fireEvent.change(screen.getByLabelText(/CostAmountLabel/), { target: { value: "150" } });
+    fireEvent.click(screen.getByRole("button", { name: "SaveHandoverCost" }));
+    await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordDealFee")).toHaveLength(3));
+    const third = mutationCalls.get("financeDealCosts:recordDealFee")![2] as Record<string, unknown>;
+    expect(third.idempotencyKey).not.toBe(first.idempotencyKey);
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "AddHandoverCost" }));
+    fireEvent.change(screen.getByLabelText(/CostAmountLabel/), { target: { value: "150" } });
+    fireEvent.click(screen.getByRole("button", { name: "SaveHandoverCost" }));
+    await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordDealFee")).toHaveLength(4));
+    const fourth = mutationCalls.get("financeDealCosts:recordDealFee")![3] as Record<string, unknown>;
+    expect(fourth.idempotencyKey).not.toBe(third.idempotencyKey);
+  });
+
+  test("AF-215-01 — no pinned economics currency: adding is withheld with the reason; lines still read in their own currency", () => {
+    readableDeal();
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    queryResults.set(GET_QUERY, application({ status: "APPROVED", economicsCurrency: undefined }));
+    queryResults.set(COSTS_QUERY, costsPayload([transferLine]));
+    renderCockpit();
+    const section = screen.getByTestId("deal-handover-costs");
+    expect(within(section).queryByRole("button", { name: "AddHandoverCost" })).toBeNull();
+    expect(screen.getByTestId("deal-handover-costs-unpinned").textContent).toBe("HandoverCostsNeedPin");
+    // The JOD line on a JOD org is still the deal's denomination: editable, totals shown.
+    expect(within(screen.getByTestId("deal-handover-cost-fee_1")).getByRole("button", { name: "RecordActualCost" })).toBeTruthy();
+    expect(screen.getByTestId("deal-handover-costs-totals")).toBeTruthy();
+  });
+
+  test("AF-215-01 — a line recorded in another currency is spelled in ITS currency, is not editable here, and withholds the mixed totals", () => {
+    readableDeal();
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    queryResults.set(
+      COSTS_QUERY,
+      costsPayload([transferLine, { ...transferLine, _id: "fee_usd", feeType: "INSPECTION", currency: "USD", estimatedAmountMinor: 4_000 }])
+    );
+    renderCockpit();
+    const usd = screen.getByTestId("deal-handover-cost-fee_usd");
+    // 4,000 minor at USD scale 2 = 40 USD — never 4 JD (scale 3) and never relabelled.
+    expect(usd.textContent).toContain("40 USD");
+    expect(usd.textContent).not.toContain("4 Jordanian");
+    expect(within(usd).queryByRole("button")).toBeNull();
+    expect(screen.getByTestId("deal-handover-cost-fee_usd-currency").textContent).toBe("HandoverCostCurrencyDiffers");
+    expect(screen.queryByTestId("deal-handover-costs-totals")).toBeNull();
+    expect(screen.getByTestId("deal-handover-costs-mixed")).toBeTruthy();
+    // The JOD line keeps its controls.
+    expect(within(screen.getByTestId("deal-handover-cost-fee_1")).getByRole("button", { name: "RecordActualCost" })).toBeTruthy();
+  });
+
+  test("AF-215-01 — an actual is scaled at the LINE's own currency, and that currency is named in the payload", async () => {
+    readableDeal();
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    // A USD-pinned deal with a USD line: 165.5 → 16,550 minor (scale 2), not 165,500.
+    queryResults.set(GET_QUERY, application({ status: "APPROVED", economicsCurrency: "USD" }));
+    queryResults.set(COSTS_QUERY, costsPayload([{ ...transferLine, currency: "USD", estimatedAmountMinor: 15_000 }]));
+    renderCockpit();
+    fireEvent.click(within(screen.getByTestId("deal-handover-cost-fee_1")).getByRole("button", { name: "RecordActualCost" }));
+    fireEvent.change(screen.getByLabelText(/^CostActual/), { target: { value: "165.5" } });
+    fireEvent.click(screen.getByRole("button", { name: "SaveActualCost" }));
+    await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordActualFeeAmount")).toHaveLength(1));
+    expect(mutationCalls.get("financeDealCosts:recordActualFeeAmount")![0]).toMatchObject({ feeId: "fee_1", actualAmountMinor: 16_550 });
+  });
+
+  test("SM-R4-3 — while permissions or the rows are still loading the section says loading, not 'not readable with your permissions'", () => {
+    readableDeal();
+    // Query result deliberately absent: still loading for an authorised caller.
+    renderCockpit();
+    expect(screen.getByTestId("deal-handover-costs").textContent).toContain("HandoverCostsLoading");
+    expect(screen.getByTestId("deal-handover-costs").textContent).not.toContain("HandoverCostsUnavailable");
   });
 
   test("cancelling the add form writes nothing", () => {

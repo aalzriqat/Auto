@@ -37,6 +37,8 @@ export type SaleListRow = {
   vehicleSummary: string;
   salespersonName: string;
   applicationId?: string;
+  /** FINANCED is a property of the SALE, not of whether an application exists. */
+  financingType?: "CASH" | "FINANCED" | "LEASE";
 };
 
 const APPLICATION_STATUS_LABEL: Record<string, string> = {
@@ -112,10 +114,16 @@ export function saleRow(
   t: (key: string) => string,
   formatAmount: (major: number) => string
 ): DealRow {
+  // `sales.create` accepts FINANCED / LEASE with no application at all, so an
+  // applicationless financed sale is ordinary — the same rule `sales.dealCockpit`
+  // applies (`externallyFinanced`). Deriving the kind from the application's
+  // absence would label those "Cash" and queue them as a cash sale to complete.
+  const externallyFinanced =
+    sale.applicationId !== undefined || sale.financingType === "FINANCED" || sale.financingType === "LEASE";
   return {
     key: `sale_${sale._id}`,
     href: `/${orgId}/sales/${sale._id}/deal`,
-    kind: "CASH",
+    kind: externallyFinanced ? "FINANCED" : "CASH",
     customerName: sale.customerName,
     vehicleDesc: sale.vehicleSummary,
     financierLabel: null,
@@ -123,7 +131,7 @@ export function saleRow(
       sale.status === "PENDING" ? "SaleStatusPending" : sale.status === "COMPLETED" ? "SaleStatusCompleted" : "Cancelled"
     ),
     statusTone: sale.status === "COMPLETED" ? "done" : sale.status === "CANCELLED" ? "stopped" : "active",
-    reason: sale.status === "PENDING" ? "CASH_PENDING" : null,
+    reason: sale.status === "PENDING" ? (externallyFinanced ? "SALE_PENDING" : "CASH_PENDING") : null,
     waitingOn: sale.status === "PENDING" ? "DEALERSHIP" : "NONE",
     since: sale.saleDate,
     salespersonName: sale.salespersonName,
@@ -133,9 +141,14 @@ export function saleRow(
 
 /**
  * One entry per deal. A financed deal that has been finalized ALSO has a sale
- * row (`sales.applicationId` set); that sale is the same deal and is dropped
- * here so the application row — which the deal screen canonicalizes to the
- * sale URL once the sale exists — is its one entry.
+ * row (`sales.applicationId` set); that sale is the same deal, and it is
+ * dropped ONLY when its application row is actually among the loaded
+ * applications. The two sources paginate independently, so a loaded sale
+ * whose application sits on a page not yet fetched keeps its own entry —
+ * rendered as the FINANCED deal it is, at the sale deal URL (the canonical
+ * address once a sale exists), with no financier or queue state invented —
+ * and coalesces into the application row once that page arrives. Dropping it
+ * unconditionally made a finalized deal vanish from the only register.
  */
 export function mergeDealRows(
   applications: ReadonlyArray<ApplicationListRow>,
@@ -144,8 +157,11 @@ export function mergeDealRows(
   t: (key: string) => string,
   formatAmount: (major: number) => string
 ): DealRow[] {
+  const loadedApplicationIds = new Set(applications.map((app) => app._id));
   return [
     ...applications.map((app) => applicationRow(app, orgId, t, formatAmount)),
-    ...sales.filter((sale) => !sale.applicationId).map((sale) => saleRow(sale, orgId, t, formatAmount)),
+    ...sales
+      .filter((sale) => sale.applicationId === undefined || !loadedApplicationIds.has(sale.applicationId))
+      .map((sale) => saleRow(sale, orgId, t, formatAmount)),
   ];
 }

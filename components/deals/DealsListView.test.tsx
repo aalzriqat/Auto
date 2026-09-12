@@ -74,8 +74,8 @@ describe("the Deals list is a needs-action queue first", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: /DealsAll/ }));
     expect(screen.getAllByRole("row")).toHaveLength(5);
-    expect(screen.getByRole("link", { name: "OpenDeal: Cash Buyer" }).getAttribute("href")).toBe("/org1/sales/sale_1/deal");
-    expect(screen.getByRole("link", { name: "OpenDeal: Test Customer" }).getAttribute("href")).toBe(
+    expect(screen.getByRole("link", { name: "OpenDealRow: Cash Buyer" }).getAttribute("href")).toBe("/org1/sales/sale_1/deal");
+    expect(screen.getByRole("link", { name: "OpenDealRow: Test Customer" }).getAttribute("href")).toBe(
       "/org1/applications/app_1/deal"
     );
   });

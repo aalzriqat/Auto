@@ -118,6 +118,14 @@ const STATUS_LABEL: Record<string, string> = {
 export type HandoverCostLine = {
   _id: string;
   feeType: string;
+  /**
+   * The denomination the row was RECORDED in (`app.economicsCurrency ?? org`
+   * at write time). Every figure on the line is spelled in this, never in the
+   * deal's current denomination: the org currency lock does not count fee
+   * rows, so on a deal whose economics were never pinned the two can differ
+   * (SCRUM-319).
+   */
+  currency: string;
   description?: string;
   estimatedAmountMinor?: number;
   actualAmountMinor?: number;
@@ -141,6 +149,15 @@ export type HandoverCostsData = {
   summary: HandoverCostsSummary;
 };
 
+/**
+ * The denomination a NEW line would be recorded in. `pinned` is whether the
+ * deal's economics currency is fixed on the application; when it is not, the
+ * server would resolve the org's CURRENT currency at write time and nothing
+ * stops that setting moving afterwards — so adding is withheld until the pin
+ * exists (SCRUM-319 containment).
+ */
+export type HandoverCostsDenomination = { code: string; pinned: boolean };
+
 export type NewHandoverCost = {
   /**
    * Names THIS attempt's intent — minted once when the add form opened, so the
@@ -163,6 +180,8 @@ export type ActualHandoverCost = {
   actualAmountMinor: number;
   paidAt: number | undefined;
   receiptReference: string | undefined;
+  /** The line's own denomination the amount was scaled at — for the audit trail. */
+  currency: string;
 };
 
 function isHandoverType(feeType: string): feeType is HandoverFeeType {
@@ -183,27 +202,39 @@ const selectClass =
 
 export function HandoverCostsPanel({
   costs,
-  currency,
-  scale,
+  loading,
+  denomination,
+  scaleOf,
   money,
   canManage,
   dealClosed,
   t,
   onAdd,
+  onAbandonAdd,
   onRecordActual,
   onVoid,
 }: Readonly<{
   /** `undefined` while loading or when this caller may not read the cost rows. */
   costs: HandoverCostsData | undefined;
-  currency: string;
-  scale: number;
-  money: (minor: number) => string;
+  /**
+   * Whether `costs` being undefined means "not yet" rather than "not for you".
+   * The two are different sentences; saying "not readable with your
+   * permissions" to an authorised caller for the first render is a lie.
+   */
+  loading: boolean;
+  denomination: HandoverCostsDenomination;
+  /** Minor-unit scale of a denomination code. */
+  scaleOf: (currency: string) => number;
+  /** Spells a minor amount IN THE GIVEN currency. */
+  money: (minor: number, currency: string) => string;
   /** `create:finance_application` — the permission all three commands check. */
   canManage: boolean;
   /** Informational only; the server decides what a closed deal still accepts. */
   dealClosed: boolean;
   t: (key: string) => string;
   onAdd: (values: NewHandoverCost) => Promise<void>;
+  /** The operator cancelled a form that had already attempted once: its intent is over. */
+  onAbandonAdd: (intentId: string) => void;
   onRecordActual: (feeId: string, values: ActualHandoverCost) => Promise<void>;
   onVoid: (feeId: string, reason: string) => Promise<void>;
 }>) {
@@ -214,6 +245,11 @@ export function HandoverCostsPanel({
   // `listDealCosts` serves live lines only; a voided line leaves the section
   // (its record survives server-side with reason, actor and time).
   const live = costs?.lines ?? [];
+  // The server's summary sums every line's integers whatever each row's own
+  // currency is; a total over mixed denominations is not a number, so it is
+  // withheld and the reason said.
+  const mixedCurrencies = live.some((line) => line.currency !== denomination.code);
+  const canAdd = canManage && denomination.pinned;
 
   return (
     <Card data-testid="deal-handover-costs">
@@ -222,7 +258,7 @@ export function HandoverCostsPanel({
           <CardTitle className="text-base">{t("HandoverCostsHeading")}</CardTitle>
           <p className="text-xs text-muted-foreground">{t("HandoverCostsNote")}</p>
         </div>
-        {canManage && costs && !adding && (
+        {canAdd && costs && !adding && (
           <Button
             type="button"
             size="sm"
@@ -240,17 +276,29 @@ export function HandoverCostsPanel({
       </CardHeader>
       <CardContent className="space-y-3">
         {costs === undefined ? (
-          <p className="text-sm text-muted-foreground">{t("HandoverCostsUnavailable")}</p>
+          <p className="text-sm text-muted-foreground">
+            {t(loading ? "HandoverCostsLoading" : "HandoverCostsUnavailable")}
+          </p>
         ) : (
           <>
+            {canManage && !denomination.pinned && (
+              <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="deal-handover-costs-unpinned">
+                {t("HandoverCostsNeedPin")}
+              </p>
+            )}
             {/* Compact totals first: estimated and actual are different facts
-                and are never combined. */}
+                and are never combined — and never summed across currencies. */}
+            {mixedCurrencies ? (
+              <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="deal-handover-costs-mixed">
+                {t("HandoverCostsMixedCurrency")}
+              </p>
+            ) : (
             <dl className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm sm:grid-cols-3" data-testid="deal-handover-costs-totals">
               <div>
                 <dt className="text-xs text-muted-foreground">{t("CostsExpectedTotal")}</dt>
                 <dd className="font-medium">
                   <bdi className="tabular-nums" dir="ltr">
-                    {money(costs.summary.estimatedTotalMinor)}
+                    {money(costs.summary.estimatedTotalMinor, denomination.code)}
                   </bdi>
                 </dd>
               </div>
@@ -258,7 +306,7 @@ export function HandoverCostsPanel({
                 <dt className="text-xs text-muted-foreground">{t("CostsActualTotal")}</dt>
                 <dd className="font-medium">
                   <bdi className="tabular-nums" dir="ltr">
-                    {money(costs.summary.actualTotalMinor)}
+                    {money(costs.summary.actualTotalMinor, denomination.code)}
                   </bdi>
                 </dd>
               </div>
@@ -271,6 +319,7 @@ export function HandoverCostsPanel({
                 </div>
               )}
             </dl>
+            )}
             <Separator />
 
             {live.length === 0 && !adding && (
@@ -287,8 +336,7 @@ export function HandoverCostsPanel({
                   {editingId === line._id ? (
                     <ActualForm
                       line={line}
-                      currency={currency}
-                      scale={scale}
+                      scale={scaleOf(line.currency)}
                       t={t}
                       onCancel={() => setEditingId(null)}
                       onSubmit={async (values) => {
@@ -335,7 +383,7 @@ export function HandoverCostsPanel({
                             {line.estimatedAmountMinor === undefined ? (
                               <span className="text-muted-foreground">{t("FactUnavailable")}</span>
                             ) : (
-                              <bdi dir="ltr">{money(line.estimatedAmountMinor)}</bdi>
+                              <bdi dir="ltr">{money(line.estimatedAmountMinor, line.currency)}</bdi>
                             )}
                           </dd>
                           <dt className="text-muted-foreground">{t("CostActual")}</dt>
@@ -343,11 +391,16 @@ export function HandoverCostsPanel({
                             {line.actualAmountMinor === undefined ? (
                               <span className="font-normal text-muted-foreground">{t("FactUnavailable")}</span>
                             ) : (
-                              <bdi dir="ltr">{money(line.actualAmountMinor)}</bdi>
+                              <bdi dir="ltr">{money(line.actualAmountMinor, line.currency)}</bdi>
                             )}
                           </dd>
                         </dl>
-                        {canManage && isHandoverType(line.feeType) && (
+                        {canManage && isHandoverType(line.feeType) && line.currency !== denomination.code && (
+                          <span className="text-xs text-amber-700 dark:text-amber-400" data-testid={`deal-handover-cost-${line._id}-currency`}>
+                            {t("HandoverCostCurrencyDiffers")}
+                          </span>
+                        )}
+                        {canManage && isHandoverType(line.feeType) && line.currency === denomination.code && (
                           <div className="flex gap-1">
                             <Button
                               type="button"
@@ -388,11 +441,14 @@ export function HandoverCostsPanel({
 
             {adding && (
               <AddForm
-                currency={currency}
-                scale={scale}
+                currency={denomination.code}
+                scale={scaleOf(denomination.code)}
                 dealClosed={dealClosed}
                 t={t}
-                onCancel={() => setAdding(false)}
+                onCancel={(intentId, attempted) => {
+                  if (attempted) onAbandonAdd(intentId);
+                  setAdding(false);
+                }}
                 onSubmit={async (values) => {
                   await onAdd(values);
                   setAdding(false);
@@ -418,7 +474,7 @@ function AddForm({
   scale: number;
   dealClosed: boolean;
   t: (key: string) => string;
-  onCancel: () => void;
+  onCancel: (intentId: string, attempted: boolean) => void;
   onSubmit: (values: NewHandoverCost) => Promise<void>;
 }>) {
   const [feeType, setFeeType] = useState<HandoverFeeType>("OWNERSHIP_TRANSFER");
@@ -432,6 +488,16 @@ function AddForm({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [intentId] = useState(() => crypto.randomUUID());
+  /**
+   * Once an attempt has gone out under this intent, the fields FREEZE. The
+   * server deduplicates a retry by the command identity and a fingerprint of
+   * the material amounts — not of every field — so a retry that quietly
+   * changed the date or description would be answered with the FIRST record
+   * and a success toast. A retry therefore resends exactly what was
+   * submitted; changing anything means cancelling this intent and opening a
+   * new form (a new command).
+   */
+  const [attempted, setAttempted] = useState(false);
 
   const amountMinor = parseMajor(amount, scale);
   const amountInvalid = amount.trim() !== "" && amountMinor === null;
@@ -448,6 +514,7 @@ function AddForm({
         }
         setSubmitting(true);
         setError(null);
+        setAttempted(true);
         try {
           await onSubmit({
             intentId,
@@ -469,6 +536,12 @@ function AddForm({
     >
       <p className="text-sm font-medium">{t("AddHandoverCost")}</p>
       {dealClosed && <p className="text-xs text-muted-foreground">{t("HandoverCostAfterCloseNote")}</p>}
+      {attempted && (
+        <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="deal-handover-cost-add-frozen">
+          {t("HandoverCostRetryFrozen")}
+        </p>
+      )}
+      <fieldset disabled={attempted || submitting} className="contents">
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label htmlFor="handover-cost-type">{t("CostTypeLabel")}</Label>
@@ -577,18 +650,19 @@ function AddForm({
           <p className="text-xs text-muted-foreground">{t("CostTreatmentNote")}</p>
         </div>
       </div>
+      </fieldset>
       {error && (
         <p role="alert" className="text-xs font-medium text-destructive">
           {error}
         </p>
       )}
       <div className="flex justify-end gap-2">
-        <Button type="button" variant="ghost" size="sm" disabled={submitting} onClick={onCancel}>
+        <Button type="button" variant="ghost" size="sm" disabled={submitting} onClick={() => onCancel(intentId, attempted)}>
           {t("Cancel")}
         </Button>
         <Button type="submit" size="sm" disabled={submitting || amountMinor === null}>
           {submitting && <Loader2 className="h-4 w-4 me-1.5 animate-spin" />}
-          {t("SaveHandoverCost")}
+          {t(attempted ? "RetryHandoverCost" : "SaveHandoverCost")}
         </Button>
       </div>
     </form>
@@ -597,14 +671,13 @@ function AddForm({
 
 function ActualForm({
   line,
-  currency,
   scale,
   t,
   onCancel,
   onSubmit,
 }: Readonly<{
   line: HandoverCostLine;
-  currency: string;
+  /** The scale of the LINE's own currency — the amount is patched onto that row. */
   scale: number;
   t: (key: string) => string;
   onCancel: () => void;
@@ -636,6 +709,7 @@ function ActualForm({
             actualAmountMinor: amountMinor,
             paidAt: paidOn ? dateInputToUtcMs(paidOn) : undefined,
             receiptReference: reference.trim() || undefined,
+            currency: line.currency,
           });
         } catch (caught) {
           setError(caught instanceof Error ? caught.message : t("UnexpectedError"));
@@ -651,7 +725,7 @@ function ActualForm({
         <p className="text-xs text-muted-foreground">
           {t("CostEstimated")}:{" "}
           <bdi dir="ltr" className="tabular-nums">
-            {line.estimatedAmountMinor / Math.pow(10, scale)} {currency}
+            {line.estimatedAmountMinor / Math.pow(10, scale)} {line.currency}
           </bdi>{" "}
           — {t("CostEstimatePreservedNote")}
         </p>
@@ -662,7 +736,7 @@ function ActualForm({
       <div className="grid gap-3 sm:grid-cols-3">
         <div className="space-y-1.5">
           <Label htmlFor={`actual-amount-${line._id}`}>
-            {t("CostActual")} (<bdi dir="ltr">{currency}</bdi>)
+            {t("CostActual")} (<bdi dir="ltr">{line.currency}</bdi>)
           </Label>
           <Input
             id={`actual-amount-${line._id}`}

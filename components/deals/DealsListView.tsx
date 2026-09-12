@@ -37,7 +37,8 @@ export type DealReason =
   | "AWAITING_DECISION"
   | "READY_FOR_HANDOVER"
   | "AWAITING_RECEIPT"
-  | "CASH_PENDING";
+  | "CASH_PENDING"
+  | "SALE_PENDING";
 
 export type DealWaitingOn = "DEALERSHIP" | "OTHERS" | "NONE";
 
@@ -67,6 +68,7 @@ const REASON_LABEL: Record<DealReason, string> = {
   READY_FOR_HANDOVER: "ReasonReadyForHandover",
   AWAITING_RECEIPT: "ReasonAwaitingReceipt",
   CASH_PENDING: "ReasonCashPending",
+  SALE_PENDING: "ReasonSalePending",
 };
 
 /** Severity order for the reason groups: money first. */
@@ -76,6 +78,7 @@ const REASON_ORDER: DealReason[] = [
   "READY_FOR_HANDOVER",
   "DOCS_PENDING",
   "CASH_PENDING",
+  "SALE_PENDING",
   "AWAITING_DECISION",
 ];
 
@@ -85,6 +88,7 @@ const REASON_TONE: Record<DealReason, string> = {
   READY_FOR_HANDOVER: "bg-primary",
   DOCS_PENDING: "bg-primary",
   CASH_PENDING: "bg-primary",
+  SALE_PENDING: "bg-primary",
   AWAITING_DECISION: "bg-muted-foreground/50",
 };
 
@@ -344,7 +348,7 @@ export function DealsListView({
                       <TableHead className="text-end">{t("Amount")}</TableHead>
                     )}
                     <TableHead>
-                      <span className="sr-only">{t("OpenDeal")}</span>
+                      <span className="sr-only">{t("OpenDealRow")}</span>
                     </TableHead>
                   </TableRow>
                 </TableHeader>
@@ -396,8 +400,8 @@ export function DealsListView({
                       )}
                       <TableCell className="text-end">
                         <Button variant="ghost" size="sm" asChild>
-                          <Link href={row.href} aria-label={`${t("OpenDeal")}: ${row.customerName}`}>
-                            {t("OpenDeal")}
+                          <Link href={row.href} aria-label={`${t("OpenDealRow")}: ${row.customerName}`}>
+                            {t("OpenDealRow")}
                             <ArrowUpRight className="h-4 w-4 ms-1.5 rtl:-scale-x-100" />
                           </Link>
                         </Button>

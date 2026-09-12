@@ -81,6 +81,38 @@ describe("one entry per deal", () => {
     expect(rows[1]).toMatchObject({ kind: "CASH", reason: "CASH_PENDING", waitingOn: "DEALERSHIP", amountLabel: "12000 JD" });
   });
 
+  test("SM-R4-1 — an applicationless FINANCED or LEASE sale is a financed deal, never 'cash sale to complete'", () => {
+    const rows = mergeDealRows([], [sale({ financingType: "FINANCED" }), sale({ _id: "sale_2", financingType: "LEASE", status: "COMPLETED" })], "org1", t, fmt);
+    expect(rows[0]).toMatchObject({ kind: "FINANCED", reason: "SALE_PENDING", waitingOn: "DEALERSHIP", href: "/org1/sales/sale_1/deal" });
+    expect(rows[1]).toMatchObject({ kind: "FINANCED", reason: null, waitingOn: "NONE" });
+    // The cash rule is untouched.
+    expect(mergeDealRows([], [sale({ financingType: "CASH" })], "org1", t, fmt)[0]).toMatchObject({ kind: "CASH", reason: "CASH_PENDING" });
+  });
+
+  test("AF-215-03 — a loaded sale whose application is NOT in the loaded page keeps its own entry, as the financed deal it is", () => {
+    // Independent cursors: the sale page arrived, the application page it
+    // belongs to has not. Dropping it made a finalized deal vanish.
+    const rows = mergeDealRows([], [sale({ _id: "sale_fin", status: "COMPLETED", applicationId: "app_101" })], "org1", t, fmt);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      key: "sale_sale_fin",
+      kind: "FINANCED",
+      href: "/org1/sales/sale_fin/deal",
+      financierLabel: null,
+      reason: null,
+      waitingOn: "NONE",
+    });
+    // Once the application page arrives the two coalesce into ONE entry.
+    const coalesced = mergeDealRows(
+      [app({ _id: "app_101", status: "CLOSED" })],
+      [sale({ _id: "sale_fin", status: "COMPLETED", applicationId: "app_101" })],
+      "org1",
+      t,
+      fmt
+    );
+    expect(coalesced.map((row) => row.key)).toEqual(["app_app_101"]);
+  });
+
   test("a financed row with no recorded financed amount shows no amount rather than zero", () => {
     const rows = mergeDealRows([app({ financedAmount: 0 })], [], "org1", t, fmt);
     expect(rows[0].amountLabel).toBeNull();
