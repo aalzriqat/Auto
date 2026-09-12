@@ -1716,6 +1716,8 @@ export async function runRehearsalCases(ctx) {
         deductedFromSettlement: true,
         actualAmountMinor: withheld,
         description: "Withheld by the company.",
+        // SCRUM-319: every cost write names the currency its integer is in.
+        expectedCurrency: denom.currency,
       });
       await ownerMust("mutation", "financeDealCosts:reconcileDealFee", { orgId, feeId, notes: "Matched." });
       await ownerMust("mutation", "financeDealCosts:classifyDealAccounting", {
@@ -1841,6 +1843,223 @@ export async function runRehearsalCases(ctx) {
           "applications.registerVehicleHandover", "applications.registerExpectedPayment",
           "financeDealCosts.recordLegalInvoice", "financeDealCosts.recordDealFee", "financeDealCosts.reconcileDealFee",
           "financeDealCosts.classifyDealAccounting", "applications.finalizeDeal", "applications.confirmDisbursement",
+        ],
+      };
+    }
+  );
+
+
+  // ── FD2 — a deal's costs are denominated once (SCRUM-319) ──────────────────
+  //
+  // The defect this guards: a cost line recorded in the org currency of its
+  // day on a deal with no economics pin, then read and edited at whatever
+  // scale the org uses NOW. Nothing converted, nothing refused — 150.000 JOD
+  // became 1,500.00 USD on screen and the next actual landed on the JOD row as
+  // 15.000. The contract: the caller names the currency it counted in, the
+  // server proves the deal's own and refuses a mismatch with nothing written;
+  // the org currency locks the moment a deal or a money fact exists; no total
+  // is published across currencies.
+  //
+  // Part A runs on the shared organization, whose currency is never changed
+  // by a rehearsal. Part B creates disposable second organizations to exercise
+  // the ordering between a settings change and the first record that locks it.
+  await recordCase(
+    results,
+    "FD2",
+    "a deal's handover costs are recorded in the deal's own currency; a stale or foreign currency is refused with nothing written; the org currency locks",
+    async () => {
+      const stamp = Date.now().toString(36);
+      const denom = await orgDenomination({ orgId, ownerMust });
+      const m = denom.minorPerMajor;
+      const sameScaleCode = Object.keys(CURRENCY_SCALES).find(
+        (code) => code !== denom.currency && CURRENCY_SCALES[code] === denom.decimals
+      );
+      const otherScaleCode = Object.keys(CURRENCY_SCALES).find(
+        (code) => code !== denom.currency && CURRENCY_SCALES[code] !== denom.decimals
+      );
+      if (!sameScaleCode || !otherScaleCode) unproven("no foreign currency codes to probe with");
+
+      const vehicleId = await makeVehicle({ orgId, ownerMust, label: `fd2${stamp}` });
+      const customerId = await ownerMust("mutation", "customers:create", { orgId, firstName: "Rehearsal", lastName: `fd2-${stamp}` });
+      const companyId = await ownerMust("mutation", "finance:createCompany", {
+        orgId, name: `Rehearsal Finance FD2 ${stamp}`, profitRate: 5, maxTermMonths: 60, gracePeriodMonths: 0,
+        defaultLtvPercent: 100, isActive: true,
+      });
+      const quoteId = await ownerMust("mutation", "quotes:saveQuote", {
+        orgId, customerId, vehicleId, vehiclePrice: 22000, downPayment: 0, termMonths: 48,
+        mode: "CONFIGURED_FINANCE_COMPANY", companyId, totalFinancedAmount: 22000,
+      });
+      // UNPINNED on purpose: no quotation, no approval. The early licensing
+      // estimate is the deal's first money fact.
+      const applicationId = await ownerMust("mutation", "applications:createFromQuote", { orgId, quoteId });
+
+      const listCosts = () => ownerMust("query", "financeDealCosts:listDealCosts", { orgId, applicationId });
+      const feeKey = `rehearsal-fd2-fee-${stamp}`;
+      const feeArgs = {
+        idempotencyKey: feeKey,
+        orgId,
+        applicationId,
+        feeType: "OWNERSHIP_TRANSFER",
+        description: "Transfer at the licensing department",
+        estimatedAmountMinor: 150 * m,
+        paidBy: "DEALER",
+        paidTo: "GOVERNMENT",
+        accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+        source: "MANUAL",
+        expectedCurrency: denom.currency,
+      };
+      const feeId = await ownerMust("mutation", "financeDealCosts:recordDealFee", feeArgs);
+      let listed = await listCosts();
+      expectEqual(listed.currency, denom.currency, "the deal's currency after the first cost");
+      expectEqual(listed.fees.length, 1, "cost lines after one add");
+      expectEqual(listed.fees[0].currency, denom.currency, "the stored line's currency");
+      expectEqual(listed.fees[0].estimatedAmountMinor, 150 * m, "the stored estimate");
+      expectEqual(listed.summaryUnavailable, null, "summary availability on a single-currency deal");
+      expectEqual(listed.summary?.estimatedTotalMinor, 150 * m, "the estimated total");
+
+      // Exact retry replays the same line; the same key with a changed intent
+      // refuses; neither adds a line.
+      const replay = await ownerMust("mutation", "financeDealCosts:recordDealFee", feeArgs);
+      expectEqual(String(replay), String(feeId), "the replayed add's identity");
+      const changedIntent = await ownerCall("mutation", "financeDealCosts:recordDealFee", { ...feeArgs, description: "Plates" });
+      if (changedIntent.ok) fail("the same key with a different description was accepted as a replay");
+      if (!/different request content/i.test(changedIntent.error)) {
+        fail(`the changed-intent refusal is not the identity check: ${changedIntent.error.slice(0, 200)}`);
+      }
+      expectEqual((await listCosts()).fees.length, 1, "cost lines after the replay and the changed-intent attempt");
+
+      // A currency the caller believes in but the deal is not kept in — same
+      // decimals, different decimals, missing — is refused before any write.
+      const refusals = {};
+      for (const [label, patch] of [
+        ["sameScale", { expectedCurrency: sameScaleCode }],
+        ["otherScale", { expectedCurrency: otherScaleCode, estimatedAmountMinor: 150 * 10 ** CURRENCY_SCALES[otherScaleCode] }],
+        ["lowercase", { expectedCurrency: denom.currency.toLowerCase() }],
+      ]) {
+        const attempt = await ownerCall("mutation", "financeDealCosts:recordDealFee", {
+          ...feeArgs, ...patch, idempotencyKey: `${feeKey}-${label}`,
+        });
+        if (attempt.ok) fail(`a cost entered in ${patch.expectedCurrency} was accepted on a ${denom.currency} deal (${label})`);
+        if (/ArgumentValidationError/i.test(attempt.error)) {
+          fail(`the ${label} refusal came from the argument validator, not the denomination check: ${attempt.error.slice(0, 200)}`);
+        }
+        refusals[label] = attempt.error.slice(0, 160);
+      }
+      const missing = await ownerCall("mutation", "financeDealCosts:recordDealFee", {
+        ...feeArgs, expectedCurrency: undefined, idempotencyKey: `${feeKey}-missing`,
+      });
+      if (missing.ok) fail("a cost with NO currency stated was accepted");
+      refusals.missing = missing.error.slice(0, 160);
+      expectEqual((await listCosts()).fees.length, 1, "cost lines after the refused foreign-currency adds");
+
+      // EDIT compares with the STORED row, never with what the caller believes.
+      const staleEdit = await ownerCall("mutation", "financeDealCosts:recordActualFeeAmount", {
+        orgId, feeId, actualAmountMinor: 150 * 10 ** CURRENCY_SCALES[otherScaleCode], expectedCurrency: otherScaleCode,
+      });
+      if (staleEdit.ok) fail(`an actual entered in ${otherScaleCode} was patched onto a ${denom.currency} line`);
+      if (/ArgumentValidationError/i.test(staleEdit.error)) {
+        fail(`the stale-edit refusal came from the argument validator: ${staleEdit.error.slice(0, 200)}`);
+      }
+      listed = await listCosts();
+      expectEqual(listed.fees[0].actualAmountMinor, undefined, "the actual after the refused foreign-currency edit");
+      await ownerMust("mutation", "financeDealCosts:recordActualFeeAmount", {
+        orgId, feeId, actualAmountMinor: 152 * m, expectedCurrency: denom.currency,
+      });
+      listed = await listCosts();
+      expectEqual(listed.fees[0].actualAmountMinor, 152 * m, "the actual after the same-currency edit");
+      expectEqual(listed.fees[0].currency, denom.currency, "the line's currency after the edit (never relabelled)");
+      expectEqual(listed.summary?.actualTotalMinor, 152 * m, "the actual total");
+
+      // The organization's currency is LOCKED: this org holds deals and cost
+      // lines, and the product refuses to reinterpret them. (The rehearsal
+      // never changes the shared org's currency; this is the refusal path.)
+      const lock = await ownerCall("mutation", "orgSettings:upsert", { orgId, currency: otherScaleCode, currencySymbol: "?" });
+      if (lock.ok) fail(`the organization's currency was changed to ${otherScaleCode} while deals and cost lines exist`);
+      if (!/cannot be changed after financial records exist/i.test(lock.error)) {
+        fail(`the currency change was refused for a different reason than the lock: ${lock.error.slice(0, 200)}`);
+      }
+      const settingsAfter = await orgDenomination({ orgId, ownerMust });
+      expectEqual(settingsAfter.currency, denom.currency, "the org currency after the refused change");
+
+      // Removal is an audited void, and it leaves the totals.
+      await ownerMust("mutation", "financeDealCosts:voidDealFee", { orgId, feeId, reason: "Entered on the wrong deal." });
+      listed = await listCosts();
+      expectEqual(listed.fees.length, 0, "live cost lines after the void");
+      expectEqual(listed.summary?.lineCount, 0, "line count after the void");
+
+      // ── Part B: the ordering between a settings change and the first locking
+      // record, on DISPOSABLE organizations the caller creates and owns.
+      //
+      // Honest scope: the two mutations are issued from one client without
+      // awaiting between them. The platform serialises them in SOME order; the
+      // assertion is that the end state is consistent with whichever order
+      // occurred — never a deal denominated in one currency under settings that
+      // say another — and that a cost entered with the pre-race belief is
+      // accepted or refused exactly according to that outcome. Simultaneity at
+      // the server is NOT proven by this probe.
+      const rounds = [];
+      for (let round = 0; round < 3; round += 1) {
+        const org2 = await ownerMust("mutation", "organizations:create", { name: `Rehearsal FD2 ${stamp}-${round}` });
+        if (String(org2) === String(orgId)) fail("the disposable organization is the shared one");
+        const before = await orgDenomination({ orgId: org2, ownerMust });
+        // Empty onboarding: the currency can still be chosen.
+        await ownerMust("mutation", "orgSettings:upsert", { orgId: org2, currency: before.currency, currencySymbol: "?" });
+        const v2 = await makeVehicle({ orgId: org2, ownerMust, label: `fd2r${round}${stamp}` });
+        const c2 = await ownerMust("mutation", "customers:create", { orgId: org2, firstName: "Rehearsal", lastName: `fd2r-${round}-${stamp}` });
+        const co2 = await ownerMust("mutation", "finance:createCompany", {
+          orgId: org2, name: `Rehearsal Finance FD2r ${round} ${stamp}`, profitRate: 5, maxTermMonths: 60,
+          gracePeriodMonths: 0, defaultLtvPercent: 100, isActive: true,
+        });
+        const q2 = await ownerMust("mutation", "quotes:saveQuote", {
+          orgId: org2, customerId: c2, vehicleId: v2, vehiclePrice: 22000, downPayment: 0, termMonths: 48,
+          mode: "CONFIGURED_FINANCE_COMPANY", companyId: co2, totalFinancedAmount: 22000,
+        });
+        const [switched, created] = await Promise.all([
+          ownerCall("mutation", "orgSettings:upsert", { orgId: org2, currency: otherScaleCode, currencySymbol: "?" }),
+          ownerCall("mutation", "applications:createFromQuote", { orgId: org2, quoteId: q2 }),
+        ]);
+        if (!created.ok) fail(`round ${round}: the application could not be created: ${created.error.slice(0, 200)}`);
+        const app2 = created.value;
+        const after = await orgDenomination({ orgId: org2, ownerMust });
+        // Consistency: the settings say what the switch's outcome says.
+        expectEqual(after.currency, switched.ok ? otherScaleCode : before.currency, `round ${round}: org currency after the race`);
+        if (!switched.ok && !/cannot be changed after financial records exist/i.test(switched.error)) {
+          fail(`round ${round}: the switch was refused for a different reason than the lock: ${switched.error.slice(0, 200)}`);
+        }
+        // A cost entered with the PRE-RACE belief is accepted iff that belief
+        // still holds; a cost entered in the org's actual currency is accepted.
+        const stale = await ownerCall("mutation", "financeDealCosts:recordDealFee", {
+          ...feeArgs, orgId: org2, applicationId: app2, idempotencyKey: `${feeKey}-r${round}-stale`,
+          expectedCurrency: before.currency, estimatedAmountMinor: 150 * before.minorPerMajor,
+        });
+        expectEqual(stale.ok, after.currency === before.currency, `round ${round}: a cost entered in the pre-race currency`);
+        const current = await ownerCall("mutation", "financeDealCosts:recordDealFee", {
+          ...feeArgs, orgId: org2, applicationId: app2, idempotencyKey: `${feeKey}-r${round}-current`,
+          expectedCurrency: after.currency, estimatedAmountMinor: 150 * after.minorPerMajor,
+        });
+        if (!current.ok) fail(`round ${round}: a cost entered in the org's actual currency was refused: ${current.error.slice(0, 200)}`);
+        const listed2 = await ownerMust("query", "financeDealCosts:listDealCosts", { orgId: org2, applicationId: app2 });
+        expectEqual(listed2.currency, after.currency, `round ${round}: the deal's currency`);
+        if (listed2.fees.some((fee) => fee.currency !== after.currency)) {
+          fail(`round ${round}: a cost line is denominated in a currency other than the org's: ${JSON.stringify(listed2.fees.map((f) => f.currency))}`);
+        }
+        expectEqual(listed2.summaryUnavailable, null, `round ${round}: summary availability`);
+        rounds.push({ org2: String(org2), switchWon: switched.ok, currency: after.currency, lines: listed2.fees.length });
+      }
+
+      return {
+        applicationId: String(applicationId),
+        currency: denom.currency,
+        minorUnitScale: m,
+        probes: { sameScaleCode, otherScaleCode },
+        refusals,
+        replayReturnedSameId: true,
+        lockRefusal: lock.error.slice(0, 160),
+        orderingRounds: rounds,
+        concurrencyScope: "two mutations issued without awaiting from one client; end-state consistency asserted per observed order; simultaneity not proven",
+        commandsExercised: [
+          "financeDealCosts.recordDealFee", "financeDealCosts.recordActualFeeAmount", "financeDealCosts.voidDealFee",
+          "financeDealCosts.listDealCosts", "orgSettings.upsert", "organizations.create", "applications.createFromQuote",
         ],
       };
     }

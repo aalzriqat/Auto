@@ -214,7 +214,38 @@ longer true, and reviews of it should be read with that in mind.
 | `CONVEX_PROD_DEPLOYMENT` | that environment's **variables** | ✅ | `kindly-hound-172`. Not a secret — it is an identifier, and naming it is the point |
 | `CONVEX_PROD_DEPLOY_KEY` | that environment's secrets | ✅ | Intended scope: that deployment, permission `deployment:deploy` **only** |
 | `CONVEX_PROD_OPERATOR_KEY` | that environment's secrets | ✅ | Intended scope: `deployment:functions:runInternalMutations` + `runInternalQueries` **only** |
+| `CONVEX_FRESH_OBSERVER_KEY` | that environment's secrets | ✅ | Read by ONE step only — `Verify zero-state (fresh launch checkpoint)`, which runs only when the dispatch input `zero_state` is `fresh-launch`. **Full deploy capability** — Convex mints no narrower key (checked 2026-09-11: `convex deployment token create` has no scope option). The read-only property is `scripts/verifyZeroState.mjs`'s fixed command set, not the key |
 | `CONVEX_PREVIEW_DEPLOY_KEY` | **repository** secrets | ✅ | Not used by this workflow; `playwright.yml` reads it |
+
+**Zero-state checkpoint (SCRUM-231 / SCRUM-313 B4).** The first deploy to a
+brand-new production deployment is dispatched with `zero_state: fresh-launch`.
+After `convex deploy` and before the rollout step, `scripts/verifyZeroState.mjs`
+lists every table the deployment reports, every mounted component's tables and
+the file store, reads each with `--limit 1`, checks that functions exist and the
+schema's tables are all present, that the deployment answers to
+`CONVEX_PROD_DEPLOYMENT` (credential prefix, `function-spec` URL, `/instance_name`),
+and that the `AUTOFLOW_DEPLOYMENT_CLASS` marker read is VERIFIED_ABSENT — the
+CLI's own not-found sentence; `env get` exits 0 either way, so a PRESENT value
+(preview or anything else) fails and an UNREADABLE read (non-zero exit, timeout,
+silence, any other shape) fails too — a failed read is never an absent marker.
+Only `cronHeartbeats` and `webhookLogs` may hold rows, and only when EVERY row
+is read back (bounded, JSON lines) and validated as a cron self-report: the
+exact key set, a declared heartbeat job name or cron-only `source`, none of the
+fields a provider delivery carries. `webhookLogs` also logs Clerk / WhatsApp /
+Resend / payment / social traffic, so a table name is not provenance; one
+rejected row, more rows than the bound, or an unparseable read fails. Verified
+diagnostics are disclosed by provenance and count, never counted as data
+(controls 2026-09-12: `fantastic-blackbird-16` ZERO with 26 verified rows;
+`proficient-snail-903` FAIL, provider rows rejected after 84 valid cron rows).
+A nonexistent table prints the same sentence as an empty one, so only LISTED
+tables are read; an unreadable read is never zero. A failed verdict stops the run and changes nothing. It is a one-time
+launch checkpoint, never a standing gate — an established dealership's deployment
+is supposed to hold data. The same script runs from a workstation with a Convex
+account login (`--deployment <name>`) for the pre-bootstrap boundary and for
+controls on disposable previews. What it cannot do from CI: read the
+control-plane record (numeric deployment id, project id, region) — that needs an
+account token the job deliberately does not hold; the operator records that
+read-back separately at the release window.
 
 Verify presence — never values — with:
 

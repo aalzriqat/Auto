@@ -330,7 +330,7 @@ async function runDeal(
       legalInvoiceDate: Date.now(),
       issuedTo: "FINANCE_COMPANY",
     });
-    const feeId = await s.asUser.mutation(api.financeDealCosts.recordDealFee, { idempotencyKey: crypto.randomUUID(),
+    const feeId = await s.asUser.mutation(api.financeDealCosts.recordDealFee, { expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
       feeType: "OTHER_CLOSING_EXPENSE",

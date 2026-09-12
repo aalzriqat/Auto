@@ -120,7 +120,7 @@ test.describe("recording a financed deal's economics through the interface", () 
       // The credit decision. `updateStatus` refuses the application's own
       // salesperson, so this is the manager's to make and could not have been
       // reached from the page above.
-      await approveCreditDecision(managerPage, lastName);
+      await approveCreditDecision(managerPage, dealUrl);
 
       // --- the salesperson records what was SENT to the finance company ----
       await recordQuotation(page, dealUrl);

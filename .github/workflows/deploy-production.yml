@@ -50,6 +50,21 @@ on:
         description: "Type DEPLOY TO PRODUCTION exactly"
         required: true
         type: string
+      # ⚠️ ONE-TIME LAUNCH CHECKPOINT, opt-in. Set to `fresh-launch` ONLY for
+      # the first deploy to a brand-new, empty production deployment
+      # (SCRUM-231 / SCRUM-313 B4). It reads every table, every component and
+      # the file store AFTER the push and BEFORE the rollout step, and stops the
+      # run unless they are empty. An established dealership's deployment is
+      # SUPPOSED to hold data, so the default never runs it — do not turn this
+      # into a standing release gate.
+      zero_state:
+        description: "Zero-state checkpoint: `not-required` (default) or `fresh-launch` (first deploy to an EMPTY deployment only)"
+        required: false
+        default: "not-required"
+        type: choice
+        options:
+          - not-required
+          - fresh-launch
 
 # Least privilege by default; the one job that needs more asks for it.
 permissions:
@@ -236,6 +251,32 @@ jobs:
             exit 1
           fi
           pnpm exec convex deploy
+
+      # ── Zero-state checkpoint (fresh launch only) ─────────────────────────
+      #
+      # READ-ONLY COMMANDS / WRITE-CAPABLE CREDENTIAL. Runs after the push and
+      # before the rollout step — i.e. before anything is written on behalf of
+      # an organization — and refuses the run unless every table the deployment
+      # lists, every mounted component's tables and the file store are empty,
+      # functions exist, the schema's tables are all present, the deployment
+      # answers to the expected name, and it carries no E2E preview marker.
+      #
+      # The credential is the observer key, injected into THIS step only. Its
+      # name does not narrow it: Convex mints full deploy keys, so it could
+      # deploy. What bounds it is this protected job (main tip, exact SHA,
+      # environment approval), the target check (the key must address
+      # `CONVEX_PROD_DEPLOYMENT`), the fixed read-only command set in
+      # `scripts/verifyZeroState.mjs`, and a log that carries table names and
+      # counts only. No PR job, no repository fallback, no artifact.
+      #
+      # A failed verdict STOPS the run. Nothing here resets, imports or retries.
+      - name: Verify zero-state (fresh launch checkpoint)
+        if: ${{ inputs.zero_state == 'fresh-launch' }}
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_FRESH_OBSERVER_KEY }}
+          CONVEX_PROD_DEPLOYMENT: ${{ vars.CONVEX_PROD_DEPLOYMENT }}
+          RELEASE_SHA: ${{ needs.authorize.outputs.sha }}
+        run: node scripts/verifyZeroState.mjs --phase post-deploy
 
       # Same job, immediately after the deploy, because the window between them
       # is the expensive one: the conversation trigger is live and adding writes

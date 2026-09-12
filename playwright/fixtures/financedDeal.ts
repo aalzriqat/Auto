@@ -226,11 +226,12 @@ export async function createFinancedApplication(
   await startApplication.click();
 
   // Creating the application does not open it. The wizard swaps the button for
-  // "View Application", and that goes to the LIST — so the deal is reached the
-  // way an operator reaches it from there: by its own row.
+  // "View Application", and that goes to the Deals LIST — so the deal is
+  // reached the way an operator reaches it from there: by its own row on the
+  // needs-action queue (a fresh application is waiting on the dealership).
   await expect(page.getByText(/View Application/)).toBeVisible();
 
-  await gotoOrgRoute(page, "applications");
+  await gotoOrgRoute(page, "deals");
   await dismissOverlays(page);
   const row = page.getByRole("row").filter({ hasText: fixtures.customer }).first();
   await expect(row).toBeVisible();
@@ -240,38 +241,35 @@ export async function createFinancedApplication(
   return page.url();
 }
 
-/** Opens one application's review dialog from the list, by its customer. */
-export async function openReviewDialog(page: Page, customer: string) {
-  await gotoOrgRoute(page, "applications");
-  await dismissOverlays(page);
-  const row = page.getByRole("row").filter({ hasText: customer }).first();
-  await expect(row).toBeVisible();
-  await row.getByRole("button", { name: "Review", exact: true }).click();
-  return page.getByRole("dialog");
-}
-
 /**
- * The credit decision, made by somebody who is not the deal's own salesperson.
+ * The credit decision, made by somebody who is not the deal's own salesperson,
+ * FROM THE DEAL COCKPIT — the Review dialog that used to carry it is retired
+ * (SCRUM-215).
  *
  * Two steps, because the application's own state machine has two:
- * PENDING_DOCS → UNDER_REVIEW → APPROVED. `updateStatus` refuses the jump —
- * "Invalid finance application status transition" — while the dialog offers
- * Approve from either state and reports the refusal as an unexpected error.
+ * PENDING_DOCS → UNDER_REVIEW → APPROVED. `updateStatus` refuses the jump, so
+ * the rail offers "Mark Under Review" first and the decision dialog after.
  * SCRUM-73.
  */
 export async function approveCreditDecision(
   managerPage: Page,
-  customerLastName: string,
+  dealUrl: string,
 ): Promise<void> {
-  const decision = await openReviewDialog(managerPage, customerLastName);
-  await decision.getByRole("button", { name: "Mark Under Review" }).click();
-  await decision.getByRole("button", { name: "Approve Application" }).click();
-  await managerPage.getByRole("button", { name: "Close", exact: true }).click();
-  // Read back off the ROW rather than off the button that made it — a disabled
-  // button proves the click landed, not that the application moved.
-  await expect(
-    managerPage.getByRole("row").filter({ hasText: customerLastName }).first(),
-  ).toContainText("Approved");
+  await managerPage.goto(dealUrl);
+  await dismissOverlays(managerPage);
+  await hideFloatingButtons(managerPage);
+  const nextStep = managerPage.getByTestId("deal-next-step");
+  await nextStep.getByRole("button", { name: "Mark Under Review" }).click();
+  await nextStep
+    .getByRole("button", { name: "Record the finance company's decision" })
+    .click();
+  const decision = managerPage.getByRole("dialog");
+  await decision.getByRole("radio", { name: /They approved the financing/ }).click();
+  await decision.getByRole("button", { name: "Record decision" }).click();
+  await expect(decision).not.toBeVisible();
+  // Read back off the HEADER badge rather than off the button that made it —
+  // a closed dialog proves the click landed, not that the application moved.
+  await expect(managerPage.getByTestId("deal-header")).toContainText("Approved");
 }
 
 /** Records what the dealership SENT the finance company, from the deal cockpit. */

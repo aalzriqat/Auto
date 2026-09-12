@@ -25,18 +25,20 @@ const dealRailMessages = defineBilingualMessages({
   StageDisbursement: ["Finance company payment", "صرف شركة التمويل"],
 
   /**
-   * TRANSITIONAL, and load-bearing for exactly one release.
+   * TRANSITIONAL. It did its job in the previous release; it is kept here as
+   * DEFERRED CLEANUP, not as a compatibility requirement.
    *
-   * This release ships the DISBURSEMENT stage from the backend while the
-   * deployed cockpit is still the previous build. That build resolves a stage
-   * label as `t(STAGE_LABEL[key] ?? key)`, and `t()` returns the KEY when it
-   * knows no translation — so without this entry the rail would render the bare
-   * string "DISBURSEMENT" to operators, in Arabic as well as English, for the
-   * whole window between this deploy and the frontend release that follows it.
+   * The previous release shipped the DISBURSEMENT stage from the backend while
+   * the deployed cockpit was still the build before it, which resolved a stage
+   * label as `t(STAGE_LABEL[key] ?? key)` — so without this entry the rail
+   * rendered the bare string "DISBURSEMENT" for that window.
    *
-   * The new cockpit never reads this key; it uses `StageDisbursement` above.
-   * Remove this once that frontend is live.
-   * `lib/i18n/deployedStageLabels.test.ts` is what keeps it honest meanwhile.
+   * Each Vercel deployment is an IMMUTABLE, SELF-CONTAINED bundle carrying its
+   * own frozen copy of this dictionary, so no running frontend reads this
+   * source entry and deleting it is safe. It stays only because retiring it
+   * also means retiring `lib/i18n/deployedStageLabels.test.ts`, which is
+   * cleanup for the Review-retirement slice. The cockpit in this build never
+   * reads it; it uses `StageDisbursement` above.
    */
   DISBURSEMENT: ["Finance company payment", "صرف شركة التمويل"],
 
@@ -73,6 +75,293 @@ const dealRailMessages = defineBilingualMessages({
   BlockerAwaitingDisbursement: [
     "Waiting on the finance company to pay",
     "بانتظار صرف شركة التمويل",
+  ],
+
+  /**
+   * The appraisal stage when the appraiser is NOT on record.
+   *
+   * Deliberately not "the finance company". `APPRAISAL` is a MIRROR stage, so
+   * the rail would otherwise name them by default — but the vehicle may be
+   * valued by an independent appraiser instead, and a deal with no active
+   * appraisal at all has no appraiser to name. Also covers a DEALER_ESTIMATE,
+   * which is neither party the badge can name.
+   */
+  StageOwnerAppraiserNotRecorded: ["Appraiser not recorded", "جهة التخمين غير مسجّلة"],
+
+  /**
+   * A rejected or cancelled deal that is still holding the customer's deposit.
+   *
+   * The wording avoids naming a resolution: refunding and forfeiting are
+   * different decisions with different accounting. It says money is being held
+   * and that somebody must decide — which is what the applications list has
+   * always said, and what this screen used to omit entirely.
+   */
+  DepositAwaitingResolutionTitle: [
+    "A customer deposit is still being held",
+    // `عربون` is MASCULINE, so `ما زال … محتجزاً`, not the feminine agreement.
+    "ما زال عربون العميل محتجزاً",
+  ],
+  DepositAwaitingResolutionBody: [
+    "This deal is closed, but the deposit has not been refunded or forfeited. Until it is, the money sits against the customer with no outcome recorded.",
+    "أُغلقت هذه الصفقة دون ردّ العربون أو مصادرته. وحتى يتم ذلك، يبقى المبلغ مقيّداً على العميل دون نتيجة مسجّلة.",
+  ],
+
+  /**
+   * The finance company's credit decision, RECORDED on the deal.
+   *
+   * AutoFlow never approves financing. Every string here says the company
+   * decided and the dealership wrote it down; the two outcomes are offered as
+   * equals, not as a green "approve" and a red "reject".
+   */
+  RecordCreditDecisionAction: ["Record the finance company's decision", "تسجيل قرار شركة التمويل"],
+  RecordCreditDecisionTitle: ["The finance company's decision", "قرار شركة التمويل"],
+  RecordCreditDecisionDesc: [
+    "Record what the finance company decided about this application. AutoFlow writes the decision down; it does not make one.",
+    "سجِّل ما قرّرته شركة التمويل بشأن هذا الطلب. يدوّن أوتوفلو القرار ولا يتّخذه.",
+  ],
+  CreditDecisionApproved: ["They approved the financing", "وافقت على التمويل"],
+  CreditDecisionApprovedHint: [
+    "The application moves on to the appraisal and the approved purchase amount.",
+    "ينتقل الطلب إلى التخمين والمبلغ المعتمد للشراء.",
+  ],
+  CreditDecisionRejected: ["They declined the financing", "رفضت التمويل"],
+  CreditDecisionRejectedHint: [
+    "The deal stops here. Any held deposit will need to be refunded or forfeited.",
+    "تتوقّف الصفقة هنا. وأي عربون محتجز سيلزم ردّه أو مصادرته.",
+  ],
+  RecordCreditDecisionConfirm: ["Record decision", "تسجيل القرار"],
+  CreditDecisionApproveNeedsPermission: [
+    "Recording an approval needs permission to approve finance applications.",
+    "يتطلّب تسجيل الموافقة صلاحية اعتماد طلبات التمويل.",
+  ],
+  CreditDecisionRejectNeedsPermission: [
+    "Recording a rejection needs permission to review finance applications.",
+    "يتطلّب تسجيل الرفض صلاحية مراجعة طلبات التمويل.",
+  ],
+  CreditDecisionOwnDeal: [
+    "You submitted this application, so someone else records its approval.",
+    "أنت من قدّم هذا الطلب، لذا يسجّل الموافقة شخص آخر.",
+  ],
+  CreditDecisionNeedsPermission: [
+    "You do not have permission to record the finance company's decision. Someone who does completes this step.",
+    "ليست لديك صلاحية تسجيل قرار شركة التمويل. يُكمل هذه الخطوة من يملكها.",
+  ],
+
+  /**
+   * Why the DISBURSEMENT step offers no button to this caller. The
+   * permission case and the not-yet case are different sentences: one names
+   * a person, the other names a fact about the deal.
+   */
+  DisbursementNeedsPermission: [
+    "You do not have permission to confirm the finance company's payment. Someone who does completes this step.",
+    "ليست لديك صلاحية تأكيد دفعة شركة التمويل. يُكمل هذه الخطوة من يملكها.",
+  ],
+  DisbursementUnavailable: [
+    "Nothing is expected from the finance company on this deal, or the receipt is already on record.",
+    "لا يوجد مبلغ متوقّع من شركة التمويل على هذه الصفقة، أو أن الاستلام مسجّل بالفعل.",
+  ],
+  SupplierDisbursementUnavailable: [
+    "The supplier's payment cannot be recorded on this deal: the direct route is not available, or the advice is already on record.",
+    "لا يمكن تسجيل دفعة المورّد على هذه الصفقة: المسار المباشر غير متاح، أو أن الإشعار مسجّل بالفعل.",
+  ],
+
+  /**
+   * TEMPORARY CONTAINMENT (SCRUM-215 SN3-1 → SCRUM-241). The deal's settlement
+   * is recorded in a currency other than the organisation's current one, and
+   * confirming the receipt is certain to be refused by the ledger — so the
+   * action is withheld and the reason said. No conversion is offered, no
+   * repair is suggested, and nothing has been posted.
+   */
+  DisbursementCurrencyUnsupported: [
+    "This deal's settlement is recorded in a currency AutoFlow does not recognise. The receipt cannot be confirmed until the recorded currency is corrected; nothing has been posted.",
+    "تسوية هذه الصفقة مسجّلة بعملة لا يتعرّف عليها AutoFlow. لا يمكن تأكيد الاستلام حتى تُصحَّح العملة المسجّلة؛ لم يُرحَّل أي قيد.",
+  ],
+  FinalizeCurrencyMismatch: [
+    "This deal's figures were recorded in a currency that differs from the organisation's current currency. A deal is closed in the currency its figures were recorded in, so the close is withheld until the organisation's currency is restored to the recorded one; nothing has been posted.",
+    "أرقام هذه الصفقة مسجّلة بعملة تختلف عن العملة الحالية للمؤسسة. تُغلق الصفقة بالعملة التي سُجِّلت بها أرقامها، لذا يُحجب الإغلاق حتى تُعاد عملة المؤسسة إلى العملة المسجّلة؛ لم يُرحَّل أي قيد.",
+  ],
+  FinalizeCurrencyUnsupported: [
+    "This deal's economics are recorded in a currency AutoFlow does not recognise. The close is withheld until the recorded currency is corrected.",
+    "اقتصاديات هذه الصفقة مسجّلة بعملة لا يتعرّف عليها AutoFlow. يُحجب الإغلاق حتى تُصحَّح العملة المسجّلة.",
+  ],
+  /** Prefix for the withheld figure, spelled in the currency it is recorded in. */
+  RecordedSettlementAmount: ["Recorded settlement", "التسوية المسجّلة"],
+  /** Prefix for the currency a deal's figures were pinned in. */
+  RecordedEconomicsCurrency: ["Recorded currency", "العملة المسجّلة"],
+
+  /**
+   * The customer's financing plan on the Deal — read-only, what the customer
+   * agreed to pay; explicitly not the dealer's remittance or profit.
+   */
+  FinancingPlanHeading: ["Financing plan", "خطة التمويل"],
+  FinancingPlanNote: [
+    "What the customer agreed to pay, as the quote recorded it — not what the finance company remits to the dealership.",
+    "ما اتفق العميل على دفعه كما سجّله عرض السعر — وليس ما تحوّله جهة التمويل إلى المعرض.",
+  ],
+  FinancingProvider: ["Financier", "جهة التمويل"],
+  CustomerPrice: ["Vehicle price", "سعر السيارة"],
+  DownPaymentLabel: ["Down payment", "الدفعة الأولى"],
+  FinancedAmountLabel: ["Financed amount", "المبلغ المموَّل"],
+  TermLabel: ["Term", "المدة"],
+  MonthsUnit: ["months", "شهرًا"],
+  InstallmentLabel: ["Monthly instalment", "القسط الشهري"],
+  NationalIdLabel: ["National ID", "الرقم الوطني"],
+  ShowNationalId: ["Show national ID", "إظهار الرقم الوطني"],
+  HideNationalId: ["Hide national ID", "إخفاء الرقم الوطني"],
+  /** A fact the record does not carry; never rendered as a zero. */
+  FactUnavailable: ["Not recorded", "غير مسجّل"],
+
+  /** The Deals list — one entry per deal, the needs-action queue first. */
+  DealsTitle: ["Deals", "الصفقات"],
+  NewDeal: ["New deal", "صفقة جديدة"],
+  DealsNeedsAction: ["Needs action", "تحتاج إجراءً"],
+  DealsWaitingOnOthers: ["Waiting on others", "بانتظار أطراف أخرى"],
+  DealsAll: ["All deals", "كل الصفقات"],
+  DealKindCash: ["Cash", "نقدي"],
+  DealKindFinanced: ["Financed", "مموَّل"],
+  SearchDeals: ["Search deals by customer, vehicle, financier or owner", "ابحث في الصفقات بالعميل أو السيارة أو جهة التمويل أو المسؤول"],
+  LoadingDeals: ["Loading deals…", "جارٍ تحميل الصفقات…"],
+  NoDealsFound: ["No deals match these filters.", "لا توجد صفقات مطابقة لهذه التصفية."],
+  DealsQueueEmpty: ["Nothing is waiting on the dealership right now.", "لا شيء بانتظار المعرض حاليًا."],
+  DealsReasonColumn: ["Waiting on", "بانتظار"],
+  DealsCustomerVehicleColumn: ["Customer · vehicle", "العميل · السيارة"],
+  DealsTypeColumn: ["Type · financier", "النوع · جهة التمويل"],
+  DealsSinceColumn: ["Since", "منذ"],
+  OpenDealRow: ["Open deal", "فتح الصفقة"],
+  DealsShownOf: ["shown of", "معروضة من"],
+  DealsLoadedMoreAvailable: ["loaded — more can be loaded; counts are of loaded rows", "محمّلة — يمكن تحميل المزيد؛ الأعداد للصفوف المحمّلة فقط"],
+  DealsLoadedAll: ["loaded — that is every deal", "محمّلة — وهذه كل الصفقات"],
+  ReasonDepositPending: ["Held deposit to resolve", "عربون محتجز بحاجة لحسم"],
+  ReasonDocsPending: ["Documents to complete", "مستندات ناقصة"],
+  ReasonAwaitingDecision: ["Financier decision", "قرار جهة التمويل"],
+  ReasonReadyForHandover: ["Handover and close", "التسليم والإغلاق"],
+  ReasonAwaitingReceipt: ["Financier payment to the dealership", "دفعة جهة التمويل للمعرض"],
+  ReasonCashPending: ["Cash sale to complete", "بيع نقدي لإتمامه"],
+  ReasonSalePending: ["Sale to complete", "بيع لإتمامه"],
+  /** The two panes under the money on the Deal. */
+  DealTabDocuments: ["Documents", "المستندات"],
+  DealTabActivity: ["Activity", "السجل"],
+
+  /** رسوم ومصاريف تسليم السيارة — the handover-cost section on the Deal. */
+  HandoverCostsHeading: ["Vehicle handover fees and costs", "رسوم ومصاريف تسليم السيارة"],
+  HandoverCostsNote: [
+    "Costs of handing this car to this customer — transfer, licensing, plates, paperwork, inspection, delivery insurance. Not the car's purchase, import or preparation.",
+    "تكاليف تسليم هذه السيارة لهذا العميل — نقل الملكية، الترخيص، اللوحات، المعاملات، الفحص، تأمين التسليم. لا تشمل شراء السيارة أو استيرادها أو تجهيزها.",
+  ],
+  HandoverCostsUnavailable: [
+    "Cost lines are not readable with your permissions.",
+    "لا يمكن قراءة بنود التكاليف بصلاحياتك الحالية.",
+  ],
+  HandoverCostsLoading: ["Loading cost lines…", "جارٍ تحميل بنود التكاليف…"],
+  HandoverCostsMixedCurrency: [
+    "These lines are not all in the deal's currency; totals are not available until the records agree.",
+    "ليست كل هذه البنود بعملة الصفقة؛ الإجماليات غير متاحة حتى تتوافق السجلات.",
+  ],
+  HandoverCostOutcomeUnknown: [
+    "The last attempt's result never arrived, so that cost may already be recorded. Check the lines above before adding it again.",
+    "لم تصل نتيجة المحاولة الأخيرة، لذا قد يكون ذلك المصروف مسجّلاً بالفعل. راجع البنود أعلاه قبل إضافته من جديد.",
+  ],
+  HandoverCostCurrencyDiffers: [
+    "Recorded in a different currency from the deal's; not editable here.",
+    "مسجّل بعملة تختلف عن عملة الصفقة؛ لا يمكن تعديله هنا.",
+  ],
+  HandoverCostRetryFrozen: [
+    "The server refused this attempt; nothing was recorded. Retry sends exactly what was entered; to change anything, cancel and add the cost again.",
+    "رفض الخادم هذه المحاولة ولم يُسجَّل شيء. تُعيد المحاولة إرسال ما أُدخل بالضبط؛ لتغيير أي شيء، ألغِ وأضف المصروف من جديد.",
+  ],
+  HandoverCostRetryFrozenUnknown: [
+    "The result of this attempt never arrived; the cost may already be recorded. Retry resends the same request without duplicating it. Cancelling does not undo a recorded cost.",
+    "لم تصل نتيجة هذه المحاولة؛ قد يكون المصروف مسجّلاً بالفعل. تُعيد المحاولة إرسال الطلب نفسه دون تكراره. الإلغاء لا يلغي مصروفاً مسجّلاً.",
+  ],
+  RetryHandoverCost: ["Retry", "إعادة المحاولة"],
+  HandoverCostAcknowledgeChecked: ["I have checked the lines", "راجعتُ البنود"],
+  NoHandoverCosts: ["No handover costs recorded yet.", "لم تُسجَّل مصاريف تسليم بعد."],
+  AddHandoverCost: ["Add cost", "إضافة مصروف"],
+  SaveHandoverCost: ["Save cost", "حفظ المصروف"],
+  RecordActualCost: ["Record actual", "تسجيل الفعلي"],
+  SaveActualCost: ["Save actual", "حفظ الفعلي"],
+  RemoveHandoverCost: ["Remove cost", "إزالة المصروف"],
+  ConfirmRemoveCost: ["Remove", "إزالة"],
+  HandoverCostSaved: ["Handover cost saved", "تم حفظ مصروف التسليم"],
+  HandoverCostRemoved: ["Handover cost removed", "تمت إزالة مصروف التسليم"],
+  CostsExpectedTotal: ["Expected", "المتوقّع"],
+  CostsActualTotal: ["Recorded actual", "الفعلي المسجّل"],
+  CostsAwaitingActual: ["Lines awaiting an actual", "بنود بانتظار الفعلي"],
+  CostEstimated: ["Estimated", "تقديري"],
+  CostActual: ["Actual", "فعلي"],
+  CostTypeLabel: ["Cost type", "نوع المصروف"],
+  CostPayeeLabel: ["Paid to", "مدفوع إلى"],
+  CostDescriptionLabel: ["Description (optional)", "الوصف (اختياري)"],
+  CostFigureLabel: ["Figure", "الرقم"],
+  CostAmountLabel: ["Amount", "المبلغ"],
+  CostAmountRequired: ["Enter a valid amount.", "أدخل مبلغًا صحيحًا."],
+  CostPaidOnLabel: ["Paid on", "تاريخ الدفع"],
+  ReceiptReferenceLabel: ["Receipt reference", "مرجع الإيصال"],
+  CostTreatmentLabel: ["Accounting treatment", "المعالجة المحاسبية"],
+  CostTreatmentNote: [
+    "Pre-selected for the cost type; the record states it explicitly rather than inferring it.",
+    "محدَّدة مسبقًا حسب نوع المصروف؛ يُسجَّل ذلك صراحةً ولا يُستنتج.",
+  ],
+  CostEstimatePreservedNote: [
+    "the estimate stays on the line beside the actual.",
+    "يبقى التقدير على البند إلى جانب الفعلي.",
+  ],
+  CostReconciledEditNote: [
+    "This figure was reconciled; changing it withdraws the reconciliation and is refused without the permission to do so.",
+    "هذا الرقم مُطابَق؛ تغييره يسحب المطابقة ويُرفض دون صلاحية ذلك.",
+  ],
+  HandoverCostAfterCloseNote: [
+    "The deal is closed; a cost added now re-opens its accounting classification.",
+    "الصفقة مغلقة؛ إضافة مصروف الآن تعيد فتح تصنيفها المحاسبي.",
+  ],
+  VoidCostNote: [
+    "The line is kept on record as void with your reason — nothing is deleted, and removing a cost is not a refund.",
+    "يبقى البند مسجّلًا كملغى مع سببك — لا يُحذف شيء، وإزالة المصروف ليست استردادًا.",
+  ],
+  VoidReasonLabel: ["Reason", "السبب"],
+  VoidReasonRequired: ["Say why this cost is being removed.", "اذكر سبب إزالة هذا المصروف."],
+  VoidedCostsSummary: ["removed cost lines", "بنود مصاريف مُزالة"],
+  CostStatusUnquantified: ["No amount yet", "بلا مبلغ بعد"],
+  CostStatusEstimated: ["Estimated only", "تقديري فقط"],
+  CostStatusActual: ["Actual recorded", "فعلي مسجّل"],
+  CostStatusReconciled: ["Reconciled", "مُطابَق"],
+  CostStatusVoid: ["Void", "ملغى"],
+  FeeTypeFinanceCompany: ["Finance company fee", "رسوم جهة التمويل"],
+  FeeTypeAppraisal: ["Appraisal fee", "رسوم التقييم"],
+  FeeTypeInsurance: ["Insurance", "التأمين"],
+  FeeTypeStamps: ["Stamps", "الطوابع"],
+  FeeTypeLicensing: ["Licensing / plates", "الترخيص / اللوحات"],
+  FeeTypeOwnershipTransfer: ["Ownership transfer", "نقل الملكية"],
+  FeeTypeLienRegistration: ["Lien registration", "تسجيل الرهن"],
+  FeeTypeLienRelease: ["Lien release", "فك الرهن"],
+  FeeTypeInspection: ["Inspection", "الفحص"],
+  FeeTypeAdministrative: ["Administrative fee", "رسوم إدارية"],
+  FeeTypeCommission: ["Commission", "العمولة"],
+  FeeTypeOtherClosing: ["Other handover expense", "مصروف تسليم آخر"],
+  TreatmentOwnershipTransferExpense: ["Ownership-transfer expense", "مصروف نقل ملكية"],
+  TreatmentSellingExpense: ["Selling expense", "مصروف بيع"],
+  TreatmentInsuranceExpense: ["Insurance expense", "مصروف تأمين"],
+  TreatmentCustomerReceivable: ["Recoverable from the customer", "مستحق على العميل"],
+  PayeeGovernment: ["Government", "جهة حكومية"],
+  PayeeInsurer: ["Insurer", "شركة التأمين"],
+  PayeeOther: ["Other", "أخرى"],
+  /** Prefix for the organisation's current currency beside it. */
+  OrganisationCurrencyLabel: ["Organisation currency", "عملة المؤسسة"],
+
+  /** A document rule the finance company waived for this deal. */
+  DocWaived: ["Waived", "مُعفى"],
+
+  /**
+   * Why a held deposit is listed here but not resolved here: part of it is
+   * applied, assigned to a car, awaiting its own decision, or already paid
+   * out, so its face value is not what a release would move. Deliberately
+   * makes NO claim about what another screen displays — the vehicle's deposit
+   * manager is the established path, and the server releases only the free
+   * remainder there too.
+   */
+  DepositResolveElsewhere: [
+    "Part of this deposit is applied, assigned to a vehicle, or already paid out, so its face value is not what a release would move. It is not resolved from here; use the vehicle's deposit manager, where only the free remainder is released.",
+    "جزء من هذا العربون مطبَّق أو مخصَّص لمركبة أو مدفوع مسبقاً، لذا فإن قيمته الاسمية ليست ما سيُصرف عند التحرير. لا تتم معالجته من هنا؛ استخدم إدارة العربون في صفحة المركبة، حيث لا يُصرف إلا المتبقي الحر.",
   ],
 });
 
@@ -402,25 +691,14 @@ export const salesEn = {
   Open: "Open",
   // Applications
   FinanceApplications: "Finance Applications",
-  ActiveApplications: "Active Applications",
-  ReviewApp: "Review",
-  LoadingApplications: "Loading applications...",
-  NoApplicationsFound: "No applications found.",
   Employee: "Employee",
   JOD: "JOD",
   Company: "Company",
 
   // Application Details
-  ApplicationDetails: "Application Details",
-  SubmittedOn: "Submitted on",
-  CustomerInfo: "Customer Info",
-  VehicleInfo: "Vehicle Info",
   VIN: "VIN",
-  FinancingDetails: "Financing Details",
-  AppActions: "Actions",
   MarkUnderReview: "Mark Under Review",
   ApproveApplication: "Approve Application",
-  FinalizeDealClose: "Finalize Deal (Close)",
   RejectApplication: "Reject Application",
   ConfirmDisbursement: "Confirm Disbursement",
   ConfirmDisbursementDesc: "Record receipt of the finance-company funds for this closed deal.",
@@ -439,7 +717,6 @@ export const salesEn = {
   AdviceDate: "Date paid",
   AdviceAmountInvalid: "Enter the amount from the settlement advice.",
   DisbursementConfirmedSuccess: "Disbursement receipt confirmed.",
-  DisbursementStatus: "Disbursement Status",
   DisbursementReceived: "Received",
   AwaitingDisbursement: "Awaiting receipt",
   RegisterVehicleHandover: "Register Vehicle Handover",
@@ -457,8 +734,6 @@ export const salesEn = {
   ExpectedPaymentRegisteredSuccess: "Expected payment registered.",
   ExpectedPaymentRegistered: "Payment registered",
   Confirm: "Confirm",
-  FinalizeBlockedHandoverHint: "Register the vehicle handover before finalizing.",
-  FinalizeBlockedPaymentHint: "Register the expected payment before finalizing.",
   CancelApplication: "Cancel Application",
   ConfirmCancelApplication: "Cancel this application?",
   CancelApplicationWarning: "This permanently voids the application — e.g. because it was submitted against the wrong car. Any vehicle hold from a deposit will be released. To redo the deal, create a new quote and application.",
@@ -476,8 +751,6 @@ export const salesEn = {
   Verify: "Verify",
   Upload: "Upload",
   NoDocsRequired: "No documents required for this application.",
-  StatusHistory: "Status History",
-  NoStatusHistory: "No status changes recorded yet.",
   Months: "Months",
   MonthlyInstallment: "Monthly Installment",
   DealFinalizedSuccess: "Deal Finalized successfully! Sale record created.",
@@ -952,7 +1225,7 @@ export const salesEn = {
    * record. It says where, because the control is still in the review dialog.
    */
   FinalizeNeedsSettlementRoute:
-    "This car belongs to the supplier and the deal is financed, so who the finance company pays has to be recorded before the deal can be closed. It is chosen in Finance Applications → Review.",
+    "This car belongs to the supplier and the deal is financed, so who the finance company pays has to be recorded before the deal can be closed. Choose it here, on this step.",
   /**
    * Both blockers at once, and the pointer withheld on purpose.
    *
@@ -973,7 +1246,7 @@ export const salesEn = {
    * the operator on a page that names a step nobody can take. SCRUM-83.
    */
   GapResolutionUnavailable:
-    "The finance company approved less than the quotation, and recording who covers the difference is not available in AutoFlow yet — so this step cannot be completed here. The rest of the deal can still be handled from Finance Applications → Review.",
+    "The finance company approved less than the quotation, and recording who covers the difference is not available in AutoFlow yet — so this step cannot be completed here.",
   ConfirmFinalizeTitle: "Close the deal",
   ConfirmFinalizeDesc:
     "The handover and the expected payment are on file, so the deal can be closed.",
@@ -1018,7 +1291,7 @@ export const salesEn = {
   QuotationAmountInvalid: "Enter an amount greater than zero.",
   QuotationRecorded: "Quotation recorded",
 
-  TheirAppraisalLabel: "Their appraisal of the vehicle",
+  TheirAppraisalLabel: "Recorded appraisal of the vehicle",
   RecordAppraisalAction: "Record appraisal",
   AppraisalNeedsReviewer:
     "A manager records the appraisal. The deal's stage rail waits on it once the quotation has gone out.",
@@ -1060,17 +1333,17 @@ export const salesEn = {
     "The amount the finance company said it will buy the vehicle at. Recording it here puts their decision on the record; it does not make one.",
   ApprovedAmountLabel: "Approved amount",
   ApprovalBasisLabel: "What they based it on",
-  BasisAppraisal: "Their appraisal",
+  BasisAppraisal: "The recorded appraisal",
   BasisAppraisalHint: "Equal to the appraisal on file.",
   BasisQuotationException: "Our quotation, as an exception",
   BasisQuotationExceptionHint:
-    "They approved at the amount we submitted even though their appraisal is lower. Their own tolerance rule decides whether this is allowed.",
+    "They approved at the amount we submitted even though the recorded appraisal is lower. Their own tolerance rule decides whether this is allowed.",
   BasisManual: "Another amount they named",
   BasisManualNotesLabel: "What they told us",
   BasisManualNotesPlaceholder: "e.g. approved at 18,900 by the branch's credit officer",
   BasisManualNotesRequired: "Record what the finance company said. It is kept on the audit record.",
   NoAppraisalOnFile:
-    "No appraisal from the finance company is recorded on this deal, so only an amount they named directly can be recorded.",
+    "No appraisal is recorded on this deal, so only an amount they named directly can be recorded.",
   ApprovedAmountInvalid: "Enter an amount greater than zero.",
   ApprovedPurchaseRecorded: "Approved amount recorded",
   ApprovedPurchaseReopened: "Reopened for correction — record the correct amount",
@@ -1391,25 +1664,14 @@ export const salesAr = {
   Open: "مفتوح",
   // Applications
   FinanceApplications: "طلبات التمويل",
-  ActiveApplications: "الطلبات النشطة",
-  ReviewApp: "مراجعة",
-  LoadingApplications: "جاري تحميل الطلبات...",
   Employee: "الموظف",
-  NoApplicationsFound: "لم يتم العثور على طلبات.",
   JOD: "دينار اردني",
   Company: "الشركة",
 
   // Application Details
-  ApplicationDetails: "تفاصيل الطلب",
-  SubmittedOn: "تاريخ التقديم",
-  CustomerInfo: "معلومات العميل",
-  VehicleInfo: "معلومات المركبة",
   VIN: "رقم الهيكل",
-  FinancingDetails: "تفاصيل التمويل",
-  AppActions: "الإجراءات",
   MarkUnderReview: "تعيين قيد المراجعة",
   ApproveApplication: "الموافقة على الطلب",
-  FinalizeDealClose: "إنهاء الصفقة (إغلاق)",
   RejectApplication: "رفض الطلب",
   ConfirmDisbursement: "تأكيد الصرف",
   ConfirmDisbursementDesc: "تسجيل استلام مبلغ شركة التمويل لهذه الصفقة المغلقة.",
@@ -1428,7 +1690,6 @@ export const salesAr = {
   AdviceDate: "تاريخ الدفع",
   AdviceAmountInvalid: "أدخل المبلغ كما ورد في إشعار التسوية.",
   DisbursementConfirmedSuccess: "تم تأكيد استلام مبلغ الصرف.",
-  DisbursementStatus: "حالة الصرف",
   DisbursementReceived: "تم الاستلام",
   AwaitingDisbursement: "بانتظار الاستلام",
   RegisterVehicleHandover: "تسجيل تسليم السيارة",
@@ -1446,8 +1707,6 @@ export const salesAr = {
   ExpectedPaymentRegisteredSuccess: "تم تسجيل الدفعة المتوقعة.",
   ExpectedPaymentRegistered: "تم تسجيل الدفعة",
   Confirm: "تأكيد",
-  FinalizeBlockedHandoverHint: "سجّل تسليم السيارة قبل إنهاء الصفقة.",
-  FinalizeBlockedPaymentHint: "سجّل الدفعة المتوقعة قبل إنهاء الصفقة.",
   CancelApplication: "إلغاء الطلب",
   ConfirmCancelApplication: "هل تريد إلغاء هذا الطلب؟",
   CancelApplicationWarning: "سيؤدي هذا إلى إلغاء الطلب نهائيًا — مثلاً إذا تم تقديمه بسيارة خاطئة. سيتم تحرير أي حجز للمركبة ناتج عن دفعة مقدمة. لإعادة الصفقة، أنشئ عرض سعر وطلبًا جديدين.",
@@ -1471,8 +1730,6 @@ export const salesAr = {
   Verify: "تحقق",
   Upload: "رفع",
   NoDocsRequired: "لا توجد مستندات مطلوبة لهذا الطلب.",
-  StatusHistory: "سجل الحالة",
-  NoStatusHistory: "لا توجد تغييرات حالة مسجلة بعد.",
   Months: "أشهر",
   MonthlyInstallment: "القسط الشهري",
   DealFinalizedSuccess: "تم إنهاء الصفقة بنجاح! تم إنشاء سجل البيع.",
@@ -1872,11 +2129,11 @@ export const salesAr = {
   FinalizeDealAction: "إغلاق الصفقة",
   FinalizeNeedsPermission: "لا تملك صلاحية إغلاق الصفقة. يُكمل هذه الخطوة من يملكها.",
   FinalizeNeedsSettlementRoute:
-    "هذه المركبة تعود للمورد والصفقة ممولة، لذا يجب تسجيل الجهة التي تدفع لها شركة التمويل قبل إغلاق الصفقة. يُختار ذلك من طلبات التمويل ← مراجعة.",
+    "هذه المركبة تعود للمورد والصفقة ممولة، لذا يجب تسجيل الجهة التي تدفع لها شركة التمويل قبل إغلاق الصفقة. اختره هنا، في هذه الخطوة.",
   FinalizeNeedsRouteAndPermission:
     "هذه الصفقة بانتظار تحديد الجهة التي تدفع لها شركة التمويل، ويُسجّل ذلك من يملك صلاحية إغلاق الصفقة نفسها. يُكمل الخطوتين من يملك تلك الصلاحية.",
   GapResolutionUnavailable:
-    "اعتمدت شركة التمويل مبلغاً أقل من عرض السعر، وتسجيل الجهة التي تتحمّل الفرق غير متاح في أوتوفلو بعد، لذا لا يمكن إتمام هذه الخطوة هنا. يمكن متابعة بقية الصفقة من طلبات التمويل ← مراجعة.",
+    "اعتمدت شركة التمويل مبلغاً أقل من عرض السعر، وتسجيل الجهة التي تتحمّل الفرق غير متاح في أوتوفلو بعد، لذا لا يمكن إتمام هذه الخطوة هنا.",
   ConfirmFinalizeTitle: "إغلاق الصفقة",
   ConfirmFinalizeDesc: "التسليم والدفعة المتوقعة مسجَّلان، ويمكن إغلاق الصفقة.",
   FinalizeCreatesTheSale:
@@ -1906,7 +2163,7 @@ export const salesAr = {
   QuotationAmountInvalid: "أدخل مبلغاً أكبر من صفر.",
   QuotationRecorded: "تم تسجيل عرض السعر",
 
-  TheirAppraisalLabel: "تخمين شركة التمويل للمركبة",
+  TheirAppraisalLabel: "التخمين المسجَّل للمركبة",
   RecordAppraisalAction: "تسجيل التخمين",
   AppraisalNeedsReviewer:
     "يسجّل التخمين المدير. تتوقّف مراحل الصفقة عنده بعد إرسال عرض السعر.",
@@ -1941,17 +2198,17 @@ export const salesAr = {
     "المبلغ الذي أبلغت شركة التمويل أنها ستشتري به المركبة. تسجيله هنا يوثّق قرارها، ولا يصنع قراراً.",
   ApprovedAmountLabel: "المبلغ المعتمد",
   ApprovalBasisLabel: "أساس الاعتماد",
-  BasisAppraisal: "تخمينها",
+  BasisAppraisal: "التخمين المسجَّل",
   BasisAppraisalHint: "مساوٍ للتخمين المسجَّل على الصفقة.",
   BasisQuotationException: "عرض السعر المُرسَل، استثناءً",
   BasisQuotationExceptionHint:
-    "اعتمدت المبلغ الذي أرسلناه رغم أن تخمينها أقل. قاعدة التفاوت لديها هي التي تحدّد ما إذا كان ذلك مسموحاً.",
+    "اعتمدت المبلغ الذي أرسلناه رغم أن التخمين المسجَّل أقل. قاعدة التفاوت لديها هي التي تحدّد ما إذا كان ذلك مسموحاً.",
   BasisManual: "مبلغ آخر حدّدته",
   BasisManualNotesLabel: "ما أبلغتنا به",
   BasisManualNotesPlaceholder: "مثال: اعتُمد بمبلغ 18,900 من ضابط الائتمان في الفرع",
   BasisManualNotesRequired: "سجِّل ما أبلغت به شركة التمويل. يُحفظ في سجل التدقيق.",
   NoAppraisalOnFile:
-    "لا يوجد تخمين من شركة التمويل مسجَّل على هذه الصفقة، لذلك يمكن تسجيل المبلغ الذي حدّدته مباشرة فقط.",
+    "لا يوجد تخمين مسجَّل على هذه الصفقة، لذلك يمكن تسجيل المبلغ الذي حدّدته مباشرة فقط.",
   ApprovedAmountInvalid: "أدخل مبلغاً أكبر من صفر.",
   ApprovedPurchaseRecorded: "تم تسجيل المبلغ المعتمد",
   ApprovedPurchaseReopened: "أُعيد الفتح للتصحيح — سجِّل المبلغ الصحيح",

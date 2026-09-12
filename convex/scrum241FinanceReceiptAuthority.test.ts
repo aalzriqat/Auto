@@ -176,7 +176,7 @@ async function prepareForFinalize(
     legalInvoiceDate: Date.now(),
     issuedTo: "FINANCE_COMPANY",
   });
-  const feeId = await s.asUser.mutation(api.financeDealCosts.recordDealFee, {
+  const feeId = await s.asUser.mutation(api.financeDealCosts.recordDealFee, { expectedCurrency: "JOD",
     idempotencyKey: crypto.randomUUID(),
     orgId: s.orgId,
     applicationId,
@@ -259,6 +259,26 @@ async function switchOrgCurrencyViaProduct(s: Seeded, currency: "USD" | "JOD" | 
   });
 }
 
+/**
+ * SCRUM-319 closed the product path: `orgSettings.upsert` now refuses once a
+ * finance application, a deal cost or a custody record exists. The drift these
+ * cases exercise is therefore only reachable out of contract — a raw settings
+ * edit (support/data-repair analogue). Each call first PROVES the lock, then
+ * produces the drift the downstream refusal must still catch.
+ */
+async function driftOrgCurrencyOutOfContract(s: Seeded, currency: "USD" | "JOD" | "KWD") {
+  await expect(switchOrgCurrencyViaProduct(s, currency)).rejects.toThrow(
+    /currency cannot be changed after financial records exist/i
+  );
+  await s.t.run(async (ctx) => {
+    const settings = await ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).unique();
+    await ctx.db.patch(settings!._id, {
+      currency,
+      currencySymbol: currency === "USD" ? "$" : currency === "KWD" ? "KD" : "JD",
+    });
+  });
+}
+
 function messageOf(error: unknown) {
   return String((error as { data?: unknown; message?: string })?.data ?? (error as Error)?.message ?? error);
 }
@@ -337,9 +357,10 @@ describe("SCRUM-241 — finance-company receipt settles the exact recorded recei
     const s = await seedDealership("pre_usd");
     const { applicationId } = await approvedDealWithPinnedEconomics(s);
     await prepareForFinalize(s, applicationId);
-    // The real product mutation succeeds here: a pinned application is not on
-    // the currency lock's list and nothing financial exists yet (c19265 case 2).
-    await switchOrgCurrencyViaProduct(s, "USD");
+    // c19265 case 2 used the real product mutation here; SCRUM-319 put pinned
+    // applications, deal costs and custody on the lock, so the product now
+    // refuses and the drift is produced out of contract instead.
+    await driftOrgCurrencyOutOfContract(s, "USD");
     expect((await app(s, applicationId))?.economicsCurrency).toBe("JOD");
     const before = await economicDelta(s, applicationId);
     expect(before.sales).toBe(0);
@@ -361,7 +382,7 @@ describe("SCRUM-241 — finance-company receipt settles the exact recorded recei
     const s = await seedDealership("pre_kwd");
     const { applicationId } = await approvedDealWithPinnedEconomics(s);
     await prepareForFinalize(s, applicationId);
-    await switchOrgCurrencyViaProduct(s, "KWD");
+    await driftOrgCurrencyOutOfContract(s, "KWD");
     const before = await economicDelta(s, applicationId);
 
     const refusal = await refusalOf(finalize(s, applicationId));
@@ -375,9 +396,11 @@ describe("SCRUM-241 — finance-company receipt settles the exact recorded recei
     const s = await seedDealership("pre_back");
     const { applicationId } = await approvedDealWithPinnedEconomics(s);
     await prepareForFinalize(s, applicationId);
-    await switchOrgCurrencyViaProduct(s, "USD");
+    await driftOrgCurrencyOutOfContract(s, "USD");
     expect(await refusalOf(finalize(s, applicationId))).toMatch(/currency/i);
-    await switchOrgCurrencyViaProduct(s, "JOD");
+    // Restoring is the repair the refusal asks for; the lock still stands in
+    // the product, so the restore is out of contract too.
+    await driftOrgCurrencyOutOfContract(s, "JOD");
 
     await finalize(s, applicationId);
     const closed = await app(s, applicationId);

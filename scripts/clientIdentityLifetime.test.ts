@@ -186,15 +186,16 @@ describe("SCRUM-313 client identity lifetime", () => {
   });
 
   test("server-only commands are ENUMERATED, not assumed", () => {
-    // An absence claim needs a search of the space it claims. These five have
+    // An absence claim needs a search of the space it claims. These four have
     // no client caller anywhere under components/, app/, hooks/, lib/,
     // apps/mobile/src/, playwright/ or cypress/ — verified, not inferred from a
-    // grep that happened to return nothing.
+    // grep that happened to return nothing. `financeDealCosts.recordDealFee`
+    // left this list when the Deal's handover-cost section became its first
+    // client caller (SCRUM-215); its lifetime is measured above like the rest.
     expect(commandsWithNoClientCaller.sort((a, b) => a.localeCompare(b))).toEqual([
       "collections.applyRetainedCredit",
       "financeDealCosts.openDealCustody",
       "financeDealCosts.recordCustodyMovement",
-      "financeDealCosts.recordDealFee",
       "sourcingPayables.recordPartialPayment",
     ]);
   });

@@ -88,7 +88,7 @@ const { queryResults, permissions, mutationCalls, mutationFailures } = stubs;
 const ORG = "org1" as Id<"organizations">;
 const APP = "app_2048" as Id<"financeApplications">;
 
-const COCKPIT_QUERY = "applications:dealCockpit";
+const COCKPIT_QUERY = "dealWorkspace:financedDealCockpit";
 const HANDOVER_MUTATION = "applications:registerVehicleHandover";
 const EXPECTED_PAYMENT_MUTATION = "applications:registerExpectedPayment";
 const FINALIZE_MUTATION = "applications:finalizeDeal";
@@ -156,7 +156,30 @@ afterEach(() => {
   mutationFailures.clear();
 });
 
+/**
+ * The close is offered only once `applications.get` has answered — its
+ * refusal reason and the route control it points at read from that payload,
+ * so a still-loading `app` keeps the step at its blocker. These tests are
+ * about the tail's permissions and ordering, not about loading, so the
+ * application payload is present unless a case says otherwise.
+ */
 function renderCockpit() {
+  if (!queryResults.has("applications:get")) {
+    queryResults.set("applications:get", {
+      _id: APP,
+      quoteId: "quote_1",
+      status: "APPROVED",
+      salespersonId: "user_other",
+      companyId: "company_1",
+      economicsCurrency: "JOD",
+      quote: { totalFinancedAmount: 15000 },
+      vehicle: { sourceType: "OWNED" },
+      deposits: [],
+      hasExternalFinancier: true,
+      canSettleDirectToSupplier: false,
+      directRouteRefusal: null,
+    });
+  }
   return render(<DealCockpit orgId={ORG} applicationId={APP} />);
 }
 
