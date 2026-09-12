@@ -185,7 +185,7 @@ export function DealsListView({
       </div>
 
       {/* Views: the queue, the ones somebody else is holding, the register. */}
-      <div role="tablist" aria-label={t("DealsTitle")} className="flex gap-1 overflow-x-auto border-b">
+      <div role="tablist" aria-label={t("DealsTitle")} className="flex flex-wrap gap-1 border-b">
         {(
           [
             ["needs", "DealsNeedsAction", counts.needs],
