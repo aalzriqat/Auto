@@ -1,5 +1,5 @@
 import { ConvexError, v } from "convex/values";
-import { settlementDeductedTotalMinor } from "./utils/settlementDeductions";
+import { resolveDealCurrency, settlementDeductedTotalMinor } from "./utils/settlementDeductions";
 import { paginationOptsValidator } from "convex/server";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
@@ -125,7 +125,12 @@ async function recomputeAndPatchEconomics(
   // persisted and scaled by a guess further downstream.
   assertSupportedDenomination(app.economicsCurrency, "recomputing these economics");
   const snapshot = await resolveRuleSnapshot(ctx, app);
-  const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, app.orgId));
+  // Pinning is the moment an unpinned deal's denomination becomes permanent.
+  // It must agree with the cost/custody rows already recorded against the deal
+  // (SCRUM-319): those were written in the org currency of their day and are
+  // protected by the settings lock, so a pin that disagreed with them could
+  // only come from a raw edit — and is refused rather than persisted.
+  const currency = await resolveDealCurrency(ctx, app, "recomputing these economics");
 
   if (
     app.submittedQuotationMinor === undefined ||
@@ -184,7 +189,7 @@ async function recomputeAndPatchEconomics(
     // That is not a claim it withholds nothing: `classifyDealAccounting` refuses
     // while any line lacks an actual, and finalization refuses an unclassified
     // deal, so no journal is ever posted from a partially-recorded settlement.
-    feeDeductionsMinor: await settlementDeductedTotalMinor(ctx, app._id),
+    feeDeductionsMinor: await settlementDeductedTotalMinor(ctx, app._id, currency),
     customerDirectToDealerMinor: customerGapToDealer,
     dealerBorneExpensesMinor:
       app.actualClosingExpensesMinor ?? app.estimatedClosingExpensesMinor ?? 0,
@@ -1210,7 +1215,7 @@ export const recordSubmittedQuotation = mutation({
     // every figure derived from this deal afterwards.
     assertSupportedDenomination(app.economicsCurrency, "recording this quotation");
     await ctx.db.patch(args.applicationId, {
-      economicsCurrency: app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId)),
+      economicsCurrency: await resolveDealCurrency(ctx, app, "recording this quotation"),
       submittedQuotationMinor: args.submittedQuotationMinor,
       submittedQuotationSource: args.source,
       submittedQuotationOverrideReason: reason,
@@ -1402,7 +1407,7 @@ export const recordAppraisal = mutation({
 
     const now = Date.now();
     assertSupportedDenomination(app.economicsCurrency, "recording these economics");
-    const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
+    const currency = await resolveDealCurrency(ctx, app, "recording these economics");
     const appraisalId = await ctx.db.insert("financeAppraisals", {
       orgId: args.orgId,
       applicationId: args.applicationId,

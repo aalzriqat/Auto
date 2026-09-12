@@ -321,7 +321,7 @@ describe("applications.finalizeDeal re-verifies at the commit point", () => {
       legalInvoiceDate: Date.now(),
       issuedTo: "FINANCE_COMPANY",
     });
-    const feeId = await ids.asOwner.mutation(api.financeDealCosts.recordDealFee, { idempotencyKey: crypto.randomUUID(),
+    const feeId = await ids.asOwner.mutation(api.financeDealCosts.recordDealFee, { expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(),
       orgId: ids.orgId,
       applicationId,
       feeType: "OTHER_CLOSING_EXPENSE",

@@ -8,6 +8,8 @@ import { AppErrorCode } from "./utils/errors";
 import { runWithIdempotency } from "./utils/idempotency";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { getOrgCurrency } from "./accounting/workflowHooks";
+import { assertExpectedCurrency, resolveDealCurrency } from "./utils/settlementDeductions";
+import { assertSupportedDenomination } from "./utils/money";
 import { reconcileEmployeeCustody } from "../lib/financingEconomics";
 import { recomputeEconomicsForApplication } from "./financingEconomics";
 import {
@@ -181,6 +183,18 @@ export function deriveFeeStatus(
  * is how a caller knows which one it is holding.
  */
 export function summarizeFees(fees: Array<Doc<"financeDealFees">>) {
+  // Every line carries its own `currency`, and the totals below are integers
+  // in ONE of them. Summing fils with cents produces a number that looks like
+  // a total and is not one, so a mixed set refuses here rather than at some
+  // caller that forgot to check (SCRUM-319). `listDealCosts` pre-checks and
+  // reports the condition instead of throwing; any other caller that reaches
+  // this with mixed rows is a bug and should hear about it.
+  const currencies = new Set(fees.filter((fee) => fee.voidedAt === undefined).map((fee) => fee.currency));
+  if (currencies.size > 1) {
+    throw new ConvexError(
+      `Deal costs are recorded in more than one currency (${[...currencies].join(", ")}); their totals cannot be summed.`
+    );
+  }
   let estimatedTotalMinor = 0;
   let actualTotalMinor = 0;
   let dealerBorneActualMinor = 0;
@@ -497,18 +511,50 @@ export const listDealCosts = query({
     const fees = await activeFeesFor(ctx, args.applicationId);
     const custodyRows = await custodyFor(ctx, args.applicationId);
 
+    // The deal's denomination as the WRITERS would resolve it. A read never
+    // refuses (a query that throws blanks the screen), so a contradiction is
+    // reported in the payload instead: the per-line facts stay readable in
+    // their own currency, and every scalar total is withheld with the reason.
+    const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
+    const lineCurrencies = [...new Set(fees.map((fee) => fee.currency))];
+    const foreignLineCurrencies = lineCurrencies.filter((code) => code !== currency);
+    const summaryUnavailable =
+      foreignLineCurrencies.length > 0
+        ? {
+            reason: "MIXED_DENOMINATION" as const,
+            dealCurrency: currency,
+            lineCurrencies,
+            message: `Costs on this deal are recorded in ${lineCurrencies.join(", ")} while the deal is in ${currency}; totals are unavailable until the records agree.`,
+          }
+        : null;
+
     const custody = [];
     for (const row of custodyRows) {
+      // A custody record is balanced against the actuals on the lines it paid
+      // for. If any of those lines is in another currency the arithmetic is
+      // meaningless, and the record is reported without a summary.
+      const paidLines = fees.filter((fee) => fee.custodyId === row._id);
+      const custodyMismatch =
+        row.currency !== currency || paidLines.some((fee) => fee.currency !== row.currency);
       custody.push({
         ...row,
-        summary: summarizeCustody(row, await custodyActualExpensesMinor(ctx, row._id)),
+        summary: custodyMismatch
+          ? null
+          : summarizeCustody(row, await custodyActualExpensesMinor(ctx, row._id)),
+        summaryUnavailable: custodyMismatch
+          ? { reason: "MIXED_DENOMINATION" as const, custodyCurrency: row.currency, dealCurrency: currency }
+          : null,
       });
     }
 
     return {
-      currency: app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId)),
+      currency,
       fees: fees.map((fee) => ({ ...fee, status: deriveFeeStatus(fee) })),
-      summary: summarizeFees(fees),
+      // Null, never a plausible number, when the lines do not share the deal's
+      // currency. A client that renders `summary.actualTotalMinor` has to
+      // handle the absence — that is the contract, not a hidden total.
+      summary: summaryUnavailable === null ? summarizeFees(fees) : null,
+      summaryUnavailable,
       custody,
       // Stated rather than derived: PENDING_CLASSIFICATION is what an unset
       // value means, and saying so beats every caller re-deriving it.
@@ -545,12 +591,21 @@ export const recordDealFee = mutation({
     receiptReference: v.optional(v.string()),
     documentStorageIds: v.optional(v.array(v.id("_storage"))),
     source: v.optional(v.union(v.literal("COMPANY_TEMPLATE"), v.literal("MANUAL"))),
+    /**
+     * REQUIRED. The currency the caller entered the minor-unit amounts in
+     * (SCRUM-319). The server never trusts it as the denomination — it proves
+     * the deal's own and refuses when the two differ — but without it a form
+     * rendered in USD could submit cents onto a deal whose lines are fils and
+     * nothing would notice until settlement.
+     */
+    expectedCurrency: v.string(),
     idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [
       PERMISSIONS.CREATE_FINANCE_APPLICATION,
     ]);
+    assertExpectedCurrency(args.expectedCurrency, "recording this cost");
     // Inline rather than behind a helper: scripts/tenantWriteGuard only accepts
     // proof it can see inside the handler, and "the ownership check is
     // somewhere else" is the exact shape that shipped two Criticals.
@@ -579,6 +634,19 @@ export const recordDealFee = mutation({
       );
     }
 
+    // The deal's denomination, proven BEFORE any write: the pin when there is
+    // one, else the org's verified currency — which the first cost line then
+    // fixes, because `orgSettings.upsert` refuses to change it once this row
+    // exists. Recording a licensing estimate early does not need a quotation
+    // or an approval first; it needs the caller to be entering the amount in
+    // the currency the deal is actually kept in.
+    const currency = await resolveDealCurrency(ctx, app, "recording this cost");
+    if (args.expectedCurrency !== currency) {
+      throw new ConvexError(
+        `This cost was entered in ${args.expectedCurrency}, but the deal's costs are kept in ${currency}. Reload the deal and enter the amount in ${currency}.`
+      );
+    }
+
     // A cost line is additive: a retried submit does not overwrite anything, it
     // adds a second real charge, and `actualTotalMinor` rises by an amount
     // nobody spent. Every other money-recording surface in this codebase
@@ -594,20 +662,34 @@ export const recordDealFee = mutation({
         economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
+        // The command's WHOLE persisted input, normalised exactly as it is
+        // stored below (SCRUM-319 / AF-215-02). The previous fingerprint
+        // omitted description, paidAt, includedInQuotation, refundable, the
+        // attachments and the source — so a retry carrying a different
+        // description or payment date under the same key replayed the first
+        // row's id and silently dropped the operator's second intent. Same
+        // key + same intent replays; same key + any changed field refuses.
         fingerprint: JSON.stringify({
           applicationId: args.applicationId,
           feeType: args.feeType,
+          expectedCurrency: args.expectedCurrency,
+          description: args.description?.trim() || null,
           estimatedAmountMinor: args.estimatedAmountMinor ?? null,
           actualAmountMinor: args.actualAmountMinor ?? null,
           paidBy: args.paidBy,
           paidTo: args.paidTo,
           accountingTreatment: args.accountingTreatment,
-          custodyId: args.custodyId ?? null,
-          receiptReference: args.receiptReference?.trim() || null,
-          // Persisted at line ~629 and summed by settlementDeductedTotalMinor,
-          // so it changes the dealer remittance. Two fees identical except for
-          // this flag are DIFFERENT economic instructions.
+          includedInQuotation: args.includedInQuotation ?? false,
+          // Persisted below and summed by settlementDeductedTotalMinor, so it
+          // changes the dealer remittance. Two fees identical except for this
+          // flag are DIFFERENT economic instructions.
           deductedFromSettlement: args.deductedFromSettlement ?? false,
+          refundable: args.refundable ?? false,
+          custodyId: args.custodyId ?? null,
+          paidAt: args.paidAt ?? null,
+          receiptReference: args.receiptReference?.trim() || null,
+          documentStorageIds: args.documentStorageIds?.map((id) => id.toString()) ?? null,
+          source: args.source ?? "MANUAL",
         }),
       },
       async () => {
@@ -616,7 +698,6 @@ export const recordDealFee = mutation({
           "A new cost was added to the deal after its accounting was classified."
         );
 
-        const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
         const now = Date.now();
         return await ctx.db.insert("financeDealFees", {
           orgId: args.orgId,
@@ -658,12 +739,21 @@ export const recordDealFee = mutation({
  * identified row to a value the caller supplies, so replaying it converges on
  * the same state instead of accumulating. The keys belong on the inserts, where
  * a retry adds a charge or a payment that nobody made.
+ *
+ * The amount is a bare integer, so the caller MUST say which currency it
+ * counted it in (SCRUM-319). It is compared with the row's stored `currency` —
+ * never with the org's current one, and never used to relabel the row: a form
+ * still open from before a settings change sends its integer at the scale it
+ * was rendered in, and that integer is refused rather than patched onto a
+ * row denominated in something else.
  */
 export const recordActualFeeAmount = mutation({
   args: {
     orgId: v.id("organizations"),
     feeId: v.id("financeDealFees"),
     actualAmountMinor: v.number(),
+    /** REQUIRED. The currency the caller counted `actualAmountMinor` in. */
+    expectedCurrency: v.string(),
     paidAt: v.optional(v.number()),
     receiptReference: v.optional(v.string()),
     documentStorageIds: v.optional(v.array(v.id("_storage"))),
@@ -683,6 +773,15 @@ export const recordActualFeeAmount = mutation({
     );
     if (fee.voidedAt !== undefined) {
       throw new ConvexError("This cost has been voided. Add a new line instead.");
+    }
+    assertExpectedCurrency(args.expectedCurrency, "recording this actual amount");
+    // A stored denomination nobody can vouch for (a raw-edited "JD") is not one
+    // the integer can be checked against; refuse rather than patch blind.
+    assertSupportedDenomination(fee.currency, "recording this actual amount");
+    if (args.expectedCurrency !== fee.currency) {
+      throw new ConvexError(
+        `This amount was entered in ${args.expectedCurrency}, but this cost line is recorded in ${fee.currency}. Reload the deal and enter the amount in ${fee.currency}.`
+      );
     }
     assertMinorAmount(args.actualAmountMinor, "Actual amount");
     // The more destructive of the two siblings: voiding preserves the amount
@@ -966,7 +1065,7 @@ export const openDealCustody = mutation({
           "Custody was opened on the deal after its accounting was classified."
         );
 
-        const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
+        const currency = await resolveDealCurrency(ctx, app, "opening custody on this deal");
         const now = Date.now();
         const custodyId = await ctx.db.insert("financeDealCustody", {
           orgId: args.orgId,

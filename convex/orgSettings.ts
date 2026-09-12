@@ -166,7 +166,22 @@ export const upsert = mutation({
       // the currency it was written in, and a REVERSED one still has lines the
       // reports read. Presence of the row is the invariant, not its status —
       // narrowing this to POSTED would re-open the hole one state earlier.
-      const [ledger, pending, txns, comp, advances, expenseRow, obDraft, journal] = await Promise.all([
+      // `financeDealFees` and `financeDealCustody` (SCRUM-319): a deal's cost
+      // lines and custody advances store minor units in `currency` at the time
+      // they were written, post nothing, and feed settlement deductions and
+      // recognition later. They were the gap: an org could record a 150.000 JOD
+      // licensing estimate on an unpinned deal, switch to USD, and have that
+      // row read as 1,500.00 — and the next actual patched onto it at the
+      // wrong scale.
+      // `financeApplications` is an EXPLICIT CONSERVATIVE EXISTENCE LOCK: the
+      // pinned `economicsCurrency` is what needs protecting, but it is an
+      // optional field with no index, and sampling the first application to
+      // decide whether any is pinned would be a guess. A deal that exists at
+      // all already carries quotation, appraisal and approval figures
+      // denominated in the org currency of its day, so presence of the row is
+      // the invariant — the same rule the journal-entry check applies above.
+      // Onboarding stays open: a fresh org has no application.
+      const [ledger, pending, txns, comp, advances, expenseRow, obDraft, journal, dealFee, dealCustody, financeApp] = await Promise.all([
         ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
         ctx.db.query("pendingAccountingEvents").withIndex("by_org_status", (q) => q.eq("orgId", args.orgId)).first(),
         ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
@@ -178,8 +193,14 @@ export const upsert = mutation({
           .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING_APPROVAL"))
           .first(),
         ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
+        ctx.db.query("financeDealFees").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
+        ctx.db.query("financeDealCustody").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
+        ctx.db.query("financeApplications").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
       ]);
-      if (ledger || pending || txns || comp || advances || expenseRow || obDraft || journal) {
+      if (
+        ledger || pending || txns || comp || advances || expenseRow || obDraft || journal ||
+        dealFee || dealCustody || financeApp
+      ) {
         throw new ConvexError(
           "The organization currency cannot be changed after financial records exist — stored amounts are not converted and would be misread. Contact support for a currency migration."
         );

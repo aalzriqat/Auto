@@ -64,7 +64,10 @@ export async function resolveFinancedSalePlan(
   if (!financedSaleRecognitionApplies(app, opts)) return undefined;
 
   const fees = await settlementDeductedFees(ctx, app._id);
-  const feeDeductionsMinor = settlementDeductedActualMinor(fees);
+  // The plan settles in `opts.currency` (the deal's pinned denomination at
+  // finalize). A deducted line recorded in any other currency refuses here,
+  // before the receivable is opened for a figure that mixed fils and cents.
+  const feeDeductionsMinor = settlementDeductedActualMinor(fees, opts.currency);
 
   const snapshot = app.companyRuleSnapshot;
   const dealerContributionSettlement =

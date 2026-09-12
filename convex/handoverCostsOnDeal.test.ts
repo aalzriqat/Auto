@@ -110,6 +110,7 @@ function addArgs(s: Seeded, intent: string, overrides: Record<string, unknown> =
     receiptReference: undefined,
     source: "MANUAL" as const,
     idempotencyKey: `record-deal-fee:${s.applicationId}:${intent}`,
+    expectedCurrency: "JOD",
     ...overrides,
   };
 }
@@ -167,13 +168,13 @@ describe("handover costs on the Deal — the three canonical commands, with the 
 
     await s.asUser.mutation(api.financeDealCosts.recordDealFee, addArgs(s, "intent-2"));
     expect((await costs(s)).fees).toHaveLength(2);
-    expect((await costs(s)).summary.estimatedTotalMinor).toBe(300_000);
+    expect((await costs(s)).summary!.estimatedTotalMinor).toBe(300_000);
   });
 
   test("EDIT records the actual on the existing line — the estimate survives beside it, no second live line", async () => {
     const s = await seedDeal("edit");
     const feeId = await s.asUser.mutation(api.financeDealCosts.recordDealFee, addArgs(s, "intent-1"));
-    await s.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+    await s.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, { expectedCurrency: "JOD",
       orgId: s.orgId,
       feeId,
       actualAmountMinor: 165 * JOD_SCALE,

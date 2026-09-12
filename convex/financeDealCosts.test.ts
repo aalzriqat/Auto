@@ -81,7 +81,7 @@ async function addFee(
     custodyId: Id<"financeDealCustody">;
   }> = {}
 ): Promise<Id<"financeDealFees">> {
-  return await seed.asUser.mutation(api.financeDealCosts.recordDealFee, { idempotencyKey: crypto.randomUUID(),
+  return await seed.asUser.mutation(api.financeDealCosts.recordDealFee, { expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(),
     orgId: seed.orgId,
     applicationId: seed.applicationId,
     feeType: "LICENSING",
@@ -110,13 +110,13 @@ async function readCosts(seed: Seed) {
 describe("a retried submit does not spend money twice", () => {
   test("the same key replays one cost line instead of adding a second real charge", async () => {
     const seed = await seedDeal();
-    const first = await seed.asUser.mutation(api.financeDealCosts.recordDealFee, {
+    const first = await seed.asUser.mutation(api.financeDealCosts.recordDealFee, { expectedCurrency: "JOD",
       orgId: seed.orgId, applicationId: seed.applicationId,
       feeType: "LICENSING", paidBy: "DEALER", paidTo: "GOVERNMENT",
       accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
       actualAmountMinor: jod(120), idempotencyKey: "fee-retry-1",
     });
-    const second = await seed.asUser.mutation(api.financeDealCosts.recordDealFee, {
+    const second = await seed.asUser.mutation(api.financeDealCosts.recordDealFee, { expectedCurrency: "JOD",
       orgId: seed.orgId, applicationId: seed.applicationId,
       feeType: "LICENSING", paidBy: "DEALER", paidTo: "GOVERNMENT",
       accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
@@ -128,7 +128,7 @@ describe("a retried submit does not spend money twice", () => {
     expect(costs.fees).toHaveLength(1);
     // The figure, not just the row count: a second line would have made the
     // deal cost 240 without anybody spending the difference.
-    expect(costs.summary.actualTotalMinor).toBe(jod(120));
+    expect(costs.summary!.actualTotalMinor).toBe(jod(120));
   });
 
   test("the same key replays a reimbursement instead of paying it again", async () => {
@@ -149,8 +149,8 @@ describe("a retried submit does not spend money twice", () => {
     const costs = await readCosts(seed);
     // Without the key this is 100 reimbursed against 50 owed, surfaced as an
     // overpayment — correct detection of a payment that should never have left.
-    expect(costs.custody[0]?.summary.reimbursementOverpaidMinor).toBe(0);
-    expect(costs.custody[0]?.summary.settled).toBe(true);
+    expect(costs.custody[0]?.summary!.reimbursementOverpaidMinor).toBe(0);
+    expect(costs.custody[0]?.summary!.settled).toBe(true);
     const entries = await seed.t.run((ctx) =>
       ctx.db
         .query("financeDealCustodyEntries")
@@ -195,7 +195,7 @@ describe("a retried submit does not spend money twice", () => {
 
   test("reusing a key for a different amount is refused rather than replayed", async () => {
     const seed = await seedDeal();
-    await seed.asUser.mutation(api.financeDealCosts.recordDealFee, {
+    await seed.asUser.mutation(api.financeDealCosts.recordDealFee, { expectedCurrency: "JOD",
       orgId: seed.orgId, applicationId: seed.applicationId,
       feeType: "LICENSING", paidBy: "DEALER", paidTo: "GOVERNMENT",
       accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
@@ -204,7 +204,7 @@ describe("a retried submit does not spend money twice", () => {
 
     // Returning the first result here would silently discard the second charge.
     await expect(
-      seed.asUser.mutation(api.financeDealCosts.recordDealFee, {
+      seed.asUser.mutation(api.financeDealCosts.recordDealFee, { expectedCurrency: "JOD",
         orgId: seed.orgId, applicationId: seed.applicationId,
         feeType: "LICENSING", paidBy: "DEALER", paidTo: "GOVERNMENT",
         accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
@@ -220,15 +220,15 @@ describe("itemized deal costs", () => {
     const feeId = await addFee(seed, { estimatedAmountMinor: jod(120) });
 
     let costs = await readCosts(seed);
-    expect(costs.summary.estimatedTotalMinor).toBe(jod(120));
+    expect(costs.summary!.estimatedTotalMinor).toBe(jod(120));
     // The actual is genuinely unknown, and an unknown is not a zero and not the
     // estimate. A total that quietly substituted one for the other would read
     // as complete when nothing has been paid.
-    expect(costs.summary.actualTotalMinor).toBe(0);
-    expect(costs.summary.linesAwaitingActual).toBe(1);
+    expect(costs.summary!.actualTotalMinor).toBe(0);
+    expect(costs.summary!.linesAwaitingActual).toBe(1);
     expect(costs.fees[0]?.status).toBe("ESTIMATED_ONLY");
 
-    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, { expectedCurrency: "JOD",
       orgId: seed.orgId,
       feeId,
       actualAmountMinor: jod(137),
@@ -237,8 +237,8 @@ describe("itemized deal costs", () => {
     costs = await readCosts(seed);
     // Both survive, so the comparison the reconciliation depends on is still
     // there afterwards.
-    expect(costs.summary.estimatedTotalMinor).toBe(jod(120));
-    expect(costs.summary.actualTotalMinor).toBe(jod(137));
+    expect(costs.summary!.estimatedTotalMinor).toBe(jod(120));
+    expect(costs.summary!.actualTotalMinor).toBe(jod(137));
     expect(costs.fees[0]?.status).toBe("ACTUAL_RECORDED");
   });
 
@@ -248,21 +248,21 @@ describe("itemized deal costs", () => {
 
     const costs = await readCosts(seed);
     expect(costs.fees[0]?.status).toBe("UNQUANTIFIED");
-    expect(costs.summary.estimatedTotalMinor).toBe(0);
-    expect(costs.summary.linesAwaitingActual).toBe(1);
-    expect(costs.summary.fullyReconciled).toBe(false);
+    expect(costs.summary!.estimatedTotalMinor).toBe(0);
+    expect(costs.summary!.linesAwaitingActual).toBe(1);
+    expect(costs.summary!.fullyReconciled).toBe(false);
   });
 
   test("nothing itemized reports nothing, rather than inferring a residual", async () => {
     const seed = await seedDeal();
 
     const costs = await readCosts(seed);
-    expect(costs.summary.lineCount).toBe(0);
-    expect(costs.summary.estimatedTotalMinor).toBe(0);
-    expect(costs.summary.actualTotalMinor).toBe(0);
+    expect(costs.summary!.lineCount).toBe(0);
+    expect(costs.summary!.estimatedTotalMinor).toBe(0);
+    expect(costs.summary!.actualTotalMinor).toBe(0);
     // And an empty deal is NOT "fully reconciled" — there is nothing to have
     // reconciled, which is a different claim from everything checking out.
-    expect(costs.summary.fullyReconciled).toBe(false);
+    expect(costs.summary!.fullyReconciled).toBe(false);
   });
 
   test("changing a recorded actual withdraws the reconciliation it was checked under", async () => {
@@ -275,7 +275,7 @@ describe("itemized deal costs", () => {
     });
     expect((await readCosts(seed)).fees[0]?.status).toBe("RECONCILED");
 
-    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, { expectedCurrency: "JOD",
       orgId: seed.orgId,
       feeId,
       actualAmountMinor: jod(152),
@@ -312,7 +312,7 @@ describe("itemized deal costs", () => {
     });
 
     // Gone from the working totals, still on the record.
-    expect((await readCosts(seed)).summary.lineCount).toBe(0);
+    expect((await readCosts(seed)).summary!.lineCount).toBe(0);
     const row = await seed.t.run((ctx) => ctx.db.get(feeId));
     expect(row?.voidedAt).toBeDefined();
     expect(row?.voidReason).toBe("Charged to the customer instead.");
@@ -331,8 +331,8 @@ describe("employee custody", () => {
     await addFee(seed, { actualAmountMinor: jod(650), paidBy: "EMPLOYEE", custodyId });
 
     let costs = await readCosts(seed);
-    expect(costs.custody[0]?.summary.employeeOwesDealerMinor).toBe(jod(50));
-    expect(costs.custody[0]?.summary.settled).toBe(false);
+    expect(costs.custody[0]?.summary!.employeeOwesDealerMinor).toBe(jod(50));
+    expect(costs.custody[0]?.summary!.settled).toBe(false);
 
     await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
@@ -342,8 +342,8 @@ describe("employee custody", () => {
     });
 
     costs = await readCosts(seed);
-    expect(costs.custody[0]?.summary.remainingEmployeeBalanceMinor).toBe(0);
-    expect(costs.custody[0]?.summary.settled).toBe(true);
+    expect(costs.custody[0]?.summary!.remainingEmployeeBalanceMinor).toBe(0);
+    expect(costs.custody[0]?.summary!.settled).toBe(true);
   });
 
   test("an employee who spent their own money is owed it, not charged for it", async () => {
@@ -365,12 +365,12 @@ describe("employee custody", () => {
     // the advance, which drove the reimbursement due to zero and reported the
     // record as reconciled. The dealership that documented it most carefully
     // was the one that erased it.
-    expect(costs.custody[0]?.summary.reimbursementIncurredMinor).toBe(jod(50));
+    expect(costs.custody[0]?.summary!.reimbursementIncurredMinor).toBe(jod(50));
     // Negative: the balance runs the other way, which is the whole point above.
-    expect(costs.custody[0]?.summary.remainingEmployeeBalanceMinor).toBe(jod(-50));
-    expect(costs.custody[0]?.summary.employeeOwesDealerMinor).toBe(0);
-    expect(costs.custody[0]?.summary.reimbursementOutstandingMinor).toBe(jod(50));
-    expect(costs.custody[0]?.summary.settled).toBe(false);
+    expect(costs.custody[0]?.summary!.remainingEmployeeBalanceMinor).toBe(jod(-50));
+    expect(costs.custody[0]?.summary!.employeeOwesDealerMinor).toBe(0);
+    expect(costs.custody[0]?.summary!.reimbursementOutstandingMinor).toBe(jod(50));
+    expect(costs.custody[0]?.summary!.settled).toBe(false);
   });
 
   test("a debt to the employee is not settled until it is actually paid", async () => {
@@ -593,7 +593,7 @@ describe("a closed record cannot go quietly wrong afterwards", () => {
     // said the employee was out of pocket, and every route to fixing it then
     // refused with an error naming a mutation that did not exist.
     await expect(
-      seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+      seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, { expectedCurrency: "JOD",
         orgId: seed.orgId, feeId, actualAmountMinor: jod(750),
       })
     ).rejects.toThrow(/closed\. Reopen it/i);
@@ -656,7 +656,7 @@ describe("a closed record cannot go quietly wrong afterwards", () => {
 
     const costs = await readCosts(seed);
     expect(costs.accountingClassification).toBe("PENDING_CLASSIFICATION");
-    expect(costs.summary.linesAwaitingActual).toBe(1);
+    expect(costs.summary!.linesAwaitingActual).toBe(1);
   });
 
   test("classifying twice is refused rather than overwriting who decided", async () => {
@@ -709,7 +709,7 @@ describe("money can only move in directions that are true", () => {
     ).rejects.toThrow(/paid by that employee/i);
 
     const costs = await readCosts(seed);
-    expect(costs.custody[0]?.summary.employeeOwesDealerMinor).toBe(jod(700));
+    expect(costs.custody[0]?.summary!.employeeOwesDealerMinor).toBe(jod(700));
   });
 
   test("a duplicate reimbursement is surfaced, not clamped away", async () => {
@@ -728,8 +728,8 @@ describe("money can only move in directions that are true", () => {
     }
 
     const costs = await readCosts(seed);
-    expect(costs.custody[0]?.summary.reimbursementOverpaidMinor).toBe(jod(50));
-    expect(costs.custody[0]?.summary.settled).toBe(false);
+    expect(costs.custody[0]?.summary!.reimbursementOverpaidMinor).toBe(jod(50));
+    expect(costs.custody[0]?.summary!.settled).toBe(false);
     await expect(
       seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, {
         orgId: seed.orgId, custodyId, notes: "Close it.",
@@ -847,8 +847,8 @@ describe("money can only move in directions that are true", () => {
     ).rejects.toThrow(/cannot both be true/i);
 
     const costs = await readCosts(seed);
-    expect(costs.custody[0]?.summary.reimbursementOutstandingMinor).toBe(0);
-    expect(costs.custody[0]?.summary.overReturnedMinor).toBe(0);
+    expect(costs.custody[0]?.summary!.reimbursementOutstandingMinor).toBe(0);
+    expect(costs.custody[0]?.summary!.overReturnedMinor).toBe(0);
   });
 
   test("an issuance already settled against cannot be reversed out from under the settlement", async () => {
@@ -869,7 +869,7 @@ describe("money can only move in directions that are true", () => {
     await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, custodyId, kind: "REIMBURSED", amountMinor: jod(50),
     });
-    expect((await readCosts(seed)).custody[0]?.summary.settled).toBe(true);
+    expect((await readCosts(seed)).custody[0]?.summary!.settled).toBe(true);
 
     // The totals guard passes here — nothing comes back that did not go out —
     // so it never fires. But that 50 was paid against a 700 baseline, and
@@ -886,8 +886,8 @@ describe("money can only move in directions that are true", () => {
     ).rejects.toThrow(/reimbursement/i);
 
     const costs = await readCosts(seed);
-    expect(costs.custody[0]?.summary.reimbursementOutstandingMinor).toBe(0);
-    expect(costs.custody[0]?.summary.settled).toBe(true);
+    expect(costs.custody[0]?.summary!.reimbursementOutstandingMinor).toBe(0);
+    expect(costs.custody[0]?.summary!.settled).toBe(true);
   });
 
   test("a reversal can only cancel a movement on its own custody record", async () => {
@@ -973,7 +973,7 @@ describe("money can only move in directions that are true", () => {
     const first = await seed.t.run((ctx) => ctx.storage.store(new Blob(["receipt-a"])));
     const second = await seed.t.run((ctx) => ctx.storage.store(new Blob(["receipt-b"])));
 
-    const feeId = await seed.asUser.mutation(api.financeDealCosts.recordDealFee, { idempotencyKey: crypto.randomUUID(),
+    const feeId = await seed.asUser.mutation(api.financeDealCosts.recordDealFee, { expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       applicationId: seed.applicationId,
       feeType: "LICENSING",
@@ -987,7 +987,7 @@ describe("money can only move in directions that are true", () => {
     // Both deletion paths enumerate ROWS, so a blob dropped from the array is
     // referenced by nothing and survives the org hard-delete and the financial
     // reset alike.
-    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, { expectedCurrency: "JOD",
       orgId: seed.orgId, feeId, actualAmountMinor: jod(137),
       documentStorageIds: [second],
     });
@@ -1040,7 +1040,7 @@ describe("reconciled work is not destroyable from below", () => {
     // figure, the checker's identity and their notes outright. Escalating only
     // the void left the easier door open.
     await expect(
-      asSales.mutation(api.financeDealCosts.recordActualFeeAmount, {
+      asSales.mutation(api.financeDealCosts.recordActualFeeAmount, { expectedCurrency: "JOD",
         orgId: seed.orgId, feeId, actualAmountMinor: jod(300),
       })
     ).rejects.toThrow(/confirm finance disbursements/i);
@@ -1062,7 +1062,7 @@ describe("reconciled work is not destroyable from below", () => {
       orgId: seed.orgId, feeId, notes: "Matched receipt #4471.",
     });
 
-    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, { expectedCurrency: "JOD",
       orgId: seed.orgId, feeId, actualAmountMinor: jod(770),
     });
 
@@ -1155,7 +1155,7 @@ describe("the legal invoice and accounting classification", () => {
       })
     ).rejects.toThrow(/no actual amount recorded/i);
 
-    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, { expectedCurrency: "JOD",
       orgId: seed.orgId, feeId, actualAmountMinor: jod(137),
     });
 
@@ -1372,7 +1372,7 @@ describe("tenancy", () => {
     ).rejects.toThrow(/not found/i);
 
     await expect(
-      seed.asUser.mutation(api.financeDealCosts.recordDealFee, { idempotencyKey: crypto.randomUUID(),
+      seed.asUser.mutation(api.financeDealCosts.recordDealFee, { expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         applicationId: otherApplicationId,
         feeType: "LICENSING",
@@ -1443,7 +1443,7 @@ describe("classification establishes the remittance from what the company actual
     seed: Seed,
     fee: { deductedFromSettlement: boolean; actualAmountMinor: number }
   ) {
-    const feeId = await seed.asUser.mutation(api.financeDealCosts.recordDealFee, { idempotencyKey: crypto.randomUUID(),
+    const feeId = await seed.asUser.mutation(api.financeDealCosts.recordDealFee, { expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       applicationId: seed.applicationId,
       feeType: "LICENSING",

@@ -1023,7 +1023,7 @@ async function classifyFinancedDeal(
     legalInvoiceDate: Date.now(),
     issuedTo: "FINANCE_COMPANY",
   });
-  const feeId = await asUser.mutation(api.financeDealCosts.recordDealFee, { idempotencyKey: crypto.randomUUID(),
+  const feeId = await asUser.mutation(api.financeDealCosts.recordDealFee, { expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(),
     orgId,
     applicationId,
     feeType: "OTHER_CLOSING_EXPENSE",

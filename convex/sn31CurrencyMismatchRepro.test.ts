@@ -180,7 +180,7 @@ async function finalize(s: Seeded, applicationId: Id<"financeApplications">) {
     legalInvoiceDate: Date.now(),
     issuedTo: "FINANCE_COMPANY",
   });
-  const feeId = await s.asUser.mutation(api.financeDealCosts.recordDealFee, {
+  const feeId = await s.asUser.mutation(api.financeDealCosts.recordDealFee, { expectedCurrency: "JOD",
     orgId: s.orgId,
     applicationId,
     feeType: "OTHER_CLOSING_EXPENSE",
@@ -252,6 +252,17 @@ async function switchOrgCurrencyViaProduct(s: Seeded, currency: "USD" | "JOD") {
   });
 }
 
+/** See SCRUM-319: the product refuses; the drift is produced out of contract. */
+async function driftOrgCurrencyOutOfContract(s: Seeded, currency: "USD" | "JOD") {
+  await expect(switchOrgCurrencyViaProduct(s, currency)).rejects.toThrow(
+    /currency cannot be changed after financial records exist/i
+  );
+  await s.t.run(async (ctx) => {
+    const settings = await ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).unique();
+    await ctx.db.patch(settings!._id, { currency, currencySymbol: currency === "USD" ? "$" : "JD" });
+  });
+}
+
 describe("SN3-1 — confirmDisbursement when the deal's pinned currency ≠ the org's current currency", () => {
   test("CONTROL — same currency throughout: the frozen net is accepted and settles the receivable in JOD", async () => {
     const s = await seedDealership("ctrl");
@@ -281,27 +292,27 @@ describe("SN3-1 — confirmDisbursement when the deal's pinned currency ≠ the 
     expect(after.cashReceivedEvents).toBe(1);
   });
 
-  test("BEFORE finalization — org switches JOD→USD after the economics were pinned: the product lock does NOT stop it", async () => {
+  test("BEFORE finalization — org tries JOD→USD after the economics were pinned: the product lock NOW stops it (SCRUM-319); the pin and the setting are unchanged", async () => {
     const s = await seedDealership("pre");
     const { applicationId } = await approvedDealWithPinnedEconomics(s);
     expect((await app(s, applicationId))?.economicsCurrency).toBe("JOD");
 
-    // The real product mutation. `orgSettings.upsert` locks currency only once
-    // an accounting/transaction/journal/expense row exists — none does yet: a
-    // pinned finance application is not on its list.
-    await switchOrgCurrencyViaProduct(s, "USD");
+    // The real product mutation. Before SCRUM-319 this succeeded because a
+    // pinned finance application was not on the lock's list; it is now.
+    await expect(switchOrgCurrencyViaProduct(s, "USD")).rejects.toThrow(
+      /currency cannot be changed after financial records exist/i
+    );
     const settings = await s.t.run((ctx) =>
       ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).unique()
     );
-    expect(settings?.currency).toBe("USD");
-    // The deal keeps its pin.
+    expect(settings?.currency).toBe("JOD");
     expect((await app(s, applicationId))?.economicsCurrency).toBe("JOD");
   });
 
   test("MERGED INVARIANT — BEFORE finalization, a drifted pin is refused at finalizeDeal itself: no sale, no receivable, nothing commits", async () => {
     const s = await seedDealership("pre2");
     const { applicationId } = await approvedDealWithPinnedEconomics(s);
-    await switchOrgCurrencyViaProduct(s, "USD");
+    await driftOrgCurrencyOutOfContract(s, "USD");
     const before = await settlementDelta(s, applicationId);
     expect(before.receivable).toBeNull();
 
@@ -326,7 +337,7 @@ describe("SN3-1 — confirmDisbursement when the deal's pinned currency ≠ the 
     expect((await app(s, applicationId))?.status).toBe("APPROVED");
     expect((await app(s, applicationId))?.financedSaleNetReceivableMinor).toBeUndefined();
 
-    await switchOrgCurrencyViaProduct(s, "JOD");
+    await driftOrgCurrencyOutOfContract(s, "JOD");
     // Handover, costs and classification were already recorded by the first
     // attempt; only the close itself is retried, with the SAME command identity.
     await s.asUser.mutation(api.applications.finalizeDeal, {
