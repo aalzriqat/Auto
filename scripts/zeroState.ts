@@ -149,9 +149,20 @@ export type ZeroStateVerdict = "ZERO" | "ABSENT_INFRASTRUCTURE" | "FAIL";
 const NO_TABLES = /^There are no tables in the .* deployment's database\.?$/;
 const NO_DOCUMENTS = /^There are no documents in this table\.?$/;
 
-/** Lines the CLI prints on stdout that are not table names. */
+/**
+ * In deploy-key mode the CLI ignores the `--prod` selector the shell passes and
+ * says so on stderr before EVERY command (convex 1.42.1 `cli/lib/api.ts`,
+ * `logWarning` under `source === "deployKey"`). Production run 34705827721
+ * (2026-09-12) failed as UNREADABLE on that one line; reproduced read-only on
+ * `clever-mockingbird-719`. It is matched whole and verbatim — a prefix, a
+ * suffix or the `--url`/`--admin-key` sibling sentence is still unknown output.
+ */
+export const CONVEX_DEPLOY_KEY_SELECTOR_NOTICE =
+  "Ignoring `--prod`, `--preview-name`, or `--deployment-name` flags and using deployment from CONVEX_DEPLOY_KEY";
+
+/** Lines either stream may carry that are not the command's output: Node's runtime warnings and the one pinned CLI notice. */
 function isNoise(line: string): boolean {
-  return line === "" || line.startsWith("(node:") || line.startsWith("(Use `node");
+  return line === "" || line.startsWith("(node:") || line.startsWith("(Use `node") || line === CONVEX_DEPLOY_KEY_SELECTOR_NOTICE;
 }
 
 const cleanLines = (text: string): string[] =>

@@ -426,6 +426,57 @@ describe("diagnostic tables are read back in full and validated — the shell is
   });
 });
 
+/**
+ * Production run 34705827721 (2026-09-12): the first deploy-key-mode execution
+ * of this shell. The CLI answered every command with the selector notice on
+ * stderr BEFORE its real output, because the shell passes `--prod` and a deploy
+ * key is set (convex 1.42.1 `cli/lib/api.ts` → `logWarning(...)` for
+ * `source === "deployKey"`). The reads themselves were fine: 178 empty tables,
+ * five cron rows. Reproduced read-only against `clever-mockingbird-719` with a
+ * probe key; the notice is byte-identical on every command.
+ */
+describe("deploy-key mode as the production runner actually sees it — the CLI's selector notice precedes every answer", () => {
+  const CLI_NOTICE = "Ignoring `--prod`, `--preview-name`, or `--deployment-name` flags and using deployment from CONVEX_DEPLOY_KEY\n";
+  /** The real CLI, in deploy-key mode: the notice first, then whatever the command prints. */
+  const asDeployKeyCli = (base: (args: string[]) => CliAnswer, extra = ""): ((args: string[]) => CliAnswer) => (args) => {
+    const a = base(args);
+    if (!args.includes("--prod")) return a;
+    return { ...a, stderr: `${CLI_NOTICE}${extra}${a.stderr ?? ""}` };
+  };
+  const deployKey = () => runShell(["--phase", "post-deploy"], { CONVEX_DEPLOY_KEY: PROD_KEY, CONVEX_PROD_DEPLOYMENT: DEPLOYMENT, RELEASE_SHA: "8fd436f0179bf4d002f5c3e62cad2719dc237af9" });
+
+  test("REGRESSION (run 34705827721): the observed shapes — notice + not-found on the marker, notice alone on the bounded reads — verify as ZERO with the cron rows disclosed", async () => {
+    answer = asDeployKeyCli(deploymentAnswers({ nonEmpty: { cronHeartbeats: [HEARTBEAT_ROW, HEARTBEAT_ROW, HEARTBEAT_ROW, HEARTBEAT_ROW], webhookLogs: [CRON_REPORT_ROW] } }));
+    const r = await deployKey();
+    expect(r.stdout).toMatch(/marker AUTOFLOW_DEPLOYMENT_CLASS: VERIFIED_ABSENT/);
+    expect(r.summary).toMatch(/178 empty · 0 non-empty · 2 operational-diagnostic \(5 row\(s\) verified\)/);
+    expect(r.summary).not.toMatch(/UNREADABLE|wrote to stderr|unexpected shape/);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toMatch(/✔ ZERO on clever-mockingbird-719/);
+    for (const c of r.commands) expect(c.at(-1)).toBe("--prod");
+  });
+
+  test("the notice tolerates nothing beyond itself: one foreign stderr line on the bounded read is still UNREADABLE at exit 1", async () => {
+    const base = asDeployKeyCli(deploymentAnswers({ nonEmpty: { webhookLogs: [CRON_REPORT_ROW] } }));
+    answer = (args) => (args[0] === "data" && args.includes("--format") ? { ...base(args), stderr: `${CLI_NOTICE}✖ partial response\n` } : base(args));
+    const r = await deployKey();
+    expect(r.exitCode).toBe(1);
+    expect(r.summary).toMatch(/webhookLogs holds 0 row\(s\) that were NOT verified .*\(UNREADABLE\): the bounded read of webhookLogs wrote to stderr/);
+  });
+
+  test("the notice tolerates nothing beyond itself: a second line on the marker read is still UNREADABLE, and the marked deployment still fails", async () => {
+    answer = asDeployKeyCli(deploymentAnswers(), "✖ something else\n");
+    const r = await deployKey();
+    expect(r.exitCode).toBe(1);
+    expect(r.stdout).toMatch(/marker AUTOFLOW_DEPLOYMENT_CLASS: UNREADABLE/);
+    answer = asDeployKeyCli(deploymentAnswers({ marker: "preview" }));
+    const r2 = await deployKey();
+    expect(r2.exitCode).toBe(1);
+    expect(r2.stdout).toMatch(/marker AUTOFLOW_DEPLOYMENT_CLASS: PRESENT/);
+    expect(r2.summary).toMatch(/AUTOFLOW_DEPLOYMENT_CLASS=preview/);
+  });
+});
+
 describe("a CLI that fails to start, and a step summary that is written only when GitHub asks for one", () => {
   test("spawn failure (timeout / ENOENT) is a non-status result: function-spec unreadable → exit 1", async () => {
     answer = () => ({ error: new Error("ETIMEDOUT") });
