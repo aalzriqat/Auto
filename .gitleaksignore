@@ -2,8 +2,8 @@
 # Keep this list to exact findings: unlike a line-targeted regex in .gitleaks.toml,
 # a fingerprint cannot mask a real secret that later appears beside the fixture.
 #
-# scripts/zeroState.test.ts:200 — credentialDeployment: "kindly-hound-172" is a
-# Convex DEPLOYMENT NAME (adjective-noun-number) used as an identity fixture by
-# the zero-state verifier tests; generic-api-key matched it on entropy beside
-# the word "credential". An address, not a credential.
+# scripts/zeroState.test.ts:200 — the identity fixture there sets the expected
+# deployment to kindly-hound-172, a Convex DEPLOYMENT NAME
+# (adjective-noun-number); generic-api-key matched it on entropy beside the
+# word "credential". An address, not a credential.
 28b4ce35639fc20a384e0d38736626370ba59bfd:scripts/zeroState.test.ts:generic-api-key:200
